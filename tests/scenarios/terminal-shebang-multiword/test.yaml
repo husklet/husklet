@@ -1,0 +1,23 @@
+cases:
+- id: terminal-shebang-multiword/single-optional-argument
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "stty -echo; printf '%s\\n' '#!/bin/sh' 'test \"$1\" = \"alpha beta\" || exit 93' 'shift' 'exec /bin/sh -e \"$@\"' > /tmp/husklet-interpreter; printf '%s\\n' '#!/tmp/husklet-interpreter alpha beta' 'false' 'touch /tmp/husklet-multiword-ran' > /tmp/husklet-target; chmod 755 /tmp/husklet-interpreter /tmp/husklet-target; printf 'MULTIWORD-%s\\n' READY\r" }
+      - await_output: { contains: MULTIWORD-READY, timeout_ms: 5000 }
+      - write: { text: "/tmp/husklet-target; status=$?; if test -e /tmp/husklet-multiword-ran; then ran=yes; else ran=no; fi; printf 'MULTIWORD-STATUS-%s-RAN-%s\\n' \"$status\" \"$ran\"\r" }
+      - await_output: { contains: MULTIWORD-STATUS-1-RAN-no, timeout_ms: 5000 }
+      - write: { text: "printf 'MULTIWORD-SHELL-%s\\n' RECOVERED; stty echo; exit\r" }
+      - await_output: { contains: MULTIWORD-SHELL-RECOVERED, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/status.txt
+    - golden/recovered.txt

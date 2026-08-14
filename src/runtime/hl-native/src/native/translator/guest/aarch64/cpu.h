@@ -62,10 +62,18 @@ struct cpu {
     // which reports container_pid() (==1); each spawned thread gets a unique id. Appended after the
     // baked-offset fields so the emitted-code offsets above are unaffected.
     int tid;
+    /* Per-task seccomp state.  The filter chain is immutable after
+       publication, so clone can inherit this pointer byte-for-byte. */
+    void *seccomp_filters;
+    unsigned int seccomp_mode;
     // Thread-DIRECTED pending signals (1<<signo), the per-thread analogue of the process-wide g_pending.
     // A tgkill()/tkill() to THIS thread sets a bit here so the signal is delivered by this thread alone
     // (a process-directed signal in g_pending may be taken by any thread). Drained by maybe_deliver_signal.
     volatile uint64_t tpending;
+    // Signal 64 cannot use the established 1<<signo encoding above. Keep its
+    // single pending bit in the serialized CPU state so checkpoint/restore does
+    // not lose thread-directed SIGRTMAX ownership.
+    volatile uint64_t tpending_hi;
     int sync_signal;
     int sync_code;
     uint64_t sync_address;
@@ -76,6 +84,8 @@ struct cpu {
     // sig_defer is the innermost level's deferred set; sig_defer_stack saves the enclosing levels.
     uint64_t sig_defer;
     uint64_t sig_defer_stack[32];
+    uint64_t sig_defer_hi;
+    uint64_t sig_defer_hi_stack[32];
     uint64_t sig_frame_sp[32]; // guest SP of each active handler frame (to detect siglongjmp unwinds)
     int sig_depth;
     // SMC: guest VA of the most recent `ic ivau` (icache invalidate). The emitter spills it here on the

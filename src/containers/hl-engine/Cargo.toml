@@ -27,5 +27,3 @@ path = "src/lib.rs"
 default = []
 # Counts host heap allocations per native crossing; see `native::allocations`.
 alloc-count = []
-# Kept as a source-compatible no-op while callers migrate to the unconditional native engine.
-c-execution = []

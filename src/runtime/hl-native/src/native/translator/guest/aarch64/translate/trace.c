@@ -56,6 +56,11 @@ static void aarch64_smc_copyout(uint64_t first, uint64_t last) {
 
 /* Return 1 to retry the instruction, 0 for a guest protection fault. */
 static int aarch64_soft_tlb_miss(struct cpu *c) {
+    // On a host whose VM granule is wider than Linux's 4 KB page, munmap may
+    // leave the containing host page physically present to preserve an adjacent live guest page.
+    // gna is the architectural accessibility ledger; consult it before the identity fallback so
+    // that retained physical backing never makes a logical hole readable.
+    if (gna_hit(c->soft_ea, c->soft_bytes ? c->soft_bytes : 1)) return 0;
     void *host = NULL;
     size_t contiguous = 0;
     uint32_t protection = HL_LOGICAL_VMA_READ | HL_LOGICAL_VMA_WRITE | HL_LOGICAL_VMA_EXEC;
@@ -218,6 +223,10 @@ static int smc_commit(struct cpu *c) {
         pthread_mutex_unlock(&g_jit_lock);
         return 1;
     }
+    /* Freeze peer writers before hashing whole cache lines. Distinct generated-code slots share a
+       line: classifying before the rendezvous can record a peer's new bytes before that peer has
+       invalidated its stale translation, making its later flush look unchanged. */
+    stw_mapping_begin_locked();
     __atomic_store_n(&g_smc_seen, 1, __ATOMIC_RELEASE);
     if (!c->smc_range_overflow && !force_whole) {
         uint32_t retained = 0;
@@ -248,13 +257,12 @@ static int smc_commit(struct cpu *c) {
         }
         c->smc_range_count = retained;
         if (!retained) {
-            pthread_mutex_unlock(&g_jit_lock);
             c->smc_range_count = 0;
             c->smc_range_overflow = 0;
+            stw_mapping_end();
             return 1;
         }
     }
-    pthread_mutex_unlock(&g_jit_lock);
     /*
      * Do not rewrite live map entries in place here.  Besides leaving several
      * independent ingress paths to the old body (direct chains, shadow
@@ -269,7 +277,6 @@ static int smc_commit(struct cpu *c) {
      * executing host PC is invalidated.  Subsequent entries translate the
      * modified guest bytes on demand.
     */
-    stw_mapping_begin();
 #if HL_ENABLE_LOGGING
     uint32_t removed;
 #endif

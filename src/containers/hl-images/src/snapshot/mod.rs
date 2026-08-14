@@ -1,6 +1,5 @@
 use std::{
-    fs::{self, File},
-    io::Read as _,
+    fs,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -20,7 +19,7 @@ pub(super) mod index;
 mod tree;
 use tree::Tree;
 mod record;
-use crate::storage::{Native, Persistence as _};
+use crate::storage::{Directory, Native, Persistence as _};
 use fs2::FileExt as _;
 pub(crate) use record::LayerRecord;
 use record::{DraftOwner, Publication};
@@ -28,6 +27,8 @@ use record::{DraftOwner, Publication};
 #[derive(Clone, Debug)]
 pub struct Snapshots {
     root: PathBuf,
+    publications: Arc<Directory>,
+    indexes: Arc<Directory>,
 }
 impl Snapshots {
     pub(crate) fn root(&self) -> &Path {
@@ -56,8 +57,13 @@ impl Snapshots {
             let directory = root.as_ref().join(directory);
             fs::create_dir_all(&directory).at(directory)?;
         }
+        let root = root.as_ref().to_owned();
+        let publications = Arc::new(Directory::open(root.join("publication/committed"))?);
+        let indexes = Arc::new(Directory::open(root.join("index/committed"))?);
         let snapshots = Self {
-            root: root.as_ref().to_owned(),
+            root,
+            publications,
+            indexes,
         };
         snapshots.recover_abandoned_drafts()?;
         Ok(snapshots)
@@ -122,6 +128,8 @@ impl Snapshots {
             root: self.root.clone(),
             ownership,
             names,
+            publications: self.publications.clone(),
+            indexes: self.indexes.clone(),
             finished: false,
             lock,
         })
@@ -225,15 +233,15 @@ impl Snapshots {
                     Err(error) => return Err(error).at(ownership),
                 }
                 let _ = fs::remove_file(self.names_path("committed", id));
-                let _ = Native.remove(&self.publication_path(id));
-                index::discard(&self.root, id);
+                let _ = self.publications.remove(&Self::publication_name(id));
+                index::discard(&self.indexes, id);
                 Ok(true)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 let _ = fs::remove_file(self.ownership_path("committed", id));
                 let _ = fs::remove_file(self.names_path("committed", id));
-                let _ = Native.remove(&self.publication_path(id));
-                index::discard(&self.root, id);
+                let _ = self.publications.remove(&Self::publication_name(id));
+                index::discard(&self.indexes, id);
                 Ok(false)
             }
             Err(error) => Err(error).at(path),
@@ -265,24 +273,22 @@ impl Snapshots {
             .join(format!("{}.json", id.as_str()))
     }
 
+    fn publication_name(id: &Id) -> PathBuf {
+        PathBuf::from(format!("{}.json", id.as_str()))
+    }
+
     fn publication(&self, id: &Id) -> Result<Publication> {
         const MAX_PUBLICATION_BYTES: u64 = 128 * 1024;
         let path = self.publication_path(id);
-        let file = File::open(&path).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                Error::InvalidMetadata(format!("snapshot {} is not completely published", id.as_str()))
-            } else {
-                Error::Io {
-                    path: Some(path.clone()),
-                    source: error,
+        let bytes = self
+            .publications
+            .read(&Self::publication_name(id), MAX_PUBLICATION_BYTES)
+            .map_err(|error| match error {
+                Error::Io { source, .. } if source.kind() == std::io::ErrorKind::NotFound => {
+                    Error::InvalidMetadata(format!("snapshot {} is not completely published", id.as_str()))
                 }
-            }
-        })?;
-        let mut bytes = Vec::new();
-        file.take(MAX_PUBLICATION_BYTES + 1).read_to_end(&mut bytes).at(&path)?;
-        if bytes.len() as u64 > MAX_PUBLICATION_BYTES {
-            return Err(Error::InvalidMetadata("snapshot publication exceeds 128 KiB".into()));
-        }
+                other => other,
+            })?;
         let publication = serde_json::from_slice::<Publication>(&bytes)
             .map_err(|error| {
                 Error::InvalidMetadata(format!("malformed snapshot publication {}: {error}", path.display()))
@@ -484,6 +490,28 @@ mod publication_tests {
         assert!(!snapshots.index_path(&upper).exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn index_publication_stays_with_its_opened_metadata_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let snapshots = Snapshots::open(temp.path()).unwrap();
+        let index = temp.path().join("index/committed");
+        let opened = temp.path().join("opened-index");
+        std::fs::rename(&index, &opened).unwrap();
+        std::fs::create_dir(&index).unwrap();
+
+        let layers = records(1);
+        let key = id(&layers);
+        snapshots
+            .prepare(Id::new("confined-index-draft").unwrap(), None)
+            .unwrap()
+            .commit_layer(key.clone(), layers)
+            .unwrap();
+
+        assert!(opened.join(format!("{}.idx", key.as_str())).is_file());
+        assert!(std::fs::read_dir(&index).unwrap().next().is_none());
+    }
+
     #[test]
     fn removing_a_snapshot_reclaims_its_index() {
         let temp = tempfile::tempdir().unwrap();
@@ -538,6 +566,56 @@ mod publication_tests {
         snapshots.discard_unpublished(&key).unwrap();
         assert!(!snapshots.root.join("committed").join(key.as_str()).exists());
         assert!(!snapshots.publication_path(&key).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn publication_never_follows_a_replaced_metadata_directory() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let snapshots = Snapshots::open(temp.path()).unwrap();
+        let publication = temp.path().join("publication/committed");
+        std::fs::remove_dir(&publication).unwrap();
+        symlink(outside.path(), &publication).unwrap();
+
+        let id = Id::new("confined-publication").unwrap();
+        let result = snapshots
+            .prepare(Id::new("confined-draft").unwrap(), None)
+            .unwrap()
+            .commit(id.clone());
+
+        assert!(
+            result.is_err(),
+            "publication followed an attacker-controlled directory symlink"
+        );
+        assert!(std::fs::read_dir(outside.path()).unwrap().next().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn publication_read_never_follows_a_replaced_record() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let snapshots = Snapshots::open(temp.path()).unwrap();
+        let id = Id::new("confined-publication-read").unwrap();
+        snapshots
+            .prepare(Id::new("confined-read-draft").unwrap(), None)
+            .unwrap()
+            .commit(id.clone())
+            .unwrap();
+        let publication = snapshots.publication_path(&id);
+        let external = outside.path().join("publication.json");
+        std::fs::copy(&publication, &external).unwrap();
+        std::fs::remove_file(&publication).unwrap();
+        symlink(&external, &publication).unwrap();
+
+        assert!(!snapshots.contains(&id));
+        assert!(snapshots.view(&id).is_err());
+        assert!(external.is_file());
     }
 
     #[test]

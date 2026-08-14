@@ -1,10 +1,8 @@
 struct a64_soft_guard {
     uint32_t *miss[6];
-    uint32_t *direct[2];
     int miss_bit[6]; /* -1 = CBNZ; otherwise TBZ bit */
     int miss_reg[6];
     unsigned nmiss;
-    unsigned ndirect;
     int ea;
     int tmp;
     int tmp2;
@@ -75,32 +73,6 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
         tmp = 17;
         tmp2 = 18;
     }
-
-    /*
-     * Most accesses in a process with one sparse 4 KiB alias still target
-     * ordinary identity-mapped stack/heap pages. Reject those against the
-     * conservative logical-VMA hull before consulting the per-page software
-     * TLB. All arithmetic and branches are flag-free, preserving guest NZCV
-     * and host exclusive-monitor state.
-     *
-     * Below-hull: first - (ea+bytes) has bit 63 clear when the access ends at
-     * or below first. Above-hull: ea-last has bit 63 clear when ea >= last.
-     * Equality is intentionally classified direct; overlap remains on the
-     * guarded path.
-     */
-    e_ldr(tmp, CPUREG, OFF_SOFT_FILTER_FIRST);
-    e_movconst(tmp2, bytes);
-    emit32(0x8B000000u | ((unsigned)tmp2 << 16) | ((unsigned)ea << 5) | (unsigned)tmp2);
-    emit32(0xCB000000u | ((unsigned)tmp2 << 16) | ((unsigned)tmp << 5) | (unsigned)tmp2);
-    emit32(0xD37FFC00u | ((unsigned)tmp2 << 5) | (unsigned)tmp2);
-    guard.direct[guard.ndirect++] = (uint32_t *)g_cp;
-    emit32(0); /* tbz tmp2,#0,direct */
-
-    e_ldr(tmp, CPUREG, OFF_SOFT_FILTER_LAST);
-    emit32(0xCB000000u | ((unsigned)tmp << 16) | ((unsigned)ea << 5) | (unsigned)tmp2);
-    emit32(0xD37FFC00u | ((unsigned)tmp2 << 5) | (unsigned)tmp2);
-    guard.direct[guard.ndirect++] = (uint32_t *)g_cp;
-    emit32(0); /* tbz tmp2,#0,direct */
 
     if (guard.shared) {
         /*
@@ -245,8 +217,6 @@ static void emit_a64_soft_guard_end(struct a64_soft_guard *guard) {
         }
         int32_t narrow_delta = (int32_t)miss_delta;
         memcpy(guard->metadata + 8, &narrow_delta, sizeof narrow_delta);
-        for (unsigned i = 0; i < guard->ndirect; ++i)
-            *guard->direct[i] = a64_tbz_x(guard->tmp2, 0, (guard->native - (uint8_t *)guard->direct[i]) / 4);
         return;
     }
     uint32_t *skip = (uint32_t *)g_cp;
@@ -263,9 +233,6 @@ static void emit_a64_soft_guard_end(struct a64_soft_guard *guard) {
                 a64_tbz_x(guard->miss_reg[i], (unsigned)guard->miss_bit[i], (miss - (uint8_t *)guard->miss[i]) / 4);
     }
     // Profiling must not insert register-using code into this live-EA path.
-    uint8_t *direct = guard->native;
-    for (unsigned i = 0; i < guard->ndirect; ++i)
-        *guard->direct[i] = a64_tbz_x(guard->tmp2, 0, (direct - (uint8_t *)guard->direct[i]) / 4);
 }
 
 static void aarch64_soft_filter_refresh(struct cpu *c) {
@@ -276,6 +243,7 @@ static void aarch64_soft_filter_refresh(struct cpu *c) {
         first = snapshot->views[0].guest_first;
         last = snapshot->views[snapshot->count - 1].guest_last;
     }
+    gna_filter(&first, &last);
     c->soft_filter_first = first;
     c->soft_filter_last = last;
 }

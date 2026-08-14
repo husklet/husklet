@@ -1062,9 +1062,13 @@ static struct {
     struct cpu *cpu;
     _Atomic uint64_t dispatch_ack;
     _Atomic int in_translated;
+    _Atomic int departing;
 } g_stw_threads[STW_MAXTHREAD];
 
 static pthread_mutex_t g_stw_reg_lock = PTHREAD_MUTEX_INITIALIZER;
+/* A checkpoint releases g_jit_lock while its dispatcher gate remains active.
+   Serialize every gate epoch so a second publisher cannot replace or clear it. */
+static pthread_mutex_t g_quiesce_lock = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic int g_stw_active; // 1 while a flush is in progress -> parked peers spin until cleared
 static _Atomic int g_stw_parked; // # of peers currently parked at the safepoint
 static uint64_t g_stw_flushes;   // PROF: stop-the-world flushes performed
@@ -1081,6 +1085,7 @@ static uint64_t g_stw_flushes;   // PROF: stop-the-world flushes performed
 // that corrupted parked peers.
 static __thread _Atomic uint64_t *g_my_exec_gen; // this thread's exec_gen slot (NULL until registered)
 static __thread int g_my_stw_slot = -1;
+static __thread unsigned g_mapping_stw_depth;
 static _Atomic uint64_t g_dispatch_request;
 static _Atomic int g_dispatch_gate;
 #define STW_RETIRED_MAX (STW_MAXTHREAD + 8)
@@ -1221,10 +1226,11 @@ static void stw_park_handler(int sig, siginfo_t *si, void *ucv) {
             cpu->irq = 1;
             if (!atomic_load_explicit(&g_stw_threads[slot].in_translated, memory_order_acquire) &&
                 !__atomic_load_n(&cpu->in_service, __ATOMIC_SEQ_CST)) {
-                uint64_t request = atomic_load_explicit(&g_dispatch_request, memory_order_acquire);
-                atomic_store_explicit(&g_stw_threads[slot].dispatch_ack, request, memory_order_release);
-                while (atomic_load_explicit(&g_dispatch_gate, memory_order_acquire))
+                while (atomic_load_explicit(&g_dispatch_gate, memory_order_acquire)) {
+                    uint64_t request = atomic_load_explicit(&g_dispatch_request, memory_order_acquire);
+                    atomic_store_explicit(&g_stw_threads[slot].dispatch_ack, request, memory_order_release);
                     jit_backoff_ns(UINT64_C(50000));
+                }
             }
         }
         return;
@@ -1266,6 +1272,7 @@ static void stw_register(struct cpu *cpu) {
                                   atomic_load_explicit(&g_dispatch_request, memory_order_relaxed),
                                   memory_order_relaxed);
             atomic_store_explicit(&g_stw_threads[i].in_translated, 0, memory_order_relaxed);
+            atomic_store_explicit(&g_stw_threads[i].departing, 0, memory_order_relaxed);
 #ifdef G_SOFT_TLB_REFRESH
             G_SOFT_TLB_REFRESH(cpu);
 #endif
@@ -1296,10 +1303,42 @@ static void stw_unregister(void) {
    no peer can enter an old, unguarded translation after the prepare returns. */
 static void stw_dispatch_safepoint(void) {
     if (g_my_stw_slot < 0) return;
-    uint64_t request = atomic_load_explicit(&g_dispatch_request, memory_order_acquire);
-    atomic_store_explicit(&g_stw_threads[g_my_stw_slot].dispatch_ack, request, memory_order_release);
-    while (atomic_load_explicit(&g_dispatch_gate, memory_order_acquire)) {
+    /* Read the gate before its request. Reading request first permits a
+       publisher to advance the epoch and raise the gate between the ack and
+       this load: the peer then parks with a stale ack forever. Q keeps the
+       active request stable until the gate is released. */
+    while (atomic_load_explicit(&g_dispatch_gate, memory_order_seq_cst)) {
+        uint64_t request = atomic_load_explicit(&g_dispatch_request, memory_order_acquire);
+        atomic_store_explicit(&g_stw_threads[g_my_stw_slot].dispatch_ack, request, memory_order_release);
         jit_backoff_ns(UINT64_C(50000));
+    }
+}
+
+/* A peer may reach cache lookup immediately before a quiescer publishes its
+   gate. Blocking on the writer lock there prevents that peer from reaching
+   the dispatcher acknowledgement the writer is awaiting. Retry through the
+   safepoint so an active epoch can park us without weakening writer exclusion. */
+static void jit_dispatch_lock(void) {
+    for (;;) {
+        int status = pthread_mutex_trylock(&g_jit_lock);
+        if (status == 0) return;
+        if (status != EBUSY) abort();
+        stw_dispatch_safepoint();
+        jit_backoff_ns(UINT64_C(50000));
+    }
+}
+
+/* Every quiescer arrives with JIT writer authority. A checkpoint may keep the
+   epoch lock after releasing that authority, so never wait for the epoch while
+   retaining g_jit_lock: a running peer must remain able to acknowledge and park. */
+static void stw_quiesce_lock(void) {
+    for (;;) {
+        int status = pthread_mutex_trylock(&g_quiesce_lock);
+        if (status == 0) return;
+        if (status != EBUSY) abort();
+        pthread_mutex_unlock(&g_jit_lock);
+        stw_dispatch_safepoint();
+        jit_dispatch_lock();
     }
 }
 
@@ -1355,20 +1394,26 @@ static void stw_wait_translated_acks(uint64_t request) {
     }
 }
 
+static int stw_checkpoint_member(int slot) {
+    return atomic_load_explicit(&g_stw_threads[slot].used, memory_order_acquire) &&
+           !atomic_load_explicit(&g_stw_threads[slot].departing, memory_order_seq_cst);
+}
+
 static int stw_force_dispatch_flush(void) {
     pthread_t me = pthread_self();
     /* Serialize activation ownership before publishing its epoch/gate.  If two
        callbacks publish first and lock second, the first can clear the second's
        gate; its signal is then mistaken for an ordinary park and its peer never
        acknowledges the newer epoch. */
-    pthread_mutex_lock(&g_jit_lock);
+    jit_dispatch_lock();
+    stw_quiesce_lock();
     uint64_t request = atomic_fetch_add_explicit(&g_dispatch_request, 1, memory_order_acq_rel) + 1;
     /* seq_cst: pairs with stw_before_translated's in_translated publication. */
     atomic_store_explicit(&g_dispatch_gate, 1, memory_order_seq_cst);
     /* Preserve the global lock order used by ordinary STW: jit -> registry. */
     pthread_mutex_lock(&g_stw_reg_lock);
     for (int i = 0; i < STW_MAXTHREAD; i++) {
-        if (!atomic_load_explicit(&g_stw_threads[i].used, memory_order_acquire)) continue;
+        if (!stw_checkpoint_member(i)) continue;
         if (pthread_equal(g_stw_threads[i].th, me)) {
             atomic_store_explicit(&g_stw_threads[i].dispatch_ack, request, memory_order_release);
         } else if (atomic_load_explicit(&g_stw_threads[i].in_translated, memory_order_seq_cst)) {
@@ -1389,6 +1434,7 @@ static int stw_force_dispatch_flush(void) {
     int ok = jit_flush_to_fresh(0);
     atomic_store_explicit(&g_dispatch_gate, 0, memory_order_release);
     pthread_mutex_unlock(&g_stw_reg_lock);
+    pthread_mutex_unlock(&g_quiesce_lock);
     pthread_mutex_unlock(&g_jit_lock);
     return ok;
 }
@@ -1397,15 +1443,16 @@ static int stw_force_dispatch_flush(void) {
    and its BUS ledger are changed as one transaction.  Unlike cache rotation,
    this preserves the current arena: only the mapping publisher is active
    until stw_mapping_end releases the gate. */
-static void stw_mapping_begin(void) {
+static void stw_mapping_begin_locked(void) {
+    if (g_mapping_stw_depth++ != 0) return;
     pthread_t me = pthread_self();
-    pthread_mutex_lock(&g_jit_lock);
+    stw_quiesce_lock();
     uint64_t request = atomic_fetch_add_explicit(&g_dispatch_request, 1, memory_order_acq_rel) + 1;
     /* seq_cst: pairs with stw_before_translated's in_translated publication. */
     atomic_store_explicit(&g_dispatch_gate, 1, memory_order_seq_cst);
     pthread_mutex_lock(&g_stw_reg_lock);
     for (int i = 0; i < STW_MAXTHREAD; i++) {
-        if (!atomic_load_explicit(&g_stw_threads[i].used, memory_order_acquire)) continue;
+        if (!stw_checkpoint_member(i)) continue;
         if (pthread_equal(g_stw_threads[i].th, me))
             atomic_store_explicit(&g_stw_threads[i].dispatch_ack, request, memory_order_release);
         else if (atomic_load_explicit(&g_stw_threads[i].in_translated, memory_order_seq_cst) && g_stw_threads[i].cpu)
@@ -1422,7 +1469,18 @@ static void stw_mapping_begin(void) {
 #endif
 }
 
+static void stw_mapping_begin(void) {
+    if (g_mapping_stw_depth != 0) {
+        ++g_mapping_stw_depth;
+        return;
+    }
+    jit_dispatch_lock();
+    stw_mapping_begin_locked();
+}
+
 static void stw_mapping_end(void) {
+    if (g_mapping_stw_depth == 0) abort();
+    if (--g_mapping_stw_depth != 0) return;
 #ifdef G_SOFT_TLB_REFRESH
     /* The logical snapshot is now committed while every peer remains behind
        the mapping gate. Publish each CPU's conservative rejection hull before
@@ -1433,6 +1491,7 @@ static void stw_mapping_end(void) {
 #endif
     atomic_store_explicit(&g_dispatch_gate, 0, memory_order_release);
     pthread_mutex_unlock(&g_stw_reg_lock);
+    pthread_mutex_unlock(&g_quiesce_lock);
     pthread_mutex_unlock(&g_jit_lock);
 }
 
@@ -1442,12 +1501,15 @@ static void stw_mapping_end(void) {
    the returned inventory cannot gain or lose a thread before release. */
 static uint64_t stw_checkpoint_arm(void) {
     pthread_t caller = pthread_self();
-    pthread_mutex_lock(&g_jit_lock);
+    jit_dispatch_lock();
+    stw_quiesce_lock();
     uint64_t request = atomic_fetch_add_explicit(&g_dispatch_request, 1, memory_order_acq_rel) + 1;
-    atomic_store_explicit(&g_dispatch_gate, 1, memory_order_release);
+    /* seq_cst pairs with a thread's departing publication: either this scan
+       excludes it, or its final safepoint observes the gate and acknowledges. */
+    atomic_store_explicit(&g_dispatch_gate, 1, memory_order_seq_cst);
     pthread_mutex_lock(&g_stw_reg_lock);
     for (int i = 0; i < STW_MAXTHREAD; i++) {
-        if (!atomic_load_explicit(&g_stw_threads[i].used, memory_order_acquire)) continue;
+        if (!stw_checkpoint_member(i)) continue;
         if (pthread_equal(g_stw_threads[i].th, caller))
             atomic_store_explicit(&g_stw_threads[i].dispatch_ack, request, memory_order_release);
         else if (g_stw_threads[i].cpu)
@@ -1464,7 +1526,7 @@ static int stw_checkpoint_wait(uint64_t request) {
     for (int attempt = 0; attempt < 100000; attempt++) {
         int pending = 0;
         for (int i = 0; i < STW_MAXTHREAD; i++) {
-            if (!atomic_load_explicit(&g_stw_threads[i].used, memory_order_acquire)) continue;
+            if (!stw_checkpoint_member(i)) continue;
             if (atomic_load_explicit(&g_stw_threads[i].dispatch_ack, memory_order_acquire) < request) {
                 pending = 1;
                 break;
@@ -1475,7 +1537,7 @@ static int stw_checkpoint_wait(uint64_t request) {
     }
 #if HL_ENABLE_LOGGING
     for (int i = 0; i < STW_MAXTHREAD; i++) {
-        if (!atomic_load_explicit(&g_stw_threads[i].used, memory_order_acquire)) continue;
+        if (!stw_checkpoint_member(i)) continue;
         uint64_t ack = atomic_load_explicit(&g_stw_threads[i].dispatch_ack, memory_order_acquire);
         if (ack >= request) continue;
         struct cpu *c = g_stw_threads[i].cpu;
@@ -1492,7 +1554,7 @@ static int stw_checkpoint_wait(uint64_t request) {
 static int stw_checkpoint_cpus(struct cpu **out, int capacity) {
     int count = 0;
     for (int i = 0; i < STW_MAXTHREAD; i++) {
-        if (!atomic_load_explicit(&g_stw_threads[i].used, memory_order_acquire)) continue;
+        if (!stw_checkpoint_member(i)) continue;
         /* A used slot with no cpu is not a guest thread and has no state to capture. stw_after_fork() leaves
            exactly that behind whenever a process forks BEFORE its own guest thread registers -- which is the
            shape of every restore refork (ckpt_fork_children runs ahead of run_guest), so the child's later
@@ -1508,6 +1570,7 @@ static int stw_checkpoint_cpus(struct cpu **out, int capacity) {
 static void stw_checkpoint_end(void) {
     atomic_store_explicit(&g_dispatch_gate, 0, memory_order_release);
     pthread_mutex_unlock(&g_stw_reg_lock);
+    pthread_mutex_unlock(&g_quiesce_lock);
 }
 
 // # of OTHER live guest threads (excludes the caller). 0 -> the cheap in-place flush is safe.
@@ -1641,6 +1704,7 @@ static int jit_flush_to_fresh(int retain_map_generations) {
 static int stw_flush(void) {
     g_stw_flushes++;
     pthread_t me = pthread_self();
+    stw_quiesce_lock();
     uint64_t request = atomic_fetch_add_explicit(&g_dispatch_request, 1, memory_order_acq_rel) + 1;
     /*
      * Quiesce at dispatcher boundaries instead of asynchronously parking a
@@ -1658,7 +1722,7 @@ static int stw_flush(void) {
     atomic_store_explicit(&g_dispatch_gate, 1, memory_order_seq_cst);
     pthread_mutex_lock(&g_stw_reg_lock);
     for (int i = 0; i < STW_MAXTHREAD; ++i) {
-        if (!atomic_load_explicit(&g_stw_threads[i].used, memory_order_acquire)) continue;
+        if (!stw_checkpoint_member(i)) continue;
         if (pthread_equal(g_stw_threads[i].th, me)) {
             atomic_store_explicit(&g_stw_threads[i].dispatch_ack, request, memory_order_release);
         } else if (atomic_load_explicit(&g_stw_threads[i].in_translated, memory_order_seq_cst) &&
@@ -1670,6 +1734,7 @@ static int stw_flush(void) {
     int ok = jit_flush_to_fresh(1);
     atomic_store_explicit(&g_dispatch_gate, 0, memory_order_release);
     pthread_mutex_unlock(&g_stw_reg_lock);
+    pthread_mutex_unlock(&g_quiesce_lock);
     return ok;
 }
 
@@ -1701,12 +1766,14 @@ static void stw_after_fork(void) {
        in the child, so inheriting its closed gate would deadlock first re-entry. */
     atomic_store_explicit(&g_dispatch_gate, 0, memory_order_relaxed);
     pthread_mutex_init(&g_stw_reg_lock, NULL);
+    pthread_mutex_init(&g_quiesce_lock, NULL);
     for (int i = 0; i < STW_MAXTHREAD; i++)
         atomic_store_explicit(&g_stw_threads[i].used, 0, memory_order_relaxed);
     g_stw_threads[0].th = pthread_self();
     g_stw_threads[0].cpu = survivor;
     atomic_store_explicit(&g_stw_threads[0].exec_gen, g_cache_gen, memory_order_relaxed);
     atomic_store_explicit(&g_stw_threads[0].in_translated, 0, memory_order_relaxed);
+    atomic_store_explicit(&g_stw_threads[0].departing, 0, memory_order_relaxed);
     atomic_store_explicit(&g_stw_threads[0].used, 1, memory_order_relaxed);
     g_my_exec_gen = &g_stw_threads[0].exec_gen;
     g_my_stw_slot = 0;
@@ -1747,7 +1814,7 @@ static int jit_after_fork(void) {
     // fork() only clones the CALLING thread. If a peer M was translating (holding g_jit_lock, and g_cache_lock
     // under it in map_put) at the instant the guest forked, the child inherits those mutexes LOCKED with no
     // owner thread left to release them -- so the child's very first dispatcher iteration deadlocks forever in
-    // run_guest's `pthread_mutex_lock(&g_jit_lock)` (0% CPU) while its parent blocks reaping it. This is THE
+    // run_guest's `jit_dispatch_lock()` (0% CPU) while its parent blocks reaping it. This is THE
     // go/npm/cargo build hang: a heavily-threaded driver (Go compiler, node) forks a child while
     // sibling Ms are mid-translate. The child is single-threaded now, so reinitialising both locks to a clean
     // unlocked state is always correct (no surviving peer can hold or want them; the calling thread never holds

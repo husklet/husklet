@@ -432,7 +432,15 @@ impl<'a> CaseExecution<'a> {
             networks.connect(&created.name, name, endpoint).await?;
         }
         self.containers.start(name).await?;
-        let status = self.wait(name, timeout).await?;
+        let status = if let Some(orchestration) = self.case.orchestration {
+            let delay = Duration::from_millis(orchestration.stop_after_ms);
+            tokio::time::sleep(delay).await;
+            // The manifest timeout bounds the complete attempt, including the pre-stop delay.
+            // Validation proves the delay is shorter, so this never silently widens the case.
+            self.containers.stop(name, timeout.saturating_sub(delay)).await?
+        } else {
+            self.wait(name, timeout).await?
+        };
         *observed = Some(status);
         let mut logs = self.containers.logs(name).await?;
         logs.bounded()?;
@@ -443,7 +451,13 @@ impl<'a> CaseExecution<'a> {
             // secondary telemetry loss hide the guest's exit or output failure. Abnormal engine paths can end
             // before the retained dispatcher emits its summary, and the underlying compatibility defect is the
             // actionable diagnostic in that case.
-            profile_validation = output::validate_profile(text);
+            // An explicitly orchestrated signal ends the engine before its normal dispatcher
+            // epilogue. The lifecycle result is the contract for that typed path; all ordinary
+            // exits still require the complete profile summary.
+            profile_validation = self
+                .case
+                .expected_signal
+                .map_or_else(|| output::validate_profile(text), |_| Ok(()));
             output::forward_profile(text, std::io::stderr().lock())?;
             logs.stderr = text
                 .lines()
@@ -461,6 +475,7 @@ impl<'a> CaseExecution<'a> {
         super::outcome::validate(
             status,
             self.case.exit,
+            self.case.expected_signal,
             &logs,
             &expected,
             &self.case.stderr,
@@ -521,10 +536,17 @@ mod stderr_tests {
 
     #[test]
     fn exit_failure_precedes_missing_profile() {
-        let error =
-            super::super::outcome::validate(ExitStatus::Code(7), 0, &Logs::default(), b"", &[], missing_profile())
-                .unwrap_err();
-        assert_eq!(error.to_string(), "exit Code(7), expected 0");
+        let error = super::super::outcome::validate(
+            ExitStatus::Code(7),
+            0,
+            None,
+            &Logs::default(),
+            b"",
+            &[],
+            missing_profile(),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "exit Code(7), expected Code(0)");
     }
 
     #[test]
@@ -533,16 +555,24 @@ mod stderr_tests {
             stdout: b"wrong".to_vec(),
             stderr: Vec::new(),
         };
-        let error = super::super::outcome::validate(ExitStatus::Code(0), 0, &logs, b"right", &[], missing_profile())
-            .unwrap_err();
+        let error =
+            super::super::outcome::validate(ExitStatus::Code(0), 0, None, &logs, b"right", &[], missing_profile())
+                .unwrap_err();
         assert!(error.to_string().starts_with("stdout differs:"), "{error}");
     }
 
     #[test]
     fn otherwise_valid_output_still_requires_profile() {
-        let error =
-            super::super::outcome::validate(ExitStatus::Code(0), 0, &Logs::default(), b"", &[], missing_profile())
-                .unwrap_err();
+        let error = super::super::outcome::validate(
+            ExitStatus::Code(0),
+            0,
+            None,
+            &Logs::default(),
+            b"",
+            &[],
+            missing_profile(),
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("crossings/translations"), "{error}");
     }
 

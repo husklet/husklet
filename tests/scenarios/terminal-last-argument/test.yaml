@@ -1,0 +1,25 @@
+cases:
+- id: terminal-last-argument/readline-insert-last-argument
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "true FIRST-ARG\r" }
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "printf '<%s>\\n' " }
+      - write: { text: "\u001b." }
+      - write: { text: "\r" }
+      - await_output: { contains: "<FIRST-ARG>", timeout_ms: 5000 }
+      - write: { text: "printf 'SHELL-OK\\n'; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/last_argument.txt
+    - golden/shell_ok.txt

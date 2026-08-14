@@ -51,21 +51,56 @@ impl OwnedChild {
     }
 
     pub(super) fn terminate(&mut self) -> std::io::Result<()> {
+        #[cfg(target_os = "linux")]
+        let descendants = {
+            // Freeze the original group first. Each escaped descendant is then
+            // frozen before its children are enumerated, closing the fork race
+            // while the complete ownership tree is captured.
+            self.signal(libc::SIGSTOP)?;
+            super::tree::Descendants::freeze(self.group)?
+        };
         self.signal(libc::SIGTERM)?;
+        #[cfg(target_os = "linux")]
+        descendants.signal(libc::SIGTERM)?;
+        #[cfg(target_os = "linux")]
+        {
+            descendants.signal(libc::SIGCONT)?;
+            self.signal(libc::SIGCONT)?;
+        }
         let deadline = Instant::now() + TERM_GRACE;
-        while !self.reaped && Instant::now() < deadline {
+        while (!self.reaped || {
+            #[cfg(target_os = "linux")]
+            {
+                descendants.exists()
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                false
+            }
+        }) && Instant::now() < deadline
+        {
             match self.try_wait() {
                 Ok(None) => thread::sleep(POLL),
                 Ok(Some(_)) | Err(_) => break,
             }
         }
         self.signal(libc::SIGKILL)?;
+        #[cfg(target_os = "linux")]
+        descendants.signal(libc::SIGKILL)?;
         let _ = self.process.kill();
         if !self.reaped {
             self.process.wait()?;
             self.reaped = true;
         }
-        self.quiesce()
+        self.quiesce()?;
+        #[cfg(target_os = "linux")]
+        if !descendants.settle() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "detached host subprocess descendants did not quiesce",
+            ));
+        }
+        Ok(())
     }
 
     pub(super) fn quiesce(&self) -> std::io::Result<()> {

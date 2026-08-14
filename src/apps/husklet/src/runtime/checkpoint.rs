@@ -1,7 +1,7 @@
 use hl_container::{CheckpointError, CheckpointImage, CheckpointImages};
 use hl_ws::{Directory, Key, Namespace, Storage};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
@@ -88,6 +88,30 @@ impl WorkspaceImage {
             .lock()
             .map_err(|_| CheckpointError::new("checkpoint generation lock is poisoned"))
     }
+
+    fn state_until(
+        &self,
+        deadline: std::time::Instant,
+    ) -> Result<std::sync::MutexGuard<'_, ImageState>, CheckpointError> {
+        loop {
+            match self.state.try_lock() {
+                Ok(state) => return Ok(state),
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    return Err(CheckpointError::new("checkpoint generation lock is poisoned"));
+                }
+                Err(std::sync::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(
+                        deadline
+                            .saturating_duration_since(std::time::Instant::now())
+                            .min(std::time::Duration::from_millis(1)),
+                    );
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    return Err(CheckpointError::deadline());
+                }
+            }
+        }
+    }
 }
 
 impl CheckpointImage for WorkspaceImage {
@@ -98,6 +122,16 @@ impl CheckpointImage for WorkspaceImage {
             .map_err(WorkspaceCheckpoints::error)
     }
 
+    fn put_until(&self, name: &str, bytes: &[u8], deadline: std::time::Instant) -> Result<(), CheckpointError> {
+        self.state_until(deadline)?
+            .staging
+            .put(&Self::key(name)?, bytes)
+            .map_err(WorkspaceCheckpoints::error)?;
+        (std::time::Instant::now() < deadline)
+            .then_some(())
+            .ok_or_else(CheckpointError::deadline)
+    }
+
     fn get(&self, name: &str) -> Result<Vec<u8>, CheckpointError> {
         self.state()?
             .current
@@ -105,6 +139,19 @@ impl CheckpointImage for WorkspaceImage {
             .ok_or_else(|| CheckpointError::new("checkpoint has no committed generation"))?
             .get(&Self::key(name)?)
             .map_err(WorkspaceCheckpoints::error)
+    }
+
+    fn get_until(&self, name: &str, deadline: std::time::Instant) -> Result<Vec<u8>, CheckpointError> {
+        let bytes = self
+            .state_until(deadline)?
+            .current
+            .as_ref()
+            .ok_or_else(|| CheckpointError::new("checkpoint has no committed generation"))?
+            .get(&Self::key(name)?)
+            .map_err(WorkspaceCheckpoints::error)?;
+        (std::time::Instant::now() < deadline)
+            .then_some(bytes)
+            .ok_or_else(CheckpointError::deadline)
     }
 
     fn list(&self) -> Result<Vec<String>, CheckpointError> {
@@ -118,12 +165,49 @@ impl CheckpointImage for WorkspaceImage {
             .map_err(WorkspaceCheckpoints::error)
     }
 
+    fn list_until(&self, deadline: std::time::Instant) -> Result<Vec<String>, CheckpointError> {
+        let state = self.state_until(deadline)?;
+        let Some(current) = &state.current else {
+            return (std::time::Instant::now() < deadline)
+                .then(Vec::new)
+                .ok_or_else(CheckpointError::deadline);
+        };
+        let names = current
+            .list(None)
+            .map(|keys| keys.into_iter().map(|key| key.as_str().to_owned()).collect())
+            .map_err(WorkspaceCheckpoints::error)?;
+        (std::time::Instant::now() < deadline)
+            .then_some(names)
+            .ok_or_else(CheckpointError::deadline)
+    }
+
     fn commit(&self, manifest: &[u8]) -> Result<(), CheckpointError> {
-        let mut state = self.state()?;
+        self.commit_inner(manifest, None)
+    }
+
+    fn commit_until(&self, manifest: &[u8], deadline: std::time::Instant) -> Result<(), CheckpointError> {
+        self.commit_inner(manifest, Some(deadline))
+    }
+}
+
+impl WorkspaceImage {
+    fn commit_inner(&self, manifest: &[u8], deadline: Option<std::time::Instant>) -> Result<(), CheckpointError> {
+        let mut state = match deadline {
+            Some(deadline) => self.state_until(deadline)?,
+            None => self.state()?,
+        };
         state
             .staging
             .put(&Self::key("MANIFEST")?, manifest)
-            .and_then(|()| self.storage.put(&self.current_key, state.generation.as_bytes()))
+            .map_err(WorkspaceCheckpoints::error)?;
+        if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+            return Err(CheckpointError::deadline());
+        }
+        // Publication is the transaction's irrevocable point. Once this write
+        // begins, its result wins over the deadline so success is never reported
+        // as timeout after the new generation became authoritative.
+        self.storage
+            .put(&self.current_key, state.generation.as_bytes())
             .map_err(WorkspaceCheckpoints::error)?;
 
         state.current = Some(state.staging.clone());

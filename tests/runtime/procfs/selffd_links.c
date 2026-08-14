@@ -5,7 +5,10 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/eventfd.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 static int link_of(int fd, char *out, size_t n) {
@@ -45,7 +48,15 @@ int main(void) {
     // a nonexistent descriptor number
     int l6 = link_of(9999, buf, sizeof buf);
     int e6 = (l6 == -1) ? errno : 0;
+    int sock[2];
+    int socket_ok = socketpair(AF_UNIX, SOCK_STREAM, 0, sock) == 0 && link_of(sock[0], buf, sizeof buf) == 0 &&
+                    strncmp(buf, "socket:[", 8) == 0;
+    int namespace_fd = open("/proc/self/ns/net", O_RDONLY | O_CLOEXEC);
+    int namespace_ok = namespace_fd >= 0 && link_of(namespace_fd, buf, sizeof buf) == 0 && strncmp(buf, "net:[", 5) == 0;
+    int event_fd = eventfd(0, EFD_CLOEXEC);
+    int event_ok = event_fd >= 0 && link_of(event_fd, buf, sizeof buf) == 0 && strcmp(buf, "anon_inode:[eventfd]") == 0;
     printf("l1=%d isnull=%d l2=%d dupnull=%d l3=%d e3=%d l4=%d ispipe=%d l5=%d istmp=%d ok=%d l6=%d e6=%d\n",
            l1, isnull, l2, dupnull, l3, e3, l4, ispipe, l5, istmp, ok, l6, e6);
+    printf("targets socket=%d namespace=%d eventfd=%d\n", socket_ok, namespace_ok, event_ok);
     return 0;
 }

@@ -237,6 +237,7 @@ static int smc_commit(struct cpu *c) {
         pthread_mutex_unlock(&g_jit_lock);
         return 1;
     }
+    stw_mapping_begin_locked();
     __atomic_store_n(&g_smc_seen, 1, __ATOMIC_RELEASE);
     if (!c->smc_range_overflow && !force_whole) {
         uint32_t retained = 0;
@@ -258,14 +259,12 @@ static int smc_commit(struct cpu *c) {
         }
         c->smc_range_count = retained;
         if (!retained) {
-            pthread_mutex_unlock(&g_jit_lock);
             c->smc_range_overflow = 0;
+            stw_mapping_end();
             return 1;
         }
     }
-    pthread_mutex_unlock(&g_jit_lock);
     // Map readers are lock-free: a peer must not still be in run_block against a range about to go stale.
-    stw_mapping_begin();
     uint32_t removed;
     if (force_whole || c->smc_range_overflow) {
         removed = g_live_map_count;

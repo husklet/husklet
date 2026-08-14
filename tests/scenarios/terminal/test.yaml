@@ -70,6 +70,45 @@ cases:
       - close: {}
   expect:
     stdout_contains: golden/interactive_term.txt
+- id: terminal/resize-winch
+  image: python:3.12-alpine
+  resources: [pty]
+  timeout: 60
+  actions:
+  - terminal:
+      argv:
+      - python3
+      - -c
+      - |-
+        import os,signal,sys
+        def resized(_signal, _frame):
+            size=os.get_terminal_size(0)
+            print(f"{size.lines} {size.columns}", flush=True)
+            sys.exit(0)
+        signal.signal(signal.SIGWINCH, resized)
+        print("READY", flush=True)
+        signal.pause()
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: READY, timeout_ms: 15000 }
+      - resize: { rows: 40, columns: 100 }
+      - await_output: { contains: "40 100", timeout_ms: 15000 }
+      - close: {}
+  expect:
+    stdout_contains: golden/ubuntu_stty_setsize.txt
+- id: terminal/large-output-tail
+  image: alpine
+  resources: [pty]
+  timeout: 60
+  actions:
+  - terminal:
+      argv: [/bin/sh, -c, "head -c 900000 /dev/zero | tr '\\000' x; printf '\\nPIPE-OK\\n'"]
+      steps:
+      - await_output: { contains: PIPE-OK, timeout_ms: 15000 }
+      - close: {}
+  expect:
+    stdout_contains: golden/jobctl_fg_pipeline.txt
 - id: terminal/ubuntu-isatty
   image: ubuntu:latest
   resources:

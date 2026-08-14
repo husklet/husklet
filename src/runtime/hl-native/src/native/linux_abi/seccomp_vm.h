@@ -32,6 +32,7 @@ struct hl_linux_seccomp_data {
 
 uint32_t hl_seccomp_run(const struct hl_linux_sock_filter *filter, uint16_t length,
                         const struct hl_linux_seccomp_data *data);
+int hl_seccomp_validate(const struct hl_linux_sock_filter *filter, uint16_t length);
 int hl_seccomp_precedence(uint32_t action);
 
 #endif

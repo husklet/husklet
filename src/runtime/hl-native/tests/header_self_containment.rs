@@ -17,6 +17,475 @@ fn headers(directory: &Path, output: &mut Vec<PathBuf>) {
 }
 
 #[test]
+fn guest_memory_pin_projects_data_and_owns_each_span() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-guest-pin-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("guest pin probe directory");
+    let source = scratch.join("guest_pin.c");
+    let executable = scratch.join("guest_pin");
+    fs::write(
+        &source,
+        r#"
+#define _GNU_SOURCE
+#include <stdint.h>
+#include <string.h>
+#include <setjmp.h>
+#include <signal.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#include "translator/guest_memory.h"
+#include "translator/guest/x86_64/guest_data.h"
+
+static unsigned char identity[512], projected[512];
+static int pins, unpins, observations;
+static int fail_second;
+static int deny_read, deny_write;
+static unsigned char *fault_host;
+static sigjmp_buf fault_pad;
+static void fault_handler(int signal_) { (void)signal_; siglongjmp(fault_pad, 1); }
+static int indirect(void) { return 1; }
+static int pin(uint64_t guest, size_t length, hl_guest_memory_access access, hl_guest_memory_pin *out) {
+    if ((access == HL_GUEST_MEMORY_READ && deny_read) || (access == HL_GUEST_MEMORY_WRITE && deny_write))
+        return HL_GUEST_MEMORY_FAULT;
+    uintptr_t first = (uintptr_t)identity;
+    if (guest < first || guest >= first + sizeof(identity)) return HL_GUEST_MEMORY_FAULT;
+    size_t offset = (size_t)(guest - first);
+    if (fail_second && offset >= 8) return HL_GUEST_MEMORY_FAULT;
+#ifdef IDENTITY_PROJECTION
+    out->host = identity + offset;
+#else
+    out->host = fault_host ? fault_host + offset : projected + offset;
+#endif
+    size_t boundary = 8 - (offset & 7);
+    out->contiguous = length < boundary ? length : boundary;
+    out->token = out;
+    ++pins;
+    return HL_GUEST_MEMORY_PROJECTED;
+}
+static void unpin(hl_guest_memory_pin *pin_) { if (pin_->token) ++unpins; }
+static void observe(uint64_t guest, size_t length) { (void)guest; (void)length; ++observations; }
+
+int main(void) {
+    for (size_t i = 0; i < sizeof(projected); ++i) { identity[i] = 0xa5; projected[i] = (unsigned char)i; }
+    const hl_guest_memory_ops ops = {.indirect = indirect, .pin = pin, .unpin = unpin, .store_observe = observe};
+    hl_guest_memory_bind(&ops);
+    unsigned char scalar[8], cross[12], sse[16], stack[32], xsave[512];
+    for (size_t width = 1; width <= 8; width *= 2)
+        if (hl_x86_guest_data_read((uintptr_t)identity + 3, scalar, width, 0) != 0 || memcmp(scalar, projected + 3, width)) return 1;
+    if (hl_x86_guest_data_read((uintptr_t)identity + 5, cross, sizeof(cross), 0) != 0 ||
+        memcmp(cross, projected + 5, sizeof(cross))) return 2;
+    if (hl_x86_guest_data_read((uintptr_t)identity + 7, sse, sizeof(sse), 0) != 0 ||
+        memcmp(sse, projected + 7, sizeof(sse))) return 3;
+    if (hl_x86_guest_data_read((uintptr_t)identity + 16, stack, sizeof(stack), 0) != 0 ||
+        memcmp(stack, projected + 16, sizeof(stack))) return 4;
+    if (hl_x86_guest_data_read((uintptr_t)identity, xsave, sizeof(xsave), 0) != 0 || memcmp(xsave, projected, sizeof(xsave))) return 5;
+    memset(sse, 0x3c, sizeof(sse));
+    if (hl_x86_guest_data_write((uintptr_t)identity + 7, sse, sizeof(sse), 0) != 0 ||
+        memcmp(projected + 7, sse, sizeof(sse)) || identity[7] != 0xa5) return 6;
+    unsigned char before[sizeof(projected)], replacement[12];
+    memcpy(before, projected, sizeof(before));
+    memset(replacement, 0x77, sizeof(replacement));
+    fail_second = 1;
+    if (hl_x86_guest_data_write((uintptr_t)identity + 5, replacement, sizeof(replacement), 0) == 0) return 7;
+    fail_second = 0;
+    if (memcmp(before, projected, sizeof(before))) return 8;
+    deny_write = 1;
+    if (hl_x86_guest_data_write((uintptr_t)identity + 5, replacement, sizeof(replacement), 0) == 0) return 9;
+    deny_write = 0;
+    if (memcmp(before, projected, sizeof(before))) return 10;
+    deny_read = 1;
+    if (hl_x86_guest_data_read((uintptr_t)identity + 5, cross, sizeof(cross), 0) == 0) return 11;
+    deny_read = 0;
+    hl_x86_guest_data_pins retained;
+    size_t page = (size_t)sysconf(_SC_PAGESIZE);
+    fault_host = mmap(0, page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (fault_host == MAP_FAILED) return 12;
+    if (hl_x86_guest_data_prepare(&retained, (uintptr_t)identity + 5, 12, HL_GUEST_MEMORY_WRITE, 0) != 0) return 12;
+    if (mprotect(fault_host, page, PROT_NONE) != 0) return 13;
+    struct sigaction action = {0};
+    action.sa_handler = fault_handler;
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGSEGV, &action, 0);
+    if (sigsetjmp(fault_pad, 1) == 0) {
+        hl_x86_guest_data_copy_to(&retained, replacement);
+        return 14;
+    }
+#ifndef OMIT_ABANDON_RELEASE
+    hl_x86_guest_data_abandon(&retained);
+#endif
+    mprotect(fault_host, page, PROT_READ | PROT_WRITE);
+    munmap(fault_host, page);
+    return pins == unpins && pins != 0 && observations == 2 ? 0 : 15;
+}
+"#,
+    )
+    .expect("guest pin probe source");
+    let compile = |output: &Path, mutation: bool| {
+        let mut command = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()));
+        command.args(["-std=c11", "-Wall", "-Wextra", "-Werror"]);
+        if mutation {
+            command.arg("-DIDENTITY_PROJECTION");
+        }
+        command
+            .arg(format!("-I{}", native.display()))
+            .arg(&source)
+            .arg(native.join("translator/guest_memory.c"))
+            .arg(native.join("translator/guest/x86_64/guest_data.c"))
+            .arg("-o")
+            .arg(output)
+            .output()
+            .expect("guest pin probe compiler")
+    };
+    let built = compile(&executable, false);
+    assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+    assert!(Command::new(&executable).status().expect("guest pin probe").success());
+    let mutation = scratch.join("guest_pin_identity");
+    let built = compile(&mutation, true);
+    assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+    assert!(
+        !Command::new(&mutation)
+            .status()
+            .expect("guest pin identity mutation")
+            .success(),
+        "identity projection mutation did not redden the canary probe"
+    );
+    let mutation = scratch.join("guest_pin_leak");
+    let mut command = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()));
+    let built = command
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-DOMIT_ABANDON_RELEASE"])
+        .arg(format!("-I{}", native.display()))
+        .arg(&source)
+        .arg(native.join("translator/guest_memory.c"))
+        .arg(native.join("translator/guest/x86_64/guest_data.c"))
+        .arg("-o")
+        .arg(&mutation)
+        .output()
+        .expect("guest pin leak mutation compiler");
+    assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+    assert!(!Command::new(&mutation).status().expect("guest pin leak mutation").success());
+    fs::remove_dir_all(scratch).expect("remove guest pin probe directory");
+}
+
+#[test]
+fn smc_page_index_is_exact_under_collisions_removal_and_publication() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-smc-index-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("create SMC index probe directory");
+    let source = scratch.join("smc_index.c");
+    let executable = scratch.join("smc_index");
+    fs::write(
+        &source,
+        r#"
+#include <pthread.h>
+
+static void claim_barrier(void);
+#define HL_SMC_PAGE_INDEX_BEFORE_CLAIM() claim_barrier()
+#ifdef OMIT_LIFECYCLE_INDEX_REMOVE
+#define HL_SMC_PAGE_INDEX_LIFECYCLE_REMOVE(index, page) ((void)(index), (void)(page), 0)
+#endif
+#include "translator/guest/x86_64/smc_page_index.h"
+
+static _Atomic uint64_t slots[8];
+static hl_smc_page_index index_ = {slots, 8};
+static _Atomic int start;
+static _Atomic int claim_sync;
+static pthread_barrier_t claims;
+static _Thread_local int claim_waited;
+static uint64_t concurrent_pages[2];
+
+static void claim_barrier(void) {
+    if (atomic_load_explicit(&claim_sync, memory_order_acquire) && !claim_waited) {
+        claim_waited = 1;
+        pthread_barrier_wait(&claims);
+    }
+}
+
+static void *reader(void *unused) {
+    (void)unused;
+    while (!atomic_load_explicit(&start, memory_order_acquire)) {}
+    while (!hl_smc_page_index_contains(&index_, UINT64_C(0xabc000))) {}
+    return NULL;
+}
+
+static void *adder(void *opaque) {
+    unsigned which = *(unsigned *)opaque;
+    while (!atomic_load_explicit(&start, memory_order_acquire)) {}
+    return (void *)(uintptr_t)!hl_smc_page_index_add(&index_, concurrent_pages[which]);
+}
+
+int main(void) {
+    uint64_t first = UINT64_C(0x1000), collision = 0;
+    size_t bucket = hl_smc_page_index_hash(first) & 7;
+    for (uint64_t page = UINT64_C(0x2000); page < UINT64_C(0x100000); page += UINT64_C(0x1000))
+        if ((hl_smc_page_index_hash(page) & 7) == bucket) { collision = page; break; }
+    if (!collision || hl_smc_page_index_contains(&index_, first)) return 1;
+    if (!hl_smc_page_index_add(&index_, first) || !hl_smc_page_index_add(&index_, collision)) return 2;
+    if (!hl_smc_page_index_contains(&index_, first) || !hl_smc_page_index_contains(&index_, collision)) return 3;
+    if (!hl_smc_page_index_add(&index_, first)) return 4;
+    if (!hl_smc_page_index_remove(&index_, first) || hl_smc_page_index_contains(&index_, first)) return 5;
+    if (!hl_smc_page_index_contains(&index_, collision)) return 6;
+    if (!hl_smc_page_index_add(&index_, first) || !hl_smc_page_index_contains(&index_, first)) return 7;
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, reader, NULL) != 0) return 8;
+    atomic_store_explicit(&start, 1, memory_order_release);
+    if (!hl_smc_page_index_add(&index_, UINT64_C(0xabc000))) return 9;
+    if (pthread_join(thread, NULL) != 0) return 10;
+    for (unsigned i = 0; i < 8; ++i) atomic_store_explicit(&slots[i], 0, memory_order_release);
+    concurrent_pages[0] = first;
+    concurrent_pages[1] = collision;
+    unsigned which[] = {0, 1};
+    pthread_t adders[2];
+    if (pthread_barrier_init(&claims, NULL, 2) != 0) return 11;
+    atomic_store_explicit(&claim_sync, 1, memory_order_release);
+    atomic_store_explicit(&start, 0, memory_order_release);
+    if (pthread_create(&adders[0], NULL, adder, &which[0]) != 0 ||
+        pthread_create(&adders[1], NULL, adder, &which[1]) != 0) return 11;
+    atomic_store_explicit(&start, 1, memory_order_release);
+    void *left = NULL, *right = NULL;
+    if (pthread_join(adders[0], &left) != 0 || pthread_join(adders[1], &right) != 0 || left || right) return 12;
+    atomic_store_explicit(&claim_sync, 0, memory_order_release);
+    pthread_barrier_destroy(&claims);
+    if (!hl_smc_page_index_contains(&index_, first) || !hl_smc_page_index_contains(&index_, collision)) return 13;
+    for (unsigned i = 0; i < 8; ++i) atomic_store_explicit(&slots[i], 0, memory_order_release);
+    if (hl_smc_page_index_contains(&index_, first) || hl_smc_page_index_contains(&index_, collision)) return 14;
+    for (unsigned i = 0; i < 8; ++i)
+        atomic_store_explicit(&slots[i], (UINT64_C(0x100000) + ((uint64_t)i << 12)) | HL_SMC_PAGE_INDEX_TOMB,
+                              memory_order_release);
+    if (hl_smc_page_index_add(&index_, UINT64_C(0xdef000)) != HL_SMC_PAGE_INDEX_INSERTED ||
+        !hl_smc_page_index_contains(&index_, UINT64_C(0xdef000))) return 15;
+    for (unsigned i = 0; i < 8; ++i) atomic_store_explicit(&slots[i], 0, memory_order_release);
+    uint64_t pages[3] = {first, collision, UINT64_C(0xabc000)};
+    int length = 3;
+    for (int i = 0; i < length; ++i)
+        if (hl_smc_page_index_add(&index_, pages[i]) != HL_SMC_PAGE_INDEX_INSERTED) return 16;
+    if (!hl_smc_page_registry_remove_range(&index_, pages, &length, first, first + UINT64_C(0x1000))) return 17;
+    if (length != 2 || hl_smc_page_index_contains(&index_, first) ||
+        !hl_smc_page_index_contains(&index_, collision) ||
+        !hl_smc_page_index_contains(&index_, UINT64_C(0xabc000))) return 18;
+    hl_smc_page_registry_remove_all(&index_, pages, &length);
+    if (length != 0 || hl_smc_page_index_contains(&index_, collision) ||
+        hl_smc_page_index_contains(&index_, UINT64_C(0xabc000))) return 19;
+    return 0;
+}
+"#,
+    )
+    .expect("write SMC index probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-D_GNU_SOURCE", "-Wall", "-Wextra", "-Werror", "-pthread"])
+        .arg(format!("-I{}", native.display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("SMC index probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable).status().expect("SMC index probe execution");
+    assert!(run.success(), "SMC index probe failed with {run}");
+    let mutation = scratch.join("smc_index_omit_lifecycle");
+    let compile_mutation = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args([
+            "-std=c11",
+            "-D_GNU_SOURCE",
+            "-DOMIT_LIFECYCLE_INDEX_REMOVE",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-pthread",
+        ])
+        .arg(format!("-I{}", native.display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&mutation)
+        .output()
+        .expect("mutated SMC index probe compiler");
+    assert!(
+        compile_mutation.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compile_mutation.stderr)
+    );
+    let mutation_run = Command::new(&mutation)
+        .status()
+        .expect("mutated SMC index probe execution");
+    assert!(
+        !mutation_run.success(),
+        "omitting lifecycle index removal did not redden the probe"
+    );
+    fs::remove_dir_all(scratch).expect("remove SMC index probe directory");
+}
+
+#[test]
+fn smc_address_domains_are_explicit_and_idempotent() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-smc-address-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("create SMC address probe directory");
+    let source = scratch.join("smc_address.c");
+    let executable = scratch.join("smc_address");
+    fs::write(
+        &source,
+        r#"
+#include "translator/guest/x86_64/smc_address.h"
+
+int main(void) {
+    const uint64_t page = UINT64_C(0x1000);
+    const uint64_t low = UINT64_C(0x400000);
+    const uint64_t high = UINT64_C(0x800000);
+    const uint64_t bias = UINT64_C(0x100000000);
+    if (!hl_smc_address_is_direct(0)) return 1;
+    if (hl_smc_address_is_direct(1) || hl_smc_address_is_direct(-1)) return 2;
+    if (hl_smc_direct_page(UINT64_C(0x401234), low, high, bias, page) != UINT64_C(0x100401000)) return 3;
+    if (hl_smc_direct_page(UINT64_C(0x100401234), low, high, bias, page) != UINT64_C(0x100401000)) return 4;
+    if (hl_smc_direct_page(UINT64_C(0x401234), 0, 0, 0, page) != UINT64_C(0x401000)) return 5;
+    return 0;
+}
+"#,
+    )
+    .expect("write SMC address probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("SMC address probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable).status().expect("SMC address probe execution");
+    assert!(run.success(), "SMC address probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove SMC address probe directory");
+}
+
+#[test]
+fn proc_fd_pseudo_targets_exclude_host_filesystem_spellings() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-procfd-target-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("create procfd target probe directory");
+    let source = scratch.join("procfd_target.c");
+    let executable = scratch.join("procfd_target");
+    fs::write(
+        &source,
+        r#"
+#include "linux_abi/proc_fd_target.h"
+
+int main(void) {
+    const char *accepted[] = {
+        "pipe:[7]", "socket:[19]", "anon_inode:[eventfd]", "anon_inode:inotify", "net:[4026531840]",
+        "mnt:[1]", "pid_for_children:[2]", "time_for_children:[3]"
+    };
+    const char *rejected[] = {
+        "pipe:", "pipe:[]", "pipe:[x]", "pipe:[7]suffix", "other:[7]", "anon_inode:", "anon_inode:[]",
+        "anon_inode:../../file", "anon_inode:[event/fd]", "memfd:name", "/memfd:name (deleted)", "/tmp/file",
+        "/tmp/file (deleted)", "net:[x]",
+        "C:\\rootfs\\tmp\\file", "C:/rootfs/tmp/file", "\\\\server\\share\\file", "relative/file", ""
+    };
+    for (unsigned i = 0; i < sizeof accepted / sizeof accepted[0]; ++i)
+        if (!hl_proc_fd_pseudo_target(accepted[i])) return 1;
+    for (unsigned i = 0; i < sizeof rejected / sizeof rejected[0]; ++i)
+        if (hl_proc_fd_pseudo_target(rejected[i])) return 2;
+    return hl_proc_fd_pseudo_target(0) ? 3 : 0;
+}
+"#,
+    )
+    .expect("write procfd target probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("procfd target probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable)
+        .status()
+        .expect("procfd target probe execution");
+    assert!(run.success(), "procfd target probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove procfd target probe directory");
+}
+
+#[test]
+fn elf64_parser_rejects_hostile_ranges_before_loader_access() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-elf64-parser-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("create ELF parser probe directory");
+    let source = scratch.join("elf64_parser.c");
+    let executable = scratch.join("elf64_parser");
+    fs::write(
+        &source,
+        r#"
+#include "linux_abi/image.h"
+#include <stdint.h>
+#include <string.h>
+
+static void put16(uint8_t *p, uint16_t v) { memcpy(p, &v, sizeof v); }
+static void put32(uint8_t *p, uint32_t v) { memcpy(p, &v, sizeof v); }
+static void put64(uint8_t *p, uint64_t v) { memcpy(p, &v, sizeof v); }
+
+static void valid(uint8_t *b, uint16_t machine) {
+    memset(b, 0, 256);
+    memcpy(b, "\177ELF\2\1\1", 7);
+    put16(b + 16, 2); put16(b + 18, machine); put32(b + 20, 1);
+    put64(b + 32, 64); put16(b + 52, 64); put16(b + 54, 56); put16(b + 56, 1);
+    put64(b + 24, 0x400000); put32(b + 64, 1); put32(b + 68, 5); put64(b + 72, 120); put64(b + 80, 0x400000);
+    put64(b + 96, 8); put64(b + 104, 4096); put64(b + 112, 8);
+}
+
+int main(void) {
+    uint8_t bytes[256]; hl_linux_elf64_layout layout;
+    hl_linux_image image = {bytes, sizeof bytes};
+    valid(bytes, 0xb7);
+    if (hl_linux_elf64_validate(&image, 0xb7, &layout) != 0 || layout.load_end != 0x401000) return 1;
+    if (hl_linux_elf64_validate(&image, 0x3e, &layout) == 0) return 2;
+    image.size = 63;
+    if (hl_linux_elf64_validate(&image, 0xb7, &layout) == 0) return 3;
+    image.size = sizeof bytes; valid(bytes, 0xb7); put64(bytes + 32, UINT64_MAX - 8);
+    if (hl_linux_elf64_validate(&image, 0xb7, &layout) == 0) return 4;
+    valid(bytes, 0xb7); put64(bytes + 72, UINT64_MAX - 3); put64(bytes + 96, 8);
+    if (hl_linux_elf64_validate(&image, 0xb7, &layout) == 0) return 5;
+    valid(bytes, 0xb7); put64(bytes + 80, UINT64_MAX - 7); put64(bytes + 104, 16);
+    if (hl_linux_elf64_validate(&image, 0xb7, &layout) == 0) return 6;
+    valid(bytes, 0xb7); put16(bytes + 56, 2); memcpy(bytes + 120, bytes + 64, 56);
+    put64(bytes + 120 + 16, UINT64_MAX - 7); put64(bytes + 120 + 40, 16);
+    if (hl_linux_elf64_validate(&image, 0xb7, &layout) == 0) return 9;
+    valid(bytes, 0xb7); put16(bytes + 56, 2); memcpy(bytes + 120, bytes + 64, 56);
+    put64(bytes + 96, 0); put64(bytes + 104, 0); put64(bytes + 80, 0);
+    if (hl_linux_elf64_validate(&image, 0xb7, &layout) != 0 || layout.load_start != 0x400000) return 10;
+    valid(bytes, 0xb7); put16(bytes + 56, 3); memcpy(bytes + 120, bytes + 64, 56);
+    memcpy(bytes + 176, bytes + 64, 56); put32(bytes + 120, 3); put32(bytes + 176, 3);
+    put64(bytes + 128, 240); put64(bytes + 152, 2); put64(bytes + 184, 240); put64(bytes + 208, 2);
+    bytes[240] = 'x'; bytes[241] = 0;
+    if (hl_linux_elf64_validate(&image, 0xb7, &layout) == 0) return 11;
+    valid(bytes, 0xb7); put32(bytes + 64, 3); put64(bytes + 72, 250); put64(bytes + 96, 8);
+    if (hl_linux_elf64_validate(&image, 0xb7, &layout) == 0) return 7;
+    valid(bytes, 0x3e);
+    if (hl_linux_elf64_validate(&image, 0x3e, &layout) != 0) return 8;
+    return 0;
+}
+
+"#,
+    )
+    .expect("write ELF parser probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg(native.join("linux_abi/image.c"))
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("ELF parser probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable).status().expect("ELF parser probe execution");
+    assert!(run.success(), "ELF parser probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove ELF parser probe directory");
+}
+
+#[test]
 fn virtual_dac_policy_uses_guest_identity_mode_groups_and_capabilities() {
     let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let native = package.join("src/native");
@@ -123,7 +592,9 @@ int main(void) {
         .output()
         .expect("path composition probe compiler");
     assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
-    let run = Command::new(&executable).status().expect("path composition probe execution");
+    let run = Command::new(&executable)
+        .status()
+        .expect("path composition probe execution");
     assert!(run.success(), "path composition probe failed with {run}");
     fs::remove_dir_all(scratch).expect("remove path composition probe directory");
 }
@@ -193,16 +664,18 @@ int main(void) {
 
 #[test]
 fn fatal_guest_signal_path_excludes_printf_family_formatting() {
-    let source = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native/engine/fatal_diagnostic.c"),
-    )
-        .expect("read native logging source");
+    let source =
+        fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native/engine/fatal_diagnostic.c"))
+            .expect("read native logging source");
     let start = source
         .find("void hl_fatal_diagnostic_publish(")
         .expect("fatal diagnostic helper");
     let body = &source[start..];
     for forbidden in ["printf(", "snprintf(", "sprintf(", "hl_log_format(", "hl_log_message("] {
-        assert!(!body.contains(forbidden), "fatal signal path uses non-signal-safe {forbidden}");
+        assert!(
+            !body.contains(forbidden),
+            "fatal signal path uses non-signal-safe {forbidden}"
+        );
     }
 }
 
@@ -455,12 +928,7 @@ int main(void) {
     )
     .expect("engine output probe source");
     let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
-        .args([
-            "-std=c11",
-            "-D_GNU_SOURCE",
-            "-ffunction-sections",
-            "-fdata-sections",
-        ])
+        .args(["-std=c11", "-D_GNU_SOURCE", "-ffunction-sections", "-fdata-sections"])
         .arg(if cfg!(target_os = "macos") {
             "-Wl,-dead_strip"
         } else {
@@ -512,12 +980,7 @@ int main(void) {
     )
     .expect("run output probe source");
     let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
-        .args([
-            "-std=c11",
-            "-D_GNU_SOURCE",
-            "-ffunction-sections",
-            "-fdata-sections",
-        ])
+        .args(["-std=c11", "-D_GNU_SOURCE", "-ffunction-sections", "-fdata-sections"])
         .arg(if cfg!(target_os = "macos") {
             "-Wl,-dead_strip"
         } else {
@@ -876,7 +1339,9 @@ int main(void) {
         .output()
         .expect("status output probe compiler");
     assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
-    let run = Command::new(&executable).status().expect("status output probe execution");
+    let run = Command::new(&executable)
+        .status()
+        .expect("status output probe execution");
     assert!(run.success(), "status output probe failed with {run}");
     fs::remove_dir_all(scratch).expect("remove status output probe directory");
 }
@@ -917,4 +1382,81 @@ fn cpp_bridge_declarations_retain_c_linkage() {
         "{symbols}"
     );
     fs::remove_dir_all(scratch).expect("remove C++ linkage probe directory");
+}
+
+#[test]
+fn checkpoint_object_bounds_reject_oversize_and_inconsistent_counts() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-checkpoint-bounds-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("create checkpoint bounds probe directory");
+    let source = scratch.join("checkpoint_bounds.c");
+    let executable = scratch.join("checkpoint_bounds");
+    fs::write(
+        &source,
+        r#"
+#include "linux_abi/checkpoint/object_bounds.h"
+#include <stdint.h>
+
+int main(void) {
+    size_t size = 0;
+    if (ckpt_bounded_object_size(128, 16, 128, &size) != 0 || size != 128) return 1;
+    if (ckpt_bounded_object_size(INT64_MAX, 16, 4096, &size) == 0) return 2;
+    if (ckpt_bounded_object_size(15, 16, 4096, &size) == 0) return 3;
+    if (ckpt_bounded_object_size(16, 16, 4096, 0) == 0) return 4;
+    if (ckpt_counted_object_size(48, 16, 2, 16, 2) != 0) return 5;
+    if (ckpt_counted_object_size(49, 16, 2, 16, 2) == 0) return 6;
+    if (ckpt_counted_object_size(48, 16, 3, 16, 2) == 0) return 7;
+    if (ckpt_counted_object_size(SIZE_MAX, 16, UINT64_MAX, 16, UINT64_MAX) == 0) return 8;
+    if (ckpt_counted_object_size(16, 16, 0, 0, 0) == 0) return 9;
+    if (ckpt_inotify_object_size(CKPT_INOTIFY_IMAGE_LIMIT, &size) != 0 ||
+        size != CKPT_INOTIFY_IMAGE_LIMIT) return 10;
+    if (ckpt_inotify_object_size((int64_t)CKPT_INOTIFY_IMAGE_LIMIT + 1, &size) == 0) return 11;
+    if (ckpt_inotify_object_size(0, &size) == 0) return 12;
+    size_t count = 0;
+    if (ckpt_record_object_size(48, 16, 3, &size, &count) != 0 || size != 48 || count != 3) return 13;
+    if (ckpt_record_object_size(-1, 16, 3, &size, &count) == 0) return 14;
+    if (ckpt_record_object_size(49, 16, 4, &size, &count) == 0) return 15;
+    if (ckpt_record_object_size(64, 16, 3, &size, &count) == 0) return 16;
+    if (ckpt_record_object_size(0, 0, 0, &size, &count) == 0) return 17;
+    if (ckpt_record_object_size(0, 16, 0, &size, &count) != 0 || size != 0 || count != 0) return 18;
+    if (ckpt_minimum_counted_object_size(160, 2, 80, 4) != 0) return 19;
+    if (ckpt_minimum_counted_object_size(159, 2, 80, 4) == 0) return 20;
+    if (ckpt_minimum_counted_object_size(INT64_MAX, 5, 80, 4) == 0) return 21;
+    if (ckpt_minimum_counted_object_size(INT64_MAX, UINT64_MAX, 80, UINT64_MAX) == 0) return 22;
+    if (ckpt_minimum_counted_object_size(0, 0, 0, 0) == 0) return 23;
+    if (ckpt_capacity_object_size(65536, 65536, &size) != 0 || size != 65536) return 24;
+    if (ckpt_capacity_object_size(65537, 65536, &size) == 0) return 25;
+    if (ckpt_capacity_object_size(-1, 65536, &size) == 0) return 26;
+    if (ckpt_capacity_object_size(0, 0, &size) == 0) return 27;
+    if (ckpt_decimal_capacity("8192", 65536, 1048576, &size) != 0 || size != 8192) return 28;
+    if (ckpt_decimal_capacity("0", 65536, 1048576, &size) != 0 || size != 65536) return 29;
+    if (ckpt_decimal_capacity("8192x", 65536, 1048576, &size) == 0) return 30;
+    if (ckpt_decimal_capacity("1048577", 65536, 1048576, &size) == 0) return 31;
+    if (ckpt_decimal_capacity("", 65536, 1048576, &size) == 0) return 32;
+    if (ckpt_fixed_payload_object_size(48, 16, 2, 16, 2, &size) != 0 || size != 32) return 33;
+    if (ckpt_fixed_payload_object_size(47, 16, 2, 16, 2, &size) == 0) return 34;
+    if (ckpt_fixed_payload_object_size(49, 16, 2, 16, 2, &size) == 0) return 35;
+    if (ckpt_fixed_payload_object_size(48, 16, 3, 16, 2, &size) == 0) return 36;
+    if (ckpt_fixed_payload_object_size(INT64_MAX, 16, UINT64_MAX, 16, UINT64_MAX, &size) == 0) return 37;
+    if (ckpt_fixed_payload_object_size(48, 16, 2, 16, 2, 0) == 0) return 38;
+    return 0;
+}
+"#,
+    )
+    .expect("write checkpoint bounds probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("checkpoint bounds probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable)
+        .status()
+        .expect("checkpoint bounds probe execution");
+    assert!(run.success(), "checkpoint bounds probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove checkpoint bounds probe directory");
 }

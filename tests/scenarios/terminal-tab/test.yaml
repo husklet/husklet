@@ -1,0 +1,20 @@
+cases:
+- id: terminal-tab/readline-path-completion
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      steps:
+      - write: { text: "stty -echo; printf '\\122\\104\\131\\n'\r" }
+      - await_output: { contains: RDY, timeout_ms: 5000 }
+      - write: { text: "touch /tmp/husklet-completion-target; printf '\\106\\111\\114\\105\\055\\122\\104\\131\\n'\r" }
+      - await_output: { contains: FILE-RDY, timeout_ms: 5000 }
+      - write: { text: "printf '<%s>\\n' /tmp/husklet-com\t\r" }
+      - await_output: { contains: "</tmp/husklet-completion-target>", timeout_ms: 5000 }
+      - write: { text: "printf '\\123\\110\\105\\114\\114\\055\\117\\113\\n'; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains: [golden/completed.txt, golden/shell_ok.txt]

@@ -1,0 +1,17 @@
+cases:
+- id: terminal-ctrl-c/foreground-command
+  image: alpine
+  resources: [pty]
+  timeout: 20
+  actions:
+  - terminal:
+      argv: [/bin/sh]
+      steps:
+      - write: { text: "printf '\\123\\124\\101\\122\\124\\105\\104\\n'; sleep 30\r" }
+      - await_output: { contains: STARTED, timeout_ms: 5000 }
+      - write: { text: "\u0003" }
+      - write: { text: "printf '\\120\\111\\120\\105\\055\\117\\113\\n'; exit\r" }
+      - await_output: { contains: PIPE-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains: golden/foreground_command.txt

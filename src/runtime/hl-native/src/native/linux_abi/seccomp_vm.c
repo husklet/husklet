@@ -12,6 +12,64 @@
 #define MISCOP(c) ((c) & 0xf8)
 #define MEMWORDS 16
 
+int hl_seccomp_validate(const struct hl_linux_sock_filter *f, uint16_t flen) {
+    if (!f || flen == 0 || flen > HL_LINUX_BPF_MAXINSNS || CLASS(f[flen - 1].code) != 0x06) return 0;
+    for (uint32_t pc = 0; pc < flen; pc++) {
+        uint16_t code = f[pc].code;
+        uint32_t value = f[pc].k;
+        switch (CLASS(code)) {
+        case 0x00:                                   /* LD */
+            if (code == 0x00 || code == 0x80) break; /* IMM, LEN */
+            if (MODE(code) == 0x20) {
+                if (SIZE(code) != 0 || value > sizeof(struct hl_linux_seccomp_data) - sizeof(uint32_t) ||
+                    (value & (sizeof(uint32_t) - 1u)) != 0)
+                    return 0;
+                break;
+            }
+            if (code == 0x60 && value < MEMWORDS) break;
+            return 0;
+        case 0x01: /* LDX */
+            if (code == 0x01 || code == 0x81 || (code == 0x61 && value < MEMWORDS)) break;
+            return 0;
+        case 0x02: /* ST */
+        case 0x03: /* STX */
+            if (code != CLASS(code) || value >= MEMWORDS) return 0;
+            break;
+        case 0x04: { /* ALU */
+            uint16_t op = OP(code);
+            if (op == 0x80) {
+                if (code != 0x84) return 0;
+            } else if (!(op == 0x00 || op == 0x10 || op == 0x20 || op == 0x30 || op == 0x40 || op == 0x50 ||
+                         op == 0x60 || op == 0x70 || op == 0x90 || op == 0xa0)) {
+                return 0;
+            }
+            if ((op == 0x30 || op == 0x90) && SRC(code) == 0 && value == 0) return 0;
+            break;
+        }
+        case 0x05: { /* JMP */
+            uint32_t remaining = flen - pc - 1u;
+            if (OP(code) == 0x00) {
+                if (code != 0x05 || value >= remaining) return 0;
+            } else {
+                uint16_t op = OP(code);
+                if (!(op == 0x10 || op == 0x20 || op == 0x30 || op == 0x40) || f[pc].jt >= remaining ||
+                    f[pc].jf >= remaining)
+                    return 0;
+            }
+            break;
+        }
+        case 0x06: /* RET */
+            if (!(code == 0x06 || code == 0x16)) return 0;
+            break;
+        case 0x07: /* MISC */
+            if (!(code == 0x07 || code == 0x87)) return 0;
+            break;
+        default: return 0;
+        }
+    }
+    return 1;
+}
+
 uint32_t hl_seccomp_run(const struct hl_linux_sock_filter *f, uint16_t flen, const struct hl_linux_seccomp_data *sd) {
     const uint8_t *packet = (const uint8_t *)sd;
     const uint32_t packet_length = (uint32_t)sizeof(*sd);

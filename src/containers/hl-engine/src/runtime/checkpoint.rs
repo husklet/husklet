@@ -7,19 +7,23 @@
 use crate::composition::{CheckpointSink, CheckpointSource};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    io::{Read, Write},
+    io::Read,
+    os::{fd::AsRawFd, unix::net::UnixStream},
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
 #[path = "checkpoint_protocol.rs"]
 mod protocol;
+#[cfg(test)]
+#[path = "checkpoint_test.rs"]
+mod test;
 use protocol::{
     CLAIM, COMMIT, DIGEST, GROUP_ABORT, GROUP_BEGIN, GROUP_COMMIT, GROUP_COUNT, GROUP_PRESENT, OBJECT_ABORT,
-    OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, PAYLOAD_MAX, REQUEST_BYTES, Reply,
-    Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, STATUS_ALREADY, UNCLAIM,
+    OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, PAYLOAD_MAX, RECOVERY_COMPLETE,
+    REQUEST_BYTES, Reply, Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, STATUS_ALREADY, UNCLAIM,
 };
 
 const HASH_BASIS: u64 = 14_695_981_039_346_656_037;
@@ -40,10 +44,72 @@ struct State {
     failure: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CaptureFailure {
+    Deadline,
+    Failed,
+    Poisoned,
+    Busy,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CapturePhase {
+    Idle,
+    Recovery {
+        id: u64,
+        deadline: std::time::Instant,
+    },
+    Active {
+        id: u64,
+        deadline: std::time::Instant,
+    },
+    Publishing {
+        id: u64,
+    },
+    Finished {
+        id: u64,
+        result: Result<(), CaptureFailure>,
+    },
+    Complete,
+    Poisoned,
+}
+
+struct CaptureState {
+    phase: CapturePhase,
+    mutations: usize,
+    recovery_report_published: bool,
+}
+
+struct MutationAdmission<'a> {
+    server: &'a Server,
+    id: u64,
+    deadline: std::time::Instant,
+    finished: bool,
+}
+
+impl MutationAdmission<'_> {
+    fn finish(mut self, result: Result<(), CaptureFailure>) -> Result<(), CaptureFailure> {
+        self.finished = true;
+        self.server.finish_mutation(self.id, result)
+    }
+}
+
+impl Drop for MutationAdmission<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.server.finish_mutation(self.id, Err(CaptureFailure::Failed));
+        }
+    }
+}
+
 pub(crate) struct Server {
     sink: Arc<dyn CheckpointSink>,
     source: Arc<dyn CheckpointSource>,
     state: Mutex<State>,
+    capture: Mutex<CaptureState>,
+    capture_changed: Condvar,
+    channels: Mutex<HashMap<i32, UnixStream>>,
+    recovery_connections: Mutex<HashMap<u64, u64>>,
     committed: AtomicBool,
     running: AtomicBool,
     connections: AtomicUsize,
@@ -55,22 +121,296 @@ impl Server {
             sink,
             source,
             state: Mutex::new(State::default()),
+            capture: Mutex::new(CaptureState {
+                phase: CapturePhase::Idle,
+                mutations: 0,
+                recovery_report_published: false,
+            }),
+            capture_changed: Condvar::new(),
+            channels: Mutex::new(HashMap::new()),
+            recovery_connections: Mutex::new(HashMap::new()),
             committed: AtomicBool::new(false),
             running: AtomicBool::new(true),
             connections: AtomicUsize::new(0),
         }
     }
 
+    pub(crate) fn begin_capture(&self, generation: u32, deadline: std::time::Instant) -> Result<u64, CaptureFailure> {
+        if std::time::Instant::now() >= deadline {
+            return Err(CaptureFailure::Deadline);
+        }
+        let mut capture = self.capture_lock()?;
+        if !matches!(capture.phase, CapturePhase::Idle) {
+            return Err(match capture.phase {
+                CapturePhase::Poisoned => CaptureFailure::Poisoned,
+                _ => CaptureFailure::Busy,
+            });
+        }
+        let id = u64::from(generation);
+        if id == 0 {
+            return Err(CaptureFailure::Poisoned);
+        }
+        *self.state.lock().map_err(|_| CaptureFailure::Poisoned)? = State::default();
+        self.committed.store(false, Ordering::Release);
+        capture.phase = CapturePhase::Active { id, deadline };
+        capture.mutations = 0;
+        capture.recovery_report_published = false;
+        Ok(id)
+    }
+
+    pub(crate) fn begin_recovery(&self, generation: u32, deadline: std::time::Instant) -> Result<u64, CaptureFailure> {
+        if std::time::Instant::now() >= deadline {
+            return Err(CaptureFailure::Deadline);
+        }
+        let mut capture = self.capture_lock()?;
+        if !matches!(capture.phase, CapturePhase::Idle) {
+            return Err(match capture.phase {
+                CapturePhase::Poisoned => CaptureFailure::Poisoned,
+                _ => CaptureFailure::Busy,
+            });
+        }
+        let id = u64::from(generation);
+        if id == 0 {
+            return Err(CaptureFailure::Poisoned);
+        }
+        *self.state.lock().map_err(|_| CaptureFailure::Poisoned)? = State::default();
+        capture.phase = CapturePhase::Recovery { id, deadline };
+        capture.mutations = 0;
+        capture.recovery_report_published = false;
+        Ok(id)
+    }
+
+    pub(crate) fn abort_recovery(&self, id: u64) -> Result<(), CaptureFailure> {
+        let mut capture = self.capture_lock()?;
+        match capture.phase {
+            CapturePhase::Recovery { id: active, .. } if active == id => {
+                let result = if capture.mutations == 0 {
+                    capture.phase = CapturePhase::Idle;
+                    Ok(())
+                } else {
+                    capture.phase = CapturePhase::Poisoned;
+                    Err(CaptureFailure::Failed)
+                };
+                self.capture_changed.notify_all();
+                drop(capture);
+                if result.is_err() {
+                    self.interrupt_channels();
+                }
+                result
+            }
+            CapturePhase::Idle => Ok(()),
+            CapturePhase::Poisoned => Err(CaptureFailure::Poisoned),
+            _ => Err(CaptureFailure::Busy),
+        }
+    }
+
+    fn capture_lock(&self) -> Result<std::sync::MutexGuard<'_, CaptureState>, CaptureFailure> {
+        match self.capture.lock() {
+            Ok(capture) => Ok(capture),
+            Err(poisoned) => {
+                let mut capture = poisoned.into_inner();
+                capture.phase = CapturePhase::Poisoned;
+                self.capture_changed.notify_all();
+                Err(CaptureFailure::Poisoned)
+            }
+        }
+    }
+
+    fn active_deadline(&self) -> Result<(u64, std::time::Instant), CaptureFailure> {
+        let capture = self.capture_lock()?;
+        match capture.phase {
+            CapturePhase::Active { id, deadline } if std::time::Instant::now() < deadline => Ok((id, deadline)),
+            CapturePhase::Active { .. } => Err(CaptureFailure::Deadline),
+            CapturePhase::Poisoned => Err(CaptureFailure::Poisoned),
+            _ => Err(CaptureFailure::Busy),
+        }
+    }
+
+    fn admit_mutation(&self) -> Result<Option<MutationAdmission<'_>>, CaptureFailure> {
+        let mut capture = self.capture_lock()?;
+        match capture.phase {
+            CapturePhase::Idle => Ok(None),
+            CapturePhase::Active { id, deadline } if std::time::Instant::now() < deadline => {
+                capture.mutations = capture.mutations.checked_add(1).ok_or(CaptureFailure::Poisoned)?;
+                Ok(Some(MutationAdmission {
+                    server: self,
+                    id,
+                    deadline,
+                    finished: false,
+                }))
+            }
+            CapturePhase::Recovery { id, deadline } if std::time::Instant::now() < deadline => {
+                capture.mutations = capture.mutations.checked_add(1).ok_or(CaptureFailure::Poisoned)?;
+                Ok(Some(MutationAdmission {
+                    server: self,
+                    id,
+                    deadline,
+                    finished: false,
+                }))
+            }
+            CapturePhase::Recovery { .. } => Err(CaptureFailure::Deadline),
+            CapturePhase::Active { .. } => Err(CaptureFailure::Deadline),
+            CapturePhase::Poisoned => Err(CaptureFailure::Poisoned),
+            _ => Err(CaptureFailure::Busy),
+        }
+    }
+
+    fn finish_mutation(&self, id: u64, result: Result<(), CaptureFailure>) -> Result<(), CaptureFailure> {
+        let mut capture = self.capture_lock()?;
+        if capture.mutations == 0 {
+            capture.phase = CapturePhase::Poisoned;
+            self.capture_changed.notify_all();
+            return Err(CaptureFailure::Poisoned);
+        }
+        capture.mutations -= 1;
+        if let Err(failure) = result
+            && matches!(capture.phase, CapturePhase::Active { id: active, .. } if active == id)
+        {
+            capture.phase = CapturePhase::Finished {
+                id,
+                result: Err(failure),
+            };
+        }
+        if result.is_err() && matches!(capture.phase, CapturePhase::Recovery { id: active, .. } if active == id) {
+            capture.phase = CapturePhase::Poisoned;
+        }
+        self.capture_changed.notify_all();
+        let terminal = result.is_err();
+        drop(capture);
+        if terminal {
+            self.interrupt_channels();
+        }
+        result
+    }
+
+    fn source_deadline(&self) -> Result<Option<std::time::Instant>, CaptureFailure> {
+        let capture = self.capture_lock()?;
+        match capture.phase {
+            CapturePhase::Idle => Ok(None),
+            CapturePhase::Recovery { deadline, .. } if std::time::Instant::now() < deadline => Ok(Some(deadline)),
+            CapturePhase::Recovery { .. } => Err(CaptureFailure::Deadline),
+            CapturePhase::Active { deadline, .. } if std::time::Instant::now() < deadline => Ok(Some(deadline)),
+            CapturePhase::Active { .. } => Err(CaptureFailure::Deadline),
+            CapturePhase::Publishing { .. } => Err(CaptureFailure::Busy),
+            CapturePhase::Finished { result: Ok(()), .. } => Ok(None),
+            CapturePhase::Finished { result: Err(error), .. } => Err(error),
+            CapturePhase::Complete => Ok(None),
+            CapturePhase::Poisoned => Err(CaptureFailure::Poisoned),
+        }
+    }
+
+    fn finish_failed(&self, id: u64, failure: CaptureFailure) -> Result<(), CaptureFailure> {
+        let mut capture = self.capture_lock()?;
+        if matches!(capture.phase, CapturePhase::Active { id: active, .. } if active == id) {
+            capture.phase = CapturePhase::Finished {
+                id,
+                result: Err(failure),
+            };
+            self.capture_changed.notify_all();
+        }
+        drop(capture);
+        self.interrupt_channels();
+        Ok(())
+    }
+
+    fn interrupt_channels(&self) {
+        if let Ok(channels) = self.channels.lock() {
+            for channel in channels.values() {
+                let _ = channel.shutdown(std::net::Shutdown::Both);
+            }
+        }
+    }
+
+    pub(crate) fn abort_capture(&self, id: u64) -> Result<(), CaptureFailure> {
+        let mut capture = self.capture_lock()?;
+        if matches!(capture.phase, CapturePhase::Active { id: active, .. } if active == id) {
+            capture.phase = CapturePhase::Poisoned;
+            self.capture_changed.notify_all();
+        }
+        drop(capture);
+        self.interrupt_channels();
+        Ok(())
+    }
+
+    pub(crate) fn wait_capture(
+        &self,
+        id: u64,
+        wake: std::time::Instant,
+    ) -> Result<Option<Result<(), CaptureFailure>>, CaptureFailure> {
+        let mut capture = self.capture_lock()?;
+        loop {
+            match capture.phase {
+                CapturePhase::Active { id: active, deadline } if active == id => {
+                    let now = std::time::Instant::now();
+                    if now >= deadline {
+                        capture.phase = CapturePhase::Poisoned;
+                        self.capture_changed.notify_all();
+                        drop(capture);
+                        self.interrupt_channels();
+                        return Ok(Some(Err(CaptureFailure::Deadline)));
+                    }
+                    if now >= wake {
+                        return Ok(None);
+                    }
+                    let wait = deadline.min(wake).saturating_duration_since(now);
+                    let (next, timeout) = match self.capture_changed.wait_timeout(capture, wait) {
+                        Ok(result) => result,
+                        Err(poisoned) => {
+                            let (mut capture, _) = poisoned.into_inner();
+                            capture.phase = CapturePhase::Poisoned;
+                            self.capture_changed.notify_all();
+                            drop(capture);
+                            self.interrupt_channels();
+                            return Err(CaptureFailure::Poisoned);
+                        }
+                    };
+                    capture = next;
+                    if timeout.timed_out() && std::time::Instant::now() >= wake {
+                        return Ok(None);
+                    }
+                }
+                CapturePhase::Publishing { id: active } if active == id => {
+                    // This capture exclusively owns the synchronous publication attempt.
+                    // Storage checks the deadline immediately before replacement; after
+                    // replacement starts, its actual result wins over wall-clock expiry.
+                    capture = match self.capture_changed.wait(capture) {
+                        Ok(capture) => capture,
+                        Err(poisoned) => {
+                            let mut capture = poisoned.into_inner();
+                            capture.phase = CapturePhase::Poisoned;
+                            self.capture_changed.notify_all();
+                            drop(capture);
+                            self.interrupt_channels();
+                            return Err(CaptureFailure::Poisoned);
+                        }
+                    };
+                }
+                CapturePhase::Finished { id: active, result } if active == id => {
+                    capture.phase = if result.is_ok() {
+                        CapturePhase::Complete
+                    } else {
+                        CapturePhase::Poisoned
+                    };
+                    return Ok(Some(result));
+                }
+                CapturePhase::Poisoned => return Ok(Some(Err(CaptureFailure::Poisoned))),
+                _ => return Err(CaptureFailure::Busy),
+            }
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn committed(&self) -> bool {
         self.committed.load(Ordering::Acquire)
     }
 
-    pub(crate) fn failure(&self) -> Option<String> {
-        self.state.lock().ok()?.failure.clone()
-    }
-
     pub(crate) fn stop(&self) {
         self.running.store(false, Ordering::Release);
+        if let Ok(mut channels) = self.channels.lock() {
+            for (_, channel) in channels.drain() {
+                let _ = channel.shutdown(std::net::Shutdown::Both);
+            }
+        }
     }
 
     pub(crate) fn start(server: &Arc<Self>, broker: hl_native::CheckpointBroker) -> std::thread::JoinHandle<()> {
@@ -80,12 +420,12 @@ impl Server {
             .spawn(move || {
                 let mut workers = Vec::new();
                 while server.running.load(Ordering::Acquire) {
-                    let Some((mut channel, host_pid)) = broker.accept(std::time::Duration::from_millis(50)) else {
+                    let Some((channel, host_pid)) = broker.accept(std::time::Duration::from_millis(50)) else {
                         continue;
                     };
                     server.connections.fetch_add(1, Ordering::Release);
                     let worker = Arc::clone(&server);
-                    workers.push(std::thread::spawn(move || worker.serve(&mut channel, host_pid)));
+                    workers.push(std::thread::spawn(move || worker.serve(channel, host_pid)));
                 }
                 for worker in workers {
                     let _ = worker.join();
@@ -95,10 +435,14 @@ impl Server {
     }
 
     fn fail(&self, message: String) {
+        let capture = self.active_deadline().ok().map(|(id, _)| id);
         if let Ok(mut state) = self.state.lock()
             && state.failure.is_none()
         {
             state.failure = Some(message);
+        }
+        if let Some(id) = capture {
+            let _ = self.finish_failed(id, CaptureFailure::Failed);
         }
     }
 
@@ -132,10 +476,44 @@ impl Server {
         (hash, objects.len() as u64, bytes)
     }
 
-    fn publish(&self, object: &Object) -> Result<(), ()> {
-        self.sink.put(&object.name, &object.bytes).map_err(|_| ())?;
+    fn publish(&self, object: &Object, admission: Option<MutationAdmission<'_>>) -> Result<(), ()> {
+        if let Some(admission) = admission {
+            let deadline = admission.deadline;
+            let result = self
+                .publish_object(object, Some(deadline))
+                .map_err(|error| {
+                    if error == crate::composition::CompositionError::DeadlineExceeded {
+                        CaptureFailure::Deadline
+                    } else {
+                        CaptureFailure::Failed
+                    }
+                })
+                .and_then(|()| {
+                    (std::time::Instant::now() < deadline)
+                        .then_some(())
+                        .ok_or(CaptureFailure::Deadline)
+                });
+            admission.finish(result).map_err(|_| ())?;
+        } else {
+            self.publish_object(object, None).map_err(|_| ())?;
+        }
+        Ok(())
+    }
+
+    fn publish_object(
+        &self,
+        object: &Object,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(), crate::composition::CompositionError> {
+        deadline.map_or_else(
+            || self.sink.put(&object.name, &object.bytes),
+            |deadline| self.sink.put_until(&object.name, &object.bytes, deadline),
+        )?;
         if Self::included(&object.name) {
-            let mut state = self.state.lock().map_err(|_| ())?;
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| crate::composition::CompositionError::RuntimeConstruction)?;
             state.digest.insert(
                 object.name.clone(),
                 (
@@ -149,16 +527,158 @@ impl Server {
 
     fn stored_digest(&self) -> Result<(u64, u64, u64), ()> {
         let mut objects = BTreeMap::new();
-        for name in self.source.list().map_err(|_| ())? {
+        let deadline = self.source_deadline().map_err(|_| ())?;
+        let names = deadline.map_or_else(|| self.source.list(), |deadline| self.source.list_until(deadline));
+        for name in names.map_err(|_| ())? {
             if Self::included(&name) {
-                let bytes = self.source.get(&name).map_err(|_| ())?;
+                let bytes = deadline
+                    .map_or_else(
+                        || self.source.get(&name),
+                        |deadline| self.source.get_until(&name, deadline),
+                    )
+                    .map_err(|_| ())?;
                 objects.insert(name.clone(), (Self::object_hash(&name, &bytes), bytes.len() as u64));
             }
         }
         Ok(Self::image_hash(&objects))
     }
 
-    pub(crate) fn serve(self: &Arc<Self>, channel: &mut (impl Read + Write), id: u64) {
+    fn publish_manifest(&self, manifest: &[u8]) -> Result<(), CaptureFailure> {
+        let (id, deadline) = {
+            let mut capture = self.capture_lock()?;
+            loop {
+                let CapturePhase::Active { id, deadline } = capture.phase else {
+                    return Err(match capture.phase {
+                        CapturePhase::Finished { result: Err(error), .. } => error,
+                        CapturePhase::Poisoned => CaptureFailure::Poisoned,
+                        _ => CaptureFailure::Busy,
+                    });
+                };
+                if std::time::Instant::now() >= deadline {
+                    capture.phase = CapturePhase::Poisoned;
+                    self.capture_changed.notify_all();
+                    drop(capture);
+                    self.interrupt_channels();
+                    return Err(CaptureFailure::Deadline);
+                }
+                if capture.mutations == 0 {
+                    capture.phase = CapturePhase::Publishing { id };
+                    break (id, deadline);
+                }
+                let wait = deadline.saturating_duration_since(std::time::Instant::now());
+                let (next, _) = self
+                    .capture_changed
+                    .wait_timeout(capture, wait)
+                    .map_err(|_| CaptureFailure::Poisoned)?;
+                capture = next;
+            }
+        };
+
+        let result = match self.sink.commit_until(manifest, deadline) {
+            Ok(()) => Ok(()),
+            Err(crate::composition::CompositionError::PublishedNotDurable) => {
+                hl_log::hl_error!(
+                    hl_log::tag::CHECKPOINT,
+                    "checkpoint generation published but directory durability is uncertain"
+                );
+                Ok(())
+            }
+            Err(crate::composition::CompositionError::DeadlineExceeded) => Err(CaptureFailure::Deadline),
+            Err(_) => Err(CaptureFailure::Failed),
+        };
+        let mut capture = self.capture_lock()?;
+        if !matches!(capture.phase, CapturePhase::Publishing { id: active } if active == id) {
+            capture.phase = CapturePhase::Poisoned;
+            self.capture_changed.notify_all();
+            return Err(CaptureFailure::Poisoned);
+        }
+        capture.phase = CapturePhase::Finished { id, result };
+        if result.is_ok() {
+            self.committed.store(true, Ordering::Release);
+        }
+        self.capture_changed.notify_all();
+        result
+    }
+
+    fn source_get(&self, name: &str) -> Result<Vec<u8>, ()> {
+        self.source_deadline()
+            .map_err(|_| ())?
+            .map_or_else(
+                || self.source.get(name),
+                |deadline| self.source.get_until(name, deadline),
+            )
+            .map_err(|_| ())
+    }
+
+    fn recovery_object_request(&self, connection: u64, request: &Request, name: &str) -> bool {
+        match request.op {
+            OBJECT_BEGIN => name == "RECOVERY.jsonl",
+            OBJECT_WRITE | OBJECT_WRITE_AT | OBJECT_TELL | OBJECT_FINISH | OBJECT_ABORT => self
+                .state
+                .lock()
+                .ok()
+                .and_then(|state| {
+                    state
+                        .open
+                        .get(&(connection, request.stream))
+                        .map(|object| object.name.as_str() == "RECOVERY.jsonl")
+                })
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+
+    fn request_in_scope(&self, connection: u64, request: &Request, name: &str) -> bool {
+        let Ok(capture) = self.capture_lock() else { return false };
+        match capture.phase {
+            CapturePhase::Idle => {
+                request.generation == 0 && matches!(request.op, SOURCE_LIST | SOURCE_SIZE | SOURCE_READ | DIGEST)
+            }
+            CapturePhase::Recovery { id, deadline } => {
+                let bound_restore_connection = request.generation == 0
+                    && self
+                        .recovery_connections
+                        .lock()
+                        .ok()
+                        .and_then(|connections| connections.get(&connection).copied())
+                        == Some(id);
+                (u64::from(request.generation) == id || bound_restore_connection)
+                    && std::time::Instant::now() < deadline
+                    && (matches!(request.op, SOURCE_LIST | SOURCE_SIZE | SOURCE_READ | DIGEST)
+                        || request.op == RECOVERY_COMPLETE
+                        || self.recovery_object_request(connection, request, name))
+            }
+            CapturePhase::Complete => false,
+            CapturePhase::Active { id, .. } | CapturePhase::Publishing { id } => u64::from(request.generation) == id,
+            CapturePhase::Finished { id, .. } => u64::from(request.generation) == id && request.op == COMMIT,
+            CapturePhase::Poisoned => false,
+        }
+    }
+
+    pub(crate) fn serve(self: &Arc<Self>, mut channel: UnixStream, id: u64) {
+        let descriptor = channel.as_raw_fd();
+        let Ok(control) = channel.try_clone() else {
+            return;
+        };
+        let Ok(mut channels) = self.channels.lock() else {
+            return;
+        };
+        channels.insert(descriptor, control);
+        drop(channels);
+        if let Ok(capture) = self.capture_lock()
+            && let CapturePhase::Recovery { id: recovery, .. } = capture.phase
+            && let Ok(mut connections) = self.recovery_connections.lock()
+        {
+            connections.insert(id, recovery);
+        }
+        let _connection = Connection {
+            server: self,
+            descriptor,
+            id,
+        };
+        if !self.running.load(Ordering::Acquire) {
+            return;
+        }
         loop {
             let mut header = [0_u8; REQUEST_BYTES];
             if channel.read_exact(&mut header).is_err() {
@@ -188,7 +708,7 @@ impl Server {
                 }
             }
             let reply = self.dispatch(id, &request, &name, &payload);
-            if reply.write(channel).is_err() {
+            if reply.write(&mut channel).is_err() {
                 return;
             }
         }
@@ -196,6 +716,13 @@ impl Server {
 
     #[allow(clippy::too_many_lines)]
     fn dispatch(&self, id: u64, request: &Request, name: &str, payload: &[u8]) -> Reply {
+        if !self.request_in_scope(id, request, name) {
+            eprintln!(
+                "REJECT op={} generation={} name={name:?}",
+                request.op, request.generation
+            );
+            return Reply::error();
+        }
         let key = (id, request.stream);
         match request.op {
             OBJECT_BEGIN => {
@@ -246,6 +773,14 @@ impl Server {
                 .and_then(|state| state.open.get(&key).map(|object| object.bytes.len() as u64))
                 .map_or_else(Reply::error, Reply::value),
             OBJECT_FINISH => {
+                let admission = self.admit_mutation().map_err(|_| ()).ok().flatten();
+                if matches!(
+                    self.capture_lock().map(|capture| capture.phase),
+                    Ok(CapturePhase::Active { .. })
+                ) && admission.is_none()
+                {
+                    return Reply::error();
+                }
                 let Some(object) = self.state.lock().ok().and_then(|mut state| state.open.remove(&key)) else {
                     return Reply::error();
                 };
@@ -254,9 +789,22 @@ impl Server {
                     && let Some(staged) = state.staged.get_mut(&group)
                 {
                     staged.push(object);
+                    if let Some(admission) = admission {
+                        let _ = admission.finish(Ok(()));
+                    }
                     return Reply::ok();
                 }
-                if self.publish(&object).is_ok() {
+                if self.publish(&object, admission).is_ok() {
+                    if object.name == "RECOVERY.jsonl" {
+                        let Ok(mut capture) = self.capture_lock() else {
+                            return Reply::error();
+                        };
+                        if matches!(capture.phase, CapturePhase::Recovery { .. }) && capture.mutations == 0 {
+                            capture.recovery_report_published = true;
+                        } else {
+                            return Reply::error();
+                        }
+                    }
                     Reply::ok()
                 } else {
                     self.fail(format!("checkpoint store rejected {}", object.name));
@@ -280,17 +828,40 @@ impl Server {
                 }
             }
             GROUP_COMMIT => {
+                let admission = self.admit_mutation().map_err(|_| ()).ok().flatten();
+                if matches!(
+                    self.capture_lock().map(|capture| capture.phase),
+                    Ok(CapturePhase::Active { .. })
+                ) && admission.is_none()
+                {
+                    return Reply::error();
+                }
                 let objects = self
                     .state
                     .lock()
                     .ok()
                     .and_then(|mut state| state.staged.remove(name))
                     .unwrap_or_default();
+                let deadline = admission.as_ref().map(|admission| admission.deadline);
+                let mut result = Ok(());
                 for object in &objects {
-                    if self.publish(object).is_err() {
+                    if let Err(error) = self.publish_object(object, deadline) {
+                        result = Err(if error == crate::composition::CompositionError::DeadlineExceeded {
+                            CaptureFailure::Deadline
+                        } else {
+                            CaptureFailure::Failed
+                        });
                         self.fail(format!("checkpoint store rejected {}", object.name));
-                        return Reply::error();
+                        break;
                     }
+                }
+                if let Some(admission) = admission
+                    && admission.finish(result).is_err()
+                {
+                    return Reply::error();
+                }
+                if result.is_err() {
+                    return Reply::error();
                 }
                 if let Ok(mut state) = self.state.lock() {
                     state.groups.insert(name.into());
@@ -329,6 +900,7 @@ impl Server {
                     .and_then(|state| (!state.digest.is_empty()).then(|| Self::image_hash(&state.digest)))
                     .or_else(|| self.stored_digest().ok());
                 let Some((hash, files, bytes)) = digest else {
+                    self.fail("checkpoint digest could not be computed".into());
                     return Reply::error();
                 };
                 let mut payload = Vec::with_capacity(24);
@@ -338,20 +910,19 @@ impl Server {
                 Reply::payload(payload)
             }
             COMMIT => {
-                if self.sink.commit(payload).is_err() {
+                if self.publish_manifest(payload).is_err() {
                     self.fail("checkpoint store rejected manifest".into());
                     return Reply::error();
                 }
-                self.committed.store(true, Ordering::Release);
                 Reply::ok()
             }
             SOURCE_LIST => self.source_list(name),
-            SOURCE_SIZE => self.source.get(name).map_or_else(
-                |_| Reply::status(STATUS_ALREADY),
+            SOURCE_SIZE => self.source_get(name).map_or_else(
+                |()| Reply::status(STATUS_ALREADY),
                 |bytes| Reply::value(bytes.len() as u64),
             ),
             SOURCE_READ => {
-                let Ok(bytes) = self.source.get(name) else {
+                let Ok(bytes) = self.source_get(name) else {
                     return Reply::error();
                 };
                 let Ok(offset) = usize::try_from(request.offset) else {
@@ -362,6 +933,20 @@ impl Server {
                 }
                 let length = usize::try_from(request.length).unwrap_or(0).min(PAYLOAD_MAX);
                 Reply::payload(bytes[offset..offset.saturating_add(length).min(bytes.len())].to_vec())
+            }
+            RECOVERY_COMPLETE => {
+                let Ok(mut capture) = self.capture_lock() else {
+                    return Reply::error();
+                };
+                if !matches!(capture.phase, CapturePhase::Recovery { .. })
+                    || capture.mutations != 0
+                    || !capture.recovery_report_published
+                {
+                    return Reply::error();
+                }
+                capture.phase = CapturePhase::Idle;
+                self.capture_changed.notify_all();
+                Reply::ok()
             }
             _ => Reply::error(),
         }
@@ -379,7 +964,12 @@ impl Server {
     }
 
     fn source_list(&self, prefix: &str) -> Reply {
-        let Ok(names) = self.source.list() else {
+        let names = self.source_deadline().map_err(|_| ()).and_then(|deadline| {
+            deadline
+                .map_or_else(|| self.source.list(), |deadline| self.source.list_until(deadline))
+                .map_err(|_| ())
+        });
+        let Ok(names) = names else {
             return Reply::error();
         };
         let mut seen = Vec::new();
@@ -395,5 +985,22 @@ impl Server {
             payload.push(0);
         }
         Reply::counted_payload(seen.len() as u64, payload)
+    }
+}
+
+struct Connection<'a> {
+    server: &'a Server,
+    descriptor: i32,
+    id: u64,
+}
+
+impl Drop for Connection<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut channels) = self.server.channels.lock() {
+            channels.remove(&self.descriptor);
+        }
+        if let Ok(mut connections) = self.server.recovery_connections.lock() {
+            connections.remove(&self.id);
+        }
     }
 }

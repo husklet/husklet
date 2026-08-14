@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <poll.h>
 #include <sys/signalfd.h>
 #include <unistd.h>
 
@@ -36,8 +37,13 @@ int main(void) {
     sigemptyset(&m2);
     sigaddset(&m2, SIGUSR2);
     sigprocmask(SIG_BLOCK, &m2, NULL);
+    raise(SIGUSR1); // leave an old-mask wake token behind
     int fd2 = signalfd(fd, &m2, 0);
-    raise(SIGUSR1);
+    struct pollfd stale_poll = {.fd = fd, .events = POLLIN};
+    int stale_ready = poll(&stale_poll, 1, 0);
+    errno = 0;
+    ssize_t stale = read(fd, &si, sizeof si);
+    int stale_errno = stale == -1 ? errno : 0;
     raise(SIGUSR2);
     ssize_t r3 = read(fd, &si, sizeof si);
     int signo3 = (int)si.ssi_signo;
@@ -47,7 +53,8 @@ int main(void) {
     char small[4];
     ssize_t r4 = read(fd, small, sizeof small);
     int e4 = (r4 == -1) ? errno : 0;
-    printf("r0=%zd e0=%d r1=%zd signo=%d code=%d r2=%zd e2=%d stillpend=%d same=%d r3=%zd signo3=%d usr1pend=%d r4=%zd e4=%d\n",
-           r0, e0, r1, signo, code, r2, e2, stillpend, fd2 == fd, r3, signo3, usr1pend, r4, e4);
+    printf("r0=%zd e0=%d r1=%zd signo=%d code=%d r2=%zd e2=%d stillpend=%d same=%d stale_ready=%d stale=%zd stale_errno=%d r3=%zd signo3=%d usr1pend=%d r4=%zd e4=%d\n",
+           r0, e0, r1, signo, code, r2, e2, stillpend, fd2 == fd, stale_ready, stale, stale_errno, r3, signo3,
+           usr1pend, r4, e4);
     return 0;
 }

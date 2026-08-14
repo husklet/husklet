@@ -55,7 +55,10 @@ extern int g_rwx_guest;
 // pathological guest still exceeds it, smc_protect degrades GRACEFULLY (leaves the overflow page writable
 // rather than read-only-but-untracked, which would hang on the un-recognized write). 64K * 8 B = 512 KB BSS.
 #define SMC_MAX 65536
+#define SMC_INDEX_SLOTS (SMC_MAX * 2)
 static uint64_t g_smc_pg[SMC_MAX];
+static _Atomic uint64_t g_smc_index_slots[SMC_INDEX_SLOTS];
+static hl_smc_page_index g_smc_index = {g_smc_index_slots, SMC_INDEX_SLOTS};
 static int g_smc_n;
 static uint64_t g_smc_flushes; // PROF: number of SMC re-translate events
 
@@ -75,7 +78,10 @@ static void smc_protect(uint64_t pc) {
     // runs long before any block is translated, so the answer is unchanged.
     int resolved = hl_guest_memory_resolve_exec(pc, 1, &canonical, &contiguous);
     if (resolved < 0) return;
-    if (resolved > 0) pc = (uint64_t)(uintptr_t)canonical;
+    /* Logical-VMA stores are observed through the executable-alias visitor.
+       Protecting canonical backing here would create a host fault outside the
+       direct-address domain represented by the exact index. */
+    if (!hl_smc_address_is_direct(resolved)) return;
     uint64_t size = smc_page_size();
     uint64_t pg = pc & ~(size - 1);
     for (int i = 0; i < g_smc_n; i++)
@@ -85,7 +91,13 @@ static void smc_protect(uint64_t pc) {
     // fault falls through as a real SIGSEGV / hangs on the un-handled write. Not protecting past SMC_MAX only
     // loses SMC coherence for the overflow pages (the separate "SMC capacity cliff" -> stale code, not a hang).
     if (g_smc_n >= SMC_MAX) return;
-    if (mprotect((void *)pg, (size_t)size, PROT_READ) != 0) return; // code page -> read-only; writes trap
+    hl_smc_page_index_add_result indexed = hl_smc_page_index_add(&g_smc_index, pg);
+    if (indexed == HL_SMC_PAGE_INDEX_FULL) return;
+    if (indexed == HL_SMC_PAGE_INDEX_EXISTS) return;
+    if (mprotect((void *)pg, (size_t)size, PROT_READ) != 0) {
+        if (indexed == HL_SMC_PAGE_INDEX_INSERTED) (void)hl_smc_page_index_remove(&g_smc_index, pg);
+        return;
+    }
     g_smc_pg[g_smc_n++] = pg;
 }
 
@@ -95,13 +107,10 @@ static int smc_on_write(uint64_t a) {
     if (!g_rwx_guest) return 0;
     uint64_t size = smc_page_size();
     uint64_t pg = a & ~(size - 1);
-    for (int i = 0; i < g_smc_n; i++)
-        if (g_smc_pg[i] == pg) {
-            mprotect((void *)pg, (size_t)size, PROT_READ | PROT_WRITE); // let the guest's write through
-            g_smc_flushes++;
-            return 1;
-        }
-    return 0;
+    if (!hl_smc_page_index_contains(&g_smc_index, pg)) return 0;
+    mprotect((void *)pg, (size_t)size, PROT_READ | PROT_WRITE); // let the guest's write through
+    g_smc_flushes++;
+    return 1;
 }
 
 /* Claim a successful store to a tracked translated source page.  Keeping the
@@ -110,14 +119,19 @@ static int smc_on_write(uint64_t a) {
 static int smc_tracked_written(uint64_t address, uint64_t size) {
     if (size == 0 || address > UINT64_MAX - size) return 0;
     uint64_t page_size = smc_page_size();
-    for (int index = 0; index < g_smc_n; ++index) {
-        uint64_t page = g_smc_pg[index];
-        if (address >= page + page_size || address + size <= page) continue;
+    uint64_t first = address & ~(page_size - 1);
+    uint64_t last = (address + size - 1) & ~(page_size - 1);
+    for (uint64_t guest_page = first;; guest_page += page_size) {
+        uint64_t page = hl_x86_guest_pointer(guest_page);
+        page &= ~(page_size - 1);
+        if (hl_smc_page_index_contains(&g_smc_index, page)) {
         /* Re-arm before publication. A concurrent writer which was already
          * admitted either reaches this same observer and publishes too, or
          * faults and retries after the stop-the-world commit. */
-        (void)mprotect((void *)page, (size_t)page_size, PROT_READ);
-        return 1;
+            (void)mprotect((void *)page, (size_t)page_size, PROT_READ);
+            return 1;
+        }
+        if (guest_page == last) break;
     }
     return 0;
 }
@@ -142,7 +156,7 @@ static int smc_tracked_written(uint64_t address, uint64_t size) {
 // shared dispatcher while-loop -- the original broke the loop immediately, not just the macro.
 #define G_DISPATCH_DEBUG(c)                                                                                            \
     {                                                                                                                  \
-        if (g_pending) { maybe_deliver_signal(c); /* async signal pending -> redirect to guest handler */ }            \
+        if (signal_deliverable_for_cpu(c)) { maybe_deliver_signal(c); /* deliverable signal -> handler */ }           \
         g_prevpc = g_curpc;                                                                                            \
         g_curpc = (c)->rip;                                                                                            \
         g_disp_n++;                                                                                                    \

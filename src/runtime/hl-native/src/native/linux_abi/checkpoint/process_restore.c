@@ -48,6 +48,10 @@ static void ckpt_restore_retire_typed_fd(const struct ckpt_fd *record) {
 }
 
 static void ckpt_restore_socket_state(int fd, const struct ckpt_socket_state *state) {
+    if (state->guest_family == AF_UNIX && state->host_family == AF_UNIX) {
+        const struct sockaddr_un *local = (const void *)&state->local;
+        if (local->sun_path[0] == '/') unix_bind_note(fd, local->sun_path);
+    }
     g_tcp_listen[fd] = state->listening != 0;
     g_sock_backlog[fd] = state->backlog;
     g_lo_port[fd] = state->lo_port;
@@ -263,11 +267,11 @@ static int ckpt_restore_typed_inotify(const char *procdir, const struct ckpt_fd 
         char image_path[1400];
         snprintf(image_path, sizeof image_path, "%s/%s", procdir, record->path);
         int64_t stored = ckpt_source_object_size(image_path);
-        if (stored <= 0) {
+        size_t image_size;
+        if (ckpt_inotify_object_size(stored, &image_size) != 0) {
             fprintf(stderr, "[restore] inotify %d image %s is invalid: %s\n", record->gfd, image_path, strerror(errno));
             return -1;
         }
-        size_t image_size = (size_t)stored;
         void *image = malloc(image_size);
         if (image == NULL || ckpt_source_load(image_path, image, image_size) != 0) {
             fprintf(stderr, "[restore] inotify %d cannot load %s\n", record->gfd, image_path);
@@ -510,19 +514,19 @@ static int ckpt_restore_fds_dir(const char *procdir) {
     struct ckpt_fd *records = NULL;
     char pf[1300];
     snprintf(pf, sizeof pf, "%s/fds", procdir);
-    FILE *f = ckpt_source_fopen(pf);
-    if (!f) return 0;
     // The object's length, asked of the source. fstat(fileno()) does not work here: a streamed object is a
-    // memory stream with no descriptor behind it.
+    // memory stream with no descriptor behind it. Validate before ckpt_source_fopen materializes the object,
+    // so an invalid record count cannot drive an otherwise unnecessary allocation.
     int64_t record_bytes = ckpt_source_object_size(pf);
-    if (record_bytes < 0 || record_bytes % (int64_t)sizeof *records != 0 ||
-        (uint64_t)record_bytes / sizeof *records > HL_NFD) {
-        ckpt_source_fclose(f);
-        return -1;
-    }
-    int count = (int)((uint64_t)record_bytes / sizeof *records);
-    records = calloc((size_t)(count ? count : 1), sizeof *records);
-    if (records == NULL || (count != 0 && fread(records, sizeof *records, (size_t)count, f) != (size_t)count) ||
+    size_t image_size, record_count;
+    if (record_bytes < 0) return 0;
+    if (ckpt_record_object_size(record_bytes, sizeof *records, HL_NFD, &image_size, &record_count) != 0) return -1;
+    if (image_size != record_count * sizeof *records) return -1;
+    FILE *f = ckpt_source_fopen(pf);
+    if (!f) return -1;
+    int count = (int)record_count;
+    records = calloc(record_count ? record_count : 1, sizeof *records);
+    if (records == NULL || (record_count != 0 && fread(records, sizeof *records, record_count, f) != record_count) ||
         fgetc(f) != EOF) {
         free(records);
         ckpt_source_fclose(f);
@@ -548,29 +552,31 @@ static int ckpt_restore_fds_dir(const char *procdir) {
 static int ckpt_restore_cpu_dir(const char *procdir, const struct ckpt_meta *m, struct cpu **out) {
     char pf[1300];
     snprintf(pf, sizeof pf, "%s/cpu", procdir);
-    if (m->n_threads > SIZE_MAX / sizeof(struct cpu)) return -1;
-    size_t bytes = (size_t)m->n_threads * sizeof(struct cpu);
-    if (bytes > SIZE_MAX - sizeof(struct ckpt_cpu_header)) return -1;
-    size_t file_bytes = sizeof(struct ckpt_cpu_header) + bytes;
-    struct ckpt_cpu_header *cpu_file = malloc(file_bytes);
-    if (!cpu_file || ckpt_source_load(pf, cpu_file, file_bytes) != 0) {
-        free(cpu_file);
+    *out = NULL;
+    size_t bytes;
+    if (ckpt_fixed_payload_object_size(ckpt_source_object_size(pf), sizeof(struct ckpt_cpu_header), m->n_threads,
+                                       sizeof(struct cpu), THREAD_REG_MAX, &bytes) != 0)
+        return -1;
+    FILE *file = ckpt_source_fopen(pf);
+    struct ckpt_cpu_header header;
+    if (file == NULL || ckpt_rd_all(file, &header, sizeof header) != 0) {
+        if (file != NULL) ckpt_source_fclose(file);
         fprintf(stderr, "[restore] cannot read cpu state\n");
         return -1;
     }
-    if (cpu_file->magic != CKPT_CPU_MAGIC || cpu_file->version != m->version || cpu_file->arch != G_CKPT_ARCH ||
-        cpu_file->count != m->n_threads || cpu_file->payload_size != sizeof(struct cpu)) {
+    if (header.magic != CKPT_CPU_MAGIC || header.version != m->version || header.arch != G_CKPT_ARCH ||
+        header.count != m->n_threads || header.payload_size != sizeof(struct cpu)) {
         fprintf(stderr, "[restore] cpu image version/architecture/layout mismatch\n");
-        free(cpu_file);
+        ckpt_source_fclose(file);
         return -1;
     }
     struct cpu *images = malloc(bytes);
-    if (!images) {
-        free(cpu_file);
+    if (!images || ckpt_rd_all(file, images, bytes) != 0 || fgetc(file) != EOF) {
+        free(images);
+        ckpt_source_fclose(file);
         return -1;
     }
-    memcpy(images, cpu_file + 1, bytes);
-    free(cpu_file);
+    ckpt_source_fclose(file);
     // Zero host-transient fields (meaningful only WHILE a block runs; run_block re-populates them). The
     // architectural state (x[],sp,pc,tls,nzcv,v[],sigmask,tpending,alt_*,tid,ctid) + shadow stack are verbatim.
     for (uint64_t i = 0; i < m->n_threads; i++) {
@@ -583,6 +589,10 @@ static int ckpt_restore_cpu_dir(const char *procdir, const struct ckpt_meta *m, 
         c->in_service = 0;
         c->exited = 0;
         c->redirect = 0;
+        /* Filter nodes are engine addresses, not checkpoint data.  The former
+           host-TLS model also did not serialize seccomp state. */
+        c->seccomp_filters = NULL;
+        c->seccomp_mode = 0;
         G_CKPT_CPU_SANITIZE(c);
     }
     *out = images;
@@ -777,21 +787,23 @@ static void ckpt_process_stop(struct ckpt_proc *process, const char *reason) {
     }
 }
 
-static void ckpt_json_string(FILE *file, const char *value) {
+static void ckpt_json_string(FILE *file, const char *value, size_t capacity) {
+    size_t length = value != NULL ? strnlen(value, capacity) : 0;
     fputc('"', file);
-    for (const unsigned char *p = (const unsigned char *)(value ? value : ""); *p; ++p) {
-        if (*p == '"' || *p == '\\')
-            fprintf(file, "\\%c", *p);
-        else if (*p == '\n')
+    for (size_t index = 0; index < length; ++index) {
+        unsigned char byte = (unsigned char)value[index];
+        if (byte == '"' || byte == '\\')
+            fprintf(file, "\\%c", byte);
+        else if (byte == '\n')
             fputs("\\n", file);
-        else if (*p == '\r')
+        else if (byte == '\r')
             fputs("\\r", file);
-        else if (*p == '\t')
+        else if (byte == '\t')
             fputs("\\t", file);
-        else if (*p < 0x20)
-            fprintf(file, "\\u%04x", *p);
+        else if (byte < 0x20)
+            fprintf(file, "\\u%04x", byte);
         else
-            fputc(*p, file);
+            fputc(byte, file);
     }
     fputc('"', file);
 }
@@ -838,7 +850,10 @@ static int ckpt_recovery_report_queue(FILE *report, const struct ckpt_proc *proc
                 report,
                 "{\"type\":\"resource\",\"gpid\":%d,\"fd\":-1,\"kind\":%d,\"queued\":true,\"outcome\":\"%s\",\"path\":",
                 process->gpid, right.kind, outcome);
-            ckpt_json_string(report, (right.kind == CKF_FILE || right.kind == CKF_DEVICE) ? right.path : "");
+            if (right.kind == CKF_FILE || right.kind == CKF_DEVICE)
+                ckpt_json_string(report, right.path, sizeof right.path);
+            else
+                fputs("\"\"", report);
             fputs("}\n", report);
         }
     }
@@ -859,7 +874,7 @@ static int ckpt_recovery_report(int policy) {
         struct ckpt_proc *process = &g_rprocs[i];
         fprintf(file, "{\"type\":\"process\",\"gpid\":%d,\"ppid\":%d,\"outcome\":\"%s\",\"reason\":", process->gpid,
                 process->ppid, process->viable ? "restored" : "stopped");
-        ckpt_json_string(file, process->reason);
+        ckpt_json_string(file, process->reason, sizeof process->reason);
         fputs("}\n", file);
         char fd_path[1300];
         snprintf(fd_path, sizeof fd_path, "proc.%d/fds", process->gpid);
@@ -875,7 +890,10 @@ static int ckpt_recovery_report(int policy) {
                     outcome = "reconnected";
                 fprintf(file, "{\"type\":\"resource\",\"gpid\":%d,\"fd\":%d,\"kind\":%d,\"outcome\":\"%s\",\"path\":",
                         process->gpid, record.gfd, record.kind, outcome);
-                ckpt_json_string(file, (record.kind == CKF_FILE || record.kind == CKF_DEVICE) ? record.path : "");
+                if (record.kind == CKF_FILE || record.kind == CKF_DEVICE)
+                    ckpt_json_string(file, record.path, sizeof record.path);
+                else
+                    fputs("\"\"", file);
                 fputs("}\n", file);
                 if (record.kind == CKF_SOCKETPAIR && ckpt_recovery_report_queue(file, process, &record) != 0) {
                     ckpt_source_fclose(fds);
@@ -963,6 +981,11 @@ static int ckpt_validate_process_image(const struct ckpt_proc *process, struct c
     free(images);
 
     snprintf(path, sizeof path, "%s/fds", procdir);
+    int64_t fd_bytes = ckpt_source_object_size(path);
+    size_t fd_size, fd_count;
+    if (ckpt_record_object_size(fd_bytes, sizeof(struct ckpt_fd), HL_NFD, &fd_size, &fd_count) != 0 ||
+        fd_count != meta->n_fds || fd_size != fd_count * sizeof(struct ckpt_fd))
+        return -1;
     FILE *fds = ckpt_source_fopen(path);
     if (!fds) return -1;
     uint64_t descriptors = 0;

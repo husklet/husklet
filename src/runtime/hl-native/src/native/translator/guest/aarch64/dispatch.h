@@ -130,7 +130,9 @@ static uint64_t g_smc_flushes;
             if (aarch64_soft_tlb_span(c) > 0) continue;                                                                \
         }                                                                                                              \
         (c)->fault_addr = (c)->soft_ea;                                                                                \
-        if (raise_guest_fetch_fault(c)) {                                                                              \
+        if ((!hl_gmap_guest_contains((c)->soft_ea, (c)->soft_bytes ? (c)->soft_bytes : 1)                             \
+                 ? raise_guest_data_map_fault(c)                                                                       \
+                 : raise_guest_fetch_fault(c))) {                                                                      \
             maybe_deliver_signal(c);                                                                                   \
             continue;                                                                                                  \
         }                                                                                                              \

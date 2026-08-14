@@ -1,0 +1,25 @@
+cases:
+- id: terminal-exec-failure/original-shell-recovers
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "ORIGINAL_PID=$$; RECOVERY_TOKEN=ORIGINAL; stty -echo; printf 'EXEC-FAIL-READY\\n'\r" }
+      - await_output: { contains: EXEC-FAIL-READY, timeout_ms: 5000 }
+      - write: { text: "exec /definitely/missing-husklet-executable\r" }
+      - await_output: { contains: "No such file or directory", timeout_ms: 5000 }
+      - write: { text: "test \"$$\" = \"$ORIGINAL_PID\" && test \"$RECOVERY_TOKEN\" = ORIGINAL && printf 'EXEC-FAIL-RECOVERED\\n'\r" }
+      - await_output: { contains: EXEC-FAIL-RECOVERED, timeout_ms: 5000 }
+      - write: { text: "stty echo; printf 'EXEC-FAIL-EXIT\\n'; exit\r" }
+      - await_output: { contains: EXEC-FAIL-EXIT, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/recovered.txt
+    - golden/exit.txt

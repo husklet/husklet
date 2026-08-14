@@ -10,6 +10,12 @@ typedef enum {
     HL_GUEST_MEMORY_WRITE = 2,
 } hl_guest_memory_access;
 
+typedef enum {
+    HL_GUEST_MEMORY_FAULT = -1,
+    HL_GUEST_MEMORY_IDENTITY = 0,
+    HL_GUEST_MEMORY_PROJECTED = 1,
+} hl_guest_memory_resolution;
+
 typedef struct {
     void *host;
     size_t contiguous;
@@ -50,10 +56,17 @@ typedef struct hl_guest_memory_ops {
     /* Address of that generation counter.  A cached span is revalidated against
        it on every use, so no mapping transition has to notify anyone. */
     const _Atomic uint64_t *(*exec_generation)(void);
-    /* Stable data span.  The return value has the same tri-state as read/write;
-       unpin releases any lifetime token acquired by pin. */
+    /* The sole guest-data projection primitive. On IDENTITY or PROJECTED,
+       host/contiguous describe the maximal stable requested prefix. A non-NULL
+       token owns that backing until unpin; host must not outlive unpin. FAULT
+       leaves no pin to release. */
     int (*pin)(uint64_t guest, size_t length, hl_guest_memory_access access, hl_guest_memory_pin *pin);
     void (*unpin)(hl_guest_memory_pin *pin);
+    /* Publish a completed DATA write in guest coordinates.  This is separate
+       from pin/unpin: a caller may validate and hold several discontiguous
+       spans before committing any byte, and executable aliases must not be
+       invalidated until that all-or-nothing commit has completed. */
+    void (*store_observe)(uint64_t guest, size_t length);
 } hl_guest_memory_ops;
 
 void hl_guest_memory_bind(const hl_guest_memory_ops *ops);
@@ -71,6 +84,7 @@ int hl_guest_memory_read(uint64_t guest, void *destination, size_t length);
 int hl_guest_memory_write(uint64_t guest, const void *source, size_t length);
 int hl_guest_memory_pin_data(uint64_t guest, size_t length, hl_guest_memory_access access, hl_guest_memory_pin *pin);
 void hl_guest_memory_unpin_data(hl_guest_memory_pin *pin);
+void hl_guest_memory_store_observe(uint64_t guest, size_t length);
 int hl_guest_memory_indirect(void);
 uint64_t hl_guest_memory_host_pointer(uint64_t guest);
 

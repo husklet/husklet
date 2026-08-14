@@ -206,6 +206,19 @@ static int ckpt_prepare_restore_socket_states(void) {
         if (ckpt_socket_state_is_bound(state)) {
             if (state->host_family == AF_UNIX) {
                 struct sockaddr_un *address = (void *)&state->local;
+                if (address->sun_path[0] == '/' && unix_path_routed(address->sun_path)) {
+                    char host[1024];
+                    if (g_rootfs)
+                        overlay_copyup(address->sun_path, host, sizeof host);
+                    else
+                        xlate(address->sun_path, host, sizeof host);
+                    unlink(host);
+                    if (unix_sock_at(fd, host, 0) != 0) {
+                        close(fd);
+                        return -1;
+                    }
+                    goto socket_bound;
+                }
                 if (address->sun_path[0] != 0) unlink(address->sun_path);
             }
             if (bind(fd, (struct sockaddr *)&state->local, (socklen_t)state->local_size) != 0) {
@@ -214,6 +227,7 @@ static int ckpt_prepare_restore_socket_states(void) {
                 close(fd);
                 return -1;
             }
+        socket_bound:;
         }
         if (state->listening && listen(fd, state->backlog) != 0) {
             fprintf(stderr, "[restore] socket %016llx listen backlog=%d failed: %s\n",
@@ -472,6 +486,150 @@ static void ckpt_restore_pgrp(int gpid, int pgid_gpid, int sid_gpid) {
     }
 }
 
+struct ckpt_restore_commit {
+    _Atomic int decision;
+    _Atomic int ready;
+    _Atomic int failed;
+    _Atomic int released;
+    int processes;
+    _Atomic pid_t pids[];
+};
+
+enum { CKPT_FUTEX_WAIT = 0, CKPT_FUTEX_WAKE = 1 };
+
+static struct ckpt_restore_commit *g_restore_commit;
+static size_t g_restore_commit_size;
+
+static int ckpt_restore_commit_futex(_Atomic int *word, int operation, int value, const struct timespec *timeout) {
+#if defined(_WIN32)
+    /* Checkpoint control is rejected by the Windows engine boundary.  Keep the
+     * Linux guest translation unit portable without manufacturing a partial
+     * restore implementation: creation below fails before this can be reached. */
+    (void)word;
+    (void)operation;
+    (void)value;
+    (void)timeout;
+    errno = ENOSYS;
+    return -1;
+#elif defined(__linux__)
+    return (int)syscall(SYS_futex, word, operation, value, timeout, NULL, 0);
+#else
+    /* The restore protocol always rechecks its shared atomic after a wait and
+     * treats wake as a hint.  Hosts without futex can therefore poll at a
+     * bounded interval without weakening the publication barrier. */
+    (void)word;
+    (void)value;
+    if (operation == CKPT_FUTEX_WAIT) {
+        const struct timespec interval = {.tv_sec = 0, .tv_nsec = 10000000};
+        (void)nanosleep(timeout != NULL ? timeout : &interval, NULL);
+    }
+    return 0;
+#endif
+}
+
+static int ckpt_restore_process_index(int gpid) {
+    for (int index = 0; index < g_nrprocs; ++index)
+        if (g_rprocs[index].gpid == gpid) return index;
+    return -1;
+}
+
+static int ckpt_restore_commit_create(void) {
+#if defined(_WIN32)
+    errno = ENOTSUP;
+    return -1;
+#else
+    if ((size_t)g_nrprocs > (SIZE_MAX - sizeof(struct ckpt_restore_commit)) / sizeof(pid_t)) return -1;
+    g_restore_commit_size = sizeof(struct ckpt_restore_commit) + (size_t)g_nrprocs * sizeof(pid_t);
+    g_restore_commit = mmap(NULL, g_restore_commit_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (g_restore_commit == MAP_FAILED) {
+        g_restore_commit = NULL;
+        return -1;
+    }
+    g_restore_commit->processes = g_nrprocs;
+    int root = ckpt_restore_process_index(1);
+    if (root >= 0) atomic_store_explicit(&g_restore_commit->pids[root], getpid(), memory_order_release);
+    return 0;
+#endif
+}
+
+static void ckpt_restore_commit_destroy(void) {
+    if (g_restore_commit != NULL) (void)munmap(g_restore_commit, g_restore_commit_size);
+    g_restore_commit = NULL;
+    g_restore_commit_size = 0;
+}
+
+static void ckpt_restore_commit_wake(void) {
+    (void)ckpt_restore_commit_futex(&g_restore_commit->decision, CKPT_FUTEX_WAKE, INT_MAX, NULL);
+}
+
+static void ckpt_restore_commit_abort(void) {
+    if (g_restore_commit == NULL) return;
+    atomic_store_explicit(&g_restore_commit->decision, 2, memory_order_release);
+    ckpt_restore_commit_wake();
+    for (int index = 0; index < g_restore_commit->processes; ++index) {
+        pid_t process = atomic_load_explicit(&g_restore_commit->pids[index], memory_order_acquire);
+        if (process > 0 && process != getpid()) (void)kill(process, SIGKILL);
+    }
+    for (;;) {
+        int status;
+        pid_t child = waitpid(-1, &status, 0);
+        if (child > 0) continue;
+        if (child < 0 && errno == EINTR) continue;
+        break;
+    }
+}
+
+static void ckpt_restore_commit_failed(void) {
+    if (g_restore_commit != NULL) {
+        atomic_fetch_add_explicit(&g_restore_commit->failed, 1, memory_order_release);
+        (void)ckpt_restore_commit_futex(&g_restore_commit->ready, CKPT_FUTEX_WAKE, INT_MAX, NULL);
+    }
+    _exit(70);
+}
+
+static void ckpt_restore_commit_wait(void) {
+    atomic_fetch_add_explicit(&g_restore_commit->ready, 1, memory_order_release);
+    (void)ckpt_restore_commit_futex(&g_restore_commit->ready, CKPT_FUTEX_WAKE, INT_MAX, NULL);
+    for (;;) {
+        int decision = atomic_load_explicit(&g_restore_commit->decision, memory_order_acquire);
+        if (decision == 1) {
+            atomic_fetch_add_explicit(&g_restore_commit->released, 1, memory_order_release);
+            (void)ckpt_restore_commit_futex(&g_restore_commit->released, CKPT_FUTEX_WAKE, INT_MAX, NULL);
+            return;
+        }
+        if (decision == 2) _exit(70);
+        (void)ckpt_restore_commit_futex(&g_restore_commit->decision, CKPT_FUTEX_WAIT, 0, NULL);
+    }
+}
+
+static int ckpt_restore_commit_publish(void) {
+    int expected = -1; /* exclude the init process itself */
+    for (int index = 0; index < g_nrprocs; ++index)
+        expected += g_rprocs[index].viable;
+    struct timespec deadline;
+    if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0) return -1;
+    deadline.tv_sec += 10;
+    while (atomic_load_explicit(&g_restore_commit->ready, memory_order_acquire) < expected) {
+        if (atomic_load_explicit(&g_restore_commit->failed, memory_order_acquire) != 0) return -1;
+        struct timespec now;
+        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0 || now.tv_sec > deadline.tv_sec ||
+            (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec))
+            return -1;
+        struct timespec pause = {.tv_sec = 0, .tv_nsec = 10000000};
+        (void)ckpt_restore_commit_futex(&g_restore_commit->ready, CKPT_FUTEX_WAIT,
+                                        atomic_load_explicit(&g_restore_commit->ready, memory_order_relaxed), &pause);
+    }
+    atomic_store_explicit(&g_restore_commit->decision, 1, memory_order_release);
+    ckpt_restore_commit_wake();
+    while (atomic_load_explicit(&g_restore_commit->released, memory_order_acquire) < expected) {
+        struct timespec pause = {.tv_sec = 0, .tv_nsec = 10000000};
+        (void)ckpt_restore_commit_futex(&g_restore_commit->released, CKPT_FUTEX_WAIT,
+                                        atomic_load_explicit(&g_restore_commit->released, memory_order_relaxed),
+                                        &pause);
+    }
+    return 0;
+}
+
 static void ckpt_restore_proc_run(int gpid); // fwd
 
 // Re-fork every child of `gpid` (per the checkpoint ppid table); each child restores its own subtree and
@@ -501,6 +659,9 @@ static void ckpt_fork_children(int gpid, struct cpu *parent) {
             _exit(0);
         } else if (p > 0) {
             (void)hl_linux_pidmap_add(&g_pidmap, cg, (int)p);
+            int index = ckpt_restore_process_index(cg);
+            if (g_restore_commit != NULL && index >= 0)
+                atomic_store_explicit(&g_restore_commit->pids[index], p, memory_order_release);
         } else {
             fprintf(stderr, "[restore] fork for gpid %d failed: %s\n", cg, strerror(errno));
         }
@@ -514,7 +675,8 @@ static void ckpt_restore_proc_run(int gpid) {
     ckpt_restore_hold_tty_signals();
     snprintf(pd, sizeof pd, "proc.%d", gpid);
     struct ckpt_meta m;
-    if (ckpt_read_meta_dir(pd, &m) != 0) _exit(70);
+    if (ckpt_read_meta_dir(pd, &m) != 0) ckpt_restore_commit_failed();
+    if (ckpt_restore_filesystem_state(pd) != 0) ckpt_restore_commit_failed();
 
     // adopt our restored identity BEFORE any pid-reporting syscall or /proc publish
     g_self_gpid = m.self_gpid;
@@ -523,7 +685,8 @@ static void ckpt_restore_proc_run(int gpid) {
     // The cpu image is read from the store, not from guest RAM, so it is available before the memory restore
     // -- which fork_child_hooks needs, and which now has to run FIRST. See below.
     struct cpu c, *images = NULL;
-    if (ckpt_restore_cpu_dir(pd, &m, &images) != 0 || ckpt_restore_leader(images, m.n_threads, &c) != 0) _exit(70);
+    if (ckpt_restore_cpu_dir(pd, &m, &images) != 0 || ckpt_restore_leader(images, m.n_threads, &c) != 0)
+        ckpt_restore_commit_failed();
     // BEFORE the memory restore, not after. jit_after_fork() inside this hook rebuilds the translated-code
     // arena at a fresh VA and UNMAPS the ~64MB pair inherited from the restoring parent -- and a guest
     // mapping's saved VA is an ordinary host mmap result, so the child's MAP_FIXED regions frequently land
@@ -541,11 +704,11 @@ static void ckpt_restore_proc_run(int gpid) {
     hl_gmap_reset();
     g_nanonmap = 0;
     gna_reset();
-    if (ckpt_restore_mem_dir(pd, &m) != 0) _exit(70);
+    if (ckpt_restore_mem_dir(pd, &m) != 0) ckpt_restore_commit_failed();
 
     ckpt_reinstall_sigacts(&m); // restore guest signal dispositions (AFTER the fork hooks reset host state)
 
-    if (ckpt_restore_fds_dir(pd) != 0 || ckpt_restore_signal_state(pd) != 0) _exit(70);
+    if (ckpt_restore_fds_dir(pd) != 0 || ckpt_restore_signal_state(pd) != 0) ckpt_restore_commit_failed();
     ckpt_restore_pgrp(gpid, m.pgid_gpid, m.sid_gpid);
     if (g_ckpt_fg_gpid == gpid) ckpt_claim_tty_fg(); // this process led the tty's foreground job -> reclaim it
 
@@ -556,7 +719,7 @@ static void ckpt_restore_proc_run(int gpid) {
     proc_reg_publish(g_exe_path, 1, pubargv);
 
     ckpt_fork_children(gpid, &c); // re-fork our own children before we resume (so a wait finds them)
-    if (thread_restore_group(images, (int)m.n_threads, &c) != 0) _exit(70);
+    if (thread_restore_group(images, (int)m.n_threads, &c) != 0) ckpt_restore_commit_failed();
     free(images);
     ckpt_restore_backings_close();
     ckpt_restore_pipe_seeds_close();
@@ -566,6 +729,7 @@ static void ckpt_restore_proc_run(int gpid) {
                                           * process leaked its signalfd seed
                                           * reader+writer pair for its lifetime */
     ckpt_restore_socket_seeds_close();
+    ckpt_restore_commit_wait();
     run_guest(&c);
     _exit(c.exit_code);
 }
@@ -621,6 +785,9 @@ static int ckpt_restore_tree(const char *rootfs) {
     } // init RAM before any engine allocation
 
     container_init(rootfs); // sets g_init_hostpid = getpid() -> this process becomes guest pid 1
+    // container_init establishes the rootfs and its default cwd; replay the captured process context after it
+    // so neither the rootfs chdir nor HL_CWD can overwrite the checkpointed directory.
+    if (ckpt_restore_filesystem_state(ipd) != 0) return 2;
     int irc = engine_global_init();
     if (irc) return irc;
     if (ckpt_prepare_restore_socket_states() != 0) {
@@ -649,6 +816,10 @@ static int ckpt_restore_tree(const char *rootfs) {
         fprintf(stderr, "[restore] init signal-state restore failed\n");
         return 70;
     }
+    if (ckpt_restore_commit_create() != 0) {
+        fprintf(stderr, "[restore] cannot create process-tree commit barrier\n");
+        return 70;
+    }
     char *pubargv[2] = {(char *)(exe[0] ? exe : "guest"), NULL};
     proc_reg_publish(g_exe_path, 1, pubargv);
 
@@ -667,8 +838,25 @@ static int ckpt_restore_tree(const char *rootfs) {
     // SIGINT hits the init instead of the foreground job -> the whole tree dies on ^C.
     g_ckpt_fg_gpid = man.fg_pgid_gpid;
     ckpt_fork_children(1, &c); // rebuild the tree BEFORE init runs (empty block map -> no stale translation)
+    if (hl_option_get("HL_CKPT_TEST_FAIL_AFTER_FORK") != NULL) {
+        fprintf(stderr, "[restore] injected post-fork restore failure\n");
+        ckpt_restore_commit_abort();
+        ckpt_restore_commit_destroy();
+        free(images);
+        return 70;
+    }
     if (thread_restore_group(images, (int)im.n_threads, &c) != 0) {
         fprintf(stderr, "[restore] init thread-group restore failed\n");
+        ckpt_restore_commit_abort();
+        ckpt_restore_commit_destroy();
+        free(images);
+        return 70;
+    }
+    if (ckpt_restore_commit_publish() != 0) {
+        fprintf(stderr, "[restore] restored descendants did not reach the commit barrier\n");
+        ckpt_restore_commit_abort();
+        ckpt_restore_commit_destroy();
+        free(images);
         return 70;
     }
     free(images);
@@ -677,7 +865,12 @@ static int ckpt_restore_tree(const char *rootfs) {
     ckpt_restore_eventfd_seeds_close();
     ckpt_restore_signalfd_seeds_close();
     ckpt_restore_socket_seeds_close();
+    ckpt_restore_commit_destroy();
     if (g_ckpt_fg_gpid == 1) ckpt_claim_tty_fg(); // the init itself was foreground (idle prompt)
+    if (ckpt_stream_recovery_complete() != 0) {
+        fprintf(stderr, "[restore] cannot close recovery publication scope\n");
+        return 70;
+    }
 
     run_guest(&c);
     return c.exit_code;

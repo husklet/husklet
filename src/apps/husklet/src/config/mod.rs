@@ -207,7 +207,7 @@ impl WorkspaceConfig {
     pub fn scrollback_lines(&self) -> i64 {
         match self.scrollback {
             None | Some(0) => 10_000_000,
-            Some(n) => n as i64,
+            Some(n) => i64::try_from(n).unwrap_or(i64::MAX),
         }
     }
 

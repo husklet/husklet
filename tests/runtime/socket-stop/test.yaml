@@ -10,10 +10,11 @@ build:
   flags: [-static, -O2, -std=gnu11]
 cases:
   - id: runtime/socket-stop/blocking-read
-    status: !broken
-      reason: "fixture intentionally blocks awaiting external stop orchestration"
+    status: !oracle-excluded
+      reason: "the compatibility contract requires the container lifecycle stop API, which a direct QEMU process cannot referee"
       evidence: "tests/runtime/socket-stop/EVIDENCE.md"
     targets: [arm64, amd64]
     compat: { class: compatibility }
     run: [blocking-read]
-    expect: { exit: 0, stdout_empty: true }
+    orchestration: { stop-after-ms: 100 }
+    expect: { exit: 0, signal: 15, stdout_empty: true }

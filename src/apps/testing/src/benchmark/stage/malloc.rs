@@ -1,7 +1,7 @@
 use super::{Error, mac};
 use std::path::{Path, PathBuf};
 
-pub(super) const SOURCE: &str = "src/apps/testing/tests/fixtures/guest/malloc.c";
+pub(super) const SOURCE: &str = "src/apps/testing/src/benchmark/stage/source/malloc.c";
 
 pub(super) struct Layout {
     pub name: &'static str,
@@ -92,7 +92,7 @@ mod tests {
     #[test]
     fn plain_and_sqlite_layouts_share_one_source_and_differ_only_by_link_contract() {
         let layouts = layouts(
-            std::path::Path::new("/workspace/src/apps/testing/tests/fixtures/guest/malloc.c"),
+            std::path::Path::new("/workspace/src/apps/testing/src/benchmark/stage/source/malloc.c"),
             std::path::Path::new("/stage/rootfs"),
             std::path::Path::new("/stage"),
         );
@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn fixture_publishes_one_complete_checked_frame() {
-        let source = include_str!("../../../tests/fixtures/guest/malloc.c");
+        let source = include_str!("source/malloc.c");
         assert_eq!(source.matches("write(STDOUT_FILENO").count(), 1);
         assert!(source.contains("snprintf(frame, sizeof(frame)"));
         assert!(source.contains("write_all(frame, (size_t)length)"));

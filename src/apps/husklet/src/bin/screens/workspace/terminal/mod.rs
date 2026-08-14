@@ -66,6 +66,7 @@ enum Shortcut {
 }
 
 impl Shortcut {
+    #[cfg(target_os = "macos")]
     fn from_key(key: gdk::Key, state: gdk::ModifierType) -> Option<Self> {
         if !state.contains(gdk::ModifierType::META_MASK) {
             return None;
@@ -77,6 +78,26 @@ impl Shortcut {
             gdk::Key::d | gdk::Key::D => Some(Self::Split(shift)),
             gdk::Key::f | gdk::Key::F => Some(Self::Search),
             gdk::Key::c | gdk::Key::C if shift => Some(Self::CopyMode),
+            gdk::Key::c | gdk::Key::C => Some(Self::Copy),
+            gdk::Key::x | gdk::Key::X => Some(Self::Cut),
+            gdk::Key::v | gdk::Key::V => Some(Self::Paste),
+            gdk::Key::a | gdk::Key::A => Some(Self::SelectAll),
+            _ => None,
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn from_key(key: gdk::Key, state: gdk::ModifierType) -> Option<Self> {
+        if !state.contains(gdk::ModifierType::CONTROL_MASK) || !state.contains(gdk::ModifierType::SHIFT_MASK) {
+            return None;
+        }
+        let alternate = state.contains(gdk::ModifierType::ALT_MASK);
+        match key {
+            gdk::Key::t | gdk::Key::T => Some(Self::Tab),
+            gdk::Key::w | gdk::Key::W => Some(Self::Close),
+            gdk::Key::d | gdk::Key::D => Some(Self::Split(alternate)),
+            gdk::Key::f | gdk::Key::F => Some(Self::Search),
+            gdk::Key::c | gdk::Key::C if alternate => Some(Self::CopyMode),
             gdk::Key::c | gdk::Key::C => Some(Self::Copy),
             gdk::Key::x | gdk::Key::X => Some(Self::Cut),
             gdk::Key::v | gdk::Key::V => Some(Self::Paste),
@@ -302,6 +323,14 @@ impl Window {
 
 pub(crate) struct Terminal<'a>(pub(crate) &'a vte4::Terminal);
 
+const SAVED_HISTORY_LINES: usize = 5000;
+
+fn history_row_range(first: i64, last: i64, maximum: usize) -> (i64, i64) {
+    let last = last.max(first);
+    let maximum = i64::try_from(maximum).unwrap_or(i64::MAX);
+    (last.saturating_sub(maximum).max(first), last)
+}
+
 impl<'a> Terminal<'a> {
     pub(crate) fn new(terminal: &'a vte4::Terminal) -> Self {
         Self(terminal)
@@ -358,10 +387,23 @@ impl<'a> Terminal<'a> {
             Some(adj) => (adj.lower() as i64, adj.upper() as i64),
             None => (0, term.row_count()),
         };
+        let (first, last) = history_row_range(first, last, SAVED_HISTORY_LINES);
         let (text, _len) = term.text_range_format(vte4::Format::Text, first, 0, last, -1);
         let raw = text.map(|g| g.to_string()).unwrap_or_default();
         // Cap the persisted history so a huge scrollback doesn't bloat the session on disk.
-        session::History::new(&raw).clamp(5000)
+        session::History::new(&raw).clamp(SAVED_HISTORY_LINES)
+    }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::history_row_range;
+
+    #[test]
+    fn persisted_history_extracts_only_the_bounded_scrollback_tail() {
+        assert_eq!(history_row_range(0, 1_000_000, 5000), (995_000, 1_000_000));
+        assert_eq!(history_row_range(40, 80, 5000), (40, 80));
+        assert_eq!(history_row_range(80, 40, 5000), (80, 80));
     }
 }
 
@@ -402,6 +444,7 @@ mod shortcut_tests {
     use super::Shortcut;
     use gtk::gdk;
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn macos_edit_shortcuts_never_fall_through_to_vte() {
         let command = gdk::ModifierType::META_MASK;
@@ -410,5 +453,17 @@ mod shortcut_tests {
         assert_eq!(Shortcut::from_key(gdk::Key::v, command), Some(Shortcut::Paste));
         assert_eq!(Shortcut::from_key(gdk::Key::a, command), Some(Shortcut::SelectAll));
         assert_eq!(Shortcut::from_key(gdk::Key::c, gdk::ModifierType::empty()), None);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn linux_shortcuts_preserve_terminal_control_keys() {
+        let control = gdk::ModifierType::CONTROL_MASK;
+        let command = control | gdk::ModifierType::SHIFT_MASK;
+        assert_eq!(Shortcut::from_key(gdk::Key::c, control), None);
+        assert_eq!(Shortcut::from_key(gdk::Key::c, command), Some(Shortcut::Copy));
+        assert_eq!(Shortcut::from_key(gdk::Key::v, command), Some(Shortcut::Paste));
+        assert_eq!(Shortcut::from_key(gdk::Key::t, command), Some(Shortcut::Tab));
+        assert_eq!(Shortcut::from_key(gdk::Key::w, command), Some(Shortcut::Close));
     }
 }

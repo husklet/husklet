@@ -700,6 +700,17 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir) {
         atomic_store_explicit(&g_ckpt_barrier_active, 0, memory_order_release);
         return -1;
     }
+    /* CPU images contain engine pointers to immutable seccomp filter nodes.
+       Restoring those addresses would either remove the sandbox or dereference
+       stale host memory. Until the filter bytecode is part of the checkpoint
+       format, refuse the capture while every task is stopped and publish
+       nothing. */
+    for (int i = 0; i < count; i++)
+        if (live[i]->seccomp_mode != 0 || live[i]->seccomp_filters != NULL) {
+            stw_checkpoint_end();
+            atomic_store_explicit(&g_ckpt_barrier_active, 0, memory_order_release);
+            return -1;
+        }
     struct cpu *images = malloc((size_t)count * sizeof *images);
     if (!images) {
         stw_checkpoint_end();
@@ -815,6 +826,7 @@ static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
     if (ckpt_dump_epoll(sink, group, fdrecs, nfd) != 0) goto done;
     if (ckpt_dump_inotify(sink, group) != 0) goto done;
     if (ckpt_dump_signal_state(sink, group) != 0) goto done;
+    if (ckpt_dump_filesystem_state(sink, group) != 0) goto done;
 
     // meta written LAST within the group (it carries the section counts).
     if (ckpt_sink_put(sink, group, "meta", 0, &m, sizeof m) != 0) goto done;

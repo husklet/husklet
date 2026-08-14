@@ -367,11 +367,12 @@ int lower_stack_control(struct insn *instruction, uint64_t guest_pc, uint64_t ne
         return TX_NEXT;
     }
     if (instruction->op == 0xC3 || instruction->op == 0xC2) {
-        if (emit_soft_memory_active()) {
+        if (emit_soft_memory_active() || emit_displaced_stack_active()) {
             e_mov_rr(17, RSP, 1);
+            emit_displaced_stack_address(17);
             emit_memory_guard(17, 8, guest_pc, X86_SOFT_READ);
         }
-        e_load(8, 16, emit_soft_memory_active() ? 17 : RSP);
+        e_load(8, 16, (emit_soft_memory_active() || emit_displaced_stack_active()) ? 17 : RSP);
         e_addi(RSP, RSP, 8, 1);
         if (instruction->op == 0xC2) {
             e_movconst(19, (uint64_t)(uint16_t)instruction->imm);
@@ -410,13 +411,14 @@ int lower_direct_call_loop(struct insn *instruction, uint64_t guest_pc, uint64_t
     uint8_t opcode = instruction->op;
     uint64_t taken = next + (uint64_t)instruction->imm;
     if (opcode == 0xE8) {
-        if (emit_soft_memory_active()) {
+        if (emit_soft_memory_active() || emit_displaced_stack_active()) {
             e_subi(17, RSP, 8, 1);
+            emit_displaced_stack_address(17);
             emit_memory_guard(17, 8, guest_pc, X86_SOFT_WRITE);
         }
         e_subi(RSP, RSP, 8, 1);
         e_movconst(16, call_return_pc(next));
-        e_store(8, 16, emit_soft_memory_active() ? 17 : RSP);
+        e_store(8, 16, (emit_soft_memory_active() || emit_displaced_stack_active()) ? 17 : RSP);
         hl_x86_trace_flags_edge(trace_state, taken, guest_pc);
         emit_chain_exit(taken);
         return TX_BREAK;
@@ -534,9 +536,10 @@ int lower_flag_stack_control(struct insn *instruction, uint64_t guest_pc) {
         e_rrr(A_ORR, 17, 17, 18, 0, 4);
         e_ldr(18, 28, OFF_ID);
         e_rrr(A_ORR, 17, 17, 18, 0, 21);
-        if (emit_soft_memory_active()) {
+        if (emit_soft_memory_active() || emit_displaced_stack_active()) {
             e_mov_rr(20, 17, 1);
             e_subi(17, RSP, 8, 1);
+            emit_displaced_stack_address(17);
             emit_memory_guard(17, 8, guest_pc, X86_SOFT_WRITE);
             e_subi(RSP, RSP, 8, 1);
             e_store(8, 20, 17);
@@ -547,11 +550,12 @@ int lower_flag_stack_control(struct insn *instruction, uint64_t guest_pc) {
         return TX_NEXT;
     }
     if (opcode == 0x9D) {
-        if (emit_soft_memory_active()) {
+        if (emit_soft_memory_active() || emit_displaced_stack_active()) {
             e_mov_rr(17, RSP, 1);
+            emit_displaced_stack_address(17);
             emit_memory_guard(17, 8, guest_pc, X86_SOFT_READ);
         }
-        e_load(8, 16, emit_soft_memory_active() ? 17 : RSP);
+        e_load(8, 16, (emit_soft_memory_active() || emit_displaced_stack_active()) ? 17 : RSP);
         e_addi(RSP, RSP, 8, 1);
         emit_restore_rflags(16);
         return TX_NEXT;
@@ -661,9 +665,14 @@ int lower_bit_scan(struct insn *instruction, uint64_t next, int sf) {
         e_rrr(A_ANDS, 31, destination, destination, sf, 0);
         e_nzcv_save_setcf(19);
     } else {
-        e_rrr(A_ANDS, 31, source, source, sf, 0);
+        if (word_form) {
+            e_lsl_i(19, source, 16, 0);
+            e_tst(19, 0);
+        } else {
+            e_tst(source, sf);
+        }
         e_csel(destination, destination, 22, 0, sf);
-        e_nzcv_save();
+        e_nzcv_save_c1();
     }
     if (word_form) e_bfi(instruction->reg, destination, 0, 16, 1);
     return TX_NEXT;

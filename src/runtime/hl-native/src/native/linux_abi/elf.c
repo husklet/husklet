@@ -25,10 +25,15 @@ static uint64_t rd64(const uint8_t *p) {
 static int elf_interp(const char *path, char *out, size_t n) {
     hl_linux_image image;
     if (aarch64_image_read(path, &image) != 0) return -1;
+    hl_linux_elf64_layout layout;
+    if (n == 0 || hl_linux_elf64_validate(&image, 0xB7, &layout) != 0) {
+        hl_linux_image_release(&image);
+        return -1;
+    }
     uint8_t *f = image.bytes;
     int r = -1;
-    uint64_t phoff = rd64(f + 32);
-    int phnum = rd16(f + 56), phent = rd16(f + 54);
+    uint64_t phoff = layout.program_offset;
+    int phnum = layout.program_count, phent = layout.program_size;
     for (int i = 0; i < phnum; i++) {
         const uint8_t *ph = f + phoff + (size_t)i * phent;
         if (rd32(ph) == 3) {
@@ -351,6 +356,9 @@ static int nonpie_fixup_pair_atomics(uint32_t insn, uint64_t real, uint64_t va, 
     //      bit30 = element width (0=32-bit pair, 1=64-bit pair). Same hang class as the exclusive pair above. ----
     if ((insn & 0xBFA07C00u) == 0x08207C00u) {
         int is64 = (insn >> 30) & 1, rs = (insn >> 16) & 0x1F;
+        // CASP names two even/odd register pairs. Odd first registers are
+        // architecturally unallocated and would make `reg + 1` escape X[0..30].
+        if ((rs & 1) || (rt & 1)) return -1;
 #define NP_XR(n) (((n) == 31) ? 0 : X[(n)])
         if (is64) { // 16-byte pair
             unsigned __int128 exp = ((unsigned __int128)NP_XR(rs + 1) << 64) | NP_XR(rs);
@@ -565,16 +573,23 @@ static int nonpie_fixup(siginfo_t *si, void *ucv) {
     ucontext_t *uc = (ucontext_t *)ucv;
     uint32_t insn = *(uint32_t *)(HL_HOST_UC_PC(uc));
     uint64_t real = va + g_nonpie_bias; // the datum's real (high) mapped location
-    uint64_t *X = HL_HOST_UC_REGS(uc);
+    // Darwin stores x0..x28, fp/x29 and lr/x30 in distinct fields. A flat
+    // pointer past __x[28] is undefined even though those fields are adjacent.
+    // Decode against a complete architectural snapshot and publish it only
+    // after a handler accepts the instruction.
+    uint64_t X[31];
+    for (unsigned reg = 0; reg < 31; ++reg)
+        X[reg] = hl_host_uc_a64_gpr_get(uc, reg);
     __uint128_t *V = HL_HOST_UC_VREGS(uc);
     int rt = insn & 0x1F;
 
-
     int result = nonpie_fixup_basic(insn, real, va, X, V, rt, uc);
-    if (result >= 0) return result;
-    result = nonpie_fixup_pair_atomics(insn, real, va, X, V, rt, uc);
-    if (result >= 0) return result;
-    return nonpie_fixup_simd_and_scalar(insn, real, va, X, V, rt, uc);
+    if (result < 0) result = nonpie_fixup_pair_atomics(insn, real, va, X, V, rt, uc);
+    if (result < 0) result = nonpie_fixup_simd_and_scalar(insn, real, va, X, V, rt, uc);
+    if (result > 0)
+        for (unsigned reg = 0; reg < 31; ++reg)
+            hl_host_uc_a64_gpr_set(uc, reg, X[reg]);
+    return result;
 }
 
 #else
@@ -793,6 +808,12 @@ static void load_elf(const char *path, struct loaded *out, const struct main_pla
         exit(1);
     }
     uint8_t *f = image.bytes;
+    hl_linux_elf64_layout layout;
+    if (hl_linux_elf64_validate(&image, 0xB7, &layout) != 0) {
+        hl_linux_image_release(&image);
+        fprintf(stderr, "hl-engine: %s: malformed aarch64 ELF image\n", path);
+        exit(1);
+    }
     // Refuse a foreign-arch ELF up front: this engine only translates aarch64 (e_machine==EM_AARCH64).
     // Without this guard an x86-64 image's bytes are decoded as aarch64 instructions -- the translator
     // runs off into a zero/garbage region and dies deep inside translate_block with a cryptic SIGSEGV.
@@ -804,25 +825,24 @@ static void load_elf(const char *path, struct loaded *out, const struct main_pla
                 path, e_machine);
         exit(1);
     }
-    uint64_t e_entry = rd64(f + 24), phoff = rd64(f + 32);
-    int phnum = rd16(f + 56), phentsize = rd16(f + 54);
-    uint64_t basepage, span;
+    uint64_t e_entry = rd64(f + 24), phoff = layout.program_offset;
+    int phnum = layout.program_count, phentsize = layout.program_size;
+    uint64_t basepage = layout.load_start & ~0xFFFull;
+    uint64_t span = (layout.load_end - basepage + 0xFFFF) & ~0xFFFFull;
     int etype;
     int force_displaced = 0;
     if (placement != NULL) {
+        if (placement->link_start != basepage || placement->link_end - placement->link_start != span) {
+            hl_linux_image_release(&image);
+            fprintf(stderr, "hl-engine: %s: ELF placement does not match load segments\n", path);
+            exit(1);
+        }
         basepage = placement->link_start;
         span = placement->link_end - placement->link_start;
         etype = placement->etype;
         force_displaced = (placement->flags & HL_ENGINE_MAIN_IMAGE_PLAN_FORCE_DISPLACED) != 0;
     } else {
-        uint64_t minv = ~0ull, maxv = 0;
-        for (int i = 0; i < phnum; i++) {
-            uint8_t *ph = f + phoff + (uint64_t)i * phentsize;
-            if (rd32(ph) != 1) continue;
-            uint64_t v = rd64(ph + 16), msz = rd64(ph + 40);
-            if (v < minv) minv = v;
-            if (v + msz > maxv) maxv = v + msz;
-        }
+        uint64_t minv = layout.load_start, maxv = layout.load_end;
         basepage = minv & ~0xFFFull;
         span = (maxv - basepage + 0xFFFF) & ~0xFFFFull;
         etype = rd16(f + 16);

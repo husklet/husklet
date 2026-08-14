@@ -99,6 +99,10 @@ pub enum EngineError {
     NotStarted,
     Destroyed,
     LaunchFailed,
+    /// Native construction refused the configured engine with this stable `hl_status` value.
+    NativeCreateFailed(i32),
+    /// The native engine completed its run boundary with this stable `hl_status` value.
+    NativeRunFailed(i32),
     WorkspaceFailed,
     WaitFailed,
     StopFailed,

@@ -26,6 +26,7 @@
 #include "../../identity.h"
 #include "../../../host/native_context.h" // ucontext_t: the fault path restores uc_sigmask by hand
 #include "decoder.h"
+#include "guest_data.h"
 
 // ---- The seam: names the JIT files own, which the rest of the TU needs.
 
@@ -118,6 +119,8 @@ static __thread int g_interp_pad_armed;             // a run_block landing pad i
 static __thread volatile int g_interp_guest_access; // a guest access is in flight
 // The cpu run_block armed the pad for; the ledger check below has no siginfo.
 static __thread struct cpu *g_interp_pad_cpu;
+static __thread hl_x86_guest_data_pins g_interp_data_pins;
+static __thread int g_interp_data_active;
 
 // ---- The past-EOF SIGBUS ledger. mem.c re-maps the past-EOF tail of a MAP_PRIVATE file mapping as
 // anonymous zero, so the host never raises BUS_ADRERR and the translator owes the guest SIGBUS out of
@@ -236,9 +239,9 @@ void interp_signal_resume(struct cpu *cpu, void *native_context) {
 #endif
 }
 
-// ---- Guest memory. Guest VA == host VA except that a non-PIE ET_EXEC's low link range is served at
-// +g_nonpie_bias (hl_x86_guest_pointer); no software TLB, no page table. Everything goes through memcpy
-// because UNALIGNED ACCESS MUST WORK and a cast through uint64_t* is UB (a real fault on some hosts). No
+// ---- Guest memory. Once a logical mapping exists, every data access projects through
+// hl_guest_memory_pin_data. The common identity/non-PIE case keeps its direct one-copy path. Everything
+// goes through memcpy because UNALIGNED ACCESS MUST WORK and a cast through uint64_t* is UB. No
 // byte swapping: guest and every host so far are little-endian. Nothing is emitted, so the guest sees the
 // host's memory ordering -- x86-64 host TSO IS guest TSO, hence the empty fence below.
 
@@ -281,45 +284,113 @@ static void interp_copy_indivisible(void *destination, const void *source, unsig
     }
 }
 
+static _Noreturn void interp_projection_fault(uint64_t guest_address, size_t length, hl_guest_memory_access access) {
+    struct cpu *cpu = g_interp_pad_cpu;
+    if (cpu == NULL || !g_interp_pad_armed) abort();
+    cpu->bus_ea = guest_address;
+    cpu->soft_width = length;
+    cpu->soft_required = access == HL_GUEST_MEMORY_WRITE ? X86_SOFT_WRITE : X86_SOFT_READ;
+    cpu->reason = R_SOFTMISS;
+    g_interp_guest_access = 0;
+#if defined(_WIN32)
+    g_interp_pad_taken = 1;
+    hl_windows_fault_pad_jump(&g_interp_fault_pad);
+    abort();
+#else
+    siglongjmp(g_interp_fault_pad, 1);
+#endif
+}
+
+static void interp_data_release_abandoned(void) {
+    if (!g_interp_data_active) return;
+    hl_x86_guest_data_abandon(&g_interp_data_pins);
+    g_interp_data_active = 0;
+}
+
+static void interp_data_prepare(uint64_t guest, size_t length, hl_guest_memory_access access) {
+    uint64_t fault = guest;
+    if (g_interp_data_active) abort();
+    if (hl_x86_guest_data_prepare(&g_interp_data_pins, guest, length, access, &fault) != 0)
+        interp_projection_fault(fault, guest + length - fault, access);
+    g_interp_data_active = 1;
+}
+
+static void interp_data_finish(void) {
+    hl_x86_guest_data_release(&g_interp_data_pins);
+    g_interp_data_active = 0;
+}
+
+static void interp_copy_from_guest(uint64_t guest, void *destination, size_t length) {
+    if (!hl_guest_memory_indirect()) {
+        const void *host = (const void *)(uintptr_t)hl_x86_guest_pointer(guest);
+        interp_access_begin(guest, length);
+        memcpy(destination, host, length);
+        interp_access_end();
+        return;
+    }
+    interp_data_prepare(guest, length, HL_GUEST_MEMORY_READ);
+    interp_access_begin(guest, length);
+    hl_x86_guest_data_copy_from(&g_interp_data_pins, destination);
+    interp_access_end();
+    interp_data_finish();
+}
+
+static void interp_copy_to_guest(uint64_t guest, const void *source, size_t length) {
+    if (!hl_guest_memory_indirect()) {
+        void *host = (void *)(uintptr_t)hl_x86_guest_pointer(guest);
+        interp_access_begin(guest, length);
+        memcpy(host, source, length);
+        interp_access_end();
+        return;
+    }
+    interp_data_prepare(guest, length, HL_GUEST_MEMORY_WRITE);
+    interp_access_begin(guest, length);
+    hl_x86_guest_data_copy_to(&g_interp_data_pins, source);
+    interp_access_end();
+    hl_guest_memory_store_observe(guest, length);
+    interp_data_finish();
+}
+
 static uint64_t interp_load(uint64_t guest_address, int width) {
     uint64_t value = 0;
-    const void *host = (const void *)(uintptr_t)hl_x86_guest_pointer(guest_address);
-    interp_access_begin(guest_address, (uint64_t)width);
-    interp_copy_indivisible(&value, host, (unsigned)width);
-    interp_access_end();
+    if (!hl_guest_memory_indirect()) {
+        const void *host = (const void *)(uintptr_t)hl_x86_guest_pointer(guest_address);
+        interp_access_begin(guest_address, (uint64_t)width);
+        interp_copy_indivisible(&value, host, (unsigned)width);
+        interp_access_end();
+    } else
+        interp_copy_from_guest(guest_address, &value, (size_t)width);
     interp_tso_fence();
     return value;
 }
 
 static void interp_store(uint64_t guest_address, int width, uint64_t value) {
-    void *host = (void *)(uintptr_t)hl_x86_guest_pointer(guest_address);
     interp_tso_fence();
-    interp_access_begin(guest_address, (uint64_t)width);
-    interp_copy_indivisible(host, &value, (unsigned)width);
-    interp_access_end();
+    if (!hl_guest_memory_indirect()) {
+        void *host = (void *)(uintptr_t)hl_x86_guest_pointer(guest_address);
+        interp_access_begin(guest_address, (uint64_t)width);
+        interp_copy_indivisible(host, &value, (unsigned)width);
+        interp_access_end();
+    } else
+        interp_copy_to_guest(guest_address, &value, (size_t)width);
     // Stores into an emulated MAP_SHARED mapping (or an executable alias) must be queued for
     // jit86_smc_commit before a syscall lets a peer observe them.
-    if (jit86_store_alias_observation_active()) jit86_store_alias_changed(guest_address, (uint64_t)width);
+    if (!hl_guest_memory_indirect() && jit86_store_alias_observation_active())
+        jit86_store_alias_changed(guest_address, (uint64_t)width);
 }
 
-// Operands wider than a general register. ONE interp_access_begin/end pair spans the whole transfer, so a
-// fault inside a straddling 16-byte access abandons the instruction with no architectural change -- hence
-// callers read operands into locals FIRST and commit after the last access.
+// Operands wider than a general register. Reads land in caller-owned locals, so a fault in a later projected
+// span cannot partially mutate architectural register state. Stores prevalidate every span before committing.
 static void interp_load_bytes(uint64_t guest_address, void *destination, unsigned length) {
-    const void *host = (const void *)(uintptr_t)hl_x86_guest_pointer(guest_address);
-    interp_access_begin(guest_address, length);
-    memcpy(destination, host, length);
-    interp_access_end();
+    interp_copy_from_guest(guest_address, destination, length);
     interp_tso_fence();
 }
 
 static void interp_store_bytes(uint64_t guest_address, const void *source, unsigned length) {
-    void *host = (void *)(uintptr_t)hl_x86_guest_pointer(guest_address);
     interp_tso_fence();
-    interp_access_begin(guest_address, length);
-    memcpy(host, source, length);
-    interp_access_end();
-    if (jit86_store_alias_observation_active()) jit86_store_alias_changed(guest_address, (uint64_t)length);
+    interp_copy_to_guest(guest_address, source, length);
+    if (!hl_guest_memory_indirect() && jit86_store_alias_observation_active())
+        jit86_store_alias_changed(guest_address, (uint64_t)length);
 }
 
 // The address CALL pushes is guest-visible: DWARF FDE lookup, dladdr and unwinding need a biased ET_EXEC's
@@ -381,6 +452,7 @@ static void run_block(struct cpu *cpu, void *code) {
     if (INTERP_PAD_ARM(g_interp_fault_pad)) {
         // A guest access was abandoned; both routes already set cpu->reason and left cpu->rip on it.
         g_interp_guest_access = 0;
+        interp_data_release_abandoned();
         g_interp_pad_armed = previous;
         g_interp_pad_cpu = previous_cpu;
         return;
@@ -1104,11 +1176,12 @@ static int interp_two_byte_bit_count(struct cpu *cpu, struct insn *insn, uint64_
         interp_reg_write(cpu, insn, insn->reg, width, result);
     } else if (source == 0) {
         interp_flags_nzcv(cpu, 0, 1, 0, 0);
-        cpu->pf = 0xff;
+        // BSF/BSR leave the destination undefined for a zero source, but a 32-bit
+        // destination write still zero-extends its retained low half.
+        if (width == 4) interp_reg_write(cpu, insn, insn->reg, width, interp_reg_read(cpu, insn, insn->reg, width));
     } else {
         uint64_t result = op == 0xBC ? (uint64_t)__builtin_ctzll(source) : (uint64_t)(63 - __builtin_clzll(source));
-        interp_flags_nzcv(cpu, 0, 0, 0, 0);
-        cpu->pf = result & 0xff;
+        interp_flags_nzcv(cpu, interp_msb(source, width), 0, 0, 0);
         interp_reg_write(cpu, insn, insn->reg, width, result);
     }
     cpu->rip = next;

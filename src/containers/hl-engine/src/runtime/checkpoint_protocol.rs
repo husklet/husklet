@@ -1,6 +1,6 @@
 use std::io::Write;
 
-pub(super) const ABI: u32 = 1;
+pub(super) const ABI: u32 = 2;
 pub(super) const MAGIC_REQUEST: u32 = 0x484b_4351;
 const MAGIC_REPLY: u32 = 0x484b_4353;
 const NAME_MAX: usize = 512;
@@ -29,6 +29,7 @@ pub(super) const DIGEST: u32 = 15;
 pub(super) const SOURCE_LIST: u32 = 16;
 pub(super) const SOURCE_SIZE: u32 = 17;
 pub(super) const SOURCE_READ: u32 = 18;
+pub(super) const RECOVERY_COMPLETE: u32 = 19;
 
 #[derive(Debug)]
 pub(super) struct Request {
@@ -37,6 +38,7 @@ pub(super) struct Request {
     pub(super) offset: u64,
     pub(super) length: u64,
     pub(super) name_size: usize,
+    pub(super) generation: u32,
 }
 
 impl Request {
@@ -57,6 +59,7 @@ impl Request {
             offset: long(24),
             length,
             name_size,
+            generation: word(44),
         })
     }
 
@@ -122,5 +125,21 @@ impl Reply {
         channel.write_all(&header)?;
         channel.write_all(&self.payload)?;
         channel.flush()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nonzero_capture_generation_survives_wire_decode() {
+        let mut bytes = [0_u8; REQUEST_BYTES];
+        bytes[0..4].copy_from_slice(&MAGIC_REQUEST.to_ne_bytes());
+        bytes[4..8].copy_from_slice(&ABI.to_ne_bytes());
+        bytes[8..12].copy_from_slice(&COMMIT.to_ne_bytes());
+        bytes[44..48].copy_from_slice(&37_u32.to_ne_bytes());
+        let request = Request::decode(&bytes).expect("ABI-2 checkpoint request");
+        assert_eq!(request.generation, 37);
     }
 }

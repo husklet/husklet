@@ -54,8 +54,8 @@ static int mq_block_wait(int have_dl, const struct timespec *dl) {
     return 0;
 }
 
-static int svc_rare_security_descriptor(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
-                           uint64_t a5) {
+static int svc_rare_security_descriptor(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                                        uint64_t a4, uint64_t a5) {
     switch (nr) {
     // ===================== seccomp / sandboxing parity =====================
     // Docker's default seccomp profile BLOCKS these with EPERM (they need elevated caps the container
@@ -86,10 +86,10 @@ static int svc_rare_security_descriptor(struct cpu *c, uint64_t nr, uint64_t a0,
     case 277: { // seccomp(op, flags, args)
         unsigned op = (unsigned)a0;
         if (op == HL_LINUX_SECCOMP_SET_MODE_FILTER) {
-            G_RET(c) = (uint64_t)(int64_t)seccomp_install_filter(a2, (uint32_t)a1);
+            G_RET(c) = (uint64_t)(int64_t)seccomp_install_filter(c, a2, (uint32_t)a1);
         } else if (op == HL_LINUX_SECCOMP_SET_MODE_STRICT) {
             // strict takes no flags/args (SECCOMP_SET_MODE_STRICT): both must be zero, else -EINVAL.
-            G_RET(c) = (a1 || a2) ? (uint64_t)(-EINVAL) : (uint64_t)(int64_t)seccomp_set_strict();
+            G_RET(c) = (a1 || a2) ? (uint64_t)(-EINVAL) : (uint64_t)(int64_t)seccomp_set_strict(c);
         } else if (op == 2 /*SECCOMP_GET_ACTION_AVAIL*/) {
             G_RET(c) = (uint64_t)(int64_t)seccomp_get_action_avail(a1, a2);
         } else if (op == 3 /*SECCOMP_GET_NOTIF_SIZES*/) {
@@ -242,8 +242,8 @@ static int svc_rare_security_descriptor(struct cpu *c, uint64_t nr, uint64_t a0,
     return 1;
 }
 
-static int svc_rare_process_descriptor(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
-                           uint64_t a5) {
+static int svc_rare_process_descriptor(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                                       uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 434: {
         pid_t pid = (pid_t)a0;
@@ -356,8 +356,8 @@ static int svc_rare_process_descriptor(struct cpu *c, uint64_t nr, uint64_t a0, 
     return 1;
 }
 
-static int svc_rare_message_queue_open(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
-                           uint64_t a5) {
+static int svc_rare_message_queue_open(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                                       uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 180: {
 #if defined(__linux__)
@@ -507,8 +507,8 @@ static int svc_rare_message_queue_open(struct cpu *c, uint64_t nr, uint64_t a0, 
     return 1;
 }
 
-static int svc_rare_message_queue_send(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
-                           uint64_t a5) {
+static int svc_rare_message_queue_send(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                                       uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 182: {
 #if defined(__linux__)
@@ -639,8 +639,8 @@ static int svc_rare_message_queue_send(struct cpu *c, uint64_t nr, uint64_t a0, 
     return 1;
 }
 
-static int svc_rare_message_queue_receive(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
-                           uint64_t a5) {
+static int svc_rare_message_queue_receive(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2,
+                                          uint64_t a3, uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 183: {
 #if defined(__linux__)
@@ -743,8 +743,8 @@ static int svc_rare_message_queue_receive(struct cpu *c, uint64_t nr, uint64_t a
     return 1;
 }
 
-static int svc_rare_message_queue_control(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
-                           uint64_t a5) {
+static int svc_rare_message_queue_control(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2,
+                                          uint64_t a3, uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 184: {
 #if defined(__linux__)
@@ -872,8 +872,8 @@ static int svc_rare_message_queue_control(struct cpu *c, uint64_t nr, uint64_t a
     return 1;
 }
 
-static int svc_rare_scheduler_memory(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
-                           uint64_t a5) {
+static int svc_rare_scheduler_memory(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                                     uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 157: {
         pid_t s = setsid();
@@ -1047,8 +1047,8 @@ static int svc_rare_scheduler_memory(struct cpu *c, uint64_t nr, uint64_t a0, ui
     return 1;
 }
 
-static int svc_rare_identity_system(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
-                           uint64_t a5) {
+static int svc_rare_identity_system(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                                    uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 112:
         G_RET(c) = ((int)a0 == 0 || (int)a0 == 11) ? (uint64_t)(int64_t)(-EPERM) : (uint64_t)(int64_t)(-EINVAL);
@@ -1158,7 +1158,7 @@ static int svc_rare_identity_system(struct cpu *c, uint64_t nr, uint64_t a0, uin
             break;
         }
 #endif
-        ssize_t r = guest_fd_vector_flags((int)a0, a1, (size_t)a2, (off_t)a3, 1, 1, (int)a5);
+        ssize_t r = guest_fd_vector_flags((int)a0, a1, (size_t)a2, (off_t)a3, 1, 1, 1, (int)a5);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
     }
@@ -1210,9 +1210,9 @@ static int svc_rare_identity_system(struct cpu *c, uint64_t nr, uint64_t a0, uin
             G_RET(c) = (uint64_t)(int64_t)(-EOPNOTSUPP);
             break;
         }
-        ssize_t r = guest_fd_vector_flags((int)a0, a1, (size_t)a2, hl_off, 1, 0, 0);
+        ssize_t r = guest_fd_vector_flags((int)a0, a1, (size_t)a2, hl_off, 1, 1, 0, 0);
 #else
-        ssize_t r = guest_fd_vector_flags((int)a0, a1, (size_t)a2, (off_t)a3, 1, 0, (int)a5);
+        ssize_t r = guest_fd_vector_flags((int)a0, a1, (size_t)a2, (off_t)a3, 1, 1, 0, (int)a5);
 #endif
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
         break;
@@ -1354,8 +1354,8 @@ static int svc_rare_timer_query(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
     return 1;
 }
 
-static int svc_rare_timer_control(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
-                           uint64_t a5) {
+static int svc_rare_timer_control(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                                  uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 45: {
         char guest_path[4200];
@@ -1537,7 +1537,7 @@ static int svc_rare_timer_control(struct cpu *c, uint64_t nr, uint64_t a0, uint6
 }
 
 static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
-                           uint64_t a5) {
+                    uint64_t a5) {
     if (svc_rare_security_descriptor(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
     if (svc_rare_process_descriptor(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
     if (svc_rare_message_queue_open(c, nr, a0, a1, a2, a3, a4, a5)) return 1;

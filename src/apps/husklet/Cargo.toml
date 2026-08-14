@@ -65,7 +65,6 @@ runtime = [
     "dep:hl-gui",
     "dep:hl-ws-extension",
     "dep:hl-container",
-    "hl-container/c-execution",
     "dep:hl-daemon",
     "dep:hl-client",
     "dep:hl-images",

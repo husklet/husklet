@@ -15,8 +15,10 @@
 #include <stdint.h>
 #include <pthread.h>
 #include <errno.h>
+#if !defined(_WIN32)
 #include <sys/ioctl.h>
 #include <termios.h>
+#endif
 #include <unistd.h>
 
 extern int hl_ckpt_channel_adopt(const char *broker, const char *trigger);

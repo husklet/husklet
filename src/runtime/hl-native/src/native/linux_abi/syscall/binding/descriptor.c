@@ -2,6 +2,7 @@ static int bound_snapshot(uint64_t value, hl_linux_fd_snapshot *snapshot) {
     if (g_linux_box == NULL || value > UINT32_MAX) return 0;
     return hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)value, snapshot) == HL_STATUS_OK;
 }
+#include "vector_validation.h"
 /* Publish descriptors supplied through the embedding API as logical guest
  * descriptors too.  In particular, typed stdin/stdout/stderr intentionally
  * do not occupy native fds 0..2: those numbers remain available to the engine
@@ -454,8 +455,14 @@ static int64_t bound_read_no_copy(const hl_linux_fd_snapshot *file, uint64_t off
     return probed <= 0 ? probed : -EFAULT;
 }
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+typedef int64_t (*bound_vector_test_provider)(hl_host_iovec *, uint32_t, int);
+static _Thread_local bound_vector_test_provider g_bound_vector_test_provider;
+#endif
+
 static int bound_vectors_copy(uint64_t address, uint64_t count, hl_host_iovec vectors[HL_LINUX_IOV_MAX]) {
     uint64_t index;
+    uint64_t total = 0;
     size_t array_size;
     if (count > HL_LINUX_IOV_MAX) return -HL_LINUX_EINVAL;
     if (count == 0) return 0;
@@ -463,11 +470,19 @@ static int bound_vectors_copy(uint64_t address, uint64_t count, hl_host_iovec ve
     array_size = (size_t)count * sizeof(*vectors);
     if (guest_copy_from(vectors, address, array_size) != (ssize_t)array_size) return -HL_LINUX_EFAULT;
     for (index = 0; index < count; ++index) {
-        // Only the descriptor ARRAY is validated here.  import_iovec does not dereference the payload
-        // bases, so an unusable base must be judged later, where EOF can still make it irrelevant.
-        if (vectors[index].size > SIZE_MAX) return -HL_LINUX_EFAULT;
+        uint64_t base = vectors[index].address, size = vectors[index].size;
+        /* import_iovec validates each segment's accumulated byte count and address range in sequence.
+           Keep that ordering before any bounce allocation or provider operation. */
+        int validated = hl_guest_iov_validate(base, size, &total);
+        if (validated != 0) return validated;
     }
     return 0;
+}
+
+static int bound_vectors_prepare(const hl_linux_fd_snapshot *file, int output, uint64_t address, uint64_t count,
+                                 hl_host_iovec vectors[HL_LINUX_IOV_MAX]) {
+    if (bound_access_rejects(file, output)) return -EBADF;
+    return bound_vectors_copy(address, count, vectors);
 }
 
 static int64_t bound_vector_io(const hl_linux_fd_snapshot *file, hl_host_iovec guest_vectors[HL_LINUX_IOV_MAX],
@@ -501,15 +516,19 @@ static int64_t bound_vector_io(const hl_linux_fd_snapshot *file, hl_host_iovec g
             goto cleanup;
         }
         if (!output) {
-            ssize_t copied = guest_copy_from(buffers[usable], guest_vectors[index].address, size);
-            if (copied <= 0) {
-                if (usable == 0) {
-                    result = bound_access_rejects(file, 0) ? -EBADF : -EFAULT;
-                    goto cleanup;
-                }
-                goto issue_or_fail;
+            size_t copied = 0;
+            while (copied < size) {
+                uint64_t address = guest_vectors[index].address + copied;
+                size_t page = 4096u - (size_t)(address & 4095u);
+                size_t chunk = size - copied < page ? size - copied : page;
+                if (guest_copy_from((char *)buffers[usable] + copied, address, chunk) != (ssize_t)chunk) break;
+                copied += chunk;
             }
-            size = (size_t)copied;
+            if (copied == 0) {
+                result = bound_access_rejects(file, 0) ? -EBADF : -EFAULT;
+                goto cleanup;
+            }
+            size = copied;
         }
         host_vectors[usable] = (hl_host_iovec){(uint64_t)(uintptr_t)buffers[usable], size};
         usable++;
@@ -517,6 +536,11 @@ static int64_t bound_vector_io(const hl_linux_fd_snapshot *file, hl_host_iovec g
     }
 issue_or_fail:
     if (usable == 0) goto cleanup;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (g_bound_vector_test_provider != NULL)
+        result = g_bound_vector_test_provider(host_vectors, usable, output);
+    else
+#endif
     if (output)
         result = positioned ? hl_linux_preadv(g_linux_box, file->fd, host_vectors, usable, offset)
                             : hl_linux_readv(g_linux_box, file->fd, host_vectors, usable);
@@ -546,3 +570,62 @@ cleanup:
         free(buffers[index]);
     return result;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static _Thread_local uint32_t g_bound_vector_test_calls;
+static _Thread_local uint64_t g_bound_vector_test_bytes;
+
+static int64_t bound_vector_test_issue(hl_host_iovec *vectors, uint32_t count, int output) {
+    uint64_t total = 0;
+    g_bound_vector_test_calls++;
+    for (uint32_t index = 0; index < count; ++index) {
+        if (vectors[index].size > INT64_MAX - total) return -EINVAL;
+        if (output) memset((void *)(uintptr_t)vectors[index].address, 0x5a, (size_t)vectors[index].size);
+        total += vectors[index].size;
+    }
+    g_bound_vector_test_bytes = total;
+    return (int64_t)total;
+}
+
+/* Test-only export: drive the production bounce/prefix routine while replacing only its final provider call. */
+HL_API int HL_TARGET_LOCAL(bound_vector_io_test)(uint32_t scenario, int64_t *result, uint32_t *calls, uint64_t *bytes) {
+    const uint64_t guest = UINT64_C(0x700000000000);
+    hl_linux_fd_snapshot file = {.fd = 3, .status_flags = HL_LINUX_O_RDWR};
+    hl_host_iovec vectors[2] = {{guest, 8192}, {0, 0}};
+    void *storage;
+    int64_t observed;
+    if (result == NULL || calls == NULL || bytes == NULL || scenario > 3) return -EINVAL;
+    if (scenario == 3) {
+        file.status_flags = HL_LINUX_O_RDONLY;
+        *result = bound_vectors_prepare(&file, 0, 0, UINT64_MAX, vectors);
+        *calls = 0;
+        *bytes = 0;
+        return 0;
+    }
+    storage = aligned_alloc(4096, 8192);
+    if (storage == NULL) return -ENOMEM;
+    memset(storage, 0x31, 8192);
+    if (hl_logical_vma_global_map_direct(guest, 4096, HL_LOGICAL_VMA_READ | HL_LOGICAL_VMA_WRITE,
+                                         (uint64_t)(uintptr_t)storage) != 0 ||
+        hl_logical_vma_global_map_direct(guest + 4096, 4096, 0, (uint64_t)(uintptr_t)((char *)storage + 4096)) != 0) {
+        (void)hl_logical_vma_global_unmap(guest, 8192);
+        free(storage);
+        return -ENOMEM;
+    }
+    if (scenario == 1) {
+        vectors[0] = (hl_host_iovec){guest, 16};
+        vectors[1] = (hl_host_iovec){guest + 4096, 16};
+    }
+    g_bound_vector_test_calls = 0;
+    g_bound_vector_test_bytes = 0;
+    g_bound_vector_test_provider = bound_vector_test_issue;
+    observed = bound_vector_io(&file, vectors, scenario == 1 ? 2 : 1, scenario == 2, 1, 17);
+    g_bound_vector_test_provider = NULL;
+    *result = observed;
+    *calls = g_bound_vector_test_calls;
+    *bytes = g_bound_vector_test_bytes;
+    (void)hl_logical_vma_global_unmap(guest, 8192);
+    free(storage);
+    return 0;
+}
+#endif

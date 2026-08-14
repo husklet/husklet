@@ -267,6 +267,7 @@ mod tests {
     use std::io;
 
     use super::{ffi, Peer};
+    use std::io;
 
     #[test]
     fn unix_peer_identity_comes_from_the_kernel() {

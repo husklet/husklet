@@ -682,6 +682,7 @@ static void interp_widening_multiply(struct cpu *cpu, const struct insn *insn, u
 }
 
 // Two/three-operand IMUL: CF=OF report that the untruncated product did not fit; SF/ZF from the result.
+// PF/AF stay preserved, matching the translated path's deterministic undefined-flag convention.
 static uint64_t interp_imul_truncating(struct cpu *cpu, uint64_t a, uint64_t b, int width) {
     uint64_t m = interp_mask(width);
     unsigned bits = (unsigned)(8 * width);
@@ -692,7 +693,6 @@ static uint64_t interp_imul_truncating(struct cpu *cpu, uint64_t a, uint64_t b, 
     int64_t sign_extended = (int64_t)(result << (64 - bits)) >> (64 - bits);
     unsigned overflow = (unsigned)((__int128)sign_extended != product);
     interp_flags_nzcv(cpu, interp_msb(result, width), result == 0, overflow, overflow);
-    cpu->pf = result & 0xff;
     return result;
 }
 

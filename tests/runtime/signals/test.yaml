@@ -529,6 +529,20 @@ cases:
     artifact: { destination: /opt/husklet/signals-signalfd-state }
     run: []
     expect: { exit: 0, stdout: golden/signalfd_state.out }
+  - id: runtime/signals/signalfd-self-tgkill
+    status: active
+    compat: { class: compatibility }
+    build: { source: signalfd_self_tgkill.c, output: signalfd-self-tgkill, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-signalfd-self-tgkill }
+    run: []
+    expect: { exit: 0, stdout: golden/signalfd_self_tgkill.out }
+  - id: runtime/signals/signalfd-peer-tgkill
+    status: active
+    compat: { class: compatibility }
+    build: { source: signalfd_peer_tgkill.c, output: signalfd-peer-tgkill, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-signalfd-peer-tgkill }
+    run: []
+    expect: { exit: 0, stdout: golden/signalfd_peer_tgkill.out }
   - id: runtime/signals/sigtimedwait-edges
     status: active
     compat: { class: compatibility }

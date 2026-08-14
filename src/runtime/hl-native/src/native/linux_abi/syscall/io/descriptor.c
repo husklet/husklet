@@ -157,11 +157,10 @@ static int svc_fcntl_lock(struct cpu *c, int descriptor, int command, uint64_t a
                     claimed = poslk_op((int)a0, lcmd, lf, &pout);
                     if (!claimed) break; // not a regular file -> fall through to the host fcntl path
                     if (lcmd == 7 && pout == -EAGAIN) {
-                        uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) |
-                                     __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
                         int intr = 0;
-                        for (int s = 1; s < 64; s++)
-                            if ((p & (1ull << s)) && !(c->sigmask & (1ull << (s - 1)))) {
+                        for (int s = 1; s <= 64; s++)
+                            if ((process_pending_test(s) || thread_pending_test(c, s)) &&
+                                !(c->sigmask & (UINT64_C(1) << (s - 1)))) {
                                 intr = 1;
                                 break;
                             }

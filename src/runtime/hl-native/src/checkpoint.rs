@@ -144,13 +144,27 @@ impl Drop for CheckpointTransport {
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
-    fn open_descriptor_count() -> usize {
-        std::fs::read_dir("/dev/fd").expect("descriptor directory").count()
+    static ADOPTION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[cfg(target_os = "linux")]
+    fn matching_descriptors(descriptor: i32) -> std::collections::BTreeSet<i32> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let expected = std::fs::metadata(format!("/dev/fd/{descriptor}")).expect("owned descriptor metadata");
+        std::fs::read_dir("/dev/fd")
+            .expect("descriptor directory")
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().to_str()?.parse::<i32>().ok())
+            .filter(|candidate| {
+                std::fs::metadata(format!("/dev/fd/{candidate}"))
+                    .is_ok_and(|metadata| metadata.dev() == expected.dev() && metadata.ino() == expected.ino())
+            })
+            .collect()
     }
 
     #[test]
     fn transport_resources_are_live_and_generation_advances() {
+        let _adoption = ADOPTION.lock().expect("checkpoint adoption lock");
         let (_broker, transport) = CheckpointTransport::create().expect("checkpoint transport");
         assert_eq!(transport.bump(), 1);
         assert_eq!(transport.bump(), 2);
@@ -161,13 +175,49 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn repeated_adoption_replaces_owned_descriptors() {
+        let _adoption = ADOPTION.lock().expect("checkpoint adoption lock");
         let (_broker, transport) = CheckpointTransport::create().expect("checkpoint transport");
         transport.adopt(1).expect("initial adoption");
-        let initial = open_descriptor_count();
+        #[cfg(target_os = "linux")]
+        let broker_source = transport.broker_child.as_raw_fd();
+        #[cfg(target_os = "linux")]
+        let trigger_source = transport.trigger_descriptor.as_raw_fd();
+        #[cfg(target_os = "linux")]
+        let mut broker_copies = matching_descriptors(broker_source);
+        #[cfg(target_os = "linux")]
+        let mut trigger_copies = matching_descriptors(trigger_source);
+        #[cfg(target_os = "linux")]
+        assert!(broker_copies.remove(&broker_source));
+        #[cfg(target_os = "linux")]
+        assert!(trigger_copies.remove(&trigger_source));
+        #[cfg(target_os = "linux")]
+        assert_eq!(broker_copies.len(), 1, "one engine-owned broker duplicate");
+        #[cfg(target_os = "linux")]
+        assert_eq!(trigger_copies.len(), 1, "one engine-owned trigger duplicate");
         for _ in 0..32 {
             transport.adopt(1).expect("replacement adoption");
+            drop(transport.broker_child.try_clone().expect("live broker source"));
+            drop(transport.trigger_descriptor.try_clone().expect("live trigger source"));
+            #[cfg(target_os = "linux")]
+            {
+                let mut next_broker = matching_descriptors(broker_source);
+                let mut next_trigger = matching_descriptors(trigger_source);
+                assert!(next_broker.remove(&broker_source));
+                assert!(next_trigger.remove(&trigger_source));
+                assert_eq!(next_broker.len(), 1, "old broker duplicate leaked");
+                assert_eq!(next_trigger.len(), 1, "old trigger duplicate leaked");
+                assert!(
+                    broker_copies.is_disjoint(&next_broker),
+                    "old broker duplicate remained live"
+                );
+                assert!(
+                    trigger_copies.is_disjoint(&next_trigger),
+                    "old trigger duplicate remained live"
+                );
+                broker_copies = next_broker;
+                trigger_copies = next_trigger;
+            }
         }
-        assert_eq!(open_descriptor_count(), initial);
     }
 
     #[test]

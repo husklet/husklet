@@ -3,6 +3,7 @@
 // otherwise. Included by service.c AFTER its local helpers (overlay_*/proc_self_exe/synth_str_fd/
 // cpu_range_str it calls) and before service() -- same TU scope.
 #include "../device.h"
+#include "../proc_fd_target.h"
 
 #if defined(__linux__)
 #include <linux/stat.h>
@@ -21,7 +22,10 @@ static int dac_snapshot_at(int directory, const char *raw, int nofollow, hl_dac_
     const char *resolved;
     if (g_rootfs) {
         abs_guest(directory, raw, guest, sizeof guest);
-        if (!overlay_resolve(guest, host, sizeof host, nofollow)) return -ENOENT;
+        if (!overlay_resolve(guest, host, sizeof host, nofollow)) {
+            int ancestor_error = overlay_ancestor_error(guest);
+            return ancestor_error != 0 ? ancestor_error : -ENOENT;
+        }
         resolved = host;
     } else {
         resolved = atpath(directory, raw, path, sizeof path, nofollow);

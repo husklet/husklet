@@ -1,0 +1,23 @@
+cases:
+- id: terminal-flow-control/xoff-xon-resume
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "\u0013" }
+      - write: { text: "printf '<FLOW-RESUMED>\\n'\r" }
+      - write: { text: "\u0011" }
+      - await_output: { contains: "<FLOW-RESUMED>", timeout_ms: 5000 }
+      - write: { text: "printf 'SHELL-OK\\n'; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/resumed.txt
+    - golden/shell_ok.txt

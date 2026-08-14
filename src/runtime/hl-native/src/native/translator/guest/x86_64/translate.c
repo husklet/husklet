@@ -287,32 +287,39 @@ static void emit_guest_signal(uint64_t rip, int lsig, int code) {
 // write-protected code page (g_smc_pg), so ordinary data munmap/mmap churn pays nothing and re-translates
 // nothing. Inert unless a JIT guest is present (g_rwx_guest) -> the normal (non-JIT) matrix is byte-exact.
 static void jit86_drop_range_translations(uint64_t lo, uint64_t hi) {
-    if (!g_rwx_guest || g_smc_n == 0 || hi <= lo) return;
+    if (!g_rwx_guest || hi <= lo) return;
+    stw_mapping_begin();
+    if (g_smc_n == 0) {
+        stw_mapping_end();
+        return;
+    }
     uint64_t page_size = smc_page_size();
     uint64_t plo = lo & ~(page_size - 1), phi = (hi + page_size - 1) & ~(page_size - 1);
-    int hit = 0;
-    for (int i = 0; i < g_smc_n;) {
-        if (g_smc_pg[i] >= plo && g_smc_pg[i] < phi) { // a translated code page lived in the range
-            hit = 1;
-            g_smc_pg[i] = g_smc_pg[--g_smc_n]; // forget it -> re-protected when the fresh mapping is translated
-        } else {
-            i++;
-        }
+    int hit = hl_smc_page_registry_remove_range(&g_smc_index, g_smc_pg, &g_smc_n, plo, phi);
+    if (!hit) {
+        stw_mapping_end();
+        return; // no translated code in the range -> nothing to invalidate (the common data-munmap case)
     }
-    if (!hit) return; // no translated code in the range -> nothing to invalidate (the common data-munmap case)
     map_clear();
     memset(g_ibtc, 0, sizeof g_ibtc);
     memset(g_xibtc, 0, sizeof g_xibtc);
     pend_reset();
+    stw_mapping_end();
 }
 
 static void jit86_drop_all_smc_translations(void) {
-    if (!g_rwx_guest || g_smc_n == 0) return;
-    g_smc_n = 0;
+    if (!g_rwx_guest) return;
+    stw_mapping_begin();
+    if (g_smc_n == 0) {
+        stw_mapping_end();
+        return;
+    }
+    hl_smc_page_registry_remove_all(&g_smc_index, g_smc_pg, &g_smc_n);
     map_clear();
     memset(g_ibtc, 0, sizeof g_ibtc);
     memset(g_xibtc, 0, sizeof g_xibtc);
     pend_reset();
+    stw_mapping_end();
 }
 
 // UD1/UD2: explicitly-undefined opcodes that real software (e.g. Chrome feature probes, ruby's

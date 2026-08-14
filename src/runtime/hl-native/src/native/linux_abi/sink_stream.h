@@ -36,8 +36,16 @@ static int ckpt_stream_call(uint32_t op, const char *name, uint64_t stream, uint
     request.stream = stream;
     request.offset = offset;
     request.length = (uint64_t)size;
+    request.generation = ckpt_request_generation();
     if (hl_ckpt_channel_call(&request, name, payload, reply, out, capacity) != 0) return -1;
     return reply->status;
+}
+
+static int ckpt_stream_recovery_complete(void) {
+    return ckpt_stream_call(HL_CKPT_OP_RECOVERY_COMPLETE, NULL, 0, 0, 0, NULL, 0, NULL, NULL, 0) ==
+                   HL_CKPT_STATUS_OK
+               ? 0
+               : -1;
 }
 
 static void ckpt_sink_stream_name(struct ckpt_sink *sink, const char *group, const char *name, char *out, size_t size) {

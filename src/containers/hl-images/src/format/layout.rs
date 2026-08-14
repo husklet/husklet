@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -25,6 +25,22 @@ pub struct Layout {
 }
 
 impl Layout {
+    #[cfg(unix)]
+    fn directory(&self, relative: &Path) -> Result<std::os::fd::OwnedFd> {
+        use nix::fcntl::{OFlag, open, openat};
+        use nix::sys::stat::Mode;
+
+        let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW;
+        let mut directory = open(&self.root, flags, Mode::empty()).map_err(std::io::Error::from)?;
+        for component in relative.components() {
+            let Component::Normal(name) = component else {
+                return Err(Error::InvalidMetadata("layout directory is not relative".into()));
+            };
+            directory = openat(&directory, name, flags, Mode::empty()).map_err(std::io::Error::from)?;
+        }
+        Ok(directory)
+    }
+
     /// Create or open an OCI layout.
     ///
     /// # Errors
@@ -116,7 +132,48 @@ impl Layout {
             .parent()
             .filter(|parent| parent.starts_with(&self.root))
             .ok_or_else(|| Error::InvalidMetadata("layout path has no owned parent".into()))?;
+        #[cfg(unix)]
+        {
+            use nix::fcntl::renameat;
+            use std::os::fd::AsFd as _;
+            let relative_parent = parent
+                .strip_prefix(&self.root)
+                .map_err(|_| Error::InvalidMetadata("layout parent escaped root".into()))?;
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| Error::InvalidMetadata("layout filename is invalid".into()))?;
+            let directory = self.directory(relative_parent)?;
+            let temporary = format!(".tmp-{}", uuid::Uuid::new_v4());
+            let descriptor = nix::fcntl::openat(
+                &directory,
+                temporary.as_str(),
+                nix::fcntl::OFlag::O_WRONLY
+                    | nix::fcntl::OFlag::O_CREAT
+                    | nix::fcntl::OFlag::O_EXCL
+                    | nix::fcntl::OFlag::O_CLOEXEC
+                    | nix::fcntl::OFlag::O_NOFOLLOW,
+                nix::sys::stat::Mode::from_bits_truncate(0o600),
+            )
+            .map_err(std::io::Error::from)?;
+            let mut file = tokio::fs::File::from_std(std::fs::File::from(descriptor));
+            let result = async {
+                file.write_all(bytes).await?;
+                file.sync_all().await?;
+                drop(file);
+                renameat(&directory, temporary.as_str(), &directory, name).map_err(std::io::Error::from)?;
+                nix::unistd::fsync(directory.as_fd()).map_err(std::io::Error::from)?;
+                Ok::<(), Error>(())
+            }
+            .await;
+            if result.is_err() {
+                let _ = nix::unistd::unlinkat(&directory, temporary.as_str(), nix::unistd::UnlinkatFlags::NoRemoveDir);
+            }
+            result
+        }
+        #[cfg(not(unix))]
         let temporary = parent.join(format!(".tmp-{}", uuid::Uuid::new_v4()));
+        #[cfg(not(unix))]
         let result = async {
             let mut file = tokio::fs::OpenOptions::new()
                 .create_new(true)
@@ -137,10 +194,12 @@ impl Layout {
             Ok(())
         }
         .await;
+        #[cfg(not(unix))]
         if result.is_err() {
             let _ = tokio::fs::remove_file(&temporary).await;
         }
-        result
+        #[cfg(not(unix))]
+        return result;
     }
 }
 
@@ -203,11 +262,32 @@ impl Target for Layout {
     async fn push(&self, descriptor: &Descriptor, mut content: BlobStream) -> Result<()> {
         use futures_util::StreamExt;
         let digest: Digest = descriptor.digest().to_string().parse()?;
+        #[cfg(not(unix))]
         let target = self.root.join("blobs/sha256").join(digest.encoded());
+        #[cfg(unix)]
+        let directory = self.directory(Path::new("blobs/sha256"))?;
+        #[cfg(unix)]
+        let temporary_name = format!(".tmp-{}", uuid::Uuid::new_v4());
+        #[cfg(unix)]
+        let descriptor_file = nix::fcntl::openat(
+            &directory,
+            temporary_name.as_str(),
+            nix::fcntl::OFlag::O_WRONLY
+                | nix::fcntl::OFlag::O_CREAT
+                | nix::fcntl::OFlag::O_EXCL
+                | nix::fcntl::OFlag::O_CLOEXEC
+                | nix::fcntl::OFlag::O_NOFOLLOW,
+            nix::sys::stat::Mode::from_bits_truncate(0o600),
+        )
+        .map_err(std::io::Error::from)?;
+        #[cfg(unix)]
+        let mut file = tokio::fs::File::from_std(std::fs::File::from(descriptor_file));
+        #[cfg(not(unix))]
         let temporary = self
             .root
             .join("blobs/sha256")
             .join(format!(".tmp-{}", uuid::Uuid::new_v4()));
+        #[cfg(not(unix))]
         let mut file = tokio::fs::OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -222,6 +302,13 @@ impl Target for Layout {
                 actual: u64::MAX,
             })?;
             if size > descriptor.size() {
+                #[cfg(unix)]
+                let _ = nix::unistd::unlinkat(
+                    &directory,
+                    temporary_name.as_str(),
+                    nix::unistd::UnlinkatFlags::NoRemoveDir,
+                );
+                #[cfg(not(unix))]
                 let _ = tokio::fs::remove_file(&temporary).await;
                 return Err(Error::SizeMismatch {
                     expected: descriptor.size(),
@@ -234,6 +321,13 @@ impl Target for Layout {
         file.sync_all().await?;
         drop(file);
         if size != descriptor.size() {
+            #[cfg(unix)]
+            let _ = nix::unistd::unlinkat(
+                &directory,
+                temporary_name.as_str(),
+                nix::unistd::UnlinkatFlags::NoRemoveDir,
+            );
+            #[cfg(not(unix))]
             let _ = tokio::fs::remove_file(&temporary).await;
             return Err(Error::SizeMismatch {
                 expected: descriptor.size(),
@@ -242,12 +336,28 @@ impl Target for Layout {
         }
         let actual = Digest::from(<[u8; 32]>::from(hash.finalize()));
         if actual != digest {
+            #[cfg(unix)]
+            let _ = nix::unistd::unlinkat(
+                &directory,
+                temporary_name.as_str(),
+                nix::unistd::UnlinkatFlags::NoRemoveDir,
+            );
+            #[cfg(not(unix))]
             let _ = tokio::fs::remove_file(&temporary).await;
             return Err(Error::DigestMismatch {
                 expected: digest.to_string(),
                 actual: actual.to_string(),
             });
         }
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsFd as _;
+            nix::fcntl::renameat(&directory, temporary_name.as_str(), &directory, digest.encoded())
+                .map_err(std::io::Error::from)?;
+            nix::unistd::fsync(directory.as_fd()).map_err(std::io::Error::from)?;
+            return Ok(());
+        }
+        #[cfg(not(unix))]
         match tokio::fs::rename(&temporary, &target).await {
             Ok(()) => {}
             Err(_error) if target.exists() => {
@@ -255,6 +365,7 @@ impl Target for Layout {
             }
             Err(error) => return Err(error.into()),
         }
+        #[cfg(not(unix))]
         Ok(())
     }
 }
@@ -262,6 +373,36 @@ impl Target for Layout {
 struct StoreSource {
     root: Descriptor,
     content: FsStore,
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use futures_util::stream;
+    use std::os::unix::fs::symlink;
+
+    #[tokio::test]
+    async fn push_refuses_a_replaced_blob_directory() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("layout");
+        let outside = temporary.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        let layout = Layout::open(&root).await.unwrap();
+        std::fs::remove_dir(root.join("blobs/sha256")).unwrap();
+        symlink(&outside, root.join("blobs/sha256")).unwrap();
+
+        let bytes = Bytes::from_static(b"checkpoint-authority");
+        let digest = Digest::from(<[u8; 32]>::from(Sha256::digest(&bytes)));
+        let descriptor: Descriptor = serde_json::from_value(serde_json::json!({
+            "mediaType": "application/octet-stream",
+            "digest": digest.to_string(),
+            "size": bytes.len()
+        }))
+        .unwrap();
+        let content: BlobStream = Box::pin(stream::once(async move { Ok(bytes) }));
+        assert!(Target::push(&layout, &descriptor, content).await.is_err());
+        assert!(std::fs::read_dir(outside).unwrap().next().is_none());
+    }
 }
 #[async_trait]
 impl Source for StoreSource {

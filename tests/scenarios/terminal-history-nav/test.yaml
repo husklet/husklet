@@ -1,0 +1,20 @@
+cases:
+- id: terminal-history-nav/recall-edit
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      steps:
+      - write: { text: "stty -echo; printf '\\122\\104\\131\\n'\r" }
+      - await_output: { contains: RDY, timeout_ms: 5000 }
+      - write: { text: "printf '<%s>\\n' old\r" }
+      - await_output: { contains: "<old>", timeout_ms: 5000 }
+      - write: { text: "\u001b[A\u0017new\r" }
+      - await_output: { contains: "<new>", timeout_ms: 5000 }
+      - write: { text: "printf '\\123\\110\\105\\114\\114\\055\\117\\113\\n'; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains: [golden/original.txt, golden/recalled.txt, golden/shell_ok.txt]

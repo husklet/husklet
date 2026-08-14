@@ -15,6 +15,8 @@
 #include "host.h"
 
 #include <fcntl.h>
+#include <stdbool.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,8 +56,17 @@ struct hl_c_backend {
     uint32_t provider_initialized;
     uint32_t provider_files_installed;
     int32_t provider_fd;
+    atomic_bool result_lock;
     hl_engine_exit result;
 };
+
+static void hl_c_backend_result_lock(hl_c_backend *backend) {
+    while (atomic_exchange_explicit(&backend->result_lock, true, memory_order_acquire)) {}
+}
+
+static void hl_c_backend_result_unlock(hl_c_backend *backend) {
+    atomic_store_explicit(&backend->result_lock, false, memory_order_release);
+}
 
 #if defined(HL_LEAK_CHECK_PROBE)
 /* Non-vacuity hook for the dedicated sanitizer gate. It is compiled only into
@@ -99,7 +110,13 @@ __attribute__((noinline)) static void hl_c_backend_scrub_probe_stack(void) {
 #endif
 
 HL_API int32_t hl_c_backend_leak_check_nonvacuity(void) {
-#if defined(HL_LEAK_CHECK_PROBE)
+#if defined(HL_ADDRESS_SANITIZER)
+    volatile unsigned char *allocation = malloc(4096);
+    if (allocation == NULL) return 1;
+    allocation[0] = 0x5a;
+    free((void *)allocation);
+    return allocation[0];
+#elif defined(HL_LEAK_CHECK_PROBE)
     hl_c_backend_make_deliberate_leak();
     hl_c_backend_scrub_probe_stack();
     return 0;
@@ -358,6 +375,9 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
         if (provider_fd >= 0) close(provider_fd);
         return HL_STATUS_OUT_OF_MEMORY;
     }
+    atomic_init(&backend->result_lock, false);
+    backend->result.abi = HL_ENGINE_ABI;
+    backend->result.size = sizeof(backend->result);
     status = hl_c_bridge_host_create(&backend->host, &backend->services);
     if (status != HL_STATUS_OK) {
         if (provider_fd >= 0) close(provider_fd);
@@ -494,8 +514,14 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
 }
 
 HL_API int32_t hl_c_backend_run(hl_c_backend *backend, int32_t argc, const char *const *argv) {
+    hl_engine_exit result = {.abi = HL_ENGINE_ABI, .size = sizeof(result)};
+    int32_t status;
     if (backend == NULL) return HL_STATUS_INVALID_ARGUMENT;
-    return hl_engine_run(backend->engine, argc, argv, &backend->result);
+    status = hl_engine_run(backend->engine, argc, argv, &result);
+    hl_c_backend_result_lock(backend);
+    backend->result = result;
+    hl_c_backend_result_unlock(backend);
+    return status;
 }
 
 HL_API int32_t hl_c_backend_request(hl_c_backend *backend, uint32_t request, int32_t signal) {
@@ -505,16 +531,28 @@ HL_API int32_t hl_c_backend_request(hl_c_backend *backend, uint32_t request, int
     return hl_engine_request(backend->engine, request, NULL, 0);
 }
 
+HL_API int32_t hl_c_backend_exit(hl_c_backend *backend, hl_engine_exit *result) {
+    if (backend == NULL || result == NULL || result->abi != HL_ENGINE_ABI || result->size < sizeof(*result))
+        return HL_STATUS_INVALID_ARGUMENT;
+    hl_c_backend_result_lock(backend);
+    *result = backend->result;
+    hl_c_backend_result_unlock(backend);
+    return HL_STATUS_OK;
+}
+
 HL_API uint32_t hl_c_backend_exit_kind(const hl_c_backend *backend) {
-    return backend == NULL ? 0 : backend->result.kind;
+    hl_engine_exit result = {.abi = HL_ENGINE_ABI, .size = sizeof(result)};
+    return hl_c_backend_exit((hl_c_backend *)backend, &result) == HL_STATUS_OK ? result.kind : 0;
 }
 
 HL_API int32_t hl_c_backend_exit_status(const hl_c_backend *backend) {
-    return backend == NULL ? -1 : backend->result.guest_status;
+    hl_engine_exit result = {.abi = HL_ENGINE_ABI, .size = sizeof(result)};
+    return hl_c_backend_exit((hl_c_backend *)backend, &result) == HL_STATUS_OK ? result.guest_status : -1;
 }
 
 HL_API uint64_t hl_c_backend_exit_detail(const hl_c_backend *backend) {
-    return backend == NULL ? 0 : backend->result.detail;
+    hl_engine_exit result = {.abi = HL_ENGINE_ABI, .size = sizeof(result)};
+    return hl_c_backend_exit((hl_c_backend *)backend, &result) == HL_STATUS_OK ? result.detail : 0;
 }
 
 HL_API uint64_t hl_c_backend_translation_count(const hl_c_backend *backend) {

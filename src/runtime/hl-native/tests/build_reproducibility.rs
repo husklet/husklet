@@ -51,10 +51,12 @@ fn find_artifact(directory: &Path, filename: &str) -> Option<PathBuf> {
 }
 
 fn sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes).iter().fold(String::with_capacity(64), |mut hash, byte| {
-        write!(hash, "{byte:02x}").expect("writing to a string cannot fail");
-        hash
-    })
+    Sha256::digest(bytes)
+        .iter()
+        .fold(String::with_capacity(64), |mut hash, byte| {
+            write!(hash, "{byte:02x}").expect("writing to a string cannot fail");
+            hash
+        })
 }
 
 #[test]

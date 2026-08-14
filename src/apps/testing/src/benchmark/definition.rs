@@ -158,8 +158,7 @@ impl Campaign {
                         || support.values().any(|entry| !entry.valid())
                 })
                 || workload.layout_phases.values().any(|phases| {
-                    !phase_names_valid(phases, false)
-                        || phases.iter().any(|phase| !workload.phases.contains(phase))
+                    !phase_names_valid(phases, false) || phases.iter().any(|phase| !workload.phases.contains(phase))
                 })
                 || workload
                     .phases
@@ -522,7 +521,10 @@ mod tests {
             workloads: BTreeMap::new(),
             invariant_phases: Vec::new(),
         };
-        assert_eq!(campaign.guest("I", &guest).unwrap(), Path::new("benchmark/malloc-plain"));
+        assert_eq!(
+            campaign.guest("I", &guest).unwrap(),
+            Path::new("benchmark/malloc-plain")
+        );
     }
 
     #[test]

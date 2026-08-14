@@ -13,6 +13,7 @@ pub(crate) use environment::EnvironmentEntry;
 pub(crate) use host::EngineHost;
 use host::HostExclusion;
 use input::ManifestPath;
+use manifest::Orchestration;
 pub(crate) use manifest::Rootfs;
 use manifest::{CompatClass, Oracle, RuntimeManifest, Status};
 pub(crate) use manifest::{GuestElf, GuestFile, GuestLibrary};
@@ -36,6 +37,8 @@ pub struct Workload {
     pub engine_options: EngineOptions,
     pub timeout: u64,
     pub exit: i32,
+    pub(crate) expected_signal: Option<u8>,
+    pub(crate) orchestration: Option<Orchestration>,
     pub golden: Option<PathBuf>,
     pub(crate) stderr: Vec<String>,
     pub(crate) diagnostics: Vec<diagnostics::Assertion>,
@@ -150,6 +153,19 @@ impl App {
                     )
                     .into());
                 }
+                if let Some(orchestration) = case.orchestration {
+                    if orchestration.stop_after_ms == 0 || orchestration.stop_after_ms >= case.timeout * 1000 {
+                        return Err(format!("{} has an out-of-range stop-after-ms", case.id).into());
+                    }
+                    if case.expect.signal.is_none() {
+                        return Err(format!("{} orchestrates a stop without an expected signal", case.id).into());
+                    }
+                } else if case.expect.signal.is_some() {
+                    return Err(format!("{} expects a signal without lifecycle orchestration", case.id).into());
+                }
+                if case.expect.signal.is_some_and(|signal| !(1..=64).contains(&signal)) {
+                    return Err(format!("{} has an out-of-range expected signal", case.id).into());
+                }
                 let (source, output, build_compiler, build_arguments, build_environment, flags, inputs, destination) =
                     document
                         .build
@@ -185,6 +201,8 @@ impl App {
                     engine_options,
                     timeout: case.timeout,
                     exit: case.expect.exit,
+                    expected_signal: case.expect.signal,
+                    orchestration: case.orchestration,
                     golden,
                     stderr,
                     diagnostics,

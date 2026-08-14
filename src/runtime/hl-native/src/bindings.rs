@@ -28,9 +28,21 @@ pub struct MainImagePlan {
     pub interpreter_identity: u64,
 }
 
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub(super) struct EngineExit {
+    pub abi: u32,
+    pub size: u32,
+    pub kind: u32,
+    pub guest_status: i32,
+    pub detail: u64,
+}
+
 const _: () = assert!(size_of::<MainImagePlan>() == 48);
 const _: () = assert!(offset_of!(MainImagePlan, link_start) == 16);
 const _: () = assert!(offset_of!(MainImagePlan, interpreter_identity) == 40);
+const _: () = assert!(size_of::<EngineExit>() == 24);
+const _: () = assert!(offset_of!(EngineExit, detail) == 16);
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -65,18 +77,40 @@ pub(super) type SyscallDispatch =
     unsafe extern "C" fn(*mut c_void, c_uint, *mut SyscallCpuAarch64, *mut SyscallTrapResult) -> c_int;
 
 unsafe extern "C" {
+    #[cfg(feature = "native-test-hooks")]
+    fn hl_aarch64_bound_vector_io_test(
+        scenario: c_uint,
+        result: *mut i64,
+        calls: *mut c_uint,
+        bytes: *mut c_ulonglong,
+    ) -> c_int;
+    #[cfg(feature = "native-test-hooks")]
+    fn hl_x86_64_bound_vector_io_test(
+        scenario: c_uint,
+        result: *mut i64,
+        calls: *mut c_uint,
+        bytes: *mut c_ulonglong,
+    ) -> c_int;
     #[cfg(test)]
     pub(super) fn hl_engine_abi() -> c_uint;
     #[cfg(test)]
     pub(super) fn hl_engine_version() -> *const c_char;
     pub(super) fn hl_c_backend_leak_check_nonvacuity() -> c_int;
+    #[cfg(unix)]
     pub(super) fn hl_c_backend_checkpoint_broker_pair(parent: *mut c_int, child: *mut c_int) -> c_int;
+    #[cfg(unix)]
     pub(super) fn hl_c_backend_checkpoint_broker_accept(broker: c_int, timeout_ms: c_int, host_pid: *mut u64) -> c_int;
+    #[cfg(unix)]
     pub(super) fn hl_c_backend_checkpoint_trigger_create(descriptor: *mut c_int, mapping: *mut *mut c_void) -> c_int;
+    #[cfg(unix)]
     pub(super) fn hl_c_backend_checkpoint_trigger_bump(mapping: *mut c_void) -> c_uint;
+    #[cfg(unix)]
     pub(super) fn hl_c_backend_checkpoint_trigger_destroy(mapping: *mut c_void, descriptor: c_int);
+    #[cfg(unix)]
     pub(super) fn hl_c_backend_checkpoint_adopt(isa: c_uint, broker: c_int, trigger: c_int) -> c_int;
+    #[cfg(unix)]
     pub(super) fn hl_c_backend_checkpoint_interrupt_signal(isa: c_uint) -> c_int;
+    #[cfg(unix)]
     pub(super) fn hl_c_backend_checkpoint_configure(backend: *mut Backend, broker: c_int, trigger: c_int) -> c_int;
     pub(super) fn hl_c_backend_create(
         isa: c_uint,
@@ -95,12 +129,41 @@ unsafe extern "C" {
     ) -> c_int;
     pub(super) fn hl_c_backend_run(backend: *mut Backend, argc: c_int, argv: *const *const c_char) -> c_int;
     pub(super) fn hl_c_backend_request(backend: *mut Backend, request: c_uint, signal: c_int) -> c_int;
+    #[cfg(all(test, feature = "native-test-hooks"))]
+    pub(super) fn hl_c_backend_checkpoint_test_arm() -> c_uint;
+    #[cfg(all(test, feature = "native-test-hooks"))]
+    pub(super) fn hl_c_backend_checkpoint_test_phase() -> c_uint;
+    #[cfg(all(test, feature = "native-test-hooks"))]
+    pub(super) fn hl_c_backend_checkpoint_test_release();
+    #[cfg(all(test, feature = "native-test-hooks"))]
+    pub(super) fn hl_c_backend_checkpoint_test_reset();
+    pub(super) fn hl_c_backend_exit(backend: *mut Backend, result: *mut EngineExit) -> c_int;
+    #[cfg(test)]
     pub(super) fn hl_c_backend_exit_kind(backend: *const Backend) -> c_uint;
+    #[cfg(test)]
     pub(super) fn hl_c_backend_exit_status(backend: *const Backend) -> c_int;
+    #[cfg(test)]
     pub(super) fn hl_c_backend_exit_detail(backend: *const Backend) -> c_ulonglong;
     #[cfg(test)]
     pub(super) fn hl_c_backend_translation_count(backend: *const Backend) -> c_ulonglong;
     pub(super) fn hl_c_backend_destroy(backend: *mut Backend);
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn bound_vector_io_test(isa: u32, scenario: u32) -> Result<(i64, u32, u64), i32> {
+    let (mut result, mut calls, mut bytes) = (i64::MIN, u32::MAX, u64::MAX);
+    let hook = match isa {
+        1 => hl_aarch64_bound_vector_io_test,
+        2 => hl_x86_64_bound_vector_io_test,
+        _ => return Err(-22),
+    };
+    // SAFETY: the feature-gated C hook accepts writable scalar outputs and owns its fixture memory.
+    let status = unsafe { hook(scenario, &raw mut result, &raw mut calls, &raw mut bytes) };
+    if status == 0 {
+        Ok((result, calls, bytes))
+    } else {
+        Err(status)
+    }
 }
 
 #[cfg(test)]
@@ -144,6 +207,14 @@ mod tests {
             );
             assert_ne!(hl_c_backend_run(ptr::null_mut(), 0, ptr::null()), 0);
             assert_ne!(hl_c_backend_request(ptr::null_mut(), 0, 0), 0);
+            let mut exit = EngineExit {
+                abi: 5,
+                size: size_of::<EngineExit>() as u32,
+                kind: 0,
+                guest_status: 0,
+                detail: 0,
+            };
+            assert_ne!(hl_c_backend_exit(ptr::null_mut(), &raw mut exit), 0);
             assert_eq!(hl_c_backend_exit_kind(ptr::null()), 0);
             assert_eq!(hl_c_backend_exit_status(ptr::null()), -1);
             assert_eq!(hl_c_backend_exit_detail(ptr::null()), 0);

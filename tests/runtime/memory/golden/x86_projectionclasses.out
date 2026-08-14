@@ -1,0 +1,2 @@
+x86-projection-core scalar=1 vector=1 atomic=1 cmp-widths=1 rotate=1 rotate-widths=1 x87=1 altstack=1 stack=1 alias=1 legacy=1 smc=1
+x86-projection-avx gather=1

@@ -487,13 +487,6 @@ static int svc_read(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
                 break;
             }
-            char b;
-            // drain one wake byte (one byte was written per queued instance -> keeps readability accurate)
-            ssize_t pr = read(rfd, &b, 1);
-            if (pr <= 0) {
-                G_RET(c) = (uint64_t)(int64_t)(pr < 0 ? -errno : -EAGAIN);
-                break;
-            }
             // The self-pipe only preserves INSERTION order, but signalfd drains in priority order (lowest
             // signo first, FIFO within a signo) carrying the queued siginfo (ssi_int / ssi_pid / ssi_code).
             // So ignore the byte's signo for SELECTION: scan this OFD's mask ascending for the lowest signo
@@ -502,16 +495,51 @@ static int svc_read(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             int sslot = g_sigfd_slot[rfd] - 1;
             uint64_t omask = g_sfd[sslot].mask;
             struct sigq_ent ent;
+        signalfd_retry:
             int sig = 0, popped = 0;
-            for (int s = 1; s < 64; s++)
-                if ((omask & (1ull << s)) && sigq_pop(s, &ent)) {
+            int popped_targeted = 0;
+            int targeted_remaining = 0;
+            for (int s = 1; s <= 64; s++)
+                if ((omask & (UINT64_C(1) << (s - 1))) &&
+                    sigq_pop_for(s, c, &ent, &popped_targeted, &targeted_remaining)) {
                     sig = s;
                     popped = 1;
                     break;
                 }
             if (!popped) {
-                sig = (unsigned char)b;
-                if (sig > 0 && sig < 64) __atomic_and_fetch(&g_pending, ~(1ull << (unsigned)sig), __ATOMIC_SEQ_CST);
+                for (int s = 1; s <= 64; ++s) {
+                    if ((omask & (UINT64_C(1) << (s - 1))) && process_pending_test(s)) {
+                        sig = s;
+                        process_pending_clear(s);
+                        break;
+                    }
+                }
+                // Pipe bytes are wake hints only. They can outlive an OFD mask
+                // update and therefore may never manufacture a siginfo record.
+                if (!sig) {
+                    int status = fcntl(rfd, F_GETFL);
+                    if (status < 0 || (status & O_NONBLOCK)) {
+                        G_RET(c) = (uint64_t)(int64_t)(status < 0 ? -errno : -EAGAIN);
+                        break;
+                    }
+                    // Host pipe bytes are process-wide wake hints, while a
+                    // thread-directed record is readable only by its owner.
+                    // Sample in bounded sleeps until this CPU has an eligible
+                    // queue entry; never consume another thread's token.
+                    struct pollfd waiter = {.fd = rfd, .events = POLLIN};
+                    ts_wait_enter();
+                    int waited = poll(&waiter, 1, 1);
+                    ts_wait_leave();
+                    if (waited < 0 && errno != EINTR) {
+                        G_RET(c) = (uint64_t)(int64_t)(-errno);
+                        break;
+                    }
+                    if (waited < 0 && !svc_poll_retry(c)) {
+                        G_RET(c) = (uint64_t)(int64_t)(-EINTR);
+                        break;
+                    }
+                    goto signalfd_retry;
+                }
             }
             if (a2 >= 128) {
                 // a1 is a raw guest buffer we write directly -> EFAULT a bad pointer instead of faulting the engine

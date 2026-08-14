@@ -2,12 +2,6 @@
 
 #include <string.h>
 
-void hl_reloc_init(hl_reloc_table *table, hl_reloc *storage, int capacity) {
-    table->records = storage;
-    table->count = 0;
-    table->capacity = capacity;
-}
-
 void hl_reloc_reset(hl_reloc_table *table) {
     table->count = 0;
 }

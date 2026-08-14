@@ -251,11 +251,13 @@ static void futex_rel_from_abs(struct timespec *rel, const struct timespec *dead
 // dispatcher will then either run its guest handler or apply the default action, so the thread makes
 // progress. A blocked pending signal must NOT interrupt a wait (it stays pending, as on Linux) -- otherwise
 // the guest would re-wait, see it still pending, and spin returning EINTR forever.
+static int thread_pending_test(const struct cpu *cpu, int signal);
+static int signal_deliverable(const struct cpu *cpu, int signal);
 static int cpu_has_actionable_tsig(const struct cpu *c) {
     uint64_t t = __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
-    if (!t) return 0; // no thread-directed signal pending -- the common case on the hot futex path
+    if (!t && !thread_pending_test(c, 64)) return 0;
     for (int s = 1; s <= 64; s++)
-        if ((t & (1ull << s)) && !(c->sigmask & (1ull << (s - 1)))) return 1;
+        if (thread_pending_test(c, s) && signal_deliverable(c, s)) return 1;
     return 0;
 }
 

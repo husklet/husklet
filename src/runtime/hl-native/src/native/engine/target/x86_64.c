@@ -118,6 +118,7 @@ static void jit_guest_soft_restore_activate(void);
 static void jit_guest_soft_restore_deactivate(void);
 static void jit_guest_soft_deactivate(void);
 static int jit_guest_soft_active(void);
+uint64_t hl_x86_guest_pointer(uint64_t address);
 
 #include "../../translator/guest/x86_64/cpu.h"
 #include "../../translator/guest/x86_64/frame.h"
@@ -125,6 +126,8 @@ static int jit_guest_soft_active(void);
 // The dispatch seam is per (guest ISA, HOST CPU): dispatch.h patches AArch64 branch encodings.
 #include "../../host/cpu.h"
 #if defined(HL_HOST_CPU_AARCH64)
+#include "../../translator/guest/x86_64/smc_page_index.h"
+#include "../../translator/guest/x86_64/smc_address.h"
 #include "../../translator/guest/x86_64/dispatch.h" // x86 dispatch seam for the SHARED engine/dispatch.c
 #else
 #include "../../translator/guest/x86_64/interp_dispatch.h"
@@ -269,10 +272,14 @@ static int jit86_guest_memory_pin(uint64_t guest, size_t length, hl_guest_memory
     hl_logical_vma_pin logical_pin = {0};
     uint32_t required = access == HL_GUEST_MEMORY_WRITE ? HL_LOGICAL_VMA_WRITE : HL_LOGICAL_VMA_READ;
     int logical = hl_logical_vma_pin_data(guest, length, required, &logical_pin);
-    if (logical < 0) return -1;
-    pin->host = logical_pin.host;
+    if (logical < 0) return HL_GUEST_MEMORY_FAULT;
+    pin->host = logical ? logical_pin.host : (void *)(uintptr_t)hl_x86_guest_pointer(guest);
     pin->contiguous = logical_pin.contiguous;
     pin->token = logical_pin.token;
+    if (!logical && g_nonpie_lo) {
+        uint64_t boundary = guest < g_nonpie_lo ? g_nonpie_lo : (guest < g_nonpie_hi ? g_nonpie_hi : UINT64_MAX);
+        if (boundary > guest && boundary - guest < pin->contiguous) pin->contiguous = (size_t)(boundary - guest);
+    }
     return logical;
 }
 
@@ -292,6 +299,7 @@ static const hl_guest_memory_ops g_guest_memory_ops = {
     .exec_generation = hl_logical_vma_global_exec_generation,
     .pin = jit86_guest_memory_pin,
     .unpin = jit86_guest_memory_unpin,
+    .store_observe = jit86_store_alias_changed,
 };
 
 // Host-CPU fork: an AArch64 host takes the x86-64 -> ARM64 translator below (register model at the top of
@@ -654,6 +662,25 @@ static int soft_tlb_miss(struct cpu *c) {
                 break;
             }
         }
+    }
+    /* File EOF owns the overlapping inaccessible tail before the generic
+       logical/host mapping classifier.  The host range is deliberately
+       anonymous/protected to provide partial-page zero fill, so asking only
+       host_range_mapped below misreports the Linux BUS_ADRERR contract as an
+       unmapped-data SIGSEGV. */
+    uint64_t host_address = address;
+    if (view != NULL) {
+        if (view->host_delta > UINT64_MAX - address) {
+            c->fault_addr = address;
+            return raise_guest_data_map_fault(c);
+        }
+        host_address += view->host_delta;
+    }
+    uint64_t bus_fault = jit_guest_bus_fault(host_address, width);
+    if (bus_fault != 0) {
+        c->fault_addr = bus_fault - (host_address - address);
+        c->bus_ea = 0;
+        return raise_guest_bus(c);
     }
     if (view != NULL) {
         if ((view->protection & required) != required) {

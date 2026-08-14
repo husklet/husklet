@@ -5,28 +5,85 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/eventfd.h>
 #include <sys/socket.h>
+#include <sys/syscall.h>
 #include <sys/uio.h>
 #include <unistd.h>
 
-// eventfd hands back its whole 8-byte counter, which a readv must spread over both
-// 4-byte segments. Its writev stays single-segment because Linux loops eventfd
-// writes per segment and rejects a partial counter.
+// eventfd readv scatters one 8-byte scalar across vectors. A failed copy follows
+// Linux's copy_to_iter ordering and consumes the counter before reporting EFAULT.
 static int eventfd_case(void) {
-    int fd = eventfd(0, 0);
-    if (fd < 0) {
-        return 0;
-    }
-    unsigned char value[8] = {0, 0, 0, 0, 0, 0, 0, 5};
-    struct iovec whole[1] = {{value, 8}};
-    long written = writev(fd, whole, 1);
-    unsigned char low[4] = {0}, high[4] = {0};
-    struct iovec halves[2] = {{low, 4}, {high, 4}};
-    long got = readv(fd, halves, 2);
+    int fd = eventfd(0, EFD_NONBLOCK);
+    if (fd < 0) return 0;
+    uint64_t value = 5, readback = 0;
+    struct iovec whole_write = {&value, 8};
+    struct iovec split_read[2] = {{&readback, 4}, {(char *)&readback + 4, 4}};
+    int ok = writev(fd, &whole_write, 1) == 8 && readv(fd, split_read, 2) == 8 && readback == 5;
+
+    errno = 0;
+    ok &= readv(fd, split_read, 2) == -1 && errno == EAGAIN;
+    ok &= readv(fd, NULL, 0) == 0 && writev(fd, NULL, 0) == 0;
+    errno = 0;
+    ok &= readv(fd, (struct iovec *)1, 1) == -1 && errno == EFAULT;
+    errno = 0;
+    ok &= writev(fd, (struct iovec *)1, 1) == -1 && errno == EFAULT;
+    errno = 0;
+    ok &= readv(-1, (struct iovec *)1, 1) == -1 && errno == EBADF;
+    errno = 0;
+    ok &= writev(-1, (struct iovec *)1, 1) == -1 && errno == EBADF;
+    errno = 0;
+    ok &= syscall(SYS_readv, fd, split_read, 1025) == -1 && errno == EINVAL;
+    errno = 0;
+    ok &= syscall(SYS_writev, fd, split_read, 1025) == -1 && errno == EINVAL;
+    struct iovec overflow[2] = {{&readback, SIZE_MAX}, {&readback, 1}};
+    errno = 0;
+    ok &= readv(fd, overflow, 2) == -1 && errno == EINVAL;
+    errno = 0;
+    ok &= writev(fd, overflow, 2) == -1 && errno == EINVAL;
+    struct iovec split_write[2] = {{&value, 4}, {(char *)&value + 4, 4}};
+    errno = 0;
+    ok &= writev(fd, split_write, 2) == -1 && errno == EINVAL;
+    struct iovec zero_split_write[3] = {{&value, 0}, {&value, 8}, {(char *)&value + 8, 0}};
+    errno = 0;
+    ok &= writev(fd, zero_split_write, 3) == -1 && errno == EINVAL;
+    value = 6;
+    unsigned char long_buffer[9] = {0};
+    struct iovec long_read = {long_buffer, sizeof long_buffer};
+    ok &= writev(fd, &whole_write, 1) == 8 && readv(fd, &long_read, 1) == 8;
+    memcpy(&readback, long_buffer, sizeof readback);
+    ok &= readback == 6;
+    struct iovec short_vector = {&value, 7};
+    errno = 0;
+    ok &= writev(fd, &short_vector, 1) == -1 && errno == EINVAL;
+    errno = 0;
+    ok &= readv(fd, &short_vector, 1) == -1 && errno == EINVAL;
+    value = UINT64_MAX;
+    errno = 0;
+    ok &= writev(fd, &whole_write, 1) == -1 && errno == EINVAL;
+
+    value = 7;
+    ok &= writev(fd, &whole_write, 1) == 8;
+    struct iovec bad_read[2] = {{(void *)1, 4}, {(char *)&readback + 4, 4}};
+    errno = 0;
+    ok &= readv(fd, bad_read, 2) == -1 && errno == EFAULT;
+    readback = 0;
+    errno = 0;
+    ok &= readv(fd, split_read, 2) == -1 && errno == EAGAIN;
     close(fd);
-    return written == 8 && got == 8 && high[3] == 5;
+
+    fd = eventfd(2, EFD_NONBLOCK | EFD_SEMAPHORE);
+    if (fd < 0) return 0;
+    readback = 0;
+    ok &= readv(fd, split_read, 2) == 8 && readback == 1;
+    readback = 0;
+    ok &= readv(fd, split_read, 2) == 8 && readback == 1;
+    errno = 0;
+    ok &= readv(fd, split_read, 2) == -1 && errno == EAGAIN;
+    close(fd);
+    return ok;
 }
 
 // A unix datagram carries one record, so a gathered writev must arrive whole.

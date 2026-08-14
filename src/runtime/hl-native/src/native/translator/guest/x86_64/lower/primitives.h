@@ -102,6 +102,8 @@ void emit_bus_guard(int address_register, uint64_t size, uint64_t rip);
 
 void emit_memory_guard(int address_register, uint64_t size, uint64_t rip, uint32_t required);
 int emit_soft_memory_active(void);
+int emit_displaced_stack_active(void);
+void emit_displaced_stack_address(int address_register);
 void emit_soft_store_commit(uint64_t size);
 void emit_soft_store_observe(uint64_t size);
 void emit_soft_store_drain(void);

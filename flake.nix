@@ -77,6 +77,7 @@
           host = pkgs.stdenv.hostPlatform;
           hostCpu = host.parsed.cpu.name;
           nativeCC = "${pkgs.stdenv.cc}/bin/cc";
+          nativeCXX = "${pkgs.stdenv.cc}/bin/c++";
           isNative = guest: host.isLinux && hostCpu == guest.isa;
           pkgsFor = guest: if isNative guest then pkgs else pkgs.pkgsCross.${guest.crossAttr};
           ccFor =
@@ -148,7 +149,9 @@
               )
               {
                 CC = nativeCC;
+                CXX = nativeCXX;
                 NATIVE_CC = nativeCC;
+                NATIVE_CXX = nativeCXX;
               }
               guestISAs;
         };
@@ -422,6 +425,48 @@
               cargo test --workspace --all-targets --locked --offline --no-fail-fast
               cargo test --workspace --doc --locked --offline
               ${lib.optionalString pkgs.stdenv.isLinux ''
+                # AddressSanitizer covers native lifetime violations that leak
+                # accounting cannot observe. Run the bounded ownership tests,
+                # then prove that the instrumentation rejects a C heap UAF.
+                export HL_C_SANITIZER=address
+                cargo test -p hl-native --test executable_authority --locked --offline --no-run
+                authority_tests=(target/debug/deps/executable_authority-*)
+                authority_test=""
+                for candidate in "''${authority_tests[@]}"; do
+                  if [ -x "$candidate" ] && [ "''${candidate##*.}" != d ]; then
+                    if [ -n "$authority_test" ]; then
+                      printf 'multiple executable-authority test binaries found\n' >&2
+                      exit 1
+                    fi
+                    authority_test="$candidate"
+                  fi
+                done
+                if [ -z "$authority_test" ]; then
+                  printf 'executable-authority test binary is absent\n' >&2
+                  exit 1
+                fi
+                asan_runtime="$(${pkgs.stdenv.cc}/bin/cc -print-file-name=libasan.so)"
+                ASAN_OPTIONS="detect_leaks=0:halt_on_error=1:exitcode=97:log_path=$TMPDIR/asan-clean" \
+                  LD_PRELOAD="$asan_runtime" "$authority_test"
+                if compgen -G "$TMPDIR/asan-clean*" >/dev/null; then
+                  printf 'AddressSanitizer reported an error in the clean lifecycle tests\n' >&2
+                  cat "$TMPDIR"/asan-clean* >&2
+                  exit 1
+                fi
+
+                set +e
+                ASAN_OPTIONS="detect_leaks=0:halt_on_error=1:exitcode=97:log_path=$TMPDIR/asan-non-vacuity" \
+                  LD_PRELOAD="$asan_runtime" "$authority_test" \
+                  --ignored --exact deliberate_native_use_after_free_is_visible_to_address_sanitizer
+                asan_probe_status=$?
+                set -e
+                if [ "$asan_probe_status" -eq 0 ] ||
+                   ! grep -Eq 'AddressSanitizer: heap-use-after-free' "$TMPDIR"/asan-non-vacuity*; then
+                  printf 'AddressSanitizer did not reject the deliberate native UAF (exit=%s)\n' "$asan_probe_status" >&2
+                  cat "$TMPDIR"/asan-non-vacuity* >&2
+                  exit 1
+                fi
+
                 # Exercise bounded production-engine authority ownership under
                 # LeakSanitizer. Then prove the instrumentation is live with a
                 # deliberate 4,096-byte native leak.
@@ -541,27 +586,7 @@
             readelf --dyn-syms --wide "$library" |
               awk '$4 == "FUNC" && $5 == "GLOBAL" && $6 == "DEFAULT" && $7 != "UND" { print $8 }' |
               sed 's/@.*//' | sort -u > "$TMPDIR/actual-exports"
-            printf '%s\n' \
-              hl_c_backend_checkpoint_adopt \
-              hl_c_backend_checkpoint_broker_accept \
-              hl_c_backend_checkpoint_broker_pair \
-              hl_c_backend_checkpoint_interrupt_signal \
-              hl_c_backend_checkpoint_trigger_bump \
-              hl_c_backend_checkpoint_trigger_create \
-              hl_c_backend_checkpoint_trigger_destroy \
-              hl_c_backend_create \
-              hl_c_backend_destroy \
-              hl_c_backend_executable_discard \
-              hl_c_backend_executable_open \
-              hl_c_backend_exit_detail \
-              hl_c_backend_exit_kind \
-              hl_c_backend_exit_status \
-              hl_c_backend_leak_check_nonvacuity \
-              hl_c_backend_request \
-              hl_c_backend_run \
-              hl_c_backend_translation_count \
-              hl_engine_abi \
-              hl_engine_version > "$TMPDIR/expected-exports"
+            cp src/runtime/hl-native/src/native/bridge/exports.txt "$TMPDIR/expected-exports"
             diff -u "$TMPDIR/expected-exports" "$TMPDIR/actual-exports"
 
             for name in hl-engine hl-aarch64 hl-x86_64
@@ -663,27 +688,7 @@
             ${targetPkgs.stdenv.cc.targetPrefix}readelf --dyn-syms --wide "''${native_libraries[0]}" \
               | awk '$4 == "FUNC" && $5 == "GLOBAL" && $6 == "DEFAULT" && $7 != "UND" { print $8 }' \
               | sed 's/@.*//' | sort -u > "$TMPDIR/actual-exports"
-            printf '%s\n' \
-              hl_c_backend_checkpoint_adopt \
-              hl_c_backend_checkpoint_broker_accept \
-              hl_c_backend_checkpoint_broker_pair \
-              hl_c_backend_checkpoint_interrupt_signal \
-              hl_c_backend_checkpoint_trigger_bump \
-              hl_c_backend_checkpoint_trigger_create \
-              hl_c_backend_checkpoint_trigger_destroy \
-              hl_c_backend_create \
-              hl_c_backend_destroy \
-              hl_c_backend_executable_discard \
-              hl_c_backend_executable_open \
-              hl_c_backend_exit_detail \
-              hl_c_backend_exit_kind \
-              hl_c_backend_exit_status \
-              hl_c_backend_leak_check_nonvacuity \
-              hl_c_backend_request \
-              hl_c_backend_run \
-              hl_c_backend_translation_count \
-              hl_engine_abi \
-              hl_engine_version > "$TMPDIR/expected-exports"
+            cp src/runtime/hl-native/src/native/bridge/exports.txt "$TMPDIR/expected-exports"
             diff -u "$TMPDIR/expected-exports" "$TMPDIR/actual-exports"
             native_directory="$(dirname "''${native_libraries[0]}")"
             ${lib.escapeShellArg compiler} -std=c11 -Wall -Wextra -Werror \
@@ -826,28 +831,7 @@
               | grep -F 'file format pei-x86-64' >/dev/null
             file "$dll" | grep -E 'PE32\+.*DLL.*x86-64'
             file "$import" | grep -F 'current ar archive'
-            cat > expected-engine-exports <<'EOF'
-            hl_c_backend_checkpoint_adopt
-            hl_c_backend_checkpoint_broker_accept
-            hl_c_backend_checkpoint_broker_pair
-            hl_c_backend_checkpoint_interrupt_signal
-            hl_c_backend_checkpoint_trigger_bump
-            hl_c_backend_checkpoint_trigger_create
-            hl_c_backend_checkpoint_trigger_destroy
-            hl_c_backend_create
-            hl_c_backend_destroy
-            hl_c_backend_executable_discard
-            hl_c_backend_executable_open
-            hl_c_backend_exit_detail
-            hl_c_backend_exit_kind
-            hl_c_backend_exit_status
-            hl_c_backend_leak_check_nonvacuity
-            hl_c_backend_request
-            hl_c_backend_run
-            hl_c_backend_translation_count
-            hl_engine_abi
-            hl_engine_version
-            EOF
+            cp src/runtime/hl-native/src/native/bridge/exports.txt expected-engine-exports
             ${windows.stdenv.cc.targetPrefix}nm -g "$import" \
               | awk '$2 == "T" && $3 ~ /^hl_/ { print $3 }' \
               | sort -u > actual-engine-exports
@@ -936,27 +920,8 @@
           lipo -archs "$library" | grep -Fx 'arm64' >/dev/null
           otool -D "$library" | grep -Fx '@rpath/libhl_native_engine.dylib' >/dev/null
           nm -gjU "$library" | sort -u > "$TMPDIR/actual-exports"
-          printf '%s\n' \
-            _hl_c_backend_checkpoint_adopt \
-            _hl_c_backend_checkpoint_broker_accept \
-            _hl_c_backend_checkpoint_broker_pair \
-            _hl_c_backend_checkpoint_interrupt_signal \
-            _hl_c_backend_checkpoint_trigger_bump \
-            _hl_c_backend_checkpoint_trigger_create \
-            _hl_c_backend_checkpoint_trigger_destroy \
-            _hl_c_backend_create \
-            _hl_c_backend_destroy \
-            _hl_c_backend_executable_discard \
-            _hl_c_backend_executable_open \
-            _hl_c_backend_exit_detail \
-            _hl_c_backend_exit_kind \
-            _hl_c_backend_exit_status \
-            _hl_c_backend_leak_check_nonvacuity \
-            _hl_c_backend_request \
-            _hl_c_backend_run \
-            _hl_c_backend_translation_count \
-            _hl_engine_abi \
-            _hl_engine_version > "$TMPDIR/expected-exports"
+          sed 's/^/_/' ${workspaceSource}/src/runtime/hl-native/src/native/bridge/exports.txt \
+            > "$TMPDIR/expected-exports"
           diff -u "$TMPDIR/expected-exports" "$TMPDIR/actual-exports"
           for name in hl-engine hl-aarch64 hl-x86_64; do
             binary="$prefix/bin/$name"
@@ -1105,6 +1070,7 @@
               packages = [
                 pkgs.clang-tools
                 pkgs.cppcheck
+                pkgs.git
                 pkgs.go
                 pkgs.nixfmt
                 pkgs.pkg-config
@@ -1118,7 +1084,16 @@
               );
               shellHook = ''
                 export CC="${toolchain.env.CC}"
+                export CXX="${toolchain.env.CXX}"
                 export NATIVE_CC="${toolchain.env.NATIVE_CC}"
+                export NATIVE_CXX="${toolchain.env.NATIVE_CXX}"
+                native_c_target="$($CC -dumpmachine)"
+                native_cxx_target="$($CXX -dumpmachine)"
+                if [ "$native_c_target" != "$native_cxx_target" ]; then
+                  printf 'native compiler target mismatch: CC=%s CXX=%s\n' \
+                    "$native_c_target" "$native_cxx_target" >&2
+                  return 1
+                fi
                 export CARGO_BUILD_JOBS="''${CARGO_BUILD_JOBS:-1}"
                 export HL_COMPAT_JOBS="''${HL_COMPAT_JOBS:-1}"
               '';

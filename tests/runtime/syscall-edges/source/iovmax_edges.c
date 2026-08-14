@@ -1,9 +1,11 @@
-// readv/writev boundary: iovcnt 0 succeeds with 0, iovcnt above IOV_MAX is EINVAL,
-// a negative iovcnt is EINVAL, and a total length overflowing ssize_t is EINVAL.
+// readv/writev boundary: iovcnt 0 succeeds with 0, iovcnt above IOV_MAX and a
+// negative iovcnt are EINVAL, and an invalid payload range in an entry before
+// the aggregate overflows is EFAULT.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <sys/uio.h>
 #include <unistd.h>
@@ -23,8 +25,16 @@ int main(void) {
     struct iovec ov[2] = {{(void *)"x", (size_t)SSIZE_MAX}, {(void *)"y", (size_t)SSIZE_MAX}};
     ssize_t ovf = writev(fd, ov, 2);
     int eovf = (ovf == -1) ? errno : 0;
+    struct iovec zero_bad = {(void *)UINTPTR_MAX, 0};
+    errno = 0;
+    ssize_t zero_write = writev(fd, &zero_bad, 1);
+    int ezero_write = (zero_write == -1) ? errno : 0;
+    errno = 0;
+    ssize_t zero_read = readv(fd, &zero_bad, 1);
+    int ezero_read = (zero_read == -1) ? errno : 0;
     ssize_t r = readv(fd, &one, 0);
-    printf("z=%zd ez=%d big=%zd ebig=%d neg=%zd eneg=%d ovf=%zd eovf=%d r=%zd iovmax=%d\n",
-           z, ez, big, ebig, neg, eneg, ovf, eovf, r, IOV_MAX);
+    printf("z=%zd ez=%d big=%zd ebig=%d neg=%zd eneg=%d ovf=%zd eovf=%d zw=%zd ezw=%d zr=%zd ezr=%d r=%zd "
+           "iovmax=%d\n",
+           z, ez, big, ebig, neg, eneg, ovf, eovf, zero_write, ezero_write, zero_read, ezero_read, r, IOV_MAX);
     return 0;
 }

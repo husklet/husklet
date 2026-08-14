@@ -2,6 +2,7 @@
 #define HL_C_BRIDGE_API_H
 
 #include "hl/base.h"
+#include "hl/engine.h"
 #include "hl/syscall_trap.h"
 #include "main_plan.h"
 
@@ -33,6 +34,12 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
                                    hl_syscall_trap_fn syscall_dispatch, hl_c_backend **output);
 HL_API int32_t hl_c_backend_run(hl_c_backend *backend, int32_t argc, const char *const *argv);
 HL_API int32_t hl_c_backend_request(hl_c_backend *backend, uint32_t request, int32_t signal);
+/* Copies one coherently published exit record. While run is active this returns
+ * the last complete record, never fields from the record run is constructing. */
+HL_API int32_t hl_c_backend_exit(hl_c_backend *backend, hl_engine_exit *result);
+/* Compatibility accessors retained for previously linked bridge consumers.
+ * Each returns one synchronized field; callers needing a coherent tuple use
+ * hl_c_backend_exit. */
 HL_API uint32_t hl_c_backend_exit_kind(const hl_c_backend *backend);
 HL_API int32_t hl_c_backend_exit_status(const hl_c_backend *backend);
 HL_API uint64_t hl_c_backend_exit_detail(const hl_c_backend *backend);

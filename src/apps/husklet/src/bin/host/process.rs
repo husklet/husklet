@@ -14,7 +14,7 @@ impl ProcessGroup {
     }
 
     pub fn hangup(&self) -> std::io::Result<()> {
-        ffi::Signal::hangup(self.0)
+        ffi::Signal::close_tree(self.0, std::time::Duration::from_millis(200))
     }
 }
 
@@ -34,6 +34,10 @@ impl ProcessId {
         self.signal(ffi::Signal::kill)
     }
 
+    fn close(&self) -> std::io::Result<()> {
+        self.signal(|process| ffi::Signal::close_tree(process, std::time::Duration::from_millis(200)))
+    }
+
     fn signal(&self, signal: fn(i32) -> std::io::Result<()>) -> std::io::Result<()> {
         let snapshot = Processes::snapshot()?;
         if !self.matches(&snapshot) {
@@ -49,14 +53,65 @@ impl ProcessId {
         snapshot.lines().any(|line| {
             let fields: Vec<_> = line.split_whitespace().collect();
             fields.first().and_then(|value| value.parse::<i32>().ok()) == Some(self.value)
-                && fields
-                    .windows(3)
-                    .any(|values| values == ["--worker", "launch", self.workspace.as_str()])
+                && Processes::launches(&fields, &self.workspace)
         })
     }
 }
 
 impl Processes {
+    /// Reclaims every host launcher process that still belongs to one workspace.
+    ///
+    /// The domain socket is not an inventory: a launcher can outlive a crashed or replaced domain.
+    /// Discover all exact workspace launch identities first, then revalidate each PID against a
+    /// fresh process snapshot immediately before signalling it so PID reuse cannot target an
+    /// unrelated process.
+    pub fn close_workspace(workspace: &str) -> std::io::Result<()> {
+        let snapshot = Self::snapshot()?;
+        Self::close_workspace_with(&snapshot, workspace, ProcessId::close)
+    }
+
+    fn close_workspace_with(
+        snapshot: &str,
+        workspace: &str,
+        mut close: impl FnMut(&ProcessId) -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        let mut failure = None;
+        for process in Self::workspace_launchers(snapshot, workspace) {
+            match close(&process) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) if failure.is_none() => failure = Some(error),
+                Err(_) => {}
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    }
+
+    fn workspace_launchers(snapshot: &str, workspace: &str) -> Vec<ProcessId> {
+        snapshot
+            .lines()
+            .filter_map(|line| {
+                let fields: Vec<_> = line.split_whitespace().collect();
+                let value = fields.first()?.parse().ok()?;
+                Self::launches(&fields, workspace).then(|| ProcessId {
+                    value,
+                    workspace: workspace.to_owned(),
+                })
+            })
+            .filter(|process| process.value > 1)
+            .collect()
+    }
+
+    fn launches(fields: &[&str], workspace: &str) -> bool {
+        fields.windows(4).any(|values| {
+            std::path::Path::new(values[0])
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                == Some("husklet")
+                && values[1..] == ["--worker", "launch", workspace]
+        })
+    }
+
     #[cfg(unix)]
     pub fn snapshot() -> std::io::Result<String> {
         let output = std::process::Command::new("/bin/ps")
@@ -88,11 +143,36 @@ mod ffi {
     pub(super) struct Signal;
 
     impl Signal {
+        pub(super) fn close_tree(process: i32, grace: std::time::Duration) -> io::Result<()> {
+            match Self::hangup(process) {
+                Ok(()) => {}
+                Err(error) if error.raw_os_error() == Some(libc::ESRCH) => return Ok(()),
+                Err(error) => return Err(error),
+            }
+            let deadline = std::time::Instant::now() + grace;
+            while std::time::Instant::now() < deadline {
+                if !Self::alive(process) {
+                    return Ok(());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            match Self::send(process, libc::SIGKILL) {
+                Ok(()) => Ok(()),
+                Err(error) if error.raw_os_error() == Some(libc::ESRCH) => Ok(()),
+                Err(error) => Err(error),
+            }
+        }
+
+        fn alive(process: i32) -> bool {
+            // SAFETY: signal zero probes integer process identities without delivering a signal.
+            unsafe { libc::kill(-process, 0) == 0 || libc::kill(process, 0) == 0 }
+        }
+
         pub(super) fn hangup(group: i32) -> io::Result<()> {
-            Self::hangup_with(group, |group| {
-                // SAFETY: `killpg` consumes only integers and no Rust storage. The kernel
-                // owns concurrent delivery, and this non-unwinding C call retains no state.
-                Self::result(unsafe { libc::killpg(group, libc::SIGHUP) })
+            Self::hangup_with(group, |target| {
+                // SAFETY: `kill` consumes only integers and no Rust storage. A negative target
+                // addresses the process group; a positive target closes the pre-setsid race.
+                Self::result(unsafe { libc::kill(target, libc::SIGHUP) })
             })
         }
 
@@ -112,9 +192,14 @@ mod ffi {
             })
         }
 
-        pub(super) fn hangup_with(group: i32, mut deliver: impl FnMut(i32) -> io::Result<()>) -> io::Result<()> {
-            Self::validate(group)?;
-            deliver(group)
+        pub(super) fn hangup_with(process: i32, mut deliver: impl FnMut(i32) -> io::Result<()>) -> io::Result<()> {
+            Self::validate(process)?;
+            let group = deliver(-process);
+            let process = deliver(process);
+            match (group, process) {
+                (Err(_), Err(error)) => Err(error),
+                _ => Ok(()),
+            }
         }
 
         pub(super) fn send_with(
@@ -148,6 +233,26 @@ mod ffi {
             } else {
                 Ok(())
             }
+        }
+
+        #[cfg(test)]
+        pub(super) fn prepare_session(command: &mut std::process::Command) {
+            use std::os::unix::process::CommandExt as _;
+            // SAFETY: the closure invokes only the async-signal-safe setsid boundary before exec.
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() < 0 {
+                        Err(io::Error::last_os_error())
+                    } else {
+                        Ok(())
+                    }
+                });
+            }
+        }
+
+        #[cfg(test)]
+        pub(super) fn force(process: i32) -> io::Result<()> {
+            Self::send(process, libc::SIGKILL)
         }
     }
 }
@@ -184,7 +289,7 @@ mod ffi {
 mod tests {
     #[cfg(unix)]
     use super::ffi::Signal;
-    use super::ProcessId;
+    use super::{ProcessGroup, ProcessId, Processes};
 
     #[test]
     fn invalid_identity() {
@@ -202,6 +307,44 @@ mod tests {
         assert!(!process.matches("42 1 00:01 /x/husklet --worker launch design pane"));
     }
 
+    #[test]
+    fn workspace_cleanup_targets_every_exact_launcher_and_ignores_name_prefixes() {
+        let snapshot = "42 1 00:01 /x/husklet --worker launch demo pane-1\n\
+                        43 42 00:01 /x/husklet --worker launch demo pane-1\n\
+                        44 1 00:01 /x/husklet --worker launch demo-next pane-1\n\
+                        45 1 00:01 /usr/bin/tool --worker launch demo pane-1";
+        let mut closed = Vec::new();
+
+        Processes::close_workspace_with(snapshot, "demo", |process| {
+            closed.push(process.value);
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(closed, [42, 43]);
+    }
+
+    #[test]
+    fn workspace_cleanup_is_idempotent_and_attempts_every_discovered_launcher() {
+        let snapshot = "42 1 00:01 /x/husklet --worker launch demo pane-1\n\
+                        43 1 00:01 /x/husklet --worker launch demo pane-2\n\
+                        44 1 00:01 /x/husklet --worker launch demo pane-3";
+        let mut closed = Vec::new();
+
+        let error = Processes::close_workspace_with(snapshot, "demo", |process| {
+            closed.push(process.value);
+            match process.value {
+                42 => Err(std::io::Error::new(std::io::ErrorKind::NotFound, "already exited")),
+                43 => Err(std::io::Error::from_raw_os_error(libc::EPERM)),
+                _ => Ok(()),
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(closed, [42, 43, 44]);
+        assert_eq!(error.raw_os_error(), Some(libc::EPERM));
+    }
+
     #[cfg(unix)]
     #[test]
     fn signal_order() {
@@ -212,6 +355,63 @@ mod tests {
         })
         .unwrap();
         assert_eq!(calls, [(-42, libc::SIGTERM), (42, libc::SIGTERM)]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hangup_targets_the_tree_and_the_verified_worker() {
+        let mut calls = Vec::new();
+        Signal::hangup_with(42, |process| {
+            calls.push(process);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(calls, [-42, 42]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hangup_is_idempotent_when_either_identity_is_already_gone() {
+        for failed in [-42, 42] {
+            Signal::hangup_with(42, |process| {
+                if process == failed {
+                    Err(std::io::Error::from_raw_os_error(libc::ESRCH))
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn close_reaps_a_real_session_that_ignores_hangup_within_the_bound() {
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "trap '' HUP; while :; do sleep 60; done"]);
+        Signal::prepare_session(&mut command);
+        let mut child = command.spawn().unwrap();
+        let group = ProcessGroup::new(i32::try_from(child.id()).unwrap());
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let started = std::time::Instant::now();
+
+        group.hangup().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = Signal::force(i32::try_from(child.id()).unwrap());
+                let _ = child.wait();
+                panic!("terminal process tree survived its bounded close");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+
+        assert!(!status.success());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        group.hangup().unwrap();
     }
 
     #[cfg(unix)]

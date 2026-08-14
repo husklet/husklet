@@ -52,12 +52,14 @@ pub struct Engine(NonNull<Backend>);
 // run is active. The handle remains uniquely owned and destroy joins the active
 // run before releasing the engine allocation.
 unsafe impl Send for Engine {}
-// SAFETY: every shared operation is implemented by the C engine's synchronized
-// request/read interface; mutation of engine state is not exposed through Rust.
+// SAFETY: the shared Rust surface is limited to run (C lifecycle-gated), request
+// (C lifecycle-locked), and exit (one bridge-locked snapshot). Checkpoint
+// configuration and destruction require exclusive Rust access.
 unsafe impl Sync for Engine {}
 
 impl Engine {
-    pub fn configure_checkpoint(&self, transport: &crate::CheckpointTransport) -> Result<(), i32> {
+    #[cfg(unix)]
+    pub fn configure_checkpoint(&mut self, transport: &crate::CheckpointTransport) -> Result<(), i32> {
         let status = transport.configure(self.0.as_ptr());
         (status == STATUS_OK).then_some(()).ok_or(status)
     }
@@ -117,16 +119,23 @@ impl Engine {
 
     #[must_use]
     pub fn exit(&self) -> Exit {
-        // SAFETY: `self` owns a live backend; this accessor only copies the
-        // completed engine's immutable exit kind.
-        let kind = unsafe { bindings::hl_c_backend_exit_kind(self.0.as_ptr()) };
-        // SAFETY: `self` owns a live backend; this accessor only copies the
-        // completed engine's immutable exit status.
-        let status = unsafe { bindings::hl_c_backend_exit_status(self.0.as_ptr()) };
-        // SAFETY: `self` owns a live backend; this accessor only copies the
-        // completed engine's immutable exit detail.
-        let detail = unsafe { bindings::hl_c_backend_exit_detail(self.0.as_ptr()) };
-        Exit { kind, status, detail }
+        let mut result = bindings::EngineExit {
+            abi: 5,
+            size: u32::try_from(std::mem::size_of::<bindings::EngineExit>()).expect("small ABI struct"),
+            kind: 0,
+            guest_status: 0,
+            detail: 0,
+        };
+        // SAFETY: `self` owns a live backend and `result` is writable. The C
+        // bridge publishes and copies the complete record under one lock, so a
+        // concurrent run cannot race or expose a torn group of fields.
+        let status = unsafe { bindings::hl_c_backend_exit(self.0.as_ptr(), &raw mut result) };
+        debug_assert_eq!(status, STATUS_OK);
+        Exit {
+            kind: result.kind,
+            status: result.guest_status,
+            detail: result.detail,
+        }
     }
 }
 
@@ -218,10 +227,10 @@ fn open_main_image(config: &EngineConfig<'_>) -> Result<File, i32> {
         #[cfg(not(unix))]
         return Err(3);
     }
-    let path = config.executable_host.ok_or(1)?;
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;
+        let path = config.executable_host.ok_or(1)?;
         File::open(std::ffi::OsStr::from_bytes(path.to_bytes())).map_err(|_| 1)
     }
     #[cfg(not(unix))]
@@ -330,13 +339,17 @@ impl Drop for Engine {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{EngineConfig, Plan};
+    use super::{Engine, EngineConfig, Exit, Plan};
     use std::{
+        ffi::CString,
         fs::OpenOptions,
         io::{Seek, SeekFrom, Write},
         os::fd::AsRawFd,
         path::PathBuf,
     };
+
+    #[cfg(feature = "native-test-hooks")]
+    use std::time::{Duration, Instant};
 
     fn put16(bytes: &mut [u8], offset: usize, value: u16) {
         bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
@@ -369,7 +382,36 @@ mod tests {
         put64(&mut bytes, 96, 4096);
         put64(&mut bytes, 104, 4096);
         put64(&mut bytes, 112, 4096);
+        // `b .`: a valid AArch64 process that remains live until force-stop.
+        bytes[0x100..0x104].copy_from_slice(&0x1400_0000_u32.to_le_bytes());
         bytes
+    }
+
+    fn create_engine(isa: u32) -> (Engine, std::fs::File) {
+        let mut executable = tempfile::tempfile().unwrap();
+        let mut bytes = image();
+        if isa == 2 {
+            put16(&mut bytes, 18, 0x3e);
+            // `jmp .`: the x86-64 counterpart of the AArch64 live loop.
+            bytes[0x100..0x102].copy_from_slice(&[0xeb, 0xfe]);
+        }
+        executable.write_all(&bytes).unwrap();
+        executable.seek(SeekFrom::Start(0)).unwrap();
+        let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
+        let config = EngineConfig {
+            isa,
+            rootfs: None,
+            executable_host: None,
+            executable_fd: executable.as_raw_fd(),
+            option_names: &[],
+            option_values: &[],
+            standard_fds: [standard.as_raw_fd(); 3],
+            provider_fd: -1,
+        };
+        // SAFETY: all descriptors and borrowed slices remain live through create;
+        // the bridge copies configuration and imports its own descriptor handles.
+        let engine = unsafe { Engine::create(config) }.unwrap();
+        (engine, standard)
     }
 
     fn inspect(bytes: &[u8]) -> Result<Plan, i32> {
@@ -436,5 +478,136 @@ mod tests {
             inspect(&bytes).is_err(),
             "entry outside an executable segment was accepted"
         );
+    }
+
+    #[test]
+    fn concurrent_exit_reads_only_coherent_publications() {
+        for isa in [1, 2] {
+            let (engine, _standard) = create_engine(isa);
+            let argument = CString::new("guest").unwrap();
+            let initial = Exit {
+                kind: 0,
+                status: 0,
+                detail: 0,
+            };
+            let observed = std::thread::scope(|scope| {
+                let running = scope.spawn(|| engine.run(&[argument.as_ptr()]));
+                let reading = scope.spawn(|| {
+                    let mut values = Vec::with_capacity(50_000);
+                    for _ in 0..50_000 {
+                        values.push(engine.exit());
+                    }
+                    engine.request(2, 0).unwrap();
+                    for _ in 0..1_000_000 {
+                        let value = engine.exit();
+                        values.push(value);
+                        if value != initial {
+                            break;
+                        }
+                    }
+                    values
+                });
+                let values = reading.join().unwrap();
+                running.join().unwrap().unwrap();
+                values
+            });
+            let published = engine.exit();
+            assert!(
+                observed.contains(&published),
+                "ISA {isa} test never observed publication"
+            );
+            assert!(
+                observed.into_iter().all(|value| value == initial || value == published),
+                "ISA {isa} reader observed a partially published exit record"
+            );
+            drop(engine);
+        }
+    }
+
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn checkpoint_control_transaction_serializes_readiness_and_acknowledgement() {
+        const CHILD: &str = "HL_NATIVE_CHECKPOINT_TRANSACTION_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "engine::tests::checkpoint_control_transaction_serializes_readiness_and_acknowledgement",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .spawn()
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(15);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert!(status.success(), "checkpoint transaction child failed: {status}");
+                    return;
+                }
+                if Instant::now() >= deadline {
+                    child.kill().unwrap();
+                    let _ = child.wait();
+                    panic!("checkpoint transaction child exceeded 15 seconds");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        for isa in [1, 2] {
+            let (mut engine, _standard) = create_engine(isa);
+            let (_broker, transport) = crate::CheckpointTransport::create().unwrap();
+            engine.configure_checkpoint(&transport).unwrap();
+            let argument = CString::new("guest").unwrap();
+
+            // SAFETY: these test-feature-only functions own a process-global
+            // deterministic barrier and take no caller-provided pointers.
+            assert_eq!(unsafe { crate::bindings::hl_c_backend_checkpoint_test_arm() }, 1);
+            std::thread::scope(|scope| {
+                let request = scope.spawn(|| engine.request(4, 0));
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while unsafe { crate::bindings::hl_c_backend_checkpoint_test_phase() } != 2 {
+                    assert!(
+                        Instant::now() < deadline,
+                        "ISA {isa} request did not acquire checkpoint transaction"
+                    );
+                    std::thread::yield_now();
+                }
+                let running = scope.spawn(|| engine.run(&[argument.as_ptr()]));
+                while unsafe { crate::bindings::hl_c_backend_checkpoint_test_phase() } != 3 {
+                    assert!(
+                        Instant::now() < deadline,
+                        "ISA {isa} guest process did not reach checkpoint control"
+                    );
+                    std::thread::yield_now();
+                }
+                let _generation = transport.bump();
+                // SAFETY: phase 2 proves the request owns the transaction lock;
+                // release lets it consume the sole readiness byte and complete
+                // the full command/ack exchange before run may inspect it.
+                unsafe { crate::bindings::hl_c_backend_checkpoint_test_release() };
+                assert_eq!(
+                    request.join().unwrap(),
+                    Err(12),
+                    "ISA {isa} zero-executor acknowledgement changed"
+                );
+                assert_eq!(unsafe { crate::bindings::hl_c_backend_checkpoint_test_phase() }, 6);
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while unsafe { crate::bindings::hl_c_backend_checkpoint_test_phase() } != 7 {
+                    assert!(
+                        Instant::now() < deadline,
+                        "ISA {isa} run did not cross serialized readiness"
+                    );
+                    std::thread::yield_now();
+                }
+                engine.request(2, 0).unwrap();
+                assert_eq!(
+                    running.join().unwrap(),
+                    Ok(()),
+                    "ISA {isa} run failed after checkpoint ack"
+                );
+            });
+            // SAFETY: the child has joined every user of the feature-only hook.
+            unsafe { crate::bindings::hl_c_backend_checkpoint_test_reset() };
+        }
     }
 }

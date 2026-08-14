@@ -96,9 +96,18 @@ pub(super) struct RuntimeSpecification {
     pub(super) environment: Vec<EnvironmentEntry>,
     #[serde(default = "timeout")]
     pub(super) timeout: u64,
+    /// Typed lifecycle action performed by the container harness after launch.
+    pub(super) orchestration: Option<Orchestration>,
     #[serde(default)]
     pub(super) guest: Guest,
     pub(super) expect: Expectation,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Orchestration {
+    #[serde(rename = "stop-after-ms")]
+    pub(crate) stop_after_ms: u64,
 }
 
 /// Root filesystem supplied to one runtime case.
@@ -208,6 +217,8 @@ pub(crate) enum CompatClass {
 #[serde(deny_unknown_fields)]
 pub(super) struct Expectation {
     pub(super) exit: i32,
+    /// Linux signal expected from an explicitly orchestrated container stop.
+    pub(super) signal: Option<u8>,
     #[serde(default)]
     pub(super) stdout: Option<PathBuf>,
     /// Asserts that stdout is exactly zero bytes without requiring a placeholder file.

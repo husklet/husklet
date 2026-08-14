@@ -81,6 +81,14 @@ fn deliberate_native_leak_is_visible_to_memcheck() {
     assert_eq!(hl_native::leak_check_nonvacuity(), 0);
 }
 
+/// Kept ignored in normal invocations. The Linux `AddressSanitizer` gate runs
+/// this test alone and must reject the native heap use after free.
+#[test]
+#[ignore = "non-vacuity fixture for the external AddressSanitizer gate"]
+fn deliberate_native_use_after_free_is_visible_to_address_sanitizer() {
+    assert_eq!(hl_native::leak_check_nonvacuity(), 0);
+}
+
 struct State {
     open_result: HostResult,
     path: Vec<u8>,

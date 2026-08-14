@@ -20,7 +20,12 @@ static int ckpt_prepare_restore_pipes(void) {
                 pipe = &g_restore_pipes[g_nrestore_pipes++];
                 *pipe = (struct ckpt_restore_pipe){.identity = identity, .reader = -1, .writer = -1};
             }
-            int size = atoi(record.path);
+            size_t parsed;
+            if (ckpt_decimal_capacity(record.path, 65536, INT_MAX, &parsed) != 0) {
+                ckpt_source_fclose(file);
+                return -1;
+            }
+            int size = (int)parsed;
             if (size > pipe->size) pipe->size = size;
         }
         if (!feof(file)) {
@@ -28,6 +33,14 @@ static int ckpt_prepare_restore_pipes(void) {
             return -1;
         }
         ckpt_source_fclose(file);
+    }
+    for (int i = 0; i < g_nrestore_pipes; i++) {
+        char data_path[1300];
+        snprintf(data_path, sizeof data_path, "pipe.%016llx", (unsigned long long)g_restore_pipes[i].identity);
+        int64_t stored = ckpt_source_object_size(data_path);
+        size_t data_size;
+        if (stored >= 0 && ckpt_capacity_object_size(stored, (size_t)g_restore_pipes[i].size, &data_size) != 0)
+            return -1;
     }
     for (int i = 0; i < g_nrestore_pipes; i++) {
         char data_path[1300];
@@ -100,8 +113,8 @@ static int ckpt_restore_right_inotify(const struct ckpt_fd *record) {
     char image_path[1400];
     snprintf(image_path, sizeof image_path, "%s", record->path);
     int64_t stored = ckpt_source_object_size(image_path);
-    if (g_linux_box == NULL || stored <= 0 || (uint64_t)stored > 64u * 1024u * 1024u) return -1;
-    size_t size = (size_t)stored;
+    size_t size;
+    if (g_linux_box == NULL || ckpt_inotify_object_size(stored, &size) != 0) return -1;
     void *image = malloc(size);
     int shadow = bound_shadow_reserve(0);
     if (image == NULL || shadow < 0 || ckpt_source_load(image_path, image, size) != 0) {

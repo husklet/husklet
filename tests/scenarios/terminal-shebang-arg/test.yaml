@@ -1,0 +1,23 @@
+cases:
+- id: terminal-shebang-arg/errexit-option
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "printf '#!/bin/sh -e\\nfalse\\ntouch /tmp/husklet-shebang-arg-ran\\n' > /tmp/husklet-shebang-arg; chmod 0755 /tmp/husklet-shebang-arg; stty -echo; PS1='ARG# '; printf 'ARG-%s\\n' READY\r" }
+      - await_output: { contains: ARG-READY, timeout_ms: 5000 }
+      - write: { text: "/tmp/husklet-shebang-arg; status=$?; if test -e /tmp/husklet-shebang-arg-ran; then ran=yes; else ran=no; fi; printf 'ARG-STATUS-%s-RAN-%s\\n' \"$status\" \"$ran\"\r" }
+      - await_output: { contains: ARG-STATUS-1-RAN-no, timeout_ms: 5000 }
+      - write: { text: "printf 'ARG-SHELL-%s\\n' USABLE; stty echo; exit\r" }
+      - await_output: { contains: ARG-SHELL-USABLE, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/status.txt
+    - golden/shell_usable.txt

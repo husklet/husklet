@@ -94,6 +94,19 @@ async fn attach_runtime_contracts() -> Result<(), Error> {
 
 #[tokio::test]
 #[ignore = "requires HL_ALPINE_ARCHIVE"]
+async fn failed_exec_upgrade_cleanup() -> Result<(), Error> {
+    let work = TempDir::new()?;
+    let rootfs = work.path().join("rootfs");
+    let archive = env::var_os("HL_ALPINE_ARCHIVE")
+        .map(PathBuf::from)
+        .ok_or("HL_ALPINE_ARCHIVE must name the pinned Alpine minirootfs")?;
+    unpack(archive, rootfs.clone()).await?;
+    let containers = containers_for(work.path()).await?;
+    api::daemon_runtime::failed_upgrade(containers, &rootfs, work.path()).await
+}
+
+#[tokio::test]
+#[ignore = "requires HL_ALPINE_ARCHIVE"]
 async fn descendant_cleanup() -> Result<(), Error> {
     api::descendant_cleanup::run().await
 }

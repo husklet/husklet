@@ -44,7 +44,7 @@ static int bound_route_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, 
     case 69:
     case 70: {
         static _Thread_local hl_host_iovec vectors[HL_LINUX_IOV_MAX];
-        result = bound_vectors_copy(a1, a2, vectors);
+        result = bound_vectors_prepare(&source, nr == 65 || nr == 69, a1, a2, vectors);
         if (result != 0) {
             // do_readv/do_writev test the access mode at fdget_pos, ahead of import_iovec.
             if (result == -HL_LINUX_EFAULT && bound_access_rejects(&source, nr == 65 || nr == 69)) result = -EBADF;
@@ -78,7 +78,7 @@ static int bound_route_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, 
         uint64_t vector_offset =
             (uint64_t)(uint32_t)a3 | ((uint64_t)(uint32_t)G_A4(c) << 32); /* AArch64 split offset. */
 #endif
-        result = bound_vectors_copy(a1, a2, vectors);
+        result = bound_vectors_prepare(&source, nr == 286, a1, a2, vectors);
         if (result != 0) {
             if (result == -HL_LINUX_EFAULT && bound_access_rejects(&source, nr == 286)) result = -EBADF;
             break;
@@ -826,11 +826,9 @@ static int bound_route_duplication(struct cpu *c, uint64_t nr, uint64_t a0, uint
                 (void)poslk_op_identity(metadata.stable_device, metadata.stable_object, current, metadata.size, (int)a1,
                                         lock, &lock_result);
                 if (a1 != 7 || lock_result != -EAGAIN) break;
-                uint64_t pending =
-                    __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) | __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
                 int interrupted = 0;
-                for (int signal_number = 1; signal_number < 64; ++signal_number)
-                    if ((pending & (UINT64_C(1) << signal_number)) &&
+                for (int signal_number = 1; signal_number <= 64; ++signal_number)
+                    if ((process_pending_test(signal_number) || thread_pending_test(c, signal_number)) &&
                         !(c->sigmask & (UINT64_C(1) << (signal_number - 1)))) {
                         interrupted = 1;
                         break;

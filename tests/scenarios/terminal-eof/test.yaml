@@ -1,0 +1,16 @@
+cases:
+- id: terminal-eof/canonical-shell-exit
+  image: alpine
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/bin/sh]
+      steps:
+      - write: { text: "stty -echo; trap \"printf 'EOF-%s\\n' OK\" EXIT; PS1=\"$(printf 'REA%s' DY)>\"; export PS1\r" }
+      - await_output: { contains: "READY>", timeout_ms: 5000 }
+      - write: { text: "\u0004" }
+      - await_output: { contains: EOF-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains: golden/canonical_eof.txt

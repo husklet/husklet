@@ -272,7 +272,7 @@ static void run_guest(struct cpu *c) {
         // map_host() races map_put() (torn entry) and lacks the acquire barrier
         // that makes a peer thread's freshly-emitted+icache-flushed code visible.
         // Single-threaded skips the lock entirely (g_threaded == 0).
-        if (g_threaded) pthread_mutex_lock(&g_jit_lock);
+        if (g_threaded) jit_dispatch_lock();
         void *code = map_host(G_PC(c));
         if (!code) {
             uint64_t _t0 = g_dispatch_profile.enabled ? hl_dispatch_profile_begin(&g_dispatch_profile, now_ns()) : 0;
@@ -417,7 +417,16 @@ static void run_guest(struct cpu *c) {
         // it remains the aarch64 path. Both arches define tier2_promote (per-arch).
         if (c->reason == R_TIER2) tier2_promote(G_PC(c));
         // async signal -> guest handler (process-directed g_pending OR thread-directed cpu->tpending)
-        if (g_pending || c->tpending) maybe_deliver_signal(c);
+        if (signal_deliverable_for_cpu(c)) maybe_deliver_signal(c);
+    }
+    /* A checkpoint may publish its request after the last loop-top safepoint
+       but before this thread removes its registry slot. Acknowledge once more
+       with architectural state spilled; otherwise checkpoint holds the
+       registry lock while waiting on an old ack and unregister waits on that
+       same lock forever. */
+    if (g_threaded && g_my_stw_slot >= 0) {
+        atomic_store_explicit(&g_stw_threads[g_my_stw_slot].departing, 1, memory_order_seq_cst);
+        stw_dispatch_safepoint();
     }
     // Leave the registries: this thread will never execute in the cache again, nor be a signal target.
     thread_unregister(c);

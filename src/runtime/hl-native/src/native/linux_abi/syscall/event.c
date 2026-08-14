@@ -726,13 +726,11 @@ static int poll_sigmask_enter(struct cpu *c, int have_mask, uint64_t nm, uint64_
 // return) -- force exactly those bits via g_force_deliver, mirroring rt_sigsuspend (signal.c case 133).
 static void poll_sigmask_leave(struct cpu *c, uint64_t saved) {
     uint64_t temp = c->sigmask;
-    uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) | __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
     for (int s = 1; s <= 64; s++) {
-        uint64_t bit = 1ull << s;
-        if (!(p & bit)) continue;
+        if (!process_pending_test(s) && !thread_pending_test(c, s)) continue;
         if (temp & (1ull << (s - 1))) continue; // was blocked during the wait -> not delivered
         if ((saved & (1ull << (s - 1))) && g_sigact[s].handler > 1)
-            g_force_deliver |= bit; // blocked again on restore, but Linux already delivered it -> force it
+            signal_force_set(s); // blocked again on restore, but Linux already delivered it -> force it
     }
     c->sigmask = saved;
 }
@@ -839,6 +837,18 @@ static void svc_epoll_wait_common(struct cpu *c, int ep, uint64_t guest_out, int
             ts.tv_nsec = 0;
             tp = &ts;
         }
+        // Thread-directed signalfd instances deliberately have no process-wide pipe token.  Derive their
+        // readiness from queue ownership and turn this wait into a poll only for the addressed thread.
+        for (uint32_t index = 0; index < EP_NATIVE_WATCH_LIMIT; ++index) {
+            ep_native_watch *watch = &g_ep_native_watches[index];
+            if (__atomic_load_n(&watch->active, __ATOMIC_ACQUIRE) == 1 && watch->epoll == epoll_slot(ep) &&
+                (watch->events & 1u) && sfd_ready_for_cpu(watch->logical_descriptor, c)) {
+                ts.tv_sec = 0;
+                ts.tv_nsec = 0;
+                tp = &ts;
+                break;
+            }
+        }
         // Object-backed watches (inotify) have no host descriptor on this kqueue, so a blocking wait would
         // never surface their readiness. Like poll()/select() over the same objects, cap the sleep to a
         // bounded tick and re-sample readiness below; a non-blocking (timeout_ns==0) wait keeps its zero timeout.
@@ -861,6 +871,10 @@ static void svc_epoll_wait_common(struct cpu *c, int ep, uint64_t guest_out, int
             r = kevent(ep, chg, nchg, kv, maxev, tp);
             chg = NULL;
             nchg = 0;
+            if (r < 0 && errno == EINTR && sfd_any_ready_for_cpu(c)) {
+                r = 0;
+                break;
+            }
         } while (r < 0 && svc_poll_retry(c));
         ts_wait_leave();
         if (opt && !lk) g_ep_chgn[ep] = 0; // consumed (threaded flushed it under the lock already)
@@ -880,13 +894,20 @@ static void svc_epoll_wait_common(struct cpu *c, int ep, uint64_t guest_out, int
             if (kv[i].flags & EV_EOF) {
                 // kqueue raises EV_EOF for BOTH a peer half-close (shutdown SHUT_WR: the read side hits
                 // EOF but the socket is still writable) and a full hangup. Linux distinguishes them:
-                // EPOLLRDHUP on a half-close, EPOLLHUP only on a full disconnect. poll() reports POLLHUP
-                // only for a full hangup, so use it to tell the two apart. EPOLLRDHUP is edge-reported
-                // only when the guest actually registered interest in it (unlike EPOLLHUP/EPOLLERR).
+                // EPOLLRDHUP on a peer close, EPOLLHUP only once the local connection is also closed.
+                // The AF_UNIX transport collapses a peer close into host POLLHUP, so its socket EOF must
+                // not become guest EPOLLHUP. Non-sockets retain the poll distinction. EPOLLRDHUP is
+                // edge-reported only when the guest registered it (unlike EPOLLHUP/EPOLLERR).
                 int hup = 1;
                 if (kv[i].filter == EVFILT_READ) {
                     struct pollfd pf = {.fd = (int)kv[i].ident, .events = POLLIN, .revents = 0};
                     if (poll(&pf, 1, 0) >= 0) hup = (pf.revents & POLLHUP) != 0;
+                    {
+                        int socket_type;
+                        socklen_t socket_type_size = sizeof(socket_type);
+                        if (getsockopt((int)kv[i].ident, SOL_SOCKET, SO_TYPE, &socket_type, &socket_type_size) == 0)
+                            hup = 0;
+                    }
                 }
                 if (hup) ev |= 0x10u;                                                            // EPOLLHUP
                 if (kv[i].ident < HL_NFD && (g_ep_events[kv[i].ident] & 0x2000u)) ev |= 0x2000u; // EPOLLRDHUP
@@ -904,6 +925,25 @@ static void svc_epoll_wait_common(struct cpu *c, int ep, uint64_t guest_out, int
             }
             if (kv[i].ident < HL_NFD) ep_native_disarm(epoll_slot(ep), (int)kv[i].ident, kv[i].filter);
             oi++;
+        }
+        // Synthesize per-thread signalfd readiness.  A shared host kqueue cannot represent that ownership,
+        // whereas the native watch table retains the Linux event mask and user data exactly.
+        for (uint32_t index = 0; index < EP_NATIVE_WATCH_LIMIT && oi < maxev; ++index) {
+            ep_native_watch *watch = &g_ep_native_watches[index];
+            if (__atomic_load_n(&watch->active, __ATOMIC_ACQUIRE) != 1 || watch->epoll != epoll_slot(ep) ||
+                !(watch->events & 1u) || !(watch->armed & 1u) || !sfd_ready_for_cpu(watch->logical_descriptor, c))
+                continue;
+            int duplicate = 0;
+            for (int prior = 0; prior < oi; ++prior) {
+                uint64_t data;
+                memcpy(&data, out + (size_t)prior * G_EPEV_SZ + G_EPEV_DOFF, sizeof(data));
+                if (data == watch->data) duplicate = 1;
+            }
+            if (duplicate) continue;
+            *(uint32_t *)(out + (size_t)oi * G_EPEV_SZ) = 1u;
+            memcpy(out + (size_t)oi * G_EPEV_SZ + G_EPEV_DOFF, &watch->data, sizeof(watch->data));
+            if (watch->events & (UINT32_C(0x40000000) | UINT32_C(0x80000000))) watch->armed &= ~1u;
+            ++oi;
         }
         /* Provider pumps only publish an atomic readiness mark and trigger the
          * EVFILT_USER wake.  The epoll owner consumes and formats it here, so

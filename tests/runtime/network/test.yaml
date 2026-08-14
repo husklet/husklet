@@ -597,9 +597,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/tcp_sockopt.out }
   - id: runtime/network/tcp-pollhup
-    status: !broken
-      reason: "the previous reason was WRONG: it claimed EPOLLHUP is reported prematurely, but re-derived 2026-08-08 on both ISAs the engine gives 'n=1 in=1 rdhup=0 hup=0' against the golden 'n=1 in=1 rdhup=1 hup=0'. hup=0 is already correct -- nothing is premature. The single live defect is the opposite: EPOLLRDHUP is never reported when the peer full-closes while the local write half stays open, so a reader cannot distinguish half-close from a live peer. Same AF_UNIX-switch class as linger-reset, but the missing edge is RDHUP, not a spurious HUP."
-      evidence: "tests/runtime/network/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: tcp_pollhup.c, inputs: [socket_util.h], output: tcp_pollhup, flags: [-static, -O2, -std=gnu11] }
     artifact: { destination: /opt/husklet/network-tcp_pollhup }

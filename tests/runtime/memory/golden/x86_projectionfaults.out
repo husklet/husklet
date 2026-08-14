@@ -1,0 +1,6 @@
+scalar=1/1
+vector=1/1 avx=1/1
+xstate m80=1/1 env28=1/1 save108=1/1 save512=1/1
+compare=1111/1
+rotate=111/1
+x86-projection-fault complete=1

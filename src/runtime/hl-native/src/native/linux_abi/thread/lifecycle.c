@@ -1,3 +1,5 @@
+struct hl_linux_bpf_filter;
+
 static void thread_after_fork(void) {
     pthread_mutex_init(&g_threg_m, NULL); // thread registry (tkill/tgkill lookup, thread_register)
     struct cpu *self = (g_my_threg >= 0) ? g_threg[g_my_threg].c : NULL;
@@ -94,6 +96,9 @@ static int cpu_tid(const struct cpu *c) {
     return c->tid ? c->tid : container_pid();
 }
 
+/* Defined in signal.c, which follows thread.c in each target unity build. */
+static int sfd_any_ready_for_cpu(struct cpu *cpu);
+
 // Publish/clear the wait primitive this thread is blocked on (see the futex_op waits + thread_target_signal).
 static void thread_wait_publish(pthread_mutex_t *m, pthread_cond_t *cnd) {
     if (g_my_threg < 0) return;
@@ -118,9 +123,9 @@ static void thread_register(struct cpu *c) {
     pthread_mutex_lock(&g_threg_m);
     for (int i = 0; i < THREAD_REG_MAX; i++)
         if (!g_threg[i].c) {
-            g_threg[i].c = c;
             g_threg[i].th = pthread_self();
             __atomic_store_n(&g_threg[i].waitc, NULL, __ATOMIC_SEQ_CST);
+            __atomic_store_n(&g_threg[i].c, c, __ATOMIC_RELEASE);
             g_my_threg = i;
             g_threg_live++;
             break;
@@ -128,12 +133,39 @@ static void thread_register(struct cpu *c) {
     pthread_mutex_unlock(&g_threg_m);
 }
 
+/* Atomically attach one filter to every live task in the caller's thread
+   group. Linux reports the first incompatible tid instead of partially
+   synchronizing the group. */
+static long seccomp_tsync_attach(struct cpu *caller, struct hl_linux_bpf_filter *node) {
+    long status = 0;
+    pthread_mutex_lock(&g_threg_m);
+    for (int i = 0; i < THREAD_REG_MAX; i++) {
+        struct cpu *peer = g_threg[i].c;
+        if (peer && (peer->seccomp_mode != caller->seccomp_mode || peer->seccomp_filters != caller->seccomp_filters)) {
+            status = cpu_tid(peer);
+            break;
+        }
+    }
+    if (status == 0) {
+        for (int i = 0; i < THREAD_REG_MAX; i++) {
+            struct cpu *peer = g_threg[i].c;
+            if (peer) {
+                peer->seccomp_filters = node;
+                peer->seccomp_mode = 2;
+            }
+        }
+    }
+    pthread_mutex_unlock(&g_threg_m);
+    return status;
+}
+
 static void thread_unregister(struct cpu *c) {
     pthread_mutex_lock(&g_threg_m);
     for (int i = 0; i < THREAD_REG_MAX; i++)
         if (g_threg[i].c == c) {
+            sigq_drop_target_tid(cpu_tid(c));
             __atomic_store_n(&g_threg[i].waitc, NULL, __ATOMIC_SEQ_CST);
-            g_threg[i].c = NULL;
+            __atomic_store_n(&g_threg[i].c, NULL, __ATOMIC_RELEASE);
             if (g_threg_live > 0) g_threg_live--;
             break;
         }
@@ -149,21 +181,26 @@ static void thread_unregister(struct cpu *c) {
 // own, so if the signal is deliverable now we wake it out of that wait (matching a real futex interrupted by
 // a signal) -- without this, Go's doAllThreadsSyscall (setuid/setgid across all Ms, via signal 33) hangs
 // because a parked sibling M never runs the per-thread-syscall handler the coordinator busy-waits on.
-// Returns 1 if the target was found and flagged, 0 if no live thread carries that tid (caller then falls
-// back to process semantics, as Linux drops a tgkill to a dead tid).
-static int thread_target_signal(int tid, int sig) {
+// Returns 1 if the target was found and flagged, 0 if no live thread carries that tid, and -1 when the
+// realtime queue is full (the syscall caller reports EAGAIN rather than silently discarding the signal).
+static int thread_target_signal_info(int tid, int sig, int tag, int error, int code, uint64_t value, int pid, int uid,
+                                     uint64_t address) {
     int found = 0;
     pthread_mutex_lock(&g_threg_m);
     for (int i = 0; i < THREAD_REG_MAX; i++)
         if (g_threg[i].c && cpu_tid(g_threg[i].c) == tid) {
-            __atomic_or_fetch(&g_threg[i].c->tpending, 1ull << sig, __ATOMIC_SEQ_CST);
+            int published = thread_directed_signal_publish(g_threg[i].c, sig, tag, error, code, value, pid, uid, address);
+            if (published < 0) {
+                found = -1;
+                break;
+            }
             // also kick the target out of any no-syscall in-cache loop so its emitted body check
             // (cpu->irq) exits to the dispatcher and maybe_deliver_signal runs the handler at a boundary.
             __atomic_store_n(&g_threg[i].c->irq, 1, __ATOMIC_SEQ_CST);
             // Load waitc AFTER storing tpending: the seq_cst StoreLoad here pairs with the target's
             // publish-then-recheck in futex_op so the wakeup is never lost. Only wake for a signal that is
             // actionable now (unblocked) -- a blocked one stays pending without interrupting the wait.
-            if (cpu_has_actionable_tsig(g_threg[i].c)) {
+            if (cpu_has_actionable_tsig(g_threg[i].c) || sfd_any_ready_for_cpu(g_threg[i].c)) {
                 pthread_cond_t *cnd = __atomic_load_n(&g_threg[i].waitc, __ATOMIC_SEQ_CST);
                 if (cnd) {
                     pthread_mutex_t *m = g_threg[i].waitm;
@@ -478,6 +515,9 @@ static int spawn_thread(struct cpu *parent, uint64_t flags, uint64_t stack_top, 
        child or resume a BUS/service handoff with stale scratch state. */
     child->irq = 0;
     child->tpending = 0;
+    child->tpending_hi = 0;
+    child->sig_defer_hi = 0;
+    memset(child->sig_defer_hi_stack, 0, sizeof child->sig_defer_hi_stack);
     child->sync_signal = 0;
     child->sync_code = 0;
     child->sync_address = 0;

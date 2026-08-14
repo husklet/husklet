@@ -1,0 +1,25 @@
+cases:
+- id: terminal-exec-replace/replace-interactive-shell
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "stty -echo; printf \"EXEC-${x}READY\\n\"\r" }
+      - await_output: { contains: EXEC-READY, timeout_ms: 5000 }
+      - write: { text: "exec env HUSKLET_REPLACED=1 'PS1=replacement# ' /usr/local/bin/bash --noprofile --norc\r" }
+      - await_output: { contains: "replacement# ", timeout_ms: 5000 }
+      - write: { text: "test \"$HUSKLET_REPLACED\" = 1 && printf \"EXEC-${x}REPLACED\\n\"\r" }
+      - await_output: { contains: EXEC-REPLACED, timeout_ms: 5000 }
+      - write: { text: "stty echo; printf \"REPLACEMENT-${x}EXIT\\n\"; exit\r" }
+      - await_output: { contains: REPLACEMENT-EXIT, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/replaced.txt
+    - golden/replacement_exit.txt

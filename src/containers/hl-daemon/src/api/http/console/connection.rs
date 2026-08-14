@@ -76,13 +76,14 @@ impl Connection {
     async fn run(mut self) {
         let streams = self.streams;
         let terminal = self.terminal;
-        let Ok(upgraded) = self.upgrade.await else {
+        let Ok(Ok(upgraded)) = tokio::time::timeout(std::time::Duration::from_secs(5), self.upgrade).await else {
+            Self::cleanup_disconnect(&mut self.disconnect).await;
             return;
         };
         let stream = hyper_util::rt::TokioIo::new(upgraded);
         let (reader, mut writer) = tokio::io::split(stream);
         let (ended, mut end) = tokio::sync::oneshot::channel();
-        let input_task = (self.stream && streams.stdin).then(|| {
+        let input_task = (self.stream && (streams.stdin || self.disconnect.is_some())).then(|| {
             let forwarder = InputForwarder {
                 input: self.session.input(),
                 keys: self.detach.take().map(DetachInput::new),
@@ -96,6 +97,7 @@ impl Connection {
                 .is_err()
         {
             Self::finish(&mut writer, input_task).await;
+            Self::cleanup_disconnect(&mut self.disconnect).await;
             return;
         }
         if !self.stream || (!streams.stdin && !streams.stdout && !streams.stderr) {
@@ -112,6 +114,10 @@ impl Connection {
                     // watching input and keep draining; a client that really went away
                     // surfaces as a write failure below.
                     Ok(InputEnd::Closed) => {
+                        if !streams.stdin {
+                            disconnected = true;
+                            break;
+                        }
                         watch_input = false;
                         continue;
                     }
@@ -135,8 +141,14 @@ impl Connection {
         if let Some(task) = input_task {
             task.abort();
         }
-        if disconnected && let Some(disconnect) = self.disconnect {
-            tokio::spawn(disconnect.cleanup());
+        if disconnected {
+            Self::cleanup_disconnect(&mut self.disconnect).await;
+        }
+    }
+
+    async fn cleanup_disconnect(disconnect: &mut Option<Disconnect>) {
+        if let Some(disconnect) = disconnect.take() {
+            disconnect.cleanup().await;
         }
     }
 

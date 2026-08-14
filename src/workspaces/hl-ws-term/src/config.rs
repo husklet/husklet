@@ -103,7 +103,7 @@ impl TermConfig {
     pub fn scrollback_lines(&self) -> i64 {
         match self.scrollback {
             None | Some(0) => 10_000_000,
-            Some(n) => n as i64,
+            Some(n) => i64::try_from(n).unwrap_or(i64::MAX),
         }
     }
 
@@ -329,6 +329,17 @@ mod tests {
         };
         c.apply_text("scrollback = unlimited\n");
         assert_eq!(c.scrollback, None);
+    }
+
+    #[test]
+    fn scrollback_never_wraps_negative_at_the_vte_boundary() {
+        let mut config = TermConfig {
+            scrollback: Some(i64::MAX as u64),
+            ..TermConfig::default()
+        };
+        assert_eq!(config.scrollback_lines(), i64::MAX);
+        config.scrollback = Some(u64::MAX);
+        assert_eq!(config.scrollback_lines(), i64::MAX);
     }
 
     #[test]

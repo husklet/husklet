@@ -13,6 +13,7 @@
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <stdlib.h>
 
 /* Linux exposes this siginfo si_code in asm-generic/siginfo.h, but some
  * cross-libc header sets omit the public spelling.  The UAPI value is stable
@@ -51,15 +52,37 @@ static int permission_case(void) {
     return status_exit(child, 0);
 }
 
+static int flag_case(void) {
+    pid_t child = fork();
+    if (child == 0) {
+        errno = 0;
+        int unknown = filter(SECCOMP_RET_ALLOW, 0x80000000u) == -1 && errno == EINVAL;
+        errno = 0;
+        int listener_tsync =
+            filter(SECCOMP_RET_ALLOW, SECCOMP_FILTER_FLAG_NEW_LISTENER | SECCOMP_FILTER_FLAG_TSYNC) == -1 &&
+            errno == EINVAL;
+        errno = 0;
+        int listener_authority = filter(SECCOMP_RET_ALLOW, SECCOMP_FILTER_FLAG_NEW_LISTENER) == -1 && errno == EACCES;
+        if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)) _exit(2);
+        int esrch_alone = filter(SECCOMP_RET_ALLOW, SECCOMP_FILTER_FLAG_TSYNC_ESRCH) == 0;
+        int log = filter(SECCOMP_RET_ALLOW, SECCOMP_FILTER_FLAG_LOG) == 0;
+        int spec_allow = filter(SECCOMP_RET_ALLOW, SECCOMP_FILTER_FLAG_SPEC_ALLOW) == 0;
+        _exit(unknown && listener_tsync && listener_authority && esrch_alone && log && spec_allow ? 0 : 3);
+    }
+    return status_exit(child, 0);
+}
+
 static int invalid_case(void) {
     pid_t child = fork();
     if (child == 0) {
         prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
-        struct sock_filter code[] = {BPF_JUMP(BPF_JMP | BPF_JA, 8, 0, 0)};
-        struct sock_fprog program = {.len = 1, .filter = code};
+        struct sock_filter code[] = {
+            BPF_STMT(BPF_LD | BPF_W | BPF_ABS, sizeof(struct seccomp_data)),
+            BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+        };
+        struct sock_fprog program = {.len = 2, .filter = code};
         errno = 0;
-        _exit(syscall(__NR_seccomp, SECCOMP_SET_MODE_FILTER, 0, &program) == -1
-              && errno == EINVAL ? 0 : 1);
+        _exit(syscall(__NR_seccomp, SECCOMP_SET_MODE_FILTER, 0, &program) == -1 && errno == EINVAL ? 0 : 1);
     }
     return status_exit(child, 0);
 }
@@ -76,6 +99,7 @@ static int strict_case(void) {
 }
 
 static volatile sig_atomic_t trap_seen;
+
 static void trap_handler(int signal, siginfo_t *info, void *context) {
     (void)context;
 #if defined(__aarch64__)
@@ -83,8 +107,8 @@ static void trap_handler(int signal, siginfo_t *info, void *context) {
 #else
     const unsigned expected_arch = AUDIT_ARCH_X86_64;
 #endif
-    trap_seen = signal == SIGSYS && info->si_code == SYS_SECCOMP
-        && info->si_syscall == __NR_getppid && (unsigned)info->si_arch == expected_arch;
+    trap_seen = signal == SIGSYS && info->si_code == SYS_SECCOMP && info->si_syscall == __NR_getppid &&
+                (unsigned)info->si_arch == expected_arch;
 }
 
 static int trap_case(void) {
@@ -92,8 +116,8 @@ static int trap_case(void) {
     if (child == 0) {
         struct sigaction action = {.sa_sigaction = trap_handler, .sa_flags = SA_SIGINFO};
         sigemptyset(&action.sa_mask);
-        if (sigaction(SIGSYS, &action, 0) || prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)
-            || filter(SECCOMP_RET_TRAP | 17, 0)) _exit(2);
+        if (sigaction(SIGSYS, &action, 0) || prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) || filter(SECCOMP_RET_TRAP | 17, 0))
+            _exit(2);
         syscall(__NR_getppid);
         _exit(trap_seen ? 0 : 3);
     }
@@ -105,7 +129,8 @@ static int kill_process_case(void) {
     if (child == 0) {
         prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
         if (filter(SECCOMP_RET_KILL_PROCESS, 0)) _exit(2);
-        syscall(__NR_getppid); _exit(3);
+        syscall(__NR_getppid);
+        _exit(3);
     }
     return status_signal(child, SIGSYS);
 }
@@ -131,9 +156,12 @@ static int kill_thread_case(void) {
 }
 
 static atomic_int tsync_go;
+static atomic_int tsync_diverged;
+
 static void *tsync_thread(void *unused) {
     (void)unused;
-    while (!atomic_load_explicit(&tsync_go, memory_order_acquire)) sched_yield();
+    while (!atomic_load_explicit(&tsync_go, memory_order_acquire))
+        sched_yield();
     errno = 0;
     return (void *)(long)(syscall(__NR_getppid) == -1 && errno == 23);
 }
@@ -141,10 +169,11 @@ static void *tsync_thread(void *unused) {
 static int tsync_case(void) {
     pid_t child = fork();
     if (child == 0) {
-        pthread_t thread; atomic_store(&tsync_go, 0);
+        pthread_t thread;
+        atomic_store(&tsync_go, 0);
         if (pthread_create(&thread, 0, tsync_thread, 0)) _exit(2);
-        if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)
-            || filter(SECCOMP_RET_ERRNO | 23, SECCOMP_FILTER_FLAG_TSYNC)) _exit(3);
+        if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) || filter(SECCOMP_RET_ERRNO | 23, SECCOMP_FILTER_FLAG_TSYNC))
+            _exit(3);
         atomic_store_explicit(&tsync_go, 1, memory_order_release);
         void *result = 0;
         if (pthread_join(thread, &result)) _exit(4);
@@ -153,12 +182,39 @@ static int tsync_case(void) {
     return status_exit(child, 0);
 }
 
+static void *tsync_divergent_thread(void *unused) {
+    (void)unused;
+    int status = filter(SECCOMP_RET_ALLOW, 0);
+    atomic_store_explicit(&tsync_diverged, status == 0 ? 1 : -1, memory_order_release);
+    while (atomic_load_explicit(&tsync_diverged, memory_order_acquire) == 1)
+        sched_yield();
+    return 0;
+}
+
+static int tsync_esrch_case(void) {
+    pid_t child = fork();
+    if (child == 0) {
+        pthread_t thread;
+        atomic_store(&tsync_diverged, 0);
+        if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) || pthread_create(&thread, 0, tsync_divergent_thread, 0)) _exit(2);
+        while (atomic_load_explicit(&tsync_diverged, memory_order_acquire) == 0)
+            sched_yield();
+        errno = 0;
+        int rejected = filter(SECCOMP_RET_ALLOW, SECCOMP_FILTER_FLAG_TSYNC | SECCOMP_FILTER_FLAG_TSYNC_ESRCH) == -1 &&
+                       errno == ESRCH;
+        atomic_store_explicit(&tsync_diverged, 2, memory_order_release);
+        if (pthread_join(thread, 0)) _exit(3);
+        _exit(rejected ? 0 : 4);
+    }
+    return status_exit(child, 0);
+}
+
 static int stack_case(void) {
     pid_t child = fork();
     if (child == 0) {
-        if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)
-            || filter(SECCOMP_RET_ERRNO | 7, 0)
-            || filter(SECCOMP_RET_ERRNO | 9, 0)) _exit(2);
+        if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) || filter(SECCOMP_RET_ERRNO | 7, 0) ||
+            filter(SECCOMP_RET_ERRNO | 9, 0))
+            _exit(2);
         errno = 0;
         _exit(syscall(__NR_getppid) == -1 && errno == 9 ? 0 : 3);
     }
@@ -168,23 +224,43 @@ static int stack_case(void) {
 static int clone_case(void) {
     pid_t child = fork();
     if (child == 0) {
-        if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)
-            || filter(SECCOMP_RET_ERRNO | 31, 0)) _exit(2);
+        if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) || filter(SECCOMP_RET_ERRNO | 31, 0)) _exit(2);
         pid_t inherited = fork();
         if (inherited == 0) {
-            errno = 0; _exit(syscall(__NR_getppid) == -1 && errno == 31 ? 0 : 1);
+            errno = 0;
+            _exit(syscall(__NR_getppid) == -1 && errno == 31 ? 0 : 1);
         }
         _exit(status_exit(inherited, 0) ? 0 : 3);
     }
     return status_exit(child, 0);
 }
 
+static int exec_case(void) {
+    pid_t child = fork();
+    if (child == 0) {
+        if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) || filter(SECCOMP_RET_ERRNO | 41, 0)) _exit(2);
+        setenv("HL_SECCOMP_EXEC_PROBE", "1", 1);
+        execl("/proc/self/exe", "seccomp-matrix", (char *)0);
+        _exit(3);
+    }
+    return status_exit(child, 0);
+}
+
 int main(void) {
-    int permission = permission_case(), invalid = invalid_case(), strict = strict_case();
+    if (getenv("HL_SECCOMP_EXEC_PROBE")) {
+        errno = 0;
+        return syscall(__NR_getppid) == -1 && errno == 41 ? 0 : 1;
+    }
+    int permission = permission_case(), flags = flag_case(), invalid = invalid_case(), strict = strict_case();
     int trap = trap_case(), kill_thread = kill_thread_case(), kill_process = kill_process_case();
-    int tsync = tsync_case(), stack = stack_case(), clone = clone_case();
-    printf("seccomp permission=%d invalid=%d strict=%d trap=%d kill_thread=%d kill_process=%d tsync=%d stack=%d clone=%d\n",
-           permission, invalid, strict, trap, kill_thread, kill_process, tsync, stack, clone);
-    return permission && invalid && strict && trap && kill_thread && kill_process
-        && tsync && stack && clone ? 0 : 1;
+    int tsync = tsync_case(), tsync_esrch = tsync_esrch_case(), stack = stack_case(), clone = clone_case(),
+        exec = exec_case();
+    printf("seccomp permission=%d flags=%d invalid=%d strict=%d trap=%d kill_thread=%d kill_process=%d tsync=%d "
+           "tsync_esrch=%d "
+           "stack=%d clone=%d exec=%d\n",
+           permission, flags, invalid, strict, trap, kill_thread, kill_process, tsync, tsync_esrch, stack, clone, exec);
+    return permission && flags && invalid && strict && trap && kill_thread && kill_process && tsync && tsync_esrch &&
+                   stack && clone && exec
+               ? 0
+               : 1;
 }

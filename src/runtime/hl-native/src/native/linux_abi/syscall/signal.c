@@ -22,13 +22,10 @@ static int syscall_should_restart(struct cpu *c) {
     // Process-wide pending (g_pending) AND this thread's directed-pending (c->tpending, set by tkill/tgkill):
     // a thread blocked in read/accept/recv must be interrupted by a thread-directed signal too, not only a
     // process one. Scan every signal deliverable-now (unblocked, with a real guest handler).
-    uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) | __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
     int deliverable = 0;    // at least one runnable guest handler is pending
     int all_sa_restart = 1; // ...and every such handler asked for SA_RESTART
     for (int s = 1; s <= 64; s++) {
-        uint64_t bit = 1ull << s;
-        if (!(p & bit)) continue;
-        if (c->sigmask & (1ull << (s - 1))) continue; // blocked -> not delivered now
+        if (!signal_deliverable(c, s)) continue;
         if (g_sigact[s].handler <= 1) continue;       // SIG_DFL/IGN -> no guest handler runs
         deliverable = 1;
         if (!(g_sigact[s].flags & SA_RESTART_L)) all_sa_restart = 0;
@@ -74,10 +71,8 @@ static int svc_poll_retry(struct cpu *c) {
     if (ptrace_stop_requested()) return 0;                       // publish an ATTACH/INTERRUPT stop
     if (ckpt_pending()) return 0;                                // checkpoint requested: return EINTR -> safepoint
     if (__atomic_load_n(&c->exited, __ATOMIC_SEQ_CST)) return 0; // execve teardown: stop re-blocking, unwind out
-    uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) | __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
     for (int s = 1; s <= 64; s++) {
-        if (!(p & (1ull << s))) continue;
-        if (c->sigmask & (1ull << (s - 1))) continue; // blocked -> not delivered now
+        if (!signal_deliverable(c, s)) continue;
         if (g_sigact[s].handler > 1) return 0;        // a runnable guest handler -> return EINTR + deliver it
     }
     return 1; // nothing deliverable -> hide this EINTR and re-block (spurious/internal wakeup)
@@ -91,14 +86,14 @@ static int svc_poll_retry(struct cpu *c) {
 // the caller (raise_guest_signal applies the default/ignore action or coalesces into g_pending as before).
 enum { HL_SI_TKILL = -6 };
 
-static void thread_kill(struct cpu *c, int tid, int sig) {
+static int thread_kill(struct cpu *c, int tid, int sig) {
+    cred_init();
     // Route to exactly the addressed thread's cpu->tpending when it names ANOTHER live thread and the signal
     // is either handled by a guest handler OR blocked by that target (destined for its sigwait / held
     // pending). A process-wide g_pending would let any thread consume it, breaking Go's stop-the-world
     // preemption and thread-directed sigwait alike. Otherwise -- self-signal, default/ignore on an unblocked
     // signal, or an unknown/dead tid -- fall back to the process-directed path on the caller.
-    if (sig >= 1 && sig <= 64 && tid != cpu_tid(c) &&
-        (g_sigact[sig].handler > 1 || thread_tid_blocks_signal(tid, sig))) {
+    if (sig >= 1 && sig <= 64 && (g_sigact[sig].handler > 1 || thread_tid_blocks_signal(tid, sig))) {
         // Stamp the tkill/tgkill siginfo the target thread's handler reads: Linux sets si_code == SI_TKILL
         // and si_pid == the sender's thread-group (== this guest pid). glibc's SIGCANCEL handler (used by
         // pthread_cancel) IGNORES any signal whose si_code != SI_TKILL or si_pid != getpid(), so without
@@ -109,13 +104,25 @@ static void thread_kill(struct cpu *c, int tid, int sig) {
         g_sigval[sig] = 0;
         g_sigpid[sig] = container_pid();
         g_siguid[sig] = 0;
-        if (thread_target_signal(tid, sig)) return;
+        // A self-directed tkill/tgkill is still THREAD-directed on Linux.  Routing it through g_pending
+        // makes another unblocked thread eligible to consume it and, when this thread blocks the signal,
+        // means its per-thread pending state is absent from a checkpoint CPU image.  The caller is already
+        // at a dispatcher boundary, so publish directly on its CPU; maybe_deliver_signal consumes it here
+        // after the syscall or leaves it blocked for sigpending/sigwait and checkpoint capture.
+        if (tid == cpu_tid(c)) {
+            if (thread_directed_signal_publish(c, sig, 0, 0, HL_SI_TKILL, 0, container_pid(), g_ruid, 0) < 0)
+                return -EAGAIN;
+            __atomic_store_n(&c->irq, 1, __ATOMIC_SEQ_CST);
+            return 0;
+        }
+        int targeted = thread_target_signal_info(tid, sig, 0, 0, HL_SI_TKILL, 0, container_pid(), g_ruid, 0);
+        if (targeted > 0) return 0;
+        if (targeted < 0) return -EAGAIN;
     }
-    // Self-directed (or otherwise process-routed) tkill/tgkill. Linux stamps si_code == SI_TKILL for BOTH
-    // syscalls regardless of the target -- glibc's raise() lowers to tgkill, so a signalfd/sigwaitinfo
-    // reader of a raise()d signal must see SI_TKILL, not the SI_USER(0) a plain kill(2) carries.
-    cred_init();
+    // A default/ignored unblocked signal, or a dead/unknown target, follows the existing action path. Linux
+    // stamps si_code == SI_TKILL for both syscalls; glibc's raise() lowers to tgkill.
     raise_guest_signal_si(c, sig, HL_SI_TKILL, 0, container_pid(), g_ruid);
+    return 0;
 }
 
 static int svc_signal_target(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2) {
@@ -208,8 +215,7 @@ static int svc_signal_target(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
             break;
         }
-        thread_kill(c, tid, sig);
-        G_RET(c) = 0;
+        G_RET(c) = (uint64_t)(int64_t)thread_kill(c, tid, sig);
         break;
     }
     case 131: {
@@ -227,8 +233,7 @@ static int svc_signal_target(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
             break;
         }
-        thread_kill(c, tid, sig);
-        G_RET(c) = 0;
+        G_RET(c) = (uint64_t)(int64_t)thread_kill(c, tid, sig);
         break;
     }
     case 138: { // rt_sigqueueinfo(tgid, sig, siginfo): carry si_code + si_value + sender identity, and
@@ -345,13 +350,11 @@ static int svc_signal_target(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         ts_wait_enter();                        // pause -> interruptible sleep ('S') until a deliverable signal arrives
         while (!c->exited) {
             if (ptrace_stop_requested()) break;
-            uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST);
             int deliv = 0;
             for (int s = 1; s <= 64; s++) {
-                uint64_t bit = 1ull << s;
-                if (!(p & bit) || (c->sigmask & (1ull << (s - 1)))) continue; // not pending / blocked
+                if (!process_pending_test(s) || (c->sigmask & (UINT64_C(1) << (s - 1)))) continue;
                 if (g_sigact[s].handler <= 1) { // SIG_DFL/IGN: host already actioned -> consume, keep waiting
-                    __atomic_and_fetch(&g_pending, ~bit, __ATOMIC_SEQ_CST);
+                    process_pending_clear(s);
                     continue;
                 }
                 deliv = 1; // a real guest handler is runnable -> stop waiting (leave it pending to deliver)
@@ -415,14 +418,12 @@ static int svc_signal_wait(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1,
         ts_wait_enter(); // rt_sigsuspend -> interruptible sleep ('S')
         int deliv = 0;
         while (!c->exited) {
-            uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST);
             deliv = 0;
             for (int s = 1; s <= 64; s++) {
-                uint64_t bit = 1ull << s;
-                if (!(p & bit) || (newmask & (1ull << (s - 1)))) continue; // not pending / blocked
+                if (!process_pending_test(s) || (newmask & (UINT64_C(1) << (s - 1)))) continue;
                 uint64_t h = g_sigact[s].handler;
                 if (h <= 1) { // SIG_DFL/IGN: host already actioned it -> consume, keep waiting
-                    __atomic_and_fetch(&g_pending, ~bit, __ATOMIC_SEQ_CST);
+                    process_pending_clear(s);
                     continue;
                 }
                 deliv = s; // a real guest handler is runnable -> stop waiting (leave it PENDING)
@@ -439,7 +440,7 @@ static int svc_signal_wait(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1,
         // clearing its bit out of c->sigmask would corrupt the mask the sigframe saves+restores -- so leave
         // c->sigmask = oldmask and force just that one delivery via g_force_deliver (mask stays intact).
         c->sigmask = oldmask;
-        if (deliv) g_force_deliver |= (1ull << deliv);
+        if (deliv) signal_force_set(deliv);
         G_RET(c) = (uint64_t)(-EINTR);
         break;
     }
@@ -511,16 +512,14 @@ static int svc_signal_wait(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1,
             sa.sa_sigaction = host_sigh_si;
             sa.sa_flags = SA_SIGINFO;
             sigfillset(&sa.sa_mask);
-            if (sigaction(sig_l2m(s), &sa, &saved[s]) == 0) installed |= (1ull << s);
+            if (sigaction(sig_l2m(s), &sa, &saved[s]) == 0) installed |= (UINT64_C(1) << (s - 1));
         }
         int got = 0;
         ts_wait_enter(); // rt_sigtimedwait blocks in interruptible sleep ('S') until a signal/timeout
         for (;;) {
             // Both queues: process-directed (g_pending) and thread-directed (tpending via tkill/tgkill).
-            uint64_t p =
-                __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) | __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
             for (int s = 1; s <= 64; s++)
-                if ((p & (1ull << s)) && (set & (1ull << (s - 1)))) {
+                if ((process_pending_test(s) || thread_pending_test(c, s)) && (set & (1ull << (s - 1)))) {
                     got = s;
                     break;
                 }
@@ -531,9 +530,11 @@ static int svc_signal_wait(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1,
                 // more instances remain. If nothing was queued (host async path), fall back to the
                 // single-slot g_sig* the host handler wrote and clear the bit.
                 struct sigq_ent ent;
-                int popped = sigq_pop(got, &ent);
-                __atomic_and_fetch(&c->tpending, ~(1ull << got), __ATOMIC_SEQ_CST);
-                if (!popped) __atomic_and_fetch(&g_pending, ~(1ull << got), __ATOMIC_SEQ_CST);
+                int popped_targeted = 0;
+                int targeted_remaining = 0;
+                int popped = sigq_pop_for(got, c, &ent, &popped_targeted, &targeted_remaining);
+                if (!popped) thread_pending_clear(c, got);
+                if (!popped) process_pending_clear(got);
                 if (a1) { // fill siginfo_t whenever info != NULL (a3 is the sigsetsize, not a size threshold)
                     unsigned char result_info[128] = {0};
                     int error = popped ? ent.error : g_sigerror[got];
@@ -597,7 +598,7 @@ static int svc_signal_wait(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1,
         }
         ts_wait_leave();
         for (int s = 1; s <= 64; s++)
-            if (installed & (1ull << s)) sigaction(sig_l2m(s), &saved[s], NULL); // restore disposition
+            if (installed & (UINT64_C(1) << (s - 1))) sigaction(sig_l2m(s), &saved[s], NULL);
         break;
     }
     default: return 0;
@@ -676,7 +677,7 @@ static int svc_signal_action(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             // blocked, then set to SIG_IGN, stayed pending (ignore_discards_pending: sigpending must clear).
             if (h == 1 || (h == 0 && !sig_default_terminates(sig))) {
                 sigq_flush(sig);
-                __atomic_and_fetch(&c->tpending, ~(1ull << sig), __ATOMIC_SEQ_CST);
+                thread_pending_clear(c, sig);
             }
             // Synchronous CPU faults (SIGILL/FPE/TRAP/SEGV/BUS) ALWAYS stay on the engine's own host guard
             // (installed at startup): it intercepts the hardware fault and either delivers it to the guest
@@ -853,11 +854,10 @@ static int svc_signal_mask(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1,
         // an unblocked pending signal has a runnable handler and is about to be delivered, but sigpending's
         // contract is "signals pending AND blocked" -- however Linux actually reports every pending signal
         // regardless of the mask, so union without masking (the caller blocks them before checking).
-        uint64_t p = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST) | __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
         uint64_t out = 0;
         for (int s = 1; s <= 64; s++)
             // 1<<N -> sigset_t bit N-1
-            if (p & (1ull << s)) out |= (1ull << (s - 1));
+            if (process_pending_test(s) || thread_pending_test(c, s)) out |= (1ull << (s - 1));
         if (guest_copy_to(a0, &out, 8) != 8) {
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
             break;

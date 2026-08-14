@@ -33,6 +33,10 @@ int main(void) {
     timeout(srv);
     struct sockaddr_un sa = {0}; sa.sun_family = AF_UNIX; strcpy(sa.sun_path, sp);
     if (bind(srv, (struct sockaddr *)&sa, sizeof sa) < 0) fail("bind(server)");
+    int alias = dup(srv);
+    if (alias < 0) fail("dup(server)");
+    close(srv);
+    srv = alias;
     pid_t pid = fork();
     if (pid < 0) fail("fork");
     if (pid == 0) {

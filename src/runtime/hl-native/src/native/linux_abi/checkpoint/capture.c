@@ -61,7 +61,7 @@
 
 #define CKPT_MAGIC UINT64_C(0x373054504b434c48)          // "HLCKPT07" (LE) -- per-process meta
 #define CKPT_MANIFEST_MAGIC UINT64_C(0x3730304e414d4c48) // "HLMAN007" (LE) -- workspace manifest
-#define CKPT_VERSION 1                                   // current checkpoint images are advertised and written as v1
+#define CKPT_VERSION 4 // v4 preserves process and thread signal-64 pending state
 #define CKPT_ARCH_X86_64 1
 #define CKPT_ARCH_AARCH64 2
 #define CKPT_CPU_MAGIC UINT64_C(0x31305550434c4848) // "HHLCPU01" (LE)
@@ -237,11 +237,12 @@ struct ckpt_socket_queue_frame {
     uint32_t rights_count;
 };
 
-#define CKPT_SIGNAL_MAGIC UINT64_C(0x484c5349474e3031)
+#define CKPT_SIGNAL_MAGIC UINT64_C(0x484c5349474e3033)
 
 struct ckpt_signal_state {
     uint64_t magic;
     uint64_t pending;
+    uint64_t pending_hi;
     int32_t error[65];
     int32_t code[65];
     int32_t pid[65];
@@ -250,6 +251,14 @@ struct ckpt_signal_state {
     uint64_t value[65];
     uint64_t address[65];
     struct sigq_ent queue[65][SIGQ_DEPTH];
+};
+
+#define CKPT_FILESYSTEM_MAGIC UINT64_C(0x484c465354415431)
+
+struct ckpt_filesystem_state {
+    uint64_t magic;
+    char guest_cwd[4200];
+    char guest_root[4200];
 };
 
 static int ckpt_capture_file_blob(int fd, char *record_path, size_t record_capacity);
@@ -261,11 +270,15 @@ static int ckpt_restore_epoll_watches(const char *directory, const struct ckpt_f
 static int ckpt_rd_all(FILE *f, void *buf, size_t n);
 static int ckpt_restore_epoll_marker(const struct ckpt_fd *record, uint32_t ordinal);
 
+#include "object_bounds.h"
+
+#define CKPT_EPOLL_WATCH_LIMIT (HL_NFD + EP_PROVIDER_WATCH_LIMIT + EP_OBJECT_WATCH_LIMIT)
+
 static int ckpt_restore_epoll_marker(const struct ckpt_fd *record, uint32_t ordinal) {
     FILE *image_file = ckpt_source_fopen(record->path);
     struct ckpt_epoll_header header;
     if (image_file == NULL || ckpt_rd_all(image_file, &header, sizeof header) != 0 ||
-        header.magic != CKPT_EPOLL_MAGIC || header.count > HL_NFD + EP_PROVIDER_WATCH_LIMIT + EP_OBJECT_WATCH_LIMIT) {
+        header.magic != CKPT_EPOLL_MAGIC || header.count > CKPT_EPOLL_WATCH_LIMIT) {
         if (image_file != NULL) ckpt_source_fclose(image_file);
         return -1;
     }
@@ -318,6 +331,7 @@ static int ckpt_dump_signal_state(struct ckpt_sink *sink, const char *group) {
     if (state == NULL) return -1;
     state->magic = CKPT_SIGNAL_MAGIC;
     state->pending = __atomic_load_n(&g_pending, __ATOMIC_SEQ_CST);
+    state->pending_hi = __atomic_load_n(&g_pending_hi, __ATOMIC_SEQ_CST);
     memcpy(state->error, g_sigerror, sizeof state->error);
     memcpy(state->code, g_sigcode, sizeof state->code);
     memcpy(state->pid, g_sigpid, sizeof state->pid);
@@ -333,8 +347,13 @@ static int ckpt_dump_signal_state(struct ckpt_sink *sink, const char *group) {
             return -1;
         }
         state->queue_count[signal] = (uint32_t)count;
-        for (int index = 0; index < count; ++index)
+        for (int index = 0; index < count; ++index) {
             state->queue[signal][index] = g_sigq[signal].e[(g_sigq[signal].head + index) % SIGQ_DEPTH];
+            // A slot number identifies this process's transient signalfd pool.
+            // Descriptors and their masks are restored independently, so never
+            // serialize that process-local routing cache.
+            state->queue[signal][index].signalfd_slots = 0;
+        }
     }
     pthread_mutex_unlock(&g_sigq_lk);
     int result = ckpt_sink_put(sink, group, "signals", 0, state, sizeof *state);
@@ -365,11 +384,65 @@ static int ckpt_restore_signal_state(const char *procdir) {
     memset(g_sigq, 0, sizeof g_sigq);
     for (int signal = 1; signal <= 64; ++signal) {
         g_sigq[signal].count = (int)state->queue_count[signal];
-        for (int index = 0; index < g_sigq[signal].count; ++index)
+        for (int index = 0; index < g_sigq[signal].count; ++index) {
             g_sigq[signal].e[index] = state->queue[signal][index];
+            g_sigq[signal].e[index].signalfd_slots = 0;
+        }
     }
     pthread_mutex_unlock(&g_sigq_lk);
     __atomic_store_n(&g_pending, state->pending, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&g_pending_hi, state->pending_hi, __ATOMIC_SEQ_CST);
+    // Per-thread pending/defer state, including signal 64, is part of each
+    // serialized CPU image. The process word above is the only side state.
+    // Rebuild host-pipe wake hints from restored descriptors and authoritative
+    // pending words; targeted readiness is derived per calling CPU.
+    sfd_refresh_all();
+    free(state);
+    return 0;
+}
+
+static int ckpt_dump_filesystem_state(struct ckpt_sink *sink, const char *group) {
+    struct ckpt_filesystem_state *state = calloc(1, sizeof *state);
+    if (state == NULL) return -1;
+    state->magic = CKPT_FILESYSTEM_MAGIC;
+    if (g_rootfs) {
+        snprintf(state->guest_cwd, sizeof state->guest_cwd, "%s", g_cwd[0] ? g_cwd : "/");
+    } else if (getcwd(state->guest_cwd, sizeof state->guest_cwd) == NULL) {
+        fprintf(stderr, "[ckpt] refuse: cannot capture cwd: %s\n", strerror(errno));
+        free(state);
+        return -1;
+    }
+    snprintf(state->guest_root, sizeof state->guest_root, "%s", g_chroot);
+    int result = ckpt_sink_put(sink, group, "filesystem", 0, state, sizeof *state);
+    free(state);
+    return result;
+}
+
+static int ckpt_restore_filesystem_state(const char *procdir) {
+    char path[1300], host[4200];
+    char previous_root[sizeof g_chroot];
+    snprintf(path, sizeof path, "%s/filesystem", procdir);
+    struct ckpt_filesystem_state *state = malloc(sizeof *state);
+    if (state == NULL || ckpt_source_load(path, state, sizeof *state) != 0 || state->magic != CKPT_FILESYSTEM_MAGIC ||
+        memchr(state->guest_cwd, 0, sizeof state->guest_cwd) == NULL ||
+        memchr(state->guest_root, 0, sizeof state->guest_root) == NULL || state->guest_cwd[0] != '/' ||
+        (state->guest_root[0] != 0 && state->guest_root[0] != '/')) {
+        free(state);
+        return -1;
+    }
+    memcpy(previous_root, g_chroot, sizeof previous_root);
+    memcpy(g_chroot, state->guest_root, sizeof state->guest_root);
+    const char *resolved = atpath(-100, state->guest_cwd, host, sizeof host, 0);
+    if (resolved == NULL || chdir(resolved) != 0) {
+        // Resolution needs the restored root projection, but failure must not leave init's process-global
+        // namespace half-restored while the caller reports the image error. Child restorers exit immediately;
+        // init can return through its normal teardown path with the exact prior root still installed.
+        memcpy(g_chroot, previous_root, sizeof previous_root);
+        fprintf(stderr, "[restore] cannot restore guest cwd %s: %s\n", state->guest_cwd, strerror(errno));
+        free(state);
+        return -1;
+    }
+    memcpy(g_cwd, state->guest_cwd, sizeof state->guest_cwd);
     free(state);
     return 0;
 }
@@ -742,6 +815,16 @@ static int ckpt_capture_socket_state(int fd, uint64_t identity, int require_quie
         goto fail;
     state.host_family = state.local.ss_family;
     state.local_size = local_size;
+    if (state.guest_family == AF_UNIX && g_unix_bind[fd][0] == '/') {
+        struct sockaddr_un *local = (void *)&state.local;
+        size_t path_length = strlen(g_unix_bind[fd]);
+        if (path_length >= sizeof local->sun_path) goto fail;
+        memset(local, 0, sizeof *local);
+        local->sun_family = AF_UNIX;
+        memcpy(local->sun_path, g_unix_bind[fd], path_length + 1);
+        state.host_family = AF_UNIX;
+        state.local_size = (uint32_t)(offsetof(struct sockaddr_un, sun_path) + path_length + 1);
+    }
     if (state.guest_family == AF_UNIX && state.host_family == 0) {
         state.host_family = AF_UNIX;
 #if defined(__APPLE__)
@@ -805,13 +888,25 @@ static int ckpt_capture_file_blob(int fd, char *record_path, size_t record_capac
     struct ckpt_sink *sink = ckpt_sink_current();
     struct ckpt_sink_stream *output = NULL;
     if (ckpt_sink_begin(sink, NULL, record_path, CKPT_SINK_PUBLISH_ATOMIC, &output) != 0) return -1;
+    int input = fd;
+#if defined(__linux__)
+    int reader = -1;
+    int access_mode = fcntl(fd, F_GETFL);
+    if (access_mode >= 0 && (access_mode & O_ACCMODE) == O_WRONLY) {
+        char descriptor_path[64];
+        if (snprintf(descriptor_path, sizeof descriptor_path, "/proc/self/fd/%d", fd) <
+            (int)sizeof descriptor_path)
+            reader = open(descriptor_path, O_RDONLY | O_CLOEXEC);
+        if (reader >= 0) input = reader;
+    }
+#endif
     unsigned char buffer[65536];
     off_t offset = 0;
     int failed = 0;
     while (offset < status.st_size) {
         size_t wanted =
             (uint64_t)(status.st_size - offset) < sizeof buffer ? (size_t)(status.st_size - offset) : sizeof buffer;
-        ssize_t count = pread(fd, buffer, wanted, offset);
+        ssize_t count = pread(input, buffer, wanted, offset);
         if (count > 0) {
             if (ckpt_sink_write(sink, output, buffer, (size_t)count) != 0) {
                 failed = 1;
@@ -826,9 +921,16 @@ static int ckpt_capture_file_blob(int fd, char *record_path, size_t record_capac
     }
     if (failed) {
         ckpt_sink_abort(sink, &output);
+#if defined(__linux__)
+        if (reader >= 0) close(reader);
+#endif
         return -1;
     }
-    return ckpt_sink_finish(sink, &output);
+    int result = ckpt_sink_finish(sink, &output);
+#if defined(__linux__)
+    if (reader >= 0) close(reader);
+#endif
+    return result;
 }
 
 // Called at the top of the dispatcher loop (a clean safepoint: all guest arch state is spilled into `c`).
@@ -896,7 +998,9 @@ static int ckpt_control_init(void) {
         return -1;
     }
     if (restore && ckpt_source_current() == NULL && ckpt_source_bind() == NULL) return -1;
-    if (!capture) return 0;
+    /* Restore requests carry an explicit embedder-issued generation too.  Mapping the trigger here does not
+       arm capture by itself: a restore-only launch receives no later bump.  It only prevents restore source
+       and RECOVERY.jsonl traffic from falling back to the globally reusable generation zero. */
     g_ckpt_trigger = ckpt_map_trigger();
     if (!g_ckpt_trigger) return -1;
     g_ckpt_seen_gen = *g_ckpt_trigger;
@@ -944,6 +1048,11 @@ static int ckpt_same_native_ofd(int first, int second) {
     off_t first_offset = lseek(first, 0, SEEK_CUR);
     off_t second_offset = lseek(second, 0, SEEK_CUR);
     if (first_offset < 0 || second_offset < 0) return 0;
+    // Moving one descriptor can only identify a shared open file description when both views began at
+    // the same offset. Otherwise an independent descriptor may already sit at the probe value and appear
+    // to have followed the move. Besides producing a false identity, that collapses independent offsets
+    // and status flags onto one OFD during restore.
+    if (first_offset != second_offset) return 0;
     off_t probe = first_offset == 0 ? 1 : 0;
     if (lseek(first, probe, SEEK_SET) != probe) return 0;
     off_t observed = lseek(second, 0, SEEK_CUR);

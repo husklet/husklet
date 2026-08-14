@@ -28,11 +28,16 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
     parser
         .set_language(&tree_sitter_c::LANGUAGE.into())
         .map_err(|error| parse_error(path, error.to_string()))?;
-    let normalized = normalize_declared_macro_lines(source, &normalize_named_registers(&normalize_va_arg_types(&normalize_offsetof_designators(&normalize_computed_goto(
-        &normalize_gnu_attributes(&normalize_atomic_specifiers(&normalize_function_pointer_annotations(
-            &normalize_complex_macro(&source.replace("_Thread_local", "             ")),
+    let normalized = normalize_declared_macro_lines(
+        source,
+        &normalize_named_registers(&normalize_va_arg_types(&normalize_offsetof_designators(
+            &normalize_computed_goto(&normalize_gnu_attributes(&normalize_atomic_specifiers(
+                &normalize_function_pointer_annotations(&normalize_complex_macro(
+                    &source.replace("_Thread_local", "             "),
+                )),
+            ))),
         ))),
-    )))));
+    );
     let tree = parser
         .parse(&normalized, None)
         .ok_or_else(|| parse_error(path, "parser returned no syntax tree"))?;
@@ -84,7 +89,9 @@ fn normalize_named_registers(source: &str) -> String {
                 offset = start + spelling.len();
                 continue;
             }
-            let Some(close) = source[start..].find("\")").map(|close| start + close + 2) else { break };
+            let Some(close) = source[start..].find("\")").map(|close| start + close + 2) else {
+                break;
+            };
             normalized[start..close].fill(b' ');
             offset = close;
         }
@@ -97,10 +104,16 @@ fn normalize_va_arg_types(source: &str) -> String {
     let mut offset = 0;
     while let Some(relative) = source[offset..].find("va_arg(") {
         let start = offset + relative + "va_arg(".len();
-        let Some(comma) = source[start..].find(',').map(|comma| start + comma) else { break };
-        let Some(close) = source[comma..].find(')').map(|close| comma + close) else { break };
+        let Some(comma) = source[start..].find(',').map(|comma| start + comma) else {
+            break;
+        };
+        let Some(close) = source[comma..].find(')').map(|close| comma + close) else {
+            break;
+        };
         for byte in &mut normalized[comma + 1..close] {
-            if *byte == b'*' { *byte = b' '; }
+            if *byte == b'*' {
+                *byte = b' ';
+            }
         }
         offset = close + 1;
     }
@@ -112,10 +125,16 @@ fn normalize_offsetof_designators(source: &str) -> String {
     let mut offset = 0;
     while let Some(relative) = source[offset..].find("offsetof(") {
         let start = offset + relative + "offsetof(".len();
-        let Some(comma) = source[start..].find(',').map(|comma| start + comma) else { break };
-        let Some(close) = source[comma..].find(')').map(|close| comma + close) else { break };
+        let Some(comma) = source[start..].find(',').map(|comma| start + comma) else {
+            break;
+        };
+        let Some(close) = source[comma..].find(')').map(|close| comma + close) else {
+            break;
+        };
         for byte in &mut normalized[comma + 1..close] {
-            if *byte == b'.' { *byte = b'_'; }
+            if *byte == b'.' {
+                *byte = b'_';
+            }
         }
         offset = close + 1;
     }
@@ -282,9 +301,9 @@ fn declared_identifier_macro(node: tree_sitter::Node<'_>, source: &str) -> bool 
                 .and_then(|definition| definition.split_whitespace().next())
                 == Some(name)
         })
-        && node.parent().is_some_and(|parent| {
-            matches!(parent.kind(), "asm_statement" | "gnu_asm_expression" | "argument_list")
-        })
+        && node
+            .parent()
+            .is_some_and(|parent| matches!(parent.kind(), "asm_statement" | "gnu_asm_expression" | "argument_list"))
 }
 
 fn conditional_statement_directive(node: tree_sitter::Node<'_>, source: &str) -> bool {
@@ -391,10 +410,7 @@ fn va_arg_type_argument(mut node: tree_sitter::Node<'_>, source: &str) -> bool {
                 .child_by_field_name("function")
                 .and_then(|function| function.utf8_text(source.as_bytes()).ok())
                 == Some("va_arg")
-            && node
-                .utf8_text(source.as_bytes())
-                .ok()
-                .is_some_and(balanced_parentheses)
+            && node.utf8_text(source.as_bytes()).ok().is_some_and(balanced_parentheses)
         {
             return true;
         }
@@ -415,15 +431,17 @@ fn line_macro_invocation(node: tree_sitter::Node<'_>, source: &str) -> bool {
 }
 
 fn declared_macro_within(text: &str, source: &str) -> bool {
-    source.lines().filter_map(|line| {
-        let definition = line.trim_start().strip_prefix("#define")?.trim_start();
-        let open = definition.find('(')?;
-        identifier(definition[..open].trim()).then_some(definition[..open].trim())
-    }).any(|name| {
-        text.find(&format!("{name}(")).is_some_and(|start| {
-            has_balanced_parenthesized_prefix(&text[start + name.len()..])
+    source
+        .lines()
+        .filter_map(|line| {
+            let definition = line.trim_start().strip_prefix("#define")?.trim_start();
+            let open = definition.find('(')?;
+            identifier(definition[..open].trim()).then_some(definition[..open].trim())
         })
-    })
+        .any(|name| {
+            text.find(&format!("{name}("))
+                .is_some_and(|start| has_balanced_parenthesized_prefix(&text[start + name.len()..]))
+        })
 }
 
 fn has_balanced_parenthesized_prefix(text: &str) -> bool {
@@ -434,7 +452,9 @@ fn has_balanced_parenthesized_prefix(text: &str) -> bool {
             b')' => {
                 let Some(next) = depth.checked_sub(1) else { return false };
                 depth = next;
-                if depth == 0 { return true; }
+                if depth == 0 {
+                    return true;
+                }
             }
             _ => {}
         }

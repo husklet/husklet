@@ -41,9 +41,7 @@ static int svc_signalfd4(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, u
             sslot = g_sigfd_slot[(int)a0] - 1;
         }
         // sigset bit (signo-1) -> g_pending bit signo
-        uint64_t pm = 0;
-        for (int s = 1; s < 64; s++)
-            if (lm & (1ull << (s - 1))) pm |= (1ull << s);
+        uint64_t pm = lm;
         // Create: allocate an INDEPENDENT OFD (its own self-pipe + mask). The read end is the guest's signalfd;
         // the write end is engine-private (relocated out of the guest's low fd range, poked on delivery).
         if (sslot < 0) {
@@ -71,9 +69,10 @@ static int svc_signalfd4(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, u
         // Linux signalfd(fd != -1, mask): UPDATE replaces this OFD's mask EXACTLY (a narrowed mask drops the
         // signals it removed). A fresh create sets the new OFD's mask. Masks never cross between OFDs.
         g_sfd[sslot].mask = pm;
-        for (int s = 1; s < 64; s++)
+        sfd_refresh_slot(sslot);
+        for (int s = 1; s <= 64; s++)
             // make sure the host delivers them
-            if ((pm & (1ull << s)) && !sig_is_sync(s) && !sig_host_is_engine_control(sig_l2m(s))) {
+            if ((pm & (UINT64_C(1) << (s - 1))) && !sig_is_sync(s) && !sig_host_is_engine_control(sig_l2m(s))) {
                 struct sigaction sa;
                 memset(&sa, 0, sizeof sa);
                 sa.sa_handler = host_sigh;

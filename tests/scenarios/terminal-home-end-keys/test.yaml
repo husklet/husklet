@@ -1,0 +1,27 @@
+cases:
+- id: terminal-home-end-keys/readline-physical-line-boundaries
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "printf '<%s>\\n' \"$VAR\"" }
+      - write: { text: "\u001b[H" }
+      - write: { text: "VAR=ALPHA; " }
+      - write: { text: "\u001b[F" }
+      - write: { text: "; printf '<END-OK>\\n'\r" }
+      - await_output: { contains: "<ALPHA>", timeout_ms: 5000 }
+      - await_output: { contains: "<END-OK>", timeout_ms: 5000 }
+      - write: { text: "printf 'SHELL-OK\\n'; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/home.txt
+    - golden/end.txt
+    - golden/shell_ok.txt

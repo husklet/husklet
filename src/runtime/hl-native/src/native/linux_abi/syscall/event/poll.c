@@ -8,6 +8,7 @@ static int svc_pselect6(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // The Linux/macOS fd_set byte-layout is identical (bit N at byte N/8), so pass the sets through.
         int have_to = a4 != 0;
         fd_set read_set, write_set, except_set;
+        fd_set read_requested, write_requested, except_requested;
         fd_set *read_host = NULL, *write_host = NULL, *except_host = NULL;
         struct timespec timeout_value;
         // EFAULT on any inaccessible fd_set / timeout pointer -- incl. a PROT_NONE guard page (LTP's
@@ -25,6 +26,9 @@ static int svc_pselect6(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         if (a1) read_host = &read_set;
         if (a2) write_host = &write_set;
         if (a3) except_host = &except_set;
+        if (a1) read_requested = read_set;
+        if (a2) write_requested = write_set;
+        if (a3) except_requested = except_set;
         // Linux rejects an out-of-range timeout nanoseconds field (tv_nsec < 0 or >= 1e9) with EINVAL
         // before waiting; hl must not treat it as a normal timeout and hide the caller bug.
         if (have_to) {
@@ -89,9 +93,20 @@ static int svc_pselect6(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
                 rem.tv_nsec = (long)(ns % 1000000000LL);
                 tsp = &rem;
             }
+            // pselect mutates its sets. Rebuild them before every retry, then
+            // merge per-thread signalfd readiness into the host result.
+            fd_set sfd_read;
+            FD_ZERO(&sfd_read);
+            int sfd_pre = a1 ? sfd_select_apply_for_cpu((int)a0, &read_requested, &sfd_read, c) : 0;
+            if (a1) read_set = read_requested;
+            if (a2) write_set = write_requested;
+            if (a3) except_set = except_requested;
             ts_wait_enter();
-            r = pselect((int)a0, read_host, write_host, except_host, tsp, NULL);
+            struct timespec immediate = {0, 0};
+            r = pselect((int)a0, read_host, write_host, except_host, sfd_pre > 0 ? &immediate : tsp, NULL);
             ts_wait_leave(); // S while blocked (glibc pause on aarch64 lands in ppoll below; select here)
+            if (r < 0 && errno == EINTR && sfd_any_ready_for_cpu(c)) r = 0;
+            if (r >= 0 && a1) r += sfd_select_apply_for_cpu((int)a0, &read_requested, &read_set, c);
             // pselect is never restarted by a handler; loop only on a spurious EINTR (svc_poll_retry),
             // and then only for the time that remains (recomputed above), never the full budget again.
             if (r < 0 && svc_poll_retry(c)) continue;
@@ -196,6 +211,7 @@ static int svc_ppoll(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         int sm_on = poll_sigmask_enter(c, have_mask, sm_set, &sm_saved);
         int r;
         for (;;) {
+            int signalfd_ready = sfd_poll_apply_for_cpu(fds, (nfds_t)a1, c);
             r = socket_poll_error_fixup(fds, (nfds_t)a1, 0);
             if (r > 0) break;
             struct timespec rem = {0, 0};
@@ -216,7 +232,8 @@ static int svc_ppoll(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             // a scheduler quantum on every call; repeated timer waits were
             // consequently preempted for about 8ms and became much less
             // accurate than the host ppoll they were trying to improve.
-            r = ppoll(fds, (nfds_t)a1, have_to ? &rem : NULL, NULL);
+            struct timespec immediate = {0, 0};
+            r = ppoll(fds, (nfds_t)a1, signalfd_ready > 0 ? &immediate : have_to ? &rem : NULL, NULL);
 #else
             // poll(2) only accepts milliseconds. Round UP so a finite wait
             // never returns before its Linux ppoll deadline.
@@ -226,10 +243,12 @@ static int svc_ppoll(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
                 int64_t ms = (ns + 999999LL) / 1000000LL;
                 tmo = ms > 0x7fffffff ? 0x7fffffff : (int)ms;
             }
-            r = poll(fds, (nfds_t)a1, tmo);
+            r = poll(fds, (nfds_t)a1, signalfd_ready > 0 ? 0 : tmo);
 #endif
             ts_wait_leave(); // S while blocked (glibc pause on aarch64 -> ppoll)
+            if (r < 0 && errno == EINTR && sfd_any_ready_for_cpu(c)) r = 0;
             r = socket_poll_error_fixup(fds, (nfds_t)a1, r);
+            if (r >= 0) r += sfd_poll_apply_for_cpu(fds, (nfds_t)a1, c);
             if (r == 0 && have_to) {
                 struct timespec now;
                 hl_production_clock_gettime(effective_host_services(), HL_PRODUCTION_CLOCK_MONOTONIC, &now);

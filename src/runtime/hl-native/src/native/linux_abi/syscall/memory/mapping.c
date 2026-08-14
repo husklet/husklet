@@ -41,12 +41,19 @@
                 break;
             }
         }
+        size_t hp = hl_linux_host_map_granularity();
+        int coarse_partial = hp > guest_pagesz() && ((a0 & (hp - 1)) || (a1 & (hp - 1)));
         int logical_mapping_prepared = 0;
         int logical_transition_locked = 0;
-        if (jit_guest_soft_active()) {
+        if (jit_guest_soft_active() || coarse_partial) {
             gbus_mapping_transition_lock();
             logical_transition_locked = 1;
-            if (hl_logical_vma_global_overlap(a0, a1)) {
+            if (coarse_partial && !jit_guest_soft_active() && !jit_guest_soft_activate()) {
+                gbus_mapping_transition_unlock();
+                G_RET(c) = (uint64_t)(int64_t)-ENOMEM;
+                break;
+            }
+            if (coarse_partial || hl_logical_vma_global_overlap(a0, a1)) {
                 gbus_mapping_stw_begin();
                 logical_mapping_prepared = 1;
             }
@@ -87,7 +94,6 @@
         //     aborts on CHECK(0 == munmap)). So release only the whole HOST pages lying ENTIRELY inside
         //     [a0, a0+len); the partial edge pages stay mapped. The guest's logical unmap still succeeds
         //     (return 0) -- matching Linux, which never faults an unmap of a partial/already-unmapped range.
-        size_t hp = hl_linux_host_map_granularity();
         uint64_t physical_address = 0, physical_length = 0;
         int has_physical = hl_gmap_find_physical(a0, &physical_address, &physical_length);
         int complete = full != 0 && guest_length == (uint64_t)a1 &&
@@ -127,8 +133,23 @@
             // neighbour is NOT released above -> not marked here -> stays readable. That mixed-page case needs
             // per-4 KB software fault checks the JIT deliberately avoids; the common aligned/whole-page case is
             // now correct.)
-            gna_add(u_lo, u_hi);
-            gnx_add(u_lo, u_hi);
+            gna_add(coarse_partial ? a0 : u_lo, coarse_partial ? a0 + a1 : u_hi);
+            gnx_add(coarse_partial ? a0 : u_lo, coarse_partial ? a0 + a1 : u_hi);
+        } else if (r == 0 && coarse_partial) {
+            // Darwin cannot release a 4 KB guest subpage from a 16 KB host page without also
+            // removing a live neighbour. Soft-memory translations make the logical hole precise:
+            // retain the host page as backing, but reject guest accesses until a later mmap clears
+            // this range. The mapping transaction above has already rotated all guest threads away
+            // from unguarded translations before this interval is published.
+            gna_add(a0, a0 + a1);
+            gnx_add(a0, a0 + a1);
+            hl_gmap_unmap_range(a0, a0 + a1);
+            anon_split_unmap(a0, a0 + a1);
+            filemap_unmap(a0, a0 + a1);
+            futex_shared_unmap(a0, a0 + a1);
+            wipefork_del(a0, a1);
+            dontfork_del(a0, a1);
+            hl_gmap_lock_remove(a0, a1);
         }
         if (r == 0 && g_mem_max) {
             // uncharge (clamp >=0)

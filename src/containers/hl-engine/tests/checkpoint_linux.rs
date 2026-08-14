@@ -42,6 +42,34 @@ fn fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     output
 }
 
+fn signalfd_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    let (variable, compiler, name) = match isa {
+        GuestIsa::Aarch64 => (
+            "HL_CHECKPOINT_SIGNALFD_AARCH64",
+            "aarch64-linux-gnu-gcc",
+            "checkpoint-signalfd-aarch64",
+        ),
+        GuestIsa::X86_64 => (
+            "HL_CHECKPOINT_SIGNALFD_X86_64",
+            "x86_64-linux-gnu-gcc",
+            "checkpoint-signalfd-x86_64",
+        ),
+    };
+    if let Some(path) = std::env::var_os(variable) {
+        return PathBuf::from(path);
+    }
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/checkpoint_signalfd.c");
+    let output = directory.join(name);
+    let status = std::process::Command::new(compiler)
+        .args(["-static", "-O2", "-pthread", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
+    assert!(status.success(), "{compiler} failed with {status}");
+    output
+}
+
 #[derive(Default)]
 struct Store(Mutex<BTreeMap<String, Vec<u8>>>);
 
@@ -57,6 +85,20 @@ impl CheckpointSink for Store {
 
     fn commit(&self, manifest: &[u8]) -> Result<(), CompositionError> {
         self.put("MANIFEST", manifest)
+    }
+
+    fn put_until(&self, name: &str, bytes: &[u8], deadline: Instant) -> Result<(), CompositionError> {
+        (Instant::now() < deadline)
+            .then_some(())
+            .ok_or(CompositionError::DeadlineExceeded)?;
+        self.put(name, bytes)
+    }
+
+    fn commit_until(&self, manifest: &[u8], deadline: Instant) -> Result<(), CompositionError> {
+        (Instant::now() < deadline)
+            .then_some(())
+            .ok_or(CompositionError::DeadlineExceeded)?;
+        self.commit(manifest)
     }
 }
 
@@ -77,18 +119,64 @@ impl CheckpointSource for Store {
     fn list(&self) -> Result<Vec<String>, CompositionError> {
         Ok(self.0.lock().unwrap().keys().cloned().collect())
     }
+
+    fn get_until(&self, name: &str, deadline: Instant) -> Result<Vec<u8>, CompositionError> {
+        (Instant::now() < deadline)
+            .then_some(())
+            .ok_or(CompositionError::DeadlineExceeded)?;
+        self.get(name)
+    }
+
+    fn list_until(&self, deadline: Instant) -> Result<Vec<String>, CompositionError> {
+        (Instant::now() < deadline)
+            .then_some(())
+            .ok_or(CompositionError::DeadlineExceeded)?;
+        self.list()
+    }
 }
 
-fn plan(executable: &Path, release: &Path, option: &str) -> RuntimePlan {
+fn assert_transient_signalfd_slots_absent(store: &Store) {
+    const SIGNALS: usize = 65;
+    const DEPTH: usize = 128;
+    const ENTRY_SIZE: usize = 48;
+    const SLOT_OFFSET: usize = 40;
+    const COUNTS_OFFSET: usize = 24 + 4 * SIGNALS * 4;
+    const QUEUE_OFFSET: usize = 2368;
+    let image = store.0.lock().unwrap();
+    let (_, bytes) = image
+        .iter()
+        .find(|(name, _)| name.ends_with("/signals"))
+        .expect("checkpoint did not publish a signal-state object");
+    assert!(bytes.len() >= QUEUE_OFFSET + SIGNALS * DEPTH * ENTRY_SIZE);
+    for signal in 1..SIGNALS {
+        let count_offset = COUNTS_OFFSET + signal * 4;
+        let count = u32::from_ne_bytes(bytes[count_offset..count_offset + 4].try_into().unwrap()) as usize;
+        assert!(count <= DEPTH, "invalid signal {signal} queue count {count}");
+        for index in 0..count {
+            let offset = QUEUE_OFFSET + (signal * DEPTH + index) * ENTRY_SIZE + SLOT_OFFSET;
+            let slots = u64::from_ne_bytes(bytes[offset..offset + 8].try_into().unwrap());
+            assert_eq!(
+                slots, 0,
+                "signal {signal} queue entry {index} serialized transient slots"
+            );
+        }
+    }
+}
+
+fn plan(executable: &Path, release: &Path, final_release: &Path, options_to_set: &[&str]) -> RuntimePlan {
     let mut options = Options::default();
-    options.set(option, "1", true).unwrap();
+    for option in options_to_set {
+        options.set(option, "1", true).unwrap();
+    }
     RuntimePlan {
         rootfs: None,
         executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
-        arguments: vec![
+        arguments: [
             executable.as_os_str().as_encoded_bytes().to_vec(),
             release.as_os_str().as_encoded_bytes().to_vec(),
-        ],
+            final_release.as_os_str().as_encoded_bytes().to_vec(),
+        ]
+        .into(),
         environment: Vec::new(),
         result_path: None,
         options,
@@ -110,15 +198,31 @@ fn wait_ready(path: &Path) {
     panic!("guest process tree did not become ready");
 }
 
+fn wait_cycle_ready(path: &Path) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let output = std::fs::read_to_string(path).unwrap_or_default();
+        if ["CYCLE-READY 1", "CYCLE-READY 2", "CYCLE-READY 3"]
+            .iter()
+            .all(|marker| output.contains(marker))
+        {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    false
+}
+
 fn checkpoint_round_trip(isa: GuestIsa, executable: &Path) {
     let temporary = tempfile::tempdir().unwrap();
     let release = temporary.path().join("release");
+    let final_release = temporary.path().join("final-release");
     let output = temporary.path().join("release.output");
     let store = Arc::new(Store::default());
 
     let capture = Engine::with_checkpoint(
         isa,
-        plan(executable, &release, "HL_CHECKPOINT"),
+        plan(executable, &release, &final_release, &["HL_CHECKPOINT"]),
         StandardStreams::default(),
         store.clone(),
         store.clone(),
@@ -141,16 +245,71 @@ fn checkpoint_round_trip(isa: GuestIsa, executable: &Path) {
     }
 
     std::fs::write(&release, []).unwrap();
-    let restore = Engine::with_checkpoint(
+    let failed_restore = Engine::with_checkpoint(
         isa,
-        plan(executable, &release, "HL_RESTORE"),
+        plan(
+            executable,
+            &release,
+            &final_release,
+            &["HL_RESTORE", "HL_CKPT_TEST_FAIL_AFTER_FORK"],
+        ),
         StandardStreams::default(),
         store.clone(),
-        store,
+        store.clone(),
+    )
+    .unwrap();
+    failed_restore.start().unwrap();
+    assert!(matches!(
+        failed_restore.wait(),
+        Err(hl_engine::engine::EngineError::NativeCreateFailed(_))
+    ));
+    std::thread::sleep(Duration::from_millis(100));
+    let failed_output = std::fs::read_to_string(&output).unwrap();
+    assert!(
+        !failed_output.contains("CYCLE-READY"),
+        "a descendant ran after restore rollback:\n{failed_output}"
+    );
+
+    let second_store = Arc::new(Store::default());
+    let recapture = Engine::with_checkpoint(
+        isa,
+        plan(executable, &release, &final_release, &["HL_RESTORE", "HL_CHECKPOINT"]),
+        StandardStreams::default(),
+        second_store.clone(),
+        store.clone(),
+    )
+    .unwrap();
+    recapture.start().unwrap();
+    assert!(
+        wait_cycle_ready(&output),
+        "restored guest process tree did not reach the second checkpoint; status={:?}:\n{}",
+        recapture.wait(),
+        std::fs::read_to_string(&output).unwrap_or_default()
+    );
+    recapture.capture_checkpoint().unwrap_or_else(|error| {
+        panic!(
+            "second checkpoint failed: {error:?}\n{}",
+            std::fs::read_to_string(&output).unwrap_or_default()
+        )
+    });
+    assert_eq!(recapture.wait().unwrap().guest_status, 0);
+
+    std::fs::write(&final_release, []).unwrap();
+    let restore = Engine::with_checkpoint(
+        isa,
+        plan(executable, &release, &final_release, &["HL_RESTORE"]),
+        StandardStreams::default(),
+        second_store.clone(),
+        second_store,
     )
     .unwrap();
     restore.start().unwrap();
-    assert_eq!(restore.wait().unwrap().guest_status, 0);
+    assert_eq!(
+        restore.wait().unwrap().guest_status,
+        0,
+        "{}",
+        std::fs::read_to_string(&output).unwrap_or_default()
+    );
     let output = std::fs::read_to_string(output).unwrap();
     assert!(output.contains("RESTORED 1"));
     assert!(output.contains("RESTORED 2"));
@@ -169,5 +328,106 @@ fn retained_c_round_trips_three_process_tree_on_both_isas() {
             executable.display()
         );
         checkpoint_round_trip(isa, &executable);
+    }
+}
+
+#[test]
+fn signalfd_readiness_and_signal64_defer_survive_two_generations_on_both_isas() {
+    let fixtures = tempfile::tempdir().unwrap();
+    for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
+        let executable = signalfd_fixture(isa, fixtures.path());
+        let temporary = tempfile::tempdir().unwrap();
+        let release = temporary.path().join("release");
+        let final_release = temporary.path().join("final-release");
+        let output = temporary.path().join("release.output");
+        let first = Arc::new(Store::default());
+        let capture = Engine::with_checkpoint(
+            isa,
+            plan(&executable, &release, &final_release, &["HL_CHECKPOINT"]),
+            StandardStreams::default(),
+            first.clone(),
+            first.clone(),
+        )
+        .unwrap();
+        capture.start().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline
+            && !std::fs::read_to_string(&output)
+                .unwrap_or_default()
+                .contains("READY targeted_wrong_read=1 targeted_wrong_ready=1")
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let before_capture = std::fs::read_to_string(&output).unwrap_or_default();
+        assert!(
+            before_capture.contains("READY targeted_wrong_read=1 targeted_wrong_ready=1"),
+            "guest did not reach decisive first checkpoint state: {before_capture}"
+        );
+        capture.capture_checkpoint().unwrap();
+        assert_transient_signalfd_slots_absent(&first);
+        let capture_result = capture.wait();
+        assert!(
+            matches!(&capture_result, Ok(result) if result.guest_status == 0),
+            "first capture failed: {capture_result:?}: {}",
+            std::fs::read_to_string(&output).unwrap_or_default()
+        );
+
+        std::fs::write(&release, []).unwrap();
+        let second = Arc::new(Store::default());
+        let recapture = Engine::with_checkpoint(
+            isa,
+            plan(&executable, &release, &final_release, &["HL_RESTORE", "HL_CHECKPOINT"]),
+            StandardStreams::default(),
+            second.clone(),
+            first,
+        )
+        .unwrap();
+        recapture.start().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline
+            && !std::fs::read_to_string(&output)
+                .unwrap_or_default()
+                .contains("CYCLE-READY")
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let before_recapture = std::fs::read_to_string(&output).unwrap_or_default();
+        assert!(
+            before_recapture.contains("CYCLE-READY"),
+            "guest did not enter parked signal handler: {before_recapture}"
+        );
+        recapture.capture_checkpoint().unwrap();
+        assert_transient_signalfd_slots_absent(&second);
+        let recapture_result = recapture.wait();
+        assert!(
+            matches!(&recapture_result, Ok(result) if result.guest_status == 0),
+            "second capture failed: {recapture_result:?}: {}",
+            std::fs::read_to_string(&output).unwrap_or_default()
+        );
+
+        std::fs::write(&final_release, []).unwrap();
+        assert!(final_release.is_file(), "final release marker was not published");
+        let restore = Engine::with_checkpoint(
+            isa,
+            plan(&executable, &release, &final_release, &["HL_RESTORE"]),
+            StandardStreams::default(),
+            second.clone(),
+            second,
+        )
+        .unwrap();
+        restore.start().unwrap();
+        assert_eq!(
+            restore.wait().unwrap().guest_status,
+            0,
+            "{}",
+            std::fs::read_to_string(&output).unwrap_or_default()
+        );
+        let observed = std::fs::read_to_string(&output).unwrap();
+        assert!(
+            observed.contains("READY targeted_wrong_read=1 targeted_wrong_ready=1"),
+            "{observed}"
+        );
+        assert!(observed.contains("TARGETED-RESTORED"), "{observed}");
+        assert!(observed.contains("DEFER-RESTORED seen=1 nested=1"), "{observed}");
     }
 }

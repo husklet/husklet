@@ -35,7 +35,7 @@ HL_EXTERN_C_BEGIN
 #define HL_CKPT_STREAM_MAGIC_HELLO UINT32_C(0x484b4348)   /* "HKCH" */
 #define HL_CKPT_STREAM_MAGIC_REQUEST UINT32_C(0x484b4351) /* "HKCQ" */
 #define HL_CKPT_STREAM_MAGIC_REPLY UINT32_C(0x484b4353)   /* "HKCS" */
-#define HL_CKPT_STREAM_ABI 1u
+#define HL_CKPT_STREAM_ABI 2u
 
 /* Largest object name the protocol will carry, and the largest payload in a single request. Both are
  * enforced on both sides; a hostile or corrupt peer can never make the other end allocate without bound. */
@@ -64,7 +64,8 @@ typedef enum hl_ckpt_stream_op {
     /* --- source (restore) --- */
     HL_CKPT_OP_SOURCE_LIST = 16, /* name = prefix -> payload = NUL-terminated names, value = count */
     HL_CKPT_OP_SOURCE_SIZE = 17, /* name -> value = size, status 1 when absent */
-    HL_CKPT_OP_SOURCE_READ = 18  /* name, offset, length -> payload (short read at end of object) */
+    HL_CKPT_OP_SOURCE_READ = 18, /* name, offset, length -> payload (short read at end of object) */
+    HL_CKPT_OP_RECOVERY_COMPLETE = 19 /* restore is complete; release its publication authority */
 } hl_ckpt_stream_op;
 
 /* Announces one engine process on the broker. Carries exactly one descriptor: that process's channel. */
@@ -83,7 +84,7 @@ typedef struct hl_ckpt_request {
     uint64_t offset;    /* WRITE_AT / SOURCE_READ */
     uint64_t length;    /* payload bytes following the name, or requested read length */
     uint32_t name_size; /* including the terminating NUL; 0 when the op takes no name */
-    uint32_t reserved;
+    uint32_t generation; /* shared trigger generation; 0 for restore-only traffic */
 } hl_ckpt_request;
 
 #define HL_CKPT_STATUS_OK 0

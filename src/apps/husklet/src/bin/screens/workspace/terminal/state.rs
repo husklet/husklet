@@ -31,6 +31,9 @@ impl CopyMode {
     /// Handle a plain (unmodified/Ctrl) key while in copy mode. Returns true if the key was consumed
     /// (copy mode swallows all keys so nothing leaks into the shell).
     pub(crate) fn key(&self, tw: &Rc<TermWin>, key: gdk::Key, state: gdk::ModifierType) -> bool {
+        if is_window_shortcut(state) {
+            return false;
+        }
         let Some(t) = tw.focused.borrow().clone() else {
             self.exit(None);
             return true;
@@ -76,6 +79,39 @@ impl CopyMode {
             _ => {}
         }
         true
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn is_window_shortcut(state: gdk::ModifierType) -> bool {
+    state.contains(gdk::ModifierType::META_MASK)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_window_shortcut(state: gdk::ModifierType) -> bool {
+    state.contains(gdk::ModifierType::CONTROL_MASK) && state.contains(gdk::ModifierType::SHIFT_MASK)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_window_shortcut;
+    use gtk::gdk;
+
+    #[test]
+    fn copy_mode_leaves_window_shortcuts_for_the_window_dispatcher() {
+        #[cfg(target_os = "macos")]
+        {
+            assert!(is_window_shortcut(gdk::ModifierType::META_MASK));
+            assert!(!is_window_shortcut(gdk::ModifierType::CONTROL_MASK));
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert!(is_window_shortcut(
+                gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::SHIFT_MASK
+            ));
+            assert!(!is_window_shortcut(gdk::ModifierType::CONTROL_MASK));
+            assert!(!is_window_shortcut(gdk::ModifierType::SHIFT_MASK));
+        }
     }
 }
 

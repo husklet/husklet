@@ -1,8 +1,8 @@
 #![allow(unsafe_code)]
 
-use crate::composition::{
-    CheckpointSink, CheckpointSource, CompositionError, GuestMachine, RuntimeConstruction, RuntimeFactory,
-};
+#[cfg(unix)]
+use crate::composition::{CheckpointSink, CheckpointSource};
+use crate::composition::{CompositionError, GuestMachine, RuntimeConstruction, RuntimeFactory};
 use crate::engine::{EngineError, EngineExit, ExitKind, StopRequest};
 use std::ffi::CString;
 use std::sync::{Arc, Mutex};
@@ -18,6 +18,7 @@ use super::terminal::NativeTerminalBridge;
 const REQUEST_INTERRUPT: u32 = 1;
 const REQUEST_FORCE_STOP: u32 = 2;
 const REQUEST_SIGNAL: u32 = 3;
+#[cfg(unix)]
 const REQUEST_CHECKPOINT: u32 = 4;
 
 pub(crate) struct ProductionMachine {
@@ -29,6 +30,8 @@ pub(crate) struct ProductionMachine {
     output: Option<NativeOutputBridge>,
     #[cfg(unix)]
     checkpoint: Option<CheckpointControl>,
+    #[cfg(unix)]
+    recovery: Mutex<Option<RecoveryAdmission>>,
     engine: Mutex<Option<Arc<hl_native::Engine>>>,
 }
 
@@ -74,6 +77,8 @@ impl RuntimeFactory for ProductionFactory {
             output,
             #[cfg(unix)]
             checkpoint,
+            #[cfg(unix)]
+            recovery: Mutex::new(None),
             engine: Mutex::new(None),
         })
     }
@@ -150,7 +155,7 @@ impl ProductionMachine {
             provider_fd: -1,
         };
         // SAFETY: all pointers in config remain live for this call and there is no callback state.
-        let engine = unsafe { hl_native::Engine::create(config) }.map_err(|_| EngineError::LaunchFailed)?;
+        let mut engine = unsafe { hl_native::Engine::create(config) }.map_err(EngineError::NativeCreateFailed)?;
         #[cfg(unix)]
         if let Some(checkpoint) = &self.checkpoint {
             engine
@@ -196,6 +201,16 @@ fn encode_environment_record(encoded: &mut Vec<u8>, record: &[u8]) {
 
 impl GuestMachine for ProductionMachine {
     fn start(&self) -> Result<(), EngineError> {
+        #[cfg(unix)]
+        let recovery = if self.plan.options.get_bytes("HL_RESTORE").is_some() {
+            let checkpoint = self.checkpoint.as_ref().ok_or(EngineError::LaunchFailed)?;
+            Some(
+                checkpoint
+                    .begin_recovery(std::time::Instant::now() + crate::composition::DEFAULT_CHECKPOINT_TIMEOUT)?,
+            )
+        } else {
+            None
+        };
         let engine = Arc::new(self.create()?);
         *self.engine.lock().map_err(|_| EngineError::Synchronization)? = Some(Arc::clone(&engine));
         let arguments = self
@@ -205,7 +220,16 @@ impl GuestMachine for ProductionMachine {
             .map(|argument| CString::new(argument.as_slice()).map_err(|_| EngineError::LaunchFailed))
             .collect::<Result<Vec<_>, _>>()?;
         let pointers = arguments.iter().map(|argument| argument.as_ptr()).collect::<Vec<_>>();
-        engine.run(&pointers).map_err(|_| EngineError::LaunchFailed)?;
+        let run = engine.run(&pointers).map_err(native_run_failure);
+        run?;
+        #[cfg(unix)]
+        if let Some(recovery) = recovery {
+            *self.recovery.lock().map_err(|_| EngineError::Synchronization)? = Some(recovery);
+        }
+        #[cfg(unix)]
+        if let Some(terminal) = &self.terminal {
+            terminal.flush();
+        }
         #[cfg(unix)]
         if let Some(output) = &self.output {
             output.flush();
@@ -238,13 +262,21 @@ impl GuestMachine for ProductionMachine {
     }
 
     fn capture_checkpoint(&self) -> Result<(), EngineError> {
+        self.capture_checkpoint_until(std::time::Instant::now() + crate::composition::DEFAULT_CHECKPOINT_TIMEOUT)
+    }
+
+    fn capture_checkpoint_until(&self, deadline: std::time::Instant) -> Result<(), EngineError> {
         #[cfg(unix)]
         if let Some(checkpoint) = &self.checkpoint {
             let engine = self.current()?;
-            return checkpoint.capture(engine.as_ref(), self.isa);
+            return checkpoint.capture(engine.as_ref(), self.isa, deadline);
         }
         Err(EngineError::Unsupported)
     }
+}
+
+fn native_run_failure(status: i32) -> EngineError {
+    EngineError::NativeRunFailed(status)
 }
 
 #[cfg(unix)]
@@ -268,34 +300,93 @@ impl CheckpointControl {
         })
     }
 
-    fn capture(&self, engine: &hl_native::Engine, isa: crate::activation::GuestIsa) -> Result<(), EngineError> {
+    fn capture(
+        &self,
+        engine: &hl_native::Engine,
+        isa: crate::activation::GuestIsa,
+        deadline: std::time::Instant,
+    ) -> Result<(), EngineError> {
         use std::time::{Duration, Instant};
 
-        let _ = self.transport.bump();
+        if Instant::now() >= deadline {
+            return Err(EngineError::WaitFailed);
+        }
+        let generation = self.transport.bump();
+        let capture = self
+            .server
+            .begin_capture(generation, deadline)
+            .map_err(|failure| match failure {
+                super::checkpoint::CaptureFailure::Busy => EngineError::Busy,
+                super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
+                super::checkpoint::CaptureFailure::Failed | super::checkpoint::CaptureFailure::Poisoned => {
+                    EngineError::LaunchFailed
+                }
+            })?;
         let signal = hl_native::CheckpointTransport::interrupt_signal(match isa {
             crate::activation::GuestIsa::Aarch64 => 1,
             crate::activation::GuestIsa::X86_64 => 2,
         });
         if signal <= 0 || engine.request(REQUEST_CHECKPOINT, 0).is_err() {
+            self.server
+                .abort_capture(capture)
+                .map_err(|_| EngineError::LaunchFailed)?;
             return Err(EngineError::StopFailed);
         }
-        let deadline = Instant::now() + Duration::from_secs(30);
         let mut next_interrupt = Instant::now() + Duration::from_millis(100);
         loop {
-            if self.server.committed() {
-                return Ok(());
-            }
-            if self.server.failure().is_some() {
-                return Err(EngineError::LaunchFailed);
-            }
-            if Instant::now() >= deadline {
-                return Err(EngineError::WaitFailed);
+            let result = self
+                .server
+                .wait_capture(capture, next_interrupt)
+                .map_err(|_| EngineError::LaunchFailed)?;
+            if let Some(result) = result {
+                return result.map_err(|failure| match failure {
+                    super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
+                    super::checkpoint::CaptureFailure::Busy => EngineError::Busy,
+                    super::checkpoint::CaptureFailure::Failed | super::checkpoint::CaptureFailure::Poisoned => {
+                        EngineError::LaunchFailed
+                    }
+                });
             }
             if Instant::now() >= next_interrupt {
                 let _ = engine.request(REQUEST_CHECKPOINT, 0);
                 next_interrupt = Instant::now() + Duration::from_millis(100);
             }
-            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    fn begin_recovery(&self, deadline: std::time::Instant) -> Result<RecoveryAdmission, EngineError> {
+        let generation = self.transport.bump();
+        let id = self
+            .server
+            .begin_recovery(generation, deadline)
+            .map_err(capture_failure)?;
+        Ok(RecoveryAdmission {
+            server: Arc::clone(&self.server),
+            id,
+        })
+    }
+}
+
+#[cfg(unix)]
+struct RecoveryAdmission {
+    server: Arc<Server>,
+    id: u64,
+}
+
+#[cfg(unix)]
+impl Drop for RecoveryAdmission {
+    fn drop(&mut self) {
+        let _ = self.server.abort_recovery(self.id);
+    }
+}
+
+#[cfg(unix)]
+fn capture_failure(failure: super::checkpoint::CaptureFailure) -> EngineError {
+    match failure {
+        super::checkpoint::CaptureFailure::Busy => EngineError::Busy,
+        super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
+        super::checkpoint::CaptureFailure::Failed | super::checkpoint::CaptureFailure::Poisoned => {
+            EngineError::LaunchFailed
         }
     }
 }
@@ -307,5 +398,72 @@ impl Drop for CheckpointControl {
         if let Some(acceptor) = self.acceptor.take() {
             let _ = acceptor.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    struct EmptyCheckpointStore;
+
+    #[cfg(unix)]
+    impl crate::composition::CheckpointSink for EmptyCheckpointStore {
+        fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
+            Err(CompositionError::RuntimeConstruction)
+        }
+
+        fn put_until(&self, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+            Err(CompositionError::RuntimeConstruction)
+        }
+
+        fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+            Err(CompositionError::RuntimeConstruction)
+        }
+    }
+
+    #[cfg(unix)]
+    impl crate::composition::CheckpointSource for EmptyCheckpointStore {
+        fn read(&self, _: usize) -> Result<Vec<u8>, CompositionError> {
+            Err(CompositionError::RuntimeConstruction)
+        }
+
+        fn get_until(&self, _: &str, _: std::time::Instant) -> Result<Vec<u8>, CompositionError> {
+            Err(CompositionError::RuntimeConstruction)
+        }
+
+        fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
+            Err(CompositionError::RuntimeConstruction)
+        }
+    }
+
+    #[test]
+    fn native_run_status_survives_the_engine_boundary() {
+        assert_eq!(native_run_failure(13), EngineError::NativeRunFailed(13));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dropped_recovery_admission_releases_scope_and_rejects_stale_id() {
+        let store = Arc::new(EmptyCheckpointStore);
+        let server = Arc::new(Server::new(store.clone(), store));
+        let first = server
+            .begin_recovery(11, std::time::Instant::now() + std::time::Duration::from_secs(1))
+            .unwrap();
+        {
+            let _admission = RecoveryAdmission {
+                server: Arc::clone(&server),
+                id: first,
+            };
+        }
+        let second = server
+            .begin_recovery(12, std::time::Instant::now() + std::time::Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            server.abort_recovery(first),
+            Err(super::super::checkpoint::CaptureFailure::Busy)
+        );
+        server.abort_recovery(second).unwrap();
     }
 }

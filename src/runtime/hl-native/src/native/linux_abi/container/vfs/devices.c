@@ -155,6 +155,10 @@ static int devpts_slave_stat(int n, struct stat *s) {
     return ok && S_ISCHR(s->st_mode);
 }
 
+static int dev_node_is_ptmx(const char *gp) {
+    return gp && (!strcmp(gp, "/dev/ptmx") || !strcmp(gp, "/dev/pts/ptmx"));
+}
+
 static const char *dev_node_hostpath(const char *gp) {
     if (!gp) return NULL;
     return !strcmp(gp, "/dev/null")      ? "/dev/null"
@@ -164,8 +168,7 @@ static const char *dev_node_hostpath(const char *gp) {
            : !strcmp(gp, "/dev/urandom") ? "/dev/urandom"
            : !strcmp(gp, "/dev/tty")     ? "/dev/tty"
            : !strcmp(gp, "/dev/console") ? "/dev/null" // no host console in the jail -> back it with /dev/null
-           : !strcmp(gp, "/dev/ptmx") || !strcmp(gp, "/dev/pts/ptmx")
-               ? "/dev/ptmx" // both Linux spellings name the same devpts multiplexer
+           : dev_node_is_ptmx(gp) ? "/dev/ptmx" // both Linux spellings name the same devpts multiplexer
                                          : NULL;
 }
 
@@ -717,6 +720,17 @@ static int synth_proc_file_stat(const char *gp, struct stat *s) {
 
 static int synth_stat_raw(const char *gp, struct stat *s) {
     if (!gp) return 0;
+    size_t length = strlen(gp);
+    if (length > 1 && gp[length - 1] == '/') {
+        char canonical[4200];
+        if (length >= sizeof canonical) return 0;
+        memcpy(canonical, gp, length + 1);
+        while (length > 1 && canonical[length - 1] == '/') {
+            canonical[--length] = 0;
+        }
+        int result = synth_stat_raw(canonical, s);
+        return result && S_ISDIR(s->st_mode);
+    }
     if (whiteout_present(gp)) {
         synth_stat_set(s, S_IFCHR, 1);
         s->st_rdev = 0;

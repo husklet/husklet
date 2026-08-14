@@ -17,6 +17,20 @@ void e_mul_set_oc(int cfreg) {
     emit32(0xD51B4200u | 20); // msr nzcv, x20 (sync live flags)
 }
 
+// Two-/three-operand IMUL publishes SF/ZF from the truncated product (the deterministic
+// undefined-flag convention shared with the interpreter) in addition to its defined CF/OF.
+// nzreg contains an MRS snapshot whose N/Z bits came from testing that product.
+static void e_imul_set_nzoc(int cfreg, int nzreg) {
+    e_movconst(20, 3u << 28);
+    e_rrr(A_BIC, nzreg, nzreg, 20, 1, 0); // retain N/Z, clear C/V
+    e_movconst(23, 1);
+    e_rrr(A_EOR, 23, cfreg, 23, 0, 0);     // stored C = NOT x86 CF
+    e_rrr(A_ORR, nzreg, nzreg, 23, 1, 29);
+    e_rrr(A_ORR, nzreg, nzreg, cfreg, 1, 28);
+    e_str(nzreg, 28, OFF_NZCV);
+    emit32(0xD51B4200u | (uint32_t)nzreg);
+}
+
 // imul reg<-a*b (two-/three-operand forms 0F AF, 69, 6B): truncated product into dst, and x86
 // CF=OF = (the full signed product differs from the sign-extension of the truncated result).
 // Scratch x21..x25 (x21 carries the 0/1 CF into e_mul_set_oc); callers must not pass a/b in those.
@@ -53,7 +67,16 @@ void e_imul2(int dst, int a, int b, int w, int co_live) {
         else
             e_bfi(dst, 22, 0, 16, 1); // 16-bit dest: insert low 16, preserve upper bits
     }
-    e_mul_set_oc(21);
+    if (w == 2) {
+        // The architectural product is the low halfword. Move its sign bit to bit 31 so
+        // a 32-bit TST publishes the halfword's SF while still deriving ZF from those 16 bits.
+        e_lsl_i(19, 22, 16, 0);
+        e_tst(19, 0);
+    } else {
+        e_tst(dst, w == 8);
+    }
+    emit32(0xD53B4200u | 19); // mrs x19,nzcv: N/Z from the truncated product
+    e_imul_set_nzoc(21, 19);
 }
 
 // 8/16-bit one-operand MUL/IMUL (F6/F7 /4,/5) CF=OF: MUL -> the high half is nonzero; IMUL -> the result

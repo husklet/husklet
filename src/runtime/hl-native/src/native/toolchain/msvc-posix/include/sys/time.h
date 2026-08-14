@@ -47,8 +47,13 @@ struct timezone {
 };
 #endif
 
+#ifndef timerisset
 #define timerisset(tvp) ((tvp)->tv_sec || (tvp)->tv_usec)
+#endif
+
+#ifndef timerclear
 #define timerclear(tvp) ((tvp)->tv_sec = (tvp)->tv_usec = 0)
+#endif
 
 #ifdef __cplusplus
 extern "C" {

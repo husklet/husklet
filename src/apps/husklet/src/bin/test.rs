@@ -16,12 +16,17 @@ fn removal_stops_the_runtime_before_deleting_its_authority() {
         .unwrap();
     let observed = std::cell::Cell::new(false);
 
-    remove_workspace(&mut store, "demo", |workspace| {
-        assert_eq!(workspace.name, "demo");
-        assert!(WorkspaceStore::load(&path).unwrap().get("demo").is_some());
-        observed.set(true);
-        Ok(())
-    })
+    remove_workspace(
+        &mut store,
+        "demo",
+        |workspace| {
+            assert_eq!(workspace.name, "demo");
+            assert!(WorkspaceStore::load(&path).unwrap().get("demo").is_some());
+            observed.set(true);
+            Ok(())
+        },
+        |_| Ok(()),
+    )
     .unwrap();
 
     assert!(observed.get());
@@ -37,10 +42,45 @@ fn failed_runtime_teardown_preserves_the_workspace_authority() {
         .upsert(WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64))
         .unwrap();
 
-    let error = remove_workspace(&mut store, "demo", |_| Err(std::io::Error::other("still running"))).unwrap_err();
+    let error = remove_workspace(
+        &mut store,
+        "demo",
+        |_| Err(std::io::Error::other("still running")),
+        |_| Ok(()),
+    )
+    .unwrap_err();
 
     assert_eq!(error.to_string(), "still running");
     assert!(WorkspaceStore::load(path).unwrap().get("demo").is_some());
+}
+
+#[test]
+fn removal_reclaims_launchers_after_domain_teardown_before_deleting_authority() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("workspaces.conf");
+    let mut store = WorkspaceStore::load(&path).unwrap();
+    store
+        .upsert(WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64))
+        .unwrap();
+    let events = std::cell::RefCell::new(Vec::new());
+
+    remove_workspace(
+        &mut store,
+        "demo",
+        |_| {
+            events.borrow_mut().push("domain");
+            Ok(())
+        },
+        |_| {
+            assert!(WorkspaceStore::load(&path).unwrap().get("demo").is_some());
+            events.borrow_mut().push("launchers");
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    assert_eq!(*events.borrow(), ["domain", "launchers"]);
+    assert!(WorkspaceStore::load(path).unwrap().get("demo").is_none());
 }
 
 // A captured `ps -axo pid=,ppid=,etime=,command=` slice: Husklet (43405) with two launcher shells for

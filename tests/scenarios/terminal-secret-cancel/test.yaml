@@ -1,0 +1,22 @@
+cases:
+- id: terminal-secret-cancel/ctrl-c-restores-echo
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc, -i]
+      steps:
+      - write: { text: "PS1=$'\\120\\122\\117\\115\\120\\124\\055\\122\\105\\101\\104\\131\\076 '; unset pw; read -rsp \"$(printf '\\123\\105\\103\\122\\105\\124\\055\\120\\122\\117\\115\\120\\124\\072\\040')\" pw\r" }
+      - await_output: { contains: "SECRET-PROMPT: ", timeout_ms: 5000 }
+      - write: { text: partial-secret }
+      - write: { text: "\u0003" }
+      - await_output: { contains: "PROMPT-READY> ", timeout_ms: 5000 }
+      - write: { text: "if [[ ! -v pw ]]; then printf '\\103\\101\\116\\103\\105\\114\\114\\105\\104\\n'; fi; stty -a; printf '\\123\\110\\105\\114\\114\\055\\117\\113\\n'; exit\r" }
+      - await_output: { contains: CANCELLED, timeout_ms: 5000 }
+      - await_output: { contains: " echo echoe ", timeout_ms: 5000 }
+      - reject_output: { text: partial-secret }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains: [golden/cancelled.txt, golden/echo_restored.txt, golden/shell_ok.txt]
