@@ -6,7 +6,7 @@ const LINE: &str = "#2b2f39";
 const LINE_S: &str = "#20232b";
 const TXT: &str = "#e7e9ee";
 const DIM: &str = "#878e9c";
-const FAINT: &str = "#565c69";
+const FAINT: &str = "#818896";
 pub(crate) const ACCENT: &str = "#2f80ff";
 
 pub(crate) fn css() -> String {
@@ -148,12 +148,42 @@ vte-terminal.copymode, terminal.copymode {{ box-shadow: inset 0 0 0 1px {ACCENT}
 
 #[cfg(test)]
 mod tests {
-    use super::css;
+    use super::{BG0, BG1, BG2, FAINT, css};
+
+    fn channel(value: u8) -> f64 {
+        let value = f64::from(value) / 255.0;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    }
+
+    fn luminance(color: &str) -> f64 {
+        let component = |offset| u8::from_str_radix(&color[offset..offset + 2], 16).unwrap();
+        0.2126 * channel(component(1)) + 0.7152 * channel(component(3)) + 0.0722 * channel(component(5))
+    }
+
+    fn contrast(left: &str, right: &str) -> f64 {
+        let (light, dark) = if luminance(left) > luminance(right) {
+            (luminance(left), luminance(right))
+        } else {
+            (luminance(right), luminance(left))
+        };
+        (light + 0.05) / (dark + 0.05)
+    }
 
     #[test]
     fn theme_never_suppresses_toolkit_focus_indicators() {
         let theme = css();
         assert!(!theme.contains("outline:none"));
         assert!(!theme.contains("outline: none"));
+    }
+
+    #[test]
+    fn faint_normal_text_meets_contrast_on_application_surfaces() {
+        for background in [BG0, BG1, BG2] {
+            assert!(contrast(FAINT, background) >= 4.5);
+        }
     }
 }
