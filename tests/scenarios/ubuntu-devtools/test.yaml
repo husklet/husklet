@@ -1,0 +1,31 @@
+cases:
+- id: ubuntu-devtools/install-build-and-run
+  image: ubuntu:22.04
+  class: long
+  timeout: 300
+  resources: [network, registry, disk_heavy, process_heavy]
+  actions:
+  - shell:
+      script: |
+        set -eu
+        export DEBIAN_FRONTEND=noninteractive
+        rm -rf /var/lib/apt/lists/*
+        apt-get update >/tmp/apt-update.log 2>&1
+        apt-get install -y --no-install-recommends build-essential git curl ca-certificates >/tmp/apt-install.log 2>&1
+        cat >/tmp/hello.c <<'EOF'
+        #include <stdio.h>
+        int main(void) { puts("C_TOOLCHAIN_OK"); return 0; }
+        EOF
+        cc -O2 -Wall -Wextra -Werror /tmp/hello.c -o /tmp/hello
+        /tmp/hello
+        make --version | head -n 1
+        git --version
+        curl --version | head -n 1
+        echo DEVTOOLS_INSTALLED_AND_RUNNABLE
+  expect:
+    stdout_contains:
+    - golden/toolchain.txt
+    - golden/make.txt
+    - golden/git.txt
+    - golden/curl.txt
+    - golden/done.txt
