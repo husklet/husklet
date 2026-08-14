@@ -23,8 +23,6 @@ int g_pcache_poison;
 uint64_t g_tracecap;
 int g_diag;
 int g_nochain;
-int g_dbg_nochain;
-int g_dbg_gprdump;
 uint64_t g_loadbase;
 uint8_t *g_w8;
 uint8_t g_w8v;

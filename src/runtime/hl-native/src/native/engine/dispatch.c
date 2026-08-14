@@ -346,9 +346,7 @@ static void run_guest(struct cpu *c) {
             }
             // THEN chain existing blocks to it (still write mode). Frontend hook: aarch64 chains here;
             // x86's translate_block already chained internally, so its hook is a no-op.
-            // Debug-only no-chain mode: every block re-enters the dispatcher and the
-            // JT trace records every execution (exact per-block PC attribution). Correct but slow.
-            if (!g_dbg_nochain) G_DISPATCH_CHAIN(c);
+            G_DISPATCH_CHAIN(c);
             if (hl_fatal_status(&g_jit_fatal) != HL_STATUS_OK) {
                 (void)jit_wprot(1);
                 if (g_threaded) pthread_mutex_unlock(&g_jit_lock);

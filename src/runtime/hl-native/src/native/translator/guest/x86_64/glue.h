@@ -43,8 +43,6 @@ extern int g_pcache_poison;
 extern uint64_t g_tracecap;
 extern int g_diag;
 extern int g_nochain;
-extern int g_dbg_nochain;
-extern int g_dbg_gprdump;
 extern uint64_t g_loadbase;
 extern uint8_t *g_w8;
 extern uint8_t g_w8v;

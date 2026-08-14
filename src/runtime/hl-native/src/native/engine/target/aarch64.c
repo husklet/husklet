@@ -1137,8 +1137,6 @@ static int engine_global_init(void) {
 
     g_trace = 0;
     g_systrace = 0;
-    g_dbg_nochain = 0;
-    g_dbg_gprdump = 0;
     g_prof = hl_option_get("HL_C_DIAGNOSTICS") != NULL;
     g_service_ns = 0;
     g_prof_soft_hull_sampled = g_prof_soft_cached_sampled = g_prof_soft_sites_sampled = 0;
