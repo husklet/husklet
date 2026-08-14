@@ -245,7 +245,7 @@ mod tests {
             true,
             timeout,
             || async { Ok::<_, &'static str>(()) },
-            || std::future::pending::<Result<(), &'static str>>(),
+            std::future::pending::<Result<(), &'static str>>,
             || async {
                 removed.store(true, std::sync::atomic::Ordering::SeqCst);
                 Ok::<_, &'static str>(())

@@ -138,9 +138,8 @@ fn a_live_compatible_domain_without_configuration_identity_is_rejected_not_repla
     let (workspace, domain, _listener) = live_domain(root.path());
     PublishedProtocol::new(&domain.directory).publish().unwrap();
 
-    let error = match domain.decide(&workspace) {
-        Ok(_) => panic!("a live domain without authenticated configuration must not be used or replaced"),
-        Err(error) => error,
+    let Err(error) = domain.decide(&workspace) else {
+        panic!("a live domain without authenticated configuration must not be used or replaced");
     };
 
     assert_eq!(error.kind(), io::ErrorKind::NotFound);
