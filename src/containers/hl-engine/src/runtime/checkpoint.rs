@@ -72,6 +72,29 @@ enum CapturePhase {
 
 struct CaptureState {
     phase: CapturePhase,
+    mutations: usize,
+}
+
+struct MutationAdmission<'a> {
+    server: &'a Server,
+    id: u64,
+    deadline: std::time::Instant,
+    finished: bool,
+}
+
+impl MutationAdmission<'_> {
+    fn finish(mut self, result: Result<(), CaptureFailure>) -> Result<(), CaptureFailure> {
+        self.finished = true;
+        self.server.finish_mutation(self.id, result)
+    }
+}
+
+impl Drop for MutationAdmission<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.server.finish_mutation(self.id, Err(CaptureFailure::Failed));
+        }
+    }
 }
 
 pub(crate) struct Server {
@@ -94,6 +117,7 @@ impl Server {
             state: Mutex::new(State::default()),
             capture: Mutex::new(CaptureState {
                 phase: CapturePhase::Idle,
+                mutations: 0,
             }),
             capture_changed: Condvar::new(),
             channels: Mutex::new(HashMap::new()),
@@ -121,6 +145,7 @@ impl Server {
         *self.state.lock().map_err(|_| CaptureFailure::Poisoned)? = State::default();
         self.committed.store(false, Ordering::Release);
         capture.phase = CapturePhase::Active { id, deadline };
+        capture.mutations = 0;
         Ok(id)
     }
 
@@ -146,15 +171,48 @@ impl Server {
         }
     }
 
-    fn mutation_deadline(&self) -> Result<Option<(u64, std::time::Instant)>, CaptureFailure> {
-        let capture = self.capture_lock()?;
+    fn admit_mutation(&self) -> Result<Option<MutationAdmission<'_>>, CaptureFailure> {
+        let mut capture = self.capture_lock()?;
         match capture.phase {
             CapturePhase::Idle => Ok(None),
-            CapturePhase::Active { id, deadline } if std::time::Instant::now() < deadline => Ok(Some((id, deadline))),
+            CapturePhase::Active { id, deadline } if std::time::Instant::now() < deadline => {
+                capture.mutations = capture.mutations.checked_add(1).ok_or(CaptureFailure::Poisoned)?;
+                Ok(Some(MutationAdmission {
+                    server: self,
+                    id,
+                    deadline,
+                    finished: false,
+                }))
+            }
             CapturePhase::Active { .. } => Err(CaptureFailure::Deadline),
             CapturePhase::Poisoned => Err(CaptureFailure::Poisoned),
             _ => Err(CaptureFailure::Busy),
         }
+    }
+
+    fn finish_mutation(&self, id: u64, result: Result<(), CaptureFailure>) -> Result<(), CaptureFailure> {
+        let mut capture = self.capture_lock()?;
+        if capture.mutations == 0 {
+            capture.phase = CapturePhase::Poisoned;
+            self.capture_changed.notify_all();
+            return Err(CaptureFailure::Poisoned);
+        }
+        capture.mutations -= 1;
+        if let Err(failure) = result
+            && matches!(capture.phase, CapturePhase::Active { id: active, .. } if active == id)
+        {
+            capture.phase = CapturePhase::Finished {
+                id,
+                result: Err(failure),
+            };
+        }
+        self.capture_changed.notify_all();
+        let terminal = result.is_err();
+        drop(capture);
+        if terminal {
+            self.interrupt_channels();
+        }
+        result
     }
 
     fn source_deadline(&self) -> Result<Option<std::time::Instant>, CaptureFailure> {
@@ -173,8 +231,7 @@ impl Server {
 
     fn finish_failed(&self, id: u64, failure: CaptureFailure) -> Result<(), CaptureFailure> {
         let mut capture = self.capture_lock()?;
-        if matches!(capture.phase, CapturePhase::Active { id: active, .. } | CapturePhase::Publishing { id: active } if active == id)
-        {
+        if matches!(capture.phase, CapturePhase::Active { id: active, .. } if active == id) {
             capture.phase = CapturePhase::Finished {
                 id,
                 result: Err(failure),
@@ -349,28 +406,44 @@ impl Server {
         (hash, objects.len() as u64, bytes)
     }
 
-    fn publish(&self, object: &Object) -> Result<(), ()> {
-        if let Some((id, deadline)) = self.mutation_deadline().map_err(|_| ())? {
-            if let Err(error) = self.sink.put_until(&object.name, &object.bytes, deadline) {
-                let _ = self.finish_failed(
-                    id,
+    fn publish(&self, object: &Object, admission: Option<MutationAdmission<'_>>) -> Result<(), ()> {
+        if let Some(admission) = admission {
+            let deadline = admission.deadline;
+            let result = self
+                .publish_object(object, Some(deadline))
+                .map_err(|error| {
                     if error == crate::composition::CompositionError::DeadlineExceeded {
                         CaptureFailure::Deadline
                     } else {
                         CaptureFailure::Failed
-                    },
-                );
-                return Err(());
-            }
-            if std::time::Instant::now() >= deadline {
-                let _ = self.finish_failed(id, CaptureFailure::Deadline);
-                return Err(());
-            }
+                    }
+                })
+                .and_then(|()| {
+                    (std::time::Instant::now() < deadline)
+                        .then_some(())
+                        .ok_or(CaptureFailure::Deadline)
+                });
+            admission.finish(result).map_err(|_| ())?;
         } else {
-            self.sink.put(&object.name, &object.bytes).map_err(|_| ())?;
+            self.publish_object(object, None).map_err(|_| ())?;
         }
+        Ok(())
+    }
+
+    fn publish_object(
+        &self,
+        object: &Object,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(), crate::composition::CompositionError> {
+        deadline.map_or_else(
+            || self.sink.put(&object.name, &object.bytes),
+            |deadline| self.sink.put_until(&object.name, &object.bytes, deadline),
+        )?;
         if Self::included(&object.name) {
-            let mut state = self.state.lock().map_err(|_| ())?;
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| crate::composition::CompositionError::RuntimeConstruction)?;
             state.digest.insert(
                 object.name.clone(),
                 (
@@ -403,19 +476,32 @@ impl Server {
     fn publish_manifest(&self, manifest: &[u8]) -> Result<(), CaptureFailure> {
         let (id, deadline) = {
             let mut capture = self.capture_lock()?;
-            let CapturePhase::Active { id, deadline } = capture.phase else {
-                return Err(match capture.phase {
-                    CapturePhase::Poisoned => CaptureFailure::Poisoned,
-                    _ => CaptureFailure::Busy,
-                });
-            };
-            if std::time::Instant::now() >= deadline {
-                capture.phase = CapturePhase::Poisoned;
-                self.capture_changed.notify_all();
-                return Err(CaptureFailure::Deadline);
+            loop {
+                let CapturePhase::Active { id, deadline } = capture.phase else {
+                    return Err(match capture.phase {
+                        CapturePhase::Finished { result: Err(error), .. } => error,
+                        CapturePhase::Poisoned => CaptureFailure::Poisoned,
+                        _ => CaptureFailure::Busy,
+                    });
+                };
+                if std::time::Instant::now() >= deadline {
+                    capture.phase = CapturePhase::Poisoned;
+                    self.capture_changed.notify_all();
+                    drop(capture);
+                    self.interrupt_channels();
+                    return Err(CaptureFailure::Deadline);
+                }
+                if capture.mutations == 0 {
+                    capture.phase = CapturePhase::Publishing { id };
+                    break (id, deadline);
+                }
+                let wait = deadline.saturating_duration_since(std::time::Instant::now());
+                let (next, _) = self
+                    .capture_changed
+                    .wait_timeout(capture, wait)
+                    .map_err(|_| CaptureFailure::Poisoned)?;
+                capture = next;
             }
-            capture.phase = CapturePhase::Publishing { id };
-            (id, deadline)
         };
 
         let result = match self.sink.commit_until(manifest, deadline) {
@@ -523,7 +609,7 @@ impl Server {
             return Reply::error();
         }
         if !matches!(request.op, SOURCE_LIST | SOURCE_SIZE | SOURCE_READ | DIGEST | COMMIT)
-            && self.mutation_deadline().is_err()
+            && self.active_deadline().is_err()
         {
             return Reply::error();
         }
@@ -577,6 +663,14 @@ impl Server {
                 .and_then(|state| state.open.get(&key).map(|object| object.bytes.len() as u64))
                 .map_or_else(Reply::error, Reply::value),
             OBJECT_FINISH => {
+                let admission = self.admit_mutation().map_err(|_| ()).ok().flatten();
+                if matches!(
+                    self.capture_lock().map(|capture| capture.phase),
+                    Ok(CapturePhase::Active { .. })
+                ) && admission.is_none()
+                {
+                    return Reply::error();
+                }
                 let Some(object) = self.state.lock().ok().and_then(|mut state| state.open.remove(&key)) else {
                     return Reply::error();
                 };
@@ -585,9 +679,12 @@ impl Server {
                     && let Some(staged) = state.staged.get_mut(&group)
                 {
                     staged.push(object);
+                    if let Some(admission) = admission {
+                        let _ = admission.finish(Ok(()));
+                    }
                     return Reply::ok();
                 }
-                if self.publish(&object).is_ok() {
+                if self.publish(&object, admission).is_ok() {
                     Reply::ok()
                 } else {
                     self.fail(format!("checkpoint store rejected {}", object.name));
@@ -611,17 +708,40 @@ impl Server {
                 }
             }
             GROUP_COMMIT => {
+                let admission = self.admit_mutation().map_err(|_| ()).ok().flatten();
+                if matches!(
+                    self.capture_lock().map(|capture| capture.phase),
+                    Ok(CapturePhase::Active { .. })
+                ) && admission.is_none()
+                {
+                    return Reply::error();
+                }
                 let objects = self
                     .state
                     .lock()
                     .ok()
                     .and_then(|mut state| state.staged.remove(name))
                     .unwrap_or_default();
+                let deadline = admission.as_ref().map(|admission| admission.deadline);
+                let mut result = Ok(());
                 for object in &objects {
-                    if self.publish(object).is_err() {
+                    if let Err(error) = self.publish_object(object, deadline) {
+                        result = Err(if error == crate::composition::CompositionError::DeadlineExceeded {
+                            CaptureFailure::Deadline
+                        } else {
+                            CaptureFailure::Failed
+                        });
                         self.fail(format!("checkpoint store rejected {}", object.name));
-                        return Reply::error();
+                        break;
                     }
+                }
+                if let Some(admission) = admission
+                    && admission.finish(result).is_err()
+                {
+                    return Reply::error();
+                }
+                if result.is_err() {
+                    return Reply::error();
                 }
                 if let Ok(mut state) = self.state.lock() {
                     state.groups.insert(name.into());
