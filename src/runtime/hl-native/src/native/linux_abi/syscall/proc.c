@@ -335,7 +335,11 @@ static void fork_child_hooks(struct cpu *c) {
     // S2: invalidate inherited path/metadata caches so the child cannot serve an
     // entry populated before the filesystem diverged.
     hl_fdcache_reset();
-    hl_vfs_cursor_state_after_fork();
+    if (hl_vfs_cursor_state_after_fork() != 0) {
+        c->exit_code = 70;
+        c->exited = 1;
+        return;
+    }
     g_ndirs = 0;                 // the getdents DIR* cache is the PARENT's -- closedir'ing inherited handles
                                  // (on the child's close) crashes; drop it so the child re-fdopendir's fresh
     kqueue_rebuild_after_fork(); // macOS kqueue() fds (epoll/timerfd/inotify) don't survive fork ->

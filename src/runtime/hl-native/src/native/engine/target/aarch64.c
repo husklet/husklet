@@ -1281,7 +1281,6 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     g_engine_result_status = HL_STATUS_OK;
     if (argument_count > (uint32_t)INT_MAX) return 2;
     argc = (int)argument_count;
-    hl_vfs_cursor_state_clear();
     hl_target_services_inject(&g_target_services, host);
     hl_gmap_bind_host(host);
     futex_table_init(host);
@@ -1299,31 +1298,31 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
         hl_host_result now;
         if (hl_host_services_validate(host, HL_HOST_CAP_CLOCK) != HL_STATUS_OK) {
             fprintf(stderr, "hl-engine: restore prerequisite host clock validation failed\n");
-            return 70;
+            return hl_vfs_cursor_state_finish(70);
         }
         now = host->clock->monotonic_ns(host->context);
         if (now.status != HL_STATUS_OK) {
             fprintf(stderr, "hl-engine: restore prerequisite monotonic clock read failed\n");
-            return 70;
+            return hl_vfs_cursor_state_finish(70);
         }
         g_host_launch_monotonic_ns = now.value;
     }
     if (bound_shadow_activate() != 0) {
         fprintf(stderr, "hl-engine: restore prerequisite shadow descriptor activation failed\n");
-        return 70;
+        return hl_vfs_cursor_state_finish(70);
     }
     // Resume a previously checkpointed workspace instead of launching a program (the embedding host sets this on
     // window reopen; the container config/env is otherwise identical to the original launch).
     const char *rdir = hl_option_get("HL_RESTORE");
-    if (rdir != NULL) return hl_restore_checkpoint(rootfs);
-    if (argc < 1 || !argv || !argv[0]) return 2;
+    if (rdir != NULL) return hl_vfs_cursor_state_finish(hl_restore_checkpoint(rootfs));
+    if (argc < 1 || !argv || !argv[0]) return hl_vfs_cursor_state_finish(2);
     // Persistent cross-process translated-code cache. Opt in with HL_PCACHE=1.
     // Read per invocation so a fork-server cold runner honors its typed launch configuration.
     g_pcache = hl_option_get("HL_PCACHE") != NULL;
     g_coldprof = 0;
-    if (container_init(rootfs) != 0) return 70;
+    if (container_init(rootfs) != 0) return hl_vfs_cursor_state_finish(70);
     int irc = engine_global_init();
-    if (irc) return irc;
+    if (irc) return hl_vfs_cursor_state_finish(irc);
     const char *prog = argv[0];
     static char gb[1024];
     prog = find_in_path(prog, gb, sizeof gb); // bare "sh" (docker) -> "/bin/sh" via the container PATH
@@ -1354,7 +1353,7 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
         resolve_shebang_chain(sb_argv, sb_argc, 256, prog_host, sb_store, sb_fhb, sizeof sb_fhb, &sb_finalhost);
     if (sb_new < 0) {
         fprintf(stderr, "hl-engine: too many nested #! interpreters (ELOOP): %s\n", prog);
-        return 40; // ELOOP
+        return hl_vfs_cursor_state_finish(40); // ELOOP
     }
     if (sb_new != sb_argc) { // a shebang chain resolved -> run the final interpreter, not the script
         argc = sb_new;
@@ -1378,7 +1377,7 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
         if (hl_fatal_status(&g_jit_fatal) != HL_STATUS_OK) {
             g_engine_result_status = hl_fatal_status(&g_jit_fatal);
             pcache_directory_close();
-            return 70;
+            return hl_vfs_cursor_state_finish(70);
         }
     }
     int ec = run_loaded(argc, argv, &lm, jump, at_base);
@@ -1389,7 +1388,7 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
         ec = 70;
     }
     pcache_directory_close();
-    return ec;
+    return hl_vfs_cursor_state_finish(ec);
 }
 
 // resident engine fork server (server/client/worker), shared with the x86-64 target through the

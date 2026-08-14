@@ -30,6 +30,8 @@ static int references[4];
 static int clones;
 static int closes;
 static int child_present = 1;
+static int clone_fails;
+static int context_poisoned;
 
 static hl_host_result result(int32_t status, uint64_t value) {
     return (hl_host_result){.status = status, .value = value};
@@ -37,6 +39,8 @@ static hl_host_result result(int32_t status, uint64_t value) {
 
 static hl_host_result clone_file(void *context, hl_host_handle handle) {
     (void)context;
+    if (context_poisoned) abort();
+    if (clone_fails) return result(HL_STATUS_OUT_OF_MEMORY, 0);
     references[handle]++;
     clones++;
     return result(HL_STATUS_OK, handle);
@@ -44,6 +48,7 @@ static hl_host_result clone_file(void *context, hl_host_handle handle) {
 
 static hl_host_result close_file(void *context, hl_host_handle handle) {
     (void)context;
+    if (context_poisoned) abort();
     if (handle > 3 || references[handle] == 0) return result(HL_STATUS_INVALID_ARGUMENT, 0);
     references[handle]--;
     closes++;
@@ -115,12 +120,27 @@ int main(void) {
     hl_vfs_cursor_release(&clone);
     if (hl_vfs_fd_cursor_publish(4, &root) != 0) return 6;
     int before_fork_clones = clones;
-    hl_vfs_fd_cursor_after_fork();
-    if (hl_vfs_fd_cursor_get(4) == NULL || clones <= before_fork_clones) return 7;
+    int before_failure_references = references[1];
+    clone_fails = 1;
+    hl_vfs_cursor **failed = calloc(HL_NFD, sizeof *failed);
+    if (hl_vfs_fd_cursor_clone_table(failed) == 0 || hl_vfs_fd_cursor_get(4) == NULL ||
+        references[1] != before_failure_references) return 7;
+    hl_vfs_fd_cursor_release_table(failed);
+    free(failed);
+    clone_fails = 0;
+    hl_vfs_cursor **forked = calloc(HL_NFD, sizeof *forked);
+    if (hl_vfs_fd_cursor_clone_table(forked) != 0) return 8;
+    hl_vfs_fd_cursor_replace_table(forked);
+    free(forked);
+    if (hl_vfs_fd_cursor_get(4) == NULL || clones <= before_fork_clones) return 9;
     hl_vfs_fd_cursor_clear();
-    if (hl_vfs_fd_cursor_get(4) != NULL) return 8;
+    if (hl_vfs_fd_cursor_get(4) != NULL) return 10;
+    context_poisoned = 1;
+    /* A subsequent run begins only after teardown emptied the table; it must never call the poisoned old host. */
+    hl_vfs_fd_cursor_clear();
+    context_poisoned = 0;
     hl_vfs_cursor_release(&root);
-    if (references[1] != 1 || closes == 0) return 9;
+    if (references[1] != 1 || closes == 0) return 11;
     return 0;
 }
 "#,

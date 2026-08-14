@@ -83,21 +83,40 @@ static void hl_vfs_cursor_state_clear(void) {
     hl_vfs_fd_cursor_clear();
 }
 
-static void hl_vfs_cursor_state_after_fork(void) {
+static int hl_vfs_cursor_state_after_fork(void) {
+    hl_vfs_cursor **replacements = calloc(HL_NFD, sizeof *replacements);
+    if (replacements == NULL) return -1;
+    hl_vfs_cursor *cwd_replacement = NULL;
     if (g_vfs_cwd_cursor != NULL) {
-        hl_vfs_cursor *replacement = calloc(1, sizeof *replacement);
-        if (replacement != NULL && hl_vfs_cursor_clone(g_vfs_cwd_cursor, replacement) == 0) {
-            hl_vfs_cursor_release(g_vfs_cwd_cursor);
-            free(g_vfs_cwd_cursor);
-            g_vfs_cwd_cursor = replacement;
-        } else {
-            free(replacement);
-            hl_vfs_cursor_release(g_vfs_cwd_cursor);
-            free(g_vfs_cwd_cursor);
-            g_vfs_cwd_cursor = NULL;
+        cwd_replacement = calloc(1, sizeof *cwd_replacement);
+        if (cwd_replacement == NULL || hl_vfs_cursor_clone(g_vfs_cwd_cursor, cwd_replacement) != 0) {
+            free(cwd_replacement);
+            free(replacements);
+            return -1;
         }
     }
-    hl_vfs_fd_cursor_after_fork();
+    if (hl_vfs_fd_cursor_clone_table(replacements) != 0) {
+        if (cwd_replacement != NULL) {
+            hl_vfs_cursor_release(cwd_replacement);
+            free(cwd_replacement);
+        }
+        hl_vfs_fd_cursor_release_table(replacements);
+        free(replacements);
+        return -1;
+    }
+    if (cwd_replacement != NULL) {
+        hl_vfs_cursor_release(g_vfs_cwd_cursor);
+        free(g_vfs_cwd_cursor);
+        g_vfs_cwd_cursor = cwd_replacement;
+    }
+    hl_vfs_fd_cursor_replace_table(replacements);
+    free(replacements);
+    return 0;
+}
+
+static int hl_vfs_cursor_state_finish(int result) {
+    hl_vfs_cursor_state_clear();
+    return result;
 }
 
 static int hl_vfs_cwd_cursor_require(void) {

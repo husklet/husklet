@@ -613,7 +613,7 @@ static void hl_vfs_fd_cursor_clear(void) {
 /* Provider handles are process-owned capabilities. A forked child must acquire its own references before
  * either process can close a cursor; retaining the COW-copied numeric handles would make ownership depend on
  * provider implementation details. Native descriptors already have kernel fork ownership and need no duplicate. */
-static void hl_vfs_fd_cursor_after_fork(void) {
+static int hl_vfs_fd_cursor_clone_table(hl_vfs_cursor **replacements) {
     for (int descriptor = 0; descriptor < HL_NFD; ++descriptor) {
         hl_vfs_cursor *cursor = g_vfs_fd_cursor[descriptor];
         if (cursor == NULL) continue;
@@ -622,16 +622,29 @@ static void hl_vfs_fd_cursor_after_fork(void) {
             provider |= cursor->layers[layer].kind == HL_VFS_CURSOR_AUTHORITY_HOST;
         if (!provider) continue;
         hl_vfs_cursor *replacement = calloc(1, sizeof *replacement);
-        if (replacement != NULL && hl_vfs_cursor_clone(cursor, replacement) == 0) {
-            hl_vfs_cursor_release(cursor);
-            free(cursor);
-            g_vfs_fd_cursor[descriptor] = replacement;
-        } else {
+        if (replacement == NULL || hl_vfs_cursor_clone(cursor, replacement) != 0) {
             free(replacement);
-            /* Failure cannot leave an inherited provider number masquerading as child authority. */
-            hl_vfs_cursor_release(cursor);
-            free(cursor);
-            g_vfs_fd_cursor[descriptor] = NULL;
+            return -1;
         }
+        replacements[descriptor] = replacement;
+    }
+    return 0;
+}
+
+static void hl_vfs_fd_cursor_replace_table(hl_vfs_cursor **replacements) {
+    for (int descriptor = 0; descriptor < HL_NFD; ++descriptor) {
+        if (replacements[descriptor] == NULL) continue;
+        hl_vfs_cursor_release(g_vfs_fd_cursor[descriptor]);
+        free(g_vfs_fd_cursor[descriptor]);
+        g_vfs_fd_cursor[descriptor] = replacements[descriptor];
+        replacements[descriptor] = NULL;
+    }
+}
+
+static void hl_vfs_fd_cursor_release_table(hl_vfs_cursor **replacements) {
+    for (int descriptor = 0; descriptor < HL_NFD; ++descriptor) {
+        if (replacements[descriptor] == NULL) continue;
+        hl_vfs_cursor_release(replacements[descriptor]);
+        free(replacements[descriptor]);
     }
 }

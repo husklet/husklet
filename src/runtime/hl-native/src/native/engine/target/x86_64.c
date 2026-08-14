@@ -1303,7 +1303,6 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     g_authorized_executable_size = executable_size;
     if (argument_count > (uint32_t)INT_MAX) return 2;
     argc = (int)argument_count;
-    hl_vfs_cursor_state_clear();
     hl_target_services_inject(&g_target_services, host);
     hl_gmap_bind_host(host);
     futex_table_init(host);
@@ -1319,21 +1318,21 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     g_host_launch_monotonic_ns = 0;
     if (host != NULL) {
         hl_host_result now;
-        if (hl_host_services_validate(host, HL_HOST_CAP_CLOCK) != HL_STATUS_OK) return 70;
+        if (hl_host_services_validate(host, HL_HOST_CAP_CLOCK) != HL_STATUS_OK) return hl_vfs_cursor_state_finish(70);
         now = host->clock->monotonic_ns(host->context);
-        if (now.status != HL_STATUS_OK) return 70;
+        if (now.status != HL_STATUS_OK) return hl_vfs_cursor_state_finish(70);
         g_host_launch_monotonic_ns = now.value;
     }
-    if (bound_shadow_activate() != 0) return 70;
+    if (bound_shadow_activate() != 0) return hl_vfs_cursor_state_finish(70);
     const char *rdir = hl_option_get("HL_RESTORE");
-    if (rdir != NULL) return ckpt_restore_tree(rootfs);
-    if (argc < 1 || !argv || !argv[0]) return 2;
+    if (rdir != NULL) return hl_vfs_cursor_state_finish(ckpt_restore_tree(rootfs));
+    if (argc < 1 || !argv || !argv[0]) return hl_vfs_cursor_state_finish(2);
     // Persistent translated-code cache: enabled only by the centralized HL_PCACHE option.
     g_coldprof = 0;
     g_pcache = hl_option_get("HL_PCACHE") != NULL;
-    if (container_init(rootfs) != 0) return 70;
+    if (container_init(rootfs) != 0) return hl_vfs_cursor_state_finish(70);
     int rc = engine_global_init();
-    if (rc) return rc;
+    if (rc) return hl_vfs_cursor_state_finish(rc);
     // Initial-exec shebang handling -- mirror of linux_aarch64.c (and execve case 221) via the shared
     // resolve_shebang_chain(). The container entry may itself be a "#!" script (redis/postgres'
     // docker-entrypoint.sh), and that script's interpreter may ITSELF be a "#!" script (nested, Linux
@@ -1357,7 +1356,7 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
         resolve_shebang_chain(sb_argv, sb_argc, 256, sb_prog_host, sb_store, sb_fhb, sizeof sb_fhb, &sb_finalhost);
     if (sb_new < 0) {
         fprintf(stderr, "hl-engine: too many nested #! interpreters (ELOOP): %s\n", argv[0]);
-        return 40; // ELOOP
+        return hl_vfs_cursor_state_finish(40); // ELOOP
     }
     if (sb_new != sb_argc) { // a shebang chain resolved -> run the final interpreter, not the script
         argc = sb_new;
@@ -1378,7 +1377,7 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
         if (hl_fatal_status(&g_jit_fatal) != HL_STATUS_OK) {
             g_engine_result_status = hl_fatal_status(&g_jit_fatal);
             pcache_directory_close();
-            return 70;
+            return hl_vfs_cursor_state_finish(70);
         }
     }
     int ec = run_loaded(argc, argv, &lm, jump, at_base);
@@ -1389,7 +1388,7 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
         ec = 70;
     }
     pcache_directory_close();
-    return ec;
+    return hl_vfs_cursor_state_finish(ec);
 }
 
 // resident engine fork server (server/client/worker), shared with the AArch64 target and driven
