@@ -49,7 +49,7 @@ impl Directory {
         })
     }
 
-    fn name<'a>(&self, name: &'a Path) -> Result<&'a std::ffi::OsStr> {
+    fn name(name: &Path) -> Result<&std::ffi::OsStr> {
         let mut components = name.components();
         let Some(Component::Normal(name)) = components.next() else {
             return Err(Error::InvalidMetadata("metadata filename is invalid".into()));
@@ -61,7 +61,7 @@ impl Directory {
     }
 
     pub(crate) fn replace(&self, name: &Path, bytes: &[u8]) -> Result<()> {
-        let name = self.name(name)?;
+        let name = Self::name(name)?;
         let temporary_name = format!(".{}.tmp-{}", name.to_str().unwrap_or("metadata"), uuid::Uuid::new_v4());
         let temporary = self.path.join(&temporary_name);
         let target = self.path.join(name);
@@ -124,7 +124,7 @@ impl Directory {
     }
 
     pub(crate) fn read(&self, name: &Path, limit: u64) -> Result<Vec<u8>> {
-        let name = self.name(name)?;
+        let name = Self::name(name)?;
         let target = self.path.join(name);
         #[cfg(unix)]
         let file = {
@@ -153,7 +153,7 @@ impl Directory {
     }
 
     pub(crate) fn remove(&self, name: &Path) -> Result<bool> {
-        let name = self.name(name)?;
+        let name = Self::name(name)?;
         let target = self.path.join(name);
         #[cfg(unix)]
         {

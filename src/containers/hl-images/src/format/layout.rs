@@ -169,7 +169,7 @@ impl Layout {
             if result.is_err() {
                 let _ = nix::unistd::unlinkat(&directory, temporary.as_str(), nix::unistd::UnlinkatFlags::NoRemoveDir);
             }
-            return result;
+            result
         }
         #[cfg(not(unix))]
         let temporary = parent.join(format!(".tmp-{}", uuid::Uuid::new_v4()));
