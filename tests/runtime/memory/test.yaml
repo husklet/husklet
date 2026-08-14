@@ -999,6 +999,14 @@ cases:
     artifact: { destination: /opt/husklet/memory/x86-projection-xsave }
     run: []
     expect: { exit: 0, stdout: golden/x86_projectionxsave.out }
+  - id: runtime/memory/x86-projection-faults
+    targets: [amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/x86_projectionfaults.c, output: x86-projection-faults, flags: ["-static","-O2","-std=gnu11","-mcx16"] }
+    artifact: { destination: /opt/husklet/memory/x86-projection-faults }
+    run: []
+    expect: { exit: 0, stdout: golden/x86_projectionfaults.out }
   - id: runtime/memory/copyout-readonly
     targets: [arm64, amd64]
     status: active

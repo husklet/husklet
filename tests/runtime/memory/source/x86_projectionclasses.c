@@ -30,6 +30,13 @@ static void *stack_thread(void *opaque) {
     return NULL;
 }
 
+static void *atomic_thread(void *opaque) {
+    uint64_t *value = opaque;
+    for (unsigned iteration = 0; iteration < 1000; iteration++)
+        __atomic_fetch_add(value, 1, __ATOMIC_SEQ_CST);
+    return NULL;
+}
+
 __attribute__((target("avx2"), noinline)) static int gather_values(const int *values) {
     __m128i indexes = _mm_setr_epi32(0, 2, 4, 6);
     __m128i gathered = _mm_i32gather_epi32(values, indexes, 4);
@@ -77,10 +84,24 @@ int main(void) {
                      : "memory", "cc");
     int atomic = add == 7 && *(uint64_t *)(logical + 3 * page) == 12 && swapped && pair[0] == 21 && pair[1] == 34;
 
+    uint8_t cmp1 = 1, expected1 = 1;
+    uint16_t cmp2 = 2, expected2 = 2;
+    uint32_t cmp4 = 4, expected4 = 4;
+    uint64_t cmp8 = 8, expected8 = 8;
+    int compare_widths = __atomic_compare_exchange_n(&cmp1, &expected1, 11, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) &&
+                         __atomic_compare_exchange_n(&cmp2, &expected2, 22, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) &&
+                         __atomic_compare_exchange_n(&cmp4, &expected4, 44, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) &&
+                         __atomic_compare_exchange_n(&cmp8, &expected8, 88, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+
     uint64_t rotated = UINT64_C(0x8000000000000001);
     memcpy(logical + 3 * page + 48, &rotated, 8);
     __asm__ volatile("rolq $1, (%0)" : : "r"(logical + 3 * page + 48) : "memory", "cc");
     int rotate = *(uint64_t *)(logical + 3 * page + 48) == 3;
+    uint8_t rotate1 = 0x81;
+    uint16_t rotate2 = 0x8001;
+    uint32_t rotate4 = UINT32_C(0x80000001);
+    __asm__ volatile("rolb $1, %0; rolw $1, %1; roll $1, %2" : "+m"(rotate1), "+m"(rotate2), "+m"(rotate4) : : "cc");
+    int rotate_widths = rotate1 == 3 && rotate2 == 3 && rotate4 == 3;
 
     double fp = 3.5, fp_out = 0;
     memcpy(logical + 4 * page, &fp, sizeof fp);
@@ -104,6 +125,17 @@ int main(void) {
                     stack_result < (uintptr_t)(logical + 10 * page);
     pthread_attr_destroy(&attributes);
 
+    uint64_t *alias_a = (uint64_t *)(logical + 3 * page + 128);
+    unsigned char *alias_page = logical + 11 * page;
+    int alias = mmap(alias_page, page, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, (off_t)(3 * page)) ==
+                alias_page;
+    uint64_t *alias_b = (uint64_t *)(alias_page + 128);
+    *alias_a = 0;
+    pthread_t first_thread, second_thread;
+    alias = alias && pthread_create(&first_thread, NULL, atomic_thread, alias_a) == 0 &&
+            pthread_create(&second_thread, NULL, atomic_thread, alias_b) == 0 && pthread_join(first_thread, NULL) == 0 &&
+            pthread_join(second_thread, NULL) == 0 && *alias_a == 2000 && *alias_b == 2000;
+
     int pipefd[2];
     int legacy = pipe(pipefd) == 0;
     memcpy(logical + 10 * page, "legacy", 6);
@@ -122,14 +154,15 @@ int main(void) {
     __builtin___clear_cache((char *)code, (char *)code + sizeof first);
     int smc = before == 11 && generated() == 29;
 
-    printf("x86-projection-core scalar=%d vector=%d atomic=%d rotate=%d x87=%d altstack=%d stack=%d legacy=%d smc=%d\n",
-           scalar, vector, atomic, rotate, x87, altstack_ok, thread_ok, legacy, smc);
+    printf("x86-projection-core scalar=%d vector=%d atomic=%d cmp-widths=%d rotate=%d rotate-widths=%d x87=%d altstack=%d stack=%d alias=%d legacy=%d smc=%d\n",
+           scalar, vector, atomic, compare_widths, rotate, rotate_widths, x87, altstack_ok, thread_ok, alias, legacy, smc);
     fflush(stdout);
     int values[8] = {10, 20, 30, 40, 50, 60, 70, 80};
     memcpy(logical + 4 * page + 2048, values, sizeof values);
     int gather = gather_values((const int *)(logical + 4 * page + 2048));
     printf("x86-projection-avx gather=%d\n", gather);
-    return !(scalar && vector && atomic && rotate && x87 && gather && altstack_ok && thread_ok && legacy && smc);
+    return !(scalar && vector && atomic && compare_widths && rotate && rotate_widths && x87 && gather && altstack_ok &&
+             thread_ok && alias && legacy && smc);
 }
 #else
 int main(void) { return 0; }
