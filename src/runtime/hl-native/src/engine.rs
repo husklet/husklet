@@ -7,9 +7,6 @@ use std::{
     ptr::NonNull,
 };
 
-#[cfg(unix)]
-use std::path::PathBuf;
-
 use crate::bindings::{self, Backend};
 
 pub const STATUS_OK: i32 = 0;
@@ -295,12 +292,11 @@ fn pin_guest_image(config: &EngineConfig<'_>, guest: &[u8]) -> Result<Vec<u8>, i
     use std::os::unix::ffi::OsStrExt as _;
     let guest = std::path::Path::new(std::ffi::OsStr::from_bytes(guest));
     let roots = launch_roots(config)?;
-    let path = if roots.is_empty() {
-        guest.to_owned()
+    let mut file = if roots.is_empty() {
+        File::open(guest).map_err(|_| 1)?
     } else {
         resolve_layered_guest(guest, &roots).ok_or(1)?
     };
-    let mut file = File::open(path).map_err(|_| 1)?;
     let size = usize::try_from(file.metadata().map_err(|_| 1)?.len()).map_err(|_| 1)?;
     if size == 0 || size > 64 * 1024 * 1024 {
         return Err(1);
@@ -311,11 +307,19 @@ fn pin_guest_image(config: &EngineConfig<'_>, guest: &[u8]) -> Result<Vec<u8>, i
 }
 
 #[cfg(unix)]
-fn launch_roots(config: &EngineConfig<'_>) -> Result<Vec<PathBuf>, i32> {
+fn launch_roots(config: &EngineConfig<'_>) -> Result<Vec<File>, i32> {
     use std::os::unix::ffi::OsStrExt as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
     let mut roots = Vec::new();
+    let open = |path: &std::ffi::OsStr| {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(path)
+            .map_err(|_| 1)
+    };
     if let Some(root) = config.rootfs {
-        roots.push(PathBuf::from(std::ffi::OsStr::from_bytes(root.to_bytes())));
+        roots.push(open(std::ffi::OsStr::from_bytes(root.to_bytes()))?);
     }
     for (&name, &value) in config.option_names.iter().zip(config.option_values) {
         if name.is_null() || value.is_null() {
@@ -332,14 +336,14 @@ fn launch_roots(config: &EngineConfig<'_>) -> Result<Vec<PathBuf>, i32> {
             .split(|byte| *byte == b'\n')
             .filter(|record| !record.is_empty())
         {
-            roots.push(PathBuf::from(std::ffi::OsStr::from_bytes(record)));
+            roots.push(open(std::ffi::OsStr::from_bytes(record))?);
         }
     }
     Ok(roots)
 }
 
 #[cfg(unix)]
-fn resolve_layered_guest(guest: &std::path::Path, roots: &[PathBuf]) -> Option<PathBuf> {
+fn resolve_layered_guest(guest: &std::path::Path, roots: &[File]) -> Option<File> {
     use std::path::Component;
     let mut pending = guest
         .components()
@@ -357,10 +361,8 @@ fn resolve_layered_guest(guest: &std::path::Path, roots: &[PathBuf]) -> Option<P
         let mut followed = false;
         for index in 0..pending.len() {
             prefix.push(pending[index].clone());
-            let relative = prefix.iter().collect::<PathBuf>();
-            let (root, metadata) = layered_metadata(&relative, roots)?;
-            if metadata.file_type().is_symlink() {
-                let target = std::fs::read_link(root.join(relative)).ok()?;
+            let (_root, kind) = layered_entry(&prefix, roots)?;
+            if let EntryKind::Symlink(target) = kind {
                 let mut replacement = if target.is_absolute() {
                     Vec::new()
                 } else {
@@ -385,37 +387,121 @@ fn resolve_layered_guest(guest: &std::path::Path, roots: &[PathBuf]) -> Option<P
         if followed {
             continue;
         }
-        let relative = pending.iter().collect::<PathBuf>();
-        return roots
-            .iter()
-            .map(|root| root.join(&relative))
-            .find(|candidate| candidate.is_file());
+        let (root, kind) = layered_entry(&pending, roots)?;
+        if !matches!(kind, EntryKind::Regular) {
+            return None;
+        }
+        return open_components(&roots[root], &pending, false).ok();
     }
     None
 }
 
 #[cfg(unix)]
-fn layered_metadata<'a>(relative: &std::path::Path, roots: &'a [PathBuf]) -> Option<(&'a PathBuf, std::fs::Metadata)> {
-    let parent = relative.parent().unwrap_or_else(|| std::path::Path::new(""));
-    let leaf = relative.file_name()?;
+enum EntryKind {
+    Directory,
+    Regular,
+    Symlink(std::path::PathBuf),
+}
+
+#[cfg(unix)]
+fn layered_entry(parts: &[std::ffi::OsString], roots: &[File]) -> Option<(usize, EntryKind)> {
+    let (leaf, parent) = parts.split_last()?;
     let whiteout = {
         let mut name = std::ffi::OsString::from(".wh.");
         name.push(leaf);
         name
     };
-    for root in roots {
-        let directory = root.join(parent);
-        if directory.join(&whiteout).symlink_metadata().is_ok() {
+    for (index, root) in roots.iter().enumerate() {
+        let Ok(directory) = open_components(root, parent, true) else {
+            continue;
+        };
+        if entry_mode(&directory, &whiteout).is_some() {
             return None;
         }
-        if let Ok(metadata) = std::fs::symlink_metadata(root.join(relative)) {
-            return Some((root, metadata));
+        if let Some(mode) = entry_mode(&directory, leaf) {
+            let kind = if mode & libc::S_IFMT == libc::S_IFLNK {
+                EntryKind::Symlink(read_link(&directory, leaf)?)
+            } else if mode & libc::S_IFMT == libc::S_IFDIR {
+                EntryKind::Directory
+            } else if mode & libc::S_IFMT == libc::S_IFREG {
+                EntryKind::Regular
+            } else {
+                return None;
+            };
+            return Some((index, kind));
         }
-        if directory.join(".wh..wh..opq").symlink_metadata().is_ok() {
+        if entry_mode(&directory, std::ffi::OsStr::new(".wh..wh..opq")).is_some() {
             return None;
         }
     }
     None
+}
+
+#[cfg(unix)]
+fn open_components(root: &File, parts: &[std::ffi::OsString], directory: bool) -> std::io::Result<File> {
+    use std::os::fd::{AsRawFd as _, FromRawFd as _};
+    use std::os::unix::ffi::OsStrExt as _;
+    let duplicate = unsafe { libc::fcntl(root.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+    if duplicate < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: fcntl returned a new owned descriptor.
+    let mut current = unsafe { File::from_raw_fd(duplicate) };
+    for (index, part) in parts.iter().enumerate() {
+        let name = std::ffi::CString::new(part.as_bytes())
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        let final_part = index + 1 == parts.len();
+        let flags = libc::O_RDONLY
+            | libc::O_NOFOLLOW
+            | libc::O_CLOEXEC
+            | if !final_part || directory { libc::O_DIRECTORY } else { 0 };
+        let descriptor = unsafe { libc::openat(current.as_raw_fd(), name.as_ptr(), flags) };
+        if descriptor < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: openat returned a new owned descriptor.
+        current = unsafe { File::from_raw_fd(descriptor) };
+    }
+    Ok(current)
+}
+
+#[cfg(unix)]
+fn entry_mode(directory: &File, name: &std::ffi::OsStr) -> Option<libc::mode_t> {
+    use std::{mem::MaybeUninit, os::fd::AsRawFd as _, os::unix::ffi::OsStrExt as _};
+    let name = std::ffi::CString::new(name.as_bytes()).ok()?;
+    let mut metadata = MaybeUninit::<libc::stat>::uninit();
+    let status = unsafe {
+        libc::fstatat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            metadata.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    (status == 0).then(|| unsafe { metadata.assume_init().st_mode })
+}
+
+#[cfg(unix)]
+fn read_link(directory: &File, name: &std::ffi::OsStr) -> Option<std::path::PathBuf> {
+    use std::{
+        os::fd::AsRawFd as _,
+        os::unix::ffi::{OsStrExt as _, OsStringExt as _},
+    };
+    let name = std::ffi::CString::new(name.as_bytes()).ok()?;
+    let mut bytes = vec![0_u8; 4096];
+    let count = unsafe {
+        libc::readlinkat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            bytes.as_mut_ptr().cast(),
+            bytes.len(),
+        )
+    };
+    if count < 0 || count as usize == bytes.len() {
+        return None;
+    }
+    bytes.truncate(count as usize);
+    Some(std::path::PathBuf::from(std::ffi::OsString::from_vec(bytes)))
 }
 
 impl ProgramLayout {
@@ -520,11 +606,11 @@ impl Drop for Engine {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{Engine, EngineConfig, Exit, Plan};
+    use super::{Engine, EngineConfig, Exit, Plan, resolve_layered_guest};
     use std::{
         ffi::CString,
-        fs::OpenOptions,
-        io::{Seek, SeekFrom, Write},
+        fs::{File, OpenOptions},
+        io::{Read as _, Seek, SeekFrom, Write},
         os::fd::AsRawFd,
         path::PathBuf,
     };
@@ -676,6 +762,67 @@ mod tests {
         let argument = CString::new("/bin/main").unwrap();
         engine.run(&[argument.as_ptr()]).unwrap();
         assert_eq!(engine.exit().status, 0);
+    }
+
+    fn resolved(mut roots: Vec<std::fs::File>, path: &str) -> Option<String> {
+        let mut file = resolve_layered_guest(std::path::Path::new(path), &roots)?;
+        let mut value = String::new();
+        file.read_to_string(&mut value).ok()?;
+        roots.clear();
+        Some(value)
+    }
+
+    #[test]
+    fn interpreter_union_authority_handles_layers_links_and_deletions() {
+        use std::os::unix::fs::symlink;
+        let upper = tempfile::tempdir().unwrap();
+        let lower = tempfile::tempdir().unwrap();
+        let lower_second = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(lower.path().join("lib/real")).unwrap();
+        std::fs::create_dir_all(lower_second.path().join("lib")).unwrap();
+        std::fs::write(lower.path().join("lib/real/loader"), "lower").unwrap();
+        std::fs::write(lower_second.path().join("lib/fallback"), "second").unwrap();
+        symlink("real/loader", lower.path().join("lib/relative")).unwrap();
+        symlink("/lib/real/loader", lower.path().join("lib/absolute")).unwrap();
+        let roots = || {
+            vec![
+                File::open(upper.path()).unwrap(),
+                File::open(lower.path()).unwrap(),
+                File::open(lower_second.path()).unwrap(),
+            ]
+        };
+        assert_eq!(resolved(roots(), "/lib/real/loader").as_deref(), Some("lower"));
+        assert_eq!(resolved(roots(), "/lib/relative").as_deref(), Some("lower"));
+        assert_eq!(resolved(roots(), "/lib/absolute").as_deref(), Some("lower"));
+        assert_eq!(resolved(roots(), "/lib/fallback").as_deref(), Some("second"));
+        std::fs::write(lower.path().join("lib/fallback"), "first").unwrap();
+        assert_eq!(resolved(roots(), "/lib/fallback").as_deref(), Some("first"));
+
+        std::fs::create_dir_all(upper.path().join("lib/real")).unwrap();
+        std::fs::write(upper.path().join("lib/real/loader"), "upper").unwrap();
+        assert_eq!(resolved(roots(), "/lib/real/loader").as_deref(), Some("upper"));
+        std::fs::remove_file(upper.path().join("lib/real/loader")).unwrap();
+        std::fs::write(upper.path().join("lib/real/.wh.loader"), "").unwrap();
+        assert!(resolved(roots(), "/lib/real/loader").is_none());
+        std::fs::remove_file(upper.path().join("lib/real/.wh.loader")).unwrap();
+        std::fs::write(upper.path().join("lib/real/.wh..wh..opq"), "").unwrap();
+        assert!(resolved(roots(), "/lib/real/loader").is_none());
+        assert!(resolved(roots(), "/../../proc/self/fd/0").is_none());
+    }
+
+    #[test]
+    fn pinned_interpreter_survives_ancestor_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("lib/live")).unwrap();
+        std::fs::write(root.path().join("lib/live/loader"), "original").unwrap();
+        let roots = vec![File::open(root.path()).unwrap()];
+        let mut pinned = resolve_layered_guest(std::path::Path::new("/lib/live/loader"), &roots).unwrap();
+        std::fs::rename(root.path().join("lib/live"), root.path().join("lib/displaced")).unwrap();
+        std::fs::create_dir_all(root.path().join("lib/live")).unwrap();
+        std::fs::write(root.path().join("lib/live/loader"), "replacement").unwrap();
+        let mut value = String::new();
+        pinned.read_to_string(&mut value).unwrap();
+        assert_eq!(value, "original");
     }
 
     fn inspect(bytes: &[u8]) -> Result<Plan, i32> {

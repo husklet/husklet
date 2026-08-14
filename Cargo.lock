@@ -1199,6 +1199,7 @@ name = "hl-native"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "libc",
  "sha2",
  "tempfile",
 ]

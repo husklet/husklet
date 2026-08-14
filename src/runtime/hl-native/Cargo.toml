@@ -14,6 +14,9 @@ workspace = true
 [features]
 native-test-hooks = []
 
+[dependencies]
+libc = "0.2"
+
 [build-dependencies]
 cc = "1.4.0"
 
