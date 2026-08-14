@@ -52,6 +52,7 @@ impl Form {
             (CreatePage::Docker, form.docker()),
             (CreatePage::Network, form.network()),
         ]);
+        window.set_default_widget(Some(&view.create));
 
         {
             let w = window.clone();

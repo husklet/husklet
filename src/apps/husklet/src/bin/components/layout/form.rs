@@ -21,6 +21,8 @@ impl Panel {
 pub(crate) struct Field;
 
 impl Field {
+    const ENTRY_ACTIVATES_DEFAULT: bool = true;
+
     pub(crate) fn toggle(title: &str, description: &str, switch: &gtk::Switch) -> gtk::Box {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         row.add_css_class("dockrow");
@@ -45,6 +47,7 @@ impl Field {
     pub(crate) fn entry(placeholder: &str, mono: bool) -> gtk::Entry {
         let e = gtk::Entry::new();
         e.set_placeholder_text(Some(placeholder));
+        e.set_activates_default(Self::ENTRY_ACTIVATES_DEFAULT);
         if mono {
             e.add_css_class("mono");
         }
@@ -91,6 +94,16 @@ impl Field {
         b.append(&l);
         b.append(s);
         b
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Field;
+
+    #[test]
+    fn single_line_entries_activate_the_window_default() {
+        assert!(Field::ENTRY_ACTIVATES_DEFAULT);
     }
 }
 
