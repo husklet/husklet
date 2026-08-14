@@ -27,6 +27,7 @@ use registry::Registry;
 /// A rendered surface: the retained widget tree for one node tree.
 pub struct Surface {
     registry: Registry,
+    bindings: event::Bindings,
     sources: HashMap<SourceId, NodeId>,
     root: gtk::Box,
     reports: Reports,
@@ -44,6 +45,7 @@ impl Surface {
         registry.insert(NodeId::ROOT, root.clone().upcast());
         Self {
             registry,
+            bindings: event::Bindings::default(),
             sources: HashMap::new(),
             root,
             reports: Reports::new(),
@@ -127,6 +129,7 @@ impl Surface {
 
     fn discard(&mut self, id: NodeId) -> Result<(), Failure> {
         let widget = self.registry.remove(id).ok_or(Failure::Unmapped(id))?;
+        self.bindings.forget(id);
         build::detach(&widget);
         Ok(())
     }
@@ -181,11 +184,14 @@ impl Renderer for Surface {
                 Ok(())
             }
             Patch::SetHandler { id, handler } => {
-                let widget = self.require(*id)?;
-                event::bind(widget, *id, handler, &self.reports);
+                let widget = self.registry.get(*id).ok_or(Failure::Unmapped(*id))?;
+                self.bindings.set(widget, *id, handler, &self.reports);
                 Ok(())
             }
-            Patch::ClearHandler { .. } => Ok(()),
+            Patch::ClearHandler { id, trigger } => {
+                self.bindings.clear(*id, *trigger);
+                Ok(())
+            }
             Patch::Remove { id } => self.discard(*id),
         }
     }

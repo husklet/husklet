@@ -31,12 +31,55 @@ fn answer(request: &hl_gui::RowRequest) -> RowWindow {
     }
 }
 
+/// Every scenario runs inside one test.
+///
+/// GTK may only be initialized from a single thread, and the libtest harness
+/// gives every `#[test]` its own thread — so a second GTK test in the same
+/// binary either panics or, if it treats the failure as "no display", skips
+/// itself without saying anything useful. One test that runs the scenarios in
+/// sequence is therefore the only shape in which all of them actually run.
 #[test]
-fn a_model_describes_the_whole_source_while_holding_a_viewport() {
+fn a_model_virtualizes_a_source_larger_than_the_widgets_that_show_it() {
     if !toolkit() {
         eprintln!("skipped: no display connection");
         return;
     }
+    let scenarios: [(&str, fn()); 6] = [
+        (
+            "a_model_describes_the_whole_source_while_holding_a_viewport",
+            a_model_describes_the_whole_source_while_holding_a_viewport,
+        ),
+        (
+            "realizing_a_row_answers_at_once_and_asks_for_the_rest",
+            realizing_a_row_answers_at_once_and_asks_for_the_rest,
+        ),
+        (
+            "a_delivered_window_replaces_the_placeholders_it_covers",
+            a_delivered_window_replaces_the_placeholders_it_covers,
+        ),
+        (
+            "scrolling_a_large_source_holds_only_a_bounded_number_of_rows",
+            scrolling_a_large_source_holds_only_a_bounded_number_of_rows,
+        ),
+        (
+            "an_invalidated_band_returns_to_pending_without_disturbing_the_rest",
+            an_invalidated_band_returns_to_pending_without_disturbing_the_rest,
+        ),
+        (
+            "a_window_arriving_before_a_length_is_still_reachable",
+            a_window_arriving_before_a_length_is_still_reachable,
+        ),
+    ];
+    let mut ran = 0;
+    for (name, scenario) in scenarios {
+        scenario();
+        eprintln!("ran {name}");
+        ran += 1;
+    }
+    assert_eq!(ran, scenarios.len(), "every scenario must actually execute");
+}
+
+fn a_model_describes_the_whole_source_while_holding_a_viewport() {
     let rows = Rows::new(SOURCE);
     rows.resize(Version::new(1), LENGTH);
 
@@ -48,12 +91,7 @@ fn a_model_describes_the_whole_source_while_holding_a_viewport() {
     assert_eq!(rows.held(), 0, "nothing is held before anything is asked for");
 }
 
-#[test]
 fn realizing_a_row_answers_at_once_and_asks_for_the_rest() {
-    if !toolkit() {
-        eprintln!("skipped: no display connection");
-        return;
-    }
     let rows = Rows::new(SOURCE);
     rows.resize(Version::new(1), LENGTH);
 
@@ -68,12 +106,7 @@ fn realizing_a_row_answers_at_once_and_asks_for_the_rest() {
     );
 }
 
-#[test]
 fn a_delivered_window_replaces_the_placeholders_it_covers() {
-    if !toolkit() {
-        eprintln!("skipped: no display connection");
-        return;
-    }
     let rows = Rows::new(SOURCE);
     rows.resize(Version::new(1), LENGTH);
     let _ = rows.item(0);
@@ -89,12 +122,7 @@ fn a_delivered_window_replaces_the_placeholders_it_covers() {
     assert!(!rows.is_pending(0));
 }
 
-#[test]
 fn scrolling_a_large_source_holds_only_a_bounded_number_of_rows() {
-    if !toolkit() {
-        eprintln!("skipped: no display connection");
-        return;
-    }
     let rows = Rows::new(SOURCE);
     rows.resize(Version::new(1), LENGTH);
 
@@ -118,12 +146,7 @@ fn scrolling_a_large_source_holds_only_a_bounded_number_of_rows() {
     assert_eq!(u64::from(rows.n_items()), LENGTH, "the source length is unchanged");
 }
 
-#[test]
 fn an_invalidated_band_returns_to_pending_without_disturbing_the_rest() {
-    if !toolkit() {
-        eprintln!("skipped: no display connection");
-        return;
-    }
     let rows = Rows::new(SOURCE);
     rows.resize(Version::new(1), LENGTH);
     for index in [0_u32, 512] {
@@ -141,19 +164,26 @@ fn an_invalidated_band_returns_to_pending_without_disturbing_the_rest() {
     assert!(!rows.is_pending(0), "an unrelated band keeps its widgets");
 }
 
-#[test]
 fn a_window_arriving_before_a_length_is_still_reachable() {
-    if !toolkit() {
-        eprintln!("skipped: no display connection");
-        return;
-    }
     let rows = Rows::new(SOURCE);
     let _ = rows.item(0);
     let requests = rows.drain();
 
-    // Nothing was scheduled, because the model does not yet know the source has
-    // any rows; a producer may still push a window first.
-    assert!(requests.is_empty());
+    // Realizing a row observes a viewport, and the cache bounds a request by
+    // the length only once it knows one — so the first block is already on its
+    // way. This scenario never ran while each test had its own thread, and the
+    // assertion it carried (that nothing was scheduled) contradicted the
+    // windowing contract `hl-gui` pins in `filtering_invalidates_the_row_count`.
+    assert!(
+        !requests.is_empty(),
+        "a realized row schedules its block even before a length is known"
+    );
+    for request in requests {
+        rows.deliver(&answer(&request));
+    }
+
+    // The delivered window opened generation 1, so the resize that follows is
+    // not a new generation and does not discard what already arrived.
     rows.resize(Version::new(1), 128);
     let _ = rows.item(0);
     for request in rows.drain() {
