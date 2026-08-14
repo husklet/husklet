@@ -720,6 +720,15 @@ static int synth_proc_file_stat(const char *gp, struct stat *s) {
 
 static int synth_stat_raw(const char *gp, struct stat *s) {
     if (!gp) return 0;
+    size_t length = strlen(gp);
+    if (length > 1 && gp[length - 1] == '/') {
+        char canonical[4200];
+        if (length >= sizeof canonical) return 0;
+        memcpy(canonical, gp, length + 1);
+        while (length > 1 && canonical[length - 1] == '/') canonical[--length] = 0;
+        int result = synth_stat_raw(canonical, s);
+        return result && S_ISDIR(s->st_mode);
+    }
     if (whiteout_present(gp)) {
         synth_stat_set(s, S_IFCHR, 1);
         s->st_rdev = 0;
