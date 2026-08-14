@@ -47,7 +47,7 @@ impl Page {
 pub struct View {
     pub widget: gtk::Box,
     pages: gtk::Stack,
-    items: Rc<RefCell<Vec<gtk::Box>>>,
+    items: Rc<RefCell<Vec<gtk::Button>>>,
 }
 
 impl View {
@@ -60,28 +60,28 @@ impl View {
         pages.set_hexpand(true);
         pages.set_vexpand(true);
         pages.set_transition_type(gtk::StackTransitionType::None);
-        let items: Rc<RefCell<Vec<gtk::Box>>> = Rc::new(RefCell::new(Vec::new()));
+        let items: Rc<RefCell<Vec<gtk::Button>>> = Rc::new(RefCell::new(Vec::new()));
 
         for (index, (page, content)) in content.into_iter().enumerate() {
             let name = page.title();
             pages.add_named(&content, Some(name));
-            let item = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            let item = gtk::Button::with_label(name);
             item.add_css_class("dsi");
+            item.set_has_frame(false);
+            item.set_hexpand(true);
+            item.set_halign(gtk::Align::Fill);
+            if let Some(label) = item.child().and_downcast::<gtk::Label>() {
+                label.set_xalign(0.0);
+            }
             if index == 0 {
                 item.add_css_class("on");
             }
-            let label = gtk::Label::new(Some(name));
-            label.set_xalign(0.0);
-            label.set_hexpand(true);
-            item.append(&label);
-            let click = gtk::GestureClick::new();
             let stack = pages.clone();
             let event_items = items.clone();
-            click.connect_released(move |_, _, _, _| {
+            item.connect_clicked(move |_| {
                 stack.set_visible_child_name(name);
                 Self::select_items(&event_items.borrow(), name);
             });
-            item.add_controller(click);
             sidebar.append(&item);
             items.borrow_mut().push(item);
         }
@@ -105,12 +105,9 @@ impl View {
         Self::select_items(&self.items.borrow(), name);
     }
 
-    fn select_items(items: &[gtk::Box], selected: &str) {
+    fn select_items(items: &[gtk::Button], selected: &str) {
         for item in items {
-            let matches = item
-                .first_child()
-                .and_downcast::<gtk::Label>()
-                .is_some_and(|label| label.text() == selected);
+            let matches = item.label().as_deref() == Some(selected);
             if matches {
                 item.add_css_class("on");
             } else {
