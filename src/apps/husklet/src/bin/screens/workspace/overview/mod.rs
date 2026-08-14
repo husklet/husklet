@@ -23,18 +23,40 @@ impl<'a> Overview<'a> {
         Self { workspace, page }
     }
 
-    /// The surface an extension draws into.
+    /// The surface an extension draws into, fed by a host for this workspace.
     ///
-    /// Nothing is posted to it yet: the host that accepts an extension's
-    /// socket is a separate lane, and the page is deliberately reachable
-    /// before that lands so the two can be joined without touching the shell
-    /// again. Until then it shows an empty surface rather than pretending.
-    fn extension_page() -> gtk::Box {
+    /// Nothing here blocks and nothing here fails. Reading the installation,
+    /// reaching the container daemon, and binding the socket all happen on the
+    /// host's own thread, so a workspace whose daemon is slow — or whose
+    /// extension does not exist — costs the main loop nothing. A workspace with
+    /// nothing installed is told so through the same banner path a stopped
+    /// extension uses, over the empty surface it already has.
+    fn extension_page(workspace: &WorkspaceConfig) -> gtk::Box {
+        use hl::extension::{Order, Report};
+        use screens::workspace::extension::{Delivery, Signal};
+
         let (post, deliveries) = screens::workspace::extension::channel();
-        // The sink holds the posting end so the queue stays open rather than
-        // reading as a disconnected extension the moment the page is built.
-        let sink = std::rc::Rc::new(move |_signal: screens::workspace::extension::Signal| {
-            let _held = &post;
+        // The two halves were built apart and carry the same three cases under
+        // their own names, because the page lives in this binary and the host
+        // lives in the library; this is the whole of the translation.
+        let host = std::rc::Rc::new(hl::extension::Host::workspace(
+            workspace,
+            Box::new(move |report| {
+                let delivery = match report {
+                    Report::Frame(frame) => Delivery::Frame(frame),
+                    Report::Source(mutation) => Delivery::Source(mutation),
+                    Report::Loss(reason) => Delivery::Loss(reason),
+                };
+                // A page that has gone away is not a failure: the host is about
+                // to be dropped with it.
+                drop(post.send(delivery));
+            }),
+        ));
+        // The page never names the host, so the sink is where the two vocabularies
+        // meet: one enum for what a person did, one for what the extension said.
+        let sink = std::rc::Rc::new(move |signal: Signal| match signal {
+            Signal::Interaction(event) => host.accept(Order::Interaction(event)),
+            Signal::Retry => host.accept(Order::Retry),
         });
         let (widget, page) = screens::workspace::extension::Interface::new(deliveries, sink);
         page.install();
@@ -55,7 +77,7 @@ impl<'a> Overview<'a> {
         let volumes = Table::new(&["NAME", "DRIVER"]);
         let networks = Table::new(&["NAME", "DRIVER", "SCOPE"]);
         let (ppane, pbody) = live_proc_pane();
-        let extension = Self::extension_page();
+        let extension = Self::extension_page(ws);
         let view = screens::workspace::View::new([
             (WorkspacePage::Overview, self.overview().upcast()),
             (WorkspacePage::Containers, containers.widget.clone().upcast()),

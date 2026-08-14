@@ -17,6 +17,7 @@
 mod control;
 mod conversation;
 mod files;
+mod host;
 mod image;
 mod inventory;
 mod listener;
@@ -32,6 +33,7 @@ use hl_ws_extension::port::{ContainerControl, ContainerInventory, HostError, Ima
 pub use control::ContainerLifecycle;
 pub use conversation::{Conversation, Interface, Queue};
 pub use files::WorkspaceDirectory;
+pub use host::{Audience, Host, Order, Overrun, Plan, Report, Standing, Supply};
 pub use image::ImageLibrary;
 pub use inventory::ContainerCatalog;
 pub use listener::Listener;
