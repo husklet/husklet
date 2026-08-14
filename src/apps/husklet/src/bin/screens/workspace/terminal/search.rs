@@ -177,7 +177,7 @@ impl Search {
 
 #[cfg(test)]
 mod tests {
-    use super::{FocusTransition, incremental_search_allowed};
+    use super::{incremental_search_allowed, FocusTransition};
 
     #[test]
     fn incremental_search_is_bounded_for_large_scrollback() {

@@ -139,7 +139,10 @@ mod tests {
         let workspace = WorkspaceConfig::new("test", "ubuntu:22.04", Arch::Arm64);
 
         assert_eq!(
-            Configuration::new(&workspace).environment().get("LANG").map(String::as_str),
+            Configuration::new(&workspace)
+                .environment()
+                .get("LANG")
+                .map(String::as_str),
             Some("C.UTF-8")
         );
     }
@@ -150,7 +153,10 @@ mod tests {
         workspace.env.push(("LANG".into(), "ja_JP.UTF-8".into()));
 
         assert_eq!(
-            Configuration::new(&workspace).environment().get("LANG").map(String::as_str),
+            Configuration::new(&workspace)
+                .environment()
+                .get("LANG")
+                .map(String::as_str),
             Some("ja_JP.UTF-8")
         );
     }
