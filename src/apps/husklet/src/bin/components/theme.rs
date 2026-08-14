@@ -11,10 +11,9 @@ pub(crate) const ACCENT: &str = "#2f80ff";
 
 pub(crate) fn css() -> String {
     format!(
-        "
-window {{ background-color:{BG0}; color:{TXT}; }}
-* {{ outline:none; }}
-label {{ color:{TXT}; }}
+	"
+	window {{ background-color:{BG0}; color:{TXT}; }}
+	label {{ color:{TXT}; }}
 
 /* ---- generic slim controls ---- */
 .strip {{ background-color:{BG1}; box-shadow: inset 0 -1px 0 0 {LINE_S}; min-height:38px; padding:0 10px 0 14px; }}
@@ -39,7 +38,7 @@ list.wslist > row:selected {{ background-color:{BG1}; }}
 .go {{ font-size:12px; color:{ACCENT}; font-weight:600; }}
 .empty {{ color:{DIM}; font-size:13px; padding:26px; }}
 /* per-row action affordances: ▶ play + ⋯ menu — frameless (no button box), color-only hover */
-.rowbtn, .rowbtn > button {{ min-height:0; min-width:0; padding:2px 7px; background:none; border:none; box-shadow:none; outline:none; color:{DIM}; }}
+	.rowbtn, .rowbtn > button {{ min-height:0; min-width:0; padding:2px 7px; background:none; border:none; box-shadow:none; color:{DIM}; }}
 .rowbtn:hover, .rowbtn:hover > button, .rowbtn > button:hover {{ color:{TXT}; background:none; }}
 .rowbtn > button:checked, .rowbtn > button:active {{ background:none; box-shadow:none; }}
 .rowbtn image {{ -gtk-icon-size:15px; }}
@@ -144,5 +143,17 @@ vte-terminal.copymode, terminal.copymode {{ box-shadow: inset 0 0 0 1px {ACCENT}
 .searchinfo {{ font-size:11px; color:{FAINT}; min-width:56px; }}
 .searchinfo.nomatch {{ color:#ff6b6b; }}
 "
-    )
+	)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::css;
+
+    #[test]
+    fn theme_never_suppresses_toolkit_focus_indicators() {
+        let theme = css();
+        assert!(!theme.contains("outline:none"));
+        assert!(!theme.contains("outline: none"));
+    }
 }
