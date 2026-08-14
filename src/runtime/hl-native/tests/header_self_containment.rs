@@ -300,7 +300,7 @@ static void claim_barrier(void);
 #ifdef OMIT_LIFECYCLE_INDEX_REMOVE
 #define HL_SMC_PAGE_INDEX_LIFECYCLE_REMOVE(index, page) ((void)(index), (void)(page), 0)
 #endif
-#include "translator/guest/x86_64/smc_page_index.h"
+#include "translator/guest/x86_64/smc/index.h"
 
 static _Atomic uint64_t slots[8];
 static hl_smc_page_index index_ = {slots, 8};

@@ -128,8 +128,10 @@ uint64_t hl_x86_guest_pointer(uint64_t address);
 // The dispatch seam is per (guest ISA, HOST CPU): dispatch.h patches AArch64 branch encodings.
 #include "../../host/cpu.h"
 #if defined(HL_HOST_CPU_AARCH64)
-#include "../../translator/guest/x86_64/smc_page_index.h"
+#include "../../translator/guest/x86_64/smc/index.h"
 #include "../../translator/guest/x86_64/smc_address.h"
+#include "../../translator/guest_memory.h"
+#include "../../translator/guest/x86_64/smc/protection.c"
 #include "../../translator/guest/x86_64/dispatch.h" // x86 dispatch seam for the SHARED engine/dispatch.c
 #else
 #include "../../translator/guest/x86_64/interp_dispatch.h"
@@ -158,7 +160,6 @@ static const hl_x86_avx_state g_avx_state = {&g_nonpie_lo, &g_nonpie_hi, &g_nonp
                                              jit86_avx_memory_write};
 #include "../../translator/guest/x86_64/glue.h" // independently compiled x86 target state
 #include "../../translator/guest_fetch.h"
-#include "../../translator/guest_memory.h"
 #include "../../translator/guest/x86_64/rep_runtime.h" // string-op helpers + the hooks engine_global_init sets
 #include "../../translator/cache.c"                    // SHARED translator: code cache + block map
 

@@ -43,101 +43,6 @@
 // debug: track block transitions for fault diagnosis (used by linux_abi/x86.c).
 static uint64_t g_prevpc, g_curpc;
 
-// ---- W6A item 3: SMC (self-modifying code) for in-process JIT guests ----  gate NOSMC=1
-// Once a guest takes a PROT_EXEC (RWX) mmap (g_rwx_guest, set in os/linux/service.c), it may overwrite
-// code it already executed (and we translated+cached). After translating a block we mprotect its source
-// 16KB page READ-ONLY; a guest write then traps in jit86_lazyguard (linux_abi/x86.c) -> smc_on_write() unprotects
-// the page + drops the stale translations so the modified bytes re-translate. Entirely inert unless
-// g_rwx_guest is set -> zero effect on the normal (non-JIT) matrix.
-extern int g_rwx_guest;
-// SMC-protected 16 KB code-page table. Sized to cover 64K pages (~1 GB of distinct executed code) so a real
-// JIT (V8/PyPy/.NET use tens of MB) never overflows -> no "capacity cliff" stale code in practice; and if a
-// pathological guest still exceeds it, smc_protect degrades GRACEFULLY (leaves the overflow page writable
-// rather than read-only-but-untracked, which would hang on the un-recognized write). 64K * 8 B = 512 KB BSS.
-#define SMC_MAX 65536
-#define SMC_INDEX_SLOTS (SMC_MAX * 2)
-static uint64_t g_smc_pg[SMC_MAX];
-static _Atomic uint64_t g_smc_index_slots[SMC_INDEX_SLOTS];
-static hl_smc_page_index g_smc_index = {g_smc_index_slots, SMC_INDEX_SLOTS};
-static int g_smc_n;
-static uint64_t g_smc_flushes; // PROF: number of SMC re-translate events
-
-static uint64_t smc_page_size(void) {
-    static uint64_t size;
-    if (size == 0) size = (uint64_t)getpagesize();
-    return size;
-}
-
-static void smc_protect(uint64_t pc) {
-    if (!g_rwx_guest) return; // no JIT guest -> inert (matrix bit-exact)
-    const void *canonical = NULL;
-    size_t contiguous = 0;
-    // The last hl_logical_vma_resolve_exec call in the translator (f98ae9cf): same tri-state, same
-    // arguments, but reached through the bound seam so translator -> linux_abi stays an arrow DOCS.md 3.3
-    // does not draw. core/target/x86_64.c binds the logical-VMA implementation in engine_global_init, which
-    // runs long before any block is translated, so the answer is unchanged.
-    int resolved = hl_guest_memory_resolve_exec(pc, 1, &canonical, &contiguous);
-    if (resolved < 0) return;
-    /* Logical-VMA stores are observed through the executable-alias visitor.
-       Protecting canonical backing here would create a host fault outside the
-       direct-address domain represented by the exact index. */
-    if (!hl_smc_address_is_direct(resolved)) return;
-    uint64_t size = smc_page_size();
-    uint64_t pg = pc & ~(size - 1);
-    for (int i = 0; i < g_smc_n; i++)
-        if (g_smc_pg[i] == pg) return; // already protected
-    // Capacity check BEFORE the mprotect. If the table is full, leave the page WRITABLE: a protected-but-
-    // untracked page would trap a later guest write that smc_on_write() cannot recognize (returns 0), so the
-    // fault falls through as a real SIGSEGV / hangs on the un-handled write. Not protecting past SMC_MAX only
-    // loses SMC coherence for the overflow pages (the separate "SMC capacity cliff" -> stale code, not a hang).
-    if (g_smc_n >= SMC_MAX) return;
-    hl_smc_page_index_add_result indexed = hl_smc_page_index_add(&g_smc_index, pg);
-    if (indexed == HL_SMC_PAGE_INDEX_FULL) return;
-    if (indexed == HL_SMC_PAGE_INDEX_EXISTS) return;
-    if (mprotect((void *)pg, (size_t)size, PROT_READ) != 0) {
-        if (indexed == HL_SMC_PAGE_INDEX_INSERTED) (void)hl_smc_page_index_remove(&g_smc_index, pg);
-        return;
-    }
-    g_smc_pg[g_smc_n++] = pg;
-}
-
-// If `a` falls in a protected SMC page, unprotect+forget it and return 1 (caller drops translations).
-// Re-protected the next time the page is translated. Called from jit86_lazyguard (linux_abi/x86.c).
-static int smc_on_write(uint64_t a) {
-    if (!g_rwx_guest) return 0;
-    uint64_t size = smc_page_size();
-    uint64_t pg = a & ~(size - 1);
-    if (!hl_smc_page_index_contains(&g_smc_index, pg)) return 0;
-    mprotect((void *)pg, (size_t)size, PROT_READ | PROT_WRITE); // let the guest's write through
-    g_smc_flushes++;
-    return 1;
-}
-
-/* Claim a successful store to a tracked translated source page.  Keeping the
- * page in this registry lets every concurrent writer publish through the
- * ordinary stop-the-world path, not only the thread which took the fault. */
-static int smc_tracked_written(uint64_t address, uint64_t size) {
-    if (size == 0 || address > UINT64_MAX - size) return 0;
-    uint64_t page_size = smc_page_size();
-    uint64_t first = address & ~(page_size - 1);
-    uint64_t last = (address + size - 1) & ~(page_size - 1);
-    for (uint64_t guest_page = first;; guest_page += page_size) {
-        uint64_t page = hl_x86_guest_pointer(guest_page);
-        page &= ~(page_size - 1);
-        if (hl_smc_page_index_contains(&g_smc_index, page)) {
-        /* Re-arm before publication. A concurrent writer which was already
-         * admitted either reaches this same observer and publishes too, or
-         * faults and retries after the stop-the-world commit. */
-            (void)mprotect((void *)page, (size_t)page_size, PROT_READ);
-            return 1;
-        }
-        if (guest_page == last) break;
-    }
-    return 0;
-}
-
-// ------------------------------------------------------------------------------------------------------
-
 // x86 keeps its own naked trampolines (frontend/x86_64/translate.c: cpu pinned in x28, 16-GPR model,
 // host save offsets #168..#264). Defining this tells jit/dispatch.c NOT to emit the aarch64 ones.
 #define G_OWN_TRAMPOLINES 1
@@ -156,7 +61,7 @@ static int smc_tracked_written(uint64_t address, uint64_t size) {
 // shared dispatcher while-loop -- the original broke the loop immediately, not just the macro.
 #define G_DISPATCH_DEBUG(c)                                                                                            \
     {                                                                                                                  \
-        if (signal_deliverable_for_cpu(c)) { maybe_deliver_signal(c); /* deliverable signal -> handler */ }           \
+        if (signal_deliverable_for_cpu(c)) { maybe_deliver_signal(c); /* deliverable signal -> handler */ }            \
         if (g_dispatch_diagnostics) {                                                                                  \
             g_prevpc = g_curpc;                                                                                        \
             g_curpc = (c)->rip;                                                                                        \

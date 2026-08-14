@@ -1,5 +1,5 @@
-#ifndef HL_TRANSLATOR_X86_64_SMC_PAGE_INDEX_H
-#define HL_TRANSLATOR_X86_64_SMC_PAGE_INDEX_H
+#ifndef HL_TRANSLATOR_X86_64_SMC_INDEX_H
+#define HL_TRANSLATOR_X86_64_SMC_INDEX_H
 
 #include <stdatomic.h>
 #include <stddef.h>
@@ -58,7 +58,8 @@ static inline hl_smc_page_index_add_result hl_smc_page_index_add(hl_smc_page_ind
             if ((entry & UINT64_C(0xfff)) == HL_SMC_PAGE_INDEX_TOMB && tomb == SIZE_MAX) tomb = slot;
             if (entry == 0) {
                 size_t destination = tomb == SIZE_MAX ? slot : tomb;
-                uint64_t expected = tomb == SIZE_MAX ? 0 : atomic_load_explicit(&index->slots[tomb], memory_order_acquire);
+                uint64_t expected =
+                    tomb == SIZE_MAX ? 0 : atomic_load_explicit(&index->slots[tomb], memory_order_acquire);
                 HL_SMC_PAGE_INDEX_BEFORE_CLAIM();
                 if ((tomb == SIZE_MAX || (expected & UINT64_C(0xfff)) == HL_SMC_PAGE_INDEX_TOMB) &&
                     atomic_compare_exchange_strong_explicit(&index->slots[destination], &expected, live,
