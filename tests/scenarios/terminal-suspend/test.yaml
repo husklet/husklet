@@ -1,0 +1,30 @@
+cases:
+- id: terminal-suspend/foreground-job
+  image: alpine
+  resources: [pty]
+  timeout: 20
+  actions:
+  - terminal:
+      argv: [/bin/sh]
+      steps:
+      - write: { text: "stty -echo; echo ECHO-OFF\r" }
+      - await_output: { contains: ECHO-OFF, timeout_ms: 5000 }
+      - write: { text: "PS1='POST-$?>'; export PS1\r" }
+      - await_output: { contains: "POST-0>", timeout_ms: 5000 }
+      - write: { text: "cat\r" }
+      - write: { text: "CHILD-RDY\r" }
+      - await_output: { contains: CHILD-RDY, timeout_ms: 5000 }
+      - write: { text: "\u001a" }
+      - await_output: { contains: "POST-148>", timeout_ms: 5000 }
+      - write: { text: "jobs; echo JOBS-OK\r" }
+      - await_output: { contains: JOBS-OK, timeout_ms: 5000 }
+      - write: { text: "fg\r" }
+      - write: { text: "RESUMED\r" }
+      - await_output: { contains: RESUMED, timeout_ms: 5000 }
+      - write: { text: "\u0003" }
+      - await_output: { contains: "POST-130>", timeout_ms: 5000 }
+      - write: { text: "echo SHELL-OK; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains: golden/foreground_suspend.txt
