@@ -3,7 +3,7 @@
 // otherwise. Included by service.c AFTER its local helpers (overlay_*/proc_self_exe/synth_str_fd/
 // cpu_range_str it calls) and before service() -- same TU scope.
 #include "../device.h"
-#include "../proc_fd_target.h"
+#include "fs/procfd.h"
 
 #if defined(__linux__)
 #include <linux/stat.h>

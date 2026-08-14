@@ -1,5 +1,5 @@
-#ifndef HL_LINUX_ABI_PROC_FD_TARGET_H
-#define HL_LINUX_ABI_PROC_FD_TARGET_H
+#ifndef HL_LINUX_ABI_SYSCALL_FS_PROCFD_H
+#define HL_LINUX_ABI_SYSCALL_FS_PROCFD_H
 
 #include <stddef.h>
 #include <string.h>
@@ -27,8 +27,8 @@ static inline int hl_proc_fd_anon_name(const char *text, size_t length) {
  * also not slash-rooted, but remains a filesystem path that must pass through
  * host-to-guest projection and confinement. */
 static inline int hl_proc_fd_pseudo_target(const char *target) {
-    static const char *const namespaces[] = {"cgroup", "ipc",  "mnt",  "net",  "pid", "pid_for_children",
-                                             "time",   "time_for_children", "user", "uts"};
+    static const char *const namespaces[] = {
+        "cgroup", "ipc", "mnt", "net", "pid", "pid_for_children", "time", "time_for_children", "user", "uts"};
     if (target == NULL) return 0;
     size_t length = strlen(target);
     static const char anon[] = "anon_inode:";

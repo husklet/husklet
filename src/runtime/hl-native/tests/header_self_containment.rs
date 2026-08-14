@@ -483,7 +483,7 @@ fn proc_fd_pseudo_targets_exclude_host_filesystem_spellings() {
     fs::write(
         &source,
         r#"
-#include "linux_abi/proc_fd_target.h"
+#include "linux_abi/syscall/fs/procfd.h"
 
 int main(void) {
     const char *accepted[] = {
