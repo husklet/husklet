@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     fn single_line_entries_activate_the_window_default() {
-        assert!(Field::ENTRY_ACTIVATES_DEFAULT);
+        assert!(std::hint::black_box(Field::ENTRY_ACTIVATES_DEFAULT));
     }
 }
 
