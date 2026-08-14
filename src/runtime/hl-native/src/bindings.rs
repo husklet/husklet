@@ -26,8 +26,6 @@ pub struct MainImagePlan {
     pub has_interpreter: u32,
     pub flags: u32,
     pub interpreter_identity: u64,
-    pub interpreter_image: *const c_void,
-    pub interpreter_size: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -40,10 +38,9 @@ pub(super) struct EngineExit {
     pub detail: u64,
 }
 
-const _: () = assert!(size_of::<MainImagePlan>() == 64);
+const _: () = assert!(size_of::<MainImagePlan>() == 48);
 const _: () = assert!(offset_of!(MainImagePlan, link_start) == 16);
 const _: () = assert!(offset_of!(MainImagePlan, interpreter_identity) == 40);
-const _: () = assert!(offset_of!(MainImagePlan, interpreter_image) == 48);
 const _: () = assert!(size_of::<EngineExit>() == 24);
 const _: () = assert!(offset_of!(EngineExit, detail) == 16);
 
@@ -121,6 +118,8 @@ unsafe extern "C" {
         executable_host: *const c_char,
         executable_fd: c_int,
         image_plan: *const MainImagePlan,
+        interpreter_image: *const c_void,
+        interpreter_size: usize,
         option_count: c_uint,
         option_names: *const *const c_char,
         option_values: *const *const c_char,
@@ -197,6 +196,8 @@ mod tests {
                     ptr::null(),
                     -1,
                     ptr::null(),
+                    ptr::null(),
+                    0,
                     0,
                     ptr::null(),
                     ptr::null(),
@@ -238,6 +239,8 @@ mod tests {
                 ptr::null(),
                 -1,
                 ptr::null(),
+                ptr::null(),
+                0,
                 0,
                 ptr::null(),
                 ptr::null(),

@@ -59,6 +59,7 @@ struct hl_engine {
     hl_engine_main_image_plan main_image_plan;
     unsigned char *owned_executable_image;
     unsigned char *owned_interpreter_image;
+    size_t interpreter_image_size;
     uint64_t translations;
     int checkpoint_broker;
     int checkpoint_trigger;
@@ -641,10 +642,7 @@ static hl_status hl_engine_create_validate(const hl_engine_config *config, const
         ((config->main_image_plan->flags & ~HL_ENGINE_MAIN_IMAGE_PLAN_FORCE_DISPLACED) != 0 ||
          (config->main_image_plan->flags != 0 && config->main_image_plan->kind != 1) ||
          config->main_image_plan->link_end <= config->main_image_plan->link_start ||
-         (config->main_image_plan->kind != 1 && config->main_image_plan->kind != 2) ||
-         ((config->main_image_plan->interpreter_image == NULL) != (config->main_image_plan->interpreter_size == 0)) ||
-         (config->main_image_plan->has_interpreter != 0 && config->main_image_plan->interpreter_size == 0) ||
-         (config->main_image_plan->has_interpreter == 0 && config->main_image_plan->interpreter_size != 0)))
+         (config->main_image_plan->kind != 1 && config->main_image_plan->kind != 2)))
         return HL_STATUS_INVALID_ARGUMENT;
     if (config->fd_binding_count != 0 && config->fd_bindings == NULL) return HL_STATUS_INVALID_ARGUMENT;
     return hl_host_services_validate(host, HL_HOST_CAP_MEMORY | HL_HOST_CAP_CLOCK | HL_HOST_CAP_SYNC);
@@ -652,12 +650,21 @@ static hl_status hl_engine_create_validate(const hl_engine_config *config, const
 
 static hl_status hl_engine_create_with_options_mode(const hl_engine_config *config, const hl_host_services *host,
                                                     const hl_options *source_options, uint32_t borrow_options,
+                                                    const void *interpreter_image, size_t interpreter_size,
                                                     hl_engine **out_engine) {
     hl_engine *engine;
     hl_host_handle *candidate_handles = NULL;
     hl_status status;
     status = hl_engine_create_validate(config, host, source_options, borrow_options, out_engine);
     if (status != HL_STATUS_OK) return status;
+    if ((interpreter_image == NULL) != (interpreter_size == 0) || interpreter_size > 64u * 1024u * 1024u)
+        return HL_STATUS_INVALID_ARGUMENT;
+#if defined(_WIN32)
+    if (interpreter_size != 0) return HL_STATUS_NOT_SUPPORTED;
+#endif
+    if (interpreter_size != 0 &&
+        (config->main_image_plan == NULL || config->main_image_plan->has_interpreter == 0))
+        return HL_STATUS_INVALID_ARGUMENT;
     engine = calloc(1, sizeof(*engine));
     if (engine == NULL) return HL_STATUS_OUT_OF_MEMORY;
     engine->checkpoint_broker = -1;
@@ -669,15 +676,14 @@ static hl_status hl_engine_create_with_options_mode(const hl_engine_config *conf
     engine->executable = HL_HOST_HANDLE_INVALID;
     if (config->main_image_plan != NULL) {
         engine->main_image_plan = *config->main_image_plan;
-        if (config->main_image_plan->interpreter_size != 0) {
-            engine->owned_interpreter_image = malloc(config->main_image_plan->interpreter_size);
+        if (interpreter_size != 0) {
+            engine->owned_interpreter_image = malloc(interpreter_size);
             if (engine->owned_interpreter_image == NULL) {
                 status = HL_STATUS_OUT_OF_MEMORY;
                 goto fail;
             }
-            memcpy(engine->owned_interpreter_image, config->main_image_plan->interpreter_image,
-                   config->main_image_plan->interpreter_size);
-            engine->main_image_plan.interpreter_image = engine->owned_interpreter_image;
+            memcpy(engine->owned_interpreter_image, interpreter_image, interpreter_size);
+            engine->interpreter_image_size = interpreter_size;
         }
         engine->config.main_image_plan = &engine->main_image_plan;
     }
@@ -838,7 +844,7 @@ fail:
             free(engine->owned_executable_image);
         }
         if (engine->owned_interpreter_image != NULL) {
-            memset(engine->owned_interpreter_image, 0, engine->main_image_plan.interpreter_size);
+            memset(engine->owned_interpreter_image, 0, engine->interpreter_image_size);
             free(engine->owned_interpreter_image);
         }
         if (engine->executable != HL_HOST_HANDLE_INVALID)
@@ -863,19 +869,28 @@ fail:
 
 hl_status hl_engine_create_with_options(const hl_engine_config *config, const hl_host_services *host,
                                         const hl_options *source_options, hl_engine **out_engine) {
-    return hl_engine_create_with_options_mode(config, host, source_options, 0, out_engine);
+    return hl_engine_create_with_options_mode(config, host, source_options, 0, NULL, 0, out_engine);
 }
 
 hl_status hl_engine_create_with_borrowed_options(const hl_engine_config *config, const hl_host_services *host,
                                                  const hl_options *source_options, hl_engine **out_engine) {
-    return hl_engine_create_with_options_mode(config, host, source_options, 1, out_engine);
+    return hl_engine_create_with_options_mode(config, host, source_options, 1, NULL, 0, out_engine);
 }
 
 hl_status
 hl_engine_create_with_borrowed_options_and_syscall_trap(const hl_engine_config *config, const hl_host_services *host,
                                                         const hl_options *source_options, void *syscall_context,
                                                         hl_syscall_trap_fn syscall_dispatch, hl_engine **out_engine) {
-    hl_status status = hl_engine_create_with_options_mode(config, host, source_options, 1, out_engine);
+    return hl_engine_create_with_borrowed_options_and_syscall_trap_and_interpreter(
+        config, host, source_options, syscall_context, syscall_dispatch, NULL, 0, out_engine);
+}
+
+hl_status hl_engine_create_with_borrowed_options_and_syscall_trap_and_interpreter(
+    const hl_engine_config *config, const hl_host_services *host, const hl_options *source_options,
+    void *syscall_context, hl_syscall_trap_fn syscall_dispatch, const void *interpreter_image,
+    size_t interpreter_size, hl_engine **out_engine) {
+    hl_status status = hl_engine_create_with_options_mode(config, host, source_options, 1,
+                                                          interpreter_image, interpreter_size, out_engine);
     if (status == HL_STATUS_OK) {
         (*out_engine)->syscall_context = syscall_context;
         (*out_engine)->syscall_dispatch = syscall_dispatch;
@@ -927,7 +942,9 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
     status = engine->backend->start_process(
         &engine->host, engine->box_initialized ? &engine->box : NULL, &engine->options, &engine->config, (uint32_t)argc,
         argv, engine->syscall_context, engine->syscall_dispatch, engine->checkpoint_broker, engine->checkpoint_trigger,
-        engine->checkpoint_control_child, &process, &process_result);
+        engine->checkpoint_control_child, engine->owned_interpreter_image,
+        engine->owned_interpreter_image == NULL ? 0 : engine->interpreter_image_size,
+        &process, &process_result);
     if (status != HL_STATUS_OK) {
         hl_engine_lock(engine);
         engine->state = HL_ENGINE_FINISHED;
@@ -1109,7 +1126,7 @@ void hl_engine_destroy(hl_engine *engine) {
         free(engine->owned_executable_image);
     }
     if (engine->owned_interpreter_image != NULL) {
-        memset(engine->owned_interpreter_image, 0, engine->main_image_plan.interpreter_size);
+        memset(engine->owned_interpreter_image, 0, engine->interpreter_image_size);
         free(engine->owned_interpreter_image);
     }
     if (engine->executable != HL_HOST_HANDLE_INVALID)

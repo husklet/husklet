@@ -78,8 +78,6 @@ typedef struct hl_engine_main_image_plan {
     uint32_t has_interpreter;
     uint32_t flags;
     uint64_t interpreter_identity;
-    const void *interpreter_image;
-    size_t interpreter_size;
 } hl_engine_main_image_plan;
 
 #define HL_ENGINE_MAIN_IMAGE_PLAN_ABI 1u
@@ -166,7 +164,7 @@ typedef struct hl_engine_exit {
 HL_STATIC_ASSERT(sizeof(hl_engine_fd_binding) == 32, "engine descriptor binding ABI drifted");
 HL_STATIC_ASSERT(offsetof(hl_engine_fd_binding, host_handle) == 24, "engine descriptor handle ABI drifted");
 HL_STATIC_ASSERT(sizeof(hl_engine_executable) == 40, "engine executable ABI drifted");
-HL_STATIC_ASSERT(sizeof(hl_engine_main_image_plan) == 64, "engine main-image plan ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_engine_main_image_plan) == 48, "engine main-image plan ABI drifted");
 HL_STATIC_ASSERT(sizeof(hl_engine_box_config) == 152, "engine box configuration ABI drifted");
 HL_STATIC_ASSERT(offsetof(hl_engine_box_config, publish_count) == 64,
                  "engine box publish count ABI drifted");

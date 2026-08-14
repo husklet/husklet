@@ -92,16 +92,11 @@ impl Engine {
         after_pin();
         let image_plan = Plan::inspect(&config)?;
         #[cfg(unix)]
-        let mut image_plan = image_plan;
-        #[cfg(unix)]
         let interpreter_image = Plan::interpreter(&config)?
             .map(|path| pin_guest_image(&config, &path))
             .transpose()?;
-        #[cfg(unix)]
-        if let Some(image) = interpreter_image.as_deref() {
-            image_plan.interpreter_image = image.as_ptr().cast();
-            image_plan.interpreter_size = image.len();
-        }
+        #[cfg(not(unix))]
+        let interpreter_image: Option<Vec<u8>> = None;
         let mut output = std::ptr::null_mut();
         // SAFETY: the caller guarantees that the raw option and callback
         // pointers satisfy the documented C ABI. All Rust-owned arrays and
@@ -113,6 +108,10 @@ impl Engine {
                 config.executable_host.map_or(std::ptr::null(), std::ffi::CStr::as_ptr),
                 config.executable_fd,
                 &raw const image_plan,
+                interpreter_image
+                    .as_deref()
+                    .map_or(std::ptr::null(), |image| image.as_ptr().cast()),
+                interpreter_image.as_deref().map_or(0, <[u8]>::len),
                 count,
                 config.option_names.as_ptr(),
                 config.option_values.as_ptr(),
@@ -236,8 +235,6 @@ impl Plan {
             // layer translates every guest-visible address back to the ELF link range.
             flags: u32::from(kind == 1),
             interpreter_identity,
-            interpreter_image: std::ptr::null(),
-            interpreter_size: 0,
         })
     }
 

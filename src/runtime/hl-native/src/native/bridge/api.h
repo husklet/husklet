@@ -28,6 +28,7 @@ HL_API int32_t hl_c_backend_checkpoint_interrupt_signal(uint32_t isa);
 /* output is required and is cleared before any other input is validated; every failure leaves it NULL. */
 HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *executable_host,
                                    int32_t executable_fd, const hl_c_main_image_plan *image_plan,
+                                   const void *interpreter_image, size_t interpreter_size,
                                    uint32_t option_count, const char *const *option_names,
                                    const char *const *option_values, const int32_t standard_fds[3],
                                    int32_t provider_fd, void *syscall_context,
@@ -46,12 +47,10 @@ HL_API uint64_t hl_c_backend_exit_detail(const hl_c_backend *backend);
 HL_API uint64_t hl_c_backend_translation_count(const hl_c_backend *backend);
 HL_API void hl_c_backend_destroy(hl_c_backend *backend);
 
-HL_STATIC_ASSERT(sizeof(hl_c_main_image_plan) == 64, "main image plan size ABI drifted");
+HL_STATIC_ASSERT(sizeof(hl_c_main_image_plan) == 48, "main image plan size ABI drifted");
 HL_STATIC_ASSERT(offsetof(hl_c_main_image_plan, link_start) == 16, "main image plan link_start ABI drifted");
 HL_STATIC_ASSERT(offsetof(hl_c_main_image_plan, interpreter_identity) == 40,
                  "main image plan interpreter identity ABI drifted");
-HL_STATIC_ASSERT(offsetof(hl_c_main_image_plan, interpreter_image) == 48,
-                 "main image plan interpreter image ABI drifted");
 
 HL_EXTERN_C_END
 

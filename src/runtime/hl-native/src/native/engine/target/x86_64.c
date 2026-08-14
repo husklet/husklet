@@ -1304,14 +1304,16 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
 
 int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const char *rootfs, hl_host_handle executable,
                        const void *executable_image, size_t executable_size,
-                       const hl_engine_main_image_plan *image_plan, uint32_t argument_count, char *const argv[]) {
+                       const hl_engine_main_image_plan *image_plan,
+                       const void *interpreter_image, size_t interpreter_size,
+                       uint32_t argument_count, char *const argv[]) {
     int argc;
     g_engine_result_status = HL_STATUS_OK;
     (void)executable;
     g_initial_executable_image = executable_image;
     g_initial_executable_size = executable_size;
-    g_initial_interpreter_image = image_plan != NULL ? image_plan->interpreter_image : NULL;
-    g_initial_interpreter_size = image_plan != NULL ? image_plan->interpreter_size : 0;
+    g_initial_interpreter_image = interpreter_image;
+    g_initial_interpreter_size = interpreter_size;
     g_authorized_executable_image = executable_image;
     g_authorized_executable_size = executable_size;
     if (argument_count > (uint32_t)INT_MAX) return 2;

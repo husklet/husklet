@@ -11,7 +11,8 @@ typedef struct hl_engine_backend {
     hl_status (*start_process)(const hl_host_services *host, hl_linux_abi *box, hl_options *options,
                                const hl_engine_config *config, uint32_t argc, const char *const argv[],
                                void *syscall_context, hl_syscall_trap_fn syscall_dispatch, int checkpoint_broker,
-                               int checkpoint_trigger, int checkpoint_control, hl_host_handle *process,
+                               int checkpoint_trigger, int checkpoint_control,
+                               const void *interpreter_image, size_t interpreter_size, hl_host_handle *process,
                                hl_host_handle *result);
     hl_status (*finish_process)(const hl_host_services *host, hl_host_handle token, const hl_host_result *waited,
                                 hl_engine_exit *result, uint64_t *translations);
@@ -33,6 +34,10 @@ hl_status hl_engine_create_with_borrowed_options_and_syscall_trap(const hl_engin
                                                                   const hl_options *options, void *syscall_context,
                                                                   hl_syscall_trap_fn syscall_dispatch,
                                                                   hl_engine **out_engine);
+hl_status hl_engine_create_with_borrowed_options_and_syscall_trap_and_interpreter(
+    const hl_engine_config *config, const hl_host_services *host, const hl_options *options,
+    void *syscall_context, hl_syscall_trap_fn syscall_dispatch, const void *interpreter_image,
+    size_t interpreter_size, hl_engine **out_engine);
 uint64_t hl_engine_translation_count(const hl_engine *engine);
 hl_status hl_engine_checkpoint_configure(hl_engine *engine, int broker, int trigger);
 

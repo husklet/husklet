@@ -30,7 +30,9 @@ extern int hl_ckpt_interrupt_executors(void);
 
 int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const char *rootfs, hl_host_handle executable,
                        const void *executable_image, size_t executable_size,
-                       const hl_engine_main_image_plan *main_image_plan, uint32_t argc, char *const argv[]);
+                       const hl_engine_main_image_plan *main_image_plan,
+                       const void *interpreter_image, size_t interpreter_size,
+                       uint32_t argc, char *const argv[]);
 hl_status hl_run_linux_guest_status(void);
 uint64_t hl_run_linux_guest_translations(void);
 
@@ -95,6 +97,8 @@ typedef struct hl_production_entry_context {
     int checkpoint_broker;
     int checkpoint_trigger;
     int checkpoint_control;
+    const void *interpreter_image;
+    size_t interpreter_size;
 } hl_production_entry_context;
 
 #if defined(_WIN32)
@@ -440,7 +444,7 @@ static int32_t hl_production_cold_entry(void *opaque) {
      * below already relies on for the services pointer itself. */
     box = hl_production_cold_box(&services);
     result = hl_run_linux_guest(&services, box, rootfs, HL_HOST_HANDLE_INVALID, image, (size_t)header.image_size, NULL,
-                                header.argc, argv);
+                                NULL, 0, header.argc, argv);
     (void)hl_options_bind_process_state(previous_state);
     (void)hl_options_bind_process(previous);
     hl_options_destroy(&process_state);
@@ -539,7 +543,8 @@ static int32_t hl_production_entry(void *opaque) {
     int32_t result =
         hl_run_linux_guest(context->host, context->box, context->config->rootfs, executable,
                            spec == NULL ? NULL : spec->image, spec == NULL ? 0 : spec->image_size,
-                           context->config->main_image_plan, context->argc, (char *const *)(uintptr_t)context->argv);
+                           context->config->main_image_plan, context->interpreter_image,
+                           context->interpreter_size, context->argc, (char *const *)(uintptr_t)context->argv);
     (void)hl_options_bind_process_state(previous_state);
     (void)hl_options_bind_process(previous);
     hl_options_destroy(&process_state);
@@ -561,6 +566,7 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
                                              void *syscall_context, hl_syscall_trap_fn syscall_dispatch,
                                              int checkpoint_broker, int checkpoint_trigger,
                                              int checkpoint_control,
+                                             const void *interpreter_image, size_t interpreter_size,
                                              hl_host_handle *process, hl_host_handle *result_token) {
 #if !defined(_WIN32)
     hl_production_entry_context entry = {0};
@@ -630,6 +636,8 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     entry.checkpoint_broker = checkpoint_broker;
     entry.checkpoint_trigger = checkpoint_trigger;
     entry.checkpoint_control = checkpoint_control;
+    entry.interpreter_image = interpreter_image;
+    entry.interpreter_size = interpreter_size;
     if (box == NULL) {
         spawned = host->process->spawn_cloned(host->context, hl_production_entry, &entry);
     } else {

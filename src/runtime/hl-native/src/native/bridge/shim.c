@@ -341,7 +341,8 @@ static int hl_c_validate_main_image_plan(int fd, const hl_c_main_image_plan *pla
 }
 
 HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *executable_host, int32_t executable_fd,
-                            const hl_c_main_image_plan *image_plan, uint32_t option_count,
+                            const hl_c_main_image_plan *image_plan, const void *interpreter_image,
+                            size_t interpreter_size, uint32_t option_count,
                             const char *const *option_names, const char *const *option_values,
                             const int32_t standard_fds[3], int32_t provider_fd, void *syscall_context,
                             hl_syscall_trap_fn syscall_dispatch, hl_c_backend **output) {
@@ -494,8 +495,9 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
         }
         config.executable = &executable;
     }
-    status = hl_engine_create_with_borrowed_options_and_syscall_trap(
-        &config, &backend->services, &backend->options, syscall_context, syscall_dispatch, &backend->engine);
+    status = hl_engine_create_with_borrowed_options_and_syscall_trap_and_interpreter(
+        &config, &backend->services, &backend->options, syscall_context, syscall_dispatch,
+        interpreter_image, interpreter_size, &backend->engine);
     if (status != HL_STATUS_OK) {
         hl_c_backend_executable_discard(&backend->services, &executable);
         if (standard_fds != NULL)
