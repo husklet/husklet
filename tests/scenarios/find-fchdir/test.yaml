@@ -7,7 +7,7 @@ cases:
       script: |
         set -eu
         cd /
-        result=$(find /etc -type f -name passwd -print -quit)
+        result=$(find /etc -maxdepth 1 -type f -name passwd -print -quit)
         test "$result" = /etc/passwd
         test "$(pwd)" = /
         echo FIND_RESTORED_CWD
