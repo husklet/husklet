@@ -139,6 +139,7 @@ static void interp_bus_ledger_check(uint64_t guest_address, uint64_t length) {
     uint64_t guest_fault = host_fault - (host - guest_address);
     cpu->fault_addr = guest_fault;
     cpu->bus_ea = guest_fault;
+    cpu->soft_guest_ea = guest_fault;
     cpu->reason = R_BUS;
     g_interp_guest_access = 0;
     // The OTHER route into the pad, and the one that owes no mask restore: this runs on the ordinary
@@ -289,6 +290,7 @@ static _Noreturn void interp_projection_fault(uint64_t guest_address, size_t len
     struct cpu *cpu = g_interp_pad_cpu;
     if (cpu == NULL || !g_interp_pad_armed) abort();
     cpu->bus_ea = guest_address;
+    cpu->soft_guest_ea = guest_address;
     cpu->soft_width = length;
     cpu->soft_required = access == HL_GUEST_MEMORY_WRITE ? X86_SOFT_WRITE : X86_SOFT_READ;
     cpu->reason = R_SOFTMISS;

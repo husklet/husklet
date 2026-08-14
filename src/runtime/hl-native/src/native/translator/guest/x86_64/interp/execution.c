@@ -470,6 +470,7 @@ static int interp_exit(struct cpu *cpu, uint64_t rip, uint64_t reason) {
 // retries or delivers the guest SIGSEGV with the right si_addr. rip stays on the instruction.
 static int interp_softmiss(struct cpu *cpu, uint64_t rip, uint64_t address, uint64_t width, uint32_t required) {
     cpu->bus_ea = address;
+    cpu->soft_guest_ea = address;
     cpu->soft_width = width;
     cpu->soft_required = required;
     cpu->rip = rip;

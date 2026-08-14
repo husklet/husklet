@@ -181,6 +181,7 @@ static __thread uint64_t g_avx_pc;     // the architectural PC of the instructio
 void avx_abandon(uint64_t guest, uint64_t length, uint32_t required) {
     struct cpu *c = g_avx_cpu;
     c->bus_ea = guest;
+    c->soft_guest_ea = guest;
     c->soft_width = length;
     c->soft_required = required;
     c->rip = g_avx_pc;
