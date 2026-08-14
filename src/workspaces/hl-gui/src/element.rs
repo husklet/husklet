@@ -5,6 +5,24 @@
 //! the difference from the previous description. The result is an ordinary
 //! [`Frame`] of [`Patch`]es, so nothing downstream — the retained tree, the
 //! adapter, the transport — learns that a description was involved.
+//!
+//! # Why creation is not batched
+//!
+//! A first render spends one patch per fact: a realistic panel — a card, a
+//! heading, two rows, six styled and handled buttons, ten nodes in all — costs
+//! 48 patches, of which 10 are creations, 10 are placements, 22 are properties
+//! and 6 are handlers (`a_realistic_first_render_costs_one_patch_per_fact`
+//! pins the number). A creation patch carrying its node's properties would
+//! save those 22.
+//!
+//! It was not worth it. The saving lands once, on the first frame, and never
+//! again: the frames that follow are already one patch per actual change, and
+//! an unchanged description costs nothing at all. Against that, a batched
+//! variant widens the wire contract permanently and forces every adapter to
+//! implement a second creation path — for a fixed cost of a few dozen patches
+//! at startup. If a description ever appears whose first frame is genuinely
+//! large, the honest fix is a compression of the whole frame on the transport,
+//! not a second shape for creation in the model.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -192,7 +210,12 @@ impl Instance {
     fn properties(&mut self, frame: &mut Frame, element: &Element) {
         let id = self.id;
         for (prop, value) in &element.props {
-            if self.subject.props.get(prop) != Some(value) {
+            if !self
+                .subject
+                .props
+                .get(prop)
+                .is_some_and(|current| current.unchanged(value))
+            {
                 frame.push(Patch::SetProp {
                     id,
                     prop: *prop,

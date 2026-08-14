@@ -134,6 +134,24 @@ impl PropValue {
         }
     }
 
+    /// Whether re-sending `other` would tell a renderer nothing new.
+    ///
+    /// Diffing cannot use `==` alone: `PartialEq` on this type inherits
+    /// IEEE-754 equality through `f64`, where `NaN != NaN`. A producer that
+    /// describes a number as `NaN` — an unknown ratio, an empty average —
+    /// would therefore see the same property re-sent on every single frame,
+    /// forever. The arithmetic meaning of `==` is right for everyone else, so
+    /// it stays as it is and the diff asks this question instead.
+    #[must_use]
+    pub fn unchanged(&self, other: &Self) -> bool {
+        let (Self::Number(current), Self::Number(next)) = (self, other) else {
+            return self == other;
+        };
+        // A total order answers this without float equality at all: it calls
+        // every NaN equal to itself, which is exactly the case `==` gets wrong.
+        current.total_cmp(next) == std::cmp::Ordering::Equal
+    }
+
     #[must_use]
     pub fn as_length(&self) -> Option<Length> {
         match self {
@@ -199,6 +217,23 @@ mod tests {
         assert_eq!(PropValue::Integer(7).as_number(), Some(7.0));
         assert_eq!(PropValue::Number(1.5).as_number(), Some(1.5));
         assert_eq!(PropValue::text("x").as_number(), None);
+    }
+
+    #[test]
+    fn a_number_that_is_not_a_number_still_counts_as_unchanged() {
+        let absent = PropValue::Number(f64::NAN);
+        assert_ne!(
+            absent,
+            PropValue::Number(f64::NAN),
+            "equality keeps its arithmetic meaning"
+        );
+        assert!(absent.unchanged(&PropValue::Number(f64::NAN)), "the diff must settle");
+        assert!(PropValue::Number(1.5).unchanged(&PropValue::Number(1.5)));
+        // A total order separates the signed zeroes. Re-sending one costs a
+        // single patch and then settles, which is the harmless direction.
+        assert!(!PropValue::Number(0.0).unchanged(&PropValue::Number(-0.0)));
+        assert!(!PropValue::Number(1.0).unchanged(&PropValue::Number(2.0)));
+        assert!(!absent.unchanged(&PropValue::Number(1.0)));
     }
 
     #[test]

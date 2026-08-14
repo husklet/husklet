@@ -4,7 +4,7 @@
 
 use hl_gui::{
     Element, EventId, Frame, Length, NodeId, Patch, Prop, PropValue, Reconciliation, Renderer, RowWindow, Tag, Theme,
-    Tone, Tree, Trigger,
+    Tone, Tree, Trigger, Variant,
 };
 
 /// Records what an adapter would have been asked to do, so reconciliation is
@@ -316,6 +316,68 @@ fn a_deep_description_round_trips_through_the_tree() {
     assert_eq!(session.identity(&[0, 0, 0, 0, 0]), leaf);
     assert_eq!(session.label(&[0, 0, 0, 0, 1]), "second");
     assert_eq!(session.tag(&[0, 0, 0, 1]), Tag::Badge);
+}
+
+#[test]
+fn a_number_that_is_not_a_number_settles_after_one_frame() {
+    let mut session = Session::new();
+    // An unknown ratio is a number a producer really does describe; under plain
+    // float equality it would be re-sent on every frame for the session's life.
+    let described = Element::column().child(
+        Element::new(Tag::Progress)
+            .prop(Prop::Fraction, PropValue::Number(f64::NAN))
+            .label("measuring"),
+    );
+
+    let first = session.render(&described);
+    let second = session.render(&described);
+
+    assert!(!first.is_empty());
+    assert_eq!(second.patches, Vec::new(), "a NaN property must stop re-sending");
+}
+
+/// Evidence for the decision recorded in `element.rs`: a first render costs one
+/// patch per fact, and every fact is one a renderer has to be told anyway.
+#[test]
+fn a_realistic_first_render_costs_one_patch_per_fact() {
+    let mut session = Session::new();
+    let action = |name: &str, tone: Tone| {
+        Element::button(name, EventId::new(name))
+            .variant(Variant::Filled)
+            .tone(tone)
+            .key(name)
+    };
+    let described = Element::card()
+        .gap(Length::Step(3))
+        .child(Element::heading("Containers"))
+        .child(
+            Element::row()
+                .gap(Length::Step(2))
+                .child(action("start", Tone::Positive))
+                .child(action("stop", Tone::Danger))
+                .child(action("restart", Tone::Accent)),
+        )
+        .child(
+            Element::row()
+                .gap(Length::Step(2))
+                .child(action("logs", Tone::Neutral))
+                .child(action("shell", Tone::Neutral))
+                .child(action("remove", Tone::Danger)),
+        );
+
+    let frame = session.render(&described);
+
+    let nodes = 10;
+    assert_eq!(creations(&frame), nodes);
+    assert_eq!(
+        frame.patches.len(),
+        48,
+        "10 nodes: 10 creations, 10 placements, 22 properties, 6 handlers"
+    );
+    // A batched creation patch could carry a node's properties with its
+    // creation, saving 22 of these 48. The saving applies once, to the first
+    // frame only: the second frame below is the steady state.
+    assert_eq!(session.render(&described).patches.len(), 0);
 }
 
 #[test]
