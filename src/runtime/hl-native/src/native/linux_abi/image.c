@@ -1,6 +1,7 @@
 #include "image.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -187,7 +188,9 @@ int hl_linux_image_read_fd(int descriptor, hl_linux_image *image) {
         return -1;
     }
     while (offset < (size_t)metadata.st_size) {
-        ssize_t count = read(descriptor, bytes + offset, (size_t)metadata.st_size - offset);
+        size_t remaining = (size_t)metadata.st_size - offset;
+        unsigned int chunk = remaining > UINT_MAX ? UINT_MAX : (unsigned int)remaining;
+        ssize_t count = read(descriptor, bytes + offset, chunk);
         if (count < 0 && errno == EINTR) continue;
         if (count <= 0) {
             free(bytes);
