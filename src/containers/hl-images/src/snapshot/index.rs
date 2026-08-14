@@ -11,7 +11,7 @@ use hl_fs::LayerIndex;
 
 use super::Id;
 use crate::Result;
-use crate::storage::{Native, Persistence as _};
+use crate::storage::Directory;
 
 pub(super) fn path(root: &Path, id: &Id) -> PathBuf {
     root.join("index/committed").join(format!("{}.idx", id.as_str()))
@@ -21,16 +21,16 @@ pub(super) fn path(root: &Path, id: &Id) -> PathBuf {
 ///
 /// A missing or unverifiable sidecar is a miss, never a wrong answer, so a
 /// failure here is reported to the caller but never corrupts the snapshot.
-pub(super) fn publish(root: &Path, id: &Id, tree: &Path) -> Result<()> {
+pub(super) fn publish(directory: &Directory, id: &Id, tree: &Path) -> Result<()> {
     let index = LayerIndex::build(tree).map_err(|source| crate::Error::LayerFilesystem {
         operation: "index snapshot tree",
         path: tree.to_owned(),
         source,
     })?;
-    Native.replace(&path(root, id), &index.encode())?;
+    directory.replace(Path::new(&format!("{}.idx", id.as_str())), &index.encode())?;
     Ok(())
 }
 
-pub(super) fn discard(root: &Path, id: &Id) {
-    let _ = Native.remove(&path(root, id));
+pub(super) fn discard(directory: &Directory, id: &Id) {
+    let _ = directory.remove(Path::new(&format!("{}.idx", id.as_str())));
 }

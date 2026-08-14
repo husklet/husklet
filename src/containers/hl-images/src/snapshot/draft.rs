@@ -18,6 +18,7 @@ pub struct Draft {
     pub(super) ownership: Ownerships,
     pub(super) names: Names,
     pub(super) publications: Arc<Directory>,
+    pub(super) indexes: Arc<Directory>,
     pub(super) finished: bool,
     pub(super) lock: File,
 }
@@ -114,7 +115,7 @@ impl Draft {
         // before the publication record that makes the snapshot visible: nothing
         // can observe a published chain whose index is still being written.
         if publication.is_layer_chain() {
-            super::index::publish(&self.root, &id, &target)?;
+            super::index::publish(&self.indexes, &id, &target)?;
         }
         self.publications.replace(
             Path::new(&format!("{}.json", id.as_str())),

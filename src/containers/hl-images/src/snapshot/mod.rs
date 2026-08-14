@@ -28,6 +28,7 @@ use record::{DraftOwner, Publication};
 pub struct Snapshots {
     root: PathBuf,
     publications: Arc<Directory>,
+    indexes: Arc<Directory>,
 }
 impl Snapshots {
     pub(crate) fn root(&self) -> &Path {
@@ -58,7 +59,12 @@ impl Snapshots {
         }
         let root = root.as_ref().to_owned();
         let publications = Arc::new(Directory::open(root.join("publication/committed"))?);
-        let snapshots = Self { root, publications };
+        let indexes = Arc::new(Directory::open(root.join("index/committed"))?);
+        let snapshots = Self {
+            root,
+            publications,
+            indexes,
+        };
         snapshots.recover_abandoned_drafts()?;
         Ok(snapshots)
     }
@@ -123,6 +129,7 @@ impl Snapshots {
             ownership,
             names,
             publications: self.publications.clone(),
+            indexes: self.indexes.clone(),
             finished: false,
             lock,
         })
@@ -227,14 +234,14 @@ impl Snapshots {
                 }
                 let _ = fs::remove_file(self.names_path("committed", id));
                 let _ = self.publications.remove(&Self::publication_name(id));
-                index::discard(&self.root, id);
+                index::discard(&self.indexes, id);
                 Ok(true)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 let _ = fs::remove_file(self.ownership_path("committed", id));
                 let _ = fs::remove_file(self.names_path("committed", id));
                 let _ = self.publications.remove(&Self::publication_name(id));
-                index::discard(&self.root, id);
+                index::discard(&self.indexes, id);
                 Ok(false)
             }
             Err(error) => Err(error).at(path),
@@ -481,6 +488,28 @@ mod publication_tests {
             .commit(upper.clone())
             .unwrap();
         assert!(!snapshots.index_path(&upper).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn index_publication_stays_with_its_opened_metadata_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let snapshots = Snapshots::open(temp.path()).unwrap();
+        let index = temp.path().join("index/committed");
+        let opened = temp.path().join("opened-index");
+        std::fs::rename(&index, &opened).unwrap();
+        std::fs::create_dir(&index).unwrap();
+
+        let layers = records(1);
+        let key = id(&layers);
+        snapshots
+            .prepare(Id::new("confined-index-draft").unwrap(), None)
+            .unwrap()
+            .commit_layer(key.clone(), layers)
+            .unwrap();
+
+        assert!(opened.join(format!("{}.idx", key.as_str())).is_file());
+        assert!(std::fs::read_dir(&index).unwrap().next().is_none());
     }
 
     #[test]
