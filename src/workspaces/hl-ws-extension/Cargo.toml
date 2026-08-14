@@ -1,0 +1,21 @@
+[package]
+name = "hl-ws-extension"
+version = "0.1.0"
+edition = "2021"
+description = "Workspace extension protocol: framing, channels, capabilities, and the host session."
+license = "MIT"
+
+[lib]
+name = "hl_ws_extension"
+path = "src/lib.rs"
+
+# Deliberately no container, client, or toolkit dependency. Every host effect
+# is reached through a port this crate declares and something else implements,
+# so the protocol is provable without a runtime.
+[dependencies]
+hl-gui = { path = "../hl-gui" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

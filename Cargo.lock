@@ -1224,6 +1224,15 @@ name = "hl-ws"
 version = "0.1.0"
 
 [[package]]
+name = "hl-ws-extension"
+version = "0.1.0"
+dependencies = [
+ "hl-gui",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "hl-ws-term"
 version = "0.1.0"
 dependencies = [
