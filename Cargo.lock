@@ -1176,6 +1176,7 @@ dependencies = [
  "futures-util",
  "hl-fs",
  "hl-log",
+ "nix",
  "oci-client",
  "oci-spec",
  "reflink-copy",
