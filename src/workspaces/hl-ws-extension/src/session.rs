@@ -64,6 +64,30 @@ impl Session {
         self.tab.as_deref()
     }
 
+    /// Withdraws a capability and drops everything it entitled.
+    ///
+    /// Re-checking at emission is not enough on its own: a snapshot queued
+    /// while the grant was held would still be drained afterwards, so the
+    /// subscriber would receive data it is no longer entitled to. Revocation
+    /// therefore closes every topic the capability covered, which discards
+    /// what those channels were holding.
+    pub fn revoke(
+        &mut self,
+        capability: Capability,
+        subscriptions: &mut crate::subscription::Subscriptions,
+        channels: &mut crate::channel::Channels,
+        outbox: &mut crate::outbox::Outbox,
+    ) {
+        self.authority.revoke(capability);
+        for topic in self.topics() {
+            if topic.capability() != capability {
+                continue;
+            }
+            self.topics.remove(&topic);
+            subscriptions.close(topic, channels, outbox);
+        }
+    }
+
     /// Whether an emission on `topic` may still be delivered.
     ///
     /// Checked on every emission rather than only at subscribe time, so

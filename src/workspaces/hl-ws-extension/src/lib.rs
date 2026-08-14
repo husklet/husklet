@@ -29,6 +29,7 @@ mod path;
 pub mod port;
 mod request;
 mod session;
+mod subscription;
 mod transport;
 
 pub use authority::{Authority, Denial, Permit, Reason};
@@ -43,4 +44,5 @@ pub use outbox::{Emission, Message, Outbox};
 pub use path::{Refusal, RelativePath};
 pub use request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 pub use session::{Services, Session};
+pub use subscription::{NetworkSummary, Parcel, Snapshot, Streams, Subscriptions, VolumeSummary};
 pub use transport::{Transit, Wire};
