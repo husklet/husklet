@@ -2,7 +2,7 @@ use std::path::Path;
 
 use hl_cc::{
     ArchiveFormat, ArchiveSpec, BuildEnvironment, CCompiler, CargoDirectives, CompilerFlavor, Definition, EnvFlag,
-    EnvKey, LanguageStandard, LinkerFlavor, Sanitizer, SharedLibrarySpec, Toolchain, Visibility, Warning,
+    EnvKey, LanguageStandard, LinkerFlavor, Sanitizer, SharedLibrarySpec, Visibility, Warning,
 };
 
 #[path = "src/artifact.rs"]
@@ -58,8 +58,7 @@ fn main() {
     } else {
         CompilerFlavor::GnuLike
     };
-    let toolchain = Toolchain::discover(&environment).unwrap_or_else(|error| panic!("{error}"));
-    let compiler = CCompiler::new(&environment, &toolchain, compiler_flavor);
+    let compiler = CCompiler::new(&environment, compiler_flavor);
     let platform_definition = if target.os == platform::HostOs::Macos {
         "_DARWIN_C_SOURCE"
     } else {
@@ -69,19 +68,17 @@ fn main() {
     if plan.guests == [GuestIsa::X86_64] {
         shim_definitions.push(Definition::value("HL_BUILD_TARGET_X86_64_ONLY", "1"));
     }
-    let shim_archive = compiler
-        .archive(
-            &archive(&environment, target, sanitizer, "hl_c_backend_shim", false)
-                .sources([
-                    "src/native/bridge/shim.c",
-                    "src/native/bridge/host.c",
-                    "src/native/bridge/executable_authority.c",
-                    "src/native/bridge/address_projection.c",
-                ])
-                .definitions(shim_definitions)
-                .visibility(Visibility::Default),
-        )
-        .unwrap_or_else(|error| panic!("{error}"));
+    compiler.archive(
+        &archive(&environment, target, sanitizer, "hl_c_backend_shim", false)
+            .sources([
+                "src/native/bridge/shim.c",
+                "src/native/bridge/host.c",
+                "src/native/bridge/executable_authority.c",
+                "src/native/bridge/address_projection.c",
+            ])
+            .definitions(shim_definitions)
+            .visibility(Visibility::Default),
+    );
 
     let runtime_sources = inventory::sources::runtime_roots(
         environment.target_os.as_str(),
@@ -90,15 +87,13 @@ fn main() {
     );
     let mut runtime_definitions = common_definitions();
     add_test_hooks(&mut runtime_definitions, test_hooks);
-    let runtime_archive = compiler
-        .archive(
-            &archive(&environment, target, sanitizer, "hl_c_backend_runtime", true)
-                .sources(runtime_sources)
-                .definitions(runtime_definitions),
-        )
-        .unwrap_or_else(|error| panic!("{error}"));
+    compiler.archive(
+        &archive(&environment, target, sanitizer, "hl_c_backend_runtime", true)
+            .sources(runtime_sources)
+            .definitions(runtime_definitions),
+    );
 
-    let mut linked_archives = vec![shim_archive];
+    let mut linked_archives = vec!["hl_c_backend_shim"];
     for guest in plan.guests {
         let (target_archive, target_source, lifecycle_archive) = match guest {
             GuestIsa::Aarch64 => (
@@ -131,13 +126,11 @@ fn main() {
             target_definitions.push(Definition::value("HL_CKPT_INTERRUPT_EXPORT", "1"));
         }
         add_test_hooks(&mut target_definitions, test_hooks);
-        let target_archive = compiler
-            .archive(
-                &archive(&environment, target, sanitizer, target_archive, false)
-                    .sources([target_source])
-                    .definitions(target_definitions),
-            )
-            .unwrap_or_else(|error| panic!("{error}"));
+        compiler.archive(
+            &archive(&environment, target, sanitizer, target_archive, false)
+                .sources([target_source])
+                .definitions(target_definitions),
+        );
 
         let lifecycle_definitions = [
             Definition::value("HL_ENABLE_LOGGING", "0"),
@@ -159,16 +152,14 @@ fn main() {
                 },
             ),
         ];
-        let lifecycle_archive = compiler
-            .archive(
-                &archive(&environment, target, sanitizer, lifecycle_archive, false)
-                    .sources(["src/native/engine/lifecycle.c"])
-                    .definitions(lifecycle_definitions),
-            )
-            .unwrap_or_else(|error| panic!("{error}"));
+        compiler.archive(
+            &archive(&environment, target, sanitizer, lifecycle_archive, false)
+                .sources(["src/native/engine/lifecycle.c"])
+                .definitions(lifecycle_definitions),
+        );
         linked_archives.extend([target_archive, lifecycle_archive]);
     }
-    linked_archives.push(runtime_archive);
+    linked_archives.push("hl_c_backend_runtime");
 
     let export_manifest = if test_hooks {
         TEST_HOOK_EXPORTS
@@ -216,7 +207,7 @@ fn main() {
         library = library.sanitizer(value);
     }
     library
-        .link(&environment, &toolchain, linker)
+        .link(&environment, linker)
         .unwrap_or_else(|error| panic!("{error}"));
     CargoDirectives::rustc_environment("HL_NATIVE_LIBRARY_NAME", filename);
     CargoDirectives::rustc_environment("HL_NATIVE_LIBRARY_PATH", environment.output.join(filename).display());
