@@ -201,15 +201,6 @@ fn encode_environment_record(encoded: &mut Vec<u8>, record: &[u8]) {
 
 impl GuestMachine for ProductionMachine {
     fn start(&self) -> Result<(), EngineError> {
-        let engine = Arc::new(self.create()?);
-        *self.engine.lock().map_err(|_| EngineError::Synchronization)? = Some(Arc::clone(&engine));
-        let arguments = self
-            .plan
-            .arguments
-            .iter()
-            .map(|argument| CString::new(argument.as_slice()).map_err(|_| EngineError::LaunchFailed))
-            .collect::<Result<Vec<_>, _>>()?;
-        let pointers = arguments.iter().map(|argument| argument.as_ptr()).collect::<Vec<_>>();
         #[cfg(unix)]
         let recovery = if self.plan.options.get_bytes("HL_RESTORE").is_some() {
             let checkpoint = self.checkpoint.as_ref().ok_or(EngineError::LaunchFailed)?;
@@ -220,6 +211,15 @@ impl GuestMachine for ProductionMachine {
         } else {
             None
         };
+        let engine = Arc::new(self.create()?);
+        *self.engine.lock().map_err(|_| EngineError::Synchronization)? = Some(Arc::clone(&engine));
+        let arguments = self
+            .plan
+            .arguments
+            .iter()
+            .map(|argument| CString::new(argument.as_slice()).map_err(|_| EngineError::LaunchFailed))
+            .collect::<Result<Vec<_>, _>>()?;
+        let pointers = arguments.iter().map(|argument| argument.as_ptr()).collect::<Vec<_>>();
         let run = engine.run(&pointers).map_err(native_run_failure);
         run?;
         #[cfg(unix)]
