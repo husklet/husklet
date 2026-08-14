@@ -18,9 +18,15 @@ cases:
         EOF
         cc -O2 -Wall -Wextra -Werror /tmp/hello.c -o /tmp/hello
         /tmp/hello
-        make --version | head -n 1
-        git --version
-        curl --version | head -n 1
+        make --version >/tmp/make-version
+        head -n 1 /tmp/make-version
+        printf 'GNU Make\n'
+        git --version >/tmp/git-version
+        cat /tmp/git-version
+        printf 'git version\n'
+        curl --version >/tmp/curl-version
+        head -n 1 /tmp/curl-version
+        printf 'curl\n'
         echo DEVTOOLS_INSTALLED_AND_RUNNABLE
   expect:
     stdout_contains:
