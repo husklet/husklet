@@ -1,10 +1,9 @@
 //! Bounded ownership for a host subprocess and the lifecycle domain it starts.
 //!
-//! On Unix the domain is a process group. Deliberately calling `setsid` or
-//! moving to another process group escapes that primitive; callers must only
-//! launch trusted host programs whose descendants preserve the group. On
-//! Windows the domain is a Job Object without breakaway permission, which is
-//! stronger and cannot be escaped by ordinary descendants.
+//! On Linux teardown also discovers and identity-checks descendants that call
+//! `setsid` or move to another process group. Other Unix hosts own a process
+//! group, so callers there must launch trusted programs whose descendants
+//! preserve it. Windows uses a Job Object without breakaway permission.
 
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;

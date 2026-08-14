@@ -16,6 +16,8 @@ static SPAWN_LOCK: Mutex<()> = Mutex::new(());
 
 mod child;
 mod spawn;
+#[cfg(target_os = "linux")]
+mod tree;
 
 use child::{OwnedChild, Process, nonblocking};
 use spawn::spawn;
@@ -263,6 +265,7 @@ mod tests {
         assert_reported_process_gone(&directory.path().join("stdout"));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn timeout_does_not_wait_for_detached_capture_writer() {
         let directory = tempfile::tempdir().unwrap();
@@ -291,9 +294,10 @@ mod tests {
                 .unwrap()
                 .ends_with(b"detached\n")
         );
-        detached.terminate().unwrap();
+        detached.assert_not_live().unwrap();
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "executed as a subprocess retaining a detached capture writer"]
     fn detached_capture_writer_child() {
@@ -373,21 +377,19 @@ mod tests {
             }
         }
 
-        fn terminate(&self) -> std::io::Result<()> {
+        fn assert_not_live(&self) -> std::io::Result<()> {
             if !self.armed.get() {
                 return Ok(());
             }
             let pid = self.pid()?;
-            // SAFETY: the positive PID came from the dedicated fixture file;
-            // SIGKILL carries no Rust pointer and cannot unwind.
-            if unsafe { libc::kill(pid, libc::SIGKILL) } < 0 {
-                let error = std::io::Error::last_os_error();
-                if error.raw_os_error() != Some(libc::ESRCH) {
-                    return Err(error);
-                }
-            }
             let deadline = Instant::now() + Duration::from_secs(1);
             loop {
+                let stat = fs::read_to_string(format!("/proc/{pid}/stat"));
+                if matches!(stat.as_deref(), Ok(value) if value.rsplit_once(") ").is_some_and(|(_, fields)| fields.starts_with('Z')))
+                {
+                    self.armed.set(false);
+                    return Ok(());
+                }
                 // SAFETY: signal zero only observes the exact fixture PID and
                 // retains no pointer or Rust alias.
                 if unsafe { libc::kill(pid, 0) } < 0 {
@@ -411,7 +413,13 @@ mod tests {
 
     impl Drop for DetachedChild {
         fn drop(&mut self) {
-            let _ = self.terminate();
+            if self.armed.get() {
+                let Ok(pid) = self.pid() else { return };
+                // Test-failure cleanup only; the positive PID came from the
+                // fixture's private report file.
+                // SAFETY: SIGKILL carries no Rust pointer and cannot unwind.
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
         }
     }
 
