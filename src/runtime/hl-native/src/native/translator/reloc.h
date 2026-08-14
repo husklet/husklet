@@ -15,7 +15,6 @@ typedef struct hl_reloc_table {
     int capacity;
 } hl_reloc_table;
 
-void hl_reloc_init(hl_reloc_table *table, hl_reloc *storage, int capacity);
 void hl_reloc_reset(hl_reloc_table *table);
 int hl_reloc_add(hl_reloc_table *table, uint32_t off, uint32_t info);
 int hl_reloc_import(hl_reloc_table *table, const hl_reloc *records, size_t count);
