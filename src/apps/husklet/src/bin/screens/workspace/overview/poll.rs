@@ -1,5 +1,26 @@
 use super::*;
 
+#[derive(Default)]
+struct DaemonSocketCache {
+    socket: Option<std::path::PathBuf>,
+}
+
+impl DaemonSocketCache {
+    fn resolve_with(
+        &mut self,
+        resolve: impl FnOnce() -> Result<std::path::PathBuf, String>,
+    ) -> Result<std::path::PathBuf, String> {
+        if let Some(socket) = &self.socket {
+            return Ok(socket.clone());
+        }
+        let socket = resolve()?;
+        if !socket.as_os_str().is_empty() {
+            self.socket = Some(socket.clone());
+        }
+        Ok(socket)
+    }
+}
+
 /// Latest snapshot of the workspace daemon's resources (rows are pre-formatted cell strings).
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Data {
@@ -82,13 +103,14 @@ impl Data {
     }
 
     fn poll_forever(workspace: &str, shell: &str, data: &std::sync::Mutex<Self>, stop: &std::sync::atomic::AtomicBool) {
-        let socket = Self::daemon_socket(workspace);
+        let mut socket_cache = DaemonSocketCache::default();
         loop {
             if stop.load(std::sync::atomic::Ordering::Acquire) {
                 return;
             }
 
             let mut snapshot = Self::poll();
+            let socket = socket_cache.resolve_with(|| Self::daemon_socket(workspace));
             snapshot.merge_resources(&socket);
             snapshot.merge_processes(workspace, shell);
             *data.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = snapshot;
@@ -109,7 +131,7 @@ pub(super) fn spawn_overview_poller(
 
 #[cfg(test)]
 mod tests {
-    use super::Data;
+    use super::{DaemonSocketCache, Data};
 
     #[test]
     fn initial_overview_never_claims_backend_results_are_empty() {
@@ -121,5 +143,40 @@ mod tests {
         assert_eq!(poll.resources_error, None);
         assert_eq!(poll.processes_error, None);
         assert_ne!(loading, poll);
+    }
+
+    #[test]
+    fn daemon_socket_resolution_retries_until_a_nonempty_success() {
+        let mut cache = DaemonSocketCache::default();
+        let mut attempts = 0;
+
+        assert_eq!(
+            cache.resolve_with(|| {
+                attempts += 1;
+                Err("daemon starting".into())
+            }),
+            Err("daemon starting".into())
+        );
+        assert_eq!(
+            cache.resolve_with(|| {
+                attempts += 1;
+                Ok(std::path::PathBuf::new())
+            }),
+            Ok(std::path::PathBuf::new())
+        );
+
+        let socket = std::path::PathBuf::from("/tmp/husklet-daemon.sock");
+        assert_eq!(
+            cache.resolve_with(|| {
+                attempts += 1;
+                Ok(socket.clone())
+            }),
+            Ok(socket.clone())
+        );
+        assert_eq!(
+            cache.resolve_with(|| panic!("successful socket resolution must be cached")),
+            Ok(socket)
+        );
+        assert_eq!(attempts, 3);
     }
 }
