@@ -158,17 +158,20 @@
 
       workspaceSource = lib.fileset.toSource {
         root = ./.;
-        fileset = lib.fileset.unions [
-          ./Cargo.lock
-          ./Cargo.toml
-          ./lint.toml
-          ./lint
-          ./rust-toolchain.toml
-          ./rustfmt.toml
-          ./src
-          ./tests
-        ];
+        fileset = lib.fileset.gitTracked ./.;
       };
+
+      documentationSourcePaths =
+        (builtins.fromTOML (builtins.readFile ./lint.toml)).documentation.allowed;
+
+      workspaceSourceContractFor =
+        pkgs:
+        pkgs.runCommand "husklet-workspace-source-contract" { } ''
+          ${lib.concatMapStringsSep "\n" (
+            path: "test -f ${workspaceSource}/${lib.escapeShellArg path}"
+          ) documentationSourcePaths}
+          touch "$out"
+        '';
 
       commonNativeInputs =
         pkgs:
@@ -1027,6 +1030,7 @@
           engine = packageFor pkgs;
         in
         {
+          "workspace-source" = workspaceSourceContractFor pkgs;
           package = verification;
           workspace = verification;
           test = verification;
