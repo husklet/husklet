@@ -192,10 +192,10 @@ fn main() {
             .require_defined_symbols(true),
         LinkerFlavor::GnuWindows | LinkerFlavor::MsvcWindows => library,
     };
-    if target.os == platform::HostOs::Linux {
-        if let Some(value) = sanitizer.compiler() {
-            library = library.sanitizer(value);
-        }
+    if target.os == platform::HostOs::Linux
+        && let Some(value) = sanitizer.compiler()
+    {
+        library = library.sanitizer(value);
     }
     library
         .link(&environment, linker)
@@ -245,11 +245,7 @@ fn archive(
         .data_sections(false)
         .warnings_enabled(strict)
         .cargo_metadata(false)
-        .warnings(if strict {
-            STRICT_WARNINGS.iter().copied().collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        });
+        .warnings(if strict { STRICT_WARNINGS.to_vec() } else { Vec::new() });
     if sanitizer.compiler().is_some() {
         spec = spec.omit_frame_pointer(false);
     }
