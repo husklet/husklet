@@ -135,6 +135,16 @@ static int hl_vfs_cursor_opaque(int directory) {
     return fstatat(directory, ".wh..wh..opq", &(struct stat){0}, AT_SYMLINK_NOFOLLOW) == 0;
 }
 
+static uint32_t hl_vfs_mount_flags_for_guest(const char *guest, uint32_t inherited) {
+    static const char *const noexec[] = {"/proc", "/sys", "/dev"};
+    for (size_t index = 0; index < sizeof noexec / sizeof noexec[0]; index++) {
+        size_t length = strlen(noexec[index]);
+        if (!strncmp(guest, noexec[index], length) && (guest[length] == 0 || guest[length] == '/'))
+            return inherited | HL_VFS_MOUNT_NOEXEC;
+    }
+    return inherited;
+}
+
 static void hl_vfs_cursor_entry_release(hl_vfs_cursor_entry *entry) {
     if (entry == NULL) return;
     if (entry->descriptor >= 0) close(entry->descriptor);
@@ -166,7 +176,12 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor
     }
     if (selected == cursor->count) return -ENOENT;
     output->status = selected_status;
-    output->mount_flags = cursor->mount_flags;
+    char guest_entry[4200];
+    int guest_length = !strcmp(cursor->guest, "/")
+                           ? snprintf(guest_entry, sizeof guest_entry, "/%s", component)
+                           : snprintf(guest_entry, sizeof guest_entry, "%s/%s", cursor->guest, component);
+    if (guest_length < 0 || (size_t)guest_length >= sizeof guest_entry) return -ENAMETOOLONG;
+    output->mount_flags = hl_vfs_mount_flags_for_guest(guest_entry, cursor->mount_flags);
     if (S_ISLNK(selected_status.st_mode)) {
         ssize_t length =
             readlinkat(cursor->descriptors[selected], component, output->symlink, sizeof output->symlink - 1);
@@ -187,7 +202,7 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor
     if (selected_directory < 0) return -errno;
     output->directory.descriptors[output->directory.count++] = selected_directory;
     output->directory.opaque_cut = hl_vfs_cursor_opaque(selected_directory);
-    output->directory.mount_flags = cursor->mount_flags;
+    output->directory.mount_flags = output->mount_flags;
     if (!output->directory.opaque_cut)
         for (size_t index = selected + 1; index < cursor->count; index++) {
             struct stat status;
