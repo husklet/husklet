@@ -331,7 +331,7 @@ static int g_pcache; // HL_PCACHE=1 requested (never hits)
 static int g_coldprof;
 static uint64_t g_force_base;   // one-shot fixed-VA request consumed by load_elf
 static int g_force_base_failed; // a fixed-VA map fell back to a kernel base
-static uint64_t g_pc_binid;     // binary + interp + argv0 + build + host ISA
+static hl_identity_digest g_pc_binid; // binary + interp + argv0 + build + host ISA
 static uint64_t g_pc_entry;     // initial guest pc
 static int g_pcache_loaded;     // never set here
 static int g_pcache_forked;     // never set here
@@ -350,9 +350,9 @@ static uint64_t pcache_engine_id(void) {
     return hl_identity_configuration(build, HL_HOST_CPU_ISA_AARCH64, HL_HOST_CPU_ISA, modes);
 }
 
-static uint64_t pcache_make_id(uint64_t program, uint64_t interpreter, const char *argv0) {
-    if (!interpreter) interpreter = 0xABCDEFull;
-    return hl_identity_mix(program, interpreter, pcache_engine_id(), hl_identity_name(argv0));
+static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity_digest interpreter,
+                                        const char *argv0) {
+    return hl_identity_digest_mix(program, interpreter, pcache_engine_id(), hl_identity_name(argv0));
 }
 
 // Always a clean MISS.

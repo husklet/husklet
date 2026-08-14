@@ -1242,7 +1242,8 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
     // opt8: key the cache by the identity (dev/ino/size/mtime) of the guest binary AND its interpreter,
     // plus the argv[0] basename -- a multicall binary (busybox) runs a different applet per
     // argv[0], and with the exec re-key each image epoch persists its own arena under its own key.
-    if (g_pcache) g_pc_binid = pcache_make_id(lm->identity, *have_interp ? li->identity : 0, prog);
+    if (g_pcache)
+        g_pc_binid = pcache_make_id(lm->identity, *have_interp ? li->identity : (hl_identity_digest){0}, prog);
     return prog;
 }
 

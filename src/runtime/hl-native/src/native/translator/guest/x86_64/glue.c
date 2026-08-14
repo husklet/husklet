@@ -13,7 +13,7 @@ hl_x86_ibtc_entry g_xibtc[XIBTC_SETS * XIBTC_WAYS];
 int g_coldprof;
 int g_pcache;
 int g_pcache_loaded;
-uint64_t g_pc_binid;
+hl_identity_digest g_pc_binid;
 uint64_t g_pc_entry;
 uint64_t g_force_base;
 hl_reloc g_reloc_storage[PC_RELOC_CAP];

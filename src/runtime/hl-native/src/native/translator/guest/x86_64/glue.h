@@ -1,6 +1,7 @@
 #ifndef HL_TRANSLATOR_GUEST_X86_64_GLUE_H
 #define HL_TRANSLATOR_GUEST_X86_64_GLUE_H
 
+#include "../../identity.h"
 #include "../../reloc.h"
 #include "hl/host_services.h"
 
@@ -30,7 +31,7 @@ extern hl_x86_ibtc_entry g_xibtc[XIBTC_SETS * XIBTC_WAYS];
 extern int g_coldprof;
 extern int g_pcache;
 extern int g_pcache_loaded;
-extern uint64_t g_pc_binid;
+extern hl_identity_digest g_pc_binid;
 extern uint64_t g_pc_entry;
 extern uint64_t g_force_base;
 extern hl_reloc g_reloc_storage[PC_RELOC_CAP];

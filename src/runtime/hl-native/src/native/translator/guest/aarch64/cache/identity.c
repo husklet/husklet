@@ -29,10 +29,9 @@ static uint64_t pcache_argv0_id(const char *argv0) {
     return hl_identity_name(argv0);
 }
 
-static uint64_t pcache_make_id(uint64_t program, uint64_t interpreter, const char *argv0) {
-    uint64_t a = program;
-    uint64_t b = interpreter ? interpreter : 0xABCDEFull;
-    return hl_identity_mix(a, b, pcache_engine_id(), pcache_argv0_id(argv0));
+static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity_digest interpreter,
+                                        const char *argv0) {
+    return hl_identity_digest_mix(program, interpreter, pcache_engine_id(), pcache_argv0_id(argv0));
 }
 
 static int pcache_file(char *out, size_t n) {
@@ -53,6 +52,12 @@ static int pcache_file(char *out, size_t n) {
             return 0;
         }
     }
-    int written = snprintf(out, n, "%016llx.pcache", (unsigned long long)g_pc_binid);
-    return written > 0 && (size_t)written < n;
+    static const char hex[] = "0123456789abcdef";
+    if (n < 72) return 0;
+    for (size_t i = 0; i < sizeof g_pc_binid.bytes; ++i) {
+        out[i * 2] = hex[g_pc_binid.bytes[i] >> 4];
+        out[i * 2 + 1] = hex[g_pc_binid.bytes[i] & 15];
+    }
+    memcpy(out + 64, ".pcache", 8);
+    return 1;
 }

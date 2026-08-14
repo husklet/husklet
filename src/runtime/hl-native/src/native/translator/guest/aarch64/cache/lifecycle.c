@@ -56,7 +56,8 @@ static void pcache_exec_force_interp(void) {
     if (g_pcache) g_force_base = PC_INTERP_BASE;
 }
 
-static void pcache_exec_reload(uint64_t program, uint64_t interpreter, const char *argv0, uint64_t jump) {
+static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest interpreter, const char *argv0,
+                               uint64_t jump) {
     if (!g_pcache) return;
     // Execve has flushed the old arena and installed a new fixed-base image. Reset every cache-production
     // datum in lockstep with that identity boundary. The new epoch may publish even when its process was

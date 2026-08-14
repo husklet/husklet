@@ -185,9 +185,26 @@ fn executable_cache_identity_follows_pinned_bytes_not_a_reused_path() {
 int main(void) {
     static const unsigned char first[] = {0x7f, 'E', 'L', 'F', 1};
     static const unsigned char replacement[] = {0x7f, 'E', 'L', 'F', 2};
-    uint64_t pinned = hl_identity_image(first, sizeof first);
-    if (pinned != hl_identity_image(first, sizeof first)) return 1;
-    if (pinned == hl_identity_image(replacement, sizeof replacement)) return 2;
+    static const unsigned char abc_sha256[32] = {
+        0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
+        0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad,
+    };
+    hl_identity_digest pinned = hl_identity_image_digest(first, sizeof first);
+    hl_identity_digest same = hl_identity_image_digest(first, sizeof first);
+    hl_identity_digest changed = hl_identity_image_digest(replacement, sizeof replacement);
+    hl_identity_digest abc = hl_identity_image_digest("abc", 3);
+    if (!hl_identity_digest_equal(&pinned, &same)) return 1;
+    if (hl_identity_digest_equal(&pinned, &changed)) return 2;
+    if (memcmp(abc.bytes, abc_sha256, sizeof abc.bytes) != 0) return 3;
+
+    /* Regression: equality must inspect all 256 bits, not just the old 64-bit-sized prefix. */
+    same.bytes[31] ^= 1;
+    if (hl_identity_digest_equal(&pinned, &same)) return 4;
+
+    hl_identity_digest none = {0};
+    hl_identity_digest first_key = hl_identity_digest_mix(pinned, none, 7, 11);
+    hl_identity_digest replacement_key = hl_identity_digest_mix(changed, none, 7, 11);
+    if (hl_identity_digest_equal(&first_key, &replacement_key)) return 5;
     return 0;
 }
 "#,

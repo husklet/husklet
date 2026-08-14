@@ -467,7 +467,7 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             argv[i] = xargv[i];
         argv[ac < HL_MAXARGV - 1 ? ac : HL_MAXARGV - 1] = NULL;
         struct loaded lm;
-        uint64_t interp_identity = 0;
+        hl_identity_digest interp_identity = {0};
         char pc_ihost[4200];
         const char *pc_interp_host = NULL;
         (void)pc_ihost;

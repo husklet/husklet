@@ -1544,9 +1544,9 @@ static uint64_t pcache_engine_id(void) {
     return hl_identity_configuration(hash, 2, HL_HOST_CPU_ISA, 0);
 }
 
-static uint64_t pcache_make_id(uint64_t program, uint64_t interpreter, const char *argv0) {
-    if (!interpreter) interpreter = 0xABCDEFull;
-    return hl_identity_mix(program, interpreter, pcache_engine_id(), hl_identity_name(argv0));
+static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity_digest interpreter,
+                                        const char *argv0) {
+    return hl_identity_digest_mix(program, interpreter, pcache_engine_id(), hl_identity_name(argv0));
 }
 
 static int pcache_load(uint64_t entry_jump) {
