@@ -76,9 +76,10 @@ impl Form {
                     FormValidation::focus_missing(&form, name_ok);
                     return;
                 }
-                let result = form
-                    .configuration()
-                    .and_then(|workspace| WorkspaceStore::load(Home::current().workspaces_config())?.upsert(workspace));
+                let result = form.configuration().and_then(|workspace| {
+                    let mut store = WorkspaceStore::load(Home::current().workspaces_config())?;
+                    create_workspace(&mut store, workspace)
+                });
                 match result {
                     Ok(()) => {
                         on_created();
@@ -111,6 +112,58 @@ impl Form {
         }
         host::appearance::Appearance::apply();
         Screenshot::schedule(&window, "newws");
+    }
+}
+
+fn create_workspace(store: &mut WorkspaceStore, workspace: WorkspaceConfig) -> std::io::Result<()> {
+    if store.get(&workspace.name).is_some() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("A workspace named {:?} already exists.", workspace.name),
+        ));
+    }
+    store.upsert(workspace)
+}
+
+#[cfg(test)]
+mod create_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_creation_preserves_the_existing_workspace() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("workspaces.conf");
+        let mut store = WorkspaceStore::load(&path).unwrap();
+        store
+            .upsert(WorkspaceConfig::new("demo", "original:latest", Arch::Arm64))
+            .unwrap();
+
+        let error = create_workspace(
+            &mut store,
+            WorkspaceConfig::new("demo", "replacement:latest", Arch::Amd64),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+
+        let reloaded = WorkspaceStore::load(path).unwrap();
+        let workspace = reloaded.get("demo").unwrap();
+        assert_eq!(workspace.image, "original:latest");
+        assert_eq!(workspace.arch, Arch::Arm64);
+    }
+
+    #[test]
+    fn unique_creation_is_persisted() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("workspaces.conf");
+        let mut store = WorkspaceStore::load(&path).unwrap();
+
+        create_workspace(
+            &mut store,
+            WorkspaceConfig::new("demo", "image:latest", Arch::Arm64),
+        )
+        .unwrap();
+
+        assert!(WorkspaceStore::load(path).unwrap().get("demo").is_some());
     }
 }
 
