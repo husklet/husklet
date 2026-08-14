@@ -43,6 +43,7 @@ impl<'a> Configuration<'a> {
     pub(super) fn environment(&self) -> BTreeMap<String, String> {
         let mut values = BTreeMap::from([
             ("TERM".into(), "xterm-256color".into()),
+            ("COLORTERM".into(), "truecolor".into()),
             ("HOME".into(), "/root".into()),
             (
                 "PATH".into(),
