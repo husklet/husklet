@@ -500,6 +500,22 @@ enum { CKPT_FUTEX_WAIT = 0, CKPT_FUTEX_WAKE = 1 };
 static struct ckpt_restore_commit *g_restore_commit;
 static size_t g_restore_commit_size;
 
+static int ckpt_restore_commit_futex(_Atomic int *word, int operation, int value, const struct timespec *timeout) {
+#if defined(_WIN32)
+    /* Checkpoint control is rejected by the Windows engine boundary.  Keep the
+     * Linux guest translation unit portable without manufacturing a partial
+     * restore implementation: creation below fails before this can be reached. */
+    (void)word;
+    (void)operation;
+    (void)value;
+    (void)timeout;
+    errno = ENOSYS;
+    return -1;
+#else
+    return (int)syscall(SYS_futex, word, operation, value, timeout, NULL, 0);
+#endif
+}
+
 static int ckpt_restore_process_index(int gpid) {
     for (int index = 0; index < g_nrprocs; ++index)
         if (g_rprocs[index].gpid == gpid) return index;
@@ -507,6 +523,10 @@ static int ckpt_restore_process_index(int gpid) {
 }
 
 static int ckpt_restore_commit_create(void) {
+#if defined(_WIN32)
+    errno = ENOTSUP;
+    return -1;
+#else
     if ((size_t)g_nrprocs > (SIZE_MAX - sizeof(struct ckpt_restore_commit)) / sizeof(pid_t)) return -1;
     g_restore_commit_size = sizeof(struct ckpt_restore_commit) + (size_t)g_nrprocs * sizeof(pid_t);
     g_restore_commit = mmap(NULL, g_restore_commit_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
@@ -518,6 +538,7 @@ static int ckpt_restore_commit_create(void) {
     int root = ckpt_restore_process_index(1);
     if (root >= 0) atomic_store_explicit(&g_restore_commit->pids[root], getpid(), memory_order_release);
     return 0;
+#endif
 }
 
 static void ckpt_restore_commit_destroy(void) {
@@ -527,7 +548,7 @@ static void ckpt_restore_commit_destroy(void) {
 }
 
 static void ckpt_restore_commit_wake(void) {
-    (void)syscall(SYS_futex, &g_restore_commit->decision, CKPT_FUTEX_WAKE, INT_MAX, NULL, NULL, 0);
+    (void)ckpt_restore_commit_futex(&g_restore_commit->decision, CKPT_FUTEX_WAKE, INT_MAX, NULL);
 }
 
 static void ckpt_restore_commit_abort(void) {
@@ -550,23 +571,23 @@ static void ckpt_restore_commit_abort(void) {
 static void ckpt_restore_commit_failed(void) {
     if (g_restore_commit != NULL) {
         atomic_fetch_add_explicit(&g_restore_commit->failed, 1, memory_order_release);
-        (void)syscall(SYS_futex, &g_restore_commit->ready, CKPT_FUTEX_WAKE, INT_MAX, NULL, NULL, 0);
+        (void)ckpt_restore_commit_futex(&g_restore_commit->ready, CKPT_FUTEX_WAKE, INT_MAX, NULL);
     }
     _exit(70);
 }
 
 static void ckpt_restore_commit_wait(void) {
     atomic_fetch_add_explicit(&g_restore_commit->ready, 1, memory_order_release);
-    (void)syscall(SYS_futex, &g_restore_commit->ready, CKPT_FUTEX_WAKE, INT_MAX, NULL, NULL, 0);
+    (void)ckpt_restore_commit_futex(&g_restore_commit->ready, CKPT_FUTEX_WAKE, INT_MAX, NULL);
     for (;;) {
         int decision = atomic_load_explicit(&g_restore_commit->decision, memory_order_acquire);
         if (decision == 1) {
             atomic_fetch_add_explicit(&g_restore_commit->released, 1, memory_order_release);
-            (void)syscall(SYS_futex, &g_restore_commit->released, CKPT_FUTEX_WAKE, INT_MAX, NULL, NULL, 0);
+            (void)ckpt_restore_commit_futex(&g_restore_commit->released, CKPT_FUTEX_WAKE, INT_MAX, NULL);
             return;
         }
         if (decision == 2) _exit(70);
-        (void)syscall(SYS_futex, &g_restore_commit->decision, CKPT_FUTEX_WAIT, 0, NULL, NULL, 0);
+        (void)ckpt_restore_commit_futex(&g_restore_commit->decision, CKPT_FUTEX_WAIT, 0, NULL);
     }
 }
 
@@ -584,15 +605,16 @@ static int ckpt_restore_commit_publish(void) {
             (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec))
             return -1;
         struct timespec pause = {.tv_sec = 0, .tv_nsec = 10000000};
-        (void)syscall(SYS_futex, &g_restore_commit->ready, CKPT_FUTEX_WAIT,
-                      atomic_load_explicit(&g_restore_commit->ready, memory_order_relaxed), &pause, NULL, 0);
+        (void)ckpt_restore_commit_futex(&g_restore_commit->ready, CKPT_FUTEX_WAIT,
+                                        atomic_load_explicit(&g_restore_commit->ready, memory_order_relaxed), &pause);
     }
     atomic_store_explicit(&g_restore_commit->decision, 1, memory_order_release);
     ckpt_restore_commit_wake();
     while (atomic_load_explicit(&g_restore_commit->released, memory_order_acquire) < expected) {
         struct timespec pause = {.tv_sec = 0, .tv_nsec = 10000000};
-        (void)syscall(SYS_futex, &g_restore_commit->released, CKPT_FUTEX_WAIT,
-                      atomic_load_explicit(&g_restore_commit->released, memory_order_relaxed), &pause, NULL, 0);
+        (void)ckpt_restore_commit_futex(&g_restore_commit->released, CKPT_FUTEX_WAIT,
+                                        atomic_load_explicit(&g_restore_commit->released, memory_order_relaxed),
+                                        &pause);
     }
     return 0;
 }
