@@ -1,3 +1,4 @@
+/* Public C++ ABI integration fixture owned by hl-native. */
 #include "hl/engine.h"
 
 #if defined(__APPLE__)

@@ -1,3 +1,4 @@
+/* Public Windows C ABI integration fixture owned by hl-native. */
 #include "hl/engine.h"
 #include "hl/windows.h"
 

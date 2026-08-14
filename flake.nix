@@ -696,11 +696,11 @@
             native_directory="$(dirname "''${native_libraries[0]}")"
             ${lib.escapeShellArg compiler} -std=c11 -Wall -Wextra -Werror \
               -Isrc/runtime/hl-native/src/native/include \
-              tests/native/host-abi/unix.c -L"$native_directory" \
+              src/runtime/hl-native/tests/host-abi/unix.c -L"$native_directory" \
               -Wl,-rpath-link,"$native_directory" -lhl_native_engine -o public-abi-c
             ${lib.escapeShellArg cxx} -std=c++20 -Wall -Wextra -Werror \
               -Isrc/runtime/hl-native/src/native/include \
-              tests/native/host-abi/unix.cpp -L"$native_directory" \
+              src/runtime/hl-native/tests/host-abi/unix.cpp -L"$native_directory" \
               -Wl,-rpath-link,"$native_directory" -lhl_native_engine -o public-abi-cxx
             file public-abi-c public-abi-cxx | grep -F ${lib.escapeShellArg fileArchitecture}
             ${targetPkgs.stdenv.cc.targetPrefix}readelf -d public-abi-c \
@@ -873,14 +873,14 @@
             ${lib.escapeShellArg compiler} -std=c11 -Wall -Wextra -Werror \
               -DHL_SHARED -DHL_ABI_COMPILE_CONTRACT \
               -Isrc/runtime/hl-native/src/native/include \
-              -c tests/native/host-abi/windows.c -o public-abi-c.obj
+              -c src/runtime/hl-native/tests/host-abi/windows.c -o public-abi-c.obj
             ${windows.stdenv.cc.targetPrefix}objdump -f public-abi-c.obj \
               | grep -F 'file format pe-x86-64' >/dev/null
             ${windows.stdenv.cc.targetPrefix}objdump -f public-abi-c.obj \
               | grep -F 'architecture: i386:x86-64' >/dev/null
             ${lib.escapeShellArg cxx} -std=c++20 -Wall -Wextra -Werror \
               -DHL_SHARED -Isrc/runtime/hl-native/src/native/include \
-              -c tests/native/host-abi/windows.cpp -o public-abi-cxx.obj
+              -c src/runtime/hl-native/tests/host-abi/windows.cpp -o public-abi-cxx.obj
             ${windows.stdenv.cc.targetPrefix}objdump -f public-abi-cxx.obj \
               | grep -F 'file format pe-x86-64' >/dev/null
             ${windows.stdenv.cc.targetPrefix}objdump -f public-abi-cxx.obj \
@@ -889,7 +889,7 @@
               -DHL_ABI_FIXTURE_EXPORT \
               -Isrc/runtime/hl-native/src/native/include \
               -L${windows.windows.mcfgthreads}/lib \
-              -shared tests/native/host-abi/windows.c -o hl-abi-fixture.dll \
+              -shared src/runtime/hl-native/tests/host-abi/windows.c -o hl-abi-fixture.dll \
               -Wl,--out-implib,libhl-abi-fixture.dll.a
             ${windows.stdenv.cc.targetPrefix}objdump -f hl-abi-fixture.dll \
               | grep -F 'file format pei-x86-64' >/dev/null
@@ -972,12 +972,12 @@
 
             ${pkgs.stdenv.cc}/bin/cc -std=c11 -Wall -Wextra -Werror \
               -DHL_SHARED -I${workspaceSource}/src/runtime/hl-native/src/native/include \
-              ${workspaceSource}/tests/native/host-abi/unix.c \
+              ${workspaceSource}/src/runtime/hl-native/tests/host-abi/unix.c \
               -L"$TMPDIR/product" -lhl_native_engine \
               -Wl,-rpath,@loader_path -o "$TMPDIR/product/public-abi-c"
             ${pkgs.stdenv.cc}/bin/c++ -std=c++20 -Wall -Wextra -Werror \
               -DHL_SHARED -I${workspaceSource}/src/runtime/hl-native/src/native/include \
-              ${workspaceSource}/tests/native/host-abi/unix.cpp \
+              ${workspaceSource}/src/runtime/hl-native/tests/host-abi/unix.cpp \
               -L"$TMPDIR/product" -lhl_native_engine \
               -Wl,-rpath,@loader_path -o "$TMPDIR/product/public-abi-cxx"
 
