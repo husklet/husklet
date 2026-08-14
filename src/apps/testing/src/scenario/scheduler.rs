@@ -311,6 +311,9 @@ fn plan(scenarios: Vec<Scenario>, options: &Options) -> Result<Vec<Work>, Error>
             extend_target_work(&scenario, target, options, &mut keys, &mut work)?;
         }
     }
+    if work.is_empty() {
+        return Err("scenario selection produced no executable case/target/sample rows".into());
+    }
     work.sort_by(|left, right| left.keys.cmp(&right.keys));
     Ok(work)
 }
