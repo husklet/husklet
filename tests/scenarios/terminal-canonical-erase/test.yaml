@@ -1,0 +1,27 @@
+cases:
+- id: terminal-canonical-erase/foreground-verase
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "stty -echo erase '^?'; echo ERASE-${x}READY; cat; stty echo; echo ERASE-${x}DONE\r" }
+      - await_output: { contains: ERASE-READY, timeout_ms: 5000 }
+      - write: { text: "CANON-KEEPM\u007f\r" }
+      - await_output: { contains: CANON-KEEP, timeout_ms: 5000 }
+      - reject_output: { text: "CANON-KEEPM" }
+      - write: { text: "\u0004" }
+      - await_output: { contains: ERASE-DONE, timeout_ms: 5000 }
+      - write: { text: "printf \"SHELL-${x}OK\\n\"; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/kept.txt
+    - golden/erase_done.txt
+    - golden/shell_ok.txt
