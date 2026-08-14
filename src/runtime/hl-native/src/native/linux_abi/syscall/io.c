@@ -514,11 +514,11 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             return svc_done(c);
         }
         /*
-         * Linux rejects an aggregate vector length that cannot fit in ssize_t
-         * with EINVAL before access_ok() considers the payload ranges.  This
-         * matters for a single SSIZE_MAX+1 segment: treating its inevitably
-         * overflowing address range first incorrectly turns EINVAL into
-         * EFAULT.  Keep the sum overflow-safe because iov_len is unsigned.
+         * Linux validates each vector entry in order: an entry that takes the
+         * aggregate past SSIZE_MAX is EINVAL, while an earlier entry whose
+         * payload range is outside user memory is EFAULT before a later entry
+         * can overflow that aggregate.  Interleave the checks to preserve both
+         * sides of that precedence ladder.
          */
         uint64_t total = 0;
         for (int i = 0; i < (int)a2; i++) {
@@ -528,11 +528,8 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 return svc_done(c);
             }
             total += len;
-        }
-        for (int i = 0; i < (int)a2; i++) {
             uintptr_t base = (uintptr_t)imported[i].iov_base;
-            uintptr_t len = (uintptr_t)imported[i].iov_len;
-            if (len && (base + len < base || base + len > UINT64_C(0x0001000000000000))) {
+            if (base + len < base || base + len > UINT64_C(0x0001000000000000)) {
                 G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
                 return svc_done(c);
             }
