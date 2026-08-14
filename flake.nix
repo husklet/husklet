@@ -541,27 +541,7 @@
             readelf --dyn-syms --wide "$library" |
               awk '$4 == "FUNC" && $5 == "GLOBAL" && $6 == "DEFAULT" && $7 != "UND" { print $8 }' |
               sed 's/@.*//' | sort -u > "$TMPDIR/actual-exports"
-            printf '%s\n' \
-              hl_c_backend_checkpoint_adopt \
-              hl_c_backend_checkpoint_broker_accept \
-              hl_c_backend_checkpoint_broker_pair \
-              hl_c_backend_checkpoint_interrupt_signal \
-              hl_c_backend_checkpoint_trigger_bump \
-              hl_c_backend_checkpoint_trigger_create \
-              hl_c_backend_checkpoint_trigger_destroy \
-              hl_c_backend_create \
-              hl_c_backend_destroy \
-              hl_c_backend_executable_discard \
-              hl_c_backend_executable_open \
-              hl_c_backend_exit_detail \
-              hl_c_backend_exit_kind \
-              hl_c_backend_exit_status \
-              hl_c_backend_leak_check_nonvacuity \
-              hl_c_backend_request \
-              hl_c_backend_run \
-              hl_c_backend_translation_count \
-              hl_engine_abi \
-              hl_engine_version > "$TMPDIR/expected-exports"
+            cp src/runtime/hl-native/src/native/bridge/exports.txt "$TMPDIR/expected-exports"
             diff -u "$TMPDIR/expected-exports" "$TMPDIR/actual-exports"
 
             for name in hl-engine hl-aarch64 hl-x86_64
@@ -663,27 +643,7 @@
             ${targetPkgs.stdenv.cc.targetPrefix}readelf --dyn-syms --wide "''${native_libraries[0]}" \
               | awk '$4 == "FUNC" && $5 == "GLOBAL" && $6 == "DEFAULT" && $7 != "UND" { print $8 }' \
               | sed 's/@.*//' | sort -u > "$TMPDIR/actual-exports"
-            printf '%s\n' \
-              hl_c_backend_checkpoint_adopt \
-              hl_c_backend_checkpoint_broker_accept \
-              hl_c_backend_checkpoint_broker_pair \
-              hl_c_backend_checkpoint_interrupt_signal \
-              hl_c_backend_checkpoint_trigger_bump \
-              hl_c_backend_checkpoint_trigger_create \
-              hl_c_backend_checkpoint_trigger_destroy \
-              hl_c_backend_create \
-              hl_c_backend_destroy \
-              hl_c_backend_executable_discard \
-              hl_c_backend_executable_open \
-              hl_c_backend_exit_detail \
-              hl_c_backend_exit_kind \
-              hl_c_backend_exit_status \
-              hl_c_backend_leak_check_nonvacuity \
-              hl_c_backend_request \
-              hl_c_backend_run \
-              hl_c_backend_translation_count \
-              hl_engine_abi \
-              hl_engine_version > "$TMPDIR/expected-exports"
+            cp src/runtime/hl-native/src/native/bridge/exports.txt "$TMPDIR/expected-exports"
             diff -u "$TMPDIR/expected-exports" "$TMPDIR/actual-exports"
             native_directory="$(dirname "''${native_libraries[0]}")"
             ${lib.escapeShellArg compiler} -std=c11 -Wall -Wextra -Werror \
@@ -826,28 +786,7 @@
               | grep -F 'file format pei-x86-64' >/dev/null
             file "$dll" | grep -E 'PE32\+.*DLL.*x86-64'
             file "$import" | grep -F 'current ar archive'
-            cat > expected-engine-exports <<'EOF'
-            hl_c_backend_checkpoint_adopt
-            hl_c_backend_checkpoint_broker_accept
-            hl_c_backend_checkpoint_broker_pair
-            hl_c_backend_checkpoint_interrupt_signal
-            hl_c_backend_checkpoint_trigger_bump
-            hl_c_backend_checkpoint_trigger_create
-            hl_c_backend_checkpoint_trigger_destroy
-            hl_c_backend_create
-            hl_c_backend_destroy
-            hl_c_backend_executable_discard
-            hl_c_backend_executable_open
-            hl_c_backend_exit_detail
-            hl_c_backend_exit_kind
-            hl_c_backend_exit_status
-            hl_c_backend_leak_check_nonvacuity
-            hl_c_backend_request
-            hl_c_backend_run
-            hl_c_backend_translation_count
-            hl_engine_abi
-            hl_engine_version
-            EOF
+            cp src/runtime/hl-native/src/native/bridge/exports.txt expected-engine-exports
             ${windows.stdenv.cc.targetPrefix}nm -g "$import" \
               | awk '$2 == "T" && $3 ~ /^hl_/ { print $3 }' \
               | sort -u > actual-engine-exports
@@ -936,27 +875,8 @@
           lipo -archs "$library" | grep -Fx 'arm64' >/dev/null
           otool -D "$library" | grep -Fx '@rpath/libhl_native_engine.dylib' >/dev/null
           nm -gjU "$library" | sort -u > "$TMPDIR/actual-exports"
-          printf '%s\n' \
-            _hl_c_backend_checkpoint_adopt \
-            _hl_c_backend_checkpoint_broker_accept \
-            _hl_c_backend_checkpoint_broker_pair \
-            _hl_c_backend_checkpoint_interrupt_signal \
-            _hl_c_backend_checkpoint_trigger_bump \
-            _hl_c_backend_checkpoint_trigger_create \
-            _hl_c_backend_checkpoint_trigger_destroy \
-            _hl_c_backend_create \
-            _hl_c_backend_destroy \
-            _hl_c_backend_executable_discard \
-            _hl_c_backend_executable_open \
-            _hl_c_backend_exit_detail \
-            _hl_c_backend_exit_kind \
-            _hl_c_backend_exit_status \
-            _hl_c_backend_leak_check_nonvacuity \
-            _hl_c_backend_request \
-            _hl_c_backend_run \
-            _hl_c_backend_translation_count \
-            _hl_engine_abi \
-            _hl_engine_version > "$TMPDIR/expected-exports"
+          sed 's/^/_/' src/runtime/hl-native/src/native/bridge/exports.txt \
+            > "$TMPDIR/expected-exports"
           diff -u "$TMPDIR/expected-exports" "$TMPDIR/actual-exports"
           for name in hl-engine hl-aarch64 hl-x86_64; do
             binary="$prefix/bin/$name"

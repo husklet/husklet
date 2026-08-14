@@ -13,29 +13,7 @@ mod platform;
 
 const NATIVE_ROOT: &str = "src/native";
 const COMMON_DEFINITIONS: &[&str] = &["HL_ENABLE_LOGGING=0", "HL_TRANSLIT_DEFAULT=0"];
-const RUST_BRIDGE_EXPORTS: &[&str] = &[
-    "hl_engine_abi",
-    "hl_engine_version",
-    "hl_c_backend_leak_check_nonvacuity",
-    "hl_c_backend_checkpoint_broker_pair",
-    "hl_c_backend_checkpoint_broker_accept",
-    "hl_c_backend_checkpoint_trigger_create",
-    "hl_c_backend_checkpoint_trigger_bump",
-    "hl_c_backend_checkpoint_trigger_destroy",
-    "hl_c_backend_checkpoint_adopt",
-    "hl_c_backend_checkpoint_interrupt_signal",
-    "hl_c_backend_checkpoint_configure",
-    "hl_c_backend_create",
-    "hl_c_backend_run",
-    "hl_c_backend_request",
-    "hl_c_backend_exit_kind",
-    "hl_c_backend_exit_status",
-    "hl_c_backend_exit_detail",
-    "hl_c_backend_translation_count",
-    "hl_c_backend_destroy",
-    "hl_c_backend_executable_open",
-    "hl_c_backend_executable_discard",
-];
+const RUST_BRIDGE_EXPORTS: &str = include_str!("src/native/bridge/exports.txt");
 fn main() {
     for input in build_support::BUILD_POLICY_INPUTS {
         println!("cargo:rerun-if-changed={input}");
@@ -55,6 +33,7 @@ fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("Cargo supplies CARGO_CFG_TARGET_OS");
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").expect("Cargo supplies CARGO_CFG_TARGET_ARCH");
     let target_env = env::var("CARGO_CFG_TARGET_ENV").expect("Cargo supplies CARGO_CFG_TARGET_ENV");
+    let bridge_exports = build_support::export_symbols(RUST_BRIDGE_EXPORTS);
     let Some(target) = platform::HostTarget::from_cfg(&target_os, &target_arch) else {
         println!("cargo:supported=0");
         println!("cargo:warning=native C engine unavailable for {target_arch}-{target_os}");
@@ -183,7 +162,14 @@ fn main() {
         "windows" => build_support::WINDOWS_SYSTEM_LIBRARIES,
         _ => &["atomic", "dl", "m", "pthread"][..],
     };
-    link_shared_engine(&output, &target_os, &target_env, &archives, system_libraries);
+    link_shared_engine(
+        &output,
+        &target_os,
+        &target_env,
+        &archives,
+        system_libraries,
+        &bridge_exports,
+    );
     println!("cargo:rustc-link-search=native={}", output.display());
     println!("cargo:rustc-link-lib=dylib=hl_native_engine");
     emit_loader_paths(
@@ -379,14 +365,21 @@ fn compile(name: &str, sources: &[&str], definitions: &[&str], strict: bool) {
     build.compile(name);
 }
 
-fn link_shared_engine(output: &Path, target_os: &str, target_env: &str, archives: &[&str], libraries: &[&str]) {
+fn link_shared_engine(
+    output: &Path,
+    target_os: &str,
+    target_env: &str,
+    archives: &[&str],
+    libraries: &[&str],
+    bridge_exports: &[&str],
+) {
     let compiler = cc::Build::new().get_compiler();
     let filename = artifact::filename(target_os);
     let destination = output.join(filename);
     let mut command = compiler.to_command();
     if target_os == "macos" {
         let export_list = output.join("hl_native_engine.exports");
-        let exported = build_support::darwin_export_list(RUST_BRIDGE_EXPORTS);
+        let exported = build_support::darwin_export_list(bridge_exports);
         fs::write(&export_list, exported).expect("write Darwin native export list");
         command.args(["-dynamiclib", "-Wl,-install_name,@rpath/libhl_native_engine.dylib"]);
         command.arg(format!("-Wl,-exported_symbols_list,{}", export_list.display()));
@@ -398,7 +391,7 @@ fn link_shared_engine(output: &Path, target_os: &str, target_env: &str, archives
         }
     } else if target_os == "windows" {
         let definition = output.join("hl_native_engine.def");
-        let exported = build_support::windows_export_definition(RUST_BRIDGE_EXPORTS);
+        let exported = build_support::windows_export_definition(bridge_exports);
         fs::write(&definition, exported).expect("write Windows native export definition");
         command.arg("-shared");
         if target_env == "msvc" {
@@ -429,8 +422,7 @@ fn link_shared_engine(output: &Path, target_os: &str, target_env: &str, archives
         }
     } else {
         let export_map = output.join("hl_native_engine.map");
-        fs::write(&export_map, build_support::linux_export_map(RUST_BRIDGE_EXPORTS))
-            .expect("write Linux native export map");
+        fs::write(&export_map, build_support::linux_export_map(bridge_exports)).expect("write Linux native export map");
         command.args([
             "-shared",
             "-Wl,-soname,libhl_native_engine.so",

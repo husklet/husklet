@@ -35,6 +35,21 @@ pub(crate) const WINDOWS_SYSTEM_LIBRARIES: &[&str] = &[
     "userenv",
 ];
 
+pub(crate) fn export_symbols(manifest: &str) -> Vec<&str> {
+    let symbols = manifest.lines().filter(|line| !line.is_empty()).collect::<Vec<_>>();
+    assert!(!symbols.is_empty(), "native bridge export manifest is empty");
+    assert!(
+        symbols.windows(2).all(|pair| pair[0] < pair[1]),
+        "native bridge exports must be unique and sorted"
+    );
+    assert!(
+        symbols.iter().all(|symbol| symbol.starts_with("hl_")
+            && symbol.bytes().all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())),
+        "native bridge export manifest contains an invalid C identifier"
+    );
+    symbols
+}
+
 pub(crate) fn source_matches(target_os: &str, source: &str) -> bool {
     if target_os == "windows"
         && matches!(
@@ -224,6 +239,14 @@ mod tests {
             super::linux_export_map(&symbols),
             "HL_NATIVE_1 {\n  global:\n    hl_engine_abi;\n    hl_engine_version;\n  local: *;\n};\n"
         );
+    }
+
+    #[test]
+    fn bridge_export_manifest_is_sorted_and_contains_checkpoint_configuration() {
+        let manifest = include_str!("native/bridge/exports.txt");
+        let symbols = super::export_symbols(manifest);
+        assert!(symbols.contains(&"hl_c_backend_checkpoint_configure"));
+        assert_eq!(symbols.len(), 21);
     }
 
     #[test]
