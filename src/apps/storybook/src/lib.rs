@@ -4,8 +4,10 @@
 //! extension would be, which is what makes it a real test of the library
 //! rather than a hand-built demo window.
 
+mod live;
 mod story;
 
+pub use live::{host, Fault};
 pub use story::{Catalogue, Story};
 
 /// How many rows the catalogue's table claims to have.

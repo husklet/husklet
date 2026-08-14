@@ -107,10 +107,12 @@ pub(crate) fn present(widget: &gtk::Widget, window: &RowWindow) {
     let Some(rows) = model(widget, window.source) else {
         return;
     };
-    if u64::from(rows.n_items()) < window.range.end() {
-        // A window can arrive before the length does; describe at least what
-        // was delivered, so those rows are reachable rather than invisible.
-        rows.resize(window.version, window.range.end());
+    // A window can arrive before the length does. Extend only as far as the
+    // rows actually delivered: the requested range is what was asked for, not
+    // what exists, and trusting it invents placeholder rows past the end.
+    let reached = window.range.start.saturating_add(window.rows.len() as u64);
+    if u64::from(rows.n_items()) < reached {
+        rows.resize(window.version, reached);
     }
     rows.deliver(window);
 }

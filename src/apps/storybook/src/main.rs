@@ -27,6 +27,10 @@ fn main() -> gtk::glib::ExitCode {
 fn present(application: &gtk::Application) {
     let mut widgets = Widgets::new();
     let mut tree = Tree::new();
+    if std::env::var("STORYBOOK_LIVE").is_ok() {
+        live(application, widgets, tree);
+        return;
+    }
     let filter = std::env::var("STORYBOOK_STORY").ok();
     let (_, frame) = Catalogue::selected(filter.as_deref());
     if let Err(failure) = tree.apply(&frame, &mut widgets) {
@@ -52,6 +56,38 @@ fn present(application: &gtk::Application) {
         Catalogue::STORIES.len(),
         widgets.len()
     );
+    capture::Shot::schedule(&window);
+    window.present();
+}
+
+/// Renders whatever the reference extension sends over a real socket.
+///
+/// Nothing about the interface is known here: it arrives as mutations from
+/// another thread speaking the protocol, which is the same path an extension
+/// running in its own container takes.
+fn live(application: &gtk::Application, mut widgets: Widgets, mut tree: Tree) {
+    match storybook::host(&mut widgets, &mut tree) {
+        Ok(applied) => eprintln!("[storybook] applied {applied} mutations from the extension"),
+        Err(fault) => {
+            eprintln!("[storybook] extension failed: {fault}");
+            return;
+        }
+    }
+    window(application, &widgets);
+}
+
+/// Places a rendered surface in a window and shows it.
+fn window(application: &gtk::Application, widgets: &Widgets) {
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.set_child(Some(widgets.widget()));
+    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    let window = gtk::ApplicationWindow::builder()
+        .application(application)
+        .title("hl-gui component catalogue")
+        .default_width(WIDTH)
+        .default_height(HEIGHT)
+        .child(&scroll)
+        .build();
     capture::Shot::schedule(&window);
     window.present();
 }
