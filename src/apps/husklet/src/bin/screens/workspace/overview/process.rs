@@ -184,6 +184,25 @@ pub(crate) fn fill_proc_table(body: &gtk::Box, workspace: &str, rows: &[Vec<Stri
 
 struct ProcessTable;
 
+#[derive(Debug, Eq, PartialEq)]
+struct SignalFeedback {
+    text: String,
+    delivered: bool,
+}
+
+fn signal_feedback(name: &str, progress: &str, failure: &str, result: std::io::Result<()>) -> SignalFeedback {
+    match result {
+        Ok(()) => SignalFeedback {
+            text: format!("{name} · {progress}…"),
+            delivered: true,
+        },
+        Err(error) => SignalFeedback {
+            text: format!("{name} · {failure} failed: {error}"),
+            delivered: false,
+        },
+    }
+}
+
 impl ProcessTable {
     fn append_row(body: &gtk::Box, workspace: &str, row_data: &[String]) {
         let Some(pid) = crate::host::process::ProcessId::parse(
@@ -212,23 +231,69 @@ impl ProcessTable {
         stop.add_css_class("sigbtn");
         stop.set_tooltip_text(Some("Stop — send SIGTERM"));
         stop.set_valign(gtk::Align::Center);
-        let stop_pid = pid.clone();
-        stop.connect_clicked(move |_| {
-            if let Err(error) = stop_pid.terminate() {
-                hl_log::hl_warn!(hl_log::tag::RUNTIME, "workspace process stop ignored: {error}");
-            }
-        });
         let force = gtk::Button::from_icon_name("user-trash-symbolic");
         force.add_css_class("sigbtn");
         force.set_tooltip_text(Some("Force kill — send SIGKILL"));
         force.set_valign(gtk::Align::Center);
+
+        let stop_pid = pid.clone();
+        let stop_label = nl.clone();
+        let stop_button = stop.clone();
+        let stop_force = force.clone();
+        let stop_name = name.clone();
+        stop.connect_clicked(move |_| {
+            let feedback = signal_feedback(&stop_name, "stopping", "stop", stop_pid.terminate());
+            stop_label.set_text(&feedback.text);
+            if feedback.delivered {
+                stop_label.remove_css_class("err");
+                stop_button.set_sensitive(false);
+                stop_force.set_sensitive(false);
+            } else {
+                stop_label.add_css_class("err");
+                hl_log::hl_warn!(hl_log::tag::RUNTIME, "{}", feedback.text);
+            }
+        });
+        let kill_label = nl.clone();
+        let kill_stop = stop.clone();
+        let kill_button = force.clone();
         force.connect_clicked(move |_| {
-            if let Err(error) = pid.kill() {
-                hl_log::hl_warn!(hl_log::tag::RUNTIME, "workspace process kill ignored: {error}");
+            let feedback = signal_feedback(&name, "killing", "force kill", pid.kill());
+            kill_label.set_text(&feedback.text);
+            if feedback.delivered {
+                kill_label.remove_css_class("err");
+                kill_stop.set_sensitive(false);
+                kill_button.set_sensitive(false);
+            } else {
+                kill_label.add_css_class("err");
+                hl_log::hl_warn!(hl_log::tag::RUNTIME, "{}", feedback.text);
             }
         });
         row.append(&stop);
         row.append(&force);
         body.append(&row);
+    }
+}
+
+#[cfg(test)]
+mod signal_feedback_tests {
+    use super::signal_feedback;
+
+    #[test]
+    fn delivered_signal_reports_progress_and_disables_repeats() {
+        let feedback = signal_feedback("bash", "stopping", "stop", Ok(()));
+        assert_eq!(feedback.text, "bash · stopping…");
+        assert!(feedback.delivered);
+    }
+
+    #[test]
+    fn failed_signal_reports_the_error_and_allows_retry() {
+        let feedback = signal_feedback(
+            "bash",
+            "killing",
+            "force kill",
+            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "permission denied")),
+        );
+        assert_eq!(feedback.text, "bash · force kill failed: permission denied");
+        assert!(!feedback.delivered);
     }
 }
