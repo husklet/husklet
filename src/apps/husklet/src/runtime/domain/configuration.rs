@@ -44,6 +44,7 @@ impl<'a> Configuration<'a> {
         let mut values = BTreeMap::from([
             ("TERM".into(), "xterm-256color".into()),
             ("COLORTERM".into(), "truecolor".into()),
+            ("LANG".into(), "C.UTF-8".into()),
             ("HOME".into(), "/root".into()),
             (
                 "PATH".into(),
@@ -124,5 +125,33 @@ impl<'a> Configuration<'a> {
             "" => "workspace".to_owned(),
             value => value.to_owned(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Configuration;
+    use crate::config::WorkspaceConfig;
+    use hl_ws::Arch;
+
+    #[test]
+    fn terminal_environment_defaults_to_utf8() {
+        let workspace = WorkspaceConfig::new("test", "ubuntu:22.04", Arch::Arm64);
+
+        assert_eq!(
+            Configuration::new(&workspace).environment().get("LANG").map(String::as_str),
+            Some("C.UTF-8")
+        );
+    }
+
+    #[test]
+    fn workspace_locale_overrides_the_terminal_default() {
+        let mut workspace = WorkspaceConfig::new("test", "ubuntu:22.04", Arch::Arm64);
+        workspace.env.push(("LANG".into(), "ja_JP.UTF-8".into()));
+
+        assert_eq!(
+            Configuration::new(&workspace).environment().get("LANG").map(String::as_str),
+            Some("ja_JP.UTF-8")
+        );
     }
 }
