@@ -294,7 +294,7 @@ static void jit86_drop_range_translations(uint64_t lo, uint64_t hi) {
     for (int i = 0; i < g_smc_n;) {
         if (g_smc_pg[i] >= plo && g_smc_pg[i] < phi) { // a translated code page lived in the range
             hit = 1;
-            (void)hl_smc_page_index_remove(&g_smc_index, g_smc_pg[i]);
+            smc_forget_page(g_smc_pg[i]);
             g_smc_pg[i] = g_smc_pg[--g_smc_n]; // forget it -> re-protected when the fresh mapping is translated
         } else {
             i++;
@@ -310,7 +310,7 @@ static void jit86_drop_range_translations(uint64_t lo, uint64_t hi) {
 static void jit86_drop_all_smc_translations(void) {
     if (!g_rwx_guest || g_smc_n == 0) return;
     g_smc_n = 0;
-    hl_smc_page_index_reset(&g_smc_index);
+    smc_forget_all();
     map_clear();
     memset(g_ibtc, 0, sizeof g_ibtc);
     memset(g_xibtc, 0, sizeof g_xibtc);

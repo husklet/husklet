@@ -68,6 +68,14 @@ static uint64_t smc_page_size(void) {
     return size;
 }
 
+static void smc_forget_page(uint64_t page) {
+    (void)hl_smc_page_index_remove(&g_smc_index, page);
+}
+
+static void smc_forget_all(void) {
+    hl_smc_page_index_reset(&g_smc_index);
+}
+
 static void smc_protect(uint64_t pc) {
     if (!g_rwx_guest) return; // no JIT guest -> inert (matrix bit-exact)
     const void *canonical = NULL;
@@ -88,9 +96,10 @@ static void smc_protect(uint64_t pc) {
     // fault falls through as a real SIGSEGV / hangs on the un-handled write. Not protecting past SMC_MAX only
     // loses SMC coherence for the overflow pages (the separate "SMC capacity cliff" -> stale code, not a hang).
     if (g_smc_n >= SMC_MAX) return;
-    if (!hl_smc_page_index_add(&g_smc_index, pg)) return;
+    int indexed = hl_smc_page_index_add(&g_smc_index, pg);
+    if (!indexed) return;
     if (mprotect((void *)pg, (size_t)size, PROT_READ) != 0) {
-        (void)hl_smc_page_index_remove(&g_smc_index, pg);
+        if (indexed == 1) (void)hl_smc_page_index_remove(&g_smc_index, pg);
         return;
     }
     g_smc_pg[g_smc_n++] = pg;

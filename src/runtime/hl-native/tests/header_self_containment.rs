@@ -27,13 +27,26 @@ fn smc_page_index_is_exact_under_collisions_removal_and_publication() {
     fs::write(
         &source,
         r#"
-#include "translator/guest/x86_64/smc_page_index.h"
 #include <pthread.h>
+
+static void claim_barrier(void);
+#define HL_SMC_PAGE_INDEX_BEFORE_CLAIM() claim_barrier()
+#include "translator/guest/x86_64/smc_page_index.h"
 
 static _Atomic uint64_t slots[8];
 static hl_smc_page_index index_ = {slots, 8};
 static _Atomic int start;
+static _Atomic int claim_sync;
+static pthread_barrier_t claims;
+static _Thread_local int claim_waited;
 static uint64_t concurrent_pages[2];
+
+static void claim_barrier(void) {
+    if (atomic_load_explicit(&claim_sync, memory_order_acquire) && !claim_waited) {
+        claim_waited = 1;
+        pthread_barrier_wait(&claims);
+    }
+}
 
 static void *reader(void *unused) {
     (void)unused;
@@ -70,12 +83,16 @@ int main(void) {
     concurrent_pages[1] = collision;
     unsigned which[] = {0, 1};
     pthread_t adders[2];
+    if (pthread_barrier_init(&claims, NULL, 2) != 0) return 11;
+    atomic_store_explicit(&claim_sync, 1, memory_order_release);
     atomic_store_explicit(&start, 0, memory_order_release);
     if (pthread_create(&adders[0], NULL, adder, &which[0]) != 0 ||
         pthread_create(&adders[1], NULL, adder, &which[1]) != 0) return 11;
     atomic_store_explicit(&start, 1, memory_order_release);
     void *left = NULL, *right = NULL;
     if (pthread_join(adders[0], &left) != 0 || pthread_join(adders[1], &right) != 0 || left || right) return 12;
+    atomic_store_explicit(&claim_sync, 0, memory_order_release);
+    pthread_barrier_destroy(&claims);
     if (!hl_smc_page_index_contains(&index_, first) || !hl_smc_page_index_contains(&index_, collision)) return 13;
     hl_smc_page_index_reset(&index_);
     if (hl_smc_page_index_contains(&index_, first) || hl_smc_page_index_contains(&index_, collision)) return 14;
@@ -85,7 +102,7 @@ int main(void) {
     )
     .expect("write SMC index probe source");
     let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
-        .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-pthread"])
+        .args(["-std=c11", "-D_GNU_SOURCE", "-Wall", "-Wextra", "-Werror", "-pthread"])
         .arg(format!("-I{}", native.display()))
         .arg(&source)
         .arg("-o")
