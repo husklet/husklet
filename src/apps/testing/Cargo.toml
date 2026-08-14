@@ -17,7 +17,7 @@ hl-container = { path = "../../containers/hl-container" }
 hl-design = { path = "../../packages/hl-design" }
 hl-images = { path = "../../containers/hl-images" }
 hl-log = { path = "../../packages/hl-log" }
-hl-native = { path = "../../runtime/hl-native" }
+hl-native = { path = "../../runtime/hl-native", features = ["native-test-hooks"] }
 hl-process = { path = "../../packages/hl-process" }
 hl-engine = { path = "../../containers/hl-engine" }
 reflink-copy.workspace = true

@@ -504,6 +504,25 @@ static unsigned long g_timerslack = 50000; // PR_SET/GET_TIMERSLACK (ns); Linux 
 static int g_thp_disable;                  // PR_SET/GET_THP_DISABLE (per-process transparent-hugepage opt-out)
 static int g_subreaper;                    // PR_SET/GET_CHILD_SUBREAPER (this process is a reaper for orphans)
 static int g_mce_kill = 2; // PR_MCE_KILL/PR_MCE_KILL_GET machine-check policy: LATE=0, EARLY=1, DEFAULT=2
+#if defined(HL_NATIVE_TEST_HOOKS)
+// Deterministic in-process exec authority rendezvous. This is deliberately reachable only from native-test-hook
+// builds: a helper guest thread arms one acquisition boundary, observes the pinned-image phase, replaces the
+// pathname, and releases the exec thread. Production builds contain neither the private prctl option nor the wait.
+#define HL_EXEC_PIN_TEST_PRCTL 0x48504e54u
+#define HL_EXEC_PIN_TEST_MAIN 1u
+#define HL_EXEC_PIN_TEST_FINAL 2u
+static atomic_uint g_exec_pin_test_mode;
+static atomic_uint g_exec_pin_test_phase;
+
+static void exec_pin_test_wait(unsigned stage) {
+    if (atomic_load_explicit(&g_exec_pin_test_mode, memory_order_acquire) != stage) return;
+    atomic_store_explicit(&g_exec_pin_test_phase, stage, memory_order_release);
+    while (atomic_load_explicit(&g_exec_pin_test_phase, memory_order_acquire) != 3u)
+        sched_yield();
+    atomic_store_explicit(&g_exec_pin_test_mode, 0, memory_order_release);
+    atomic_store_explicit(&g_exec_pin_test_phase, 0, memory_order_release);
+}
+#endif
 // The process EFFECTIVE capability set. The container starts as full root (all caps); we don't model
 // per-capability ENFORCEMENT in general, but we DO track what capset(2) leaves in the effective set so the
 // few prctl options the kernel gates on a specific capability (PR_SET_SECUREBITS / PR_CAPBSET_DROP need
@@ -604,10 +623,8 @@ static int credential_publish_or_fault(struct cpu *c) {
 #include "process/clone.c"
 #include "process/wait.c"
 
-#define HL_PROC_CASE(number)                                                                                          \
-    case number:                                                                                                      \
-        (void)svc_proc_##number(c, nr, a0, a1, a2, a3, a4, a5);                                                      \
-        break
+#define HL_PROC_CASE(number)                                                                                           \
+    case number: (void)svc_proc_##number(c, nr, a0, a1, a2, a3, a4, a5); break
 
 static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
                     uint64_t a5) {

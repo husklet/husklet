@@ -21,3 +21,14 @@ cases:
     artifact: { destination: /opt/husklet/execveat-edges }
     run: []
     expect: { exit: 0, stdout: golden/execveat_edges.txt }
+  - id: runtime/exec/exec-pinned-authority
+    targets: [arm64, amd64]
+    status: !oracle-excluded
+      reason: "The deterministic pathname-swap rendezvous is a Husklet native-test-hook boundary, not a Linux ABI"
+      evidence: "tests/runtime/exec/source/exec_pinned_authority.c"
+    compat: { class: compatibility }
+    build: { source: source/exec_pinned_authority.c, output: exec-pinned-authority, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/exec-pinned-authority }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/exec_pinned_authority.txt }

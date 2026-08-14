@@ -134,8 +134,7 @@ static int exec_image_adopt(int descriptor, const char *path, exec_image *image)
         exec_image_release(image);
         return -ENOEXEC;
     }
-    if (is_elf &&
-        (got < 20 || header[4] != 2 || (unsigned)(header[18] | (header[19] << 8)) != HL_EXEC_ELF_MACHINE)) {
+    if (is_elf && (got < 20 || header[4] != 2 || (unsigned)(header[18] | (header[19] << 8)) != HL_EXEC_ELF_MACHINE)) {
         exec_image_release(image);
         return -ENOEXEC;
     }
@@ -160,14 +159,17 @@ static int exec_image_parse_shebang(const exec_image *image, char *interpreter, 
     char *newline = strchr(header, '\n');
     if (newline != NULL) *newline = 0;
     char *start = header + 2;
-    while (*start == ' ' || *start == '\t') start++;
+    while (*start == ' ' || *start == '\t')
+        start++;
     char *end = start;
-    while (*end && *end != ' ' && *end != '\t') end++;
+    while (*end && *end != ' ' && *end != '\t')
+        end++;
     char *optional = NULL;
     if (*end) {
         *end = 0;
         optional = end + 1;
-        while (*optional == ' ' || *optional == '\t') optional++;
+        while (*optional == ' ' || *optional == '\t')
+            optional++;
         if (!*optional) optional = NULL;
     }
     snprintf(interpreter, interpreter_size, "%s", start);
@@ -194,7 +196,8 @@ static int exec_resolve_shebang_images(char **argv, int argc, int capacity, exec
             stored_optional = store[stored++];
             snprintf(stored_optional, 256, "%s", optional);
         }
-        for (int index = argc; index >= 0; index--) argv[index + inserted] = argv[index];
+        for (int index = argc; index >= 0; index--)
+            argv[index + inserted] = argv[index];
         argv[0] = stored_interpreter;
         if (stored_optional != NULL) argv[1] = stored_optional;
         argc += inserted;
@@ -242,7 +245,8 @@ static int exec_collect_argv(uint64_t argv_address, char **argv, int *argc) {
 
 static _Thread_local int g_exec_requested_descriptor = -1;
 
-static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 221: {
         int requested_descriptor = g_exec_requested_descriptor;
@@ -269,13 +273,16 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             break;
         }
         char pb[4200];
-        const char *p = requested_descriptor >= 0 ? (const char *)(uintptr_t)a0 :
-            // resolve the exec path through the SAME resolver openat uses (atpath): overlay-aware
-            // (upper then lowers), bind-mount/volume aware, AND relative-path aware -- a RELATIVE exec
-            // (`./x`, `./binary` from `go build`/`make`, `./script`) is joined to the guest cwd (g_cwd),
-            // not the host cwd. The old xresolve_overlay bailed on any non-'/' path and returned it raw,
-            // so `./x` was access()'d against the host process cwd (never the mounted guest cwd) -> ENOENT.
-            atpath(-100, (const char *)a0, pb, sizeof pb, 0);
+        const char *p =
+            requested_descriptor >= 0
+                ? (const char *)(uintptr_t)a0
+                :
+                // resolve the exec path through the SAME resolver openat uses (atpath): overlay-aware
+                // (upper then lowers), bind-mount/volume aware, AND relative-path aware -- a RELATIVE exec
+                // (`./x`, `./binary` from `go build`/`make`, `./script`) is joined to the guest cwd (g_cwd),
+                // not the host cwd. The old xresolve_overlay bailed on any non-'/' path and returned it raw,
+                // so `./x` was access()'d against the host process cwd (never the mounted guest cwd) -> ENOENT.
+                atpath(-100, (const char *)a0, pb, sizeof pb, 0);
         // execve(2) error classification, matching Linux binfmt semantics, applied to the resolved target:
         // a directory is EACCES, and a regular file that is neither an ELF this engine can translate nor a
         // #! script is ENOEXEC. A missing path stat()s ENOENT and falls through to the access() check below.
@@ -290,6 +297,9 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             G_RET(c) = (uint64_t)(int64_t)image_error;
             break;
         }
+#if defined(HL_NATIVE_TEST_HOOKS)
+        exec_pin_test_wait(HL_EXEC_PIN_TEST_MAIN);
+#endif
         char *argv[HL_MAXARGV]; // Linux allows far more than 255 args within ARG_MAX -- a fixed 256 silently
         int ac = 0;             // dropped the tail (a different command ran, and /proc/self/cmdline diverged)
         int argument_error = exec_collect_argv(a1, argv, &ac);
@@ -370,6 +380,9 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             G_RET(c) = (uint64_t)(int64_t)-ETXTBSY;
             break;
         }
+#if defined(HL_NATIVE_TEST_HOOKS)
+        exec_pin_test_wait(HL_EXEC_PIN_TEST_FINAL);
+#endif
         // /proc/self/exe must name the new image as an ABSOLUTE, CANONICAL guest path -- fold "."/".."
         // and resolve symlinks to the backing file (an exec of /bin/sh -> busybox reports /bin/busybox,
         // and a relative "./x" exec reports "<cwd>/x", exactly like Linux d_path). glibc static-pie
@@ -394,7 +407,7 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // All failure returns are behind us: Linux releases a vfork parent
         // when exec commits, before the new image begins executing.
         vfork_release_parent();
-        set_guest_comm(comm_src); // comm := basename of the exec'd NAME (captured pre-rewrite above)
+        set_guest_comm(comm_src);                  // comm := basename of the exec'd NAME (captured pre-rewrite above)
         cred_after_exec_snapshot(&main_image.dac); // apply set-id ownership from the pinned executable
 #ifdef PCACHE_SAVE_HOOK
         // the exec below flushes this image's translated arena and RE-KEYS the cache identity for
@@ -525,7 +538,8 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
 
 static int svc_proc_exec(struct cpu *cpu, const char *logical_path, uint64_t argv, uint64_t environment,
                          int owned_descriptor) {
-    if (owned_descriptor < 0) return svc_proc_221(cpu, 221, (uint64_t)(uintptr_t)logical_path, argv, environment, 0, 0, 0);
+    if (owned_descriptor < 0)
+        return svc_proc_221(cpu, 221, (uint64_t)(uintptr_t)logical_path, argv, environment, 0, 0, 0);
     if (g_exec_requested_descriptor >= 0) {
         close(owned_descriptor);
         return 0;

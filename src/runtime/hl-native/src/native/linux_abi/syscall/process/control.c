@@ -398,6 +398,23 @@ static int svc_proc_167(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
                         uint64_t a5) {
     switch (nr) {
     case 167: {
+#if defined(HL_NATIVE_TEST_HOOKS)
+        if ((uint32_t)a0 == HL_EXEC_PIN_TEST_PRCTL) {
+            if (a1 == HL_EXEC_PIN_TEST_MAIN || a1 == HL_EXEC_PIN_TEST_FINAL) {
+                atomic_store_explicit(&g_exec_pin_test_phase, 0, memory_order_release);
+                atomic_store_explicit(&g_exec_pin_test_mode, (unsigned)a1, memory_order_release);
+                G_RET(c) = 0;
+            } else if (a1 == 0) {
+                G_RET(c) = atomic_load_explicit(&g_exec_pin_test_phase, memory_order_acquire);
+            } else if (a1 == 3) {
+                atomic_store_explicit(&g_exec_pin_test_phase, 3, memory_order_release);
+                G_RET(c) = 0;
+            } else {
+                G_RET(c) = (uint64_t)(int64_t)-EINVAL;
+            }
+            break;
+        }
+#endif
         if (proc_prctl_name(c, a0, a1)) break;
         // PR_SET_TIMERSLACK(29)/PR_GET_TIMERSLACK(30): the per-process timer slack (ns) round-trips. SET with
         // arg2==0 resets to the default (Linux copies the process's default_timer_slack_ns); GET returns the
