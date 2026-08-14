@@ -59,7 +59,6 @@ profile = ["hl-log/release-verbose"]
 runtime = [
     "dep:hl-ws-term",
     "dep:hl-container",
-    "hl-container/c-execution",
     "dep:hl-daemon",
     "dep:hl-client",
     "dep:hl-images",

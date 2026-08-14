@@ -29,10 +29,5 @@ uuid = { workspace = true, features = ["v4"] }
 flate2.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 
-[features]
-default = ["c-execution"]
-# The product container path owns the retained-C execution capability explicitly.
-c-execution = ["hl-engine/c-execution"]
-
 [lints]
 workspace = true
