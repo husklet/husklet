@@ -3,39 +3,44 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "../../guest_memory.h"
+struct guest_data_una8 { uint8_t value; } __attribute__((packed));
+struct guest_data_una16 { uint16_t value; } __attribute__((packed));
+struct guest_data_una32 { uint32_t value; } __attribute__((packed));
+struct guest_data_una64 { uint64_t value; } __attribute__((packed));
+
+static void guest_data_copy_indivisible(void *destination, const void *source, size_t length) {
+    switch (length) {
+    case 1: *(struct guest_data_una8 *)destination = *(const struct guest_data_una8 *)source; return;
+    case 2: *(struct guest_data_una16 *)destination = *(const struct guest_data_una16 *)source; return;
+    case 4: *(struct guest_data_una32 *)destination = *(const struct guest_data_una32 *)source; return;
+    case 8: *(struct guest_data_una64 *)destination = *(const struct guest_data_una64 *)source; return;
+    default: memcpy(destination, source, length); return;
+    }
+}
 
 /* The largest helper-owned image is the 512-byte legacy FXSAVE area.  A
    maximal pin span may be one byte, so 512 retained pins is the exact finite
    upper bound and avoids allocation in the execution path. */
-#define HL_X86_GUEST_DATA_MAX 512u
-
-typedef struct {
-    hl_guest_memory_pin pin;
-    size_t offset;
-    size_t length;
-} hl_x86_guest_data_span;
-
-typedef struct {
-    hl_x86_guest_data_span spans[HL_X86_GUEST_DATA_MAX];
-    size_t count;
-} hl_x86_guest_data_pins;
-
-static void guest_data_release(hl_x86_guest_data_pins *pins) {
+void hl_x86_guest_data_release(hl_x86_guest_data_pins *pins) {
     while (pins->count != 0) {
         pins->count--;
         hl_guest_memory_unpin_data(&pins->spans[pins->count].pin);
     }
 }
 
-static int guest_data_pin(uint64_t guest, size_t length, hl_guest_memory_access access,
-                          hl_x86_guest_data_pins *pins, uint64_t *fault_guest) {
+int hl_x86_guest_data_prepare(hl_x86_guest_data_pins *pins, uint64_t guest, size_t length,
+                              hl_guest_memory_access access, uint64_t *fault_guest) {
+    if (pins == NULL) return -1;
+    *pins = (hl_x86_guest_data_pins){0};
+    pins->guest = guest;
+    pins->length = length;
+    pins->access = access;
     if (fault_guest != NULL) *fault_guest = guest;
     if (length == 0 || length > HL_X86_GUEST_DATA_MAX || guest > UINT64_MAX - length) return -1;
     size_t offset = 0;
     while (offset < length) {
         if (pins->count == HL_X86_GUEST_DATA_MAX) {
-            guest_data_release(pins);
+            hl_x86_guest_data_release(pins);
             return -1;
         }
         hl_x86_guest_data_span *span = &pins->spans[pins->count];
@@ -43,7 +48,7 @@ static int guest_data_pin(uint64_t guest, size_t length, hl_guest_memory_access 
         if (result < 0 || span->pin.host == NULL || span->pin.contiguous == 0) {
             hl_guest_memory_unpin_data(&span->pin);
             if (fault_guest != NULL) *fault_guest = guest + offset;
-            guest_data_release(pins);
+            hl_x86_guest_data_release(pins);
             return -1;
         }
         span->offset = offset;
@@ -55,27 +60,45 @@ static int guest_data_pin(uint64_t guest, size_t length, hl_guest_memory_access 
     return 0;
 }
 
+void hl_x86_guest_data_copy_from(hl_x86_guest_data_pins *pins, void *destination) {
+    pins->commit_started = 1;
+    if (pins->count == 1) {
+        guest_data_copy_indivisible(destination, pins->spans[0].pin.host, pins->length);
+        return;
+    }
+    for (size_t index = 0; index < pins->count; ++index) {
+        const hl_x86_guest_data_span *span = &pins->spans[index];
+        memcpy((uint8_t *)destination + span->offset, span->pin.host, span->length);
+    }
+}
+
+void hl_x86_guest_data_copy_to(hl_x86_guest_data_pins *pins, const void *source) {
+    pins->commit_started = 1;
+    if (pins->count == 1) {
+        guest_data_copy_indivisible(pins->spans[0].pin.host, source, pins->length);
+        return;
+    }
+    for (size_t index = 0; index < pins->count; ++index) {
+        const hl_x86_guest_data_span *span = &pins->spans[index];
+        memcpy(span->pin.host, (const uint8_t *)source + span->offset, span->length);
+    }
+}
+
 int hl_x86_guest_data_read(uint64_t guest, void *destination, size_t length, uint64_t *fault_guest) {
     if (destination == NULL) return -1;
     hl_x86_guest_data_pins pins = {0};
-    if (guest_data_pin(guest, length, HL_GUEST_MEMORY_READ, &pins, fault_guest) != 0) return -1;
-    for (size_t index = 0; index < pins.count; ++index) {
-        const hl_x86_guest_data_span *span = &pins.spans[index];
-        memcpy((uint8_t *)destination + span->offset, span->pin.host, span->length);
-    }
-    guest_data_release(&pins);
+    if (hl_x86_guest_data_prepare(&pins, guest, length, HL_GUEST_MEMORY_READ, fault_guest) != 0) return -1;
+    hl_x86_guest_data_copy_from(&pins, destination);
+    hl_x86_guest_data_release(&pins);
     return 0;
 }
 
 int hl_x86_guest_data_write(uint64_t guest, const void *source, size_t length, uint64_t *fault_guest) {
     if (source == NULL) return -1;
     hl_x86_guest_data_pins pins = {0};
-    if (guest_data_pin(guest, length, HL_GUEST_MEMORY_WRITE, &pins, fault_guest) != 0) return -1;
-    for (size_t index = 0; index < pins.count; ++index) {
-        const hl_x86_guest_data_span *span = &pins.spans[index];
-        memcpy(span->pin.host, (const uint8_t *)source + span->offset, span->length);
-    }
-    guest_data_release(&pins);
+    if (hl_x86_guest_data_prepare(&pins, guest, length, HL_GUEST_MEMORY_WRITE, fault_guest) != 0) return -1;
+    hl_x86_guest_data_copy_to(&pins, source);
+    hl_x86_guest_data_release(&pins);
     hl_guest_memory_store_observe(guest, length);
     return 0;
 }

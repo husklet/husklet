@@ -26,6 +26,7 @@
 #include "../../identity.h"
 #include "../../../host/native_context.h" // ucontext_t: the fault path restores uc_sigmask by hand
 #include "decoder.h"
+#include "guest_data.h"
 
 // ---- The seam: names the JIT files own, which the rest of the TU needs.
 
@@ -118,6 +119,8 @@ static __thread int g_interp_pad_armed;             // a run_block landing pad i
 static __thread volatile int g_interp_guest_access; // a guest access is in flight
 // The cpu run_block armed the pad for; the ledger check below has no siginfo.
 static __thread struct cpu *g_interp_pad_cpu;
+static __thread hl_x86_guest_data_pins g_interp_data_pins;
+static __thread int g_interp_data_active;
 
 // ---- The past-EOF SIGBUS ledger. mem.c re-maps the past-EOF tail of a MAP_PRIVATE file mapping as
 // anonymous zero, so the host never raises BUS_ADRERR and the translator owes the guest SIGBUS out of
@@ -298,6 +301,27 @@ static _Noreturn void interp_projection_fault(uint64_t guest_address, size_t len
 #endif
 }
 
+static void interp_data_release_abandoned(void) {
+    if (!g_interp_data_active) return;
+    if (g_interp_data_pins.access == HL_GUEST_MEMORY_WRITE && g_interp_data_pins.commit_started)
+        hl_guest_memory_store_observe(g_interp_data_pins.guest, g_interp_data_pins.length);
+    hl_x86_guest_data_release(&g_interp_data_pins);
+    g_interp_data_active = 0;
+}
+
+static void interp_data_prepare(uint64_t guest, size_t length, hl_guest_memory_access access) {
+    uint64_t fault = guest;
+    if (g_interp_data_active) abort();
+    if (hl_x86_guest_data_prepare(&g_interp_data_pins, guest, length, access, &fault) != 0)
+        interp_projection_fault(fault, guest + length - fault, access);
+    g_interp_data_active = 1;
+}
+
+static void interp_data_finish(void) {
+    hl_x86_guest_data_release(&g_interp_data_pins);
+    g_interp_data_active = 0;
+}
+
 static void interp_copy_from_guest(uint64_t guest, void *destination, size_t length) {
     if (!hl_guest_memory_indirect()) {
         const void *host = (const void *)(uintptr_t)hl_x86_guest_pointer(guest);
@@ -306,21 +330,11 @@ static void interp_copy_from_guest(uint64_t guest, void *destination, size_t len
         interp_access_end();
         return;
     }
-    size_t copied = 0;
-    while (copied < length) {
-        hl_guest_memory_pin pin = {0};
-        int resolution = hl_guest_memory_pin_data(guest + copied, length - copied, HL_GUEST_MEMORY_READ, &pin);
-        if (resolution < 0 || pin.host == NULL || pin.contiguous == 0) {
-            hl_guest_memory_unpin_data(&pin);
-            interp_projection_fault(guest + copied, length - copied, HL_GUEST_MEMORY_READ);
-        }
-        size_t chunk = pin.contiguous < length - copied ? pin.contiguous : length - copied;
-        interp_access_begin(guest + copied, chunk);
-        memcpy((unsigned char *)destination + copied, pin.host, chunk);
-        interp_access_end();
-        hl_guest_memory_unpin_data(&pin);
-        copied += chunk;
-    }
+    interp_data_prepare(guest, length, HL_GUEST_MEMORY_READ);
+    interp_access_begin(guest, length);
+    hl_x86_guest_data_copy_from(&g_interp_data_pins, destination);
+    interp_access_end();
+    interp_data_finish();
 }
 
 static void interp_copy_to_guest(uint64_t guest, const void *source, size_t length) {
@@ -331,21 +345,12 @@ static void interp_copy_to_guest(uint64_t guest, const void *source, size_t leng
         interp_access_end();
         return;
     }
-    size_t copied = 0;
-    while (copied < length) {
-        hl_guest_memory_pin pin = {0};
-        int resolution = hl_guest_memory_pin_data(guest + copied, length - copied, HL_GUEST_MEMORY_WRITE, &pin);
-        if (resolution < 0 || pin.host == NULL || pin.contiguous == 0) {
-            hl_guest_memory_unpin_data(&pin);
-            interp_projection_fault(guest + copied, length - copied, HL_GUEST_MEMORY_WRITE);
-        }
-        size_t chunk = pin.contiguous < length - copied ? pin.contiguous : length - copied;
-        interp_access_begin(guest + copied, chunk);
-        memcpy(pin.host, (const unsigned char *)source + copied, chunk);
-        interp_access_end();
-        hl_guest_memory_unpin_data(&pin);
-        copied += chunk;
-    }
+    interp_data_prepare(guest, length, HL_GUEST_MEMORY_WRITE);
+    interp_access_begin(guest, length);
+    hl_x86_guest_data_copy_to(&g_interp_data_pins, source);
+    interp_access_end();
+    hl_guest_memory_store_observe(guest, length);
+    interp_data_finish();
 }
 
 static uint64_t interp_load(uint64_t guest_address, int width) {
@@ -355,23 +360,8 @@ static uint64_t interp_load(uint64_t guest_address, int width) {
         interp_access_begin(guest_address, (uint64_t)width);
         interp_copy_indivisible(&value, host, (unsigned)width);
         interp_access_end();
-    } else {
-        hl_guest_memory_pin pin = {0};
-        int resolution = hl_guest_memory_pin_data(guest_address, (size_t)width, HL_GUEST_MEMORY_READ, &pin);
-        if (resolution < 0 || pin.host == NULL || pin.contiguous == 0) {
-            hl_guest_memory_unpin_data(&pin);
-            interp_projection_fault(guest_address, (size_t)width, HL_GUEST_MEMORY_READ);
-        }
-        if (pin.contiguous >= (size_t)width) {
-            interp_access_begin(guest_address, (uint64_t)width);
-            interp_copy_indivisible(&value, pin.host, (unsigned)width);
-            interp_access_end();
-            hl_guest_memory_unpin_data(&pin);
-        } else {
-            hl_guest_memory_unpin_data(&pin);
-            interp_copy_from_guest(guest_address, &value, (size_t)width);
-        }
-    }
+    } else
+        interp_copy_from_guest(guest_address, &value, (size_t)width);
     interp_tso_fence();
     return value;
 }
@@ -383,31 +373,16 @@ static void interp_store(uint64_t guest_address, int width, uint64_t value) {
         interp_access_begin(guest_address, (uint64_t)width);
         interp_copy_indivisible(host, &value, (unsigned)width);
         interp_access_end();
-    } else {
-        hl_guest_memory_pin pin = {0};
-        int resolution = hl_guest_memory_pin_data(guest_address, (size_t)width, HL_GUEST_MEMORY_WRITE, &pin);
-        if (resolution < 0 || pin.host == NULL || pin.contiguous == 0) {
-            hl_guest_memory_unpin_data(&pin);
-            interp_projection_fault(guest_address, (size_t)width, HL_GUEST_MEMORY_WRITE);
-        }
-        if (pin.contiguous >= (size_t)width) {
-            interp_access_begin(guest_address, (uint64_t)width);
-            interp_copy_indivisible(pin.host, &value, (unsigned)width);
-            interp_access_end();
-            hl_guest_memory_unpin_data(&pin);
-        } else {
-            hl_guest_memory_unpin_data(&pin);
-            interp_copy_to_guest(guest_address, &value, (size_t)width);
-        }
-    }
+    } else
+        interp_copy_to_guest(guest_address, &value, (size_t)width);
     // Stores into an emulated MAP_SHARED mapping (or an executable alias) must be queued for
     // jit86_smc_commit before a syscall lets a peer observe them.
-    if (jit86_store_alias_observation_active()) jit86_store_alias_changed(guest_address, (uint64_t)width);
+    if (!hl_guest_memory_indirect() && jit86_store_alias_observation_active())
+        jit86_store_alias_changed(guest_address, (uint64_t)width);
 }
 
 // Operands wider than a general register. Reads land in caller-owned locals, so a fault in a later projected
-// span cannot partially mutate architectural register state. Ordinary x86 stores may expose an accessible
-// prefix before faulting on the next span; atomic instructions use their separate staged path.
+// span cannot partially mutate architectural register state. Stores prevalidate every span before committing.
 static void interp_load_bytes(uint64_t guest_address, void *destination, unsigned length) {
     interp_copy_from_guest(guest_address, destination, length);
     interp_tso_fence();
@@ -416,7 +391,8 @@ static void interp_load_bytes(uint64_t guest_address, void *destination, unsigne
 static void interp_store_bytes(uint64_t guest_address, const void *source, unsigned length) {
     interp_tso_fence();
     interp_copy_to_guest(guest_address, source, length);
-    if (jit86_store_alias_observation_active()) jit86_store_alias_changed(guest_address, (uint64_t)length);
+    if (!hl_guest_memory_indirect() && jit86_store_alias_observation_active())
+        jit86_store_alias_changed(guest_address, (uint64_t)length);
 }
 
 // The address CALL pushes is guest-visible: DWARF FDE lookup, dladdr and unwinding need a biased ET_EXEC's
@@ -478,6 +454,7 @@ static void run_block(struct cpu *cpu, void *code) {
     if (INTERP_PAD_ARM(g_interp_fault_pad)) {
         // A guest access was abandoned; both routes already set cpu->reason and left cpu->rip on it.
         g_interp_guest_access = 0;
+        interp_data_release_abandoned();
         g_interp_pad_armed = previous;
         g_interp_pad_cpu = previous_cpu;
         return;

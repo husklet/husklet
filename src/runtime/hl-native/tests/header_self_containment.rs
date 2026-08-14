@@ -30,15 +30,18 @@ fn guest_memory_pin_projects_data_and_owns_each_span() {
 #include <stdint.h>
 #include <string.h>
 #include "translator/guest_memory.h"
+#include "translator/guest/x86_64/guest_data.h"
 
 static unsigned char identity[512], projected[512];
 static int pins, unpins;
+static int fail_second;
 static int indirect(void) { return 1; }
 static int pin(uint64_t guest, size_t length, hl_guest_memory_access access, hl_guest_memory_pin *out) {
     (void)access;
     uintptr_t first = (uintptr_t)identity;
     if (guest < first || guest >= first + sizeof(identity)) return HL_GUEST_MEMORY_FAULT;
     size_t offset = (size_t)(guest - first);
+    if (fail_second && offset >= 8) return HL_GUEST_MEMORY_FAULT;
 #ifdef IDENTITY_PROJECTION
     out->host = identity + offset;
 #else
@@ -52,51 +55,36 @@ static int pin(uint64_t guest, size_t length, hl_guest_memory_access access, hl_
 }
 static void unpin(hl_guest_memory_pin *pin_) { if (pin_->token) ++unpins; }
 
-static int copy_from(uint64_t guest, void *destination, size_t length) {
-    size_t copied = 0;
-    while (copied < length) {
-        hl_guest_memory_pin span = {0};
-        if (hl_guest_memory_pin_data(guest + copied, length - copied, HL_GUEST_MEMORY_READ, &span) < 0 ||
-            span.host == 0 || span.contiguous == 0) return -1;
-        size_t chunk = span.contiguous < length - copied ? span.contiguous : length - copied;
-        memcpy((unsigned char *)destination + copied, span.host, chunk);
-        hl_guest_memory_unpin_data(&span);
-        copied += chunk;
-    }
-    return 0;
-}
-static int copy_to(uint64_t guest, const void *source, size_t length) {
-    size_t copied = 0;
-    while (copied < length) {
-        hl_guest_memory_pin span = {0};
-        if (hl_guest_memory_pin_data(guest + copied, length - copied, HL_GUEST_MEMORY_WRITE, &span) < 0 ||
-            span.host == 0 || span.contiguous == 0) return -1;
-        size_t chunk = span.contiguous < length - copied ? span.contiguous : length - copied;
-        memcpy(span.host, (const unsigned char *)source + copied, chunk);
-        hl_guest_memory_unpin_data(&span);
-        copied += chunk;
-    }
-    return 0;
-}
-
 int main(void) {
     for (size_t i = 0; i < sizeof(projected); ++i) { identity[i] = 0xa5; projected[i] = (unsigned char)i; }
     const hl_guest_memory_ops ops = {.indirect = indirect, .pin = pin, .unpin = unpin};
     hl_guest_memory_bind(&ops);
     unsigned char scalar[8], cross[12], sse[16], stack[32], xsave[512];
     for (size_t width = 1; width <= 8; width *= 2)
-        if (copy_from((uintptr_t)identity + 3, scalar, width) != 0 || memcmp(scalar, projected + 3, width)) return 1;
-    if (copy_from((uintptr_t)identity + 5, cross, sizeof(cross)) != 0 ||
+        if (hl_x86_guest_data_read((uintptr_t)identity + 3, scalar, width, 0) != 0 || memcmp(scalar, projected + 3, width)) return 1;
+    if (hl_x86_guest_data_read((uintptr_t)identity + 5, cross, sizeof(cross), 0) != 0 ||
         memcmp(cross, projected + 5, sizeof(cross))) return 2;
-    if (copy_from((uintptr_t)identity + 7, sse, sizeof(sse)) != 0 ||
+    if (hl_x86_guest_data_read((uintptr_t)identity + 7, sse, sizeof(sse), 0) != 0 ||
         memcmp(sse, projected + 7, sizeof(sse))) return 3;
-    if (copy_from((uintptr_t)identity + 16, stack, sizeof(stack)) != 0 ||
+    if (hl_x86_guest_data_read((uintptr_t)identity + 16, stack, sizeof(stack), 0) != 0 ||
         memcmp(stack, projected + 16, sizeof(stack))) return 4;
-    if (copy_from((uintptr_t)identity, xsave, sizeof(xsave)) != 0 || memcmp(xsave, projected, sizeof(xsave))) return 5;
+    if (hl_x86_guest_data_read((uintptr_t)identity, xsave, sizeof(xsave), 0) != 0 || memcmp(xsave, projected, sizeof(xsave))) return 5;
     memset(sse, 0x3c, sizeof(sse));
-    if (copy_to((uintptr_t)identity + 7, sse, sizeof(sse)) != 0 ||
+    if (hl_x86_guest_data_write((uintptr_t)identity + 7, sse, sizeof(sse), 0) != 0 ||
         memcmp(projected + 7, sse, sizeof(sse)) || identity[7] != 0xa5) return 6;
-    return pins == unpins && pins != 0 ? 0 : 7;
+    unsigned char before[sizeof(projected)], replacement[12];
+    memcpy(before, projected, sizeof(before));
+    memset(replacement, 0x77, sizeof(replacement));
+    fail_second = 1;
+    if (hl_x86_guest_data_write((uintptr_t)identity + 5, replacement, sizeof(replacement), 0) == 0) return 7;
+    fail_second = 0;
+    if (memcmp(before, projected, sizeof(before))) return 8;
+    hl_x86_guest_data_pins retained;
+    if (hl_x86_guest_data_prepare(&retained, (uintptr_t)identity + 5, 12, HL_GUEST_MEMORY_READ, 0) != 0) return 9;
+#ifndef OMIT_ABANDON_RELEASE
+    hl_x86_guest_data_release(&retained);
+#endif
+    return pins == unpins && pins != 0 ? 0 : 10;
 }
 "#,
     )
@@ -111,6 +99,7 @@ int main(void) {
             .arg(format!("-I{}", native.display()))
             .arg(&source)
             .arg(native.join("translator/guest_memory.c"))
+            .arg(native.join("translator/guest/x86_64/guest_data.c"))
             .arg("-o")
             .arg(output)
             .output()
@@ -129,6 +118,20 @@ int main(void) {
             .success(),
         "identity projection mutation did not redden the canary probe"
     );
+    let mutation = scratch.join("guest_pin_leak");
+    let mut command = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()));
+    let built = command
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-DOMIT_ABANDON_RELEASE"])
+        .arg(format!("-I{}", native.display()))
+        .arg(&source)
+        .arg(native.join("translator/guest_memory.c"))
+        .arg(native.join("translator/guest/x86_64/guest_data.c"))
+        .arg("-o")
+        .arg(&mutation)
+        .output()
+        .expect("guest pin leak mutation compiler");
+    assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+    assert!(!Command::new(&mutation).status().expect("guest pin leak mutation").success());
     fs::remove_dir_all(scratch).expect("remove guest pin probe directory");
 }
 
