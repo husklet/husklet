@@ -198,6 +198,14 @@ fn encode_environment_record(encoded: &mut Vec<u8>, record: &[u8]) {
 impl GuestMachine for ProductionMachine {
     fn start(&self) -> Result<(), EngineError> {
         let engine = Arc::new(self.create()?);
+        *self.engine.lock().map_err(|_| EngineError::Synchronization)? = Some(Arc::clone(&engine));
+        let arguments = self
+            .plan
+            .arguments
+            .iter()
+            .map(|argument| CString::new(argument.as_slice()).map_err(|_| EngineError::LaunchFailed))
+            .collect::<Result<Vec<_>, _>>()?;
+        let pointers = arguments.iter().map(|argument| argument.as_ptr()).collect::<Vec<_>>();
         #[cfg(unix)]
         let recovery = if self.plan.options.get_bytes("HL_RESTORE").is_some() {
             let checkpoint = self.checkpoint.as_ref().ok_or(EngineError::LaunchFailed)?;
@@ -208,21 +216,10 @@ impl GuestMachine for ProductionMachine {
         } else {
             None
         };
-        *self.engine.lock().map_err(|_| EngineError::Synchronization)? = Some(Arc::clone(&engine));
-        let arguments = self
-            .plan
-            .arguments
-            .iter()
-            .map(|argument| CString::new(argument.as_slice()).map_err(|_| EngineError::LaunchFailed))
-            .collect::<Result<Vec<_>, _>>()?;
-        let pointers = arguments.iter().map(|argument| argument.as_ptr()).collect::<Vec<_>>();
         let run = engine.run(&pointers).map_err(native_run_failure);
         #[cfg(unix)]
         if let Some(recovery) = recovery {
-            self.checkpoint
-                .as_ref()
-                .ok_or(EngineError::LaunchFailed)?
-                .end_recovery(recovery)?;
+            recovery.finish()?;
         }
         run?;
         #[cfg(unix)]
@@ -353,15 +350,41 @@ impl CheckpointControl {
         }
     }
 
-    fn begin_recovery(&self, deadline: std::time::Instant) -> Result<u64, EngineError> {
+    fn begin_recovery(&self, deadline: std::time::Instant) -> Result<RecoveryAdmission<'_>, EngineError> {
         let generation = self.transport.bump();
-        self.server
+        let id = self
+            .server
             .begin_recovery(generation, deadline)
-            .map_err(capture_failure)
+            .map_err(capture_failure)?;
+        Ok(RecoveryAdmission {
+            server: self.server.as_ref(),
+            id,
+            finished: false,
+        })
     }
+}
 
-    fn end_recovery(&self, id: u64) -> Result<(), EngineError> {
-        self.server.abort_recovery(id).map_err(capture_failure)
+#[cfg(unix)]
+struct RecoveryAdmission<'a> {
+    server: &'a Server,
+    id: u64,
+    finished: bool,
+}
+
+#[cfg(unix)]
+impl RecoveryAdmission<'_> {
+    fn finish(mut self) -> Result<(), EngineError> {
+        self.finished = true;
+        self.server.abort_recovery(self.id).map_err(capture_failure)
+    }
+}
+
+#[cfg(unix)]
+impl Drop for RecoveryAdmission<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.server.abort_recovery(self.id);
+        }
     }
 }
 
@@ -390,8 +413,66 @@ impl Drop for CheckpointControl {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    struct EmptyCheckpointStore;
+
+    #[cfg(unix)]
+    impl crate::composition::CheckpointSink for EmptyCheckpointStore {
+        fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
+            Err(CompositionError::RuntimeConstruction)
+        }
+
+        fn put_until(&self, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+            Err(CompositionError::RuntimeConstruction)
+        }
+
+        fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+            Err(CompositionError::RuntimeConstruction)
+        }
+    }
+
+    #[cfg(unix)]
+    impl crate::composition::CheckpointSource for EmptyCheckpointStore {
+        fn read(&self, _: usize) -> Result<Vec<u8>, CompositionError> {
+            Err(CompositionError::RuntimeConstruction)
+        }
+
+        fn get_until(&self, _: &str, _: std::time::Instant) -> Result<Vec<u8>, CompositionError> {
+            Err(CompositionError::RuntimeConstruction)
+        }
+
+        fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
+            Err(CompositionError::RuntimeConstruction)
+        }
+    }
+
     #[test]
     fn native_run_status_survives_the_engine_boundary() {
         assert_eq!(native_run_failure(13), EngineError::NativeRunFailed(13));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dropped_recovery_admission_releases_scope_and_rejects_stale_id() {
+        let store = Arc::new(EmptyCheckpointStore);
+        let server = Server::new(store.clone(), store);
+        let first = server
+            .begin_recovery(11, std::time::Instant::now() + std::time::Duration::from_secs(1))
+            .unwrap();
+        {
+            let _admission = RecoveryAdmission {
+                server: &server,
+                id: first,
+                finished: false,
+            };
+        }
+        let second = server
+            .begin_recovery(12, std::time::Instant::now() + std::time::Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            server.abort_recovery(first),
+            Err(super::super::checkpoint::CaptureFailure::Busy)
+        );
+        server.abort_recovery(second).unwrap();
     }
 }
