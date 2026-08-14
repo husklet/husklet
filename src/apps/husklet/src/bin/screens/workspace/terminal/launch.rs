@@ -19,8 +19,12 @@ impl Launch<'_> {
         // Keep the FOREIGN pty sized to the terminal grid — VTE doesn't resize a foreign pty itself,
         // so without this htop is malformed / half-height and doesn't reflow on window resize.
         let weak = self.terminal.downgrade();
+        let pid = self.pid.clone();
         let mut last = (0, 0);
         glib::timeout_add_local(std::time::Duration::from_millis(300), move || {
+            if pid.get() == 0 {
+                return glib::ControlFlow::Break;
+            }
             let Some(terminal) = weak.upgrade() else {
                 return glib::ControlFlow::Break;
             };
@@ -38,8 +42,9 @@ impl Launch<'_> {
     fn watch_child(&self, child: i32) {
         let window = self.window.clone();
         let terminal = self.terminal.clone();
+        let pid = self.pid.clone();
         glib::child_watch_add_local(glib::Pid(child), move |_pid, status| {
-            let status = ChildStatus::from_wait(status);
+            let status = ChildStatus::finish(&pid, status);
             if !status.succeeded() {
                 terminal.feed(format!("\r\n\x1b[31mworkspace session ended ({status})\x1b[0m\r\n").as_bytes());
                 return;
@@ -59,6 +64,11 @@ impl Launch<'_> {
 }
 
 impl ChildStatus {
+    fn finish(pid: &Cell<i32>, status: i32) -> Self {
+        pid.set(0);
+        Self::from_wait(status)
+    }
+
     fn from_wait(status: i32) -> Self {
         if libc::WIFEXITED(status) {
             Self::Exited(libc::WEXITSTATUS(status))
@@ -189,6 +199,7 @@ pub(crate) const URL_REGEX: &str = r"(?:https?://|www\.)[^\s<>\x22'`{}|\\^\[\]]+
 #[cfg(test)]
 mod child_status_tests {
     use super::ChildStatus;
+    use std::cell::Cell;
 
     #[test]
     fn decodes_exit_and_signal_wait_statuses_without_inventing_255() {
@@ -200,5 +211,14 @@ mod child_status_tests {
         );
         assert!(ChildStatus::from_wait(0).succeeded());
         assert!(!ChildStatus::from_wait(libc::SIGTERM).succeeded());
+    }
+
+    #[test]
+    fn finishing_any_child_revokes_its_resize_and_signal_authority() {
+        for status in [0, 7 << 8, libc::SIGTERM] {
+            let pid = Cell::new(42);
+            let _ = ChildStatus::finish(&pid, status);
+            assert_eq!(pid.get(), 0);
+        }
     }
 }
