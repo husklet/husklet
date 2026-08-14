@@ -1,0 +1,24 @@
+cases:
+- id: terminal-sigquit/foreground-trap-and-shell-recovery
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "bash -c \"trap 'echo QUIT-${x}TRAP; exit 131' QUIT; echo CHILD-${x}READY; while :; do sleep 1; done\"\r" }
+      - await_output: { contains: CHILD-READY, timeout_ms: 5000 }
+      - write: { text: "\u001c" }
+      - await_output: { contains: QUIT-TRAP, timeout_ms: 5000 }
+      - write: { text: "printf 'SHELL-OK\\n'; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/child_ready.txt
+    - golden/quit_trap.txt
+    - golden/shell_ok.txt
