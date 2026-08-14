@@ -270,3 +270,34 @@ impl hl_gui::Renderer for Ignore {
         Ok(())
     }
 }
+
+#[test]
+fn the_manifest_this_extension_ships_is_one_a_host_accepts() {
+    let manifest = extension::manifest().expect("a manifest");
+    let label = manifest.label().expect("a label");
+
+    let parsed = hl_ws_extension::Manifest::parse(&label, PROTOCOL).expect("a host accepts it");
+
+    assert_eq!(parsed, manifest, "the label round-trips unchanged");
+    assert_eq!(parsed.name.as_str(), "containers");
+    assert!(
+        parsed.interface.is_some(),
+        "an extension that draws must declare that it draws"
+    );
+}
+
+#[test]
+fn this_extension_asks_for_no_more_than_it_needs() {
+    let manifest = extension::manifest().expect("a manifest");
+
+    assert!(manifest.capabilities.holds(hl_ws_extension::Capability::ContainerRead));
+    assert!(manifest.capabilities.holds(hl_ws_extension::Capability::Interface));
+    assert!(
+        !manifest.capabilities.executes(),
+        "nothing this extension does needs to run code in the workspace"
+    );
+    assert!(
+        manifest.filesystem_roots.is_empty(),
+        "it reads no files, so it declares no roots and can reach none"
+    );
+}
