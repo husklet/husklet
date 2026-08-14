@@ -10,7 +10,7 @@ cases:
       columns: 80
       steps:
       - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
-      - write: { text: "stty -echo; PS1=\"BG-${x}PROMPT# \"; printf 'BACKGROUND-%s\\n' READY\r" }
+      - write: { text: "stty -echo; PS1=$(printf '\\102\\107\\055\\120\\122\\117\\115\\120\\124\\043\\040'); printf 'BACKGROUND-%s\\n' READY\r" }
       - await_output: { contains: BACKGROUND-READY, timeout_ms: 5000 }
       - await_output: { contains: "BG-PROMPT# ", timeout_ms: 5000 }
       - write: { text: "sleep 30 & bg=$!; printf 'BACKGROUND-%s\\n' STARTED\r" }

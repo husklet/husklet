@@ -19,7 +19,5 @@ cases:
       - close: {}
   expect:
     stdout_contains:
-    - golden/one.txt
-    - golden/two.txt
-    - golden/done.txt
+    - golden/order.txt
     - golden/recovered.txt

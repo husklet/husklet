@@ -10,7 +10,7 @@ cases:
       columns: 80
       steps:
       - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
-      - write: { text: "stty -echo -onlcr; PS2='QUOTE> '; printf 'QUOTE-%s\\n' READY\r" }
+      - write: { text: "stty -echo -onlcr; PS2=$(printf '\\121\\125\\117\\124\\105\\076\\040'); printf 'QUOTE-%s\\n' READY\r" }
       - await_output: { contains: QUOTE-READY, timeout_ms: 5000 }
       - write: { text: "printf '<%s>\\n' \"QUOTED-LINE-ONE\r" }
       - await_output: { contains: "QUOTE> ", timeout_ms: 5000 }

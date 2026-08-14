@@ -10,7 +10,7 @@ cases:
       columns: 80
       steps:
       - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
-      - write: { text: "stty -echo; printf 'STREAM-OUT-%s\\n' ONE; printf 'STREAM-ERR-%s\\n' TWO >&2; printf 'STREAM-OUT-%s\\n' THREE\r" }
+      - write: { text: "stty -echo -onlcr; printf 'STREAM-OUT-%s\\n' ONE; printf 'STREAM-ERR-%s\\n' TWO >&2; printf 'STREAM-OUT-%s\\n' THREE\r" }
       - await_output: { contains: STREAM-OUT-ONE, timeout_ms: 5000 }
       - await_output: { contains: STREAM-ERR-TWO, timeout_ms: 5000 }
       - await_output: { contains: STREAM-OUT-THREE, timeout_ms: 5000 }
@@ -19,7 +19,5 @@ cases:
       - close: {}
   expect:
     stdout_contains:
-    - golden/out_one.txt
-    - golden/err_two.txt
-    - golden/out_three.txt
+    - golden/order.txt
     - golden/recovered.txt

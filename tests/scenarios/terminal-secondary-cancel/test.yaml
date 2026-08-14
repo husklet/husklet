@@ -10,7 +10,7 @@ cases:
       columns: 80
       steps:
       - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
-      - write: { text: "stty -echo; PS1=\"CANCEL-${x}PROMPT# \"; PS2='CANCEL> '; printf 'CANCEL-%s\\n' READY\r" }
+      - write: { text: "stty -echo; PS1=$(printf '\\103\\101\\116\\103\\105\\114\\055\\120\\122\\117\\115\\120\\124\\043\\040'); PS2=$(printf '\\103\\101\\116\\103\\105\\114\\076\\040'); printf 'CANCEL-%s\\n' READY\r" }
       - await_output: { contains: CANCEL-READY, timeout_ms: 5000 }
       - await_output: { contains: "CANCEL-PROMPT# ", timeout_ms: 5000 }
       - write: { text: "for item in ONE; do\r" }

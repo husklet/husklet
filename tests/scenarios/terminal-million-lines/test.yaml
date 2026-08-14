@@ -10,7 +10,7 @@ cases:
       columns: 80
       steps:
       - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
-      - write: { text: "stty -echo -onlcr; awk 'BEGIN { for (i=0; i<1000000; i++) print \"\" }'; printf '<MILLION-DONE>\\n'\r" }
+      - write: { text: "stty -echo -onlcr; awk 'BEGIN { for (i=0; i<1000000; i++) print \"\" }'; printf '<MILLION-%s>\\n' DONE\r" }
       - await_output: { contains: "<MILLION-DONE>", timeout_ms: 60000 }
       - write: { text: "printf '<AFTER-FLOOD>\\n'; exit\r" }
       - await_output: { contains: "<AFTER-FLOOD>", timeout_ms: 5000 }

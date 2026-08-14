@@ -10,7 +10,7 @@ cases:
       columns: 80
       steps:
       - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
-      - write: { text: "stty -echo; PS1=\"ERROR-${x}PROMPT# \"; printf 'SYNTAX-%s\\n' READY\r" }
+      - write: { text: "stty -echo; PS1=$(printf '\\105\\122\\122\\117\\122\\055\\120\\122\\117\\115\\120\\124\\043\\040'); printf 'SYNTAX-%s\\n' READY\r" }
       - await_output: { contains: SYNTAX-READY, timeout_ms: 5000 }
       - await_output: { contains: "ERROR-PROMPT# ", timeout_ms: 5000 }
       - write: { text: "for; do\r" }

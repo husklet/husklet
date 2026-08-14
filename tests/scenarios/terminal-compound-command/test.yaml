@@ -10,7 +10,7 @@ cases:
       columns: 80
       steps:
       - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
-      - write: { text: "stty -echo; PS2='LOOP> '; printf 'LOOP-%s\\n' READY\r" }
+      - write: { text: "stty -echo; PS2=$(printf '\\114\\117\\117\\120\\076\\040'); printf 'LOOP-%s\\n' READY\r" }
       - await_output: { contains: LOOP-READY, timeout_ms: 5000 }
       - write: { text: "for item in ONE TWO; do\r" }
       - await_output: { contains: "LOOP> ", timeout_ms: 5000 }

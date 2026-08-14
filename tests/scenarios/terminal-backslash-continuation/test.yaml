@@ -10,7 +10,7 @@ cases:
       columns: 80
       steps:
       - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
-      - write: { text: "stty -echo; PS2='CONT> '; printf 'CONT-%s\\n' READY\r" }
+      - write: { text: "stty -echo; PS2=$(printf '\\103\\117\\116\\124\\076\\040'); printf 'CONT-%s\\n' READY\r" }
       - await_output: { contains: CONT-READY, timeout_ms: 5000 }
       - write: { text: "printf '<%s>\\n' CONTINUED-\\\r" }
       - await_output: { contains: "CONT> ", timeout_ms: 5000 }
