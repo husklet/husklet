@@ -1,7 +1,7 @@
 use hl_container::{CheckpointError, CheckpointImage, CheckpointImages};
 use hl_ws::{Directory, Key, Namespace, Storage};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 

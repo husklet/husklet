@@ -253,8 +253,7 @@ mod terminal_start_tests {
 
     #[test]
     fn inherited_directory_is_shell_quoted_and_relative_values_are_ignored() {
-        let (working_dir, command) =
-            terminal_start(Some("/tmp/a'b; echo unsafe"), "/root", "exec bash -il");
+        let (working_dir, command) = terminal_start(Some("/tmp/a'b; echo unsafe"), "/root", "exec bash -il");
         assert_eq!(working_dir, "/root");
         assert_eq!(
             command,

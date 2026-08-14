@@ -34,7 +34,9 @@ int main(void) {
         .output()
         .expect("vector validation probe compiler");
     assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
-    let run = Command::new(&executable).status().expect("vector validation probe execution");
+    let run = Command::new(&executable)
+        .status()
+        .expect("vector validation probe execution");
     assert!(run.success(), "vector validation probe failed with {run}");
     fs::remove_dir_all(scratch).expect("remove vector validation probe directory");
 }

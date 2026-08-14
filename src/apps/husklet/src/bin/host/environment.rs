@@ -33,7 +33,9 @@ impl Environment {
     }
 
     pub fn terminal(&self) -> Vec<String> {
-        let mut values = TERMINAL_CAPABILITIES.map(|(key, value)| format!("{key}={value}")).to_vec();
+        let mut values = TERMINAL_CAPABILITIES
+            .map(|(key, value)| format!("{key}={value}"))
+            .to_vec();
         values.extend(self.0.iter().map(|(key, value)| format!("{key}={value}")));
         values
     }

@@ -287,8 +287,7 @@ impl Window {
             keys.connect_key_pressed(move |_, key, _c, state| {
                 let shortcut = Shortcut::from_key(key, state);
                 // Copy/scroll mode intercepts plain (unmodified) keys for keyboard scrollback navigation.
-                if copy_mode_captures(tw.copymode.is_active(), shortcut) && tw.copymode.key(&tw, key, state)
-                {
+                if copy_mode_captures(tw.copymode.is_active(), shortcut) && tw.copymode.key(&tw, key, state) {
                     return glib::Propagation::Stop;
                 }
                 match shortcut {
