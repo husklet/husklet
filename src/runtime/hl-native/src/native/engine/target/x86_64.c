@@ -135,10 +135,10 @@ uint64_t hl_x86_guest_pointer(uint64_t address);
 #include "../../translator/guest/x86_64/abi.h" // cpu-interface seam (G_* contract + sysmap + normalize)
 // The dispatch seam is per (guest ISA, HOST CPU): dispatch.h patches AArch64 branch encodings.
 #include "../../host/cpu.h"
+#include "../../translator/guest_memory.h"
 #if defined(HL_HOST_CPU_AARCH64)
 #include "../../translator/guest/x86_64/smc/index.h"
 #include "../../translator/guest/x86_64/smc_address.h"
-#include "../../translator/guest_memory.h"
 #include "../../translator/guest/x86_64/smc/protection.c"
 #include "../../translator/guest/x86_64/dispatch.h" // x86 dispatch seam for the SHARED engine/dispatch.c
 #else
