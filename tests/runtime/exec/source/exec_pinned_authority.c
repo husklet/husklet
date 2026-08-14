@@ -16,7 +16,8 @@
 #define HL_EXEC_PIN_TEST_MAIN 1u
 #define HL_EXEC_PIN_TEST_FINAL 2u
 #define HL_EXEC_PIN_TEST_SHEBANG_HOP 4u
-#define HL_EXEC_PIN_TEST_ENV_POISON 5u
+#define HL_EXEC_PIN_TEST_ENV_SEED 5u
+#define HL_EXEC_PIN_TEST_ENV_CHECK 6u
 
 struct replacement {
     unsigned stage;
@@ -192,10 +193,11 @@ static int failed_exec_keeps_environment(const char *root) {
     int written = descriptor >= 0 && write(descriptor, "#!\n", 3) == 3;
     if (descriptor >= 0) close(descriptor);
     if (!written) return 0;
+    if (syscall(SYS_prctl, HL_EXEC_PIN_TEST_PRCTL, HL_EXEC_PIN_TEST_ENV_SEED, 0, 0, 0) != 0) return 0;
     char *arguments[] = {malformed, NULL};
     char *environment[] = {(char *)"HL_FAILED_EXEC_POISON=1", NULL};
     execve(malformed, arguments, environment);
-    return errno == ENOEXEC && syscall(SYS_prctl, HL_EXEC_PIN_TEST_PRCTL, HL_EXEC_PIN_TEST_ENV_POISON, 0, 0, 0) == 0;
+    return errno == ENOEXEC && syscall(SYS_prctl, HL_EXEC_PIN_TEST_PRCTL, HL_EXEC_PIN_TEST_ENV_CHECK, 0, 0, 0) == 0;
 }
 
 int main(int argc, char **argv) {

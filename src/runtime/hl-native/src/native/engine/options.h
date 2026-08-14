@@ -14,6 +14,20 @@ typedef struct hl_options {
     size_t store_size;
 } hl_options;
 
+/*
+ * A successful exec publishes three related records: the process-private guest
+ * environment and the launch-option escape/exactness flags.  Preparing owns
+ * every allocation; committing only swaps already-owned stores and cannot fail.
+ */
+typedef struct hl_exec_environment_update {
+    hl_options process;
+    hl_options state;
+    hl_options *process_target;
+    hl_options *state_target;
+    int separate_state;
+    int prepared;
+} hl_exec_environment_update;
+
 int hl_options_init(hl_options *options);
 /* Deep-copy one already-validated, unique record set into the C read view. */
 int hl_options_init_records(hl_options *options, size_t count, const char *const *names, const char *const *values);
@@ -38,6 +52,9 @@ hl_options *hl_options_bind_process_state(hl_options *options);
 const char *hl_process_guest_environment_get(void);
 int hl_process_guest_environment_set(const char *value);
 int hl_process_guest_environment_unset(void);
+int hl_exec_environment_prepare(hl_exec_environment_update *update, const char *serialized);
+void hl_exec_environment_commit(hl_exec_environment_update *update);
+void hl_exec_environment_discard(hl_exec_environment_update *update);
 
 /* Existing engine internals resolve through the scoped store. */
 const char *hl_option_get(const char *name);

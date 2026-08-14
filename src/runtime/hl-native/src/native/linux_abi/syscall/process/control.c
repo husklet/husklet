@@ -409,9 +409,21 @@ static int svc_proc_167(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             } else if (a1 == 3) {
                 atomic_store_explicit(&g_exec_pin_test_phase, 3, memory_order_release);
                 G_RET(c) = 0;
-            } else if (a1 == HL_EXEC_PIN_TEST_ENV_POISON) {
+            } else if (a1 == HL_EXEC_PIN_TEST_ENV_SEED) {
+                G_RET(c) = hl_process_guest_environment_set("HL_EXEC_SENTINEL=old\n") == 0 &&
+                                   hl_option_set("HL_GUEST_ENV_ESC", "sentinel-escape", 1) == 0 &&
+                                   hl_option_set("HL_GUEST_ENV_EXACT", "sentinel-exact", 1) == 0
+                               ? 0
+                               : (uint64_t)(int64_t)-ENOMEM;
+            } else if (a1 == HL_EXEC_PIN_TEST_ENV_CHECK) {
                 const char *environment = hl_process_guest_environment_get();
-                G_RET(c) = environment != NULL && strstr(environment, "HL_FAILED_EXEC_POISON=1") != NULL;
+                const char *escape = hl_option_get("HL_GUEST_ENV_ESC");
+                const char *exact = hl_option_get("HL_GUEST_ENV_EXACT");
+                G_RET(c) = environment != NULL && strcmp(environment, "HL_EXEC_SENTINEL=old\n") == 0 &&
+                                   escape != NULL && strcmp(escape, "sentinel-escape") == 0 && exact != NULL &&
+                                   strcmp(exact, "sentinel-exact") == 0
+                               ? 0
+                               : 1;
             } else {
                 G_RET(c) = (uint64_t)(int64_t)-EINVAL;
             }

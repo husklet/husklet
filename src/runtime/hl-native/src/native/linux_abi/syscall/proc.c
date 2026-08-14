@@ -78,13 +78,10 @@ static char *exec_stage_env(uint64_t envp_guest) {
     return buf;
 }
 
-static void exec_publish_env(char *serialized) {
-    // No fallible exec return follows this publication. The option layer copies each value, so the staged
-    // buffer can be released immediately after the new process environment becomes authoritative.
-    (void)hl_process_guest_environment_set(serialized);
-    (void)hl_option_set("HL_GUEST_ENV_ESC", "1", 1);
-    (void)hl_option_set("HL_GUEST_ENV_EXACT", "1", 1);
-    free(serialized);
+static void exec_publish_env(hl_exec_environment_update *update) {
+    // No allocation or other fallible operation occurs here: prepare cloned and populated both option stores.
+    // The old stores remain authoritative until these infallible swaps make the complete update visible.
+    hl_exec_environment_commit(update);
 }
 
 // Fill a guest `struct rlimit { rlim_cur; rlim_max; }` for {get,set}rlimit/prlimit64 (cases 163/261).
@@ -514,7 +511,8 @@ static int g_mce_kill = 2; // PR_MCE_KILL/PR_MCE_KILL_GET machine-check policy: 
 #define HL_EXEC_PIN_TEST_PRCTL 0x48504e54u
 #define HL_EXEC_PIN_TEST_MAIN 1u
 #define HL_EXEC_PIN_TEST_FINAL 2u
-#define HL_EXEC_PIN_TEST_ENV_POISON 5u
+#define HL_EXEC_PIN_TEST_ENV_SEED 5u
+#define HL_EXEC_PIN_TEST_ENV_CHECK 6u
 #define HL_EXEC_PIN_TEST_SHEBANG_HOP 4u
 static atomic_uint g_exec_pin_test_mode;
 static atomic_uint g_exec_pin_test_phase;

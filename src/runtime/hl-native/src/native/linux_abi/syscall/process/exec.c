@@ -324,6 +324,14 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             G_RET(c) = (uint64_t)(int64_t)-ENOMEM;
             break;
         }
+        hl_exec_environment_update environment_update;
+        if (hl_exec_environment_prepare(&environment_update, staged_environment) != 0) {
+            free(staged_environment);
+            exec_image_release(&main_image);
+            G_RET(c) = (uint64_t)(int64_t)-ENOMEM;
+            break;
+        }
+        free(staged_environment);
         // Capture the guest-absolute exec path NOW (a0 is still mapped) so /proc/self/exe can name the new
         // image after the teardown below. ld.so resolves a binary's $ORIGIN (DT_RUNPATH) via readlink of
         // /proc/self/exe; a stale value makes an exec'd dynamic binary fail to find its own libraries (e.g.
@@ -352,7 +360,7 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             // too many nested #! -> ELOOP. `-ELOOP` is the host macOS errno 62; svc_done's boundary translation
             // maps it to Linux ELOOP (40) at the syscall boundary, exactly like the vfs symlink-loop path.
             exec_image_release(&main_image);
-            free(staged_environment);
+            hl_exec_environment_discard(&environment_update);
             G_RET(c) = (uint64_t)(int64_t)sh_new;
             break;
         }
@@ -361,7 +369,7 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             // interpreter.  Falling through to the ELF loader after an empty/malformed shebang
             // commits the exec, tears down the old image, and interprets text bytes as an ELF.
             exec_image_release(&main_image);
-            free(staged_environment);
+            hl_exec_environment_discard(&environment_update);
             G_RET(c) = (uint64_t)(int64_t)-ENOEXEC;
             break;
         }
@@ -382,7 +390,7 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             int interpreter_error = exec_image_open(resolved, &program_interpreter);
             if (interpreter_error != 0) {
                 exec_image_release(&main_image);
-                free(staged_environment);
+                hl_exec_environment_discard(&environment_update);
                 G_RET(c) = (uint64_t)(int64_t)interpreter_error;
                 break;
             }
@@ -391,7 +399,7 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             (has_program_interpreter && exec_image_is_write_open(&program_interpreter.status))) {
             exec_image_release(&program_interpreter);
             exec_image_release(&main_image);
-            free(staged_environment);
+            hl_exec_environment_discard(&environment_update);
             G_RET(c) = (uint64_t)(int64_t)-ETXTBSY;
             break;
         }
@@ -415,12 +423,12 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         if (!thread_exec_owner_handoff(c)) {
             exec_image_release(&program_interpreter);
             exec_image_release(&main_image);
-            free(staged_environment);
+            hl_exec_environment_discard(&environment_update);
             G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
             break;
         }
         thread_exit_others(c);
-        exec_publish_env(staged_environment);
+        exec_publish_env(&environment_update);
         // All failure returns are behind us: Linux releases a vfork parent
         // when exec commits, before the new image begins executing.
         vfork_release_parent();
