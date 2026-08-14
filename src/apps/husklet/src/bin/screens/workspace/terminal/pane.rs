@@ -1,5 +1,9 @@
 use super::*;
 
+fn page_owns_focus<T: PartialEq>(focused: Option<&T>, page: &[T]) -> bool {
+    focused.is_some_and(|focused| page.iter().any(|candidate| candidate == focused))
+}
+
 pub(crate) struct PaneWidget;
 
 impl PaneWidget {
@@ -213,6 +217,15 @@ impl<'a> Page<'a> {
             }
         }
         if let Some(child) = tw.stack.child_by_name(name) {
+            let mut terminals = Vec::new();
+            PaneView::collect(&child, &mut terminals);
+            let clear_focus = {
+                let focused = tw.focused.borrow();
+                page_owns_focus(focused.as_ref(), &terminals)
+            };
+            if clear_focus {
+                tw.focused.borrow_mut().take();
+            }
             // A user-closed tab must forget its pane registry entries.
             Slots::new(tw).discard_page(&child);
             tw.stack.remove(&child);
@@ -386,5 +399,17 @@ impl PaneReplacement {
         } else {
             parent_pane.set_end_child(Some(sibling));
         }
+    }
+}
+
+#[cfg(test)]
+mod focus_ownership_tests {
+    use super::page_owns_focus;
+
+    #[test]
+    fn removed_page_clears_only_focus_owned_by_that_page() {
+        assert!(page_owns_focus(Some(&2), &[1, 2, 3]));
+        assert!(!page_owns_focus(Some(&4), &[1, 2, 3]));
+        assert!(!page_owns_focus::<i32>(None, &[1, 2, 3]));
     }
 }
