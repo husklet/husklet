@@ -168,7 +168,7 @@ mod ffi {
         })
     }
 
-    fn signal_process_with(
+    pub(super) fn signal_process_with(
         process: libc::pid_t,
         signal: libc::c_int,
         mut deliver: impl FnMut(libc::pid_t, libc::c_int) -> io::Result<()>,
@@ -181,7 +181,7 @@ mod ffi {
         }
     }
 
-    fn signal_group_with(
+    pub(super) fn signal_group_with(
         process: libc::pid_t,
         signal: libc::c_int,
         mut deliver: impl FnMut(libc::pid_t, libc::c_int) -> io::Result<()>,
@@ -264,6 +264,8 @@ mod ffi {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use super::{ffi, Peer};
 
     #[test]
