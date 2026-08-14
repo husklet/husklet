@@ -67,17 +67,6 @@ impl ConfigurationIdentity {
         hl_fs::File::from(self.path.clone()).replace(Configuration::new(workspace).signature())
     }
 
-    pub(super) fn validate(&self, workspace: &WorkspaceConfig) -> io::Result<()> {
-        if self.matches(workspace)? {
-            Ok(())
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "workspace settings changed while its execution domain is running; stop the workspace runtime before reopening",
-            ))
-        }
-    }
-
     /// Returns whether the live domain was published for this exact workspace
     /// configuration. A missing or unreadable identity remains an error: only
     /// an authenticated mismatch is safe to classify as a replacement.

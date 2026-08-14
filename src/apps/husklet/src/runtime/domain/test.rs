@@ -62,14 +62,13 @@ fn published_configuration_is_secret_free_and_detects_changes() {
     let mut workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);
     workspace.env.push(("TOKEN".into(), "secret-value".into()));
     publication.publish(&workspace).unwrap();
-    publication.validate(&workspace).unwrap();
+    assert!(publication.matches(&workspace).unwrap());
     let digest = std::fs::read_to_string(&publication.path).unwrap();
     assert_eq!(digest.len(), 64);
     assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
     assert!(!digest.contains("secret-value"));
     workspace.env.push(("MODE".into(), "changed".into()));
-    let error = publication.validate(&workspace).unwrap_err();
-    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert!(!publication.matches(&workspace).unwrap());
     publication.remove().unwrap();
     assert!(!publication.path.exists());
 }
@@ -79,7 +78,7 @@ fn live_domain_without_configuration_identity_is_rejected() {
     let root = tempfile::tempdir().unwrap();
     let publication = PublishedConfiguration::new(root.path());
     let workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);
-    let error = publication.validate(&workspace).unwrap_err();
+    let error = publication.matches(&workspace).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::NotFound);
     assert!(error.to_string().contains("no verifiable configuration identity"));
 }
@@ -130,6 +129,23 @@ fn a_live_domain_with_changed_settings_is_replaced() {
         panic!("a domain with a stale configuration must be replaced");
     };
     assert!(reason.contains("configuration"));
+    assert!(domain.socket().exists(), "decision must not unlink the live domain");
+}
+
+#[test]
+fn a_live_compatible_domain_without_configuration_identity_is_rejected_not_replaced() {
+    let root = tempfile::tempdir().unwrap();
+    let (workspace, domain, _listener) = live_domain(root.path());
+    PublishedProtocol::new(&domain.directory).publish().unwrap();
+
+    let error = match domain.decide(&workspace) {
+        Ok(_) => panic!("a live domain without authenticated configuration must not be used or replaced"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    assert!(error.to_string().contains("no verifiable configuration identity"));
+    assert!(domain.socket().exists());
 }
 
 #[test]
