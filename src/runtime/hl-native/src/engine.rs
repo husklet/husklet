@@ -638,7 +638,7 @@ impl Drop for Engine {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{Engine, EngineConfig, Exit, Plan, resolve_layered_guest};
+    use super::{resolve_layered_guest, Engine, EngineConfig, Exit, Plan};
     use std::{
         ffi::CString,
         fs::{File, OpenOptions},
@@ -866,12 +866,16 @@ int main(int argc, char **argv) {
     syscall(SYS_execve, next[0], next, (char *[]){ 0 });
     return errno == EACCES ? 0 : errno;
 #else
-    if (argc == 2) return 96;
-    int held = open("/busy", O_WRONLY);
+    if (argc == 2) return !strcmp(argv[1], "verify-a") ? 0 : 96;
+    int held = open("/next", O_WRONLY);
     if (held < 0) return 94;
-    char *next[] = { (char *)"/proc/self/exe", (char *)"again", 0 };
+    char *next[] = { (char *)"/next", (char *)"stage-b", 0 };
     syscall(SYS_execve, next[0], next, (char *[]){ 0 });
-    return errno == ETXTBSY ? 0 : 95;
+    if (errno != ETXTBSY) return 95;
+    close(held);
+    char *self[] = { (char *)"/proc/self/exe", (char *)"verify-a", 0 };
+    syscall(SYS_execve, self[0], self, (char *[]){ 0 });
+    return errno;
 #endif
 }
 "#;
@@ -921,6 +925,11 @@ int main(int argc, char **argv) {
                 engine.exit().status
             };
             assert_eq!(
+                run(&busy_path, "/busy", &|| {}),
+                0,
+                "ISA {isa} rotated authority after failed exec"
+            );
+            assert_eq!(
                 run(&main_path, "/bin/main", &|| {
                     std::fs::remove_file(&main_path).unwrap();
                     std::fs::remove_dir(root.path().join("bin")).unwrap();
@@ -936,11 +945,6 @@ int main(int argc, char **argv) {
                 run(&dac_path, "/dac", &|| std::fs::remove_file(&dac_path).unwrap()),
                 0,
                 "ISA {isa} self authority lost execute DAC metadata"
-            );
-            assert_eq!(
-                run(&busy_path, "/busy", &|| {}),
-                0,
-                "ISA {isa} self authority lost ETXTBSY identity"
             );
         }
     }
