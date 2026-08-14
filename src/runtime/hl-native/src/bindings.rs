@@ -207,11 +207,11 @@ fn symbol_library_path(address: *const c_void) -> Option<std::path::PathBuf> {
 #[cfg(unix)]
 pub(super) fn engine_library_paths() -> Option<Vec<std::path::PathBuf>> {
     [
-        hl_engine_abi as *const () as *const c_void,
-        hl_engine_version as *const () as *const c_void,
-        hl_c_backend_create as *const () as *const c_void,
-        hl_c_backend_run as *const () as *const c_void,
-        hl_c_backend_destroy as *const () as *const c_void,
+        (hl_engine_abi as *const ()).cast::<c_void>(),
+        (hl_engine_version as *const ()).cast::<c_void>(),
+        (hl_c_backend_create as *const ()).cast::<c_void>(),
+        (hl_c_backend_run as *const ()).cast::<c_void>(),
+        (hl_c_backend_destroy as *const ()).cast::<c_void>(),
     ]
     .into_iter()
     .map(symbol_library_path)
