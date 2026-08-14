@@ -22,8 +22,10 @@ typedef struct hl_identity_digest {
 uint64_t hl_identity_name(const char *name);
 uint64_t hl_identity_image(const void *bytes, size_t size);
 hl_identity_digest hl_identity_image_digest(const void *bytes, size_t size);
-hl_identity_digest hl_identity_digest_mix(hl_identity_digest program, hl_identity_digest interpreter, uint64_t engine,
-                                          uint64_t name);
+hl_identity_digest hl_identity_engine_digest(const void *build_tag, size_t build_tag_size, uint64_t translator_abi,
+                                             uint32_t guest_isa, uint32_t host_isa, uint64_t modes);
+hl_identity_digest hl_identity_digest_mix(hl_identity_digest program, hl_identity_digest interpreter,
+                                          hl_identity_digest engine, const char *name);
 int hl_identity_digest_equal(const hl_identity_digest *left, const hl_identity_digest *right);
 int hl_identity_digest_empty(const hl_identity_digest *digest);
 uint64_t hl_identity_file(const hl_host_file_metadata *metadata);

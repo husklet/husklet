@@ -162,6 +162,13 @@ static uint64_t pcache_engine_id(void) {
     return hl_identity_configuration(h, 2, HL_HOST_CPU_ISA, modes);
 }
 
+static hl_identity_digest pcache_translator_identity(void) {
+    static const char tag[] = __DATE__ " " __TIME__;
+    uint64_t modes = (uint64_t)(g_fastsys != 0) | ((uint64_t)(g_fastclk != 0) << 1) |
+                     ((uint64_t)(g_siginline != 0) << 2) | ((uint64_t)(slimsys_on() != 0) << 3);
+    return hl_identity_engine_digest(tag, sizeof tag - 1, PC_TRANSLATOR_ABI, 2, HL_HOST_CPU_ISA, modes);
+}
+
 // hash the BASENAME of argv[0]. A multicall binary (busybox, toolchain drivers) runs a DIFFERENT
 // code path per applet, and with the exec re-key each epoch persists its own arena -- so the key must
 // separate `sh` from `tar` or one applet's arena would shadow the other's. Basename (not full argv) so a
@@ -172,7 +179,7 @@ static uint64_t pcache_argv0_id(const char *argv0) {
 
 static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity_digest interpreter,
                                         const char *argv0) {
-    return hl_identity_digest_mix(program, interpreter, pcache_engine_id(), pcache_argv0_id(argv0));
+    return hl_identity_digest_mix(program, interpreter, pcache_translator_identity(), argv0);
 }
 
 static int pcache_file(char *out, size_t n) {

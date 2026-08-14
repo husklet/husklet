@@ -1,3 +1,5 @@
+#include "../../../cache_abi.h"
+
 static int interp_step(struct cpu *cpu) {
     uint32_t insn = 0;
     if (hl_guest_fetch_u32(cpu->pc, &insn) != 0) {
@@ -350,9 +352,15 @@ static uint64_t pcache_engine_id(void) {
     return hl_identity_configuration(build, HL_HOST_CPU_ISA_AARCH64, HL_HOST_CPU_ISA, modes);
 }
 
+static hl_identity_digest pcache_translator_identity(void) {
+    static const char tag[] = __DATE__ " " __TIME__;
+    return hl_identity_engine_digest(tag, sizeof tag - 1, HL_PCACHE_ABI_AARCH64, HL_HOST_CPU_ISA_AARCH64,
+                                     HL_HOST_CPU_ISA, 1u);
+}
+
 static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity_digest interpreter,
                                         const char *argv0) {
-    return hl_identity_digest_mix(program, interpreter, pcache_engine_id(), hl_identity_name(argv0));
+    return hl_identity_digest_mix(program, interpreter, pcache_translator_identity(), argv0);
 }
 
 // Always a clean MISS.

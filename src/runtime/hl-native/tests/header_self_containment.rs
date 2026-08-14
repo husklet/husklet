@@ -202,8 +202,9 @@ int main(void) {
     if (hl_identity_digest_equal(&pinned, &same)) return 4;
 
     hl_identity_digest none = {0};
-    hl_identity_digest first_key = hl_identity_digest_mix(pinned, none, 7, 11);
-    hl_identity_digest replacement_key = hl_identity_digest_mix(changed, none, 7, 11);
+    hl_identity_digest engine = hl_identity_engine_digest("build", 5, 7, 1, 1, 0);
+    hl_identity_digest first_key = hl_identity_digest_mix(pinned, none, engine, "applet");
+    hl_identity_digest replacement_key = hl_identity_digest_mix(changed, none, engine, "applet");
     if (hl_identity_digest_equal(&first_key, &replacement_key)) return 5;
     return 0;
 }

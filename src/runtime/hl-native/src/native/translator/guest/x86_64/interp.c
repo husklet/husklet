@@ -23,6 +23,7 @@
 #include <xmmintrin.h>
 #endif
 
+#include "../../cache_abi.h"
 #include "../../identity.h"
 #include "../../../host/native_context.h" // ucontext_t: the fault path restores uc_sigmask by hand
 #include "decoder.h"
@@ -1544,9 +1545,14 @@ static uint64_t pcache_engine_id(void) {
     return hl_identity_configuration(hash, 2, HL_HOST_CPU_ISA, 0);
 }
 
+static hl_identity_digest pcache_translator_identity(void) {
+    static const char tag[] = __DATE__ " " __TIME__;
+    return hl_identity_engine_digest(tag, sizeof tag - 1, HL_PCACHE_ABI_X86_64, 2, HL_HOST_CPU_ISA, 0);
+}
+
 static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity_digest interpreter,
                                         const char *argv0) {
-    return hl_identity_digest_mix(program, interpreter, pcache_engine_id(), hl_identity_name(argv0));
+    return hl_identity_digest_mix(program, interpreter, pcache_translator_identity(), argv0);
 }
 
 static int pcache_load(uint64_t entry_jump) {

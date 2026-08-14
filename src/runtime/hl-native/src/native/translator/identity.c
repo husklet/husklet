@@ -157,16 +157,35 @@ hl_identity_digest hl_identity_image_digest(const void *bytes, size_t size) {
     return sha256_finish(&state);
 }
 
-hl_identity_digest hl_identity_digest_mix(hl_identity_digest program, hl_identity_digest interpreter, uint64_t engine,
-                                          uint64_t name) {
+hl_identity_digest hl_identity_engine_digest(const void *build_tag, size_t build_tag_size, uint64_t translator_abi,
+                                             uint32_t guest_isa, uint32_t host_isa, uint64_t modes) {
+    static const uint8_t domain[] = "husklet-pcache-translator-v1";
+    sha256_state state;
+    sha256_init(&state);
+    sha256_update(&state, domain, sizeof domain);
+    sha256_update(&state, build_tag, build_tag_size);
+    sha256_update(&state, &translator_abi, sizeof translator_abi);
+    sha256_update(&state, &guest_isa, sizeof guest_isa);
+    sha256_update(&state, &host_isa, sizeof host_isa);
+    sha256_update(&state, &modes, sizeof modes);
+    return sha256_finish(&state);
+}
+
+hl_identity_digest hl_identity_digest_mix(hl_identity_digest program, hl_identity_digest interpreter,
+                                          hl_identity_digest engine, const char *name) {
     static const uint8_t domain[] = "husklet-pcache-executable-v1";
     sha256_state state;
     sha256_init(&state);
     sha256_update(&state, domain, sizeof domain);
     sha256_update(&state, program.bytes, sizeof program.bytes);
     sha256_update(&state, interpreter.bytes, sizeof interpreter.bytes);
-    sha256_update(&state, &engine, sizeof engine);
-    sha256_update(&state, &name, sizeof name);
+    sha256_update(&state, engine.bytes, sizeof engine.bytes);
+    if (name != NULL) {
+        const char *base = name;
+        for (const char *cursor = name; *cursor != '\0'; ++cursor)
+            if (*cursor == '/') base = cursor + 1;
+        sha256_update(&state, base, strlen(base));
+    }
     return sha256_finish(&state);
 }
 

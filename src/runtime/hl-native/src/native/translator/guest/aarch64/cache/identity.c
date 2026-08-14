@@ -20,6 +20,15 @@ static uint64_t pcache_engine_id(void) {
     return hl_identity_configuration(build, 1, 1, modes);
 }
 
+static hl_identity_digest pcache_translator_identity(void) {
+    static const char tag[] = __DATE__ " " __TIME__;
+    uint64_t modes = (uint64_t)(g_guestfold != 0) | ((uint64_t)(g_steal1617 != 0) << 1) |
+                     ((uint64_t)(g_noibslim != 0) << 2) | ((uint64_t)(g_mtibtc != 0) << 3) |
+                     ((uint64_t)(g_no_stw_reclaim != 0) << 4) | ((uint64_t)(g_prof != 0) << 5) |
+                     ((uint64_t)(uint32_t)g_fwdskip << 32);
+    return hl_identity_engine_digest(tag, sizeof tag - 1, PC_TRANSLATOR_ABI, 1, HL_HOST_CPU_ISA, modes);
+}
+
 // Hash the BASENAME of argv[0]. A multicall binary (busybox, toolchain drivers) runs DIFFERENT code
 // paths per argv[0]; the translated arena is therefore per-applet, so the cache MUST be keyed by argv[0]
 // too or one applet loads another's arena. Basename (not full argv) so a single-purpose binary invoked
@@ -31,7 +40,7 @@ static uint64_t pcache_argv0_id(const char *argv0) {
 
 static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity_digest interpreter,
                                         const char *argv0) {
-    return hl_identity_digest_mix(program, interpreter, pcache_engine_id(), pcache_argv0_id(argv0));
+    return hl_identity_digest_mix(program, interpreter, pcache_translator_identity(), argv0);
 }
 
 static int pcache_file(char *out, size_t n) {
