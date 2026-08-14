@@ -1277,7 +1277,7 @@ int hl_host_windows_waitpid(pid_t pid, int *status, int options) {
             waited = WaitForMultipleObjects(count, waitset, FALSE, HL_WINDOWS_WAIT_SLICE_MS);
             if (waited == WAIT_TIMEOUT) continue;
         }
-        if (waited >= WAIT_OBJECT_0 && waited < WAIT_OBJECT_0 + count) {
+        if (waited < WAIT_OBJECT_0 + count) {
             const DWORD index = waited - WAIT_OBJECT_0;
             int taken;
             AcquireSRWLockExclusive(&hl_windows_children_lock);
