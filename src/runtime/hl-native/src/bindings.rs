@@ -77,6 +77,20 @@ pub(super) type SyscallDispatch =
     unsafe extern "C" fn(*mut c_void, c_uint, *mut SyscallCpuAarch64, *mut SyscallTrapResult) -> c_int;
 
 unsafe extern "C" {
+    #[cfg(feature = "native-test-hooks")]
+    fn hl_aarch64_bound_vector_io_test(
+        scenario: c_uint,
+        result: *mut i64,
+        calls: *mut c_uint,
+        bytes: *mut c_ulonglong,
+    ) -> c_int;
+    #[cfg(feature = "native-test-hooks")]
+    fn hl_x86_64_bound_vector_io_test(
+        scenario: c_uint,
+        result: *mut i64,
+        calls: *mut c_uint,
+        bytes: *mut c_ulonglong,
+    ) -> c_int;
     #[cfg(test)]
     pub(super) fn hl_engine_abi() -> c_uint;
     #[cfg(test)]
@@ -133,6 +147,23 @@ unsafe extern "C" {
     #[cfg(test)]
     pub(super) fn hl_c_backend_translation_count(backend: *const Backend) -> c_ulonglong;
     pub(super) fn hl_c_backend_destroy(backend: *mut Backend);
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn bound_vector_io_test(isa: u32, scenario: u32) -> Result<(i64, u32, u64), i32> {
+    let (mut result, mut calls, mut bytes) = (i64::MIN, u32::MAX, u64::MAX);
+    let hook = match isa {
+        1 => hl_aarch64_bound_vector_io_test,
+        2 => hl_x86_64_bound_vector_io_test,
+        _ => return Err(-22),
+    };
+    // SAFETY: the feature-gated C hook accepts writable scalar outputs and owns its fixture memory.
+    let status = unsafe { hook(scenario, &raw mut result, &raw mut calls, &raw mut bytes) };
+    if status == 0 {
+        Ok((result, calls, bytes))
+    } else {
+        Err(status)
+    }
 }
 
 #[cfg(test)]

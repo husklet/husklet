@@ -95,19 +95,23 @@ fn main() {
         runtime_definitions.push("HL_NATIVE_TEST_HOOKS=1");
     }
     compile("hl_c_backend_runtime", &runtime_source_refs, &runtime_definitions, true);
+    let mut aarch64_target_definitions = vec![
+        "HL_ENABLE_LOGGING=0",
+        "HL_TRANSLIT_DEFAULT=0",
+        "_GNU_SOURCE",
+        "HL_EMBEDDED_BUILD=1",
+        "HL_ENGINE_NO_MAIN=1",
+        "HL_ENGINE_NO_STANDALONE=1",
+        "HL_TARGET_NAMESPACE=aarch64",
+    ];
+    if test_hooks {
+        aarch64_target_definitions.push("HL_NATIVE_TEST_HOOKS=1");
+    }
     if !x86_only {
         compile(
             "hl_c_backend_target_aarch64",
             &["src/native/engine/target/aarch64.c"],
-            &[
-                "HL_ENABLE_LOGGING=0",
-                "HL_TRANSLIT_DEFAULT=0",
-                "_GNU_SOURCE",
-                "HL_EMBEDDED_BUILD=1",
-                "HL_ENGINE_NO_MAIN=1",
-                "HL_ENGINE_NO_STANDALONE=1",
-                "HL_TARGET_NAMESPACE=aarch64",
-            ],
+            &aarch64_target_definitions,
             false,
         );
     }
@@ -122,6 +126,9 @@ fn main() {
     ];
     if x86_only {
         x86_target_definitions.push("HL_CKPT_INTERRUPT_EXPORT=1");
+    }
+    if test_hooks {
+        x86_target_definitions.push("HL_NATIVE_TEST_HOOKS=1");
     }
     compile(
         "hl_c_backend_target_x86_64",

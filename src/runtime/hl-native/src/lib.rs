@@ -20,6 +20,16 @@ pub use checkpoint::{CheckpointBroker, CheckpointTransport};
 pub use engine::{Engine, EngineConfig, Exit};
 pub use provider::leak_check_nonvacuity;
 
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn bound_vector_io_test(isa: u32, scenario: u32) -> Result<(i64, u32, u64), i32> {
+    // The production target runs each guest in its own child process. This test hook runs both target TUs
+    // in the test process, where they deliberately share the process-global logical-VMA ledger.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    bindings::bound_vector_io_test(isa, scenario)
+}
+
 #[cfg(test)]
 mod platform;
 

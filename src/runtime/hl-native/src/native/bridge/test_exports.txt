@@ -1,3 +1,4 @@
+hl_aarch64_bound_vector_io_test
 hl_c_backend_checkpoint_adopt
 hl_c_backend_checkpoint_broker_accept
 hl_c_backend_checkpoint_broker_pair
@@ -24,3 +25,4 @@ hl_c_backend_run
 hl_c_backend_translation_count
 hl_engine_abi
 hl_engine_version
+hl_x86_64_bound_vector_io_test
