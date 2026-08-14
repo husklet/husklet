@@ -27,6 +27,7 @@ mod path;
 pub mod port;
 mod request;
 mod session;
+mod transport;
 
 pub use authority::{Authority, Denial, Permit, Reason};
 pub use capability::{Capability, Grant};
@@ -38,3 +39,4 @@ pub use outbox::{Emission, Message, Outbox};
 pub use path::{Refusal, RelativePath};
 pub use request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 pub use session::{Services, Session};
+pub use transport::{Transit, Wire};
