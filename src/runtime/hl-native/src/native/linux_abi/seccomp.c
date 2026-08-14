@@ -222,7 +222,7 @@ static long seccomp_install_filter(struct cpu *c, uint64_t fprog_ptr, uint32_t f
         if (status != 0) {
             free(node->insns);
             free(node);
-            return status;
+            return flags & HL_LINUX_SECCOMP_FILTER_FLAG_TSYNC_ESRCH ? -ESRCH : status;
         }
     } else {
         c->seccomp_filters = node;

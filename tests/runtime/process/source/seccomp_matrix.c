@@ -136,6 +136,7 @@ static int kill_thread_case(void) {
 }
 
 static atomic_int tsync_go;
+static atomic_int tsync_diverged;
 
 static void *tsync_thread(void *unused) {
     (void)unused;
@@ -157,6 +158,33 @@ static int tsync_case(void) {
         void *result = 0;
         if (pthread_join(thread, &result)) _exit(4);
         _exit((long)result == 1 ? 0 : 5);
+    }
+    return status_exit(child, 0);
+}
+
+static void *tsync_divergent_thread(void *unused) {
+    (void)unused;
+    int status = filter(SECCOMP_RET_ALLOW, 0);
+    atomic_store_explicit(&tsync_diverged, status == 0 ? 1 : -1, memory_order_release);
+    while (atomic_load_explicit(&tsync_diverged, memory_order_acquire) == 1)
+        sched_yield();
+    return 0;
+}
+
+static int tsync_esrch_case(void) {
+    pid_t child = fork();
+    if (child == 0) {
+        pthread_t thread;
+        atomic_store(&tsync_diverged, 0);
+        if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) || pthread_create(&thread, 0, tsync_divergent_thread, 0)) _exit(2);
+        while (atomic_load_explicit(&tsync_diverged, memory_order_acquire) == 0)
+            sched_yield();
+        errno = 0;
+        int rejected = filter(SECCOMP_RET_ALLOW, SECCOMP_FILTER_FLAG_TSYNC | SECCOMP_FILTER_FLAG_TSYNC_ESRCH) == -1 &&
+                       errno == ESRCH;
+        atomic_store_explicit(&tsync_diverged, 2, memory_order_release);
+        if (pthread_join(thread, 0)) _exit(3);
+        _exit(rejected ? 0 : 4);
     }
     return status_exit(child, 0);
 }
@@ -205,11 +233,13 @@ int main(void) {
     }
     int permission = permission_case(), invalid = invalid_case(), strict = strict_case();
     int trap = trap_case(), kill_thread = kill_thread_case(), kill_process = kill_process_case();
-    int tsync = tsync_case(), stack = stack_case(), clone = clone_case(), exec = exec_case();
-    printf("seccomp permission=%d invalid=%d strict=%d trap=%d kill_thread=%d kill_process=%d tsync=%d stack=%d "
-           "clone=%d exec=%d\n",
-           permission, invalid, strict, trap, kill_thread, kill_process, tsync, stack, clone, exec);
-    return permission && invalid && strict && trap && kill_thread && kill_process && tsync && stack && clone && exec
+    int tsync = tsync_case(), tsync_esrch = tsync_esrch_case(), stack = stack_case(), clone = clone_case(),
+        exec = exec_case();
+    printf("seccomp permission=%d invalid=%d strict=%d trap=%d kill_thread=%d kill_process=%d tsync=%d tsync_esrch=%d "
+           "stack=%d clone=%d exec=%d\n",
+           permission, invalid, strict, trap, kill_thread, kill_process, tsync, tsync_esrch, stack, clone, exec);
+    return permission && invalid && strict && trap && kill_thread && kill_process && tsync && tsync_esrch && stack &&
+                   clone && exec
                ? 0
                : 1;
 }
