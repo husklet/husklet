@@ -62,6 +62,11 @@ typedef struct hl_guest_memory_ops {
        leaves no pin to release. */
     int (*pin)(uint64_t guest, size_t length, hl_guest_memory_access access, hl_guest_memory_pin *pin);
     void (*unpin)(hl_guest_memory_pin *pin);
+    /* Publish a completed DATA write in guest coordinates.  This is separate
+       from pin/unpin: a caller may validate and hold several discontiguous
+       spans before committing any byte, and executable aliases must not be
+       invalidated until that all-or-nothing commit has completed. */
+    void (*store_observe)(uint64_t guest, size_t length);
 } hl_guest_memory_ops;
 
 void hl_guest_memory_bind(const hl_guest_memory_ops *ops);
@@ -79,6 +84,7 @@ int hl_guest_memory_read(uint64_t guest, void *destination, size_t length);
 int hl_guest_memory_write(uint64_t guest, const void *source, size_t length);
 int hl_guest_memory_pin_data(uint64_t guest, size_t length, hl_guest_memory_access access, hl_guest_memory_pin *pin);
 void hl_guest_memory_unpin_data(hl_guest_memory_pin *pin);
+void hl_guest_memory_store_observe(uint64_t guest, size_t length);
 int hl_guest_memory_indirect(void);
 uint64_t hl_guest_memory_host_pointer(uint64_t guest);
 

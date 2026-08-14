@@ -299,6 +299,7 @@ static const hl_guest_memory_ops g_guest_memory_ops = {
     .exec_generation = hl_logical_vma_global_exec_generation,
     .pin = jit86_guest_memory_pin,
     .unpin = jit86_guest_memory_unpin,
+    .store_observe = jit86_store_alias_changed,
 };
 
 // Host-CPU fork: an AArch64 host takes the x86-64 -> ARM64 translator below (register model at the top of
