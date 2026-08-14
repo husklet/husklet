@@ -300,8 +300,8 @@ static void hl_forkserver_runner(int conn, int *fds, int nfd, int argc, char **a
         hl_option_unset("HL_PCACHE_DIR");
     }
     _exit(hl_run_linux_guest(hl_target_services_effective(&g_target_services), g_linux_box,
-                             g_srv_rootfs[0] ? g_srv_rootfs : NULL, HL_HOST_HANDLE_INVALID, NULL, 0, NULL,
-                             NULL, NULL, 0, (uint32_t)argc, argv));
+                             g_srv_rootfs[0] ? g_srv_rootfs : NULL, HL_HOST_HANDLE_INVALID, NULL, 0, NULL, NULL, NULL,
+                             0, (uint32_t)argc, argv));
 }
 
 // ---- server ----

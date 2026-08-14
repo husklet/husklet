@@ -359,8 +359,8 @@ static void e_ldp_q(int rt, int rt2, int rn, int off) {
 // The guest-visible signal trampoline is stored in each AArch64 frame.  A
 // normal handler return reaches this readable instruction pair; the
 // dispatcher recognizes it before translation and performs rt_sigreturn.
-#define G_IS_SIGNAL_RETURN(c)                                                                                           \
-    (G_PC(c) == SIGRETURN_PC ||                                                                                         \
+#define G_IS_SIGNAL_RETURN(c)                                                                                          \
+    (G_PC(c) == SIGRETURN_PC ||                                                                                        \
      ((c)->sig_depth > 0 && G_PC(c) == (c)->sig_frame_sp[(c)->sig_depth - 1] + UINT64_C(4608)))
 
 // signal delivery
@@ -460,8 +460,7 @@ static int g_authorized_executable_metadata_ready;
 static int aarch64_image_read(const char *path, hl_linux_image *image) {
     if (g_initial_executable_image != NULL)
         return hl_linux_image_read_bytes(g_initial_executable_image, g_initial_executable_size, image);
-    if (g_rootfs == NULL && g_authorized_executable_image != NULL && path != NULL &&
-        g_authorized_executable_path[0]) {
+    if (g_rootfs == NULL && g_authorized_executable_image != NULL && path != NULL && g_authorized_executable_path[0]) {
         char canonical[4200];
         if (realpath(path, canonical) != NULL && strcmp(canonical, g_authorized_executable_path) == 0)
             return hl_linux_image_read_bytes(g_authorized_executable_image, g_authorized_executable_size, image);
@@ -1191,9 +1190,8 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
     exe_canon(prog, bootexe, sizeof bootexe);
     g_exe_path = bootexe;
     static char pb[4200];
-    const char *prog_host = g_initial_executable_image != NULL
-                                ? prog
-                                : xresolve_overlay(prog, pb, sizeof pb); // named fallback only
+    const char *prog_host =
+        g_initial_executable_image != NULL ? prog : xresolve_overlay(prog, pb, sizeof pb); // named fallback only
     // Authorize the launched image for the bare-mode execve gate (proc.c) and the by-path image reader.
     // This must be set even when no executable image was embedded (the macOS embedding/bridge path launches
     // the guest purely by path): otherwise a guest re-exec of /proc/self/exe fails the authorized-target
@@ -1297,10 +1295,9 @@ static int hl_restore_checkpoint(const char *rootfs) {
 
 int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const char *rootfs, hl_host_handle executable,
                        const void *executable_image, size_t executable_size,
-                       const hl_executable_authority *executable_authority,
-                       const hl_engine_main_image_plan *image_plan,
-                       const void *interpreter_image, size_t interpreter_size,
-                       uint32_t argument_count, char *const argv[]) {
+                       const hl_executable_authority *executable_authority, const hl_engine_main_image_plan *image_plan,
+                       const void *interpreter_image, size_t interpreter_size, uint32_t argument_count,
+                       char *const argv[]) {
     int argc;
     (void)executable;
     g_initial_executable_image = executable_image;

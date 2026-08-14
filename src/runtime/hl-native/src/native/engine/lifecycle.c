@@ -32,9 +32,8 @@ extern int hl_ckpt_interrupt_executors(void);
 int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const char *rootfs, hl_host_handle executable,
                        const void *executable_image, size_t executable_size,
                        const hl_executable_authority *executable_authority,
-                       const hl_engine_main_image_plan *main_image_plan,
-                       const void *interpreter_image, size_t interpreter_size,
-                       uint32_t argc, char *const argv[]);
+                       const hl_engine_main_image_plan *main_image_plan, const void *interpreter_image,
+                       size_t interpreter_size, uint32_t argc, char *const argv[]);
 hl_status hl_run_linux_guest_status(void);
 uint64_t hl_run_linux_guest_translations(void);
 
@@ -174,8 +173,8 @@ static size_t hl_production_launch_text(const char *text) {
 }
 
 static void *hl_production_launch_encode(const hl_host_services *host, const hl_engine_config *config,
-                                         const hl_options *options, uint32_t argc,
-                                         const char *const argv[], size_t *out_size) {
+                                         const hl_options *options, uint32_t argc, const char *const argv[],
+                                         size_t *out_size) {
     hl_production_launch_header header;
     const hl_engine_executable *spec = config->executable;
     unsigned char *bytes;
@@ -481,13 +480,11 @@ static hl_status hl_production_claim_terminal(const hl_production_entry_context 
     hl_host_result borrowed;
     int descriptor;
     int saved_errno;
-    if (context->box == NULL ||
-        hl_linux_fd_snapshot_get(context->box, 0, &input) != HL_STATUS_OK ||
+    if (context->box == NULL || hl_linux_fd_snapshot_get(context->box, 0, &input) != HL_STATUS_OK ||
         input.host_handle == HL_HOST_HANDLE_INVALID)
         return HL_STATUS_OK;
     attachments = context->host->posix_attachment;
-    if (attachments == NULL || attachments->borrow_file == NULL || attachments->release == NULL)
-        return HL_STATUS_OK;
+    if (attachments == NULL || attachments->borrow_file == NULL || attachments->release == NULL) return HL_STATUS_OK;
     borrowed = attachments->borrow_file(context->host->context, input.host_handle);
     if (borrowed.status != HL_STATUS_OK) return (hl_status)borrowed.status;
     descriptor = (int)borrowed.value;
@@ -556,12 +553,10 @@ static int32_t hl_production_entry(void *opaque) {
             if (pthread_detach(control) != 0) return HL_STATUS_PLATFORM_FAILURE;
         }
     }
-    int32_t result =
-        hl_run_linux_guest(context->host, context->box, context->config->rootfs, executable,
-                           spec == NULL ? NULL : spec->image, spec == NULL ? 0 : spec->image_size,
-                           NULL,
-                           context->config->main_image_plan, context->interpreter_image,
-                           context->interpreter_size, context->argc, (char *const *)(uintptr_t)context->argv);
+    int32_t result = hl_run_linux_guest(
+        context->host, context->box, context->config->rootfs, executable, spec == NULL ? NULL : spec->image,
+        spec == NULL ? 0 : spec->image_size, NULL, context->config->main_image_plan, context->interpreter_image,
+        context->interpreter_size, context->argc, (char *const *)(uintptr_t)context->argv);
     (void)hl_options_bind_process_state(previous_state);
     (void)hl_options_bind_process(previous);
     hl_options_destroy(&process_state);
@@ -581,8 +576,7 @@ static void hl_production_result_release(const hl_host_services *host, hl_host_h
 static hl_status hl_production_start_process(const hl_host_services *host, hl_linux_abi *box, hl_options *options,
                                              const hl_engine_config *config, uint32_t argc, const char *const argv[],
                                              void *syscall_context, hl_syscall_trap_fn syscall_dispatch,
-                                             int checkpoint_broker, int checkpoint_trigger,
-                                             int checkpoint_control,
+                                             int checkpoint_broker, int checkpoint_trigger, int checkpoint_control,
                                              const void *interpreter_image, size_t interpreter_size,
                                              hl_host_handle *process, hl_host_handle *result_token) {
 #if !defined(_WIN32)

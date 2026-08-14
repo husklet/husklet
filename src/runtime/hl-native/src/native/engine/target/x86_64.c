@@ -1312,10 +1312,9 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
 
 int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const char *rootfs, hl_host_handle executable,
                        const void *executable_image, size_t executable_size,
-                       const hl_executable_authority *executable_authority,
-                       const hl_engine_main_image_plan *image_plan,
-                       const void *interpreter_image, size_t interpreter_size,
-                       uint32_t argument_count, char *const argv[]) {
+                       const hl_executable_authority *executable_authority, const hl_engine_main_image_plan *image_plan,
+                       const void *interpreter_image, size_t interpreter_size, uint32_t argument_count,
+                       char *const argv[]) {
     int argc;
     g_engine_result_status = HL_STATUS_OK;
     (void)executable;
