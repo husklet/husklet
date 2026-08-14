@@ -3,6 +3,10 @@
 //! A producer never ships whole result sets. It declares a source and answers
 //! row windows the host asks for, so a million-row table costs one viewport.
 
+mod cache;
+
+pub use cache::{Lookup, RowCache};
+
 use crate::style::{Align, Length, Tone};
 
 /// Identity of one data source within a session.
@@ -211,7 +215,7 @@ pub struct RowWindow {
 /// A producer-side mutation of a source, independent of the node tree.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
-pub enum DataOp {
+pub enum SourceMutation {
     Open {
         source: SourceId,
         columns: Vec<Column>,

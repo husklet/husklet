@@ -30,7 +30,10 @@ mod size;
 mod style;
 
 pub use builder::Surface;
-pub use data::{Cell, Column, DataOp, RequestId, Row, RowRange, RowRequest, RowWindow, Sort, SourceId, Version};
+pub use data::{
+    Cell, Column, Lookup, RequestId, Row, RowCache, RowRange, RowRequest, RowWindow, Sort, SourceId, SourceMutation,
+    Version,
+};
 pub use dialog::{Action, Dialog, Role};
 pub use identity::{Identities, NodeId};
 pub use node::{
