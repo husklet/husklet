@@ -2,6 +2,7 @@ static int bound_snapshot(uint64_t value, hl_linux_fd_snapshot *snapshot) {
     if (g_linux_box == NULL || value > UINT32_MAX) return 0;
     return hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)value, snapshot) == HL_STATUS_OK;
 }
+#include "vector_validation.h"
 /* Publish descriptors supplied through the embedding API as logical guest
  * descriptors too.  In particular, typed stdin/stdout/stderr intentionally
  * do not occupy native fds 0..2: those numbers remain available to the engine
@@ -456,6 +457,7 @@ static int64_t bound_read_no_copy(const hl_linux_fd_snapshot *file, uint64_t off
 
 static int bound_vectors_copy(uint64_t address, uint64_t count, hl_host_iovec vectors[HL_LINUX_IOV_MAX]) {
     uint64_t index;
+    uint64_t total = 0;
     size_t array_size;
     if (count > HL_LINUX_IOV_MAX) return -HL_LINUX_EINVAL;
     if (count == 0) return 0;
@@ -463,9 +465,11 @@ static int bound_vectors_copy(uint64_t address, uint64_t count, hl_host_iovec ve
     array_size = (size_t)count * sizeof(*vectors);
     if (guest_copy_from(vectors, address, array_size) != (ssize_t)array_size) return -HL_LINUX_EFAULT;
     for (index = 0; index < count; ++index) {
-        // Only the descriptor ARRAY is validated here.  import_iovec does not dereference the payload
-        // bases, so an unusable base must be judged later, where EOF can still make it irrelevant.
-        if (vectors[index].size > SIZE_MAX) return -HL_LINUX_EFAULT;
+        uint64_t base = vectors[index].address, size = vectors[index].size;
+        /* import_iovec rejects an aggregate that cannot be returned in ssize_t before access_ok examines
+           payload addresses. Keep the same ordering before any bounce allocation or provider operation. */
+        int validated = hl_guest_iov_validate(base, size, &total);
+        if (validated != 0) return validated;
     }
     return 0;
 }
