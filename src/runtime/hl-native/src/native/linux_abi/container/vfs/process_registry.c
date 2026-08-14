@@ -167,26 +167,13 @@ static int g_self_cmdline_len = 0;
 
 static void set_guest_cmdline(int argc, char *const argv[]) {
     int o = 0;
-    int diagnostic_offset = 0;
     for (int i = 0; i < argc && argv && argv[i]; i++) {
         int L = (int)strlen(argv[i]);
         if (o + L + 1 > (int)sizeof g_self_cmdline) break;
         memcpy(g_self_cmdline + o, argv[i], (size_t)L);
         o += L;
         g_self_cmdline[o++] = 0;
-        if (diagnostic_offset < (int)sizeof g_fault_cmdline - 1) {
-            int remaining = (int)sizeof g_fault_cmdline - diagnostic_offset;
-            int written = snprintf(g_fault_cmdline + diagnostic_offset, (size_t)remaining, "%s%s",
-                                   diagnostic_offset ? " " : "", argv[i]);
-            if (written < 0)
-                diagnostic_offset = 0;
-            else if (written >= remaining)
-                diagnostic_offset = (int)sizeof g_fault_cmdline - 1;
-            else
-                diagnostic_offset += written;
-        }
     }
-    g_fault_cmdline[diagnostic_offset] = 0;
     g_self_cmdline_len = o;
 }
 

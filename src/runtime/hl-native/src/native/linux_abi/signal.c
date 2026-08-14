@@ -124,9 +124,6 @@ static int g_sigpid[65];
 static int g_siguid[65];
 // synchronous-fault address carried to the handler's siginfo (si_addr; consumed on delivery, 0 for async)
 static uint64_t g_sigaddr[65];
-// Temporary Chrome child-fault diagnostics. Populated when the guest stack is built so fatal-default
-// reports identify forked Chromium service roles whose executable path is otherwise identical.
-static char g_fault_cmdline[512];
 
 // ---------------- per-signal pending FIFO (siginfo carrier) ----------------
 // g_pending/c->tpending stay the 1-bit-per-signal "is pending" indicators every fast-path scan reads.
