@@ -725,7 +725,9 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
         char canonical[4200];
         if (length >= sizeof canonical) return 0;
         memcpy(canonical, gp, length + 1);
-        while (length > 1 && canonical[length - 1] == '/') canonical[--length] = 0;
+        while (length > 1 && canonical[length - 1] == '/') {
+            canonical[--length] = 0;
+        }
         int result = synth_stat_raw(canonical, s);
         return result && S_ISDIR(s->st_mode);
     }
