@@ -589,8 +589,8 @@ dependencies = [
 name = "extension"
 version = "0.1.0"
 dependencies = [
+ "hl-extension",
  "hl-gui",
- "hl-ws-extension",
  "serde",
  "serde_json",
 ]
@@ -1161,6 +1161,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hl-extension"
+version = "0.1.0"
+dependencies = [
+ "hl-gui",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "hl-fs"
 version = "0.1.0"
 dependencies = [
@@ -1239,15 +1248,6 @@ name = "hl-ws"
 version = "0.1.0"
 
 [[package]]
-name = "hl-ws-extension"
-version = "0.1.0"
-dependencies = [
- "hl-gui",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "hl-ws-term"
 version = "0.1.0"
 dependencies = [
@@ -1321,13 +1321,13 @@ dependencies = [
  "hl-container",
  "hl-daemon",
  "hl-design",
+ "hl-extension",
  "hl-fs",
  "hl-gui",
  "hl-gui-gtk",
  "hl-images",
  "hl-log",
  "hl-ws",
- "hl-ws-extension",
  "hl-ws-term",
  "libc",
  "objc2-app-kit",
@@ -2569,9 +2569,9 @@ version = "0.1.0"
 dependencies = [
  "extension",
  "gtk4",
+ "hl-extension",
  "hl-gui",
  "hl-gui-gtk",
- "hl-ws-extension",
  "serde",
  "serde_json",
 ]

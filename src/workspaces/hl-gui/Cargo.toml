@@ -9,6 +9,12 @@ license = "MIT"
 name = "hl_gui"
 path = "src/lib.rs"
 
+# The catalogue a playground reads. It writes its JSON by hand so that
+# describing the library to another language costs the library no dependency.
+[[bin]]
+name = "catalogue"
+path = "src/bin/catalogue.rs"
+
 # Serialization is optional and off by default: the library stays dependency
 # free for an embedding application that renders in-process, and gains a wire
 # representation only when something actually needs to send an interface.

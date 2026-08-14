@@ -1,0 +1,670 @@
+{
+  "source": "src/workspaces/hl-gui/src/node/tag.rs",
+  "tags": [
+    {
+      "tag": "Column",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Row",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Grid",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Scroll",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Splitter",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Stack",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Overlay",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Container",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Spacer",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Separator",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Card",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "CardHeader",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "CardContent",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "CardActions",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "CardMedia",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "CardActionArea",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Paper",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Section",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Toolbar",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "HeaderBar",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Sidebar",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Text",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Heading",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Code",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Link",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Icon",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Badge",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Avatar",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "AvatarGroup",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Chip",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Image",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "ImageList",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "ImageListItem",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Progress",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Spinner",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Meter",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Skeleton",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "EmptyState",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Stat",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Toast",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Banner",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "AlertTitle",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "InlineMessage",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Button",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "IconButton",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "ToggleButton",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "ButtonGroup",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "ToggleButtonGroup",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "SplitButton",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Fab",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "SpeedDial",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "SpeedDialAction",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Overflow",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Entry",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Search",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "NumberEntry",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "TextArea",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "PasswordEntry",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Autocomplete",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "TextField",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "InputAdornment",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Slider",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "DatePicker",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "TimePicker",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "ColorPicker",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "FilePicker",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Rating",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "FormControl",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "FormLabel",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "FormHelperText",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "FormControlLabel",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "FormGroup",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Switch",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Checkbox",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Radio",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "RadioGroup",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Select",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "List",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "ListRow",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "ListItemText",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "ListItemIcon",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "ListItemAvatar",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "ListItemButton",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "ListItemAction",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "ListItemSecondaryAction",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "ListSubheader",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Table",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "TableHead",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "TableBody",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "TableFooter",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "TableRow",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "TableCell",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "TableSortLabel",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "DataTable",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "TreeTable",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "TablePagination",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Tree",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "TreeItem",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Tabs",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "TabPage",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Breadcrumb",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Pagination",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "PaginationItem",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Stepper",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Step",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "StepLabel",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "StepContent",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "StepConnector",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "StepIcon",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "NavigationRail",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "NavigationRailItem",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "BottomNavigation",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "BottomNavigationAction",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Accordion",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "AccordionSummary",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "AccordionDetails",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "AccordionActions",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Expander",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Dialog",
+      "children": true,
+      "detached": true
+    },
+    {
+      "tag": "DialogTitle",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "DialogContent",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "DialogContentText",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "DialogActions",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Popover",
+      "children": true,
+      "detached": true
+    },
+    {
+      "tag": "ContextMenu",
+      "children": true,
+      "detached": true
+    },
+    {
+      "tag": "Menu",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "MenuItem",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "Drawer",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "DrawerPanel",
+      "children": true,
+      "detached": false
+    },
+    {
+      "tag": "CodeView",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "LogView",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Video",
+      "children": false,
+      "detached": false
+    },
+    {
+      "tag": "Chart",
+      "children": false,
+      "detached": false
+    }
+  ]
+}
