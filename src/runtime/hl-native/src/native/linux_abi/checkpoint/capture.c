@@ -983,7 +983,9 @@ static int ckpt_control_init(void) {
         return -1;
     }
     if (restore && ckpt_source_current() == NULL && ckpt_source_bind() == NULL) return -1;
-    if (!capture) return 0;
+    /* Restore requests carry an explicit embedder-issued generation too.  Mapping the trigger here does not
+       arm capture by itself: a restore-only launch receives no later bump.  It only prevents restore source
+       and RECOVERY.jsonl traffic from falling back to the globally reusable generation zero. */
     g_ckpt_trigger = ckpt_map_trigger();
     if (!g_ckpt_trigger) return -1;
     g_ckpt_seen_gen = *g_ckpt_trigger;
