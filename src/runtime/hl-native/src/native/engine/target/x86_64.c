@@ -655,6 +655,25 @@ static int soft_tlb_miss(struct cpu *c) {
             }
         }
     }
+    /* File EOF owns the overlapping inaccessible tail before the generic
+       logical/host mapping classifier.  The host range is deliberately
+       anonymous/protected to provide partial-page zero fill, so asking only
+       host_range_mapped below misreports the Linux BUS_ADRERR contract as an
+       unmapped-data SIGSEGV. */
+    uint64_t host_address = address;
+    if (view != NULL) {
+        if (view->host_delta > UINT64_MAX - address) {
+            c->fault_addr = address;
+            return raise_guest_data_map_fault(c);
+        }
+        host_address += view->host_delta;
+    }
+    uint64_t bus_fault = jit_guest_bus_fault(host_address, width);
+    if (bus_fault != 0) {
+        c->fault_addr = bus_fault - (host_address - address);
+        c->bus_ea = 0;
+        return raise_guest_bus(c);
+    }
     if (view != NULL) {
         if ((view->protection & required) != required) {
             c->fault_addr = address;
