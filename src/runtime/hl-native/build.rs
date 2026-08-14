@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use hl_cc::{
-    ArchiveFormat, ArchiveSpec, BuildEnvironment, CCompiler, CargoDirectives, CompilerFlavor, LanguageStandard,
-    LinkerFlavor, Sanitizer, SharedLibrarySpec, Visibility, Warning,
+    ArchiveFormat, ArchiveSpec, BuildEnvironment, CCompiler, CargoDirectives, CompilerFlavor, Definition, EnvFlag,
+    EnvKey, LanguageStandard, LinkerFlavor, Sanitizer, SharedLibrarySpec, Visibility, Warning,
 };
 
 #[path = "src/artifact.rs"]
@@ -16,8 +16,9 @@ mod platform;
 use platform::{GuestIsa, HostTarget};
 
 const NATIVE_ROOT: &str = "src/native";
-const ENGINE_DEFINITIONS: &[&str] = &["HL_SHARED", "HL_BUILDING_ENGINE", "HL_EXPLICIT_EXPORTS"];
-const COMMON_DEFINITIONS: &[&str] = &["HL_ENABLE_LOGGING=0", "HL_TRANSLIT_DEFAULT=0"];
+const NATIVE_TEST_HOOKS: EnvFlag = EnvFlag::new("CARGO_FEATURE_NATIVE_TEST_HOOKS");
+const NATIVE_COMPILE_CHECK: EnvFlag = EnvFlag::new("HL_NATIVE_COMPILE_CHECK");
+const C_SANITIZER: EnvKey<NativeSanitizer> = EnvKey::new("HL_C_SANITIZER", NativeSanitizer::parse);
 const RUST_BRIDGE_EXPORTS: &str = include_str!("src/native/bridge/exports.txt");
 const TEST_HOOK_EXPORTS: &str = include_str!("src/native/bridge/test_exports.txt");
 const DARWIN_LIBRARIES: &[&str] = &["m", "pthread"];
@@ -26,13 +27,12 @@ const ELF_LIBRARIES: &[&str] = &["atomic", "dl", "m", "pthread"];
 fn main() {
     let environment = BuildEnvironment::from_cargo().unwrap_or_else(|error| panic!("{error}"));
     emit_build_inputs(environment.target.as_str());
-    let test_hooks = environment.feature("native-test-hooks");
-    let compile_check = environment.flag("HL_NATIVE_COMPILE_CHECK");
-    let sanitizer = NativeSanitizer::parse(
-        environment
-            .value("HL_C_SANITIZER")
-            .unwrap_or_else(|error| panic!("{error}")),
-    );
+    let test_hooks = environment.flag(NATIVE_TEST_HOOKS);
+    let compile_check = environment.flag(NATIVE_COMPILE_CHECK);
+    let sanitizer = environment
+        .value(&C_SANITIZER)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .unwrap_or(NativeSanitizer::None);
     let Some(target) = HostTarget::from_cfg(environment.target_os.as_str(), environment.target_arch.as_str()) else {
         CargoDirectives::cfg("supported", 0);
         CargoDirectives::warning(format!(
@@ -64,9 +64,9 @@ fn main() {
     } else {
         "_GNU_SOURCE"
     };
-    let mut shim_definitions = vec![platform_definition];
+    let mut shim_definitions = vec![Definition::flag(platform_definition)];
     if plan.guests == [GuestIsa::X86_64] {
-        shim_definitions.push("HL_BUILD_TARGET_X86_64_ONLY=1");
+        shim_definitions.push(Definition::value("HL_BUILD_TARGET_X86_64_ONLY", "1"));
     }
     compiler.archive(
         &archive(&environment, target, sanitizer, "hl_c_backend_shim", false)
@@ -85,7 +85,7 @@ fn main() {
         environment.target_arch.as_str(),
         &environment.manifest_directory,
     );
-    let mut runtime_definitions = COMMON_DEFINITIONS.to_vec();
+    let mut runtime_definitions = common_definitions();
     add_test_hooks(&mut runtime_definitions, test_hooks);
     compiler.archive(
         &archive(&environment, target, sanitizer, "hl_c_backend_runtime", true)
@@ -108,19 +108,22 @@ fn main() {
             ),
         };
         let mut target_definitions = vec![
-            "HL_ENABLE_LOGGING=0",
-            "HL_TRANSLIT_DEFAULT=0",
-            "_GNU_SOURCE",
-            "HL_EMBEDDED_BUILD=1",
-            "HL_ENGINE_NO_MAIN=1",
-            "HL_ENGINE_NO_STANDALONE=1",
+            Definition::value("HL_ENABLE_LOGGING", "0"),
+            Definition::value("HL_TRANSLIT_DEFAULT", "0"),
+            Definition::flag("_GNU_SOURCE"),
+            Definition::value("HL_EMBEDDED_BUILD", "1"),
+            Definition::value("HL_ENGINE_NO_MAIN", "1"),
+            Definition::value("HL_ENGINE_NO_STANDALONE", "1"),
         ];
-        target_definitions.push(match guest {
-            GuestIsa::Aarch64 => "HL_TARGET_NAMESPACE=aarch64",
-            GuestIsa::X86_64 => "HL_TARGET_NAMESPACE=x86_64",
-        });
+        target_definitions.push(Definition::value(
+            "HL_TARGET_NAMESPACE",
+            match guest {
+                GuestIsa::Aarch64 => "aarch64",
+                GuestIsa::X86_64 => "x86_64",
+            },
+        ));
         if plan.guests == [GuestIsa::X86_64] && *guest == GuestIsa::X86_64 {
-            target_definitions.push("HL_CKPT_INTERRUPT_EXPORT=1");
+            target_definitions.push(Definition::value("HL_CKPT_INTERRUPT_EXPORT", "1"));
         }
         add_test_hooks(&mut target_definitions, test_hooks);
         compiler.archive(
@@ -130,18 +133,24 @@ fn main() {
         );
 
         let lifecycle_definitions = [
-            "HL_ENABLE_LOGGING=0",
-            "HL_TRANSLIT_DEFAULT=0",
-            "_GNU_SOURCE",
-            "HL_EMBEDDED_BUILD=1",
-            match guest {
-                GuestIsa::Aarch64 => "HL_TARGET_NAMESPACE=aarch64",
-                GuestIsa::X86_64 => "HL_TARGET_NAMESPACE=x86_64",
-            },
-            match guest {
-                GuestIsa::Aarch64 => "HL_PRODUCTION_GUEST_ISA=HL_GUEST_ISA_AARCH64",
-                GuestIsa::X86_64 => "HL_PRODUCTION_GUEST_ISA=HL_GUEST_ISA_X86_64",
-            },
+            Definition::value("HL_ENABLE_LOGGING", "0"),
+            Definition::value("HL_TRANSLIT_DEFAULT", "0"),
+            Definition::flag("_GNU_SOURCE"),
+            Definition::value("HL_EMBEDDED_BUILD", "1"),
+            Definition::value(
+                "HL_TARGET_NAMESPACE",
+                match guest {
+                    GuestIsa::Aarch64 => "aarch64",
+                    GuestIsa::X86_64 => "x86_64",
+                },
+            ),
+            Definition::value(
+                "HL_PRODUCTION_GUEST_ISA",
+                match guest {
+                    GuestIsa::Aarch64 => "HL_GUEST_ISA_AARCH64",
+                    GuestIsa::X86_64 => "HL_GUEST_ISA_X86_64",
+                },
+            ),
         ];
         compiler.archive(
             &archive(&environment, target, sanitizer, lifecycle_archive, false)
@@ -235,7 +244,7 @@ fn archive(
     ];
     let mut spec = ArchiveSpec::new(name)
         .includes([NATIVE_ROOT, "src/native/include", "src/native"])
-        .definitions(ENGINE_DEFINITIONS.iter().copied())
+        .definitions(engine_definitions())
         .language(LanguageStandard::C11)
         .optimization(if sanitizer.compiler().is_some() { 1 } else { 2 })
         .debug(environment.profile != hl_cc::Profile::Release)
@@ -259,17 +268,37 @@ fn archive(
     }
     match sanitizer {
         NativeSanitizer::Leak => spec
-            .definitions(["HL_LEAK_CHECK_PROBE", "HL_LEAK_SANITIZER"])
+            .definitions([
+                Definition::flag("HL_LEAK_CHECK_PROBE"),
+                Definition::flag("HL_LEAK_SANITIZER"),
+            ])
             .sanitizer(Sanitizer::Leak),
-        NativeSanitizer::Memcheck => spec.definitions(["HL_LEAK_CHECK_PROBE"]),
-        NativeSanitizer::Address => spec.definitions(["HL_ADDRESS_SANITIZER"]).sanitizer(Sanitizer::Address),
+        NativeSanitizer::Memcheck => spec.definitions([Definition::flag("HL_LEAK_CHECK_PROBE")]),
+        NativeSanitizer::Address => spec
+            .definitions([Definition::flag("HL_ADDRESS_SANITIZER")])
+            .sanitizer(Sanitizer::Address),
         NativeSanitizer::None => spec,
     }
 }
 
-fn add_test_hooks(definitions: &mut Vec<&'static str>, enabled: bool) {
+fn engine_definitions() -> [Definition; 3] {
+    [
+        Definition::flag("HL_SHARED"),
+        Definition::flag("HL_BUILDING_ENGINE"),
+        Definition::flag("HL_EXPLICIT_EXPORTS"),
+    ]
+}
+
+fn common_definitions() -> Vec<Definition> {
+    vec![
+        Definition::value("HL_ENABLE_LOGGING", "0"),
+        Definition::value("HL_TRANSLIT_DEFAULT", "0"),
+    ]
+}
+
+fn add_test_hooks(definitions: &mut Vec<Definition>, enabled: bool) {
     if enabled {
-        definitions.push("HL_NATIVE_TEST_HOOKS=1");
+        definitions.push(Definition::value("HL_NATIVE_TEST_HOOKS", "1"));
     }
 }
 
@@ -311,13 +340,14 @@ enum NativeSanitizer {
 }
 
 impl NativeSanitizer {
-    fn parse(value: Option<&str>) -> Self {
+    fn parse(value: &str) -> Result<Self, String> {
         match value {
-            None => Self::None,
-            Some("address") => Self::Address,
-            Some("leak") => Self::Leak,
-            Some("memcheck") => Self::Memcheck,
-            Some(value) => panic!("unsupported HL_C_SANITIZER={value:?}; expected address, leak, or memcheck"),
+            "address" => Ok(Self::Address),
+            "leak" => Ok(Self::Leak),
+            "memcheck" => Ok(Self::Memcheck),
+            value => Err(format!(
+                "unsupported value {value:?}; expected address, leak, or memcheck"
+            )),
         }
     }
     const fn compiler(self) -> Option<Sanitizer> {

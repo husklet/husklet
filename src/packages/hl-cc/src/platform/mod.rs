@@ -1,3 +1,3 @@
 mod environment;
 
-pub use environment::{BuildEnvironment, Profile, TargetArch, TargetEnvironment, TargetOs, Triple};
+pub use environment::{BuildEnvironment, EnvFlag, EnvKey, Profile, TargetArch, TargetEnvironment, TargetOs, Triple};

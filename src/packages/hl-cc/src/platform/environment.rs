@@ -29,6 +29,31 @@ pub enum Profile {
     Release,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EnvFlag {
+    name: &'static str,
+}
+
+impl EnvFlag {
+    #[must_use]
+    pub const fn new(name: &'static str) -> Self {
+        Self { name }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct EnvKey<T> {
+    name: &'static str,
+    parse: fn(&str) -> Result<T, String>,
+}
+
+impl<T> EnvKey<T> {
+    #[must_use]
+    pub const fn new(name: &'static str, parse: fn(&str) -> Result<T, String>) -> Self {
+        Self { name, parse }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BuildEnvironment {
     pub target: Triple,
@@ -66,21 +91,20 @@ impl BuildEnvironment {
     }
 
     #[must_use]
-    pub fn flag(&self, name: &str) -> bool {
-        self.variables.contains_key(OsString::from(name).as_os_str())
+    pub fn flag(&self, flag: EnvFlag) -> bool {
+        self.variables.contains_key(OsString::from(flag.name).as_os_str())
     }
 
-    #[must_use]
-    pub fn feature(&self, name: &str) -> bool {
-        let name = format!("CARGO_FEATURE_{}", name.replace('-', "_").to_ascii_uppercase());
-        self.flag(&name)
-    }
-
-    pub fn value(&self, name: &str) -> Result<Option<&str>, String> {
-        self.variables
-            .get(OsString::from(name).as_os_str())
-            .map(|value| value.to_str().ok_or_else(|| format!("{name} is not valid UTF-8")))
-            .transpose()
+    pub fn value<T>(&self, key: &EnvKey<T>) -> Result<Option<T>, String> {
+        let Some(value) = self.variables.get(OsString::from(key.name).as_os_str()) else {
+            return Ok(None);
+        };
+        let value = value
+            .to_str()
+            .ok_or_else(|| format!("{} is not valid UTF-8", key.name))?;
+        (key.parse)(value)
+            .map(Some)
+            .map_err(|error| format!("{}: {error}", key.name))
     }
 }
 
@@ -99,7 +123,7 @@ fn required_os(variables: &BTreeMap<OsString, OsString>, name: &str) -> Result<O
 
 #[cfg(test)]
 mod tests {
-    use super::{BuildEnvironment, Profile};
+    use super::{BuildEnvironment, EnvFlag, EnvKey, Profile};
     use std::{collections::BTreeMap, ffi::OsString};
 
     fn variables() -> BTreeMap<OsString, OsString> {
@@ -130,10 +154,34 @@ mod tests {
     }
 
     #[test]
-    fn flags_and_features_are_typed_presence_queries() {
+    fn flags_and_values_require_declared_typed_keys() {
+        const PROJECT_SWITCH: EnvFlag = EnvFlag::new("PROJECT_SWITCH");
+        const MISSING: EnvFlag = EnvFlag::new("MISSING");
+        const VALUE: EnvKey<usize> = EnvKey::new("PROJECT_SWITCH", parse_usize);
         let parsed = BuildEnvironment::from_variables(variables()).unwrap();
-        assert!(parsed.flag("PROJECT_SWITCH"));
-        assert!(parsed.feature("native-hooks"));
-        assert!(!parsed.feature("missing"));
+        assert!(parsed.flag(PROJECT_SWITCH));
+        assert!(!parsed.flag(MISSING));
+        assert_eq!(parsed.value(&VALUE).unwrap(), Some(1));
+    }
+
+    fn parse_usize(value: &str) -> Result<usize, String> {
+        value.parse().map_err(|error| format!("expected an integer: {error}"))
+    }
+
+    #[test]
+    fn typed_value_parser_failure_is_not_ignored() {
+        fn parse_enabled(value: &str) -> Result<bool, String> {
+            match value {
+                "enabled" => Ok(true),
+                _ => Err("expected enabled".to_owned()),
+            }
+        }
+        const VALUE: EnvKey<bool> = EnvKey::new("CARGO_FEATURE_NATIVE_HOOKS", parse_enabled);
+        let error = BuildEnvironment::from_variables(variables())
+            .unwrap()
+            .value(&VALUE)
+            .unwrap_err();
+        assert!(error.contains("CARGO_FEATURE_NATIVE_HOOKS"));
+        assert!(error.contains("expected enabled"));
     }
 }

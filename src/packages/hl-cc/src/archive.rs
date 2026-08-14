@@ -2,6 +2,47 @@ use std::path::PathBuf;
 
 use crate::BuildEnvironment;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Definition {
+    name: String,
+    value: Option<String>,
+}
+
+impl Definition {
+    #[must_use]
+    pub fn flag(name: impl Into<String>) -> Self {
+        Self::new(name.into(), None)
+    }
+
+    #[must_use]
+    pub fn value(name: impl Into<String>, value: impl Into<String>) -> Self {
+        Self::new(name.into(), Some(value.into()))
+    }
+
+    fn new(name: String, value: Option<String>) -> Self {
+        assert!(valid_identifier(&name), "invalid C definition name {name:?}");
+        Self { name, value }
+    }
+
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
+    pub fn definition_value(&self) -> Option<&str> {
+        self.value.as_deref()
+    }
+}
+
+fn valid_identifier(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
+        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CompilerFlavor {
     GnuLike,
@@ -66,7 +107,7 @@ pub struct ArchiveSpec {
     pub name: String,
     pub sources: Vec<PathBuf>,
     pub includes: Vec<PathBuf>,
-    pub definitions: Vec<String>,
+    pub definitions: Vec<Definition>,
     pub forced_include: Option<PathBuf>,
     pub language: Option<LanguageStandard>,
     pub optimization: Option<u32>,
@@ -114,8 +155,8 @@ impl ArchiveSpec {
         self.includes.extend(values.into_iter().map(Into::into));
         self
     }
-    pub fn definitions(mut self, values: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.definitions.extend(values.into_iter().map(Into::into));
+    pub fn definitions(mut self, values: impl IntoIterator<Item = Definition>) -> Self {
+        self.definitions.extend(values);
         self
     }
     pub fn forced_include(mut self, value: impl Into<PathBuf>) -> Self {
@@ -253,11 +294,7 @@ impl<'a> CCompiler<'a> {
             build.flag_if_supported(warning.flag());
         }
         for definition in &spec.definitions {
-            if let Some((name, value)) = definition.split_once('=') {
-                build.define(name, value);
-            } else {
-                build.define(definition, None);
-            }
+            build.define(definition.name(), definition.definition_value());
         }
         for source in &spec.sources {
             build.file(source);
@@ -268,7 +305,7 @@ impl<'a> CCompiler<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArchiveSpec, LanguageStandard, Visibility, Warning};
+    use super::{ArchiveSpec, Definition, LanguageStandard, Visibility, Warning};
     #[test]
     fn compile_options_are_explicit_in_the_archive_spec() {
         let spec = ArchiveSpec::new("core")
@@ -283,5 +320,19 @@ mod tests {
         assert_eq!(spec.pic, Some(true));
         assert_eq!(spec.visibility, Some(Visibility::Hidden));
         assert_eq!(spec.warnings, [Warning::All]);
+    }
+
+    #[test]
+    fn definition_values_are_not_parsed_as_compound_strings() {
+        let spec = ArchiveSpec::new("core").definitions([Definition::value("EXPRESSION", "left=right")]);
+        let definition = &spec.definitions[0];
+        assert_eq!(definition.name(), "EXPRESSION");
+        assert_eq!(definition.definition_value(), Some("left=right"));
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid C definition name")]
+    fn definition_names_reject_command_line_syntax() {
+        let _ = Definition::flag("NAME=value");
     }
 }
