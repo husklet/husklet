@@ -565,6 +565,14 @@ mod tests {
         );
     }
 
+    fn guest_compiler(name: &str) -> std::process::Command {
+        let mut command = std::process::Command::new(name);
+        // The Nix Darwin shell exports host linker flags such as `-lintl`.
+        // Linux cross-linkers must not inherit flags for Darwin libraries.
+        command.env_remove("NIX_LDFLAGS").env_remove("NIX_LDFLAGS_FOR_BUILD");
+        command
+    }
+
     fn put16(bytes: &mut [u8], offset: usize, value: u16) {
         bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
     }
@@ -805,7 +813,7 @@ int main(int argc, char **argv) {
             let busy_path = root.path().join("busy");
             std::fs::write(&source, SOURCE).unwrap();
             for (identity, output) in [(1, &main_path), (2, &second_path), (3, &dac_path), (4, &busy_path)] {
-                let compile = std::process::Command::new(compiler)
+                let compile = guest_compiler(compiler)
                     .args(["-static", "-no-pie", "-O2"])
                     .arg(format!("-DIMAGE_ID={identity}"))
                     .arg(&source)
@@ -912,7 +920,7 @@ int main(int argc, char **argv) {
             let source = root.path().join("authority.c");
             std::fs::write(&source, SOURCE).unwrap();
             let compile = |arguments: &[&str], input: &std::path::Path, output: &std::path::Path| {
-                let result = std::process::Command::new(compiler)
+                let result = guest_compiler(compiler)
                     .args(arguments)
                     .arg(input)
                     .arg("-o")

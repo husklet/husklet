@@ -157,6 +157,7 @@ int main(void) {
     action.sa_handler = fault_handler;
     sigemptyset(&action.sa_mask);
     sigaction(SIGSEGV, &action, 0);
+    sigaction(SIGBUS, &action, 0);
     if (sigsetjmp(fault_pad, 1) == 0) {
         hl_x86_guest_data_copy_to(&retained, replacement);
         return 14;
@@ -189,7 +190,8 @@ int main(void) {
     };
     let built = compile(&executable, false);
     assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
-    assert!(Command::new(&executable).status().expect("guest pin probe").success());
+    let run = Command::new(&executable).status().expect("guest pin probe");
+    assert!(run.success(), "guest pin probe failed with {run}");
     let mutation = scratch.join("guest_pin_identity");
     let built = compile(&mutation, true);
     assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
@@ -306,14 +308,26 @@ static _Atomic uint64_t slots[8];
 static hl_smc_page_index index_ = {slots, 8};
 static _Atomic int start;
 static _Atomic int claim_sync;
-static pthread_barrier_t claims;
+static pthread_mutex_t claims_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t claims_condition = PTHREAD_COND_INITIALIZER;
+static unsigned claims_arrived;
+static unsigned claims_generation;
 static _Thread_local int claim_waited;
 static uint64_t concurrent_pages[2];
 
 static void claim_barrier(void) {
     if (atomic_load_explicit(&claim_sync, memory_order_acquire) && !claim_waited) {
         claim_waited = 1;
-        pthread_barrier_wait(&claims);
+        pthread_mutex_lock(&claims_mutex);
+        unsigned generation = claims_generation;
+        if (++claims_arrived == 2) {
+            claims_arrived = 0;
+            ++claims_generation;
+            pthread_cond_broadcast(&claims_condition);
+        } else {
+            while (generation == claims_generation) pthread_cond_wait(&claims_condition, &claims_mutex);
+        }
+        pthread_mutex_unlock(&claims_mutex);
     }
 }
 
@@ -352,7 +366,6 @@ int main(void) {
     concurrent_pages[1] = collision;
     unsigned which[] = {0, 1};
     pthread_t adders[2];
-    if (pthread_barrier_init(&claims, NULL, 2) != 0) return 11;
     atomic_store_explicit(&claim_sync, 1, memory_order_release);
     atomic_store_explicit(&start, 0, memory_order_release);
     if (pthread_create(&adders[0], NULL, adder, &which[0]) != 0 ||
@@ -361,7 +374,6 @@ int main(void) {
     void *left = NULL, *right = NULL;
     if (pthread_join(adders[0], &left) != 0 || pthread_join(adders[1], &right) != 0 || left || right) return 12;
     atomic_store_explicit(&claim_sync, 0, memory_order_release);
-    pthread_barrier_destroy(&claims);
     if (!hl_smc_page_index_contains(&index_, first) || !hl_smc_page_index_contains(&index_, collision)) return 13;
     for (unsigned i = 0; i < 8; ++i) atomic_store_explicit(&slots[i], 0, memory_order_release);
     if (hl_smc_page_index_contains(&index_, first) || hl_smc_page_index_contains(&index_, collision)) return 14;
