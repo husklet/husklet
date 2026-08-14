@@ -41,6 +41,16 @@ int main(void) {
     void *too_large = mmap(0, page * 2, PROT_READ | PROT_WRITE,
                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     int future_limit = future_policy && too_large == MAP_FAILED && errno == ENOMEM;
+    munlockall();
+    void *fixed_base = mmap(0, page * 2, PROT_READ | PROT_WRITE,
+                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    int fixed_limit = 0;
+    if (fixed_base != MAP_FAILED) {
+        fixed_limit = mlockall(MCL_FUTURE) == 0 &&
+            mmap(fixed_base, page * 2, PROT_READ | PROT_WRITE,
+                 MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED && errno == ENOMEM;
+        munmap(fixed_base, page * 2);
+    }
     int clear = munlockall() == 0;
     void *after_clear = mmap(0, page * 2, PROT_READ | PROT_WRITE,
                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -65,8 +75,8 @@ int main(void) {
     int hole_call = mlock(range, page * 2);
     const char *hole = hole_call == 0 ? "0" : error_name(errno);
     munmap(range, page);
-    printf("lock_range=%d unlock_range=%d mlockall=%s munlockall=%d badflag=%s limit_set=%d future=%d future_one=%d future_limit=%d clear=%d clear_map=%d fork_empty=%d hole=%s\n",
+    printf("lock_range=%d unlock_range=%d mlockall=%s munlockall=%d badflag=%s limit_set=%d future=%d future_one=%d future_limit=%d fixed_limit=%d clear=%d clear_map=%d fork_empty=%d hole=%s\n",
            lock_range, unlock_range, all, unall, bad, limit_set, future, future_one,
-           future_limit, clear, clear_map, fork_empty, hole);
+           future_limit, fixed_limit, clear, clear_map, fork_empty, hole);
     return 0;
 }

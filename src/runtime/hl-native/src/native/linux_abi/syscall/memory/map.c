@@ -57,6 +57,20 @@
             break;
         }
         uint64_t mapped_length = ((a1 + page_mask) & ~page_mask) + guard;
+        /* Linux applies MCL_FUTURE to mmap admission: if locking the new
+           mapping would exceed RLIMIT_MEMLOCK, mmap itself fails with ENOMEM.
+           For MAP_FIXED, charge only pages not already locked in the replaced
+           range; for kernel-placed mappings address zero denotes a wholly new
+           range. hl_gmap_lock_limit_range owns page rounding and overflow. */
+        uint64_t future_lock_address = (a3 & 0x10) ? a0 : 0;
+        if (hl_gmap_lock_future() && hl_gmap_lock_limit_range(future_lock_address, (uint64_t)a1) != 0) {
+            if (charge) {
+                atomic_fetch_sub(&g_mem_charged, (uint64_t)a1);
+                acct_publish_mem();
+            }
+            G_RET(c) = (uint64_t)(int64_t)(-ENOMEM);
+            break;
+        }
         // mprotect (case 226) is a no-op (the JIT never executes guest pages), so a later PROT_READ ->
         // PROT_READ|WRITE upgrade would be silently dropped. Map ANON memory writable up front so the
         // upgrade is already in effect (redis' checkLinuxMadvFreeForkBug mmaps R then mprotects RW then stores).
@@ -350,11 +364,9 @@
             // every MAP_PRIVATE mapping and a no-op on the aarch64 frontend, which elides nothing.
             if (a3 & 0x01) (void)G_SHARED_MAP_BARRIERS();
             // mlockall(MCL_FUTURE): a mapping created while future-locking is armed must be wired resident on
-            // creation (Linux mm/mlock.c). Best-effort (a RLIMIT_MEMLOCK refusal leaves it pageable); the
+            // creation (Linux mm/mlock.c). Admission above has already enforced RLIMIT_MEMLOCK; the
             // hl_gmap_lock_add records it so /proc Locked:/VmLck: reports the range under whole-map locking too.
-            // MCL_FUTURE accounting: only wire+count the new mapping while it stays within RLIMIT_MEMLOCK.
-            // A mapping that would push the locked total over the guest's limit is left pageable/uncounted
-            // (the mmap still succeeds) so the tracked locked bytes never exceed the limit.
+            // MCL_FUTURE accounting wires and counts the admitted mapping.
             if (hl_gmap_lock_future() && hl_gmap_lock_limit_range((uint64_t)r, (uint64_t)a1) == 0) {
                 mlock(r, (size_t)a1 + guard);
                 hl_gmap_lock_add((uint64_t)r, (uint64_t)a1);
