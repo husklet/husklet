@@ -93,6 +93,8 @@ unsafe extern "C" {
     ) -> c_int;
     pub(super) fn hl_engine_abi() -> c_uint;
     pub(super) fn hl_engine_version() -> *const c_char;
+    #[cfg(unix)]
+    fn dladdr(address: *const c_void, information: *mut DynamicSymbol) -> c_int;
     pub(super) fn hl_c_backend_leak_check_nonvacuity() -> c_int;
     #[cfg(unix)]
     pub(super) fn hl_c_backend_checkpoint_broker_pair(parent: *mut c_int, child: *mut c_int) -> c_int;
@@ -149,6 +151,15 @@ unsafe extern "C" {
     pub(super) fn hl_c_backend_destroy(backend: *mut Backend);
 }
 
+#[cfg(unix)]
+#[repr(C)]
+struct DynamicSymbol {
+    filename: *const c_char,
+    base: *mut c_void,
+    symbol: *const c_char,
+    address: *mut c_void,
+}
+
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn bound_vector_io_test(isa: u32, scenario: u32) -> Result<(i64, u32, u64), i32> {
     let (mut result, mut calls, mut bytes) = (i64::MIN, u32::MAX, u64::MAX);
@@ -170,6 +181,27 @@ pub(super) fn engine_metadata_is_valid() -> bool {
     // SAFETY: both functions are immutable metadata queries exported by the
     // package-owned shared library and take no caller-provided pointers.
     unsafe { hl_engine_abi() == 5 && !hl_engine_version().is_null() }
+}
+
+#[cfg(unix)]
+pub(super) fn engine_library_path() -> Option<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let mut information = DynamicSymbol {
+        filename: std::ptr::null(),
+        base: std::ptr::null_mut(),
+        symbol: std::ptr::null(),
+        address: std::ptr::null_mut(),
+    };
+    // SAFETY: `hl_engine_abi` is a linked function address and `information` is a live writable
+    // `Dl_info`-compatible record. `dladdr` owns no returned storage; copy the filename now.
+    let found = unsafe { dladdr(hl_engine_abi as *const () as *const c_void, &raw mut information) };
+    if found == 0 || information.filename.is_null() {
+        return None;
+    }
+    // SAFETY: successful `dladdr` returns a process-lifetime NUL-terminated filename.
+    let bytes = unsafe { std::ffi::CStr::from_ptr(information.filename) }.to_bytes();
+    Some(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
 }
 
 #[cfg(test)]

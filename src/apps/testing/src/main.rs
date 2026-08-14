@@ -115,12 +115,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
         Command::NativeArtifactSmoke => {
-            if hl_native::artifact_smoke() {
-                println!("hl-native-artifact-smoke-v1");
-                Ok(())
-            } else {
-                Err("native artifact ABI metadata is invalid".into())
-            }
+            runtime::artifact_smoke()?;
+            println!("hl-native-artifact-smoke-v1");
+            Ok(())
         }
     }
 }

@@ -18,7 +18,7 @@ mod artifact;
 #[cfg(unix)]
 pub use checkpoint::{CheckpointBroker, CheckpointTransport};
 pub use engine::{Engine, EngineConfig, Exit};
-pub use provider::leak_check_nonvacuity;
+pub use provider::{artifact_lifecycle_smoke, leak_check_nonvacuity};
 
 /// Verifies that the dynamically loaded private engine exposes the ABI this Rust wrapper expects.
 ///
@@ -27,6 +27,14 @@ pub use provider::leak_check_nonvacuity;
 #[must_use]
 pub fn artifact_smoke() -> bool {
     bindings::engine_metadata_is_valid()
+}
+
+/// Resolves the shared object that supplied the linked engine ABI symbol.
+#[cfg(unix)]
+#[doc(hidden)]
+#[must_use]
+pub fn artifact_path() -> Option<std::path::PathBuf> {
+    bindings::engine_library_path()
 }
 
 #[cfg(feature = "native-test-hooks")]

@@ -66,9 +66,13 @@ fn release_identity(path: &std::path::Path, bytes: &[u8]) -> Result<String, Erro
     {
         return Err("release runtime corpus must execute an immutable <prefix>/bin/testing artifact".into());
     }
-    let receipt: Receipt = serde_yaml::from_str(&std::fs::read_to_string(prefix.join("receipt.yaml"))?)?;
+    let receipt_bytes = std::fs::read(prefix.join("receipt.yaml"))?;
+    let receipt: Receipt = serde_yaml::from_slice(&receipt_bytes)?;
     if receipt.schema != "husklet-runtime-corpus-artifacts-v1"
         || receipt.profile != "release"
+        || receipt.smoke != "hl-native-artifact-smoke-v1"
+        || receipt.commit.len() != 40
+        || !receipt.commit.bytes().all(|byte| byte.is_ascii_hexdigit())
         || receipt.runner.path != "bin/testing"
         || receipt.library.path != native_library_path()
     {
@@ -84,6 +88,7 @@ fn release_identity(path: &std::path::Path, bytes: &[u8]) -> Result<String, Erro
     }
     let mut digest = Sha256::new();
     hash_field(&mut digest, b"husklet-runtime-artifact-set-v1");
+    hash_field(&mut digest, &receipt_bytes);
     hash_field(&mut digest, bytes);
     hash_field(&mut digest, &library);
     Ok(hex(&digest.finalize()))
@@ -92,9 +97,11 @@ fn release_identity(path: &std::path::Path, bytes: &[u8]) -> Result<String, Erro
 #[derive(Deserialize)]
 struct Receipt {
     schema: String,
+    commit: String,
     profile: String,
     runner: Artifact,
     library: Artifact,
+    smoke: String,
 }
 
 #[derive(Deserialize)]
@@ -177,7 +184,7 @@ mod tests {
         std::fs::write(
             directory.path().join("receipt.yaml"),
             format!(
-                "schema: husklet-runtime-corpus-artifacts-v1\nprofile: release\nrunner:\n  path: bin/testing\n  sha256: {}\n  bytes: {}\nlibrary:\n  path: {}\n  sha256: {}\n  bytes: {}\n",
+                "schema: husklet-runtime-corpus-artifacts-v1\ncommit: 0123456789abcdef0123456789abcdef01234567\nprofile: release\nrunner:\n  path: bin/testing\n  sha256: {}\n  bytes: {}\nlibrary:\n  path: {}\n  sha256: {}\n  bytes: {}\nsmoke: hl-native-artifact-smoke-v1\n",
                 hash(runner_bytes),
                 runner_bytes.len(),
                 super::native_library_path(),

@@ -53,6 +53,9 @@ struct Artifact {
 }
 
 pub(crate) fn run(options: Options) -> Result<(), Error> {
+    if !cfg!(target_os = "linux") {
+        return Err("runtime corpus staging currently supports Linux ELF artifact pairs only".into());
+    }
     let workspace = super::workspace()?;
     let output = workspace.join(&options.output);
     if output.exists() {
@@ -71,7 +74,35 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
     result
 }
 
+pub(crate) fn artifact_smoke() -> Result<(), Error> {
+    #[cfg(unix)]
+    {
+        let expected = std::env::var_os("HL_NATIVE_EXPECT_LIBRARY")
+            .map(PathBuf::from)
+            .ok_or("native artifact smoke has no expected library path")?;
+        let loaded = hl_native::artifact_path().ok_or("dladdr could not resolve the native engine library")?;
+        if fs::canonicalize(&loaded)? != fs::canonicalize(&expected)? {
+            return Err(format!(
+                "native artifact smoke loaded {}, expected {}",
+                loaded.display(),
+                expected.display()
+            )
+            .into());
+        }
+        if !hl_native::artifact_smoke() {
+            return Err("native artifact ABI metadata is invalid".into());
+        }
+        hl_native::artifact_lifecycle_smoke().map_err(|error| format!("relocated native lifecycle smoke: {error}"))?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        Err("native artifact smoke is unavailable on this host".into())
+    }
+}
+
 fn build(cargo: &Path, workspace: &Path) -> Result<BuildArtifacts, Error> {
+    let native_package = native_package_id(cargo, workspace)?;
     let mut child = Command::new(cargo)
         .current_dir(workspace)
         .args([
@@ -90,7 +121,7 @@ fn build(cargo: &Path, workspace: &Path) -> Result<BuildArtifacts, Error> {
         .spawn()
         .map_err(|error| format!("start exact runtime corpus build: {error}"))?;
     let stdout = child.stdout.take().ok_or("Cargo build stdout was not captured")?;
-    let artifacts = select_messages(BufReader::new(stdout));
+    let artifacts = select_messages(BufReader::new(stdout), &native_package);
     let status = child.wait()?;
     if !status.success() {
         return Err(format!("exact runtime corpus build failed with {status}").into());
@@ -99,7 +130,30 @@ fn build(cargo: &Path, workspace: &Path) -> Result<BuildArtifacts, Error> {
     artifacts.ok_or_else(|| "Cargo did not identify both the testing runner and hl-native library".into())
 }
 
-fn select_messages(reader: impl BufRead) -> Result<Option<BuildArtifacts>, Error> {
+fn native_package_id(cargo: &Path, workspace: &Path) -> Result<String, Error> {
+    let output = Command::new(cargo)
+        .current_dir(workspace)
+        .args(["metadata", "--locked", "--offline", "--no-deps", "--format-version=1"])
+        .output()?;
+    if !output.status.success() {
+        return Err(format!("Cargo metadata failed with {}", output.status).into());
+    }
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let matches = metadata
+        .get("packages")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|package| package.get("name").and_then(serde_json::Value::as_str) == Some("hl-native"))
+        .filter_map(|package| package.get("id").and_then(serde_json::Value::as_str))
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [package] => Ok((*package).to_owned()),
+        _ => Err(format!("Cargo metadata identified {} hl-native packages", matches.len()).into()),
+    }
+}
+
+fn select_messages(reader: impl BufRead, native_package: &str) -> Result<Option<BuildArtifacts>, Error> {
     let mut runner = None;
     let mut library = None;
     for line in reader.lines() {
@@ -122,10 +176,7 @@ fn select_messages(reader: impl BufRead) -> Result<Option<BuildArtifacts>, Error
                 unique(&mut runner, PathBuf::from(executable), "testing runner")?;
             }
             Some("build-script-executed")
-                if message
-                    .get("package_id")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|id| id.contains("/hl-native#")) =>
+                if message.get("package_id").and_then(serde_json::Value::as_str) == Some(native_package) =>
             {
                 let path = message
                     .get("env")
@@ -220,7 +271,14 @@ fn sync_directory(path: &Path) -> Result<(), Error> {
 }
 
 fn smoke(launcher: &Path) -> Result<(), Error> {
-    let output = Command::new(launcher).arg("native-artifact-smoke").output()?;
+    let prefix = launcher.parent().ok_or("runtime corpus launcher has no prefix")?;
+    let library = prefix.join(native_library_receipt_path());
+    let output = Command::new(launcher)
+        .arg("native-artifact-smoke")
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HL_NATIVE_EXPECT_LIBRARY", &library)
+        .output()?;
     if !output.status.success() || String::from_utf8_lossy(&output.stdout).trim() != SMOKE_RECEIPT {
         return Err(format!(
             "staged native artifact smoke failed with {}: {}",
@@ -276,7 +334,7 @@ fn write_launcher(path: &Path) -> Result<(), Error> {
         use std::os::unix::fs::PermissionsExt as _;
         fs::write(
             path,
-            "#!/bin/sh\nset -eu\nprefix=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nLD_LIBRARY_PATH=\"$prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\"\nexport LD_LIBRARY_PATH\nexec \"$prefix/bin/testing\" \"$@\"\n",
+            "#!/bin/sh\nset -eu\nprefix=${0%/*}\nprefix=$(CDPATH= cd -- \"$prefix\" && pwd)\nunset LD_PRELOAD LD_AUDIT\nLD_LIBRARY_PATH=\"$prefix/lib\"\nexport LD_LIBRARY_PATH\nexec \"$prefix/bin/testing\" \"$@\"\n",
         )?;
         fs::set_permissions(path, fs::Permissions::from_mode(0o555))?;
         Ok(())
@@ -393,33 +451,11 @@ fn command_text(command: &mut Command) -> Result<String, Error> {
 }
 
 const fn native_library_name() -> &'static str {
-    #[cfg(target_os = "macos")]
-    {
-        "libhl_native_engine.dylib"
-    }
-    #[cfg(target_os = "linux")]
-    {
-        "libhl_native_engine.so"
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        "hl_native_engine.dll"
-    }
+    "libhl_native_engine.so"
 }
 
 const fn native_library_receipt_path() -> &'static str {
-    #[cfg(target_os = "macos")]
-    {
-        "lib/libhl_native_engine.dylib"
-    }
-    #[cfg(target_os = "linux")]
-    {
-        "lib/libhl_native_engine.so"
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        "bin/hl_native_engine.dll"
-    }
+    "lib/libhl_native_engine.so"
 }
 
 #[cfg(test)]
@@ -441,11 +477,13 @@ mod tests {
             "{\"reason\":\"compiler-artifact\",\"target\":{\"name\":\"testing\",\"kind\":[\"bin\"]},\"executable\":\"/build/testing\"}\n",
             "{\"reason\":\"build-script-executed\",\"package_id\":\"path+file:///source/src/runtime/hl-native#0.1.0\",\"env\":[[\"HL_NATIVE_LIBRARY_PATH\",\"/build/libhl_native_engine.so\"]]}\n"
         );
-        let selected = select_messages(Cursor::new(messages)).unwrap().unwrap();
+        let native = "path+file:///source/src/runtime/hl-native#0.1.0";
+        let selected = select_messages(Cursor::new(messages), native).unwrap().unwrap();
         assert_eq!(selected.runner, std::path::Path::new("/build/testing"));
         assert_eq!(selected.library, std::path::Path::new("/build/libhl_native_engine.so"));
-        assert!(select_messages(Cursor::new(&messages[..messages.find('\n').unwrap()])).is_err());
-        assert!(select_messages(Cursor::new(format!("{messages}{messages}"))).is_err());
+        assert!(select_messages(Cursor::new(&messages[..messages.find('\n').unwrap()]), native).is_err());
+        assert!(select_messages(Cursor::new(format!("{messages}{messages}")), native).is_err());
+        assert!(select_messages(Cursor::new(messages), "path+file:///foreign/hl-native#0.1.0").is_err());
     }
 
     #[test]

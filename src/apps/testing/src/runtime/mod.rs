@@ -37,6 +37,7 @@ use std::sync::Arc;
 
 pub(crate) use execution::WorkerOptions;
 pub(crate) use stage::Options as StageOptions;
+pub(crate) use stage::artifact_smoke;
 pub(crate) use stage::run as stage;
 
 pub(crate) fn preflight_image(name: &str, target: Target) -> Result<bool, Error> {
