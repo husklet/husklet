@@ -1,6 +1,8 @@
 #[derive(Clone, Default)]
 pub struct Environment(Vec<(String, String)>);
 
+const TERMINAL_CAPABILITIES: [(&str, &str); 2] = [("TERM", "xterm-256color"), ("COLORTERM", "truecolor")];
+
 impl Environment {
     pub fn capture() -> Self {
         let keys = [
@@ -26,12 +28,12 @@ impl Environment {
     }
 
     pub fn apply(&self, command: &mut std::process::Command) {
-        command.env_clear().env("TERM", "xterm-256color");
+        command.env_clear().envs(TERMINAL_CAPABILITIES);
         command.envs(self.0.iter().map(|(key, value)| (key, value)));
     }
 
     pub fn terminal(&self) -> Vec<String> {
-        let mut values = vec!["TERM=xterm-256color".to_owned()];
+        let mut values = TERMINAL_CAPABILITIES.map(|(key, value)| format!("{key}={value}")).to_vec();
         values.extend(self.0.iter().map(|(key, value)| format!("{key}={value}")));
         values
     }
@@ -80,5 +82,13 @@ mod tests {
             1
         );
         assert!(paths.contains(&std::path::PathBuf::from("/home/test/.local/bin")));
+    }
+
+    #[test]
+    fn terminal_environment_advertises_vte_truecolor_support() {
+        assert_eq!(
+            Environment::default().terminal(),
+            ["TERM=xterm-256color", "COLORTERM=truecolor"]
+        );
     }
 }
