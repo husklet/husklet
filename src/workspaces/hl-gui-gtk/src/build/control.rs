@@ -18,7 +18,13 @@ pub(super) fn widget(tag: Tag) -> gtk::Widget {
         Tag::Slider => slider().upcast(),
         Tag::DatePicker => gtk::Calendar::new().upcast(),
         Tag::ColorPicker => gtk::ColorDialogButton::new(Some(gtk::ColorDialog::new())).upcast(),
-        _ => gtk::Button::with_label("Choose…").upcast(),
+        // FilePicker is the last control tag, and `build::widget` routes only
+        // control tags here. GTK4 has no file-chooser *widget* left: the
+        // chooser is `gtk::FileDialog`, which is asynchronous and needs a
+        // parent window the adapter does not have at construction. The button
+        // is therefore the component, and the embedder opens the dialog from
+        // the invoke it reports.
+        _ => picker().upcast(),
     }
 }
 
@@ -26,6 +32,11 @@ fn icon_button() -> gtk::Button {
     let widget = gtk::Button::new();
     widget.set_icon_name("view-more-symbolic");
     widget
+}
+
+/// The label is a default, not a fixed caption: `Prop::Label` replaces it.
+fn picker() -> gtk::Button {
+    gtk::Button::with_label("Choose…")
 }
 
 fn number() -> gtk::SpinButton {
@@ -57,6 +68,31 @@ fn slider() -> gtk::Scale {
     widget.set_hexpand(true);
     widget.set_draw_value(true);
     widget
+}
+
+/// Attaches to the controls that hold a child. A button is a container in the
+/// component library — an icon beside a label is described, not configured —
+/// and GTK4 agrees: its label is only the child it builds by default.
+pub(super) fn attach(parent: &gtk::Widget, child: &gtk::Widget) -> bool {
+    let Some(button) = parent.downcast_ref::<gtk::Button>() else {
+        return false;
+    };
+    super::surface::set_single(button.child(), child, |value| button.set_child(value))
+}
+
+/// Removes a child from the controls this module attaches to.
+///
+/// A button tracks its child itself, so unparenting behind its back leaves it
+/// pointing at a widget it no longer holds.
+pub(super) fn detach(parent: &gtk::Widget, child: &gtk::Widget) -> bool {
+    let Some(button) = parent.downcast_ref::<gtk::Button>() else {
+        return false;
+    };
+    if button.child().is_some_and(|held| held.eq(child)) {
+        button.set_child(gtk::Widget::NONE);
+        return true;
+    }
+    false
 }
 
 /// The editable buffer behind a text area, when the widget is one.

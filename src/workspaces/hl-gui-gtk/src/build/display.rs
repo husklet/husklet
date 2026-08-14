@@ -13,7 +13,10 @@ pub(super) fn widget(tag: Tag) -> gtk::Widget {
         Tag::Avatar => avatar().upcast(),
         Tag::Progress => gtk::ProgressBar::new().upcast(),
         Tag::Spinner => spinner().upcast(),
-        _ => gtk::Picture::new().upcast(),
+        // Image is the last display tag, and `build::widget` routes only
+        // display tags here. A picture, not an icon image: the source arrives
+        // as `Prop::Uri`, which names a file rather than an icon theme entry.
+        _ => picture().upcast(),
     }
 }
 
@@ -53,6 +56,15 @@ fn avatar() -> gtk::Label {
     widget.set_halign(gtk::Align::Center);
     widget.set_valign(gtk::Align::Center);
     widget.set_size_request(36, 36);
+    widget
+}
+
+/// A picture that may shrink below its natural size, or an image larger than
+/// its slot forces the whole surface wider instead of scaling down.
+fn picture() -> gtk::Picture {
+    let widget = gtk::Picture::new();
+    widget.set_can_shrink(true);
+    widget.set_content_fit(gtk::ContentFit::Contain);
     widget
 }
 

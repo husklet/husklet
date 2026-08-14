@@ -13,11 +13,19 @@ pub(super) fn widget(tag: Tag) -> gtk::Widget {
         Tag::TabPage => gtk::Box::new(gtk::Orientation::Vertical, 8).upcast(),
         Tag::Expander => gtk::Expander::new(None).upcast(),
         Tag::Popover => gtk::Popover::new().upcast(),
-        Tag::Menu => gtk::Box::new(gtk::Orientation::Vertical, 2).upcast(),
+        // Menu and MenuItem are widget menus, not `gio::Menu` models: the model
+        // API takes actions and labels, while these carry described children
+        // and report through the adapter's own handler bindings.
+        Tag::Menu => menu().upcast(),
         Tag::MenuItem => menu_item().upcast(),
+        // Dialog is a box, not a `gtk::Window`. A detached tag still attaches to
+        // the surface root, and a window cannot be a child of a widget, so the
+        // embedder decides whether to present this subtree in a window.
         Tag::Dialog => gtk::Box::new(gtk::Orientation::Vertical, 12).upcast(),
-        // Toast and Banner live in libadwaita; a revealer over the same box
-        // model gives the behavior without taking that dependency.
+        // Toast and Banner are the last surface tags, and `build::widget`
+        // routes only surface tags here. Both live in libadwaita; a revealer
+        // over an icon and a message gives the behavior — appear, carry text,
+        // dismiss — without taking that dependency.
         _ => notice().upcast(),
     }
 }
@@ -40,18 +48,56 @@ fn sidebar() -> gtk::Box {
     widget
 }
 
+fn menu() -> gtk::Box {
+    let widget = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    widget.set_hexpand(true);
+    widget
+}
+
 fn menu_item() -> gtk::Button {
     let widget = gtk::Button::new();
     widget.set_has_frame(false);
     widget
 }
 
+/// The message strip behind Toast and Banner: an icon slot and a label, both
+/// built up front so `Prop::Icon` and `Prop::Label` have somewhere to land.
 fn notice() -> gtk::Revealer {
+    let strip = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let emblem = gtk::Image::new();
+    let message = gtk::Label::new(None);
+    message.set_halign(gtk::Align::Start);
+    message.set_hexpand(true);
+    message.set_wrap(true);
+    strip.append(&emblem);
+    strip.append(&message);
     let widget = gtk::Revealer::new();
     widget.set_transition_type(gtk::RevealerTransitionType::SlideDown);
     widget.set_reveal_child(true);
-    widget.set_child(Some(&gtk::Box::new(gtk::Orientation::Horizontal, 8)));
+    widget.set_child(Some(&strip));
     widget
+}
+
+/// The message label of a notice, when the widget is one.
+/// It is the slot after the icon rather than the last child, because described
+/// children are appended to the same strip and would otherwise take its place.
+pub(crate) fn message(widget: &gtk::Widget) -> Option<gtk::Label> {
+    strip(widget)?
+        .first_child()
+        .and_then(|slot| slot.next_sibling())
+        .and_then(|slot| slot.downcast().ok())
+}
+
+/// The icon slot of a notice, when the widget is one.
+pub(crate) fn emblem(widget: &gtk::Widget) -> Option<gtk::Image> {
+    strip(widget)?.first_child().and_then(|slot| slot.downcast().ok())
+}
+
+fn strip(widget: &gtk::Widget) -> Option<gtk::Box> {
+    widget
+        .downcast_ref::<gtk::Revealer>()
+        .and_then(gtk::Revealer::child)
+        .and_then(|child| child.downcast::<gtk::Box>().ok())
 }
 
 /// Attaches to the surfaces whose protocol is not `gtk::Box`.
@@ -84,7 +130,11 @@ pub(super) fn attach(parent: &gtk::Widget, child: &gtk::Widget, index: usize) ->
 
 /// A single-child surface holds the first attachment and wraps later ones into
 /// a column, so a producer is never silently limited to one child.
-fn set_single(existing: Option<gtk::Widget>, child: &gtk::Widget, assign: impl Fn(Option<&gtk::Widget>)) -> bool {
+pub(super) fn set_single(
+    existing: Option<gtk::Widget>,
+    child: &gtk::Widget,
+    assign: impl Fn(Option<&gtk::Widget>),
+) -> bool {
     match existing {
         None => assign(Some(child)),
         Some(current) if current.is::<gtk::Box>() => {

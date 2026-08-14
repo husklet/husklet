@@ -4,7 +4,7 @@ pub(crate) mod collection;
 pub(crate) mod control;
 mod display;
 mod layout;
-mod surface;
+pub(crate) mod surface;
 
 use gtk::prelude::*;
 use hl_gui::{Node, Tag};
@@ -86,7 +86,7 @@ pub(crate) fn attach(parent: &gtk::Widget, child: &gtk::Widget, index: usize) ->
         window.set_child(Some(child));
         return true;
     }
-    surface::attach(parent, child, index) || layout::attach(parent, child, index)
+    surface::attach(parent, child, index) || layout::attach(parent, child, index) || control::attach(parent, child)
 }
 
 fn insert_into(container: &gtk::Box, child: &gtk::Widget, index: usize) {
@@ -117,7 +117,7 @@ pub(crate) fn detach(child: &gtk::Widget) {
         window.set_child(gtk::Widget::NONE);
         return;
     }
-    if surface::detach(&parent, child) {
+    if surface::detach(&parent, child) || layout::detach(&parent, child) || control::detach(&parent, child) {
         return;
     }
     child.unparent();

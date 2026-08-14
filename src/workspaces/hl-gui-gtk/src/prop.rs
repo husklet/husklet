@@ -74,6 +74,10 @@ fn text(widget: &gtk::Widget, tag: Tag, value: &PropValue) {
         view.buffer().set_text(content);
         return;
     }
+    if let Some(message) = build::surface::message(widget) {
+        message.set_text(content);
+        return;
+    }
     numeric_text(widget, tag, value, content);
 }
 
@@ -90,11 +94,31 @@ fn numeric_text(widget: &gtk::Widget, tag: Tag, value: &PropValue, content: &str
         expander.set_label(Some(content));
         return;
     }
+    // A frame carries its title in its own header, above whatever it holds.
+    if let Some(frame) = widget.downcast_ref::<gtk::Frame>() {
+        frame.set_label(value.as_text());
+        return;
+    }
     if tag == Tag::Link {
         if let Some(link) = widget.downcast_ref::<gtk::LinkButton>() {
             link.set_label(content);
         }
+        return;
     }
+    caption(widget, tag, content);
+}
+
+/// A drawing area holds no text, so a chart's label is kept as its tooltip and
+/// painted from there by the draw function.
+fn caption(widget: &gtk::Widget, tag: Tag, content: &str) {
+    if tag != Tag::Chart {
+        return;
+    }
+    let Some(area) = widget.downcast_ref::<gtk::DrawingArea>() else {
+        return;
+    };
+    area.set_tooltip_text(Some(content));
+    area.queue_draw();
 }
 
 fn placeholder(widget: &gtk::Widget, value: &PropValue) {
@@ -116,6 +140,10 @@ fn icon(widget: &gtk::Widget, value: &PropValue) {
         image.set_icon_name(name);
         return;
     }
+    if let Some(emblem) = build::surface::emblem(widget) {
+        emblem.set_icon_name(name);
+        return;
+    }
     if let Some(button) = widget.downcast_ref::<gtk::Button>() {
         if let Some(name) = name {
             button.set_icon_name(name);
@@ -126,7 +154,20 @@ fn icon(widget: &gtk::Widget, value: &PropValue) {
 fn uri(widget: &gtk::Widget, value: &PropValue) {
     if let Some(link) = widget.downcast_ref::<gtk::LinkButton>() {
         link.set_uri(value.as_text().unwrap_or_default());
+        return;
     }
+    if let Some(picture) = widget.downcast_ref::<gtk::Picture>() {
+        picture.set_file(value.as_text().map(source).as_ref());
+    }
+}
+
+/// An absolute path and a `scheme://` reference both name a picture's file, and
+/// only the second is a URI — reading a path as one silently loads nothing.
+fn source(value: &str) -> gtk::gio::File {
+    if value.contains("://") {
+        return gtk::gio::File::for_uri(value);
+    }
+    gtk::gio::File::for_path(value)
 }
 
 fn checked(widget: &gtk::Widget, value: &PropValue) {

@@ -9,11 +9,24 @@ pub(super) fn widget(tag: Tag) -> gtk::Widget {
         Tag::Grid => gtk::Grid::new().upcast(),
         Tag::Scroll => scroll().upcast(),
         Tag::Splitter => gtk::Paned::new(gtk::Orientation::Horizontal).upcast(),
-        Tag::Stack => gtk::Stack::new().upcast(),
+        Tag::Stack => stack().upcast(),
         Tag::Overlay => gtk::Overlay::new().upcast(),
         Tag::Spacer => spacer().upcast(),
+        // Separator is the last layout tag, and `build::widget` routes only
+        // layout tags here, so this arm is that tag. It stays a catch-all
+        // because `Tag` is one enum for every family and a family builder
+        // cannot name the other fifty variants.
         _ => gtk::Separator::new(gtk::Orientation::Horizontal).upcast(),
     }
+}
+
+/// One page visible at a time. The stack expands so a page is laid out at the
+/// size the stack was given rather than at the size of the widest page.
+fn stack() -> gtk::Stack {
+    let widget = gtk::Stack::new();
+    widget.set_hexpand(true);
+    widget.set_vexpand(true);
+    widget
 }
 
 fn scroll() -> gtk::ScrolledWindow {
@@ -61,4 +74,45 @@ pub(super) fn attach(parent: &gtk::Widget, child: &gtk::Widget, index: usize) ->
         return true;
     }
     false
+}
+
+/// Removes a child from the layout containers this module attaches to.
+///
+/// These containers keep their own page or slot bookkeeping, so unparenting a
+/// child behind their back leaves a named page pointing at nothing — which is
+/// exactly what makes a later move place the child twice.
+pub(super) fn detach(parent: &gtk::Widget, child: &gtk::Widget) -> bool {
+    if let Some(stack) = parent.downcast_ref::<gtk::Stack>() {
+        stack.remove(child);
+        return true;
+    }
+    if let Some(overlay) = parent.downcast_ref::<gtk::Overlay>() {
+        return uncover(overlay, child);
+    }
+    if let Some(grid) = parent.downcast_ref::<gtk::Grid>() {
+        grid.remove(child);
+        return true;
+    }
+    if let Some(paned) = parent.downcast_ref::<gtk::Paned>() {
+        return unpane(paned, child);
+    }
+    false
+}
+
+fn uncover(overlay: &gtk::Overlay, child: &gtk::Widget) -> bool {
+    if overlay.child().is_some_and(|held| held.eq(child)) {
+        overlay.set_child(gtk::Widget::NONE);
+        return true;
+    }
+    overlay.remove_overlay(child);
+    true
+}
+
+fn unpane(paned: &gtk::Paned, child: &gtk::Widget) -> bool {
+    if paned.start_child().is_some_and(|held| held.eq(child)) {
+        paned.set_start_child(gtk::Widget::NONE);
+        return true;
+    }
+    paned.set_end_child(gtk::Widget::NONE);
+    true
 }
