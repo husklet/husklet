@@ -1,6 +1,6 @@
 use std::{fmt::Write, fs, process::Command};
 
-use crate::{BuildEnvironment, Sanitizer};
+use crate::{Archive, BuildEnvironment, Sanitizer, Toolchain};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LinkerFlavor {
@@ -14,7 +14,7 @@ pub enum LinkerFlavor {
 pub struct SharedLibrarySpec<'a> {
     pub name: &'a str,
     pub filename: &'a str,
-    pub archives: Vec<&'a str>,
+    pub archives: Vec<Archive>,
     pub libraries: &'a [&'a str],
     pub exports: &'a [&'a str],
     pub excluded_symbols: &'a [&'a str],
@@ -47,7 +47,7 @@ impl<'a> SharedLibrarySpec<'a> {
             exclude_all_symbols: false,
         }
     }
-    pub fn archives(mut self, values: impl IntoIterator<Item = &'a str>) -> Self {
+    pub fn archives(mut self, values: impl IntoIterator<Item = Archive>) -> Self {
         self.archives.extend(values);
         self
     }
@@ -96,9 +96,14 @@ impl<'a> SharedLibrarySpec<'a> {
         self
     }
 
-    pub fn link(self, environment: &BuildEnvironment, flavor: LinkerFlavor) -> Result<(), String> {
+    pub fn link(
+        self,
+        environment: &BuildEnvironment,
+        toolchain: &Toolchain,
+        flavor: LinkerFlavor,
+    ) -> Result<(), String> {
         let destination = environment.output.join(self.filename);
-        let mut command = cc::Build::new().get_compiler().to_command();
+        let mut command = toolchain.linker_command();
         match flavor {
             LinkerFlavor::Darwin => self.darwin(environment, &mut command)?,
             LinkerFlavor::GnuWindows => self.gnu_windows(environment, &mut command)?,
@@ -138,12 +143,9 @@ impl<'a> SharedLibrarySpec<'a> {
         command.arg(format!("-Wl,-exported_symbols_list,{}", exports.display()));
         for archive in &self.archives {
             if self.whole_archive {
-                command.arg(format!(
-                    "-Wl,-force_load,{}",
-                    environment.output.join(format!("lib{archive}.a")).display()
-                ));
+                command.arg(format!("-Wl,-force_load,{}", archive.path().display()));
             } else {
-                command.arg(environment.output.join(format!("lib{archive}.a")));
+                append_archive(command, archive);
             }
         }
         Ok(())
@@ -168,7 +170,7 @@ impl<'a> SharedLibrarySpec<'a> {
             command.arg("-Wl,--whole-archive");
         }
         for archive in &self.archives {
-            command.arg(environment.output.join(format!("lib{archive}.a")));
+            append_archive(command, archive);
         }
         if self.whole_archive {
             command.arg("-Wl,--no-whole-archive");
@@ -187,12 +189,9 @@ impl<'a> SharedLibrarySpec<'a> {
             .arg(format!("-Wl,/DEF:{}", definition.display()));
         for archive in &self.archives {
             if self.whole_archive {
-                command.arg(format!(
-                    "-Wl,/WHOLEARCHIVE:{}",
-                    environment.output.join(format!("{archive}.lib")).display()
-                ));
+                command.arg(format!("-Wl,/WHOLEARCHIVE:{}", archive.path().display()));
             } else {
-                command.arg(environment.output.join(format!("{archive}.lib")));
+                append_archive(command, archive);
             }
         }
         Ok(())
@@ -225,13 +224,17 @@ impl<'a> SharedLibrarySpec<'a> {
         }
         command.arg(format!("-Wl,--version-script={}", map.display()));
         for archive in &self.archives {
-            command.arg(environment.output.join(format!("lib{archive}.a")));
+            append_archive(command, archive);
         }
         if self.whole_archive {
             command.arg("-Wl,--no-whole-archive");
         }
         Ok(())
     }
+}
+
+fn append_archive(command: &mut Command, archive: &Archive) {
+    command.arg(archive.path());
 }
 
 fn darwin_exports(symbols: &[&str]) -> String {
@@ -259,7 +262,9 @@ fn elf_exports(version: &str, symbols: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{LinkerFlavor, SharedLibrarySpec};
+    use super::{LinkerFlavor, SharedLibrarySpec, append_archive};
+    use crate::Archive;
+    use std::{path::PathBuf, process::Command};
     #[test]
     fn linker_flavor_and_platform_options_are_explicit() {
         let spec = SharedLibrarySpec::new("library", "library.so")
@@ -268,5 +273,15 @@ mod tests {
         assert_eq!(LinkerFlavor::Elf, LinkerFlavor::Elf);
         assert_eq!(spec.soname, Some("library.so"));
         assert!(spec.symbolic_functions);
+    }
+
+    #[test]
+    fn archive_artifact_paths_are_preserved_exactly() {
+        let path = PathBuf::from("/unusual/archive-name.without-convention");
+        let spec = SharedLibrarySpec::new("library", "library.so").archives([Archive::new(path.clone())]);
+        assert_eq!(spec.archives[0].path(), path);
+        let mut command = Command::new("linker");
+        append_archive(&mut command, &spec.archives[0]);
+        assert_eq!(command.get_args().collect::<Vec<_>>(), [path.as_os_str()]);
     }
 }

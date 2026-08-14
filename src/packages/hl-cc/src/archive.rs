@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::BuildEnvironment;
+use crate::{BuildEnvironment, Toolchain};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Definition {
@@ -83,6 +83,22 @@ pub enum Warning {
     MissingPrototypes,
     ImplicitFunctionDeclarationError,
     ImplicitIntError,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Archive {
+    path: PathBuf,
+}
+
+impl Archive {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
 }
 
 impl Warning {
@@ -220,15 +236,25 @@ impl ArchiveSpec {
 #[must_use]
 pub struct CCompiler<'a> {
     environment: &'a BuildEnvironment,
+    toolchain: &'a Toolchain,
     flavor: CompilerFlavor,
 }
 
 impl<'a> CCompiler<'a> {
-    pub const fn new(environment: &'a BuildEnvironment, flavor: CompilerFlavor) -> Self {
-        Self { environment, flavor }
+    pub const fn new(environment: &'a BuildEnvironment, toolchain: &'a Toolchain, flavor: CompilerFlavor) -> Self {
+        Self {
+            environment,
+            toolchain,
+            flavor,
+        }
     }
-    pub fn archive(&self, spec: &ArchiveSpec) {
+    pub fn archive(&self, spec: &ArchiveSpec) -> Result<Archive, String> {
         let mut build = cc::Build::new();
+        self.toolchain.configure(&mut build);
+        build
+            .out_dir(&self.environment.output)
+            .target(self.environment.target.as_str())
+            .host(self.environment.host.as_str());
         if let Some(value) = spec.cargo_metadata {
             build.cargo_metadata(value);
         }
@@ -250,11 +276,8 @@ impl<'a> CCompiler<'a> {
         for include in &spec.includes {
             build.include(include);
         }
-        if spec.archive_format == ArchiveFormat::Darwin {
-            build.archiver("/usr/bin/ar");
-            if !self.environment.host.as_str().ends_with("-apple-darwin") {
-                build.ar_flag("--format=darwin");
-            }
+        if spec.archive_format == ArchiveFormat::Darwin && !self.environment.host.as_str().ends_with("-apple-darwin") {
+            build.ar_flag("--format=darwin");
         }
         if let Some(prelude) = &spec.forced_include {
             match self.flavor {
@@ -299,7 +322,18 @@ impl<'a> CCompiler<'a> {
         for source in &spec.sources {
             build.file(source);
         }
-        build.compile(&spec.name);
+        let filename = format!("lib{}.a", spec.name);
+        build
+            .try_compile(&filename)
+            .map_err(|error| format!("compile C archive {}: {error}", spec.name))?;
+        let path = self.environment.output.join(filename);
+        if !path.is_file() {
+            return Err(format!(
+                "C compiler did not produce expected archive {}",
+                path.display()
+            ));
+        }
+        Ok(Archive::new(path))
     }
 }
 
