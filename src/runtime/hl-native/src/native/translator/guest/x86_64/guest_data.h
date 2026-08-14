@@ -30,6 +30,12 @@ typedef struct {
  * routines pin every view before moving a byte, so a failed later span cannot
  * leave a partial guest store or a partially restored CPU image.  On failure,
  * *fault_guest is the first byte for which pinning made no forward progress.
+ *
+ * Preparation proves projection and requested guest permissions only. A host
+ * mapping can still fault afterward (for example, SIGBUS after file truncation).
+ * A caller that can recover from host faults must retain this pin set in its
+ * landing authority and call release there; commit_started tells a write-side
+ * landing whether conservative whole-range store publication is owed.
  */
 int hl_x86_guest_data_read(uint64_t guest, void *destination, size_t length, uint64_t *fault_guest);
 int hl_x86_guest_data_write(uint64_t guest, const void *source, size_t length, uint64_t *fault_guest);
@@ -38,5 +44,6 @@ int hl_x86_guest_data_prepare(hl_x86_guest_data_pins *pins, uint64_t guest, size
 void hl_x86_guest_data_copy_from(hl_x86_guest_data_pins *pins, void *destination);
 void hl_x86_guest_data_copy_to(hl_x86_guest_data_pins *pins, const void *source);
 void hl_x86_guest_data_release(hl_x86_guest_data_pins *pins);
+void hl_x86_guest_data_abandon(hl_x86_guest_data_pins *pins);
 
 #endif

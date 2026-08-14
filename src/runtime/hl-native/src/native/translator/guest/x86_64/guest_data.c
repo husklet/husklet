@@ -28,6 +28,13 @@ void hl_x86_guest_data_release(hl_x86_guest_data_pins *pins) {
     }
 }
 
+void hl_x86_guest_data_abandon(hl_x86_guest_data_pins *pins) {
+    if (pins == NULL) return;
+    if (pins->access == HL_GUEST_MEMORY_WRITE && pins->commit_started)
+        hl_guest_memory_store_observe(pins->guest, pins->length);
+    hl_x86_guest_data_release(pins);
+}
+
 int hl_x86_guest_data_prepare(hl_x86_guest_data_pins *pins, uint64_t guest, size_t length,
                               hl_guest_memory_access access, uint64_t *fault_guest) {
     if (pins == NULL) return -1;

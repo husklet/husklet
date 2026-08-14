@@ -27,17 +27,27 @@ fn guest_memory_pin_projects_data_and_owns_each_span() {
     fs::write(
         &source,
         r#"
+#define _GNU_SOURCE
 #include <stdint.h>
 #include <string.h>
+#include <setjmp.h>
+#include <signal.h>
+#include <sys/mman.h>
+#include <unistd.h>
 #include "translator/guest_memory.h"
 #include "translator/guest/x86_64/guest_data.h"
 
 static unsigned char identity[512], projected[512];
-static int pins, unpins;
+static int pins, unpins, observations;
 static int fail_second;
+static int deny_read, deny_write;
+static unsigned char *fault_host;
+static sigjmp_buf fault_pad;
+static void fault_handler(int signal_) { (void)signal_; siglongjmp(fault_pad, 1); }
 static int indirect(void) { return 1; }
 static int pin(uint64_t guest, size_t length, hl_guest_memory_access access, hl_guest_memory_pin *out) {
-    (void)access;
+    if ((access == HL_GUEST_MEMORY_READ && deny_read) || (access == HL_GUEST_MEMORY_WRITE && deny_write))
+        return HL_GUEST_MEMORY_FAULT;
     uintptr_t first = (uintptr_t)identity;
     if (guest < first || guest >= first + sizeof(identity)) return HL_GUEST_MEMORY_FAULT;
     size_t offset = (size_t)(guest - first);
@@ -45,7 +55,7 @@ static int pin(uint64_t guest, size_t length, hl_guest_memory_access access, hl_
 #ifdef IDENTITY_PROJECTION
     out->host = identity + offset;
 #else
-    out->host = projected + offset;
+    out->host = fault_host ? fault_host + offset : projected + offset;
 #endif
     size_t boundary = 8 - (offset & 7);
     out->contiguous = length < boundary ? length : boundary;
@@ -54,10 +64,11 @@ static int pin(uint64_t guest, size_t length, hl_guest_memory_access access, hl_
     return HL_GUEST_MEMORY_PROJECTED;
 }
 static void unpin(hl_guest_memory_pin *pin_) { if (pin_->token) ++unpins; }
+static void observe(uint64_t guest, size_t length) { (void)guest; (void)length; ++observations; }
 
 int main(void) {
     for (size_t i = 0; i < sizeof(projected); ++i) { identity[i] = 0xa5; projected[i] = (unsigned char)i; }
-    const hl_guest_memory_ops ops = {.indirect = indirect, .pin = pin, .unpin = unpin};
+    const hl_guest_memory_ops ops = {.indirect = indirect, .pin = pin, .unpin = unpin, .store_observe = observe};
     hl_guest_memory_bind(&ops);
     unsigned char scalar[8], cross[12], sse[16], stack[32], xsave[512];
     for (size_t width = 1; width <= 8; width *= 2)
@@ -79,12 +90,33 @@ int main(void) {
     if (hl_x86_guest_data_write((uintptr_t)identity + 5, replacement, sizeof(replacement), 0) == 0) return 7;
     fail_second = 0;
     if (memcmp(before, projected, sizeof(before))) return 8;
+    deny_write = 1;
+    if (hl_x86_guest_data_write((uintptr_t)identity + 5, replacement, sizeof(replacement), 0) == 0) return 9;
+    deny_write = 0;
+    if (memcmp(before, projected, sizeof(before))) return 10;
+    deny_read = 1;
+    if (hl_x86_guest_data_read((uintptr_t)identity + 5, cross, sizeof(cross), 0) == 0) return 11;
+    deny_read = 0;
     hl_x86_guest_data_pins retained;
-    if (hl_x86_guest_data_prepare(&retained, (uintptr_t)identity + 5, 12, HL_GUEST_MEMORY_READ, 0) != 0) return 9;
+    size_t page = (size_t)sysconf(_SC_PAGESIZE);
+    fault_host = mmap(0, page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (fault_host == MAP_FAILED) return 12;
+    if (hl_x86_guest_data_prepare(&retained, (uintptr_t)identity + 5, 12, HL_GUEST_MEMORY_WRITE, 0) != 0) return 12;
+    if (mprotect(fault_host, page, PROT_NONE) != 0) return 13;
+    struct sigaction action = {0};
+    action.sa_handler = fault_handler;
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGSEGV, &action, 0);
+    if (sigsetjmp(fault_pad, 1) == 0) {
+        hl_x86_guest_data_copy_to(&retained, replacement);
+        return 14;
+    }
 #ifndef OMIT_ABANDON_RELEASE
-    hl_x86_guest_data_release(&retained);
+    hl_x86_guest_data_abandon(&retained);
 #endif
-    return pins == unpins && pins != 0 ? 0 : 10;
+    mprotect(fault_host, page, PROT_READ | PROT_WRITE);
+    munmap(fault_host, page);
+    return pins == unpins && pins != 0 && observations == 2 ? 0 : 15;
 }
 "#,
     )

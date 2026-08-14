@@ -303,9 +303,7 @@ static _Noreturn void interp_projection_fault(uint64_t guest_address, size_t len
 
 static void interp_data_release_abandoned(void) {
     if (!g_interp_data_active) return;
-    if (g_interp_data_pins.access == HL_GUEST_MEMORY_WRITE && g_interp_data_pins.commit_started)
-        hl_guest_memory_store_observe(g_interp_data_pins.guest, g_interp_data_pins.length);
-    hl_x86_guest_data_release(&g_interp_data_pins);
+    hl_x86_guest_data_abandon(&g_interp_data_pins);
     g_interp_data_active = 0;
 }
 
