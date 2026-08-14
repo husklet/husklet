@@ -17,7 +17,7 @@ cases:
       rows: 24
       columns: 80
       steps:
-      - write: { text: "stty -echo; export PS1=''; tmux -L husklet new-session -d -s ux; tmux -L husklet set-option -g status off; set -m; (sleep 8; tmux -L husklet kill-server >/dev/null 2>&1 && printf '\\127\\101\\124\\103\\110\\104\\117\\107\\055\\103\\114\\105\\101\\116\\105\\104\\n') & watchdog=$!; tmux -L husklet send-keys -t ux \"stty -echo; printf '\\124\\115\\125\\130\\055\\122\\105\\101\\104\\131\\012'\" C-m; tmux -L husklet attach -t ux; printf '\\117\\125\\124\\105\\122\\055\\104\\105\\124\\101\\103\\110\\105\\104\\n'\r" }
+      - write: { text: "stty -echo; export PS1=''; tmux -L husklet new-session -d -s ux; tmux -L husklet set-option -g status off; tmux -L husklet run-shell -b -d 8 \"tmux -L husklet send-keys -t ux \\\"printf '\\\\127\\\\101\\\\124\\\\103\\\\110\\\\104\\\\117\\\\107\\\\055\\\\103\\\\114\\\\105\\\\101\\\\116\\\\105\\\\104\\\\n'\\\" C-m; tmux -L husklet kill-server\"; tmux -L husklet send-keys -t ux \"stty -echo; printf '\\124\\115\\125\\130\\055\\122\\105\\101\\104\\131\\012'\" C-m; tmux -L husklet attach -t ux; printf '\\117\\125\\124\\105\\122\\055\\104\\105\\124\\101\\103\\110\\105\\104\\n'\r" }
       - await_output: { contains: TMUX-READY, timeout_ms: 10000 }
       - write: { text: "printf '\\124\\115\\125\\130\\055\\105\\116\\124\\105\\122\\105\\104\\n'; test -n \"$TMUX\" && printf '\\124\\115\\125\\130\\055\\105\\116\\126\\055\\117\\113\\n'\r" }
       - await_output: { contains: TMUX-ENTERED, timeout_ms: 10000 }
@@ -29,7 +29,7 @@ cases:
       - write: { text: "\u0002" }
       - write: { text: "d" }
       - await_output: { contains: OUTER-DETACHED, timeout_ms: 10000 }
-      - write: { text: "tmux -L husklet kill-server && { kill -TERM -- \"-$watchdog\" 2>/dev/null || :; wait \"$watchdog\" 2>/dev/null || :; printf '\\117\\125\\124\\105\\122\\055\\123\\110\\105\\114\\114\\055\\117\\113\\n'; }; exit\r" }
+      - write: { text: "tmux -L husklet has-session -t ux && tmux -L husklet kill-server && printf '\\117\\125\\124\\105\\122\\055\\123\\110\\105\\114\\114\\055\\117\\113\\n'; exit\r" }
       - await_output: { contains: OUTER-SHELL-OK, timeout_ms: 5000 }
       - close: {}
   expect:
