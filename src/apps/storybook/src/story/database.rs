@@ -41,36 +41,54 @@ fn catalogue(surface: &mut Surface) -> NodeId {
 
     let database = branch(surface, "app", true);
     surface.append(tree, database);
-
-    for (schema, tables) in [
-        (
-            "public",
-            [
-                ("users", ["id", "email", "created_at"]),
-                ("orders", ["id", "user_id", "total"]),
-            ],
-        ),
-        (
-            "billing",
-            [
-                ("invoices", ["id", "issued_at", "amount"]),
-                ("payments", ["id", "invoice_id", "paid_at"]),
-            ],
-        ),
-    ] {
-        let level = branch(surface, schema, schema == "public");
+    for (schema, tables) in SCHEMAS {
+        let level = branch(surface, schema, *schema == "public");
         surface.append(database, level);
-        for (table, columns) in tables {
-            let entry = branch(surface, table, table == "users");
-            surface.append(level, entry);
-            for column in columns {
-                let leaf = branch(surface, column, false);
-                surface.append(entry, leaf);
-            }
-        }
+        tables_of(surface, level, tables);
     }
     tree
 }
+
+/// The tables of one schema, each disclosing its columns.
+fn tables_of(surface: &mut Surface, level: NodeId, tables: &[Table]) {
+    for (table, columns) in tables {
+        let entry = branch(surface, table, *table == "users");
+        surface.append(level, entry);
+        columns_of(surface, entry, columns);
+    }
+}
+
+/// The columns of one table — the level a flat list of expanders could not
+/// reach at all.
+fn columns_of(surface: &mut Surface, table: NodeId, columns: &[&str]) {
+    for column in columns {
+        let leaf = branch(surface, column, false);
+        surface.append(table, leaf);
+    }
+}
+
+/// One table and the columns it holds.
+type Table = (&'static str, &'static [&'static str]);
+/// One schema and the tables it holds.
+type Schema = (&'static str, &'static [Table]);
+
+/// The schema this story browses.
+const SCHEMAS: &[Schema] = &[
+    (
+        "public",
+        &[
+            ("users", &["id", "email", "created_at"]),
+            ("orders", &["id", "user_id", "total"]),
+        ],
+    ),
+    (
+        "billing",
+        &[
+            ("invoices", &["id", "issued_at", "amount"]),
+            ("payments", &["id", "invoice_id", "paid_at"]),
+        ],
+    ),
+];
 
 /// One node of the tree, disclosed or folded.
 fn branch(surface: &mut Surface, label: &str, open: bool) -> NodeId {
