@@ -114,7 +114,7 @@ fn wait_ready(path: &Path) {
     panic!("guest process tree did not become ready");
 }
 
-fn wait_cycle_ready(path: &Path) {
+fn wait_cycle_ready(path: &Path) -> bool {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
         let output = std::fs::read_to_string(path).unwrap_or_default();
@@ -122,11 +122,11 @@ fn wait_cycle_ready(path: &Path) {
             .iter()
             .all(|marker| output.contains(marker))
         {
-            return;
+            return true;
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    panic!("restored guest process tree did not reach the second checkpoint");
+    false
 }
 
 fn checkpoint_round_trip(isa: GuestIsa, executable: &Path) {
@@ -170,7 +170,13 @@ fn checkpoint_round_trip(isa: GuestIsa, executable: &Path) {
     )
     .unwrap();
     recapture.start().unwrap();
-    wait_cycle_ready(&output);
+    if !wait_cycle_ready(&output) {
+        panic!(
+            "restored guest process tree did not reach the second checkpoint; status={:?}:\n{}",
+            recapture.wait(),
+            std::fs::read_to_string(&output).unwrap_or_default()
+        );
+    }
     recapture.capture_checkpoint().unwrap_or_else(|error| {
         panic!(
             "second checkpoint failed: {error:?}\n{}",

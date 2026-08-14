@@ -97,8 +97,7 @@ static void thread_kill(struct cpu *c, int tid, int sig) {
     // pending). A process-wide g_pending would let any thread consume it, breaking Go's stop-the-world
     // preemption and thread-directed sigwait alike. Otherwise -- self-signal, default/ignore on an unblocked
     // signal, or an unknown/dead tid -- fall back to the process-directed path on the caller.
-    if (sig >= 1 && sig <= 64 && tid != cpu_tid(c) &&
-        (g_sigact[sig].handler > 1 || thread_tid_blocks_signal(tid, sig))) {
+    if (sig >= 1 && sig <= 64 && (g_sigact[sig].handler > 1 || thread_tid_blocks_signal(tid, sig))) {
         // Stamp the tkill/tgkill siginfo the target thread's handler reads: Linux sets si_code == SI_TKILL
         // and si_pid == the sender's thread-group (== this guest pid). glibc's SIGCANCEL handler (used by
         // pthread_cancel) IGNORES any signal whose si_code != SI_TKILL or si_pid != getpid(), so without
@@ -109,11 +108,20 @@ static void thread_kill(struct cpu *c, int tid, int sig) {
         g_sigval[sig] = 0;
         g_sigpid[sig] = container_pid();
         g_siguid[sig] = 0;
+        // A self-directed tkill/tgkill is still THREAD-directed on Linux.  Routing it through g_pending
+        // makes another unblocked thread eligible to consume it and, when this thread blocks the signal,
+        // means its per-thread pending state is absent from a checkpoint CPU image.  The caller is already
+        // at a dispatcher boundary, so publish directly on its CPU; maybe_deliver_signal consumes it here
+        // after the syscall or leaves it blocked for sigpending/sigwait and checkpoint capture.
+        if (tid == cpu_tid(c)) {
+            __atomic_or_fetch(&c->tpending, UINT64_C(1) << sig, __ATOMIC_SEQ_CST);
+            __atomic_store_n(&c->irq, 1, __ATOMIC_SEQ_CST);
+            return;
+        }
         if (thread_target_signal(tid, sig)) return;
     }
-    // Self-directed (or otherwise process-routed) tkill/tgkill. Linux stamps si_code == SI_TKILL for BOTH
-    // syscalls regardless of the target -- glibc's raise() lowers to tgkill, so a signalfd/sigwaitinfo
-    // reader of a raise()d signal must see SI_TKILL, not the SI_USER(0) a plain kill(2) carries.
+    // A default/ignored unblocked signal, or a dead/unknown target, follows the existing action path. Linux
+    // stamps si_code == SI_TKILL for both syscalls; glibc's raise() lowers to tgkill.
     cred_init();
     raise_guest_signal_si(c, sig, HL_SI_TKILL, 0, container_pid(), g_ruid);
 }
