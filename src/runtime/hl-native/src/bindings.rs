@@ -117,6 +117,12 @@ unsafe extern "C" {
     pub(super) fn hl_c_backend_request(backend: *mut Backend, request: c_uint, signal: c_int) -> c_int;
     pub(super) fn hl_c_backend_exit(backend: *mut Backend, result: *mut EngineExit) -> c_int;
     #[cfg(test)]
+    pub(super) fn hl_c_backend_exit_kind(backend: *const Backend) -> c_uint;
+    #[cfg(test)]
+    pub(super) fn hl_c_backend_exit_status(backend: *const Backend) -> c_int;
+    #[cfg(test)]
+    pub(super) fn hl_c_backend_exit_detail(backend: *const Backend) -> c_ulonglong;
+    #[cfg(test)]
     pub(super) fn hl_c_backend_translation_count(backend: *const Backend) -> c_ulonglong;
     pub(super) fn hl_c_backend_destroy(backend: *mut Backend);
 }
@@ -170,6 +176,9 @@ mod tests {
                 detail: 0,
             };
             assert_ne!(hl_c_backend_exit(ptr::null_mut(), &raw mut exit), 0);
+            assert_eq!(hl_c_backend_exit_kind(ptr::null()), 0);
+            assert_eq!(hl_c_backend_exit_status(ptr::null()), -1);
+            assert_eq!(hl_c_backend_exit_detail(ptr::null()), 0);
             assert_eq!(hl_c_backend_translation_count(ptr::null()), 0);
             hl_c_backend_destroy(ptr::null_mut());
         }

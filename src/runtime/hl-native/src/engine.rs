@@ -52,13 +52,14 @@ pub struct Engine(NonNull<Backend>);
 // run is active. The handle remains uniquely owned and destroy joins the active
 // run before releasing the engine allocation.
 unsafe impl Send for Engine {}
-// SAFETY: every shared operation is implemented by the C engine's synchronized
-// request/read interface; mutation of engine state is not exposed through Rust.
+// SAFETY: the shared Rust surface is limited to run (C lifecycle-gated), request
+// (C lifecycle-locked), and exit (one bridge-locked snapshot). Checkpoint
+// configuration and destruction require exclusive Rust access.
 unsafe impl Sync for Engine {}
 
 impl Engine {
     #[cfg(unix)]
-    pub fn configure_checkpoint(&self, transport: &crate::CheckpointTransport) -> Result<(), i32> {
+    pub fn configure_checkpoint(&mut self, transport: &crate::CheckpointTransport) -> Result<(), i32> {
         let status = transport.configure(self.0.as_ptr());
         (status == STATUS_OK).then_some(()).ok_or(status)
     }
@@ -508,7 +509,10 @@ mod tests {
                 values
             });
             let published = engine.exit();
-            assert!(observed.contains(&published), "ISA {isa} test never observed publication");
+            assert!(
+                observed.contains(&published),
+                "ISA {isa} test never observed publication"
+            );
             assert!(
                 observed.into_iter().all(|value| value == initial || value == published),
                 "ISA {isa} reader observed a partially published exit record"

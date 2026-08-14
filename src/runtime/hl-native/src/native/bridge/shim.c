@@ -15,6 +15,7 @@
 #include "host.h"
 
 #include <fcntl.h>
+#include <stdbool.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -55,16 +56,16 @@ struct hl_c_backend {
     uint32_t provider_initialized;
     uint32_t provider_files_installed;
     int32_t provider_fd;
-    atomic_flag result_lock;
+    atomic_bool result_lock;
     hl_engine_exit result;
 };
 
 static void hl_c_backend_result_lock(hl_c_backend *backend) {
-    while (atomic_flag_test_and_set_explicit(&backend->result_lock, memory_order_acquire)) {}
+    while (atomic_exchange_explicit(&backend->result_lock, true, memory_order_acquire)) {}
 }
 
 static void hl_c_backend_result_unlock(hl_c_backend *backend) {
-    atomic_flag_clear_explicit(&backend->result_lock, memory_order_release);
+    atomic_store_explicit(&backend->result_lock, false, memory_order_release);
 }
 
 #if defined(HL_LEAK_CHECK_PROBE)
@@ -374,7 +375,7 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
         if (provider_fd >= 0) close(provider_fd);
         return HL_STATUS_OUT_OF_MEMORY;
     }
-    atomic_flag_clear_explicit(&backend->result_lock, memory_order_relaxed);
+    atomic_init(&backend->result_lock, false);
     backend->result.abi = HL_ENGINE_ABI;
     backend->result.size = sizeof(backend->result);
     status = hl_c_bridge_host_create(&backend->host, &backend->services);
@@ -537,6 +538,21 @@ HL_API int32_t hl_c_backend_exit(hl_c_backend *backend, hl_engine_exit *result) 
     *result = backend->result;
     hl_c_backend_result_unlock(backend);
     return HL_STATUS_OK;
+}
+
+HL_API uint32_t hl_c_backend_exit_kind(const hl_c_backend *backend) {
+    hl_engine_exit result = {.abi = HL_ENGINE_ABI, .size = sizeof(result)};
+    return hl_c_backend_exit((hl_c_backend *)backend, &result) == HL_STATUS_OK ? result.kind : 0;
+}
+
+HL_API int32_t hl_c_backend_exit_status(const hl_c_backend *backend) {
+    hl_engine_exit result = {.abi = HL_ENGINE_ABI, .size = sizeof(result)};
+    return hl_c_backend_exit((hl_c_backend *)backend, &result) == HL_STATUS_OK ? result.guest_status : -1;
+}
+
+HL_API uint64_t hl_c_backend_exit_detail(const hl_c_backend *backend) {
+    hl_engine_exit result = {.abi = HL_ENGINE_ABI, .size = sizeof(result)};
+    return hl_c_backend_exit((hl_c_backend *)backend, &result) == HL_STATUS_OK ? result.detail : 0;
 }
 
 HL_API uint64_t hl_c_backend_translation_count(const hl_c_backend *backend) {

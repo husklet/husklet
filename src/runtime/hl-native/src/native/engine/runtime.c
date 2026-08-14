@@ -5,6 +5,7 @@
 #include "../host/system.h"
 
 #include <stdlib.h>
+#include <stdbool.h>
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -33,6 +34,7 @@ struct hl_engine {
     hl_host_services host;
     const hl_engine_backend *backend;
     atomic_flag lock;
+    atomic_bool checkpoint_control_lock;
     hl_host_handle process;
     uint32_t state;
     uint32_t pending_termination;
@@ -72,12 +74,23 @@ enum {
     HL_ENGINE_DESTROYING = 4
 };
 
+static void hl_engine_yield(hl_engine *engine);
+
 static void hl_engine_lock(hl_engine *engine) {
     while (atomic_flag_test_and_set_explicit(&engine->lock, memory_order_acquire)) {}
 }
 
 static void hl_engine_unlock(hl_engine *engine) {
     atomic_flag_clear_explicit(&engine->lock, memory_order_release);
+}
+
+static void hl_engine_checkpoint_control_lock(hl_engine *engine) {
+    while (atomic_exchange_explicit(&engine->checkpoint_control_lock, true, memory_order_acquire))
+        hl_engine_yield(engine);
+}
+
+static void hl_engine_checkpoint_control_unlock(hl_engine *engine) {
+    atomic_store_explicit(&engine->checkpoint_control_lock, false, memory_order_release);
 }
 
 static void hl_engine_yield(hl_engine *engine) {
@@ -722,6 +735,7 @@ static hl_status hl_engine_create_with_options_mode(const hl_engine_config *conf
         engine->config.fd_binding_count = 0;
     }
     atomic_flag_clear(&engine->lock);
+    atomic_init(&engine->checkpoint_control_lock, false);
     engine->backend = production_backends[config->guest_isa];
     free(candidate_handles);
     *out_engine = engine;
@@ -857,7 +871,9 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
     hl_engine_unlock(engine);
     if (pending != 0) engine->host.process->terminate(engine->host.context, process, pending);
     if (engine->checkpoint_control_parent >= 0) {
+        hl_engine_checkpoint_control_lock(engine);
         status = hl_engine_checkpoint_control_ready(engine);
+        hl_engine_checkpoint_control_unlock(engine);
         if (status != HL_STATUS_OK)
             (void)engine->host.process->terminate(engine->host.context, process, HL_HOST_PROCESS_TERMINATE_FORCE);
     }
@@ -908,8 +924,12 @@ hl_status hl_engine_request(hl_engine *engine, uint32_t request, const void *dat
         return HL_STATUS_NOT_SUPPORTED;
 #else
         if (engine->checkpoint_control_parent < 0) return HL_STATUS_NOT_SUPPORTED;
+        hl_engine_checkpoint_control_lock(engine);
         status = hl_engine_checkpoint_control_ready(engine);
-        if (status != HL_STATUS_OK) return status;
+        if (status != HL_STATUS_OK) {
+            hl_engine_checkpoint_control_unlock(engine);
+            return status;
+        }
         for (;;) {
             unsigned char command = 1;
             ssize_t written = write(engine->checkpoint_control_parent, &command, sizeof(command));
@@ -922,10 +942,14 @@ hl_status hl_engine_request(hl_engine *engine, uint32_t request, const void *dat
                 } while (ready < 0 && errno == EINTR);
                 if (ready > 0 && read(waiting.fd, &interrupted, sizeof(interrupted)) == (ssize_t)sizeof(interrupted) &&
                     interrupted != 0)
-                    return HL_STATUS_OK;
-                return HL_STATUS_PLATFORM_FAILURE;
+                    status = HL_STATUS_OK;
+                else
+                    status = HL_STATUS_PLATFORM_FAILURE;
+                hl_engine_checkpoint_control_unlock(engine);
+                return status;
             }
             if (written < 0 && errno == EINTR) continue;
+            hl_engine_checkpoint_control_unlock(engine);
             return HL_STATUS_PLATFORM_FAILURE;
         }
 #endif
