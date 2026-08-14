@@ -99,6 +99,7 @@ static atomic_uint checkpoint_test_phase;
 HL_API uint32_t hl_c_backend_checkpoint_test_arm(void);
 HL_API uint32_t hl_c_backend_checkpoint_test_phase(void);
 HL_API void hl_c_backend_checkpoint_test_release(void);
+HL_API void hl_c_backend_checkpoint_test_reset(void);
 
 HL_API uint32_t hl_c_backend_checkpoint_test_arm(void) {
     atomic_store_explicit(&checkpoint_test_phase, 1, memory_order_release);
@@ -111,6 +112,10 @@ HL_API uint32_t hl_c_backend_checkpoint_test_phase(void) {
 
 HL_API void hl_c_backend_checkpoint_test_release(void) {
     atomic_store_explicit(&checkpoint_test_phase, 5, memory_order_release);
+}
+
+HL_API void hl_c_backend_checkpoint_test_reset(void) {
+    atomic_store_explicit(&checkpoint_test_phase, 0, memory_order_release);
 }
 
 static void hl_engine_checkpoint_test_pause(hl_engine *engine) {

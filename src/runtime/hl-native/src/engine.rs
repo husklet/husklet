@@ -527,6 +527,32 @@ mod tests {
     #[cfg(feature = "native-test-hooks")]
     #[test]
     fn checkpoint_control_transaction_serializes_readiness_and_acknowledgement() {
+        const CHILD: &str = "HL_NATIVE_CHECKPOINT_TRANSACTION_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "engine::tests::checkpoint_control_transaction_serializes_readiness_and_acknowledgement",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .spawn()
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(15);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert!(status.success(), "checkpoint transaction child failed: {status}");
+                    return;
+                }
+                if Instant::now() >= deadline {
+                    child.kill().unwrap();
+                    let _ = child.wait();
+                    panic!("checkpoint transaction child exceeded 15 seconds");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
         for isa in [1, 2] {
             let (mut engine, _standard) = create_engine(isa);
             let (_broker, transport) = crate::CheckpointTransport::create().unwrap();
@@ -580,6 +606,8 @@ mod tests {
                     "ISA {isa} run failed after checkpoint ack"
                 );
             });
+            // SAFETY: the child has joined every user of the feature-only hook.
+            unsafe { crate::bindings::hl_c_backend_checkpoint_test_reset() };
         }
     }
 }
