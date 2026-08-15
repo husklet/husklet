@@ -50,6 +50,38 @@ pub(crate) fn run(options: Options) -> Result<(), Box<dyn Error>> {
     let timeout = Duration::from_secs(options.timeout_seconds);
     let mut failed = false;
 
+    let label = "non-vacuity";
+    let stdout = File::create(artifacts.join("non-vacuity.stdout"))?;
+    let stderr = File::create(artifacts.join("non-vacuity.stderr"))?;
+    let log = artifacts.join("non-vacuity.sanitizer");
+    let mut probe = crate::platform::HostProcess::standard(&executable);
+    probe
+        .arg("leak-probe")
+        .env(
+            "ASAN_OPTIONS",
+            format!("detect_leaks=1:halt_on_error=1:exitcode=97:log_path={}", log.display()),
+        )
+        .env(
+            "LSAN_OPTIONS",
+            format!(
+                "suppressions={}:print_suppressions=1:exitcode=97:log_path={}",
+                suppression.display(),
+                log.display()
+            ),
+        )
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+    let mut child = probe.spawn()?;
+    let probe_outcome = wait(&mut child, timeout)?;
+    let probe_sanitizer = sanitizer_reported(&artifacts, label)?;
+    if !non_vacuity_passed(probe_outcome.status.code(), probe_outcome.timed_out, probe_sanitizer) {
+        let probe_diagnostic = diagnostic(&probe_outcome, probe_sanitizer);
+        writeln!(report, "non-vacuity\tarm64\tfail\t{probe_diagnostic}")?;
+        report.flush()?;
+        eprintln!("leaks: artifacts={}", artifacts.display());
+        return Err(non_vacuity_failure(&probe_diagnostic).into());
+    }
+
     for (index, &(case, isa)) in DEFAULT_CASES.iter().enumerate() {
         if case == "runtime/workload/sqlite" && !sqlite_available() {
             writeln!(
@@ -81,45 +113,28 @@ pub(crate) fn run(options: Options) -> Result<(), Box<dyn Error>> {
         failed |= !passed;
     }
 
-    let label = "non-vacuity";
-    let stdout = File::create(artifacts.join("non-vacuity.stdout"))?;
-    let stderr = File::create(artifacts.join("non-vacuity.stderr"))?;
-    let log = artifacts.join("non-vacuity.sanitizer");
-    let mut probe = crate::platform::HostProcess::standard(&executable);
-    probe
-        .arg("leak-probe")
-        .env(
-            "ASAN_OPTIONS",
-            format!("detect_leaks=1:halt_on_error=1:exitcode=97:log_path={}", log.display()),
-        )
-        .env(
-            "LSAN_OPTIONS",
-            format!(
-                "suppressions={}:print_suppressions=1:exitcode=97:log_path={}",
-                suppression.display(),
-                log.display()
-            ),
-        )
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr));
-    let mut child = probe.spawn()?;
-    let outcome = wait(&mut child, timeout)?;
-    let sanitizer = sanitizer_reported(&artifacts, label)?;
-    let probe_passed = !outcome.timed_out && outcome.status.code() == Some(97) && sanitizer;
     writeln!(
         report,
-        "non-vacuity\tarm64\t{}\t{}",
-        if probe_passed { "pass" } else { "fail" },
-        diagnostic(&outcome, sanitizer)
+        "non-vacuity\tarm64\tpass\t{}",
+        diagnostic(&probe_outcome, probe_sanitizer)
     )?;
     report.flush()?;
-    failed |= !probe_passed;
     eprintln!("leaks: artifacts={}", artifacts.display());
     if failed {
         Err("production C engine leak gate failed; inspect retained artifacts".into())
     } else {
         Ok(())
     }
+}
+
+fn non_vacuity_passed(exit_code: Option<i32>, timed_out: bool, sanitizer: bool) -> bool {
+    !timed_out && exit_code == Some(97) && sanitizer
+}
+
+fn non_vacuity_failure(diagnostic: &str) -> String {
+    format!(
+        "LeakSanitizer non-vacuity probe failed before workloads ({diagnostic}); rebuild and run an instrumented binary in a dedicated target: HL_C_SANITIZER=leak CARGO_TARGET_DIR=target/lsan cargo run --locked --offline -p testing -- leaks --artifacts target/testing/leaks/lsan-UNIQUE"
+    )
 }
 
 fn sqlite_available() -> bool {
@@ -257,4 +272,26 @@ fn diagnostic(outcome: &Outcome, sanitizer: bool) -> String {
         "exit={} timeout={} sanitizer={sanitizer}",
         outcome.status, outcome.timed_out
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{non_vacuity_failure, non_vacuity_passed};
+
+    #[test]
+    fn non_vacuity_requires_exit_97_and_sanitizer_report() {
+        assert!(non_vacuity_passed(Some(97), false, true));
+        assert!(!non_vacuity_passed(Some(0), false, false));
+        assert!(!non_vacuity_passed(Some(97), false, false));
+        assert!(!non_vacuity_passed(Some(97), true, true));
+    }
+
+    #[test]
+    fn non_vacuity_failure_explains_dedicated_instrumented_build() {
+        let message = non_vacuity_failure("exit=exit status: 0 timeout=false sanitizer=false");
+        assert!(message.contains("failed before workloads"));
+        assert!(message.contains("HL_C_SANITIZER=leak"));
+        assert!(message.contains("CARGO_TARGET_DIR=target/lsan"));
+        assert!(message.contains("cargo run --locked --offline -p testing -- leaks"));
+    }
 }
