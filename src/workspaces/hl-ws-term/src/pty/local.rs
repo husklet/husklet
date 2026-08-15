@@ -15,6 +15,8 @@ use std::ffi::{CStr, CString};
 use std::io;
 use std::os::unix::io::RawFd;
 
+const PTY_CLOSE_GRACE: std::time::Duration = std::time::Duration::from_millis(200);
+
 /// A forked child shell attached to a PTY master fd.
 pub struct LocalPty {
     master: RawFd,
@@ -136,6 +138,73 @@ impl LocalPty {
             })
         }
     }
+
+    fn close_process_group(&mut self) {
+        if self.exited.is_some() && !self.process_group_exists() {
+            return;
+        }
+        self.signal_process_group(libc::SIGHUP);
+        let deadline = std::time::Instant::now() + PTY_CLOSE_GRACE;
+        while std::time::Instant::now() < deadline {
+            self.reap_child();
+            if self.exited.is_some() && !self.process_group_exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if self.exited.is_none() || self.process_group_exists() {
+            self.signal_process_group(libc::SIGKILL);
+        }
+        if self.exited.is_none() {
+            let mut status = 0;
+            // SAFETY: `child` is the sole child process owned by this PTY. A blocking wait after
+            // SIGKILL reaps it exactly once and retains no pointer to `status`.
+            let waited = unsafe { libc::waitpid(self.child, &raw mut status, 0) };
+            if waited == self.child {
+                self.exited = Some(Self::exit_code(status));
+            }
+        }
+    }
+
+    fn signal_process_group(&self, signal: libc::c_int) {
+        // The child calls setsid, so its PID becomes its process-group ID. Deliver to both the group and
+        // an unreaped leader: the positive target closes the short race where Drop runs before setsid
+        // completes. Once reaped, the positive PID could have been reused and must not be signalled.
+        // SAFETY: the calls consume integer process identities and retain no Rust storage.
+        unsafe {
+            libc::kill(-self.child, signal);
+            if self.exited.is_none() {
+                libc::kill(self.child, signal);
+            }
+        }
+    }
+
+    fn process_group_exists(&self) -> bool {
+        // SAFETY: signal zero probes the process-group identity without delivering a signal.
+        unsafe { libc::kill(-self.child, 0) == 0 }
+    }
+
+    fn reap_child(&mut self) -> bool {
+        let mut status = 0;
+        // SAFETY: `status` is live writable storage and `child` is owned by this PTY.
+        let waited = unsafe { libc::waitpid(self.child, &raw mut status, libc::WNOHANG) };
+        if waited == self.child {
+            self.exited = Some(Self::exit_code(status));
+            true
+        } else {
+            false
+        }
+    }
+
+    fn exit_code(status: libc::c_int) -> i32 {
+        if libc::WIFEXITED(status) {
+            libc::WEXITSTATUS(status)
+        } else if libc::WIFSIGNALED(status) {
+            128 + libc::WTERMSIG(status)
+        } else {
+            -1
+        }
+    }
 }
 
 impl PtyBackend for LocalPty {
@@ -197,14 +266,7 @@ impl PtyBackend for LocalPty {
         // SAFETY: `status` is a live local the kernel writes exclusively for this call.
         let r = unsafe { libc::waitpid(self.child, &raw mut status, libc::WNOHANG) };
         if r == self.child {
-            let code = if libc::WIFEXITED(status) {
-                libc::WEXITSTATUS(status)
-            } else if libc::WIFSIGNALED(status) {
-                128 + libc::WTERMSIG(status)
-            } else {
-                -1
-            };
-            self.exited = Some(code);
+            self.exited = Some(Self::exit_code(status));
         }
         self.exited
     }
@@ -212,14 +274,9 @@ impl PtyBackend for LocalPty {
 
 impl Drop for LocalPty {
     fn drop(&mut self) {
+        self.close_process_group();
         // SAFETY: the descriptors and child pid are owned by this value and still valid while it drops.
         unsafe {
-            if self.exited.is_none() {
-                libc::kill(self.child, libc::SIGHUP);
-                // Best-effort reap so we don't leak a zombie.
-                let mut status = 0;
-                libc::waitpid(self.child, &raw mut status, libc::WNOHANG);
-            }
             if self.slave >= 0 {
                 libc::close(self.slave);
             }
@@ -278,6 +335,88 @@ mod tests {
         std::path::Path::new(prog).exists()
     }
 
+    fn read_process_id(pty: &mut LocalPty) -> libc::pid_t {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 64];
+        while Instant::now() < deadline {
+            if let Ok(count) = pty.read(&mut buffer) {
+                bytes.extend_from_slice(&buffer[..count]);
+                if bytes.contains(&b'\n') {
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        String::from_utf8_lossy(&bytes)
+            .trim()
+            .parse()
+            .expect("shell must report its descendant pid")
+    }
+
+    fn process_exists(process: libc::pid_t) -> bool {
+        // SAFETY: signal zero only probes the integer process identity.
+        unsafe { libc::kill(process, 0) == 0 }
+    }
+
+    fn pre_session_ignored_hangup_child() -> libc::pid_t {
+        let mut ready = [-1; 2];
+        // SAFETY: the pipe array is valid writable storage for two descriptors.
+        assert_eq!(unsafe { libc::pipe(ready.as_mut_ptr()) }, 0);
+        let shell = std::ffi::CString::new("/bin/sh").unwrap();
+        let name = std::ffi::CString::new("sh").unwrap();
+        let option = std::ffi::CString::new("-c").unwrap();
+        let script = std::ffi::CString::new("printf x >&3; exec sleep 2").unwrap();
+        // SAFETY: fork creates one owned child. Every child-side operation below is async-signal-safe,
+        // and all exec strings were allocated in the parent.
+        let child = unsafe { libc::fork() };
+        if child == 0 {
+            // SAFETY: the child exclusively owns its descriptor table and immediately execs or exits.
+            unsafe {
+                libc::close(ready[0]);
+                libc::dup2(ready[1], 3);
+                if ready[1] != 3 {
+                    libc::close(ready[1]);
+                }
+                libc::signal(libc::SIGHUP, libc::SIG_IGN);
+                libc::execl(
+                    shell.as_ptr(),
+                    name.as_ptr(),
+                    option.as_ptr(),
+                    script.as_ptr(),
+                    std::ptr::null::<libc::c_char>(),
+                );
+                libc::_exit(127);
+            }
+        }
+        assert!(child > 1, "fork test child");
+        // SAFETY: only the child needs the write end after fork.
+        unsafe { libc::close(ready[1]) };
+        let mut poll = libc::pollfd {
+            fd: ready[0],
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: the parent owns the live pipe descriptor and `poll` is writable for this call.
+        let readable = unsafe { libc::poll(&raw mut poll, 1, 2_000) };
+        if readable != 1 {
+            // SAFETY: this failure path owns the child and remaining read descriptor.
+            unsafe {
+                libc::kill(child, libc::SIGKILL);
+                libc::waitpid(child, std::ptr::null_mut(), 0);
+                libc::close(ready[0]);
+            }
+            panic!("pre-session child did not exec within two seconds");
+        }
+        // SAFETY: the parent owns these pipe descriptors and reads one readiness byte before closing.
+        unsafe {
+            let mut byte = 0_u8;
+            assert_eq!(libc::read(ready[0], (&raw mut byte).cast(), 1), 1);
+            libc::close(ready[0]);
+        }
+        child
+    }
+
     #[test]
     fn real_shell_prints_text_through_the_vt() {
         // The end-to-end headless proof: a real shell on a real PTY -> our VT parser -> grid.
@@ -292,6 +431,96 @@ mod tests {
         let vt = run_into_vt(pty, 40, 10);
         assert_eq!(vt.grid().row_text(0), "hello");
         assert_eq!(vt.grid().row_text(1), "world");
+    }
+
+    #[test]
+    fn dropping_a_pty_reaps_its_hup_ignoring_process_group() {
+        let mut pty = LocalPty::spawn(
+            &[
+                "/bin/sh",
+                "-c",
+                "trap '' HUP TERM; sleep 60 & printf '%s\\n' \"$!\"; wait",
+            ],
+            40,
+            10,
+            &std::collections::BTreeMap::new(),
+        )
+        .expect("spawn process tree");
+        let descendant = read_process_id(&mut pty);
+        assert!(process_exists(descendant));
+
+        drop(pty);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while process_exists(descendant) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let survived = process_exists(descendant);
+        if survived {
+            // Never leak the mutation's deliberately surviving process into another test or lane.
+            // SAFETY: this test exclusively owns the reported descendant process identity.
+            unsafe { libc::kill(descendant, libc::SIGKILL) };
+        }
+        assert!(!survived, "PTY descendant survived its owner's bounded teardown");
+    }
+
+    #[test]
+    fn dropping_before_setsid_forces_a_leader_inheriting_ignored_hangup() {
+        let child = pre_session_ignored_hangup_child();
+        // Readiness is written after exec, while the child deliberately remains in this test's process
+        // group. It has therefore inherited SIG_IGN across exec but has not reached the PTY setsid state.
+        // SAFETY: getpgid only reads the live child process identity.
+        assert_ne!(unsafe { libc::getpgid(child) }, child);
+        // LocalPty closes both descriptors after owning and reaping the child.
+        // SAFETY: each open returns a new descriptor owned by the constructed LocalPty.
+        let master = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDWR) };
+        // SAFETY: as above, this is a second independently owned descriptor.
+        let slave = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDWR) };
+        assert!(master >= 0 && slave >= 0);
+        let pty = LocalPty {
+            master,
+            slave,
+            child,
+            exited: None,
+        };
+
+        let started = Instant::now();
+        drop(pty);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(!process_exists(child));
+    }
+
+    #[test]
+    fn dropping_a_reaped_pty_leader_still_reaps_its_process_group() {
+        let mut pty = LocalPty::spawn(
+            &[
+                "/bin/sh",
+                "-c",
+                "trap '' HUP TERM; sleep 60 & printf '%s\\n' \"$!\"; exit 0",
+            ],
+            40,
+            10,
+            &std::collections::BTreeMap::new(),
+        )
+        .expect("spawn detached descendant");
+        let descendant = read_process_id(&mut pty);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while pty.try_wait().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(pty.exited, Some(0), "PTY leader must be reaped before ownership drops");
+        assert!(process_exists(descendant));
+
+        drop(pty);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while process_exists(descendant) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let survived = process_exists(descendant);
+        if survived {
+            // SAFETY: this test exclusively owns the reported descendant process identity.
+            unsafe { libc::kill(descendant, libc::SIGKILL) };
+        }
+        assert!(!survived, "reaped PTY leader stranded its process group");
     }
 
     #[test]
