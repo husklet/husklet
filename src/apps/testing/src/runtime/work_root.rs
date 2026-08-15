@@ -88,6 +88,15 @@ impl WorkRoot {
         self.0.join("state")
     }
 
+    /// Creates one independently owned container-state directory.
+    pub(crate) fn temporary_state(&self) -> Result<tempfile::TempDir, String> {
+        let state = self.state();
+        fs::create_dir_all(&state)
+            .map_err(|error| format!("create runtime state root {}: {error}", state.display()))?;
+        tempfile::tempdir_in(&state)
+            .map_err(|error| format!("create container state directory in {}: {error}", state.display()))
+    }
+
     pub(crate) fn scratch_images(&self) -> PathBuf {
         self.0.join("scratch-images")
     }
@@ -193,5 +202,17 @@ mod tests {
         let root = WorkRoot(parent.path().join("runtime"));
         root.preflight().unwrap();
         assert!(root.0.is_dir());
+    }
+
+    #[test]
+    fn temporary_state_owns_its_cleanup() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = WorkRoot(parent.path().join("runtime"));
+        let state = root.temporary_state().unwrap();
+        let path = state.path().to_owned();
+        assert_eq!(path.parent(), Some(root.state().as_path()));
+        assert!(path.is_dir());
+        drop(state);
+        assert!(!path.exists());
     }
 }
