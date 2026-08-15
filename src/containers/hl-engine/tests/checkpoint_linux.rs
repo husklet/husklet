@@ -418,7 +418,7 @@ fn concurrent_engines_keep_second_generation_checkpoint_channels_private() {
                 Some(first_ready),
                 Some(first_capture),
                 Some(first_done),
-            )
+            );
         });
         scope.spawn(move || {
             concurrent_signalfd_recapture(
@@ -428,7 +428,7 @@ fn concurrent_engines_keep_second_generation_checkpoint_channels_private() {
                 Some(second_ready),
                 Some(second_capture),
                 None,
-            )
+            );
         });
     });
 }

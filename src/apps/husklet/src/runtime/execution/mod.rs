@@ -11,8 +11,6 @@ mod process;
 
 use process::{ExecPty, Output, Shell};
 
-const PANE_SLOT: &str = "HL_HUSKLET_PANE_SLOT";
-
 #[derive(Clone)]
 pub(crate) struct PaneExecution {
     storage: Directory,
@@ -112,15 +110,7 @@ pub fn launch(
             stderr: true,
         },
         tty: true,
-        env: Some(
-            [
-                Some(format!("HOME={terminal_home}")),
-                slot.map(|slot| format!("{PANE_SLOT}={slot}")),
-            ]
-            .into_iter()
-            .flatten()
-            .collect(),
-        ),
+        env: Some(vec![format!("HOME={terminal_home}")]),
         command: vec!["/bin/sh".into(), "-c".into(), command],
         user: terminal_user.into(),
         working_dir,

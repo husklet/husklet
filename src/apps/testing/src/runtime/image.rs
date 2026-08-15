@@ -55,7 +55,7 @@ pub struct TestImage {
     root: Root,
     runtime: RuntimeConfig,
     /// A scratch case owns its isolated image catalog for the full container lifetime.
-    _scratch_store: Option<tempfile::TempDir>,
+    scratch_store: Option<tempfile::TempDir>,
 }
 
 impl TestImage {
@@ -106,7 +106,7 @@ impl TestImage {
             unpacked: matches!(mode, Materialization::Overlay).then_some(unpacked),
             root,
             runtime,
-            _scratch_store: None,
+            scratch_store: None,
         })
     }
 
@@ -133,7 +133,7 @@ impl TestImage {
         let name: Reference = "husklet.invalid/testing-scratch:empty".parse()?;
         let image = images.commit(&layer, &runtime, platform, &name)?;
         let mut fixture = Self::from_image(images, &image, platform, mode)?;
-        fixture._scratch_store = Some(store);
+        fixture.scratch_store = Some(store);
         Ok(fixture)
     }
 

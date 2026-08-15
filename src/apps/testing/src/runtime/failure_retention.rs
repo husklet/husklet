@@ -134,7 +134,7 @@ impl<W: std::io::Write> std::io::Write for HashedBoundedWriter<W> {
 fn sha256_file(path: &Path) -> Result<String, Error> {
     let mut file = fs::File::open(path)?;
     let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
     loop {
         let read = std::io::Read::read(&mut file, &mut buffer)?;
         if read == 0 {

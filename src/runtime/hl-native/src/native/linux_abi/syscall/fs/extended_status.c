@@ -286,7 +286,7 @@ static void svc_fs_extended_status_265(struct cpu *c, uint64_t nr, uint64_t a0, 
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
         }
-        if (nr == 439 && (a3 & ~(uint64_t)(AT_EACCESS | AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH))) {
+        if (nr == 439 && (a3 & ~(uint64_t)(AT_EACCESS | AT_SYMLINK_NOFOLLOW | 0x1000))) {
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
         }

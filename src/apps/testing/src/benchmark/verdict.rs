@@ -89,7 +89,11 @@ fn append_compatibility(campaign: &Campaign, lines: &mut Vec<String>) {
     }
 }
 
-use verify::*;
+use verify::{NullKey, phases, verify_balanced_order, verify_complete_plan, verify_plan};
+#[cfg(test)]
+use verify::{
+    verify_context_plan, verify_host_load, verify_phase_coverage, verify_phase_frame, verify_row_provenance,
+};
 
 #[path = "verdict/verify.rs"]
 mod verify;
