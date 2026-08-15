@@ -1,1 +1,1 @@
-simd_mp rounds=400000 bad=0
+simd_mp rounds=10000 bad=0

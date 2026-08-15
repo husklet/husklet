@@ -172,6 +172,39 @@ fn repository_yaml_inventory_is_fully_discovered_and_planned() {
     assert_eq!(scheduled.union(&recorded).cloned().collect::<BTreeSet<_>>(), declared);
 }
 
+#[test]
+fn x86_tso_compatibility_and_full_stress_are_both_owned() {
+    let apps = apps(&options(&[])).unwrap();
+    let cases = apps
+        .iter()
+        .flat_map(|app| &app.cases)
+        .map(|case| (case.id.as_str(), case))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    for (bounded, bounded_rounds, soak, soak_rounds) in [
+        (
+            "runtime/ipc/tso-unaligned",
+            "2000",
+            "runtime/ipc/tso-unaligned-soak",
+            "100000",
+        ),
+        (
+            "runtime/ipc/tso-simd-mp",
+            "10000",
+            "runtime/ipc/tso-simd-mp-soak",
+            "400000",
+        ),
+    ] {
+        let bounded = cases.get(bounded).unwrap();
+        assert_eq!(bounded.arguments, [bounded_rounds]);
+        assert!(bounded.soak.is_none());
+
+        let extended = cases.get(soak).unwrap();
+        assert_eq!(extended.arguments, [soak_rounds]);
+        assert_eq!(extended.soak.as_ref().unwrap().duration().as_secs(), 900);
+    }
+}
+
 /// Builds a one-case app whose manifest header and expectation are supplied, so floor inheritance
 /// can be exercised without a real toolchain.
 fn floored(header: &str, expect: &str) -> Result<App, crate::suite::Error> {
