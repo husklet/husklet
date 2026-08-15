@@ -247,6 +247,9 @@ static void readlink_copy(struct cpu *c, char *buf, size_t size, const char *tar
     G_RET(c) = (uint64_t)length;
 }
 
+static void readlink_filesystem(struct cpu *c, int dirfd, const char *path, const char *guest_path, char *buf,
+                                size_t size);
+
 static int readlink_empty_path(struct cpu *c, int fd, const char *path, char *buf, size_t size) {
     if (!path || path[0] || fd < 0) return 0;
     hl_linux_fd_snapshot snapshot;
@@ -263,6 +266,10 @@ static int readlink_empty_path(struct cpu *c, int fd, const char *path, char *bu
     }
     char fd_path[4200];
     const char *named = NULL;
+    if (fd < HL_NFD && g_opath[fd] && g_fdpath[fd][0] && g_fdpath_guest[fd]) {
+        readlink_filesystem(c, AT_FDCWD, g_fdpath[fd], g_fdpath[fd], buf, size);
+        return 1;
+    }
     if (fd < HL_NFD && g_opath[fd] && g_fdpath[fd][0])
         named = g_fdpath[fd];
     else if (hl_native_fd_path(fd, fd_path, sizeof fd_path) == 0)
