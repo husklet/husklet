@@ -437,7 +437,7 @@ static int exec_prepare_interpreter(exec_prepared *prepared) {
     int error = exec_image_open(resolved, &prepared->program_interpreter);
     /* Linux reports a malformed PT_INTERP target as ELIBBAD, while the same
        bytes used as the main image are ENOEXEC. */
-    return error == -ENOEXEC ? -ELIBBAD : error;
+    return error == -ENOEXEC ? -HL_LINUX_ELIBBAD : error;
 }
 
 static int exec_prepare_request(uint64_t path_address, uint64_t argv_address, uint64_t environment_address,

@@ -49,7 +49,8 @@ typedef enum hl_linux_errno {
     HL_LINUX_ECONNRESET = 104,
     HL_LINUX_ENETUNREACH = 101,
     HL_LINUX_EADDRINUSE = 98,
-    HL_LINUX_EOVERFLOW = 75
+    HL_LINUX_EOVERFLOW = 75,
+    HL_LINUX_ELIBBAD = 80
 } hl_linux_errno;
 
 enum { HL_LINUX_PATH_MAX = 4096 };
