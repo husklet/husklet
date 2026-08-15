@@ -136,6 +136,17 @@ static void svc_fs_namespace_34(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
     }
 }
 
+static int rmdir_final_dot_errno(const char *path) {
+    size_t end = strlen(path);
+    while (end > 1 && path[end - 1] == '/') --end;
+    size_t start = end;
+    while (start > 0 && path[start - 1] != '/') --start;
+    size_t length = end - start;
+    if (length == 1 && path[start] == '.') return EINVAL;
+    if (length == 2 && path[start] == '.' && path[start + 1] == '.') return ENOTEMPTY;
+    return 0;
+}
+
 static void svc_fs_namespace_35(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                                 uint64_t a4, uint64_t a5) {
     switch (nr) {
@@ -146,6 +157,13 @@ static void svc_fs_namespace_35(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
         if (a2 & ~0x200u) {
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
+        }
+        if (a2 & 0x200) {
+            int syntax = rmdir_final_dot_errno((const char *)a1);
+            if (syntax != 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-syntax);
+                break;
+            }
         }
         // The pathname was already imported and validated at the svc_fs boundary.
         {
@@ -604,6 +622,16 @@ static void svc_fs_namespace_38(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
             if (!adc) adc = at_dirfd_check((int)a2, (const char *)a3);
             if (adc) {
                 G_RET(c) = (uint64_t)(int64_t)adc;
+                break;
+            }
+        }
+        {
+            const char *source = (const char *)a1;
+            size_t length = strlen(source);
+            hl_dac_snapshot snapshot;
+            if (length > 1 && source[length - 1] == '/' && dac_snapshot_at((int)a0, source, 1, &snapshot) == 0 &&
+                !S_ISDIR(snapshot.mode)) {
+                G_RET(c) = (uint64_t)(int64_t)(-ENOTDIR);
                 break;
             }
         }

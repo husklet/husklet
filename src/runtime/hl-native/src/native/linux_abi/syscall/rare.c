@@ -1368,6 +1368,11 @@ static int svc_rare_timer_control(struct cpu *c, uint64_t nr, uint64_t a0, uint6
             G_RET(c) = (uint64_t)(int64_t)(-EROFS);
             break;
         }
+        hl_dac_snapshot snapshot;
+        if (dac_snapshot_at(-100, guest_path, 1, &snapshot) == 0 && S_ISDIR(snapshot.mode)) {
+            G_RET(c) = (uint64_t)(int64_t)(-EISDIR);
+            break;
+        }
         char pb[4200];
         const char *p = xresolve_overlay(guest_path, pb, sizeof pb);
         // RLIMIT_FSIZE: a truncate whose target length exceeds the soft file-size limit raises SIGXFSZ and
