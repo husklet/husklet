@@ -1,7 +1,7 @@
 // The controlling-terminal and descriptor calls in this worker adapter are `unsafe` libc entry points.
 #![allow(unsafe_code)]
 
-use super::{on_winch, Ordering, WINCH};
+use super::{Ordering, WINCH, on_winch};
 use crate::ffi::RawMode;
 use std::io::Write;
 
@@ -69,7 +69,7 @@ impl OpenFiles {
 
 /// Private Unix resource-limit boundary implemented by its existing owner.
 mod ffi {
-    use super::{on_winch, OpenFiles, TerminalSession};
+    use super::{OpenFiles, TerminalSession, on_winch};
 
     impl TerminalSession<'_> {
         pub(super) fn install_resize_handler() {
@@ -233,25 +233,33 @@ impl<'a> TerminalSession<'a> {
     }
 
     fn drain_output(&mut self) -> std::io::Result<()> {
-        let mut wrote = false;
-        let mut drained = 0;
-        loop {
-            let count = self.pty.read(&mut self.buffer)?;
-            if count == 0 {
-                break;
-            }
-            self.output.write_all(&self.buffer[..count])?;
-            wrote = true;
-            drained += count;
-            if drained >= OUTPUT_DRAIN_BUDGET {
-                break;
-            }
-        }
-        if wrote {
-            self.output.flush()?;
-        }
-        Ok(())
+        drain_output_to(self.pty, &mut self.buffer, &mut self.output)
     }
+}
+
+fn drain_output_to(
+    pty: &mut dyn hl_ws_term::PtyBackend,
+    buffer: &mut [u8; 8192],
+    output: &mut impl Write,
+) -> std::io::Result<()> {
+    let mut wrote = false;
+    let mut drained = 0;
+    loop {
+        let count = pty.read(buffer)?;
+        if count == 0 {
+            break;
+        }
+        output.write_all(&buffer[..count])?;
+        wrote = true;
+        drained += count;
+        if drained >= OUTPUT_DRAIN_BUDGET {
+            break;
+        }
+    }
+    if wrote {
+        output.flush()?;
+    }
+    Ok(())
 }
 
 /// Query the controlling terminal's size (cols, rows).
@@ -345,17 +353,21 @@ mod open_files_tests {
 
     #[test]
     fn productive_output_yields_to_the_relay_loop() {
-        let mut backend = ProductiveBackend { reads: 0 };
-        let mut terminal = TerminalSession::new(&mut backend);
+        let expected_reads = super::OUTPUT_DRAIN_BUDGET / 8192;
+        let mut backend = ProductiveBackend {
+            reads: 0,
+            available_reads: expected_reads + 1,
+        };
+        let mut buffer = [0; 8192];
 
-        terminal.drain_output().unwrap();
-        drop(terminal);
+        super::drain_output_to(&mut backend, &mut buffer, &mut io::sink()).unwrap();
 
-        assert_eq!(backend.reads, super::OUTPUT_DRAIN_BUDGET / 8192);
+        assert_eq!(backend.reads, expected_reads);
     }
 
     struct ProductiveBackend {
         reads: usize,
+        available_reads: usize,
     }
 
     impl PtyBackend for ProductiveBackend {
@@ -364,8 +376,11 @@ mod open_files_tests {
         }
 
         fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-            buffer.fill(b'x');
             self.reads += 1;
+            if self.reads > self.available_reads {
+                return Ok(0);
+            }
+            buffer.fill(b'x');
             Ok(buffer.len())
         }
 
