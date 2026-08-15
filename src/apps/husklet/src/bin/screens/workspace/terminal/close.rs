@@ -57,11 +57,23 @@ impl CloseRequest {
                 crate::components::dialog::CloseChoice::Kill => hl::runtime::domain::Close::Kill,
                 crate::components::dialog::CloseChoice::Continue => hl::runtime::domain::Close::Continue,
             };
-            let closed = hl::runtime::domain::Domain::new(&workspace).close(disposition);
+            let closed = Self::close_runtime(
+                || hl::runtime::domain::Domain::new(&workspace).close(disposition),
+                || Processes::close_workspace(&workspace.key()),
+            );
             if let Ok(mut result) = completed.lock() {
                 *result = Some(closed);
             }
         });
+    }
+
+    fn close_runtime(
+        close_domain: impl FnOnce() -> std::io::Result<()>,
+        close_launchers: impl FnOnce() -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        let domain = close_domain();
+        let launchers = close_launchers();
+        domain.and(launchers)
     }
 
     fn poll_close(
@@ -96,5 +108,43 @@ impl CloseRequest {
             .detail(error.to_string())
             .action(hl_gui::Action::new(hl_gui::EventId::new("dismiss"), "Dismiss"));
         crate::gtk_adapter::Dialog::present(Some(parent.upcast_ref()), failure, |_| {});
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CloseRequest;
+    use std::cell::Cell;
+
+    #[test]
+    fn workspace_close_reaps_launchers_after_the_domain() {
+        let stage = Cell::new(0);
+        CloseRequest::close_runtime(
+            || {
+                assert_eq!(stage.replace(1), 0);
+                Ok(())
+            },
+            || {
+                assert_eq!(stage.replace(2), 1);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(stage.get(), 2);
+    }
+
+    #[test]
+    fn failed_domain_close_still_reaps_launchers() {
+        let reaped = Cell::new(false);
+        let error = CloseRequest::close_runtime(
+            || Err(std::io::Error::other("domain close failed")),
+            || {
+                reaped.set(true);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(reaped.get());
+        assert_eq!(error.to_string(), "domain close failed");
     }
 }
