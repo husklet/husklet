@@ -5,6 +5,21 @@ static SESSION_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) struct CopyMode(Cell<bool>);
 
+#[derive(Debug, Eq, PartialEq)]
+struct CopyModeFocusTransition {
+    clear_previous: bool,
+    mark_current: bool,
+}
+
+impl CopyModeFocusTransition {
+    fn new(active: bool, has_previous: bool, previous_is_current: bool) -> Self {
+        Self {
+            clear_previous: active && has_previous && !previous_is_current,
+            mark_current: active,
+        }
+    }
+}
+
 impl CopyMode {
     pub(crate) fn new() -> Self {
         Self(Cell::new(false))
@@ -25,6 +40,23 @@ impl CopyMode {
         self.0.set(false);
         if let Some(t) = terminal {
             t.remove_css_class("copymode");
+        }
+    }
+
+    /// Keep the visual owner of an active window-global copy mode aligned with keyboard focus.
+    pub(crate) fn focus(&self, previous: Option<vte4::Terminal>, current: &vte4::Terminal) {
+        let transition = CopyModeFocusTransition::new(
+            self.is_active(),
+            previous.is_some(),
+            previous.as_ref().is_some_and(|terminal| terminal == current),
+        );
+        if transition.clear_previous {
+            if let Some(previous) = previous {
+                previous.remove_css_class("copymode");
+            }
+        }
+        if transition.mark_current {
+            current.add_css_class("copymode");
         }
     }
 
@@ -79,6 +111,49 @@ impl CopyMode {
             _ => {}
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod copy_mode_tests {
+    use super::CopyModeFocusTransition;
+
+    #[test]
+    fn active_copy_mode_follows_focus_between_panes() {
+        assert_eq!(
+            CopyModeFocusTransition::new(true, true, false),
+            CopyModeFocusTransition {
+                clear_previous: true,
+                mark_current: true,
+            }
+        );
+        assert_eq!(
+            CopyModeFocusTransition::new(true, false, false),
+            CopyModeFocusTransition {
+                clear_previous: false,
+                mark_current: true,
+            }
+        );
+    }
+
+    #[test]
+    fn copy_mode_focus_is_stable_for_same_pane_and_inert_after_exit() {
+        assert_eq!(
+            CopyModeFocusTransition::new(true, true, true),
+            CopyModeFocusTransition {
+                clear_previous: false,
+                mark_current: true,
+            }
+        );
+        for (has_previous, previous_is_current) in [(false, false), (true, false), (true, true)] {
+            assert_eq!(
+                CopyModeFocusTransition::new(false, has_previous, previous_is_current),
+                CopyModeFocusTransition {
+                    clear_previous: false,
+                    mark_current: false,
+                }
+            );
+        }
     }
 }
 
