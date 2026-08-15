@@ -22,28 +22,141 @@ static const char *xresolve_exec(const char *p, char *buf,
                                  size_t n);
 
 static struct hl_linux_vfs_lower g_lower[HL_LINUX_VFS_LOWER_CAPACITY];
+static hl_host_handle g_lower_handle[HL_LINUX_VFS_LOWER_CAPACITY] = {0};
+static unsigned char g_lower_borrowed[HL_LINUX_VFS_LOWER_CAPACITY] = {0};
 // [0] = highest-priority lower (searched first)
 static int g_nlower = 0;
 
-// register a read-only lower layer (image layer)
+#include "cursor.c"
+
+static void hl_vfs_lower_release_at(int index) {
+    if (index < 0 || index >= g_nlower) return;
+    if (g_lower_borrowed[index] && g_host_services != NULL && g_host_services->posix_attachment != NULL &&
+        g_host_services->posix_attachment->release != NULL)
+        (void)g_host_services->posix_attachment->release(g_host_services->context,
+                                                         (uint64_t)(unsigned)g_lower[index].descriptor);
+    else if (g_lower[index].descriptor >= 0)
+        close(g_lower[index].descriptor);
+    if (g_lower_handle[index] != HL_HOST_HANDLE_INVALID && g_host_services != NULL &&
+        g_host_services->file != NULL && g_host_services->file->close != NULL)
+        (void)g_host_services->file->close(g_host_services->context, g_lower_handle[index]);
+    memset(&g_lower[index], 0, sizeof g_lower[index]);
+    g_lower[index].descriptor = -1;
+    g_lower_handle[index] = HL_HOST_HANDLE_INVALID;
+    g_lower_borrowed[index] = 0;
+}
+
+static void hl_vfs_lower_state_clear(void) {
+    while (g_nlower != 0) {
+        hl_vfs_lower_release_at(g_nlower - 1);
+        g_nlower--;
+    }
+}
+
+static int hl_vfs_lower_state_after_fork(void) {
+    hl_host_handle handles[HL_LINUX_VFS_LOWER_CAPACITY] = {0};
+    int descriptors[HL_LINUX_VFS_LOWER_CAPACITY];
+    for (int index = 0; index < HL_LINUX_VFS_LOWER_CAPACITY; index++)
+        descriptors[index] = -1;
+    if (g_host_services == NULL || g_host_services->file == NULL ||
+        g_host_services->file->clone_for_fork == NULL || g_host_services->file->close == NULL ||
+        g_host_services->posix_attachment == NULL ||
+        g_host_services->posix_attachment->borrow_file_at_least == NULL ||
+        g_host_services->posix_attachment->release == NULL)
+        return 0;
+    for (int index = 0; index < g_nlower; index++) {
+        if (!g_lower_borrowed[index]) continue;
+        hl_host_result cloned = g_host_services->file->clone_for_fork(g_host_services->context, g_lower_handle[index]);
+        if (cloned.status != HL_STATUS_OK) goto fail;
+        handles[index] = cloned.value;
+        hl_host_result borrowed =
+            g_host_services->posix_attachment->borrow_file_at_least(g_host_services->context, cloned.value, 1u << 20);
+        if (borrowed.status != HL_STATUS_OK)
+            borrowed =
+                g_host_services->posix_attachment->borrow_file_at_least(g_host_services->context, cloned.value, 64);
+        if (borrowed.status != HL_STATUS_OK || borrowed.value > INT_MAX) goto fail;
+        descriptors[index] = (int)borrowed.value;
+    }
+    for (int index = 0; index < g_nlower; index++) {
+        if (!g_lower_borrowed[index]) continue;
+        (void)g_host_services->posix_attachment->release(g_host_services->context,
+                                                         (uint64_t)(unsigned)g_lower[index].descriptor);
+        (void)g_host_services->file->close(g_host_services->context, g_lower_handle[index]);
+        g_lower[index].descriptor = descriptors[index];
+        g_lower_handle[index] = handles[index];
+    }
+    return 0;
+fail:
+    for (int index = 0; index < g_nlower; index++) {
+        if (descriptors[index] >= 0)
+            (void)g_host_services->posix_attachment->release(g_host_services->context,
+                                                             (uint64_t)(unsigned)descriptors[index]);
+        if (handles[index] != HL_HOST_HANDLE_INVALID)
+            (void)g_host_services->file->close(g_host_services->context, handles[index]);
+    }
+    return -1;
+}
+
+// Register a read-only lower layer. When opaque host services are active, the native descriptor is borrowed
+// from the same pinned host handle; the two compatibility views can therefore never authorize different trees.
 static void add_lower(const char *dir) {
-    if (g_nlower >= 8 || !dir || !dir[0]) return;
+    if (g_nlower >= HL_LINUX_VFS_LOWER_CAPACITY || !dir || !dir[0]) return;
     struct hl_linux_vfs_lower *lower = &g_lower[g_nlower];
+    lower->descriptor = -1;
     if (canonicalize_path(dir, lower->canon, sizeof lower->canon) != 0 &&
         snprintf(lower->canon, sizeof lower->canon, "%s", dir) >= (int)sizeof lower->canon)
         return;
-    // Keep namespace authority rooted in the directory object selected at launch. Reopening `canon` during
-    // exec would let a host-side ancestor replacement redirect authorization and image loading outside the
-    // immutable lower that the container was granted.
-    lower->descriptor = open(lower->canon, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    const hl_host_file_services *file = g_host_services != NULL ? g_host_services->file : NULL;
+    const hl_host_posix_attachment_services *attachment =
+        g_host_services != NULL ? g_host_services->posix_attachment : NULL;
+    if (file != NULL && file->open_relative != NULL && file->close != NULL && attachment != NULL &&
+        attachment->borrow_file_at_least != NULL && attachment->release != NULL) {
+        hl_host_result opened = file->open_relative(
+            g_host_services->context, HL_HOST_HANDLE_CWD, lower->canon, strlen(lower->canon),
+            HL_HOST_FILE_READ | HL_HOST_FILE_DIRECTORY | HL_HOST_FILE_PATH_ONLY, 0, 0);
+        if (opened.status == HL_STATUS_OK) {
+            hl_host_result borrowed =
+                attachment->borrow_file_at_least(g_host_services->context, opened.value, 1u << 20);
+            if (borrowed.status != HL_STATUS_OK)
+                borrowed = attachment->borrow_file_at_least(g_host_services->context, opened.value, 64);
+            if (borrowed.status == HL_STATUS_OK && borrowed.value <= INT_MAX) {
+                lower->descriptor = (int)borrowed.value;
+                g_lower_handle[g_nlower] = opened.value;
+                g_lower_borrowed[g_nlower] = 1;
+            } else {
+                (void)file->close(g_host_services->context, opened.value);
+            }
+        }
+    }
+    // Hosts without opaque/attachment support retain the established native implementation.
+    if (lower->descriptor < 0) lower->descriptor = open(lower->canon, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (lower->descriptor < 0) return;
     lower->clen = strlen(lower->canon);
     g_nlower++;
 }
 
-#include "cursor.c"
-
 static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_namespace_root(hl_vfs_cursor *output) {
+    hl_vfs_cursor_authority lowers[HL_LINUX_VFS_LOWER_CAPACITY];
+    for (int index = 0; index < g_nlower; index++)
+        if (g_linux_box != NULL && g_lower_handle[index] != HL_HOST_HANDLE_INVALID) {
+            lowers[index].kind = HL_VFS_CURSOR_AUTHORITY_HOST;
+            lowers[index].value.host.handle = g_lower_handle[index];
+            lowers[index].value.host.services = g_host_services;
+        } else {
+            lowers[index] = hl_vfs_cursor_native(g_lower[index].descriptor);
+        }
+    hl_vfs_cursor_authority upper = hl_vfs_cursor_native(g_root_fd);
+    if (g_root_handle != HL_HOST_HANDLE_INVALID && g_host_services != NULL) {
+        upper.kind = HL_VFS_CURSOR_AUTHORITY_HOST;
+        upper.value.host.handle = g_root_handle;
+        upper.value.host.services = g_host_services;
+    }
+    return hl_vfs_cursor_root_authorities(&upper, lowers, (size_t)g_nlower, output);
+}
+
+/* Directory descriptors retain the native twin so ordinary openat/renameat users keep one kernel-owned
+ * directory object while the published cursor carries every merged lower. Regular files use opaque handles. */
+static int hl_vfs_cursor_namespace_root_native_lowers(hl_vfs_cursor *output) {
     hl_vfs_cursor_authority lowers[HL_LINUX_VFS_LOWER_CAPACITY];
     for (int index = 0; index < g_nlower; index++)
         lowers[index] = hl_vfs_cursor_native(g_lower[index].descriptor);
@@ -84,6 +197,7 @@ static void hl_vfs_cursor_state_clear(void) {
 }
 
 static int hl_vfs_cursor_state_after_fork(void) {
+    if (hl_vfs_lower_state_after_fork() != 0) return -1;
     hl_vfs_cursor **replacements = calloc(HL_NFD, sizeof *replacements);
     if (replacements == NULL) return -1;
     hl_vfs_cursor *cwd_replacement = NULL;
@@ -116,6 +230,7 @@ static int hl_vfs_cursor_state_after_fork(void) {
 
 static int hl_vfs_cursor_state_finish(int result) {
     hl_vfs_cursor_state_clear();
+    hl_vfs_lower_state_clear();
     return result;
 }
 
@@ -141,6 +256,26 @@ static int hl_vfs_cwd_cursor_require(void) {
 static int hl_vfs_cursor_resolve_at(int dirfd, const char *path, int nofollow_final, hl_vfs_cursor_entry *output) {
     hl_vfs_cursor root;
     int error = hl_vfs_cursor_namespace_root(&root);
+    if (error != 0) return error;
+    const hl_vfs_cursor *start = &root;
+    if (path != NULL && path[0] != '/') {
+        if (dirfd == -100) {
+            error = hl_vfs_cwd_cursor_require();
+            if (error == 0) start = g_vfs_cwd_cursor;
+        } else {
+            start = hl_vfs_fd_cursor_get(dirfd);
+            if (start == NULL) error = -EBADF;
+        }
+    }
+    if (error == 0) error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, output);
+    hl_vfs_cursor_release(&root);
+    return error;
+}
+
+static int hl_vfs_cursor_resolve_at_native_lowers(int dirfd, const char *path, int nofollow_final,
+                                                  hl_vfs_cursor_entry *output) {
+    hl_vfs_cursor root;
+    int error = hl_vfs_cursor_namespace_root_native_lowers(&root);
     if (error != 0) return error;
     const hl_vfs_cursor *start = &root;
     if (path != NULL && path[0] != '/') {

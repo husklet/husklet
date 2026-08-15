@@ -52,7 +52,7 @@ typedef enum hl_vfs_cursor_kind {
 
 typedef struct hl_vfs_cursor_entry {
     hl_vfs_cursor_kind kind;
-    int descriptor;
+    hl_vfs_cursor_authority file;
     struct stat status;
     uint32_t mount_flags;
     hl_vfs_cursor directory;
@@ -344,10 +344,9 @@ static uint32_t hl_vfs_mount_flags_for_guest(const char *guest, uint32_t inherit
 
 static void hl_vfs_cursor_entry_release(hl_vfs_cursor_entry *entry) {
     if (entry == NULL) return;
-    if (entry->descriptor >= 0) close(entry->descriptor);
+    hl_vfs_cursor_authority_close(&entry->file);
     hl_vfs_cursor_release(&entry->directory);
     memset(entry, 0, sizeof *entry);
-    entry->descriptor = -1;
 }
 
 static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor, const char *component,
@@ -355,7 +354,6 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor
     if (cursor == NULL || output == NULL || !hl_vfs_cursor_component_valid(component)) return -EINVAL;
     if (hl_vfs_cursor_component_hidden(component)) return -ENOENT;
     memset(output, 0, sizeof *output);
-    output->descriptor = -1;
 
     size_t selected = cursor->count;
     struct stat selected_status;
@@ -389,14 +387,7 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor
         hl_vfs_cursor_authority opened;
         int error = hl_vfs_cursor_authority_open_child(&cursor->layers[selected], component, 0, &opened);
         if (error != 0) return error;
-        if (opened.kind == HL_VFS_CURSOR_AUTHORITY_NATIVE) {
-            output->descriptor = opened.value.descriptor;
-        } else {
-            /* File entries still feed the fd-shaped legacy execution path. Directory traversal is fully
-               authority-shaped; do not manufacture a pathname or borrow a provider handle as an fd. */
-            hl_vfs_cursor_authority_close(&opened);
-            return -ENOSYS;
-        }
+        output->file = opened;
         output->kind = HL_VFS_CURSOR_FILE;
         return 0;
     }
@@ -471,7 +462,6 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_walk(const hl_vfs_cursor *root, co
             component++;
         if (!*component) {
             memset(output, 0, sizeof *output);
-            output->descriptor = -1;
             output->kind = HL_VFS_CURSOR_DIRECTORY;
             error = hl_vfs_cursor_clone(&frames[depth], &output->directory);
             goto done;
@@ -559,7 +549,6 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_walk(const hl_vfs_cursor *root, co
         depth++;
         frames[depth] = entry.directory;
         memset(&entry.directory, 0, sizeof entry.directory);
-        entry.descriptor = -1;
         snprintf(rest, sizeof rest, "%s", tail);
     }
 done:

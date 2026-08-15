@@ -26,7 +26,6 @@ static int dac_snapshot_at(int directory, const char *raw, int nofollow, hl_dac_
         // ENOENT before open(2) gets a chance to report the original error.
         hl_vfs_cursor_entry entry;
         memset(&entry, 0, sizeof entry);
-        entry.descriptor = -1;
         int resolution = hl_vfs_cursor_resolve_at(directory, raw, nofollow, &entry);
         hl_vfs_cursor_entry_release(&entry);
         // A typed host authority cannot yet materialize every regular file as a cursor entry; retain the
