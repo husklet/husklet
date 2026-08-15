@@ -11,8 +11,32 @@
 #include <fcntl.h>
 #include <mqueue.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
+#include <sys/random.h>
 #include <time.h>
+
+enum { NAME_ATTEMPTS = 16 };
+
+static int random_name(char *name, size_t size, const char *prefix) {
+    uint64_t token;
+    ssize_t bytes;
+    do
+        bytes = getrandom(&token, sizeof token, 0);
+    while (bytes < 0 && errno == EINTR);
+    if (bytes != (ssize_t)sizeof token) return 0;
+    return snprintf(name, size, "/%s_%016llx", prefix, (unsigned long long)token) > 0;
+}
+
+static mqd_t create_unique(char *name, size_t size, const char *prefix, int flags, const struct mq_attr *attr) {
+    for (int attempt = 0; attempt < NAME_ATTEMPTS; attempt++) {
+        if (!random_name(name, size, prefix)) return (mqd_t)-1;
+        mqd_t queue = mq_open(name, O_CREAT | O_EXCL | flags, 0600, attr);
+        if (queue != (mqd_t)-1 || errno != EEXIST) return queue;
+    }
+    errno = EEXIST;
+    return (mqd_t)-1;
+}
 
 static const char *en(int e) {
     switch (e) {
@@ -43,17 +67,28 @@ static struct timespec deadline_in(long ms) {
 }
 
 int main(void) {
-    const char *name = "/hl_mq_edge";
-    mq_unlink(name); // clean slate
-
-    // open a missing queue without O_CREAT -> ENOENT
-    mqd_t bad = mq_open(name, O_RDWR);
-    printf("open_missing=%s\n", en(bad == (mqd_t)-1 ? errno : 0));
+    char name[64];
+    char timed_name[64];
 
     struct mq_attr at = {0};
     at.mq_maxmsg = 4;
     at.mq_msgsize = 16;
-    mqd_t q = mq_open(name, O_CREAT | O_RDWR | O_NONBLOCK, 0600, &at);
+    mqd_t bad = (mqd_t)-1;
+    mqd_t q = (mqd_t)-1;
+    int missing_errno = 0;
+    for (int attempt = 0; attempt < NAME_ATTEMPTS; attempt++) {
+        if (!random_name(name, sizeof name, "hl_mq_edge")) break;
+        bad = mq_open(name, O_RDWR);
+        missing_errno = bad == (mqd_t)-1 ? errno : 0;
+        if (bad != (mqd_t)-1) {
+            mq_close(bad);
+            continue;
+        }
+        q = mq_open(name, O_CREAT | O_EXCL | O_RDWR | O_NONBLOCK, 0600, &at);
+        if (q != (mqd_t)-1 || errno != EEXIST) break;
+    }
+    // open a missing queue without O_CREAT -> ENOENT
+    printf("open_missing=%s\n", en(missing_errno));
     printf("open_create=%d\n", q != (mqd_t)-1);
     if (q == (mqd_t)-1) return 1;
 
@@ -118,12 +153,11 @@ int main(void) {
     printf("open_toolong=%s\n", en(mq_open(toolong, O_CREAT | O_RDWR, 0600, &at) == (mqd_t)-1 ? errno : 0));
 
     // ---- blocking (non-O_NONBLOCK) timed matrix: EINVAL(tv_nsec) / ETIMEDOUT ----
-    const char *tn = "/hl_mq_timed";
-    mq_unlink(tn);
+    const char *tn = timed_name;
     struct mq_attr tat = {0};
     tat.mq_maxmsg = 1;
     tat.mq_msgsize = 8;
-    mqd_t tq = mq_open(tn, O_CREAT | O_RDWR, 0600, &tat); // NO O_NONBLOCK -> blocking descriptor
+    mqd_t tq = create_unique(timed_name, sizeof timed_name, "hl_mq_timed", O_RDWR, &tat);
     if (tq == (mqd_t)-1) return 1;
     // send with an out-of-range tv_nsec is validated before the queue state -> EINVAL (queue has room here)
     struct timespec bad_ts = {0, 1000000000L};
