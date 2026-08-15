@@ -614,7 +614,7 @@ static void nonpie_guard(int sig, siginfo_t *si, void *uc) {
     if (hrm_fault_hook(si)) return; // never actually returns on a claim (siglongjmp); shape-only
     if (nonpie_fixup(si, uc)) return;
     // The host representation may be narrower than the guest mapping when 4 KiB ELF segment edges share
-    // a 16 KiB macOS page, or after fork-server protection restoration. Re-open only a logically writable,
+    // a 16 KiB macOS page. Re-open only a logically writable,
     // tracked private-anonymous guest page; PROT_NONE/read-only and file-EOF ledgers remain authoritative.
     // This is a representation repair, not lazy allocation: the address must already belong to gmap.
     if (si && si->si_addr) {

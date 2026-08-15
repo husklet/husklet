@@ -2,8 +2,8 @@
  * The engine-private descriptor band on a Windows host.
  *
  * On the POSIX hosts this group solves a problem created by fd number reuse:
- * the engine opens host descriptors of its own -- a code-cache file, a
- * forkserver socket, a directory watch -- and a guest that calls dup2(x, 7)
+ * the engine opens host descriptors of its own -- a code-cache file or a
+ * directory watch -- and a guest that calls dup2(x, 7)
  * would clobber them if they sat in the low range the guest gets to name. So
  * the engine hoists its own descriptors above HL_HOST_PRIVATE_DESCRIPTOR_MINIMUM
  * with F_DUPFD, records which numbers are its own, and derives the

@@ -1801,14 +1801,6 @@ static void stw_after_fork(void) {
 // cache VAs (x86 g_xibtc) survived (1) or must be dropped (0).
 static int g_fork_preserved;
 
-// fork-server runner latch: a runner is a first-generation fork off the RESIDENT server (never itself
-// a translated-code fork child that returns), so the nested-fork __stack_chk_fail hazard -- which is
-// carried by an inherited generation's baked return/`b body` edges -- does not apply to the runner's
-// OWN fork from the server. Setting this lets the runner inherit the parent's prewarmed arena
-// (preserve=1) instead of re-translating. It is cleared immediately after the runner's jit_after_fork
-// so any GUEST fork inside the runner falls back to the proven preserve=0 nested-fork cure.
-static int g_fsrv_preserve;
-
 static int jit_after_fork(void) {
     int preserve;
     stw_after_fork(); // single-threaded child: shed the inherited thread registry (also for the MAP_JIT path)
@@ -1835,10 +1827,6 @@ static int jit_after_fork(void) {
        with a private empty cache and re-translate on demand.  Only the proven
        fixed-address macOS repair path retains warm-cache preservation. */
     preserve = 0;
-    /* Fork-server runner: inherit the resident parent's prewarmed arena at its fixed VA (same
-       single-threaded dual-map re-couple the macOS warm path uses). Safe here because the runner
-       does not itself fork translated code that later returns through a sibling generation. */
-    if (g_fsrv_preserve && !g_threaded && g_dualmap) preserve = 1;
 #if G_GPC_HASH_SHIFT == 0
     /* x86 guest exception: with the persistent translated-code cache active, the
        fresh-arena rebuild leaves a SINGLE-THREADED fork child resuming on incoherent

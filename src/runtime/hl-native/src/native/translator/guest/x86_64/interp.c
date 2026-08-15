@@ -1533,7 +1533,6 @@ static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
 // none. IDENTITY still matters: pcache_engine_id mixes HL_HOST_CPU_ISA, and checkpoint.c validates that
 // same id on restore -- without the host-ISA term a JIT-written checkpoint would restore against nothing.
 
-static int g_pcache_forked;     // set by linux_abi/fork.c in a fork child; unread here
 static int g_force_base_failed; // latched by the ELF loader on fixed-VA map fallback
 
 static uint64_t pcache_engine_id(void) {

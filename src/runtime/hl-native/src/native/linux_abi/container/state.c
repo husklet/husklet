@@ -71,13 +71,12 @@ static void namespace_key_set(const char *key) {
 // process-local g_pids_cur / g_mem_charged therefore under-report: a parent could not see a forked
 // child's tasks/memory in cgroup.procs / pids.current / memory.current, and pids.max was enforced only
 // for in-process threads (spawn_thread), never for a forked process. FIX: a small MAP_SHARED|MAP_ANON
-// slot table, created FRESH when a process becomes a container init (container_init / the forkserver
-// warm re-anchor) and inherited by every guest fork of that init -- COW keeps ONE physical page across
+// slot table, created FRESH when a process becomes a container init and inherited by every guest fork
+// of that init -- COW keeps ONE physical page across
 // fork, exactly like the futex bucket table (thread.c). Each engine process owns one slot keyed by its
 // host pid, in which it publishes its live guest-task count + charged bytes; the cgroup files SUM the
 // LIVE slots (a slot whose pid is dead is skipped and reclaimed), so the totals are container-wide AND
-// self-healing across a crash -- no fragile running counter to leak on SIGKILL. A fresh segment per
-// container-init isolates sibling forkserver workers (each is its own container).
+// self-healing across a crash -- no fragile running counter to leak on SIGKILL.
 #define HL_ACCT_SLOTS 1024
 
 struct hl_acct_slot {
@@ -130,8 +129,7 @@ static void acct_claim_self(void) {
     }
 }
 
-// (Re)create the shared accounting table for a NEW container init and claim this process's slot. Called
-// from container_init (normal launch + cold forkserver) and the forkserver warm re-anchor point.
+// (Re)create the shared accounting table for a new container init and claim this process's slot.
 static void acct_container_reset(const hl_host_services *host) {
     size_t sz = sizeof(struct hl_acct_slot) * HL_ACCT_SLOTS;
     void *arena = NULL;
@@ -905,7 +903,7 @@ static uint64_t parse_size(const char *s) {
 // instead of spinning one worker per HOST core and over-subscribing the machine.
 static int container_online_cpus(void) {
     // Probe the TRUE host core count via macOS sysctl, NOT sysconf(_SC_NPROCESSORS_ONLN): in the mac-side
-    // engine process (the `mac` bridge / x86 fork-server spawn context) macOS sysconf reports 1, which would
+    // engine process macOS sysconf reports 1, which would
     // pin every unconstrained container to a single CPU (nproc=1, affinity mask=1 bit, /sys .../cpu/online="0")
     // and stop guests scaling. hw.activecpu is what Go / the JVM / most runtimes read anyway; mirror the darwin
     // Linux guest CPU reporting. Fallbacks: hw.logicalcpu -> hw.ncpu -> sysconf.
@@ -974,8 +972,8 @@ static void parse_ulimits(const char *spec) {
 }
 
 // Shared resource-config reader (docker --cpus/--read-only/--ulimit). BOTH the aarch64 and x86_64 frontends
-// call this from container init, so the contract is engine-identical. Env-only: HL_* survive the mac bridge
-// and the x86 fork-server (both inherit env), and the daemon serializes the HostConfig into these vars.
+// call this from container init, so the contract is engine-identical. The daemon serializes HostConfig
+// into these options.
 static void container_read_resource_env(void) {
     const char *c = hl_option_get("HL_CPUS");
     if (c && c[0] && !g_cpu_max) {

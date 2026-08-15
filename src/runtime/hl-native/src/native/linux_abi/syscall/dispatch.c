@@ -1,10 +1,5 @@
 // brk arena
 static uint64_t brk_lo, brk_cur, brk_hi;
-// W3D fork-server prewarm/worker: when set, the guest's exit_group UNWINDS run_guest (sets c->exited
-// + c->exit_code) instead of _exit()ing, so the resident engine server survives pre-translating a
-// binary into the COW arena and a worker can report its exit code before dying. 0 on every normal
-// (standalone) run -> exit_group behaves exactly as before.
-int g_noexit;
 // W6A item 3: set the first time a guest requests a PROT_EXEC (RWX) anonymous mapping -- i.e. a
 // guest with its own in-process JIT (JVM/V8/LuaJIT/.NET/PyPy). Normal guests never set it, so the
 // SMC write-fault invalidation path (frontend/x86_64) stays completely inert for the whole existing

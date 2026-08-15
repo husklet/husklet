@@ -27,9 +27,6 @@
 // from a lazy-growth one. Registry keys are GUEST coordinates (thread.c's one rule) while a host
 // protection takes the storage address -- hence the nonpie_unfold on the way into g_gro.
 //
-// This is also the state the fork server's pristine-image restore has to put back, so it calls the same
-// function rather than restating the rule (fork.c, FSRV_RESTORE_DONE).
-
 #define HL_ELF_PROTECT_RETRIES 6
 
 static uint32_t hl_elf_ph32(const uint8_t *p) {
@@ -42,7 +39,7 @@ static uint64_t hl_elf_ph64(const uint8_t *p) {
 
 // `phdr` is the program-header table (file or mapped copy -- identical bytes), `bias` the amount the
 // image was displaced from its link address. `mapping` is the image's host mapping; pass NULL to change
-// the protection with mprotect(2) directly, which is all the fork-server restore has to hand.
+// the protection with mprotect(2) directly.
 static void hl_elf_protect_segments(const hl_host_memory_mapping *mapping, const uint8_t *phdr, int phnum, int phent,
                                     uint64_t bias) {
     size_t host_page = hl_host_page_size();

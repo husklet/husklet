@@ -40,9 +40,8 @@ static int svc_eventfd2(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // pipe never returns. See g_eventfd_readend_nb.
         g_eventfd_readend_nb = fcntl(fds[0], F_SETFL, O_NONBLOCK) == 0;
         // writes to the eventfd go to fds[1]; the counter + sema-flag live alongside.
-        // Defensive: the accumulating-counter arena is bound once per process (eventfd_count_init, from a
-        // cold hl_run_linux_guest or the fork-server prewarm parent). If it is somehow still NULL, indexing
-        // it would SIGSEGV the process (fatal in a resident fork-server parent) -- report ENOMEM instead.
+        // Defensive: the accumulating-counter arena is bound once per process by eventfd_count_init.
+        // If it is somehow still NULL, indexing it would SIGSEGV -- report ENOMEM instead.
         if (!g_eventfd_count) {
             close(fds[0]);
             close(peer);

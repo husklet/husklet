@@ -545,19 +545,10 @@ static int engine_global_init(void);
 
 // Final-product bridge: read the serialized HL config file and enter this target's Linux guest.
 
-// ---- library entry (Rust binding) + main() ----
 // ---------------- library entry (Rust bindings call this) ----------------
 // Loads `argv[0]` (a guest aarch64 ELF, path resolved inside `rootfs` if given),
 // runs it to completion, and returns the guest's exit code. argv is the guest
-// argv (program + args). Single-shot per process: the daemon forks a child per
-// container and calls this once. Declared in jit.h.
-// Fork-server seam: the original guest entry inlined (1)
-// container init, (2) engine init (signal handlers + pthread key + code-cache arena + env flags), and
-// (3) per-launch load+run. The resident engine server pays (1)+(2) once and shares them COW with
-// every forked worker, so those phases are factored into container_init()/engine_global_init().
-// engine_global_init() is idempotent (g_engine_inited) so the standalone path is unchanged: standalone
-// hl_run_linux_guest() composes container_init -> engine_global_init -> load_program -> run_loaded in the exact
-// original order, with the identical operations in each phase.
+// argv (program + args). The execution lifecycle calls this once per engine.
 static int g_engine_inited;
 
 static int container_init(const char *rootfs) {
@@ -568,8 +559,8 @@ static int container_init(const char *rootfs) {
     hl_gmap_bind_limits(&g_limits);
     // PID ns: only containers (rootfs) get PID 1
     if (rootfs) g_init_hostpid = getpid();
-    // cross-engine-process cgroup accounting: a FRESH shared slot table for THIS container init, inherited
-    // by every guest fork (see state.c). Per-container so sibling forkserver workers never share a total.
+    // Cross-process cgroup accounting: a fresh shared slot table for this container init is inherited
+    // by every guest fork (see state.c).
     if (rootfs) acct_container_reset(effective_host_services());
     {
         const char *h = hl_option_get("HL_HOSTNAME");
@@ -658,10 +649,8 @@ static int container_init(const char *rootfs) {
     return 0;
 }
 
-// idempotent engine init (fault handlers + pthread key + code-cache arena + env-flag reads).
-// Returns 0 on success, nonzero exit code on failure. First call wins; later calls are no-ops
-// (g_engine_inited), so the resident fork-server parent pays this once and the standalone path runs it
-// exactly as before.
+// Idempotent engine init (fault handlers, pthread key, code-cache arena, and option reads).
+// Returns zero on success and a nonzero exit code on failure.
 static int guest_fetch_direct_valid(uint64_t address, size_t length) {
     return host_range_mapped((uintptr_t)address, length);
 }
@@ -730,7 +719,7 @@ static int engine_global_init(void) {
     g_sentry_sandbox = hl_option_get("HL_SANDBOX") != NULL;
     // pcache_poison_check runs AFTER the codegen-mode flags above so it can refuse to persist an arena
     // that a non-default mode (PROF) baked unrecorded host pointers
-    // into. The cache mode is read per guest invocation so a fork-server runner honors HL_PCACHE.
+    // into. The cache mode is read per guest invocation.
     pcache_poison_check();
     // ptrace tracer/tracee coordination arena -- mmap the shared region ONCE here, BEFORE any guest
     // fork, so every descendant guest process inherits the same physical pages. Inert until a guest ptraces.
@@ -745,10 +734,8 @@ static int engine_global_init(void) {
     return 0;
 }
 
-// load main program + (optional) interp, recording the load base/entry/at_base into *lm/*li.
-// Used both by the standalone path and by the fork-server's parent preload (so the COW-inherited image
-// is byte-identical and the warm worker re-runs from the same entry at the same base). The gb/pb/ib
-// buffers are static because g_exe_path = prog points into gb and must outlive this call.
+// Load the main program and optional interpreter, recording their entry metadata. The gb/pb/ib
+// buffers are static because g_exe_path points into gb and must outlive this call.
 static const char *load_program(const char *prog, struct loaded *lm, struct loaded *li, uint64_t *jump,
                                 uint64_t *at_base, int *have_interp, const hl_engine_main_image_plan *image_plan) {
     // cache id keys the INVOKED name (argv[0] pre-resolution), exactly as before this refactor.
@@ -822,10 +809,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
     return prog;
 }
 
-// fresh per-launch guest run from a loaded image. Allocates a private heap + a guest stack +
-// cpu and runs from `jump`. Shared by standalone/cold and fork-server warm-worker paths (which
-// restores a pristine COW image first, then calls this against the parent-preloaded base). Body is the
-// preserve the same execution tail.
+// Fresh guest run from a loaded image. Allocates a private heap, guest stack, and CPU, then runs at `jump`.
 static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t jump, uint64_t at_base) {
     // checkpoint/restore: place the brk heap in the deterministic high arena (0 hint => normal NULL placement)
     uint64_t heap;
@@ -921,7 +905,6 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     if (rdir != NULL) return hl_vfs_cursor_state_finish(hl_restore_checkpoint(rootfs));
     if (argc < 1 || !argv || !argv[0]) return hl_vfs_cursor_state_finish(2);
     // Persistent cross-process translated-code cache. Opt in with HL_PCACHE=1.
-    // Read per invocation so a fork-server cold runner honors its typed launch configuration.
     g_pcache = hl_option_get("HL_PCACHE") != NULL;
     g_coldprof = 0;
     if (container_init(rootfs) != 0) return hl_vfs_cursor_state_finish(70);
@@ -965,9 +948,7 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
         // load_program below re-resolves argv[0] and re-sets g_exe_path to the binary actually loaded
         // (matches /proc/self/exe for a script exec).
     }
-    // /proc/self/exe canonicalization now happens inside load_program (below), so it also covers the
-    // fork-server parent preload path. load_program re-resolves
-    // argv[0] and sets g_exe_path to the canonical absolute path of the binary actually loaded, matching
+    // load_program re-resolves argv[0] and sets g_exe_path to the canonical absolute path actually loaded, matching
     // /proc/self/exe for a script exec.
     struct loaded lm, li;
     uint64_t jump, at_base;
@@ -994,23 +975,6 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     pcache_directory_close();
     return hl_vfs_cursor_state_finish(ec);
 }
-
-// resident engine fork server (server/client/worker), shared with the x86-64 target through the
-// container-init/engine-init/load/run seam above. aarch64 has no g_loadbase and its container model never
-// chdir()s the engine into the rootfs, so those knobs stay default no-ops; the pristine-image restore
-// around the guest image's W^X is now the shared default too (fork.c, fsrv_restore_prep/done).
-// Bind the same per-guest host-service tables a cold hl_run_linux_guest() would, so the fork-server prewarm
-// parent (which runs guests via run_loaded()) allocates them once and every warm COW worker inherits them.
-#define FSRV_GUEST_HOST_INIT()                                                                                         \
-    do {                                                                                                               \
-        const hl_host_services *fsrv_host_ = hl_target_services_effective(&g_target_services);                         \
-        futex_table_init(fsrv_host_);                                                                                  \
-        seq_ref_arena_init(fsrv_host_);                                                                                \
-        eventfd_count_init(fsrv_host_);                                                                                \
-        fdvis_init(fsrv_host_);                                                                                        \
-        ts_init(fsrv_host_);                                                                                           \
-    } while (0)
-#include "../../linux_abi/fork.c"
 
 void hl_target_runtime_init(void) {
     install_sync_fault_guards();

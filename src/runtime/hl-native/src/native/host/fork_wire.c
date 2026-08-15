@@ -1,71 +1,12 @@
 #include "fork_wire.h"
 
 #include <errno.h>
-#include <stdint.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <sys/un.h>
 #include <sys/types.h>
 #include <unistd.h>
 
 #define HL_FORK_WIRE_MAX_DESCRIPTORS 8
-
-static int hl_fork_client_descriptor(const hl_host_fork_client *client) {
-    if (client == NULL || client->private_value == 0 || client->private_value > (uintptr_t)INT32_MAX) {
-        errno = EINVAL;
-        return -1;
-    }
-    return (int)(client->private_value - 1);
-}
-
-int hl_host_fork_client_open(hl_host_fork_client *client, const char *path) {
-    struct sockaddr_un address;
-    int descriptor;
-    size_t length;
-    if (client == NULL || path == NULL || client->private_value != 0) {
-        errno = EINVAL;
-        return -1;
-    }
-    length = strlen(path);
-    if (length == 0 || length >= sizeof address.sun_path) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-    descriptor = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (descriptor < 0) return -1;
-    memset(&address, 0, sizeof address);
-    address.sun_family = AF_UNIX;
-    memcpy(address.sun_path, path, length + 1);
-    if (connect(descriptor, (struct sockaddr *)&address, sizeof address) != 0) {
-        int saved_error = errno;
-        (void)close(descriptor);
-        errno = saved_error;
-        return -1;
-    }
-    client->private_value = (uintptr_t)descriptor + 1;
-    return 0;
-}
-
-int hl_host_fork_client_send_launch(hl_host_fork_client *client, const void *buffer, size_t size) {
-    int descriptor = hl_fork_client_descriptor(client);
-    int streams[3] = {STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO};
-    if (descriptor < 0) return -1;
-    return hl_fork_wire_send_descriptors(descriptor, buffer, size, streams, 3);
-}
-
-int hl_host_fork_client_receive(hl_host_fork_client *client, void *buffer, size_t size) {
-    int descriptor = hl_fork_client_descriptor(client);
-    if (descriptor < 0) return -1;
-    return hl_fork_wire_receive(descriptor, buffer, size);
-}
-
-void hl_host_fork_client_close(hl_host_fork_client *client) {
-    int descriptor;
-    if (client == NULL || client->private_value == 0) return;
-    descriptor = hl_fork_client_descriptor(client);
-    client->private_value = 0;
-    if (descriptor >= 0) (void)close(descriptor);
-}
 
 int hl_fork_wire_send_descriptors(int socket, const void *buffer, size_t size, const int *descriptors,
                                   int descriptor_count) {

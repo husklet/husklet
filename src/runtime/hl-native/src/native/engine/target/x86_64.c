@@ -1073,15 +1073,7 @@ static uint64_t g_loaded_image_identity;
 #include "../../linux_abi/x86.c" // Linux x86-64 ELF loader + stack + fault handlers
 #include "../../linux_abi/checkpoint.c"
 
-// ---- entry + main ----
 // ---------------- entry ----------------
-// Fork-server refactor: the original guest entry inlined container init, engine init,
-// (pthread key + MAP_JIT arena + signal handlers + trace env), and (3) per-launch load+run. The
-// resident engine server pays (1)+(2) once and shares them COW with every forked worker, so
-// those two phases are factored into container_init()/engine_global_init(). engine_global_init()
-// is idempotent (g_engine_inited) so the standalone path is byte-for-byte unchanged: standalone
-// hl_run_linux_guest() composes container_init -> engine_global_init -> load_program -> run_loaded in the
-// exact original order, with the identical operations in each phase.
 static int g_engine_inited;
 
 static int container_init(const char *rootfs) {
@@ -1097,17 +1089,15 @@ static int container_init(const char *rootfs) {
     // returned the real host pid, and bash's setpgid(0,1)/tcsetpgrp targeted host pid 1 (launchd) -> the
     // foreground command got SIGTTOU/SIGTTIN-stopped ("[N]+ Stopped  ls") instead of running.
     if (rootfs) g_init_hostpid = getpid();
-    // cross-engine-process cgroup accounting: a FRESH shared slot table for THIS container init, inherited
-    // by every guest fork (see state.c). Per-container so sibling forkserver workers never share a total.
+    // Cross-process cgroup accounting: a fresh shared slot table for this container init is inherited
+    // by every guest fork (see state.c).
     if (rootfs) acct_container_reset(effective_host_services());
     container_read_resource_env(); // Docker CPU, read-only-root, and ulimit values from centralized HL options.
     // The final typed launch hands the container model to the engine as HL options, not as the
     // --hostname/--mem-max/--pids-max CLI flags. aarch64's container_init() already reads these options;
     // (linux_aarch64.c); x86-64 did not, so a `docker run --hostname h` on x86 dropped the hostname
     // (uname/gethostname/`/etc/hostname` returned "jit") and --memory/--pids-limit were ignored. The
-    // out-of-process SpawnConfig::script() path passes them as CLI flags, which is why the default test
-    // matrix missed this. Guard on the CLI value (only fill when the flag path left it unset), matching
-    // aarch64, so a genuine --hostname flag still wins.
+    // Guard on an existing value so explicitly supplied configuration still wins.
     if (hl_option_get("HL_NET_HOST") == NULL) {
         const char *h = hl_option_get("HL_HOSTNAME");
         if (h && h[0] && !g_hostname[0]) {
@@ -1296,10 +1286,8 @@ static int engine_global_init(void) {
     return 0;
 }
 
-// W3D: load main program + (optional) interp, recording the load base/entry/at_base into *lm/*li.
-// Used both by the standalone path and by the fork-server's parent preload (so the COW-inherited
-// image is byte-identical and the warm worker re-runs from the same entry at the same base). The
-// gb/pb/ib buffers are static because g_exe_path = prog points into gb and must outlive this call.
+// Load the main program and optional interpreter, recording their entry metadata. The gb/pb/ib
+// buffers are static because g_exe_path points into gb and must outlive this call.
 static const char *load_program(const char *prog, struct loaded *lm, struct loaded *li, uint64_t *jump,
                                 uint64_t *at_base, int *have_interp, const hl_engine_main_image_plan *image_plan) {
     static char gb[1024];
@@ -1523,30 +1511,6 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     return hl_vfs_cursor_state_finish(ec);
 }
 
-// resident engine fork server (server/client/worker), shared with the AArch64 target and driven
-// through the container-init/engine-init/load/run seam defined above.
-// x86-only knobs: the warm re-run must re-point g_loadbase, and the x86 container model chdir()s the
-// engine process into the rootfs (container_init does; the warm path must match it per request).
-#define FSRV_SET_LOADBASE(b) (g_loadbase = (b))
-#define FSRV_WARM_CHDIR_ROOTFS()                                                                                       \
-    do {                                                                                                               \
-        if (g_rootfs) {                                                                                                \
-            if (chdir(g_rootfs)) {}                                                                                    \
-        }                                                                                                              \
-    } while (0)
-// Bind the same per-guest host-service tables a cold hl_run_linux_guest() would, so the fork-server prewarm
-// parent (which runs guests via run_loaded()) allocates them once and every warm COW worker inherits them.
-#define FSRV_GUEST_HOST_INIT()                                                                                         \
-    do {                                                                                                               \
-        const hl_host_services *fsrv_host_ = hl_target_services_effective(&g_target_services);                         \
-        futex_table_init(fsrv_host_);                                                                                  \
-        seq_ref_arena_init(fsrv_host_);                                                                                \
-        eventfd_count_init(fsrv_host_);                                                                                \
-        fdvis_init(fsrv_host_);                                                                                        \
-        ts_init(fsrv_host_);                                                                                           \
-    } while (0)
-#include "../../linux_abi/fork.c"
-
 void hl_target_runtime_init(void) {
     jit86_install_sync_fault_guards();
     poslk_init();
@@ -1556,103 +1520,3 @@ void hl_target_runtime_init(void) {
 uint64_t hl_run_linux_guest_translations(void) {
     return g_dispatch_profile.translations;
 }
-
-#ifndef HL_ENGINE_NO_STANDALONE
-// The engine entry point uses the public HL prefix so the runtime can be linked as a library and launched
-// by an in-process fork()+call; the thin `main` shim below keeps the standalone binary (used by the test
-// harness) launching identically.
-int hl_engine_entry(int argc, char **argv);
-
-static int hl_standalone_run(const char *rootfs, const char *executable_host, uint32_t argc, char *const argv[],
-                             const hl_options *options, const char *result_path) {
-    (void)executable_host;
-    // Earliest point that knows this launch is a restore: cover the whole rebuild against a terminal signal
-    // typed at the pty before the tree exists (ckpt_restore_hold_tty_signals).
-    if (options == NULL ? hl_option_get("HL_RESTORE") != NULL : hl_options_get(options, "HL_RESTORE") != NULL)
-        ckpt_restore_hold_tty_signals();
-    return hl_native_engine_run(HL_GUEST_ISA_X86_64, rootfs, argc, argv, options, result_path);
-}
-
-int main(int argc, char **argv) {
-    return hl_engine_entry(argc, argv);
-}
-
-int hl_engine_entry(int argc, char **argv) {
-    hl_cli_route route = hl_cli_route_parse(argc, argv);
-    int ai = 1;
-    const char *rootfs = NULL;
-    static char self[4200];
-    hl_option_reset();
-    if (realpath(argv[0], self))
-        g_self_path = self;
-    else
-        g_self_path = argv[0];
-    // Final-product launch: the host provides one serialized, validated HL config file.
-    if (route.mode == HL_CLI_CONFIG) return hl_run_config_file_with(route.config_path, hl_standalone_run);
-    // W3D fork-server dispatch (gated; standalone path untouched when neither flag is present):
-    //   --server SOCK [--rootfs DIR] [--prewarm PROG] : run the resident engine server
-    //   --client SOCK [--rootfs DIR] PROG [args...]   : forward a launch request to that server
-    if (route.mode == HL_CLI_SERVER) return hl_server_main(argc, argv);
-    if (route.mode == HL_CLI_CLIENT) return hl_client_main(argc, argv);
-    // Valued options need a following argument; the checkpoint flags do not.
-    while (ai < argc && argv[ai][0] == '-') {
-        int valued = ai + 1 < argc;
-        if (strcmp(argv[ai], "--checkpoint") == 0) {
-            hl_option_set("HL_CHECKPOINT", "1", 1);
-            ai += 1;
-        } else if (strcmp(argv[ai], "--restore") == 0) {
-            hl_option_set("HL_RESTORE", "1", 1);
-            ai += 1;
-        } else if (!valued) {
-            break;
-        } else if (strcmp(argv[ai], "--rootfs") == 0) {
-            rootfs = argv[ai + 1];
-            ai += 2;
-        } else if (strcmp(argv[ai], "--checkpoint-store") == 0 && ai + 2 < argc) {
-            if (hl_ckpt_channel_adopt(argv[ai + 1], argv[ai + 2]) != 0) {
-                fprintf(stderr, "hl-engine: --checkpoint-store %s %s is not an inherited descriptor pair\n",
-                        argv[ai + 1], argv[ai + 2]);
-                return 2;
-            }
-            ai += 3;
-        } else if (strcmp(argv[ai], "--restore-policy") == 0) {
-            if (ckpt_recovery_policy_set(argv[ai + 1]) != 0) return 2;
-            ai += 2;
-        } else if (strcmp(argv[ai], "--vol") == 0) {
-            add_vol(argv[ai + 1]);
-            ai += 2;
-        } else if (strcmp(argv[ai], "--publish") == 0 || strcmp(argv[ai], "-p") == 0) { // docker -p H:C (port-map)
-            parse_publish(argv[ai + 1]);
-            hl_option_set("HL_PUBLISH", argv[ai + 1], 1);
-            ai += 2;
-        } else if (strcmp(argv[ai], "--lower") == 0) {
-            add_lower(argv[ai + 1]);
-            ai += 2;
-        } // overlay read-only layer
-        else if (strcmp(argv[ai], "--hostname") == 0) { // docker --hostname -> uname/gethostname + /etc/hostname
-            strncpy(g_hostname, argv[ai + 1], 64);
-            g_hostname[64] = 0;
-            ai += 2;
-        } else if (strcmp(argv[ai], "--mem-max") == 0) { // docker --memory -> brk/mmap charge + /proc reporting
-            g_mem_max = parse_size(argv[ai + 1]);
-            ai += 2;
-        } else if (strcmp(argv[ai], "--pids-max") == 0) { // docker --pids-limit -> pids.max reporting
-            g_pids_max = hl_parse_id("--pids-max", argv[ai + 1]);
-            ai += 2;
-        } else if (strcmp(argv[ai], "--uid") == 0) { // docker --user uid (USER-ns uid); else container default 0
-            g_uid = hl_parse_id("--uid", argv[ai + 1]);
-            ai += 2;
-        } else if (strcmp(argv[ai], "--gid") == 0) {
-            g_gid = hl_parse_id("--gid", argv[ai + 1]);
-            ai += 2;
-        } else
-            break;
-    }
-    if (hl_option_get("HL_RESTORE")) return hl_standalone_run(rootfs, NULL, 0, NULL, NULL, NULL);
-    if (ai >= argc) {
-        fprintf(stderr, "usage: %s [--rootfs DIR] [--vol guest:host]... [-p H:C]... <x86-64-elf> [args...]\n", argv[0]);
-        return 2;
-    }
-    return hl_standalone_run(rootfs, NULL, (uint32_t)(argc - ai), argv + ai, NULL, NULL);
-}
-#endif

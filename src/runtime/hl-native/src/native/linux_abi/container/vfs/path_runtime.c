@@ -1434,7 +1434,7 @@ static struct ts_slot *ts_slot_for(int pid, int claim) {
 // getpid(): current glibc (>=2.25) no longer caches getpid(), so calling it on every syscall issued a
 // real host getpid() -- ~88ns of pure overhead on the gettid-loop fast path. Fork safety instead rides on
 // ts_after_fork(), which drops this cache in the child; every host fork() that goes on to run guest
-// syscalls (guest fork/vfork/clone in proc.c, the fork-server runner, checkpoint restore) is a glibc
+// syscalls (guest fork/vfork/clone in proc.c and checkpoint restore) is a glibc
 // fork(), so registering ts_after_fork() as a pthread_atfork child handler resets the cache on ALL of
 // them -- the child then re-derives its own pid once, exactly as the old per-call getpid() did lazily.
 static _Thread_local struct ts_slot *ts_self;

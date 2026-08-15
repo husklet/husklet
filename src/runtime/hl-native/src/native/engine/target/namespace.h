@@ -15,7 +15,6 @@
 #define HL_TARGET_SYMBOL(ns, name) HL_TARGET_SYMBOL_INNER(ns, name)
 #define HL_TARGET_LOCAL(name) HL_TARGET_SYMBOL(HL_TARGET_NAMESPACE, name)
 
-#define g_noexit HL_TARGET_LOCAL(g_noexit)
 #define g_rwx_guest HL_TARGET_LOCAL(g_rwx_guest)
 #define g_stack_hi HL_TARGET_LOCAL(g_stack_hi)
 #define g_stack_lo HL_TARGET_LOCAL(g_stack_lo)

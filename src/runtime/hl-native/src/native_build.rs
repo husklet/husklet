@@ -111,8 +111,6 @@ fn main() {
             Definition::value("HL_TRANSLIT_DEFAULT", "0"),
             Definition::flag("_GNU_SOURCE"),
             Definition::value("HL_EMBEDDED_BUILD", "1"),
-            Definition::value("HL_ENGINE_NO_MAIN", "1"),
-            Definition::value("HL_ENGINE_NO_STANDALONE", "1"),
         ];
         target_definitions.push(Definition::value(
             "HL_TARGET_NAMESPACE",

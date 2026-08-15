@@ -886,14 +886,3 @@ cases:
     run: []
     timeout: 120
     expect: { exit: 0, stdout: golden/symlink_entry.txt }
-  - id: runtime/process/forkserver-equivalence
-    targets: [arm64, amd64]
-    status: !unsupported
-      reason: "The canonical runner currently cannot express the retained two-program typed server/client integration protocol"
-      evidence: "tests/runtime/process/ORACLE.md"
-    compat: { class: compatibility }
-    build: { source: source/fork_runner.c, output: forkserver-equivalence, flags: ["-static", "-O2", "-std=gnu11"] }
-    artifact: { destination: /opt/husklet/forkserver-equivalence }
-    run: []
-    timeout: 120
-    expect: { exit: 0, stdout: golden/fork_equivalence.txt }

@@ -11,7 +11,6 @@ static int g_force_base_failed; // a fixed-VA map fell back to a kernel base
 static hl_identity_digest g_pc_binid; // binary + interp + argv0 + build + host ISA
 static uint64_t g_pc_entry;     // initial guest pc
 static int g_pcache_loaded;     // never set here
-static int g_pcache_forked;     // never set here
 static int g_nreloc;            // always zero here
 
 // Engine-identity mix-in for the cache key. Must be right even though the cache never hits: host_isa is

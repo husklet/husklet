@@ -262,11 +262,6 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
                 (void)hl_linux_write(g_linux_box, STDERR_FILENO, profile, bounded);
             }
         }
-        if (g_noexit) { // W3D fork-server prewarm: don't kill the resident parent; unwind run_guest instead
-            c->exited = 1;
-            c->exit_code = (int)(a0 & 0xffu);
-            break;
-        }
 #ifdef PCACHE_SAVE_HOOK
         PCACHE_SAVE_HOOK; // persist the translated arena before one-shot exit when HL_PCACHE is active
 #endif
