@@ -270,7 +270,7 @@ void hl_x86_emit_vex_fp(int vd, int src1, int src2, int op, int dbl) {
 // dies (exit 133/132) instead of running the guest handler. Routing through the dispatcher (raise_guest_trap)
 // is the same C-delivery path #DE already uses (raise_guest_de) and is host-trap-independent. lsig/code are
 // packed into cpu->divop; emit_exit_const spills guest GPR+xmm and sets cpu->rip = the architectural PC.
-static void emit_guest_signal(uint64_t rip, int lsig, int code) {
+void emit_guest_signal(uint64_t rip, int lsig, int code) {
     if (hl_x86_legacy_flags_pending()) flags_materialize();
     if (hl_x86_x87_known()) hl_x86_x87_drop();
     e_movconst(16, (uint64_t)((lsig & 0xff) | ((code & 0xff) << 8)));

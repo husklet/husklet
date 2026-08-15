@@ -148,6 +148,8 @@ static uint64_t g_prevpc, g_curpc;
         continue;                                                                                                      \
     }
 
+#include "xsave.h"
+
 #define G_DISPATCH_REASON(c)                                                                                           \
     /* The C instruction emulators come FIRST and do not `continue` unconditionally: they run outside                  \
        run_block, so a guest access they reject leaves a NEW reason (R_SOFTMISS, or R_TRAP for an                      \
@@ -159,6 +161,25 @@ static uint64_t g_prevpc, g_curpc;
     if ((c)->reason == R_SSE3B) { /* legacy 0F38/0F3A insn: emulate in C */                                            \
         hl_x86_sse_run(&g_avx_state, (c));                                                                             \
         if ((c)->reason == R_SSE3B) continue;                                                                          \
+    }                                                                                                                  \
+    if ((c)->reason == R_XSAVE) {                                                                                      \
+        uint64_t xsave_fault = (c)->x87_ea;                                                                            \
+        int xsave_result = hl_x86_xsave((c), &xsave_fault);                                                            \
+        if (xsave_result == 0) {                                                                                       \
+            (c)->rip = (c)->divop;                                                                                     \
+            (c)->reason = R_BRANCH;                                                                                    \
+            continue;                                                                                                  \
+        }                                                                                                              \
+        if (xsave_result == -2) {                                                                                      \
+            (c)->divop = UINT64_C(11) | (UINT64_C(128) << 8);                                                          \
+            (c)->reason = R_TRAP;                                                                                      \
+        } else {                                                                                                       \
+            (c)->bus_ea = xsave_fault;                                                                                 \
+            (c)->soft_guest_ea = xsave_fault;                                                                          \
+            (c)->soft_width = (c)->x87_ea + HL_X86_XSAVE_SPAN - xsave_fault;                                           \
+            (c)->soft_required = X86_SOFT_WRITE;                                                                       \
+            (c)->reason = R_SOFTMISS;                                                                                  \
+        }                                                                                                              \
     }                                                                                                                  \
     if ((c)->reason == R_SOFTMISS) {                                                                                   \
         if (soft_tlb_miss(c)) maybe_deliver_signal(c);                                                                 \

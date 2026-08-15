@@ -80,6 +80,8 @@ void narrow_adcsbb(int adc, int destination, int left, int right, int width);
 int lock_rmw(int kind, int width, int source);
 void emit_rcl_rcr(struct insn *insn, uint64_t next, int width, int rotate_right, int count);
 void emit_exit_const(uint64_t rip, uint64_t reason);
+void emit_guest_signal(uint64_t rip, int signal_number, int signal_code);
+void emit_guest_address_store(int address_register, int cpu_offset);
 void hl_x86_emit_block_return(void);
 void hl_x86_emit_spill(void);
 void hl_x86_emit_reload(void);

@@ -80,16 +80,22 @@ fn guest_memory_pin_projects_data_and_owns_each_span() {
 #define _GNU_SOURCE
 #include <stdint.h>
 #include <string.h>
+#include <pthread.h>
+#include <sched.h>
+#include <stdatomic.h>
 #include <setjmp.h>
 #include <signal.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include "translator/guest_memory.h"
 #include "translator/guest/x86_64/guest_data.h"
+#include "translator/guest/x86_64/xsave.h"
 
-static unsigned char identity[512], projected[512];
-static int pins, unpins, observations;
-static int fail_second;
+static unsigned char identity[HL_X86_XSAVE_SPAN], projected[HL_X86_XSAVE_SPAN];
+static int pins, unpins, observations, transactions, transaction_ends;
+static pthread_mutex_t transaction_lock = PTHREAD_MUTEX_INITIALIZER;
+static atomic_int contender_started, contender_acquired;
+static size_t fail_at;
 static int deny_read, deny_write;
 static unsigned char *fault_host;
 static sigjmp_buf fault_pad;
@@ -101,7 +107,7 @@ static int pin(uint64_t guest, size_t length, hl_guest_memory_access access, hl_
     uintptr_t first = (uintptr_t)identity;
     if (guest < first || guest >= first + sizeof(identity)) return HL_GUEST_MEMORY_FAULT;
     size_t offset = (size_t)(guest - first);
-    if (fail_second && offset >= 8) return HL_GUEST_MEMORY_FAULT;
+    if (fail_at && offset >= fail_at) return HL_GUEST_MEMORY_FAULT;
 #ifdef IDENTITY_PROJECTION
     out->host = identity + offset;
 #else
@@ -115,12 +121,24 @@ static int pin(uint64_t guest, size_t length, hl_guest_memory_access access, hl_
 }
 static void unpin(hl_guest_memory_pin *pin_) { if (pin_->token) ++unpins; }
 static void observe(uint64_t guest, size_t length) { (void)guest; (void)length; ++observations; }
+static void transaction_begin(void) { pthread_mutex_lock(&transaction_lock); ++transactions; }
+static void transaction_end(void) { ++transaction_ends; pthread_mutex_unlock(&transaction_lock); }
+static void *contend(void *unused) {
+    (void)unused;
+    atomic_store_explicit(&contender_started, 1, memory_order_release);
+    transaction_begin();
+    atomic_store_explicit(&contender_acquired, 1, memory_order_release);
+    transaction_end();
+    return 0;
+}
 
 int main(void) {
     for (size_t i = 0; i < sizeof(projected); ++i) { identity[i] = 0xa5; projected[i] = (unsigned char)i; }
-    const hl_guest_memory_ops ops = {.indirect = indirect, .pin = pin, .unpin = unpin, .store_observe = observe};
+    const hl_guest_memory_ops ops = {.indirect = indirect, .pin = pin, .unpin = unpin,
+                                     .transaction_begin = transaction_begin, .transaction_end = transaction_end,
+                                     .store_observe = observe};
     hl_guest_memory_bind(&ops);
-    unsigned char scalar[8], cross[12], sse[16], stack[32], xsave[512];
+    unsigned char scalar[8], cross[12], sse[16], stack[32], xsave[HL_X86_XSAVE_SPAN];
     for (size_t width = 1; width <= 8; width *= 2)
         if (hl_x86_guest_data_read((uintptr_t)identity + 3, scalar, width, 0) != 0 || memcmp(scalar, projected + 3, width)) return 1;
     if (hl_x86_guest_data_read((uintptr_t)identity + 5, cross, sizeof(cross), 0) != 0 ||
@@ -136,14 +154,30 @@ int main(void) {
     unsigned char before[sizeof(projected)], replacement[12];
     memcpy(before, projected, sizeof(before));
     memset(replacement, 0x77, sizeof(replacement));
-    fail_second = 1;
+    fail_at = 8;
     if (hl_x86_guest_data_write((uintptr_t)identity + 5, replacement, sizeof(replacement), 0) == 0) return 7;
-    fail_second = 0;
+    fail_at = 0;
     if (memcmp(before, projected, sizeof(before))) return 8;
     deny_write = 1;
     if (hl_x86_guest_data_write((uintptr_t)identity + 5, replacement, sizeof(replacement), 0) == 0) return 9;
     deny_write = 0;
     if (memcmp(before, projected, sizeof(before))) return 10;
+    fail_at = 520;
+    hl_x86_guest_data_pins failed_transaction;
+    if (hl_x86_guest_data_prepare_transaction(&failed_transaction, (uintptr_t)identity, sizeof(projected),
+                                              HL_GUEST_MEMORY_WRITE, 0) == 0) return 16;
+    fail_at = 0;
+    if (memcmp(before, projected, sizeof(before))) return 17;
+    hl_x86_guest_data_pins mapping_transaction;
+    if (hl_x86_guest_data_prepare_transaction(&mapping_transaction, (uintptr_t)identity, sizeof(projected),
+                                              HL_GUEST_MEMORY_WRITE, 0) != 0) return 18;
+    pthread_t contender;
+    if (pthread_create(&contender, 0, contend, 0) != 0) return 19;
+    while (!atomic_load_explicit(&contender_started, memory_order_acquire)) sched_yield();
+    for (int spin = 0; spin < 10000; ++spin) sched_yield();
+    if (atomic_load_explicit(&contender_acquired, memory_order_acquire)) return 20;
+    hl_x86_guest_data_release(&mapping_transaction);
+    if (pthread_join(contender, 0) != 0 || !atomic_load_explicit(&contender_acquired, memory_order_acquire)) return 21;
     deny_read = 1;
     if (hl_x86_guest_data_read((uintptr_t)identity + 5, cross, sizeof(cross), 0) == 0) return 11;
     deny_read = 0;
@@ -167,14 +201,16 @@ int main(void) {
 #endif
     mprotect(fault_host, page, PROT_READ | PROT_WRITE);
     munmap(fault_host, page);
-    return pins == unpins && pins != 0 && observations == 2 ? 0 : 15;
+    return pins == unpins && pins != 0 && observations == 2 && transactions == transaction_ends && transactions != 0
+               ? 0
+               : 15;
 }
 "#,
     )
     .expect("guest pin probe source");
     let compile = |output: &Path, mutation: bool| {
         let mut command = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()));
-        command.args(["-std=c11", "-Wall", "-Wextra", "-Werror"]);
+        command.args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-pthread"]);
         if mutation {
             command.arg("-DIDENTITY_PROJECTION");
         }
@@ -205,7 +241,7 @@ int main(void) {
     let mutation = scratch.join("guest_pin_leak");
     let mut command = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()));
     let built = command
-        .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-DOMIT_ABANDON_RELEASE"])
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-pthread", "-DOMIT_ABANDON_RELEASE"])
         .arg(format!("-I{}", native.display()))
         .arg(&source)
         .arg(native.join("translator/guest_memory.c"))

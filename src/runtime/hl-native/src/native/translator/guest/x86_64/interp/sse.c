@@ -1318,41 +1318,7 @@ static int interp_step_sse(struct cpu *cpu, struct insn *insn, uint64_t pc, uint
 //   The 64-byte header at 512 is NOT bulk-written: XSAVE read-modify-writes only the XSTATE_BV bits named
 //   by RFBM and leaves XCOMP_BV and the reserved bytes alone (byte 512 went 0xAA -> 0xAB, byte 513 stayed
 //   0xAA). Getting that wrong would corrupt a caller's XCOMP_BV.
-#define INTERP_XCR0 UINT64_C(3)
-
-// The legacy image as this engine's FXSAVE produces it, staged so a faulting store commits nothing.
-static void interp_xsave_legacy(struct cpu *cpu, uint8_t image[512]) {
-    uint64_t saved = cpu->x87_ea;
-    memset(image, 0, 512);
-    cpu->x87_ea = (uint64_t)(uintptr_t)image;
-    hl_x86_fxsave(cpu);
-    cpu->x87_ea = saved;
-    uint32_t mxcsr_mask = 0xffffu;      // exactly the bits LDMXCSR keeps (case 0xAE below); hl_x86_fxsave leaves
-    memcpy(image + 28, &mxcsr_mask, 4); // this field untouched, and a zero mask reads as "nothing settable"
-}
-
-// XINUSE, derived rather than tracked: a component whose state EQUALS its initial configuration is in it.
-// The SDM permits either answer (an implementation may report 1 for a component that is at init), so the
-// derived form is legal and additionally agrees with silicon on the case guests test -- never touched.
-static uint64_t interp_xsave_xinuse(const uint8_t image[512]) {
-    uint64_t inuse = 0;
-    uint16_t fcw, fsw;
-    uint32_t mxcsr;
-    memcpy(&fcw, image + 0, 2);
-    memcpy(&fsw, image + 2, 2);
-    memcpy(&mxcsr, image + 24, 4);
-    int x87_init = fcw == 0x037fu && fsw == 0 && image[4] == 0; // abridged tag 0 == every register empty
-    for (unsigned i = 6; i < 24 && x87_init; i++)
-        x87_init = image[i] == 0;
-    for (unsigned i = 32; i < 160 && x87_init; i++)
-        x87_init = image[i] == 0;
-    int sse_init = mxcsr == 0x1f80u;
-    for (unsigned i = 160; i < 416 && sse_init; i++)
-        sse_init = image[i] == 0;
-    if (!x87_init) inuse |= 1;
-    if (!sse_init) inuse |= 2;
-    return inuse;
-}
+#define INTERP_XCR0 HL_X86_XSAVE_XCR0
 
 // The initial configuration of each component, for XRSTOR of a header whose XSTATE_BV bit is clear.
 static void interp_xsave_init(uint8_t image[512], uint64_t components) {

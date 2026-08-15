@@ -1,1 +1,1 @@
-x86-projection-xsave saved=1
+x86-projection-xsave saved=1 selective=1 aligned-fault=1 atomic-fault=1 neighbor=1

@@ -1186,6 +1186,12 @@ void emit_memory_guard(int address_register, uint64_t size, uint64_t rip, uint32
         0x36000000u | (((uint32_t)((resume_inactive - (uint8_t *)inactive_fast) / 4) & 0x3FFFu) << 5) | 16u;
 }
 
+void emit_guest_address_store(int address_register, int cpu_offset) {
+    if (g_address_recorded) e_ldr(address_register, 28, OFF_SOFT_GUEST_EA);
+    g_address_recorded = 0;
+    e_str(address_register, 28, cpu_offset);
+}
+
 void emit_bus_guard(int address_register, uint64_t size, uint64_t rip) {
     emit_memory_guard(address_register, size, rip, 1u);
 }

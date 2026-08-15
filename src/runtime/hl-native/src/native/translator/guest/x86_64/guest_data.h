@@ -6,7 +6,7 @@
 
 #include "../../guest_memory.h"
 
-#define HL_X86_GUEST_DATA_MAX 512u
+#define HL_X86_GUEST_DATA_MAX 576u
 
 typedef struct {
     hl_guest_memory_pin pin;
@@ -21,6 +21,7 @@ typedef struct {
     size_t length;
     hl_guest_memory_access access;
     int commit_started;
+    int transaction_active;
 } hl_x86_guest_data_pins;
 
 /*
@@ -41,6 +42,8 @@ int hl_x86_guest_data_read(uint64_t guest, void *destination, size_t length, uin
 int hl_x86_guest_data_write(uint64_t guest, const void *source, size_t length, uint64_t *fault_guest);
 int hl_x86_guest_data_prepare(hl_x86_guest_data_pins *pins, uint64_t guest, size_t length,
                               hl_guest_memory_access access, uint64_t *fault_guest);
+int hl_x86_guest_data_prepare_transaction(hl_x86_guest_data_pins *pins, uint64_t guest, size_t length,
+                                          hl_guest_memory_access access, uint64_t *fault_guest);
 void hl_x86_guest_data_copy_from(hl_x86_guest_data_pins *pins, void *destination);
 void hl_x86_guest_data_copy_to(hl_x86_guest_data_pins *pins, const void *source);
 void hl_x86_guest_data_release(hl_x86_guest_data_pins *pins);

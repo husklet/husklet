@@ -18,13 +18,17 @@ static void guest_data_copy_indivisible(void *destination, const void *source, s
     }
 }
 
-/* The largest helper-owned image is the 512-byte legacy FXSAVE area.  A
-   maximal pin span may be one byte, so 512 retained pins is the exact finite
-   upper bound and avoids allocation in the execution path. */
+/* The largest helper-owned image is XSAVE's 576-byte standard-format area. A
+   maximal pin span may be one byte, so 576 retained pins is the finite upper
+   bound and avoids allocation in the execution path. */
 void hl_x86_guest_data_release(hl_x86_guest_data_pins *pins) {
     while (pins->count != 0) {
         pins->count--;
         hl_guest_memory_unpin_data(&pins->spans[pins->count].pin);
+    }
+    if (pins->transaction_active) {
+        pins->transaction_active = 0;
+        hl_guest_memory_transaction_end();
     }
 }
 
@@ -67,8 +71,18 @@ int hl_x86_guest_data_prepare(hl_x86_guest_data_pins *pins, uint64_t guest, size
     return 0;
 }
 
+int hl_x86_guest_data_prepare_transaction(hl_x86_guest_data_pins *pins, uint64_t guest, size_t length,
+                                          hl_guest_memory_access access, uint64_t *fault_guest) {
+    hl_guest_memory_transaction_begin();
+    if (hl_x86_guest_data_prepare(pins, guest, length, access, fault_guest) != 0) {
+        hl_guest_memory_transaction_end();
+        return -1;
+    }
+    pins->transaction_active = 1;
+    return 0;
+}
+
 void hl_x86_guest_data_copy_from(hl_x86_guest_data_pins *pins, void *destination) {
-    pins->commit_started = 1;
     if (pins->count == 1) {
         guest_data_copy_indivisible(destination, pins->spans[0].pin.host, pins->length);
         return;

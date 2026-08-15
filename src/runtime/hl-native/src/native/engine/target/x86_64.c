@@ -185,6 +185,9 @@ static const hl_host_services *effective_host_services(void) {
 
 static void jit86_store_alias_changed(uint64_t guest, size_t size);
 static int jit86_store_alias_observation_active(void);
+static void gbus_mapping_transition_lock(void);
+static void gbus_mapping_transition_unlock(void);
+static size_t x86_store_writable_prefix(uintptr_t address, size_t length);
 
 static void jit86_smc_queue_range(uint64_t lo, uint64_t hi, void *opaque) {
     struct cpu *cpu = opaque;
@@ -289,8 +292,17 @@ static int jit86_guest_memory_pin(uint64_t guest, size_t length, hl_guest_memory
     uint32_t required = access == HL_GUEST_MEMORY_WRITE ? HL_LOGICAL_VMA_WRITE : HL_LOGICAL_VMA_READ;
     int logical = hl_logical_vma_pin_data(guest, length, required, &logical_pin);
     if (logical < 0) return HL_GUEST_MEMORY_FAULT;
+    size_t direct_contiguous = length;
+    if (logical == 0) {
+        if (access == HL_GUEST_MEMORY_WRITE) {
+            direct_contiguous = x86_store_writable_prefix((uintptr_t)hl_x86_guest_pointer(guest), length);
+            if (direct_contiguous == 0) return HL_GUEST_MEMORY_FAULT;
+        } else if (!hl_x86_guest_readable(guest, length)) {
+            return HL_GUEST_MEMORY_FAULT;
+        }
+    }
     pin->host = logical ? logical_pin.host : (void *)(uintptr_t)hl_x86_guest_pointer(guest);
-    pin->contiguous = logical_pin.contiguous;
+    pin->contiguous = logical ? logical_pin.contiguous : direct_contiguous;
     pin->token = logical_pin.token;
     if (!logical && g_nonpie_lo) {
         uint64_t boundary = guest < g_nonpie_lo ? g_nonpie_lo : (guest < g_nonpie_hi ? g_nonpie_hi : UINT64_MAX);
@@ -315,6 +327,8 @@ static const hl_guest_memory_ops g_guest_memory_ops = {
     .exec_generation = hl_logical_vma_global_exec_generation,
     .pin = jit86_guest_memory_pin,
     .unpin = jit86_guest_memory_unpin,
+    .transaction_begin = gbus_mapping_transition_lock,
+    .transaction_end = gbus_mapping_transition_unlock,
     .store_observe = jit86_store_alias_changed,
 };
 

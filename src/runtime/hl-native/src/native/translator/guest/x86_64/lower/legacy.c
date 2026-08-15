@@ -927,7 +927,7 @@ int lower_extended_state(struct insn *instruction, uint64_t guest_pc, uint64_t n
     if (instruction->op == 0x77) return TX_NEXT;
     if (instruction->op != 0xAE) return TX_FALL;
     int operation = instruction->reg & 7;
-    if (operation >= 5) {
+    if (operation >= 5 && !instruction->is_mem) {
         emit32(0xD5033BBFu);
         return TX_NEXT;
     }
@@ -938,6 +938,20 @@ int lower_extended_state(struct insn *instruction, uint64_t guest_pc, uint64_t n
     if (operation == 3) {
         emit_stmxcsr(instruction, next);
         return TX_NEXT;
+    }
+    if (operation == 4 && instruction->is_mem) {
+        if (instruction->p66 || instruction->rep || instruction->repne) {
+            emit_guest_signal(guest_pc, 4, 2);
+            return TX_BREAK;
+        }
+        emit_ea(instruction, next);
+        emit_guest_address_store(17, OFF_X87EA);
+        e_movconst(16, next);
+        e_str(16, 28, OFF_DIVOP);
+        if (hl_x86_legacy_flags_pending()) flags_materialize();
+        if (hl_x86_x87_known()) hl_x86_x87_drop();
+        emit_exit_const(guest_pc, R_XSAVE);
+        return TX_BREAK;
     }
     if ((operation != 0 && operation != 1) || !instruction->is_mem) return TX_FALL;
     emit_ea(instruction, next);

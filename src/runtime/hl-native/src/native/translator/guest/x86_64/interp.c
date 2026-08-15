@@ -28,6 +28,7 @@
 #include "../../../host/native_context.h" // ucontext_t: the fault path restores uc_sigmask by hand
 #include "decoder.h"
 #include "guest_data.h"
+#include "xsave.h"
 
 // ---- The seam: names the JIT files own, which the rest of the TU needs.
 
@@ -1014,6 +1015,7 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
 
 #include "interp/sse.c"
 #include "interp/x87.c"
+
 static int interp_is_legacy_sse(uint8_t op) {
     if (op >= 0x10 && op <= 0x17) return 1;
     if (op >= 0x28 && op <= 0x2F) return 1;
@@ -1442,7 +1444,7 @@ static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
                 for (unsigned i = 0; i < sizeof reserved; i++)
                     if (reserved[i] != 0) return interp_guest_trap(cpu, pc, 11, 128);
                 interp_x87_arm(cpu);
-                interp_xsave_legacy(cpu, image); // components outside RFBM keep their current values
+                hl_x86_xsave_legacy(cpu, image); // components outside RFBM keep their current values
                 if (rfbm & 1) {
                     if (bv & 1) {
                         interp_load_bytes(ea + 0, image + 0, 24);
@@ -1475,7 +1477,7 @@ static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
             // already required to treat as undefined. Silently equating the two mnemonics without saying so
             // is the part that would be wrong, not the behaviour.
             interp_x87_arm(cpu);
-            interp_xsave_legacy(cpu, image);
+            hl_x86_xsave_legacy(cpu, image);
             if (rfbm & 1) {
                 interp_store_bytes(ea + 0, image + 0, 24);
                 interp_store_bytes(ea + 32, image + 32, 128);
@@ -1486,7 +1488,7 @@ static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
             }
             uint64_t bv;
             interp_load_bytes(ea + 512, &bv, 8);
-            bv = (bv & ~rfbm) | (rfbm & interp_xsave_xinuse(image));
+            bv = (bv & ~rfbm) | (rfbm & hl_x86_xsave_xinuse(image));
             interp_store_bytes(ea + 512, &bv, 8);
             cpu->rip = next;
             return STEP_NEXT;
@@ -1553,7 +1555,7 @@ static hl_identity_digest pcache_translator_identity(void) {
 }
 
 static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity_digest interpreter,
-                                        const char *argv0) {
+                                         const char *argv0) {
     return hl_identity_digest_mix(program, interpreter, pcache_translator_identity(), argv0);
 }
 
