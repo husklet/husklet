@@ -31,7 +31,7 @@ impl<T: Send + 'static, R: Send + 'static> Pool<T, R> {
 
     /// Cancels the active frontier and waits until every task destructor has
     /// finished. Row destructors own external worker cleanup, so dropping the
-    /// JoinSet without this barrier can return while worker groups still live.
+    /// `JoinSet` without this barrier can return while worker groups still live.
     pub async fn shutdown(&mut self) {
         self.running.shutdown().await;
     }
