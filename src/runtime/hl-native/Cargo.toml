@@ -27,3 +27,15 @@ tempfile.workspace = true
 [lib]
 name = "hl_native"
 path = "src/lib.rs"
+
+[[test]]
+name = "bound_vector_io"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "errno_namespace"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "x86_store_preflight"
+required-features = ["native-test-hooks"]
