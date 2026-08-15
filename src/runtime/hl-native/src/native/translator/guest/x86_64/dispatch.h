@@ -8,56 +8,47 @@
 #include "operand.h"
 #include "flags.h"
 
-// translator/guest/x86_64/dispatch.h -- the x86-64 guest's definitions of the shared run_guest()
-// dispatch seam (engine-dedup PR3/PR4). Mirror of guest/aarch64/dispatch.h: the shared
-// jit/dispatch.c calls these hooks at every guest-architecture seam. Each macro reproduces what the standalone
-// frontend/x86_64/dispatch.c did, so swapping the x86 target onto jit/dispatch.c is behavior-preserving.
+// x86-64 definitions for the architecture-specific seams in engine/dispatch.c's shared run_guest() loop.
 //
-// The macros are EXPANDED at their call sites inside jit/dispatch.c's run_guest() loop (not here), so
+// The macros expand at their call sites inside engine/dispatch.c's run_guest() loop, so
 // `continue`/`break` reach that loop and the engine globals (g_ibtc/g_xibtc, map_body, g_ibtc_fill,
 // do_cpuid/do_repstr/x87_*/tier2_promote, the R_* codes, ...) are in scope there even though this header
-// is pulled in early (targets/linux_x86_64.c #includes it right after abi.h). Every name used in a macro
-// body is defined earlier in the x86 target TU (declared glue state, cache, emitters and translation) — all
-// included before jit/dispatch.c, where the macros expand.
+// is pulled in by engine/target/x86_64.c before engine/dispatch.c. Every name used in a macro
+// body is defined earlier in the x86 target translation unit: glue state, cache, emitters, and translation
+// are included before engine/dispatch.c.
 //
-// Hooks the shared loop expects (the four PR2 seams + the PR3/PR4 additions for opts committed after the
-// design was written -- W6A SMC, opt2 2-way IBTC, the per-block trace dump, the ibtc_base entry setup):
+// Hooks supplied to the shared loop:
 //   G_OWN_TRAMPOLINES   x86 supplies its own run_block/block_return (translate.c) -> suppress the shared
-//                       (aarch64) naked trampolines in jit/dispatch.c (different reg model: cpu pinned x28)
+//                       AArch64 naked trampolines in engine/dispatch.c (different register model)
 //   G_DISPATCH_ENTER    one-time per-thread setup before the loop (x86: publish the 2-way IBTC base)
 //   G_DISPATCH_DEBUG    top-of-loop instrumentation (+ the x86 top-of-loop async-signal check)
 //   G_SHADOW_CLEAR      wholesale-flush engine reset (x86: drop the 2-way IBTC; aarch64: shadow stack)
 //   G_DISPATCH_CHAIN    post-translate chaining (x86: NO-OP -- translate_block already chained)
 //   G_AFTER_TRANSLATE   post-translate per-arch step (x86: W6A SMC source-page write-protect)
-//   G_TRACE_DUMP        per-block JT trace dump (x86 register/flag layout; the 5th divergence)
+//   G_TRACE_DUMP        per-block JT trace dump using the x86 register and flag layout
 //   G_IBTC_FILL         IBTC miss fill (x86: 1-way/2-way, keyed on ic_miss, plain body)
 //   G_DISPATCH_REASON   post-run_block reason handling (x86: cpuid/repstr/x87/div/idiv/tier2/syscall)
 
-// ---- x86 dispatch support relocated out of the lifted dispatch.c -------------------------------------
-// These DEFINITIONS used to sit at the top of frontend/x86_64/dispatch.c (above run_guest). The swap
-// stops #include-ing that file, but linux_abi/x86.c (jit86_lazyguard) and the G_AFTER_TRANSLATE /
-// G_DISPATCH_DEBUG hooks still need them, so they move here (the x86 dispatch seam). This header is
-// #included exactly once in the x86 unity TU -> each is defined once. They reference only libc + the
-// extern g_rwx_guest (defined later in os/linux/service.c) -> position-independent here.
+// This header is included exactly once in the x86 target translation unit, so its support state has one
+// definition. linux_abi/x86.c and the dispatch hooks below share that state.
 
 // debug: track block transitions for fault diagnosis (used by linux_abi/x86.c).
 static uint64_t g_prevpc, g_curpc;
 
-// x86 keeps its own naked trampolines (frontend/x86_64/translate.c: cpu pinned in x28, 16-GPR model,
-// host save offsets #168..#264). Defining this tells jit/dispatch.c NOT to emit the aarch64 ones.
+// x86 keeps the naked trampolines in translate.c because its register and host-save model differs from
+// AArch64. Defining this prevents engine/dispatch.c from emitting the AArch64 trampolines.
 #define G_OWN_TRAMPOLINES 1
 
 // One-time entry setup: opt2's emitted indirect hot path loads the 2-way IBTC base from cpu->ibtc_base
-// in a single insn, so publish it once before the dispatcher loop. (Was the line right after
-// pthread_setspecific in frontend/x86_64/dispatch.c.)
+// in a single instruction, so publish it once before the dispatcher loop.
 #define G_DISPATCH_ENTER(c) ((c)->ibtc_base = (uint64_t)g_xibtc)
 
-// (4) Top-of-loop instrumentation. x86 checks the async-signal flag at the top of every iteration (the
+// Top-of-loop instrumentation. x86 checks the async-signal flag at the top of every iteration (the
 // shared loop also checks it at the bottom -- the two are the same block boundary, so the top check here
-// just preserves x86's historical position; maybe_deliver_signal is guarded + idempotent under g_pending,
+// preserves the required delivery position; maybe_deliver_signal is guarded and idempotent under g_pending,
 // so the extra bottom check is a no-op once delivered). Then the fault-diagnosis block: prev/cur pc, the
-// trace cap runaway guard. A PLAIN brace block (NOT do/while(0)) so the trace-cap `break` reaches the
-// shared dispatcher while-loop -- the original broke the loop immediately, not just the macro.
+// trace cap runaway guard. A plain brace block (not do/while(0)) is required so the trace-cap `break`
+// reaches the shared dispatcher while-loop rather than only the macro body.
 #define G_DISPATCH_DEBUG(c)                                                                                            \
     {                                                                                                                  \
         if (signal_deliverable_for_cpu(c)) { maybe_deliver_signal(c); /* deliverable signal -> handler */ }            \
@@ -76,29 +67,24 @@ static uint64_t g_prevpc, g_curpc;
 
 // §B-equivalent on-flush engine reset. x86 has no shadow stack; instead, on a wholesale cache flush the
 // opt2 2-way IBTC bodies point into the cache we just dropped, so zero it. (The shared loop already
-// memset()s the 1-way g_ibtc inline; this drops the x86-only g_xibtc.) Was the `memset(g_xibtc, ...)`
-// after the flush in frontend/x86_64/dispatch.c.
+// memset()s the 1-way g_ibtc inline; this drops the x86-only g_xibtc.)
 #define G_SHADOW_CLEAR(c) memset(g_xibtc, 0, sizeof g_xibtc)
 
-// A3 (aarch64-only lever): no §B-off block-entry alignment on x86. Defined so the shared jit/dispatch.c
-// compiles; expands to a compile-time 0 -> the alignment `while` is dead-stripped on x86.
-// IRQSLIM moved the per-block poll exit stub out of line, which shifts downstream block layout;
-// 16-align each block entry (same rationale as the aarch64 A3 alignment: stabilize hot-loop/BTB
-// placement; the pad precedes the entry and never executes). Costs only pad bytes.
+// The shared dispatcher aligns x86 block entries when forward skipping is enabled. The out-of-line
+// per-block poll exit stub shifts downstream block layout, so 16-byte alignment stabilizes hot-loop and
+// branch-target-buffer placement; the preceding padding never executes.
 #define G_BLOCK_ALIGN (g_fwdskip != 0)
 
-// Post-translate chaining. x86's translate_block() already calls patch_links_to() internally (frontend/
-// x86_64/translate.c, gated !g_threaded), so the dispatcher must NOT chain again. (aarch64 moved chaining
-// to the dispatcher; x86 keeps it in translate_block -- the per-arch placement the shared loop hides here.)
+// Post-translate chaining. x86's translate_block() already calls patch_links_to() internally in translate.c
+// when !g_threaded, so the dispatcher must not chain again.
 #define G_DISPATCH_CHAIN(c) ((void)0)
 
-// W6A item 3: after translating a block, write-protect its 16KB source page so a JIT (RWX-mmap) guest's
+// After translating a block, write-protect its 16KB source page so a JIT (RWX-mmap) guest's
 // later overwrite traps in jit86_lazyguard -> smc_on_write() drops the stale translation. Inert unless
-// g_rwx_guest is set (smc_protect returns immediately). Was the smc_protect(c->rip) after the translate.
+// g_rwx_guest is set (smc_protect returns immediately).
 #define G_AFTER_TRANSLATE(c) smc_protect(nonpie_fold((c)->rip))
 
-// (5) Per-block JT trace dump. x86 register/flag layout (flags derived from cpu->nzcv; stored C = NOT
-// x86 CF). Verbatim from frontend/x86_64/dispatch.c.
+// Per-block JT trace dump. x86 register/flag layout (flags derived from cpu->nzcv; stored C = NOT x86 CF).
 #define G_TRACE_DUMP(c)                                                                                                \
     if (g_trace) {                                                                                                     \
         unsigned nz = (unsigned)(c)->nzcv;                                                                             \
@@ -114,10 +100,10 @@ static uint64_t g_prevpc, g_curpc;
                 (unsigned long long)(c)->r[15], CF, ZF, SF, OF);                                                       \
     }
 
-// (1) IBTC miss fill. x86 keys off c->ic_miss (0/1), stores the PLAIN body (no body-8 stub; x16-x21 are
+// IBTC miss fill. x86 keys off c->ic_miss (0/1), stores the plain body (no body-8 stub; x16-x21 are
 // free scratch, no stash/restore), and is skipped under threads (the indirect probe reads g_ibtc/g_xibtc
 // unlocked -> a torn fill would dispatch the wrong body). IBTC1WAY=1 restores the old 1-way shared-g_ibtc
-// fill; otherwise opt2's 2-way set-associative g_xibtc insert. Verbatim from frontend/x86_64/dispatch.c.
+// fill; otherwise use the 2-way set-associative g_xibtc insert.
 #define G_IBTC_FILL(c)                                                                                                 \
     if ((c)->ic_miss) {                                                                                                \
         if (!g_threaded) {                                                                                             \
@@ -148,12 +134,12 @@ static uint64_t g_prevpc, g_curpc;
         (c)->ic_miss = 0;                                                                                              \
     }
 
-// (2) Post-run_block reason handling. The full x86 reason switch: the unimplemented-opcode abort (99),
-// the W5-B R_TIER2 promote, R_CPUID, the W4-C R_REPSTR rep cmps/scas idiom, the x87 m80 fld/fstp, the
+// Post-run_block reason handling: the unimplemented-opcode abort (99),
+// R_TIER2 promotion, R_CPUID, R_REPSTR rep cmps/scas, the x87 m80 fld/fstp, the
 // 128/64 div/idiv done in C, and finally R_SYSCALL (x86 pre-advances rip in the emitter, so NO post-
 // service pc-advance -- the per-arch syscall tail convention lives here; aarch64 does pc += 4 instead).
 // Each non-syscall case `continue`s the shared while-loop (so the shared `if (reason==R_TIER2) ...`
-// tail line never re-fires for x86). Verbatim from frontend/x86_64/dispatch.c. `break` exits the loop.
+// tail line never re-fires for x86). `break` exits the loop.
 #define G_DISPATCH_SOFTSPAN(c)                                                                                         \
     if ((c)->reason == R_SOFTSPAN) {                                                                                   \
         (c)->soft_snapshot = 0;                                                                                        \
