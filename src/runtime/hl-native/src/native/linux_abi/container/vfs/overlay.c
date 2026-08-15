@@ -647,6 +647,40 @@ static void ovl_copy_meta(const char *src, const char *dst, const struct stat *s
     ovl_copy_xattrs(src, dst);
 }
 
+// A copied-up inode is still the same logical overlay file. POSIX record locks therefore need one stable
+// identity on descriptors opened before and after copy-up, even though the host backing inode changes.
+// Keep the lower identity private from the guest in the engine-owned xattr namespace; guest xattr APIs
+// expose only user.hl.guest.*. The marker is replaced on every copy-up, so it always names this overlay's
+// immediate lower backing rather than an identity inherited from an older committed layer.
+#define HL_OVERLAY_LOCK_IDENTITY_XATTR "user.hl.overlay.lock-identity"
+#define HL_OVERLAY_LOCK_IDENTITY_VERSION UINT64_C(1)
+struct hl_overlay_lock_identity {
+    uint64_t version;
+    uint64_t device;
+    uint64_t object;
+};
+
+static void overlay_lock_identity_store(const char *upper, const struct stat *lower) {
+    const struct hl_overlay_lock_identity identity = {
+        .version = HL_OVERLAY_LOCK_IDENTITY_VERSION,
+        .device = (uint64_t)lower->st_dev,
+        .object = (uint64_t)lower->st_ino,
+    };
+    (void)hl_native_setxattr(upper, HL_OVERLAY_LOCK_IDENTITY_XATTR, &identity, sizeof identity, 0, XATTR_NOFOLLOW);
+}
+
+static void overlay_lock_identity_resolve(int descriptor, const struct stat *status, dev_t *device, ino_t *object) {
+    struct hl_overlay_lock_identity identity;
+    ssize_t length = hl_native_fgetxattr(descriptor, HL_OVERLAY_LOCK_IDENTITY_XATTR, &identity, sizeof identity, 0, 0);
+    if (length == (ssize_t)sizeof identity && identity.version == HL_OVERLAY_LOCK_IDENTITY_VERSION) {
+        *device = (dev_t)identity.device;
+        *object = (ino_t)identity.object;
+    } else {
+        *device = status->st_dev;
+        *object = status->st_ino;
+    }
+}
+
 // Recursively remove a host path (file, symlink, or a whole directory subtree). Used to whiteout a
 // lower-backed directory: a plain remove() cannot drop an upper dir that still holds child `.wh.` markers
 // (ENOTEMPTY), which left the directory wrongly still resolving as present after `rm -rf`.
@@ -787,6 +821,7 @@ static void overlay_copyup(const char *guest, char *host, size_t hn) {
     // Preserve the lower inode's mode (incl S_ISUID/S_ISGID/S_ISVTX), atime/mtime and xattrs -- real
     // overlayfs copy-up semantics (security-critical for setuid/file-cap binaries; correctness for mtime).
     ovl_copy_meta(src, up, &st);
+    overlay_lock_identity_store(up, &st);
     // The file (and possibly its parent dirs) now lives in the UPPER: its resolved host path relocated
     // lower->upper. Bump the namespace epoch so the guest->host path caches (rc_/oc_) and the updirneg
     // memo can't keep serving the stale LOWER path -- fchmodat/fchownat/utimensat/setxattr copy-ups reach
