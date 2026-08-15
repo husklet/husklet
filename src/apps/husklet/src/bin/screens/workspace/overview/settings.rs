@@ -86,13 +86,15 @@ impl Overview<'_> {
         }
         form.cpus.set_value(workspace.cpus.unwrap_or(0) as f64);
         form.mem.set_value(workspace.memory_mb.unwrap_or(0) as f64);
-        if let Some(scrollback) = workspace.scrollback {
-            form.scrollback.set_text(&scrollback.to_string());
-        }
+        form.scrollback.set_text(&Self::scrollback_text(workspace.scrollback));
         form.features.docker.set_active(workspace.docker_sock);
         if let Some(vpn) = &workspace.vpn {
             form.features.vpn.set_text(&vpn.to_spec());
         }
+    }
+
+    fn scrollback_text(scrollback: Option<u64>) -> String {
+        scrollback.map_or_else(|| "unlimited".to_owned(), |lines| lines.to_string())
     }
 
     fn save_row(form: Rc<Form>) -> gtk::Box {
@@ -128,5 +130,16 @@ impl Overview<'_> {
         row.append(&status);
         row.append(&save);
         row
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Overview;
+
+    #[test]
+    fn unlimited_scrollback_is_populated_explicitly() {
+        assert_eq!(Overview::scrollback_text(None), "unlimited");
+        assert_eq!(Overview::scrollback_text(Some(100_000)), "100000");
     }
 }

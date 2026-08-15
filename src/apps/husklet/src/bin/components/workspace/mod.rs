@@ -128,6 +128,9 @@ fn create_workspace(store: &mut WorkspaceStore, workspace: WorkspaceConfig) -> s
 impl Form {
     pub(crate) fn new() -> Self {
         let terminal = TermConfig::default();
+        let scrollback = terminal
+            .scrollback
+            .map_or_else(|| "unlimited".to_owned(), |lines| lines.to_string());
         let font_size = gtk::SpinButton::with_range(6.0, 48.0, 1.0);
         font_size.set_value(terminal.font_size);
         let cursor_blink = gtk::Switch::new();
@@ -140,7 +143,7 @@ impl Form {
             cpu_amd: Rc::new(Cell::new(false)),
             cpus: gtk::SpinButton::with_range(0.0, 64.0, 1.0),
             mem: gtk::SpinButton::with_range(0.0, 65536.0, 256.0),
-            scrollback: Field::entry("unlimited", false),
+            scrollback: Field::entry(&scrollback, false),
             font: FontPicker::new(&terminal.font_family),
             font_size,
             foreground: ColorPicker::new(&terminal.foreground),
@@ -194,7 +197,7 @@ impl Form {
         panel.append(&Field::text(
             "SCROLLBACK",
             &self.scrollback,
-            Some("Blank keeps unlimited history."),
+            Some("Enter a line limit, or “unlimited”."),
         ));
         panel
     }

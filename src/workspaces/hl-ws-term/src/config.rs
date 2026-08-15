@@ -56,6 +56,8 @@ pub struct TermConfig {
     pub keybindings: Vec<(String, String)>,
 }
 
+pub const DEFAULT_SCROLLBACK_LINES: u64 = 100_000;
+
 /// The committed near-black defaults (mirror `term.rs`'s hard-coded look), so an absent/partial config
 /// yields exactly today's appearance.
 const DEFAULT_PALETTE: [&str; 16] = [
@@ -68,7 +70,7 @@ impl Default for TermConfig {
         TermConfig {
             font_family: "Menlo".to_string(),
             font_size: 12.0,
-            scrollback: None,
+            scrollback: Some(DEFAULT_SCROLLBACK_LINES),
             cursor_shape: CursorShape::Block,
             cursor_blink: true,
             foreground: "#e7e9ee".to_string(),
@@ -154,13 +156,7 @@ impl TermConfig {
                     self.font_size = n;
                 }
             }
-            "scrollback" => {
-                // `unlimited`/`0`/empty → unlimited; a number → cap.
-                self.scrollback = match value.to_ascii_lowercase().as_str() {
-                    "" | "0" | "unlimited" | "infinite" | "inf" => None,
-                    _ => value.parse::<u64>().ok().filter(|n| *n > 0),
-                };
-            }
+            "scrollback" => self.apply_scrollback(value),
             "cursor_shape" | "cursor" => {
                 if let Some(cs) = CursorShape::parse(value) {
                     self.cursor_shape = cs;
@@ -177,6 +173,19 @@ impl TermConfig {
             "background" | "bg" => self.apply_color(value, Some(16)),
             _ => {
                 self.apply_named_entry(key, value);
+            }
+        }
+    }
+
+    fn apply_scrollback(&mut self, value: &str) {
+        // `unlimited`/`0`/empty -> unlimited; a positive number -> cap. Invalid values preserve
+        // the current setting instead of silently selecting the most memory-intensive mode.
+        match value.to_ascii_lowercase().as_str() {
+            "" | "0" | "unlimited" | "infinite" | "inf" => self.scrollback = None,
+            _ => {
+                if let Some(lines) = value.parse::<u64>().ok().filter(|lines| *lines > 0) {
+                    self.scrollback = Some(lines);
+                }
             }
         }
     }
@@ -230,7 +239,7 @@ impl TermConfig {
         s.push_str("font_family = Menlo\n");
         s.push_str("font_size = 12\n");
         s.push_str("# scrollback: a number of lines, or `unlimited`\n");
-        s.push_str("scrollback = unlimited\n");
+        let _ = writeln!(s, "scrollback = {DEFAULT_SCROLLBACK_LINES}");
         s.push_str("cursor_shape = block   # block | beam | underline\n");
         s.push_str("cursor_blink = true\n\n");
         s.push_str("# colors (#rrggbb)\n");
@@ -272,8 +281,8 @@ mod tests {
     fn defaults_match_shipped_look() {
         let c = TermConfig::default();
         assert_eq!(c.font_string(), "Menlo 12");
-        assert_eq!(c.scrollback, None);
-        assert_eq!(c.scrollback_lines(), 10_000_000);
+        assert_eq!(c.scrollback, Some(DEFAULT_SCROLLBACK_LINES));
+        assert_eq!(c.scrollback_lines(), DEFAULT_SCROLLBACK_LINES as i64);
         assert_eq!(c.cursor_shape, CursorShape::Block);
         assert!(c.cursor_blink);
         assert_eq!(c.palette[1], "#ff5f56");
@@ -362,7 +371,7 @@ mod tests {
         let mut c = TermConfig::default();
         c.apply_text("font_size = notanumber\nscrollback = abc\ncolor99 = #fff\ncolor1 = nothex\n");
         assert_eq!(c.font_size, 12.0);
-        assert_eq!(c.scrollback, None); // "abc" -> None (unlimited) is acceptable fallback
+        assert_eq!(c.scrollback, Some(DEFAULT_SCROLLBACK_LINES));
         assert_eq!(c.palette[1], "#ff5f56"); // unchanged
     }
 

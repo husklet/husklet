@@ -1,4 +1,4 @@
-use super::{io, Arch, Mount, PathBuf, TerminalPreferences, VpnConfig, Workspace, WorkspaceConfig};
+use super::{Arch, Mount, PathBuf, TerminalPreferences, VpnConfig, Workspace, WorkspaceConfig, io};
 
 #[derive(Default)]
 pub(super) struct WorkspaceDocument {
@@ -84,9 +84,17 @@ struct WsBuilder {
     env: Vec<(String, String)>,
     mounts: Vec<Mount>,
     docker_sock: Option<bool>,
-    scrollback: Option<u64>,
+    scrollback: ScrollbackValue,
     vpn: Option<VpnConfig>,
     terminal: TerminalPreferences,
+}
+
+#[derive(Default)]
+enum ScrollbackValue {
+    #[default]
+    Missing,
+    Unlimited,
+    Lines(u64),
 }
 
 impl WsBuilder {
@@ -104,7 +112,18 @@ impl WsBuilder {
             "cpus" => self.cpus = Some(Value::new("cpus", v).number()?),
             "memory" => self.memory_mb = Some(Value::new("memory", v).number()?),
             "docker_sock" => self.docker_sock = Some(Value::new("docker_sock", v).boolean()?),
-            "scrollback" => self.scrollback = Some(Value::new("scrollback", v).number()?),
+            "scrollback" => {
+                self.scrollback = match v.to_ascii_lowercase().as_str() {
+                    "0" | "unlimited" => ScrollbackValue::Unlimited,
+                    _ => {
+                        let lines = Value::new("scrollback", v).number::<u64>()?;
+                        if lines == 0 {
+                            return Err(Value::new("scrollback", v).invalid());
+                        }
+                        ScrollbackValue::Lines(lines)
+                    }
+                };
+            }
             "vpn" if !v.is_empty() => {
                 self.vpn = Some(VpnConfig::parse(v).ok_or_else(|| Value::new("vpn", v).invalid())?);
             }
@@ -194,7 +213,11 @@ impl WsBuilder {
                 mounts: self.mounts,
             },
             docker_sock: self.docker_sock.unwrap_or(true),
-            scrollback: self.scrollback,
+            scrollback: match self.scrollback {
+                ScrollbackValue::Missing => Some(super::DEFAULT_SCROLLBACK_LINES),
+                ScrollbackValue::Unlimited => None,
+                ScrollbackValue::Lines(lines) => Some(lines),
+            },
             vpn: self.vpn,
             terminal: self.terminal,
         })
