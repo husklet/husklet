@@ -197,6 +197,18 @@ static int svc_proc_51(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
     return 1;
 }
 
+static void process_last_thread_exit(int status) {
+    launch_reg_terminate_peers();
+    udp_ref_process_exit();
+    acct_proc_leave();
+    proc_reg_unlink();
+    proc_fdvis_cleanup();
+    hl_host_process_fd_private_cleanup();
+    poslk_on_exit();
+    sysv_on_exit();
+    hl_engine_child_result_publish(status, HL_STATUS_OK, 0);
+}
+
 static int svc_proc_93(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 93:
@@ -207,7 +219,13 @@ static int svc_proc_93(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
         // `exit_group` path below, this unwinds through the engine instead of
         // reaching the host `_exit`, so the kernel cannot normalize it for us.
         c->exit_code = (int)(a0 & 0xffu);
-        // exit: end THIS thread
+        // exit: end THIS thread. The thread trampoline owns peer-thread cleanup;
+        // the process owner reaches this path directly, so when it is the last
+        // live thread it must also retire process-scoped shared registries before
+        // returning through the embedding host. Otherwise fork children leave
+        // their descriptor-visibility rows behind until the fixed arena fills.
+        futex_robust_exit(c);
+        if (thread_live_count() == 1) process_last_thread_exit(c->exit_code);
         break;
     // exit_group: end the whole process
     default: return 0;
@@ -252,16 +270,8 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
 #ifdef PCACHE_SAVE_HOOK
         PCACHE_SAVE_HOOK; // persist the translated arena before one-shot exit when HL_PCACHE is active
 #endif
-        futex_robust_exit(c);         // robust mutexes still held by the calling thread -> OWNER_DIED + wake waiters
-        launch_reg_terminate_peers(); // PID-namespace init exit kills every launch-owned descendant, even setsid peers
-        udp_ref_process_exit();       // unlink AF_UNIX rendezvous inodes whose last owner is this exiting process
-        acct_proc_leave();            // release this process's cgroup accounting slot (_exit bypasses atexit)
-        proc_reg_unlink();            // drop our /proc process-table entry (_exit bypasses the atexit handler)
-        proc_fdvis_cleanup();         // retire typed logical-fd identities (_exit bypasses the atexit handler)
-        hl_host_process_fd_private_cleanup(); // retire provider-private descriptors for this process identity
-        poslk_on_exit();                      // release this process's in-engine fcntl advisory locks
-        sysv_on_exit();                       // apply SEM_UNDO + GC this container's SysV objects (_exit skips atexit)
-        hl_engine_child_result_publish((int32_t)a0, HL_STATUS_OK, 0);
+        futex_robust_exit(c); // robust mutexes still held by the calling thread -> OWNER_DIED + wake waiters
+        process_last_thread_exit((int32_t)a0);
         _exit((int)a0);
     default: return 0;
     }
