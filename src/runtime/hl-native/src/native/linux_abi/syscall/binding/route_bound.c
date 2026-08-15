@@ -841,8 +841,8 @@ static int bound_route_duplication(struct cpu *c, uint64_t nr, uint64_t a0, uint
                 nanosleep(&delay, NULL);
             }
             /* poslk_apply is shared with the legacy Darwin syscall path and therefore reports native
-             * errno numbers. This typed route bypasses svc_done(), so translate at this boundary. */
-            result = lock_result < 0 ? -hl_linux_errno_from_macos(-lock_result) : lock_result;
+             * errno numbers. This typed route bypasses svc_done_host(), so translate at this boundary. */
+            result = lock_result < 0 ? -hl_linux_errno_from_host(-lock_result) : lock_result;
             if (result == 0 && a1 == 5 && guest_copy_to(a2, lock, sizeof(lock)) != (ssize_t)sizeof(lock))
                 result = -EFAULT;
         } else if ((int32_t)a1 == HL_LINUX_F_SETFL) {

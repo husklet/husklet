@@ -1,5 +1,6 @@
 hl_aarch64_bound_vector_io_test
 hl_aarch64_fdvis_path_publication_test
+hl_aarch64_signal_errno_frame_test
 hl_c_backend_checkpoint_adopt
 hl_c_backend_checkpoint_broker_accept
 hl_c_backend_checkpoint_broker_pair
@@ -14,6 +15,7 @@ hl_c_backend_checkpoint_trigger_create
 hl_c_backend_checkpoint_trigger_destroy
 hl_c_backend_create
 hl_c_backend_destroy
+hl_c_backend_errno_from_host_test
 hl_c_backend_executable_discard
 hl_c_backend_executable_open
 hl_c_backend_exit
@@ -28,4 +30,5 @@ hl_engine_abi
 hl_engine_version
 hl_x86_64_bound_vector_io_test
 hl_x86_64_fdvis_path_publication_test
+hl_x86_64_signal_errno_frame_test
 hl_x86_64_store_preflight_test

@@ -1,6 +1,6 @@
     case 198: {
         if ((int)a0 == LX_AF_NETLINK) {                     // socket(AF_NETLINK,...) -> socketpair-backed netlink
-            G_RET(c) = (uint64_t)nl_open((int)a1, (int)a2); // -host_errno on fail -> svc_done translates
+            G_RET(c) = (uint64_t)nl_open((int)a1, (int)a2); // -host_errno on fail -> svc_done_host translates
             break;
         }
         int ty = (int)a1;
@@ -225,7 +225,7 @@
             int pc = net_precheck((int)a0, a1, (socklen_t)a2, 0);
             if (pc) {
                 G_RET(c) = (uint64_t)(int64_t)pc;
-                return svc_done(c);
+                return svc_done_host(c);
             }
         }
         // GUEST Linux sockaddr_in: family@0(u16 LE), port@2(BE)
@@ -662,7 +662,7 @@
             int pc = net_precheck((int)a0, a1, (socklen_t)a2, 1);
             if (pc) {
                 G_RET(c) = (uint64_t)(int64_t)pc;
-                return svc_done(c);
+                return svc_done_host(c);
             }
         }
         // Isolated networking: no external egress (HL_NET_ISOLATE). Loopback is redirected by the lo_* path

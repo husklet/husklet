@@ -1205,5 +1205,5 @@ static int svc_sysv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // Map the host(macOS) errno left in G_RET to the Linux errno the guest expects (e.g. ENOMSG 91->42,
     // EIDRM 90->43, EAGAIN 35->11). Like every other svc_<family>() tail, sysv early-returns from
     // service_local before its trailing m2l boundary, so it must translate here.
-    return svc_done(c);
+    return svc_done_host(c);
 }

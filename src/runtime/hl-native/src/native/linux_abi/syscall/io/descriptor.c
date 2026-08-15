@@ -34,7 +34,7 @@ static int svc_dup(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     }
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_dup3(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -111,7 +111,7 @@ static int svc_dup3(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     }
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_fcntl_lock(struct cpu *c, int descriptor, int command, uint64_t address) {
@@ -703,7 +703,7 @@ static int svc_fcntl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     }
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_ioctl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -734,7 +734,7 @@ static int svc_ioctl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     }
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_pipe2(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -826,7 +826,7 @@ static int svc_pipe2(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     // A RAM-backed scratch file is anonymous/private: fsync has no observable effect -> 0.
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_fsync(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -837,7 +837,7 @@ static int svc_fsync(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     // fdatasync -> fsync (no macOS fdatasync); same durability policy
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_fdatasync(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -848,7 +848,7 @@ static int svc_fdatasync(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, u
     // copy_file_range(fdin,offin*,fdout,offout*,len,flags)
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_copy_file_range(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -925,7 +925,7 @@ static int svc_copy_file_range(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t
     // preadv/pwritev: struct iovec layout is identical Linux<->macOS
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_sync_file_range(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -937,5 +937,5 @@ static int svc_sync_file_range(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t
         break; // sync_file_range -> fsync (no-op for RAM scratch)
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }

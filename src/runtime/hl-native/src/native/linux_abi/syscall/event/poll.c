@@ -134,7 +134,7 @@ static int svc_pselect6(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     }
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_ppoll(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -286,5 +286,5 @@ static int svc_ppoll(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     // signalfd4(fd, mask, sizemask, flags)
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }

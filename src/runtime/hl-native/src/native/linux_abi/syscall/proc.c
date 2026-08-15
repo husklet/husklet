@@ -1,7 +1,7 @@
 // Extracted from service(): Process & scheduling -- clone/fork/execve/wait/exit, pid/uid/gid identity,
 // prctl/futex/caps/sched/affinity. Returns 1 if nr was handled, 0 otherwise. Because its cases call
 // service.c-local helpers (nonpie_p/cpu_online_mask/affinity_mask), it is #included after them, before
-// service(). NOTE: execve sets c->redirect; svc_done() (the shared tail) skips errno xlate when redirect
+// service(). NOTE: execve sets c->redirect; svc_done_host() (the shared tail) skips errno xlate when redirect
 // is set, so a redirect's already-Linux G_RET is never re-translated.
 
 // Restore guest GPRs that a per-arch fork/vfork->clone normalization repurposed as clone arguments (the x86
@@ -689,7 +689,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         HL_PROC_CASE(435);
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 #undef HL_PROC_CASE

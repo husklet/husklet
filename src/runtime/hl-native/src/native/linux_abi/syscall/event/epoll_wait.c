@@ -37,7 +37,7 @@ static int svc_epoll_pwait(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1,
     // epoll_pwait2(epfd, events, max, timeout(const struct timespec*), sigmask, sigsetsize)
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_epoll_pwait2(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -90,5 +90,5 @@ static int svc_epoll_pwait2(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1
     }
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }

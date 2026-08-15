@@ -896,7 +896,7 @@ static void service_local(struct cpu *c) {
         };
         if (hl_linux_misc_dispatch(&misc, nr, arguments, &result)) {
             G_RET(c) = (uint64_t)result;
-            (void)svc_done(c);
+            (void)svc_done_host(c);
             return;
         }
     }
@@ -921,6 +921,6 @@ static void service_local(struct cpu *c) {
     // expects. Skip redirect (sigreturn restored an already-Linux x0 from the signal frame).
     if (!c->redirect) {
         int64_t rv = (int64_t)G_RET(c);
-        if (rv < 0 && rv >= -4095) G_RET(c) = (uint64_t)(-(int64_t)hl_linux_errno_from_macos((int)(-rv)));
+        if (rv < 0 && rv >= -4095) G_RET(c) = (uint64_t)(-(int64_t)hl_linux_errno_from_host((int)(-rv)));
     }
 }

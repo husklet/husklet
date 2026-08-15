@@ -612,7 +612,7 @@ static int bound_route_attributes(struct cpu *c, uint64_t nr, uint64_t a0, uint6
             result = guest_xattr_list(path, (char *)a1, (size_t)a2, 0);
         else
             result = guest_xattr_remove(path, (const char *)a1, 0);
-        if (result < 0) result = -hl_linux_errno_from_macos((int)-result);
+        if (result < 0) result = -hl_linux_errno_from_host((int)-result);
         break;
     }
     case 33: {

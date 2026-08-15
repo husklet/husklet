@@ -62,6 +62,7 @@ fn main() {
         "_GNU_SOURCE"
     };
     let mut shim_definitions = vec![Definition::flag(platform_definition)];
+    add_test_hooks(&mut shim_definitions, test_hooks);
     if plan.guests == [GuestIsa::X86_64] {
         shim_definitions.push(Definition::value("HL_BUILD_TARGET_X86_64_ONLY", "1"));
     }

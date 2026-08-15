@@ -35,7 +35,7 @@
 // marshaling into the arch-specific *id64_ds, uid/gid virtualization (we now store the container identity
 // natively so no host<->guest mapping is needed), ipcperms EACCES + owner EPERM, EFAULT, key semantics,
 // *_INFO/*_STAT -- all byte-exact vs the oracle. errno values below are the *macOS* <errno.h> constants;
-// svc_done() does the macOS->Linux boundary translation at the tail (e.g. ENOMSG 91->42, EIDRM 90->43,
+// svc_done_host() does the macOS->Linux boundary translation at the tail (e.g. ENOMSG 91->42, EIDRM 90->43,
 // EAGAIN 35->11), same as every other svc_<family>().
 
 // shm sizes round to the host granule; reported limits are in guest pages.

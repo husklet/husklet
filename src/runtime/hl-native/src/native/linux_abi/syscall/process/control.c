@@ -135,7 +135,7 @@ static int svc_proc_155(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     case 155: {
         // Map the guest's view of the init (pid 1) to its real host pid, then query. Linux getpgid fails
         // ONLY with ESRCH (no process with that pid) -- never EPERM/EINVAL. The old handler returned the
-        // raw -1 on failure, which svc_done then misread as -EPERM (errno "1"): getpgid02's -99/unused_pid
+        // raw -1 on failure, which svc_done_host then misread as -EPERM (errno "1"): getpgid02's -99/unused_pid
         // wrongly reported EPERM instead of ESRCH. Force ESRCH for any lookup failure.
         pid_t pid = ((pid_t)a0 == 1 && g_init_hostpid) ? g_init_hostpid : (pid_t)a0;
         pid_t r = getpgid(pid);
@@ -157,7 +157,7 @@ static int svc_proc_156(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     switch (nr) {
     case 156: {
         // getsid: same contract as getpgid above -- fails only with ESRCH for a pid that names no process
-        // (getsid02's unused_pid), so map a raw -1 to ESRCH rather than let svc_done coin it into EPERM.
+        // (getsid02's unused_pid), so map a raw -1 to ESRCH rather than let svc_done_host coin it into EPERM.
         pid_t pid = ((pid_t)a0 == 1 && g_init_hostpid) ? g_init_hostpid : (pid_t)a0;
         pid_t r = getsid(pid);
         if (r < 0) {

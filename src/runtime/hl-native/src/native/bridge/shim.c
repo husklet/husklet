@@ -125,6 +125,18 @@ HL_API int32_t hl_c_backend_leak_check_nonvacuity(void) {
 #endif
 }
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+extern int hl_linux_errno_from_host(int host_errno);
+extern int hl_linux_errno_from_darwin(int host_errno);
+extern int hl_linux_errno_from_ucrt(int host_errno);
+
+HL_API int32_t hl_c_backend_errno_from_host_test(uint32_t domain, int32_t host_errno) {
+    if (domain == 1) return hl_linux_errno_from_darwin(host_errno);
+    if (domain == 2) return hl_linux_errno_from_ucrt(host_errno);
+    return hl_linux_errno_from_host(host_errno);
+}
+#endif
+
 extern int hl_aarch64_ckpt_broker_pair(hl_activation_descriptor *, hl_activation_descriptor *);
 extern hl_activation_descriptor hl_aarch64_ckpt_broker_accept(hl_activation_descriptor, int, uint64_t *);
 extern int hl_aarch64_ckpt_trigger_create(hl_activation_descriptor *, void **);

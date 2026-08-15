@@ -73,7 +73,7 @@ static int svc_eventfd2(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     }
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_epoll_create1(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -111,7 +111,7 @@ static int svc_epoll_create1(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
     // epoll_ctl(epfd, op, fd, event) -> kevent
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_epoll_ctl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -297,5 +297,5 @@ static int svc_epoll_ctl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, u
     // epoll_pwait(epfd, events, max, timeout_ms, sigmask)
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }

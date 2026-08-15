@@ -108,7 +108,7 @@
  *     The fix is the Windows host backend's file group, which already takes
  *     typed HL_HOST_FILE_* access words instead of a flag bit-set.
  *
- *   - RESOLVED. src/linux_abi/errno.c's hl_linux_errno_from_macos() now has a
+ *   - RESOLVED. src/linux_abi/errno.c's hl_linux_errno_from_host() now has a
  *     Windows arm.  The residual noted here was worse than recorded: the
  *     function is not the identity off Apple, it fed the UCRT's number to the
  *     DARWIN table, so a refusal's ENOSYS (UCRT 40) reached the guest as Linux

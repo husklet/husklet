@@ -68,6 +68,19 @@ pub fn x86_store_preflight_test() -> bool {
     bindings::x86_store_preflight_test()
 }
 
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+#[must_use]
+pub fn linux_errno_from_host(domain: u32, host_errno: i32) -> i32 {
+    bindings::linux_errno_from_host(domain, host_errno)
+}
+
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn signal_errno_frame_test(isa: u32, domain: u32, redirect: bool, nr: u64, raw: i64) -> Result<(i64, i64), i32> {
+    bindings::signal_errno_frame_test(isa, domain, redirect, nr, raw)
+}
+
 #[cfg(test)]
 mod platform;
 

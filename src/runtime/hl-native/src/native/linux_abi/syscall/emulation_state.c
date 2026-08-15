@@ -1615,11 +1615,17 @@ static void inotify_fd_reset(int fd) {
 // errno the guest expects (e.g. macOS EAGAIN=35 = Linux EDEADLK). Skip when c->redirect is set: a redirect
 // (execve / sigreturn) leaves an already-Linux value in G_RET that must not be re-translated -- a no-op for
 // the families that never set redirect, so collapsing all tails onto this one helper is byte-identical.
-// Returns 1 so a handler can `return svc_done(c);`.
-static int svc_done(struct cpu *c) {
+// Returns 1 so a handler can `return svc_done_host(c);`.
+typedef int (*svc_errno_converter)(int);
+
+static int svc_done_with(struct cpu *c, svc_errno_converter converter) {
     if (!c->redirect) {
         int64_t rv = (int64_t)G_RET(c);
-        if (rv < 0 && rv >= -4095) G_RET(c) = (uint64_t)(-(int64_t)hl_linux_errno_from_macos((int)(-rv)));
+        if (rv < 0 && rv >= -4095) G_RET(c) = (uint64_t)(-(int64_t)converter((int)(-rv)));
     }
     return 1;
+}
+
+static int svc_done_host(struct cpu *c) {
+    return svc_done_with(c, hl_linux_errno_from_host);
 }

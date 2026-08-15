@@ -97,6 +97,26 @@ unsafe extern "C" {
     fn hl_x86_64_fdvis_path_publication_test(scenario: c_uint) -> c_int;
     #[cfg(feature = "native-test-hooks")]
     fn hl_x86_64_store_preflight_test() -> c_int;
+    #[cfg(feature = "native-test-hooks")]
+    fn hl_aarch64_signal_errno_frame_test(
+        domain: c_uint,
+        redirect: c_uint,
+        nr: c_ulonglong,
+        raw: i64,
+        observed: *mut i64,
+        completed: *mut i64,
+    ) -> c_int;
+    #[cfg(feature = "native-test-hooks")]
+    fn hl_x86_64_signal_errno_frame_test(
+        domain: c_uint,
+        redirect: c_uint,
+        nr: c_ulonglong,
+        raw: i64,
+        observed: *mut i64,
+        completed: *mut i64,
+    ) -> c_int;
+    #[cfg(feature = "native-test-hooks")]
+    fn hl_c_backend_errno_from_host_test(domain: c_uint, host_errno: c_int) -> c_int;
     pub(super) fn hl_engine_abi() -> c_uint;
     pub(super) fn hl_engine_version() -> *const c_char;
     #[cfg(unix)]
@@ -198,6 +218,44 @@ pub(crate) fn fdvis_path_publication_test(isa: u32, scenario: u32) -> bool {
 pub(crate) fn x86_store_preflight_test() -> bool {
     // SAFETY: the feature-gated hook owns its local emitter and CPU fixtures.
     unsafe { hl_x86_64_store_preflight_test() == 0 }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn linux_errno_from_host(domain: u32, host_errno: i32) -> i32 {
+    // SAFETY: this pure test export accepts and returns one scalar value.
+    unsafe { hl_c_backend_errno_from_host_test(domain, host_errno) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn signal_errno_frame_test(
+    isa: u32,
+    domain: u32,
+    redirect: bool,
+    nr: u64,
+    raw: i64,
+) -> Result<(i64, i64), i32> {
+    let hook = match isa {
+        1 => hl_aarch64_signal_errno_frame_test,
+        2 => hl_x86_64_signal_errno_frame_test,
+        _ => return Err(-22),
+    };
+    let (mut observed, mut completed) = (i64::MIN, i64::MIN);
+    // SAFETY: the feature-gated hook owns its CPU fixture and writes two scalar outputs.
+    let status = unsafe {
+        hook(
+            domain,
+            u32::from(redirect),
+            nr,
+            raw,
+            &raw mut observed,
+            &raw mut completed,
+        )
+    };
+    if status == 0 {
+        Ok((observed, completed))
+    } else {
+        Err(status)
+    }
 }
 
 pub(super) fn engine_metadata_is_valid() -> bool {

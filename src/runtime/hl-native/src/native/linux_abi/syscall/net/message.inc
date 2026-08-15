@@ -312,7 +312,7 @@
             (void)svc_net(c, nr == 269 ? 211 : 212, a0, (uint64_t)(uintptr_t)message, nested_flags, 0, 0, 0);
             int64_t result = (int64_t)G_RET(c);
             if (result < 0) {
-                if (!completed) return 1; /* nested svc_done already translated the errno */
+                if (!completed) return 1; /* nested svc_done_host already translated the errno */
                 break;
             }
             uint32_t message_length = (uint32_t)result;

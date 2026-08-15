@@ -405,7 +405,7 @@
         // port) is delivered exactly once through SO_ERROR, mirroring a real TCP stack.
         if (lvl == 1 && opt == 4 && gfd >= 0 && gfd < HL_NFD && g_so_error[gfd]) {
             if (a3 && a4 && *(socklen_t *)a4 >= 4) {
-                *(int *)a3 = hl_linux_errno_from_macos(g_so_error[gfd]);
+                *(int *)a3 = hl_linux_errno_from_host(g_so_error[gfd]);
                 *(socklen_t *)a4 = 4;
             }
             g_so_error[gfd] = 0;

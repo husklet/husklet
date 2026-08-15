@@ -40,7 +40,7 @@ static int svc_inotify_init1(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
     // inotify_add_watch(fd, path, mask) -- kqueue EVFILT_VNODE
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_inotify_add_watch(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -109,7 +109,7 @@ static int svc_inotify_add_watch(struct cpu *c, uint64_t nr, uint64_t a0, uint64
     }
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_inotify_rm_watch(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -138,5 +138,5 @@ static int svc_inotify_rm_watch(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
     }
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }

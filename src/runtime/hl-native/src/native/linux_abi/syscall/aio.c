@@ -444,5 +444,5 @@ static int svc_aio(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     }
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }

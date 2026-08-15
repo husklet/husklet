@@ -633,7 +633,7 @@ static int svc_read(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     }
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static void svc_write_host(struct cpu *c, int descriptor, uint64_t address, uint64_t count) {
@@ -899,5 +899,5 @@ static int svc_write(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     }
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }

@@ -1091,11 +1091,11 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     int path_import_status;
     if (path_arg0 && (path_import_status = guest_copy_string(imported_path0, sizeof imported_path0, *path_arg0)) < 0) {
         G_RET(c) = (uint64_t)(int64_t)path_import_status;
-        return svc_done(c);
+        return svc_done_host(c);
     }
     if (path_arg1 && (path_import_status = guest_copy_string(imported_path1, sizeof imported_path1, *path_arg1)) < 0) {
         G_RET(c) = (uint64_t)(int64_t)path_import_status;
-        return svc_done(c);
+        return svc_done_host(c);
     }
     if (path_arg0) *path_arg0 = (uint64_t)(uintptr_t)imported_path0;
     if (path_arg1) *path_arg1 = (uint64_t)(uintptr_t)imported_path1;
@@ -1115,7 +1115,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         if (!strcmp(opened_path, "/proc") || !strncmp(opened_path, "/proc/", 6) || !strcmp(opened_path, "/dev/fd"))
             snprintf(g_fdpath[(int)G_RET(c)], sizeof g_fdpath[(int)G_RET(c)], "%s", opened_path);
     }
-    int handled = svc_done(c); // boundary errno xlate (host macOS -> Linux); see helpers.c svc_done
+    int handled = svc_done_host(c); // boundary errno xlate (host macOS -> Linux); see helpers.c svc_done_host
     if (nr == 56 || nr == 437)
         HL_LOGF(&g_jit_log, HL_LOG_TAG_FS, "%s path=%s flags=%#llx result=%lld", operation != NULL ? operation : "open",
                 (const char *)a1, (unsigned long long)a2, (long long)(int64_t)G_RET(c));
