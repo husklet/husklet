@@ -509,6 +509,20 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_transport_arms_capture_and_requested_restore() {
+        for restore in [false, true] {
+            let mut launch = launch();
+            launch.checkpoint = Some(crate::service::CheckpointConfig {
+                image: Arc::new(Image::default()),
+                restore,
+            });
+            let spec = Spec::try_from(&launch).unwrap();
+            assert_eq!(spec.plan.options.get("HL_CHECKPOINT"), Some("1"));
+            assert_eq!(spec.plan.options.get("HL_RESTORE"), restore.then_some("1"));
+        }
+    }
+
+    #[test]
     fn file_mounts_use_the_volume_protocol() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("guest-program");
