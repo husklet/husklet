@@ -32,14 +32,13 @@
 // high-map address used to execute non-PIE images. Linux enters seccomp after advancing ELR past SVC.
 #define G_SECCOMP_IP(c) pcrel_base((c)->pc + 4)
 
-// Engine seam: the shared jit/cache.c hashes the guest PC as (gpc >> G_GPC_HASH_SHIFT). aarch64 PCs are
+// Engine seam: the shared translator/cache.c hashes the guest PC as (gpc >> G_GPC_HASH_SHIFT). aarch64 PCs are
 // 4-byte aligned, so shifting out the low 2 bits spreads the map. (Pure tuning constant; value 2 is the
 // historical aarch64 hash, so this keeps the aarch64 engine bit-identical.)
 #define G_GPC_HASH_SHIFT 2
 
-// Engine seam (engine-dedup PR2): the shared jit/dispatch.c run_guest() loop calls four hooks at the spots
-// where the dispatcher diverges per guest arch. The aarch64 definitions expand to EXACTLY the code that was
-// inline before, so the aarch64 engine stays bit-identical; the x86 frontend defines its own in a later PR.
+// Engine seam: the shared engine/dispatch.c run_guest() loop calls hooks at the points where dispatcher behavior
+// differs by guest architecture. Each frontend owns its definitions in its dispatch header.
 //
 // The seam is per (guest ISA, HOST CPU): dispatch.h patches AArch64 branch encodings and assumes guest
 // registers live in the matching host registers, so it is the AArch64-host arm. Everything ABOVE this line

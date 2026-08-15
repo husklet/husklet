@@ -281,7 +281,7 @@ static void run_guest(struct cpu *c) {
                 if (g_threaded && stw_peers_live()) {
                     // More than one guest thread is live: reusing the arena in place could free code out
                     // from under a peer mid-block. Stop the world and switch to a fresh cache instead
-                    // (the old one is retained until peers drift off it). See jit/cache.c.
+                    // (the old one is retained until peers drift off it). See translator/cache.c.
                     if (!stw_flush()) {
                         if (g_threaded) pthread_mutex_unlock(&g_jit_lock);
                         c->exit_code = 70;
