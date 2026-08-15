@@ -1,1 +1,1 @@
-direct-store protected=1/1 readonly=1/1 absent=1/1
+direct-store writable=1/1/1 protected=1/1 readonly=1/1 absent=1/1
