@@ -380,8 +380,8 @@ static void hl_vfs_cursor_entry_release(hl_vfs_cursor_entry *entry) {
     memset(entry, 0, sizeof *entry);
 }
 
-static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor, const char *component,
-                                                     int path_only_file, hl_vfs_cursor_entry *output) {
+static int hl_vfs_cursor_lookup_intent(const hl_vfs_cursor *cursor, const char *component, int path_only_file,
+                                       hl_vfs_cursor_entry *output) {
     if (cursor == NULL || output == NULL || !hl_vfs_cursor_component_valid(component)) return -EINVAL;
     if (hl_vfs_cursor_component_hidden(component)) return -ENOENT;
     memset(output, 0, sizeof *output);
@@ -477,6 +477,11 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor
     return 0;
 }
 
+static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor, const char *component,
+                                                     hl_vfs_cursor_entry *output) {
+    return hl_vfs_cursor_lookup_intent(cursor, component, 0, output);
+}
+
 #define HL_VFS_CURSOR_DEPTH 260
 
 // Walk from retained directory provenance. `root` is the namespace restart authority for absolute paths
@@ -549,7 +554,7 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_walk(const hl_vfs_cursor *root, co
             continue;
         }
         hl_vfs_cursor_entry entry;
-        error = hl_vfs_cursor_lookup(&frames[depth], name, path_only_final, &entry);
+        error = hl_vfs_cursor_lookup_intent(&frames[depth], name, path_only_final, &entry);
         if (error != 0) goto done;
         if (entry.kind == HL_VFS_CURSOR_SYMLINK && !(final && nofollow_final)) {
             if (++follows > 40) {
