@@ -216,7 +216,7 @@
                 *(uint32_t *)(g + 8) = 16;
             } else if (gname && gnamelen &&
                        udp_switch_source((int)a0, &nss, mh.msg_namelen, gname, (socklen_t *)(g + 8))) {
-                // AF_UNIX switch sender restored to its Linux AF_INET identity.
+                // AF_UNIX switch sender restored to its Linux AF_INET or AF_INET6 identity.
             } else if (gname && gnamelen) { // translate received host sockaddr back to Linux layout
                 int ll = sa_m2l((struct sockaddr *)&nss, gname, gnamelen);
                 *(uint32_t *)(g + 8) = (ll >= 0) ? (uint32_t)ll : mh.msg_namelen;
