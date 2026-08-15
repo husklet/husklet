@@ -70,6 +70,23 @@ fn signalfd_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     output
 }
 
+fn exit_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    let (compiler, name) = match isa {
+        GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-exit-aarch64"),
+        GuestIsa::X86_64 => ("x86_64-linux-gnu-gcc", "checkpoint-exit-x86_64"),
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/exit.c");
+    let output = directory.join(name);
+    let status = std::process::Command::new(compiler)
+        .args(["-static", "-O2", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
+    assert!(status.success(), "{compiler} failed with {status}");
+    output
+}
+
 #[derive(Default)]
 struct Store(Mutex<BTreeMap<String, Vec<u8>>>);
 
@@ -217,6 +234,35 @@ fn checkpoint_deadline() -> Instant {
     Instant::now() + Duration::from_secs(10)
 }
 
+fn capture_after_plain_engine(isa: GuestIsa, plain_executable: &Path, checkpoint_executable: &Path) {
+    let temporary = tempfile::tempdir().unwrap();
+    let release = temporary.path().join("release");
+    let final_release = temporary.path().join("final-release");
+    let output = temporary.path().join("release.output");
+
+    // Exercise the process-global native initialization first without checkpoint
+    // channels. A later engine must still arm its own broker and trigger.
+    let plain = Engine::from_plan(isa, plan(plain_executable, &release, &final_release, &[])).unwrap();
+    plain.start().unwrap();
+    assert_eq!(plain.wait().unwrap().guest_status, 0);
+
+    std::fs::write(&output, []).unwrap();
+    let store = Arc::new(Store::default());
+    let capture = Engine::with_checkpoint(
+        isa,
+        plan(checkpoint_executable, &release, &final_release, &["HL_CHECKPOINT"]),
+        StandardStreams::default(),
+        store.clone(),
+        store.clone(),
+    )
+    .unwrap();
+    capture.start().unwrap();
+    wait_ready(&output);
+    capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+    assert_eq!(capture.wait().unwrap().guest_status, 0);
+    assert!(store.0.lock().unwrap().contains_key("MANIFEST"));
+}
+
 fn checkpoint_round_trip(isa: GuestIsa, executable: &Path, recapture_barrier: Option<&std::sync::Barrier>) {
     let temporary = tempfile::tempdir().unwrap();
     let release = temporary.path().join("release");
@@ -337,6 +383,16 @@ fn retained_c_round_trips_three_process_tree_on_both_isas() {
             executable.display()
         );
         checkpoint_round_trip(isa, &executable, None);
+    }
+}
+
+#[test]
+fn checkpoint_arms_after_a_plain_engine_on_both_isas() {
+    let fixtures = tempfile::tempdir().unwrap();
+    for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
+        let plain = exit_fixture(isa, fixtures.path());
+        let checkpoint = fixture(isa, fixtures.path());
+        capture_after_plain_engine(isa, &plain, &checkpoint);
     }
 }
 
