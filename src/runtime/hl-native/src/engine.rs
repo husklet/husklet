@@ -1229,12 +1229,16 @@ int main(int argc, char **argv) {
             let descriptors_before = std::fs::read_dir(descriptor_directory).unwrap().count();
             // SAFETY: the feature-only hook affects only this thread's next configure transaction.
             unsafe { crate::bindings::hl_c_backend_checkpoint_test_fail_private_adopt(position) };
+            // SAFETY: this feature-only observation hook takes no pointers and only reads the
+            // checkpoint test ledger while no configure transaction is active.
             let private_before = unsafe { crate::bindings::hl_c_backend_checkpoint_test_private_descriptor_count() };
             assert!(
                 engine.configure_checkpoint(&transport).is_err(),
                 "position {position} unexpectedly succeeded"
             );
             let descriptors_after = std::fs::read_dir(descriptor_directory).unwrap().count();
+            // SAFETY: the failed configure transaction has returned, so this feature-only hook
+            // only reads the settled checkpoint test ledger and does not alias mutable state.
             let private_after = unsafe { crate::bindings::hl_c_backend_checkpoint_test_private_descriptor_count() };
             assert_eq!(
                 descriptors_after, descriptors_before,
