@@ -328,6 +328,16 @@ static void svc_fs_extended_status_265(struct cpu *c, uint64_t nr, uint64_t a0, 
         // wrongly ENOENT'd (the link exists) instead of succeeding. Resolve the final component unfollowed
         // and evaluate the link node directly. (faccessat(48) has no flags word; a3 is unused there.)
         int access_nofollow = (nr == 439) && (a3 & 0x100);
+        if (g_rootfs) {
+            int cursor_access = dac_access_at((int)a0, (const char *)a1, access_nofollow, (int)a2,
+                                              nr == 439 && (a3 & AT_EACCESS));
+            // Synthetic /proc, /sys, and device entries may not have an on-disk cursor node. Let their
+            // established providers below answer absence; every other cursor verdict is authoritative.
+            if (cursor_access != -ENOENT && cursor_access != -ENOSYS) {
+                G_RET(c) = (uint64_t)(int64_t)cursor_access;
+                break;
+            }
+        }
         // faccessat
         const char *p = procfd_directory_path(gp48)
                             ? gp48

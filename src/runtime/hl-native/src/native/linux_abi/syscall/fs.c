@@ -17,6 +17,39 @@ static int guest_fill_linux_stat(uint64_t destination, const struct stat *status
     return guest_copy_to(destination, encoded, sizeof encoded) == sizeof encoded ? 0 : -EFAULT;
 }
 
+static int dac_snapshot_cursor_authority(const hl_vfs_cursor_authority *authority, hl_dac_snapshot *snapshot) {
+    if (authority->kind == HL_VFS_CURSOR_AUTHORITY_NATIVE)
+        return dac_snapshot_fd(authority->value.descriptor, snapshot);
+    if (authority->kind != HL_VFS_CURSOR_AUTHORITY_HOST || authority->value.host.services == NULL ||
+        authority->value.host.services->posix_attachment == NULL ||
+        authority->value.host.services->posix_attachment->borrow_file_at_least == NULL ||
+        authority->value.host.services->posix_attachment->release == NULL)
+        return -ENOSYS;
+    const hl_host_posix_attachment_services *attachment = authority->value.host.services->posix_attachment;
+    hl_host_result borrowed = attachment->borrow_file_at_least(authority->value.host.services->context,
+                                                               authority->value.host.handle, 1u << 20);
+    if (borrowed.status != HL_STATUS_OK)
+        borrowed = attachment->borrow_file_at_least(authority->value.host.services->context,
+                                                    authority->value.host.handle, 64);
+    int error = hl_vfs_cursor_host_error(borrowed);
+    if (error != 0) return error;
+    if (borrowed.value > INT_MAX) {
+        (void)attachment->release(authority->value.host.services->context, borrowed.value);
+        return -EMFILE;
+    }
+    error = dac_snapshot_fd((int)borrowed.value, snapshot);
+    (void)attachment->release(authority->value.host.services->context, borrowed.value);
+    return error;
+}
+
+static int dac_snapshot_cursor_entry(const hl_vfs_cursor_entry *entry, hl_dac_snapshot *snapshot) {
+    if (entry->kind == HL_VFS_CURSOR_FILE)
+        return dac_snapshot_cursor_authority(&entry->file, snapshot);
+    if (entry->kind == HL_VFS_CURSOR_DIRECTORY && entry->directory.count != 0)
+        return dac_snapshot_cursor_authority(&entry->directory.layers[0], snapshot);
+    return -ENOSYS;
+}
+
 static int dac_snapshot_at(int directory, const char *raw, int nofollow, hl_dac_snapshot *snapshot) {
     char guest[4200], host[4300], path[4200];
     const char *resolved;
@@ -27,10 +60,15 @@ static int dac_snapshot_at(int directory, const char *raw, int nofollow, hl_dac_
         hl_vfs_cursor_entry entry;
         memset(&entry, 0, sizeof entry);
         int resolution = hl_vfs_cursor_resolve_at(directory, raw, nofollow, &entry);
-        hl_vfs_cursor_entry_release(&entry);
-        // A typed host authority cannot yet materialize every regular file as a cursor entry; retain the
-        // pathname metadata fallback for those compatibility results, while preserving the loop verdict
-        // that fallback cannot represent.
+        if (resolution == 0) {
+            int snapshot_error = dac_snapshot_cursor_entry(&entry, snapshot);
+            hl_vfs_cursor_entry_release(&entry);
+            if (snapshot_error != -ENOSYS) return snapshot_error;
+        } else {
+            hl_vfs_cursor_entry_release(&entry);
+        }
+        // Symlink-inode snapshots and hosts without POSIX attachment still use the pathname compatibility
+        // resolver. Preserve the loop verdict that its present/absent result cannot represent.
         if (resolution == -ELOOP) return resolution;
         abs_guest(directory, raw, guest, sizeof guest);
         if (!overlay_resolve(guest, host, sizeof host, nofollow)) {
@@ -176,6 +214,24 @@ static int dac_open_at(int directory, const char *raw, int flags, int path_only)
     unsigned requested = (flags & 3) == 0 ? HL_DAC_READ : (flags & 3) == 1 ? HL_DAC_WRITE
                                                                               : HL_DAC_READ | HL_DAC_WRITE;
     if ((flags & 0x200) != 0) requested |= HL_DAC_WRITE;
+    return -hl_dac_authorize_access(&snapshot, &credentials, requested);
+}
+
+static int dac_access_at(int directory, const char *raw, int nofollow, int mode, int effective) {
+    hl_dac_snapshot snapshot;
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    int status = dac_snapshot_at(directory, raw, nofollow, &snapshot);
+    if (status != 0 || mode == F_OK) return status;
+    if (!effective) {
+        credentials.fsuid = (uint32_t)cred_ruid();
+        credentials.fsgid = (uint32_t)cred_rgid();
+        credentials.capabilities = g_cap_prm;
+    }
+    unsigned requested = 0;
+    if (mode & R_OK) requested |= HL_DAC_READ;
+    if (mode & W_OK) requested |= HL_DAC_WRITE;
+    if (mode & X_OK) requested |= HL_DAC_EXECUTE;
     return -hl_dac_authorize_access(&snapshot, &credentials, requested);
 }
 
