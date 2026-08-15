@@ -1,1 +1,1 @@
-faccessat-flags exists=1 readable=1 executable=1 enoent=1 dangling-enoent=1 nofollow-exists=1 faccessat2=1
+faccessat-flags exists=1 readable=1 executable=1 enoent=1 dangling-enoent=1 nofollow-exists=1 faccessat2=1 mode-zero=1 execute-only=1 search-only=1 real-denied=1 effective-allowed=1 keepcaps-denied=1 invalid-flags=1 noexec=1

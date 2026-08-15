@@ -243,7 +243,7 @@ static int hl_vfs_cwd_cursor_require(void) {
         error = hl_vfs_cwd_cursor_set(&root);
     } else {
         hl_vfs_cursor_entry entry;
-        error = hl_vfs_cursor_walk(&root, &root, g_cwd, 0, &entry);
+        error = hl_vfs_cursor_walk(&root, &root, g_cwd, 0, 0, &entry);
         if (error == 0) {
             error = entry.kind == HL_VFS_CURSOR_DIRECTORY ? hl_vfs_cwd_cursor_set(&entry.directory) : -ENOTDIR;
             hl_vfs_cursor_entry_release(&entry);
@@ -267,7 +267,27 @@ static int hl_vfs_cursor_resolve_at(int dirfd, const char *path, int nofollow_fi
             if (start == NULL) error = -EBADF;
         }
     }
-    if (error == 0) error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, output);
+    if (error == 0) error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, 0, output);
+    hl_vfs_cursor_release(&root);
+    return error;
+}
+
+static int hl_vfs_cursor_resolve_metadata_at(int dirfd, const char *path, int nofollow_final,
+                                             hl_vfs_cursor_entry *output) {
+    hl_vfs_cursor root;
+    int error = hl_vfs_cursor_namespace_root(&root);
+    if (error != 0) return error;
+    const hl_vfs_cursor *start = &root;
+    if (path != NULL && path[0] != '/') {
+        if (dirfd == -100) {
+            error = hl_vfs_cwd_cursor_require();
+            if (error == 0) start = g_vfs_cwd_cursor;
+        } else {
+            start = hl_vfs_fd_cursor_get(dirfd);
+            if (start == NULL) error = -EBADF;
+        }
+    }
+    if (error == 0) error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, 1, output);
     hl_vfs_cursor_release(&root);
     return error;
 }
@@ -287,7 +307,7 @@ static int hl_vfs_cursor_resolve_at_native_lowers(int dirfd, const char *path, i
             if (start == NULL) error = -EBADF;
         }
     }
-    if (error == 0) error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, output);
+    if (error == 0) error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, 0, output);
     hl_vfs_cursor_release(&root);
     return error;
 }

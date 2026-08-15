@@ -286,6 +286,10 @@ static void svc_fs_extended_status_265(struct cpu *c, uint64_t nr, uint64_t a0, 
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
         }
+        if (nr == 439 && (a3 & ~(uint64_t)(AT_EACCESS | AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH))) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
         // Linux: an empty pathname is ENOENT for faccessat(48), and for faccessat2(439) unless
         // AT_EMPTY_PATH(0x1000) is set. hl used to resolve "" to the rootfs root (a searchable dir) and
         // report it executable, so `[ -x "$(command -v missing)" ]` (dash's `command -v` yields "" for a
@@ -296,6 +300,8 @@ static void svc_fs_extended_status_265(struct cpu *c, uint64_t nr, uint64_t a0, 
                 G_RET(c) = (uint64_t)(int64_t)(-ENOENT);
                 break;
             }
+            G_RET(c) = (uint64_t)(int64_t)dac_access_fd((int)a0, (int)a2, (a3 & AT_EACCESS) != 0);
+            break;
         }
         // /proc/[self|pid]/exe magic symlink -> access the actual executable (matched on the
         // guest-absolute path so dirfd-relative and cwd-relative spellings work too)
@@ -328,7 +334,7 @@ static void svc_fs_extended_status_265(struct cpu *c, uint64_t nr, uint64_t a0, 
         // wrongly ENOENT'd (the link exists) instead of succeeding. Resolve the final component unfollowed
         // and evaluate the link node directly. (faccessat(48) has no flags word; a3 is unused there.)
         int access_nofollow = (nr == 439) && (a3 & 0x100);
-        if (g_rootfs) {
+        if (g_rootfs && a1 && ((const char *)a1)[0]) {
             int cursor_access = dac_access_at((int)a0, (const char *)a1, access_nofollow, (int)a2,
                                               nr == 439 && (a3 & AT_EACCESS));
             // Synthetic /proc, /sys, and device entries may not have an on-disk cursor node. Let their

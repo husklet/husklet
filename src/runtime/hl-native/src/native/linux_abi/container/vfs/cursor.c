@@ -194,6 +194,37 @@ static int hl_vfs_cursor_authority_open_child(const hl_vfs_cursor_authority *aut
     return 0;
 }
 
+static int hl_vfs_cursor_authority_open_path(const hl_vfs_cursor_authority *authority, const char *component,
+                                             int directory, hl_vfs_cursor_authority *output) {
+    if (authority == NULL || component == NULL || output == NULL) return -EINVAL;
+    if (authority->kind == HL_VFS_CURSOR_AUTHORITY_NATIVE) {
+#if defined(__linux__)
+        int descriptor = openat(authority->value.descriptor, component,
+                                O_PATH | O_CLOEXEC | O_NOFOLLOW | (directory ? O_DIRECTORY : 0));
+#elif defined(__APPLE__)
+        int descriptor = openat(authority->value.descriptor, component,
+                                O_SYMLINK | O_CLOEXEC | (directory ? O_DIRECTORY : 0));
+#else
+        return -ENOSYS;
+#endif
+        if (descriptor < 0) return -errno;
+        *output = hl_vfs_cursor_native(descriptor);
+        return 0;
+    }
+    if (authority->kind != HL_VFS_CURSOR_AUTHORITY_HOST || authority->value.host.services == NULL ||
+        authority->value.host.services->file == NULL || authority->value.host.services->file->open_relative == NULL)
+        return -ENOSYS;
+    hl_host_result opened = authority->value.host.services->file->open_relative(
+        authority->value.host.services->context, authority->value.host.handle, component, strlen(component),
+        HL_HOST_FILE_PATH_ONLY | HL_HOST_FILE_NOFOLLOW | (directory ? HL_HOST_FILE_DIRECTORY : 0), 0, 0);
+    int error = hl_vfs_cursor_host_error(opened);
+    if (error != 0) return error;
+    output->kind = HL_VFS_CURSOR_AUTHORITY_HOST;
+    output->value.host.handle = opened.value;
+    output->value.host.services = authority->value.host.services;
+    return 0;
+}
+
 static int hl_vfs_cursor_authority_readlink(const hl_vfs_cursor_authority *authority, const char *component,
                                             char *output, size_t capacity) {
     if (authority == NULL || component == NULL || output == NULL || capacity == 0) return -EINVAL;
@@ -350,7 +381,7 @@ static void hl_vfs_cursor_entry_release(hl_vfs_cursor_entry *entry) {
 }
 
 static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor, const char *component,
-                                                     hl_vfs_cursor_entry *output) {
+                                                     int path_only_file, hl_vfs_cursor_entry *output) {
     if (cursor == NULL || output == NULL || !hl_vfs_cursor_component_valid(component)) return -EINVAL;
     if (hl_vfs_cursor_component_hidden(component)) return -ENOENT;
     memset(output, 0, sizeof *output);
@@ -380,20 +411,30 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor
         int error = hl_vfs_cursor_authority_readlink(&cursor->layers[selected], component, output->symlink,
                                                      sizeof output->symlink);
         if (error != 0) return error;
+        if (path_only_file) {
+            error = hl_vfs_cursor_authority_open_path(&cursor->layers[selected], component, 0, &output->file);
+            if (error != 0) return error;
+        }
         output->kind = HL_VFS_CURSOR_SYMLINK;
         return 0;
     }
     if (!S_ISDIR(selected_status.st_mode)) {
         hl_vfs_cursor_authority opened;
-        int error = hl_vfs_cursor_authority_open_child(&cursor->layers[selected], component, 0, &opened);
+        int error = path_only_file ? hl_vfs_cursor_authority_open_path(&cursor->layers[selected], component, 0,
+                                                                       &opened)
+                                   : hl_vfs_cursor_authority_open_child(&cursor->layers[selected], component, 0,
+                                                                        &opened);
         if (error != 0) return error;
         output->file = opened;
         output->kind = HL_VFS_CURSOR_FILE;
         return 0;
     }
 
-    int error = hl_vfs_cursor_authority_open_child(&cursor->layers[selected], component, 1,
-                                                   &output->directory.layers[output->directory.count]);
+    int error = path_only_file
+                    ? hl_vfs_cursor_authority_open_path(&cursor->layers[selected], component, 1,
+                                                        &output->directory.layers[output->directory.count])
+                    : hl_vfs_cursor_authority_open_child(&cursor->layers[selected], component, 1,
+                                                         &output->directory.layers[output->directory.count]);
     if (error != 0) return error;
     output->directory.count++;
     output->directory.opaque_cut = hl_vfs_cursor_opaque(&output->directory.layers[0]);
@@ -405,8 +446,11 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor
             if (hl_vfs_cursor_authority_metadata(&cursor->layers[index], component, &status) != 0 ||
                 !S_ISDIR(status.st_mode))
                 continue;
-            error = hl_vfs_cursor_authority_open_child(&cursor->layers[index], component, 1,
-                                                       &output->directory.layers[output->directory.count]);
+            error = path_only_file
+                        ? hl_vfs_cursor_authority_open_path(&cursor->layers[index], component, 1,
+                                                            &output->directory.layers[output->directory.count])
+                        : hl_vfs_cursor_authority_open_child(&cursor->layers[index], component, 1,
+                                                             &output->directory.layers[output->directory.count]);
             if (error != 0) {
                 hl_vfs_cursor_entry_release(output);
                 return error;
@@ -440,7 +484,8 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor
 // Every frame owns its contributing descriptors, so renaming/unlinking an ancestor cannot redirect a later
 // component. The returned entry owns its file descriptor or merged-directory cursor.
 static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_walk(const hl_vfs_cursor *root, const hl_vfs_cursor *start,
-                                                   const char *path, int nofollow_final, hl_vfs_cursor_entry *output) {
+                                                   const char *path, int nofollow_final, int path_only_final,
+                                                   hl_vfs_cursor_entry *output) {
     if (root == NULL || start == NULL || path == NULL || output == NULL || !path[0]) return -ENOENT;
     hl_vfs_cursor *frames = calloc(HL_VFS_CURSOR_DEPTH, sizeof *frames);
     if (frames == NULL) return -ENOMEM;
@@ -504,7 +549,7 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_walk(const hl_vfs_cursor *root, co
             continue;
         }
         hl_vfs_cursor_entry entry;
-        error = hl_vfs_cursor_lookup(&frames[depth], name, &entry);
+        error = hl_vfs_cursor_lookup(&frames[depth], name, path_only_final, &entry);
         if (error != 0) goto done;
         if (entry.kind == HL_VFS_CURSOR_SYMLINK && !(final && nofollow_final)) {
             if (++follows > 40) {

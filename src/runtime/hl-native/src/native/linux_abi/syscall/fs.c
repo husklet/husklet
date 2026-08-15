@@ -17,14 +17,45 @@ static int guest_fill_linux_stat(uint64_t destination, const struct stat *status
     return guest_copy_to(destination, encoded, sizeof encoded) == sizeof encoded ? 0 : -EFAULT;
 }
 
+static int dac_snapshot_host_metadata(const hl_vfs_cursor_authority *authority, hl_dac_snapshot *snapshot) {
+    if (authority->value.host.services == NULL || authority->value.host.services->file == NULL ||
+        authority->value.host.services->file->metadata == NULL)
+        return -ENOSYS;
+    hl_host_file_metadata metadata;
+    int error = hl_vfs_cursor_host_error(authority->value.host.services->file->metadata(
+        authority->value.host.services->context, authority->value.host.handle, &metadata));
+    if (error != 0) return error;
+    uint32_t type = metadata.type == HL_HOST_FILE_TYPE_DIRECTORY   ? S_IFDIR
+                    : metadata.type == HL_HOST_FILE_TYPE_SYMLINK  ? S_IFLNK
+                    : metadata.type == HL_HOST_FILE_TYPE_REGULAR  ? S_IFREG
+                    : metadata.type == HL_HOST_FILE_TYPE_CHARACTER ? S_IFCHR
+                    : metadata.type == HL_HOST_FILE_TYPE_BLOCK    ? S_IFBLK
+                    : metadata.type == HL_HOST_FILE_TYPE_FIFO     ? S_IFIFO
+                    : metadata.type == HL_HOST_FILE_TYPE_SOCKET   ? S_IFSOCK
+                                                                  : 0;
+    snapshot->uid = metadata.user;
+    snapshot->gid = metadata.group;
+    snapshot->mode = type | (metadata.permissions & 07777u);
+    return type != 0 ? 0 : -EIO;
+}
+
 static int dac_snapshot_cursor_authority(const hl_vfs_cursor_authority *authority, hl_dac_snapshot *snapshot) {
-    if (authority->kind == HL_VFS_CURSOR_AUTHORITY_NATIVE)
+    if (authority->kind == HL_VFS_CURSOR_AUTHORITY_NATIVE) {
+#if defined(__linux__)
+        char descriptor_path[64];
+        int length = snprintf(descriptor_path, sizeof descriptor_path, "/proc/self/fd/%d", authority->value.descriptor);
+        if (length < 0 || (size_t)length >= sizeof descriptor_path) return -ENAMETOOLONG;
+        return dac_snapshot_path(descriptor_path, 0, snapshot);
+#else
         return dac_snapshot_fd(authority->value.descriptor, snapshot);
-    if (authority->kind != HL_VFS_CURSOR_AUTHORITY_HOST || authority->value.host.services == NULL ||
-        authority->value.host.services->posix_attachment == NULL ||
+#endif
+    }
+    if (authority->kind != HL_VFS_CURSOR_AUTHORITY_HOST || authority->value.host.services == NULL)
+        return -ENOSYS;
+    if (authority->value.host.services->posix_attachment == NULL ||
         authority->value.host.services->posix_attachment->borrow_file_at_least == NULL ||
         authority->value.host.services->posix_attachment->release == NULL)
-        return -ENOSYS;
+        return dac_snapshot_host_metadata(authority, snapshot);
     const hl_host_posix_attachment_services *attachment = authority->value.host.services->posix_attachment;
     hl_host_result borrowed = attachment->borrow_file_at_least(authority->value.host.services->context,
                                                                authority->value.host.handle, 1u << 20);
@@ -32,18 +63,27 @@ static int dac_snapshot_cursor_authority(const hl_vfs_cursor_authority *authorit
         borrowed = attachment->borrow_file_at_least(authority->value.host.services->context,
                                                     authority->value.host.handle, 64);
     int error = hl_vfs_cursor_host_error(borrowed);
+    if (error == -ENOSYS) return dac_snapshot_host_metadata(authority, snapshot);
     if (error != 0) return error;
     if (borrowed.value > INT_MAX) {
         (void)attachment->release(authority->value.host.services->context, borrowed.value);
         return -EMFILE;
     }
+#if defined(__linux__)
+    char descriptor_path[64];
+    int length = snprintf(descriptor_path, sizeof descriptor_path, "/proc/self/fd/%d", (int)borrowed.value);
+    error = length < 0 || (size_t)length >= sizeof descriptor_path ? -ENAMETOOLONG
+                                                                  : dac_snapshot_path(descriptor_path, 0, snapshot);
+#else
     error = dac_snapshot_fd((int)borrowed.value, snapshot);
+#endif
     (void)attachment->release(authority->value.host.services->context, borrowed.value);
     return error;
 }
 
 static int dac_snapshot_cursor_entry(const hl_vfs_cursor_entry *entry, hl_dac_snapshot *snapshot) {
-    if (entry->kind == HL_VFS_CURSOR_FILE)
+    if (entry->kind == HL_VFS_CURSOR_FILE ||
+        (entry->kind == HL_VFS_CURSOR_SYMLINK && entry->file.kind != HL_VFS_CURSOR_AUTHORITY_INVALID))
         return dac_snapshot_cursor_authority(&entry->file, snapshot);
     if (entry->kind == HL_VFS_CURSOR_DIRECTORY && entry->directory.count != 0)
         return dac_snapshot_cursor_authority(&entry->directory.layers[0], snapshot);
@@ -59,7 +99,7 @@ static int dac_snapshot_at(int directory, const char *raw, int nofollow, hl_dac_
         // ENOENT before open(2) gets a chance to report the original error.
         hl_vfs_cursor_entry entry;
         memset(&entry, 0, sizeof entry);
-        int resolution = hl_vfs_cursor_resolve_at(directory, raw, nofollow, &entry);
+        int resolution = hl_vfs_cursor_resolve_metadata_at(directory, raw, nofollow, &entry);
         if (resolution == 0) {
             int snapshot_error = dac_snapshot_cursor_entry(&entry, snapshot);
             hl_vfs_cursor_entry_release(&entry);
@@ -221,13 +261,48 @@ static int dac_access_at(int directory, const char *raw, int nofollow, int mode,
     hl_dac_snapshot snapshot;
     uint32_t groups[HL_NGROUPS_MAX];
     hl_dac_credentials credentials = dac_credentials_current(groups);
-    int status = dac_snapshot_at(directory, raw, nofollow, &snapshot);
-    if (status != 0 || mode == F_OK) return status;
-    if (!effective) {
-        credentials.fsuid = (uint32_t)cred_ruid();
-        credentials.fsgid = (uint32_t)cred_rgid();
-        credentials.capabilities = g_cap_prm;
+    hl_vfs_cursor_entry entry;
+    memset(&entry, 0, sizeof entry);
+    int status = hl_vfs_cursor_resolve_metadata_at(directory, raw, nofollow, &entry);
+    uint32_t mount_flags = status == 0 ? entry.mount_flags : 0;
+    if (status == 0 && mode == F_OK) {
+        hl_vfs_cursor_entry_release(&entry);
+        return 0;
     }
+    if (status == 0) status = dac_snapshot_cursor_entry(&entry, &snapshot);
+    hl_vfs_cursor_entry_release(&entry);
+    if (status == -ENOSYS) status = dac_snapshot_at(directory, raw, nofollow, &snapshot);
+    if (status != 0) return status;
+    credentials.fsuid = (uint32_t)(effective ? cred_euid() : cred_ruid());
+    credentials.fsgid = (uint32_t)(effective ? cred_egid() : cred_rgid());
+    credentials.capabilities = effective ? g_cap_eff : (credentials.fsuid == 0 ? g_cap_prm : 0);
+    unsigned requested = 0;
+    if (mode & R_OK) requested |= HL_DAC_READ;
+    if (mode & W_OK) requested |= HL_DAC_WRITE;
+    if (mode & X_OK) requested |= HL_DAC_EXECUTE;
+    if ((requested & HL_DAC_EXECUTE) && (mount_flags & HL_VFS_MOUNT_NOEXEC)) return -EACCES;
+    return -hl_dac_authorize_access(&snapshot, &credentials, requested);
+}
+
+static int dac_access_fd(int descriptor, int mode, int effective) {
+    hl_dac_snapshot snapshot;
+    hl_linux_fd_snapshot source;
+    int status;
+    if (bound_snapshot((uint64_t)(uint32_t)descriptor, &source)) {
+        hl_vfs_cursor_authority authority = {0};
+        authority.kind = HL_VFS_CURSOR_AUTHORITY_HOST;
+        authority.value.host.handle = source.host_handle;
+        authority.value.host.services = g_host_services;
+        status = dac_snapshot_cursor_authority(&authority, &snapshot);
+    } else {
+        status = dac_snapshot_fd(descriptor, &snapshot);
+    }
+    if (status != 0 || mode == F_OK) return status;
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    credentials.fsuid = (uint32_t)(effective ? cred_euid() : cred_ruid());
+    credentials.fsgid = (uint32_t)(effective ? cred_egid() : cred_rgid());
+    credentials.capabilities = effective ? g_cap_eff : (credentials.fsuid == 0 ? g_cap_prm : 0);
     unsigned requested = 0;
     if (mode & R_OK) requested |= HL_DAC_READ;
     if (mode & W_OK) requested |= HL_DAC_WRITE;
