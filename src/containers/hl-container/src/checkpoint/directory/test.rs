@@ -18,6 +18,27 @@ fn incomplete_capture_cannot_modify_committed_generation() {
 }
 
 #[test]
+fn abort_discards_only_unpublished_generation_and_reuses_image_cleanly() {
+    let temporary = tempfile::tempdir().unwrap();
+    let images = DirectoryImages::open(temporary.path().join("checkpoints")).unwrap();
+    let image = images.open("container").unwrap();
+    image.put("state", b"first").unwrap();
+    image.commit(b"manifest-one").unwrap();
+
+    image.put("stale", b"must-not-survive").unwrap();
+    assert!(image.abort_until(std::time::Instant::now()).unwrap_err().is_deadline());
+    image.abort().unwrap();
+    assert_eq!(image.get("state").unwrap(), b"first");
+    assert_eq!(image.get("MANIFEST").unwrap(), b"manifest-one");
+
+    image.put("state", b"second").unwrap();
+    image.commit(b"manifest-two").unwrap();
+    assert_eq!(image.get("state").unwrap(), b"second");
+    assert_eq!(image.get("MANIFEST").unwrap(), b"manifest-two");
+    assert!(!image.list().unwrap().iter().any(|name| name == "stale"));
+}
+
+#[test]
 fn stale_capture_cannot_replace_a_newer_committed_generation() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("checkpoints");

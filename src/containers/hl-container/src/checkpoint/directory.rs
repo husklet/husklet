@@ -268,6 +268,20 @@ impl DirectoryImage {
         }
     }
 
+    fn abort_state(&self, mut state: MutexGuard<'_, DirectoryImageState>) -> Result<(), CheckpointError> {
+        #[cfg(unix)]
+        Self::remove_tree_at(&self.directory, &state.generation)
+            .map_err(|error| CheckpointError::new(format!("discard checkpoint generation: {error}")))?;
+        #[cfg(not(unix))]
+        std::fs::remove_dir_all(self.root.join(&state.generation)).or_else(|error| {
+            (error.kind() == std::io::ErrorKind::NotFound)
+                .then_some(())
+                .ok_or(error)
+        })?;
+        state.generation = Self::generation();
+        Ok(())
+    }
+
     #[cfg(unix)]
     fn hold_generation(&self, generation: &DirectoryGeneration) -> Result<std::os::fd::OwnedFd, CheckpointError> {
         match generation {
@@ -317,6 +331,17 @@ impl CheckpointImage for DirectoryImage {
         (std::time::Instant::now() < deadline)
             .then_some(())
             .ok_or_else(CheckpointError::deadline)
+    }
+
+    fn abort(&self) -> Result<(), CheckpointError> {
+        self.abort_state(self.state()?)
+    }
+
+    fn abort_until(&self, deadline: std::time::Instant) -> Result<(), CheckpointError> {
+        if std::time::Instant::now() >= deadline {
+            return Err(CheckpointError::deadline());
+        }
+        self.abort_state(self.state_until(deadline)?)
     }
 
     fn get(&self, name: &str) -> Result<Vec<u8>, CheckpointError> {

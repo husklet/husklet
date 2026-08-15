@@ -30,6 +30,7 @@ use protocol::{
 
 const HASH_BASIS: u64 = 14_695_981_039_346_656_037;
 const HASH_PRIME: u64 = 1_099_511_628_211;
+const ABORT_SETTLEMENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 struct Object {
     name: String,
@@ -43,7 +44,6 @@ struct State {
     groups: HashSet<String>,
     claims: HashSet<String>,
     digest: BTreeMap<String, (u64, u64)>,
-    failure: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,6 +66,9 @@ enum CapturePhase {
         deadline: std::time::Instant,
     },
     Publishing {
+        id: u64,
+    },
+    Aborting {
         id: u64,
     },
     Finished {
@@ -101,6 +104,31 @@ impl Drop for MutationAdmission<'_> {
         if !self.finished {
             let _ = self.server.finish_mutation(self.id, Err(CaptureFailure::Failed));
         }
+    }
+}
+
+struct AbortTransition<'a> {
+    server: &'a Server,
+    id: u64,
+    finished: bool,
+}
+
+impl Drop for AbortTransition<'_> {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        let mut capture = match self.server.capture.lock() {
+            Ok(capture) => capture,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if matches!(capture.phase, CapturePhase::Aborting { id } if id == self.id) {
+            capture.phase = CapturePhase::Poisoned;
+        }
+        self.server.capture.clear_poison();
+        self.server.capture_changed.notify_all();
+        drop(capture);
+        self.server.interrupt_channels();
     }
 }
 
@@ -152,7 +180,11 @@ impl Server {
         if id == 0 {
             return Err(CaptureFailure::Poisoned);
         }
-        *self.state.lock().map_err(|_| CaptureFailure::Poisoned)? = State::default();
+        if let Err(failure) = self.discard_transaction(deadline) {
+            capture.phase = CapturePhase::Poisoned;
+            self.capture_changed.notify_all();
+            return Err(failure);
+        }
         self.committed.store(false, Ordering::Release);
         capture.phase = CapturePhase::Active { id, deadline };
         capture.mutations = 0;
@@ -294,6 +326,7 @@ impl Server {
             CapturePhase::Active { deadline, .. } if std::time::Instant::now() < deadline => Ok(Some(deadline)),
             CapturePhase::Active { .. } => Err(CaptureFailure::Deadline),
             CapturePhase::Publishing { .. } => Err(CaptureFailure::Busy),
+            CapturePhase::Aborting { .. } => Err(CaptureFailure::Busy),
             CapturePhase::Finished { result: Ok(()), .. } => Ok(None),
             CapturePhase::Finished { result: Err(error), .. } => Err(error),
             CapturePhase::Complete => Ok(None),
@@ -315,6 +348,91 @@ impl Server {
         Ok(())
     }
 
+    fn discard_transaction(&self, deadline: std::time::Instant) -> Result<(), CaptureFailure> {
+        let storage = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.sink.abort_until(deadline)))
+            .map_err(|_| CaptureFailure::Poisoned)
+            .and_then(|result| result.map_err(Self::publication_failure));
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *state = State::default();
+        self.state.clear_poison();
+        storage
+    }
+
+    fn settle_failed_capture(&self, id: u64, failure: CaptureFailure) -> Result<CaptureFailure, CaptureFailure> {
+        let settlement_deadline = std::time::Instant::now() + ABORT_SETTLEMENT_TIMEOUT;
+        let mut capture = self.capture_lock()?;
+        loop {
+            match capture.phase {
+                CapturePhase::Finished {
+                    id: active,
+                    result: Err(_),
+                } if active == id => {
+                    if capture.mutations != 0 {
+                        let now = std::time::Instant::now();
+                        if now >= settlement_deadline {
+                            capture.phase = CapturePhase::Poisoned;
+                            self.capture_changed.notify_all();
+                            drop(capture);
+                            self.interrupt_channels();
+                            return Err(CaptureFailure::Deadline);
+                        }
+                        let (next, timeout) = self
+                            .capture_changed
+                            .wait_timeout(capture, settlement_deadline.saturating_duration_since(now))
+                            .map_err(|_| CaptureFailure::Poisoned)?;
+                        capture = next;
+                        if timeout.timed_out() && capture.mutations != 0 {
+                            capture.phase = CapturePhase::Poisoned;
+                            self.capture_changed.notify_all();
+                            drop(capture);
+                            self.interrupt_channels();
+                            return Err(CaptureFailure::Deadline);
+                        }
+                        continue;
+                    }
+                    capture.phase = CapturePhase::Aborting { id };
+                    self.capture_changed.notify_all();
+                    drop(capture);
+                    let mut transition = AbortTransition {
+                        server: self,
+                        id,
+                        finished: false,
+                    };
+                    let discarded = self.discard_transaction(std::time::Instant::now() + ABORT_SETTLEMENT_TIMEOUT);
+                    let mut capture = self.capture_lock()?;
+                    if !matches!(capture.phase, CapturePhase::Aborting { id: active } if active == id) {
+                        capture.phase = CapturePhase::Poisoned;
+                        self.capture_changed.notify_all();
+                        return Err(CaptureFailure::Poisoned);
+                    }
+                    capture.phase = CapturePhase::Poisoned;
+                    self.capture_changed.notify_all();
+                    transition.finished = true;
+                    return discarded.map(|()| failure);
+                }
+                CapturePhase::Aborting { id: active } if active == id => {
+                    let now = std::time::Instant::now();
+                    if now >= settlement_deadline {
+                        return Err(CaptureFailure::Deadline);
+                    }
+                    let (next, timeout) = self
+                        .capture_changed
+                        .wait_timeout(capture, settlement_deadline.saturating_duration_since(now))
+                        .map_err(|_| CaptureFailure::Poisoned)?;
+                    capture = next;
+                    if timeout.timed_out() && matches!(capture.phase, CapturePhase::Aborting { .. }) {
+                        return Err(CaptureFailure::Deadline);
+                    }
+                }
+                CapturePhase::Poisoned => return Err(CaptureFailure::Poisoned),
+                _ => return Err(CaptureFailure::Busy),
+            }
+        }
+    }
+
     fn interrupt_channels(&self) {
         if let Ok(channels) = self.channels.lock() {
             for channel in channels.values() {
@@ -326,12 +444,15 @@ impl Server {
     pub(crate) fn abort_capture(&self, id: u64) -> Result<(), CaptureFailure> {
         let mut capture = self.capture_lock()?;
         if matches!(capture.phase, CapturePhase::Active { id: active, .. } if active == id) {
-            capture.phase = CapturePhase::Poisoned;
+            capture.phase = CapturePhase::Finished {
+                id,
+                result: Err(CaptureFailure::Failed),
+            };
             self.capture_changed.notify_all();
         }
         drop(capture);
         self.interrupt_channels();
-        Ok(())
+        self.settle_failed_capture(id, CaptureFailure::Failed).map(|_| ())
     }
 
     pub(crate) fn wait_capture(
@@ -345,11 +466,16 @@ impl Server {
                 CapturePhase::Active { id: active, deadline } if active == id => {
                     let now = std::time::Instant::now();
                     if now >= deadline {
-                        capture.phase = CapturePhase::Poisoned;
+                        capture.phase = CapturePhase::Finished {
+                            id,
+                            result: Err(CaptureFailure::Deadline),
+                        };
                         self.capture_changed.notify_all();
                         drop(capture);
                         self.interrupt_channels();
-                        return Ok(Some(Err(CaptureFailure::Deadline)));
+                        return self
+                            .settle_failed_capture(id, CaptureFailure::Deadline)
+                            .map(|failure| Some(Err(failure)));
                     }
                     if now >= wake {
                         return Ok(None);
@@ -387,13 +513,37 @@ impl Server {
                         }
                     };
                 }
-                CapturePhase::Finished { id: active, result } if active == id => {
-                    capture.phase = if result.is_ok() {
-                        CapturePhase::Complete
-                    } else {
-                        CapturePhase::Poisoned
+                CapturePhase::Aborting { id: active } if active == id => {
+                    let now = std::time::Instant::now();
+                    if now >= wake {
+                        return Ok(None);
+                    }
+                    let (next, timeout) = match self
+                        .capture_changed
+                        .wait_timeout(capture, wake.saturating_duration_since(now))
+                    {
+                        Ok(result) => result,
+                        Err(poisoned) => {
+                            let (mut capture, _) = poisoned.into_inner();
+                            capture.phase = CapturePhase::Poisoned;
+                            self.capture_changed.notify_all();
+                            return Err(CaptureFailure::Poisoned);
+                        }
                     };
-                    return Ok(Some(result));
+                    capture = next;
+                    if timeout.timed_out() && std::time::Instant::now() >= wake {
+                        return Ok(None);
+                    }
+                }
+                CapturePhase::Finished { id: active, result } if active == id => {
+                    if let Err(failure) = result {
+                        drop(capture);
+                        return self
+                            .settle_failed_capture(id, failure)
+                            .map(|failure| Some(Err(failure)));
+                    }
+                    capture.phase = CapturePhase::Complete;
+                    return Ok(Some(Ok(())));
                 }
                 CapturePhase::Poisoned => return Ok(Some(Err(CaptureFailure::Poisoned))),
                 _ => return Err(CaptureFailure::Busy),
@@ -404,6 +554,18 @@ impl Server {
     #[cfg(test)]
     pub(crate) fn committed(&self) -> bool {
         self.committed.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn transaction_state(&self) -> (usize, usize, usize, usize, usize) {
+        let state = self.state.lock().unwrap();
+        (
+            state.open.len(),
+            state.staged.len(),
+            state.groups.len(),
+            state.claims.len(),
+            state.digest.len(),
+        )
     }
 
     pub(crate) fn stop(&self) {
@@ -437,12 +599,8 @@ impl Server {
     }
 
     fn fail(&self, message: String) {
+        hl_log::hl_error!(hl_log::tag::CHECKPOINT, "{message}");
         let capture = self.active_deadline().ok().map(|(id, _)| id);
-        if let Ok(mut state) = self.state.lock()
-            && state.failure.is_none()
-        {
-            state.failure = Some(message);
-        }
         if let Some(id) = capture
             && self.finish_failed(id, CaptureFailure::Failed).is_err()
         {

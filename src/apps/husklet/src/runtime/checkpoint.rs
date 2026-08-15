@@ -1,7 +1,7 @@
 use hl_container::{CheckpointError, CheckpointImage, CheckpointImages};
 use hl_ws::{Directory, Key, Namespace, Storage};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
@@ -112,6 +112,18 @@ impl WorkspaceImage {
             }
         }
     }
+
+    fn abort_state(&self, mut state: std::sync::MutexGuard<'_, ImageState>) -> Result<(), CheckpointError> {
+        for key in state.staging.list(None).map_err(WorkspaceCheckpoints::error)? {
+            state.staging.remove(&key).map_err(WorkspaceCheckpoints::error)?;
+        }
+        state.generation = WorkspaceCheckpoints::generation();
+        state.staging = Namespace::new(
+            self.storage.clone(),
+            self.root.join(&state.generation).map_err(WorkspaceCheckpoints::error)?,
+        );
+        Ok(())
+    }
 }
 
 impl CheckpointImage for WorkspaceImage {
@@ -130,6 +142,17 @@ impl CheckpointImage for WorkspaceImage {
         (std::time::Instant::now() < deadline)
             .then_some(())
             .ok_or_else(CheckpointError::deadline)
+    }
+
+    fn abort(&self) -> Result<(), CheckpointError> {
+        self.abort_state(self.state()?)
+    }
+
+    fn abort_until(&self, deadline: std::time::Instant) -> Result<(), CheckpointError> {
+        if std::time::Instant::now() >= deadline {
+            return Err(CheckpointError::deadline());
+        }
+        self.abort_state(self.state_until(deadline)?)
     }
 
     fn get(&self, name: &str) -> Result<Vec<u8>, CheckpointError> {
@@ -277,5 +300,25 @@ mod tests {
         let reopened = images.open("terminal").unwrap();
         assert_eq!(reopened.get("proc.1/pages").unwrap(), b"second");
         assert_eq!(reopened.get("MANIFEST").unwrap(), b"manifest-two");
+    }
+
+    #[test]
+    fn abort_preserves_committed_generation_and_clears_retry_staging() {
+        let temporary = tempfile::tempdir().unwrap();
+        let images = WorkspaceCheckpoints::open(temporary.path()).unwrap();
+        let image = images.open("terminal-abort").unwrap();
+        image.put("state", b"first").unwrap();
+        image.commit(b"manifest-one").unwrap();
+
+        image.put("stale", b"must-not-survive").unwrap();
+        assert!(image.abort_until(std::time::Instant::now()).unwrap_err().is_deadline());
+        image.abort().unwrap();
+        assert_eq!(image.get("state").unwrap(), b"first");
+        assert_eq!(image.get("MANIFEST").unwrap(), b"manifest-one");
+
+        image.put("state", b"second").unwrap();
+        image.commit(b"manifest-two").unwrap();
+        assert_eq!(image.get("state").unwrap(), b"second");
+        assert!(!image.list().unwrap().iter().any(|name| name == "stale"));
     }
 }

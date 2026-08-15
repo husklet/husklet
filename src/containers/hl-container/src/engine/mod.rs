@@ -77,6 +77,19 @@ impl hl_engine::composition::CheckpointSink for CheckpointTransport {
             .map_err(|error| Self::storage_error(&error))
     }
 
+    fn abort(&self) -> std::result::Result<(), hl_engine::composition::CompositionError> {
+        self.image.abort().map_err(|error| Self::storage_error(&error))
+    }
+
+    fn abort_until(
+        &self,
+        deadline: std::time::Instant,
+    ) -> std::result::Result<(), hl_engine::composition::CompositionError> {
+        self.image
+            .abort_until(deadline)
+            .map_err(|error| Self::storage_error(&error))
+    }
+
     fn commit_until(
         &self,
         manifest: &[u8],
@@ -417,6 +430,10 @@ mod tests {
                 .then_some(())
                 .ok_or_else(|| crate::CheckpointError::new("deadline exceeded"))?;
             self.put(name, bytes)
+        }
+
+        fn abort(&self) -> Result<(), crate::CheckpointError> {
+            Ok(())
         }
 
         fn get_until(&self, name: &str, deadline: std::time::Instant) -> Result<Vec<u8>, crate::CheckpointError> {

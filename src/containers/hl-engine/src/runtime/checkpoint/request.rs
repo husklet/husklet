@@ -18,7 +18,7 @@ impl Server {
         }
         let key = (id, request.stream);
         match request.op {
-            OBJECT_BEGIN => {
+            OBJECT_BEGIN => self.local_mutation(|| {
                 let Ok(mut state) = self.state.lock() else {
                     return Reply::error();
                 };
@@ -36,8 +36,8 @@ impl Server {
                     return Reply::error();
                 }
                 Reply::ok()
-            }
-            OBJECT_WRITE | OBJECT_WRITE_AT => {
+            }),
+            OBJECT_WRITE | OBJECT_WRITE_AT => self.local_mutation(|| {
                 let Ok(mut state) = self.state.lock() else {
                     return Reply::error();
                 };
@@ -58,7 +58,7 @@ impl Server {
                     object.bytes[offset..end].copy_from_slice(payload);
                 }
                 Reply::ok()
-            }
+            }),
             OBJECT_TELL => self
                 .state
                 .lock()
@@ -66,13 +66,13 @@ impl Server {
                 .and_then(|state| state.open.get(&key).map(|object| object.bytes.len() as u64))
                 .map_or_else(Reply::error, Reply::value),
             OBJECT_FINISH => self.finish_object(key),
-            OBJECT_ABORT => {
+            OBJECT_ABORT => self.local_mutation(|| {
                 if let Ok(mut state) = self.state.lock() {
                     state.open.remove(&key);
                 }
                 Reply::ok()
-            }
-            GROUP_BEGIN => {
+            }),
+            GROUP_BEGIN => self.local_mutation(|| {
                 let Ok(mut state) = self.state.lock() else {
                     return Reply::error();
                 };
@@ -81,21 +81,21 @@ impl Server {
                 } else {
                     Reply::ok()
                 }
-            }
+            }),
             GROUP_COMMIT => self.commit_group(name),
-            GROUP_ABORT => {
+            GROUP_ABORT => self.local_mutation(|| {
                 if let Ok(mut state) = self.state.lock() {
                     state.staged.remove(name);
                 }
                 Reply::ok()
-            }
-            CLAIM => self.claim(name),
-            UNCLAIM => {
+            }),
+            CLAIM => self.local_mutation(|| self.claim(name)),
+            UNCLAIM => self.local_mutation(|| {
                 if let Ok(mut state) = self.state.lock() {
                     state.claims.remove(name);
                 }
                 Reply::ok()
-            }
+            }),
             GROUP_PRESENT => self.state.lock().map_or_else(
                 |_| Reply::error(),
                 |state| {
@@ -176,6 +176,18 @@ impl Server {
         (!active || admission.is_some()).then_some(admission).ok_or(())
     }
 
+    fn local_mutation(&self, operation: impl FnOnce() -> Reply) -> Reply {
+        let Ok(admission) = self.mutation_admission() else {
+            return Reply::error();
+        };
+        let reply = operation();
+        if admission.is_some_and(|admission| admission.finish(Ok(())).is_err()) {
+            Reply::error()
+        } else {
+            reply
+        }
+    }
+
     fn stage_object(&self, object: Object) -> Result<(), Object> {
         let Some(group) = object.name.split_once('/').map(|(group, _)| group.to_owned()) else {
             return Err(object);
@@ -246,13 +258,16 @@ impl Server {
                 break;
             }
         }
-        if admission.is_some_and(|admission| admission.finish(result).is_err()) || result.is_err() {
-            return Reply::error();
-        }
-        if let Ok(mut state) = self.state.lock() {
+        if result.is_ok()
+            && let Ok(mut state) = self.state.lock()
+        {
             state.groups.insert(name.into());
         }
-        Reply::ok()
+        if admission.is_some_and(|admission| admission.finish(result).is_err()) || result.is_err() {
+            Reply::error()
+        } else {
+            Reply::ok()
+        }
     }
 
     pub(super) fn claim(&self, name: &str) -> Reply {

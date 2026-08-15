@@ -44,6 +44,19 @@ pub trait CheckpointSink: Send + Sync {
     /// userspace waits they control and report deadline expiry cooperatively.
     fn put_until(&self, name: &str, bytes: &[u8], deadline: std::time::Instant) -> Result<(), CompositionError>;
 
+    /// Discards every object written for the unpublished generation while
+    /// preserving the last committed generation.
+    fn abort(&self) -> Result<(), CompositionError>;
+
+    /// Discards the unpublished generation before an absolute monotonic
+    /// deadline. Implementations must not abandon background cleanup work.
+    fn abort_until(&self, deadline: std::time::Instant) -> Result<(), CompositionError> {
+        (std::time::Instant::now() < deadline)
+            .then_some(())
+            .ok_or(CompositionError::DeadlineExceeded)?;
+        self.abort()
+    }
+
     /// Atomically publishes the generation after every object is durable.
     fn commit(&self, _manifest: &[u8]) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)

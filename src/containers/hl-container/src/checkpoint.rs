@@ -70,6 +70,23 @@ pub trait CheckpointImage: Send + Sync {
     /// completes; this API does not create or abandon background work.
     fn put_until(&self, name: &str, bytes: &[u8], deadline: std::time::Instant) -> Result<(), CheckpointError>;
 
+    /// Discards the unpublished generation without changing the generation
+    /// visible through `get` and `list`.
+    ///
+    /// # Errors
+    /// Returns a storage failure when the unpublished generation cannot be
+    /// discarded completely.
+    fn abort(&self) -> Result<(), CheckpointError>;
+
+    /// Cooperatively discards the unpublished generation before an absolute
+    /// monotonic deadline.
+    fn abort_until(&self, deadline: std::time::Instant) -> Result<(), CheckpointError> {
+        (std::time::Instant::now() < deadline)
+            .then_some(())
+            .ok_or_else(CheckpointError::deadline)?;
+        self.abort()
+    }
+
     /// Reads one object from the committed checkpoint generation.
     ///
     /// # Errors

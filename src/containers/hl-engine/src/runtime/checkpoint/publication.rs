@@ -116,7 +116,10 @@ impl Server {
                     });
                 };
                 if std::time::Instant::now() >= deadline {
-                    capture.phase = CapturePhase::Poisoned;
+                    capture.phase = CapturePhase::Finished {
+                        id,
+                        result: Err(CaptureFailure::Deadline),
+                    };
                     self.capture_changed.notify_all();
                     drop(capture);
                     self.interrupt_channels();
@@ -209,7 +212,7 @@ impl Server {
                         || request.op == RECOVERY_COMPLETE
                         || self.recovery_object_request(connection, request, name))
             }
-            CapturePhase::Complete => false,
+            CapturePhase::Complete | CapturePhase::Aborting { .. } => false,
             CapturePhase::Active { id, .. } | CapturePhase::Publishing { id } => u64::from(request.generation) == id,
             CapturePhase::Finished { id, .. } => u64::from(request.generation) == id && request.op == COMMIT,
             CapturePhase::Poisoned => false,

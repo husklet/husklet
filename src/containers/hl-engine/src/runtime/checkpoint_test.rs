@@ -2,7 +2,11 @@ use super::{CaptureFailure, Server, protocol};
 use crate::composition::{CheckpointSink, CheckpointSource, CompositionError};
 use std::{
     os::unix::net::UnixStream,
-    sync::{Arc, Condvar, Mutex, mpsc},
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
     time::Duration,
 };
 
@@ -14,6 +18,9 @@ impl CheckpointSink for Store {
     }
     fn put_until(&self, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
+    }
+    fn abort(&self) -> Result<(), CompositionError> {
+        Ok(())
     }
     fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
@@ -34,6 +41,9 @@ impl CheckpointSink for RecordingStore {
     }
     fn put_until(&self, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
+    }
+    fn abort(&self) -> Result<(), CompositionError> {
+        Ok(())
     }
     fn commit_until(&self, manifest: &[u8], deadline: std::time::Instant) -> Result<(), CompositionError> {
         if std::time::Instant::now() >= deadline {
@@ -89,6 +99,11 @@ impl CheckpointSink for RecoveryStore {
         Ok(())
     }
 
+    fn abort(&self) -> Result<(), CompositionError> {
+        self.0.lock().unwrap().clear();
+        Ok(())
+    }
+
     fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
     }
@@ -120,6 +135,379 @@ fn object_request(op: u32, stream: u64, generation: u32) -> protocol::Request {
         name_size: 0,
         generation,
     }
+}
+
+#[derive(Default)]
+struct TransactionStore {
+    state: Mutex<(Vec<(String, Vec<u8>)>, Vec<(String, Vec<u8>)>, usize)>,
+}
+
+impl TransactionStore {
+    fn seed_committed(&self, name: &str, bytes: &[u8]) {
+        self.state.lock().unwrap().0.push((name.to_owned(), bytes.to_vec()));
+    }
+
+    fn snapshot(&self) -> (Vec<(String, Vec<u8>)>, Vec<(String, Vec<u8>)>, usize) {
+        self.state.lock().unwrap().clone()
+    }
+}
+
+impl CheckpointSink for TransactionStore {
+    fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+
+    fn put(&self, name: &str, bytes: &[u8]) -> Result<(), CompositionError> {
+        self.state.lock().unwrap().1.push((name.to_owned(), bytes.to_vec()));
+        Ok(())
+    }
+
+    fn put_until(&self, name: &str, bytes: &[u8], deadline: std::time::Instant) -> Result<(), CompositionError> {
+        (std::time::Instant::now() < deadline)
+            .then_some(())
+            .ok_or(CompositionError::DeadlineExceeded)?;
+        self.put(name, bytes)
+    }
+
+    fn abort(&self) -> Result<(), CompositionError> {
+        let mut state = self.state.lock().unwrap();
+        state.1.clear();
+        state.2 += 1;
+        Ok(())
+    }
+
+    fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+}
+
+impl CheckpointSource for TransactionStore {
+    fn read(&self, _: usize) -> Result<Vec<u8>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+
+    fn get_until(&self, _: &str, _: std::time::Instant) -> Result<Vec<u8>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+
+    fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+}
+
+#[derive(Default)]
+struct PanickingAbortStore(AtomicUsize);
+
+impl CheckpointSink for PanickingAbortStore {
+    fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+
+    fn put_until(&self, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        Ok(())
+    }
+
+    fn abort(&self) -> Result<(), CompositionError> {
+        if self.0.fetch_add(1, Ordering::Relaxed) == 0 {
+            Ok(())
+        } else {
+            panic!("injected abort panic")
+        }
+    }
+
+    fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+}
+
+impl CheckpointSource for PanickingAbortStore {
+    fn read(&self, _: usize) -> Result<Vec<u8>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+
+    fn get_until(&self, _: &str, _: std::time::Instant) -> Result<Vec<u8>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+
+    fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+}
+
+#[derive(Default)]
+struct BlockingAbortStore {
+    state: Mutex<(usize, bool)>,
+    changed: Condvar,
+}
+
+impl BlockingAbortStore {
+    fn wait_started(&self) {
+        let mut state = self.state.lock().unwrap();
+        while state.0 < 2 {
+            state = self.changed.wait(state).unwrap();
+        }
+    }
+
+    fn release(&self) {
+        self.state.lock().unwrap().1 = true;
+        self.changed.notify_all();
+    }
+}
+
+impl CheckpointSink for BlockingAbortStore {
+    fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+
+    fn put_until(&self, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        Ok(())
+    }
+
+    fn abort(&self) -> Result<(), CompositionError> {
+        self.abort_until(std::time::Instant::now() + Duration::from_secs(1))
+    }
+
+    fn abort_until(&self, deadline: std::time::Instant) -> Result<(), CompositionError> {
+        let mut state = self.state.lock().unwrap();
+        state.0 += 1;
+        self.changed.notify_all();
+        if state.0 == 1 {
+            return Ok(());
+        }
+        while !state.1 {
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return Err(CompositionError::DeadlineExceeded);
+            }
+            let (next, timeout) = self
+                .changed
+                .wait_timeout(state, deadline.saturating_duration_since(now))
+                .unwrap();
+            state = next;
+            if timeout.timed_out() && !state.1 {
+                return Err(CompositionError::DeadlineExceeded);
+            }
+        }
+        Ok(())
+    }
+
+    fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+}
+
+impl CheckpointSource for BlockingAbortStore {
+    fn read(&self, _: usize) -> Result<Vec<u8>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+
+    fn get_until(&self, _: &str, _: std::time::Instant) -> Result<Vec<u8>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+
+    fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+}
+
+#[test]
+fn failed_capture_settles_server_and_storage_transaction_without_replacing_committed_image() {
+    let store = Arc::new(TransactionStore::default());
+    store.seed_committed("MANIFEST", b"prior");
+    let server = Server::new(store.clone(), store.clone());
+    let capture = server
+        .begin_capture(17, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+
+    let group_begin = object_request(protocol::GROUP_BEGIN, 0, 17);
+    let group_commit = object_request(protocol::GROUP_COMMIT, 0, 17);
+    let begin = object_request(protocol::OBJECT_BEGIN, 1, 17);
+    let write = object_request(protocol::OBJECT_WRITE, 1, 17);
+    let finish = object_request(protocol::OBJECT_FINISH, 1, 17);
+    let claim = object_request(protocol::CLAIM, 0, 17);
+    assert_eq!(
+        server.dispatch(7, &group_begin, "proc.1", &[]).status,
+        protocol::STATUS_OK
+    );
+    assert_eq!(
+        server.dispatch(7, &begin, "proc.1/pages", &[]).status,
+        protocol::STATUS_OK
+    );
+    assert_eq!(server.dispatch(7, &write, "", b"pages").status, protocol::STATUS_OK);
+    assert_eq!(server.dispatch(7, &finish, "", &[]).status, protocol::STATUS_OK);
+    assert_eq!(
+        server.dispatch(7, &group_commit, "proc.1", &[]).status,
+        protocol::STATUS_OK
+    );
+
+    assert_eq!(
+        server.dispatch(7, &group_begin, "proc.2", &[]).status,
+        protocol::STATUS_OK
+    );
+    assert_eq!(
+        server.dispatch(7, &begin, "proc.2/open", &[]).status,
+        protocol::STATUS_OK
+    );
+    assert_eq!(server.dispatch(7, &claim, "pipe.1", &[]).status, protocol::STATUS_OK);
+    assert_eq!(server.transaction_state(), (1, 1, 1, 1, 1));
+    assert_eq!(store.snapshot().1, [("proc.1/pages".into(), b"pages".to_vec())]);
+
+    server.finish_failed(capture, CaptureFailure::Failed).unwrap();
+    assert_eq!(
+        server
+            .wait_capture(capture, std::time::Instant::now() + Duration::from_secs(1))
+            .unwrap(),
+        Some(Err(CaptureFailure::Failed))
+    );
+
+    assert_eq!(server.transaction_state(), (0, 0, 0, 0, 0));
+    let (committed, staging, aborts) = store.snapshot();
+    assert_eq!(committed, [("MANIFEST".into(), b"prior".to_vec())]);
+    assert!(staging.is_empty());
+    assert_eq!(aborts, 2);
+
+    let retry = Server::new(store.clone(), store.clone());
+    let retry_capture = retry
+        .begin_capture(18, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    let (committed, staging, aborts) = store.snapshot();
+    assert_eq!(committed, [("MANIFEST".into(), b"prior".to_vec())]);
+    assert!(staging.is_empty());
+    assert_eq!(aborts, 3);
+    retry.abort_capture(retry_capture).unwrap();
+}
+
+#[test]
+fn failed_capture_waits_for_admitted_local_mutation_before_clearing_state() {
+    let store = Arc::new(TransactionStore::default());
+    let server = Arc::new(Server::new(store.clone(), store));
+    let capture = server
+        .begin_capture(23, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    let held_state = server.state.lock().unwrap();
+    let request = object_request(protocol::CLAIM, 0, 23);
+    let worker = Arc::clone(&server);
+    let mutation = std::thread::spawn(move || worker.dispatch(7, &request, "pipe.race", &[]));
+    let admission_deadline = std::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        if server.capture.lock().unwrap().mutations == 1 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < admission_deadline,
+            "local state mutation never entered the transaction barrier"
+        );
+        std::thread::yield_now();
+    }
+
+    server.finish_failed(capture, CaptureFailure::Failed).unwrap();
+    let waiter = Arc::clone(&server);
+    let (settled, settlement) = mpsc::sync_channel(1);
+    let wait = std::thread::spawn(move || {
+        let result = waiter.wait_capture(capture, std::time::Instant::now() + Duration::from_secs(1));
+        settled.send(result).unwrap();
+    });
+    assert!(
+        settlement.recv_timeout(Duration::from_millis(20)).is_err(),
+        "failure became observable before the admitted mutation settled"
+    );
+
+    drop(held_state);
+    assert_eq!(mutation.join().unwrap().status, protocol::STATUS_OK);
+    assert_eq!(
+        settlement.recv_timeout(Duration::from_secs(1)).unwrap().unwrap(),
+        Some(Err(CaptureFailure::Failed))
+    );
+    wait.join().unwrap();
+    assert_eq!(server.transaction_state(), (0, 0, 0, 0, 0));
+}
+
+#[test]
+fn dropped_mutation_admission_still_settles_and_clears_the_transaction() {
+    let store = Arc::new(TransactionStore::default());
+    let server = Server::new(store.clone(), store);
+    let capture = server
+        .begin_capture(29, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    server.state.lock().unwrap().claims.insert("pipe.cancelled".into());
+    drop(server.admit_mutation().unwrap().unwrap());
+    assert_eq!(
+        server
+            .wait_capture(capture, std::time::Instant::now() + Duration::from_secs(1))
+            .unwrap(),
+        Some(Err(CaptureFailure::Failed))
+    );
+    assert_eq!(server.transaction_state(), (0, 0, 0, 0, 0));
+}
+
+#[test]
+fn panicking_storage_abort_cannot_strand_the_server_in_aborting() {
+    let store = Arc::new(PanickingAbortStore::default());
+    let server = Server::new(store.clone(), store);
+    let capture = server
+        .begin_capture(31, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    server.state.lock().unwrap().claims.insert("pipe.panic".into());
+    server.finish_failed(capture, CaptureFailure::Failed).unwrap();
+    assert_eq!(
+        server.wait_capture(capture, std::time::Instant::now() + Duration::from_secs(1)),
+        Err(CaptureFailure::Poisoned)
+    );
+    assert_eq!(server.transaction_state(), (0, 0, 0, 0, 0));
+}
+
+#[test]
+fn poisoned_server_state_is_recovered_and_cleared_during_abort() {
+    let store = Arc::new(TransactionStore::default());
+    let server = Arc::new(Server::new(store.clone(), store));
+    let capture = server
+        .begin_capture(37, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    let poisoned = Arc::clone(&server);
+    assert!(
+        std::thread::spawn(move || {
+            let _state = poisoned.state.lock().unwrap();
+            panic!("injected state poison")
+        })
+        .join()
+        .is_err()
+    );
+    server.finish_failed(capture, CaptureFailure::Failed).unwrap();
+    assert_eq!(
+        server
+            .wait_capture(capture, std::time::Instant::now() + Duration::from_secs(1))
+            .unwrap(),
+        Some(Err(CaptureFailure::Failed))
+    );
+    assert_eq!(server.transaction_state(), (0, 0, 0, 0, 0));
+}
+
+#[test]
+fn concurrent_abort_callers_observe_cleanup_before_either_returns() {
+    let store = Arc::new(BlockingAbortStore::default());
+    let server = Arc::new(Server::new(store.clone(), store.clone()));
+    let capture = server
+        .begin_capture(41, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    server.state.lock().unwrap().claims.insert("pipe.concurrent".into());
+    let first = Arc::clone(&server);
+    let one = std::thread::spawn(move || first.abort_capture(capture));
+    store.wait_started();
+    let second = Arc::clone(&server);
+    let (returned, result) = mpsc::sync_channel(1);
+    let two = std::thread::spawn(move || returned.send(second.abort_capture(capture)).unwrap());
+    assert!(
+        result.recv_timeout(Duration::from_millis(20)).is_err(),
+        "concurrent abort returned while storage cleanup was blocked"
+    );
+    store.release();
+    assert_eq!(one.join().unwrap(), Ok(()));
+    assert_eq!(
+        result.recv_timeout(Duration::from_secs(1)).unwrap(),
+        Err(CaptureFailure::Poisoned)
+    );
+    two.join().unwrap();
+    assert_eq!(server.transaction_state(), (0, 0, 0, 0, 0));
 }
 
 fn publish_recovery(server: &Server, generation: u32, stream: u64) -> (i32, i32) {
@@ -349,6 +737,9 @@ impl CheckpointSink for PublishedUncertain {
     fn put_until(&self, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
     }
+    fn abort(&self) -> Result<(), CompositionError> {
+        Ok(())
+    }
     fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         *self.0.lock().unwrap() += 1;
         Err(CompositionError::PublishedNotDurable)
@@ -430,6 +821,9 @@ impl CheckpointSink for MutationPublicationRace {
     }
     fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         self.state.lock().unwrap().3 += 1;
+        Ok(())
+    }
+    fn abort(&self) -> Result<(), CompositionError> {
         Ok(())
     }
 }
@@ -566,6 +960,9 @@ impl CheckpointSink for PublicationGate {
 
     fn put_until(&self, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
+    }
+    fn abort(&self) -> Result<(), CompositionError> {
+        Ok(())
     }
 
     fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {

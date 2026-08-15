@@ -111,6 +111,10 @@ impl CheckpointSink for Store {
         self.put(name, bytes)
     }
 
+    fn abort(&self) -> Result<(), CompositionError> {
+        Ok(())
+    }
+
     fn commit_until(&self, manifest: &[u8], deadline: Instant) -> Result<(), CompositionError> {
         (Instant::now() < deadline)
             .then_some(())

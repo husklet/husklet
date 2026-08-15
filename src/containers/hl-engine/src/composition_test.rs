@@ -34,6 +34,9 @@ impl CheckpointSink for Checkpoints {
     fn put_until(&self, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
     }
+    fn abort(&self) -> Result<(), CompositionError> {
+        Ok(())
+    }
     fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
     }
