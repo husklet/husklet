@@ -1,0 +1,21 @@
+cases:
+- id: terminal-bracketed-paste/multiline-executes-after-enter
+  image: bash:5.2
+  resources: [pty]
+  environment: { LC_ALL: C.UTF-8 }
+  timeout: 20
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      steps:
+      - write: { text: "stty -echo; bind 'set enable-bracketed-paste on'; printf '\\122\\104\\131\\n'\r" }
+      - await_output: { contains: RDY, timeout_ms: 5000 }
+      - write: { text: "\u001b[200~printf '\\120\\101\\123\\124\\105\\055\\117\\116\\105\\n'\nprintf '\\120\\101\\123\\124\\105\\055\\124\\127\\117\\n'\u001b[201~" }
+      - write: { text: "\r" }
+      - await_output: { contains: PASTE-ONE, timeout_ms: 5000 }
+      - await_output: { contains: PASTE-TWO, timeout_ms: 5000 }
+      - write: { text: "printf '\\123\\110\\105\\114\\114\\055\\117\\113\\n'; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains: [golden/first.txt, golden/second.txt, golden/shell_ok.txt]

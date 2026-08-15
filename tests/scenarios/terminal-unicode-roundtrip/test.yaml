@@ -1,0 +1,20 @@
+cases:
+- id: terminal-unicode-roundtrip/mixed-width-output-and-input
+  image: alpine:3.20
+  resources: [pty]
+  timeout: 30
+  actions:
+  - terminal:
+      argv: [/bin/sh, -i]
+      rows: 24
+      columns: 80
+      steps:
+      - write: { text: "stty -echo -onlcr; printf '<OUT:caf\\303\\251|\\346\\274\\242\\345\\255\\227|\\360\\237\\231\\202|e\\314\\201>\\n'; IFS= read -r value; printf '<IN:%s>\\n' \"$value\"; exit\r" }
+      - await_output: { contains: "<OUT:café|漢字|🙂|é>", timeout_ms: 5000 }
+      - write: { text: "Zażółć 漢🙂 é\r" }
+      - await_output: { contains: "<IN:Zażółć 漢🙂 é>", timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/output.txt
+    - golden/input.txt
