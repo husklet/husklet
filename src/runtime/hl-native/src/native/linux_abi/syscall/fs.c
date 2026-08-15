@@ -21,6 +21,18 @@ static int dac_snapshot_at(int directory, const char *raw, int nofollow, hl_dac_
     char guest[4200], host[4300], path[4200];
     const char *resolved;
     if (g_rootfs) {
+        // Resolve against the merged namespace first so DAC observes the VFS walk's exact failure. The
+        // pathname compatibility resolver returns only present/absent and therefore collapses ELOOP into
+        // ENOENT before open(2) gets a chance to report the original error.
+        hl_vfs_cursor_entry entry;
+        memset(&entry, 0, sizeof entry);
+        entry.descriptor = -1;
+        int resolution = hl_vfs_cursor_resolve_at(directory, raw, nofollow, &entry);
+        hl_vfs_cursor_entry_release(&entry);
+        // A typed host authority cannot yet materialize every regular file as a cursor entry; retain the
+        // pathname metadata fallback for those compatibility results, while preserving the loop verdict
+        // that fallback cannot represent.
+        if (resolution == -ELOOP) return resolution;
         abs_guest(directory, raw, guest, sizeof guest);
         if (!overlay_resolve(guest, host, sizeof host, nofollow)) {
             int ancestor_error = overlay_ancestor_error(guest);

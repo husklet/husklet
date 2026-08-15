@@ -822,6 +822,26 @@ static int open_jailed_path(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2
         intent |= openat2_intent;
         if (is_opath)
             intent &= ~(uint32_t)(HL_OPEN_READ | HL_OPEN_WRITE | HL_OPEN_CREATE | HL_OPEN_TRUNCATE | HL_OPEN_APPEND);
+        // Preserve namespace-walk errors before reducing the request to a native parent/name pair. The
+        // legacy overlay path resolver represents an over-deep or cyclic link as an absent host path,
+        // which turns Linux's ELOOP into ENOENT. The VFS cursor owns merged-layer traversal semantics and
+        // reports the original error; create requests still need the planner's missing-final handling.
+        if (!(intent & HL_OPEN_CREATE) && projected == NULL) {
+            hl_vfs_cursor_entry resolved;
+            memset(&resolved, 0, sizeof resolved);
+            resolved.descriptor = -1;
+            int resolve_error = hl_vfs_cursor_resolve_at((int)a0, (const char *)a1,
+                                                         (intent & HL_OPEN_NOFOLLOW) != 0, &resolved);
+            if (resolve_error == 0 && (intent & HL_OPEN_NOFOLLOW) && !(intent & HL_OPEN_PATH_ONLY) &&
+                resolved.kind == HL_VFS_CURSOR_SYMLINK)
+                resolve_error = -ELOOP;
+            hl_vfs_cursor_entry_release(&resolved);
+            if (resolve_error == -ELOOP) {
+                bound_handle_cancel(&typed_slot);
+                G_RET(c) = (uint64_t)(int64_t)resolve_error;
+                return 1;
+            }
+        }
         // resolve following the final symlink unless the guest asked O_NOFOLLOW (per-arch bit)
         int pfd = jail_open_plan((int)a0, (const char *)a1, intent, typed_host_access(a2, is_opath),
                                  is_opath ? 0 : typed_host_creation(a2), (uint32_t)a3, !nf_want, bound_handle_reserve,
@@ -1116,6 +1136,16 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
          * synthetic pathname through the provider first resolves a nonexistent literal /proc entry. */
         int descriptor_reopen = procfd_num_at((int)a0, (const char *)a1) >= 0;
         if (!descriptor_reopen && jail_routed_at((int)a0, (const char *)a1)) {
+            // A plain O_NOFOLLOW open rejects a final symlink; O_PATH|O_NOFOLLOW names the link instead.
+            // Ask the merged VFS/DAC snapshot before planning a host open, whose typed path can otherwise
+            // adopt the symlink handle successfully and lose Linux's ELOOP result.
+            if ((lf & G_O_NOFOLLOW) && !is_opath) {
+                int symlink = dac_symlink_at((int)a0, (const char *)a1);
+                if (symlink > 0) {
+                    G_RET(c) = (uint64_t)(int64_t)(-ELOOP);
+                    break;
+                }
+            }
             int dac_status = dac_open_at((int)a0, (const char *)a1, lf, is_opath);
             if (dac_status != 0) {
                 G_RET(c) = (uint64_t)(int64_t)dac_status;
@@ -1153,16 +1183,16 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         char overlay_guest[4200];
         abs_guest((int)a0, (const char *)a1, overlay_guest, sizeof overlay_guest);
         const hl_provider_node *projected = hl_provider_namespace_launch_resolve(overlay_guest, strlen(overlay_guest));
-        if (g_rootfs && g_nlower && !jail_is_vol(overlay_guest) && projected == NULL) {
+        if (g_rootfs && g_nlower && !jail_is_vol(overlay_guest) && projected == NULL &&
+            ((lf & 3) || (lf & 0x40))) {
             const char *gp = overlay_guest;
             char host[4300];
             // O_WRONLY/O_RDWR/O_CREAT -> write
             int isw = (lf & 3) || (lf & 0x40);
-            if (isw)
-                // copy-up the lower file (or upper path to create)
-                overlay_copyup(gp, host, sizeof host);
-            else
-                overlay_resolve(gp, host, sizeof host, (lf & G_O_NOFOLLOW) != 0);
+            // copy-up the lower file (or upper path to create). Read-only opens continue through the
+            // generic jailed/VFS planner below, which preserves resolver errors such as ELOOP instead of
+            // reducing them to a host path and then reporting ENOENT from open(2).
+            overlay_copyup(gp, host, sizeof host);
             // after copy-up, `host` (the upper path) exists iff the file was already present in the
             // overlay -> a missing upper means this open will CREATE it fresh; stamp its owner post-open.
             int nf_new = nf_want && access(host, F_OK) != 0;
