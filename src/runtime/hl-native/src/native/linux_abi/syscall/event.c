@@ -815,10 +815,14 @@ static uint32_t epoll_kevent_events(const struct kevent *event) {
     int hangup = 1;
     if (event->filter == EVFILT_READ) {
         struct pollfd pollfd = {.fd = (int)event->ident, .events = POLLIN, .revents = 0};
-        if (poll(&pollfd, 1, 0) >= 0) hangup = (pollfd.revents & POLLHUP) != 0;
-        int socket_type;
-        socklen_t socket_type_size = sizeof(socket_type);
-        if (getsockopt((int)event->ident, SOL_SOCKET, SO_TYPE, &socket_type, &socket_type_size) == 0) hangup = 0;
+        int poll_status = poll(&pollfd, 1, 0);
+        if (poll_status >= 0) {
+            hangup = (pollfd.revents & POLLHUP) != 0;
+        } else {
+            int socket_type;
+            socklen_t socket_type_size = sizeof(socket_type);
+            if (getsockopt((int)event->ident, SOL_SOCKET, SO_TYPE, &socket_type, &socket_type_size) == 0) hangup = 0;
+        }
     }
     if (hangup) events |= 0x10u;
     if (event->ident < HL_NFD && (g_ep_events[event->ident] & 0x2000u)) events |= 0x2000u;
