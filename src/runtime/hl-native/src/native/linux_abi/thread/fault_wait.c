@@ -103,7 +103,6 @@ static void uninstall_host_sigaltstack(void) {
 #endif
 static _Thread_local sigjmp_buf g_hrm_jb;                   // probe return point (valid while g_hrm_hi != 0)
 static _Thread_local volatile uintptr_t g_hrm_lo, g_hrm_hi; // page range being probed; probing iff hi != 0
-static int g_hrm_slow = -1; // HL_NOFASTHRM=1 / crash diagnostics -> per-page mach_vm_region
 
 // Called FIRST by every SIGSEGV/SIGBUS handler on the run path: when the fault is this thread's own probe
 // load, long-jump back to host_range_mapped ("unmapped"). The faulting signal was auto-blocked at handler
@@ -145,12 +144,6 @@ static int host_range_mapped(uintptr_t a, size_t len) {
     return hl_windows_fault_probe((uint64_t)a, (uint64_t)len, 0);
 #else
     uintptr_t lo = a & ~(uintptr_t)0xfff;
-    if (g_hrm_slow < 0) g_hrm_slow = 0;
-    if (g_hrm_slow) {
-        for (uintptr_t p = lo; p < end; p += 0x1000)
-            if (!host_addr_mapped(p)) return 0;
-        return 1;
-    }
     volatile int ok = 1;
     if (sigsetjmp(g_hrm_jb, 0)) {
         ok = 0; // a probe load faulted -> some page in the range is unmapped
