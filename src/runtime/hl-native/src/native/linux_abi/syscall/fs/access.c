@@ -770,6 +770,20 @@ static int open_synthetic_path(struct cpu *c, uint64_t a0, uint64_t a1, int lf, 
     return 0;
 }
 
+static int open_jailed_resolution_error(int directory, const char *path, uint32_t intent,
+                                        const hl_provider_node *projected) {
+    if ((intent & HL_OPEN_CREATE) || projected != NULL) return 0;
+    hl_vfs_cursor_entry resolved;
+    memset(&resolved, 0, sizeof resolved);
+    resolved.descriptor = -1;
+    int error = hl_vfs_cursor_resolve_at(directory, path, (intent & HL_OPEN_NOFOLLOW) != 0, &resolved);
+    if (error == 0 && (intent & HL_OPEN_NOFOLLOW) && !(intent & HL_OPEN_PATH_ONLY) &&
+        resolved.kind == HL_VFS_CURSOR_SYMLINK)
+        error = -ELOOP;
+    hl_vfs_cursor_entry_release(&resolved);
+    return error == -ELOOP ? error : 0;
+}
+
 static int open_jailed_path(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, int lf, int mf,
                             int osymlink, int is_opath, int nf_want, uint32_t openat2_intent,
                             const hl_provider_node *projected, const char *overlay_guest) {
@@ -826,21 +840,10 @@ static int open_jailed_path(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2
         // legacy overlay path resolver represents an over-deep or cyclic link as an absent host path,
         // which turns Linux's ELOOP into ENOENT. The VFS cursor owns merged-layer traversal semantics and
         // reports the original error; create requests still need the planner's missing-final handling.
-        if (!(intent & HL_OPEN_CREATE) && projected == NULL) {
-            hl_vfs_cursor_entry resolved;
-            memset(&resolved, 0, sizeof resolved);
-            resolved.descriptor = -1;
-            int resolve_error = hl_vfs_cursor_resolve_at((int)a0, (const char *)a1,
-                                                         (intent & HL_OPEN_NOFOLLOW) != 0, &resolved);
-            if (resolve_error == 0 && (intent & HL_OPEN_NOFOLLOW) && !(intent & HL_OPEN_PATH_ONLY) &&
-                resolved.kind == HL_VFS_CURSOR_SYMLINK)
-                resolve_error = -ELOOP;
-            hl_vfs_cursor_entry_release(&resolved);
-            if (resolve_error == -ELOOP) {
-                bound_handle_cancel(&typed_slot);
-                G_RET(c) = (uint64_t)(int64_t)resolve_error;
-                return 1;
-            }
+        int resolve_error = open_jailed_resolution_error((int)a0, (const char *)a1, intent, projected);
+        if (resolve_error != 0) {
+            G_RET(c) = (uint64_t)(int64_t)resolve_error;
+            return 1;
         }
         // resolve following the final symlink unless the guest asked O_NOFOLLOW (per-arch bit)
         int pfd = jail_open_plan((int)a0, (const char *)a1, intent, typed_host_access(a2, is_opath),
