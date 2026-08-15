@@ -1138,6 +1138,7 @@ static int engine_global_init(void) {
     g_trace = 0;
     g_systrace = 0;
     g_prof = hl_option_get("HL_C_DIAGNOSTICS") != NULL;
+    g_profile_output_owner = 1;
     g_service_ns = 0;
     g_prof_soft_hull_sampled = g_prof_soft_cached_sampled = g_prof_soft_sites_sampled = 0;
     g_prof_soft_miss = g_prof_soft_span = 0;
@@ -1272,7 +1273,7 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
     run_guest(&c);
     c.exit_code = thread_process_owner_wait(&c, c.exit_code);
     if (g_untrusted) sentry_shutdown(); // signal quit + waitpid (reap, no orphan)
-    if (g_prof) {
+    if (g_prof && g_profile_output_owner) {
         char profile[160];
         int profile_size = snprintf(profile, sizeof profile, "[prof] dispatcher crossings=%llu translations=%llu\n",
                                     (unsigned long long)g_dispatch_profile.crossings,

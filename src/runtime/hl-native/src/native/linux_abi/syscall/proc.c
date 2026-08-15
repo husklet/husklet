@@ -20,6 +20,12 @@
 
 enum { HL_EXEC_ARGUMENT_BYTES = 128 * 1024 };
 
+/* Diagnostic counters remain enabled in a fork child because they participate
+ * in translation-cache identity.  Only the process that began the execution
+ * owns the external profile stream; otherwise a fork-heavy guest emits one
+ * report per child and diagnostics become an unbounded guest-output amplifier. */
+static int g_profile_output_owner = 1;
+
 // execve env forwarding: serialize the guest's envp array into HL_GUEST_ENV (the "K=V\nK=V..." string
 // build_stack reads when laying out the new process stack), so the guest's actual environment crosses the
 // re-exec. A guest-initiated exec makes the guest's envp AUTHORITATIVE (like Linux): whatever the guest
@@ -298,6 +304,7 @@ static void vfork_import_guest_memory(pid_t child) {
 // never drift (clone3 was missing the W^X re-assert and the DIR*-cache drop).
 
 static void fork_child_hooks(struct cpu *c) {
+    g_profile_output_owner = 0;
 #ifdef G_SOFT_STATE_RESET
     G_SOFT_STATE_RESET(c);
 #endif

@@ -1236,6 +1236,7 @@ static int engine_global_init(void) {
     g_trace = 0;
     g_systrace = 0;
     g_prof = hl_option_get("HL_C_DIAGNOSTICS") != NULL;
+    g_profile_output_owner = 1;
     g_dispatch_diagnostics = g_prof || g_trace || g_nochain;
     g_fwdskip = 8;
     g_notier2x = 0;
@@ -1387,7 +1388,7 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
     // Fast-syscall counters are host telemetry, never guest output.  Explicit retained-C diagnostics
     // remain available through the canonical [prof] report emitted by the exit path; normal launches
     // must not synthesize a guest stderr line merely because an inline clock call happened.
-    if (g_prof) {
+    if (g_prof && g_profile_output_owner) {
         char profile[256];
         int profile_size = snprintf(profile, sizeof profile,
                                     "[prof] dispatcher crossings=%llu translations=%llu\n"
