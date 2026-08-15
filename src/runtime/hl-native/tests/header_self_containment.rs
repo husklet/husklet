@@ -581,6 +581,10 @@ int main(void) {
     valid(bytes, 0xb7); put16(bytes + 56, 2); memcpy(bytes + 120, bytes + 64, 56);
     put64(bytes + 96, 0); put64(bytes + 104, 0); put64(bytes + 80, 0);
     if (hl_linux_elf64_validate(&image, 0xb7, &layout) != 0 || layout.load_start != 0x400000) return 10;
+    valid(bytes, 0xb7); put16(bytes + 56, 2); memcpy(bytes + 120, bytes + 64, 56);
+    put64(bytes + 120 + 8, 0x10000); put64(bytes + 120 + 16, 0x410000);
+    put64(bytes + 120 + 32, 0); put64(bytes + 120 + 40, 4096); put64(bytes + 120 + 48, 0x10000);
+    if (hl_linux_elf64_validate(&image, 0xb7, &layout) != 0 || layout.load_end != 0x411000) return 12;
     valid(bytes, 0xb7); put16(bytes + 56, 3); memcpy(bytes + 120, bytes + 64, 56);
     memcpy(bytes + 176, bytes + 64, 56); put32(bytes + 120, 3); put32(bytes + 176, 3);
     put64(bytes + 128, 240); put64(bytes + 152, 2); put64(bytes + 184, 240); put64(bytes + 208, 2);

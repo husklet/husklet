@@ -57,7 +57,8 @@ int hl_linux_elf64_validate(const hl_linux_image *image, uint16_t expected_machi
         uint64_t file_size = image_u64(program + 32), memory_size = image_u64(program + 40);
         uint64_t alignment = image_u64(program + 48);
         if (kind == 1) {
-            if (++loads > MAX_LOAD_SEGMENTS || file_size > memory_size || !image_range(offset, file_size, image->size) ||
+            if (++loads > MAX_LOAD_SEGMENTS || file_size > memory_size ||
+                (file_size != 0 && !image_range(offset, file_size, image->size)) ||
                 memory_size > UINT64_MAX - address ||
                 (alignment > 1 && ((alignment & (alignment - 1)) != 0 || address % alignment != offset % alignment)))
                 return -1;
