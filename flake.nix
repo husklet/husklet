@@ -113,7 +113,10 @@
               guestPkgs = pkgsFor guest;
             in
             pkgs.writeShellScriptBin "${guest.isa}-linux-gnu-gcc" ''
-              exec ${lib.escapeShellArg (ccFor guest)} -L${lib.escapeShellArg "${guestPkgs.glibc.static}/lib"} "$@"
+              exec ${lib.escapeShellArg (ccFor guest)} \
+                -isystem ${lib.escapeShellArg "${guestPkgs.sqlite.dev}/include"} \
+                -L${lib.escapeShellArg "${guestPkgs.glibc.static}/lib"} \
+                -L${lib.escapeShellArg "${guestPkgs.sqlite.out}/lib"} "$@"
             '';
         in
         rec {
@@ -126,6 +129,10 @@
           crossCompilers = map ccPackageFor guestISAs;
           rustStaticLinkers = map rustStaticLinkerFor guestISAs;
           compilerAliases = map compilerAliasFor guestISAs;
+          guestLibraries = lib.concatMap (guest: [
+            (pkgsFor guest).sqlite.dev
+            (pkgsFor guest).sqlite.out
+          ]) guestISAs;
           emulators = lib.optional (host.isLinux && hostCpu == "x86_64") pkgs.qemu-user;
           env =
             lib.foldl'
@@ -1095,6 +1102,7 @@
                 toolchain.crossCompilers
                 ++ toolchain.rustStaticLinkers
                 ++ toolchain.compilerAliases
+                ++ toolchain.guestLibraries
                 ++ toolchain.emulators
               );
               shellHook = ''

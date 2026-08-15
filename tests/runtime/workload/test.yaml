@@ -166,7 +166,6 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/smc_overflow.out }
   - id: runtime/workload/sqlite
-    targets: [arm64]
     status: active
     compat: { class: compatibility }
     timeout: 120
