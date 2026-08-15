@@ -25,6 +25,7 @@ impl Rule for ProvisionalDiagnostic {
             let text = fs::read_to_string(&path).map_err(|error| crate::LintError::io("read", &path, error))?;
             for (index, line) in text.lines().enumerate() {
                 let comment = line.trim_start();
+                let indentation = line.len() - comment.len();
                 if !matches!(comment.get(..2), Some("//" | "/*" | "* ")) {
                     continue;
                 }
@@ -41,7 +42,7 @@ impl Rule for ProvisionalDiagnostic {
                     Location {
                         path: path.clone(),
                         line: index + 1,
-                        column: temporary + 1,
+                        column: indentation + temporary + 1,
                         source: line.to_owned(),
                     },
                 );
@@ -78,7 +79,7 @@ mod tests {
         let root = fixture();
         fs::write(
             root.join("src/runtime.rs"),
-            "// Temporary child diagnostics.\nfn run() {}\n",
+            "    // Temporary child diagnostics.\nfn run() {}\n",
         )
         .unwrap();
         fs::write(
@@ -92,6 +93,11 @@ mod tests {
 
         assert_eq!(findings.len(), 2);
         assert!(findings.iter().all(|finding| finding.rule == "provisional-diagnostic"));
+        let rust = findings
+            .iter()
+            .find(|finding| finding.location.path.ends_with("runtime.rs"))
+            .unwrap();
+        assert_eq!((rust.location.line, rust.location.column), (1, 8));
         fs::remove_dir_all(root).unwrap();
     }
 
