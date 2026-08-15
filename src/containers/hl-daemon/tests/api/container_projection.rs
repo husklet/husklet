@@ -17,7 +17,7 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let archive = work.path().join("process.tar");
     let executable = work.path().join("process");
     let compiler = std::env::var_os("HL_COMPAT_ARM64_CC").unwrap_or_else(|| "aarch64-linux-gnu-gcc".into());
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/testing/tests/fixtures/guest/process_loop.c");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/process_loop.c");
     let status = std::process::Command::new(compiler)
         .args([
             "-O2",
