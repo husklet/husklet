@@ -249,6 +249,18 @@ static void readlink_copy(struct cpu *c, char *buf, size_t size, const char *tar
 
 static int readlink_empty_path(struct cpu *c, int fd, const char *path, char *buf, size_t size) {
     if (!path || path[0] || fd < 0) return 0;
+    hl_linux_fd_snapshot snapshot;
+    if (bound_snapshot((uint64_t)(uint32_t)fd, &snapshot)) {
+        if (g_host_services == NULL || g_host_services->file == NULL || g_host_services->file->readlink == NULL) {
+            G_RET(c) = (uint64_t)(int64_t)(-ENOSYS);
+            return 1;
+        }
+        hl_host_result linked = g_host_services->file->readlink(
+            g_host_services->context, snapshot.host_handle, (hl_host_bytes){.data = buf, .size = size});
+        G_RET(c) = linked.status == HL_STATUS_OK ? linked.value
+                                                 : (uint64_t)(int64_t)vfs_host_error((hl_status)linked.status);
+        return 1;
+    }
     char fd_path[4200];
     const char *named = NULL;
     if (fd < HL_NFD && g_opath[fd] && g_fdpath[fd][0])
