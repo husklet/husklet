@@ -150,31 +150,34 @@ impl Server {
                 Reply::payload(bytes[offset..offset.saturating_add(length).min(bytes.len())].to_vec())
             }
             RECOVERY_COMPLETE => {
-                let Ok(capture) = self.capture_lock() else {
-                    return Reply::error();
-                };
-                if !matches!(capture.phase, CapturePhase::Recovery { .. })
-                    || capture.mutations != 0
-                    || !capture.recovery_report_published
-                {
-                    return Reply::error();
-                }
-                drop(capture);
-                if self
-                    .discard_transaction(std::time::Instant::now() + super::ABORT_SETTLEMENT_TIMEOUT)
-                    .is_err()
-                {
-                    return Reply::error();
-                }
                 let Ok(mut capture) = self.capture_lock() else {
                     return Reply::error();
                 };
-                if !matches!(capture.phase, CapturePhase::Recovery { .. }) || capture.mutations != 0 {
+                let CapturePhase::Recovery { id, .. } = capture.phase else {
+                    return Reply::error();
+                };
+                if capture.mutations != 0 || !capture.recovery_report_published {
                     return Reply::error();
                 }
-                capture.phase = CapturePhase::Idle;
+                capture.phase = CapturePhase::Aborting { id };
                 self.capture_changed.notify_all();
-                Reply::ok()
+                drop(capture);
+                let discarded = self.discard_transaction(std::time::Instant::now() + super::ABORT_SETTLEMENT_TIMEOUT);
+                let Ok(mut capture) = self.capture_lock() else {
+                    return Reply::error();
+                };
+                if !matches!(capture.phase, CapturePhase::Aborting { id: active } if active == id)
+                    || capture.mutations != 0
+                {
+                    return Reply::error();
+                }
+                capture.phase = if discarded.is_ok() {
+                    CapturePhase::Idle
+                } else {
+                    CapturePhase::Poisoned
+                };
+                self.capture_changed.notify_all();
+                if discarded.is_ok() { Reply::ok() } else { Reply::error() }
             }
             _ => Reply::error(),
         }

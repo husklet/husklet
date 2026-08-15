@@ -163,6 +163,30 @@ fn active_capture_cannot_be_superseded_by_another_provider() {
 }
 
 #[test]
+fn reopening_during_capture_does_not_refresh_its_publication_base() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("checkpoints");
+    let images = DirectoryImages::open(&root).unwrap();
+    let image = images.open("container").unwrap();
+    image.put("state", b"first").unwrap();
+    image.commit(b"manifest-one").unwrap();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    let transaction = image.begin_until(deadline).unwrap();
+    image.put_until(transaction, "state", b"candidate", deadline).unwrap();
+
+    let namespace = root.join("container");
+    let foreign = "generation-foreign";
+    std::fs::create_dir(namespace.join(foreign)).unwrap();
+    std::fs::write(namespace.join(foreign).join("MANIFEST"), b"foreign").unwrap();
+    std::fs::write(namespace.join("current"), foreign.as_bytes()).unwrap();
+    let _reopened = images.open("container").unwrap();
+
+    assert!(image.commit_until(transaction, b"candidate", deadline).is_err());
+    assert_eq!(std::fs::read(namespace.join("current")).unwrap(), foreign.as_bytes());
+}
+
+#[test]
 fn corrupt_current_pointer_fails_closed() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("checkpoints");

@@ -7,6 +7,7 @@ use std::sync::Arc;
 pub struct CheckpointError {
     message: String,
     deadline: bool,
+    busy: bool,
     published: bool,
 }
 
@@ -16,6 +17,7 @@ impl CheckpointError {
         Self {
             message: message.into(),
             deadline: false,
+            busy: false,
             published: false,
         }
     }
@@ -25,6 +27,17 @@ impl CheckpointError {
         Self {
             message: "checkpoint storage deadline exceeded".into(),
             deadline: true,
+            busy: false,
+            published: false,
+        }
+    }
+
+    #[must_use]
+    pub fn busy() -> Self {
+        Self {
+            message: "checkpoint transaction is busy".into(),
+            deadline: false,
+            busy: true,
             published: false,
         }
     }
@@ -34,6 +47,7 @@ impl CheckpointError {
         Self {
             message: message.into(),
             deadline: false,
+            busy: false,
             published: true,
         }
     }
@@ -41,6 +55,11 @@ impl CheckpointError {
     #[must_use]
     pub const fn is_deadline(&self) -> bool {
         self.deadline
+    }
+
+    #[must_use]
+    pub(crate) const fn is_busy(&self) -> bool {
+        self.busy
     }
 
     #[must_use]

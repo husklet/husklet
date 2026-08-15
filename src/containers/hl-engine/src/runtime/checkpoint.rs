@@ -214,20 +214,41 @@ impl Server {
     }
 
     pub(crate) fn abort_recovery(&self, id: u64) -> Result<(), CaptureFailure> {
+        let settlement_deadline = std::time::Instant::now() + ABORT_SETTLEMENT_TIMEOUT;
         let mut capture = self.capture_lock()?;
         match capture.phase {
-            CapturePhase::Recovery { id: active, deadline } if active == id => {
-                if capture.mutations != 0 {
-                    capture.phase = CapturePhase::Poisoned;
-                    self.interrupt_channels();
-                    self.capture_changed.notify_all();
-                    return Err(CaptureFailure::Failed);
-                }
+            CapturePhase::Recovery { id: active, .. } if active == id => {
                 capture.phase = CapturePhase::Aborting { id };
                 self.capture_changed.notify_all();
                 drop(capture);
-                let discarded = self.discard_transaction(deadline);
+                self.interrupt_channels();
                 let mut capture = self.capture_lock()?;
+                while capture.mutations != 0 {
+                    let now = std::time::Instant::now();
+                    if now >= settlement_deadline {
+                        capture.phase = CapturePhase::Poisoned;
+                        self.capture_changed.notify_all();
+                        return Err(CaptureFailure::Deadline);
+                    }
+                    let (next, timeout) = self
+                        .capture_changed
+                        .wait_timeout(capture, settlement_deadline.saturating_duration_since(now))
+                        .map_err(|_| CaptureFailure::Poisoned)?;
+                    capture = next;
+                    if timeout.timed_out() && capture.mutations != 0 {
+                        capture.phase = CapturePhase::Poisoned;
+                        self.capture_changed.notify_all();
+                        return Err(CaptureFailure::Deadline);
+                    }
+                }
+                drop(capture);
+                let discarded = self.discard_transaction(settlement_deadline);
+                let mut capture = self.capture_lock()?;
+                if !matches!(capture.phase, CapturePhase::Aborting { id: active } if active == id) {
+                    capture.phase = CapturePhase::Poisoned;
+                    self.capture_changed.notify_all();
+                    return Err(CaptureFailure::Poisoned);
+                }
                 capture.phase = if discarded.is_ok() {
                     CapturePhase::Idle
                 } else {

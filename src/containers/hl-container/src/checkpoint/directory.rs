@@ -130,8 +130,10 @@ impl CheckpointImages for DirectoryImages {
             {
                 let inspected_state = inspected.state()?;
                 let mut image_state = image.state()?;
-                image_state.current.clone_from(&inspected_state.current);
-                image_state.base.clone_from(&inspected_state.base);
+                if image_state.transaction.is_none() {
+                    image_state.current.clone_from(&inspected_state.current);
+                    image_state.base.clone_from(&inspected_state.base);
+                }
             }
             return Ok(image);
         }
@@ -388,7 +390,7 @@ impl CheckpointImage for DirectoryImage {
         let mut state = self.state_until(deadline)?;
         if let Some((_, lease)) = state.transaction {
             if std::time::Instant::now() < lease {
-                return Err(CheckpointError::new("checkpoint transaction is busy"));
+                return Err(CheckpointError::busy());
             }
             state = self.abort_state(state, deadline)?;
         }

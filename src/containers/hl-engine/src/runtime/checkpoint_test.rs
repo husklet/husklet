@@ -491,7 +491,7 @@ fn failed_capture_settles_server_and_storage_transaction_without_replacing_commi
 #[test]
 fn failed_capture_waits_for_admitted_local_mutation_before_clearing_state() {
     let store = Arc::new(TransactionStore::default());
-    let server = Arc::new(Server::new(store.clone(), store));
+    let server = Arc::new(Server::new(store.clone(), store.clone()));
     let capture = server
         .begin_capture(23, std::time::Instant::now() + Duration::from_secs(1))
         .unwrap();
@@ -570,7 +570,7 @@ fn panicking_storage_abort_cannot_strand_the_server_in_aborting() {
 #[test]
 fn poisoned_server_state_is_recovered_and_cleared_during_abort() {
     let store = Arc::new(TransactionStore::default());
-    let server = Arc::new(Server::new(store.clone(), store));
+    let server = Arc::new(Server::new(store.clone(), store.clone()));
     let capture = server
         .begin_capture(37, std::time::Instant::now() + Duration::from_secs(1))
         .unwrap();
@@ -701,6 +701,57 @@ fn recovery_and_capture_scopes_are_mutually_exclusive() {
         server.begin_recovery(5, std::time::Instant::now() + Duration::from_secs(1)),
         Err(CaptureFailure::Busy)
     );
+}
+
+#[test]
+fn recovery_complete_closes_mutation_admission_before_storage_cleanup() {
+    let store = Arc::new(BlockingAbortStore::default());
+    let server = Arc::new(Server::new(store.clone(), store.clone()));
+    server
+        .begin_recovery(12, std::time::Instant::now() + Duration::from_secs(2))
+        .unwrap();
+    assert_eq!(
+        publish_recovery(&server, 12, 1),
+        (protocol::STATUS_OK, protocol::STATUS_OK)
+    );
+    let complete = object_request(protocol::RECOVERY_COMPLETE, 0, 12);
+    let completing = Arc::clone(&server);
+    let worker = std::thread::spawn(move || completing.dispatch(1, &complete, "", &[]));
+    store.wait_started();
+
+    let late = object_request(protocol::OBJECT_BEGIN, 2, 12);
+    assert_ne!(server.dispatch(1, &late, "late", &[]).status, protocol::STATUS_OK);
+    store.release();
+    assert_eq!(worker.join().unwrap().status, protocol::STATUS_OK);
+    assert_eq!(server.transaction_state(), (0, 0, 0, 0, 0));
+}
+
+#[test]
+fn abort_recovery_waits_for_admitted_mutation_then_releases_transaction() {
+    let store = Arc::new(MutationPublicationRace::default());
+    let server = Arc::new(Server::new(store.clone(), store.clone()));
+    server
+        .begin_recovery(13, std::time::Instant::now() + Duration::from_secs(2))
+        .unwrap();
+    server.state.lock().unwrap().open.insert(
+        (1, 1),
+        super::Object {
+            name: "RECOVERY.jsonl".into(),
+            bytes: vec![1],
+        },
+    );
+    let mutating = Arc::clone(&server);
+    let mutation = std::thread::spawn(move || mutating.dispatch(1, &finish_request(1, 13), "", &[]));
+    store.wait_mutations(1);
+    let aborting = Arc::clone(&server);
+    let (sent, received) = mpsc::sync_channel(1);
+    let abort = std::thread::spawn(move || sent.send(aborting.abort_recovery(13)).unwrap());
+    assert!(received.recv_timeout(Duration::from_millis(20)).is_err());
+    store.release_mutations(false);
+    let _ = mutation.join().unwrap();
+    assert_eq!(received.recv_timeout(Duration::from_secs(1)).unwrap(), Ok(()));
+    abort.join().unwrap();
+    assert_eq!(server.transaction_state(), (0, 0, 0, 0, 0));
 }
 
 #[test]

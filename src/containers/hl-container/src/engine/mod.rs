@@ -33,6 +33,8 @@ impl CheckpointTransport {
     fn storage_error(error: &crate::CheckpointError) -> hl_engine::composition::CompositionError {
         if error.is_deadline() {
             hl_engine::composition::CompositionError::DeadlineExceeded
+        } else if error.is_busy() {
+            hl_engine::composition::CompositionError::TransactionBusy
         } else if error.publication_occurred() {
             hl_engine::composition::CompositionError::PublishedNotDurable
         } else {
@@ -490,6 +492,50 @@ mod tests {
             .put_until(transaction, "MANIFEST", b"not-a-rust-manifest", deadline)
             .unwrap();
         assert!(transport.read(64).is_err());
+    }
+
+    struct BusyImage;
+
+    impl crate::CheckpointImage for BusyImage {
+        fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, crate::CheckpointError> {
+            Err(crate::CheckpointError::busy())
+        }
+        fn put_until(
+            &self,
+            _: NonZeroU64,
+            _: &str,
+            _: &[u8],
+            _: std::time::Instant,
+        ) -> Result<(), crate::CheckpointError> {
+            unreachable!()
+        }
+        fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), crate::CheckpointError> {
+            unreachable!()
+        }
+        fn get(&self, _: &str) -> Result<Vec<u8>, crate::CheckpointError> {
+            unreachable!()
+        }
+        fn get_until(&self, _: &str, _: std::time::Instant) -> Result<Vec<u8>, crate::CheckpointError> {
+            unreachable!()
+        }
+        fn list(&self) -> Result<Vec<String>, crate::CheckpointError> {
+            unreachable!()
+        }
+        fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, crate::CheckpointError> {
+            unreachable!()
+        }
+        fn commit_until(&self, _: NonZeroU64, _: &[u8], _: std::time::Instant) -> Result<(), crate::CheckpointError> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn checkpoint_transport_preserves_transaction_busy() {
+        let transport = CheckpointTransport::new(Arc::new(BusyImage));
+        assert_eq!(
+            transport.begin_until(std::time::Instant::now() + std::time::Duration::from_secs(1)),
+            Err(hl_engine::composition::CompositionError::TransactionBusy)
+        );
     }
 
     fn launch() -> ProcessConfig {

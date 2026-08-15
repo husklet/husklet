@@ -199,7 +199,7 @@ impl CheckpointImage for WorkspaceImage {
         let mut state = self.state_until(deadline)?;
         if let Some((_, lease)) = state.transaction {
             if std::time::Instant::now() < lease {
-                return Err(CheckpointError::new("checkpoint transaction is busy"));
+                return Err(CheckpointError::busy());
             }
             state = self.abort_state(state, deadline)?;
         }
