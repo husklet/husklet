@@ -550,23 +550,6 @@ static void readlink_filesystem(struct cpu *c, int dirfd, const char *path, cons
         readlink_copy(c, buf, size, executable, strlen(executable));
         return;
     }
-    if (hl_provider_tree_files_active()) {
-        char projected[4200];
-        guest_abspath_at(dirfd, path, projected, sizeof projected);
-        hl_host_result opened = hl_provider_tree_open_root(
-            projected, strlen(projected), HL_HOST_FILE_READ | HL_HOST_FILE_PATH_ONLY | HL_HOST_FILE_NOFOLLOW, 0, 0,
-            HL_PROVIDER_TREE_LINK);
-        if (opened.status != HL_STATUS_OK) {
-            G_RET(c) = (uint64_t)(int64_t)vfs_host_error((hl_status)opened.status);
-            return;
-        }
-        hl_host_result linked = g_host_services->file->readlink(g_host_services->context, opened.value,
-                                                                (hl_host_bytes){.data = buf, .size = size});
-        (void)g_host_services->file->close(g_host_services->context, opened.value);
-        G_RET(c) =
-            linked.status == HL_STATUS_OK ? linked.value : (uint64_t)(int64_t)vfs_host_error((hl_status)linked.status);
-        return;
-    }
     if (readlink_synth_regular(c, path, guest_path)) return;
     char resolved[4200];
     const char *host_path = atpath(dirfd, path, resolved, sizeof resolved, 1);

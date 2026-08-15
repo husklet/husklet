@@ -20,10 +20,11 @@ use layout::validate_elf_image;
 
 pub const STATUS_OK: i32 = 0;
 
-/// Borrowed, low-level creation arguments for the native engine.
+/// Low-level creation arguments for the native engine.
 ///
-/// The safe high-level container adapter owns the strings, arrays and image
-/// plan. This package deliberately does not depend on application domain types.
+/// Strings, arrays, image descriptors, and standard descriptors are borrowed
+/// for the duration of creation. `provider_fd`, when nonnegative, transfers
+/// ownership to create even though provider transport is currently unsupported.
 #[derive(Clone, Copy)]
 pub struct EngineConfig<'a> {
     pub isa: u32,

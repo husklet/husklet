@@ -402,7 +402,6 @@ static _Thread_local uint32_t g_openat2_resolve_intent;
 
 static int jail_routed_at(int dirfd, const char *path) {
     (void)dirfd;
-    if (hl_provider_tree_files_active()) return path != NULL;
     if (g_rootfs) return 1;
     if (!path || path[0] != '/') return 0;
     char normalized[4200];

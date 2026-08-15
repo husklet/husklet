@@ -9,7 +9,6 @@
 #include "../../../host/resolve.h"
 #include "../../../engine/provider/files.h"
 #include "../../../engine/provider/namespace.h"
-#include "../../../engine/provider/tree_files.h"
 #if defined(__linux__)
 #include <sys/prctl.h>     // host PR_SET_NAME: mirror the guest comm onto this host task so a PEER's
                            // /proc/<pid>/{stat,status,comm} read (hl_host_process_read) reports the guest

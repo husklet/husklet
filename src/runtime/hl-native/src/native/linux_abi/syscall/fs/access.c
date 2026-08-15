@@ -917,7 +917,7 @@ static int open_jailed_path(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2
                 }
             }
             if (typed_authority_live) hl_vfs_cursor_entry_release(&typed_authority);
-            if (opened >= 0 && (projected != NULL || hl_provider_tree_files_active()) && opened < HL_NFD) {
+            if (opened >= 0 && projected != NULL && opened < HL_NFD) {
                 if (path_copy(g_fdpath[(int)opened], sizeof g_fdpath[(int)opened], overlay_guest) != 0)
                     g_fdpath[(int)opened][0] = 0;
                 g_fdpath_guest[(int)opened] = g_fdpath[(int)opened][0] != 0;

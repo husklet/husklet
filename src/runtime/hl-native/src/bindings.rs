@@ -312,6 +312,8 @@ mod tests {
     use super::*;
     use std::ptr;
 
+    const STATUS_NOT_SUPPORTED: i32 = 3;
+
     #[cfg(feature = "native-test-hooks")]
     #[test]
     fn descriptor_path_publication_copies_and_clears_on_both_guest_isas() {
@@ -394,5 +396,42 @@ mod tests {
         };
         assert_ne!(status, 0);
         assert!(output.is_null());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsupported_provider_descriptor_is_consumed_after_output_is_cleared() {
+        let mut descriptors = [-1; 2];
+        // SAFETY: the array has room for both descriptors produced by pipe.
+        assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);
+        let mut output = ptr::dangling_mut::<Backend>();
+        // SAFETY: output is writable. Provider rejection happens before the deliberately invalid image inputs
+        // are inspected, and ownership of descriptors[0] transfers to this call.
+        let status = unsafe {
+            hl_c_backend_create(
+                0,
+                ptr::null(),
+                ptr::null(),
+                -1,
+                ptr::null(),
+                ptr::null(),
+                0,
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                descriptors[0],
+                ptr::null_mut(),
+                None,
+                &raw mut output,
+            )
+        };
+        assert_eq!(status, STATUS_NOT_SUPPORTED);
+        assert!(output.is_null());
+        // SAFETY: fcntl retains no pointer and must report that create consumed the descriptor.
+        assert_eq!(unsafe { libc::fcntl(descriptors[0], libc::F_GETFD) }, -1);
+        assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EBADF));
+        // SAFETY: the write end remains owned by this test.
+        assert_eq!(unsafe { libc::close(descriptors[1]) }, 0);
     }
 }
