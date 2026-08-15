@@ -589,7 +589,7 @@
             readelf --dyn-syms --wide "$library" |
               awk '$4 == "FUNC" && $5 == "GLOBAL" && $6 == "DEFAULT" && $7 != "UND" { print $8 }' |
               sed 's/@.*//' | sort -u > "$TMPDIR/actual-exports"
-            cp src/runtime/hl-native/src/native/bridge/exports.txt "$TMPDIR/expected-exports"
+            cp ${workspaceSource}/src/runtime/hl-native/src/native/bridge/exports.txt "$TMPDIR/expected-exports"
             diff -u "$TMPDIR/expected-exports" "$TMPDIR/actual-exports"
 
             for name in hl-engine hl-aarch64 hl-x86_64
@@ -857,6 +857,10 @@
               | grep -F 'architecture: i386:x86-64' >/dev/null
             mkdir windows-host-objects
             for source in src/runtime/hl-native/src/native/host/windows/*.c; do
+              # io.c is a private fragment included by file.c, not an independent
+              # translation unit. Cargo's source inventory excludes included C
+              # files for the same reason.
+              [ "$(basename "$source")" = io.c ] && continue
               object="windows-host-objects/$(basename "''${source%.c}").obj"
               ${lib.escapeShellArg compiler} -std=c11 -DHL_SHARED -DHL_BUILDING_ENGINE \
                 -Isrc/runtime/hl-native/src/native \
