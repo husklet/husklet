@@ -82,14 +82,12 @@ static void svc_fs_access_50(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         }
         if (g_rootfs) {
             const hl_vfs_cursor *destination = hl_vfs_fd_cursor_get((int)a0);
-            if (destination == NULL) {
-                G_RET(c) = (uint64_t)(int64_t)-EBADF;
+            if (destination != NULL) {
+                int changed = hl_vfs_cwd_cursor_set(destination);
+                if (changed == 0) (void)path_copy(g_cwd, sizeof g_cwd, destination->guest);
+                G_RET(c) = (uint64_t)(int64_t)changed;
                 break;
             }
-            int changed = hl_vfs_cwd_cursor_set(destination);
-            if (changed == 0) (void)path_copy(g_cwd, sizeof g_cwd, destination->guest);
-            G_RET(c) = (uint64_t)(int64_t)changed;
-            break;
         }
         int changed;
         int handled = bound_handle_chdir((int)a0, &changed);
