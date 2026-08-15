@@ -28,6 +28,13 @@ impl<T: Send + 'static, R: Send + 'static> Pool<T, R> {
         }
         self.running.join_next().await.transpose()
     }
+
+    /// Cancels the active frontier and waits until every task destructor has
+    /// finished. Row destructors own external worker cleanup, so dropping the
+    /// JoinSet without this barrier can return while worker groups still live.
+    pub async fn shutdown(&mut self) {
+        self.running.shutdown().await;
+    }
 }
 
 #[cfg(test)]
@@ -95,6 +102,33 @@ mod tests {
         assert_eq!(order, (0..6).collect::<Vec<_>>());
         assert!(started.elapsed() >= Duration::from_millis(55));
         assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_cancelled_task_destructors() {
+        struct Guard(Arc<AtomicUsize>);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                std::thread::sleep(Duration::from_millis(20));
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let mut pool = Pool::new((0..4).collect(), 4);
+        let observed = Arc::clone(&dropped);
+        let launch = move |_| {
+            let guard = Guard(Arc::clone(&observed));
+            async move {
+                let _guard = guard;
+                std::future::pending::<()>().await;
+            }
+        };
+        // Fill the frontier, then cancel it through the same barrier used by a
+        // sweep abort. The timeout only proves every task reached its pending point.
+        let _ = tokio::time::timeout(Duration::from_millis(30), pool.next(launch)).await;
+        pool.shutdown().await;
+        assert_eq!(dropped.load(Ordering::SeqCst), 4);
     }
 
     #[tokio::test]

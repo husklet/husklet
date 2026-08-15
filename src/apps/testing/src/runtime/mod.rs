@@ -176,7 +176,15 @@ async fn drain(
     ledger: &Arc<ledger::Ledger>,
 ) -> Result<Vec<Completion>, Error> {
     let mut completed = Vec::new();
-    while let Some(result) = running.next(Work::execute).await? {
+    loop {
+        let result = match running.next(Work::execute).await {
+            Ok(Some(result)) => result,
+            Ok(None) => break,
+            Err(error) => {
+                running.shutdown().await;
+                return Err(error.into());
+            }
+        };
         let row = result.row();
         let recording = Arc::clone(ledger);
         tokio::task::spawn_blocking(move || recording.record(row).map_err(|error| error.to_string())).await??;
