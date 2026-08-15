@@ -2,8 +2,9 @@
 #include <stdio.h>
 #include <string.h>
 
+static _Alignas(64) unsigned char bytes[128];
+
 int main(void) {
-    _Alignas(64) unsigned char bytes[128];
     memset(bytes, 0xa5, sizeof bytes);
 
     void *inside_first_block = bytes + 37;
