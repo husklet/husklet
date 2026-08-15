@@ -48,6 +48,32 @@ pub(crate) fn runner() -> Result<std::path::PathBuf, Error> {
     std::env::current_exe().map_err(|error| format!("resolve runtime runner: {error}").into())
 }
 
+/// Resolves the executable that must create a runtime worker.
+///
+/// Release workers re-enter through the immutable artifact launcher's private-library
+/// environment instead of depending on whichever loader variables reached the corpus process.
+pub(crate) fn worker_launcher() -> Result<std::path::PathBuf, Error> {
+    worker_launcher_for(&runner()?, PROFILE)
+}
+
+fn worker_launcher_for(runner: &std::path::Path, profile: &str) -> Result<std::path::PathBuf, Error> {
+    if profile != "release" {
+        return Ok(runner.to_owned());
+    }
+    let bin = runner.parent().ok_or("release runtime runner has no bin directory")?;
+    let prefix = bin.parent().ok_or("release runtime runner has no artifact prefix")?;
+    if bin.file_name().and_then(|name| name.to_str()) != Some("bin")
+        || runner.file_name().and_then(|name| name.to_str()) != Some("testing")
+    {
+        return Err("release runtime corpus must execute an immutable <prefix>/bin/testing artifact".into());
+    }
+    let launcher = prefix.join("run");
+    if !launcher.is_file() {
+        return Err(format!("immutable runtime launcher {} is missing", launcher.display()).into());
+    }
+    Ok(launcher)
+}
+
 /// Identifies the exact runner binary, so a stale build cannot silently resume another one's rows.
 pub(crate) fn identity() -> Result<String, Error> {
     let path = runner()?;
@@ -137,7 +163,7 @@ const fn native_library_path() -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{PROFILE, Requested, identity, release_identity};
+    use super::{PROFILE, Requested, identity, release_identity, worker_launcher_for};
     use sha2::{Digest as _, Sha256};
 
     #[test]
@@ -162,6 +188,32 @@ mod tests {
             assert_eq!(identity().unwrap(), identity().unwrap());
             assert_eq!(identity().unwrap().len(), 64);
         }
+    }
+
+    #[test]
+    fn release_workers_reenter_through_the_immutable_launcher() {
+        let directory = tempfile::tempdir().unwrap();
+        let runner = directory.path().join("bin/testing");
+        std::fs::create_dir_all(runner.parent().unwrap()).unwrap();
+        std::fs::write(&runner, b"runner").unwrap();
+        std::fs::write(directory.path().join("run"), b"launcher").unwrap();
+
+        assert_eq!(
+            worker_launcher_for(&runner, "release").unwrap(),
+            directory.path().join("run")
+        );
+        assert_eq!(worker_launcher_for(&runner, "debug").unwrap(), runner);
+    }
+
+    #[test]
+    fn release_worker_refuses_a_missing_launcher() {
+        let directory = tempfile::tempdir().unwrap();
+        let runner = directory.path().join("bin/testing");
+        std::fs::create_dir_all(runner.parent().unwrap()).unwrap();
+        std::fs::write(&runner, b"runner").unwrap();
+
+        let error = worker_launcher_for(&runner, "release").unwrap_err().to_string();
+        assert!(error.contains("launcher"), "{error}");
     }
 
     #[test]

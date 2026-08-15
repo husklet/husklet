@@ -212,7 +212,7 @@ fn supervise(
         .map_err(|error| format!("create worker workspace: {error}"))?;
     let result = directory.path().join("outcome.yaml");
     let token = token()?;
-    let executable = crate::runtime::profile::runner().map_err(|error| error.to_string())?;
+    let executable = crate::runtime::profile::worker_launcher().map_err(|error| error.to_string())?;
     let mut command = hl_process::Command::new(executable);
     command.args([
         "runtime-worker",
