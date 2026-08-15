@@ -175,6 +175,33 @@ mod tests {
     #[cfg(feature = "native-test-hooks")]
     #[test]
     fn registry_allocation_failure_rejects_transport_without_leaking_descriptors() {
+        const CHILD: &str = "HL_NATIVE_CHECKPOINT_REGISTRY_FAILURE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "checkpoint::tests::registry_allocation_failure_rejects_transport_without_leaking_descriptors",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .spawn()
+                .unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert!(status.success(), "checkpoint registry child failed: {status}");
+                    return;
+                }
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("checkpoint registry child exceeded 15 seconds");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+
         let _adoption = ADOPTION.lock().expect("checkpoint adoption lock");
         let directory = if cfg!(target_os = "linux") {
             "/proc/self/fd"
