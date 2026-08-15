@@ -20,6 +20,10 @@ int main(void) {
     if (hl_guest_iov_validate(UINT64_C(0x0000fffffffff000), 8192, &total) != -EFAULT) return 4;
     total = 0;
     if (hl_guest_iov_validate(0, (uint64_t)INT64_MAX + 1, &total) != -EINVAL) return 5;
+    total = 0;
+    if (hl_guest_iov_validate(UINT64_MAX, 0, &total) != -EFAULT || total != 0) return 6;
+    total = 0;
+    if (hl_guest_iov_validate(UINT64_C(0x0001000000000000), 0, &total) != -EFAULT || total != 0) return 7;
     return 0;
 }
 "#,

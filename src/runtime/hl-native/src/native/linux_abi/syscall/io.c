@@ -532,6 +532,12 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             }
         }
     }
+    /* The emulated eventfd owns its descriptor even if a reused number still
+       has stale generic path classification.  Resolve its vectored operation
+       after Linux's common fd/iovec validation but before generic O_PATH,
+       device, and host-access-mode gates inspect the backing pipe read end. */
+    if (nr == 65 && eventfd_vector_read(c, (int)a0, a1, (size_t)a2)) return svc_done_host(c);
+    if (nr == 66 && eventfd_vector_write(c, (int)a0, a1, (size_t)a2)) return svc_done_host(c);
     // An O_PATH fd names a file but is not open for I/O -- Linux rejects the read/write family through it
     // with EBADF (fs/read_write.c). It stays valid as a dirfd for *at() and for fstat/fchdir (served by
     // svc_fs), so only the I/O syscalls are gated here.
