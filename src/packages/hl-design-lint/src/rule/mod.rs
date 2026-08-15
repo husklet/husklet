@@ -16,8 +16,8 @@ pub use c::{
 };
 pub use repository::{
     CatchAllSourcePath, DependencyDirection, Documentation, EmptyDirectory, FileLength, FileName, FolderNoun,
-    ModulePrefix, ParentName, PrefixDirectory, RepositoryEscape, RuntimeTool, SingleFileDirectory, TestDependency,
-    TestDirectory, TestName, TestSuiteKebabPath,
+    ModulePrefix, ParentName, PrefixDirectory, ProvisionalDiagnostic, RepositoryEscape, RuntimeTool,
+    SingleFileDirectory, TestDependency, TestDirectory, TestName, TestSuiteKebabPath,
 };
 pub use rust::{
     AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CatchAllModule, CeremonialStructure, ConstructorOwnership,
