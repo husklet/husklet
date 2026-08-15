@@ -73,7 +73,7 @@ tool_suffixes = ["-test", "-tests", "-tool", "-tools"]
 destination_domain = "src/apps"
 
 [source]
-ignored_directories = [".git", "target", "vendor", "lint"]
+ignored_directories = [".codegraph", ".git", "target", "vendor", "lint"]
 ignored_markers = [".hl-external-corpus", ".hl-generated-artifacts"]
 self_packages = ["hl-design-lint"]
 foreign_source_directories = ["native", "schema"]

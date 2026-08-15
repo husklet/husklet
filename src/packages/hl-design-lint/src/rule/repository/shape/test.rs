@@ -101,13 +101,13 @@ fn filename_stem_policy() {
     let workspace = Workspace::load([root.clone()]).unwrap();
     let findings = FileName.check(&workspace).unwrap();
 
-    assert_eq!(findings.len(), 9);
+    assert_eq!(findings.len(), 10);
     assert_eq!(
         findings
             .iter()
             .filter(|finding| finding.message.contains("contains a dash"))
             .count(),
-        3
+        4
     );
     assert_eq!(
         findings

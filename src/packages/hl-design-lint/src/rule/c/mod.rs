@@ -1,9 +1,6 @@
 //! Language-aware policy for repository-owned C, Objective-C, and assembly.
 
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use crate::{LintError, Result, source::Workspace};
 use tree_sitter::{Parser, Tree};
@@ -672,46 +669,15 @@ fn parse_error(path: &Path, message: impl Into<String>) -> LintError {
 }
 
 fn source_files(workspace: &Workspace) -> Result<Vec<PathBuf>> {
-    fn walk(path: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
-        let metadata = fs::symlink_metadata(path).map_err(|error| LintError::io("inspect", path, error))?;
-        if metadata.file_type().is_symlink() {
-            return Ok(());
-        }
-        if metadata.is_file() {
-            if path
-                .extension()
+    Ok(workspace
+        .source_files()?
+        .into_iter()
+        .filter(|path| {
+            path.extension()
                 .and_then(|value| value.to_str())
                 .is_some_and(|extension| matches!(extension, "c" | "h" | "m" | "mm"))
-            {
-                output.push(path.to_owned());
-            }
-            return Ok(());
-        }
-        if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| matches!(name, ".git" | "target" | "vendor"))
-        {
-            return Ok(());
-        }
-        let mut entries = fs::read_dir(path)
-            .map_err(|error| LintError::io("read source directory", path, error))?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|error| LintError::io("read source directory", path, error))?;
-        entries.sort_by_key(std::fs::DirEntry::path);
-        for entry in entries {
-            walk(&entry.path(), output)?;
-        }
-        Ok(())
-    }
-
-    let mut output = Vec::new();
-    for root in workspace.paths() {
-        walk(root, &mut output)?;
-    }
-    output.sort();
-    output.dedup();
-    Ok(output)
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -1016,5 +982,26 @@ mod test {
                               return 1;\n\
                       }\n";
         assert!(parse(Path::new("invalid.c"), source).is_err());
+    }
+
+    #[test]
+    fn c_inventory_honors_configured_ignored_directories() {
+        let root = std::env::temp_dir().join(format!("hl-design-lint-c-inventory-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src/owned")).unwrap();
+        std::fs::create_dir_all(root.join("src/generated/nested")).unwrap();
+        std::fs::write(root.join("src/owned/value.c"), "int value(void) { return 1; }\n").unwrap();
+        std::fs::write(root.join("src/generated/nested/ignored.c"), "invalid C on purpose\n").unwrap();
+        let policy = crate::policy::SourcePolicy {
+            ignored_directories: vec!["generated".into()],
+            ..Default::default()
+        };
+        let workspace = crate::source::Workspace::load_with_policy([root.join("src")], &policy).unwrap();
+
+        assert_eq!(
+            super::source_files(&workspace).unwrap(),
+            [root.join("src/owned/value.c")]
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
