@@ -1,4 +1,5 @@
 use std::fmt;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 /// Failure from durable checkpoint object storage.
@@ -58,17 +59,24 @@ impl std::error::Error for CheckpointError {}
 
 /// One complete, named process-tree checkpoint image.
 pub trait CheckpointImage: Send + Sync {
+    /// Acquires exclusive ownership of one unpublished generation.
+    fn begin_until(&self, deadline: std::time::Instant) -> Result<NonZeroU64, CheckpointError>;
+
     /// Stores one object in the unpublished checkpoint generation.
     ///
     /// # Errors
     /// Returns a storage or object-name failure.
-    fn put(&self, name: &str, bytes: &[u8]) -> Result<(), CheckpointError>;
-
     /// Cooperatively stores an object before an absolute monotonic deadline.
     /// Implementations must bound waits under their control. A blocking kernel
     /// filesystem call may still outlive the deadline and return an error after it
     /// completes; this API does not create or abandon background work.
-    fn put_until(&self, name: &str, bytes: &[u8], deadline: std::time::Instant) -> Result<(), CheckpointError>;
+    fn put_until(
+        &self,
+        transaction: NonZeroU64,
+        name: &str,
+        bytes: &[u8],
+        deadline: std::time::Instant,
+    ) -> Result<(), CheckpointError>;
 
     /// Discards the unpublished generation without changing the generation
     /// visible through `get` and `list`.
@@ -76,16 +84,7 @@ pub trait CheckpointImage: Send + Sync {
     /// # Errors
     /// Returns a storage failure when the unpublished generation cannot be
     /// discarded completely.
-    fn abort(&self) -> Result<(), CheckpointError>;
-
-    /// Cooperatively discards the unpublished generation before an absolute
-    /// monotonic deadline.
-    fn abort_until(&self, deadline: std::time::Instant) -> Result<(), CheckpointError> {
-        (std::time::Instant::now() < deadline)
-            .then_some(())
-            .ok_or_else(CheckpointError::deadline)?;
-        self.abort()
-    }
+    fn abort_until(&self, transaction: NonZeroU64, deadline: std::time::Instant) -> Result<(), CheckpointError>;
 
     /// Reads one object from the committed checkpoint generation.
     ///
@@ -105,18 +104,15 @@ pub trait CheckpointImage: Send + Sync {
     /// Cooperatively lists objects before an absolute monotonic deadline.
     fn list_until(&self, deadline: std::time::Instant) -> Result<Vec<String>, CheckpointError>;
 
-    /// Publishes a complete generation after its manifest is durable.
-    ///
-    /// # Errors
-    /// Returns a storage failure.
-    fn commit(&self, manifest: &[u8]) -> Result<(), CheckpointError> {
-        self.put("MANIFEST", manifest)
-    }
-
     /// Publishes only if the deadline is live immediately before the atomic
     /// pointer replacement. Once replacement starts, its result is authoritative:
     /// successful publication is never reported as a timeout.
-    fn commit_until(&self, manifest: &[u8], deadline: std::time::Instant) -> Result<(), CheckpointError>;
+    fn commit_until(
+        &self,
+        transaction: NonZeroU64,
+        manifest: &[u8],
+        deadline: std::time::Instant,
+    ) -> Result<(), CheckpointError>;
 }
 
 /// Opens checkpoint images by stable container generation namespace.

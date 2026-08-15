@@ -1,6 +1,7 @@
 use super::{CaptureFailure, Server, protocol};
 use crate::composition::{CheckpointSink, CheckpointSource, CompositionError};
 use std::{
+    num::NonZeroU64,
     os::unix::net::UnixStream,
     sync::{
         Arc, Condvar, Mutex,
@@ -10,19 +11,26 @@ use std::{
     time::Duration,
 };
 
+fn test_transaction() -> NonZeroU64 {
+    NonZeroU64::MIN
+}
+
 struct Store;
 
 impl CheckpointSink for Store {
     fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
     }
-    fn put_until(&self, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+    fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
+        Ok(test_transaction())
+    }
+    fn put_until(&self, _: NonZeroU64, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
     }
-    fn abort(&self) -> Result<(), CompositionError> {
+    fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
         Ok(())
     }
-    fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+    fn commit_until(&self, _: NonZeroU64, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
     }
 }
@@ -35,21 +43,21 @@ impl CheckpointSink for RecordingStore {
         Err(CompositionError::RuntimeConstruction)
     }
 
-    fn commit(&self, _: &[u8]) -> Result<(), CompositionError> {
-        *self.0.lock().unwrap() += 1;
-        Ok(())
+    fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
+        Ok(test_transaction())
     }
-    fn put_until(&self, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+    fn put_until(&self, _: NonZeroU64, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
     }
-    fn abort(&self) -> Result<(), CompositionError> {
+    fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
         Ok(())
     }
-    fn commit_until(&self, manifest: &[u8], deadline: std::time::Instant) -> Result<(), CompositionError> {
+    fn commit_until(&self, _: NonZeroU64, _: &[u8], deadline: std::time::Instant) -> Result<(), CompositionError> {
         if std::time::Instant::now() >= deadline {
             return Err(CompositionError::DeadlineExceeded);
         }
-        self.commit(manifest)
+        *self.0.lock().unwrap() += 1;
+        Ok(())
     }
 }
 
@@ -91,7 +99,16 @@ impl CheckpointSink for RecoveryStore {
         Err(CompositionError::RuntimeConstruction)
     }
 
-    fn put_until(&self, name: &str, bytes: &[u8], deadline: std::time::Instant) -> Result<(), CompositionError> {
+    fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
+        Ok(test_transaction())
+    }
+    fn put_until(
+        &self,
+        _: NonZeroU64,
+        name: &str,
+        bytes: &[u8],
+        deadline: std::time::Instant,
+    ) -> Result<(), CompositionError> {
         if std::time::Instant::now() >= deadline {
             return Err(CompositionError::DeadlineExceeded);
         }
@@ -99,12 +116,12 @@ impl CheckpointSink for RecoveryStore {
         Ok(())
     }
 
-    fn abort(&self) -> Result<(), CompositionError> {
+    fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
         self.0.lock().unwrap().clear();
         Ok(())
     }
 
-    fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+    fn commit_until(&self, _: NonZeroU64, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
     }
 }
@@ -138,17 +155,50 @@ fn object_request(op: u32, stream: u64, generation: u32) -> protocol::Request {
 }
 
 #[derive(Default)]
+struct TransactionState {
+    committed: Vec<(String, Vec<u8>)>,
+    staging: Vec<(String, Vec<u8>)>,
+    aborts: usize,
+    owner: Option<(NonZeroU64, std::time::Instant)>,
+    next: u64,
+}
+
+#[derive(Default)]
 struct TransactionStore {
-    state: Mutex<(Vec<(String, Vec<u8>)>, Vec<(String, Vec<u8>)>, usize)>,
+    state: Mutex<TransactionState>,
 }
 
 impl TransactionStore {
     fn seed_committed(&self, name: &str, bytes: &[u8]) {
-        self.state.lock().unwrap().0.push((name.to_owned(), bytes.to_vec()));
+        self.state
+            .lock()
+            .unwrap()
+            .committed
+            .push((name.to_owned(), bytes.to_vec()));
     }
 
     fn snapshot(&self) -> (Vec<(String, Vec<u8>)>, Vec<(String, Vec<u8>)>, usize) {
-        self.state.lock().unwrap().clone()
+        let state = self.state.lock().unwrap();
+        (state.committed.clone(), state.staging.clone(), state.aborts)
+    }
+
+    fn expire_owner(&self) {
+        let mut state = self.state.lock().unwrap();
+        if let Some((owner, _)) = state.owner {
+            state.owner = Some((owner, std::time::Instant::now()));
+        }
+    }
+
+    fn validate(
+        state: &TransactionState,
+        transaction: NonZeroU64,
+        deadline: std::time::Instant,
+    ) -> Result<(), CompositionError> {
+        let now = std::time::Instant::now();
+        match state.owner {
+            Some((owner, lease)) if owner == transaction && now < lease && now < deadline => Ok(()),
+            _ => Err(CompositionError::RuntimeConstruction),
+        }
     }
 }
 
@@ -157,27 +207,54 @@ impl CheckpointSink for TransactionStore {
         Err(CompositionError::RuntimeConstruction)
     }
 
-    fn put(&self, name: &str, bytes: &[u8]) -> Result<(), CompositionError> {
-        self.state.lock().unwrap().1.push((name.to_owned(), bytes.to_vec()));
-        Ok(())
-    }
-
-    fn put_until(&self, name: &str, bytes: &[u8], deadline: std::time::Instant) -> Result<(), CompositionError> {
-        (std::time::Instant::now() < deadline)
-            .then_some(())
-            .ok_or(CompositionError::DeadlineExceeded)?;
-        self.put(name, bytes)
-    }
-
-    fn abort(&self) -> Result<(), CompositionError> {
+    fn begin_until(&self, deadline: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
         let mut state = self.state.lock().unwrap();
-        state.1.clear();
-        state.2 += 1;
+        if let Some((_, lease)) = state.owner {
+            if std::time::Instant::now() < lease {
+                return Err(CompositionError::TransactionBusy);
+            }
+            state.staging.clear();
+            state.aborts += 1;
+        }
+        state.next = state.next.wrapping_add(1).max(1);
+        let transaction = NonZeroU64::new(state.next).unwrap();
+        state.owner = Some((transaction, deadline));
+        Ok(transaction)
+    }
+
+    fn put_until(
+        &self,
+        transaction: NonZeroU64,
+        name: &str,
+        bytes: &[u8],
+        deadline: std::time::Instant,
+    ) -> Result<(), CompositionError> {
+        let mut state = self.state.lock().unwrap();
+        Self::validate(&state, transaction, deadline)?;
+        state.staging.push((name.to_owned(), bytes.to_vec()));
         Ok(())
     }
 
-    fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
-        Err(CompositionError::RuntimeConstruction)
+    fn abort_until(&self, transaction: NonZeroU64, deadline: std::time::Instant) -> Result<(), CompositionError> {
+        let mut state = self.state.lock().unwrap();
+        Self::validate(&state, transaction, deadline)?;
+        state.staging.clear();
+        state.aborts += 1;
+        state.owner = None;
+        Ok(())
+    }
+
+    fn commit_until(
+        &self,
+        transaction: NonZeroU64,
+        _: &[u8],
+        deadline: std::time::Instant,
+    ) -> Result<(), CompositionError> {
+        let mut state = self.state.lock().unwrap();
+        Self::validate(&state, transaction, deadline)?;
+        state.committed = std::mem::take(&mut state.staging);
+        state.owner = None;
+        Ok(())
     }
 }
 
@@ -203,19 +280,22 @@ impl CheckpointSink for PanickingAbortStore {
         Err(CompositionError::RuntimeConstruction)
     }
 
-    fn put_until(&self, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+    fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
+        Ok(test_transaction())
+    }
+    fn put_until(&self, _: NonZeroU64, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         Ok(())
     }
 
-    fn abort(&self) -> Result<(), CompositionError> {
+    fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
         if self.0.fetch_add(1, Ordering::Relaxed) == 0 {
-            Ok(())
-        } else {
             panic!("injected abort panic")
+        } else {
+            Ok(())
         }
     }
 
-    fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+    fn commit_until(&self, _: NonZeroU64, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
     }
 }
@@ -243,7 +323,7 @@ struct BlockingAbortStore {
 impl BlockingAbortStore {
     fn wait_started(&self) {
         let mut state = self.state.lock().unwrap();
-        while state.0 < 2 {
+        while state.0 < 1 {
             state = self.changed.wait(state).unwrap();
         }
     }
@@ -259,21 +339,17 @@ impl CheckpointSink for BlockingAbortStore {
         Err(CompositionError::RuntimeConstruction)
     }
 
-    fn put_until(&self, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+    fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
+        Ok(test_transaction())
+    }
+    fn put_until(&self, _: NonZeroU64, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         Ok(())
     }
 
-    fn abort(&self) -> Result<(), CompositionError> {
-        self.abort_until(std::time::Instant::now() + Duration::from_secs(1))
-    }
-
-    fn abort_until(&self, deadline: std::time::Instant) -> Result<(), CompositionError> {
+    fn abort_until(&self, _: NonZeroU64, deadline: std::time::Instant) -> Result<(), CompositionError> {
         let mut state = self.state.lock().unwrap();
         state.0 += 1;
         self.changed.notify_all();
-        if state.0 == 1 {
-            return Ok(());
-        }
         while !state.1 {
             let now = std::time::Instant::now();
             if now >= deadline {
@@ -291,7 +367,7 @@ impl CheckpointSink for BlockingAbortStore {
         Ok(())
     }
 
-    fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+    fn commit_until(&self, _: NonZeroU64, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
     }
 }
@@ -308,6 +384,41 @@ impl CheckpointSource for BlockingAbortStore {
     fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
         Err(CompositionError::RuntimeConstruction)
     }
+}
+
+#[test]
+fn shared_sink_refuses_second_server_without_erasing_first_staging() {
+    let store = Arc::new(TransactionStore::default());
+    let first = Server::new(store.clone(), store.clone());
+    let second = Server::new(store.clone(), store.clone());
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    first.begin_capture(1, deadline).unwrap();
+    let transaction = first.transaction_token().unwrap();
+    store.put_until(transaction, "first", b"owned", deadline).unwrap();
+
+    assert_eq!(second.begin_capture(2, deadline), Err(CaptureFailure::Busy));
+    assert_eq!(store.snapshot().1, [("first".into(), b"owned".to_vec())]);
+
+    first.discard_transaction(deadline).unwrap();
+    second.begin_capture(2, deadline).unwrap();
+}
+
+#[test]
+fn reclaimed_transaction_fences_stale_put_commit_and_abort() {
+    let store = TransactionStore::default();
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    let stale = store.begin_until(deadline).unwrap();
+    store.put_until(stale, "stale", b"one", deadline).unwrap();
+    store.expire_owner();
+    let current = store.begin_until(deadline).unwrap();
+    store.put_until(current, "current", b"two", deadline).unwrap();
+
+    assert!(store.put_until(stale, "late", b"bad", deadline).is_err());
+    assert!(store.commit_until(stale, b"bad", deadline).is_err());
+    assert!(store.abort_until(stale, deadline).is_err());
+    assert_eq!(store.snapshot().1, [("current".into(), b"two".to_vec())]);
+    store.commit_until(current, b"ok", deadline).unwrap();
+    assert_eq!(store.snapshot().0, [("current".into(), b"two".to_vec())]);
 }
 
 #[test]
@@ -364,7 +475,7 @@ fn failed_capture_settles_server_and_storage_transaction_without_replacing_commi
     let (committed, staging, aborts) = store.snapshot();
     assert_eq!(committed, [("MANIFEST".into(), b"prior".to_vec())]);
     assert!(staging.is_empty());
-    assert_eq!(aborts, 2);
+    assert_eq!(aborts, 1);
 
     let retry = Server::new(store.clone(), store.clone());
     let retry_capture = retry
@@ -373,7 +484,7 @@ fn failed_capture_settles_server_and_storage_transaction_without_replacing_commi
     let (committed, staging, aborts) = store.snapshot();
     assert_eq!(committed, [("MANIFEST".into(), b"prior".to_vec())]);
     assert!(staging.is_empty());
-    assert_eq!(aborts, 3);
+    assert_eq!(aborts, 1);
     retry.abort_capture(retry_capture).unwrap();
 }
 
@@ -734,13 +845,16 @@ impl CheckpointSink for PublishedUncertain {
     fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
     }
-    fn put_until(&self, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+    fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
+        Ok(test_transaction())
+    }
+    fn put_until(&self, _: NonZeroU64, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
     }
-    fn abort(&self) -> Result<(), CompositionError> {
+    fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
         Ok(())
     }
-    fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+    fn commit_until(&self, _: NonZeroU64, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         *self.0.lock().unwrap() += 1;
         Err(CompositionError::PublishedNotDurable)
     }
@@ -806,7 +920,10 @@ impl CheckpointSink for MutationPublicationRace {
     fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
     }
-    fn put_until(&self, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+    fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
+        Ok(test_transaction())
+    }
+    fn put_until(&self, _: NonZeroU64, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         let mut state = self.state.lock().unwrap();
         state.0 += 1;
         self.changed.notify_all();
@@ -819,11 +936,11 @@ impl CheckpointSink for MutationPublicationRace {
             Ok(())
         }
     }
-    fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+    fn commit_until(&self, _: NonZeroU64, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         self.state.lock().unwrap().3 += 1;
         Ok(())
     }
-    fn abort(&self) -> Result<(), CompositionError> {
+    fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
         Ok(())
     }
 }
@@ -958,14 +1075,17 @@ impl CheckpointSink for PublicationGate {
         Err(CompositionError::RuntimeConstruction)
     }
 
-    fn put_until(&self, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+    fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
+        Ok(test_transaction())
+    }
+    fn put_until(&self, _: NonZeroU64, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
     }
-    fn abort(&self) -> Result<(), CompositionError> {
+    fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
         Ok(())
     }
 
-    fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+    fn commit_until(&self, _: NonZeroU64, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         let mut state = self.state.lock().unwrap();
         state.0 = true;
         self.changed.notify_all();

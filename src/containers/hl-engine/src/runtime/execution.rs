@@ -405,15 +405,30 @@ mod tests {
             Err(CompositionError::RuntimeConstruction)
         }
 
-        fn put_until(&self, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        fn begin_until(&self, _: std::time::Instant) -> Result<std::num::NonZeroU64, CompositionError> {
+            Ok(std::num::NonZeroU64::MIN)
+        }
+
+        fn put_until(
+            &self,
+            _: std::num::NonZeroU64,
+            _: &str,
+            _: &[u8],
+            _: std::time::Instant,
+        ) -> Result<(), CompositionError> {
             Err(CompositionError::RuntimeConstruction)
         }
 
-        fn abort(&self) -> Result<(), CompositionError> {
+        fn abort_until(&self, _: std::num::NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
             Ok(())
         }
 
-        fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        fn commit_until(
+            &self,
+            _: std::num::NonZeroU64,
+            _: &[u8],
+            _: std::time::Instant,
+        ) -> Result<(), CompositionError> {
             Err(CompositionError::RuntimeConstruction)
         }
     }

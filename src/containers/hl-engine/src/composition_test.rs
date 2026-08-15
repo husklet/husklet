@@ -31,13 +31,16 @@ impl CheckpointSink for Checkpoints {
         *self.image.lock().unwrap() = image.to_vec();
         Ok(())
     }
-    fn put_until(&self, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+    fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
+        Ok(NonZeroU64::MIN)
+    }
+    fn put_until(&self, _: NonZeroU64, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
     }
-    fn abort(&self) -> Result<(), CompositionError> {
+    fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
         Ok(())
     }
-    fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+    fn commit_until(&self, _: NonZeroU64, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
         Err(CompositionError::RuntimeConstruction)
     }
 }

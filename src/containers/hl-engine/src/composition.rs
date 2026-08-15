@@ -3,6 +3,7 @@
 use crate::activation::GuestIsa;
 use crate::engine::{Engine, EngineError, EngineExit, Launcher, ProcessId, StopRequest, Workspace, WorkspaceId};
 use crate::launcher::plan::RuntimePlan;
+use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -19,6 +20,7 @@ pub enum CompositionError {
     /// Native execution does not yet own a PTY/stdio bridge for the requested terminal.
     UnsupportedTerminal,
     RuntimeConstruction,
+    TransactionBusy,
     DeadlineExceeded,
     /// The authoritative generation changed, but its containing directory
     /// could not be synced. Callers must not retry the same publication as if
@@ -30,42 +32,32 @@ pub enum CompositionError {
 pub trait CheckpointSink: Send + Sync {
     fn replace(&self, image: &[u8]) -> Result<(), CompositionError>;
 
-    /// Stores one named object in the unpublished checkpoint generation.
-    ///
-    /// The retained C engine emits a process-tree image as independently
-    /// addressable objects. Legacy single-image transports may leave this
-    /// unsupported; construction does not advertise retained-C checkpointing
-    /// until the complete object-store contract is available.
-    fn put(&self, _name: &str, _bytes: &[u8]) -> Result<(), CompositionError> {
-        Err(CompositionError::RuntimeConstruction)
-    }
+    /// Acquires exclusive ownership of one unpublished generation.
+    fn begin_until(&self, deadline: std::time::Instant) -> Result<NonZeroU64, CompositionError>;
 
     /// Stores without spawning detachable work. Implementations must bound all
     /// userspace waits they control and report deadline expiry cooperatively.
-    fn put_until(&self, name: &str, bytes: &[u8], deadline: std::time::Instant) -> Result<(), CompositionError>;
-
-    /// Discards every object written for the unpublished generation while
-    /// preserving the last committed generation.
-    fn abort(&self) -> Result<(), CompositionError>;
+    fn put_until(
+        &self,
+        transaction: NonZeroU64,
+        name: &str,
+        bytes: &[u8],
+        deadline: std::time::Instant,
+    ) -> Result<(), CompositionError>;
 
     /// Discards the unpublished generation before an absolute monotonic
     /// deadline. Implementations must not abandon background cleanup work.
-    fn abort_until(&self, deadline: std::time::Instant) -> Result<(), CompositionError> {
-        (std::time::Instant::now() < deadline)
-            .then_some(())
-            .ok_or(CompositionError::DeadlineExceeded)?;
-        self.abort()
-    }
-
-    /// Atomically publishes the generation after every object is durable.
-    fn commit(&self, _manifest: &[u8]) -> Result<(), CompositionError> {
-        Err(CompositionError::RuntimeConstruction)
-    }
+    fn abort_until(&self, transaction: NonZeroU64, deadline: std::time::Instant) -> Result<(), CompositionError>;
 
     /// Publishes transactionally. Expiry before the irrevocable publication
     /// point must leave the former generation authoritative; once publication
     /// succeeds the implementation must return success, not a late timeout.
-    fn commit_until(&self, manifest: &[u8], deadline: std::time::Instant) -> Result<(), CompositionError>;
+    fn commit_until(
+        &self,
+        transaction: NonZeroU64,
+        manifest: &[u8],
+        deadline: std::time::Instant,
+    ) -> Result<(), CompositionError>;
 }
 
 /// Deadline-aware source for a checkpoint image.

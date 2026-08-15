@@ -8,6 +8,7 @@ use crate::composition::{CheckpointSink, CheckpointSource};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     io::Read,
+    num::NonZeroU64,
     os::{fd::AsRawFd, unix::net::UnixStream},
     sync::{
         Arc, Condvar, Mutex,
@@ -136,6 +137,7 @@ pub(crate) struct Server {
     sink: Arc<dyn CheckpointSink>,
     source: Arc<dyn CheckpointSource>,
     state: Mutex<State>,
+    transaction: Mutex<Option<NonZeroU64>>,
     capture: Mutex<CaptureState>,
     capture_changed: Condvar,
     channels: Mutex<HashMap<i32, Arc<UnixStream>>>,
@@ -151,6 +153,7 @@ impl Server {
             sink,
             source,
             state: Mutex::new(State::default()),
+            transaction: Mutex::new(None),
             capture: Mutex::new(CaptureState {
                 phase: CapturePhase::Idle,
                 mutations: 0,
@@ -180,11 +183,7 @@ impl Server {
         if id == 0 {
             return Err(CaptureFailure::Poisoned);
         }
-        if let Err(failure) = self.discard_transaction(deadline) {
-            capture.phase = CapturePhase::Poisoned;
-            self.capture_changed.notify_all();
-            return Err(failure);
-        }
+        self.begin_transaction(deadline)?;
         self.committed.store(false, Ordering::Release);
         capture.phase = CapturePhase::Active { id, deadline };
         capture.mutations = 0;
@@ -207,7 +206,7 @@ impl Server {
         if id == 0 {
             return Err(CaptureFailure::Poisoned);
         }
-        *self.state.lock().map_err(|_| CaptureFailure::Poisoned)? = State::default();
+        self.begin_transaction(deadline)?;
         capture.phase = CapturePhase::Recovery { id, deadline };
         capture.mutations = 0;
         capture.recovery_report_published = false;
@@ -217,20 +216,25 @@ impl Server {
     pub(crate) fn abort_recovery(&self, id: u64) -> Result<(), CaptureFailure> {
         let mut capture = self.capture_lock()?;
         match capture.phase {
-            CapturePhase::Recovery { id: active, .. } if active == id => {
-                let result = if capture.mutations == 0 {
-                    capture.phase = CapturePhase::Idle;
-                    Ok(())
-                } else {
+            CapturePhase::Recovery { id: active, deadline } if active == id => {
+                if capture.mutations != 0 {
                     capture.phase = CapturePhase::Poisoned;
-                    Err(CaptureFailure::Failed)
-                };
+                    self.interrupt_channels();
+                    self.capture_changed.notify_all();
+                    return Err(CaptureFailure::Failed);
+                }
+                capture.phase = CapturePhase::Aborting { id };
                 self.capture_changed.notify_all();
                 drop(capture);
-                if result.is_err() {
-                    self.interrupt_channels();
-                }
-                result
+                let discarded = self.discard_transaction(deadline);
+                let mut capture = self.capture_lock()?;
+                capture.phase = if discarded.is_ok() {
+                    CapturePhase::Idle
+                } else {
+                    CapturePhase::Poisoned
+                };
+                self.capture_changed.notify_all();
+                discarded
             }
             CapturePhase::Idle => Ok(()),
             CapturePhase::Poisoned => Err(CaptureFailure::Poisoned),
@@ -348,16 +352,56 @@ impl Server {
         Ok(())
     }
 
+    fn transaction_token(&self) -> Result<NonZeroU64, CaptureFailure> {
+        self.transaction
+            .lock()
+            .map_err(|_| CaptureFailure::Poisoned)?
+            .ok_or(CaptureFailure::Poisoned)
+    }
+
+    fn begin_transaction(&self, deadline: std::time::Instant) -> Result<(), CaptureFailure> {
+        let transaction = self.sink.begin_until(deadline).map_err(Self::publication_failure)?;
+        let installed = match self.transaction.lock() {
+            Ok(mut active) if active.is_none() => {
+                *active = Some(transaction);
+                true
+            }
+            _ => false,
+        };
+        if !installed {
+            let _ = self.sink.abort_until(transaction, deadline);
+            return Err(CaptureFailure::Poisoned);
+        }
+        if let Ok(mut state) = self.state.lock() {
+            *state = State::default();
+            Ok(())
+        } else {
+            let _ = self.sink.abort_until(transaction, deadline);
+            if let Ok(mut active) = self.transaction.lock() {
+                *active = None;
+            }
+            Err(CaptureFailure::Poisoned)
+        }
+    }
+
     fn discard_transaction(&self, deadline: std::time::Instant) -> Result<(), CaptureFailure> {
-        let storage = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.sink.abort_until(deadline)))
-            .map_err(|_| CaptureFailure::Poisoned)
-            .and_then(|result| result.map_err(Self::publication_failure));
+        let transaction = self.transaction_token()?;
+        let storage = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.sink.abort_until(transaction, deadline)
+        }))
+        .map_err(|_| CaptureFailure::Poisoned)
+        .and_then(|result| result.map_err(Self::publication_failure));
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(poisoned) => poisoned.into_inner(),
         };
         *state = State::default();
         self.state.clear_poison();
+        if let Ok(mut active) = self.transaction.lock()
+            && *active == Some(transaction)
+        {
+            *active = None;
+        }
         storage
     }
 

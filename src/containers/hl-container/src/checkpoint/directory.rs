@@ -1,19 +1,24 @@
 use super::{CheckpointError, CheckpointImage, CheckpointImages};
+use std::collections::HashMap;
 #[cfg(not(unix))]
 use std::fs::OpenOptions;
+use std::num::NonZeroU64;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 mod storage;
 
 static GENERATION: AtomicU64 = AtomicU64::new(0);
+static TRANSACTION: AtomicU64 = AtomicU64::new(1);
+static IMAGES: OnceLock<Mutex<HashMap<String, std::sync::Weak<DirectoryImage>>>> = OnceLock::new();
 
 pub(crate) struct DirectoryImages {
     #[cfg(not(unix))]
     root: PathBuf,
     #[cfg(unix)]
     directory: Arc<std::os::fd::OwnedFd>,
+    identity: String,
 }
 
 impl DirectoryImages {
@@ -34,16 +39,29 @@ impl DirectoryImages {
                 .map_err(|error| CheckpointError::new(format!("open checkpoint root: {error}")))?,
             )
         };
+        #[cfg(unix)]
+        let identity = {
+            let metadata = nix::sys::stat::fstat(&*directory)
+                .map_err(|error| CheckpointError::new(format!("inspect checkpoint root: {error}")))?;
+            format!("{}:{}", metadata.st_dev, metadata.st_ino)
+        };
+        #[cfg(not(unix))]
+        let identity = root
+            .canonicalize()
+            .map_err(|error| CheckpointError::new(format!("resolve checkpoint root: {error}")))?
+            .to_string_lossy()
+            .into_owned();
         Ok(Self {
             #[cfg(not(unix))]
             root: root.to_owned(),
             #[cfg(unix)]
             directory,
+            identity,
         })
     }
 
     #[cfg(unix)]
-    fn open_held(&self, namespace: &str) -> Result<Arc<dyn CheckpointImage>, CheckpointError> {
+    fn open_held(&self, namespace: &str) -> Result<Arc<DirectoryImage>, CheckpointError> {
         use nix::fcntl::{OFlag, openat};
         use nix::sys::stat::{Mode, mkdirat};
 
@@ -85,6 +103,7 @@ impl DirectoryImages {
                 current,
                 base,
                 generation,
+                transaction: None,
             }),
         }))
     }
@@ -99,10 +118,27 @@ impl CheckpointImages for DirectoryImages {
         {
             return Err(CheckpointError::new("invalid checkpoint namespace"));
         }
+        let key = format!("{}:{namespace}", self.identity);
+        let mut images = IMAGES
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .map_err(|_| CheckpointError::new("checkpoint image cache is poisoned"))?;
         #[cfg(unix)]
-        return self.open_held(namespace);
+        let inspected = self.open_held(namespace)?;
+        if let Some(image) = images.get(&key).and_then(std::sync::Weak::upgrade) {
+            #[cfg(unix)]
+            {
+                let inspected_state = inspected.state()?;
+                let mut image_state = image.state()?;
+                image_state.current.clone_from(&inspected_state.current);
+                image_state.base.clone_from(&inspected_state.base);
+            }
+            return Ok(image);
+        }
+        #[cfg(unix)]
+        let image = inspected;
         #[cfg(not(unix))]
-        {
+        let image = {
             let root = self.root.join(namespace);
             std::fs::create_dir_all(&root)
                 .map_err(|error| CheckpointError::new(format!("create checkpoint image: {error}")))?;
@@ -133,17 +169,20 @@ impl CheckpointImages for DirectoryImages {
                 }
             };
             let generation = DirectoryImage::generation();
-            Ok(Arc::new(DirectoryImage {
+            Arc::new(DirectoryImage {
                 root: root.clone(),
                 state: Mutex::new(DirectoryImageState {
                     current,
                     base,
                     generation,
+                    transaction: None,
                 }),
                 #[cfg(unix)]
                 directory: unreachable!(),
-            }))
-        }
+            })
+        };
+        images.insert(key, Arc::downgrade(&image));
+        Ok(image)
     }
 }
 
@@ -165,6 +204,7 @@ struct DirectoryImageState {
     current: Option<DirectoryGeneration>,
     base: Option<Vec<u8>>,
     generation: String,
+    transaction: Option<(NonZeroU64, std::time::Instant)>,
 }
 
 impl Drop for DirectoryImage {
@@ -268,10 +308,13 @@ impl DirectoryImage {
         }
     }
 
-    fn abort_state(&self, mut state: MutexGuard<'_, DirectoryImageState>) -> Result<(), CheckpointError> {
+    fn abort_state<'a>(
+        &self,
+        mut state: MutexGuard<'a, DirectoryImageState>,
+        deadline: std::time::Instant,
+    ) -> Result<MutexGuard<'a, DirectoryImageState>, CheckpointError> {
         #[cfg(unix)]
-        Self::remove_tree_at(&self.directory, &state.generation)
-            .map_err(|error| CheckpointError::new(format!("discard checkpoint generation: {error}")))?;
+        Self::remove_tree_at_until(&self.directory, &state.generation, Some(deadline))?;
         #[cfg(not(unix))]
         std::fs::remove_dir_all(self.root.join(&state.generation)).or_else(|error| {
             (error.kind() == std::io::ErrorKind::NotFound)
@@ -279,7 +322,31 @@ impl DirectoryImage {
                 .ok_or(error)
         })?;
         state.generation = Self::generation();
-        Ok(())
+        state.transaction = None;
+        Ok(state)
+    }
+
+    fn next_transaction() -> NonZeroU64 {
+        loop {
+            if let Some(transaction) = NonZeroU64::new(TRANSACTION.fetch_add(1, Ordering::Relaxed)) {
+                return transaction;
+            }
+        }
+    }
+
+    fn validate_transaction(
+        state: &DirectoryImageState,
+        transaction: NonZeroU64,
+        deadline: std::time::Instant,
+    ) -> Result<(), CheckpointError> {
+        let now = std::time::Instant::now();
+        match state.transaction {
+            Some((active, lease)) if active == transaction && now < deadline && now < lease => Ok(()),
+            Some((active, _)) if active != transaction => {
+                Err(CheckpointError::new("checkpoint transaction is not owned"))
+            }
+            _ => Err(CheckpointError::deadline()),
+        }
     }
 
     #[cfg(unix)]
@@ -314,16 +381,31 @@ impl DirectoryImage {
 }
 
 impl CheckpointImage for DirectoryImage {
-    fn put(&self, name: &str, bytes: &[u8]) -> Result<(), CheckpointError> {
-        let state = self.state()?;
-        #[cfg(unix)]
-        return Self::replace_at(&self.directory, &format!("{}/{name}", state.generation), bytes);
-        #[cfg(not(unix))]
-        Self::replace(&Self::path(&self.root.join(&state.generation), name)?, bytes)
+    fn begin_until(&self, deadline: std::time::Instant) -> Result<NonZeroU64, CheckpointError> {
+        if std::time::Instant::now() >= deadline {
+            return Err(CheckpointError::deadline());
+        }
+        let mut state = self.state_until(deadline)?;
+        if let Some((_, lease)) = state.transaction {
+            if std::time::Instant::now() < lease {
+                return Err(CheckpointError::new("checkpoint transaction is busy"));
+            }
+            state = self.abort_state(state, deadline)?;
+        }
+        let transaction = Self::next_transaction();
+        state.transaction = Some((transaction, deadline));
+        Ok(transaction)
     }
 
-    fn put_until(&self, name: &str, bytes: &[u8], deadline: std::time::Instant) -> Result<(), CheckpointError> {
+    fn put_until(
+        &self,
+        transaction: NonZeroU64,
+        name: &str,
+        bytes: &[u8],
+        deadline: std::time::Instant,
+    ) -> Result<(), CheckpointError> {
         let state = self.state_until(deadline)?;
+        Self::validate_transaction(&state, transaction, deadline)?;
         #[cfg(unix)]
         Self::replace_at(&self.directory, &format!("{}/{name}", state.generation), bytes)?;
         #[cfg(not(unix))]
@@ -333,15 +415,15 @@ impl CheckpointImage for DirectoryImage {
             .ok_or_else(CheckpointError::deadline)
     }
 
-    fn abort(&self) -> Result<(), CheckpointError> {
-        self.abort_state(self.state()?)
-    }
-
-    fn abort_until(&self, deadline: std::time::Instant) -> Result<(), CheckpointError> {
+    fn abort_until(&self, transaction: NonZeroU64, deadline: std::time::Instant) -> Result<(), CheckpointError> {
         if std::time::Instant::now() >= deadline {
             return Err(CheckpointError::deadline());
         }
-        self.abort_state(self.state_until(deadline)?)
+        let state = self.state_until(deadline)?;
+        if !matches!(state.transaction, Some((active, _)) if active == transaction) {
+            return Err(CheckpointError::new("checkpoint transaction is not owned"));
+        }
+        self.abort_state(state, deadline).map(|_| ())
     }
 
     fn get(&self, name: &str) -> Result<Vec<u8>, CheckpointError> {
@@ -412,20 +494,22 @@ impl CheckpointImage for DirectoryImage {
         };
         let mut objects = Vec::new();
         #[cfg(unix)]
-        Self::collect_held(
+        Self::collect_held_until(
             self.hold_generation(current)?,
             "",
             matches!(current, DirectoryGeneration::Namespace),
             &mut objects,
+            Some(deadline),
         )?;
         #[cfg(not(unix))]
         {
             let current = self.generation_path(current);
-            Self::collect(
+            Self::collect_until(
                 &current,
                 &current,
                 matches!(state.current, Some(DirectoryGeneration::Namespace)),
                 &mut objects,
+                Some(deadline),
             )?;
         }
         objects.sort();
@@ -434,12 +518,13 @@ impl CheckpointImage for DirectoryImage {
             .ok_or_else(CheckpointError::deadline)
     }
 
-    fn commit(&self, manifest: &[u8]) -> Result<(), CheckpointError> {
-        self.commit_inner(manifest, None)
-    }
-
-    fn commit_until(&self, manifest: &[u8], deadline: std::time::Instant) -> Result<(), CheckpointError> {
-        self.commit_inner(manifest, Some(deadline))
+    fn commit_until(
+        &self,
+        transaction: NonZeroU64,
+        manifest: &[u8],
+        deadline: std::time::Instant,
+    ) -> Result<(), CheckpointError> {
+        self.commit_inner(transaction, manifest, deadline)
     }
 }
 
@@ -459,11 +544,14 @@ impl DirectoryImage {
         }
     }
 
-    fn commit_inner(&self, manifest: &[u8], deadline: Option<std::time::Instant>) -> Result<(), CheckpointError> {
-        let mut state = match deadline {
-            Some(deadline) => self.state_until(deadline)?,
-            None => self.state()?,
-        };
+    fn commit_inner(
+        &self,
+        transaction: NonZeroU64,
+        manifest: &[u8],
+        deadline: std::time::Instant,
+    ) -> Result<(), CheckpointError> {
+        let mut state = self.state_until(deadline)?;
+        Self::validate_transaction(&state, transaction, deadline)?;
         #[cfg(unix)]
         Self::replace_at(&self.directory, &format!("{}/MANIFEST", state.generation), manifest)?;
         #[cfg(not(unix))]
@@ -506,7 +594,7 @@ impl DirectoryImage {
             .write(true)
             .open(self.root.join(".publication.lock"))
             .map_err(|error| CheckpointError::new(format!("open checkpoint publication lock: {error}")))?;
-        Self::lock_publication(&lock, deadline)?;
+        Self::lock_publication(&lock, Some(deadline))?;
         #[cfg(unix)]
         let published = Self::read_optional(&self.directory, "current")?;
         #[cfg(not(unix))]
@@ -524,7 +612,7 @@ impl DirectoryImage {
                 "checkpoint generation changed while capture was in progress",
             ));
         }
-        if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+        if std::time::Instant::now() >= deadline {
             return Err(CheckpointError::deadline());
         }
         let generation = state.generation.as_bytes().to_vec();
@@ -538,9 +626,16 @@ impl DirectoryImage {
             state.generation = Self::generation();
         }
         #[cfg(unix)]
-        return Self::finish_publication(&mut state, generation, publication);
+        {
+            let result = Self::finish_publication(&mut state, generation, publication);
+            state.transaction = None;
+            result
+        }
         #[cfg(not(unix))]
-        Ok(())
+        {
+            state.transaction = None;
+            Ok(())
+        }
     }
 }
 

@@ -6,10 +6,10 @@ use super::{
 
 impl Server {
     pub(super) fn publication_failure(error: crate::composition::CompositionError) -> CaptureFailure {
-        if error == crate::composition::CompositionError::DeadlineExceeded {
-            CaptureFailure::Deadline
-        } else {
-            CaptureFailure::Failed
+        match error {
+            crate::composition::CompositionError::DeadlineExceeded => CaptureFailure::Deadline,
+            crate::composition::CompositionError::TransactionBusy => CaptureFailure::Busy,
+            _ => CaptureFailure::Failed,
         }
     }
 
@@ -66,10 +66,12 @@ impl Server {
         object: &Object,
         deadline: Option<std::time::Instant>,
     ) -> Result<(), crate::composition::CompositionError> {
-        deadline.map_or_else(
-            || self.sink.put(&object.name, &object.bytes),
-            |deadline| self.sink.put_until(&object.name, &object.bytes, deadline),
-        )?;
+        let transaction = self
+            .transaction_token()
+            .map_err(|_| crate::composition::CompositionError::RuntimeConstruction)?;
+        let deadline = deadline.ok_or(crate::composition::CompositionError::RuntimeConstruction)?;
+        self.sink
+            .put_until(transaction, &object.name, &object.bytes, deadline)?;
         if Self::included(&object.name) {
             let mut state = self
                 .state
@@ -138,7 +140,8 @@ impl Server {
             }
         };
 
-        let result = match self.sink.commit_until(manifest, deadline) {
+        let transaction = self.transaction_token()?;
+        let result = match self.sink.commit_until(transaction, manifest, deadline) {
             Ok(()) => Ok(()),
             Err(crate::composition::CompositionError::PublishedNotDurable) => {
                 hl_log::hl_error!(
@@ -159,6 +162,11 @@ impl Server {
         capture.phase = CapturePhase::Finished { id, result };
         if result.is_ok() {
             self.committed.store(true, Ordering::Release);
+            if let Ok(mut active) = self.transaction.lock()
+                && *active == Some(transaction)
+            {
+                *active = None;
+            }
         }
         self.capture_changed.notify_all();
         result

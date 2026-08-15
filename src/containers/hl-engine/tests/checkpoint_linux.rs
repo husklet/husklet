@@ -9,6 +9,7 @@ use hl_engine::{
 };
 use std::{
     collections::BTreeMap,
+    num::NonZeroU64,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -95,31 +96,28 @@ impl CheckpointSink for Store {
         Err(CompositionError::RuntimeConstruction)
     }
 
-    fn put(&self, name: &str, bytes: &[u8]) -> Result<(), CompositionError> {
+    fn begin_until(&self, _: Instant) -> Result<NonZeroU64, CompositionError> {
+        Ok(NonZeroU64::MIN)
+    }
+
+    fn put_until(&self, _: NonZeroU64, name: &str, bytes: &[u8], deadline: Instant) -> Result<(), CompositionError> {
+        (Instant::now() < deadline)
+            .then_some(())
+            .ok_or(CompositionError::DeadlineExceeded)?;
         self.0.lock().unwrap().insert(name.into(), bytes.into());
         Ok(())
     }
 
-    fn commit(&self, manifest: &[u8]) -> Result<(), CompositionError> {
-        self.put("MANIFEST", manifest)
-    }
-
-    fn put_until(&self, name: &str, bytes: &[u8], deadline: Instant) -> Result<(), CompositionError> {
-        (Instant::now() < deadline)
-            .then_some(())
-            .ok_or(CompositionError::DeadlineExceeded)?;
-        self.put(name, bytes)
-    }
-
-    fn abort(&self) -> Result<(), CompositionError> {
+    fn abort_until(&self, _: NonZeroU64, _: Instant) -> Result<(), CompositionError> {
         Ok(())
     }
 
-    fn commit_until(&self, manifest: &[u8], deadline: Instant) -> Result<(), CompositionError> {
+    fn commit_until(&self, _: NonZeroU64, manifest: &[u8], deadline: Instant) -> Result<(), CompositionError> {
         (Instant::now() < deadline)
             .then_some(())
             .ok_or(CompositionError::DeadlineExceeded)?;
-        self.commit(manifest)
+        self.0.lock().unwrap().insert("MANIFEST".into(), manifest.into());
+        Ok(())
     }
 }
 

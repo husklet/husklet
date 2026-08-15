@@ -150,13 +150,26 @@ impl Server {
                 Reply::payload(bytes[offset..offset.saturating_add(length).min(bytes.len())].to_vec())
             }
             RECOVERY_COMPLETE => {
-                let Ok(mut capture) = self.capture_lock() else {
+                let Ok(capture) = self.capture_lock() else {
                     return Reply::error();
                 };
                 if !matches!(capture.phase, CapturePhase::Recovery { .. })
                     || capture.mutations != 0
                     || !capture.recovery_report_published
                 {
+                    return Reply::error();
+                }
+                drop(capture);
+                if self
+                    .discard_transaction(std::time::Instant::now() + super::ABORT_SETTLEMENT_TIMEOUT)
+                    .is_err()
+                {
+                    return Reply::error();
+                }
+                let Ok(mut capture) = self.capture_lock() else {
+                    return Reply::error();
+                };
+                if !matches!(capture.phase, CapturePhase::Recovery { .. }) || capture.mutations != 0 {
                     return Reply::error();
                 }
                 capture.phase = CapturePhase::Idle;
