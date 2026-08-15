@@ -11,6 +11,7 @@ pub(crate) fn run() -> Result<(), Error> {
         results: PathBuf::from("target/testing/runtime/inventory-unused.tsv"),
         baseline: None,
         engine_profile: profile::Requested::Release,
+        work_root: None,
     };
     let apps = apps(&options)?;
     validate_case_ids(&apps)?;

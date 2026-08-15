@@ -24,4 +24,7 @@ pub(crate) struct Options {
     /// Engine build profile this sweep is measuring; must match how the runner was built.
     #[arg(long, value_enum, env = "HL_COMPAT_ENGINE_PROFILE", default_value_t = profile::Requested::Release)]
     pub(super) engine_profile: profile::Requested,
+    /// Absolute host-local directory for mutable corpus images, builds, workers, state, and failures.
+    #[arg(long, env = "HL_RUNTIME_WORK_ROOT", value_name = "ABSOLUTE_PATH")]
+    pub(super) work_root: Option<PathBuf>,
 }

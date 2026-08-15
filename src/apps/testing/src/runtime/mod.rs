@@ -29,6 +29,7 @@ mod output;
 pub(crate) mod profile;
 pub(crate) mod scheduler;
 mod stage;
+mod work_root;
 
 use crate::suite::{Error, Target};
 use definition::{App, EngineHost};
@@ -49,6 +50,7 @@ pub(crate) fn preflight_image(name: &str, target: Target) -> Result<bool, Error>
 
 pub async fn run(options: Options) -> Result<(), Error> {
     options.engine_profile.require()?;
+    work_root::WorkRoot::configure(options.work_root.clone())?.preflight()?;
     let runner = profile::identity()?;
     println!("runtime: engine profile={} runner={}", profile::PROFILE, &runner[..16]);
     let apps = apps(&options)?;
@@ -161,6 +163,7 @@ fn worker_work(app: String, case: String, target: Target) -> Result<Work, Error>
         results: PathBuf::from("target/testing/runtime/worker.tsv"),
         baseline: None,
         engine_profile: profile::Requested::Release,
+        work_root: None,
     };
     let apps = apps(&options)?;
     validate_case_ids(&apps)?;

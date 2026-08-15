@@ -80,7 +80,10 @@ async fn run_case_inner(
         Materialization::from_environment()
     };
     let mut fixture = materialize(&app, case, target, mode).await?;
-    let state = tempfile::tempdir().map_err(|error| format!("create container state directory: {error}"))?;
+    let state_root = super::work_root::WorkRoot::open()?.state();
+    fs::create_dir_all(&state_root)?;
+    let state =
+        tempfile::tempdir_in(state_root).map_err(|error| format!("create container state directory: {error}"))?;
 
     let mut config = Config::new(state.path());
     if let Some(cache) = case.engine_options.translation_cache() {

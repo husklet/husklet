@@ -1,7 +1,7 @@
 use super::{CaseResult, Report};
+use crate::runtime;
 use crate::runtime::definition::diagnostics::{self, Assertion};
 use crate::runtime::diagnostic::Excerpt as _;
-use crate::runtime::{self, workspace};
 use crate::suite::{Error, Target};
 use clap::Args;
 use hl_process::{Capture, Outcome as ProcessOutcome};
@@ -37,6 +37,8 @@ pub(crate) struct Options {
     result: PathBuf,
     #[arg(long, hide = true)]
     token: String,
+    #[arg(long, hide = true)]
+    work_root: PathBuf,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -47,6 +49,7 @@ struct Outcome {
 
 pub(crate) async fn execute(options: Options) -> Result<(), Error> {
     validate_token(&options.token)?;
+    runtime::work_root::WorkRoot::configure(Some(options.work_root.clone()))?;
     let work = runtime::worker_work(options.app, options.case, options.target)?;
     // A worker outlives its supervisor whenever the sweep is killed, and the deadline inside
     // `CaseExecution::wait` covers neither the build, the image materialization, nor a container
@@ -56,10 +59,8 @@ pub(crate) async fn execute(options: Options) -> Result<(), Error> {
             .declared_timeout()
             .saturating_add(BACKSTOP_ALLOWANCE),
     )?;
-    let retention = super::FailureRetention::new(
-        runtime::workspace()?.join("target/testing/runtime/failures"),
-        options.token.clone(),
-    );
+    let root = runtime::work_root::WorkRoot::open()?;
+    let retention = super::FailureRetention::new(root.failures(), options.token.clone());
     let result = super::run_case_inner(work.app, work.case_index, work.target, Some(retention))
         .await
         .map_err(|error| error.to_string());
@@ -281,8 +282,9 @@ fn supervise(
     cancelled: &AtomicBool,
     assertions: &[Assertion],
 ) -> Result<Report, String> {
-    let root = workspace().map_err(|error| error.to_string())?;
-    let workers = root.join("target/testing/runtime/workers");
+    let workers = runtime::work_root::WorkRoot::open()
+        .map_err(|error| error.to_string())?
+        .workers();
     fs::create_dir_all(&workers).map_err(|error| format!("create worker directory: {error}"))?;
     let directory = tempfile::Builder::new()
         .prefix("row-")
@@ -302,7 +304,11 @@ fn supervise(
         target.name(),
         "--result",
     ]);
-    command.arg(&result).arg("--token").arg(&token);
+    command.arg(&result).arg("--token").arg(&token).arg("--work-root").arg(
+        runtime::work_root::WorkRoot::open()
+            .map_err(|error| error.to_string())?
+            .path(),
+    );
     let capture = Capture {
         stdout: directory.path().join("stdout"),
         stderr: directory.path().join("stderr"),
