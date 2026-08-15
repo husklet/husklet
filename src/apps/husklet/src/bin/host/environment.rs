@@ -17,7 +17,6 @@ impl Environment {
             "HL_LOG",
             "HL_LOG_LEVEL",
             "HL_LOG_COUNTERS",
-            "HL_ENGINE_FS_TRACE",
         ];
         // The GUI re-execs its current binary as a worker. Cargo supplies the development build's
         // `libhl_native_engine.so` through this path, so dropping it makes every Linux workspace
