@@ -1,7 +1,5 @@
 use super::{CheckpointError, CheckpointImage, CheckpointImages};
 use std::collections::HashMap;
-#[cfg(not(unix))]
-use std::fs::OpenOptions;
 use std::num::NonZeroU64;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
