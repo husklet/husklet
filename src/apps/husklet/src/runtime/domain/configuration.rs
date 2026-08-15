@@ -55,14 +55,15 @@ impl<'a> Configuration<'a> {
         values
     }
 
-    pub(super) fn signature(&self) -> String {
+    pub(super) fn signature(&self) -> std::io::Result<String> {
         let runtime = RuntimeIdentity::current(self.0);
         self.signature_for(runtime.as_str())
     }
 
-    pub(super) fn signature_for(&self, runtime: &str) -> String {
+    pub(super) fn signature_for(&self, runtime: &str) -> std::io::Result<String> {
         use sha2::Digest as _;
 
+        self.validate()?;
         let mut identity = self.identity();
         Self::field(&mut identity, runtime);
         let digest = sha2::Sha256::digest(identity.as_bytes());
@@ -71,7 +72,26 @@ impl<'a> Configuration<'a> {
             use std::fmt::Write as _;
             let _ = write!(signature, "{byte:02x}");
         }
-        signature
+        Ok(signature)
+    }
+
+    fn validate(&self) -> std::io::Result<()> {
+        let mut targets = std::collections::BTreeSet::new();
+        for mount in &self.0.mounts {
+            if !hl_container::normalized_mount_target(&mount.container) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("mount target {:?} must be absolute and normalized", mount.container),
+                ));
+            }
+            if !targets.insert(&mount.container) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("duplicate mount target {:?}", mount.container),
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn identity(&self) -> String {

@@ -34,6 +34,7 @@ pub use model::{
     NetworkDriver, NetworkId, NetworkMode, NetworkSpec, Port, Probe, Process, Protocol, Prune, Publication,
     RemovalPolicy, Resolver, ResourceLimit, Resources, Restart, RestartPolicy, Rootfs, Sandbox, SeccompBaseline,
     Signal, Size, Stream, Streams, Subnet, Update, Volume, VolumeKind, VolumeSource, VolumeSpec, WaitCondition,
+    normalized_mount_target,
 };
 pub(crate) use model::{JournalId, LogChunk};
 pub use networks::Networks;

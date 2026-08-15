@@ -2,19 +2,61 @@ use super::*;
 use hl_ws::Arch;
 
 #[test]
+fn invalid_persisted_mount_is_rejected_before_domain_identity_decision() {
+    let mut workspace = WorkspaceConfig::new("invalid-mount", "ubuntu:latest", Arch::Arm64);
+    workspace.mounts.push(hl_ws::Mount {
+        host: "/host".into(),
+        container: "/guest/./alias".into(),
+        ro: false,
+    });
+
+    let domain = Domain::new(&workspace);
+    let Err(error) = domain.decide(&workspace) else {
+        panic!("invalid persisted mount reached domain identity decision");
+    };
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(error.to_string().contains("must be absolute and normalized"));
+}
+
+#[test]
+fn duplicate_persisted_mount_is_rejected_before_domain_identity_decision() {
+    let mut workspace = WorkspaceConfig::new("duplicate-mount", "ubuntu:latest", Arch::Arm64);
+    for host in ["/first", "/second"] {
+        workspace.mounts.push(hl_ws::Mount {
+            host: host.into(),
+            container: "/guest".into(),
+            ro: false,
+        });
+    }
+
+    let domain = Domain::new(&workspace);
+    let Err(error) = domain.decide(&workspace) else {
+        panic!("duplicate persisted mount reached domain identity decision");
+    };
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(error.to_string().contains("duplicate mount target"));
+}
+
+#[test]
 fn signatures_are_unambiguous_and_ignore_terminal_presentation() {
     let mut first = WorkspaceConfig::new("demo", "ubuntu:latest", Arch::Arm64);
     first.env.push(("AB".into(), "C".into()));
     let mut second = WorkspaceConfig::new("demo", "ubuntu:latest", Arch::Arm64);
     second.env.push(("A".into(), "BC".into()));
     assert_ne!(
-        Configuration::new(&first).signature_for("runtime-a"),
-        Configuration::new(&second).signature_for("runtime-a")
+        Configuration::new(&first).signature_for("runtime-a").unwrap(),
+        Configuration::new(&second).signature_for("runtime-a").unwrap()
     );
-    let signature = Configuration::new(&first).signature_for("runtime-a");
+    let signature = Configuration::new(&first).signature_for("runtime-a").unwrap();
     first.terminal.font_size = Some(18);
-    assert_eq!(signature, Configuration::new(&first).signature_for("runtime-a"));
-    assert_ne!(signature, Configuration::new(&first).signature_for("runtime-b"));
+    assert_eq!(
+        signature,
+        Configuration::new(&first).signature_for("runtime-a").unwrap()
+    );
+    assert_ne!(
+        signature,
+        Configuration::new(&first).signature_for("runtime-b").unwrap()
+    );
     assert_eq!(signature.len(), 64);
     assert!(!signature.contains("ubuntu"));
     assert!(!signature.contains("AB"));

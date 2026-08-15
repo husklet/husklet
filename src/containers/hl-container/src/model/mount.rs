@@ -1,6 +1,24 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Whether a guest mount target has one exact normalized absolute spelling.
+///
+/// Guest paths always use Linux `/` syntax, independent of the host compiling
+/// or running Husklet. Requiring UTF-8 at the model boundary keeps this same
+/// contract available to persisted configuration and Windows hosts.
+#[must_use]
+pub fn normalized_mount_target(path: &str) -> bool {
+    if path == "/" {
+        return true;
+    }
+    path.strip_prefix('/').is_some_and(|relative| {
+        !relative.is_empty()
+            && relative.split('/').all(|component| {
+                !component.is_empty() && component != "." && component != ".." && !component.contains('\0')
+            })
+    })
+}
+
 /// Durable ownership of a mount's host-side content.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
@@ -166,4 +184,28 @@ pub(crate) struct ResolvedMount {
     pub(crate) source: PathBuf,
     pub(crate) target: PathBuf,
     pub(crate) access: Access,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalized_mount_target;
+
+    #[test]
+    fn normalized_target_has_one_exact_spelling() {
+        for valid in ["/", "/guest", "/guest/.config"] {
+            assert!(normalized_mount_target(valid), "rejected {valid:?}");
+        }
+        for invalid in [
+            "guest",
+            "//guest",
+            "/guest//nested",
+            "/guest/./nested",
+            "/guest/../nested",
+            "/guest/",
+        ] {
+            assert!(!normalized_mount_target(invalid), "accepted {invalid:?}");
+        }
+        assert!(!normalized_mount_target("/guest/\0nested"));
+        assert!(normalized_mount_target(r"/guest\windows-is-a-linux-name"));
+    }
 }

@@ -92,15 +92,7 @@ impl Form {
         if !std::path::Path::new(host).is_absolute() {
             return Err(Self::invalid("Mount host paths must be absolute."));
         }
-        let target = std::path::Path::new(container);
-        if !target.is_absolute()
-            || target.components().any(|component| {
-                !matches!(
-                    component,
-                    std::path::Component::RootDir | std::path::Component::Normal(_)
-                )
-            })
-        {
+        if !hl_container::normalized_mount_target(container) {
             return Err(Self::invalid("Mount container paths must be normalized and absolute."));
         }
         Ok(Some(Mount {
@@ -218,6 +210,9 @@ mod tests {
         assert!(Form::mount_row("/host", "relative", false).is_err());
         assert!(Form::mount_row("/host", "/guest/../escape", false).is_err());
         assert!(Form::mount_row("/host", "/guest/./nested", false).is_err());
+        assert!(Form::mount_row("/host", "/guest//nested", false).is_err());
+        assert!(Form::mount_row("/host", "/guest/nested/", false).is_err());
+        assert!(Form::mount_row("/host", "/guest/.config", false).is_ok());
 
         let mut mounts = Vec::new();
         Form::push_mount(&mut mounts, "/first", "/guest", false).unwrap();
