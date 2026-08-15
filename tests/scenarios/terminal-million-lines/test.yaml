@@ -19,3 +19,27 @@ cases:
     stdout_contains:
     - golden/done.txt
     - golden/responsive.txt
+- id: terminal-million-lines/alpine-tail-resize-responsive-shell
+  image: alpine:3.20
+  resources: [pty]
+  timeout: 120
+  actions:
+  - terminal:
+      argv: [/bin/sh, -i]
+      rows: 24
+      columns: 80
+      steps:
+      - write: { text: "stty -echo -onlcr; printf '\\122\\104\\131\\n'\r" }
+      - await_output: { contains: RDY, timeout_ms: 5000 }
+      - write: { text: "awk 'BEGIN { for (i=0; i<1000000; i++) print \"\"; printf \"<MILLION-COUNT-%d>\\n\", i }'\r" }
+      - await_output: { contains: "<MILLION-COUNT-1000000>", timeout_ms: 60000 }
+      - resize: { rows: 10, columns: 40 }
+      - write: { text: "stty size; printf '<AFTER-FLOOD>\\n'; exit\r" }
+      - await_output: { contains: "10 40", timeout_ms: 5000 }
+      - await_output: { contains: "<AFTER-FLOOD>", timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/done.txt
+    - golden/alpine_dimensions.txt
+    - golden/responsive.txt

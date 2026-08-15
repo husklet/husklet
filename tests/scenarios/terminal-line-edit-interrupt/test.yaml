@@ -1,0 +1,28 @@
+cases:
+- id: terminal-line-edit-interrupt/cursor-edit-and-ctrl-c-recovery
+  image: alpine:3.20
+  resources: [pty]
+  timeout: 30
+  actions:
+  - terminal:
+      argv: [/bin/sh, -i]
+      rows: 24
+      columns: 80
+      steps:
+      - write: { text: "stty -onlcr; PS1=$(printf '\\074READY\\076'); export PS1\r" }
+      - await_output: { contains: "<READY>", timeout_ms: 5000 }
+      - write: { text: "printf '\\074EDIT:%s\\076\\n' ac" }
+      - write: { text: "\u001b[D" }
+      - write: { text: "b\r" }
+      - await_output: { contains: "<EDIT:abc>", timeout_ms: 5000 }
+      - write: { text: "PS1=$(printf '\\074INTERRUPTED\\076'); printf '\\074SLEEPING\\076\\n'; sleep 30\r" }
+      - await_output: { contains: "<SLEEPING>", timeout_ms: 5000 }
+      - write: { text: "\u0003" }
+      - await_output: { contains: "<INTERRUPTED>", timeout_ms: 5000 }
+      - write: { text: "printf '\\074RECOVERED\\076\\n'; exit\r" }
+      - await_output: { contains: "<RECOVERED>", timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/edited.txt
+    - golden/recovered.txt
