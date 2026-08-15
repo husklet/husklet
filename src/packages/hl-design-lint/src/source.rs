@@ -147,14 +147,21 @@ impl Workspace {
 
     /// Returns repository-owned Rust, C, and C-header files below a source or test root.
     pub(crate) fn source_files(&self) -> Result<Vec<PathBuf>> {
-        let mut files = Vec::new();
-        for path in &self.paths {
-            source_files(path, &mut files, &self.policy)?;
-        }
-        files.sort();
-        files.dedup();
-        Ok(files)
+        source_files_with_policy(&self.paths, &self.policy)
     }
+}
+
+pub(crate) fn source_files_with_policy(
+    paths: &[PathBuf],
+    policy: &crate::policy::SourcePolicy,
+) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for path in paths {
+        source_files(path, &mut files, policy)?;
+    }
+    files.sort();
+    files.dedup();
+    Ok(files)
 }
 
 fn line_offsets(source: &str) -> Vec<usize> {
@@ -339,6 +346,9 @@ fn rust_files(
 }
 
 fn source_files(path: &Path, files: &mut Vec<PathBuf>, policy: &crate::policy::SourcePolicy) -> Result<()> {
+    if is_ignored_subtree(path, policy) {
+        return Ok(());
+    }
     let metadata = fs::symlink_metadata(path).map_err(|error| LintError::io("inspect", path, error))?;
     if metadata.file_type().is_symlink() {
         return Ok(());

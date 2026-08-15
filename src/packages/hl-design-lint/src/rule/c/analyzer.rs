@@ -8,6 +8,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::{policy::SourcePolicy, source::source_files_with_policy};
+
 const TIDY_CHECKS: &str = "clang-analyzer-*,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-clang-analyzer-security.MmapWriteExec,-clang-analyzer-unix.BlockInCriticalSection,bugprone-assignment-in-if-condition,bugprone-branch-clone,bugprone-inc-dec-in-conditions,bugprone-infinite-loop,bugprone-not-null-terminated-result,bugprone-posix-return,bugprone-signal-handler,bugprone-sizeof-expression,bugprone-suspicious-memory-comparison,bugprone-suspicious-memset-usage,bugprone-undefined-memory-manipulation";
 
 #[derive(Clone, Debug)]
@@ -35,8 +37,8 @@ struct Compilation {
 ///
 /// Tool output is forwarded verbatim because clang and cppcheck already emit
 /// file/line/column diagnostics understood by editors and CI annotation tools.
-pub fn run(config: &AnalyzerConfig, roots: &[PathBuf]) -> Result<bool, String> {
-    let files = source_files(roots)?;
+pub fn run(config: &AnalyzerConfig, roots: &[PathBuf], policy: &SourcePolicy) -> Result<bool, String> {
+    let files = source_files(roots, policy)?;
     let mut clean = true;
     for file in &files {
         clean &= invoke(
@@ -49,7 +51,7 @@ pub fn run(config: &AnalyzerConfig, roots: &[PathBuf]) -> Result<bool, String> {
     }
 
     let database = config.compilation_database.join("compile_commands.json");
-    let translation_units = translation_units(&database, roots)?;
+    let translation_units = translation_units(&database, &files)?;
     let filtered_database = filtered_database(&database, &translation_units)?;
     for file in translation_units {
         clean &= invoke(
@@ -109,45 +111,31 @@ fn forward(output: &Output) {
     let _ = std::io::stderr().write_all(&output.stderr);
 }
 
-fn source_files(roots: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
-    let mut files = BTreeSet::new();
-    for root in roots {
-        collect(root, &mut files)?;
-    }
+fn source_files(roots: &[PathBuf], policy: &SourcePolicy) -> Result<Vec<PathBuf>, String> {
+    let files = source_files_with_policy(roots, policy)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|path| matches!(path.extension().and_then(|value| value.to_str()), Some("c" | "h")))
+        .collect::<Vec<_>>();
     if files.is_empty() {
         return Err("requested analyzer roots contain no C source or header".into());
     }
-    Ok(files.into_iter().collect())
+    Ok(files)
 }
 
-fn collect(path: &Path, files: &mut BTreeSet<PathBuf>) -> Result<(), String> {
-    if path.is_dir() {
-        let mut entries = fs::read_dir(path)
-            .map_err(|error| format!("read {}: {error}", path.display()))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| format!("enumerate {}: {error}", path.display()))?;
-        entries.sort_by_key(fs::DirEntry::file_name);
-        for entry in entries {
-            collect(&entry.path(), files)?;
-        }
-    } else if matches!(path.extension().and_then(|value| value.to_str()), Some("c" | "h")) {
-        files.insert(path.to_path_buf());
-    }
-    Ok(())
-}
-
-fn translation_units(database: &Path, roots: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+fn translation_units(database: &Path, allowed_sources: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     let bytes = fs::read(database).map_err(|error| format!("read {}: {error}", database.display()))?;
     let commands: Vec<Compilation> =
         serde_json::from_slice(&bytes).map_err(|error| format!("decode {}: {error}", database.display()))?;
-    let contains_c_source = roots_contain_c_source(roots)?;
-    let roots = roots
+    let allowed_sources = allowed_sources
         .iter()
-        .map(|root| {
-            root.canonicalize()
-                .map_err(|error| format!("resolve {}: {error}", root.display()))
+        .filter(|source| source.extension().and_then(|value| value.to_str()) == Some("c"))
+        .map(|source| {
+            source
+                .canonicalize()
+                .map_err(|error| format!("resolve {}: {error}", source.display()))
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<BTreeSet<_>, _>>()?;
     let mut files = BTreeSet::new();
     for command in commands {
         let file = if command.file.is_absolute() {
@@ -159,23 +147,16 @@ fn translation_units(database: &Path, roots: &[PathBuf]) -> Result<Vec<PathBuf>,
                 .map_err(|error| format!("resolve compilation directory {}: {error}", command.directory.display()))?;
             directory.join(command.file)
         };
-        let requested = roots.iter().any(|root| file.starts_with(root));
-        let file = match file.canonicalize() {
-            Ok(file) => file,
-            Err(error) if requested => {
-                return Err(format!("resolve compiled unit {}: {error}", file.display()));
-            }
-            Err(_) => continue,
+        let Ok(file) = file.canonicalize() else {
+            continue;
         };
-        if file.extension().and_then(|value| value.to_str()) == Some("c")
-            && roots.iter().any(|root| file.starts_with(root))
-        {
+        if allowed_sources.contains(&file) {
             files.insert(file);
         }
     }
-    if files.is_empty() && contains_c_source {
+    if files.is_empty() && !allowed_sources.is_empty() {
         return Err(format!(
-            "{} contains no C translation unit below the requested source roots",
+            "{} contains no policy-allowed C translation unit from the requested source roots",
             database.display()
         ));
     }
@@ -208,16 +189,14 @@ fn filtered_database(database: &Path, translation_units: &[PathBuf]) -> Result<t
     Ok(directory)
 }
 
-fn roots_contain_c_source(roots: &[PathBuf]) -> Result<bool, String> {
-    Ok(source_files(roots)?
-        .iter()
-        .any(|file| file.extension().and_then(|value| value.to_str()) == Some("c")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::{Compilation, filtered_database, source_files, translation_units};
-    use std::{fs, path::PathBuf};
+    use crate::policy::SourcePolicy;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+    };
 
     fn fixture(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("c-analyzer-{name}-{}", std::process::id()));
@@ -226,13 +205,17 @@ mod tests {
         root
     }
 
+    fn allowed(root: &Path) -> Vec<PathBuf> {
+        source_files(&[root.join("src")], &SourcePolicy::default()).unwrap()
+    }
+
     #[test]
     fn discovers_only_c_sources_and_headers() {
         let root = fixture("sources");
         fs::write(root.join("src/a.c"), "int a;\n").unwrap();
         fs::write(root.join("src/a.h"), "int a;\n").unwrap();
         fs::write(root.join("src/a.rs"), "fn a() {}\n").unwrap();
-        let files = source_files(&[root.join("src")]).unwrap();
+        let files = source_files(&[root.join("src")], &SourcePolicy::default()).unwrap();
         assert_eq!(files, [root.join("src/a.c"), root.join("src/a.h")]);
         fs::remove_dir_all(root).unwrap();
     }
@@ -241,7 +224,7 @@ mod tests {
     fn rejects_vacuous_analyzer_roots() {
         let root = fixture("no-c-sources");
         fs::write(root.join("src/lib.rs"), "pub fn value() -> usize { 1 }\n").unwrap();
-        let error = source_files(&[root.join("src")]).unwrap_err();
+        let error = source_files(&[root.join("src")], &SourcePolicy::default()).unwrap_err();
         assert!(error.contains("no C source or header"));
         fs::remove_dir_all(root).unwrap();
     }
@@ -259,7 +242,7 @@ mod tests {
             ),
         )
         .unwrap();
-        let files = translation_units(&root.join("compile_commands.json"), &[root.join("src")]).unwrap();
+        let files = translation_units(&root.join("compile_commands.json"), &allowed(&root)).unwrap();
         assert_eq!(files, [root.join("src/a.c").canonicalize().unwrap()]);
         fs::remove_dir_all(root).unwrap();
     }
@@ -277,8 +260,8 @@ mod tests {
             ),
         )
         .unwrap();
-        let error = translation_units(&root.join("compile_commands.json"), &[root.join("src")]).unwrap_err();
-        assert!(error.contains("no C translation unit"));
+        let error = translation_units(&root.join("compile_commands.json"), &allowed(&root)).unwrap_err();
+        assert!(error.contains("no policy-allowed C translation unit"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -287,13 +270,13 @@ mod tests {
         let root = fixture("header-only");
         fs::write(root.join("src/api.h"), "int api(void);\n").unwrap();
         fs::write(root.join("compile_commands.json"), "[]").unwrap();
-        let files = translation_units(&root.join("compile_commands.json"), &[root.join("src")]).unwrap();
+        let files = translation_units(&root.join("compile_commands.json"), &allowed(&root)).unwrap();
         assert!(files.is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn rejects_missing_compiled_unit_below_requested_root() {
+    fn ignores_missing_compiled_unit_outside_policy_allowlist() {
         let root = fixture("missing-compiled-unit");
         fs::write(root.join("src/a.c"), "int a;\n").unwrap();
         fs::write(
@@ -305,8 +288,8 @@ mod tests {
             ),
         )
         .unwrap();
-        let error = translation_units(&root.join("compile_commands.json"), &[root.join("src")]).unwrap_err();
-        assert!(error.contains("src/missing.c"));
+        let files = translation_units(&root.join("compile_commands.json"), &allowed(&root)).unwrap();
+        assert_eq!(files, [root.join("src/a.c").canonicalize().unwrap()]);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -325,7 +308,7 @@ mod tests {
             ),
         )
         .unwrap();
-        let units = translation_units(&root.join("compile_commands.json"), &[root.join("src")]).unwrap();
+        let units = translation_units(&root.join("compile_commands.json"), &allowed(&root)).unwrap();
         let database = filtered_database(&root.join("compile_commands.json"), &units).unwrap();
         let commands: Vec<Compilation> =
             serde_json::from_slice(&fs::read(database.path().join("compile_commands.json")).unwrap()).unwrap();
@@ -333,6 +316,61 @@ mod tests {
         assert_eq!(commands[0].file, PathBuf::from("src/a.c"));
         assert_eq!(commands[0].metadata["output"], "a.o");
         assert_eq!(commands[0].metadata["arguments"][0], "cc");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn source_policy_excludes_named_and_marker_owned_directories_in_custom_layouts() {
+        let root = fixture("source-policy");
+        let native = root.join("components/runtime/native-code");
+        fs::create_dir_all(native.join("generated")).unwrap();
+        fs::create_dir_all(native.join("external/nested")).unwrap();
+        fs::write(native.join("engine.c"), "int engine(void) { return 0; }\n").unwrap();
+        fs::write(native.join("api.h"), "int engine(void);\n").unwrap();
+        fs::write(native.join("generated/bypass.c"), "int bypass(void);\n").unwrap();
+        fs::write(native.join("external/.external-source"), "").unwrap();
+        fs::write(native.join("external/nested/bypass.c"), "int bypass(void);\n").unwrap();
+        let policy = SourcePolicy {
+            ignored_directories: vec!["generated".into()],
+            ignored_markers: vec![".external-source".into()],
+            self_packages: Vec::new(),
+            foreign_source_directories: Vec::new(),
+        };
+
+        let files = source_files(std::slice::from_ref(&native), &policy).unwrap();
+        assert_eq!(files, [native.join("api.h"), native.join("engine.c")]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compile_database_cannot_reintroduce_policy_ignored_sources() {
+        let root = fixture("database-policy");
+        fs::create_dir_all(root.join("src/generated")).unwrap();
+        fs::create_dir_all(root.join("src/external")).unwrap();
+        fs::write(root.join("src/allowed.c"), "int allowed(void);\n").unwrap();
+        fs::write(root.join("src/generated/bypass.c"), "int bypass(void);\n").unwrap();
+        fs::write(root.join("src/external/.external-source"), "").unwrap();
+        fs::write(root.join("src/external/bypass.c"), "int bypass(void);\n").unwrap();
+        fs::write(
+            root.join("compile_commands.json"),
+            format!(
+                "[{{\"directory\":{0:?},\"file\":\"src/allowed.c\"}},\
+                  {{\"directory\":{0:?},\"file\":\"src/generated/bypass.c\"}},\
+                  {{\"directory\":{0:?},\"file\":\"src/external/bypass.c\"}}]",
+                root.to_string_lossy()
+            ),
+        )
+        .unwrap();
+        let policy = SourcePolicy {
+            ignored_directories: vec!["generated".into()],
+            ignored_markers: vec![".external-source".into()],
+            self_packages: Vec::new(),
+            foreign_source_directories: Vec::new(),
+        };
+        let allowed = source_files(&[root.join("src")], &policy).unwrap();
+
+        let files = translation_units(&root.join("compile_commands.json"), &allowed).unwrap();
+        assert_eq!(files, [root.join("src/allowed.c").canonicalize().unwrap()]);
         fs::remove_dir_all(root).unwrap();
     }
 }
