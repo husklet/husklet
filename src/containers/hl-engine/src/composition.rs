@@ -96,6 +96,7 @@ pub(crate) trait TerminalAttachment: Send + Sync {
 
 pub struct Terminal {
     port: Arc<dyn TerminalPort>,
+    #[cfg(unix)]
     initial: (u16, u16),
     attachment: Mutex<Option<Arc<dyn TerminalAttachment>>>,
 }
@@ -108,6 +109,7 @@ impl Terminal {
         }
         Ok(Arc::new(Self {
             port,
+            #[cfg(unix)]
             initial: (rows, columns),
             attachment: Mutex::new(None),
         }))
@@ -129,14 +131,17 @@ impl Terminal {
         self.port.close();
     }
 
+    #[cfg(unix)]
     pub(crate) fn port(&self) -> Arc<dyn TerminalPort> {
         Arc::clone(&self.port)
     }
 
+    #[cfg(unix)]
     pub(crate) fn initial(&self) -> (u16, u16) {
         self.initial
     }
 
+    #[cfg(unix)]
     pub(crate) fn attach(&self, attachment: Arc<dyn TerminalAttachment>) -> Result<(), CompositionError> {
         let mut current = self
             .attachment
@@ -149,6 +154,7 @@ impl Terminal {
         Ok(())
     }
 
+    #[cfg(unix)]
     pub(crate) fn detach(&self) {
         let mut current = self
             .attachment

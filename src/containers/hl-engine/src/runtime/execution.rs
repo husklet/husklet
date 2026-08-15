@@ -155,7 +155,9 @@ impl ProductionMachine {
             provider_fd: -1,
         };
         // SAFETY: all pointers in config remain live for this call and there is no callback state.
-        let mut engine = unsafe { hl_native::Engine::create(config) }.map_err(EngineError::NativeCreateFailed)?;
+        let engine = unsafe { hl_native::Engine::create(config) }.map_err(EngineError::NativeCreateFailed)?;
+        #[cfg(unix)]
+        let mut engine = engine;
         #[cfg(unix)]
         if let Some(checkpoint) = &self.checkpoint {
             engine
@@ -266,6 +268,8 @@ impl GuestMachine for ProductionMachine {
     }
 
     fn capture_checkpoint_until(&self, deadline: std::time::Instant) -> Result<(), EngineError> {
+        #[cfg(not(unix))]
+        let _ = deadline;
         #[cfg(unix)]
         if let Some(checkpoint) = &self.checkpoint {
             let engine = self.current()?;
