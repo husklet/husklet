@@ -237,7 +237,14 @@ static void run_guest(struct cpu *c) {
         // Clearing here is what stops a masked-but-pending signal (which stays in g_pending, undelivered)
         // from bouncing a hot loop out of the code cache every iteration -- a fresh signal simply re-sets
         // irq (host_sigh / thread-directed path) and the next body check catches it.
-        c->irq = 0;
+        /* Clear the interrupt consumed by the previous dispatcher crossing, then
+           re-arm it when a deliverable signal is already pending.  A host signal
+           can arrive after the preceding bottom-of-loop delivery check but before
+           this iteration: clearing irq without consulting pending state loses that
+           only kick and lets a translated hot loop run forever.  Store zero first;
+           a signal racing after the pending scan writes one itself. */
+        __atomic_store_n(&c->irq, 0, __ATOMIC_SEQ_CST);
+        if (signal_deliverable_for_cpu(c)) __atomic_store_n(&c->irq, 1, __ATOMIC_SEQ_CST);
         // A checkpoint freezes the registry while holding g_jit_lock. Peers must acknowledge and park at
         // this already-spilled dispatcher boundary BEFORE cache lookup attempts to acquire that same lock.
         // The threaded gate is also the precise boundary needed by mapping activation; single-threaded runs
