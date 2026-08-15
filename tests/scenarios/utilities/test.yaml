@@ -2586,3 +2586,11 @@ cases:
   actions:
   - entrypoint: {}
   expect: { stdout_contains: golden/hello_world.txt }
+- id: utilities/ubuntu-seq-format
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: seq -f 'ROW-%03g' 1 3; printf 'SEQ-EXIT-%s\n' "$?"
+  expect:
+    stdout_contains: golden/ubuntu_seq_format.txt
