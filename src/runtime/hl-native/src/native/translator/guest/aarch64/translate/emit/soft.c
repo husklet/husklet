@@ -393,6 +393,30 @@ static void emit_a64_soft_bounce_commit(uint64_t next_pc) {
     *clear = 0xB4000000u | (((uint32_t)((resume - (uint8_t *)clear) / 4) & 0x7ffffu) << 5) | 16u;
 }
 
+static void emit_a64_soft_fold_address(int address, int temporary, int flags) {
+    if (!guestbase_on()) return;
+    emit32(0xD360FC00u | ((unsigned)address << 5) | (unsigned)temporary); // lsr temporary, address, #32
+    uint32_t *high = (uint32_t *)g_cp;
+    emit32(0);                             // cbnz temporary, done
+    emit32(0xD53B4200u | (unsigned)flags); // mrs flags, nzcv
+    e_movconst(temporary, g_nonpie_lo);
+    emit32(0xEB000000u | ((unsigned)temporary << 16) | ((unsigned)address << 5) | 31u); // cmp address, lo
+    uint32_t *below = (uint32_t *)g_cp;
+    emit32(0); // b.lo restore
+    e_movconst(temporary, g_nonpie_hi);
+    emit32(0xEB000000u | ((unsigned)temporary << 16) | ((unsigned)address << 5) | 31u); // cmp address, hi
+    uint32_t *above = (uint32_t *)g_cp;
+    emit32(0); // b.hs restore
+    e_movconst(temporary, g_nonpie_bias);
+    emit32(0x8B000000u | ((unsigned)temporary << 16) | ((unsigned)address << 5) | (unsigned)address);
+    uint8_t *restore = g_cp;
+    emit32(0xD51B4200u | (unsigned)flags); // msr nzcv, flags
+    uint8_t *done = g_cp;
+    *high = 0xB5000000u | (((uint32_t)((done - (uint8_t *)high) / 4) & 0x7ffffu) << 5) | (unsigned)temporary;
+    *below = 0x54000000u | (((uint32_t)((restore - (uint8_t *)below) / 4) & 0x7ffffu) << 5) | 3u;
+    *above = 0x54000000u | (((uint32_t)((restore - (uint8_t *)above) / 4) & 0x7ffffu) << 5) | 2u;
+}
+
 static void emit_a64_soft_exclusive(uint32_t in) {
     int base = (int)((in >> 5) & 31u);
     if (base == 31)
@@ -401,6 +425,7 @@ static void emit_a64_soft_exclusive(uint32_t in) {
         e_ldr(16, CPUREG, base * 8);
     else
         e_movr(16, base);
+    emit_a64_soft_fold_address(16, 17, 18);
     emit_a64_bus_guard(16, a64_mem_bytes(in), g_emit_gpc);
 
     int mask = gpr_field_mask(in);
