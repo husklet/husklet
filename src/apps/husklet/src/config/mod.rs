@@ -351,10 +351,7 @@ impl WorkspaceStore {
                 out.field("env", &format!("{k}={v}"));
             }
             for m in &w.mounts {
-                out.field(
-                    "mount",
-                    &format!("{}:{}:{}", m.host, m.container, if m.ro { "ro" } else { "rw" }),
-                );
+                out.mount(m);
             }
         }
         hl_fs::File::from(self.path.clone()).replace(out.into_string()?)

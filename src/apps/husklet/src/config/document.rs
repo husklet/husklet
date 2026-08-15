@@ -134,6 +134,9 @@ impl WsBuilder {
     }
 
     fn set_mount(&mut self, value: &str) -> io::Result<()> {
+        if let Some(encoded) = value.strip_prefix("v2::") {
+            return self.set_encoded_mount(value, encoded);
+        }
         let mut fields = value.split(':');
         let (Some(host), Some(container)) = (fields.next(), fields.next()) else {
             return Err(Value::new("mount", value).invalid());
@@ -149,6 +152,27 @@ impl WsBuilder {
             host: host.to_owned(),
             container: container.to_owned(),
             ro: mode == Some("ro"),
+        });
+        Ok(())
+    }
+
+    fn set_encoded_mount(&mut self, original: &str, encoded: &str) -> io::Result<()> {
+        let mut fields = encoded.split(':');
+        let (Some(host), Some(container), Some(mode)) = (fields.next(), fields.next(), fields.next()) else {
+            return Err(Value::new("mount", original).invalid());
+        };
+        if fields.next().is_some() || !matches!(mode, "ro" | "rw") {
+            return Err(Value::new("mount", original).invalid());
+        }
+        let host = decode_mount_path(host).ok_or_else(|| Value::new("mount", original).invalid())?;
+        let container = decode_mount_path(container).ok_or_else(|| Value::new("mount", original).invalid())?;
+        if host.is_empty() || container.is_empty() {
+            return Err(Value::new("mount", original).invalid());
+        }
+        self.mounts.push(Mount {
+            host,
+            container,
+            ro: mode == "ro",
         });
         Ok(())
     }
@@ -244,8 +268,51 @@ impl WorkspaceText {
         self.text.push('\n');
     }
 
+    pub(super) fn mount(&mut self, mount: &Mount) {
+        self.field(
+            "mount",
+            &format!(
+                "v2::{}:{}:{}",
+                encode_mount_path(&mount.host),
+                encode_mount_path(&mount.container),
+                if mount.ro { "ro" } else { "rw" }
+            ),
+        );
+    }
+
     pub(super) fn into_string(self) -> io::Result<String> {
         self.error.map_or(Ok(self.text), Err)
+    }
+}
+
+fn encode_mount_path(path: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(path.len() * 2);
+    for byte in path.bytes() {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
+fn decode_mount_path(encoded: &str) -> Option<String> {
+    if !encoded.len().is_multiple_of(2) {
+        return None;
+    }
+    let bytes = encoded.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len() / 2);
+    for pair in bytes.chunks_exact(2) {
+        decoded.push(hex_value(pair[0])? << 4 | hex_value(pair[1])?);
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
     }
 }
 
