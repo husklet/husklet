@@ -208,6 +208,7 @@ static void bound_path_duplicate(hl_linux_fd source, int64_t target) {
     if (source >= HL_NFD || target < 0 || target >= HL_NFD) return;
     memmove(g_fdpath[(int)target], g_fdpath[(int)source], sizeof g_fdpath[(int)target]);
     g_fdpath_guest[(int)target] = g_fdpath_guest[(int)source];
+    memmove(g_ovldir[(int)target], g_ovldir[(int)source], sizeof g_ovldir[(int)target]);
     ovldents_duplicate((int)source, (int)target);
 }
 
