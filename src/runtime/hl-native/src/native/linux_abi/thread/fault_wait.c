@@ -74,14 +74,12 @@ static void uninstall_host_sigaltstack(void) {
 // host_range_mapped->mach_vm_region->mach_msg2_trap. Replace it with the kernel's own access_ok() idiom:
 // a FAULT-GUARDED PROBE READ of each page under a per-thread sigsetjmp. Mapped pointer (the always case)
 // = one L1 load per page, no syscall; unmapped pointer = the SIGSEGV/SIGBUS guard long-jumps back and we
-// report 0 exactly as mach_vm_region did. Every fault handler on the normal run path checks
+// report 0 exactly as mach_vm_region did. Every fault handler checks
 // hrm_fault_hook() FIRST (before non-PIE fixup / the x86 lazy zero-page mapper), so a probe fault can
 // never be mis-served as a lazy mapping (which would flip an EFAULT into a bogus success), never burns
 // lazy-map budget, and never reaches guest-signal delivery. PROT_NONE pages now probe as UNMAPPED ->
 // -EFAULT, which is what a real Linux copy_from_user() returns (the old region query called them mapped
-// and the later engine deref crashed) -- strictly closer to the oracle. CRASHDBG runs (whose Mach
-// exception port intercepts EXC_BAD_ACCESS before the POSIX guards) and HL_NOFASTHRM=1 keep the
-// byte-identical mach_vm_region path.
+// and the later engine deref crashed) -- strictly closer to the oracle.
 #include <setjmp.h>
 #if defined(_WIN32)
 // The host fault primitive already owns this exact operation, pad and all: it arms its own landing site,

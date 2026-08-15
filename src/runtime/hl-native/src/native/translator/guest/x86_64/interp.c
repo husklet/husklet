@@ -209,7 +209,7 @@ static void interp_restore_handler_mask(void *native_context) {
         pthread_sigmask(SIG_SETMASK, &((ucontext_t *)native_context)->uc_sigmask, NULL);
         return;
     }
-    // No context (no caller does this today: deliver_guest_fault_hint rejects a NULL ucontext up front).
+    // No context (no caller does this today: deliver_guest_fault rejects a NULL ucontext up front).
     // Unblock the classes the kernel could have auto-blocked at handler entry, so a repeat fault is still
     // deliverable -- the failure mode this guards is exactly the silent one described above.
     sigset_t fault;

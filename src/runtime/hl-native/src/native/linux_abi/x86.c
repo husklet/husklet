@@ -1040,7 +1040,6 @@ void jit86_lazyguard(int sig, siginfo_t *si, void *uc) {
 // deliver_guest_fault, and mprotect/retry the PC page in a loop. Instead route straight to nonpie_fixup
 // (which self-declines: si_addr is the high faulting PC, never in the low non-PIE link range) and then
 // deliver_guest_fault (delivers the guest signal when the guest has a handler, else re-raises the default).
-// CRASHDBG handles these via its mach exception port + diagnostics instead, so leave that path untouched.
 static void jit86_syncguard(int sig, siginfo_t *si, void *uc) {
     if (nonpie_fixup(si, uc)) return;
     if (deliver_guest_fault(sig, si, uc)) return;

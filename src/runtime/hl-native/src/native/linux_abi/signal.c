@@ -930,27 +930,6 @@ static void host_sigh_sync(int sig, siginfo_t *si, void *uc) {
     host_sig_pend(ls);
 }
 
-// Mach exception delivery runs on a dedicated helper thread, so it cannot read the faulting thread's
-// g_in_service TLS directly. CRASHDBG passes the faulting cpu via x28; use its syscall-stamped guest PC as
-// the cross-thread equivalent of "the target was in service(c)" for async fault-class signals caught by the
-// Mach port before POSIX host_sigh_sync can run.
-static int mach_async_fault_signal(struct cpu *c, int hostsig, siginfo_t *si) {
-    int sig = sig_m2l(hostsig);
-    if (!c || sig < 1 || sig > 64) return 0;
-    if (!sig_is_sync(sig)) return 0;
-    if (!host_range_mapped((uintptr_t)c, sizeof *c)) return 0;
-    uint64_t pc = G_PC(c);
-    if (!host_range_mapped((uintptr_t)pc, 4)) return 0;
-    if (!pc || *(uint32_t *)pc != 0xD4000001u) return 0; // aarch64 svc #0
-    if (si && si->si_pid > 0) {
-        g_sigpid[sig] = (int)si->si_pid;
-        g_siguid[sig] = (int)si->si_uid;
-    }
-    process_pending_set(sig);
-    __atomic_store_n(&c->irq, 1, __ATOMIC_SEQ_CST);
-    return 1;
-}
-
 // build_signal_frame + do_sigreturn are per-arch -> translator/guest/<arch>/signal.c
 static void build_signal_frame(struct cpu *c, int sig, int synchronous);
 static void do_sigreturn(struct cpu *c);
@@ -1233,15 +1212,7 @@ static void svc_sigpipe_on_epipe(struct cpu *c, int64_t ret) {
 // back to run_guest -- its maybe_deliver_signal builds the frame in the engine's own stack context (the
 // exact, already-tested async-delivery path). A synchronous fault cannot be ignored or masked, so force it
 // deliverable first.
-// `cpu_hint` names the FAULTING thread's cpu, for a caller that does NOT run on that thread. The POSIX
-// guard (nonpie_guard) runs ON the faulting thread, so it passes NULL and we read the cpu from this
-// thread's TLS. The CRASHDBG aarch64 Mach handler (mach_resolve_fault) runs on a DEDICATED exc_thread whose
-// g_cpu_key TLS is NULL -- so it MUST pass the faulting thread's cpu explicitly (recovered from that
-// thread's x28==CPUREG register), or every guest-handled fault (a gcc/cc1/JVM/Go SIGSEGV handler, glibc
-// stack-overflow detection, ...) is wrongly declined here and reported as a spurious [MACH] crash instead
-// of being delivered. The hint is only ever dereferenced after sigframe_capture_fault confirms the faulting
-// host PC is inside the code cache, where x28==cpu holds by construction, so a stale hint is never used.
-static int deliver_guest_fault_hint(struct cpu *cpu_hint, int hostsig, siginfo_t *si, void *ucv) {
+static int deliver_guest_fault(int hostsig, siginfo_t *si, void *ucv) {
     int sig = sig_m2l(hostsig);
     if (sig < 1 || sig > 64 || !ucv) return 0;
     // macOS raises a PROT_NONE access / unmapped-page / guard-gap fault as host SIGBUS (-> Linux
@@ -1262,7 +1233,7 @@ static int deliver_guest_fault_hint(struct cpu *cpu_hint, int hostsig, siginfo_t
 #endif
     // SIG_DFL/SIG_IGN: not the guest's to handle -> let the guard re-raise (a real crash).
     if (g_sigact[sig].handler <= 1) return 0;
-    struct cpu *c = cpu_hint ? cpu_hint : (struct cpu *)pthread_getspecific(g_cpu_key);
+    struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
     if (!c) return 0;
     if (!sigframe_capture_fault(c, ucv)) {
         // The faulting host PC is NOT inside translated code, so this is not the guest's own CPU fault.
@@ -1305,11 +1276,6 @@ static int deliver_guest_fault_hint(struct cpu *cpu_hint, int hostsig, siginfo_t
     thread_pending_set(c, sig);
     sigframe_resume_dispatch(c, ucv);
     return 1;
-}
-
-// POSIX-guard entry: the faulting thread IS this thread, so its cpu is in TLS (cpu_hint == NULL).
-static int deliver_guest_fault(int hostsig, siginfo_t *si, void *ucv) {
-    return deliver_guest_fault_hint(NULL, hostsig, si, ucv);
 }
 
 /* Dispatcher-only delivery for a translated access rejected by the file-mapping BUS ledger. */
