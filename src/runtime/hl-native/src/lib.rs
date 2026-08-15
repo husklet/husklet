@@ -18,7 +18,9 @@ mod artifact;
 #[cfg(unix)]
 pub use checkpoint::{CheckpointBroker, CheckpointTransport};
 pub use engine::{Engine, EngineConfig, Exit};
-pub use provider::{artifact_lifecycle_smoke, leak_check_nonvacuity};
+#[cfg(unix)]
+pub use provider::artifact_lifecycle_smoke;
+pub use provider::leak_check_nonvacuity;
 
 /// Verifies that the dynamically loaded private engine exposes the ABI this Rust wrapper expects.
 ///
