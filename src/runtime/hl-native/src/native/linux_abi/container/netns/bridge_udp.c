@@ -587,13 +587,16 @@ static int udp_switch_write(int fd, const struct iovec *iov, int iov_count, int6
     return 1;
 }
 
-static int udp_switch_source(const struct sockaddr_storage *source, socklen_t length, uint8_t *guest,
+static int udp_switch_source(int fd, const struct sockaddr_storage *source, socklen_t length, uint8_t *guest,
                              socklen_t *guest_length) {
     if (!source || source->ss_family != AF_UNIX || length < offsetof(struct sockaddr_un, sun_path) + 2) return 0;
     const char *path = ((const struct sockaddr_un *)source)->sun_path;
     unsigned port;
     if (g_netns[0] && !strncmp(path, g_netns, strlen(g_netns)) && sscanf(path + strlen(g_netns), "/p%u", &port) == 1) {
-        fill_inet_lo(guest, guest_length, (uint16_t)port);
+        if (fd >= 0 && fd < HL_NFD && g_udp_local_v6[fd])
+            fill_inet6_lo(guest, guest_length, (uint16_t)port);
+        else
+            fill_inet_lo(guest, guest_length, (uint16_t)port);
         return 1;
     }
     for (int i = 0; i < g_netif_count; i++) {

@@ -214,7 +214,8 @@
                 // DNS socket: report the nameserver (127.0.0.11:53) as the source (see case 207).
                 dns_fill_ns(gname, NULL);
                 *(uint32_t *)(g + 8) = 16;
-            } else if (gname && gnamelen && udp_switch_source(&nss, mh.msg_namelen, gname, (socklen_t *)(g + 8))) {
+            } else if (gname && gnamelen &&
+                       udp_switch_source((int)a0, &nss, mh.msg_namelen, gname, (socklen_t *)(g + 8))) {
                 // AF_UNIX switch sender restored to its Linux AF_INET identity.
             } else if (gname && gnamelen) { // translate received host sockaddr back to Linux layout
                 int ll = sa_m2l((struct sockaddr *)&nss, gname, gnamelen);
