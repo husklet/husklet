@@ -1,7 +1,7 @@
 // The controlling-terminal and descriptor calls in this worker adapter are `unsafe` libc entry points.
 #![allow(unsafe_code)]
 
-use super::{Ordering, WINCH, on_winch};
+use super::{on_winch, Ordering, WINCH};
 use crate::ffi::RawMode;
 use std::io::Write;
 
@@ -69,7 +69,7 @@ impl OpenFiles {
 
 /// Private Unix resource-limit boundary implemented by its existing owner.
 mod ffi {
-    use super::{OpenFiles, TerminalSession, on_winch};
+    use super::{on_winch, OpenFiles, TerminalSession};
 
     impl TerminalSession<'_> {
         pub(super) fn install_resize_handler() {
@@ -133,6 +133,7 @@ pub(super) struct TerminalSession<'a> {
     last_size: Option<(u16, u16)>,
     ticks: u32,
     stdin_open: bool,
+    pending_input: Option<Vec<u8>>,
 }
 
 // Keep a productive child from monopolising the relay loop. Each pass must return to
@@ -159,6 +160,7 @@ impl<'a> TerminalSession<'a> {
             last_size,
             ticks: 0,
             stdin_open: true,
+            pending_input: None,
         }
     }
 
@@ -172,6 +174,9 @@ impl<'a> TerminalSession<'a> {
                 return 1;
             }
             let Some(code) = self.pty.try_wait() else {
+                if self.pending_input.is_some() {
+                    Self::pace();
+                }
                 continue;
             };
             if self.drain_output().is_err() {
@@ -198,6 +203,9 @@ impl<'a> TerminalSession<'a> {
     }
 
     fn poll_input(&mut self) -> std::io::Result<()> {
+        if flush_pending_input(self.pty, &mut self.pending_input)? {
+            return Ok(());
+        }
         if !self.stdin_open {
             Self::pace();
             return Ok(());
@@ -222,7 +230,8 @@ impl<'a> TerminalSession<'a> {
         // SAFETY: the destination is this frame's buffer and the length is its own capacity.
         let count = unsafe { libc::read(libc::STDIN_FILENO, self.buffer.as_mut_ptr().cast(), self.buffer.len()) };
         if count > 0 {
-            self.pty.write(&self.buffer[..count as usize])?;
+            self.pending_input = Some(self.buffer[..count as usize].to_vec());
+            let _ = flush_pending_input(self.pty, &mut self.pending_input)?;
             return Ok(());
         }
         if count == 0 {
@@ -234,6 +243,20 @@ impl<'a> TerminalSession<'a> {
 
     fn drain_output(&mut self) -> std::io::Result<()> {
         drain_output_to(self.pty, &mut self.buffer, &mut self.output)
+    }
+}
+
+fn flush_pending_input(pty: &mut dyn hl_ws_term::PtyBackend, pending: &mut Option<Vec<u8>>) -> std::io::Result<bool> {
+    let Some(bytes) = pending.as_deref() else {
+        return Ok(false);
+    };
+    match pty.write(bytes) {
+        Ok(()) => {
+            pending.take();
+            Ok(false)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(true),
+        Err(error) => Err(error),
     }
 }
 
@@ -363,6 +386,53 @@ mod open_files_tests {
         super::drain_output_to(&mut backend, &mut buffer, &mut io::sink()).unwrap();
 
         assert_eq!(backend.reads, expected_reads);
+    }
+
+    #[test]
+    fn saturated_input_is_retained_until_the_backend_accepts_it() {
+        let mut backend = BackpressuredBackend {
+            reject_next: true,
+            writes: Vec::new(),
+        };
+        let mut pending = Some(b"large paste".to_vec());
+
+        assert!(super::flush_pending_input(&mut backend, &mut pending).unwrap());
+        assert_eq!(pending.as_deref(), Some(b"large paste".as_slice()));
+        assert!(backend.writes.is_empty());
+
+        assert!(!super::flush_pending_input(&mut backend, &mut pending).unwrap());
+        assert!(pending.is_none());
+        assert_eq!(backend.writes, [b"large paste".to_vec()]);
+    }
+
+    struct BackpressuredBackend {
+        reject_next: bool,
+        writes: Vec<Vec<u8>>,
+    }
+
+    impl PtyBackend for BackpressuredBackend {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
+            if self.reject_next {
+                self.reject_next = false;
+                return Err(io::ErrorKind::WouldBlock.into());
+            }
+            self.writes.push(bytes.to_vec());
+            Ok(())
+        }
+
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            Ok(0)
+        }
+
+        fn resize(&mut self, _columns: u16, _rows: u16) {}
+
+        fn master_fd(&self) -> Option<RawFd> {
+            None
+        }
+
+        fn try_wait(&mut self) -> Option<i32> {
+            None
+        }
     }
 
     struct ProductiveBackend {

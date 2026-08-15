@@ -169,24 +169,26 @@ pub fn launch(
         }
         Err(error) => return Err(LauncherError::io(error)),
     };
-    let (input, mut stream) = session.into_terminal().map_err(LauncherError::io)?;
+    let (mut input, stream) = session.into_terminal().map_err(LauncherError::io)?;
 
-    let (output_tx, output) = std::sync::mpsc::channel();
+    let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(process::OUTPUT_QUEUE_RECORDS);
+    runtime.spawn(async move {
+        while let Some(bytes) = input_rx.recv().await {
+            if input.write(&bytes).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    let (output_tx, output) = tokio::sync::mpsc::channel(process::OUTPUT_QUEUE_RECORDS);
     if let Some(message) = restore_failure {
-        let _ = output_tx.send(message.into_bytes());
+        let _ = output_tx.try_send(message.into_bytes());
     }
     let lifecycle_tx = output_tx.clone();
     let exited = std::sync::Arc::new(std::sync::Mutex::new(None));
-    runtime.spawn(async move {
-        // Stop forwarding as soon as the stream ends or the reader hangs up.
-        let mut open = true;
-        while open {
-            let Ok(Some(entry)) = stream.next().await else {
-                break;
-            };
-            open = output_tx.send(entry.into_bytes().to_vec()).is_ok();
-        }
-    });
+    let streaming = client.clone();
+    let streaming_id = execution.clone();
+    runtime.spawn(forward_output(stream, output_tx, streaming, streaming_id));
     let waiting = client.clone();
     let waiting_id = execution.clone();
     let waiting_pane = pane.clone();
@@ -195,14 +197,18 @@ pub fn launch(
         let status = match waiting.executions().wait(&waiting_id).await {
             Ok(status) => status,
             Err(error) => {
-                let _ = lifecycle_tx.send(format!("\r\nworkspace execution wait failed: {error}\r\n").into_bytes());
+                let _ = lifecycle_tx
+                    .send(format!("\r\nworkspace execution wait failed: {error}\r\n").into_bytes())
+                    .await;
                 *exit.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(70);
                 return;
             }
         };
         let code = i32::try_from(status.status_code).unwrap_or(70);
         if let Err(error) = waiting.executions().remove(&waiting_id).await {
-            let _ = lifecycle_tx.send(format!("\r\nworkspace execution cleanup failed: {error}\r\n").into_bytes());
+            let _ = lifecycle_tx
+                .send(format!("\r\nworkspace execution cleanup failed: {error}\r\n").into_bytes())
+                .await;
         }
         if let Some(pane) = waiting_pane {
             let _ = pane.clear(&waiting_id);
@@ -214,11 +220,37 @@ pub fn launch(
         runtime,
         client,
         execution,
-        input,
+        input: input_tx,
         output: Output::new(output),
         exited,
         pane,
     }))
+}
+
+async fn forward_output(
+    mut stream: hl_client::api::TerminalOutput,
+    output: tokio::sync::mpsc::Sender<Vec<u8>>,
+    client: hl_client::Client,
+    execution: String,
+) {
+    // Stop forwarding as soon as the stream ends or the reader hangs up.
+    let mut open = true;
+    while open {
+        match stream.next().await {
+            Ok(Some(entry)) => open = output.send(entry.into_bytes().to_vec()).await.is_ok(),
+            Ok(None) => break,
+            Err(error) => {
+                let _ = output
+                    .send(format!("\r\nworkspace terminal transport failed: {error}\r\n").into_bytes())
+                    .await;
+                break;
+            }
+        }
+    }
+    // The attachment owns this interactive execution (`kill_on_disconnect`). Explicitly request
+    // termination as well so a broken transport cannot leave the wait task and GUI pane hanging if
+    // the remote disconnect path itself failed before applying that policy.
+    let _ = client.executions().signal(&execution, "KILL").await;
 }
 
 fn terminal_identity() -> (&'static str, &'static str) {
