@@ -153,21 +153,23 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn hup_resistant_launcher(workspace: &str) -> (tempfile::TempDir, std::process::Child) {
-        use std::os::unix::fs::PermissionsExt as _;
+    fn hup_resistant_launcher(workspace: &str) -> std::process::Child {
         use std::os::unix::process::CommandExt as _;
 
-        let directory = tempfile::tempdir().unwrap();
-        let executable = directory.path().join("husklet");
-        std::fs::write(
-            &executable,
-            "#!/bin/sh\ntrap '' HUP TERM\nprintf 'ready\\n'\nwhile :; do sleep 60; done\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let mut command = std::process::Command::new(&executable);
+        // Use the stable system shell rather than executing a freshly-written fixture, which can race
+        // the kernel's text-busy check under the default-parallel test harness. The shell's argument zero
+        // still gives the process snapshot the exact production launcher identity.
+        let mut command = std::process::Command::new("/bin/sh");
         command
-            .args(["--worker", "launch", workspace, "test-pane"])
+            .args([
+                "-c",
+                "trap '' HUP TERM; printf 'ready\\n'; while :; do sleep 60; done",
+                "husklet",
+                "--worker",
+                "launch",
+                workspace,
+                "test-pane",
+            ])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null());
         command.process_group(0);
@@ -177,7 +179,7 @@ mod tests {
             .read_line(&mut ready)
             .unwrap();
         assert_eq!(ready, "ready\n");
-        (directory, child)
+        child
     }
 
     #[cfg(unix)]
@@ -188,7 +190,7 @@ mod tests {
             hl_ws::Arch::Arm64,
         );
         let key = workspace.key();
-        let (_directory, mut child) = hup_resistant_launcher(&key);
+        let mut child = hup_resistant_launcher(&key);
         let completed = result();
         CloseRequest::spawn_close(workspace, choice, &completed);
         wait(&completed).unwrap();
@@ -228,7 +230,7 @@ mod tests {
             hl_ws::Arch::Arm64,
         );
         let key = workspace.key();
-        let (_directory, mut child) = hup_resistant_launcher(&key);
+        let mut child = hup_resistant_launcher(&key);
         let completed = result();
         CloseRequest::spawn_close_with(
             workspace,
