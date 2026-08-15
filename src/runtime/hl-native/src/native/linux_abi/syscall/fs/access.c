@@ -661,8 +661,8 @@ static int open_synthetic_path(struct cpu *c, uint64_t a0, uint64_t a1, int lf, 
             if (ef >= 0) {
                 if (lf & 0x80000) fcntl(ef, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
                 if (ef < HL_NFD) {
-                    if (path_copy(g_fdpath[ef], sizeof g_fdpath[ef], hp) != 0) g_fdpath[ef][0] = 0;
-                    g_fdpath_guest[ef] = 0;
+                    if (path_copy(g_fdpath[ef], sizeof g_fdpath[ef], ep) != 0) g_fdpath[ef][0] = 0;
+                    g_fdpath_guest[ef] = g_fdpath[ef][0] != 0;
                     (void)proc_fdvis_publish_native_fd(ef);
                 }
             }

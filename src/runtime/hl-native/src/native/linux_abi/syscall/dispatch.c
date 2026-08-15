@@ -657,6 +657,7 @@ static void guest_abspath_at(int dirfd, const char *raw, char *out, size_t n) {
  * projected/typed descriptor must be duplicated through the Linux fd model rather than reopening its
  * native sentinel path; binding.c supplies the allocator after the syscall families are included. */
 static int64_t bound_dup_at_least(hl_linux_fd source, int minimum, uint32_t descriptor_flags);
+static int bound_exec_descriptor(int descriptor);
 #include "fs.c"
 static void bound_mapping_reset(void);
 static size_t bound_mapping_watch_capacity(void);

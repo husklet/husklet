@@ -194,6 +194,10 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
 
 static int execveat_empty_path(int dirfd, char *path, size_t capacity) {
     char host[4200];
+    if (dirfd >= 0 && dirfd < HL_NFD && g_fdpath[dirfd][0] && g_fdpath_guest[dirfd]) {
+        snprintf(path, capacity, "%s", g_fdpath[dirfd]);
+        return 0;
+    }
     if (dirfd >= 0 && dirfd < HL_NFD && g_fdpath[dirfd][0])
         snprintf(host, sizeof host, "%s", g_fdpath[dirfd]);
     else if (dirfd < 0 || hl_native_fd_path(dirfd, host, sizeof host) != 0 || !host[0])
@@ -251,7 +255,7 @@ static int svc_proc_281(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // entry, and reopening g_fdpath would then validate and execute a different image. The exec request
         // owns this duplicate on success and failure; keeping it non-CLOEXEC also lets it survive the manual
         // close-on-exec sweep until the immutable exec image has finished loading.
-        owned_descriptor = dup((int)a0);
+        owned_descriptor = bound_exec_descriptor((int)a0);
         error = owned_descriptor < 0 ? -errno : execveat_empty_path((int)a0, path, sizeof path);
     }
     else if (!source || !source[0])

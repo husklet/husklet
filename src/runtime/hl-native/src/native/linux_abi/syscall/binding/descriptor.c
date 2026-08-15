@@ -2,6 +2,32 @@ static int bound_snapshot(uint64_t value, hl_linux_fd_snapshot *snapshot) {
     if (g_linux_box == NULL || value > UINT32_MAX) return 0;
     return hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)value, snapshot) == HL_STATUS_OK;
 }
+
+/* Return an independently closeable native descriptor for an execveat
+ * AT_EMPTY_PATH request. A bound guest fd's same-number native descriptor is
+ * only its sentinel shadow; duplicating that shadow executes the wrong object.
+ * Detach the host attachment from the private-descriptor registry because the
+ * exec image takes ordinary close(2) ownership from this point onward. */
+static int bound_exec_descriptor(int descriptor) {
+    hl_linux_fd_snapshot snapshot;
+    const hl_host_posix_attachment_services *attachments;
+    hl_host_result borrowed;
+    int native;
+    if (!bound_snapshot((uint64_t)(uint32_t)descriptor, &snapshot)) return dup(descriptor);
+    attachments = g_host_services != NULL ? g_host_services->posix_attachment : NULL;
+    if (attachments == NULL || attachments->borrow_file == NULL) {
+        errno = ENOSYS;
+        return -1;
+    }
+    borrowed = attachments->borrow_file(g_host_services->context, snapshot.host_handle);
+    if (borrowed.status != HL_STATUS_OK || borrowed.value > INT_MAX) {
+        errno = borrowed.status == HL_STATUS_OK ? EOVERFLOW : (int)-bound_host_error(borrowed.status);
+        return -1;
+    }
+    native = (int)borrowed.value;
+    hl_host_process_fd_private_remove(native);
+    return native;
+}
 #include "vector_validation.h"
 /* Publish descriptors supplied through the embedding API as logical guest
  * descriptors too.  In particular, typed stdin/stdout/stderr intentionally
