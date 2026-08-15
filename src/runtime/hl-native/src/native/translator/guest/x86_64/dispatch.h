@@ -56,8 +56,7 @@ static uint64_t g_prevpc, g_curpc;
 // shared loop also checks it at the bottom -- the two are the same block boundary, so the top check here
 // just preserves x86's historical position; maybe_deliver_signal is guarded + idempotent under g_pending,
 // so the extra bottom check is a no-op once delivered). Then the fault-diagnosis block: prev/cur pc, the
-// trace cap runaway guard, the malloc/avail-mask dumps, and the byte watchpoint. Verbatim from the old
-// frontend/x86_64/dispatch.c. A PLAIN brace block (NOT do/while(0)) so the trace-cap `break` reaches the
+// trace cap runaway guard. A PLAIN brace block (NOT do/while(0)) so the trace-cap `break` reaches the
 // shared dispatcher while-loop -- the original broke the loop immediately, not just the macro.
 #define G_DISPATCH_DEBUG(c)                                                                                            \
     {                                                                                                                  \
@@ -72,24 +71,6 @@ static uint64_t g_prevpc, g_curpc;
             (c)->exited = 1;                                                                                           \
             (c)->exit_code = 99;                                                                                       \
             break;                                                                                                     \
-        }                                                                                                              \
-        if (g_nochain && g_loadbase && (c)->rip == g_loadbase + 0x2ee0) g_malloc_n++; /* __libc_malloc_impl entries */ \
-        if (g_nochain && g_loadbase) {                                                                                 \
-            uint64_t po =                                                                                              \
-                g_prevpc - g_loadbase; /* malloc first-handout: dump the new group's avail_mask (rbp=meta) */          \
-            if (po >= 0x32a0 && po <= 0x3340) {                                                                        \
-                uint64_t rbp = (c)->r[5], rax = (c)->r[0];                                                             \
-                uint32_t avail = (rbp > 0x10000) ? *(uint32_t *)(rbp + 0x1c) : 0;                                      \
-                fprintf(stderr, "[av] blk+%llx handout=%llx meta(rbp)=%llx avail_mask[rbp+1c]=%x freed[rbp+18]=%x\n",  \
-                        (unsigned long long)po, (unsigned long long)rax, (unsigned long long)rbp, avail,               \
-                        (rbp > 0x10000) ? *(uint32_t *)(rbp + 0x18) : 0);                                              \
-            }                                                                                                          \
-        }                                                                                                              \
-        if (g_w8 && *g_w8 != g_w8v) { /* byte-watchpoint: report the block that just changed it */                     \
-            fprintf(stderr, "[w8] @%p %02x -> %02x  by block +%llx  malloc#=%llu  rsi=%llx\n", (void *)g_w8, g_w8v,    \
-                    *g_w8, (unsigned long long)(g_prevpc - g_loadbase), (unsigned long long)g_malloc_n,                \
-                    (unsigned long long)(c)->r[6]);                                                                    \
-            g_w8v = *g_w8;                                                                                             \
         }                                                                                                              \
     }
 

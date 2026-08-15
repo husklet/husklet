@@ -5,7 +5,7 @@ fn x86_dispatch_bookkeeping_is_diagnostic_only() {
     let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
     let target = fs::read_to_string(native.join("engine/target/x86_64.c")).expect("read x86 target");
     assert!(
-        target.contains("g_dispatch_diagnostics = g_prof || g_trace || g_nochain || g_w8 != NULL;"),
+        target.contains("g_dispatch_diagnostics = g_prof || g_trace || g_nochain;"),
         "x86 target does not bind every diagnostic mode to dispatcher bookkeeping"
     );
     for relative in [
@@ -28,6 +28,20 @@ fn x86_dispatch_bookkeeping_is_diagnostic_only() {
             assert!(
                 position > gate,
                 "{relative} performs {write} before its diagnostic gate"
+            );
+        }
+    }
+}
+
+#[test]
+fn x86_dispatch_has_no_executable_specific_malloc_probe() {
+    let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native/translator/guest/x86_64");
+    for relative in ["dispatch.h", "glue.c", "glue.h"] {
+        let source = fs::read_to_string(native.join(relative)).expect("read x86 diagnostic source");
+        for legacy in ["g_malloc_n", "g_w8", "avail_mask", "__libc_malloc_impl"] {
+            assert!(
+                !source.contains(legacy),
+                "{relative} retains legacy diagnostic {legacy}"
             );
         }
     }
