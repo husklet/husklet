@@ -530,9 +530,6 @@ static int lazy_nofix(void) {
     return 0;
 }
 
-static void lazy_diag(void) {
-}
-
 // W6A item 1: emulate a faulting host load/store against the biased non-PIE image. A non-PIE guest's
 // absolute ref resolves to the original low link vaddr (in [g_nonpie_lo,g_nonpie_hi)); the real data
 // lives at that vaddr + g_nonpie_bias. We decode the faulting emitted arm64 access, perform it at +bias,
@@ -1006,11 +1003,6 @@ void jit86_lazyguard(int sig, siginfo_t *si, void *uc) {
         int ok = adjacent ? (g_growmaps < (256 << 10)) /* 1GB of grow pages */ : (g_lazymaps < lazy_budget());
 #endif
         if (ok) {
-            static int hooked;
-            if (!hooked) {
-                hooked = 1;
-                atexit(lazy_diag);
-            }
             // This executes inside a synchronous signal handler. Use only the host service's explicitly
             // signal-context-safe, non-owning exact-page repair; ordinary mapping services take registry locks.
             /* The accessor only reads immutable process-global pointers. Cache it so the signal path
