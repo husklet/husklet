@@ -117,6 +117,7 @@ impl Search {
         let text = self.entry.text().to_string();
         if text.is_empty() {
             t.search_set_regex(None, 0);
+            t.unselect_all();
             self.info.set_text("");
             self.info.remove_css_class("nomatch");
             return;
