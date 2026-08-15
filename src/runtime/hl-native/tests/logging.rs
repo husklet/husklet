@@ -61,6 +61,57 @@ fn aarch64_ibtc_profile_counters_are_diagnostic_only() {
     }
 }
 
+#[test]
+fn aarch64_shared_soft_resolver_avoids_darwin_reserved_x18() {
+    let source = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native/translator/guest/aarch64/translate/emit/soft.c"),
+    )
+    .expect("AArch64 soft-memory emitter source");
+    let start = source
+        .find("if (g_soft_resolver_patch_count) {")
+        .expect("shared soft resolver");
+    let end = source[start..]
+        .find("\n    if (g_soft_stub_patch_count)")
+        .map(|end| start + end)
+        .expect("end of shared soft resolver");
+    let resolver = &source[start..end];
+    for forbidden in [
+        "e_ldr(18,",
+        "e_str(18,",
+        "e_br(18)",
+        "(18u <<",
+        "a64_cbnz_x(18",
+        "a64_tbz_x(18",
+    ] {
+        assert!(
+            !resolver.contains(forbidden),
+            "shared soft resolver uses Darwin-reserved x18 via {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn faccessat2_uses_linux_guest_flag_values() {
+    let source = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native/linux_abi/syscall/fs/extended_status.c"),
+    )
+    .expect("extended status syscall source");
+    for declaration in [
+        "GUEST_AT_SYMLINK_NOFOLLOW = 0x100",
+        "GUEST_AT_EACCESS = 0x200",
+        "GUEST_AT_EMPTY_PATH = 0x1000",
+    ] {
+        assert!(
+            source.contains(declaration),
+            "missing Linux ABI declaration {declaration}"
+        );
+    }
+    assert!(
+        !source.contains("(a3 & AT_"),
+        "guest faccessat2 flags depend on host AT_* values"
+    );
+}
+
 const MACRO_CONTRACT_PROBE: &str = r#"
 #include "hl/log.h"
 #include <string.h>
