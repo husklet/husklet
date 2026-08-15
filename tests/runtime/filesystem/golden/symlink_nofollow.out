@@ -1,1 +1,1 @@
-symlink-nofollow eloop=1 reg=1 mid-follows=1 opath-link=1 dangling-node=1 dangling-follow-enoent=1
+symlink-nofollow eloop=1 reg=1 mid-follows=1 opath-link-type=1 opath-link-target=1 opath-link-io=1 dangling-opath-type=1 dangling-opath-target=1 dangling-node=1 dangling-follow-enoent=1
