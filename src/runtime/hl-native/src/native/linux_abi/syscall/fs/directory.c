@@ -39,22 +39,20 @@ static void svc_fs_directory_61(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
         }
         // OVERLAY: merged listing across layers
         if (g_nlower && fd >= 0 && fd < HL_NFD && g_ovldir[fd][0]) {
-            // snapshot cache is indexed directly by guest fd (no slot table -> no eviction thrash)
-            if (!g_ovldents[fd].taken) {
-                g_ovldents[fd].taken = 1;
-                g_ovldents[fd].n = overlay_readdir(g_ovldir[fd], &g_ovldents[fd].nm, &g_ovldents[fd].ty);
+            ovldents_snapshot *snapshot = ovldents_require(fd);
+            if (snapshot == NULL) {
+                G_RET(c) = (uint64_t)(int64_t)(-ENOMEM);
+                break;
             }
-            // The host directory descriptor is the open-file-description state shared by dup() and fork().
-            // Keep the synthetic overlay cursor in its offset instead of treating this descriptor-indexed
-            // replay cache as authoritative.  Otherwise every alias starts its own snapshot at zero, and a
-            // fork copies the parent's cursor rather than observing the child's reads.  It also makes EOF a
-            // durable offset: freeing the snapshot at EOF used to make the next call silently restart at zero.
-            off_t shared_pos = lseek(fd, 0, SEEK_CUR);
-            g_ovldents[fd].pos = shared_pos >= 0 && shared_pos <= g_ovldents[fd].n ? (int)shared_pos : 0;
+            // snapshot cache is indexed directly by guest fd (no slot table -> no eviction thrash)
+            if (!snapshot->taken) {
+                snapshot->taken = 1;
+                snapshot->n = overlay_readdir(g_ovldir[fd], &snapshot->nm, &snapshot->ty);
+            }
             size_t o = 0;
             int einval = 0;
-            while (g_ovldents[fd].pos < g_ovldents[fd].n) {
-                const char *nm = g_ovldents[fd].nm[g_ovldents[fd].pos];
+            while (snapshot->pos < snapshot->n) {
+                const char *nm = snapshot->nm[snapshot->pos];
                 size_t nl = strlen(nm), lr = (19 + nl + 1 + 7) & ~7ull;
                 if (o + lr > (size_t)a2) {
                     // buffer too small for even the first pending entry -> EINVAL (see case 61 below)
@@ -75,7 +73,7 @@ static void svc_fs_directory_61(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
                 // `find -inum`, and hardlink detection work on a layered image. The old `pos+1` fabricated a
                 // unique per-position number -> every entry looked like a distinct inode (hardlinks/du/rsync
                 // dedup broke). Fall back to pos+1 only if the entry can't be stat'd.
-                uint64_t d_ino = (uint64_t)g_ovldents[fd].pos + 1;
+                uint64_t d_ino = (uint64_t)snapshot->pos + 1;
                 if (nl < 200) {
                     char egp[4300], ehp[4300];
                     int gl = snprintf(egp, sizeof egp, "%s/%s", g_ovldir[fd], nm);
@@ -86,9 +84,13 @@ static void svc_fs_directory_61(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
                     }
                 }
                 *(uint64_t *)(ld + 0) = d_ino;
-                *(uint64_t *)(ld + 8) = o + lr;
+                // d_off is the cookie for the next directory entry, not an offset within this one
+                // result buffer.  The overlay cursor is stored as the shared descriptor offset, so
+                // publishing the same position here keeps seekdir and dup aliases in one coordinate
+                // system.  A buffer-relative cookie restarts at 24 on every single-entry read.
+                *(uint64_t *)(ld + 8) = (uint64_t)snapshot->pos + 1;
                 *(uint16_t *)(ld + 16) = (uint16_t)lr;
-                *(ld + 18) = g_ovldents[fd].ty[g_ovldents[fd].pos];
+                *(ld + 18) = snapshot->ty[snapshot->pos];
                 memcpy(ld + 19, nm, nl);
                 ld[19 + nl] = 0;
                 if (guest_copy_to(a1 + o, record, lr) != (ssize_t)lr) {
@@ -96,12 +98,9 @@ static void svc_fs_directory_61(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
                     break;
                 }
                 o += lr;
-                g_ovldents[fd].pos++;
+                snapshot->pos++;
             }
-            // Publish the cursor through the real descriptor so every alias and fork peer observes it.
-            // The snapshot remains owned until the last descriptor number using it is closed; retaining an
-            // exhausted snapshot is what makes repeated getdents64 calls continue to report EOF.
-            if (!einval) (void)lseek(fd, (off_t)g_ovldents[fd].pos, SEEK_SET);
+            // Retaining an exhausted snapshot makes repeated getdents64 calls continue to report EOF.
             G_RET(c) = einval > 0   ? (uint64_t)(int64_t)(-EINVAL)
                        : einval < 0 ? (uint64_t)(int64_t)(-EFAULT)
                                     : (uint64_t)o;

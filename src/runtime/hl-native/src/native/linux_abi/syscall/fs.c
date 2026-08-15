@@ -412,32 +412,53 @@ static void tty_ctl_restore(const sigset_t *saved) {
 // broke deep `find`: a recursive walk keeps one open dir fd per level, so past 16 concurrent overlay dirs
 // an ancestor's snapshot was evicted and its next getdents re-snapshotted from pos 0 -> re-descended the
 // same subtree forever (loop threshold was exactly depth 16).
-static struct {
+typedef struct {
+    unsigned references;
     int taken; // 1 = this fd's snapshot is live
     int n, pos;
     char (*nm)[256];
     uint8_t *ty;
-} g_ovldents[HL_NFD]; // [HL_NFD], not [1024]: case 61 below guards with `fd < HL_NFD` before indexing this.
+} ovldents_snapshot;
 
-static void ovldents_free(int i) {
-    free(g_ovldents[i].nm);
-    free(g_ovldents[i].ty);
-    g_ovldents[i].nm = NULL;
-    g_ovldents[i].ty = NULL;
-    g_ovldents[i].taken = 0;
-    g_ovldents[i].n = g_ovldents[i].pos = 0;
+static ovldents_snapshot
+    *g_ovldents[HL_NFD]; // [HL_NFD], not [1024]: case 61 below guards with `fd < HL_NFD` before indexing this.
+
+static ovldents_snapshot *ovldents_require(int fd) {
+    if (fd < 0 || fd >= HL_NFD) return NULL;
+    if (g_ovldents[fd] == NULL) {
+        g_ovldents[fd] = calloc(1, sizeof *g_ovldents[fd]);
+        if (g_ovldents[fd] != NULL) g_ovldents[fd]->references = 1;
+    }
+    return g_ovldents[fd];
 }
 
 static void ovldents_drop(int fd) {
-    if (fd >= 0 && fd < HL_NFD && g_ovldents[fd].taken) ovldents_free(fd);
+    if (fd < 0 || fd >= HL_NFD || g_ovldents[fd] == NULL) return;
+    ovldents_snapshot *snapshot = g_ovldents[fd];
+    g_ovldents[fd] = NULL;
+    if (--snapshot->references == 0) {
+        free(snapshot->nm);
+        free(snapshot->ty);
+        free(snapshot);
+    }
+}
+
+static void ovldents_duplicate(int source, int destination) {
+    if (source < 0 || source >= HL_NFD || destination < 0 || destination >= HL_NFD || source == destination) return;
+    ovldents_snapshot *snapshot = ovldents_require(source);
+    if (snapshot == NULL) return;
+    ovldents_drop(destination);
+    snapshot->references++;
+    g_ovldents[destination] = snapshot;
 }
 
 // rewinddir/seekdir on an overlay-merged dir: reset the replay cursor. pos<=0 (or out of range) restarts
 // from the top; an untaken snapshot is left alone (the next getdents re-snapshots from 0). Forward-declared
 // in vfs.c for the lseek handler (io.c), which is compiled into this TU before fs.c.
 static void ovldents_rewind(int fd, int pos) {
-    if (fd < 0 || fd >= HL_NFD || !g_ovldents[fd].taken) return;
-    g_ovldents[fd].pos = (pos > 0 && pos <= g_ovldents[fd].n) ? pos : 0;
+    if (fd < 0 || fd >= HL_NFD || g_ovldents[fd] == NULL || !g_ovldents[fd]->taken) return;
+    ovldents_snapshot *snapshot = g_ovldents[fd];
+    snapshot->pos = (pos > 0 && pos <= snapshot->n) ? pos : 0;
 }
 
 // POSIX shm / named semaphores live under /dev/shm, for which the guest /dev tmpfs has no real host tmpfs;

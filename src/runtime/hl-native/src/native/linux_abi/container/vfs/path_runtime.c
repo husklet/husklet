@@ -366,6 +366,7 @@ static int unix_name_fill(const char *name, uint8_t *g, socklen_t gcap, socklen_
 // Overlay merged-getdents snapshot cursor reset (rewinddir/seekdir on an overlay dir). Defined in fs.c
 // where g_ovldents lives, but the lseek handler (io.c) is included before fs.c, so forward-declare it.
 static void ovldents_rewind(int fd, int pos);
+static void ovldents_duplicate(int source, int destination);
 // eventfd(read-end) -> pipe write-end + 1 (0 = not an eventfd)
 static int g_eventfd_peer[HL_NFD];
 // eventfd accumulating counter: write() adds, read() returns + resets (the pipe is only readiness).
