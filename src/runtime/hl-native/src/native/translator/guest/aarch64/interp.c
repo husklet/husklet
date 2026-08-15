@@ -5,3 +5,4 @@
 #include "interp/floating.c"
 #include "interp/simd.c"
 #include "interp/dispatch.c"
+#include "interp/persistence.c"
