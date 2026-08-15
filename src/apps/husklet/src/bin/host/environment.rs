@@ -5,7 +5,7 @@ const TERMINAL_CAPABILITIES: [(&str, &str); 2] = [("TERM", "xterm-256color"), ("
 
 impl Environment {
     pub fn capture() -> Self {
-        let keys = [
+        let keys = vec![
             "HOME",
             "USER",
             "LOGNAME",
@@ -19,6 +19,14 @@ impl Environment {
             "HL_LOG_COUNTERS",
             "HL_ENGINE_FS_TRACE",
         ];
+        // The GUI re-execs its current binary as a worker. Cargo supplies the development build's
+        // `libhl_native_engine.so` through this path, so dropping it makes every Linux workspace
+        // terminal exit 127 before the worker can start. Release bundles normally leave it absent.
+        // macOS deliberately continues to exclude DYLD_* loader variables.
+        #[cfg(target_os = "linux")]
+        let keys = keys.into_iter().chain(["LD_LIBRARY_PATH"]);
+        #[cfg(not(target_os = "linux"))]
+        let keys = keys.into_iter();
         let mut values: Vec<(String, String)> = keys
             .into_iter()
             .filter_map(|key| std::env::var(key).ok().map(|value| (key.to_owned(), value)))
@@ -92,5 +100,11 @@ mod tests {
             Environment::default().terminal(),
             ["TERM=xterm-256color", "COLORTERM=truecolor"]
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cargo_launched_worker_reexec_preserves_native_library_path() {
+        assert!(Environment::capture().0.iter().any(|(key, _)| key == "LD_LIBRARY_PATH"));
     }
 }
