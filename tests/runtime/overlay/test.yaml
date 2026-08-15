@@ -28,6 +28,13 @@ cases:
     artifact: { destination: /opt/husklet/overlay/lower-negative }
     run: [negative]
     expect: { exit: 0, stdout: golden/lower-negative.out }
+  - id: runtime/overlay/lower-readonly-truncate
+    status: active
+    compat: { class: compatibility }
+    build: { source: lower.c, output: lower-readonly-truncate, flags: [-static, -O2, -std=c11] }
+    artifact: { destination: /opt/husklet/overlay/lower-readonly-truncate }
+    run: [readonly-truncate]
+    expect: { exit: 0, stdout: golden/lower-readonly-truncate.out }
   - id: runtime/overlay/lower-copy-up
     status: active
     compat: { class: compatibility }

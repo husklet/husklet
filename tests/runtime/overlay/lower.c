@@ -25,8 +25,30 @@ static int probe_read(void) {
     if (got <= 0 || close(fd) != 0) return 3;
     bytes[got] = '\0';
     if (strncmp(bytes, "root:", 5) != 0) return 4;
+    /* Separate opens own separate open-file descriptions. Returning one cached
+       lower descriptor twice would make the second offset follow the first. */
+    int first = open("/etc/group", O_RDONLY);
+    int second = open("/etc/group", O_RDONLY);
+    char left[8], right[8];
+    if (first < 0 || second < 0) return 6;
+    if (read(first, left, sizeof left) != (ssize_t)sizeof left ||
+        read(second, right, sizeof right) != (ssize_t)sizeof right || memcmp(left, right, sizeof left) != 0)
+        return 7;
+    if (close(first) != 0 || close(second) != 0) return 8;
     if (stat("/bin/busybox", &status) != 0 || status.st_size < 100000) return 5;
     puts("lower read ok");
+    return 0;
+}
+
+/* Linux honors O_TRUNC even when the requested access mode is O_RDONLY. The
+   lower is immutable, so this must copy up and truncate the upper object. */
+static int probe_readonly_truncate(void) {
+    struct stat status;
+    int fd = open("/etc/passwd", O_RDONLY | O_TRUNC);
+    if (fd < 0) return 13;
+    if (fstat(fd, &status) != 0 || status.st_size != 0 || close(fd) != 0) return 14;
+    if (stat("/etc/passwd", &status) != 0 || status.st_size != 0) return 15;
+    puts("lower readonly truncate ok");
     return 0;
 }
 
@@ -252,6 +274,7 @@ int main(int count, char **arguments) {
     if (count != 2) return 90;
     if (strcmp(arguments[1], "read") == 0) return probe_read();
     if (strcmp(arguments[1], "negative") == 0) return probe_negative();
+    if (strcmp(arguments[1], "readonly-truncate") == 0) return probe_readonly_truncate();
     if (strcmp(arguments[1], "copy-up") == 0) return probe_copy_up();
     if (strcmp(arguments[1], "directory-mode-copy-up") == 0) return probe_directory_mode_copy_up();
     if (strcmp(arguments[1], "whiteout") == 0) return probe_whiteout();
