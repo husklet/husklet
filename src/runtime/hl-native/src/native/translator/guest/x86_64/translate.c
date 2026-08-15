@@ -283,24 +283,32 @@ static void emit_guest_signal(uint64_t rip, int lsig, int code) {
 // reuse), and the dispatcher keys cached host code by guest PC, so it would jump to the OLD host code for the
 // new bytes. Called from the guest munmap / MAP_FIXED / mremap(MREMAP_FIXED) paths. This is the SAME wholesale
 // map/IBTC drop the SMC write-fault path uses (a currently-running block's host code stays intact; orphaned
-// translations are reclaimed by the next wholesale flush) -- but ONLY fired when the range actually overlaps a
-// write-protected code page (g_smc_pg), so ordinary data munmap/mmap churn pays nothing and re-translates
-// nothing. Inert unless a JIT guest is present (g_rwx_guest) -> the normal (non-JIT) matrix is byte-exact.
+// translations are reclaimed by the next wholesale flush).  A protection transition can happen before the source
+// page reaches g_smc_pg, so also invalidate cache entries under both its storage and architectural source identity.
+// If neither exact index knows the range, conservatively clear the map: a protection transition is authoritative
+// evidence that the bytes may change, and retaining a stale block is worse than retranslating an armed JIT guest.
+// Inert unless a JIT guest is present (g_rwx_guest) -> the normal (non-JIT) matrix is byte-exact.
 static void jit86_drop_range_translations(uint64_t lo, uint64_t hi) {
     if (!g_rwx_guest || hi <= lo) return;
     stw_mapping_begin();
-    if (g_smc_n == 0) {
-        stw_mapping_end();
-        return;
-    }
     uint64_t page_size = smc_page_size();
     uint64_t plo = lo & ~(page_size - 1), phi = (hi + page_size - 1) & ~(page_size - 1);
     int hit = hl_smc_page_registry_remove_range(&g_smc_index, g_smc_pg, &g_smc_n, plo, phi);
-    if (!hit) {
+    uint64_t storage_lo = g_nonpie_lo + g_nonpie_bias;
+    uint64_t storage_hi = g_nonpie_hi + g_nonpie_bias;
+    uint64_t guest_lo = g_nonpie_lo && lo >= storage_lo && lo < storage_hi ? lo - g_nonpie_bias : lo;
+    uint64_t guest_ranges[2][2] = {{lo, hi}, {guest_lo, guest_lo + (hi - lo)}};
+    uint32_t range_count = guest_lo == lo ? 1 : 2;
+    uint32_t invalidated = map_invalidate_source_ranges((const uint64_t (*)[2])guest_ranges, range_count);
+    if (!hit && invalidated == 0) {
+        map_clear();
+        memset(g_ibtc, 0, sizeof g_ibtc);
+        memset(g_xibtc, 0, sizeof g_xibtc);
+        pend_reset();
         stw_mapping_end();
-        return; // no translated code in the range -> nothing to invalidate (the common data-munmap case)
+        return;
     }
-    map_clear();
+    if (hit) map_clear();
     memset(g_ibtc, 0, sizeof g_ibtc);
     memset(g_xibtc, 0, sizeof g_xibtc);
     pend_reset();
