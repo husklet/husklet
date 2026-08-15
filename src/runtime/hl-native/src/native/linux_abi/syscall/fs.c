@@ -129,6 +129,14 @@ static int dac_snapshot_at(int directory, const char *raw, int nofollow, hl_dac_
     return dac_snapshot_path(resolved, nofollow, snapshot);
 }
 
+static int dac_authorize_cursor_search(const hl_vfs_cursor *directory, void *context) {
+    const hl_dac_credentials *credentials = context;
+    if (directory == NULL || credentials == NULL || directory->count == 0) return -EACCES;
+    hl_dac_snapshot snapshot;
+    int status = dac_snapshot_cursor_authority(&directory->layers[0], &snapshot);
+    return status != 0 ? status : -hl_dac_authorize_access(&snapshot, credentials, HL_DAC_EXECUTE);
+}
+
 static int dac_snapshot_parent_at(int directory, const char *raw, hl_dac_snapshot *snapshot) {
     char guest[4200], host[4300], path[4200];
     const char *resolved;
@@ -263,19 +271,17 @@ static int dac_access_at(int directory, const char *raw, int nofollow, int mode,
     hl_dac_credentials credentials = dac_credentials_current(groups);
     hl_vfs_cursor_entry entry;
     memset(&entry, 0, sizeof entry);
-    int status = hl_vfs_cursor_resolve_metadata_at(directory, raw, nofollow, &entry);
-    uint32_t mount_flags = status == 0 ? entry.mount_flags : 0;
-    if (status == 0 && mode == F_OK) {
-        hl_vfs_cursor_entry_release(&entry);
-        return 0;
-    }
-    if (status == 0) status = dac_snapshot_cursor_entry(&entry, &snapshot);
-    hl_vfs_cursor_entry_release(&entry);
-    if (status == -ENOSYS) status = dac_snapshot_at(directory, raw, nofollow, &snapshot);
-    if (status != 0) return status;
     credentials.fsuid = (uint32_t)(effective ? cred_euid() : cred_ruid());
     credentials.fsgid = (uint32_t)(effective ? cred_egid() : cred_rgid());
     credentials.capabilities = effective ? g_cap_eff : (credentials.fsuid == 0 ? g_cap_prm : 0);
+    int status = hl_vfs_cursor_resolve_metadata_search_at(directory, raw, nofollow, dac_authorize_cursor_search,
+                                                          &credentials, &entry);
+    uint32_t mount_flags = status == 0 ? entry.mount_flags : 0;
+    if (status == 0 && mode != F_OK) status = dac_snapshot_cursor_entry(&entry, &snapshot);
+    hl_vfs_cursor_entry_release(&entry);
+    if (status == -ENOSYS) status = dac_snapshot_at(directory, raw, nofollow, &snapshot);
+    if (status != 0) return status;
+    if (mode == F_OK) return 0;
     unsigned requested = 0;
     if (mode & R_OK) requested |= HL_DAC_READ;
     if (mode & W_OK) requested |= HL_DAC_WRITE;
@@ -308,6 +314,81 @@ static int dac_access_fd(int descriptor, int mode, int effective) {
     if (mode & W_OK) requested |= HL_DAC_WRITE;
     if (mode & X_OK) requested |= HL_DAC_EXECUTE;
     return -hl_dac_authorize_access(&snapshot, &credentials, requested);
+}
+
+static int dac_access_synthetic(const char *guest, int mode, int effective) {
+    struct stat status;
+    if (!synth_stat_raw(guest, &status)) return -ENOENT;
+    hl_dac_snapshot snapshot = {
+        .uid = (uint32_t)status.st_uid,
+        .gid = (uint32_t)status.st_gid,
+        .mode = (uint32_t)status.st_mode,
+    };
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    credentials.fsuid = (uint32_t)(effective ? cred_euid() : cred_ruid());
+    credentials.fsgid = (uint32_t)(effective ? cred_egid() : cred_rgid());
+    credentials.capabilities = effective ? g_cap_eff : (credentials.fsuid == 0 ? g_cap_prm : 0);
+    unsigned requested = 0;
+    if (mode & R_OK) requested |= HL_DAC_READ;
+    if (mode & W_OK) requested |= HL_DAC_WRITE;
+    if (mode & X_OK) requested |= HL_DAC_EXECUTE;
+    if ((requested & HL_DAC_EXECUTE) &&
+        (hl_vfs_mount_flags_for_guest(guest, 0) & HL_VFS_MOUNT_NOEXEC))
+        return -EACCES;
+    return -hl_dac_authorize_access(&snapshot, &credentials, requested);
+}
+
+static int dac_access_executable(int mode, int effective) {
+    if (!g_authorized_executable_metadata_ready) return -ENOENT;
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    credentials.fsuid = (uint32_t)(effective ? cred_euid() : cred_ruid());
+    credentials.fsgid = (uint32_t)(effective ? cred_egid() : cred_rgid());
+    credentials.capabilities = effective ? g_cap_eff : (credentials.fsuid == 0 ? g_cap_prm : 0);
+    unsigned requested = 0;
+    if (mode & R_OK) requested |= HL_DAC_READ;
+    if (mode & W_OK) requested |= HL_DAC_WRITE;
+    if (mode & X_OK) requested |= HL_DAC_EXECUTE;
+    return -hl_dac_authorize_access(&g_authorized_executable_dac, &credentials, requested);
+}
+
+static int dac_synthetic_terminal(const char *guest, void *context) {
+    if (dev_node_hostpath(guest) != NULL) return 1;
+    char executable[1024];
+    if (!proc_self_exe(guest, executable, sizeof executable)) return 0;
+    char ancestor[4200];
+    if (!strcmp(guest, "/proc/self/exe") || !strcmp(guest, "/proc/thread-self/exe"))
+        snprintf(ancestor, sizeof ancestor, "/proc/%d", container_pid());
+    else {
+        if (snprintf(ancestor, sizeof ancestor, "%s", guest) >= (int)sizeof ancestor) return -ENAMETOOLONG;
+        char *leaf = strrchr(ancestor, '/');
+        if (leaf == NULL || strcmp(leaf, "/exe")) return -EINVAL;
+        *leaf = 0;
+    }
+    struct stat status;
+    if (!synth_stat_raw(ancestor, &status) || !S_ISDIR(status.st_mode)) return -ENOENT;
+    const hl_dac_credentials *credentials = context;
+    hl_dac_snapshot snapshot = {
+        .uid = (uint32_t)status.st_uid,
+        .gid = (uint32_t)status.st_gid,
+        .mode = (uint32_t)status.st_mode,
+    };
+    return credentials != NULL && hl_dac_authorize_access(&snapshot, credentials, HL_DAC_EXECUTE) == 0 ? 1 : -EACCES;
+}
+
+static int dac_search_at(int directory, const char *raw, int nofollow_final, int effective, char *resolved,
+                         size_t resolved_size,
+                         int *final_requires_directory) {
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    credentials.fsuid = (uint32_t)(effective ? cred_euid() : cred_ruid());
+    credentials.fsgid = (uint32_t)(effective ? cred_egid() : cred_rgid());
+    credentials.capabilities = effective ? g_cap_eff : (credentials.fsuid == 0 ? g_cap_prm : 0);
+    return hl_vfs_cursor_search_parent_at(directory, raw, nofollow_final, dac_authorize_cursor_search, &credentials,
+                                          resolved,
+                                          resolved_size, final_requires_directory, dac_synthetic_terminal,
+                                          &credentials);
 }
 
 static int dac_sticky_at(int directory, const char *raw) {

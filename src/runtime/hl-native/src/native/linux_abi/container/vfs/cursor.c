@@ -483,14 +483,47 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_lookup(const hl_vfs_cursor *cursor
 }
 
 #define HL_VFS_CURSOR_DEPTH 260
+#define HL_VFS_CURSOR_NO_FINAL 1
 
 // Walk from retained directory provenance. `root` is the namespace restart authority for absolute paths
 // and absolute symlink targets; `start` is the exact directory authority supplied by a relative dirfd.
 // Every frame owns its contributing descriptors, so renaming/unlinking an ancestor cannot redirect a later
 // component. The returned entry owns its file descriptor or merged-directory cursor.
+typedef int (*hl_vfs_cursor_search_hook)(const hl_vfs_cursor *directory, void *context);
+typedef int (*hl_vfs_cursor_terminal_hook)(const char *guest, void *context);
+
+static int hl_vfs_cursor_terminal_remaining(const hl_vfs_cursor *directory, const char *remaining,
+                                            hl_vfs_cursor_terminal_hook terminal, void *terminal_context,
+                                            char *resolved, size_t resolved_size, int *requires_directory) {
+    if (directory == NULL || remaining == NULL || terminal == NULL || !strcmp(directory->guest, "/") || !remaining[0])
+        return 0;
+    char unresolved[4200];
+    int length = snprintf(unresolved, sizeof unresolved, "%s/%s", directory->guest, remaining);
+    if (length < 0 || (size_t)length >= sizeof unresolved) return -ENAMETOOLONG;
+    size_t unresolved_length = (size_t)length;
+    int trailing = 0;
+    while (unresolved_length > 1 && unresolved[unresolved_length - 1] == '/') {
+        unresolved[--unresolved_length] = 0;
+        trailing = 1;
+    }
+    int terminal_status = terminal(unresolved, terminal_context);
+    if (terminal_status <= 0) return terminal_status;
+    if (resolved != NULL && resolved_size != 0 &&
+        snprintf(resolved, resolved_size, "%s", unresolved) >= (int)resolved_size)
+        return -ENAMETOOLONG;
+    if (requires_directory != NULL) *requires_directory = trailing;
+    return 1;
+}
+
 static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_walk(const hl_vfs_cursor *root, const hl_vfs_cursor *start,
                                                    const char *path, int nofollow_final, int path_only_final,
+                                                   int stop_before_final, char *resolved_final,
+                                                   size_t resolved_final_size, int *final_requires_directory,
+                                                   hl_vfs_cursor_terminal_hook terminal, void *terminal_context,
+                                                   hl_vfs_cursor_search_hook search, void *search_context,
                                                    hl_vfs_cursor_entry *output) {
+    if (resolved_final != NULL && resolved_final_size != 0) resolved_final[0] = 0;
+    if (final_requires_directory != NULL) *final_requires_directory = 0;
     if (root == NULL || start == NULL || path == NULL || output == NULL || !path[0]) return -ENOENT;
     hl_vfs_cursor *frames = calloc(HL_VFS_CURSOR_DEPTH, sizeof *frames);
     if (frames == NULL) return -ENOMEM;
@@ -507,10 +540,28 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_walk(const hl_vfs_cursor *root, co
     }
     int follows = 0;
     for (;;) {
+        if (search != NULL && (error = search(&frames[depth], search_context)) != 0) goto done;
         char *component = rest;
         while (*component == '/')
             component++;
+        size_t component_rest_length = strlen(component);
+        int trailing_directory = component_rest_length != 0 && component[component_rest_length - 1] == '/';
+        if (stop_before_final && (!nofollow_final || trailing_directory)) {
+            error = hl_vfs_cursor_terminal_remaining(&frames[depth], component, terminal, terminal_context,
+                                                     resolved_final, resolved_final_size,
+                                                     final_requires_directory);
+            if (error < 0) goto done;
+            if (error > 0) {
+                memset(output, 0, sizeof *output);
+                error = 0;
+                goto done;
+            }
+        }
         if (!*component) {
+            if (stop_before_final) {
+                error = HL_VFS_CURSOR_NO_FINAL;
+                goto done;
+            }
             memset(output, 0, sizeof *output);
             output->kind = HL_VFS_CURSOR_DIRECTORY;
             error = hl_vfs_cursor_clone(&frames[depth], &output->directory);
@@ -553,10 +604,30 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_walk(const hl_vfs_cursor *root, co
             snprintf(rest, sizeof rest, "%s", tail);
             continue;
         }
+        char candidate[4200];
+        if (final && stop_before_final) {
+            int length = !strcmp(frames[depth].guest, "/") ? snprintf(candidate, sizeof candidate, "/%s", name)
+                                                            : snprintf(candidate, sizeof candidate, "%s/%s",
+                                                                       frames[depth].guest, name);
+            if (length < 0 || (size_t)length >= sizeof candidate) {
+                error = -ENAMETOOLONG;
+                goto done;
+            }
+        }
         hl_vfs_cursor_entry entry;
         error = hl_vfs_cursor_lookup_intent(&frames[depth], name, path_only_final, &entry);
+        if (error == -ENOENT && final && stop_before_final) {
+            if (final_requires_directory != NULL) *final_requires_directory = *end != 0;
+            if (resolved_final != NULL && resolved_final_size != 0) {
+                int length = snprintf(resolved_final, resolved_final_size, "%s", candidate);
+                if (length < 0 || (size_t)length >= resolved_final_size) error = -ENAMETOOLONG;
+            }
+            if (error == -ENOENT) error = 0;
+            memset(output, 0, sizeof *output);
+            goto done;
+        }
         if (error != 0) goto done;
-        if (entry.kind == HL_VFS_CURSOR_SYMLINK && !(final && nofollow_final)) {
+        if (entry.kind == HL_VFS_CURSOR_SYMLINK && !(final && nofollow_final && !*end)) {
             if (++follows > 40) {
                 hl_vfs_cursor_entry_release(&entry);
                 error = -ELOOP;
@@ -582,6 +653,32 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_walk(const hl_vfs_cursor *root, co
             continue;
         }
         if (final) {
+            if (stop_before_final) {
+                if (*end && entry.kind != HL_VFS_CURSOR_DIRECTORY) {
+                    hl_vfs_cursor_entry_release(&entry);
+                    error = -ENOTDIR;
+                    goto done;
+                }
+                if (final_requires_directory != NULL) *final_requires_directory = *end != 0;
+                if (resolved_final != NULL && resolved_final_size != 0) {
+                    int length = snprintf(resolved_final, resolved_final_size, "%s", candidate);
+                    if (length < 0 || (size_t)length >= resolved_final_size) error = -ENAMETOOLONG;
+                }
+                hl_vfs_cursor_entry_release(&entry);
+                memset(output, 0, sizeof *output);
+                goto done;
+            }
+            if (*end) {
+                if (entry.kind != HL_VFS_CURSOR_DIRECTORY) {
+                    hl_vfs_cursor_entry_release(&entry);
+                    error = -ENOTDIR;
+                    goto done;
+                }
+                if (search != NULL && (error = search(&entry.directory, search_context)) != 0) {
+                    hl_vfs_cursor_entry_release(&entry);
+                    goto done;
+                }
+            }
             *output = entry;
             error = 0;
             goto done;

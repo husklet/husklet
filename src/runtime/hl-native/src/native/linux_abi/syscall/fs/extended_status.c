@@ -311,17 +311,14 @@ static void svc_fs_extended_status_265(struct cpu *c, uint64_t nr, uint64_t a0, 
             guest_abspath_at((int)a0, gp48, gsyn48, sizeof gsyn48);
             if (!strncmp(gsyn48, "/proc/", 6) || !strncmp(gsyn48, "/dev/fd/", 8)) gp48 = gsyn48;
         }
-        if (proc_self_exe(gp48, ep, sizeof ep)) {
-            char hb[4200];
-            const char *hp = xresolve_overlay(ep, hb, sizeof hb);
-            int r = access(hp, (int)a2);
-            G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
+        if (!g_rootfs && proc_self_exe(gp48, ep, sizeof ep)) {
+            G_RET(c) = (uint64_t)(int64_t)dac_access_executable((int)a2, nr == 439 && (a3 & AT_EACCESS));
             break;
         }
         // pseudo /dev char devices (open() backs them with a host node) must also test as present: e.g.
         // libgcrypt probes access("/dev/urandom",R_OK) to pick its RNG module -- an ENOENT there aborts
         // gpgv and breaks `apt-get update`. Test the host device with the requested mode.
-        {
+        if (!g_rootfs) {
             const char *hd = dev_node_hostpath((const char *)a1);
             if (hd) {
                 int r = access(hd, (int)a2);
@@ -334,6 +331,20 @@ static void svc_fs_extended_status_265(struct cpu *c, uint64_t nr, uint64_t a0, 
         // wrongly ENOENT'd (the link exists) instead of succeeding. Resolve the final component unfollowed
         // and evaluate the link node directly. (faccessat(48) has no flags word; a3 is unused there.)
         int access_nofollow = (nr == 439) && (a3 & 0x100);
+        char canonical_access[4200];
+        int final_requires_directory = 0;
+        int search_result = dac_search_at((int)a0, (const char *)a1, access_nofollow,
+                                          nr == 439 && (a3 & AT_EACCESS),
+                                          canonical_access, sizeof canonical_access, &final_requires_directory);
+        const char *synthetic_device = search_result == 0 ? dev_node_hostpath(canonical_access) : NULL;
+        if (g_rootfs && synthetic_device != NULL) {
+            int result = final_requires_directory ? -ENOTDIR : search_result;
+            if (result == 0 && access(synthetic_device, F_OK) != 0) result = -errno;
+            if (result == 0)
+                result = dac_access_synthetic(canonical_access, (int)a2, nr == 439 && (a3 & AT_EACCESS));
+            G_RET(c) = (uint64_t)(int64_t)result;
+            break;
+        }
         if (g_rootfs && a1 && ((const char *)a1)[0]) {
             int cursor_access = dac_access_at((int)a0, (const char *)a1, access_nofollow, (int)a2,
                                               nr == 439 && (a3 & AT_EACCESS));
@@ -341,6 +352,25 @@ static void svc_fs_extended_status_265(struct cpu *c, uint64_t nr, uint64_t a0, 
             // established providers below answer absence; every other cursor verdict is authoritative.
             if (cursor_access != -ENOENT && cursor_access != -ENOSYS) {
                 G_RET(c) = (uint64_t)(int64_t)cursor_access;
+                break;
+            }
+        }
+        const char *proc_candidate = search_result == 0 ? canonical_access : gp48;
+        if (proc_self_exe(proc_candidate, ep, sizeof ep)) {
+            G_RET(c) = final_requires_directory
+                           ? (uint64_t)(int64_t)(-ENOTDIR)
+                           : (uint64_t)(int64_t)dac_access_executable((int)a2,
+                                                                      nr == 439 && (a3 & AT_EACCESS));
+            break;
+        }
+        {
+            const char *host_device = synthetic_device;
+            if (host_device) {
+                int result = final_requires_directory ? -ENOTDIR : access(host_device, F_OK);
+                if (result < 0 && !final_requires_directory) result = -errno;
+                G_RET(c) = result < 0 ? (uint64_t)(int64_t)result
+                                      : (uint64_t)(int64_t)dac_access_synthetic(
+                                            canonical_access, (int)a2, nr == 439 && (a3 & AT_EACCESS));
                 break;
             }
         }

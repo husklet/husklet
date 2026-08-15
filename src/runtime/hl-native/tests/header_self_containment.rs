@@ -696,6 +696,11 @@ int main(void) {
     if (hl_dac_authorize_create(&closed, &user) != EACCES) return 10;
     user.capabilities = UINT64_C(1) << HL_DAC_CAP_DAC_OVERRIDE;
     if (hl_dac_authorize_create(&closed, &user) != 0) return 11;
+    const hl_dac_snapshot closed_directory = {0, 0, 0040000};
+    const hl_dac_snapshot closed_regular = {0, 0, 0100000};
+    user.capabilities = UINT64_C(1) << HL_DAC_CAP_DAC_READ_SEARCH;
+    if (hl_dac_authorize_access(&closed_directory, &user, HL_DAC_EXECUTE) != 0) return 17;
+    if (hl_dac_authorize_access(&closed_regular, &user, HL_DAC_EXECUTE) != EACCES) return 18;
     const hl_dac_snapshot sticky = {1000, 1000, 01777};
     hl_dac_credentials owner = user;
     owner.fsuid = 2000;

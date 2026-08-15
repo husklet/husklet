@@ -243,7 +243,7 @@ static int hl_vfs_cwd_cursor_require(void) {
         error = hl_vfs_cwd_cursor_set(&root);
     } else {
         hl_vfs_cursor_entry entry;
-        error = hl_vfs_cursor_walk(&root, &root, g_cwd, 0, 0, &entry);
+        error = hl_vfs_cursor_walk(&root, &root, g_cwd, 0, 0, 0, NULL, 0, NULL, NULL, NULL, NULL, NULL, &entry);
         if (error == 0) {
             error = entry.kind == HL_VFS_CURSOR_DIRECTORY ? hl_vfs_cwd_cursor_set(&entry.directory) : -ENOTDIR;
             hl_vfs_cursor_entry_release(&entry);
@@ -267,7 +267,9 @@ static int hl_vfs_cursor_resolve_at(int dirfd, const char *path, int nofollow_fi
             if (start == NULL) error = -EBADF;
         }
     }
-    if (error == 0) error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, 0, output);
+    if (error == 0)
+        error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, 0, 0, NULL, 0, NULL, NULL, NULL, NULL, NULL,
+                                   output);
     hl_vfs_cursor_release(&root);
     return error;
 }
@@ -287,7 +289,61 @@ static int hl_vfs_cursor_resolve_metadata_at(int dirfd, const char *path, int no
             if (start == NULL) error = -EBADF;
         }
     }
-    if (error == 0) error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, 1, output);
+    if (error == 0)
+        error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, 1, 0, NULL, 0, NULL, NULL, NULL, NULL, NULL,
+                                   output);
+    hl_vfs_cursor_release(&root);
+    return error;
+}
+
+static int hl_vfs_cursor_resolve_metadata_search_at(int dirfd, const char *path, int nofollow_final,
+                                                    hl_vfs_cursor_search_hook search, void *search_context,
+                                                    hl_vfs_cursor_entry *output) {
+    hl_vfs_cursor root;
+    int error = hl_vfs_cursor_namespace_root(&root);
+    if (error != 0) return error;
+    const hl_vfs_cursor *start = &root;
+    if (path != NULL && path[0] != '/') {
+        if (dirfd == -100) {
+            error = hl_vfs_cwd_cursor_require();
+            if (error == 0) start = g_vfs_cwd_cursor;
+        } else {
+            start = hl_vfs_fd_cursor_get(dirfd);
+            if (start == NULL) error = -EBADF;
+        }
+    }
+    if (error == 0)
+        error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, 1, 0, NULL, 0, NULL, NULL, NULL, search,
+                                   search_context, output);
+    hl_vfs_cursor_release(&root);
+    return error;
+}
+
+static int hl_vfs_cursor_search_parent_at(int dirfd, const char *path, int nofollow_final,
+                                          hl_vfs_cursor_search_hook search,
+                                          void *search_context, char *resolved_final, size_t resolved_final_size,
+                                          int *final_requires_directory, hl_vfs_cursor_terminal_hook terminal,
+                                          void *terminal_context) {
+    if (resolved_final != NULL && resolved_final_size != 0) resolved_final[0] = 0;
+    if (final_requires_directory != NULL) *final_requires_directory = 0;
+    hl_vfs_cursor root;
+    int error = hl_vfs_cursor_namespace_root(&root);
+    if (error != 0) return error;
+    const hl_vfs_cursor *start = &root;
+    if (path != NULL && path[0] != '/') {
+        if (dirfd == -100) {
+            error = hl_vfs_cwd_cursor_require();
+            if (error == 0) start = g_vfs_cwd_cursor;
+        } else {
+            start = hl_vfs_fd_cursor_get(dirfd);
+            if (start == NULL) error = -EBADF;
+        }
+    }
+    hl_vfs_cursor_entry ignored;
+    if (error == 0)
+        error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, 1, 1, resolved_final, resolved_final_size,
+                                   final_requires_directory, terminal, terminal_context, search, search_context,
+                                   &ignored);
     hl_vfs_cursor_release(&root);
     return error;
 }
@@ -307,7 +363,9 @@ static int hl_vfs_cursor_resolve_at_native_lowers(int dirfd, const char *path, i
             if (start == NULL) error = -EBADF;
         }
     }
-    if (error == 0) error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, 0, output);
+    if (error == 0)
+        error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, 0, 0, NULL, 0, NULL, NULL, NULL, NULL, NULL,
+                                   output);
     hl_vfs_cursor_release(&root);
     return error;
 }

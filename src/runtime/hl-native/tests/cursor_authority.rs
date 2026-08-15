@@ -32,6 +32,7 @@ static int closes;
 static int child_present = 1;
 static int clone_fails;
 static int context_poisoned;
+static unsigned child_permissions = 0755;
 
 static hl_host_result result(int32_t status, uint64_t value) {
     return (hl_host_result){.status = status, .value = value};
@@ -76,7 +77,7 @@ static hl_host_result metadata(void *context, hl_host_handle handle, hl_host_fil
     memset(output, 0, sizeof *output);
     output->stable_device = 7;
     output->stable_object = handle;
-    output->permissions = 0755;
+    output->permissions = handle == 2 ? child_permissions : 0755;
     output->type = handle == 3 ? HL_HOST_FILE_TYPE_SYMLINK : HL_HOST_FILE_TYPE_DIRECTORY;
     return result(HL_STATUS_OK, 0);
 }
@@ -99,6 +100,30 @@ static const hl_host_services services = {
 
 #include "linux_abi/container/vfs/cursor.c"
 
+static int search_hook(const hl_vfs_cursor *directory, void *context) {
+    int *calls = context;
+    (*calls)++;
+    if (directory->count != 0 && directory->layers[0].kind == HL_VFS_CURSOR_AUTHORITY_HOST) {
+        const hl_vfs_cursor_authority *authority = &directory->layers[0];
+        hl_host_file_metadata status;
+        if (authority->value.host.services->file->metadata(authority->value.host.services->context,
+                                                           authority->value.host.handle, &status).status != HL_STATUS_OK)
+            return -EIO;
+        if ((status.permissions & 0111) == 0) return -EACCES;
+    }
+    return 0;
+}
+
+static int terminal_hook(const char *guest, void *context) {
+    (void)context;
+    return !strcmp(guest, "/dir/missing");
+}
+
+static int terminal_denied(const char *guest, void *context) {
+    (void)context;
+    return !strcmp(guest, "/dir/missing") ? -EACCES : 0;
+}
+
 int main(void) {
     references[1] = 1;
     hl_vfs_cursor_authority root_authority = {
@@ -115,6 +140,49 @@ int main(void) {
     hl_vfs_cursor_entry_release(&entry);
     child_present = 0;
     if (hl_vfs_cursor_lookup(&root, "dir", &entry) != -ENOENT) return 4;
+    child_present = 1;
+    child_permissions = 0;
+    int search_calls = 0;
+    if (hl_vfs_cursor_walk(&root, &root, "link/missing", 0, 1, 0, NULL, 0, NULL, NULL, NULL, search_hook, &search_calls, &entry) != -EACCES ||
+        search_calls < 2) return 12;
+    search_calls = 0;
+    if (hl_vfs_cursor_walk(&root, &root, "dir/", 0, 1, 0, NULL, 0, NULL, NULL, NULL, search_hook, &search_calls, &entry) != -EACCES ||
+        search_calls < 2) return 13;
+    search_calls = 0;
+    char denied_terminal[16] = "uninitialized";
+    int denied_requires_directory = 7;
+    if (hl_vfs_cursor_walk(&root, &root, "dir/missing", 0, 1, 1, denied_terminal, sizeof denied_terminal,
+                           &denied_requires_directory, terminal_hook, NULL, search_hook, &search_calls, &entry) !=
+            -EACCES ||
+        search_calls < 2 || denied_terminal[0] != 0 || denied_requires_directory != 0) return 20;
+    child_permissions = 0755;
+    search_calls = 0;
+    if (hl_vfs_cursor_walk(&root, &root, "dir/missing", 0, 1, 1, denied_terminal, sizeof denied_terminal,
+                           &denied_requires_directory, terminal_denied, NULL, search_hook, &search_calls, &entry) !=
+            -EACCES ||
+        search_calls < 2 || denied_terminal[0] != 0 || denied_requires_directory != 0) return 22;
+    for (size_t index = 0; index < 3; ++index) {
+        const char *no_final[] = {"/", ".", ".."};
+        char resolved[16] = "uninitialized";
+        int requires_directory = 7;
+        if (hl_vfs_cursor_walk(&root, &root, no_final[index], 0, 1, 1, resolved, sizeof resolved,
+                               &requires_directory, NULL, NULL, search_hook, &search_calls, &entry) != HL_VFS_CURSOR_NO_FINAL ||
+            resolved[0] != 0 || requires_directory != 0) return 14 + (int)index;
+    }
+    char resolved_link[16];
+    int requires_directory = 0;
+    if (hl_vfs_cursor_walk(&root, &root, "link", 0, 1, 1, resolved_link, sizeof resolved_link,
+                           &requires_directory, NULL, NULL, search_hook, &search_calls, &entry) != 0 ||
+        strcmp(resolved_link, "/dir") || requires_directory) return 17;
+    if (hl_vfs_cursor_walk(&root, &root, "link", 1, 1, 1, resolved_link, sizeof resolved_link,
+                           &requires_directory, NULL, NULL, search_hook, &search_calls, &entry) != 0 ||
+        strcmp(resolved_link, "/link") || requires_directory) return 18;
+    if (hl_vfs_cursor_walk(&root, &root, "link/", 1, 1, 1, resolved_link, sizeof resolved_link,
+                           &requires_directory, NULL, NULL, search_hook, &search_calls, &entry) != 0 ||
+        strcmp(resolved_link, "/dir") || !requires_directory) return 21;
+    if (hl_vfs_cursor_walk(&root, &root, "link/missing", 0, 1, 1, resolved_link, sizeof resolved_link,
+                           &requires_directory, terminal_hook, NULL, search_hook, &search_calls, &entry) != 0 ||
+        strcmp(resolved_link, "/dir/missing") || requires_directory) return 19;
     hl_vfs_cursor clone;
     if (hl_vfs_cursor_clone(&root, &clone) != 0 || clones < 3) return 5;
     hl_vfs_cursor_release(&clone);
