@@ -302,8 +302,14 @@ impl<'a> CCompiler<'a> {
     }
 
     fn assemble_gnu(&self, spec: &ArchiveSpec, path: &std::path::Path, objects: &[PathBuf]) -> Result<()> {
+        let (flags, zero_ar_date) = deterministic_archive_mode(self.environment.host.as_str());
+        if zero_ar_date {
+            let mut command = self.gnu_archiver(spec);
+            command.env("ZERO_AR_DATE", "1").arg(flags).arg(path).args(objects);
+            return run(&mut command, "assemble deterministic C archive", path);
+        }
         let mut command = self.gnu_archiver(spec);
-        command.arg("crsD").arg(path).args(objects);
+        command.arg(flags).arg(path).args(objects);
         let status = command
             .status()
             .map_err(|source| Error::io("assemble deterministic C archive", path, source))?;
@@ -322,6 +328,14 @@ impl<'a> CCompiler<'a> {
             command.arg("--format=darwin");
         }
         command
+    }
+}
+
+fn deterministic_archive_mode(host: &str) -> (&'static str, bool) {
+    if host.ends_with("-apple-darwin") {
+        ("crs", true)
+    } else {
+        ("crsD", false)
     }
 }
 
@@ -427,7 +441,14 @@ fn run(command: &mut std::process::Command, operation: &'static str, path: &std:
 
 #[cfg(test)]
 mod tests {
-    use super::{ArchiveSpec, Definition, LanguageStandard, Visibility, Warning};
+    use super::{ArchiveSpec, Definition, LanguageStandard, Visibility, Warning, deterministic_archive_mode};
+
+    #[test]
+    fn apple_archiver_uses_zero_date_without_gnu_deterministic_flag() {
+        assert_eq!(deterministic_archive_mode("aarch64-apple-darwin"), ("crs", true));
+        assert_eq!(deterministic_archive_mode("x86_64-apple-darwin"), ("crs", true));
+        assert_eq!(deterministic_archive_mode("aarch64-unknown-linux-gnu"), ("crsD", false));
+    }
     #[test]
     fn compile_options_are_explicit_in_the_archive_spec() {
         let spec = ArchiveSpec::new("core")

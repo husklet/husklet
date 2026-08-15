@@ -137,11 +137,17 @@ HL_API int32_t hl_c_backend_errno_from_host_test(uint32_t domain, int32_t host_e
 }
 #endif
 
-extern int hl_aarch64_ckpt_broker_pair(hl_activation_descriptor *, hl_activation_descriptor *);
-extern hl_activation_descriptor hl_aarch64_ckpt_broker_accept(hl_activation_descriptor, int, uint64_t *);
-extern int hl_aarch64_ckpt_trigger_create(hl_activation_descriptor *, void **);
-extern uint32_t hl_aarch64_ckpt_trigger_bump(void *);
-extern void hl_aarch64_ckpt_trigger_destroy(void *, hl_activation_descriptor);
+#if defined(HL_BUILD_TARGET_X86_64_ONLY)
+#define HL_BRIDGE_CKPT(name) hl_x86_64_ckpt_##name
+#else
+#define HL_BRIDGE_CKPT(name) hl_aarch64_ckpt_##name
+#endif
+
+extern int HL_BRIDGE_CKPT(broker_pair)(hl_activation_descriptor *, hl_activation_descriptor *);
+extern hl_activation_descriptor HL_BRIDGE_CKPT(broker_accept)(hl_activation_descriptor, int, uint64_t *);
+extern int HL_BRIDGE_CKPT(trigger_create)(hl_activation_descriptor *, void **);
+extern uint32_t HL_BRIDGE_CKPT(trigger_bump)(void *);
+extern void HL_BRIDGE_CKPT(trigger_destroy)(void *, hl_activation_descriptor);
 
 HL_API int32_t hl_c_backend_checkpoint_broker_pair(int32_t *parent, int32_t *child) {
     hl_activation_descriptor parent_descriptor = HL_ACTIVATION_DESCRIPTOR_NONE;
@@ -149,7 +155,7 @@ HL_API int32_t hl_c_backend_checkpoint_broker_pair(int32_t *parent, int32_t *chi
     if (parent == NULL || child == NULL) return HL_STATUS_INVALID_ARGUMENT;
     *parent = -1;
     *child = -1;
-    if (hl_aarch64_ckpt_broker_pair(&parent_descriptor, &child_descriptor) != 0 || parent_descriptor > INT32_MAX ||
+    if (HL_BRIDGE_CKPT(broker_pair)(&parent_descriptor, &child_descriptor) != 0 || parent_descriptor > INT32_MAX ||
         child_descriptor > INT32_MAX)
         return HL_STATUS_PLATFORM_FAILURE;
     *parent = (int32_t)parent_descriptor;
@@ -160,7 +166,7 @@ HL_API int32_t hl_c_backend_checkpoint_broker_pair(int32_t *parent, int32_t *chi
 HL_API int32_t hl_c_backend_checkpoint_broker_accept(int32_t broker, int32_t timeout_ms, uint64_t *host_pid) {
     hl_activation_descriptor channel;
     if (broker < 0 || timeout_ms < 0) return -1;
-    channel = hl_aarch64_ckpt_broker_accept((hl_activation_descriptor)broker, timeout_ms, host_pid);
+    channel = HL_BRIDGE_CKPT(broker_accept)((hl_activation_descriptor)broker, timeout_ms, host_pid);
     return channel == HL_ACTIVATION_DESCRIPTOR_NONE || channel > INT32_MAX ? -1 : (int32_t)channel;
 }
 
@@ -169,20 +175,19 @@ HL_API int32_t hl_c_backend_checkpoint_trigger_create(int32_t *descriptor, void 
     if (descriptor == NULL || mapping == NULL) return HL_STATUS_INVALID_ARGUMENT;
     *descriptor = -1;
     *mapping = NULL;
-    if (hl_aarch64_ckpt_trigger_create(&native_descriptor, mapping) != 0 || native_descriptor > INT32_MAX)
+    if (HL_BRIDGE_CKPT(trigger_create)(&native_descriptor, mapping) != 0 || native_descriptor > INT32_MAX)
         return HL_STATUS_PLATFORM_FAILURE;
     *descriptor = (int32_t)native_descriptor;
     return HL_STATUS_OK;
 }
 
 HL_API uint32_t hl_c_backend_checkpoint_trigger_bump(void *mapping) {
-    return hl_aarch64_ckpt_trigger_bump(mapping);
+    return HL_BRIDGE_CKPT(trigger_bump)(mapping);
 }
 
 HL_API void hl_c_backend_checkpoint_trigger_destroy(void *mapping, int32_t descriptor) {
-    hl_aarch64_ckpt_trigger_destroy(mapping,
-                                    descriptor < 0 ? HL_ACTIVATION_DESCRIPTOR_NONE
-                                                   : (hl_activation_descriptor)descriptor);
+    HL_BRIDGE_CKPT(trigger_destroy)(mapping, descriptor < 0 ? HL_ACTIVATION_DESCRIPTOR_NONE
+                                                            : (hl_activation_descriptor)descriptor);
 }
 
 extern int hl_aarch64_ckpt_channel_adopt(const char *broker, const char *trigger);
@@ -210,8 +215,12 @@ HL_API int32_t hl_c_backend_checkpoint_adopt(uint32_t isa, int32_t broker, int32
     }
     (void)snprintf(broker_text, sizeof(broker_text), "%d", broker_copy);
     (void)snprintf(trigger_text, sizeof(trigger_text), "%d", trigger_copy);
+#if defined(HL_BUILD_TARGET_X86_64_ONLY)
+    if (isa == 2 && hl_x86_64_ckpt_channel_adopt(broker_text, trigger_text) == 0)
+#else
     if ((isa == 1 ? hl_aarch64_ckpt_channel_adopt(broker_text, trigger_text)
                   : hl_x86_64_ckpt_channel_adopt(broker_text, trigger_text)) == 0)
+#endif
         return HL_STATUS_OK;
     (void)close(broker_copy);
     (void)close(trigger_copy);
@@ -219,10 +228,14 @@ HL_API int32_t hl_c_backend_checkpoint_adopt(uint32_t isa, int32_t broker, int32
 #endif
 }
 
-extern int hl_aarch64_ckpt_interrupt_signal(void);
+extern int HL_BRIDGE_CKPT(interrupt_signal)(void);
 
 HL_API int32_t hl_c_backend_checkpoint_interrupt_signal(uint32_t isa) {
-    return isa == 1 || isa == 2 ? hl_aarch64_ckpt_interrupt_signal() : -1;
+#if defined(HL_BUILD_TARGET_X86_64_ONLY)
+    return isa == 2 ? HL_BRIDGE_CKPT(interrupt_signal)() : -1;
+#else
+    return isa == 1 || isa == 2 ? HL_BRIDGE_CKPT(interrupt_signal)() : -1;
+#endif
 }
 
 HL_API int32_t hl_c_backend_checkpoint_configure(hl_c_backend *backend, int32_t broker, int32_t trigger) {
