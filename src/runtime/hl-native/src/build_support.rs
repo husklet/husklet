@@ -2,10 +2,11 @@
 
 pub(crate) const BUILD_POLICY_INPUTS: &[&str] = &[
     "build.rs",
-    "inventory/mod.rs",
-    "inventory/sources.rs",
     "src/artifact.rs",
     "src/build_support.rs",
+    "src/inventory/mod.rs",
+    "src/inventory/sources.rs",
+    "src/native_build.rs",
     "src/platform.rs",
 ];
 
@@ -126,10 +127,11 @@ mod tests {
             super::BUILD_POLICY_INPUTS,
             &[
                 "build.rs",
-                "inventory/mod.rs",
-                "inventory/sources.rs",
                 "src/artifact.rs",
                 "src/build_support.rs",
+                "src/inventory/mod.rs",
+                "src/inventory/sources.rs",
+                "src/native_build.rs",
                 "src/platform.rs",
             ]
         );
@@ -139,6 +141,40 @@ mod tests {
                 "missing build policy input {path}"
             );
         }
+
+        let listed = super::BUILD_POLICY_INPUTS
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        let entry = std::fs::read_to_string("build.rs").expect("read Cargo build entry point");
+        assert!(
+            entry.contains("include!(\"src/native_build.rs\")"),
+            "build.rs must delegate to the owned native build module"
+        );
+        for module in ["artifact", "build_support", "inventory", "platform"] {
+            let source = format!("mod {module};");
+            assert!(
+                std::fs::read_to_string("src/native_build.rs")
+                    .expect("read native build module")
+                    .contains(&source),
+                "native build module no longer owns {module}"
+            );
+            let file = format!("src/{module}.rs");
+            let directory = format!("src/{module}/mod.rs");
+            let resolved = if std::path::Path::new(&file).is_file() {
+                file
+            } else {
+                directory
+            };
+            assert!(
+                listed.contains(resolved.as_str()),
+                "build module {resolved} is absent from rerun inventory"
+            );
+        }
+        assert!(
+            listed.contains("src/inventory/sources.rs"),
+            "nested inventory source discovery is absent from rerun inventory"
+        );
     }
 
     #[test]

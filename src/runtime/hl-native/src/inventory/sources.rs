@@ -1,3 +1,5 @@
+//! Deterministic native translation-unit discovery.
+
 use std::{
     collections::BTreeSet,
     fs,
