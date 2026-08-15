@@ -213,7 +213,11 @@ fn wait_cycle_ready(path: &Path) -> bool {
     false
 }
 
-fn checkpoint_round_trip(isa: GuestIsa, executable: &Path) {
+fn checkpoint_deadline() -> Instant {
+    Instant::now() + Duration::from_secs(10)
+}
+
+fn checkpoint_round_trip(isa: GuestIsa, executable: &Path, recapture_barrier: Option<&std::sync::Barrier>) {
     let temporary = tempfile::tempdir().unwrap();
     let release = temporary.path().join("release");
     let final_release = temporary.path().join("final-release");
@@ -230,7 +234,7 @@ fn checkpoint_round_trip(isa: GuestIsa, executable: &Path) {
     .unwrap();
     capture.start().unwrap();
     wait_ready(&output);
-    capture.capture_checkpoint().unwrap();
+    capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
     assert_eq!(capture.wait().unwrap().guest_status, 0);
     {
         let image = store.0.lock().unwrap();
@@ -286,12 +290,17 @@ fn checkpoint_round_trip(isa: GuestIsa, executable: &Path) {
         recapture.wait(),
         std::fs::read_to_string(&output).unwrap_or_default()
     );
-    recapture.capture_checkpoint().unwrap_or_else(|error| {
-        panic!(
-            "second checkpoint failed: {error:?}\n{}",
-            std::fs::read_to_string(&output).unwrap_or_default()
-        )
-    });
+    if let Some(barrier) = recapture_barrier {
+        barrier.wait();
+    }
+    recapture
+        .capture_checkpoint_until(checkpoint_deadline())
+        .unwrap_or_else(|error| {
+            panic!(
+                "second checkpoint failed: {error:?}\n{}",
+                std::fs::read_to_string(&output).unwrap_or_default()
+            )
+        });
     assert_eq!(recapture.wait().unwrap().guest_status, 0);
 
     std::fs::write(&final_release, []).unwrap();
@@ -327,7 +336,122 @@ fn retained_c_round_trips_three_process_tree_on_both_isas() {
             "missing checkpoint fixture: {}",
             executable.display()
         );
-        checkpoint_round_trip(isa, &executable);
+        checkpoint_round_trip(isa, &executable, None);
+    }
+}
+
+#[test]
+fn concurrent_engines_keep_second_generation_checkpoint_channels_private() {
+    let fixtures = tempfile::tempdir().unwrap();
+    let executables = [
+        (GuestIsa::Aarch64, signalfd_fixture(GuestIsa::Aarch64, fixtures.path())),
+        (GuestIsa::X86_64, signalfd_fixture(GuestIsa::X86_64, fixtures.path())),
+    ];
+    let (first_ready, second_start) = std::sync::mpsc::channel();
+    let (second_ready, first_capture) = std::sync::mpsc::channel();
+    let (first_done, second_capture) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        let [(first_isa, first_executable), (second_isa, second_executable)] = executables;
+        scope.spawn(move || {
+            concurrent_signalfd_recapture(
+                first_isa,
+                &first_executable,
+                None,
+                Some(first_ready),
+                Some(first_capture),
+                Some(first_done),
+            )
+        });
+        scope.spawn(move || {
+            concurrent_signalfd_recapture(
+                second_isa,
+                &second_executable,
+                Some(second_start),
+                Some(second_ready),
+                Some(second_capture),
+                None,
+            )
+        });
+    });
+}
+
+fn concurrent_signalfd_recapture(
+    isa: GuestIsa,
+    executable: &Path,
+    start_gate: Option<std::sync::mpsc::Receiver<()>>,
+    ready_signal: Option<std::sync::mpsc::Sender<()>>,
+    capture_gate: Option<std::sync::mpsc::Receiver<()>>,
+    done_signal: Option<std::sync::mpsc::Sender<()>>,
+) {
+    let temporary = tempfile::tempdir().unwrap();
+    let release = temporary.path().join("release");
+    let final_release = temporary.path().join("final-release");
+    let output = temporary.path().join("release.output");
+    let first = Arc::new(Store::default());
+    let capture = Engine::with_checkpoint(
+        isa,
+        plan(executable, &release, &final_release, &["HL_CHECKPOINT"]),
+        StandardStreams::default(),
+        first.clone(),
+        first.clone(),
+    )
+    .unwrap();
+    capture.start().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline
+        && !std::fs::read_to_string(&output)
+            .unwrap_or_default()
+            .contains("READY targeted_wrong_read=1")
+    {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+    assert_eq!(capture.wait().unwrap().guest_status, 0);
+
+    if let Some(start_gate) = start_gate {
+        start_gate.recv().unwrap();
+    }
+    std::fs::write(&release, []).unwrap();
+    let second = Arc::new(Store::default());
+    let recapture = Engine::with_checkpoint(
+        isa,
+        plan(executable, &release, &final_release, &["HL_RESTORE", "HL_CHECKPOINT"]),
+        StandardStreams::default(),
+        second.clone(),
+        first,
+    )
+    .unwrap();
+    recapture.start().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline
+        && !std::fs::read_to_string(&output)
+            .unwrap_or_default()
+            .contains("CYCLE-READY")
+    {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        std::fs::read_to_string(&output)
+            .unwrap_or_default()
+            .contains("CYCLE-READY")
+    );
+    if let Some(ready_signal) = ready_signal {
+        ready_signal.send(()).unwrap();
+    }
+    if let Some(capture_gate) = capture_gate {
+        capture_gate.recv().unwrap();
+    }
+    recapture
+        .capture_checkpoint_until(checkpoint_deadline())
+        .unwrap_or_else(|error| {
+            panic!(
+                "concurrent second checkpoint failed: {error:?}\n{}",
+                std::fs::read_to_string(&output).unwrap_or_default()
+            )
+        });
+    assert_eq!(recapture.wait().unwrap().guest_status, 0);
+    if let Some(done_signal) = done_signal {
+        done_signal.send(()).unwrap();
     }
 }
 
@@ -363,7 +487,7 @@ fn signalfd_readiness_and_signal64_defer_survive_two_generations_on_both_isas() 
             before_capture.contains("READY targeted_wrong_read=1 targeted_wrong_ready=1"),
             "guest did not reach decisive first checkpoint state: {before_capture}"
         );
-        capture.capture_checkpoint().unwrap();
+        capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
         assert_transient_signalfd_slots_absent(&first);
         let capture_result = capture.wait();
         assert!(
@@ -396,7 +520,14 @@ fn signalfd_readiness_and_signal64_defer_survive_two_generations_on_both_isas() 
             before_recapture.contains("CYCLE-READY"),
             "guest did not enter parked signal handler: {before_recapture}"
         );
-        recapture.capture_checkpoint().unwrap();
+        recapture
+            .capture_checkpoint_until(checkpoint_deadline())
+            .unwrap_or_else(|error| {
+                panic!(
+                    "signalfd second checkpoint failed: {error:?}\n{}",
+                    std::fs::read_to_string(&output).unwrap_or_default()
+                )
+            });
         assert_transient_signalfd_slots_absent(&second);
         let recapture_result = recapture.wait();
         assert!(

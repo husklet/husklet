@@ -81,6 +81,7 @@ int hl_host_process_fd_private_floor(void);
 void hl_host_process_fd_private_remove(int descriptor);
 int hl_host_process_fd_private_is(int64_t pid, uint64_t start_ns, int descriptor);
 int hl_host_process_fd_private_current(int descriptor);
+size_t hl_host_process_fd_private_count_current(void);
 int hl_host_process_fd_private_fork_prepare(void);
 int hl_host_process_fd_private_fork_complete(int child);
 void hl_host_process_fd_private_cleanup(void);

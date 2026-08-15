@@ -1169,6 +1169,64 @@ int main(int argc, char **argv) {
 
     #[cfg(feature = "native-test-hooks")]
     #[test]
+    fn fork_child_prunes_foreign_checkpoint_descriptors_before_fd_reuse() {
+        // SAFETY: the test hook creates, forks, verifies, and closes its own descriptors.
+        assert_eq!(
+            unsafe { crate::bindings::hl_c_backend_checkpoint_test_prune_foreign_descriptors() },
+            1
+        );
+    }
+
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn checkpoint_configuration_adopt_failures_preserve_descriptor_ownership() {
+        const CHILD: &str = "HL_NATIVE_CHECKPOINT_ADOPT_FAILURE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "engine::tests::checkpoint_configuration_adopt_failures_preserve_descriptor_ownership",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1");
+            let status = command.status().unwrap();
+            assert!(status.success(), "checkpoint adoption child failed: {status}");
+            return;
+        }
+
+        let descriptor_directory = if cfg!(target_os = "linux") {
+            "/proc/self/fd"
+        } else {
+            "/dev/fd"
+        };
+        for position in 1..=4 {
+            let (mut engine, _standard) = create_engine(1);
+            let (_broker, transport) = crate::CheckpointTransport::create().unwrap();
+            let descriptors_before = std::fs::read_dir(descriptor_directory).unwrap().count();
+            // SAFETY: the feature-only hook affects only this thread's next configure transaction.
+            unsafe { crate::bindings::hl_c_backend_checkpoint_test_fail_private_adopt(position) };
+            let private_before = unsafe { crate::bindings::hl_c_backend_checkpoint_test_private_descriptor_count() };
+            assert!(
+                engine.configure_checkpoint(&transport).is_err(),
+                "position {position} unexpectedly succeeded"
+            );
+            let descriptors_after = std::fs::read_dir(descriptor_directory).unwrap().count();
+            let private_after = unsafe { crate::bindings::hl_c_backend_checkpoint_test_private_descriptor_count() };
+            assert_eq!(
+                descriptors_after, descriptors_before,
+                "position {position} leaked a descriptor"
+            );
+            assert_eq!(
+                private_after, private_before,
+                "position {position} changed private ownership"
+            );
+            engine.configure_checkpoint(&transport).unwrap();
+        }
+    }
+
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
     fn checkpoint_control_transaction_serializes_readiness_and_acknowledgement() {
         const CHILD: &str = "HL_NATIVE_CHECKPOINT_TRANSACTION_CHILD";
         if std::env::var_os(CHILD).is_none() {

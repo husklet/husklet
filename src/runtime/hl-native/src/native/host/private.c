@@ -355,6 +355,23 @@ int hl_host_process_fd_private_current(int fd) {
     return hl_host_process_fd_private_is(pid, hl_private_process_start(pid), fd);
 }
 
+size_t hl_host_process_fd_private_count_current(void) {
+    int64_t pid = (int64_t)getpid();
+    uint64_t start = hl_private_process_start(pid);
+    size_t count = 0;
+    if (!hl_private) return 0;
+    for (unsigned record = 0; record < HL_PRIVATE_PROCESSES; ++record) {
+        hl_private_process *process = &hl_private[record];
+        if (atomic_load_explicit(&process->state, memory_order_acquire) != HL_PRIVATE_LIVE ||
+            atomic_load_explicit(&process->pid, memory_order_relaxed) != pid ||
+            atomic_load_explicit(&process->start_ns, memory_order_relaxed) != start)
+            continue;
+        for (unsigned index = 0; index < HL_PRIVATE_CELLS; ++index)
+            count += (uint32_t)atomic_load_explicit(&process->cells[index], memory_order_acquire);
+    }
+    return count;
+}
+
 int hl_host_process_fd_private_fork_prepare(void) {
     int64_t pid = (int64_t)getpid();
     uint64_t start = hl_private_process_start(pid);

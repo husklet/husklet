@@ -110,7 +110,7 @@ pub(crate) struct Server {
     state: Mutex<State>,
     capture: Mutex<CaptureState>,
     capture_changed: Condvar,
-    channels: Mutex<HashMap<i32, UnixStream>>,
+    channels: Mutex<HashMap<i32, Arc<UnixStream>>>,
     recovery_connections: Mutex<HashMap<u64, u64>>,
     committed: AtomicBool,
     running: AtomicBool,
@@ -450,16 +450,15 @@ impl Server {
         }
     }
 
-    pub(crate) fn serve(self: &Arc<Self>, mut channel: UnixStream, id: u64) {
+    pub(crate) fn serve(self: &Arc<Self>, channel: UnixStream, id: u64) {
+        let channel = Arc::new(channel);
         let descriptor = channel.as_raw_fd();
-        let Ok(control) = channel.try_clone() else {
-            return;
-        };
         let Ok(mut channels) = self.channels.lock() else {
             return;
         };
-        channels.insert(descriptor, control);
+        channels.insert(descriptor, Arc::clone(&channel));
         drop(channels);
+        let mut channel = channel.as_ref();
         if let Ok(capture) = self.capture_lock()
             && let CapturePhase::Recovery { id: recovery, .. } = capture.phase
             && let Ok(mut connections) = self.recovery_connections.lock()

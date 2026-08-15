@@ -40,5 +40,9 @@ hl_status hl_engine_create_with_borrowed_options_and_syscall_trap_and_interprete
     size_t interpreter_size, hl_engine **out_engine);
 uint64_t hl_engine_translation_count(const hl_engine *engine);
 hl_status hl_engine_checkpoint_configure(hl_engine *engine, int broker, int trigger);
+void hl_engine_checkpoint_fork_prepare(void);
+void hl_engine_checkpoint_fork_parent(void);
+void hl_engine_checkpoint_fork_child(int broker, int trigger, int control);
+int hl_engine_checkpoint_descriptors_register(int first, int second);
 
 #endif

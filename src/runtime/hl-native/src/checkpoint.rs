@@ -172,6 +172,23 @@ mod tests {
         transport.adopt(1).expect("adopt transport descriptors");
     }
 
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn registry_allocation_failure_rejects_transport_without_leaking_descriptors() {
+        let _adoption = ADOPTION.lock().expect("checkpoint adoption lock");
+        let directory = if cfg!(target_os = "linux") {
+            "/proc/self/fd"
+        } else {
+            "/dev/fd"
+        };
+        let before = std::fs::read_dir(directory).expect("descriptor directory").count();
+        // SAFETY: this feature-only hook fails exactly the next registry reservation.
+        unsafe { crate::bindings::hl_c_backend_checkpoint_test_fail_registry_allocation() };
+        assert!(CheckpointTransport::create().is_err());
+        let after = std::fs::read_dir(directory).expect("descriptor directory").count();
+        assert_eq!(after, before, "failed registration leaked a checkpoint descriptor");
+    }
+
     #[test]
     #[cfg(unix)]
     fn repeated_adoption_replaces_owned_descriptors() {

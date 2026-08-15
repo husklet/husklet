@@ -165,6 +165,14 @@ unsafe extern "C" {
     pub(super) fn hl_c_backend_checkpoint_test_release();
     #[cfg(all(test, feature = "native-test-hooks"))]
     pub(super) fn hl_c_backend_checkpoint_test_reset();
+    #[allow(dead_code)]
+    pub(super) fn hl_c_backend_checkpoint_test_prune_foreign_descriptors() -> c_uint;
+    #[allow(dead_code)]
+    pub(super) fn hl_c_backend_checkpoint_test_fail_registry_allocation();
+    #[allow(dead_code)]
+    pub(super) fn hl_c_backend_checkpoint_test_fail_private_adopt(position: c_uint);
+    #[allow(dead_code)]
+    pub(super) fn hl_c_backend_checkpoint_test_private_descriptor_count() -> u64;
     pub(super) fn hl_c_backend_exit(backend: *mut Backend, result: *mut EngineExit) -> c_int;
     #[cfg(test)]
     pub(super) fn hl_c_backend_exit_kind(backend: *const Backend) -> c_uint;

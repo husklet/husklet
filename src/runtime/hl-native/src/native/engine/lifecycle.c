@@ -531,6 +531,8 @@ static void *hl_checkpoint_control_main(void *opaque) {
 
 static int32_t hl_production_entry(void *opaque) {
     hl_production_entry_context *context = opaque;
+    hl_engine_checkpoint_fork_child(context->checkpoint_broker, context->checkpoint_trigger,
+                                    context->checkpoint_control);
     hl_status terminal_status = hl_production_claim_terminal(context);
     if (terminal_status != HL_STATUS_OK) return terminal_status;
     active_result = context->result;
@@ -655,16 +657,18 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     entry.checkpoint_control = checkpoint_control;
     entry.interpreter_image = interpreter_image;
     entry.interpreter_size = interpreter_size;
+    hl_engine_checkpoint_fork_prepare();
     if (box == NULL) {
         spawned = host->process->spawn_cloned(host->context, hl_production_entry, &entry);
     } else {
         hl_status status = hl_linux_abi_spawn(box, hl_production_entry, &entry, process);
         if (status != HL_STATUS_OK) {
-            hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);
-            return status;
+            spawned = (hl_host_result){(int32_t)status, 0, HL_HOST_HANDLE_INVALID, 0};
+        } else {
+            spawned = (hl_host_result){HL_STATUS_OK, 0, *process, 0};
         }
-        spawned = (hl_host_result){HL_STATUS_OK, 0, *process, 0};
     }
+    hl_engine_checkpoint_fork_parent();
 #endif
     if (spawned.status != HL_STATUS_OK) {
         hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);

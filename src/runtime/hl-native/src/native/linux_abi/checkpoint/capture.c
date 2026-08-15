@@ -960,7 +960,11 @@ int hl_ckpt_interrupt_executors(void) {
         if (g_threg[i].c == NULL) continue;
         __atomic_store_n(&g_threg[i].c->irq, 1, __ATOMIC_SEQ_CST);
         if (pthread_kill(g_threg[i].th, THREAD_INT_SIG) != 0) continue;
-        pthread_kill(g_threg[i].th, STW_SIG);
+        /* THREAD_INT_SIG is the activation kick.  Do not queue STW_SIG here:
+         * delivery can be delayed until the leader has armed its own checkpoint
+         * gate, at which point the gate owner parks in stw_park_handler waiting
+         * for itself to release that gate.  ckpt_dump_self() sends STW_SIG only
+         * to peer threads after the barrier is armed. */
         interrupted++;
         if (g_threg[i].c->tid == 0) leader_interrupted = 1;
     }

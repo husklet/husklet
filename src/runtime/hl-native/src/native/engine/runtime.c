@@ -9,9 +9,15 @@
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <signal.h>
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#if !defined(_WIN32)
+#include <pthread.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#endif
 
 #define HL_ENGINE_REQUEST_CHECKPOINT_PRIVATE 4u
 #if !defined(_WIN32)
@@ -68,6 +74,128 @@ struct hl_engine {
     uint32_t checkpoint_control_ready;
 };
 
+#if !defined(_WIN32)
+static pthread_mutex_t checkpoint_registry_lock = PTHREAD_MUTEX_INITIALIZER;
+typedef struct hl_checkpoint_descriptor {
+    int descriptor;
+    dev_t device;
+    ino_t inode;
+} hl_checkpoint_descriptor;
+static hl_checkpoint_descriptor *checkpoint_registry;
+static size_t checkpoint_registry_count;
+static size_t checkpoint_registry_capacity;
+#if defined(HL_NATIVE_TEST_HOOKS)
+static _Thread_local int checkpoint_registry_fail_allocation;
+static _Thread_local uint32_t checkpoint_adopt_failure_position;
+static _Thread_local uint32_t checkpoint_adopt_position;
+#endif
+
+static void hl_engine_checkpoint_registry_compact_locked(void) {
+    size_t index;
+    for (index = 0; index < checkpoint_registry_count; ++index) {
+        hl_checkpoint_descriptor *entry = &checkpoint_registry[index];
+        struct stat current;
+        if (fstat(entry->descriptor, &current) != 0 || current.st_dev != entry->device || current.st_ino != entry->inode)
+            *entry = checkpoint_registry[--checkpoint_registry_count];
+        else
+            continue;
+        --index;
+    }
+}
+
+static int hl_engine_checkpoint_registry_reserve_locked(size_t additional) {
+    size_t required = checkpoint_registry_count + additional;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (checkpoint_registry_fail_allocation) {
+        checkpoint_registry_fail_allocation = 0;
+        return -1;
+    }
+#endif
+    if (required > checkpoint_registry_capacity) {
+        size_t capacity = checkpoint_registry_capacity == 0 ? 16 : checkpoint_registry_capacity;
+        while (capacity < required) capacity *= 2;
+        hl_checkpoint_descriptor *grown = realloc(checkpoint_registry, capacity * sizeof(*grown));
+        if (grown == NULL) return -1;
+        checkpoint_registry = grown;
+        checkpoint_registry_capacity = capacity;
+    }
+    return 0;
+}
+
+static int hl_engine_checkpoint_descriptor_identity(int descriptor, hl_checkpoint_descriptor *out) {
+    struct stat identity;
+    if (descriptor < 0 || fstat(descriptor, &identity) != 0) return -1;
+    *out = (hl_checkpoint_descriptor){descriptor, identity.st_dev, identity.st_ino};
+    return 0;
+}
+
+static void hl_engine_checkpoint_descriptor_append_locked(hl_checkpoint_descriptor descriptor) {
+    size_t index;
+    for (index = 0; index < checkpoint_registry_count; ++index) {
+        hl_checkpoint_descriptor *entry = &checkpoint_registry[index];
+        if (entry->descriptor == descriptor.descriptor && entry->device == descriptor.device &&
+            entry->inode == descriptor.inode)
+            return;
+    }
+    checkpoint_registry[checkpoint_registry_count++] = descriptor;
+}
+
+int hl_engine_checkpoint_descriptors_register(int first, int second) {
+    hl_checkpoint_descriptor descriptors[2];
+    size_t count = second < 0 ? 1 : 2;
+    int status = -1;
+    (void)pthread_mutex_lock(&checkpoint_registry_lock);
+    hl_engine_checkpoint_registry_compact_locked();
+    if (hl_engine_checkpoint_descriptor_identity(first, &descriptors[0]) == 0 &&
+        (count == 1 || hl_engine_checkpoint_descriptor_identity(second, &descriptors[1]) == 0) &&
+        hl_engine_checkpoint_registry_reserve_locked(count) == 0) {
+        hl_engine_checkpoint_descriptor_append_locked(descriptors[0]);
+        if (count == 2) hl_engine_checkpoint_descriptor_append_locked(descriptors[1]);
+        status = 0;
+    }
+    (void)pthread_mutex_unlock(&checkpoint_registry_lock);
+    return status;
+}
+
+void hl_engine_checkpoint_fork_prepare(void) {
+    (void)pthread_mutex_lock(&checkpoint_registry_lock);
+}
+
+void hl_engine_checkpoint_fork_parent(void) {
+    (void)pthread_mutex_unlock(&checkpoint_registry_lock);
+}
+
+static void hl_engine_checkpoint_fork_close(int descriptor, int broker, int trigger, int control) {
+    if (descriptor < 0 || descriptor == broker || descriptor == trigger || descriptor == control) return;
+    hl_host_process_fd_private_remove(descriptor);
+    (void)close(descriptor);
+}
+
+void hl_engine_checkpoint_fork_child(int broker, int trigger, int control) {
+    size_t index;
+    for (index = 0; index < checkpoint_registry_count; ++index) {
+        hl_checkpoint_descriptor *entry = &checkpoint_registry[index];
+        struct stat identity;
+        if (fstat(entry->descriptor, &identity) == 0 && identity.st_dev == entry->device && identity.st_ino == entry->inode)
+            hl_engine_checkpoint_fork_close(entry->descriptor, broker, trigger, control);
+    }
+    (void)pthread_mutex_unlock(&checkpoint_registry_lock);
+}
+#else
+void hl_engine_checkpoint_fork_prepare(void) {}
+void hl_engine_checkpoint_fork_parent(void) {}
+void hl_engine_checkpoint_fork_child(int broker, int trigger, int control) {
+    (void)broker;
+    (void)trigger;
+    (void)control;
+}
+int hl_engine_checkpoint_descriptors_register(int first, int second) {
+    (void)first;
+    (void)second;
+    return 0;
+}
+#endif
+
 enum {
     HL_ENGINE_CREATED = 0,
     HL_ENGINE_STARTING = 1,
@@ -102,6 +230,10 @@ HL_API uint32_t hl_c_backend_checkpoint_test_arm(void);
 HL_API uint32_t hl_c_backend_checkpoint_test_phase(void);
 HL_API void hl_c_backend_checkpoint_test_release(void);
 HL_API void hl_c_backend_checkpoint_test_reset(void);
+HL_API uint32_t hl_c_backend_checkpoint_test_prune_foreign_descriptors(void);
+HL_API void hl_c_backend_checkpoint_test_fail_registry_allocation(void);
+HL_API void hl_c_backend_checkpoint_test_fail_private_adopt(uint32_t position);
+HL_API uint64_t hl_c_backend_checkpoint_test_private_descriptor_count(void);
 
 HL_API uint32_t hl_c_backend_checkpoint_test_arm(void) {
     atomic_store_explicit(&checkpoint_test_phase, 1, memory_order_release);
@@ -118,6 +250,83 @@ HL_API void hl_c_backend_checkpoint_test_release(void) {
 
 HL_API void hl_c_backend_checkpoint_test_reset(void) {
     atomic_store_explicit(&checkpoint_test_phase, 0, memory_order_release);
+}
+
+HL_API void hl_c_backend_checkpoint_test_fail_registry_allocation(void) {
+#if !defined(_WIN32)
+    checkpoint_registry_fail_allocation = 1;
+#endif
+}
+
+HL_API void hl_c_backend_checkpoint_test_fail_private_adopt(uint32_t position) {
+#if !defined(_WIN32)
+    checkpoint_adopt_failure_position = position;
+    checkpoint_adopt_position = 0;
+#else
+    (void)position;
+#endif
+}
+
+HL_API uint64_t hl_c_backend_checkpoint_test_private_descriptor_count(void) {
+#if defined(_WIN32)
+    return 0;
+#else
+    return (uint64_t)hl_host_process_fd_private_count_current();
+#endif
+}
+
+HL_API uint32_t hl_c_backend_checkpoint_test_prune_foreign_descriptors(void) {
+#if defined(_WIN32)
+    return 0;
+#else
+    int foreign[2] = {-1, -1};
+    int active[2] = {-1, -1};
+    int release[2] = {-1, -1};
+    pid_t child;
+    int status = 0;
+    unsigned char byte = 1;
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, foreign) != 0 || socketpair(AF_UNIX, SOCK_STREAM, 0, active) != 0 ||
+        pipe(release) != 0)
+        goto cleanup;
+    if (hl_engine_checkpoint_descriptors_register(foreign[0], foreign[1]) != 0 ||
+        hl_engine_checkpoint_descriptors_register(active[0], active[1]) != 0)
+        goto cleanup;
+    hl_engine_checkpoint_fork_prepare();
+    child = fork();
+    if (child == 0) {
+        int valid;
+        hl_engine_checkpoint_fork_child(active[0], active[1], -1);
+        (void)close(release[1]);
+        if (read(release[0], &byte, sizeof(byte)) != (ssize_t)sizeof(byte)) _exit(2);
+        valid = fcntl(foreign[0], F_GETFD) < 0 && errno == EBADF && fcntl(foreign[1], F_GETFD) < 0 &&
+                errno == EBADF && fcntl(active[0], F_GETFD) >= 0 && fcntl(active[1], F_GETFD) >= 0;
+        _exit(valid ? 0 : 3);
+    }
+    hl_engine_checkpoint_fork_parent();
+    if (child < 0) goto cleanup;
+    (void)close(release[0]);
+    release[0] = -1;
+    (void)close(foreign[0]);
+    (void)close(foreign[1]);
+    if (dup2(active[0], foreign[0]) < 0 || dup2(active[1], foreign[1]) < 0) goto cleanup_child;
+    if (write(release[1], &byte, sizeof(byte)) != (ssize_t)sizeof(byte)) goto cleanup_child;
+    if (waitpid(child, &status, 0) != child) goto cleanup;
+    child = -1;
+    status = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    goto cleanup;
+cleanup_child:
+    (void)close(release[1]);
+    release[1] = -1;
+    (void)waitpid(child, NULL, 0);
+cleanup:
+    if (foreign[0] >= 0) (void)close(foreign[0]);
+    if (foreign[1] >= 0) (void)close(foreign[1]);
+    if (active[0] >= 0) (void)close(active[0]);
+    if (active[1] >= 0) (void)close(active[1]);
+    if (release[0] >= 0) (void)close(release[0]);
+    if (release[1] >= 0) (void)close(release[1]);
+    return status ? 1u : 0u;
+#endif
 }
 
 static void hl_engine_checkpoint_test_pause(hl_engine *engine) {
@@ -189,56 +398,105 @@ uint64_t hl_engine_translation_count(const hl_engine *engine) {
     return engine == NULL ? 0 : engine->translations;
 }
 
+#if !defined(_WIN32)
+static void hl_engine_checkpoint_descriptor_close(int *descriptor) {
+    if (*descriptor < 0) return;
+    hl_host_process_fd_private_remove(*descriptor);
+    (void)close(*descriptor);
+    *descriptor = -1;
+}
+
+static int hl_engine_checkpoint_descriptor_adopt(int *descriptor) {
+    int original = *descriptor;
+    int adopted;
+    int fail_adopt = 0;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    checkpoint_adopt_position++;
+    if (checkpoint_adopt_failure_position == checkpoint_adopt_position) {
+        checkpoint_adopt_failure_position = 0;
+        fail_adopt = 1;
+    }
+#endif
+    adopted = fail_adopt ? -1 : hl_host_process_fd_private_adopt(original);
+    if (adopted < 0) {
+        (void)close(original);
+        *descriptor = -1;
+        return -1;
+    }
+    *descriptor = adopted;
+    return 0;
+}
+#endif
+
 hl_status hl_engine_checkpoint_configure(hl_engine *engine, int broker, int trigger) {
 #if defined(_WIN32)
     if (engine == NULL || broker < 0 || trigger < 0) return HL_STATUS_INVALID_ARGUMENT;
     return HL_STATUS_NOT_SUPPORTED;
 #else
-    int broker_copy;
-    int trigger_copy;
+    int broker_copy = -1;
+    int trigger_copy = -1;
+    int control_parent = engine == NULL ? -1 : engine->checkpoint_control_parent;
+    int control_child = engine == NULL ? -1 : engine->checkpoint_control_child;
+    int control_created = 0;
+    hl_status status = HL_STATUS_PLATFORM_FAILURE;
     if (engine == NULL || broker < 0 || trigger < 0) return HL_STATUS_INVALID_ARGUMENT;
-    broker_copy = dup(broker);
-    if (broker_copy < 0) return HL_STATUS_PLATFORM_FAILURE;
-    trigger_copy = dup(trigger);
-    if (trigger_copy < 0) {
-        (void)close(broker_copy);
-        return HL_STATUS_PLATFORM_FAILURE;
+    (void)pthread_mutex_lock(&checkpoint_registry_lock);
+    hl_engine_checkpoint_registry_compact_locked();
+    if (hl_engine_checkpoint_registry_reserve_locked(4) != 0) {
+        (void)pthread_mutex_unlock(&checkpoint_registry_lock);
+        return HL_STATUS_OUT_OF_MEMORY;
     }
+    broker_copy = dup(broker);
+    if (broker_copy < 0) goto fail;
+    trigger_copy = dup(trigger);
+    if (trigger_copy < 0) goto fail;
     (void)fcntl(broker_copy, F_SETFD, FD_CLOEXEC);
     (void)fcntl(trigger_copy, F_SETFD, FD_CLOEXEC);
-    broker_copy = hl_host_process_fd_private_adopt(broker_copy);
-    trigger_copy = hl_host_process_fd_private_adopt(trigger_copy);
-    if (broker_copy < 0 || trigger_copy < 0) {
-        if (broker_copy >= 0) (void)close(broker_copy);
-        if (trigger_copy >= 0) (void)close(trigger_copy);
-        return HL_STATUS_PLATFORM_FAILURE;
-    }
     if (engine->checkpoint_control_parent < 0) {
         int control[2];
-        if (socketpair(AF_UNIX, SOCK_STREAM, 0, control) != 0) {
-            (void)close(broker_copy);
-            (void)close(trigger_copy);
-            return HL_STATUS_PLATFORM_FAILURE;
-        }
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, control) != 0) goto fail;
         (void)fcntl(control[0], F_SETFD, FD_CLOEXEC);
         (void)fcntl(control[1], F_SETFD, FD_CLOEXEC);
-        engine->checkpoint_control_parent = hl_host_process_fd_private_adopt(control[0]);
-        engine->checkpoint_control_child = hl_host_process_fd_private_adopt(control[1]);
-        if (engine->checkpoint_control_parent < 0 || engine->checkpoint_control_child < 0) {
-            if (engine->checkpoint_control_parent >= 0) (void)close(engine->checkpoint_control_parent);
-            if (engine->checkpoint_control_child >= 0) (void)close(engine->checkpoint_control_child);
-            engine->checkpoint_control_parent = -1;
-            engine->checkpoint_control_child = -1;
-            (void)close(broker_copy);
-            (void)close(trigger_copy);
-            return HL_STATUS_PLATFORM_FAILURE;
-        }
+        control_parent = control[0];
+        control_child = control[1];
+        control_created = 1;
     }
-    if (engine->checkpoint_broker >= 0) (void)close(engine->checkpoint_broker);
-    if (engine->checkpoint_trigger >= 0) (void)close(engine->checkpoint_trigger);
+    if (hl_engine_checkpoint_descriptor_adopt(&broker_copy) != 0 ||
+        hl_engine_checkpoint_descriptor_adopt(&trigger_copy) != 0 ||
+        (control_created && hl_engine_checkpoint_descriptor_adopt(&control_parent) != 0) ||
+        (control_created && hl_engine_checkpoint_descriptor_adopt(&control_child) != 0))
+        goto fail;
+    {
+        hl_checkpoint_descriptor registered[4];
+        if (hl_engine_checkpoint_descriptor_identity(broker_copy, &registered[0]) != 0 ||
+            hl_engine_checkpoint_descriptor_identity(trigger_copy, &registered[1]) != 0 ||
+            hl_engine_checkpoint_descriptor_identity(control_parent, &registered[2]) != 0 ||
+            hl_engine_checkpoint_descriptor_identity(control_child, &registered[3]) != 0)
+            goto fail;
+        hl_engine_checkpoint_descriptor_append_locked(registered[0]);
+        hl_engine_checkpoint_descriptor_append_locked(registered[1]);
+        hl_engine_checkpoint_descriptor_append_locked(registered[2]);
+        hl_engine_checkpoint_descriptor_append_locked(registered[3]);
+    }
+    hl_engine_checkpoint_descriptor_close(&engine->checkpoint_broker);
+    hl_engine_checkpoint_descriptor_close(&engine->checkpoint_trigger);
     engine->checkpoint_broker = broker_copy;
     engine->checkpoint_trigger = trigger_copy;
+    if (control_created) {
+        engine->checkpoint_control_parent = control_parent;
+        engine->checkpoint_control_child = control_child;
+    }
+    (void)pthread_mutex_unlock(&checkpoint_registry_lock);
     return HL_STATUS_OK;
+fail:
+    hl_engine_checkpoint_descriptor_close(&broker_copy);
+    hl_engine_checkpoint_descriptor_close(&trigger_copy);
+    if (control_created) {
+        hl_engine_checkpoint_descriptor_close(&control_parent);
+        hl_engine_checkpoint_descriptor_close(&control_child);
+    }
+    (void)pthread_mutex_unlock(&checkpoint_registry_lock);
+    return status;
 #endif
 }
 
