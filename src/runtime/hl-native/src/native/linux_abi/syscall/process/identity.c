@@ -284,14 +284,18 @@ static int svc_proc_96(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
 static int svc_proc_97(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 97: {
-        // unshare(flags): no real namespaces here, but honour Linux's flag validation so a probe of an
-        // unknown flag (e.g. 0xdeadbeef) fails EINVAL instead of a fake success that misleads isolation setup.
+        // unshare(flags): this engine does not create a distinct namespace or process-sharing domain.
+        // Preserve Linux's flag validation, but report a recognized nonzero request as unavailable instead
+        // of claiming isolation that was never established.  Callers can then fall back safely.
         unsigned uf = (unsigned)a0;
-        const unsigned UNSHARE_OK = 0x80u /*NEWTIME*/ | 0x200u /*FS*/ | 0x400u /*FILES*/ | 0x20000u /*NEWNS*/ |
-                                    0x40000u /*SYSVSEM*/ | 0x2000000u /*NEWCGROUP*/ | 0x4000000u /*NEWUTS*/ |
-                                    0x8000000u /*NEWIPC*/ | 0x10000000u /*NEWUSER*/ | 0x20000000u /*NEWPID*/ |
-                                    0x40000000u /*NEWNET*/;
-        G_RET(c) = (uf & ~UNSHARE_OK) ? (uint64_t)(int64_t)(-EINVAL) : 0;
+        const unsigned UNSHARE_VALID =
+            0x80u /*NEWTIME*/ | 0x200u /*FS*/ | 0x400u /*FILES*/ | 0x20000u /*NEWNS*/ |
+            0x40000u /*SYSVSEM*/ | 0x2000000u /*NEWCGROUP*/ | 0x4000000u /*NEWUTS*/ |
+            0x8000000u /*NEWIPC*/ | 0x10000000u /*NEWUSER*/ | 0x20000000u /*NEWPID*/ | 0x40000000u /*NEWNET*/;
+        if (uf & ~UNSHARE_VALID)
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+        else
+            G_RET(c) = uf ? (uint64_t)(int64_t)(-ENOSYS) : 0;
         break;
     }
     // setns(fd, nstype): no real namespaces, but a negative/invalid fd must fail EBADF (Linux copies the ns fd
