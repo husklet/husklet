@@ -448,10 +448,14 @@ fn excluded(path: &Path, include_linter: bool, policy: &crate::policy::SourcePol
 
 fn is_ignored_subtree(path: &Path, policy: &crate::policy::SourcePolicy) -> bool {
     path.ancestors().any(|ancestor| {
-        policy
-            .ignored_markers
-            .iter()
-            .any(|marker| ancestor.join(marker).is_file())
+        ancestor
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| policy.ignored_directories.iter().any(|ignored| ignored == name))
+            || policy
+                .ignored_markers
+                .iter()
+                .any(|marker| ancestor.join(marker).is_file())
     })
 }
 

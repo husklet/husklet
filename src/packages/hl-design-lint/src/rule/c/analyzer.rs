@@ -343,6 +343,30 @@ mod tests {
     }
 
     #[test]
+    fn explicit_roots_cannot_bypass_ignored_ancestors() {
+        let root = fixture("explicit-policy-root");
+        fs::create_dir_all(root.join("generated/nested")).unwrap();
+        fs::create_dir_all(root.join("external/nested")).unwrap();
+        let generated = root.join("generated/nested/bypass.c");
+        let external = root.join("external/nested/bypass.c");
+        fs::write(&generated, "int bypass(void);\n").unwrap();
+        fs::write(root.join("external/.external-source"), "").unwrap();
+        fs::write(&external, "int bypass(void);\n").unwrap();
+        let policy = SourcePolicy {
+            ignored_directories: vec!["generated".into()],
+            ignored_markers: vec![".external-source".into()],
+            self_packages: Vec::new(),
+            foreign_source_directories: Vec::new(),
+        };
+
+        let generated_error = source_files(&[generated], &policy).unwrap_err();
+        let external_error = source_files(&[external], &policy).unwrap_err();
+        assert!(generated_error.contains("no C source or header"));
+        assert!(external_error.contains("no C source or header"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn compile_database_cannot_reintroduce_policy_ignored_sources() {
         let root = fixture("database-policy");
         fs::create_dir_all(root.join("src/generated")).unwrap();
