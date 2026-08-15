@@ -300,7 +300,7 @@ Announce intent before requesting, so builders can yield:
     flock -x 8                          # ... then take fd 9 and run
 
     # builder, before taking flock -s
-    while ! flock -n -x 8>/var/tmp/husklet-box.wanted; do sleep 5; done
+    while ! (exec 8>/var/tmp/husklet-box.wanted; flock -n -x 8); do sleep 5; done
 
 **Announce before you request, or the announcement is retroactive.** Take fd 8
 *then* fd 9. A lane that queued its exclusive request first and announced
