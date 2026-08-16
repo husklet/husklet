@@ -203,6 +203,7 @@ struct sentry_ring {
     uint32_t wpid;         // stamping worker PROCESS pid: selects this guest's per-process virtual fd table (P1/P2)
     uint32_t wtid;         // stable worker-thread token: selects a CLOSE_RANGE_UNSHARE private fd-table copy
     uint32_t inherit_wtid; // reserved for wire compatibility; prepared thread bindings no longer defer inheritance
+    hl_sentry_credential_snapshot credentials; // worker DAC identity for sentry-executed filesystem operations
     uint64_t rawnr;        // raw syscall-number register (so the sentry's G_NR re-derives the canonical nr)
     uint64_t a[6];         // a0..a5 (G_A0..G_A5)
     // Generalized pointer marshaling: redir[i] is the byte offset within buf[] that arg i is redirected

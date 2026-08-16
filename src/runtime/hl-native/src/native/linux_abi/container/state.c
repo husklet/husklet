@@ -676,6 +676,18 @@ static gid_t g_groups[HL_NGROUPS_MAX];
 static int g_ngroups = 0;       // count in g_groups (may be 0 after a guest setgroups(0))
 static int g_groups_parsed = 0; // 1 once container_parse_groups ran (rootfs mode); gates getgroups/setgroups
 
+typedef struct hl_sentry_credential_snapshot {
+    uint32_t fsuid;
+    uint32_t fsgid;
+    uint32_t group_count;
+    uint32_t groups[HL_NGROUPS_MAX];
+    uint64_t capabilities;
+} hl_sentry_credential_snapshot;
+
+/* Forwarded filesystem operations execute on a dedicated sentry thread. Its process-local credential
+ * globals describe the launch identity, not a worker's later setuid/setgroups transitions. */
+static _Thread_local const hl_sentry_credential_snapshot *g_sentry_credentials_override;
+
 static void cred_reset_initial(void) {
     uint64_t initial = cuid() == 0 ? HL_CAP_DEFAULT : 0;
     g_cred_init = 0;
@@ -718,6 +730,16 @@ static int groups_status_str(char *b, size_t n) {
 
 static hl_dac_credentials dac_credentials_current(uint32_t groups[HL_NGROUPS_MAX]) {
     hl_dac_credentials credentials;
+    if (g_sentry_credentials_override != NULL) {
+        credentials.fsuid = g_sentry_credentials_override->fsuid;
+        credentials.fsgid = g_sentry_credentials_override->fsgid;
+        credentials.group_count = g_sentry_credentials_override->group_count;
+        for (size_t index = 0; index < credentials.group_count; ++index)
+            groups[index] = g_sentry_credentials_override->groups[index];
+        credentials.groups = groups;
+        credentials.capabilities = g_sentry_credentials_override->capabilities;
+        return credentials;
+    }
     credentials.fsuid = (uint32_t)(g_fsuid_ovr >= 0 ? g_fsuid_ovr : cred_euid());
     credentials.fsgid = (uint32_t)(g_fsgid_ovr >= 0 ? g_fsgid_ovr : cred_egid());
     credentials.group_count = (size_t)g_ngroups;
@@ -765,10 +787,12 @@ static int dac_snapshot_fd(int descriptor, hl_dac_snapshot *snapshot) {
 // override (POSIX: fsuid tracks euid). We persist the intended owner as the SAME hl.uid/gid xattr the
 // chown path uses, so a later stat reports it. The create sites in fs.c call the helpers below.
 static int newfile_uid(void) {
+    if (g_sentry_credentials_override != NULL) return (int)g_sentry_credentials_override->fsuid;
     return g_fsuid_ovr >= 0 ? g_fsuid_ovr : cred_euid();
 }
 
 static int newfile_gid(void) {
+    if (g_sentry_credentials_override != NULL) return (int)g_sentry_credentials_override->fsgid;
     return g_fsgid_ovr >= 0 ? g_fsgid_ovr : cred_egid();
 }
 

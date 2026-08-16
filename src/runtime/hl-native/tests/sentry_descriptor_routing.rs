@@ -56,3 +56,19 @@ fn bound_close_clears_fd_emulation_state_before_closing_the_provider_handle() {
         "fd emulation state must be released while the underlying descriptor remains live"
     );
 }
+
+#[test]
+fn forwarded_filesystem_calls_carry_the_workers_current_dac_credentials() {
+    let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native/linux_abi");
+    let mailbox = fs::read_to_string(native.join("sentry.c")).expect("sentry mailbox source");
+    let route = fs::read_to_string(native.join("sentry_route.c")).expect("sentry route source");
+    let service = fs::read_to_string(native.join("sentry_service.c")).expect("sentry service source");
+    let state = fs::read_to_string(native.join("container/state.c")).expect("credential state source");
+
+    assert!(mailbox.contains("hl_sentry_credential_snapshot credentials;"));
+    assert!(route.contains("R->credentials.fsuid = credentials.fsuid;"));
+    assert!(route.contains("R->credentials.capabilities = credentials.capabilities;"));
+    assert!(service.contains("g_sentry_credentials_override = &R->credentials;"));
+    assert!(state.contains("credentials.fsuid = g_sentry_credentials_override->fsuid;"));
+    assert!(state.contains("return (int)g_sentry_credentials_override->fsuid;"));
+}

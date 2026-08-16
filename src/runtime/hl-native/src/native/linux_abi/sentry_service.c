@@ -1165,6 +1165,7 @@ static void sentry_service_one(struct sentry_ring *R) {
         sentry_service_control(R);
         return;
     }
+    g_sentry_credentials_override = &R->credentials;
     struct cpu tmp;
     // Snapshot scalars and pointer redirects before validation to avoid shared-ring TOCTOU races.
     uint32_t iovn;

@@ -1156,6 +1156,16 @@ static void syscall_route(struct cpu *c) {
     R->wpid = (uint32_t)g_worker_pid; // stamp the worker PROCESS: selects this guest's virtual fd table (P1/P2)
     R->wtid = t_token;
     R->inherit_wtid = 0;
+    {
+        uint32_t groups[HL_NGROUPS_MAX];
+        hl_dac_credentials credentials = dac_credentials_current(groups);
+        R->credentials.fsuid = credentials.fsuid;
+        R->credentials.fsgid = credentials.fsgid;
+        R->credentials.group_count = (uint32_t)credentials.group_count;
+        R->credentials.capabilities = credentials.capabilities;
+        for (size_t index = 0; index < credentials.group_count; ++index)
+            R->credentials.groups[index] = credentials.groups[index];
+    }
 #ifdef G_PROF_EXTRA
     R->rawnr = hl_linux_syscall_guest_number(HL_LINUX_GUEST_X86_64, nr);
     if (R->rawnr == UINT64_MAX) {
