@@ -83,3 +83,15 @@ fn bound_file_mutations_evict_cached_path_metadata() {
     assert!(poll.contains("if (result > 0) bound_evict_handle(file->host_handle);"));
     assert!(route.contains("if (result == 0) bound_evict_handle(target);"));
 }
+#[test]
+fn copy_file_range_preserves_both_descriptor_authorities() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/native/linux_abi");
+    let sentry = std::fs::read_to_string(root.join("sentry_service.c")).unwrap();
+    let route = std::fs::read_to_string(root.join("syscall/binding/route_special.c")).unwrap();
+    let transfer = std::fs::read_to_string(root.join("syscall/binding/poll.c")).unwrap();
+
+    assert!(sentry.contains("g_bound_source_native = !p->typed[input];"));
+    assert!(sentry.contains("g_bound_second_native = !p->typed[output];"));
+    assert!(route.contains("bound_copy_file_range("));
+    assert!(transfer.contains("if (done != 0 && output != NULL) bound_evict_handle(output->host_handle);"));
+}

@@ -893,11 +893,15 @@ static int sentry_translate_inputs(struct sentry_ring *R, struct cpu *tmp, uint6
             }
             case 76:
             case 285: { // splice/copy_file_range(fd_in=a0, fd_out=a2): translate BOTH virtual descriptors
-                int r0 = vfd_real(p, (int)(int64_t)G_A0(tmp));
-                int r2 = vfd_real(p, (int)(int64_t)G_A2(tmp));
+                int input = (int)(int64_t)G_A0(tmp);
+                int output = (int)(int64_t)G_A2(tmp);
+                int r0 = vfd_real(p, input);
+                int r2 = vfd_real(p, output);
                 if (r0 < 0 || r2 < 0)
                     eb = 1;
                 else {
+                    g_bound_source_native = !p->typed[input];
+                    g_bound_second_native = !p->typed[output];
                     G_A0(tmp) = (uint64_t)(int64_t)r0;
                     G_A2(tmp) = (uint64_t)(int64_t)r2;
                 }
