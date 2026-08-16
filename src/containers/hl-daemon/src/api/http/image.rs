@@ -240,7 +240,11 @@ where
             .filter(|name| !name.repository().starts_with("hl-build-cache/"))
             .map(|name| name.to_string())
             .collect::<Vec<_>>();
-        let id = identity(&graph.target)?;
+        let id = match identity(&graph.target) {
+            Ok(id) => id,
+            Err(hl_images::Error::UnsupportedPlatform { .. }) => continue,
+            Err(error) => return Err(error),
+        };
         match grouped.entry(id) {
             std::collections::btree_map::Entry::Vacant(entry) => {
                 entry.insert((graph.target, tags, graph.created_at_ms));
