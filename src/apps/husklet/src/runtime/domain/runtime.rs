@@ -164,6 +164,14 @@ impl Runtime {
                 ));
             }
         }
+        for (id, error) in containers
+            .executions()
+            .restore_checkpoints()
+            .await
+            .map_err(io::Error::other)?
+        {
+            failures.push(format!("execution {id}: {error}"));
+        }
         Ok(failures)
     }
 

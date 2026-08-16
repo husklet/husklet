@@ -1,4 +1,4 @@
-use crate::{Exec, ExecId, ExecSpec, Result, Session, service::Service};
+use crate::{Error, Exec, ExecId, ExecSpec, ExecState, Result, Session, service::Service};
 use std::sync::Arc;
 
 /// Cheaply clonable service for additional processes owned by containers.
@@ -102,5 +102,25 @@ impl Executions {
     /// Returns the first capture, runtime, or persistence failure.
     pub async fn checkpoint_all(&self, timeout: std::time::Duration) -> Result<()> {
         self.service.checkpoint_execs(timeout).await
+    }
+
+    /// Restarts every execution whose durable checkpoint is ready to restore.
+    ///
+    /// Independent failures are returned together so startup can restore every viable execution
+    /// and report the complete degraded state instead of abandoning later records.
+    ///
+    /// # Errors
+    /// Returns persistence failures encountered while listing execution records.
+    pub async fn restore_checkpoints(&self) -> Result<Vec<(ExecId, Error)>> {
+        let mut failures = Vec::new();
+        for execution in self.list().await? {
+            if execution.checkpoint.is_none() || !matches!(execution.state, ExecState::Created) {
+                continue;
+            }
+            if let Err(error) = self.start(&execution.id).await {
+                failures.push((execution.id, error));
+            }
+        }
+        Ok(failures)
     }
 }

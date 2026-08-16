@@ -260,10 +260,13 @@ async fn startup_preserves_an_exec_that_has_a_committed_checkpoint() {
     let reopened = test_containers(repository, Arc::new(FakeRuntime::new(ExitStatus::Code(0))))
         .await
         .unwrap();
+    reopened.start("workspace").await.unwrap();
+    let failures = reopened.executions().restore_checkpoints().await.unwrap();
     let recovered = reopened.executions().inspect(&exec.id).await.unwrap();
 
-    assert_eq!(recovered.state, ExecState::Created);
-    assert!(recovered.checkpoint.is_some());
+    assert!(failures.is_empty());
+    assert!(matches!(recovered.state, ExecState::Running { .. }));
+    assert!(recovered.checkpoint.is_none());
 }
 
 #[tokio::test]
