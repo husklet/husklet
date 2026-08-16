@@ -406,6 +406,7 @@ static int bound_route_metadata(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
             }
         }
         result = bound_host_error(g_host_services->file->set_times(g_host_services->context, target, times).status);
+        if (result == 0) bound_evict_handle(target);
     bound_set_times_done:
         if (close_target) (void)g_host_services->file->close(g_host_services->context, target);
         break;

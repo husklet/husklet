@@ -72,3 +72,14 @@ fn forwarded_filesystem_calls_carry_the_workers_current_dac_credentials() {
     assert!(state.contains("credentials.fsuid = g_sentry_credentials_override->fsuid;"));
     assert!(state.contains("return (int)g_sentry_credentials_override->fsuid;"));
 }
+#[test]
+fn bound_file_mutations_evict_cached_path_metadata() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/native/linux_abi/syscall/binding");
+    let descriptor = std::fs::read_to_string(root.join("descriptor.c")).unwrap();
+    let poll = std::fs::read_to_string(root.join("poll.c")).unwrap();
+    let route = std::fs::read_to_string(root.join("route_bound.c")).unwrap();
+
+    assert!(descriptor.contains("if (!output && result > 0) bound_evict_handle(file->host_handle);"));
+    assert!(poll.contains("if (result > 0) bound_evict_handle(file->host_handle);"));
+    assert!(route.contains("if (result == 0) bound_evict_handle(target);"));
+}

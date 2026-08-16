@@ -452,6 +452,7 @@ static int64_t bound_guest_write(const hl_linux_fd_snapshot *file, uint64_t gues
     int64_t result = positioned ? hl_linux_pwrite64(g_linux_box, file->fd, buffer, (size_t)copied, offset)
                                 : hl_linux_write(g_linux_box, file->fd, buffer, (size_t)copied);
     free(buffer);
+    if (result > 0) bound_evict_handle(file->host_handle);
     return result;
 }
 

@@ -340,6 +340,11 @@ static int bound_handle_host_path(hl_host_handle file, char *path, size_t size) 
     return 0;
 }
 
+static void bound_evict_handle(hl_host_handle file) {
+    char path[HL_LINUX_PATH_MAX + 1];
+    if (bound_handle_host_path(file, path, sizeof(path)) == 0) hl_fdcache_evict_path(path);
+}
+
 static int bound_handle_chdir(int fd, int *result) {
     hl_linux_fd_snapshot snapshot;
     char path[HL_LINUX_PATH_MAX + 1];
@@ -593,6 +598,7 @@ issue_or_fail:
             }
         }
     }
+    if (!output && result > 0) bound_evict_handle(file->host_handle);
 cleanup:
     for (uint32_t index = 0; index < usable; ++index)
         free(buffers[index]);
