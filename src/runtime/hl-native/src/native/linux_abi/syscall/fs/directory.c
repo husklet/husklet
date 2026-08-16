@@ -22,21 +22,26 @@ static void svc_fs_directory_57(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
     }
 }
 
+static int overlay_directory_ensure(int fd) {
+    if (fd < 0 || fd >= HL_NFD) return 0;
+    if (!g_ovldir[fd][0] && g_fdpath[fd][0]) {
+        char guest_directory[4200];
+        uint32_t provider_cursor = 0;
+        int mapped = guest_from_host(g_fdpath[fd], guest_directory, sizeof guest_directory);
+        if (mapped > 0 &&
+            hl_provider_namespace_launch_child(guest_directory, strlen(guest_directory), &provider_cursor) != NULL &&
+            path_copy(g_ovldir[fd], sizeof g_ovldir[fd], guest_directory) != 0)
+            g_ovldir[fd][0] = 0;
+    }
+    return g_ovldir[fd][0] != 0;
+}
+
 static void svc_fs_directory_61(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                                 uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 61: {
         int fd = (int)a0;
-        if (fd >= 0 && fd < HL_NFD && !g_ovldir[fd][0] && g_fdpath[fd][0]) {
-            char guest_directory[4200];
-            uint32_t provider_cursor = 0;
-            int mapped = guest_from_host(g_fdpath[fd], guest_directory, sizeof guest_directory);
-            if (mapped > 0 &&
-                hl_provider_namespace_launch_child(guest_directory, strlen(guest_directory), &provider_cursor) !=
-                    NULL &&
-                path_copy(g_ovldir[fd], sizeof g_ovldir[fd], guest_directory) != 0)
-                g_ovldir[fd][0] = 0;
-        }
+        (void)overlay_directory_ensure(fd);
         // OVERLAY: merged listing across layers
         if (g_nlower && fd >= 0 && fd < HL_NFD && g_ovldir[fd][0]) {
             ovldents_snapshot *snapshot = ovldents_require(fd);

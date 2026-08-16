@@ -653,6 +653,10 @@ static int bound_route_directory(struct cpu *c, uint64_t nr, uint64_t a0, uint64
     int64_t result;
     switch (nr) {
     case 61: {
+        if (overlay_directory_ensure((int)source.fd)) {
+            svc_fs_directory_61(c, nr, source.fd, a1, a2, a3, a4, 0);
+            return 1;
+        }
         uint64_t byte_capacity = a2 > UINT32_C(1 << 20) ? UINT32_C(1 << 20) : a2;
         if (a2 < 24) {
             result = -EINVAL;
