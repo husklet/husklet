@@ -232,11 +232,9 @@ fn versioned_mount_serialization_is_canonical_across_repeated_saves() {
     let mut store = WorkspaceStore::load(&path).unwrap();
     store.upsert(workspace.clone()).unwrap();
     let first = std::fs::read(&path).unwrap();
-    assert!(
-        first
-            .windows(b"mount = v2::2F613A62:2F635C64:rw\n".len())
-            .any(|window| { window == b"mount = v2::2F613A62:2F635C64:rw\n" })
-    );
+    assert!(first
+        .windows(b"mount = v2::2F613A62:2F635C64:rw\n".len())
+        .any(|window| { window == b"mount = v2::2F613A62:2F635C64:rw\n" }));
 
     let mut reloaded = WorkspaceStore::load(&path).unwrap();
     reloaded.upsert(workspace).unwrap();
@@ -276,11 +274,9 @@ fn failed_persistence_does_not_change_the_live_store() {
         items: vec![original.clone()],
     };
 
-    assert!(
-        store
-            .upsert(WorkspaceConfig::new("new", "debian:bookworm", Arch::Arm64))
-            .is_err()
-    );
+    assert!(store
+        .upsert(WorkspaceConfig::new("new", "debian:bookworm", Arch::Arm64))
+        .is_err());
     assert_eq!(store.all(), [original]);
 }
 

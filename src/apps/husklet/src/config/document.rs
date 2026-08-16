@@ -1,4 +1,4 @@
-use super::{Arch, Mount, PathBuf, TerminalPreferences, VpnConfig, Workspace, WorkspaceConfig, io};
+use super::{io, Arch, Mount, PathBuf, TerminalPreferences, VpnConfig, Workspace, WorkspaceConfig};
 
 #[derive(Default)]
 pub(super) struct WorkspaceDocument {

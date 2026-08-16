@@ -2,40 +2,8 @@
 
 This is the authoritative checklist for the C-primary production migration. Checked items have current repository evidence. Unchecked items remain required; “in progress” means an active lane owns the work but completion is not yet proven on the merged tip.
 
-## Repository recovery and ownership
-
-- [x] Preserve the prior Rust repository in `../engine_rust`, excluding build artifacts. The recovery tree exists and is independent of production builds.
-- [x] Keep `../engine` read-only and remove build/runtime dependency on both sibling repositories. Current `cargo metadata`, normal/build dependency trees, and repository-escape scan contain no sibling dependency.
-- [x] Make Husklet the active repository and retain its container, workspace, terminal, GUI, daemon, logging, image, and lifecycle surfaces.
-- [x] Remove obsolete Rust runtime crates replaced by the C engine. Current Cargo metadata and the filesystem contain only `src/runtime/hl-native` under `src/runtime`; deleted runtime package names are absent from `Cargo.lock`.
-- [x] Delete obsolete duplicate native executor, differential production selector, retained directory, fixtures, manifests, provenance hashes, and source bookkeeping.
-- [x] Remove `tests/runtime/legacy` and its stale/generated compatibility corpus.
-- [x] Remove all tracked Python tooling and Python build dependencies. Python remains only as a guest workload to test compatibility.
-- [x] Remove Make and CMake build frontends. Cargo is primary; Nix pins the toolchain and system dependencies.
-- [x] Keep only intentional Markdown: `AGENTS.md`, `README.md`, this checklist, and the positive/negative lint examples; fold the former pipeline proposal into this checklist.
-- [x] Restore and update root `AGENTS.md` for the Cargo-owned C architecture.
-- [x] Restore `lint/examples/positive.md` and `lint/examples/negative.md` as executable design documentation.
-- [x] Re-run the unused-file, unused-package, reachability, and generated-artifact audit after the native-source decomposition. Current evidence covers all 18 Cargo packages and 74 targets, reaches all 340 C files across the five modeled host closures, and finds no unused direct dependencies, tracked ignored files, empty files or directories, broken links, or tracked native build artifacts. The refresh removed two unreferenced address-projection wrappers; platform-only entry points and public bridge exports remain intentionally rooted.
-
 ## `hl-native` package and C boundary
 
-- [x] Move the production C engine into `src/runtime/hl-native/src/native`.
-- [x] Make `src/runtime/hl-native` a normal Cargo package with `Cargo.toml`, `build.rs`, `src`, and package tests only.
-- [x] Compile one private shared C engine through `build.rs` into Cargo `OUT_DIR`; do not mutate or commit `bin/` during ordinary builds.
-- [x] Keep all C and headers inside `hl-native/src/native`; keep Rust bindings/wrapper under `hl-native/src`.
-- [x] Expose a slim opaque Rust API around the C engine and isolate/document every unsafe ABI boundary.
-- [x] Route `hl-engine` lifecycle through `hl-native` and remove dependencies on deleted Rust runtime packages.
-- [x] Make `hl-engine` own and service `hl-native`'s checkpoint broker/trigger transport for every checkpoint-enabled production machine; prove an actual guest checkpoint reaches the configured sink instead of exiting for a missing broker descriptor.
-  Merged commit `f5c825c25` keeps broker, trigger, and control descriptors engine-private, delivers checkpoint requests to registered executor threads, and commits real capture data to the Rust sink. The three-process capture/restore test passed both guest ISAs in five consecutive clean runs; merged-tip native tests pass 43 active tests with two intentional external-gate ignores.
-- [x] Give `hl-native` a configured zero-local-dependency budget in `lint.toml`.
-- [x] Install the Cargo-built private shared library beside packaged products with relocatable Linux/macOS loader paths and portable artifact naming.
-- [x] Prove installed-product execution on Linux from a fresh copied prefix, including sibling-library selection, relocatable RUNPATH, backend receipts, and artifact hashes.
-- [x] Prove authoritative packaging/install behavior on macOS ARM64 artifacts.
-  The native `aarch64-darwin` `installed-product` and `host-darwin-aarch64-native`
-  flake checks passed together on commit `ef4ad33f0`: the Cargo-built dylib and
-  all three launchers are exact ARM64 Mach-O artifacts, copied-prefix loader and
-  deterministic hash-bound receipt contracts pass, removing the sibling dylib
-  fails closed, and strict C/C++ consumers compile, link, and execute against it.
 - [ ] Prove authoritative packaging/install behavior on Windows AMD64 artifacts.
   Local Nix checks fully compile/link Linux ARM64 and AMD64. They also compile the
   Windows GNU Rust surface and complete C engine into an x86-64 PE/COFF DLL plus
@@ -75,47 +43,52 @@ This is the authoritative checklist for the C-primary production migration. Chec
 
 ## Host architecture
 
-- [x] Split Linux’s 5,000-line host implementation into capability-owned files.
-- [x] Organize Linux under `context`, `handles`, `fs`, `process`, `io`, `memory`, `network`, `time`, `sync`, and logging owners.
-- [x] Keep Linux `host.c` limited to registration/assembly.
-- [x] Integrate the macOS capability hierarchy onto the current native layout and verify its source/build selection on the merged tip.
-- [x] Obtain authoritative macOS ARM64 compilation and runtime evidence from a native macOS host.
-- [x] Restore the Windows AMD64 source backend, isolate its Cargo source closure, and wire its DLL/import-library boundary into the current native layout.
 - [ ] Replace the Linux-specific bridge lifecycle and descriptor imports with Windows host-service handles before enabling Windows support.
 - [ ] Prove Windows runtime behavior; previous oracle evidence was incomplete and is not production evidence. (Windows implementation is only priority if you are on windows and have powershell and tools.)
-- [x] Eliminate the five single-file-directory findings without adding ceremonial siblings.
-- [x] Make the generic catch-all rule recognize contextually owned `memory/shared.c` while still rejecting ambiguous shallow or sibling-less catch-all sources.
 
 ## Supported platform and execution matrix
 
-- [x] Model Linux ARM64, Linux AMD64, macOS ARM64, and Windows AMD64 host targets in `hl-native`.
-- [x] Model both ARM64 and AMD64 Linux guests.
-- [x] Correctly report the optional same-ISA transliterator as Linux AMD64-only.
-- [x] Merge the host-capability matrix and host-specific source selection onto the shared-library/Windows tip.
 - [ ] Verify every supported target through authoritative platform CI.
-- [x] Compare ARM64 and AMD64 scheduler paths whenever either is changed; neither architecture may silently lag.
-  The production engine now routes both ISAs through the shared C dispatcher. Merged commit `cbabbe7f2` fixed the remaining checkpoint-placement drift and adds direct two-ISA coverage; future target-specific changes must repeat the side-by-side enumeration.
 
 ## Generic ELF and compatibility
 
-- [x] Move generic ELF inspection and executable-authority planning into `hl-native`; remove dependence on deleted Rust loader/runtime crates.
-- [x] Remove executable provenance/hash pinning and application-specific interpreter bookkeeping tests.
-- [x] Validate ELF metadata, program-table bounds, load spans/alignment, interpreter uniqueness, and executable entry authority before unsafe C loading.
-- [x] Audit production native sources and confirm ELF behavior is generic rather than selected by Go, V8, Node, Python, or executable names.
 - [ ] Finish generic ET_EXEC/non-PIE address placement and translation without Go-, V8-, Node-, Python-, sqlite-, or executable-name detection.
 - [ ] Prove PIE, static PIE, non-PIE, Go, V8/Node, Python, sqlite, self-modifying code, signals, threads, writes, atomics, and both guest ISAs.
+- [ ] Make metadata-only VFS traversal authority-safe and complete: retain exact
+  overlay objects through `PATH_ONLY` handles without read permission or
+  pathname reopening; enforce ancestor search, noexec, `AT_EMPTY_PATH`, real vs
+  effective credentials/capabilities, and invalid `faccessat2` flags.
+  Merged `e7daf35ef`..`0d68e34cc` supplies object-pinned metadata traversal,
+  absolute/chained guest symlinks, correct named-path DAC/credential/noexec
+  handling, and inspectable `O_PATH|O_NOFOLLOW` symlink descriptors. The
+  focused matrix passes both ISAs, `hl-native --all-targets` and C lint are
+  green. Merged `c06be85f8` retired the unreachable opaque tree-provider
+  transport instead of extending its incomplete UID/GID wire, while preserving
+  the exported bridge ABI as a fail-closed compatibility tombstone. Merged
+  `03a53261e` now enforces virtual search on every traversed ancestor, follows a
+  trailing-slash final symlink even under `AT_SYMLINK_NOFOLLOW`, and explicitly
+  authorizes the namespace-correct synthetic `/proc/<pid>` ancestor before
+  terminalizing `/proc/*/exe`. Exact merged-tip debug artifacts (runner
+  `713e1c99…`, library `73ca91b2…`) pass the expanded `faccessat-flags` case on
+  ARM64 and AMD64, and `hl-native --all-targets` is green. Remaining work is
+  `AT_EMPTY_PATH` noexec provenance stored on the OFD and propagated through
+  dup/fork/SCM/checkpoint.
 - [ ] Diagnose and repair the deterministic displaced ET_EXEC/thread/TLS compatibility clusters on both guest ISAs.
-- [x] Make native stdout/stderr bridge teardown bounded when a nonblocking pipe is idle, and prove real CPython startup/exit cannot hang while joining its output workers.
-  Merged commit `0d949f26e` checks the stop condition on every idle retry; its bounded idle-pipe test reddens by timeout when the check is removed. A real minimal CPython guest now exits in 1.825 seconds on ARM64 and returns the known AMD64 startup failure in about 0.4 seconds instead of hanging during output-worker teardown.
+  Merged-tip `0b5404c69` closes the ARM64 `pairatomics-nonpie` soft-exclusive gap by folding low ET_EXEC addresses before bus/soft guards; the exact case and adjacent non-PIE/signal cases pass, removing the fold reproduces signal 11, and `hl-native --all-targets` passes with 74 active tests and 4 intentional ignores.
 - [ ] Run the full compatibility corpus on the final C-backed product and classify every remaining failure.
-  The immutable exact-tip `64606792f` baseline executed 3,247 of 3,279 rows: 3,105 passed, 142 failed, and 32 were explicitly `NOT_RUN` (ledger `64606792f-20260813T120100Z-immutable-j8.tsv`, SHA-256 `9b49a23bf30b24183e57d83f39a75b9f7571fc1bf3e2470024307e0ae2088a49`). The copied runner and shared library retained their pre-run hashes after the run, and the failure extract is preserved at `/var/tmp/husklet-corpus-64606792f-immutable-j8/failures.tsv`. This is a classified baseline, not final-tip closure.
-  Since that baseline, merged commit `54b5a23f4` fixed and activated `runtime/process/ptrace-attach-blocked` on both ISAs. Merged commits `18e90b9e1`, `39c70af13`, and `e27906445` repair the two-ISA `sticky-dir`, `unlink-errno`, and launch-user capability rows. These six filesystem rows and two formerly `NOT_RUN` ptrace rows need inclusion in the next immutable full-tip corpus before updating the aggregate totals.
+  The immutable `096bfe182` release corpus recorded 3,297 rows: 3,226 active rows passed, 58 failed, and 13 were explicitly `NOT_RUN`. The unique ledger is `target/testing/runtime/results-096bfe182-20260814T2055.tsv` (SHA-256 `159455059f5e1bd004031849790e69d94d550d82afb7e7bea7a426920b35e4a8`); its runner was `d59f2da56d98f3030a3263a3fe2a3a5ecf06ff0af9278860bbce4e17ee3ced86`, its private library was `d2da2d3bb94d7ee37067709c98cb9e09aa103ae1a8b1bef6437436bf6cce0c1a`, and the staged artifact passed `hl-native-artifact-smoke-v1` before and retained both hashes after execution. Mutable images, builds, workers, state, and 58 retained failure overlays live under `/var/tmp/husklet-runtime/corpus-096bfe182-20260814T2055`, eliminating the prior host `EMFILE`/loader cascade. This is valid compatibility evidence, not final-tip closure: 2,590 rows ran above the declared host-load threshold, so load-sensitive failures and timeouts require isolated reruns before classification, and every real failure still requires repair and a new immutable full-tip sweep.
   Current-tip targeted reruns additionally prove 19 of the baseline's 22 AMD64
   soft-span-signature timeouts closed by `b4b5c65bb`, including 14 cases rerun
   together with immutable runner/library hashes. `abi-corpus-x_vex_sse2int` and
-  `publication/shared-writeback` still time out; `publication/multi-view` passes
-  at 29.784 seconds and is therefore correctness evidence but not a healthy
-  timing margin. Together with the six filesystem-policy and six `O_PATH`/
+  Current-tip immutable reruns close the historical AMD64
+  `abi-corpus-x_vex_sse2int` timeout: the exact case passes 3/3 in
+  5.268--6.248 seconds and four adjacent VEX/AVX cases pass, while the immutable
+  historical `64606792f` artifact still reproduces its 30-second timeout under
+  quiet locked load. They also close the stale `publication/shared-writeback`
+  classification: both ISAs pass 3/3
+  in 4.990--5.659 seconds, adjacent `publication/multi-view` passes both ISAs
+  in 5.169--5.641 seconds, and no processes or mounts survive cleanup. Together
+  with the six filesystem-policy and six `O_PATH`/
   sentry-fchdir closures, 31 of the original 142 failures now have focused
   closure evidence, leaving 111 baseline failures before a new full-tip corpus.
   The exhaustive classification is preserved at `/var/tmp/failure-clusters.tsv`.
@@ -126,109 +99,135 @@ This is the authoritative checklist for the C-primary production migration. Chec
   failed signalfd destination no longer drains its queued signal, and a normal
   handler return is no longer mistaken for siglongjmp before sigreturn restores
   deferred delivery state. Exact focused runs pass both ISAs.
+  The current merged tip also has focused, mutation-backed closure evidence for
+  epoll hangup reporting, recognized `unshare` refusal, fileless ELF segments,
+  bound-descriptor execution, overlay lock identity, cursorless jailed `fchdir`,
+  pending timer-signal interrupts, interruptible SysV waits, filesystem-neutral
+  memfd controls, IPv6 UDP source-family reconstruction, collision-free POSIX
+  queue fixtures, displaced ARM64 DC ZVA stores, and bounded fork-child
+  diagnostic publication, plus eventfd vector routing and zero-length iovec
+  address validation. Last-thread `_exit` now also retires process-scoped
+  descriptor, accounting, registry, locking, and IPC state; the exact
+  fork-reclamation fixture passes both ISAs and the pre-fix path exhausts the
+  descriptor-visibility arena near fork 160. Both ISAs also match native/QEMU
+  error precedence for final-dot `rmdir`, trailing-slash `rename`, and directory
+  `truncate`; staged guards independently close each prior mismatch. These
+  Exact tip `7021bde3f` now has a fresh immutable release artifact (runner
+  `91098bde83f6cd4d2ccfe221b03399c4357b57c1aa15978c0b5f57a655114676`,
+  library `32fb1fc4839296df9e564ef805e9e3533d37d0b7f2bae1048fa40ce91d87f350`)
+  whose first correctness wave passes exit, real guest fork/wait, job-control
+  lifecycle, malloc, lower-file authority, and Python JSON on both ISAs plus
+  sqlite on ARM64. A second both-ISA wave passes default signal exit codes,
+  exit teardown, nested fork, fork during blocked I/O, canonical PTY, PTY job
+  signals, allocator reclamation, and Python standard-library behavior. Across
+  both waves: 29 unique ledgers, zero failures. Merged `c198f5da9` closes the
+  AMD64 sqlite gap generically by giving each guest compiler its matching Nix
+  sqlite headers/static archive and enabling the existing fixture on both ISAs;
+  QEMU oracles, exact integrated runs, deliberate golden mutation, and 49
+  focused tests pass. There is still no runtime scenario exercising actual
+  engine/container checkpoint capture-and-restore; `ltp_checkpoint` is only
+  futex synchronization.
+  Merged `b4e4572e0` fixes a proven adapter omission: every configured
+  checkpoint transport now projects `HL_CHECKPOINT=1`, while restore startup
+  additionally projects `HL_RESTORE=1`; removing the flag makes the focused
+  plan test red. This is necessary wiring, not runtime closure. A real
+  container-rootfs three-process fixture reaches READY, but default SentryOnly
+  explicitly refuses the P3 sentry/untrusted split and Sandbox::Disabled still
+  ends capture with `WaitFailed`; direct `hl-engine` round trips remain green.
+  Merged `66bc85352` proves a plain Engine followed by a checkpoint Engine
+  captures and publishes a manifest on both ISAs, excluding process-global
+  initialization as the production timeout cause; diagnosis is now comparing
+  the real box-backed spawn/capture path with the green direct spawn path.
+  Merged `99acd042b`..`fb1d89be0` makes failed checkpoint publication
+  transactional: image staging and engine claims are aborted, transaction
+  ownership is token-scoped and fenced across providers, cleanup deadlines are
+  cooperative, and recovery completion cannot race admitted mutations. On the
+  replayed current-main integration tip, `hl-engine` passed 89/89,
+  `hl-container` passed 218/218, and Husklet runtime checkpoint tests passed
+  7/7. This closes failure cleanup and cross-provider ownership; it does not
+  close the still-red native capture/restore compatibility path.
+  A historical-failure rerun on the same artifact passes directory lifecycle,
+  PID/procfs identity, sentry fork under both sandbox and untrusted policies,
+  and background TTY signaling on both ISAs (10 unique ledgers). Merged
+  `e7daf35ef`..`0d68e34cc` closes absolute-root and chained symlink traversal on
+  both ISAs while preserving lower-file and Python JSON behavior.
+  These
+  closures do not replace the required immutable
+  full-tip corpus rerun.
+  Merged VFS traversal now preserves `ELOOP` for deep/cyclic symlinks and keeps
+  plain `O_NOFOLLOW` distinct from `O_PATH|O_NOFOLLOW`; both ISAs, independent
+  mutations, the native Linux oracle, and the full `hl-native` gate are green.
+  Displaced AMD64 ET_EXEC self-modifying code now invalidates stale translations
+  even when an executable-page transition precedes both exact cache indexes;
+  the original MMX/XMM SIGILL fixture, adjacent cases, mutation, and native gate
+  prove closure. Profile the conservative miss fallback after compatibility is stable.
+  The staged-store transition stress is now finite and non-vacuous: exactly
+  1,000 remaps must overlap at least 100 writer iterations, passing three times
+  per ISA in 1.35--1.81 seconds instead of coupling termination to stalled
+  writer progress.
 
 ## C source structure cleanup
-
-- [x] Split checkpoint implementation into capability fragments below the file-size threshold.
-- [x] Split filesystem syscall implementation and make that subtree lint-clean.
-- [x] Split event syscall implementation and make that subtree lint-clean.
-- [x] Split IO syscall implementation into capability files below 1,500 lines.
-- [x] Split network namespace implementation below 1,500 lines.
-- [x] Begin sentry decomposition with isolated control operations.
-- [x] Decompose `svc_fcntl`, `svc_read`, and `svc_write` below the configured function and nesting limits.
-- [x] Decompose checkpoint image capture, descriptor restore, and resource restore functions below the configured limits.
-- [x] Decompose the rare syscall dispatcher into capability handlers below the configured limits.
-- [x] Finish netns ancillary/service function decomposition below all configured C structure limits.
-- [x] Split `container/vfs.c` into capability-owned unity fragments below the file threshold and decompose its synthetic-stat/proc-content hotspots.
-- [x] Split `syscall/binding.c` into capability fragments and reduce `bound_route` to an ordered family router below all limits.
-- [x] Split sentry service, lifecycle, marshalling, copy-back, and worker routing below all configured C structure limits.
-- [x] Split memory, network, process, rare, signal, SysV, and time syscall domains below all configured C structure limits.
-- [x] Split Linux ABI ELF and thread support below all configured C structure limits.
-- [x] Split Linux ABI context, fork monitoring, socket ABI vocabulary, and number translation below the configured limits.
 - [ ] Split ARM64 interpreter/translator units and oversized functions.
-- [x] Split AMD64 AVX, interpreter, translator, legacy, crypto, move, and shift units/functions.
-- [x] Refactor remaining oversized test C functions rather than suppressing them.
-- [x] Reach zero `c-file-length`, `c-function-length`, and `c-maximum-nesting` findings.
-
-## Generic reusable linter
-
-- [x] Organize linter rules into Rust, C, repository, and support domains.
-- [x] Remove Husklet package/business literals from reusable dependency analysis.
-- [x] Rename root policy to `lint.toml` and retain the declarative layer dependency matrix.
-- [x] Remove the stale explicit per-package dependency-edge ledger.
-- [x] Enforce package/runtime/container/workspace/application dependency direction from configuration.
-- [x] Embed tree-sitter C; do not shell out to parsers or depend on Python.
-- [x] Add generic C file-length, function-length, and nesting rules.
-- [x] Add strict generic `// hl-lint: allow(rule-id) -- reason` validation for exceptional C findings.
-- [x] Add generic catch-all source-path, empty-directory, single-file-directory, and redundant-parent-filename rules.
-- [x] Add a generic documentation inventory/example contract.
-- [x] Add a generic detached-constructor rule: free constructors returning `T`, `Option<T>`, or `Result<T, E>` belong on `T` when ownership is proven.
-- [x] Move detached constructors reported by the live scan onto their owned result types, including `Schedule` and `Sample`.
-- [x] Fix the remaining Rust nesting finding; merged-tip self-lint reports zero `maximum-nesting` errors.
-- [x] Repair stale linter self-test expectations and make `cargo test -p hl-design-lint --lib` fully green.
-- [x] Run the full linter to zero findings on the merged repository.
-  Immutable commit `554a889cd` completed the full configured scan with exact output `wrote 0 case(s) to lint`; future merged tips must repeat this evidence.
+  Merged tip `d7703fe46` extracts the byte-identical 166-line AdvSIMD structure decoder into `interp/structure.c`, reducing `vector.c` from 687 to 522 lines; forced-interpreter structure/cross-view cases, C lint/format, and all 74 active `hl-native` tests pass.
+- [x] Remove the unreachable macOS Mach/CRASHDBG subsystem and inert duplicate
+  native includes; the 478-line cleanup preserves the live POSIX fault path and
+  passes macOS ARM64 compilation plus focused native tests.
+- [x] Remove the unreachable standalone forkserver/client protocol while retaining
+  real guest-fork, checkpoint descriptor transport, and persistent-cache fork
+  lifecycle. Merged as `7021bde3f`: 1,452 lines and the unsupported equivalence
+  fixture are gone; native all-targets (74 active), workspace lib/bin (including
+  265 testing cases), and the full Rust/repository/C design lint pass with zero
+  failures. Exact merged tip also passes Linux ARM64 and AMD64 unity/shared-library
+  plus strict public C/C++ ABI gates and the Windows AMD64 GNU DLL/import-library,
+  export, host-adapter, and ABI smoke gate.
+- [x] Extract the 208-line Windows scalar/positioned/append/vector transfer
+  subsystem into `host/windows/io.c`; the moved implementation is byte-identical,
+  passes strict Windows cross-compilation, and leaves the service ABI unchanged.
 
 ## Testing ownership and fixtures
 
-- [x] Move native fixtures and native tests into the testing application or root compatibility suites as appropriate.
-- [x] Move syscall audit ownership into `src/apps/testing`; delete the runtime audit package.
-- [x] Remove interpreter hash/license/include-string bookkeeping tests.
-- [x] Remove Python ERI benchmark adapters and obsolete Python tests.
-- [x] Replace unexplained zero-byte golden files with typed empty-output assertions.
-- [x] Add leak-sanitizer build support and testing leak integration.
-- [x] Restore testing compilation against only the new `hl-native`/`hl-engine` public APIs and remove obsolete deleted-Rust-engine adapters.
-- [x] Expose and execute the native C leak non-vacuity probe through the slim `hl-native::Native` boundary.
-- [x] Add an independent Linux Valgrind Memcheck gate for bounded non-JIT executable-authority lifecycle tests, with a deliberate 4,096-byte native leak proving non-vacuity.
+- [x] Restore typed lower-file and merged-directory authority without pathname reopening. Merged as `7a3ea6080`/`31f9f6d0a`; current-tip `hl-native --all-targets` passes, and immutable exact-tip artifacts pass lower-file union/offset, Python JSON, and symlink `ELOOP` cases on both ISAs. Removing merged-directory tagging makes the union regression fail with the lower entry absent.
 - [ ] Audit every package/root test for correct unit, package integration, compatibility, or testing-app ownership.
 
 ## Quality gates
-
-- [x] Register C lint and structure checks in the standard Rust linter.
-- [x] Preserve strict C compiler warnings and Cargo-owned source discovery.
-- [x] Integrate clang-format verification, clang-tidy, and cppcheck without Make/CMake. Cargo owns C compilation and the embedded tree-sitter rules; Nix supplies Bear, clang-format, clang-tidy, and cppcheck, and the normal verification derivation runs them through `hl-design-lint` with Cargo's real compilation database and file-level diagnostics.
-- [x] Classify and fix the 17 path-sensitive reports found by `scan-build` 21.1.8. Current ARM64 and AMD64 analyses both report zero findings using target-matched Nix compiler/sysroot closures.
-- [x] Make zero-finding ARM64 and AMD64 `scan-build` analysis a bounded Nix hard gate using target-matched compiler/sysroot closures and disposable analyzer outputs.
-- [x] Make the complete `hl-design-lint` suite green.
-- [x] Run `cargo check --workspace --all-targets` successfully on the integrated C-backed workspace; rerun on the final delivery tip.
-- [x] Run `cargo test --workspace --lib --bins` successfully after restoring the C-backed engine/testing applications; rerun again on the final delivery tip.
 - [ ] Run `cargo test -p hl-native --all-targets` and all C executable/compatibility tests on the final merged tip.
+  Exact clean tip `0d68e34cc808` passes workspace lib/bin tests (including
+  `testing` 267/0 and `hl-container` 213/0), all 74 active `hl-native` targets
+  with four intentional external/release-only ignores, and
+  `cargo check --workspace --all-targets`; zero failures. The final-tip C
+  executable/compatibility repetition remains open.
 - [ ] Run feature-gated application Clippy checks and Nix flake checks on the final merged tip.
+  Exact merged tip `0b5404c69` passes both pinned-shell application Clippy gates: `--features runtime` and `--features gui`; final-tip Nix flake and later-tip repetition remain open.
+  Merged tip `03a53261e` passes `cargo test --workspace --lib --bins` in the pinned shell after the checkpoint responsibility and VFS traversal fixes: 1,511 passed, 0 failed, and 4 ignored; the later-tip application Clippy and Nix flake gates remain open.
+  The current shared GUI/terminal tree also passes both pinned-shell `husklet --all-targets` Clippy gates with `-D warnings` for `runtime` and `gui`; repeat after its pending handoff is committed before closing this item.
+- [x] Keep native ASan, LSan, and Valgrind gates non-vacuous. On `0b5404c69`, all clean runs pass; deliberate UAF/leak probes exit 97 and report the expected heap-use-after-free and exact 4,096-byte leak.
+  Exact tip `7021bde3f` repeats the LSan evidence: lifecycle, fork/wait,
+  self-exec, malloc, and AMD64 fork/wait workloads are clean; the deliberate
+  probe exits 97 with one exact 4,096-byte leak. Sqlite is explicitly skipped
+  because this shell lacks the ARM64 cross sqlite development headers.
+  Merged `77f24fdc4` now executes that exact non-vacuity probe before workloads
+  and fails immediately with the loader-safe instrumented `cargo run` command
+  when the testing binary was built without LSan.
 - [ ] Obtain macOS CI evidence for platform-specific application/native code.
-- [x] Build, package, sign, and smoke-launch the macOS ARM64 GUI from the C-backed
-  merged product, including relocation of Cargo's private native dylib.
-  Commit `69e7449c1` teaches the bundler where Cargo emitted the dylib; the
-  resulting 149 MiB application passed deep strict signature verification,
-  contained no `/nix/store` linkage, and remained live after launch. Subsequent
-  merged commits `cb7220abf` and `5be65ead6` keep terminal sessions inside the
-  Linux guest as root, retain launch errors, and remove unsupported Applications
-  and Compute/CUDA settings; the rebuilt application passed signature and launch
-  smoke checks. This local evidence does not replace the still-open macOS CI gate.
+  Native macOS ARM64 evidence on `fdeed8469` covers dylib compile/link, C/C++ ABI execution, architecture, install name, exports, rpath, receipts, and sibling-library isolation; signed application/release CI remains open.
 - [ ] Obtain Windows CI compile/link/ABI smoke evidence and runtime evidence.
+  GNU Windows AMD64 cross evidence on `fdeed8469` covers Rust/C compilation, EXE/DLL/import-library linking, exact exports, host translation units, and C/C++ ABI contracts. MSVC and Windows-kernel runtime evidence remain CI-only.
+- [x] Remove or cfg-narrow the four Windows-only Rust warnings in `hl-engine` (`execution.rs` mutability/deadline and `composition.rs` terminal/port state). Merged as `d853c67d2`; Windows GNU check and Clippy with warnings denied, PE/DLL/import-library/ABI smoke, Linux workspace check, and path-scoped design lint pass without warning allowances.
+- [x] Clear the checkpoint unsafe-boundary and testing async-blocking design-lint findings without suppressions. Merged as `93670bb56` and `6863c8aa3`; focused ownership/cleanup tests and package gates pass.
+- [ ] Preserve a zero-finding repository design-lint run through the pending GUI/terminal handoff. Merged `4690ffdc0`, `2a5935349`, and `5a492e5c2` coherently split the oversized checkpoint directory, storage, broker, transaction, and request responsibilities; merged-tip `hl-container --lib` passes 218/218 and `hl-engine --lib` passes 89/89. The current shared tree now reports zero findings across every repository, Rust, C, dependency, safety, and structure rule after extracting terminal output forwarding and scrollback parsing; `husklet --features runtime` checks and `hl-ws-term` passes 103/103. Keep this item open until the concurrently owned GUI/terminal diff is committed and the same zero-finding result is repeated on that merged tip.
 
 ## Performance and production readiness
 
-- [x] Restore a typed Rust benchmark harness with hashed and smoke-tested artifacts, exact-output checks, balanced scheduling, qualified nulls, unique resumable ledgers, bounded waits, two guest layouts, complete phases, and per-row host load.
 - [ ] Freeze reproducible original standalone-C and integrated-C baseline binaries; record hashes and smoke-run each copied binary for the acceptance campaign.
 - [ ] Run balanced-order, unique-ledger, box-locked benchmarks on at least two guests and report every phase.
 - [ ] Benchmark Python, sqlite, and malloc against the faster original/retained C baseline.
 - [ ] Meet the final requirement: Husklet no more than 10% slower than the faster C baseline.
 - [ ] Profile only after compatibility/build stability; validate profile hypotheses with mutations, not self-time alone.
 - [ ] Preserve lifecycle/engine observability without hot-path logging overhead.
-- [x] Make packaged interactive workspace terminals remain inside the Linux
-  guest, default to an explicit administrative identity while no user selector
-  exists, own a real controlling terminal/foreground process group, and retain
-  launch failures visibly. Merged commits `cb7220abf`, `93216995a`, and
-  `5754ba898` remove the host-shell escape, select guest root/Bash, establish
-  the native child session and `TIOCSCTTY` relationship, and prove an
-  interactive Alpine shell has job control.
-- [x] Preserve complete lower-directory metadata during overlay copy-up.
-  Merged commit `accaab27e` fixes the generic mkdir/umask loss of special mode
-  bits, timestamps, and xattrs; its exact regression proves `/tmp` remains
-  `01777`, permits unprivileged creation, and enforces sticky deletion rules.
-  This repairs the root cause of Ubuntu apt signature/temp-file failures rather
-  than adding image-specific behavior.
-- [ ] Verify no dependency on `../engine` or `../engine_rust` at build or runtime.
+- [x] Verify no dependency on `../engine` or `../engine_rust` at build or runtime.
+  Cargo metadata resolves all 47 local path dependencies inside this repository;
+  the lockfile and production/build source paths contain no sibling-engine source,
+  manifest, symlink, or runtime dependency.
 - [ ] Run final disk/artifact cleanup while preserving `../engine_rust` recovery evidence.
 - [ ] Complete a requirement-by-requirement production audit and mark the migration complete only when every item above has authoritative evidence.
 

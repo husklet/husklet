@@ -2,8 +2,8 @@ use hl_container::{CheckpointError, CheckpointImage, CheckpointImages};
 use hl_ws::{Directory, Key, Namespace, Storage};
 use std::collections::HashMap;
 use std::num::NonZeroU64;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 
 static GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -472,12 +472,10 @@ mod tests {
         image.commit(b"manifest-one").unwrap();
 
         image.put("stale", b"must-not-survive").unwrap();
-        assert!(
-            image
-                .abort_until(image.transaction(), std::time::Instant::now())
-                .unwrap_err()
-                .is_deadline()
-        );
+        assert!(image
+            .abort_until(image.transaction(), std::time::Instant::now())
+            .unwrap_err()
+            .is_deadline());
         image.abort().unwrap();
         assert_eq!(image.get("state").unwrap(), b"first");
         assert_eq!(image.get("MANIFEST").unwrap(), b"manifest-one");

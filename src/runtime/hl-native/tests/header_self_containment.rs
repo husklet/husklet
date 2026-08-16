@@ -241,7 +241,14 @@ int main(void) {
     let mutation = scratch.join("guest_pin_leak");
     let mut command = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()));
     let built = command
-        .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-pthread", "-DOMIT_ABANDON_RELEASE"])
+        .args([
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-pthread",
+            "-DOMIT_ABANDON_RELEASE",
+        ])
         .arg(format!("-I{}", native.display()))
         .arg(&source)
         .arg(native.join("translator/guest_memory.c"))
