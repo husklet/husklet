@@ -478,6 +478,67 @@ async fn checkpoint_rejection_preserves_every_running_process() {
 }
 
 #[tokio::test]
+async fn container_checkpoint_failure_does_not_checkpoint_the_terminal_execution() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(31));
+    runtime.delay = Duration::from_millis(50);
+    runtime.fail_checkpoint.store(40, Ordering::SeqCst);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("workspace")).await.unwrap();
+    containers.start("workspace").await.unwrap();
+    let exec = containers
+        .executions()
+        .create(
+            "workspace",
+            ExecSpec::new(Process::new("/bin/sh").console(Console::default().terminal(Size::new(24, 80).unwrap()))),
+        )
+        .await
+        .unwrap();
+    let _session = containers.executions().start(&exec.id).await.unwrap();
+
+    let error = containers.checkpoint_all(Duration::from_secs(1)).await.unwrap_err();
+
+    assert!(error.to_string().contains("injected checkpoint failure"));
+    assert!(matches!(
+        containers.inspect("workspace").await.unwrap().state,
+        ContainerState::Running { .. }
+    ));
+    let execution = containers.executions().inspect(&exec.id).await.unwrap();
+    assert!(matches!(execution.state, ExecState::Running { .. }));
+    assert_eq!(execution.checkpoint, None);
+    assert_eq!(
+        containers.executions().wait(&exec.id).await.unwrap(),
+        ExitStatus::Code(31)
+    );
+}
+
+#[tokio::test]
+async fn checkpoint_all_restores_earlier_captures_after_a_later_failure() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    runtime.fail_checkpoint.store(41, Ordering::SeqCst);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("first")).await.unwrap();
+    containers.create(spec("second")).await.unwrap();
+    containers.start("first").await.unwrap();
+    containers.start("second").await.unwrap();
+
+    let error = containers.checkpoint_all(Duration::from_secs(1)).await.unwrap_err();
+
+    assert!(error.to_string().contains("injected checkpoint failure"));
+    for name in ["first", "second"] {
+        let container = containers.inspect(name).await.unwrap();
+        assert!(matches!(container.state, ContainerState::Running { .. }));
+        assert_eq!(container.checkpoint, None);
+    }
+    assert_eq!(
+        runtime.checkpoints.lock().unwrap().as_slice(),
+        [Some(false), Some(false), Some(true)]
+    );
+}
+
+#[tokio::test]
 async fn failed_launch_does_not_publish_running_state() {
     let runtime = Arc::new(FakeRuntime::new(ExitStatus::Code(0)));
     runtime.fail.store(true, Ordering::SeqCst);

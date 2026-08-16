@@ -37,17 +37,17 @@ fn single_descriptor_syscalls_translate_guest_fds_at_the_sentry_boundary() {
 #[test]
 fn bound_close_clears_fd_emulation_state_before_closing_the_provider_handle() {
     let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native/linux_abi");
-    let source = fs::read_to_string(native.join("syscall/binding/route_bound.c"))
-        .expect("bound syscall routing source");
+    let source =
+        fs::read_to_string(native.join("syscall/binding/route_bound.c")).expect("bound syscall routing source");
     let close = source
         .split("case 57: /* close */")
         .nth(1)
         .and_then(|body| body.split("case 62:").next())
         .expect("bound close implementation");
 
-    let reset = close.find("fd_reset_emul((int)source.fd);").expect(
-        "bound close must clear overlay directory cursors and all other fd-indexed emulation state",
-    );
+    let reset = close
+        .find("fd_reset_emul((int)source.fd);")
+        .expect("bound close must clear overlay directory cursors and all other fd-indexed emulation state");
     let provider_close = close
         .find("hl_linux_close(g_linux_box, source.fd)")
         .expect("provider close");
