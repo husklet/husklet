@@ -79,6 +79,22 @@ impl Service {
         Ok(container)
     }
 
+    pub(crate) async fn discard_checkpoint(&self, reference: &str) -> Result<Container> {
+        let _guard = self.operations.lock().await;
+        let mut container = self.resolve(reference).await?;
+        if container.state.is_active() {
+            return Err(Error::InvalidState {
+                id: container.id,
+                actual: container.state,
+                expected: "inactive",
+            });
+        }
+        if container.checkpoint.take().is_some() {
+            self.containers.replace(&container).await?;
+        }
+        Ok(container)
+    }
+
     pub(crate) fn images(&self) -> Option<hl_images::Images> {
         self.images.clone()
     }

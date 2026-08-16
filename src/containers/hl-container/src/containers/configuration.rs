@@ -2,6 +2,14 @@ use super::Containers;
 use crate::{Container, Result};
 
 impl Containers {
+    /// Discards an inactive container's process checkpoint while preserving its writable rootfs.
+    ///
+    /// # Errors
+    /// Returns lookup, active-state, or persistence failures.
+    pub async fn discard_checkpoint(&self, reference: &str) -> Result<Container> {
+        self.service.discard_checkpoint(reference).await
+    }
+
     /// Atomically changes a container's unique name.
     ///
     /// # Errors

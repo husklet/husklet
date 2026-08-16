@@ -330,6 +330,42 @@ async fn checkpoint_is_durable_and_start_restores_while_arming_the_next_capture(
 }
 
 #[tokio::test]
+async fn discarded_checkpoint_preserves_container_and_forces_a_fresh_start() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    let created = containers.create(spec("discard-checkpoint")).await.unwrap();
+    containers.start("discard-checkpoint").await.unwrap();
+    containers
+        .checkpoint("discard-checkpoint", Duration::from_secs(1))
+        .await
+        .unwrap();
+
+    let discarded = containers.discard_checkpoint("discard-checkpoint").await.unwrap();
+    assert_eq!(discarded.id, created.id);
+    assert_eq!(discarded.checkpoint, None);
+    containers.start("discard-checkpoint").await.unwrap();
+    assert_eq!(*runtime.checkpoints.lock().unwrap(), [Some(false), Some(false)]);
+
+    containers.remove_force("discard-checkpoint").await.unwrap();
+}
+
+#[tokio::test]
+async fn active_container_checkpoint_cannot_be_discarded() {
+    let containers = service(Arc::new(FakeRuntime::new(ExitStatus::Code(0)))).await;
+    containers.create(spec("active-checkpoint")).await.unwrap();
+    containers.start("active-checkpoint").await.unwrap();
+
+    assert!(matches!(
+        containers.discard_checkpoint("active-checkpoint").await,
+        Err(Error::InvalidState { .. })
+    ));
+
+    containers.remove_force("active-checkpoint").await.unwrap();
+}
+
+#[tokio::test]
 async fn failed_restore_retains_the_checkpoint_for_retry() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_secs(1);
