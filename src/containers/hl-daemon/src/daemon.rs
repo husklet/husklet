@@ -39,6 +39,7 @@ pub struct Daemon {
     events: Events,
     release: Release,
     sampler: Arc<dyn ProcessSampler>,
+    sandbox: hl_container::Sandbox,
 }
 
 impl Daemon {
@@ -53,6 +54,7 @@ impl Daemon {
             events,
             release: Release::default(),
             sampler: Arc::new(UnavailableProcessSampler),
+            sandbox: hl_container::Sandbox::default(),
         }
     }
 
@@ -84,6 +86,13 @@ impl Daemon {
         self
     }
 
+    /// Select the default sandbox policy for Docker-created containers.
+    #[must_use]
+    pub fn sandbox(mut self, sandbox: hl_container::Sandbox) -> Self {
+        self.sandbox = sandbox;
+        self
+    }
+
     /// Direct access to the exact service instance exposed by server mode.
     #[must_use]
     pub fn headless(&self) -> Containers {
@@ -103,6 +112,7 @@ impl Daemon {
             self.events.clone(),
             self.release.clone(),
             self.sampler.clone(),
+            self.sandbox,
         )
     }
 }

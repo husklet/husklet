@@ -530,6 +530,24 @@ async fn host_config_maps_effective_resources_isolation_and_mounts() {
 }
 
 #[tokio::test]
+async fn checkpoint_compatible_sandbox_reaches_container_isolation() {
+    let (_root, containers) = containers().await;
+    let settings = HostSettings::parse_with_sandbox(
+        None,
+        &ExposedPorts::default(),
+        BTreeMap::new(),
+        false,
+        hl_container::NetworkMode::Automatic,
+        &containers,
+        hl_container::Sandbox::Disabled,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(settings.isolation.sandbox, hl_container::Sandbox::Disabled);
+}
+
+#[tokio::test]
 async fn host_config_rejects_unrepresentable_resolver_tokens() {
     let (_root, containers) = containers().await;
     let value = HostConfig {

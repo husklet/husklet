@@ -78,6 +78,7 @@ impl Daemon {
         let mut cmd = super::platform::daemon(&bin);
         cmd.arg("--root")
             .arg(dir)
+            .arg("--checkpoint-compatible")
             .arg("--images")
             .arg(&self.images)
             .arg("--external-images")

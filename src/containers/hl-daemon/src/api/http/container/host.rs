@@ -16,6 +16,7 @@ pub(super) struct HostSettings {
 }
 
 impl HostSettings {
+    #[cfg(test)]
     pub(super) async fn parse(
         value: Option<&HostConfig>,
         exposed: &crate::api::ExposedPorts,
@@ -23,6 +24,27 @@ impl HostSettings {
         network_isolated: bool,
         network_mode: hl_container::NetworkMode,
         containers: &hl_container::Containers,
+    ) -> ApiResult<Self> {
+        Self::parse_with_sandbox(
+            value,
+            exposed,
+            declared,
+            network_isolated,
+            network_mode,
+            containers,
+            hl_container::Sandbox::default(),
+        )
+        .await
+    }
+
+    pub(super) async fn parse_with_sandbox(
+        value: Option<&HostConfig>,
+        exposed: &crate::api::ExposedPorts,
+        declared: BTreeMap<String, serde_json::Value>,
+        network_isolated: bool,
+        network_mode: hl_container::NetworkMode,
+        containers: &hl_container::Containers,
+        sandbox: hl_container::Sandbox,
     ) -> ApiResult<Self> {
         let fallback = HostConfig::default();
         let value = value.unwrap_or(&fallback);
@@ -39,7 +61,7 @@ impl HostSettings {
         let resolver =
             hl_container::Resolver::new(value.dns.clone(), value.dns_search.clone(), value.dns_options.clone())
                 .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
-        let isolation = Self::isolation(value, network_isolated, network_mode);
+        let isolation = Self::isolation(value, network_isolated, network_mode, sandbox);
         let restart = value
             .restart_policy
             .policy()
@@ -181,12 +203,17 @@ impl HostSettings {
         })
     }
 
-    fn isolation(value: &HostConfig, network_isolated: bool, network_mode: hl_container::NetworkMode) -> Isolation {
+    fn isolation(
+        value: &HostConfig,
+        network_isolated: bool,
+        network_mode: hl_container::NetworkMode,
+        sandbox: hl_container::Sandbox,
+    ) -> Isolation {
         Isolation {
             sandbox: if network_mode == hl_container::NetworkMode::Host {
                 hl_container::Sandbox::Disabled
             } else {
-                hl_container::Sandbox::default()
+                sandbox
             },
             read_only_root: value.readonly_rootfs,
             network_isolated,

@@ -725,6 +725,11 @@ static void sentry_init(void) {
         _exit(71);
     }
     if (pid == 0) {
+        /* The sentry is an engine-private authority helper, not a guest process
+         * and therefore not a checkpoint participant. Peer discovery uses the
+         * worker's host session as the guest process-tree boundary, so give the
+         * helper its own session before it starts any servicer threads. */
+        if (setsid() < 0) _exit(71);
         sentry_loop(); // child: spawns the per-ring servicer threads; never returns
         _exit(0);
     }

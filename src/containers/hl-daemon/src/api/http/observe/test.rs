@@ -105,6 +105,7 @@ async fn stats_handler_rejects_streaming_one_shot_request() {
         builds: crate::builder::Builds::default(),
         release: crate::daemon::Release::default(),
         sampler: Arc::new(crate::process::UnavailableProcessSampler),
+        sandbox: hl_container::Sandbox::default(),
     };
 
     let error = stats(
@@ -230,6 +231,7 @@ async fn status_order() {
         builds: crate::builder::Builds::default(),
         release: crate::daemon::Release::default(),
         sampler: Arc::new(crate::process::UnavailableProcessSampler),
+        sandbox: hl_container::Sandbox::default(),
     };
 
     let missing = top(

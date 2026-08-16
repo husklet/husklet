@@ -34,6 +34,7 @@ pub(super) struct DockerState {
     pub(super) builds: crate::builder::Builds,
     pub(super) release: Release,
     pub(super) sampler: Arc<dyn crate::ProcessSampler>,
+    pub(super) sandbox: hl_container::Sandbox,
 }
 
 pub(crate) fn router(
@@ -43,6 +44,7 @@ pub(crate) fn router(
     events: Events,
     release: Release,
     sampler: Arc<dyn crate::ProcessSampler>,
+    sandbox: hl_container::Sandbox,
 ) -> Router {
     let state = DockerState {
         containers,
@@ -52,6 +54,7 @@ pub(crate) fn router(
         builds: crate::builder::Builds::default(),
         release,
         sampler,
+        sandbox,
     };
     let api = Router::new()
         .route("/_ping", get(system::ping).head(system::ping_head))

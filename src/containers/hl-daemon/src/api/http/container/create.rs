@@ -50,13 +50,14 @@ pub(in super::super) async fn create(
         .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error))?
         .flatten();
     let network = network.prepare(&state.containers).await?;
-    let host = HostSettings::parse(
+    let host = HostSettings::parse_with_sandbox(
         request.host_config.as_ref(),
         &request.exposed_ports,
         request.volumes,
         network.isolated(),
         network.mode(),
         &state.containers,
+        state.sandbox,
     )
     .await?;
     let overrides = RuntimeOverrides {
