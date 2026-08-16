@@ -473,6 +473,14 @@ hl_status hl_engine_checkpoint_configure(hl_engine *engine, int broker, int trig
             hl_engine_checkpoint_descriptor_identity(control_parent, &registered[2]) != 0 ||
             hl_engine_checkpoint_descriptor_identity(control_child, &registered[3]) != 0)
             goto fail;
+        /* A configured transport is the authority that capture is available. Keep the guest-side
+         * trigger arm coupled to that capability instead of relying on every embedder to duplicate
+         * the private launch option correctly. Restore remains independently selected by HL_RESTORE,
+         * while the restored process is immediately armed for its next capture. */
+        if (hl_options_set(&engine->options, "HL_CHECKPOINT", "1", 1) != 0) {
+            status = HL_STATUS_OUT_OF_MEMORY;
+            goto fail;
+        }
         hl_engine_checkpoint_descriptor_append_locked(registered[0]);
         hl_engine_checkpoint_descriptor_append_locked(registered[1]);
         hl_engine_checkpoint_descriptor_append_locked(registered[2]);
@@ -1287,23 +1295,25 @@ hl_status hl_engine_request(hl_engine *engine, uint32_t request, const void *dat
     hl_status status;
     if (engine == NULL || (data_size != 0 && data == NULL)) return HL_STATUS_INVALID_ARGUMENT;
     if (request == HL_ENGINE_REQUEST_CHECKPOINT_PRIVATE) {
-        if (data_size != 0) return HL_STATUS_INVALID_ARGUMENT;
+        uint32_t signal_number;
 #if defined(_WIN32)
         return HL_STATUS_NOT_SUPPORTED;
 #else
+        if (data == NULL || data_size != sizeof(signal_number)) return HL_STATUS_INVALID_ARGUMENT;
+        memcpy(&signal_number, data, sizeof(signal_number));
+        if (signal_number == 0 || signal_number > 64) return HL_STATUS_INVALID_ARGUMENT;
         if (engine->checkpoint_control_parent < 0) return HL_STATUS_NOT_SUPPORTED;
         hl_engine_checkpoint_control_lock(engine);
 #if defined(HL_NATIVE_TEST_HOOKS)
         hl_engine_checkpoint_test_pause(engine);
 #endif
         status = hl_engine_checkpoint_control_ready(engine);
-        if (status != HL_STATUS_OK) {
-            hl_engine_checkpoint_control_unlock(engine);
-            return status;
-        }
-        for (;;) {
+        if (status == HL_STATUS_OK) {
             unsigned char command = 1;
-            ssize_t written = write(engine->checkpoint_control_parent, &command, sizeof(command));
+            ssize_t written;
+            do {
+                written = write(engine->checkpoint_control_parent, &command, sizeof(command));
+            } while (written < 0 && errno == EINTR);
             if (written == (ssize_t)sizeof(command)) {
                 unsigned char interrupted = 0;
                 struct pollfd waiting = {.fd = engine->checkpoint_control_parent, .events = POLLIN};
@@ -1311,21 +1321,20 @@ hl_status hl_engine_request(hl_engine *engine, uint32_t request, const void *dat
                 do {
                     ready = poll(&waiting, 1, 5000);
                 } while (ready < 0 && errno == EINTR);
-                if (ready > 0 && read(waiting.fd, &interrupted, sizeof(interrupted)) == (ssize_t)sizeof(interrupted) &&
-                    interrupted != 0)
-                    status = HL_STATUS_OK;
-                else
+                if (ready <= 0 || read(waiting.fd, &interrupted, sizeof(interrupted)) !=
+                                      (ssize_t)sizeof(interrupted) ||
+                    interrupted == 0)
                     status = HL_STATUS_PLATFORM_FAILURE;
-                hl_engine_checkpoint_control_unlock(engine);
-#if defined(HL_NATIVE_TEST_HOOKS)
-                hl_engine_checkpoint_test_request_completed();
-#endif
-                return status;
+            } else {
+                status = HL_STATUS_PLATFORM_FAILURE;
             }
-            if (written < 0 && errno == EINTR) continue;
-            hl_engine_checkpoint_control_unlock(engine);
-            return HL_STATUS_PLATFORM_FAILURE;
         }
+        hl_engine_checkpoint_control_unlock(engine);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        hl_engine_checkpoint_test_request_completed();
+#endif
+        if (status != HL_STATUS_OK) return status;
+        reason = HL_HOST_PROCESS_TERMINATE_NATIVE_SIGNAL + signal_number;
 #endif
     } else if (request == HL_ENGINE_REQUEST_SIGNAL) {
         uint32_t signal_number;

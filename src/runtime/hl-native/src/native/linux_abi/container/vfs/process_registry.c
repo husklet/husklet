@@ -658,7 +658,7 @@ static int proc_reg_read(int hostpid, char *comm, size_t csz, char *cmd, size_t 
 // Live per-process stats from the host backend. rss/cpu-times/state are REAL (coarse beats
 // zero); comm here is the HOST comm (the DBT binary) -- the guest comm comes from the registry instead.
 struct hl_procinfo {
-    int ppid_host, pgid_host, nthreads;
+    int ppid_host, pgid_host, tty_host, tpgid_host, nthreads;
     char state;
     unsigned long long rss, vsize, utime_ns, stime_ns;
     long start_sec;
@@ -670,6 +670,8 @@ static int hl_get_procinfo(int pid, struct hl_procinfo *pi) {
     if (!hl_host_process_read(pid, &host)) return 0;
     pi->ppid_host = (int)host.parent_pid;
     pi->pgid_host = (int)host.process_group;
+    pi->tty_host = (int)host.terminal_device;
+    pi->tpgid_host = (int)host.foreground_group;
     pi->start_sec = (long)host.start_time_seconds;
     pi->state = host.state;
     pi->rss = host.resident_bytes;

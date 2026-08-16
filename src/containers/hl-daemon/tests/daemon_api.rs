@@ -95,8 +95,8 @@ async fn shell_vfork_exec_releases_parent_and_preserves_output() -> Result<(), E
         std::time::Duration::from_secs(10),
         containers.wait(container.id.as_str()),
     )
-        .await
-        .map_err(|_| "shell remained blocked after its vfork child exec")??;
+    .await
+    .map_err(|_| "shell remained blocked after its vfork child exec")??;
     let logs = containers.logs(container.id.as_str()).await?;
 
     assert_eq!(status, ExitStatus::Code(0));

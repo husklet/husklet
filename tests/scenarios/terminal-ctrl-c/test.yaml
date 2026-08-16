@@ -7,7 +7,7 @@ cases:
   - terminal:
       argv: [/bin/sh]
       steps:
-      - write: { text: "printf '\\123\\124\\101\\122\\124\\105\\104\\n'; sleep 30\r" }
+      - write: { text: "sh -c 'while set -- $(cat /proc/$$/stat); test $5 != $8; do :; done; echo START\"\"ED; exec sleep 30'\r" }
       - await_output: { contains: STARTED, timeout_ms: 5000 }
       - write: { text: "\u0003" }
       - write: { text: "printf '\\120\\111\\120\\105\\055\\117\\113\\n'; exit\r" }

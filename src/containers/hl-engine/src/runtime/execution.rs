@@ -30,8 +30,6 @@ pub(crate) struct ProductionMachine {
     output: Option<NativeOutputBridge>,
     #[cfg(unix)]
     checkpoint: Option<CheckpointControl>,
-    #[cfg(unix)]
-    recovery: Mutex<Option<RecoveryAdmission>>,
     engine: Mutex<Option<Arc<hl_native::Engine>>>,
 }
 
@@ -77,8 +75,6 @@ impl RuntimeFactory for ProductionFactory {
             output,
             #[cfg(unix)]
             checkpoint,
-            #[cfg(unix)]
-            recovery: Mutex::new(None),
             engine: Mutex::new(None),
         })
     }
@@ -226,7 +222,7 @@ impl GuestMachine for ProductionMachine {
         run?;
         #[cfg(unix)]
         if let Some(recovery) = recovery {
-            *self.recovery.lock().map_err(|_| EngineError::Synchronization)? = Some(recovery);
+            recovery.wait()?;
         }
         #[cfg(unix)]
         if let Some(terminal) = &self.terminal {
@@ -252,7 +248,7 @@ impl GuestMachine for ProductionMachine {
         };
         self.current()?
             .request(kind, signal)
-            .map_err(|_| EngineError::StopFailed)
+            .map_err(EngineError::NativeStopFailed)
     }
 
     fn checkpoint_supported(&self) -> Result<(), EngineError> {
@@ -324,7 +320,7 @@ impl CheckpointControl {
             crate::activation::GuestIsa::Aarch64 => 1,
             crate::activation::GuestIsa::X86_64 => 2,
         });
-        if signal <= 0 || engine.request(REQUEST_CHECKPOINT, 0).is_err() {
+        if signal <= 0 || engine.request(REQUEST_CHECKPOINT, signal).is_err() {
             self.server
                 .abort_capture(capture)
                 .map_err(|_| EngineError::LaunchFailed)?;
@@ -340,7 +336,7 @@ impl CheckpointControl {
                 return result.map_err(Self::capture_failure);
             }
             if Instant::now() >= next_interrupt {
-                let _ = engine.request(REQUEST_CHECKPOINT, 0);
+                let _ = engine.request(REQUEST_CHECKPOINT, signal);
                 next_interrupt = Instant::now() + Duration::from_millis(100);
             }
         }
@@ -379,6 +375,15 @@ struct RecoveryAdmission {
 impl Drop for RecoveryAdmission {
     fn drop(&mut self) {
         let _ = self.server.abort_recovery(self.id);
+    }
+}
+
+#[cfg(unix)]
+impl RecoveryAdmission {
+    fn wait(&self) -> Result<(), EngineError> {
+        self.server
+            .wait_recovery(self.id)
+            .map_err(CheckpointControl::capture_failure)
     }
 }
 

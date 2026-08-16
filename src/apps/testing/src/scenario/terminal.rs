@@ -240,10 +240,23 @@ async fn await_output(
         }
         Ok(())
     };
-    tokio::time::timeout(timeout, receive)
-        .await
-        .map_err(|_| format!("timed out awaiting terminal output after {} ms", timeout.as_millis()))??;
-    Ok(())
+    match tokio::time::timeout(timeout, receive).await {
+        Ok(result) => result,
+        Err(_) => Err(format!(
+            "timed out awaiting terminal output after {} ms; transcript tail={:?}",
+            timeout.as_millis(),
+            transcript_tail(stdout, stderr, 512)
+        )
+        .into()),
+    }
+}
+
+fn transcript_tail(stdout: &[u8], stderr: &[u8], limit: usize) -> String {
+    let mut transcript = Vec::with_capacity(stdout.len().saturating_add(stderr.len()));
+    transcript.extend_from_slice(stdout);
+    transcript.extend_from_slice(stderr);
+    let first = transcript.len().saturating_sub(limit);
+    String::from_utf8_lossy(&transcript[first..]).into_owned()
 }
 
 fn capture(stream: Stream, bytes: Vec<u8>, stdout: &mut Vec<u8>, stderr: &mut Vec<u8>) -> Result<(), Error> {

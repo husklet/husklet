@@ -1101,8 +1101,10 @@
               ++ lib.optionals toolchain.canBuildGuests (
                 toolchain.crossCompilers
                 ++ toolchain.rustStaticLinkers
-                ++ toolchain.compilerAliases
-                ++ toolchain.guestLibraries
+                ++ lib.optionals pkgs.stdenv.isLinux (
+                  toolchain.compilerAliases
+                  ++ toolchain.guestLibraries
+                )
                 ++ toolchain.emulators
               );
               shellHook = ''

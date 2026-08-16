@@ -578,8 +578,9 @@ static void exec_reload_image(struct cpu *cpu, exec_prepared *prepared) {
     exec_reset_caught_signals();
 
     uint64_t heap;
-    if (hl_gmap_map_anonymous(0, 256u << 20, HL_HOST_MEMORY_READ | HL_HOST_MEMORY_WRITE, HL_HOST_MEMORY_PRIVATE,
-                              &heap) != HL_STATUS_OK)
+    uint64_t heap_hint = hl_linux_snapshot_reserve(&g_ckpt_snapshot, 256u << 20);
+    if (hl_gmap_map_anonymous(heap_hint, 256u << 20, HL_HOST_MEMORY_READ | HL_HOST_MEMORY_WRITE,
+                              HL_HOST_MEMORY_PRIVATE, &heap) != HL_STATUS_OK)
         _exit(127);
     brk_lo = brk_cur = heap;
     brk_hi = brk_lo + (256u << 20);

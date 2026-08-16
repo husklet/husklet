@@ -52,6 +52,36 @@ fn raw_names_are_not_recorded_and_sidecars_follow_lifecycle() {
 }
 
 #[test]
+fn runtime_case_names_export_as_guest_names_without_a_sidecar_entry() {
+    let temp = tempfile::tempdir().unwrap();
+    let snapshots = Snapshots::open(temp.path()).unwrap();
+    let draft = snapshots.prepare(id("active"), None).unwrap();
+    fs::create_dir_all(draft.path().join("data")).unwrap();
+    fs::write(draft.path().join("data/.hl-case-v1-466f6f"), b"upper").unwrap();
+    fs::write(draft.path().join("data/.hl-case-v1-666f6f"), b"lower").unwrap();
+    let view = draft.commit(id("runtime-names")).unwrap();
+
+    assert_eq!(
+        view.names().visible(Path::new("data/.hl-case-v1-466f6f")),
+        Path::new("data/Foo")
+    );
+    assert_eq!(
+        view.names().visible(Path::new("data/.hl-case-v1-666f6f")),
+        Path::new("data/foo")
+    );
+    let mut bytes = Vec::new();
+    view.archive(&mut bytes).unwrap();
+    let paths = tar::Archive::new(bytes.as_slice())
+        .entries()
+        .unwrap()
+        .map(|entry| entry.unwrap().path().unwrap().into_owned())
+        .collect::<Vec<_>>();
+    assert!(paths.contains(&Path::new("data/Foo").to_owned()));
+    assert!(paths.contains(&Path::new("data/foo").to_owned()));
+    assert!(!paths.iter().any(|path| path.to_string_lossy().contains(".hl-case-v1-")));
+}
+
+#[test]
 fn opening_another_store_preserves_a_live_draft() {
     let temp = tempfile::tempdir().unwrap();
     let snapshots = Snapshots::open(temp.path()).unwrap();

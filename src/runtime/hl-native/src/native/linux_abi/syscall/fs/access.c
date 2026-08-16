@@ -1294,9 +1294,11 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             // after copy-up, `host` (the upper path) exists iff the file was already present in the
             // overlay -> a missing upper means this open will CREATE it fresh; stamp its owner post-open.
             int nf_new = nf_want && access(host, F_OK) != 0;
+            int created = (lf & 0x40) && access(host, F_OK) != 0;
             // Gate the new fd against the guest's soft RLIMIT_NOFILE -> EMFILE past the cap (host table larger).
             int r = nofile_gate(
                 open(host, mf | osymlink | ((lf & G_O_NOFOLLOW) && !osymlink ? O_NOFOLLOW : 0), (mode_t)a3));
+            if (r >= 0 && created) hl_fdcache_resolution_bump();
             if (r >= 0 && nf_new) newfile_stamp_fd(r);
             if (r >= 0 && r < HL_NFD) g_opath[r] = is_opath;
             if (r >= 0) {

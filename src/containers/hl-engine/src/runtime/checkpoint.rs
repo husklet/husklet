@@ -239,6 +239,41 @@ impl Server {
         }
     }
 
+    pub(crate) fn wait_recovery(&self, id: u64) -> Result<(), CaptureFailure> {
+        let mut capture = self.capture_lock()?;
+        loop {
+            match capture.phase {
+                CapturePhase::Recovery { id: active, deadline } if active == id => {
+                    let now = std::time::Instant::now();
+                    if now >= deadline {
+                        drop(capture);
+                        self.abort_recovery(id)?;
+                        return Err(CaptureFailure::Deadline);
+                    }
+                    let (next, timeout) = self
+                        .capture_changed
+                        .wait_timeout(capture, deadline.saturating_duration_since(now))
+                        .map_err(|_| CaptureFailure::Poisoned)?;
+                    capture = next;
+                    if timeout.timed_out() {
+                        drop(capture);
+                        self.abort_recovery(id)?;
+                        return Err(CaptureFailure::Deadline);
+                    }
+                }
+                CapturePhase::Aborting { id: active } if active == id => {
+                    capture = self
+                        .capture_changed
+                        .wait(capture)
+                        .map_err(|_| CaptureFailure::Poisoned)?;
+                }
+                CapturePhase::Idle => return Ok(()),
+                CapturePhase::Poisoned => return Err(CaptureFailure::Poisoned),
+                _ => return Err(CaptureFailure::Busy),
+            }
+        }
+    }
+
     fn capture_lock(&self) -> Result<std::sync::MutexGuard<'_, CaptureState>, CaptureFailure> {
         match self.capture.lock() {
             Ok(capture) => Ok(capture),

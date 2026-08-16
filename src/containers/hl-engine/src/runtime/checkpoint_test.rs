@@ -655,6 +655,7 @@ fn recovery_report_requires_and_closes_its_typed_scope() {
         "publishing the report is not proof that restore finished reading the image"
     );
     assert_eq!(server.dispatch(7, &complete, "", &[]).status, protocol::STATUS_OK);
+    assert_eq!(server.wait_recovery(recovery), Ok(()));
     assert_ne!(server.dispatch(7, &complete, "", &[]).status, protocol::STATUS_OK);
     let stale_source = object_request(protocol::SOURCE_SIZE, 0, 9);
     assert_ne!(
@@ -666,6 +667,23 @@ fn recovery_report_requires_and_closes_its_typed_scope() {
         server
             .begin_capture(10, std::time::Instant::now() + Duration::from_secs(1))
             .is_ok()
+    );
+}
+
+#[test]
+fn recovery_readiness_times_out_and_settles_the_transaction() {
+    let store = Arc::new(RecoveryStore::default());
+    let server = Server::new(store.clone(), store);
+    let recovery = server
+        .begin_recovery(11, std::time::Instant::now() + Duration::from_millis(5))
+        .unwrap();
+
+    assert_eq!(server.wait_recovery(recovery), Err(CaptureFailure::Deadline));
+    assert!(
+        server
+            .begin_recovery(12, std::time::Instant::now() + Duration::from_secs(1))
+            .is_ok(),
+        "a readiness timeout must release the abandoned recovery transaction"
     );
 }
 

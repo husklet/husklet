@@ -920,6 +920,8 @@ static int ckpt_capture_file_blob(int fd, char *record_path, size_t record_capac
     return result;
 }
 
+int hl_ckpt_interrupt_executors(void);
+
 // Called at the top of the dispatcher loop (a clean safepoint: all guest arch state is spilled into `c`).
 // Referenced by engine/dispatch.c via the G_CKPT_POLL seam (aarch64-only). Cheap: a NULL test + one shared
 // memory load on the hot path. When the trigger generation advances, the container INIT coordinates the
@@ -931,7 +933,13 @@ static void ckpt_poll(struct cpu *c) {
     // One deterministic coordinator per host process: the thread-group leader owns generation consumption.
     // A peer that observes the trigger returns to translated execution with irq armed by the process kick;
     // the leader will shortly arm the strict barrier and park it at this dispatcher boundary.
-    if (c->tid != 0) return;
+    if (c->tid != 0) {
+        /* A process-directed host kick may wake any executor. Fan it out from
+         * this safe dispatcher context so the leader always consumes the new
+         * generation and blocked peers are released as well. */
+        (void)hl_ckpt_interrupt_executors();
+        return;
+    }
     g_ckpt_seen_gen = g;
     if (container_pid() == 1) {
         ckpt_coordinate_and_exit(c); // never returns (dumps the tree + _exit)
@@ -947,6 +955,13 @@ static void ckpt_poll(struct cpu *c) {
 // reconstruct it from libc's SIGRTMIN: host_signal.h owns a separate Linux signal namespace, and
 // repeating the arithmetic outside this translation unit can turn a safepoint kick into termination.
 #if G_CKPT_ARCH == 2 || defined(HL_CKPT_INTERRUPT_EXPORT)
+void hl_ckpt_interrupt_block(void) {
+    sigset_t blocked;
+    sigemptyset(&blocked);
+    sigaddset(&blocked, THREAD_INT_SIG);
+    pthread_sigmask(SIG_BLOCK, &blocked, NULL);
+}
+
 int hl_ckpt_interrupt_signal(void) {
     return THREAD_INT_SIG;
 }

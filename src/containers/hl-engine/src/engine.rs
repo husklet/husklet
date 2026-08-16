@@ -106,6 +106,7 @@ pub enum EngineError {
     WorkspaceFailed,
     WaitFailed,
     StopFailed,
+    NativeStopFailed(i32),
     Synchronization,
     Unsupported,
 }
@@ -250,10 +251,7 @@ impl<L: Launcher, W: Workspace> Engine<L, W> {
             pending
         };
         if let Some(request) = pending {
-            self.shared
-                .launcher
-                .terminate(process, request)
-                .map_err(|_| EngineError::StopFailed)?;
+            self.shared.launcher.terminate(process, request)?;
         }
         Ok(())
     }
@@ -286,7 +284,6 @@ impl<L: Launcher, W: Workspace> Engine<L, W> {
         self.shared
             .launcher
             .terminate(process.ok_or(EngineError::Synchronization)?, request)
-            .map_err(|_| EngineError::StopFailed)
     }
 
     pub fn wait(&self) -> Result<EngineExit, EngineError> {

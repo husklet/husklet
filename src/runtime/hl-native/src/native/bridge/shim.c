@@ -483,9 +483,11 @@ HL_API int32_t hl_c_backend_run(hl_c_backend *backend, int32_t argc, const char 
     return status;
 }
 
+enum { HL_C_BACKEND_REQUEST_CHECKPOINT_PRIVATE = 4u };
+
 HL_API int32_t hl_c_backend_request(hl_c_backend *backend, uint32_t request, int32_t signal) {
     if (backend == NULL) return HL_STATUS_INVALID_ARGUMENT;
-    if (request == HL_ENGINE_REQUEST_SIGNAL)
+    if (request == HL_ENGINE_REQUEST_SIGNAL || request == HL_C_BACKEND_REQUEST_CHECKPOINT_PRIVATE)
         return hl_engine_request(backend->engine, request, &signal, sizeof(signal));
     return hl_engine_request(backend->engine, request, NULL, 0);
 }

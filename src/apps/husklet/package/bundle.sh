@@ -18,6 +18,7 @@ VERSION="${1:-0.1.0}"
 export HL_VERSION="${HL_VERSION:-$VERSION}"
 BUILD_TARGET="${CARGO_TARGET_DIR:-$ROOT/target-macos}"
 export CARGO_TARGET_DIR="$BUILD_TARGET"
+NATIVE_BUNDLE_TARGET="$BUILD_TARGET/native-bundle"
 BUNDLE_TARGET="${HL_BUNDLE_TARGET:-$ROOT/target}"
 FINAL_APP="$BUNDLE_TARGET/Husklet.app"
 APP="$BUNDLE_TARGET/.Husklet.app.build.$$"
@@ -51,7 +52,8 @@ SOURCE_CHANGES="$(source_changes)"
 # keeping the Rust API and native ABI on one published version.
 log "building release husklet and dockerd"
 ( cd "$ROOT" && cargo build --release -p dockerd && \
-    cargo build --release -p husklet --features gui,profile --bin husklet )
+    cargo build --release -p husklet --features gui,profile --bin husklet && \
+    CARGO_TARGET_DIR="$NATIVE_BUNDLE_TARGET" cargo build --release -p hl-native )
 [ "$(git -C "$ROOT" rev-parse HEAD)" = "$SOURCE_REVISION" ] \
   && [ "$(source_changes)" = "$SOURCE_CHANGES" ] \
   || die "source changed while building the application; retry from one stable generation"
@@ -104,9 +106,13 @@ fi
 log "relocating dylibs (dylibbundler)"
 XARGS=( -x "$MACOS/husklet" -x "$RES/dockerd" )
 for so in "${LOADER_SOS[@]}"; do XARGS+=( -x "$so" ); done
+NATIVE_DYLIBS=()
 while IFS= read -r -d '' native_dylib; do
-  XARGS+=( -s "$(dirname "$native_dylib")" )
-done < <(find "$BUILD_TARGET/release/build" -type f -name 'libhl_native_engine.dylib' -print0)
+  NATIVE_DYLIBS[${#NATIVE_DYLIBS[@]}]="$native_dylib"
+done < <(find "$NATIVE_BUNDLE_TARGET/release/build" -type f -name 'libhl_native_engine.dylib' -print0)
+[ ${#NATIVE_DYLIBS[@]} -eq 1 ] \
+  || die "expected exactly one dedicated native engine dylib, found ${#NATIVE_DYLIBS[@]}"
+XARGS+=( -s "$(dirname "${NATIVE_DYLIBS[0]}")" )
 dylibbundler -of -cd -b -d "$FW" -p '@executable_path/../Frameworks' "${XARGS[@]}" >/dev/null
 [ -f "$FW/libhl_native_engine.dylib" ] \
   || die "Cargo-built native engine dylib was not relocated into the application bundle"

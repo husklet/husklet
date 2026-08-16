@@ -32,6 +32,8 @@ typedef struct hl_host_process_info {
     int64_t parent_pid;
     int64_t process_group;
     int64_t session;
+    int64_t terminal_device;
+    int64_t foreground_group;
     uint64_t resident_bytes;
     uint64_t virtual_bytes;
     uint64_t user_time_ns;

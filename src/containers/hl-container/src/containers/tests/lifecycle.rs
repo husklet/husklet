@@ -330,6 +330,31 @@ async fn checkpoint_is_durable_and_start_restores_while_arming_the_next_capture(
 }
 
 #[tokio::test]
+async fn failed_restore_retains_the_checkpoint_for_retry() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("restore-retry")).await.unwrap();
+    containers.start("restore-retry").await.unwrap();
+    let checkpoint = containers
+        .checkpoint("restore-retry", Duration::from_secs(1))
+        .await
+        .unwrap();
+
+    runtime.fail.store(true, Ordering::SeqCst);
+    assert!(containers.start("restore-retry").await.is_err());
+    let failed = containers.inspect("restore-retry").await.unwrap();
+    assert!(matches!(failed.state, ContainerState::Exited { .. }));
+    assert_eq!(failed.checkpoint.as_ref(), Some(&checkpoint));
+
+    runtime.fail.store(false, Ordering::SeqCst);
+    containers.start("restore-retry").await.unwrap();
+    assert_eq!(containers.inspect("restore-retry").await.unwrap().checkpoint, None);
+    containers.remove_force("restore-retry").await.unwrap();
+}
+
+#[tokio::test]
 async fn checkpoint_all_captures_running_and_paused_containers_for_later_restore() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_secs(1);

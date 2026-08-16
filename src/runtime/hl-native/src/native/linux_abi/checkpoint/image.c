@@ -266,14 +266,24 @@ static int ckpt_capture_native_fd(struct ckpt_fd *records, int *count, const str
         int flags = fcntl(fd, F_GETFL);
         int descriptor_flags = fcntl(fd, F_GETFD);
         uint64_t identity = view->object ? view->object : g_pipe_identity[fd];
-        if (flags < 0 || descriptor_flags < 0 || identity == 0) return -1;
-        if ((flags & O_ACCMODE) != O_WRONLY && ckpt_capture_pipe(fd, identity) != 0) return -1;
+        if (flags < 0 || descriptor_flags < 0 || identity == 0) {
+            fprintf(stderr,
+                    "[ckpt] refuse: pipe fd %d has invalid metadata (flags=%d descriptor_flags=%d object=%llu "
+                    "registered=%llu)\n",
+                    fd, flags, descriptor_flags, (unsigned long long)view->object,
+                    (unsigned long long)g_pipe_identity[fd]);
+            return -1;
+        }
+        if ((flags & O_ACCMODE) != O_WRONLY && ckpt_capture_pipe(fd, identity) != 0) {
+            fprintf(stderr, "[ckpt] refuse: cannot capture pipe fd %d identity %llu\n", fd,
+                    (unsigned long long)identity);
+            return -1;
+        }
         r.kind = CKF_PIPE;
         r.flags = flags;
         r.descriptor_flags = descriptor_flags;
         r.offset = (int64_t)identity;
         snprintf(r.path, sizeof r.path, "%d", (fd >= 0 && fd < HL_NFD) ? g_pipesz[fd] : 0);
-        if ((r.flags & O_ACCMODE) == O_RDONLY && ckpt_capture_pipe(fd, identity) != 0) return -1;
         records[(*count)++] = r;
         return CKPT_FD_CAPTURED;
     }
@@ -365,12 +375,21 @@ static int ckpt_scan_fds(struct ckpt_fd *recs, int cap, int *out_n) {
         int fd = views[index].guest_fd;
         if (ckpt_fd_was_captured(recs, n, fd)) continue;
         int result = ckpt_capture_early_emulated_fd(recs, &n, fd);
-        if (result == CKPT_FD_CAPTURE_ERROR) return -1;
+        if (result == CKPT_FD_CAPTURE_ERROR) {
+            fprintf(stderr, "[ckpt] refuse: early emulated fd %d capture failed\n", fd);
+            return -1;
+        }
         if (result == CKPT_FD_CAPTURED) continue;
         result = ckpt_capture_typed_fd(recs, &n, fd);
-        if (result == CKPT_FD_CAPTURE_ERROR) return -1;
+        if (result == CKPT_FD_CAPTURE_ERROR) {
+            fprintf(stderr, "[ckpt] refuse: typed fd %d capture failed\n", fd);
+            return -1;
+        }
         if (result == CKPT_FD_CAPTURED) continue;
-        if (ckpt_capture_native_fd(recs, &n, &views[index]) == CKPT_FD_CAPTURE_ERROR) return -1;
+        if (ckpt_capture_native_fd(recs, &n, &views[index]) == CKPT_FD_CAPTURE_ERROR) {
+            fprintf(stderr, "[ckpt] refuse: native fd %d capture failed\n", fd);
+            return -1;
+        }
     }
     *out_n = n;
     return 0;
@@ -702,12 +721,14 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir) {
     uint64_t request = stw_checkpoint_arm();
     ckpt_interrupt_threads(c);
     if (stw_checkpoint_wait(request) != 0) {
+        fprintf(stderr, "[ckpt] refuse: stop-the-world barrier did not converge\n");
         stw_checkpoint_end();
         atomic_store_explicit(&g_ckpt_barrier_active, 0, memory_order_release);
         return -1;
     }
     int count = stw_checkpoint_cpus(live, THREAD_REG_MAX);
     if (count < 1 || count > THREAD_REG_MAX) {
+        fprintf(stderr, "[ckpt] refuse: invalid registered CPU count %d\n", count);
         stw_checkpoint_end();
         atomic_store_explicit(&g_ckpt_barrier_active, 0, memory_order_release);
         return -1;
@@ -719,6 +740,8 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir) {
        nothing. */
     for (int i = 0; i < count; i++)
         if (live[i]->seccomp_mode != 0 || live[i]->seccomp_filters != NULL) {
+            fprintf(stderr, "[ckpt] refuse: CPU %d has unserialized seccomp state (mode=%d filters=%p)\n", i,
+                    live[i]->seccomp_mode, (void *)live[i]->seccomp_filters);
             stw_checkpoint_end();
             atomic_store_explicit(&g_ckpt_barrier_active, 0, memory_order_release);
             return -1;

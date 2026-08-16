@@ -988,14 +988,12 @@ static void maybe_deliver_signal(struct cpu *c) {
             sigq_flush(sig);
             process_pending_clear(sig);
             thread_pending_clear(c, sig);
-            // A SIG_DFL signal whose default action TERMINATES, still pending at the container init, was NOT
-            // already actioned by the host: real Linux protects a PID-namespace init from an unhandled fatal
-            // signal, so it lingered (e.g. the guest blocked it inside its handler, reset the disposition to
-            // SIG_DFL, then re-raised it to exit -- exactly node's SignalExit / mongosh path). hl's init is
-            // just the container entrypoint, not an init that must survive, so take the default action and end
-            // the container with 128+signo (the code `docker run` reports for a PID 1 killed by a signal).
+            // The host disposition is the engine's catch-and-queue handler, so the host kernel has NOT
+            // already applied SIG_DFL to either init or a forked guest. Apply every fatal-default action
+            // here after translating it into Linux wait status. Restricting this to container init made
+            // foreground children silently discard terminal SIGINT and left their parent shell blocked.
             // SIG_IGN (h==1) and the default-ignore/stop signals stay dropped here.
-            if (h == 0 && container_pid() == 1 && sig_default_terminates(sig)) { guest_group_fatal(c, sig); }
+            if (h == 0 && sig_default_terminates(sig)) { guest_group_fatal(c, sig); }
             continue;
         }
         // Claim ONE instance and run the guest handler on this thread. Pop the per-instance siginfo from

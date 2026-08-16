@@ -23,7 +23,7 @@ impl Runtime {
         if let Some(daemon) = docker {
             daemon.close(crate::runtime::resources::Close::Checkpoint)?;
         }
-        let checkpoint = match executions.checkpoint_all(std::time::Duration::from_secs(30)).await {
+        let checkpoint = match containers.checkpoint_all(std::time::Duration::from_secs(30)).await {
             Ok(()) => containers
                 .shutdown(std::time::Duration::from_secs(5))
                 .await

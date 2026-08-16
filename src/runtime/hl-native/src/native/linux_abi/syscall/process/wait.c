@@ -1,4 +1,46 @@
 // Cohesive process-syscall handlers. Included by ../proc.c after shared process state.
+#if defined(__APPLE__)
+#include <sys/event.h>
+
+static pid_t ckpt_interruptible_wait4(pid_t pid, int *status, int options, struct rusage *usage) {
+    if (g_ckpt_trigger == NULL || (options & WNOHANG) != 0) return wait4(pid, status, options, usage);
+    int queue = kqueue();
+    if (queue < 0) return wait4(pid, status, options, usage);
+    struct kevent changes[2];
+    EV_SET(&changes[0], SIGCHLD, EVFILT_SIGNAL, EV_ADD, 0, 0, NULL);
+    EV_SET(&changes[1], THREAD_INT_SIG, EVFILT_SIGNAL, EV_ADD, 0, 0, NULL);
+    if (kevent(queue, changes, 2, NULL, 0, NULL) < 0) {
+        int saved = errno;
+        close(queue);
+        errno = saved;
+        return wait4(pid, status, options, usage);
+    }
+    pid_t result;
+    for (;;) {
+        result = wait4(pid, status, options | WNOHANG, usage);
+        if (result != 0) break;
+        if (ckpt_pending()) {
+            errno = EINTR;
+            result = -1;
+            break;
+        }
+        struct kevent event;
+        if (kevent(queue, NULL, 0, &event, 1, NULL) < 0) {
+            result = -1;
+            break;
+        }
+    }
+    int saved = errno;
+    close(queue);
+    errno = saved;
+    return result;
+}
+#else
+static pid_t ckpt_interruptible_wait4(pid_t pid, int *status, int options, struct rusage *usage) {
+    return wait4(pid, status, options, usage);
+}
+#endif
+
 static int svc_proc_260(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 260: {
@@ -85,7 +127,7 @@ static int svc_proc_260(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // gcc's driver) must transparently retry instead of failing the guest with EINTR.
         ts_wait_enter(); // 'S' while blocked waiting on a child (WNOHANG returns immediately, harmless)
         do {
-            r = wait4((pid_t)(int)a0, &st, mopt, a3 ? &ruloc : NULL);
+            r = ckpt_interruptible_wait4((pid_t)(int)a0, &st, mopt, a3 ? &ruloc : NULL);
             // Reroute to the ptrace pump if the interrupt was a tracee of ours stopping (we became a tracer
             // while blocked). Gated on nactive>0 -> the non-ptrace matrix never enters this branch.
             if (r < 0 && errno == EINTR && ptrace_wait_active() && ptrace_any_tracee_of_self()) {

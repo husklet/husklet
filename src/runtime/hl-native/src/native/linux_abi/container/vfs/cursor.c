@@ -128,6 +128,32 @@ static void hl_vfs_cursor_authority_close(hl_vfs_cursor_authority *authority) {
     memset(authority, 0, sizeof *authority);
 }
 
+static int hl_vfs_cursor_authority_component(const hl_vfs_cursor_authority *authority, const char *guest,
+                                             char *physical, size_t capacity) {
+#if defined(__APPLE__)
+    if (authority->kind == HL_VFS_CURSOR_AUTHORITY_NATIVE)
+        return hl_case_component(authority->value.descriptor, guest, physical, capacity);
+    if (authority->kind == HL_VFS_CURSOR_AUTHORITY_HOST && authority->value.host.services != NULL &&
+        authority->value.host.services->posix_attachment != NULL) {
+        const hl_host_posix_attachment_services *attachment = authority->value.host.services->posix_attachment;
+        if (attachment->borrow_file_at_least != NULL && attachment->release != NULL) {
+            hl_host_result borrowed = attachment->borrow_file_at_least(
+                authority->value.host.services->context, authority->value.host.handle, 64);
+            int error = hl_vfs_cursor_host_error(borrowed);
+            if (error != 0) return error;
+            error = borrowed.value > INT_MAX
+                        ? -EMFILE
+                        : hl_case_component((int)borrowed.value, guest, physical, capacity);
+            (void)attachment->release(authority->value.host.services->context, borrowed.value);
+            return error;
+        }
+    }
+#else
+    (void)authority;
+#endif
+    return snprintf(physical, capacity, "%s", guest) >= (int)capacity ? -ENAMETOOLONG : 0;
+}
+
 static int hl_vfs_cursor_authority_metadata(const hl_vfs_cursor_authority *authority, const char *component,
                                             struct stat *status) {
     if (authority == NULL || component == NULL || status == NULL) return -EINVAL;
@@ -388,10 +414,16 @@ static int hl_vfs_cursor_lookup_intent(const hl_vfs_cursor *cursor, const char *
 
     size_t selected = cursor->count;
     struct stat selected_status;
+    char selected_component[768] = "";
     for (size_t index = 0; index < cursor->count; index++) {
-        int metadata_error = hl_vfs_cursor_authority_metadata(&cursor->layers[index], component, &selected_status);
+        char physical[768];
+        int metadata_error =
+            hl_vfs_cursor_authority_component(&cursor->layers[index], component, physical, sizeof physical);
+        if (metadata_error == 0)
+            metadata_error = hl_vfs_cursor_authority_metadata(&cursor->layers[index], physical, &selected_status);
         if (metadata_error == 0) {
             selected = index;
+            snprintf(selected_component, sizeof selected_component, "%s", physical);
             break;
         }
         // Only genuine absence permits consulting a lower layer. ENOTDIR means a higher-layer ancestor or
@@ -408,11 +440,11 @@ static int hl_vfs_cursor_lookup_intent(const hl_vfs_cursor *cursor, const char *
     if (guest_length < 0 || (size_t)guest_length >= sizeof guest_entry) return -ENAMETOOLONG;
     output->mount_flags = hl_vfs_mount_flags_for_guest(guest_entry, cursor->mount_flags);
     if (S_ISLNK(selected_status.st_mode)) {
-        int error = hl_vfs_cursor_authority_readlink(&cursor->layers[selected], component, output->symlink,
+        int error = hl_vfs_cursor_authority_readlink(&cursor->layers[selected], selected_component, output->symlink,
                                                      sizeof output->symlink);
         if (error != 0) return error;
         if (path_only_file) {
-            error = hl_vfs_cursor_authority_open_path(&cursor->layers[selected], component, 0, &output->file);
+            error = hl_vfs_cursor_authority_open_path(&cursor->layers[selected], selected_component, 0, &output->file);
             if (error != 0) return error;
         }
         output->kind = HL_VFS_CURSOR_SYMLINK;
@@ -420,9 +452,9 @@ static int hl_vfs_cursor_lookup_intent(const hl_vfs_cursor *cursor, const char *
     }
     if (!S_ISDIR(selected_status.st_mode)) {
         hl_vfs_cursor_authority opened;
-        int error = path_only_file ? hl_vfs_cursor_authority_open_path(&cursor->layers[selected], component, 0,
+        int error = path_only_file ? hl_vfs_cursor_authority_open_path(&cursor->layers[selected], selected_component, 0,
                                                                        &opened)
-                                   : hl_vfs_cursor_authority_open_child(&cursor->layers[selected], component, 0,
+                                   : hl_vfs_cursor_authority_open_child(&cursor->layers[selected], selected_component, 0,
                                                                         &opened);
         if (error != 0) return error;
         output->file = opened;
@@ -431,9 +463,9 @@ static int hl_vfs_cursor_lookup_intent(const hl_vfs_cursor *cursor, const char *
     }
 
     int error = path_only_file
-                    ? hl_vfs_cursor_authority_open_path(&cursor->layers[selected], component, 1,
+                    ? hl_vfs_cursor_authority_open_path(&cursor->layers[selected], selected_component, 1,
                                                         &output->directory.layers[output->directory.count])
-                    : hl_vfs_cursor_authority_open_child(&cursor->layers[selected], component, 1,
+                    : hl_vfs_cursor_authority_open_child(&cursor->layers[selected], selected_component, 1,
                                                          &output->directory.layers[output->directory.count]);
     if (error != 0) return error;
     output->directory.count++;
@@ -442,14 +474,16 @@ static int hl_vfs_cursor_lookup_intent(const hl_vfs_cursor *cursor, const char *
     if (!output->directory.opaque_cut)
         for (size_t index = selected + 1; index < cursor->count; index++) {
             struct stat status;
+            char physical[768];
             if (hl_vfs_cursor_marker(&cursor->layers[index], component)) break;
-            if (hl_vfs_cursor_authority_metadata(&cursor->layers[index], component, &status) != 0 ||
+            if (hl_vfs_cursor_authority_component(&cursor->layers[index], component, physical, sizeof physical) != 0 ||
+                hl_vfs_cursor_authority_metadata(&cursor->layers[index], physical, &status) != 0 ||
                 !S_ISDIR(status.st_mode))
                 continue;
             error = path_only_file
-                        ? hl_vfs_cursor_authority_open_path(&cursor->layers[index], component, 1,
+                        ? hl_vfs_cursor_authority_open_path(&cursor->layers[index], physical, 1,
                                                             &output->directory.layers[output->directory.count])
-                        : hl_vfs_cursor_authority_open_child(&cursor->layers[index], component, 1,
+                        : hl_vfs_cursor_authority_open_child(&cursor->layers[index], physical, 1,
                                                              &output->directory.layers[output->directory.count]);
             if (error != 0) {
                 hl_vfs_cursor_entry_release(output);

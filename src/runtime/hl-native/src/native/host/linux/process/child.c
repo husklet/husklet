@@ -147,7 +147,9 @@ static hl_host_result hl_linux_process_terminate(void *context, hl_host_handle h
     hl_linux_handle_entry *entry;
     pid_t pid;
     if (reason != HL_HOST_PROCESS_TERMINATE_INTERRUPT && reason != HL_HOST_PROCESS_TERMINATE_FORCE &&
-        (reason <= HL_HOST_PROCESS_TERMINATE_SIGNAL || reason > HL_HOST_PROCESS_TERMINATE_SIGNAL + 64))
+        (reason <= HL_HOST_PROCESS_TERMINATE_SIGNAL || reason > HL_HOST_PROCESS_TERMINATE_SIGNAL + 64) &&
+        (reason <= HL_HOST_PROCESS_TERMINATE_NATIVE_SIGNAL ||
+         reason > HL_HOST_PROCESS_TERMINATE_NATIVE_SIGNAL + 64))
         return hl_linux_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
     pthread_mutex_lock(&host->lock);
     entry = hl_linux_lookup_locked(host, handle, HL_LINUX_HANDLE_PROCESS);
@@ -156,7 +158,9 @@ static hl_host_result hl_linux_process_terminate(void *context, hl_host_handle h
     if (pid < 0) return hl_linux_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
     int signal_number = reason == HL_HOST_PROCESS_TERMINATE_INTERRUPT ? SIGINT
                         : reason == HL_HOST_PROCESS_TERMINATE_FORCE   ? SIGKILL
-                                                                    : (int)(reason - HL_HOST_PROCESS_TERMINATE_SIGNAL);
+                        : reason > HL_HOST_PROCESS_TERMINATE_NATIVE_SIGNAL
+                            ? (int)(reason - HL_HOST_PROCESS_TERMINATE_NATIVE_SIGNAL)
+                            : (int)(reason - HL_HOST_PROCESS_TERMINATE_SIGNAL);
     if (kill(pid, signal_number) != 0) return hl_linux_errno_result();
     return hl_linux_result(HL_STATUS_OK, 0, 0);
 }

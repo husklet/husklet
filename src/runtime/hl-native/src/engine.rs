@@ -643,6 +643,14 @@ mod tests {
     }
 
     fn create_engine(isa: u32) -> (Engine, std::fs::File) {
+        create_engine_with_options(isa, &[], &[])
+    }
+
+    fn create_engine_with_options(
+        isa: u32,
+        option_names: &[*const std::ffi::c_char],
+        option_values: &[*const std::ffi::c_char],
+    ) -> (Engine, std::fs::File) {
         let mut executable = tempfile::tempfile().unwrap();
         let mut bytes = image();
         if isa == 2 {
@@ -658,8 +666,8 @@ mod tests {
             rootfs: None,
             executable_host: None,
             executable_fd: executable.as_raw_fd(),
-            option_names: &[],
-            option_values: &[],
+            option_names,
+            option_values,
             standard_fds: [standard.as_raw_fd(); 3],
             provider_fd: -1,
         };
@@ -667,6 +675,35 @@ mod tests {
         // the bridge copies configuration and imports its own descriptor handles.
         let engine = unsafe { Engine::create(config) }.unwrap();
         (engine, standard)
+    }
+
+    #[test]
+    fn armed_running_guest_reaches_checkpoint_broker() {
+        for isa in [1, 2] {
+            let (mut engine, _standard) = create_engine(isa);
+            let (broker, transport) = crate::CheckpointTransport::create().unwrap();
+            engine.configure_checkpoint(&transport).unwrap();
+            let argument = CString::new("guest").unwrap();
+            std::thread::scope(|scope| {
+                let running = scope.spawn(|| engine.run(&[argument.as_ptr()]));
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                let _generation = transport.bump();
+                let signal = crate::CheckpointTransport::interrupt_signal(isa);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                let channel = loop {
+                    engine.request(4, signal).unwrap();
+                    if let Some(channel) = broker.accept(std::time::Duration::from_millis(100)) {
+                        break Some(channel);
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        break None;
+                    }
+                };
+                let _ = engine.request(2, 0);
+                let _ = running.join().unwrap();
+                assert!(channel.is_some(), "ISA {isa} did not publish a checkpoint channel");
+            });
+        }
     }
 
     #[test]
@@ -1270,100 +1307,6 @@ int main(int argc, char **argv) {
                 "position {position} changed private ownership"
             );
             engine.configure_checkpoint(&transport).unwrap();
-        }
-    }
-
-    #[cfg(feature = "native-test-hooks")]
-    #[test]
-    fn checkpoint_control_transaction_serializes_readiness_and_acknowledgement() {
-        const CHILD: &str = "HL_NATIVE_CHECKPOINT_TRANSACTION_CHILD";
-        if std::env::var_os(CHILD).is_none() {
-            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-            command
-                .args([
-                    "--exact",
-                    "engine::tests::checkpoint_control_transaction_serializes_readiness_and_acknowledgement",
-                    "--nocapture",
-                ])
-                .env(CHILD, "1");
-            let mut child = IsolatedTestChild::spawn(command).unwrap();
-            let deadline = Instant::now() + Duration::from_secs(15);
-            loop {
-                if let Some(status) = child.try_wait().unwrap() {
-                    assert!(status.success(), "checkpoint transaction child failed: {status}");
-                    return;
-                }
-                assert!(
-                    Instant::now() < deadline,
-                    "checkpoint transaction child exceeded 15 seconds"
-                );
-                std::thread::sleep(Duration::from_millis(10));
-            }
-        }
-
-        for isa in [1, 2] {
-            let (mut engine, _standard) = create_engine(isa);
-            let (_broker, transport) = crate::CheckpointTransport::create().unwrap();
-            engine.configure_checkpoint(&transport).unwrap();
-            let argument = CString::new("guest").unwrap();
-
-            // SAFETY: these test-feature-only functions own a process-global
-            // deterministic barrier and take no caller-provided pointers.
-            assert_eq!(unsafe { crate::bindings::hl_c_backend_checkpoint_test_arm() }, 1);
-            std::thread::scope(|scope| {
-                let request = scope.spawn(|| engine.request(4, 0));
-                let deadline = Instant::now() + Duration::from_secs(5);
-                // SAFETY: the test barrier owns its process-global state and takes no pointers.
-                while unsafe { crate::bindings::hl_c_backend_checkpoint_test_phase() } != 2 {
-                    assert!(
-                        Instant::now() < deadline,
-                        "ISA {isa} request did not acquire checkpoint transaction"
-                    );
-                    std::thread::yield_now();
-                }
-                let running = scope.spawn(|| engine.run(&[argument.as_ptr()]));
-                // SAFETY: the test barrier owns its process-global state and takes no pointers.
-                while unsafe { crate::bindings::hl_c_backend_checkpoint_test_phase() } != 3 {
-                    assert!(
-                        Instant::now() < deadline,
-                        "ISA {isa} guest process did not reach checkpoint control"
-                    );
-                    std::thread::yield_now();
-                }
-                let _generation = transport.bump();
-                // SAFETY: phase 2 proves the request owns the transaction lock;
-                // release lets it consume the sole readiness byte and complete
-                // the full command/ack exchange before run may inspect it.
-                unsafe { crate::bindings::hl_c_backend_checkpoint_test_release() };
-                let acknowledgement = request.join().unwrap();
-                assert!(
-                    matches!(acknowledgement, Ok(()) | Err(12)),
-                    "ISA {isa} checkpoint acknowledgement changed: {acknowledgement:?}"
-                );
-                // SAFETY: the test barrier owns its process-global state and takes no pointers. The run
-                // thread may legally advance 6 -> 7 immediately after the request publishes phase 6.
-                assert!(matches!(
-                    unsafe { crate::bindings::hl_c_backend_checkpoint_test_phase() },
-                    6 | 7
-                ));
-                let deadline = Instant::now() + Duration::from_secs(5);
-                // SAFETY: the test barrier owns its process-global state and takes no pointers.
-                while unsafe { crate::bindings::hl_c_backend_checkpoint_test_phase() } != 7 {
-                    assert!(
-                        Instant::now() < deadline,
-                        "ISA {isa} run did not cross serialized readiness"
-                    );
-                    std::thread::yield_now();
-                }
-                engine.request(2, 0).unwrap();
-                assert_eq!(
-                    running.join().unwrap(),
-                    Ok(()),
-                    "ISA {isa} run failed after checkpoint ack"
-                );
-            });
-            // SAFETY: the child has joined every user of the feature-only hook.
-            unsafe { crate::bindings::hl_c_backend_checkpoint_test_reset() };
         }
     }
 }

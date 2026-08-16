@@ -187,6 +187,9 @@ pub enum StandardStream {
 }
 
 pub trait StandardStreamPort: Send + Sync {
+    fn read(&self, _bytes: &mut [u8]) -> std::io::Result<usize> {
+        Ok(0)
+    }
     fn write(&self, stream: StandardStream, bytes: &[u8]) -> std::io::Result<usize>;
     fn close(&self);
 }

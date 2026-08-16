@@ -388,6 +388,11 @@ static int proc_stat_pid_text(char *b, size_t n, int gp, int host) {
     // old code printed gp (the pid), so getsid() and /proc/<pid>/stat disagreed for a normal child.
     int hsid = (int)getsid(host);
     int psess = (hsid > 0) ? ((g_init_hostpid && hsid == g_init_hostpid) ? 1 : hsid) : gp;
+    int tty_device = 0;
+    if (ok && pi.tty_host > 0)
+        tty_device = (int)hl_linux_device_make(major((dev_t)pi.tty_host), minor((dev_t)pi.tty_host));
+    int foreground_group = ok ? pi.tpgid_host : -1;
+    if (g_init_hostpid && foreground_group == g_init_hostpid) foreground_group = 1;
     long hz = sysconf(_SC_CLK_TCK);
     if (hz <= 0) hz = 100;
     unsigned long pgsz = (unsigned long)hl_linux_host_page_size();
@@ -404,9 +409,10 @@ static int proc_stat_pid_text(char *b, size_t n, int gp, int host) {
     return snprintf(b, n,
                     // Field 38 (exit_signal, SIGCHLD=17) sat at 39 here -- the same one-too-many zero after
                     // field 25 that proc_stat_text carried, shifting every field from 26 up by one.
-                    "%d (%s) %c %d %d %d 0 -1 4194560 0 0 0 0 %llu %llu 0 0 20 0 %d 0 %llu %llu %lu "
+                    "%d (%s) %c %d %d %d %d %d 4194560 0 0 0 0 %llu %llu 0 0 20 0 %d 0 %llu %llu %lu "
                     "18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n",
-                    gp, comm, state, ppid, pgrp, psess, utime, stime, nthreads, start_ticks, vsize, rss_pg);
+                    gp, comm, state, ppid, pgrp, psess, tty_device, foreground_group, utime, stime, nthreads,
+                    start_ticks, vsize, rss_pg);
 }
 
 // /proc/<pid>/status for a peer -- the key:value form with GUEST Pid/PPid and REAL VmRSS.

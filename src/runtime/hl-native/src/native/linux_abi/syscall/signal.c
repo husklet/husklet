@@ -349,6 +349,7 @@ static int svc_signal_target(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         sigprocmask(SIG_BLOCK, &allblk, &prev); // close the check/sleep race (see case 133)
         ts_wait_enter();                        // pause -> interruptible sleep ('S') until a deliverable signal arrives
         while (!c->exited) {
+            if (ckpt_pending()) break;
             if (ptrace_stop_requested()) break;
             int deliv = 0;
             for (int s = 1; s <= 64; s++) {
@@ -418,6 +419,7 @@ static int svc_signal_wait(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1,
         ts_wait_enter(); // rt_sigsuspend -> interruptible sleep ('S')
         int deliv = 0;
         while (!c->exited) {
+            if (ckpt_pending()) break;
             deliv = 0;
             for (int s = 1; s <= 64; s++) {
                 if (!process_pending_test(s) || (newmask & (UINT64_C(1) << (s - 1)))) continue;

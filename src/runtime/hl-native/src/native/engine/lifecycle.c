@@ -24,6 +24,7 @@
 
 extern int hl_ckpt_channel_adopt(const char *broker, const char *trigger);
 extern int hl_ckpt_interrupt_executors(void);
+extern void hl_ckpt_interrupt_block(void);
 
 #ifndef HL_PRODUCTION_GUEST_ISA
 #error HL_PRODUCTION_GUEST_ISA is required
@@ -533,6 +534,9 @@ static int32_t hl_production_entry(void *opaque) {
     hl_production_entry_context *context = opaque;
     hl_engine_checkpoint_fork_child(context->checkpoint_broker, context->checkpoint_trigger,
                                     context->checkpoint_control);
+    /* Keep process-directed checkpoint kicks away from helper/control threads.
+     * Guest executor registration selectively unblocks the reserved signal. */
+    hl_ckpt_interrupt_block();
     hl_status terminal_status = hl_production_claim_terminal(context);
     if (terminal_status != HL_STATUS_OK) return terminal_status;
     active_result = context->result;

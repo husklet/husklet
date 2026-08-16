@@ -22,18 +22,27 @@ pub(super) struct NativeOutputBridge {
 
 impl NativeOutputBridge {
     pub(super) fn attach(port: Arc<dyn StandardStreamPort>) -> Result<Self, CompositionError> {
-        let input = open_null()?;
+        let (input, input_writer) = open_input_pipe()?;
         let (stdout_reader, stdout) = open_pipe()?;
         let (stderr_reader, stderr) = open_pipe()?;
         let stop = Arc::new(AtomicBool::new(false));
         let in_flight = Arc::new(Mutex::new(0));
-        let stdout_worker = spawn_stream_reader(
+        let input_worker = spawn_standard_input(Arc::clone(&port), Arc::clone(&stop), input_writer)?;
+        let stdout_worker = match spawn_stream_reader(
             Arc::clone(&port),
             Arc::clone(&stop),
             Arc::clone(&in_flight),
             stdout_reader,
             StandardStream::Stdout,
-        )?;
+        ) {
+            Ok(worker) => worker,
+            Err(error) => {
+                stop.store(true, Ordering::Release);
+                port.close();
+                let _ = input_worker.join();
+                return Err(error);
+            }
+        };
         let stderr_worker = match spawn_stream_reader(
             Arc::clone(&port),
             Arc::clone(&stop),
@@ -44,7 +53,9 @@ impl NativeOutputBridge {
             Ok(worker) => worker,
             Err(error) => {
                 stop.store(true, Ordering::Release);
+                port.close();
                 drop(stdout);
+                let _ = input_worker.join();
                 let _ = stdout_worker.join();
                 return Err(error);
             }
@@ -56,7 +67,7 @@ impl NativeOutputBridge {
             stop,
             in_flight,
             port,
-            workers: vec![stdout_worker, stderr_worker],
+            workers: vec![input_worker, stdout_worker, stderr_worker],
         })
     }
 
@@ -108,18 +119,20 @@ impl Drop for NativeOutputBridge {
     }
 }
 
-fn open_null() -> Result<OwnedFd, CompositionError> {
-    let path = c"/dev/null";
-    // SAFETY: path is a static NUL-terminated string and the returned descriptor is uniquely owned.
-    let descriptor = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
-    if descriptor < 0 {
-        return Err(CompositionError::RuntimeConstruction);
-    }
-    // SAFETY: successful open returned a fresh descriptor.
-    Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
+fn open_input_pipe() -> Result<(OwnedFd, File), CompositionError> {
+    let (reader, writer) = open_pipe_descriptors()?;
+    set_file_nonblocking(&writer)?;
+    Ok((reader, writer))
 }
 
 fn open_pipe() -> Result<(File, OwnedFd), CompositionError> {
+    let (reader, writer) = open_pipe_descriptors()?;
+    let reader = File::from(reader);
+    set_file_nonblocking(&reader)?;
+    Ok((reader, writer.into()))
+}
+
+fn open_pipe_descriptors() -> Result<(OwnedFd, File), CompositionError> {
     let mut descriptors = [-1; 2];
     // SAFETY: descriptors points to two writable integers.
     if unsafe { libc::pipe(descriptors.as_mut_ptr()) } != 0 {
@@ -136,10 +149,8 @@ fn open_pipe() -> Result<(File, OwnedFd), CompositionError> {
             return Err(CompositionError::RuntimeConstruction);
         }
     }
-    // SAFETY: successful pipe2 returned two fresh descriptors with distinct ownership.
-    let pair = unsafe { (File::from_raw_fd(descriptors[0]), OwnedFd::from_raw_fd(descriptors[1])) };
-    set_file_nonblocking(&pair.0)?;
-    Ok(pair)
+    // SAFETY: successful pipe returned two fresh descriptors with distinct ownership.
+    Ok(unsafe { (OwnedFd::from_raw_fd(descriptors[0]), File::from_raw_fd(descriptors[1])) })
 }
 
 fn set_file_nonblocking(descriptor: &File) -> Result<(), CompositionError> {
@@ -175,6 +186,28 @@ fn spawn_stream_reader(
                 drop(active);
                 if !written {
                     return;
+                }
+            }
+        })
+        .map_err(|_| CompositionError::RuntimeConstruction)
+}
+
+fn spawn_standard_input(
+    port: Arc<dyn StandardStreamPort>,
+    stop: Arc<AtomicBool>,
+    mut writer: File,
+) -> Result<JoinHandle<()>, CompositionError> {
+    std::thread::Builder::new()
+        .name("hl-stdin".to_owned())
+        .spawn(move || {
+            let mut bytes = [0_u8; 8192];
+            while !stop.load(Ordering::Acquire) {
+                let count = match port.read(&mut bytes) {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => count,
+                };
+                if write_master(&mut writer, &bytes[..count], &stop).is_err() {
+                    break;
                 }
             }
         })
@@ -415,7 +448,7 @@ fn spawn_output(
     std::thread::Builder::new()
         .name("hl-terminal-output".to_owned())
         .spawn(move || {
-            let mut bytes = [0_u8; 8192];
+            let mut bytes = [0_u8; 16 * 1024];
             while !stop.load(Ordering::Acquire) {
                 let mut poll = libc::pollfd {
                     fd: master.as_raw_fd(),
@@ -431,7 +464,7 @@ fn spawn_output(
                     continue;
                 }
                 let mut active = in_flight.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                let count = match master.read(&mut bytes) {
+                let mut count = match master.read(&mut bytes) {
                     Ok(0) => break,
                     Ok(count) => {
                         *active += 1;
@@ -448,6 +481,18 @@ fn spawn_output(
                     Err(_) => break,
                 };
                 drop(active);
+                if count < bytes.len() {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    while count < bytes.len() {
+                        match master.read(&mut bytes[count..]) {
+                            Ok(0) => break,
+                            Ok(read) => count += read,
+                            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                            Err(_) => break,
+                        }
+                    }
+                }
                 let written = write_output(port.as_ref(), &bytes[..count]);
                 let mut active = in_flight.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 *active -= 1;

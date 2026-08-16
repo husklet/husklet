@@ -226,7 +226,8 @@
                 G_RET(c) = (uint64_t)(-EINVAL);
                 break;
             }
-            void *r = mmap(0, (size_t)a2 + guard, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+            void *hint = (void *)(uintptr_t)hl_linux_snapshot_reserve(&g_ckpt_snapshot, (uint64_t)a2 + guard);
+            void *r = mmap(hint, (size_t)a2 + guard, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
             if (r == MAP_FAILED) {
                 G_RET(c) = (uint64_t)(-errno);
                 break;
@@ -378,7 +379,8 @@
         }
         // Relocate: allocate the new region (+guard tail so glibc's vectorized over-reads stay mapped),
         // copy the old bytes, then free the old extent. Allocate-before-free so a failure leaves old intact.
-        void *r = mmap(0, (size_t)a2 + guard, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        void *hint = (void *)(uintptr_t)hl_linux_snapshot_reserve(&g_ckpt_snapshot, (uint64_t)a2 + guard);
+        void *r = mmap(hint, (size_t)a2 + guard, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
         if (r == MAP_FAILED) {
             G_RET(c) = (uint64_t)(-errno);
             break;

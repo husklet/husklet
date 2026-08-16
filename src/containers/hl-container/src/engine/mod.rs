@@ -3,7 +3,6 @@ use crate::{
     service::{OverlayConfig, ProcessConfig, Running, Runtime},
 };
 use async_trait::async_trait;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     collections::VecDeque,
     sync::{Arc, Condvar, Mutex as StdMutex},
@@ -182,20 +181,64 @@ struct TerminalChannel {
 }
 
 struct OutputChannel {
+    state: StdMutex<TerminalState>,
+    changed: Condvar,
     output: crate::service::LogSender,
-    closed: AtomicBool,
 }
 
 impl OutputChannel {
-    fn new(output: crate::service::LogSender) -> Self {
+    fn new(receiver: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>, output: crate::service::LogSender) -> Self {
         Self {
+            state: StdMutex::new(TerminalState {
+                receiver,
+                pending: VecDeque::new(),
+                closed: false,
+            }),
+            changed: Condvar::new(),
             output,
-            closed: AtomicBool::new(false),
         }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, TerminalState> {
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
 impl hl_engine::composition::StandardStreamPort for OutputChannel {
+    fn read(&self, output: &mut [u8]) -> std::io::Result<usize> {
+        if output.is_empty() {
+            return Ok(0);
+        }
+        let mut state = self.lock();
+        loop {
+            if state.closed {
+                return Ok(0);
+            }
+            if !state.pending.is_empty() {
+                let length = output.len().min(state.pending.len());
+                for destination in &mut output[..length] {
+                    *destination = state.pending.pop_front().expect("bounded by pending length");
+                }
+                return Ok(length);
+            }
+            let received = match state.receiver.as_mut() {
+                Some(receiver) => receiver.try_recv(),
+                None => return Ok(0),
+            };
+            match received {
+                Ok(bytes) => state.pending.extend(bytes),
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => state.receiver = None,
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                    state = self
+                        .changed
+                        .wait_timeout(state, TerminalChannel::CANCELLATION_POLL)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .0;
+                }
+            }
+        }
+    }
+
     fn write(&self, stream: hl_engine::composition::StandardStream, input: &[u8]) -> std::io::Result<usize> {
         if input.is_empty() {
             return Ok(0);
@@ -210,7 +253,7 @@ impl hl_engine::composition::StandardStreamPort for OutputChannel {
             bytes: input[..length].to_vec(),
         };
         loop {
-            if self.closed.load(Ordering::Acquire) {
+            if self.lock().closed {
                 return Err(std::io::ErrorKind::BrokenPipe.into());
             }
             match self.output.try_send(chunk) {
@@ -227,7 +270,8 @@ impl hl_engine::composition::StandardStreamPort for OutputChannel {
     }
 
     fn close(&self) {
-        self.closed.store(true, Ordering::Release);
+        self.lock().closed = true;
+        self.changed.notify_all();
     }
 }
 
@@ -357,9 +401,8 @@ impl Runtime for Engine {
                     .map_err(|_| Error::Runtime("terminal construction failed".into()))?;
                 hl_engine::composition::StandardStreams::default().with_terminal(terminal)
             }
-            None => {
-                hl_engine::composition::StandardStreams::default().with_output(Arc::new(OutputChannel::new(sender)))
-            }
+            None => hl_engine::composition::StandardStreams::default()
+                .with_output(Arc::new(OutputChannel::new(config.input.take(), sender))),
         };
         let checkpoint = config
             .checkpoint

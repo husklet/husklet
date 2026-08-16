@@ -77,20 +77,23 @@ impl Entry<'_> {
         }
         let joined = self.relative.parent().unwrap_or(Path::new("")).join(target);
         let physical = Name::normalize(&joined);
-        let guest_target = names.guest(&physical);
-        Name::relative(guest.parent().unwrap_or(Path::new("")), guest_target)
+        let guest_target = names.visible(&physical);
+        Name::relative(guest.parent().unwrap_or(Path::new("")), &guest_target)
     }
 
     fn append<W: Write>(&self, archive: &mut tar::Builder<W>) -> Result<()> {
         let source = self.root.join(self.relative);
-        let guest = self.names.map_or(self.relative, |names| names.guest(self.relative));
+        let guest = self.names.map_or_else(
+            || std::borrow::Cow::Borrowed(self.relative),
+            |names| names.visible(self.relative),
+        );
         let metadata = fs::symlink_metadata(&source)?;
         let mut header = tar::Header::new_gnu();
         header.set_metadata_in_mode(&metadata, tar::HeaderMode::Complete);
         header.set_mtime(0);
         let ownership = self
             .ownerships
-            .get(guest)
+            .get(&guest)
             .unwrap_or(super::Ownership { uid: 0, gid: 0 });
         header.set_uid(u64::from(ownership.uid));
         header.set_gid(u64::from(ownership.gid));
@@ -99,7 +102,7 @@ impl Entry<'_> {
             header.set_entry_type(tar::EntryType::Directory);
             header.set_size(0);
             header.set_cksum();
-            archive.append_data(&mut header, guest, &[][..])?;
+            archive.append_data(&mut header, &guest, &[][..])?;
             append_children(archive, self.root, self.relative, self.ownerships, self.names)?;
         } else if metadata.file_type().is_symlink() {
             header.set_entry_type(tar::EntryType::Symlink);
@@ -107,15 +110,15 @@ impl Entry<'_> {
             let target = fs::read_link(&source)?;
             let target = self
                 .names
-                .map_or(target.clone(), |names| self.link_target(names, guest, &target));
+                .map_or(target.clone(), |names| self.link_target(names, &guest, &target));
             header.set_link_name(target)?;
             header.set_cksum();
-            archive.append_data(&mut header, guest, &[][..])?;
+            archive.append_data(&mut header, &guest, &[][..])?;
         } else if metadata.is_file() {
             header.set_entry_type(tar::EntryType::Regular);
             header.set_size(metadata.len());
             header.set_cksum();
-            archive.append_data(&mut header, guest, File::open(&source)?)?;
+            archive.append_data(&mut header, &guest, File::open(&source)?)?;
         } else {
             return Err(Error::UnsafeArchive {
                 path: self.relative.to_owned(),

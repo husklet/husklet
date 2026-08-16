@@ -11,9 +11,11 @@ cases:
       columns: 60
       steps:
       - write: { text: "vi /tmp/husklet-note\r" }
-      - await_output: { contains: "[New File]", timeout_ms: 5000 }
+      - await_output: { contains: "100%", timeout_ms: 5000 }
       - write: { text: "iEDITOR-LINE-ONE\rEDITOR-LINE-TWO" }
-      - write: { text: "\u001b:wq\r" }
+      - write: { text: "\u001b" }
+      - await_output: { contains: "- /tmp/husklet-note [Modified]", timeout_ms: 5000 }
+      - write: { text: ":wq\r" }
       - write: { text: "stty -onlcr; expected=$(printf '\\105\\104\\111\\124\\117\\122\\055\\114\\111\\116\\105\\055\\117\\116\\105\\n\\105\\104\\111\\124\\117\\122\\055\\114\\111\\116\\105\\055\\124\\127\\117'); actual=$(cat /tmp/husklet-note); test \"$actual\" = \"$expected\" && printf '\\126\\111\\055\\106\\111\\114\\105\\055\\117\\113\\n'\r" }
       - await_output: { contains: VI-FILE-OK, timeout_ms: 5000 }
       - write: { text: "printf '\\123\\110\\105\\114\\114\\055\\122\\105\\103\\117\\126\\105\\122\\105\\104\\n'; exit\r" }

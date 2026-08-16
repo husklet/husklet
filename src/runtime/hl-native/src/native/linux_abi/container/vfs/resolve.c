@@ -179,13 +179,18 @@ restart:;
                 dk == 0 && !strcmp(dcanon, dkey)) {
                 int d = open(dcanon, O_RDONLY | O_DIRECTORY);
                 if (d >= 0) {
+                    char physical[768];
+                    if (hl_case_component(d, fcomp, physical, sizeof physical) != 0) {
+                        close(d);
+                        return -ENAMETOOLONG;
+                    }
                     if (nofollow) {
-                        snprintf(final, fn, "%s", fcomp);
+                        snprintf(final, fn, "%s", physical);
                         return d;
                     }
                     struct stat fst;
-                    if (fstatat(d, fcomp, &fst, AT_SYMLINK_NOFOLLOW) != 0 || !S_ISLNK(fst.st_mode)) {
-                        snprintf(final, fn, "%s", fcomp);
+                    if (fstatat(d, physical, &fst, AT_SYMLINK_NOFOLLOW) != 0 || !S_ISLNK(fst.st_mode)) {
+                        snprintf(final, fn, "%s", physical);
                         return d;
                     }
                     close(d); // final component is a symlink: the full walk must resplice it
@@ -247,6 +252,15 @@ restart:;
             // rootfs root (or crossing budget spent) -> clamp; the walk never escapes the rootfs
             snprintf(rest, sizeof rest, "%s", tail);
             continue;
+        }
+        char physical[768];
+        if (hl_case_component(fds[nf - 1], comp, physical, sizeof physical) != 0) {
+            ret = -ENAMETOOLONG;
+            goto out;
+        }
+        if (snprintf(comp, sizeof comp, "%s", physical) >= (int)sizeof comp) {
+            ret = -ENAMETOOLONG;
+            goto out;
         }
         if (last && nofollow) {
             snprintf(final, fn, "%s", comp);

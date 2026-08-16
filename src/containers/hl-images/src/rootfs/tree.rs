@@ -63,7 +63,7 @@ impl Tree {
         children.sort_by_key(std::fs::DirEntry::file_name);
         for child in children {
             let physical_path = physical.join(child.file_name());
-            let guest = view.names().guest(&physical_path).to_owned();
+            let guest = view.names().visible(&physical_path).into_owned();
             if guest
                 .file_name()
                 .and_then(|name| name.to_str())
@@ -99,7 +99,7 @@ impl Tree {
         children.sort_by_key(std::fs::DirEntry::file_name);
         for child in children {
             let physical_path = physical.join(child.file_name());
-            let guest = view.names().guest(&physical_path).to_owned();
+            let guest = view.names().visible(&physical_path).into_owned();
             let name = guest
                 .file_name()
                 .and_then(|name| name.to_str())

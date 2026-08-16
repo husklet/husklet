@@ -237,7 +237,9 @@
             size_t head = (size_t)((off_t)a5 & (off_t)(hp - 1));
             off_t aligned_offset = (off_t)a5 - (off_t)head;
             size_t mapped_size = (size_t)a1 + head;
-            void *base = mmap(NULL, mapped_size, prot, mmap_flags((int)a3), (int)a4, aligned_offset);
+            void *fallback_hint =
+                (void *)(uintptr_t)hl_linux_snapshot_reserve(&g_ckpt_snapshot, (uint64_t)mapped_size);
+            void *base = mmap(fallback_hint, mapped_size, prot, mmap_flags((int)a3), (int)a4, aligned_offset);
             if (base != MAP_FAILED) {
                 physical_mapping = base;
                 physical_mapping_size = (mapped_size + hp - 1) & ~(hp - 1);

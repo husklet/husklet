@@ -1078,6 +1078,21 @@ static int proc_status_text(char *b, size_t n) {
 
 // /proc/[pid]/stat -- the 52-field single line (pid (comm) state ppid ...). Field 23 = vsize (bytes),
 // field 24 = rss (pages); the rest are plausible zeros. mongod's FTDC collector parses this.
+static void proc_self_terminal_identity(int *tty_device, int *foreground_group) {
+    *tty_device = 0;
+    *foreground_group = -1;
+    for (int descriptor = 0; descriptor <= 2; ++descriptor) {
+        if (!isatty(descriptor)) continue;
+        struct stat status;
+        pid_t foreground = tcgetpgrp(descriptor);
+        if (foreground <= 0 || fstat(descriptor, &status) != 0 || !S_ISCHR(status.st_mode)) continue;
+        uint32_t device = hl_linux_device_make(major(status.st_rdev), minor(status.st_rdev));
+        *tty_device = (int)device;
+        *foreground_group = (g_init_hostpid && foreground == g_init_hostpid) ? 1 : (int)foreground;
+        return;
+    }
+}
+
 static int proc_stat_text(char *b, size_t n) {
     char comm[16];
     proc_comm(comm, sizeof comm);
@@ -1089,6 +1104,8 @@ static int proc_stat_text(char *b, size_t n) {
     int hpgrp = (int)getpgid(0), hsid = (int)getsid(0);
     int gpgrp = (g_init_hostpid && hpgrp == g_init_hostpid) ? 1 : hpgrp;
     int gsid = (g_init_hostpid && hsid == g_init_hostpid) ? 1 : hsid;
+    int tty_device, foreground_group;
+    proc_self_terminal_identity(&tty_device, &foreground_group);
     unsigned long pgsz = (unsigned long)hl_linux_host_page_size();
     unsigned long long vm_rss, vm_vsize;
     self_vm_bytes(&vm_rss, &vm_vsize);
@@ -1100,10 +1117,11 @@ static int proc_stat_text(char *b, size_t n) {
     uint64_t sc, ec, sd, ed;
     maps_code_data_bounds(&sc, &ec, &sd, &ed);
     return snprintf(b, n,
-                    "%d (%s) R %d %d %d 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 100 %lu %lu 18446744073709551615 "
+                    "%d (%s) R %d %d %d %d %d 4194560 0 0 0 0 0 0 0 0 20 0 1 0 100 %lu %lu 18446744073709551615 "
                     "%llu %llu 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0 %llu %llu %llu 0 0 0 0 0\n",
-                    pid, comm, ppid, gpgrp, gsid, vsize, rss_pg, (unsigned long long)sc, (unsigned long long)ec,
-                    (unsigned long long)sd, (unsigned long long)ed, (unsigned long long)brk_lo);
+                    pid, comm, ppid, gpgrp, gsid, tty_device, foreground_group, vsize, rss_pg,
+                    (unsigned long long)sc, (unsigned long long)ec, (unsigned long long)sd, (unsigned long long)ed,
+                    (unsigned long long)brk_lo);
 }
 
 // /proc/[pid]/environ -- the guest environment as NUL-separated KEY=VALUE. The authoritative source is

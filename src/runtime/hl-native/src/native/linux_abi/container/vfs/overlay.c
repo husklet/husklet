@@ -806,20 +806,28 @@ static void overlay_mkparents(const char *guest) {
         confine_in(g_rootfs_canon, g_rootfs_canon_len, acc, up, sizeof up, 1);
         struct stat st;
         if (lstat(up, &st) != 0)
-            // missing in the upper -> copy it up from the first lower that has it as a directory
+            // Missing in the upper: preserve a relative lower symlink instead of replacing it with a
+            // directory. Replacing `/lib -> usr/lib` with an upper `/lib` directory masks the lower link
+            // and makes package-installed development loaders disappear from `/lib`.
             for (int i = 0; i < g_nlower; i++) {
                 char lo[4300];
-                layer_follow(g_lower[i].canon, g_lower[i].clen, acc, lo, sizeof lo, 0);
-                if (lstat(lo, &st) == 0 && S_ISDIR(st.st_mode)) {
-                    if (hl_compat_mkdir(up, st.st_mode & 0777) == 0) {
+                layer_follow(g_lower[i].canon, g_lower[i].clen, acc, lo, sizeof lo, 1);
+                if (lstat(lo, &st) != 0) continue;
+                if (S_ISLNK(st.st_mode)) {
+                    char target[4200];
+                    ssize_t length = readlink(lo, target, sizeof target - 1);
+                    if (length > 0) {
+                        target[length] = 0;
+                        if (target[0] != '/' && symlink(target, up) == 0) made = 1;
+                    }
+                } else if (S_ISDIR(st.st_mode) && hl_compat_mkdir(up, st.st_mode & 0777) == 0) {
                         // mkdir is umask-filtered and its creation mode omits special bits. Preserve the
                         // lower directory exactly: Ubuntu's /tmp is 01777, and apt delegates signature
                         // verification to an unprivileged helper which must create files there.
                         ovl_copy_meta(lo, up, &st);
                         made = 1;
-                    }
-                    break;
                 }
+                break;
             }
         if (!next) break;
         *next = '/';
@@ -1261,9 +1269,12 @@ static int overlay_readdir(const char *gdir, char (**names_out)[256], uint8_t **
         if (!d) continue;
         struct dirent *e;
         while ((e = readdir(d))) {
-            if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-            int wh = !strncmp(e->d_name, ".wh.", 4);
-            const char *name = wh ? e->d_name + 4 : e->d_name;
+            char decoded[256];
+            const char *visible =
+                hl_case_name_decode(e->d_name, decoded, sizeof decoded) ? decoded : e->d_name;
+            if (!strcmp(visible, ".") || !strcmp(visible, "..")) continue;
+            int wh = !strncmp(visible, ".wh.", 4);
+            const char *name = wh ? visible + 4 : visible;
             int dup = 0;
             for (int i = 0; i < ns; i++)
                 if (!strcmp(seen[i], name)) {

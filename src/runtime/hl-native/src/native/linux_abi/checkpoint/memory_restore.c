@@ -278,19 +278,28 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
                 goto fail;
             }
         } else if (!contained) {
+            uint64_t host_granularity = hl_linux_host_map_granularity();
+            if (host_granularity == 0 || (host_granularity & (host_granularity - 1)) != 0) goto fail;
+            uint64_t map_a = a & ~(host_granularity - 1);
+            uint64_t map_e = (e + host_granularity - 1) & ~(host_granularity - 1);
+            if (map_e < e || map_e <= map_a || map_e - map_a > SIZE_MAX) goto fail;
+            size_t map_len = (size_t)(map_e - map_a);
+            uint64_t prefix = a - map_a;
             int map_flags = MAP_FIXED | MAP_ANON | MAP_PRIVATE;
             int map_fd = -1;
             off_t map_offset = 0;
             if (reg.backing_object != 0 && !reg.backing_emulated) {
-                if (reg.backing_offset > UINT64_MAX - reg.len) goto fail;
-                map_fd = ckpt_restore_backing_seed(procdir, reg.backing_object, reg.backing_offset + reg.len);
+                if (reg.backing_offset < prefix) goto fail;
+                uint64_t adjusted_offset = reg.backing_offset - prefix;
+                if (adjusted_offset > UINT64_MAX - map_len) goto fail;
+                map_fd = ckpt_restore_backing_seed(procdir, reg.backing_object, adjusted_offset + map_len);
                 if (map_fd < 0) {
                     fprintf(stderr, "[restore] cannot prepare backing object %llx\n",
                             (unsigned long long)reg.backing_object);
                     goto fail;
                 }
                 map_flags = MAP_FIXED | (reg.backing_shared ? MAP_SHARED : MAP_PRIVATE);
-                map_offset = (off_t)reg.backing_offset;
+                map_offset = (off_t)adjusted_offset;
             }
             // A guest mmap's VA is an ordinary host mmap result, so a saved region can name VA the restoring
             // process is already using for ENGINE state -- and MAP_FIXED would replace it silently. Probe
@@ -301,21 +310,21 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
 #else
             int probe_flags = map_flags;
 #endif
-            void *r = mmap((void *)a, (size_t)reg.len, PROT_READ | PROT_WRITE, probe_flags, map_fd, map_offset);
-            if (r == MAP_FAILED || (uint64_t)(uintptr_t)r != a) {
-                if (r != MAP_FAILED) munmap(r, (size_t)reg.len);
+            void *r = mmap((void *)map_a, map_len, PROT_READ | PROT_WRITE, probe_flags, map_fd, map_offset);
+            if (r == MAP_FAILED || (uint64_t)(uintptr_t)r != map_a) {
+                if (r != MAP_FAILED) munmap(r, map_len);
                 fprintf(stderr, "[restore] guest region %llx+%llx overlaps a live host mapping; reclaiming it\n",
                         (unsigned long long)a, (unsigned long long)reg.len);
-                ckpt_report_overlap(a, e);
-                r = mmap((void *)a, (size_t)reg.len, PROT_READ | PROT_WRITE, map_flags, map_fd, map_offset);
+                ckpt_report_overlap(map_a, map_e);
+                r = mmap((void *)map_a, map_len, PROT_READ | PROT_WRITE, map_flags, map_fd, map_offset);
             }
-            if (r == MAP_FAILED || (uint64_t)(uintptr_t)r != a) {
+            if (r == MAP_FAILED || (uint64_t)(uintptr_t)r != map_a) {
                 fprintf(stderr, "[restore] cannot map guest region %llx+%llx: %s\n", (unsigned long long)a,
                         (unsigned long long)reg.len, strerror(errno));
                 goto fail;
             }
-            mapped_a[nmapped] = a;
-            mapped_e[nmapped] = e;
+            mapped_a[nmapped] = map_a;
+            mapped_e[nmapped] = map_e;
             nmapped++;
         }
         for (uint64_t p = 0; p < reg.npages; p++) {
