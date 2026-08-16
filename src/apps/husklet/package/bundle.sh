@@ -36,6 +36,12 @@ for tool in gdk-pixbuf-query-loaders glib-compile-schemas gtk4-update-icon-cache
   command -v "$tool" >/dev/null || die "$tool not found (nix dev shell)"
 done
 
+# The development shell also exposes Linux guest cross tools. Its generic AR
+# may therefore name a Linux archiver, but this bundle always owns native
+# Mach-O archives and must use the host Apple archiver.
+export AR=/usr/bin/ar
+unset ARFLAGS
+
 source_changes() {
   {
     git -C "$ROOT" diff --no-ext-diff --binary HEAD
