@@ -457,12 +457,7 @@ static void sentry_cmsg_translate_in(struct sentry_proc *p, uint8_t *ctl, size_t
 // pselect fd containers) are handled explicitly in sentry_service_one.
 static int fd_in_a0(uint64_t nr) {
     switch (nr) {
-    case 7:
-    case 10:
-    case 13:
-    case 16: // descriptor xattrs
     case 32: // flock
-    case 44: // fstatfs
     case 46:
     case 47: // ftruncate/fallocate
     case 50: // fchdir
@@ -476,8 +471,6 @@ static int fd_in_a0(uint64_t nr) {
     case 66:
     case 67:
     case 68:
-    case 69:
-    case 70: // preadv/pwritev
     case 71:
     case 80: // fs r/w/seek/stat
     case 82:
@@ -496,11 +489,8 @@ static int fd_in_a0(uint64_t nr) {
     case 210:
     case 211:
     case 212:
-    case 213: // recvmmsg
     case 242: // sockopt/shutdown/msg/accept4
     case 267: // syncfs
-    case 286:
-    case 287: // preadv2/pwritev2
     case 23:
     case 25:
     case 29:
