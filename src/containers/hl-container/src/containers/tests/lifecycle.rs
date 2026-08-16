@@ -396,6 +396,9 @@ async fn execution_checkpoint_restores_without_capturing_the_container_init() {
         .await
         .unwrap();
     let _session = containers.executions().start(&exec.id).await.unwrap();
+    let wait_id = exec.id.clone();
+    let wait_containers = containers.clone();
+    let mut wait = tokio::spawn(async move { wait_containers.executions().wait(&wait_id).await });
 
     containers
         .executions()
@@ -415,6 +418,12 @@ async fn execution_checkpoint_restores_without_capturing_the_container_init() {
             .map(|checkpoint| checkpoint.namespace.as_str()),
         Some(format!("exec-{}", exec.id).as_str())
     );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(25), &mut wait)
+            .await
+            .is_err(),
+        "checkpointed execution wait returned before restore"
+    );
 
     containers.shutdown(Duration::from_secs(1)).await.unwrap();
     containers.start("workspace").await.unwrap();
@@ -426,6 +435,14 @@ async fn execution_checkpoint_restores_without_capturing_the_container_init() {
     assert_eq!(
         runtime.checkpoints.lock().unwrap().as_slice(),
         [Some(false), Some(false), Some(false), Some(true)]
+    );
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), wait)
+            .await
+            .expect("restored execution wait timed out")
+            .unwrap()
+            .unwrap(),
+        ExitStatus::Code(0)
     );
 }
 
