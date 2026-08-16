@@ -13,7 +13,15 @@ pub(super) fn pin_guest_image(config: &EngineConfig<'_>, guest: &[u8]) -> Result
     let mut file = if roots.is_empty() {
         File::open(guest).map_err(|_| 1)?
     } else {
-        resolve_layered_guest(guest, &roots).map_err(|_| 1)?.ok_or(1)?
+        match resolve_layered_guest(guest, &roots) {
+            Ok(Some(file)) => file,
+            Err(error) if error.raw_os_error() == Some(libc::ENOTDIR) => {
+                resolve_through_merged_directory_symlink(guest, &roots)
+                    .map_err(|_| 1)?
+                    .ok_or(1)?
+            }
+            Ok(None) | Err(_) => return Err(1),
+        }
     };
     let size = usize::try_from(file.metadata().map_err(|_| 1)?.len()).map_err(|_| 1)?;
     if size == 0 || size > 64 * 1024 * 1024 {
@@ -22,6 +30,29 @@ pub(super) fn pin_guest_image(config: &EngineConfig<'_>, guest: &[u8]) -> Result
     let mut image = Vec::with_capacity(size);
     file.read_to_end(&mut image).map_err(|_| 1)?;
     (image.len() == size).then_some(image).ok_or(1)
+}
+
+pub(super) fn resolve_through_merged_directory_symlink(guest: &Path, roots: &[File]) -> std::io::Result<Option<File>> {
+    let Some(first) = guest.components().find_map(|component| match component {
+        Component::Normal(value) => Some(value.to_owned()),
+        _ => None,
+    }) else {
+        return Ok(None);
+    };
+    let prefix = [first];
+    if !matches!(layered_entry(&prefix, roots)?, Some((_, EntryKind::Directory))) {
+        return Ok(None);
+    }
+    for (index, root) in roots.iter().enumerate().skip(1) {
+        if matches!(
+            layered_entry(&prefix, std::slice::from_ref(root))?,
+            Some((_, EntryKind::Symlink(_)))
+        ) && let Some(file) = resolve_layered_guest(guest, &roots[index..])?
+        {
+            return Ok(Some(file));
+        }
+    }
+    Ok(None)
 }
 
 pub(super) fn resolve_layered_guest(guest: &Path, roots: &[File]) -> std::io::Result<Option<File>> {

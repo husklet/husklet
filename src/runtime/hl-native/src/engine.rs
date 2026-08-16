@@ -14,7 +14,7 @@ mod image;
 #[cfg(unix)]
 use image::pin_guest_image;
 #[cfg(all(test, unix))]
-use image::resolve_layered_guest;
+use image::{resolve_layered_guest, resolve_through_merged_directory_symlink};
 mod layout;
 use layout::validate_elf_image;
 
@@ -1039,6 +1039,26 @@ int main(int argc, char **argv) {
         let roots = vec![File::open(upper.path()).unwrap(), File::open(lower.path()).unwrap()];
         let error = resolve_layered_guest(std::path::Path::new("/lib/loader"), &roots).unwrap_err();
         assert_eq!(error.raw_os_error(), Some(libc::ENOTDIR));
+    }
+
+    #[test]
+    fn upper_merged_directory_keeps_lower_symlink_children_reachable() {
+        use std::os::unix::fs::symlink;
+        let upper = tempfile::tempdir().unwrap();
+        let lower = tempfile::tempdir().unwrap();
+        std::fs::create_dir(upper.path().join("lib")).unwrap();
+        std::fs::create_dir_all(lower.path().join("usr/lib")).unwrap();
+        std::fs::write(lower.path().join("usr/lib/loader"), "lower loader").unwrap();
+        symlink("usr/lib", lower.path().join("lib")).unwrap();
+        let roots = vec![File::open(upper.path()).unwrap(), File::open(lower.path()).unwrap()];
+        let error = resolve_layered_guest(std::path::Path::new("/lib/loader"), &roots).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::ENOTDIR));
+        let mut loader = super::resolve_through_merged_directory_symlink(std::path::Path::new("/lib/loader"), &roots)
+            .unwrap()
+            .unwrap();
+        let mut contents = String::new();
+        loader.read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, "lower loader");
     }
 
     #[test]
