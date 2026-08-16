@@ -679,6 +679,33 @@ mod tests {
 
     #[test]
     fn armed_running_guest_reaches_checkpoint_broker() {
+        const CHILD: &str = "HL_NATIVE_ARMED_CHECKPOINT_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "engine::tests::armed_running_guest_reaches_checkpoint_broker",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .spawn()
+                .unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert!(status.success(), "armed checkpoint child failed: {status}");
+                    return;
+                }
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("armed checkpoint child exceeded 15 seconds");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+
         for isa in [1, 2] {
             let (mut engine, _standard) = create_engine(isa);
             let (broker, transport) = crate::CheckpointTransport::create().unwrap();
