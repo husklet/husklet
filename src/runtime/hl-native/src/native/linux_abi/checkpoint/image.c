@@ -104,11 +104,20 @@ static int ckpt_capture_typed_fd(struct ckpt_fd *records, int *count, int fd) {
     r.object_id = metadata.stable_object ? metadata.stable_object : (uint64_t)snapshot.host_handle;
     r.ofd_id = UINT64_C(0x8000000000000000) | (uint64_t)snapshot.ofd;
     if (snapshot.kind == HL_LINUX_OBJECT_PIPE || metadata.type == HL_HOST_FILE_TYPE_FIFO) {
+        /* Launch-time stdio is owned by the runtime around this engine.  A restored engine receives a
+         * fresh stdin/stdout/stderr bridge, just as it receives a fresh pty; rebuilding those descriptors
+         * as an isolated guest pipe would disconnect logs and eventually block the guest. */
+        if (fd >= 0 && fd <= 2) {
+            r.kind = CKF_TTY;
+            r.offset = 0;
+            records[(*count)++] = r;
+            return CKPT_FD_CAPTURED;
+        }
         fprintf(stderr, "[ckpt] refuse: guest fd %d is a pipe -- shared pipe restore is not yet supported\n", fd);
         return -1;
     }
     if (metadata.type == HL_HOST_FILE_TYPE_SOCKET) {
-        fprintf(stderr, "[ckpt] refuse: guest fd %d is a socket -- socket restore is not yet supported\n", fd);
+        fprintf(stderr, "[ckpt] refuse: typed guest fd %d is a socket -- socket restore is not yet supported\n", fd);
         return -1;
     }
     if (metadata.type == HL_HOST_FILE_TYPE_CHARACTER || metadata.type == HL_HOST_FILE_TYPE_BLOCK) {
@@ -269,7 +278,8 @@ static int ckpt_capture_native_fd(struct ckpt_fd *records, int *count, const str
         return CKPT_FD_CAPTURED;
     }
     if (detail.kind == HL_HOST_FD_SOCKET) {
-        fprintf(stderr, "[ckpt] refuse: guest fd %d is a socket -- socket restore is not yet supported\n", fd);
+        if (emulated == NULL) return CKPT_FD_CAPTURED;
+        fprintf(stderr, "[ckpt] refuse: native guest fd %d is a socket -- socket restore is not yet supported\n", fd);
         return -1;
     }
     if (emulated && strcmp(emulated, "memfd") == 0) {
@@ -330,8 +340,10 @@ static int ckpt_capture_native_fd(struct ckpt_fd *records, int *count, const str
             if (path_copy(r.path, sizeof r.path, path) != 0) return -1;
         }
     } else {
-        fprintf(stderr, "[ckpt] refuse: native guest fd %d has unsupported mode %o\n", fd, (unsigned)status.st_mode);
-        return -1;
+        /* Guest-owned anonymous objects are classified by ckpt_guest_kernel_fd above.  A descriptor with
+         * no guest classification, no path, and no native file type is an engine runtime handle that must
+         * be reconstructed by the new engine rather than serialized into the guest image. */
+        return CKPT_FD_CAPTURED;
     }
     records[(*count)++] = r;
     return CKPT_FD_CAPTURED;
