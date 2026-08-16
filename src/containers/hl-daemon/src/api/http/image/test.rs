@@ -213,7 +213,7 @@ fn summaries_skip_other_platforms_without_hiding_identity_failures() {
     };
 
     let summaries = build_image_summaries(
-        vec![graph('1'), graph('2')],
+        vec![graph('1'), graph('2'), graph('3')],
         false,
         |_| Ok(101),
         |_| panic!("shared descriptor accounting must be skipped"),
@@ -227,14 +227,23 @@ fn summaries_skip_other_platforms_without_hiding_identity_failures() {
             }
             Ok(target.digest().to_string())
         },
-        |_| Ok(BTreeMap::new()),
+        |target| {
+            if target.digest().to_string().ends_with('3') {
+                return Err(hl_images::Error::UnsupportedPlatform {
+                    os: "linux".into(),
+                    architecture: "amd64".into(),
+                    variant: String::new(),
+                });
+            }
+            Ok(BTreeMap::new())
+        },
     )
     .unwrap();
     assert_eq!(summaries.len(), 1);
     assert_eq!(summaries[0].repo_tags, ["docker.io/library/example:1"]);
 
     let error = build_image_summaries(
-        vec![graph('3')],
+        vec![graph('4')],
         false,
         |_| panic!("size must not run after an identity failure"),
         |_| panic!("shared descriptor accounting must be skipped"),

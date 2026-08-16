@@ -257,36 +257,40 @@ where
         .map(|(target, _, _)| target.clone())
         .collect::<Vec<_>>();
     let usage = include_shared_size.then(|| usage(&unique)).transpose()?;
-    grouped
-        .into_iter()
-        .map(|(id, (target, mut repo_tags, created_at_ms))| {
-            repo_tags.sort();
-            let (size_bytes, shared_size) = match &usage {
-                Some(usage) => {
-                    let target_id = target.digest().to_string();
-                    let usage = usage.get(&target_id).copied().ok_or_else(|| {
-                        hl_images::Error::InvalidMetadata(format!("image usage is missing target {target_id}"))
-                    })?;
-                    (usage.size, i64::try_from(usage.shared).unwrap_or(i64::MAX))
-                }
-                None => (size(&target)?, -1),
-            };
-            let size = i64::try_from(size_bytes).unwrap_or(i64::MAX);
-            let created = i64::try_from(created_at_ms.unwrap_or_default() / 1_000)
-                .map_err(|_| hl_images::Error::InvalidMetadata("image creation time exceeds Docker range".into()))?;
-            Ok(ImageSummary {
-                id,
-                repo_tags,
-                repo_digests: Vec::new(),
-                created,
-                size,
-                shared_size,
-                virtual_size: size,
-                labels: labels(&target)?,
-                containers: -1,
-            })
-        })
-        .collect()
+    let mut summaries = Vec::with_capacity(grouped.len());
+    for (id, (target, mut repo_tags, created_at_ms)) in grouped {
+        repo_tags.sort();
+        let (size_bytes, shared_size) = match &usage {
+            Some(usage) => {
+                let target_id = target.digest().to_string();
+                let usage = usage.get(&target_id).copied().ok_or_else(|| {
+                    hl_images::Error::InvalidMetadata(format!("image usage is missing target {target_id}"))
+                })?;
+                (usage.size, i64::try_from(usage.shared).unwrap_or(i64::MAX))
+            }
+            None => (size(&target)?, -1),
+        };
+        let image_labels = match labels(&target) {
+            Ok(labels) => labels,
+            Err(hl_images::Error::UnsupportedPlatform { .. }) => continue,
+            Err(error) => return Err(error),
+        };
+        let size = i64::try_from(size_bytes).unwrap_or(i64::MAX);
+        let created = i64::try_from(created_at_ms.unwrap_or_default() / 1_000)
+            .map_err(|_| hl_images::Error::InvalidMetadata("image creation time exceeds Docker range".into()))?;
+        summaries.push(ImageSummary {
+            id,
+            repo_tags,
+            repo_digests: Vec::new(),
+            created,
+            size,
+            shared_size,
+            virtual_size: size,
+            labels: image_labels,
+            containers: -1,
+        });
+    }
+    Ok(summaries)
 }
 
 mod archive;
