@@ -14,6 +14,7 @@ static int bound_route_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, 
             if (status.status == HL_STATUS_OK && metadata.type == HL_HOST_FILE_TYPE_REGULAR)
                 poslk_on_close_identity(metadata.stable_device, metadata.stable_object);
         }
+        fd_reset_emul((int)source.fd);
         result = hl_linux_close(g_linux_box, source.fd);
         proc_fdvis_close((int)source.fd);
         (void)close((int)source.fd);
