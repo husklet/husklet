@@ -8,7 +8,7 @@ use hl_ws::Arch;
 use crate::config::WorkspaceConfig;
 use crate::paths;
 
-use super::{Configuration, CONTAINER, SIGNATURE};
+use super::{Configuration, CONFIGURATION_SIGNATURE, CONTAINER, RUNTIME_SIGNATURE, SIGNATURE};
 
 /// Composes the container capabilities that back one workspace execution domain.
 pub(super) struct Runtime;
@@ -69,12 +69,56 @@ impl Runtime {
     }
 
     pub(super) async fn ensure_container(containers: &Containers, workspace: &WorkspaceConfig) -> io::Result<()> {
-        let signature = Configuration::new(workspace).signature()?;
+        let configuration = Configuration::new(workspace);
+        let signature = configuration.signature()?;
+        let configuration_signature = configuration.configuration_signature()?;
+        let runtime_signature = configuration.runtime_signature();
         match containers.inspect(CONTAINER).await {
             Ok(container) => {
                 let stored = container.spec.labels.get(SIGNATURE);
+                let stored_configuration = container.spec.labels.get(CONFIGURATION_SIGNATURE);
+                let stored_runtime = container.spec.labels.get(RUNTIME_SIGNATURE);
                 let session = crate::runtime::session::Session::from_labels(&container.spec.labels);
-                let reusable = stored == Some(&signature) && session.is_ok();
+                let reusable = session.is_ok()
+                    && match stored_configuration {
+                        Some(value) => value == &configuration_signature,
+                        None if stored == Some(&signature) => true,
+                        None => configuration.legacy_container_compatible(&container.spec)?,
+                    };
+                if reusable {
+                    let runtime_reusable = stored_runtime == Some(&runtime_signature)
+                        || (stored_runtime.is_none() && stored == Some(&signature));
+                    if !runtime_reusable {
+                        containers
+                            .discard_checkpoint(CONTAINER)
+                            .await
+                            .map_err(io::Error::other)?;
+                        let executions = containers.executions();
+                        for execution in executions.list().await.map_err(io::Error::other)? {
+                            executions.remove(&execution.id).await.map_err(io::Error::other)?;
+                        }
+                    }
+                    if stored_configuration != Some(&configuration_signature) {
+                        containers
+                            .set_label(CONTAINER, CONFIGURATION_SIGNATURE, &configuration_signature)
+                            .await
+                            .map_err(io::Error::other)?;
+                    }
+                    if stored != Some(&signature) {
+                        containers
+                            .set_label(CONTAINER, SIGNATURE, &signature)
+                            .await
+                            .map_err(io::Error::other)?;
+                    }
+                    // Publish runtime compatibility last: a crash before this point retries
+                    // checkpoint and execution cleanup rather than trusting a partial migration.
+                    if stored_runtime != Some(&runtime_signature) {
+                        containers
+                            .set_label(CONTAINER, RUNTIME_SIGNATURE, &runtime_signature)
+                            .await
+                            .map_err(io::Error::other)?;
+                    }
+                }
                 if reusable && !container.state.is_active() {
                     containers.start(CONTAINER).await.map_err(io::Error::other)?;
                 }
@@ -112,7 +156,12 @@ impl Runtime {
         };
         containers
             .create_image(&unpacked, overrides, |spec| {
-                session.label(Configuration::new(workspace).container(spec, signature))
+                session.label(Configuration::new(workspace).container(
+                    spec,
+                    signature,
+                    configuration_signature,
+                    runtime_signature,
+                ))
             })
             .await
             .map_err(io::Error::other)?;

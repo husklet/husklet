@@ -63,6 +63,41 @@ fn signatures_are_unambiguous_and_ignore_terminal_presentation() {
 }
 
 #[test]
+fn container_configuration_identity_ignores_runtime_build_identity() {
+    let workspace = WorkspaceConfig::new("demo", "ubuntu:latest", Arch::Arm64);
+    let configuration = Configuration::new(&workspace);
+
+    assert_ne!(
+        configuration.signature_for("runtime-a").unwrap(),
+        configuration.signature_for("runtime-b").unwrap()
+    );
+    assert_eq!(
+        configuration.configuration_signature().unwrap(),
+        configuration.configuration_signature().unwrap()
+    );
+}
+
+#[test]
+fn legacy_container_compatibility_checks_rootfs_owning_launch_fields() {
+    let mut workspace = WorkspaceConfig::new("demo", "ubuntu:latest", Arch::Arm64);
+    workspace.cpus = Some(3);
+    workspace.mounts.push(hl_ws::Mount {
+        host: "/host".into(),
+        container: "/guest".into(),
+        ro: true,
+    });
+    let configuration = Configuration::new(&workspace);
+    let mut spec = hl_container::ContainerSpec::from_directory("/tmp/root", hl_container::Process::new("/bin/sh"));
+    spec.image = Some(workspace.image.parse().unwrap());
+    let spec = configuration.container(spec, "legacy".into(), "configuration".into(), "runtime".into());
+    assert!(configuration.legacy_container_compatible(&spec).unwrap());
+
+    let mut incompatible = spec;
+    incompatible.resources.cpu_count = 4;
+    assert!(!configuration.legacy_container_compatible(&incompatible).unwrap());
+}
+
+#[test]
 fn terminal_capability_defaults_remain_workspace_overridable() {
     let mut workspace = WorkspaceConfig::new("demo", "ubuntu:latest", Arch::Arm64);
     let defaults = Configuration::new(&workspace).environment();

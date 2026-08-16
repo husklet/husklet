@@ -24,6 +24,8 @@ use runtime::Runtime;
 
 const CONTAINER: &str = "workspace";
 const SIGNATURE: &str = "husklet.workspace.signature";
+const CONFIGURATION_SIGNATURE: &str = "husklet.workspace.configuration";
+const RUNTIME_SIGNATURE: &str = "husklet.workspace.runtime";
 const PROTOCOL: &str = "3";
 
 /// Owns the host process and socket serving one workspace's persistent execution domain.

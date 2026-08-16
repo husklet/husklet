@@ -1,4 +1,4 @@
-use super::{RuntimeIdentity, CONTAINER, SIGNATURE};
+use super::{RuntimeIdentity, CONFIGURATION_SIGNATURE, CONTAINER, RUNTIME_SIGNATURE, SIGNATURE};
 use crate::config::WorkspaceConfig;
 use hl_container::{ContainerSpec, Guest, Isolation, Mount, Resources, Sandbox};
 use hl_ws::Arch;
@@ -11,11 +11,19 @@ impl<'a> Configuration<'a> {
         Self(workspace)
     }
 
-    pub(super) fn container(&self, mut spec: ContainerSpec, signature: String) -> ContainerSpec {
+    pub(super) fn container(
+        &self,
+        mut spec: ContainerSpec,
+        signature: String,
+        configuration: String,
+        runtime: String,
+    ) -> ContainerSpec {
         spec = spec
             .name(CONTAINER)
             .hostname(self.hostname())
             .label(SIGNATURE, signature)
+            .label(CONFIGURATION_SIGNATURE, configuration)
+            .label(RUNTIME_SIGNATURE, runtime)
             .guest(match self.0.arch {
                 Arch::Arm64 => Guest::Aarch64,
                 Arch::Amd64 => Guest::X86_64,
@@ -60,19 +68,70 @@ impl<'a> Configuration<'a> {
         self.signature_for(runtime.as_str())
     }
 
-    pub(super) fn signature_for(&self, runtime: &str) -> std::io::Result<String> {
-        use sha2::Digest as _;
+    pub(super) fn configuration_signature(&self) -> std::io::Result<String> {
+        self.validate()?;
+        Ok(Self::digest(&self.identity()))
+    }
 
+    pub(super) fn runtime_signature(&self) -> String {
+        RuntimeIdentity::current(self.0).as_str().to_owned()
+    }
+
+    pub(super) fn signature_for(&self, runtime: &str) -> std::io::Result<String> {
         self.validate()?;
         let mut identity = self.identity();
         Self::field(&mut identity, runtime);
+        Ok(Self::digest(&identity))
+    }
+
+    pub(super) fn legacy_container_compatible(&self, spec: &ContainerSpec) -> std::io::Result<bool> {
+        self.validate()?;
+        let image: hl_images::Reference = self.0.image.parse().map_err(std::io::Error::other)?;
+        let mounts = self
+            .0
+            .mounts
+            .iter()
+            .map(|mount| {
+                if mount.ro {
+                    Mount::read_only(&mount.host, &mount.container)
+                } else {
+                    Mount::read_write(&mount.host, &mount.container)
+                }
+            })
+            .collect::<Vec<_>>();
+        let resources = Resources {
+            memory_bytes: self.0.memory_mb.map_or(0, |value| u64::from(value) * 1024 * 1024),
+            cpu_count: self.0.cpus.unwrap_or(0),
+            ..Resources::default()
+        };
+        let isolation = Isolation {
+            sandbox: Sandbox::Disabled,
+            network_isolated: false,
+            ..Isolation::default()
+        };
+        let guest = match self.0.arch {
+            Arch::Arm64 => Guest::Aarch64,
+            Arch::Amd64 => Guest::X86_64,
+        };
+        Ok(spec.name.as_deref() == Some(CONTAINER)
+            && spec.hostname.as_deref() == Some(self.hostname().as_str())
+            && spec.image.as_ref() == Some(&image)
+            && spec.guest == guest
+            && spec.mounts == mounts
+            && spec.resources == resources
+            && spec.isolation == isolation)
+    }
+
+    fn digest(identity: &str) -> String {
+        use sha2::Digest as _;
+
         let digest = sha2::Sha256::digest(identity.as_bytes());
         let mut signature = String::with_capacity(digest.len() * 2);
         for byte in digest {
             use std::fmt::Write as _;
             let _ = write!(signature, "{byte:02x}");
         }
-        Ok(signature)
+        signature
     }
 
     fn validate(&self) -> std::io::Result<()> {
