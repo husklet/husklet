@@ -44,13 +44,8 @@ static int64_t sentry_adopt_fd(int rfd, int cloexec) {
         R->redir[i] = -1;
     sentry_send_fd(g_ctl[idx][0], rfd);
     uint64_t request = atomic_fetch_add_explicit(&R->request, 1, memory_order_relaxed) + 1;
-    atomic_store_explicit(&R->turn, 1, memory_order_release);
-    uint32_t sp = 0;
-    while (atomic_load_explicit(&R->response, memory_order_acquire) != request)
-        if (++sp > 256) {
-            sched_yield();
-            sp = 0;
-        }
+    sentry_request_publish(R);
+    sentry_response_wait(R, request);
     int64_t ret = R->ret;
     atomic_store_explicit(&R->busy, 0, memory_order_release);
     return ret;
@@ -133,13 +128,14 @@ static int sentry_route_clone(struct cpu *c, uint64_t nr) {
         return 1;
     }
     int is_thread = nr == 220 ? (G_A0(c) & 0x10000) != 0 : (clone3_flags & 0x10000) != 0;
+    int is_vfork = nr == 220 ? (G_A0(c) & 0x4000) != 0 : (clone3_flags & 0x4000) != 0;
     int64_t snapshot = is_thread ? 0 : sentry_ctl_op(SENTRY_OP_FORK_PREPARE, 0, 0);
     if (!is_thread && snapshot < 0) {
         G_RET(c) = (uint64_t)snapshot;
         return 1;
     }
     int sync[2] = {-1, -1};
-    if (!is_thread && pipe(sync) != 0) {
+    if (!is_thread && !is_vfork && pipe(sync) != 0) {
         int error = errno;
         sentry_ctl_op(SENTRY_OP_FORK_CANCEL, (uint64_t)snapshot, 0);
         G_RET(c) = (uint64_t)(int64_t)-error;
@@ -147,6 +143,12 @@ static int sentry_route_clone(struct cpu *c, uint64_t nr) {
     }
     service_local(c);
     if (getpid() != g_worker_pid) {
+        if (is_vfork) {
+            int64_t installed = sentry_ctl_op(SENTRY_OP_FORK, (uint64_t)snapshot, (uint64_t)(uint32_t)getpid());
+            if (installed < 0) _exit(127);
+            sentry_fork_child();
+            return 1;
+        }
         close(sync[1]);
         unsigned char ready;
         ssize_t received;
@@ -159,6 +161,10 @@ static int sentry_route_clone(struct cpu *c, uint64_t nr) {
         return 1;
     }
     if (!is_thread && (int64_t)G_RET(c) > 0) {
+        if (is_vfork) {
+            atomic_fetch_add(&g_guest_children, 1);
+            return 1;
+        }
         close(sync[0]);
         pid_t child = (pid_t)G_RET(c);
         int64_t installed = sentry_ctl_op(SENTRY_OP_FORK, (uint64_t)snapshot, (uint64_t)child);
@@ -219,13 +225,8 @@ static int sentry_route_file_mmap(struct cpu *c, uint64_t nr) {
     R->iovn = 0;
     for (int i = 0; i < 6; i++) R->redir[i] = -1;
     uint64_t request = atomic_fetch_add_explicit(&R->request, 1, memory_order_relaxed) + 1;
-    atomic_store_explicit(&R->turn, 1, memory_order_release);
-    uint32_t spins = 0;
-    while (atomic_load_explicit(&R->response, memory_order_acquire) != request)
-        if (++spins > 256) {
-            sched_yield();
-            spins = 0;
-        }
+    sentry_request_publish(R);
+    sentry_response_wait(R, request);
     int lfd = idx >= 0 && g_ctl[idx][0] >= 0 ? sentry_recv_fd(g_ctl[idx][0]) : -1;
     atomic_store_explicit(&R->busy, 0, memory_order_release);
     uint64_t saved = G_A4(c);
@@ -1186,14 +1187,8 @@ static void syscall_route(struct cpu *c) {
 
     // ---- ring round-trip ----
     uint64_t request = atomic_fetch_add_explicit(&R->request, 1, memory_order_relaxed) + 1;
-    atomic_store_explicit(&R->turn, 1, memory_order_release); // publish request -> sentry
-    uint32_t spins = 0;
-    while (atomic_load_explicit(&R->response, memory_order_acquire) != request) { // await this response
-        if (++spins > 256) {
-            sched_yield();
-            spins = 0;
-        }
-    }
+    sentry_request_publish(R); // publish request -> sentry
+    sentry_response_wait(R, request);
 
     int64_t ret = sentry_export(&M);
     G_RET(c) = (uint64_t)ret;

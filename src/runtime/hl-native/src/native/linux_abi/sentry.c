@@ -196,6 +196,9 @@ struct sentry_ring {
     _Atomic uint32_t owner; // ring-pool free-list: 0 = free lane, else the owning worker thread's token
     _Atomic uint64_t request;
     _Atomic uint64_t response;
+    pthread_mutex_t wake_lock;
+    pthread_cond_t wake_cond;
+    uint8_t wake_ready;
     // request: the post-normalize syscall registers (frontend-agnostic via G_RAWNR / G_A0..G_A5)
     uint32_t wpid;         // stamping worker PROCESS pid: selects this guest's per-process virtual fd table (P1/P2)
     uint32_t wtid;         // stable worker-thread token: selects a CLOSE_RANGE_UNSHARE private fd-table copy
@@ -219,6 +222,54 @@ struct sentry_ring {
     _Atomic uint64_t nserved; // sentry-maintained request counter
     uint8_t buf[SENTRY_BUFSZ];
 };
+
+static void sentry_request_publish(struct sentry_ring *ring) {
+    if (!ring->wake_ready) {
+        atomic_store_explicit(&ring->turn, 1, memory_order_release);
+        return;
+    }
+    pthread_mutex_lock(&ring->wake_lock);
+    atomic_store_explicit(&ring->turn, 1, memory_order_release);
+    pthread_cond_signal(&ring->wake_cond);
+    pthread_mutex_unlock(&ring->wake_lock);
+}
+
+static void sentry_response_wait(struct sentry_ring *ring, uint64_t request) {
+    if (!ring->wake_ready) {
+        uint32_t spins = 0;
+        while (atomic_load_explicit(&ring->response, memory_order_acquire) != request)
+            if (++spins > 256) {
+                sched_yield();
+                spins = 0;
+            }
+        return;
+    }
+    pthread_mutex_lock(&ring->wake_lock);
+    while (atomic_load_explicit(&ring->response, memory_order_acquire) != request) {
+        struct timespec deadline;
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        deadline.tv_nsec += 10000000;
+        if (deadline.tv_nsec >= 1000000000L) {
+            deadline.tv_sec++;
+            deadline.tv_nsec -= 1000000000L;
+        }
+        (void)pthread_cond_timedwait(&ring->wake_cond, &ring->wake_lock, &deadline);
+    }
+    pthread_mutex_unlock(&ring->wake_lock);
+}
+
+static void sentry_response_publish(struct sentry_ring *ring, uint64_t request) {
+    if (!ring->wake_ready) {
+        atomic_store_explicit(&ring->turn, 0, memory_order_release);
+        atomic_store_explicit(&ring->response, request, memory_order_release);
+        return;
+    }
+    pthread_mutex_lock(&ring->wake_lock);
+    atomic_store_explicit(&ring->turn, 0, memory_order_release);
+    atomic_store_explicit(&ring->response, request, memory_order_release);
+    pthread_cond_signal(&ring->wake_cond);
+    pthread_mutex_unlock(&ring->wake_lock);
+}
 
 // The shared region: one teardown flag, one ring-claim counter (in shared memory so forked-worker
 // PROCESSES also draw distinct rings from the pool), and the ring pool itself.
@@ -362,13 +413,8 @@ static int64_t sentry_ctl_op(uint32_t op, uint64_t a0, uint64_t a1) {
     for (int i = 0; i < 6; i++)
         R->redir[i] = -1;
     uint64_t request = atomic_fetch_add_explicit(&R->request, 1, memory_order_relaxed) + 1;
-    atomic_store_explicit(&R->turn, 1, memory_order_release);
-    uint32_t sp = 0;
-    while (atomic_load_explicit(&R->response, memory_order_acquire) != request)
-        if (++sp > 256) {
-            sched_yield();
-            sp = 0;
-        }
+    sentry_request_publish(R);
+    sentry_response_wait(R, request);
     int64_t result = atomic_load_explicit(&R->ret, memory_order_acquire);
     atomic_store_explicit(&R->busy, 0, memory_order_release);
     return result;
@@ -584,6 +630,13 @@ static void sentry_init(void) {
     bound_fork_state bound_fork;
     int bound_status;
     void *arena = NULL;
+    pthread_mutexattr_t wake_mutex_attributes;
+    pthread_condattr_t wake_cond_attributes;
+    int wake_mutex_attributes_ready = pthread_mutexattr_init(&wake_mutex_attributes) == 0;
+    int wake_cond_attributes_ready = pthread_condattr_init(&wake_cond_attributes) == 0;
+    int wake_supported = wake_mutex_attributes_ready && wake_cond_attributes_ready &&
+                         pthread_mutexattr_setpshared(&wake_mutex_attributes, PTHREAD_PROCESS_SHARED) == 0 &&
+                         pthread_condattr_setpshared(&wake_cond_attributes, PTHREAD_PROCESS_SHARED) == 0;
     if (hl_linux_shared_create(effective_host_services(), sizeof(struct sentry_shm), &arena) != HL_STATUS_OK) {
         perror("[sentry] ring mmap");
         _exit(71);
@@ -597,6 +650,13 @@ static void sentry_init(void) {
         atomic_store_explicit(&g_shm->ring[i].owner, 0, memory_order_relaxed);
         atomic_store_explicit(&g_shm->ring[i].request, 0, memory_order_relaxed);
         atomic_store_explicit(&g_shm->ring[i].response, 0, memory_order_relaxed);
+        g_shm->ring[i].wake_ready = 0;
+        if (wake_supported && pthread_mutex_init(&g_shm->ring[i].wake_lock, &wake_mutex_attributes) == 0) {
+            if (pthread_cond_init(&g_shm->ring[i].wake_cond, &wake_cond_attributes) == 0)
+                g_shm->ring[i].wake_ready = 1;
+            else
+                pthread_mutex_destroy(&g_shm->ring[i].wake_lock);
+        }
         // Per-ring control socketpair (SCM_RIGHTS fd-lend, item 3). Created BEFORE the fork so BOTH the
         // worker and the sentry inherit both ends at the same fd numbers; each is used point-to-point by
         // the single worker thread + single sentry servicer that own that lane. A failure leaves the lane
@@ -628,6 +688,8 @@ static void sentry_init(void) {
             }
         }
     }
+    if (wake_cond_attributes_ready) pthread_condattr_destroy(&wake_cond_attributes);
+    if (wake_mutex_attributes_ready) pthread_mutexattr_destroy(&wake_mutex_attributes);
     g_worker_pid = getpid();
     g_sentry_owner_pid = getpid(); // only this process may signal-quit + reap the sentry
     g_guest_children = 0;
