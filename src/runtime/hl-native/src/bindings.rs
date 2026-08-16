@@ -158,12 +158,16 @@ unsafe extern "C" {
     pub(super) fn hl_c_backend_run(backend: *mut Backend, argc: c_int, argv: *const *const c_char) -> c_int;
     pub(super) fn hl_c_backend_request(backend: *mut Backend, request: c_uint, signal: c_int) -> c_int;
     #[cfg(all(test, feature = "native-test-hooks"))]
+    #[allow(dead_code)]
     pub(super) fn hl_c_backend_checkpoint_test_arm() -> c_uint;
     #[cfg(all(test, feature = "native-test-hooks"))]
+    #[allow(dead_code)]
     pub(super) fn hl_c_backend_checkpoint_test_phase() -> c_uint;
     #[cfg(all(test, feature = "native-test-hooks"))]
+    #[allow(dead_code)]
     pub(super) fn hl_c_backend_checkpoint_test_release();
     #[cfg(all(test, feature = "native-test-hooks"))]
+    #[allow(dead_code)]
     pub(super) fn hl_c_backend_checkpoint_test_reset();
     #[allow(dead_code)]
     pub(super) fn hl_c_backend_checkpoint_test_prune_foreign_descriptors() -> c_uint;
