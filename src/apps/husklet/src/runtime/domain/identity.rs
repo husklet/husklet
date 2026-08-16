@@ -9,11 +9,13 @@ pub(super) struct RuntimeIdentity(String);
 
 impl RuntimeIdentity {
     pub(super) fn current(workspace: &WorkspaceConfig) -> Self {
+        Self::for_build(workspace, env!("CARGO_PKG_VERSION"), env!("HUSKLET_RUNTIME_BUILD_ID"))
+    }
+
+    fn for_build(workspace: &WorkspaceConfig, _package_version: &str, _build_id: &str) -> Self {
         let mut digest = sha2::Sha256::new();
         Self::field(&mut digest, ABI.as_bytes());
         Self::field(&mut digest, PROTOCOL.as_bytes());
-        Self::field(&mut digest, env!("CARGO_PKG_VERSION").as_bytes());
-        Self::field(&mut digest, env!("HUSKLET_RUNTIME_BUILD_ID").as_bytes());
         Self::field(&mut digest, workspace.arch.as_str().as_bytes());
         let mut identity = String::new();
         for byte in digest.finalize() {
@@ -37,11 +39,13 @@ mod tests {
     use super::RuntimeIdentity;
 
     #[test]
-    fn runtime_identity_is_stable_for_one_executable_generation() {
-        let workspace = crate::config::WorkspaceConfig::new("demo", "ubuntu", hl_ws::Arch::Arm64);
-        let first = RuntimeIdentity::current(&workspace);
-        let second = RuntimeIdentity::current(&workspace);
+    fn runtime_identity_survives_application_updates_but_not_architecture_changes() {
+        let arm64 = crate::config::WorkspaceConfig::new("demo", "ubuntu", hl_ws::Arch::Arm64);
+        let amd64 = crate::config::WorkspaceConfig::new("demo", "ubuntu", hl_ws::Arch::Amd64);
+        let first = RuntimeIdentity::for_build(&arm64, "1.0.0", "build-a");
+        let second = RuntimeIdentity::for_build(&arm64, "2.0.0", "build-b");
         assert_eq!(first.as_str(), second.as_str());
+        assert_ne!(first.as_str(), RuntimeIdentity::current(&amd64).as_str());
         assert_eq!(first.as_str().len(), 64);
     }
 }
