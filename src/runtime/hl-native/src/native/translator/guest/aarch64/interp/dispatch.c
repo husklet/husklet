@@ -1,3 +1,5 @@
+#include "../../../cache_abi.h"
+
 static int interp_step(struct cpu *cpu) {
     uint32_t insn = 0;
     if (hl_guest_fetch_u32(cpu->pc, &insn) != 0) {
@@ -319,62 +321,4 @@ static int aarch64_soft_bounce_commit(struct cpu *c) {
 // Never consulted (G_BLOCK_ALIGN is literal 0); 0 spells "§B on", the ordinary non-tuning path.
 static int shadowgate(void) {
     return 0;
-}
-
-// The persistent cache stores HOST CODE; a JIT-written file holds AArch64 instructions this backend would
-// have to execute, so load is a clean MISS and save a no-op. PCACHE_*_HOOK stay undefined so their #ifdef'd
-// call sites vanish; the globals below are storage read from outside this file.
-#define PC_IMG_BASE 0x0000040000000000ull    // fixed guest image base
-#define PC_INTERP_BASE 0x0000048000000000ull // fixed interpreter (ld.so) base
-
-static int g_pcache; // HL_PCACHE=1 requested (never hits)
-static int g_coldprof;
-static uint64_t g_force_base;   // one-shot fixed-VA request consumed by load_elf
-static int g_force_base_failed; // a fixed-VA map fell back to a kernel base
-static uint64_t g_pc_binid;     // binary + interp + argv0 + build + host ISA
-static uint64_t g_pc_entry;     // initial guest pc
-static int g_pcache_loaded;     // never set here
-static int g_pcache_forked;     // never set here
-static int g_nreloc;            // always zero here
-
-// Engine-identity mix-in for the cache key. Must be right even though the cache never hits: host_isa is
-// HL_HOST_CPU_ISA, not a hardcoded 1 -- passing 1 would collide an x86-64-host identity with a JIT-written
-// cache for the same guest, resolved by executing AArch64 on x86-64. Same value keys the CHECKPOINT image.
-static uint64_t pcache_engine_id(void) {
-    static const char tag[] = __DATE__ " " __TIME__;
-    uint64_t build = hl_digest_bytes(HL_DIGEST_SEED, tag, sizeof tag - 1);
-    uint64_t self = hl_identity_source(&g_jit_services, g_self_path);
-    build = hl_digest_bytes(build, &self, sizeof self);
-    // Bit 0 marks "interpreter", so this identity can never equal the JIT's on a shared ISA number.
-    uint64_t modes = 1u;
-    return hl_identity_configuration(build, HL_HOST_CPU_ISA_AARCH64, HL_HOST_CPU_ISA, modes);
-}
-
-static uint64_t pcache_make_id(const char *prog_host, const char *interp_host, const char *argv0) {
-    uint64_t program = hl_identity_source(&g_jit_services, prog_host);
-    uint64_t interpreter = interp_host ? hl_identity_source(&g_jit_services, interp_host) : 0xABCDEFull;
-    return hl_identity_mix(program, interpreter, pcache_engine_id(), hl_identity_name(argv0));
-}
-
-// Always a clean MISS.
-static int pcache_load(uint64_t entry_jump) {
-    (void)entry_jump;
-    return 0;
-}
-
-// A no-op: descriptors are keyed to this process's mapping and hold no translated bytes.
-static void pcache_save(void) {
-}
-
-// Nothing is persisted, so nothing to poison.
-static void pcache_poison_check(void) {
-}
-
-// No cache directory is opened.
-static void pcache_directory_close(void) {
-}
-
-static void pcache_note_fixed_img(uint64_t base, uint64_t span) {
-    (void)base;
-    (void)span;
 }

@@ -1,0 +1,25 @@
+cases:
+- id: terminal-secondary-eof/incomplete-command-exits
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "stty -echo; PS2=$(printf '\\105\\117\\106\\076\\040'); trap 'status=$?; printf \"SECONDARY-EOF-EXIT-%s\\n\" \"$status\"' EXIT; printf 'SECONDARY-EOF-%s\\n' READY\r" }
+      - await_output: { contains: SECONDARY-EOF-READY, timeout_ms: 5000 }
+      - write: { text: "for item in ONE; do\r" }
+      - await_output: { contains: "EOF> ", timeout_ms: 5000 }
+      - write: { text: "\u0004" }
+      - await_output: { contains: "syntax error: unexpected end of file", timeout_ms: 5000 }
+      - await_output: { contains: SECONDARY-EOF-EXIT-2, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    exit: 2
+    stdout_contains:
+    - golden/diagnostic.txt
+    - golden/exit_status.txt

@@ -9,6 +9,7 @@ use hl_engine::{
 };
 use std::{
     collections::BTreeMap,
+    num::NonZeroU64,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -30,7 +31,7 @@ fn fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     if let Some(path) = std::env::var_os(variable) {
         return PathBuf::from(path);
     }
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/checkpoint_tree.c");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/tree.c");
     let output = directory.join(name);
     let status = std::process::Command::new(compiler)
         .args(["-static", "-O2", "-o"])
@@ -58,10 +59,27 @@ fn signalfd_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     if let Some(path) = std::env::var_os(variable) {
         return PathBuf::from(path);
     }
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/checkpoint_signalfd.c");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/signalfd.c");
     let output = directory.join(name);
     let status = std::process::Command::new(compiler)
         .args(["-static", "-O2", "-pthread", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
+    assert!(status.success(), "{compiler} failed with {status}");
+    output
+}
+
+fn exit_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    let (compiler, name) = match isa {
+        GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-exit-aarch64"),
+        GuestIsa::X86_64 => ("x86_64-linux-gnu-gcc", "checkpoint-exit-x86_64"),
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/exit.c");
+    let output = directory.join(name);
+    let status = std::process::Command::new(compiler)
+        .args(["-static", "-O2", "-o"])
         .arg(&output)
         .arg(source)
         .status()
@@ -78,27 +96,28 @@ impl CheckpointSink for Store {
         Err(CompositionError::RuntimeConstruction)
     }
 
-    fn put(&self, name: &str, bytes: &[u8]) -> Result<(), CompositionError> {
+    fn begin_until(&self, _: Instant) -> Result<NonZeroU64, CompositionError> {
+        Ok(NonZeroU64::MIN)
+    }
+
+    fn put_until(&self, _: NonZeroU64, name: &str, bytes: &[u8], deadline: Instant) -> Result<(), CompositionError> {
+        (Instant::now() < deadline)
+            .then_some(())
+            .ok_or(CompositionError::DeadlineExceeded)?;
         self.0.lock().unwrap().insert(name.into(), bytes.into());
         Ok(())
     }
 
-    fn commit(&self, manifest: &[u8]) -> Result<(), CompositionError> {
-        self.put("MANIFEST", manifest)
+    fn abort_until(&self, _: NonZeroU64, _: Instant) -> Result<(), CompositionError> {
+        Ok(())
     }
 
-    fn put_until(&self, name: &str, bytes: &[u8], deadline: Instant) -> Result<(), CompositionError> {
+    fn commit_until(&self, _: NonZeroU64, manifest: &[u8], deadline: Instant) -> Result<(), CompositionError> {
         (Instant::now() < deadline)
             .then_some(())
             .ok_or(CompositionError::DeadlineExceeded)?;
-        self.put(name, bytes)
-    }
-
-    fn commit_until(&self, manifest: &[u8], deadline: Instant) -> Result<(), CompositionError> {
-        (Instant::now() < deadline)
-            .then_some(())
-            .ok_or(CompositionError::DeadlineExceeded)?;
-        self.commit(manifest)
+        self.0.lock().unwrap().insert("MANIFEST".into(), manifest.into());
+        Ok(())
     }
 }
 
@@ -213,7 +232,40 @@ fn wait_cycle_ready(path: &Path) -> bool {
     false
 }
 
-fn checkpoint_round_trip(isa: GuestIsa, executable: &Path) {
+fn checkpoint_deadline() -> Instant {
+    Instant::now() + Duration::from_secs(10)
+}
+
+fn capture_after_plain_engine(isa: GuestIsa, plain_executable: &Path, checkpoint_executable: &Path) {
+    let temporary = tempfile::tempdir().unwrap();
+    let release = temporary.path().join("release");
+    let final_release = temporary.path().join("final-release");
+    let output = temporary.path().join("release.output");
+
+    // Exercise the process-global native initialization first without checkpoint
+    // channels. A later engine must still arm its own broker and trigger.
+    let plain = Engine::from_plan(isa, plan(plain_executable, &release, &final_release, &[])).unwrap();
+    plain.start().unwrap();
+    assert_eq!(plain.wait().unwrap().guest_status, 0);
+
+    std::fs::write(&output, []).unwrap();
+    let store = Arc::new(Store::default());
+    let capture = Engine::with_checkpoint(
+        isa,
+        plan(checkpoint_executable, &release, &final_release, &["HL_CHECKPOINT"]),
+        StandardStreams::default(),
+        store.clone(),
+        store.clone(),
+    )
+    .unwrap();
+    capture.start().unwrap();
+    wait_ready(&output);
+    capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+    assert_eq!(capture.wait().unwrap().guest_status, 0);
+    assert!(store.0.lock().unwrap().contains_key("MANIFEST"));
+}
+
+fn checkpoint_round_trip(isa: GuestIsa, executable: &Path, recapture_barrier: Option<&std::sync::Barrier>) {
     let temporary = tempfile::tempdir().unwrap();
     let release = temporary.path().join("release");
     let final_release = temporary.path().join("final-release");
@@ -230,7 +282,7 @@ fn checkpoint_round_trip(isa: GuestIsa, executable: &Path) {
     .unwrap();
     capture.start().unwrap();
     wait_ready(&output);
-    capture.capture_checkpoint().unwrap();
+    capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
     assert_eq!(capture.wait().unwrap().guest_status, 0);
     {
         let image = store.0.lock().unwrap();
@@ -286,12 +338,17 @@ fn checkpoint_round_trip(isa: GuestIsa, executable: &Path) {
         recapture.wait(),
         std::fs::read_to_string(&output).unwrap_or_default()
     );
-    recapture.capture_checkpoint().unwrap_or_else(|error| {
-        panic!(
-            "second checkpoint failed: {error:?}\n{}",
-            std::fs::read_to_string(&output).unwrap_or_default()
-        )
-    });
+    if let Some(barrier) = recapture_barrier {
+        barrier.wait();
+    }
+    recapture
+        .capture_checkpoint_until(checkpoint_deadline())
+        .unwrap_or_else(|error| {
+            panic!(
+                "second checkpoint failed: {error:?}\n{}",
+                std::fs::read_to_string(&output).unwrap_or_default()
+            )
+        });
     assert_eq!(recapture.wait().unwrap().guest_status, 0);
 
     std::fs::write(&final_release, []).unwrap();
@@ -327,7 +384,132 @@ fn retained_c_round_trips_three_process_tree_on_both_isas() {
             "missing checkpoint fixture: {}",
             executable.display()
         );
-        checkpoint_round_trip(isa, &executable);
+        checkpoint_round_trip(isa, &executable, None);
+    }
+}
+
+#[test]
+fn checkpoint_arms_after_a_plain_engine_on_both_isas() {
+    let fixtures = tempfile::tempdir().unwrap();
+    for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
+        let plain = exit_fixture(isa, fixtures.path());
+        let checkpoint = fixture(isa, fixtures.path());
+        capture_after_plain_engine(isa, &plain, &checkpoint);
+    }
+}
+
+#[test]
+fn concurrent_engines_keep_second_generation_checkpoint_channels_private() {
+    let fixtures = tempfile::tempdir().unwrap();
+    let executables = [
+        (GuestIsa::Aarch64, signalfd_fixture(GuestIsa::Aarch64, fixtures.path())),
+        (GuestIsa::X86_64, signalfd_fixture(GuestIsa::X86_64, fixtures.path())),
+    ];
+    let (first_ready, second_start) = std::sync::mpsc::channel();
+    let (second_ready, first_capture) = std::sync::mpsc::channel();
+    let (first_done, second_capture) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        let [(first_isa, first_executable), (second_isa, second_executable)] = executables;
+        scope.spawn(move || {
+            concurrent_signalfd_recapture(
+                first_isa,
+                &first_executable,
+                None,
+                Some(first_ready),
+                Some(first_capture),
+                Some(first_done),
+            );
+        });
+        scope.spawn(move || {
+            concurrent_signalfd_recapture(
+                second_isa,
+                &second_executable,
+                Some(second_start),
+                Some(second_ready),
+                Some(second_capture),
+                None,
+            );
+        });
+    });
+}
+
+fn concurrent_signalfd_recapture(
+    isa: GuestIsa,
+    executable: &Path,
+    start_gate: Option<std::sync::mpsc::Receiver<()>>,
+    ready_signal: Option<std::sync::mpsc::Sender<()>>,
+    capture_gate: Option<std::sync::mpsc::Receiver<()>>,
+    done_signal: Option<std::sync::mpsc::Sender<()>>,
+) {
+    let temporary = tempfile::tempdir().unwrap();
+    let release = temporary.path().join("release");
+    let final_release = temporary.path().join("final-release");
+    let output = temporary.path().join("release.output");
+    let first = Arc::new(Store::default());
+    let capture = Engine::with_checkpoint(
+        isa,
+        plan(executable, &release, &final_release, &["HL_CHECKPOINT"]),
+        StandardStreams::default(),
+        first.clone(),
+        first.clone(),
+    )
+    .unwrap();
+    capture.start().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline
+        && !std::fs::read_to_string(&output)
+            .unwrap_or_default()
+            .contains("READY targeted_wrong_read=1")
+    {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+    assert_eq!(capture.wait().unwrap().guest_status, 0);
+
+    if let Some(start_gate) = start_gate {
+        start_gate.recv().unwrap();
+    }
+    std::fs::write(&release, []).unwrap();
+    let second = Arc::new(Store::default());
+    let recapture = Engine::with_checkpoint(
+        isa,
+        plan(executable, &release, &final_release, &["HL_RESTORE", "HL_CHECKPOINT"]),
+        StandardStreams::default(),
+        second.clone(),
+        first,
+    )
+    .unwrap();
+    recapture.start().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline
+        && !std::fs::read_to_string(&output)
+            .unwrap_or_default()
+            .contains("CYCLE-READY")
+    {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        std::fs::read_to_string(&output)
+            .unwrap_or_default()
+            .contains("CYCLE-READY")
+    );
+    if let Some(ready_signal) = ready_signal {
+        ready_signal.send(()).unwrap();
+    }
+    if let Some(capture_gate) = capture_gate {
+        capture_gate.recv().unwrap();
+    }
+    recapture
+        .capture_checkpoint_until(checkpoint_deadline())
+        .unwrap_or_else(|error| {
+            panic!(
+                "concurrent second checkpoint failed: {error:?}\n{}",
+                std::fs::read_to_string(&output).unwrap_or_default()
+            )
+        });
+    assert_eq!(recapture.wait().unwrap().guest_status, 0);
+    if let Some(done_signal) = done_signal {
+        done_signal.send(()).unwrap();
     }
 }
 
@@ -363,7 +545,7 @@ fn signalfd_readiness_and_signal64_defer_survive_two_generations_on_both_isas() 
             before_capture.contains("READY targeted_wrong_read=1 targeted_wrong_ready=1"),
             "guest did not reach decisive first checkpoint state: {before_capture}"
         );
-        capture.capture_checkpoint().unwrap();
+        capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
         assert_transient_signalfd_slots_absent(&first);
         let capture_result = capture.wait();
         assert!(
@@ -396,7 +578,14 @@ fn signalfd_readiness_and_signal64_defer_survive_two_generations_on_both_isas() 
             before_recapture.contains("CYCLE-READY"),
             "guest did not enter parked signal handler: {before_recapture}"
         );
-        recapture.capture_checkpoint().unwrap();
+        recapture
+            .capture_checkpoint_until(checkpoint_deadline())
+            .unwrap_or_else(|error| {
+                panic!(
+                    "signalfd second checkpoint failed: {error:?}\n{}",
+                    std::fs::read_to_string(&output).unwrap_or_default()
+                )
+            });
         assert_transient_signalfd_slots_absent(&second);
         let recapture_result = recapture.wait();
         assert!(

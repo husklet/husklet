@@ -44,12 +44,13 @@ int main(void) {
     int same = dup3(fd, fd, O_CLOEXEC);
     int dup3_einval = same == -1 && errno == EINVAL;
     int d3 = dup3(fd, 21, O_CLOEXEC);
-    int dup3_cloexec = d3 == 21 && (fcntl(21, F_GETFD) & FD_CLOEXEC) != 0;
+    int dup3_result = d3 == 21;
+    int dup3_cloexec = dup3_result && (fcntl(21, F_GETFD) & FD_CLOEXEC) != 0;
 
     close(fd); close(d); close(d2); close(target); close(21);
     unlink(path);
     rmdir(dir);
-    printf("dup-offset shared-offset=%d shared-flags=%d cloexec-orig=%d cloexec-dup=%d dup2=%d dup3-einval=%d dup3-cloexec=%d\n",
-           shared_offset, shared_flags, cloexec_orig, cloexec_dup, dup2_ok, dup3_einval, dup3_cloexec);
+    printf("dup-offset shared-offset=%d shared-flags=%d cloexec-orig=%d cloexec-dup=%d dup2=%d dup3-einval=%d dup3-result=%d dup3-cloexec=%d\n",
+           shared_offset, shared_flags, cloexec_orig, cloexec_dup, dup2_ok, dup3_einval, dup3_result, dup3_cloexec);
     return 0;
 }

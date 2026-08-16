@@ -3,6 +3,7 @@
 mod api;
 
 use api::support::{containers_for, unpack};
+use hl_container::{ContainerSpec, ExitStatus, Isolation, Process, Sandbox};
 use std::{env, path::PathBuf};
 use tempfile::TempDir;
 
@@ -63,6 +64,45 @@ async fn alpine_runtime_contracts() -> Result<(), Error> {
     api::network_bridge::run(&containers, &rootfs).await?;
     api::port_publishing::run(&containers, &rootfs).await?;
     api::daemon_runtime::run(containers, &rootfs, work.path()).await
+}
+
+#[tokio::test]
+#[ignore = "requires HL_ALPINE_ARCHIVE"]
+async fn shell_vfork_exec_releases_parent_and_preserves_output() -> Result<(), Error> {
+    let work = TempDir::new()?;
+    let rootfs = work.path().join("rootfs");
+    let archive = env::var_os("HL_ALPINE_ARCHIVE")
+        .map(PathBuf::from)
+        .ok_or("HL_ALPINE_ARCHIVE must name the pinned Alpine minirootfs")?;
+    unpack(archive, rootfs.clone()).await?;
+    let containers = containers_for(work.path()).await?;
+    let container = containers
+        .create(
+            ContainerSpec::from_directory(
+                rootfs,
+                Process::new("/bin/sh").args(["-c", "/bin/echo child-ready; echo parent-ready"]),
+            )
+            .name("shell-vfork-exec")
+            .isolation(Isolation {
+                sandbox: Sandbox::Disabled,
+                ..Isolation::default()
+            }),
+        )
+        .await?;
+
+    containers.start(container.id.as_str()).await?;
+    let status = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        containers.wait(container.id.as_str()),
+    )
+    .await
+    .map_err(|_| "shell remained blocked after its vfork child exec")??;
+    let logs = containers.logs(container.id.as_str()).await?;
+
+    assert_eq!(status, ExitStatus::Code(0));
+    assert_eq!(logs.stdout, b"child-ready\nparent-ready\n");
+    assert!(logs.stderr.is_empty());
+    Ok(())
 }
 
 /// Two containers, one volume, one host inode: the byte-range lock boundary that

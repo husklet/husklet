@@ -23,10 +23,12 @@
 #include <xmmintrin.h>
 #endif
 
+#include "../../cache_abi.h"
 #include "../../identity.h"
 #include "../../../host/native_context.h" // ucontext_t: the fault path restores uc_sigmask by hand
 #include "decoder.h"
 #include "guest_data.h"
+#include "xsave.h"
 
 // ---- The seam: names the JIT files own, which the rest of the TU needs.
 
@@ -138,6 +140,7 @@ static void interp_bus_ledger_check(uint64_t guest_address, uint64_t length) {
     uint64_t guest_fault = host_fault - (host - guest_address);
     cpu->fault_addr = guest_fault;
     cpu->bus_ea = guest_fault;
+    cpu->soft_guest_ea = guest_fault;
     cpu->reason = R_BUS;
     g_interp_guest_access = 0;
     // The OTHER route into the pad, and the one that owes no mask restore: this runs on the ordinary
@@ -207,7 +210,7 @@ static void interp_restore_handler_mask(void *native_context) {
         pthread_sigmask(SIG_SETMASK, &((ucontext_t *)native_context)->uc_sigmask, NULL);
         return;
     }
-    // No context (no caller does this today: deliver_guest_fault_hint rejects a NULL ucontext up front).
+    // No context (no caller does this today: deliver_guest_fault rejects a NULL ucontext up front).
     // Unblock the classes the kernel could have auto-blocked at handler entry, so a repeat fault is still
     // deliverable -- the failure mode this guards is exactly the silent one described above.
     sigset_t fault;
@@ -288,6 +291,7 @@ static _Noreturn void interp_projection_fault(uint64_t guest_address, size_t len
     struct cpu *cpu = g_interp_pad_cpu;
     if (cpu == NULL || !g_interp_pad_armed) abort();
     cpu->bus_ea = guest_address;
+    cpu->soft_guest_ea = guest_address;
     cpu->soft_width = length;
     cpu->soft_required = access == HL_GUEST_MEMORY_WRITE ? X86_SOFT_WRITE : X86_SOFT_READ;
     cpu->reason = R_SOFTMISS;
@@ -1011,6 +1015,7 @@ static int interp_step_one_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
 
 #include "interp/sse.c"
 #include "interp/x87.c"
+
 static int interp_is_legacy_sse(uint8_t op) {
     if (op >= 0x10 && op <= 0x17) return 1;
     if (op >= 0x28 && op <= 0x2F) return 1;
@@ -1439,7 +1444,7 @@ static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
                 for (unsigned i = 0; i < sizeof reserved; i++)
                     if (reserved[i] != 0) return interp_guest_trap(cpu, pc, 11, 128);
                 interp_x87_arm(cpu);
-                interp_xsave_legacy(cpu, image); // components outside RFBM keep their current values
+                hl_x86_xsave_legacy(cpu, image); // components outside RFBM keep their current values
                 if (rfbm & 1) {
                     if (bv & 1) {
                         interp_load_bytes(ea + 0, image + 0, 24);
@@ -1472,7 +1477,7 @@ static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
             // already required to treat as undefined. Silently equating the two mnemonics without saying so
             // is the part that would be wrong, not the behaviour.
             interp_x87_arm(cpu);
-            interp_xsave_legacy(cpu, image);
+            hl_x86_xsave_legacy(cpu, image);
             if (rfbm & 1) {
                 interp_store_bytes(ea + 0, image + 0, 24);
                 interp_store_bytes(ea + 32, image + 32, 128);
@@ -1483,7 +1488,7 @@ static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
             }
             uint64_t bv;
             interp_load_bytes(ea + 512, &bv, 8);
-            bv = (bv & ~rfbm) | (rfbm & interp_xsave_xinuse(image));
+            bv = (bv & ~rfbm) | (rfbm & hl_x86_xsave_xinuse(image));
             interp_store_bytes(ea + 512, &bv, 8);
             cpu->rip = next;
             return STEP_NEXT;
@@ -1528,7 +1533,6 @@ static int interp_step_two_byte(struct cpu *cpu, struct insn *insn, uint64_t pc,
 // none. IDENTITY still matters: pcache_engine_id mixes HL_HOST_CPU_ISA, and checkpoint.c validates that
 // same id on restore -- without the host-ISA term a JIT-written checkpoint would restore against nothing.
 
-static int g_pcache_forked;     // set by linux_abi/fork.c in a fork child; unread here
 static int g_force_base_failed; // latched by the ELF loader on fixed-VA map fallback
 
 static uint64_t pcache_engine_id(void) {
@@ -1544,10 +1548,14 @@ static uint64_t pcache_engine_id(void) {
     return hl_identity_configuration(hash, 2, HL_HOST_CPU_ISA, 0);
 }
 
-static uint64_t pcache_make_id(const char *program_host, const char *interpreter_host, const char *argv0) {
-    uint64_t program = hl_identity_source(&g_jit_services, program_host);
-    uint64_t interpreter = interpreter_host ? hl_identity_source(&g_jit_services, interpreter_host) : 0xABCDEFull;
-    return hl_identity_mix(program, interpreter, pcache_engine_id(), hl_identity_name(argv0));
+static hl_identity_digest pcache_translator_identity(void) {
+    static const char tag[] = __DATE__ " " __TIME__;
+    return hl_identity_engine_digest(tag, sizeof tag - 1, HL_PCACHE_ABI_X86_64, 2, HL_HOST_CPU_ISA, 0);
+}
+
+static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity_digest interpreter,
+                                         const char *argv0) {
+    return hl_identity_digest_mix(program, interpreter, pcache_translator_identity(), argv0);
 }
 
 static int pcache_load(uint64_t entry_jump) {

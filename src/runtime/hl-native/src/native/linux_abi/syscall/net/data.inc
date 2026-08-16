@@ -198,7 +198,8 @@
             // DNS socket: report the source as the nameserver (127.0.0.11:53) so the guest resolver's
             // "answer came from the server we queried" anti-spoof check passes (the real src is AF_UNIX).
             dns_fill_ns((uint8_t *)a4, (socklen_t *)a5);
-        } else if (r >= 0 && want && udp_switch_source(&hss, hsl, (uint8_t *)a4, (socklen_t *)a5)) {
+        } else if (r >= 0 && want &&
+                   udp_switch_source((int)a0, &hss, hsl, (uint8_t *)a4, (socklen_t *)a5)) {
             // translated from the switch's opaque AF_UNIX sender identity
         } else if (r >= 0 && want) {
             socklen_t gcap = a5 ? *(socklen_t *)a5 : 0;
@@ -405,7 +406,7 @@
         // port) is delivered exactly once through SO_ERROR, mirroring a real TCP stack.
         if (lvl == 1 && opt == 4 && gfd >= 0 && gfd < HL_NFD && g_so_error[gfd]) {
             if (a3 && a4 && *(socklen_t *)a4 >= 4) {
-                *(int *)a3 = hl_linux_errno_from_macos(g_so_error[gfd]);
+                *(int *)a3 = hl_linux_errno_from_host(g_so_error[gfd]);
                 *(socklen_t *)a4 = 4;
             }
             g_so_error[gfd] = 0;

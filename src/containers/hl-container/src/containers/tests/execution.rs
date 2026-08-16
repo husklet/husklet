@@ -325,6 +325,29 @@ async fn executions_are_single_use_and_keep_independent_output() {
 }
 
 #[tokio::test]
+async fn execution_wait_started_while_created_survives_start_and_returns_the_exit() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(23));
+    runtime.delay = Duration::from_millis(30);
+    let containers = service(Arc::new(runtime)).await;
+    containers.create(spec("exec-created-wait-parent")).await.unwrap();
+    containers.start("exec-created-wait-parent").await.unwrap();
+    let execution = containers
+        .executions()
+        .create("exec-created-wait-parent", ExecSpec::new(Process::new("fake")))
+        .await
+        .unwrap();
+    let waiting = containers.executions();
+    let wait_id = execution.id.clone();
+    let wait = tokio::spawn(async move { waiting.wait(&wait_id).await });
+    tokio::task::yield_now().await;
+    assert!(!wait.is_finished(), "created execution wait returned before start");
+
+    let _session = containers.executions().start(&execution.id).await.unwrap();
+
+    assert_eq!(wait.await.unwrap().unwrap(), ExitStatus::Code(23));
+}
+
+#[tokio::test]
 async fn execution_waiters_are_event_driven_and_all_receive_the_terminal_result() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(23));
     runtime.delay = Duration::from_millis(30);

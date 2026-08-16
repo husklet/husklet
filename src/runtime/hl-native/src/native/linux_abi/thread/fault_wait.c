@@ -74,14 +74,12 @@ static void uninstall_host_sigaltstack(void) {
 // host_range_mapped->mach_vm_region->mach_msg2_trap. Replace it with the kernel's own access_ok() idiom:
 // a FAULT-GUARDED PROBE READ of each page under a per-thread sigsetjmp. Mapped pointer (the always case)
 // = one L1 load per page, no syscall; unmapped pointer = the SIGSEGV/SIGBUS guard long-jumps back and we
-// report 0 exactly as mach_vm_region did. Every fault handler on the normal run path checks
+// report 0 exactly as mach_vm_region did. Every fault handler checks
 // hrm_fault_hook() FIRST (before non-PIE fixup / the x86 lazy zero-page mapper), so a probe fault can
 // never be mis-served as a lazy mapping (which would flip an EFAULT into a bogus success), never burns
 // lazy-map budget, and never reaches guest-signal delivery. PROT_NONE pages now probe as UNMAPPED ->
 // -EFAULT, which is what a real Linux copy_from_user() returns (the old region query called them mapped
-// and the later engine deref crashed) -- strictly closer to the oracle. CRASHDBG runs (whose Mach
-// exception port intercepts EXC_BAD_ACCESS before the POSIX guards) and HL_NOFASTHRM=1 keep the
-// byte-identical mach_vm_region path.
+// and the later engine deref crashed) -- strictly closer to the oracle.
 #include <setjmp.h>
 #if defined(_WIN32)
 // The host fault primitive already owns this exact operation, pad and all: it arms its own landing site,
@@ -105,7 +103,6 @@ static void uninstall_host_sigaltstack(void) {
 #endif
 static _Thread_local sigjmp_buf g_hrm_jb;                   // probe return point (valid while g_hrm_hi != 0)
 static _Thread_local volatile uintptr_t g_hrm_lo, g_hrm_hi; // page range being probed; probing iff hi != 0
-static int g_hrm_slow = -1; // HL_NOFASTHRM=1 / crash diagnostics -> per-page mach_vm_region
 
 // Called FIRST by every SIGSEGV/SIGBUS handler on the run path: when the fault is this thread's own probe
 // load, long-jump back to host_range_mapped ("unmapped"). The faulting signal was auto-blocked at handler
@@ -147,12 +144,6 @@ static int host_range_mapped(uintptr_t a, size_t len) {
     return hl_windows_fault_probe((uint64_t)a, (uint64_t)len, 0);
 #else
     uintptr_t lo = a & ~(uintptr_t)0xfff;
-    if (g_hrm_slow < 0) g_hrm_slow = 0;
-    if (g_hrm_slow) {
-        for (uintptr_t p = lo; p < end; p += 0x1000)
-            if (!host_addr_mapped(p)) return 0;
-        return 1;
-    }
     volatile int ok = 1;
     if (sigsetjmp(g_hrm_jb, 0)) {
         ok = 0; // a probe load faulted -> some page in the range is unmapped
@@ -181,21 +172,47 @@ static int host_range_mapped(uintptr_t a, size_t len) {
    storing into guest memory. Guest mappings and their read-only/PROT_NONE/EOF
    intervals are tracked when they are created or protected; the guarded READ
    probe catches unmapped and Darwin file-tail SIGBUS bytes. */
+static size_t host_range_writable_prefix(uintptr_t a, size_t len);
+
 static int host_range_writable(uintptr_t a, size_t len) {
-    if (!len) return 1;
-    uintptr_t end = a + len;
-    if (end < a || gna_hit((uint64_t)a, (uint64_t)len) || gro_hit((uint64_t)a, (uint64_t)len) ||
-        hl_linux_bus_hit((uint64_t)a, (uint64_t)len))
-        return 0;
+    return host_range_writable_prefix(a, len) == len;
+}
+
+/* Return the exact writable prefix without performing a store.  Protection
+   ledgers locate virtual denials; page-fragment probes locate absent mappings.
+   Callers can therefore reject a complete store atomically and report the
+   first guest byte that would have faulted. */
+static size_t host_range_writable_prefix(uintptr_t a, size_t len) {
+    if (!len) return 0;
+    if (a > (uintptr_t)INTPTR_MAX || len > (size_t)((uintptr_t)INTPTR_MAX - a)) return 0;
+    size_t available = len;
+    uint64_t none = gna_prefix((uint64_t)a, (uint64_t)len);
+    uint64_t readonly = gro_prefix((uint64_t)a, (uint64_t)len);
+    if (none < available) available = (size_t)none;
+    if (readonly < available) available = (size_t)readonly;
+    uint64_t bus = hl_linux_bus_fault((uint64_t)a, (uint64_t)len);
+    if (bus != 0) {
+        size_t prefix = bus > (uint64_t)a ? (size_t)(bus - (uint64_t)a) : 0;
+        if (prefix < available) available = prefix;
+    }
 #if defined(_WIN32)
     // A WRITE probe, not the read probe host_range_mapped issues. Two things follow from that on this host
     // and neither is available to the POSIX arm: a page that is mapped but not writable answers correctly
     // without consulting any registry, and the page is left present and dirty -- which is what closes the
     // kernel-write hole for the call this validation precedes, where a kernel store into a not-yet-good
     // page fails with no exception raised anywhere and no handler entered.
-    return hl_windows_fault_probe((uint64_t)a, (uint64_t)len, 1);
+    if (available < len) return available;
+    return hl_windows_fault_probe((uint64_t)a, (uint64_t)len, 1) ? len : 0;
 #else
-    return host_range_mapped(a, len);
+    size_t checked = 0;
+    while (checked < available) {
+        uintptr_t address = a + checked;
+        size_t fragment = 4096u - (size_t)(address & 4095u);
+        if (fragment > available - checked) fragment = available - checked;
+        if (!host_range_mapped(address, fragment)) return checked;
+        checked += fragment;
+    }
+    return available;
 #endif
 }
 
@@ -253,6 +270,7 @@ static void futex_rel_from_abs(struct timespec *rel, const struct timespec *dead
 // the guest would re-wait, see it still pending, and spin returning EINTR forever.
 static int thread_pending_test(const struct cpu *cpu, int signal);
 static int signal_deliverable(const struct cpu *cpu, int signal);
+
 static int cpu_has_actionable_tsig(const struct cpu *c) {
     uint64_t t = __atomic_load_n(&c->tpending, __ATOMIC_SEQ_CST);
     if (!t && !thread_pending_test(c, 64)) return 0;

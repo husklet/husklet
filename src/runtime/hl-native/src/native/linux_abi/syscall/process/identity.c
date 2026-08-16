@@ -72,7 +72,7 @@ static int svc_proc_90(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
                 uint32_t prm = (i == 0) ? (uint32_t)g_cap_prm : (uint32_t)(g_cap_prm >> 32);
                 d[i * 3 + 0] = eff; // effective: the guest's live effective set (respects drops)
                 d[i * 3 + 1] = prm; // permitted: the docker default bounding/permitted set
-                d[i * 3 + 2] = 0;   // inheritable: empty (Docker default)
+                d[i * 3 + 2] = (i == 0) ? (uint32_t)g_cap_inh : (uint32_t)(g_cap_inh >> 32);
             }
             size_t bytes = (size_t)u32s * 12;
             if (guest_copy_to(a1, d, bytes) != (ssize_t)bytes) {
@@ -123,13 +123,19 @@ static int svc_proc_91(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
         if (u32s == 2) eff |= (uint64_t)d[3] << 32;
         uint64_t prm = d[1];
         if (u32s == 2) prm |= (uint64_t)d[4] << 32;
+        uint64_t inh = d[2];
+        if (u32s == 2) inh |= (uint64_t)d[5] << 32;
         cred_init();
-        if ((eff & ~prm) != 0 || (prm & ~g_cap_prm) != 0) {
+        uint64_t inheritable_allowed = g_cap_inh | prm;
+        if (g_cap_eff & (1ull << CAP_SETPCAP)) inheritable_allowed |= g_cap_bnd;
+        if ((eff & ~prm) != 0 || (prm & ~g_cap_prm) != 0 || (inh & ~inheritable_allowed) != 0) {
             G_RET(c) = (uint64_t)(int64_t)-EPERM;
             break;
         }
         g_cap_eff = eff;
         g_cap_prm = prm;
+        g_cap_inh = inh;
+        g_cap_amb &= g_cap_prm & g_cap_inh;
         g_cap_setid_perm = (prm & ((1ull << 6) | (1ull << 7))) != 0;
         g_cap_setid_eff = (eff & ((1ull << 6) | (1ull << 7))) != 0;
         G_RET(c) = 0;
@@ -191,6 +197,18 @@ static int svc_proc_51(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
     return 1;
 }
 
+static void process_last_thread_exit(int status) {
+    launch_reg_terminate_peers();
+    udp_ref_process_exit();
+    acct_proc_leave();
+    proc_reg_unlink();
+    proc_fdvis_cleanup();
+    hl_host_process_fd_private_cleanup();
+    poslk_on_exit();
+    sysv_on_exit();
+    hl_engine_child_result_publish(status, HL_STATUS_OK, 0);
+}
+
 static int svc_proc_93(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 93:
@@ -201,7 +219,13 @@ static int svc_proc_93(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
         // `exit_group` path below, this unwinds through the engine instead of
         // reaching the host `_exit`, so the kernel cannot normalize it for us.
         c->exit_code = (int)(a0 & 0xffu);
-        // exit: end THIS thread
+        // exit: end THIS thread. The thread trampoline owns peer-thread cleanup;
+        // the process owner reaches this path directly, so when it is the last
+        // live thread it must also retire process-scoped shared registries before
+        // returning through the embedding host. Otherwise fork children leave
+        // their descriptor-visibility rows behind until the fixed arena fills.
+        futex_robust_exit(c);
+        if (thread_live_count() == 1) process_last_thread_exit(c->exit_code);
         break;
     // exit_group: end the whole process
     default: return 0;
@@ -215,7 +239,7 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
         vfork_publish_exit();
         HL_LOGF(&g_jit_log, HL_LOG_TAG_NETWORK, "exit_group pid=%d code=%d", (int)getpid(), (int)a0);
         hl_dispatch_profile_report(&g_dispatch_profile, &g_jit_log, translation_log_summary);
-        if (g_prof) {
+        if (g_prof && g_profile_output_owner) {
             char profile[1024];
             int profile_size = snprintf(profile, sizeof profile,
                     "[prof] crossings=%llu syscalls=%llu ibtc_miss=%llu branch_cross=%llu translations=%llu lse=%llu "
@@ -238,35 +262,11 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
                 (void)hl_linux_write(g_linux_box, STDERR_FILENO, profile, bounded);
             }
         }
-        // A3: §B shadow-return coverage. hit-rate = shret_hit / (shret_hit + shret_fb). bl_shadow /
-        // bl_leaf show how the depth-gate split call sites at translate time. PROF-only (keep dark).
-        if (0) {
-            unsigned long long h = (unsigned long long)g_prof_shret_hit, f = (unsigned long long)g_prof_shret_fb;
-            double hr = (h + f) ? 100.0 * (double)h / (double)(h + f) : 0.0;
-            fprintf(
-                stderr,
-                "[prof] shadow_push=%llu shret_hit=%llu shret_fb=%llu hit_rate=%.1f%% bl_shadow=%llu bl_leaf=%llu\n",
-                (unsigned long long)g_prof_shpush, h, f, hr, (unsigned long long)g_prof_bl_shadow,
-                (unsigned long long)g_prof_bl_leaf);
-        }
-        if (g_noexit) { // W3D fork-server prewarm: don't kill the resident parent; unwind run_guest instead
-            c->exited = 1;
-            c->exit_code = (int)(a0 & 0xffu);
-            break;
-        }
 #ifdef PCACHE_SAVE_HOOK
         PCACHE_SAVE_HOOK; // persist the translated arena before one-shot exit when HL_PCACHE is active
 #endif
-        futex_robust_exit(c);         // robust mutexes still held by the calling thread -> OWNER_DIED + wake waiters
-        launch_reg_terminate_peers(); // PID-namespace init exit kills every launch-owned descendant, even setsid peers
-        udp_ref_process_exit();       // unlink AF_UNIX rendezvous inodes whose last owner is this exiting process
-        acct_proc_leave();            // release this process's cgroup accounting slot (_exit bypasses atexit)
-        proc_reg_unlink();            // drop our /proc process-table entry (_exit bypasses the atexit handler)
-        proc_fdvis_cleanup();         // retire typed logical-fd identities (_exit bypasses the atexit handler)
-        hl_host_process_fd_private_cleanup(); // retire provider-private descriptors for this process identity
-        poslk_on_exit();                      // release this process's in-engine fcntl advisory locks
-        sysv_on_exit();                       // apply SEM_UNDO + GC this container's SysV objects (_exit skips atexit)
-        hl_engine_child_result_publish((int32_t)a0, HL_STATUS_OK, 0);
+        futex_robust_exit(c); // robust mutexes still held by the calling thread -> OWNER_DIED + wake waiters
+        process_last_thread_exit((int32_t)a0);
         _exit((int)a0);
     default: return 0;
     }
@@ -289,14 +289,18 @@ static int svc_proc_96(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
 static int svc_proc_97(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 97: {
-        // unshare(flags): no real namespaces here, but honour Linux's flag validation so a probe of an
-        // unknown flag (e.g. 0xdeadbeef) fails EINVAL instead of a fake success that misleads isolation setup.
+        // unshare(flags): this engine does not create a distinct namespace or process-sharing domain.
+        // Preserve Linux's flag validation, but report a recognized nonzero request as unavailable instead
+        // of claiming isolation that was never established.  Callers can then fall back safely.
         unsigned uf = (unsigned)a0;
-        const unsigned UNSHARE_OK = 0x80u /*NEWTIME*/ | 0x200u /*FS*/ | 0x400u /*FILES*/ | 0x20000u /*NEWNS*/ |
-                                    0x40000u /*SYSVSEM*/ | 0x2000000u /*NEWCGROUP*/ | 0x4000000u /*NEWUTS*/ |
-                                    0x8000000u /*NEWIPC*/ | 0x10000000u /*NEWUSER*/ | 0x20000000u /*NEWPID*/ |
-                                    0x40000000u /*NEWNET*/;
-        G_RET(c) = (uf & ~UNSHARE_OK) ? (uint64_t)(int64_t)(-EINVAL) : 0;
+        const unsigned UNSHARE_VALID =
+            0x80u /*NEWTIME*/ | 0x200u /*FS*/ | 0x400u /*FILES*/ | 0x20000u /*NEWNS*/ |
+            0x40000u /*SYSVSEM*/ | 0x2000000u /*NEWCGROUP*/ | 0x4000000u /*NEWUTS*/ |
+            0x8000000u /*NEWIPC*/ | 0x10000000u /*NEWUSER*/ | 0x20000000u /*NEWPID*/ | 0x40000000u /*NEWNET*/;
+        if (uf & ~UNSHARE_VALID)
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+        else
+            G_RET(c) = uf ? (uint64_t)(int64_t)(-ENOSYS) : 0;
         break;
     }
     // setns(fd, nstype): no real namespaces, but a negative/invalid fd must fail EBADF (Linux copies the ns fd

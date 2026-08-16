@@ -41,7 +41,7 @@ pub struct View {
     pub cancel: gtk::Button,
     pub create: gtk::Button,
     pub status: gtk::Label,
-    labels: Rc<RefCell<Vec<gtk::Label>>>,
+    navigation: Rc<RefCell<Vec<gtk::Button>>>,
 }
 
 impl View {
@@ -56,7 +56,7 @@ impl View {
         pages.set_hexpand(true);
         pages.set_vexpand(true);
         pages.set_transition_type(gtk::StackTransitionType::None);
-        let labels: Rc<RefCell<Vec<gtk::Label>>> = Rc::new(RefCell::new(Vec::new()));
+        let navigation: Rc<RefCell<Vec<gtk::Button>>> = Rc::new(RefCell::new(Vec::new()));
 
         for (index, (page, content)) in content.into_iter().enumerate() {
             let name = page.title();
@@ -67,24 +67,27 @@ impl View {
                 .build();
             scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
             pages.add_named(&scroller, Some(name));
-            let label = gtk::Label::new(Some(name));
-            label.add_css_class("navi");
-            label.set_xalign(0.0);
-            if index == 0 {
-                label.add_css_class("on");
+            let button = gtk::Button::with_label(name);
+            button.add_css_class("navi");
+            button.set_has_frame(false);
+            button.set_hexpand(true);
+            button.set_halign(gtk::Align::Fill);
+            if let Some(label) = button.child().and_downcast::<gtk::Label>() {
+                label.set_xalign(0.0);
             }
-            let click = gtk::GestureClick::new();
+            if index == 0 {
+                button.add_css_class("on");
+            }
             let stack = pages.clone();
             let page_focus = scroller.clone();
-            let event_labels = labels.clone();
-            click.connect_released(move |_, _, _, _| {
+            let event_navigation = navigation.clone();
+            button.connect_clicked(move |_| {
                 stack.set_visible_child_name(name);
-                Self::select_labels(&event_labels.borrow(), name);
+                Self::select_navigation(&event_navigation.borrow(), name);
                 page_focus.child_focus(gtk::DirectionType::TabForward);
             });
-            label.add_controller(click);
-            nav.append(&label);
-            labels.borrow_mut().push(label);
+            nav.append(&button);
+            navigation.borrow_mut().push(button);
         }
 
         split.append(&nav);
@@ -113,27 +116,27 @@ impl View {
             cancel,
             create,
             status,
-            labels,
+            navigation,
         }
     }
 
     pub fn select(&self, page: Page) {
         let name = page.title();
         self.pages.set_visible_child_name(name);
-        Self::select_labels(&self.labels.borrow(), name);
+        Self::select_navigation(&self.navigation.borrow(), name);
     }
 
     pub fn select_name(&self, name: &str) {
         self.pages.set_visible_child_name(name);
-        Self::select_labels(&self.labels.borrow(), name);
+        Self::select_navigation(&self.navigation.borrow(), name);
     }
 
-    fn select_labels(labels: &[gtk::Label], selected: &str) {
-        for label in labels {
-            if label.text() == selected {
-                label.add_css_class("on");
+    fn select_navigation(navigation: &[gtk::Button], selected: &str) {
+        for button in navigation {
+            if button.label().as_deref() == Some(selected) {
+                button.add_css_class("on");
             } else {
-                label.remove_css_class("on");
+                button.remove_css_class("on");
             }
         }
     }

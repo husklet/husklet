@@ -1,0 +1,32 @@
+cases:
+- id: terminal-htop-ubuntu/apt-install-launch-resize-quit
+  image: ubuntu:24.04
+  resources: [network, registry, disk_heavy, process_heavy, pty]
+  timeout: 360
+  actions:
+  - shell:
+      script: |
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -qq
+        apt-get install -y -qq --no-install-recommends htop
+  - terminal:
+      argv: [/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 10000 }
+      - write: { text: "stty -echo -onlcr; printf '\\110\\124\\117\\120\\055\\122\\105\\101\\104\\131\\n'; TERM=xterm-256color htop; printf '\\110\\124\\117\\120\\055\\105\\130\\111\\124\\n'; stty size; printf '\\123\\110\\105\\114\\114\\055\\117\\113\\n'; exit\r" }
+      - await_output: { contains: HTOP-READY, timeout_ms: 10000 }
+      - await_output: { contains: "Tasks:", timeout_ms: 10000 }
+      - resize: { rows: 10, columns: 40 }
+      - write: { text: "q" }
+      - await_output: { contains: HTOP-EXIT, timeout_ms: 10000 }
+      - await_output: { contains: "10 40", timeout_ms: 10000 }
+      - await_output: { contains: SHELL-OK, timeout_ms: 10000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/tasks.txt
+    - golden/htop_exit.txt
+    - golden/size.txt
+    - golden/shell_ok.txt

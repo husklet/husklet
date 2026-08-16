@@ -1,9 +1,14 @@
 //! Cargo build-script policy shared with its unit tests.
 
-use std::fmt::Write;
-
-pub(crate) const BUILD_POLICY_INPUTS: &[&str] =
-    &["build.rs", "src/artifact.rs", "src/build_support.rs", "src/platform.rs"];
+pub(crate) const BUILD_POLICY_INPUTS: &[&str] = &[
+    "build.rs",
+    "src/artifact.rs",
+    "src/build_support.rs",
+    "src/inventory/mod.rs",
+    "src/inventory/sources.rs",
+    "src/native_build.rs",
+    "src/platform.rs",
+];
 
 pub(crate) const COMPILER_ENVIRONMENT_INPUTS: &[&str] =
     &["AR", "ARFLAGS", "CC", "CFLAGS", "CPPFLAGS", "CRATE_CC_NO_DEFAULTS"];
@@ -74,34 +79,6 @@ pub(crate) fn source_matches(target_os: &str, source: &str) -> bool {
     !matches!(platform, "linux" | "macos" | "windows") || platform == target_os
 }
 
-pub(crate) fn static_archive_filename(target_os: &str, target_env: &str, name: &str) -> String {
-    if target_os == "windows" && target_env == "msvc" {
-        format!("{name}.lib")
-    } else {
-        format!("lib{name}.a")
-    }
-}
-
-pub(crate) fn darwin_export_list(symbols: &[&str]) -> String {
-    symbols_with_affixes(symbols, "", "_", "\n")
-}
-
-pub(crate) fn windows_export_definition(symbols: &[&str]) -> String {
-    symbols_with_affixes(symbols, "EXPORTS\n", "  ", "\n")
-}
-
-pub(crate) fn linux_export_map(symbols: &[&str]) -> String {
-    symbols_with_affixes(symbols, "HL_NATIVE_1 {\n  global:\n", "    ", ";\n") + "  local: *;\n};\n"
-}
-
-fn symbols_with_affixes(symbols: &[&str], header: &str, prefix: &str, suffix: &str) -> String {
-    let mut manifest = String::from(header);
-    for symbol in symbols {
-        write!(manifest, "{prefix}{symbol}{suffix}").expect("writing to a String cannot fail");
-    }
-    manifest
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -148,7 +125,15 @@ mod tests {
     fn build_policy_modules_are_complete_and_stably_ordered() {
         assert_eq!(
             super::BUILD_POLICY_INPUTS,
-            &["build.rs", "src/artifact.rs", "src/build_support.rs", "src/platform.rs"]
+            &[
+                "build.rs",
+                "src/artifact.rs",
+                "src/build_support.rs",
+                "src/inventory/mod.rs",
+                "src/inventory/sources.rs",
+                "src/native_build.rs",
+                "src/platform.rs",
+            ]
         );
         for path in super::BUILD_POLICY_INPUTS {
             assert!(
@@ -156,6 +141,40 @@ mod tests {
                 "missing build policy input {path}"
             );
         }
+
+        let listed = super::BUILD_POLICY_INPUTS
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        let entry = std::fs::read_to_string("build.rs").expect("read Cargo build entry point");
+        assert!(
+            entry.contains("include!(\"src/native_build.rs\")"),
+            "build.rs must delegate to the owned native build module"
+        );
+        for module in ["artifact", "build_support", "inventory", "platform"] {
+            let source = format!("mod {module};");
+            assert!(
+                std::fs::read_to_string("src/native_build.rs")
+                    .expect("read native build module")
+                    .contains(&source),
+                "native build module no longer owns {module}"
+            );
+            let file = format!("src/{module}.rs");
+            let directory = format!("src/{module}/mod.rs");
+            let resolved = if std::path::Path::new(&file).is_file() {
+                file
+            } else {
+                directory
+            };
+            assert!(
+                listed.contains(resolved.as_str()),
+                "build module {resolved} is absent from rerun inventory"
+            );
+        }
+        assert!(
+            listed.contains("src/inventory/sources.rs"),
+            "nested inventory source discovery is absent from rerun inventory"
+        );
     }
 
     #[test]
@@ -208,37 +227,8 @@ mod tests {
 
     #[test]
     fn windows_link_inputs_use_target_spelling() {
-        assert_eq!(
-            super::static_archive_filename("windows", "msvc", "hl_engine"),
-            "hl_engine.lib"
-        );
-        assert_eq!(
-            super::static_archive_filename("windows", "gnu", "hl_engine"),
-            "libhl_engine.a"
-        );
-        assert_eq!(
-            super::static_archive_filename("linux", "gnu", "hl_engine"),
-            "libhl_engine.a"
-        );
         assert!(super::WINDOWS_SYSTEM_LIBRARIES.contains(&"ws2_32"));
         assert!(super::WINDOWS_SYSTEM_LIBRARIES.contains(&"ntdll"));
-    }
-
-    #[test]
-    fn export_manifests_apply_each_platforms_linker_grammar() {
-        let symbols = ["hl_engine_abi", "hl_engine_version"];
-        assert_eq!(
-            super::darwin_export_list(&symbols),
-            "_hl_engine_abi\n_hl_engine_version\n"
-        );
-        assert_eq!(
-            super::windows_export_definition(&symbols),
-            "EXPORTS\n  hl_engine_abi\n  hl_engine_version\n"
-        );
-        assert_eq!(
-            super::linux_export_map(&symbols),
-            "HL_NATIVE_1 {\n  global:\n    hl_engine_abi;\n    hl_engine_version;\n  local: *;\n};\n"
-        );
     }
 
     #[test]

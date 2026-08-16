@@ -2344,6 +2344,14 @@ cases:
         grep -q root /etc/passwd; rm -rf /usr/share/apk; mkdir /usr/share/apk; [ -z "$(ls /usr/share/apk)" ]; echo overlay-metadata-ok
   expect:
     stdout_contains: golden/overlay_metadata.txt
+- id: utilities/overlay-usrmerge-parent
+  image: debian:bookworm
+  timeout: 120
+  actions:
+  - shell:
+      script: set -e; test -L /lib; printf usrmerge-ok > /lib/husklet-usrmerge-proof; test -L /lib; test "$(cat /usr/lib/husklet-usrmerge-proof)" = usrmerge-ok; rm /lib/husklet-usrmerge-proof; echo overlay-usrmerge-ok
+  expect:
+    stdout_contains: golden/overlay_usrmerge.txt
 - id: utilities/dentry-storm-overlay
   image: alpine:3.24.1
   timeout: 120
@@ -2586,3 +2594,11 @@ cases:
   actions:
   - entrypoint: {}
   expect: { stdout_contains: golden/hello_world.txt }
+- id: utilities/ubuntu-seq-format
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: seq -f 'ROW-%03g' 1 3; printf 'SEQ-EXIT-%s\n' "$?"
+  expect:
+    stdout_contains: golden/ubuntu_seq_format.txt

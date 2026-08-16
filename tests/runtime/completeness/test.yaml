@@ -677,6 +677,15 @@ cases:
     compat: { class: compatibility }
     timeout: 120
     expect: { exit: 0, stdout: golden/x86_64/sse3.out }
+  - id: runtime/completeness/amd64-lddqu
+    targets: [amd64]
+    build: { source: x86_64/lddqu.c, output: amd64-lddqu, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-lddqu }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/lddqu.out }
   - id: runtime/completeness/amd64-ssse3
     targets: [amd64]
     build: { source: x86_64/ssse3.c, output: amd64-ssse3, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }

@@ -1,4 +1,103 @@
 use super::{CheckpointImage as _, CheckpointImages as _, DirectoryImage, DirectoryImageState, DirectoryImages};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::num::NonZeroU64;
+
+trait TestCheckpoint {
+    fn put(&self, name: &str, bytes: &[u8]) -> Result<(), super::CheckpointError>;
+    fn commit(&self, manifest: &[u8]) -> Result<(), super::CheckpointError>;
+    fn abort(&self) -> Result<(), super::CheckpointError>;
+    fn transaction(&self) -> NonZeroU64;
+}
+
+thread_local! {
+    static TRANSACTIONS: RefCell<HashMap<usize, NonZeroU64>> = RefCell::new(HashMap::new());
+}
+
+impl<T: super::CheckpointImage + ?Sized> TestCheckpoint for T {
+    fn put(&self, name: &str, bytes: &[u8]) -> Result<(), super::CheckpointError> {
+        let key = std::ptr::from_ref(self).cast::<()>() as usize;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let transaction =
+            if let Some(transaction) = TRANSACTIONS.with(|transactions| transactions.borrow().get(&key).copied()) {
+                transaction
+            } else {
+                let transaction = self.begin_until(deadline)?;
+                TRANSACTIONS.with(|transactions| transactions.borrow_mut().insert(key, transaction));
+                transaction
+            };
+        self.put_until(transaction, name, bytes, deadline)
+    }
+
+    fn commit(&self, manifest: &[u8]) -> Result<(), super::CheckpointError> {
+        let key = std::ptr::from_ref(self).cast::<()>() as usize;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let transaction =
+            if let Some(transaction) = TRANSACTIONS.with(|transactions| transactions.borrow().get(&key).copied()) {
+                transaction
+            } else {
+                self.begin_until(deadline)?
+            };
+        let result = self.commit_until(transaction, manifest, deadline);
+        if result.is_ok() {
+            TRANSACTIONS.with(|transactions| transactions.borrow_mut().remove(&key));
+        }
+        result
+    }
+
+    fn abort(&self) -> Result<(), super::CheckpointError> {
+        let key = std::ptr::from_ref(self).cast::<()>() as usize;
+        let transaction = TRANSACTIONS
+            .with(|transactions| transactions.borrow_mut().remove(&key))
+            .expect("test transaction");
+        self.abort_until(
+            transaction,
+            std::time::Instant::now() + std::time::Duration::from_secs(10),
+        )
+    }
+
+    fn transaction(&self) -> NonZeroU64 {
+        let key = std::ptr::from_ref(self).cast::<()>() as usize;
+        TRANSACTIONS.with(|transactions| transactions.borrow()[&key])
+    }
+}
+
+#[test]
+fn shared_namespace_serializes_capture_ownership() {
+    let temporary = tempfile::tempdir().unwrap();
+    let first_images = DirectoryImages::open(temporary.path()).unwrap();
+    let second_images = DirectoryImages::open(temporary.path()).unwrap();
+    let first = first_images.open("shared").unwrap();
+    let second = second_images.open("shared").unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    let owner = first.begin_until(deadline).unwrap();
+    first.put_until(owner, "first", b"owned", deadline).unwrap();
+    assert!(second.begin_until(deadline).is_err());
+    first.abort_until(owner, deadline).unwrap();
+    assert!(second.begin_until(deadline).is_ok());
+}
+
+#[test]
+fn expired_owner_is_reclaimed_and_stale_token_is_fenced() {
+    let temporary = tempfile::tempdir().unwrap();
+    let images = DirectoryImages::open(temporary.path()).unwrap();
+    let image = images.open("reclaim").unwrap();
+    let lease = std::time::Instant::now() + std::time::Duration::from_millis(2);
+    let stale = image.begin_until(lease).unwrap();
+    image.put_until(stale, "stale", b"old", lease).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(5));
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    let current = image.begin_until(deadline).unwrap();
+    image.put_until(current, "current", b"new", deadline).unwrap();
+    assert!(image.put_until(stale, "late", b"bad", deadline).is_err());
+    assert!(image.commit_until(stale, b"bad", deadline).is_err());
+    assert!(image.abort_until(stale, deadline).is_err());
+    image.commit_until(current, b"manifest", deadline).unwrap();
+    assert_eq!(image.get("current").unwrap(), b"new");
+    assert!(image.get("stale").is_err());
+    assert!(image.get("late").is_err());
+}
 
 #[test]
 fn incomplete_capture_cannot_modify_committed_generation() {
@@ -18,7 +117,33 @@ fn incomplete_capture_cannot_modify_committed_generation() {
 }
 
 #[test]
-fn stale_capture_cannot_replace_a_newer_committed_generation() {
+fn abort_discards_only_unpublished_generation_and_reuses_image_cleanly() {
+    let temporary = tempfile::tempdir().unwrap();
+    let images = DirectoryImages::open(temporary.path().join("checkpoints")).unwrap();
+    let image = images.open("container").unwrap();
+    image.put("state", b"first").unwrap();
+    image.commit(b"manifest-one").unwrap();
+
+    image.put("stale", b"must-not-survive").unwrap();
+    assert!(
+        image
+            .abort_until(image.transaction(), std::time::Instant::now())
+            .unwrap_err()
+            .is_deadline()
+    );
+    image.abort().unwrap();
+    assert_eq!(image.get("state").unwrap(), b"first");
+    assert_eq!(image.get("MANIFEST").unwrap(), b"manifest-one");
+
+    image.put("state", b"second").unwrap();
+    image.commit(b"manifest-two").unwrap();
+    assert_eq!(image.get("state").unwrap(), b"second");
+    assert_eq!(image.get("MANIFEST").unwrap(), b"manifest-two");
+    assert!(!image.list().unwrap().iter().any(|name| name == "stale"));
+}
+
+#[test]
+fn active_capture_cannot_be_superseded_by_another_provider() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("checkpoints");
     let first_process = DirectoryImages::open(root.clone()).unwrap();
@@ -26,15 +151,39 @@ fn stale_capture_cannot_replace_a_newer_committed_generation() {
 
     let older = first_process.open("container").unwrap();
     let newer = second_process.open("container").unwrap();
-    older.put("state", b"older").unwrap();
-    newer.put("state", b"newer").unwrap();
-
-    newer.commit(b"newer-manifest").unwrap();
-    assert!(older.commit(b"older-manifest").is_err());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    let owner = older.begin_until(deadline).unwrap();
+    older.put_until(owner, "state", b"older", deadline).unwrap();
+    assert!(newer.begin_until(deadline).is_err());
+    older.commit_until(owner, b"older-manifest", deadline).unwrap();
 
     let restored = first_process.open("container").unwrap();
-    assert_eq!(restored.get("state").unwrap(), b"newer");
-    assert_eq!(restored.get("MANIFEST").unwrap(), b"newer-manifest");
+    assert_eq!(restored.get("state").unwrap(), b"older");
+    assert_eq!(restored.get("MANIFEST").unwrap(), b"older-manifest");
+}
+
+#[test]
+fn reopening_during_capture_does_not_refresh_its_publication_base() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("checkpoints");
+    let images = DirectoryImages::open(&root).unwrap();
+    let image = images.open("container").unwrap();
+    image.put("state", b"first").unwrap();
+    image.commit(b"manifest-one").unwrap();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    let transaction = image.begin_until(deadline).unwrap();
+    image.put_until(transaction, "state", b"candidate", deadline).unwrap();
+
+    let namespace = root.join("container");
+    let foreign = "generation-foreign";
+    std::fs::create_dir(namespace.join(foreign)).unwrap();
+    std::fs::write(namespace.join(foreign).join("MANIFEST"), b"foreign").unwrap();
+    std::fs::write(namespace.join("current"), foreign.as_bytes()).unwrap();
+    let _reopened = images.open("container").unwrap();
+
+    assert!(image.commit_until(transaction, b"candidate", deadline).is_err());
+    assert_eq!(std::fs::read(namespace.join("current")).unwrap(), foreign.as_bytes());
 }
 
 #[test]
@@ -237,12 +386,13 @@ fn expired_storage_deadline_does_not_wait_for_generation_lock() {
             current: None,
             base: None,
             generation: "generation-deadline-test".into(),
+            transaction: None,
         }),
     };
     let held = image.state.lock().unwrap();
     let started = std::time::Instant::now();
     let error = image
-        .put_until("state", b"late", started)
+        .put_until(NonZeroU64::MIN, "state", b"late", started)
         .expect_err("expired deadline must fail while the state lock is held");
     assert!(error.to_string().contains("deadline exceeded"));
     assert!(started.elapsed() < std::time::Duration::from_millis(100));
@@ -261,7 +411,7 @@ fn expired_commit_deadline_preserves_authoritative_generation() {
     candidate.put("state", b"second").unwrap();
     let expired = std::time::Instant::now();
     let error = candidate
-        .commit_until(b"manifest-two", expired)
+        .commit_until(candidate.transaction(), b"manifest-two", expired)
         .expect_err("expired capture must not publish");
     assert!(error.to_string().contains("deadline exceeded"));
 
@@ -300,7 +450,7 @@ fn publication_lock_deadline_preserves_authoritative_generation() {
     fs2::FileExt::lock_exclusive(&publication_lock).unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(10);
     let error = candidate
-        .commit_until(b"manifest-two", deadline)
+        .commit_until(candidate.transaction(), b"manifest-two", deadline)
         .expect_err("publication lock contention must observe the deadline");
     assert!(error.to_string().contains("deadline exceeded"));
     fs2::FileExt::unlock(&publication_lock).unwrap();
@@ -328,6 +478,7 @@ fn post_rename_sync_failure_advances_in_memory_authority() {
         current: None,
         base: None,
         generation: "generation-published".into(),
+        transaction: None,
     };
     let error = DirectoryImage::finish_publication(
         &mut state,

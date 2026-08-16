@@ -515,6 +515,32 @@ static int gro_hit(uint64_t a, uint64_t len) {
     return 1; // a writer that never settles: keep the conservative answer
 }
 
+// Number of leading bytes before the first guest read-only interval.  Like
+// gna_prefix, this answers the span question without touching guest memory.
+static uint64_t gro_prefix(uint64_t a, uint64_t len) {
+    if (!len || __atomic_load_n(&g_ngro, __ATOMIC_ACQUIRE) == 0) return len;
+    a = nonpie_unfold(a);
+    for (int attempt = 0; attempt < 4096; ++attempt) {
+        uint64_t generation = atomic_load_explicit(&g_gro_generation, memory_order_acquire);
+        if (generation & 1) {
+            sched_yield();
+            continue;
+        }
+        uint64_t end = a + len;
+        int count = __atomic_load_n(&g_ngro, __ATOMIC_ACQUIRE);
+        for (int index = 0; index < count; ++index) {
+            uint64_t low = __atomic_load_n(&g_gro[index].lo, __ATOMIC_RELAXED);
+            uint64_t high = __atomic_load_n(&g_gro[index].hi, __ATOMIC_RELAXED);
+            if (a < high && end > low) {
+                uint64_t first = low > a ? low : a;
+                if (first - a < end - a) end = first;
+            }
+        }
+        if (atomic_load_explicit(&g_gro_generation, memory_order_acquire) == generation) return end - a;
+    }
+    return 0;
+}
+
 static void gnx_writer_lock(void) {
     while (atomic_flag_test_and_set_explicit(&g_gnx_writer, memory_order_acquire))
         sched_yield();

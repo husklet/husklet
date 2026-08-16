@@ -122,8 +122,8 @@ impl View {
 mod tests {
     use super::{Actions, View};
     use crate::catalogue::Catalogue;
-    use hl_gui::{Patch, Prop, PropValue, Tag, Tone};
     use hl_extension::port::ContainerSummary;
+    use hl_gui::{Patch, Prop, PropValue, Tag, Tone};
 
     fn container(name: &str, state: &str) -> ContainerSummary {
         ContainerSummary {

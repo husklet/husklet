@@ -1,0 +1,34 @@
+cases:
+- id: terminal-noncanonical-foreground/canonical-byte
+  image: bash:5.2
+  resources: [pty]
+  timeout: 10
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "stty -echo icanon; printf 'CANONFG-%s\\r\\n' READY; exec dd bs=1 count=1 status=none\r" }
+      - await_output: { contains: CANONFG-READY, timeout_ms: 5000 }
+      - write: { text: "Z\r" }
+      - await_output: { contains: Z, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains: golden/canonical_ready.txt
+
+- id: terminal-noncanonical-foreground/noncanonical-byte
+  image: bash:5.2
+  resources: [pty]
+  timeout: 10
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "stty -echo -icanon min 1 time 0; printf 'NONCANONFG-%s\\r\\n' READY; exec dd bs=1 count=1 status=none\r" }
+      - await_output: { contains: NONCANONFG-READY, timeout_ms: 5000 }
+      - write: { text: "Z" }
+      - await_output: { contains: Z, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains: golden/noncanonical_ready.txt

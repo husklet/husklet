@@ -1,6 +1,7 @@
 #ifndef HL_TRANSLATOR_GUEST_X86_64_GLUE_H
 #define HL_TRANSLATOR_GUEST_X86_64_GLUE_H
 
+#include "../../identity.h"
 #include "../../reloc.h"
 #include "hl/host_services.h"
 
@@ -23,6 +24,7 @@ extern int g_itrace;
 extern uint64_t g_emit_gpc;
 extern int g_systrace;
 extern uint64_t g_disp_n;
+extern int g_dispatch_diagnostics;
 extern uint64_t g_ibtc_fill;
 extern uint64_t g_repmovs_n;
 extern uint64_t g_repstos_n;
@@ -30,7 +32,7 @@ extern hl_x86_ibtc_entry g_xibtc[XIBTC_SETS * XIBTC_WAYS];
 extern int g_coldprof;
 extern int g_pcache;
 extern int g_pcache_loaded;
-extern uint64_t g_pc_binid;
+extern hl_identity_digest g_pc_binid;
 extern uint64_t g_pc_entry;
 extern uint64_t g_force_base;
 extern hl_reloc g_reloc_storage[PC_RELOC_CAP];
@@ -41,12 +43,7 @@ extern int g_pcache_poison;
 extern uint64_t g_tracecap;
 extern int g_diag;
 extern int g_nochain;
-extern int g_dbg_nochain;
-extern int g_dbg_gprdump;
 extern uint64_t g_loadbase;
-extern uint8_t *g_w8;
-extern uint8_t g_w8v;
-extern uint64_t g_malloc_n;
 extern const char *g_exe_path;
 extern const char *g_self_path;
 extern uint64_t g_pmovmskb_n;

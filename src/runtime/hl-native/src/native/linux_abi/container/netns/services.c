@@ -476,5 +476,6 @@ static size_t dns_gather(const struct iovec *iv, int ivn, uint8_t *tmp, size_t c
 
 struct loaded {
     uint64_t entry, phdr, base;
+    hl_identity_digest identity;
     int phent, phnum;
 };

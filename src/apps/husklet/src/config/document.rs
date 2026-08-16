@@ -9,7 +9,7 @@ pub(super) struct WorkspaceDocument {
 impl WorkspaceDocument {
     pub(super) fn parse(text: &str) -> io::Result<Vec<WorkspaceConfig>> {
         let mut document = Self::default();
-        for (index, line) in text.lines().map(str::trim).enumerate() {
+        for (index, line) in text.lines().enumerate() {
             document.read(line).map_err(|error| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -22,10 +22,11 @@ impl WorkspaceDocument {
     }
 
     fn read(&mut self, line: &str) -> io::Result<()> {
-        if line.is_empty() || line.starts_with('#') {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
             return Ok(());
         }
-        if line == "[workspace]" {
+        if trimmed == "[workspace]" {
             self.finish()?;
             self.current = Some(WsBuilder::default());
             return Ok(());
@@ -42,7 +43,7 @@ impl WorkspaceDocument {
                 "field appears before a `[workspace]` section",
             )
         })?;
-        builder.set(key.trim(), value.trim())
+        builder.set(key.trim(), value.strip_prefix(' ').unwrap_or(value))
     }
 
     fn finish(&mut self) -> io::Result<()> {
@@ -83,13 +84,25 @@ struct WsBuilder {
     env: Vec<(String, String)>,
     mounts: Vec<Mount>,
     docker_sock: Option<bool>,
-    scrollback: Option<u64>,
+    scrollback: ScrollbackValue,
     vpn: Option<VpnConfig>,
     terminal: TerminalPreferences,
 }
 
+#[derive(Default)]
+enum ScrollbackValue {
+    #[default]
+    Missing,
+    Unlimited,
+    Lines(u64),
+}
+
 impl WsBuilder {
     fn set(&mut self, k: &str, v: &str) -> io::Result<()> {
+        if k == "env" {
+            return self.set_env(v);
+        }
+        let v = v.trim();
         match k {
             "name" => self.name = Some(v.to_string()),
             "image" => self.image = Some(v.to_string()),
@@ -99,7 +112,18 @@ impl WsBuilder {
             "cpus" => self.cpus = Some(Value::new("cpus", v).number()?),
             "memory" => self.memory_mb = Some(Value::new("memory", v).number()?),
             "docker_sock" => self.docker_sock = Some(Value::new("docker_sock", v).boolean()?),
-            "scrollback" => self.scrollback = Some(Value::new("scrollback", v).number()?),
+            "scrollback" => {
+                self.scrollback = match v.to_ascii_lowercase().as_str() {
+                    "0" | "unlimited" => ScrollbackValue::Unlimited,
+                    _ => {
+                        let lines = Value::new("scrollback", v).number::<u64>()?;
+                        if lines == 0 {
+                            return Err(Value::new("scrollback", v).invalid());
+                        }
+                        ScrollbackValue::Lines(lines)
+                    }
+                };
+            }
             "vpn" if !v.is_empty() => {
                 self.vpn = Some(VpnConfig::parse(v).ok_or_else(|| Value::new("vpn", v).invalid())?);
             }
@@ -111,7 +135,6 @@ impl WsBuilder {
             "terminal_cursor_blink" => {
                 self.terminal.cursor_blink = Some(Value::new("terminal_cursor_blink", v).boolean()?);
             }
-            "env" => self.set_env(v)?,
             "mount" => self.set_mount(v)?,
             _ => return Err(Value::new("field", k).invalid()),
         }
@@ -125,11 +148,14 @@ impl WsBuilder {
         if key.trim().is_empty() {
             return Err(Value::new("environment key", key).invalid());
         }
-        self.env.push((key.trim().to_owned(), value.trim().to_owned()));
+        self.env.push((key.trim().to_owned(), value.to_owned()));
         Ok(())
     }
 
     fn set_mount(&mut self, value: &str) -> io::Result<()> {
+        if let Some(encoded) = value.strip_prefix("v2::") {
+            return self.set_encoded_mount(value, encoded);
+        }
         let mut fields = value.split(':');
         let (Some(host), Some(container)) = (fields.next(), fields.next()) else {
             return Err(Value::new("mount", value).invalid());
@@ -145,6 +171,27 @@ impl WsBuilder {
             host: host.to_owned(),
             container: container.to_owned(),
             ro: mode == Some("ro"),
+        });
+        Ok(())
+    }
+
+    fn set_encoded_mount(&mut self, original: &str, encoded: &str) -> io::Result<()> {
+        let mut fields = encoded.split(':');
+        let (Some(host), Some(container), Some(mode)) = (fields.next(), fields.next(), fields.next()) else {
+            return Err(Value::new("mount", original).invalid());
+        };
+        if fields.next().is_some() || !matches!(mode, "ro" | "rw") {
+            return Err(Value::new("mount", original).invalid());
+        }
+        let host = decode_mount_path(host).ok_or_else(|| Value::new("mount", original).invalid())?;
+        let container = decode_mount_path(container).ok_or_else(|| Value::new("mount", original).invalid())?;
+        if host.is_empty() || container.is_empty() {
+            return Err(Value::new("mount", original).invalid());
+        }
+        self.mounts.push(Mount {
+            host,
+            container,
+            ro: mode == "ro",
         });
         Ok(())
     }
@@ -166,7 +213,11 @@ impl WsBuilder {
                 mounts: self.mounts,
             },
             docker_sock: self.docker_sock.unwrap_or(true),
-            scrollback: self.scrollback,
+            scrollback: match self.scrollback {
+                ScrollbackValue::Missing => Some(super::DEFAULT_SCROLLBACK_LINES),
+                ScrollbackValue::Unlimited => None,
+                ScrollbackValue::Lines(lines) => Some(lines),
+            },
             vpn: self.vpn,
             terminal: self.terminal,
         })
@@ -240,7 +291,81 @@ impl WorkspaceText {
         self.text.push('\n');
     }
 
+    pub(super) fn mount(&mut self, mount: &Mount) {
+        self.field(
+            "mount",
+            &format!(
+                "v2::{}:{}:{}",
+                encode_mount_path(&mount.host),
+                encode_mount_path(&mount.container),
+                if mount.ro { "ro" } else { "rw" }
+            ),
+        );
+    }
+
     pub(super) fn into_string(self) -> io::Result<String> {
         self.error.map_or(Ok(self.text), Err)
+    }
+}
+
+fn encode_mount_path(path: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(path.len() * 2);
+    for byte in path.bytes() {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
+fn decode_mount_path(encoded: &str) -> Option<String> {
+    if !encoded.len().is_multiple_of(2) {
+        return None;
+    }
+    let bytes = encoded.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len() / 2);
+    for pair in bytes.chunks_exact(2) {
+        decoded.push(hex_value(pair[0])? << 4 | hex_value(pair[1])?);
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{WorkspaceConfig, WorkspaceStore};
+    use hl_ws::Arch;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn environment_values_roundtrip_exactly_through_the_store() {
+        let path = std::env::temp_dir().join(format!(
+            "husklet-workspaces-env-{}-{}.conf",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let mut workspace = WorkspaceConfig::new("env-roundtrip", "ubuntu:24.04", Arch::Arm64);
+        workspace.env = vec![
+            ("FLAGS".into(), "  -O2 -g  ".into()),
+            ("TOKEN".into(), "left=middle=right".into()),
+            ("EMPTY".into(), String::new()),
+            ("UNICODE".into(), " 中 🙂 ".into()),
+        ];
+
+        WorkspaceStore::load(&path).unwrap().upsert(workspace.clone()).unwrap();
+        let loaded = WorkspaceStore::load(&path).unwrap();
+        assert_eq!(loaded.get("env-roundtrip").unwrap().env, workspace.env);
+
+        std::fs::remove_file(path).unwrap();
     }
 }

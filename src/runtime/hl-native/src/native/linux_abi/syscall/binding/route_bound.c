@@ -14,6 +14,7 @@ static int bound_route_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, 
             if (status.status == HL_STATUS_OK && metadata.type == HL_HOST_FILE_TYPE_REGULAR)
                 poslk_on_close_identity(metadata.stable_device, metadata.stable_object);
         }
+        fd_reset_emul((int)source.fd);
         result = hl_linux_close(g_linux_box, source.fd);
         proc_fdvis_close((int)source.fd);
         (void)close((int)source.fd);
@@ -405,6 +406,7 @@ static int bound_route_metadata(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
             }
         }
         result = bound_host_error(g_host_services->file->set_times(g_host_services->context, target, times).status);
+        if (result == 0) bound_evict_handle(target);
     bound_set_times_done:
         if (close_target) (void)g_host_services->file->close(g_host_services->context, target);
         break;
@@ -653,6 +655,10 @@ static int bound_route_directory(struct cpu *c, uint64_t nr, uint64_t a0, uint64
     int64_t result;
     switch (nr) {
     case 61: {
+        if (overlay_directory_ensure((int)source.fd)) {
+            svc_fs_directory_61(c, nr, source.fd, a1, a2, a3, a4, 0);
+            return 1;
+        }
         uint64_t byte_capacity = a2 > UINT32_C(1 << 20) ? UINT32_C(1 << 20) : a2;
         if (a2 < 24) {
             result = -EINVAL;
@@ -841,8 +847,8 @@ static int bound_route_duplication(struct cpu *c, uint64_t nr, uint64_t a0, uint
                 nanosleep(&delay, NULL);
             }
             /* poslk_apply is shared with the legacy Darwin syscall path and therefore reports native
-             * errno numbers. This typed route bypasses svc_done(), so translate at this boundary. */
-            result = lock_result < 0 ? -hl_linux_errno_from_macos(-lock_result) : lock_result;
+             * errno numbers. This typed route bypasses svc_done_host(), so translate at this boundary. */
+            result = lock_result < 0 ? -hl_linux_errno_from_host(-lock_result) : lock_result;
             if (result == 0 && a1 == 5 && guest_copy_to(a2, lock, sizeof(lock)) != (ssize_t)sizeof(lock))
                 result = -EFAULT;
         } else if ((int32_t)a1 == HL_LINUX_F_SETFL) {
@@ -878,81 +884,6 @@ static int bound_route_duplication(struct cpu *c, uint64_t nr, uint64_t a0, uint
             result = r < 0 ? -(int64_t)errno : (int64_t)r;
         }
         break;
-    case 285: {
-        hl_linux_fd_snapshot output;
-        off_t input_value = 0, output_value = 0;
-        off_t *input_offset = a1 != 0 ? &input_value : NULL;
-        off_t *output_offset = a3 != 0 ? &output_value : NULL;
-        size_t done = 0;
-        char buffer[8192];
-        result = 0;
-        // copy_file_range defines NO flags: Linux rejects a non-zero `flags` with -EINVAL before copying
-        // anything. Mirrors the native path in io.c case 285.
-        if (G_A5(c)) {
-            result = -EINVAL;
-            break;
-        }
-        if (!bound_snapshot(a2, &output)) {
-            result = -ENOSYS;
-            break;
-        }
-        if ((input_offset &&
-             guest_copy_from(input_offset, a1, sizeof(*input_offset)) != (ssize_t)sizeof(*input_offset)) ||
-            (output_offset &&
-             guest_copy_from(output_offset, a3, sizeof(*output_offset)) != (ssize_t)sizeof(*output_offset))) {
-            result = -EFAULT;
-            break;
-        }
-        // Linux rejects a same-file copy whose ranges overlap (EINVAL) instead of copying through the
-        // overlap.  Mirrors the native path in io.c case 285, using the typed identity for sameness.
-        if (G_A4(c) > 0 && g_host_services != NULL && g_host_services->file != NULL &&
-            g_host_services->file->metadata != NULL) {
-            hl_host_file_metadata in_meta, out_meta;
-            hl_host_result in_status =
-                g_host_services->file->metadata(g_host_services->context, source.host_handle, &in_meta);
-            hl_host_result out_status =
-                g_host_services->file->metadata(g_host_services->context, output.host_handle, &out_meta);
-            if (in_status.status == HL_STATUS_OK && out_status.status == HL_STATUS_OK &&
-                in_meta.stable_device == out_meta.stable_device && in_meta.stable_object == out_meta.stable_object) {
-                off_t in_start = input_offset ? *input_offset : (off_t)source.offset;
-                off_t out_start = output_offset ? *output_offset : (off_t)output.offset;
-                off_t length = (off_t)G_A4(c);
-                if (in_start >= 0 && out_start >= 0 && in_start < out_start + length && out_start < in_start + length) {
-                    result = -EINVAL;
-                    break;
-                }
-            }
-        }
-        while (done < (size_t)G_A4(c)) {
-            size_t chunk = (size_t)G_A4(c) - done;
-            if (chunk > sizeof(buffer)) chunk = sizeof(buffer);
-            int64_t nr_read = input_offset
-                                  ? hl_linux_pread64(g_linux_box, source.fd, buffer, chunk, (uint64_t)*input_offset)
-                                  : hl_linux_read(g_linux_box, source.fd, buffer, chunk);
-            if (nr_read <= 0) {
-                if (!done) result = nr_read;
-                break;
-            }
-            int64_t nr_written = output_offset ? hl_linux_pwrite64(g_linux_box, output.fd, buffer, (size_t)nr_read,
-                                                                   (uint64_t)*output_offset)
-                                               : hl_linux_write(g_linux_box, output.fd, buffer, (size_t)nr_read);
-            if (nr_written < 0) {
-                if (!done) result = nr_written;
-                break;
-            }
-            done += (size_t)nr_written;
-            if (input_offset) *input_offset += (off_t)nr_written;
-            if (output_offset) *output_offset += (off_t)nr_written;
-            result = (int64_t)done;
-            if (nr_written < nr_read) break;
-        }
-        if (result >= 0 && ((input_offset && guest_copy_to(a1, input_offset, sizeof(*input_offset)) !=
-                                                 (ssize_t)sizeof(*input_offset)) ||
-                            (output_offset && guest_copy_to(a3, output_offset, sizeof(*output_offset)) !=
-                                                  (ssize_t)sizeof(*output_offset))))
-            result = done != 0 ? (int64_t)done : -EFAULT;
-        break;
-    }
     default: return 0;
     }
     G_RET(c) = (uint64_t)result;

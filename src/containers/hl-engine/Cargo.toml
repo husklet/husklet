@@ -22,8 +22,3 @@ tempfile.workspace = true
 [lib]
 name = "hl_engine"
 path = "src/lib.rs"
-
-[features]
-default = []
-# Counts host heap allocations per native crossing; see `native::allocations`.
-alloc-count = []

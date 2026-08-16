@@ -26,7 +26,7 @@ impl Peer {
     }
 
     pub(super) fn wait(
-        self,
+        &self,
         timeout: std::time::Duration,
         reconnect: impl Fn() -> io::Result<std::os::unix::net::UnixStream>,
     ) -> io::Result<()> {
@@ -34,19 +34,25 @@ impl Peer {
         let deadline = std::time::Instant::now() + timeout;
         loop {
             let connection = match reconnect() {
-                Err(error) if Self::offline(&error) => return Ok(()),
+                Err(error) if Self::offline(&error) => break,
                 Err(error) => return Err(error),
                 Ok(connection) => connection,
             };
             let peer = Self::new(&connection)?;
             if peer.process != process {
-                return Ok(());
+                break;
             }
             if std::time::Instant::now() >= deadline {
                 peer.signal_group(libc::SIGKILL)?;
-                return Self::wait_offline(reconnect, std::time::Duration::from_secs(2));
+                Self::wait_offline(reconnect, std::time::Duration::from_secs(2))?;
+                break;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        match self.signal_group(libc::SIGKILL) {
+            Ok(()) => Ok(()),
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => Ok(()),
+            Err(error) => Err(error),
         }
     }
 
@@ -316,5 +322,78 @@ mod tests {
         })
         .unwrap();
         assert_eq!(calls, [(-42, libc::SIGKILL), (42, libc::SIGKILL)]);
+    }
+}
+
+#[cfg(test)]
+mod wait_cleanup_test {
+    use super::{ffi, CommandSession as _, Peer};
+    use std::io::{BufRead as _, Write as _};
+
+    const HELPER: &str = "runtime::process::wait_cleanup_test::socket_owner_helper";
+
+    #[test]
+    #[ignore = "subprocess helper"]
+    fn socket_owner_helper() {
+        let Ok(socket) = std::env::var("HL_TEST_OWNER_SOCKET") else {
+            return;
+        };
+        let mut connection = std::os::unix::net::UnixStream::connect(socket).unwrap();
+        let descendant_output = connection.try_clone().unwrap();
+        let descendant = std::process::Command::new("sleep")
+            .arg("60")
+            .stdout(std::process::Stdio::from(std::os::fd::OwnedFd::from(descendant_output)))
+            .spawn()
+            .unwrap();
+        let descendant = std::mem::ManuallyDrop::new(descendant);
+        writeln!(connection, "{}", descendant.id()).unwrap();
+    }
+
+    #[test]
+    fn wait_kills_descendants_after_the_socket_owner_exits() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("owner.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", HELPER, "--ignored", "--nocapture"])
+            .env("HL_TEST_OWNER_SOCKET", &socket);
+        command.start_session();
+        let mut owner = command.spawn().unwrap();
+        let (connection, _) = listener.accept().unwrap();
+        let peer = Peer::new(&connection).unwrap();
+        let descendant_liveness = connection.try_clone().unwrap();
+        let mut descendant_line = String::new();
+        std::io::BufReader::new(&connection)
+            .read_line(&mut descendant_line)
+            .unwrap();
+        let descendant = descendant_line.trim().parse::<libc::pid_t>().unwrap();
+        drop(connection);
+        drop(listener);
+        std::fs::remove_file(&socket).unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while owner.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        peer.wait(std::time::Duration::from_secs(1), || {
+            std::os::unix::net::UnixStream::connect(&socket)
+        })
+        .unwrap();
+        owner.wait().unwrap();
+
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            sender.send(std::io::read_to_string(descendant_liveness)).unwrap();
+        });
+        let closed = receiver.recv_timeout(std::time::Duration::from_secs(2));
+        if closed.is_err() {
+            let _ = ffi::signal(descendant, libc::SIGKILL);
+        }
+        assert_eq!(
+            closed.unwrap().unwrap(),
+            "",
+            "socket-owner descendant survived group cleanup"
+        );
     }
 }

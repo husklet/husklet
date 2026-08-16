@@ -1,0 +1,39 @@
+cases:
+- id: terminal-less-format/search-resize-navigate-quit
+  image: bash:5.2
+  resources: [pty]
+  timeout: 120
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 10000 }
+      - write: { text: "stty -echo; printf '\\123\\105\\124\\125\\120\\055\\123\\124\\101\\122\\124\\n'; printf '\\114\\105\\123\\123\\055\\122\\105\\101\\104\\131\\n'; awk 'BEGIN { for (i = 1; i <= 100; i++) printf \"ROW-%03d\\n\", i }' >/tmp/page; printf '\\120\\101\\107\\105\\122\\055\\123\\124\\101\\122\\124\\n'; LESS='-R' less /tmp/page; printf '\\114\\105\\123\\123\\055\\105\\130\\111\\124\\n'; stty size; stty echo; printf '\\123\\110\\105\\114\\114\\055\\117\\113\\n'; exit\r" }
+      - await_output: { contains: SETUP-START, timeout_ms: 10000 }
+      - await_output: { contains: LESS-READY, timeout_ms: 10000 }
+      - await_output: { contains: PAGER-START, timeout_ms: 10000 }
+      - await_output: { contains: ROW-020, timeout_ms: 10000 }
+      - write: { text: "/ROW-075\r" }
+      - write: { text: "j" }
+      - await_output: { contains: ROW-076, timeout_ms: 10000 }
+      - resize: { rows: 10, columns: 40 }
+      - write: { text: "/ROW-090\r" }
+      - write: { text: "j" }
+      - await_output: { contains: ROW-091, timeout_ms: 10000 }
+      - write: { text: "G" }
+      - await_output: { contains: ROW-100, timeout_ms: 10000 }
+      - write: { text: "q" }
+      - await_output: { contains: LESS-EXIT, timeout_ms: 10000 }
+      - await_output: { contains: "10 40", timeout_ms: 10000 }
+      - await_output: { contains: SHELL-OK, timeout_ms: 10000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/row_076.txt
+    - golden/row_091.txt
+    - golden/row_100.txt
+    - golden/less_exit.txt
+    - golden/size.txt
+    - golden/shell_ok.txt

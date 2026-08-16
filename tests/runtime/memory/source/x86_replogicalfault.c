@@ -14,10 +14,11 @@ static sigjmp_buf jump;
 static volatile uint64_t fault_rcx;
 static volatile uintptr_t fault_rsi;
 static volatile uintptr_t fault_rdi;
+static volatile uintptr_t fault_address;
 
 static void fault_handler(int signal, siginfo_t *info, void *opaque) {
     (void)signal;
-    (void)info;
+    fault_address = (uintptr_t)info->si_addr;
     ucontext_t *context = opaque;
     fault_rcx = (uint64_t)context->uc_mcontext.gregs[REG_RCX];
     fault_rsi = (uintptr_t)context->uc_mcontext.gregs[REG_RSI];
@@ -68,6 +69,7 @@ int main(void) {
     if (mprotect(source + page, page, PROT_NONE) != 0) return 5;
     int forward = copy_fault(destination, source + page - 4, 8, 0) &&
                   memcmp(destination, "ABCD", 4) == 0 && fault_rcx == 4 &&
+                  fault_address == (uintptr_t)(source + page) &&
                   fault_rsi == (uintptr_t)(source + page) &&
                   fault_rdi == (uintptr_t)(destination + 4);
 
@@ -78,6 +80,7 @@ int main(void) {
     memset(destination, 0, 8);
     int backward = copy_fault(destination + 7, source + page + 3, 8, 1) &&
                    memcmp(destination + 4, "WXYZ", 4) == 0 && fault_rcx == 4 &&
+                   fault_address == (uintptr_t)(source + page - 1) &&
                    fault_rsi == (uintptr_t)(source + page - 1) &&
                    fault_rdi == (uintptr_t)(destination + 3);
 

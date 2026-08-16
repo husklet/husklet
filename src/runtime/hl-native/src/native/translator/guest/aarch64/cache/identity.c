@@ -20,6 +20,15 @@ static uint64_t pcache_engine_id(void) {
     return hl_identity_configuration(build, 1, 1, modes);
 }
 
+static hl_identity_digest pcache_translator_identity(void) {
+    static const char tag[] = __DATE__ " " __TIME__;
+    uint64_t modes = (uint64_t)(g_guestfold != 0) | ((uint64_t)(g_steal1617 != 0) << 1) |
+                     ((uint64_t)(g_noibslim != 0) << 2) | ((uint64_t)(g_mtibtc != 0) << 3) |
+                     ((uint64_t)(g_no_stw_reclaim != 0) << 4) | ((uint64_t)(g_prof != 0) << 5) |
+                     ((uint64_t)(uint32_t)g_fwdskip << 32);
+    return hl_identity_engine_digest(tag, sizeof tag - 1, PC_TRANSLATOR_ABI, 1, HL_HOST_CPU_ISA, modes);
+}
+
 // Hash the BASENAME of argv[0]. A multicall binary (busybox, toolchain drivers) runs DIFFERENT code
 // paths per argv[0]; the translated arena is therefore per-applet, so the cache MUST be keyed by argv[0]
 // too or one applet loads another's arena. Basename (not full argv) so a single-purpose binary invoked
@@ -29,10 +38,9 @@ static uint64_t pcache_argv0_id(const char *argv0) {
     return hl_identity_name(argv0);
 }
 
-static uint64_t pcache_make_id(const char *prog_host, const char *interp_host, const char *argv0) {
-    uint64_t a = pcache_id_of(prog_host);
-    uint64_t b = interp_host ? pcache_id_of(interp_host) : 0xABCDEFull;
-    return hl_identity_mix(a, b, pcache_engine_id(), pcache_argv0_id(argv0));
+static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity_digest interpreter,
+                                        const char *argv0) {
+    return hl_identity_digest_mix(program, interpreter, pcache_translator_identity(), argv0);
 }
 
 static int pcache_file(char *out, size_t n) {
@@ -53,6 +61,12 @@ static int pcache_file(char *out, size_t n) {
             return 0;
         }
     }
-    int written = snprintf(out, n, "%016llx.pcache", (unsigned long long)g_pc_binid);
-    return written > 0 && (size_t)written < n;
+    static const char hex[] = "0123456789abcdef";
+    if (n < 72) return 0;
+    for (size_t i = 0; i < sizeof g_pc_binid.bytes; ++i) {
+        out[i * 2] = hex[g_pc_binid.bytes[i] >> 4];
+        out[i * 2 + 1] = hex[g_pc_binid.bytes[i] & 15];
+    }
+    memcpy(out + 64, ".pcache", 8);
+    return 1;
 }

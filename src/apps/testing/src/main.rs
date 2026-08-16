@@ -46,6 +46,10 @@ enum Command {
     BenchmarkStage(benchmark::StageOptions),
     /// Run self-contained runtime compatibility cases.
     Runtime(runtime::Options),
+    /// Print the exact current-host runtime corpus plan without executing cases.
+    RuntimeInventory,
+    /// Build and publish an immutable runtime-corpus runner and native library.
+    RuntimeStage(runtime::StageOptions),
     #[command(hide = true)]
     RuntimeWorker(runtime::WorkerOptions),
     /// Check or update runtime output using the configured oracle.
@@ -66,6 +70,8 @@ enum Command {
     Leaks(leaks::Options),
     #[command(hide = true)]
     LeakProbe,
+    #[command(hide = true)]
+    NativeArtifactSmoke,
 }
 
 #[tokio::main]
@@ -93,6 +99,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::BenchmarkHash(options) => benchmark::hash(options),
         Command::BenchmarkStage(options) => benchmark::stage(options),
         Command::Runtime(options) => runtime::run(options).await,
+        Command::RuntimeInventory => runtime::inventory(),
+        Command::RuntimeStage(options) => runtime::stage(options),
         Command::RuntimeWorker(options) => runtime::worker(options).await,
         Command::Oracle(options) => runtime::oracle(options),
         Command::Scenarios(options) => scenario::run(options).await,
@@ -104,6 +112,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::Leaks(options) => leaks::run(options),
         Command::LeakProbe => {
             let _ = hl_native::leak_check_nonvacuity();
+            Ok(())
+        }
+        Command::NativeArtifactSmoke => {
+            runtime::artifact_smoke()?;
+            println!("hl-native-artifact-smoke-v1");
             Ok(())
         }
     }
@@ -123,6 +136,8 @@ mod cli_tests {
             "benchmark-hash",
             "benchmark-stage",
             "runtime",
+            "runtime-inventory",
+            "runtime-stage",
             "oracle",
             "scenarios",
             "scenario-inventory",

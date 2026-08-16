@@ -1,0 +1,31 @@
+cases:
+- id: terminal-heredoc/interactive-multiline-input
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "stty -echo; printf \"HEREDOC-${x}READY\\n\"\r" }
+      - await_output: { contains: HEREDOC-READY, timeout_ms: 5000 }
+      - write: { text: "cat <<'HUSKLET'\r" }
+      - await_output: { contains: "> ", timeout_ms: 5000 }
+      - write: { text: "HEREDOC-FIRST\r" }
+      - await_output: { contains: "> ", timeout_ms: 5000 }
+      - write: { text: "HEREDOC-SECOND\r" }
+      - await_output: { contains: "> ", timeout_ms: 5000 }
+      - write: { text: "HUSKLET\r" }
+      - await_output: { contains: HEREDOC-FIRST, timeout_ms: 5000 }
+      - await_output: { contains: HEREDOC-SECOND, timeout_ms: 5000 }
+      - write: { text: "stty echo; printf \"SHELL-${x}OK\\n\"; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/first.txt
+    - golden/second.txt
+    - golden/shell_ok.txt

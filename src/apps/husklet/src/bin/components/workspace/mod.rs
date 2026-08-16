@@ -52,6 +52,7 @@ impl Form {
             (CreatePage::Docker, form.docker()),
             (CreatePage::Network, form.network()),
         ]);
+        window.set_default_widget(Some(&view.create));
 
         {
             let w = window.clone();
@@ -75,9 +76,10 @@ impl Form {
                     FormValidation::focus_missing(&form, name_ok);
                     return;
                 }
-                let result = form
-                    .configuration()
-                    .and_then(|workspace| WorkspaceStore::load(Home::current().workspaces_config())?.upsert(workspace));
+                let result = form.configuration().and_then(|workspace| {
+                    let mut store = WorkspaceStore::load(Home::current().workspaces_config())?;
+                    create_workspace(&mut store, workspace)
+                });
                 match result {
                     Ok(()) => {
                         on_created();
@@ -113,9 +115,22 @@ impl Form {
     }
 }
 
+fn create_workspace(store: &mut WorkspaceStore, workspace: WorkspaceConfig) -> std::io::Result<()> {
+    if store.get(&workspace.name).is_some() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("A workspace named {:?} already exists.", workspace.name),
+        ));
+    }
+    store.upsert(workspace)
+}
+
 impl Form {
     pub(crate) fn new() -> Self {
         let terminal = TermConfig::default();
+        let scrollback = terminal
+            .scrollback
+            .map_or_else(|| "unlimited".to_owned(), |lines| lines.to_string());
         let font_size = gtk::SpinButton::with_range(6.0, 48.0, 1.0);
         font_size.set_value(terminal.font_size);
         let cursor_blink = gtk::Switch::new();
@@ -128,7 +143,7 @@ impl Form {
             cpu_amd: Rc::new(Cell::new(false)),
             cpus: gtk::SpinButton::with_range(0.0, 64.0, 1.0),
             mem: gtk::SpinButton::with_range(0.0, 65536.0, 256.0),
-            scrollback: Field::entry("unlimited", false),
+            scrollback: Field::entry(&scrollback, false),
             font: FontPicker::new(&terminal.font_family),
             font_size,
             foreground: ColorPicker::new(&terminal.foreground),
@@ -182,7 +197,7 @@ impl Form {
         panel.append(&Field::text(
             "SCROLLBACK",
             &self.scrollback,
-            Some("Blank keeps unlimited history."),
+            Some("Enter a line limit, or “unlimited”."),
         ));
         panel
     }
@@ -408,3 +423,41 @@ impl Form {
 }
 
 // ---- new-workspace widget helpers ----
+
+#[cfg(test)]
+mod create_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_creation_preserves_the_existing_workspace() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("workspaces.conf");
+        let mut store = WorkspaceStore::load(&path).unwrap();
+        store
+            .upsert(WorkspaceConfig::new("demo", "original:latest", Arch::Arm64))
+            .unwrap();
+
+        let error = create_workspace(
+            &mut store,
+            WorkspaceConfig::new("demo", "replacement:latest", Arch::Amd64),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+
+        let reloaded = WorkspaceStore::load(path).unwrap();
+        let workspace = reloaded.get("demo").unwrap();
+        assert_eq!(workspace.image, "original:latest");
+        assert_eq!(workspace.arch, Arch::Arm64);
+    }
+
+    #[test]
+    fn unique_creation_is_persisted() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("workspaces.conf");
+        let mut store = WorkspaceStore::load(&path).unwrap();
+
+        create_workspace(&mut store, WorkspaceConfig::new("demo", "image:latest", Arch::Arm64)).unwrap();
+
+        assert!(WorkspaceStore::load(path).unwrap().get("demo").is_some());
+    }
+}

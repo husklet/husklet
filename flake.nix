@@ -113,7 +113,10 @@
               guestPkgs = pkgsFor guest;
             in
             pkgs.writeShellScriptBin "${guest.isa}-linux-gnu-gcc" ''
-              exec ${lib.escapeShellArg (ccFor guest)} -L${lib.escapeShellArg "${guestPkgs.glibc.static}/lib"} "$@"
+              exec ${lib.escapeShellArg (ccFor guest)} \
+                -isystem ${lib.escapeShellArg "${guestPkgs.sqlite.dev}/include"} \
+                -L${lib.escapeShellArg "${guestPkgs.glibc.static}/lib"} \
+                -L${lib.escapeShellArg "${guestPkgs.sqlite.out}/lib"} "$@"
             '';
         in
         rec {
@@ -126,6 +129,10 @@
           crossCompilers = map ccPackageFor guestISAs;
           rustStaticLinkers = map rustStaticLinkerFor guestISAs;
           compilerAliases = map compilerAliasFor guestISAs;
+          guestLibraries = lib.concatMap (guest: [
+            (pkgsFor guest).sqlite.dev
+            (pkgsFor guest).sqlite.out
+          ]) guestISAs;
           emulators = lib.optional (host.isLinux && hostCpu == "x86_64") pkgs.qemu-user;
           env =
             lib.foldl'
@@ -158,17 +165,20 @@
 
       workspaceSource = lib.fileset.toSource {
         root = ./.;
-        fileset = lib.fileset.unions [
-          ./Cargo.lock
-          ./Cargo.toml
-          ./lint.toml
-          ./lint
-          ./rust-toolchain.toml
-          ./rustfmt.toml
-          ./src
-          ./tests
-        ];
+        fileset = lib.fileset.gitTracked ./.;
       };
+
+      documentationSourcePaths =
+        (builtins.fromTOML (builtins.readFile ./lint.toml)).documentation.allowed;
+
+      workspaceSourceContractFor =
+        pkgs:
+        pkgs.runCommand "husklet-workspace-source-contract" { } ''
+          ${lib.concatMapStringsSep "\n" (
+            path: "test -f ${workspaceSource}/${lib.escapeShellArg path}"
+          ) documentationSourcePaths}
+          touch "$out"
+        '';
 
       commonNativeInputs =
         pkgs:
@@ -586,7 +596,7 @@
             readelf --dyn-syms --wide "$library" |
               awk '$4 == "FUNC" && $5 == "GLOBAL" && $6 == "DEFAULT" && $7 != "UND" { print $8 }' |
               sed 's/@.*//' | sort -u > "$TMPDIR/actual-exports"
-            cp src/runtime/hl-native/src/native/bridge/exports.txt "$TMPDIR/expected-exports"
+            cp ${workspaceSource}/src/runtime/hl-native/src/native/bridge/exports.txt "$TMPDIR/expected-exports"
             diff -u "$TMPDIR/expected-exports" "$TMPDIR/actual-exports"
 
             for name in hl-engine hl-aarch64 hl-x86_64
@@ -693,11 +703,11 @@
             native_directory="$(dirname "''${native_libraries[0]}")"
             ${lib.escapeShellArg compiler} -std=c11 -Wall -Wextra -Werror \
               -Isrc/runtime/hl-native/src/native/include \
-              tests/native/host-abi/unix.c -L"$native_directory" \
+              src/runtime/hl-native/tests/host-abi/unix.c -L"$native_directory" \
               -Wl,-rpath-link,"$native_directory" -lhl_native_engine -o public-abi-c
             ${lib.escapeShellArg cxx} -std=c++20 -Wall -Wextra -Werror \
               -Isrc/runtime/hl-native/src/native/include \
-              tests/native/host-abi/unix.cpp -L"$native_directory" \
+              src/runtime/hl-native/tests/host-abi/unix.cpp -L"$native_directory" \
               -Wl,-rpath-link,"$native_directory" -lhl_native_engine -o public-abi-cxx
             file public-abi-c public-abi-cxx | grep -F ${lib.escapeShellArg fileArchitecture}
             ${targetPkgs.stdenv.cc.targetPrefix}readelf -d public-abi-c \
@@ -772,7 +782,6 @@
               ${lib.escapeShellArgs strictWarnings} \
               -DHL_SHARED -DHL_BUILDING_ENGINE -DHL_ENABLE_LOGGING=0 \
               -DHL_TRANSLIT_DEFAULT=0 -D_GNU_SOURCE -DHL_EMBEDDED_BUILD=1 \
-              -DHL_ENGINE_NO_MAIN=1 -DHL_ENGINE_NO_STANDALONE=1 \
               -DHL_TARGET_NAMESPACE=${architecture} \
               -fsyntax-only src/runtime/hl-native/src/native/engine/target/${architecture}.c
             timeout 10m scan-build --status-bugs -o reports \
@@ -784,7 +793,6 @@
               ${lib.escapeShellArgs portableWarnings} \
               -DHL_SHARED -DHL_BUILDING_ENGINE -DHL_ENABLE_LOGGING=0 \
               -DHL_TRANSLIT_DEFAULT=0 -D_GNU_SOURCE -DHL_EMBEDDED_BUILD=1 \
-              -DHL_ENGINE_NO_MAIN=1 -DHL_ENGINE_NO_STANDALONE=1 \
               -DHL_TARGET_NAMESPACE=${architecture} \
               -c src/runtime/hl-native/src/native/engine/target/${architecture}.c \
               -o engine.o
@@ -820,9 +828,18 @@
             runHook preBuild
             export CC_x86_64_pc_windows_gnu=${lib.escapeShellArg compiler}
             export CARGO_TARGET_${targetKey}_LINKER=${lib.escapeShellArg compiler}
+            export CARGO_TARGET_${targetKey}_RUSTFLAGS=${lib.escapeShellArg "-Lnative=${windows.windows.pthreads}/lib"}
             export HL_NATIVE_COMPILE_CHECK=1
-            cargo check --locked --offline --target ${target} -p hl-native -p hl-engine 2>&1 |
+            cargo build --locked --offline --target ${target} -p hl-native -p hl-engine -p engine 2>&1 |
               tee "$TMPDIR/windows-contract.log"
+            for executable in hl-engine hl-aarch64 hl-x86_64; do
+              binary="target/${target}/debug/$executable.exe"
+              test -s "$binary"
+              ${windows.stdenv.cc.targetPrefix}objdump -f "$binary" \
+                | grep -F 'file format pei-x86-64' >/dev/null
+              ${windows.stdenv.cc.targetPrefix}objdump -p "$binary" \
+                | grep -F 'DLL Name: hl_native_engine.dll' >/dev/null
+            done
             dll="$(find target/${target}/debug/build -path '*/out/hl_native_engine.dll' -print -quit)"
             import="$(find target/${target}/debug/build -path '*/out/libhl_native_engine.dll.a' -print -quit)"
             test -n "$dll"
@@ -845,6 +862,10 @@
               | grep -F 'architecture: i386:x86-64' >/dev/null
             mkdir windows-host-objects
             for source in src/runtime/hl-native/src/native/host/windows/*.c; do
+              # io.c is a private fragment included by file.c, not an independent
+              # translation unit. Cargo's source inventory excludes included C
+              # files for the same reason.
+              [ "$(basename "$source")" = io.c ] && continue
               object="windows-host-objects/$(basename "''${source%.c}").obj"
               ${lib.escapeShellArg compiler} -std=c11 -DHL_SHARED -DHL_BUILDING_ENGINE \
                 -Isrc/runtime/hl-native/src/native \
@@ -870,14 +891,14 @@
             ${lib.escapeShellArg compiler} -std=c11 -Wall -Wextra -Werror \
               -DHL_SHARED -DHL_ABI_COMPILE_CONTRACT \
               -Isrc/runtime/hl-native/src/native/include \
-              -c tests/native/host-abi/windows.c -o public-abi-c.obj
+              -c src/runtime/hl-native/tests/host-abi/windows.c -o public-abi-c.obj
             ${windows.stdenv.cc.targetPrefix}objdump -f public-abi-c.obj \
               | grep -F 'file format pe-x86-64' >/dev/null
             ${windows.stdenv.cc.targetPrefix}objdump -f public-abi-c.obj \
               | grep -F 'architecture: i386:x86-64' >/dev/null
             ${lib.escapeShellArg cxx} -std=c++20 -Wall -Wextra -Werror \
               -DHL_SHARED -Isrc/runtime/hl-native/src/native/include \
-              -c tests/native/host-abi/windows.cpp -o public-abi-cxx.obj
+              -c src/runtime/hl-native/tests/host-abi/windows.cpp -o public-abi-cxx.obj
             ${windows.stdenv.cc.targetPrefix}objdump -f public-abi-cxx.obj \
               | grep -F 'file format pe-x86-64' >/dev/null
             ${windows.stdenv.cc.targetPrefix}objdump -f public-abi-cxx.obj \
@@ -886,7 +907,7 @@
               -DHL_ABI_FIXTURE_EXPORT \
               -Isrc/runtime/hl-native/src/native/include \
               -L${windows.windows.mcfgthreads}/lib \
-              -shared tests/native/host-abi/windows.c -o hl-abi-fixture.dll \
+              -shared src/runtime/hl-native/tests/host-abi/windows.c -o hl-abi-fixture.dll \
               -Wl,--out-implib,libhl-abi-fixture.dll.a
             ${windows.stdenv.cc.targetPrefix}objdump -f hl-abi-fixture.dll \
               | grep -F 'file format pei-x86-64' >/dev/null
@@ -901,7 +922,7 @@
           installPhase = ''
             mkdir -p "$out"
             printf '%s\n' \
-              'GNU Windows hl-native/hl-engine Rust target compile, complete engine DLL/import-library link with exact public exports, every Windows host-service translation unit, forced POSIX compatibility, and strict C/C++ public-header contracts; this is compile/link evidence, not MSVC SDK or runtime proof' \
+              'GNU Windows hl-native/hl-engine Rust target compile, final engine-executable links through the generated import library, complete engine DLL/import-library link with exact public exports, every Windows host-service translation unit, forced POSIX compatibility, and strict C/C++ public-header contracts; this is compile/link evidence, not MSVC SDK or runtime proof' \
               > "$out/evidence"
           '';
         };
@@ -969,12 +990,12 @@
 
             ${pkgs.stdenv.cc}/bin/cc -std=c11 -Wall -Wextra -Werror \
               -DHL_SHARED -I${workspaceSource}/src/runtime/hl-native/src/native/include \
-              ${workspaceSource}/tests/native/host-abi/unix.c \
+              ${workspaceSource}/src/runtime/hl-native/tests/host-abi/unix.c \
               -L"$TMPDIR/product" -lhl_native_engine \
               -Wl,-rpath,@loader_path -o "$TMPDIR/product/public-abi-c"
             ${pkgs.stdenv.cc}/bin/c++ -std=c++20 -Wall -Wextra -Werror \
               -DHL_SHARED -I${workspaceSource}/src/runtime/hl-native/src/native/include \
-              ${workspaceSource}/tests/native/host-abi/unix.cpp \
+              ${workspaceSource}/src/runtime/hl-native/tests/host-abi/unix.cpp \
               -L"$TMPDIR/product" -lhl_native_engine \
               -Wl,-rpath,@loader_path -o "$TMPDIR/product/public-abi-cxx"
 
@@ -1027,6 +1048,7 @@
           engine = packageFor pkgs;
         in
         {
+          "workspace-source" = workspaceSourceContractFor pkgs;
           package = verification;
           workspace = verification;
           test = verification;
@@ -1079,7 +1101,10 @@
               ++ lib.optionals toolchain.canBuildGuests (
                 toolchain.crossCompilers
                 ++ toolchain.rustStaticLinkers
-                ++ toolchain.compilerAliases
+                ++ lib.optionals pkgs.stdenv.isLinux (
+                  toolchain.compilerAliases
+                  ++ toolchain.guestLibraries
+                )
                 ++ toolchain.emulators
               );
               shellHook = ''

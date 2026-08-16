@@ -45,14 +45,7 @@ impl Service {
             }
             match self.inspect_exec(id).await?.state {
                 ExecState::Exited { result, .. } => return Ok(result),
-                ExecState::Running { .. } => {}
-                state @ ExecState::Created => {
-                    return Err(Error::InvalidExecState {
-                        id: id.clone(),
-                        actual: state,
-                        expected: "running or exited",
-                    });
-                }
+                ExecState::Created | ExecState::Running { .. } => {}
             }
             notified.await;
         }

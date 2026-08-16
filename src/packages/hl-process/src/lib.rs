@@ -186,6 +186,34 @@ pub fn run(
 mod tests {
     use super::{Command, ENVIRONMENT_BYTE_LIMIT, ENVIRONMENT_COUNT_LIMIT, EnvironmentEntry, validate_environment};
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn repeated_supervision_does_not_retain_descriptors() {
+        let directory = tempfile::tempdir().unwrap();
+        let before = std::fs::read_dir("/proc/self/fd").unwrap().count();
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        for ordinal in 0..1_000 {
+            let capture = super::Capture {
+                stdout: directory.path().join(format!("{ordinal}.out")),
+                stderr: directory.path().join(format!("{ordinal}.err")),
+                stdout_limit: 1024,
+                stderr_limit: 1024,
+            };
+            assert_eq!(
+                super::run(
+                    &Command::new("/bin/true"),
+                    &capture,
+                    std::time::Duration::from_secs(1),
+                    &cancelled,
+                )
+                .unwrap(),
+                super::Outcome::Exited(Some(0))
+            );
+        }
+        let after = std::fs::read_dir("/proc/self/fd").unwrap().count();
+        assert!(after <= before + 2, "descriptor count grew from {before} to {after}");
+    }
+
     #[test]
     fn exact_environment_rejects_invalid_exec_records() {
         for (name, value) in [

@@ -35,6 +35,7 @@ static uint64_t rep_fault(struct cpu *cpu, uint64_t address, uint64_t width, uin
                           uint64_t completed) {
     if (cpu != NULL) {
         cpu->bus_ea = address;
+        cpu->soft_guest_ea = address;
         cpu->soft_width = width;
         cpu->soft_required = required;
         cpu->rip = rip;

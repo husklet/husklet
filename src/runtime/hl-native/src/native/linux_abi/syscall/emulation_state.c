@@ -612,11 +612,10 @@ static int poslk_resolve(int fd, const uint8_t *lf, dev_t *dev, ino_t *ino, int6
         struct stat st; // cache miss, or SEEK_CUR/SEEK_END need the live offset/size -> one fstat
         if (fstat(fd, &st) < 0) return -1;
         if (!S_ISREG(st.st_mode)) return -2; // POSIX record locks are only meaningful on regular files
-        *dev = st.st_dev;
-        *ino = st.st_ino;
+        overlay_lock_identity_resolve(fd, &st, dev, ino);
         if (fd >= 0 && fd < HL_NFD) {
-            g_lkdev[fd] = st.st_dev;
-            g_lkino[fd] = st.st_ino;
+            g_lkdev[fd] = *dev;
+            g_lkino[fd] = *ino;
             g_lkval[fd] = 1;
         }
         if (whence == SEEK_SET)
@@ -821,8 +820,11 @@ static void poslk_on_close(int fd) {
     if (!g_i_locked) return; // never took a lock -> nothing of ours to release (the common close: no syscall)
     struct stat st;
     if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode)) return;
+    dev_t device;
+    ino_t object;
+    overlay_lock_identity_resolve(fd, &st, &device, &object);
     poslk_lock();
-    poslk_clear_own(st.st_dev, st.st_ino, me, 0, INT64_MAX);
+    poslk_clear_own(device, object, me, 0, INT64_MAX);
     poslk_unlock();
 }
 
@@ -1615,11 +1617,17 @@ static void inotify_fd_reset(int fd) {
 // errno the guest expects (e.g. macOS EAGAIN=35 = Linux EDEADLK). Skip when c->redirect is set: a redirect
 // (execve / sigreturn) leaves an already-Linux value in G_RET that must not be re-translated -- a no-op for
 // the families that never set redirect, so collapsing all tails onto this one helper is byte-identical.
-// Returns 1 so a handler can `return svc_done(c);`.
-static int svc_done(struct cpu *c) {
+// Returns 1 so a handler can `return svc_done_host(c);`.
+typedef int (*svc_errno_converter)(int);
+
+static int svc_done_with(struct cpu *c, svc_errno_converter converter) {
     if (!c->redirect) {
         int64_t rv = (int64_t)G_RET(c);
-        if (rv < 0 && rv >= -4095) G_RET(c) = (uint64_t)(-(int64_t)hl_linux_errno_from_macos((int)(-rv)));
+        if (rv < 0 && rv >= -4095) G_RET(c) = (uint64_t)(-(int64_t)converter((int)(-rv)));
     }
     return 1;
+}
+
+static int svc_done_host(struct cpu *c) {
+    return svc_done_with(c, hl_linux_errno_from_host);
 }

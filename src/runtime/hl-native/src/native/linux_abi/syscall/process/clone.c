@@ -194,6 +194,10 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
 
 static int execveat_empty_path(int dirfd, char *path, size_t capacity) {
     char host[4200];
+    if (dirfd >= 0 && dirfd < HL_NFD && g_fdpath[dirfd][0] && g_fdpath_guest[dirfd]) {
+        snprintf(path, capacity, "%s", g_fdpath[dirfd]);
+        return 0;
+    }
     if (dirfd >= 0 && dirfd < HL_NFD && g_fdpath[dirfd][0])
         snprintf(host, sizeof host, "%s", g_fdpath[dirfd]);
     else if (dirfd < 0 || hl_native_fd_path(dirfd, host, sizeof host) != 0 || !host[0])
@@ -238,23 +242,32 @@ static int svc_proc_281(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     (void)a5;
     static char path[4200];
     const char *source = (const char *)a1;
+    int owned_descriptor = -1;
     int error;
     // Linux validates the complete flag word before resolving either the pathname or dirfd. The only
     // accepted bits are AT_SYMLINK_NOFOLLOW and AT_EMPTY_PATH; silently ignoring another bit can execute
     // a program after the caller's execveat was required to fail with EINVAL.
     if ((int)a4 & ~(0x100 | 0x1000))
         error = -EINVAL;
-    else if (source && !source[0] && ((int)a4 & 0x1000))
-        error = execveat_empty_path((int)a0, path, sizeof path);
+    else if (source && !source[0] && ((int)a4 & 0x1000)) {
+        // AT_EMPTY_PATH names the open file description, not the path which happened to open it. Pin that
+        // description before pathname bookkeeping: the guest may have unlinked or replaced the directory
+        // entry, and reopening g_fdpath would then validate and execute a different image. The exec request
+        // owns this duplicate on success and failure; keeping it non-CLOEXEC also lets it survive the manual
+        // close-on-exec sweep until the immutable exec image has finished loading.
+        owned_descriptor = bound_exec_descriptor((int)a0);
+        error = owned_descriptor < 0 ? -errno : execveat_empty_path((int)a0, path, sizeof path);
+    }
     else if (!source || !source[0])
         error = -ENOENT;
     else
         error = execveat_named_path((int)a0, source, (int)a4, path, sizeof path);
     if (error != 0) {
+        if (owned_descriptor >= 0) close(owned_descriptor);
         G_RET(c) = (uint64_t)(int64_t)error;
         return 1;
     }
-    return svc_proc_221(c, 221, (uint64_t)(uintptr_t)path, a2, a3, 0, 0, 0);
+    return svc_proc_exec(c, path, a2, a3, owned_descriptor);
 }
 
 static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {

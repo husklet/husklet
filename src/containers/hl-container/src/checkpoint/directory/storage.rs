@@ -10,6 +10,13 @@ pub(super) enum PublicationOutcome {
 }
 
 impl DirectoryImage {
+    pub(super) fn check_deadline(deadline: Option<std::time::Instant>) -> Result<(), CheckpointError> {
+        deadline
+            .is_none_or(|deadline| std::time::Instant::now() < deadline)
+            .then_some(())
+            .ok_or_else(CheckpointError::deadline)
+    }
+
     #[cfg(unix)]
     fn create_directory(directory: &std::os::fd::OwnedFd, component: &std::ffi::OsStr) -> Result<(), CheckpointError> {
         use nix::sys::stat::{Mode, mkdirat};
@@ -175,112 +182,6 @@ impl DirectoryImage {
     }
 
     #[cfg(not(unix))]
-    pub(super) fn collect(
-        root: &Path,
-        directory: &Path,
-        exclude_generation_metadata: bool,
-        objects: &mut Vec<String>,
-    ) -> Result<(), CheckpointError> {
-        for entry in std::fs::read_dir(directory)
-            .map_err(|error| CheckpointError::new(format!("list checkpoint objects: {error}")))?
-        {
-            let entry = entry.map_err(|error| CheckpointError::new(format!("read checkpoint object: {error}")))?;
-            if exclude_generation_metadata
-                && directory == root
-                && (entry.file_name() == "current"
-                    || entry
-                        .file_name()
-                        .to_str()
-                        .is_some_and(|name| name.starts_with("generation-")))
-            {
-                continue;
-            }
-            let kind = entry
-                .file_type()
-                .map_err(|error| CheckpointError::new(error.to_string()))?;
-            if kind.is_symlink() {
-                return Err(CheckpointError::new("checkpoint image contains a symbolic link"));
-            }
-            if kind.is_dir() {
-                Self::collect(root, &entry.path(), exclude_generation_metadata, objects)?;
-            } else {
-                let relative = entry
-                    .path()
-                    .strip_prefix(root)
-                    .map_err(|error| CheckpointError::new(error.to_string()))?
-                    .components()
-                    .map(|component| component.as_os_str().to_string_lossy())
-                    .collect::<Vec<_>>()
-                    .join("/");
-                objects.push(relative);
-            }
-        }
-        Ok(())
-    }
-
-    #[cfg(unix)]
-    pub(super) fn collect_held(
-        directory: std::os::fd::OwnedFd,
-        prefix: &str,
-        exclude_generation_metadata: bool,
-        objects: &mut Vec<String>,
-    ) -> Result<(), CheckpointError> {
-        use nix::fcntl::{OFlag, openat};
-        use nix::sys::stat::{Mode, SFlag, fstat};
-
-        let mut directory = nix::dir::Dir::from_fd(directory)
-            .map_err(|error| CheckpointError::new(format!("list checkpoint objects: {error}")))?;
-        let names = directory
-            .iter()
-            .map(|entry| {
-                entry
-                    .map(|entry| entry.file_name().to_owned())
-                    .map_err(|error| CheckpointError::new(format!("read checkpoint object: {error}")))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        for name in names {
-            let name = name.as_c_str();
-            if name == c"." || name == c".." {
-                continue;
-            }
-            let text = name
-                .to_str()
-                .map_err(|_| CheckpointError::new("checkpoint object name is not UTF-8"))?;
-            if exclude_generation_metadata
-                && prefix.is_empty()
-                && (text == "current" || text.starts_with("generation-"))
-            {
-                continue;
-            }
-            let descriptor = openat(
-                &directory,
-                name,
-                OFlag::O_RDONLY | OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK,
-                Mode::empty(),
-            )
-            .map_err(|error| CheckpointError::new(format!("open checkpoint object: {error}")))?;
-            let kind = SFlag::from_bits_truncate(
-                fstat(&descriptor)
-                    .map_err(|error| CheckpointError::new(format!("inspect checkpoint object: {error}")))?
-                    .st_mode,
-            );
-            let relative = if prefix.is_empty() {
-                text.to_owned()
-            } else {
-                format!("{prefix}/{text}")
-            };
-            if kind.contains(SFlag::S_IFDIR) {
-                Self::collect_held(descriptor, &relative, exclude_generation_metadata, objects)?;
-            } else if kind.contains(SFlag::S_IFREG) {
-                objects.push(relative);
-            } else {
-                return Err(CheckpointError::new("checkpoint image contains a non-regular object"));
-            }
-        }
-        Ok(())
-    }
-
-    #[cfg(not(unix))]
     pub(super) fn replace(path: &Path, bytes: &[u8]) -> Result<(), CheckpointError> {
         let parent = path
             .parent()
@@ -406,9 +307,19 @@ impl DirectoryImage {
 
     #[cfg(unix)]
     pub(super) fn remove_tree_at(root: &std::os::fd::OwnedFd, name: &str) -> Result<(), CheckpointError> {
+        Self::remove_tree_at_until(root, name, None)
+    }
+
+    #[cfg(unix)]
+    pub(super) fn remove_tree_at_until(
+        root: &std::os::fd::OwnedFd,
+        name: &str,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(), CheckpointError> {
         use nix::fcntl::{OFlag, openat};
         use nix::sys::stat::Mode;
 
+        Self::check_deadline(deadline)?;
         let directory = match openat(
             root,
             name,
@@ -423,27 +334,34 @@ impl DirectoryImage {
                 )));
             }
         };
-        Self::clear_directory(directory)?;
+        Self::clear_directory_until(directory, deadline)?;
+        Self::check_deadline(deadline)?;
         nix::unistd::unlinkat(root, name, nix::unistd::UnlinkatFlags::RemoveDir)
             .map_err(|error| CheckpointError::new(format!("remove checkpoint staging generation: {error}")))
     }
 
     #[cfg(unix)]
-    fn clear_directory(directory: std::os::fd::OwnedFd) -> Result<(), CheckpointError> {
+    fn clear_directory_until(
+        directory: std::os::fd::OwnedFd,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(), CheckpointError> {
         use nix::fcntl::{OFlag, openat};
         use nix::sys::stat::{Mode, SFlag, fstat};
 
+        Self::check_deadline(deadline)?;
         let mut entries = nix::dir::Dir::from_fd(directory)
             .map_err(|error| CheckpointError::new(format!("read checkpoint staging generation: {error}")))?;
         let names = entries
             .iter()
             .map(|entry| {
+                Self::check_deadline(deadline)?;
                 entry
                     .map(|entry| entry.file_name().to_owned())
                     .map_err(|error| CheckpointError::new(format!("read checkpoint staging object: {error}")))
             })
             .collect::<Result<Vec<_>, _>>()?;
         for child in names {
+            Self::check_deadline(deadline)?;
             let child = child.as_c_str();
             if child == c"." || child == c".." {
                 continue;
@@ -458,17 +376,21 @@ impl DirectoryImage {
                 fstat(descriptor).is_ok_and(|status| SFlag::from_bits_truncate(status.st_mode).contains(SFlag::S_IFDIR))
             });
             if directory {
-                Self::clear_directory(
+                Self::clear_directory_until(
                     descriptor
                         .map_err(|error| CheckpointError::new(format!("open checkpoint staging directory: {error}")))?,
+                    deadline,
                 )?;
+                Self::check_deadline(deadline)?;
                 nix::unistd::unlinkat(&entries, child, nix::unistd::UnlinkatFlags::RemoveDir)
                     .map_err(|error| CheckpointError::new(format!("remove checkpoint staging directory: {error}")))?;
             } else {
+                Self::check_deadline(deadline)?;
                 nix::unistd::unlinkat(&entries, child, nix::unistd::UnlinkatFlags::NoRemoveDir)
                     .map_err(|error| CheckpointError::new(format!("remove checkpoint staging object: {error}")))?;
             }
         }
+        Self::check_deadline(deadline)?;
         Ok(())
     }
 }

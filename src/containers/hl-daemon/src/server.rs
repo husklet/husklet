@@ -25,6 +25,7 @@ pub struct Server {
     events: Events,
     release: Release,
     sampler: Arc<dyn ProcessSampler>,
+    sandbox: hl_container::Sandbox,
 }
 
 impl Server {
@@ -36,6 +37,7 @@ impl Server {
         events: Events,
         release: Release,
         sampler: Arc<dyn ProcessSampler>,
+        sandbox: hl_container::Sandbox,
     ) -> Self {
         Self {
             socket: socket.to_path_buf(),
@@ -45,6 +47,7 @@ impl Server {
             events,
             release,
             sampler,
+            sandbox,
         }
     }
 
@@ -114,6 +117,7 @@ impl Server {
             self.events,
             self.release,
             self.sampler,
+            self.sandbox,
         );
         let (shutdown_sender, shutdown_receiver) = tokio::sync::watch::channel(false);
         let mut connections = tokio::task::JoinSet::new();

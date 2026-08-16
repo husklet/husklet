@@ -1,0 +1,25 @@
+cases:
+- id: terminal-backslash-continuation/secondary-prompt-join
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "stty -echo; PS2=$(printf '\\103\\117\\116\\124\\076\\040'); printf 'CONT-%s\\n' READY\r" }
+      - await_output: { contains: CONT-READY, timeout_ms: 5000 }
+      - write: { text: "printf '<%s>\\n' CONTINUED-\\\r" }
+      - await_output: { contains: "CONT> ", timeout_ms: 5000 }
+      - write: { text: "VALUE\r" }
+      - await_output: { contains: "<CONTINUED-VALUE>", timeout_ms: 5000 }
+      - write: { text: "printf 'CONT-SHELL-%s\\n' RECOVERED; stty echo; exit\r" }
+      - await_output: { contains: CONT-SHELL-RECOVERED, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/joined.txt
+    - golden/recovered.txt

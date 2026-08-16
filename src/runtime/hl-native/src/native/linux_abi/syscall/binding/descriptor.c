@@ -2,6 +2,32 @@ static int bound_snapshot(uint64_t value, hl_linux_fd_snapshot *snapshot) {
     if (g_linux_box == NULL || value > UINT32_MAX) return 0;
     return hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)value, snapshot) == HL_STATUS_OK;
 }
+
+/* Return an independently closeable native descriptor for an execveat
+ * AT_EMPTY_PATH request. A bound guest fd's same-number native descriptor is
+ * only its sentinel shadow; duplicating that shadow executes the wrong object.
+ * Detach the host attachment from the private-descriptor registry because the
+ * exec image takes ordinary close(2) ownership from this point onward. */
+static int bound_exec_descriptor(int descriptor) {
+    hl_linux_fd_snapshot snapshot;
+    const hl_host_posix_attachment_services *attachments;
+    hl_host_result borrowed;
+    int native;
+    if (!bound_snapshot((uint64_t)(uint32_t)descriptor, &snapshot)) return dup(descriptor);
+    attachments = g_host_services != NULL ? g_host_services->posix_attachment : NULL;
+    if (attachments == NULL || attachments->borrow_file == NULL) {
+        errno = ENOSYS;
+        return -1;
+    }
+    borrowed = attachments->borrow_file(g_host_services->context, snapshot.host_handle);
+    if (borrowed.status != HL_STATUS_OK || borrowed.value > INT_MAX) {
+        errno = borrowed.status == HL_STATUS_OK ? EOVERFLOW : (int)-bound_host_error(borrowed.status);
+        return -1;
+    }
+    native = (int)borrowed.value;
+    hl_host_process_fd_private_remove(native);
+    return native;
+}
 #include "vector_validation.h"
 /* Publish descriptors supplied through the embedding API as logical guest
  * descriptors too.  In particular, typed stdin/stdout/stderr intentionally
@@ -182,6 +208,8 @@ static void bound_path_duplicate(hl_linux_fd source, int64_t target) {
     if (source >= HL_NFD || target < 0 || target >= HL_NFD) return;
     memmove(g_fdpath[(int)target], g_fdpath[(int)source], sizeof g_fdpath[(int)target]);
     g_fdpath_guest[(int)target] = g_fdpath_guest[(int)source];
+    memmove(g_ovldir[(int)target], g_ovldir[(int)source], sizeof g_ovldir[(int)target]);
+    ovldents_duplicate((int)source, (int)target);
 }
 
 static int64_t bound_dup_at_least(hl_linux_fd source, int minimum, uint32_t descriptor_flags) {
@@ -310,6 +338,11 @@ static int bound_handle_host_path(hl_host_handle file, char *path, size_t size) 
     if (named.status != HL_STATUS_OK || named.value >= size) return -1;
     path[named.value] = '\0';
     return 0;
+}
+
+static void bound_evict_handle(hl_host_handle file) {
+    char path[HL_LINUX_PATH_MAX + 1];
+    if (bound_handle_host_path(file, path, sizeof(path)) == 0) hl_fdcache_evict_path(path);
 }
 
 static int bound_handle_chdir(int fd, int *result) {
@@ -565,6 +598,7 @@ issue_or_fail:
             }
         }
     }
+    if (!output && result > 0) bound_evict_handle(file->host_handle);
 cleanup:
     for (uint32_t index = 0; index < usable; ++index)
         free(buffers[index]);

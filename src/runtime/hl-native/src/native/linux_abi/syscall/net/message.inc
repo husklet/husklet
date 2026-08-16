@@ -214,8 +214,9 @@
                 // DNS socket: report the nameserver (127.0.0.11:53) as the source (see case 207).
                 dns_fill_ns(gname, NULL);
                 *(uint32_t *)(g + 8) = 16;
-            } else if (gname && gnamelen && udp_switch_source(&nss, mh.msg_namelen, gname, (socklen_t *)(g + 8))) {
-                // AF_UNIX switch sender restored to its Linux AF_INET identity.
+            } else if (gname && gnamelen &&
+                       udp_switch_source((int)a0, &nss, mh.msg_namelen, gname, (socklen_t *)(g + 8))) {
+                // AF_UNIX switch sender restored to its Linux AF_INET or AF_INET6 identity.
             } else if (gname && gnamelen) { // translate received host sockaddr back to Linux layout
                 int ll = sa_m2l((struct sockaddr *)&nss, gname, gnamelen);
                 *(uint32_t *)(g + 8) = (ll >= 0) ? (uint32_t)ll : mh.msg_namelen;
@@ -312,7 +313,7 @@
             (void)svc_net(c, nr == 269 ? 211 : 212, a0, (uint64_t)(uintptr_t)message, nested_flags, 0, 0, 0);
             int64_t result = (int64_t)G_RET(c);
             if (result < 0) {
-                if (!completed) return 1; /* nested svc_done already translated the errno */
+                if (!completed) return 1; /* nested svc_done_host already translated the errno */
                 break;
             }
             uint32_t message_length = (uint32_t)result;

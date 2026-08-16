@@ -30,6 +30,18 @@ static void svc_fs_access_49(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
                 G_RET(c) = 0;
                 break;
             }
+            hl_vfs_cursor_entry destination;
+            int resolved = hl_vfs_cursor_resolve_at(-100, raw, 0, &destination);
+            if (resolved != 0 || destination.kind != HL_VFS_CURSOR_DIRECTORY) {
+                if (resolved == 0) hl_vfs_cursor_entry_release(&destination);
+                G_RET(c) = (uint64_t)(int64_t)(resolved != 0 ? resolved : -ENOTDIR);
+                break;
+            }
+            int changed = hl_vfs_cwd_cursor_set(&destination.directory);
+            if (changed == 0) (void)path_copy(g_cwd, sizeof g_cwd, destination.directory.guest);
+            hl_vfs_cursor_entry_release(&destination);
+            G_RET(c) = (uint64_t)(int64_t)changed;
+            break;
         }
         // chdir (confined; tracks guest cwd)
         const char *p = atpath(-100, (const char *)a0, pb, sizeof pb, 0);
@@ -67,6 +79,15 @@ static void svc_fs_access_50(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         if (!g_untrusted && g_fdvis_control != NULL && !proc_fdvis_lookup((int)getpid(), (int)a0, NULL, NULL, NULL)) {
             G_RET(c) = (uint64_t)(int64_t)(-EBADF);
             break;
+        }
+        if (g_rootfs) {
+            const hl_vfs_cursor *destination = hl_vfs_fd_cursor_get((int)a0);
+            if (destination != NULL) {
+                int changed = hl_vfs_cwd_cursor_set(destination);
+                if (changed == 0) (void)path_copy(g_cwd, sizeof g_cwd, destination->guest);
+                G_RET(c) = (uint64_t)(int64_t)changed;
+                break;
+            }
         }
         int changed;
         int handled = bound_handle_chdir((int)a0, &changed);
@@ -638,8 +659,8 @@ static int open_synthetic_path(struct cpu *c, uint64_t a0, uint64_t a1, int lf, 
             if (ef >= 0) {
                 if (lf & 0x80000) fcntl(ef, F_SETFD, FD_CLOEXEC); // honor O_CLOEXEC
                 if (ef < HL_NFD) {
-                    if (path_copy(g_fdpath[ef], sizeof g_fdpath[ef], hp) != 0) g_fdpath[ef][0] = 0;
-                    g_fdpath_guest[ef] = 0;
+                    if (path_copy(g_fdpath[ef], sizeof g_fdpath[ef], ep) != 0) g_fdpath[ef][0] = 0;
+                    g_fdpath_guest[ef] = g_fdpath[ef][0] != 0;
                     (void)proc_fdvis_publish_native_fd(ef);
                 }
             }
@@ -749,6 +770,28 @@ static int open_synthetic_path(struct cpu *c, uint64_t a0, uint64_t a1, int lf, 
     return 0;
 }
 
+static int open_jailed_resolution_error(int directory, const char *path, uint32_t intent,
+                                        const hl_provider_node *projected) {
+    if ((intent & HL_OPEN_CREATE) || projected != NULL) return 0;
+    hl_vfs_cursor_entry resolved;
+    memset(&resolved, 0, sizeof resolved);
+    int error = hl_vfs_cursor_resolve_at(directory, path, (intent & HL_OPEN_NOFOLLOW) != 0, &resolved);
+    if (error == 0 && (intent & HL_OPEN_NOFOLLOW) && !(intent & HL_OPEN_PATH_ONLY) &&
+        resolved.kind == HL_VFS_CURSOR_SYMLINK)
+        error = -ELOOP;
+    hl_vfs_cursor_entry_release(&resolved);
+    return error == -ELOOP ? error : 0;
+}
+
+static void open_tag_merged_directory(int descriptor, const char *guest_path, int verified_overlay) {
+    if (descriptor < 0 || descriptor >= HL_NFD) return;
+    uint32_t provider_cursor = 0;
+    if ((verified_overlay ||
+         hl_provider_namespace_launch_child(guest_path, strlen(guest_path), &provider_cursor) != NULL) &&
+        path_copy(g_ovldir[descriptor], sizeof g_ovldir[descriptor], guest_path) != 0)
+        g_ovldir[descriptor][0] = 0;
+}
+
 static int open_jailed_path(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, int lf, int mf,
                             int osymlink, int is_opath, int nf_want, uint32_t openat2_intent,
                             const hl_provider_node *projected, const char *overlay_guest) {
@@ -801,6 +844,15 @@ static int open_jailed_path(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2
         intent |= openat2_intent;
         if (is_opath)
             intent &= ~(uint32_t)(HL_OPEN_READ | HL_OPEN_WRITE | HL_OPEN_CREATE | HL_OPEN_TRUNCATE | HL_OPEN_APPEND);
+        // Preserve namespace-walk errors before reducing the request to a native parent/name pair. The
+        // legacy overlay path resolver represents an over-deep or cyclic link as an absent host path,
+        // which turns Linux's ELOOP into ENOENT. The VFS cursor owns merged-layer traversal semantics and
+        // reports the original error; create requests still need the planner's missing-final handling.
+        int resolve_error = open_jailed_resolution_error((int)a0, (const char *)a1, intent, projected);
+        if (resolve_error != 0) {
+            G_RET(c) = (uint64_t)(int64_t)resolve_error;
+            return 1;
+        }
         // resolve following the final symlink unless the guest asked O_NOFOLLOW (per-arch bit)
         int pfd = jail_open_plan((int)a0, (const char *)a1, intent, typed_host_access(a2, is_opath),
                                  is_opath ? 0 : typed_host_creation(a2), (uint32_t)a3, !nf_want, bound_handle_reserve,
@@ -822,6 +874,34 @@ static int open_jailed_path(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2
         if (plan.directory == HL_HOST_HANDLE_INVALID && plan.target != HL_HOST_HANDLE_INVALID &&
             ((plan.target_type == HL_HOST_FILE_TYPE_REGULAR && !(lf & G_O_DIRECTORY)) || typed_directory)) {
             int64_t opened;
+            hl_vfs_cursor_entry typed_authority;
+            int typed_authority_live = 0;
+            memset(&typed_authority, 0, sizeof typed_authority);
+            if (typed_directory) {
+                hl_host_file_metadata target_metadata;
+                struct stat cursor_metadata;
+                int authority_error = hl_vfs_cursor_resolve_at((int)a0, (const char *)a1, nf_want, &typed_authority);
+                if (authority_error == 0 && typed_authority.kind != HL_VFS_CURSOR_DIRECTORY) authority_error = -ENOTDIR;
+                if (authority_error == 0 &&
+                    hl_vfs_cursor_authority_metadata(&typed_authority.directory.layers[0], ".", &cursor_metadata) != 0)
+                    authority_error = -EAGAIN;
+                if (authority_error == 0 &&
+                    g_host_services->file->metadata(g_host_services->context, plan.target, &target_metadata).status !=
+                        HL_STATUS_OK)
+                    authority_error = -EAGAIN;
+                if (authority_error == 0 && ((uint64_t)cursor_metadata.st_dev != target_metadata.stable_device ||
+                                             (uint64_t)cursor_metadata.st_ino != target_metadata.stable_object))
+                    authority_error = -EAGAIN;
+                if (authority_error != 0) {
+                    hl_vfs_cursor_entry_release(&typed_authority);
+                    bound_handle_cancel(&typed_slot);
+                    (void)g_host_services->file->close(g_host_services->context, plan.target);
+                    close(pfd);
+                    G_RET(c) = (uint64_t)(int64_t)authority_error;
+                    return 1;
+                }
+                typed_authority_live = 1;
+            }
             char typed_host_path[HL_LINUX_PATH_MAX + 1];
             int have_typed_host_path =
                 bound_handle_host_path(plan.target, typed_host_path, sizeof typed_host_path) == 0;
@@ -829,7 +909,15 @@ static int open_jailed_path(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2
             opened = bound_adopt_handle(&typed_slot, plan.target, typed_open_flags(a2));
             if (opened < 0) (void)g_host_services->file->close(g_host_services->context, plan.target);
             opened = bound_relocate_lowest(opened);
-            if (opened >= 0 && (projected != NULL || hl_provider_tree_files_active()) && opened < HL_NFD) {
+            if (opened >= 0 && typed_authority_live) {
+                int authority_error = hl_vfs_fd_cursor_publish((int)opened, &typed_authority.directory);
+                if (authority_error != 0) {
+                    (void)hl_linux_close(g_linux_box, (hl_linux_fd)opened);
+                    opened = authority_error;
+                }
+            }
+            if (typed_authority_live) hl_vfs_cursor_entry_release(&typed_authority);
+            if (opened >= 0 && projected != NULL && opened < HL_NFD) {
                 if (path_copy(g_fdpath[(int)opened], sizeof g_fdpath[(int)opened], overlay_guest) != 0)
                     g_fdpath[(int)opened][0] = 0;
                 g_fdpath_guest[(int)opened] = g_fdpath[(int)opened][0] != 0;
@@ -849,13 +937,10 @@ static int open_jailed_path(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2
                 }
                 if (typed_created && newfile_stamp_wanted()) newfile_stamp_path(typed_host_path, 1);
             }
-            if (opened >= 0 && opened < 1024 && (lf & G_O_DIRECTORY)) {
-                uint32_t provider_cursor = 0;
-                if (hl_provider_namespace_launch_child(typed_guest_path, strlen(typed_guest_path), &provider_cursor) !=
-                        NULL &&
-                    path_copy(g_ovldir[(int)opened], sizeof g_ovldir[(int)opened], typed_guest_path) != 0)
-                    g_ovldir[(int)opened][0] = 0;
-            }
+            if (opened >= 0 && opened < 1024 && (lf & G_O_DIRECTORY))
+                open_tag_merged_directory((int)opened, typed_guest_path,
+                                          g_nlower && typed_authority_live && !jail_is_vol(typed_guest_path) &&
+                                              projected == NULL);
             G_RET(c) = (uint64_t)opened;
             return 1;
         }
@@ -873,6 +958,32 @@ static int open_jailed_path(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2
         if (r < 0 && errno == EMFILE) e = EMFILE;
         if (r >= 0 && nf_new) newfile_stamp_fd(r);
         if (r >= 0 && r < HL_NFD) g_opath[r] = is_opath;
+        if (r >= 0) {
+            struct stat opened_status;
+            if (r < HL_NFD && fstat(r, &opened_status) == 0 && S_ISDIR(opened_status.st_mode)) {
+                hl_vfs_cursor_entry authority;
+                memset(&authority, 0, sizeof authority);
+                int authority_error = hl_vfs_cursor_resolve_at((int)a0, (const char *)a1, nf_want, &authority);
+                struct stat authority_status;
+                if (authority_error == 0 && authority.kind != HL_VFS_CURSOR_DIRECTORY) authority_error = -ENOTDIR;
+                if (authority_error == 0 &&
+                    (hl_vfs_cursor_authority_metadata(&authority.directory.layers[0], ".", &authority_status) != 0 ||
+                     opened_status.st_dev != authority_status.st_dev ||
+                     opened_status.st_ino != authority_status.st_ino))
+                    authority_error = -EAGAIN;
+                if (authority_error == 0) authority_error = hl_vfs_fd_cursor_publish(r, &authority.directory);
+                if (authority_error == 0)
+                    open_tag_merged_directory(r, typed_guest_path,
+                                              g_nlower && !jail_is_vol(typed_guest_path) && projected == NULL);
+                hl_vfs_cursor_entry_release(&authority);
+                if (authority_error != 0) {
+                    fd_reset_emul(r);
+                    close(r);
+                    r = -1;
+                    e = -authority_error;
+                }
+            }
+        }
         if (r >= 0) {
             char gp[4200];
             // canonical host path for tracking
@@ -902,6 +1013,93 @@ static int open_jailed_path(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2
         return 1;
     }
     return 0;
+}
+
+static int open_overlay_read(struct cpu *c, uint64_t directory, uint64_t path, uint64_t flags, int linux_flags,
+                             const char *guest_path) {
+    hl_vfs_cursor_entry authority;
+    memset(&authority, 0, sizeof authority);
+    int authority_error =
+        hl_vfs_cursor_resolve_at((int)directory, (const char *)path, (linux_flags & G_O_NOFOLLOW) != 0, &authority);
+    int descriptor = -1;
+    int bound_descriptor = 0;
+    if (authority_error == 0 && authority.kind == HL_VFS_CURSOR_FILE && S_ISREG(authority.status.st_mode)) {
+        if (linux_flags & G_O_DIRECTORY) {
+            authority_error = -ENOTDIR;
+        } else if (authority.file.kind == HL_VFS_CURSOR_AUTHORITY_HOST) {
+            bound_handle_slot slot = {0};
+            authority_error = bound_handle_reserve(&slot);
+            if (authority_error == 0) {
+                hl_host_handle handle = authority.file.value.host.handle;
+                authority.file.kind = HL_VFS_CURSOR_AUTHORITY_INVALID;
+                descriptor = (int)bound_adopt_handle(&slot, handle, typed_open_flags(flags));
+                if (descriptor < 0) {
+                    authority_error = descriptor;
+                    (void)g_host_services->file->close(g_host_services->context, handle);
+                } else {
+                    descriptor = (int)bound_relocate_lowest(descriptor);
+                    bound_descriptor = 1;
+                }
+            }
+        } else {
+            descriptor = authority.file.value.descriptor;
+            authority.file.kind = HL_VFS_CURSOR_AUTHORITY_INVALID;
+        }
+    } else if (authority_error == 0 && authority.kind == HL_VFS_CURSOR_DIRECTORY) {
+        hl_vfs_cursor_entry_release(&authority);
+        memset(&authority, 0, sizeof authority);
+        authority_error = hl_vfs_cursor_resolve_at_native_lowers((int)directory, (const char *)path,
+                                                                 (linux_flags & G_O_NOFOLLOW) != 0, &authority);
+        if (authority_error == 0 && authority.kind != HL_VFS_CURSOR_DIRECTORY) authority_error = -ENOTDIR;
+        if (authority_error == 0 && authority.directory.count != 0 &&
+            authority.directory.layers[0].kind == HL_VFS_CURSOR_AUTHORITY_NATIVE) {
+            descriptor = fcntl(authority.directory.layers[0].value.descriptor, F_DUPFD_CLOEXEC, 0);
+            if (descriptor < 0) authority_error = -errno;
+        }
+    } else if (authority_error == 0 && authority.kind == HL_VFS_CURSOR_SYMLINK) {
+        authority_error = -ELOOP;
+    }
+    if (descriptor >= 0 && !bound_descriptor) {
+        descriptor = nofile_gate(descriptor);
+        if (descriptor < 0) authority_error = -errno;
+    }
+    if (descriptor >= 0 && !bound_descriptor &&
+        fcntl(descriptor, F_SETFD, (linux_flags & 0x80000) ? FD_CLOEXEC : 0) != 0) {
+        authority_error = -errno;
+        close(descriptor);
+        descriptor = -1;
+    }
+    if (descriptor >= 0 && !bound_descriptor && (linux_flags & 0x800) &&
+        fcntl(descriptor, F_SETFL, fcntl(descriptor, F_GETFL) | O_NONBLOCK) != 0) {
+        authority_error = -errno;
+        close(descriptor);
+        descriptor = -1;
+    }
+    if (descriptor >= 0 && authority.kind == HL_VFS_CURSOR_DIRECTORY) {
+        authority_error = hl_vfs_fd_cursor_publish(descriptor, &authority.directory);
+        if (authority_error != 0) {
+            close(descriptor);
+            descriptor = -1;
+        }
+    }
+    if (descriptor >= 0 && descriptor < HL_NFD) {
+        g_opath[descriptor] = 0;
+        if (path_copy(g_fdpath[descriptor], sizeof g_fdpath[descriptor], guest_path) == 0)
+            g_fdpath_guest[descriptor] = 1;
+        else
+            g_fdpath[descriptor][0] = g_fdpath_guest[descriptor] = 0;
+        if (authority.kind == HL_VFS_CURSOR_DIRECTORY &&
+            path_copy(g_ovldir[descriptor], sizeof g_ovldir[descriptor], guest_path) != 0)
+            g_ovldir[descriptor][0] = 0;
+    }
+    if (descriptor >= 0 && !bound_descriptor) {
+        char host[4200];
+        if (hl_native_fd_path(descriptor, host, sizeof host) == 0) hl_fdcache_fd_setpath(descriptor, host);
+    }
+    hl_vfs_cursor_entry_release(&authority);
+    if (descriptor < 0 && authority_error == 0) return 0;
+    G_RET(c) = descriptor >= 0 ? (uint64_t)descriptor : (uint64_t)(int64_t)authority_error;
+    return 1;
 }
 
 static uint64_t open_anonymous_tmpfile(uint64_t a0, uint64_t a1, uint64_t a3) {
@@ -1034,6 +1232,16 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
          * synthetic pathname through the provider first resolves a nonexistent literal /proc entry. */
         int descriptor_reopen = procfd_num_at((int)a0, (const char *)a1) >= 0;
         if (!descriptor_reopen && jail_routed_at((int)a0, (const char *)a1)) {
+            // A plain O_NOFOLLOW open rejects a final symlink; O_PATH|O_NOFOLLOW names the link instead.
+            // Ask the merged VFS/DAC snapshot before planning a host open, whose typed path can otherwise
+            // adopt the symlink handle successfully and lose Linux's ELOOP result.
+            if ((lf & G_O_NOFOLLOW) && !is_opath) {
+                int symlink = dac_symlink_at((int)a0, (const char *)a1);
+                if (symlink > 0) {
+                    G_RET(c) = (uint64_t)(int64_t)(-ELOOP);
+                    break;
+                }
+            }
             int dac_status = dac_open_at((int)a0, (const char *)a1, lf, is_opath);
             if (dac_status != 0) {
                 G_RET(c) = (uint64_t)(int64_t)dac_status;
@@ -1071,22 +1279,26 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         char overlay_guest[4200];
         abs_guest((int)a0, (const char *)a1, overlay_guest, sizeof overlay_guest);
         const hl_provider_node *projected = hl_provider_namespace_launch_resolve(overlay_guest, strlen(overlay_guest));
-        if (g_rootfs && g_nlower && !jail_is_vol(overlay_guest) && projected == NULL) {
+        int overlay_write = (lf & 3) || (lf & 0x40) || (lf & 0x200);
+        int overlay_candidate = g_rootfs && g_nlower && !jail_is_vol(overlay_guest) && projected == NULL;
+        if (overlay_candidate && !overlay_write && !is_opath && openat2_intent == 0 &&
+            open_overlay_read(c, a0, a1, a2, lf, overlay_guest))
+            break;
+        if (overlay_candidate && overlay_write) {
             const char *gp = overlay_guest;
             char host[4300];
             // O_WRONLY/O_RDWR/O_CREAT -> write
-            int isw = (lf & 3) || (lf & 0x40);
-            if (isw)
-                // copy-up the lower file (or upper path to create)
-                overlay_copyup(gp, host, sizeof host);
-            else
-                overlay_resolve(gp, host, sizeof host, (lf & G_O_NOFOLLOW) != 0);
+            int isw = overlay_write;
+            // copy-up the lower file (or upper path to create)
+            overlay_copyup(gp, host, sizeof host);
             // after copy-up, `host` (the upper path) exists iff the file was already present in the
             // overlay -> a missing upper means this open will CREATE it fresh; stamp its owner post-open.
             int nf_new = nf_want && access(host, F_OK) != 0;
+            int created = (lf & 0x40) && access(host, F_OK) != 0;
             // Gate the new fd against the guest's soft RLIMIT_NOFILE -> EMFILE past the cap (host table larger).
             int r = nofile_gate(
                 open(host, mf | osymlink | ((lf & G_O_NOFOLLOW) && !osymlink ? O_NOFOLLOW : 0), (mode_t)a3));
+            if (r >= 0 && created) hl_fdcache_resolution_bump();
             if (r >= 0 && nf_new) newfile_stamp_fd(r);
             if (r >= 0 && r < HL_NFD) g_opath[r] = is_opath;
             if (r >= 0) {

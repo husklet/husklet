@@ -1,10 +1,6 @@
 #include "../engine/checkpoint_channel.h"
 #include "../engine/backend.h"
 #include "../engine/options.h"
-#if !defined(_WIN32)
-#include "../engine/provider/client.h"
-#include "../engine/provider/tree_files.h"
-#endif
 #include "executable_authority.h"
 #include "api.h"
 #include "hl/engine.h"
@@ -50,12 +46,6 @@ struct hl_c_backend {
     hl_engine *engine;
     hl_options options;
     uint32_t options_initialized;
-#if !defined(_WIN32)
-    hl_provider_client provider;
-#endif
-    uint32_t provider_initialized;
-    uint32_t provider_files_installed;
-    int32_t provider_fd;
     atomic_bool result_lock;
     hl_engine_exit result;
 };
@@ -125,11 +115,29 @@ HL_API int32_t hl_c_backend_leak_check_nonvacuity(void) {
 #endif
 }
 
-extern int hl_aarch64_ckpt_broker_pair(hl_activation_descriptor *, hl_activation_descriptor *);
-extern hl_activation_descriptor hl_aarch64_ckpt_broker_accept(hl_activation_descriptor, int, uint64_t *);
-extern int hl_aarch64_ckpt_trigger_create(hl_activation_descriptor *, void **);
-extern uint32_t hl_aarch64_ckpt_trigger_bump(void *);
-extern void hl_aarch64_ckpt_trigger_destroy(void *, hl_activation_descriptor);
+#if defined(HL_NATIVE_TEST_HOOKS)
+extern int hl_linux_errno_from_host(int host_errno);
+extern int hl_linux_errno_from_darwin(int host_errno);
+extern int hl_linux_errno_from_ucrt(int host_errno);
+
+HL_API int32_t hl_c_backend_errno_from_host_test(uint32_t domain, int32_t host_errno) {
+    if (domain == 1) return hl_linux_errno_from_darwin(host_errno);
+    if (domain == 2) return hl_linux_errno_from_ucrt(host_errno);
+    return hl_linux_errno_from_host(host_errno);
+}
+#endif
+
+#if defined(HL_BUILD_TARGET_X86_64_ONLY)
+#define HL_BRIDGE_CKPT(name) hl_x86_64_ckpt_##name
+#else
+#define HL_BRIDGE_CKPT(name) hl_aarch64_ckpt_##name
+#endif
+
+extern int HL_BRIDGE_CKPT(broker_pair)(hl_activation_descriptor *, hl_activation_descriptor *);
+extern hl_activation_descriptor HL_BRIDGE_CKPT(broker_accept)(hl_activation_descriptor, int, uint64_t *);
+extern int HL_BRIDGE_CKPT(trigger_create)(hl_activation_descriptor *, void **);
+extern uint32_t HL_BRIDGE_CKPT(trigger_bump)(void *);
+extern void HL_BRIDGE_CKPT(trigger_destroy)(void *, hl_activation_descriptor);
 
 HL_API int32_t hl_c_backend_checkpoint_broker_pair(int32_t *parent, int32_t *child) {
     hl_activation_descriptor parent_descriptor = HL_ACTIVATION_DESCRIPTOR_NONE;
@@ -137,7 +145,7 @@ HL_API int32_t hl_c_backend_checkpoint_broker_pair(int32_t *parent, int32_t *chi
     if (parent == NULL || child == NULL) return HL_STATUS_INVALID_ARGUMENT;
     *parent = -1;
     *child = -1;
-    if (hl_aarch64_ckpt_broker_pair(&parent_descriptor, &child_descriptor) != 0 || parent_descriptor > INT32_MAX ||
+    if (HL_BRIDGE_CKPT(broker_pair)(&parent_descriptor, &child_descriptor) != 0 || parent_descriptor > INT32_MAX ||
         child_descriptor > INT32_MAX)
         return HL_STATUS_PLATFORM_FAILURE;
     *parent = (int32_t)parent_descriptor;
@@ -148,7 +156,7 @@ HL_API int32_t hl_c_backend_checkpoint_broker_pair(int32_t *parent, int32_t *chi
 HL_API int32_t hl_c_backend_checkpoint_broker_accept(int32_t broker, int32_t timeout_ms, uint64_t *host_pid) {
     hl_activation_descriptor channel;
     if (broker < 0 || timeout_ms < 0) return -1;
-    channel = hl_aarch64_ckpt_broker_accept((hl_activation_descriptor)broker, timeout_ms, host_pid);
+    channel = HL_BRIDGE_CKPT(broker_accept)((hl_activation_descriptor)broker, timeout_ms, host_pid);
     return channel == HL_ACTIVATION_DESCRIPTOR_NONE || channel > INT32_MAX ? -1 : (int32_t)channel;
 }
 
@@ -157,20 +165,19 @@ HL_API int32_t hl_c_backend_checkpoint_trigger_create(int32_t *descriptor, void 
     if (descriptor == NULL || mapping == NULL) return HL_STATUS_INVALID_ARGUMENT;
     *descriptor = -1;
     *mapping = NULL;
-    if (hl_aarch64_ckpt_trigger_create(&native_descriptor, mapping) != 0 || native_descriptor > INT32_MAX)
+    if (HL_BRIDGE_CKPT(trigger_create)(&native_descriptor, mapping) != 0 || native_descriptor > INT32_MAX)
         return HL_STATUS_PLATFORM_FAILURE;
     *descriptor = (int32_t)native_descriptor;
     return HL_STATUS_OK;
 }
 
 HL_API uint32_t hl_c_backend_checkpoint_trigger_bump(void *mapping) {
-    return hl_aarch64_ckpt_trigger_bump(mapping);
+    return HL_BRIDGE_CKPT(trigger_bump)(mapping);
 }
 
 HL_API void hl_c_backend_checkpoint_trigger_destroy(void *mapping, int32_t descriptor) {
-    hl_aarch64_ckpt_trigger_destroy(mapping,
-                                    descriptor < 0 ? HL_ACTIVATION_DESCRIPTOR_NONE
-                                                   : (hl_activation_descriptor)descriptor);
+    HL_BRIDGE_CKPT(trigger_destroy)(mapping, descriptor < 0 ? HL_ACTIVATION_DESCRIPTOR_NONE
+                                                            : (hl_activation_descriptor)descriptor);
 }
 
 extern int hl_aarch64_ckpt_channel_adopt(const char *broker, const char *trigger);
@@ -198,8 +205,12 @@ HL_API int32_t hl_c_backend_checkpoint_adopt(uint32_t isa, int32_t broker, int32
     }
     (void)snprintf(broker_text, sizeof(broker_text), "%d", broker_copy);
     (void)snprintf(trigger_text, sizeof(trigger_text), "%d", trigger_copy);
+#if defined(HL_BUILD_TARGET_X86_64_ONLY)
+    if (isa == 2 && hl_x86_64_ckpt_channel_adopt(broker_text, trigger_text) == 0)
+#else
     if ((isa == 1 ? hl_aarch64_ckpt_channel_adopt(broker_text, trigger_text)
                   : hl_x86_64_ckpt_channel_adopt(broker_text, trigger_text)) == 0)
+#endif
         return HL_STATUS_OK;
     (void)close(broker_copy);
     (void)close(trigger_copy);
@@ -207,10 +218,14 @@ HL_API int32_t hl_c_backend_checkpoint_adopt(uint32_t isa, int32_t broker, int32
 #endif
 }
 
-extern int hl_aarch64_ckpt_interrupt_signal(void);
+extern int HL_BRIDGE_CKPT(interrupt_signal)(void);
 
 HL_API int32_t hl_c_backend_checkpoint_interrupt_signal(uint32_t isa) {
-    return isa == 1 || isa == 2 ? hl_aarch64_ckpt_interrupt_signal() : -1;
+#if defined(HL_BUILD_TARGET_X86_64_ONLY)
+    return isa == 2 ? HL_BRIDGE_CKPT(interrupt_signal)() : -1;
+#else
+    return isa == 1 || isa == 2 ? HL_BRIDGE_CKPT(interrupt_signal)() : -1;
+#endif
 }
 
 HL_API int32_t hl_c_backend_checkpoint_configure(hl_c_backend *backend, int32_t broker, int32_t trigger) {
@@ -218,24 +233,6 @@ HL_API int32_t hl_c_backend_checkpoint_configure(hl_c_backend *backend, int32_t 
                            : hl_engine_checkpoint_configure(backend->engine, broker, trigger);
 }
 
-
-static int32_t hl_c_backend_private_descriptor_add(int32_t descriptor) {
-    return hl_host_process_fd_private_add(descriptor) == 0 ? HL_STATUS_OK : HL_STATUS_PLATFORM_FAILURE;
-}
-
-static void hl_c_backend_provider_discard(hl_c_backend *backend) {
-    if (backend == NULL || !backend->provider_initialized) return;
-#if !defined(_WIN32)
-    if (backend->provider_files_installed) {
-        hl_provider_tree_files_revoke();
-        backend->provider_files_installed = 0;
-    }
-    hl_provider_client_destroy(&backend->provider);
-    close(backend->provider_fd);
-#endif
-    backend->provider_fd = -1;
-    backend->provider_initialized = 0;
-}
 
 static uint32_t hl_c_backend_status_flags(uint64_t detail) {
     uint32_t flags;
@@ -341,7 +338,8 @@ static int hl_c_validate_main_image_plan(int fd, const hl_c_main_image_plan *pla
 }
 
 HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *executable_host, int32_t executable_fd,
-                            const hl_c_main_image_plan *image_plan, uint32_t option_count,
+                            const hl_c_main_image_plan *image_plan, const void *interpreter_image,
+                            size_t interpreter_size, uint32_t option_count,
                             const char *const *option_names, const char *const *option_values,
                             const int32_t standard_fds[3], int32_t provider_fd, void *syscall_context,
                             hl_syscall_trap_fn syscall_dispatch, hl_c_backend **output) {
@@ -358,6 +356,11 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
         return HL_STATUS_INVALID_ARGUMENT;
     }
     *output = NULL;
+    if (provider_fd >= 0) {
+        close(provider_fd);
+        return HL_STATUS_NOT_SUPPORTED;
+    }
+    if (provider_fd != -1) return HL_STATUS_INVALID_ARGUMENT;
     int validation_fd = executable_fd;
     int validation_owned = 0;
     if (validation_fd < 0 && executable_host != NULL) {
@@ -366,56 +369,16 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
     }
     int validation_ok = validation_fd >= 0 && hl_c_validate_main_image_plan(validation_fd, image_plan);
     if (validation_owned) close(validation_fd);
-    if (!validation_ok) {
-        if (provider_fd >= 0) close(provider_fd);
-        return HL_STATUS_INVALID_ARGUMENT;
-    }
+    if (!validation_ok) return HL_STATUS_INVALID_ARGUMENT;
     backend = calloc(1, sizeof(*backend));
-    if (backend == NULL) {
-        if (provider_fd >= 0) close(provider_fd);
-        return HL_STATUS_OUT_OF_MEMORY;
-    }
+    if (backend == NULL) return HL_STATUS_OUT_OF_MEMORY;
     atomic_init(&backend->result_lock, false);
     backend->result.abi = HL_ENGINE_ABI;
     backend->result.size = sizeof(backend->result);
     status = hl_c_bridge_host_create(&backend->host, &backend->services);
     if (status != HL_STATUS_OK) {
-        if (provider_fd >= 0) close(provider_fd);
         free(backend);
         return status;
-    }
-    backend->provider_fd = -1;
-    if (provider_fd >= 0) {
-#if defined(_WIN32)
-        hl_c_bridge_host_destroy(backend->host);
-        free(backend);
-        return HL_STATUS_NOT_SUPPORTED;
-#else
-        if (provider_fd < 3 ||
-            (standard_fds != NULL &&
-             (provider_fd == standard_fds[0] || provider_fd == standard_fds[1] || provider_fd == standard_fds[2]))) {
-            hl_c_bridge_host_destroy(backend->host);
-            close(provider_fd);
-            free(backend);
-            return HL_STATUS_INVALID_ARGUMENT;
-        }
-        backend->provider_initialized = 1;
-        backend->provider_fd = provider_fd;
-        if (hl_provider_client_init(&backend->provider, provider_fd, 4096) != 0) {
-            backend->provider_initialized = 0;
-            hl_c_bridge_host_destroy(backend->host);
-            close(provider_fd);
-            free(backend);
-            return HL_STATUS_INVALID_ARGUMENT;
-        }
-        if (hl_provider_tree_files_install(&backend->services, &backend->provider) != 0) {
-            hl_c_backend_provider_discard(backend);
-            hl_c_bridge_host_destroy(backend->host);
-            free(backend);
-            return HL_STATUS_INVALID_ARGUMENT;
-        }
-        backend->provider_files_installed = 1;
-#endif
     }
     memset(&config, 0, sizeof(config));
 #if !defined(HL_BUILD_TARGET_X86_64_ONLY)
@@ -437,7 +400,6 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
                 uint32_t close_index;
                 for (close_index = 0; close_index < index; ++close_index)
                     (void)backend->services.file->close(backend->services.context, imported[close_index].value);
-                hl_c_backend_provider_discard(backend);
                 hl_c_bridge_host_destroy(backend->host);
                 free(backend);
                 return imported[index].status;
@@ -453,7 +415,6 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
         config.fd_binding_count = 3;
     }
     if (hl_options_init_records(&backend->options, option_count, option_names, option_values) != 0) {
-        hl_c_backend_provider_discard(backend);
         hl_c_bridge_host_destroy(backend->host);
         free(backend);
         return HL_STATUS_INVALID_ARGUMENT;
@@ -468,7 +429,6 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
             if (standard_fds != NULL)
                 for (index = 0; index < 3; ++index)
                     (void)backend->services.file->close(backend->services.context, imported[index].value);
-            hl_c_backend_provider_discard(backend);
             hl_c_bridge_host_destroy(backend->host);
             free(backend);
             return imported_executable.status == HL_STATUS_OK ? HL_STATUS_PLATFORM_FAILURE : imported_executable.status;
@@ -487,21 +447,20 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
         status = hl_c_backend_executable_open(&backend->services, executable_host, &executable);
         if (status != HL_STATUS_OK) {
             hl_options_destroy(&backend->options);
-            hl_c_backend_provider_discard(backend);
             hl_c_bridge_host_destroy(backend->host);
             free(backend);
             return status;
         }
         config.executable = &executable;
     }
-    status = hl_engine_create_with_borrowed_options_and_syscall_trap(
-        &config, &backend->services, &backend->options, syscall_context, syscall_dispatch, &backend->engine);
+    status = hl_engine_create_with_borrowed_options_and_syscall_trap_and_interpreter(
+        &config, &backend->services, &backend->options, syscall_context, syscall_dispatch,
+        interpreter_image, interpreter_size, &backend->engine);
     if (status != HL_STATUS_OK) {
         hl_c_backend_executable_discard(&backend->services, &executable);
         if (standard_fds != NULL)
             for (index = 0; index < 3; ++index)
                 (void)backend->services.file->close(backend->services.context, imported[index].value);
-        hl_c_backend_provider_discard(backend);
         hl_c_bridge_host_destroy(backend->host);
         hl_options_destroy(&backend->options);
         free(backend);
@@ -524,9 +483,11 @@ HL_API int32_t hl_c_backend_run(hl_c_backend *backend, int32_t argc, const char 
     return status;
 }
 
+enum { HL_C_BACKEND_REQUEST_CHECKPOINT_PRIVATE = 4u };
+
 HL_API int32_t hl_c_backend_request(hl_c_backend *backend, uint32_t request, int32_t signal) {
     if (backend == NULL) return HL_STATUS_INVALID_ARGUMENT;
-    if (request == HL_ENGINE_REQUEST_SIGNAL)
+    if (request == HL_ENGINE_REQUEST_SIGNAL || request == HL_C_BACKEND_REQUEST_CHECKPOINT_PRIVATE)
         return hl_engine_request(backend->engine, request, &signal, sizeof(signal));
     return hl_engine_request(backend->engine, request, NULL, 0);
 }
@@ -563,7 +524,6 @@ HL_API void hl_c_backend_destroy(hl_c_backend *backend) {
     if (backend == NULL) return;
     hl_engine_destroy(backend->engine);
     if (backend->options_initialized) hl_options_destroy(&backend->options);
-    hl_c_backend_provider_discard(backend);
     hl_c_bridge_host_destroy(backend->host);
     free(backend);
     hl_c_backend_leak_check_verdict();

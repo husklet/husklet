@@ -1,0 +1,26 @@
+cases:
+- id: terminal-meta-backspace/delete-previous-word
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "stty -echo; printf \"META-${x}READY\\n\"\r" }
+      - await_output: { contains: META-READY, timeout_ms: 5000 }
+      - write: { text: "echo META-BACKSPACE-OK DELETE" }
+      - write: { text: "\u001b\u007f" }
+      - write: { text: "\r" }
+      - await_output: { contains: META-BACKSPACE-OK, timeout_ms: 5000 }
+      - reject_output: { text: "META-BACKSPACE-OK DELETE" }
+      - write: { text: "stty echo; printf \"SHELL-${x}OK\\n\"; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/edited.txt
+    - golden/shell_ok.txt

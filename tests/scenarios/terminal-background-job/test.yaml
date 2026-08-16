@@ -1,0 +1,28 @@
+cases:
+- id: terminal-background-job/prompt-kill-wait
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "stty -echo; PS1=$(printf '\\102\\107\\055\\120\\122\\117\\115\\120\\124\\043\\040'); printf 'BACKGROUND-%s\\n' READY\r" }
+      - await_output: { contains: BACKGROUND-READY, timeout_ms: 5000 }
+      - await_output: { contains: "BG-PROMPT# ", timeout_ms: 5000 }
+      - write: { text: "sleep 30 & bg=$!; printf 'BACKGROUND-%s\\n' STARTED\r" }
+      - await_output: { contains: BACKGROUND-STARTED, timeout_ms: 5000 }
+      - await_output: { contains: "BG-PROMPT# ", timeout_ms: 5000 }
+      - write: { text: "kill \"$bg\"; wait \"$bg\"; status=$?; printf 'BACKGROUND-STATUS-%s\\n' \"$status\"\r" }
+      - await_output: { contains: BACKGROUND-STATUS-143, timeout_ms: 5000 }
+      - write: { text: "printf 'BACKGROUND-SHELL-%s\\n' RECOVERED; stty echo; exit\r" }
+      - await_output: { contains: BACKGROUND-SHELL-RECOVERED, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/started.txt
+    - golden/status.txt
+    - golden/recovered.txt

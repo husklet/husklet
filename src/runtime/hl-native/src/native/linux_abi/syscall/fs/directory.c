@@ -22,39 +22,42 @@ static void svc_fs_directory_57(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
     }
 }
 
+static int overlay_directory_ensure(int fd) {
+    if (fd < 0 || fd >= HL_NFD) return 0;
+    if (!g_ovldir[fd][0] && g_fdpath[fd][0]) {
+        char guest_directory[4200];
+        uint32_t provider_cursor = 0;
+        int mapped = guest_from_host(g_fdpath[fd], guest_directory, sizeof guest_directory);
+        if (mapped > 0 &&
+            hl_provider_namespace_launch_child(guest_directory, strlen(guest_directory), &provider_cursor) != NULL &&
+            path_copy(g_ovldir[fd], sizeof g_ovldir[fd], guest_directory) != 0)
+            g_ovldir[fd][0] = 0;
+    }
+    return g_ovldir[fd][0] != 0;
+}
+
 static void svc_fs_directory_61(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                                 uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 61: {
         int fd = (int)a0;
-        if (fd >= 0 && fd < HL_NFD && !g_ovldir[fd][0] && g_fdpath[fd][0]) {
-            char guest_directory[4200];
-            uint32_t provider_cursor = 0;
-            int mapped = guest_from_host(g_fdpath[fd], guest_directory, sizeof guest_directory);
-            if (mapped > 0 &&
-                hl_provider_namespace_launch_child(guest_directory, strlen(guest_directory), &provider_cursor) !=
-                    NULL &&
-                path_copy(g_ovldir[fd], sizeof g_ovldir[fd], guest_directory) != 0)
-                g_ovldir[fd][0] = 0;
-        }
+        (void)overlay_directory_ensure(fd);
         // OVERLAY: merged listing across layers
         if (g_nlower && fd >= 0 && fd < HL_NFD && g_ovldir[fd][0]) {
-            // snapshot cache is indexed directly by guest fd (no slot table -> no eviction thrash)
-            if (!g_ovldents[fd].taken) {
-                g_ovldents[fd].taken = 1;
-                g_ovldents[fd].n = overlay_readdir(g_ovldir[fd], &g_ovldents[fd].nm, &g_ovldents[fd].ty);
+            ovldents_snapshot *snapshot = ovldents_require(fd);
+            if (snapshot == NULL) {
+                G_RET(c) = (uint64_t)(int64_t)(-ENOMEM);
+                break;
             }
-            // The host directory descriptor is the open-file-description state shared by dup() and fork().
-            // Keep the synthetic overlay cursor in its offset instead of treating this descriptor-indexed
-            // replay cache as authoritative.  Otherwise every alias starts its own snapshot at zero, and a
-            // fork copies the parent's cursor rather than observing the child's reads.  It also makes EOF a
-            // durable offset: freeing the snapshot at EOF used to make the next call silently restart at zero.
-            off_t shared_pos = lseek(fd, 0, SEEK_CUR);
-            g_ovldents[fd].pos = shared_pos >= 0 && shared_pos <= g_ovldents[fd].n ? (int)shared_pos : 0;
+            // snapshot cache is indexed directly by guest fd (no slot table -> no eviction thrash)
+            if (!snapshot->taken) {
+                snapshot->taken = 1;
+                snapshot->n = overlay_readdir(g_ovldir[fd], &snapshot->nm, &snapshot->ty);
+            }
             size_t o = 0;
             int einval = 0;
-            while (g_ovldents[fd].pos < g_ovldents[fd].n) {
-                const char *nm = g_ovldents[fd].nm[g_ovldents[fd].pos];
+            while (snapshot->pos < snapshot->n) {
+                const char *nm = snapshot->nm[snapshot->pos];
                 size_t nl = strlen(nm), lr = (19 + nl + 1 + 7) & ~7ull;
                 if (o + lr > (size_t)a2) {
                     // buffer too small for even the first pending entry -> EINVAL (see case 61 below)
@@ -75,7 +78,7 @@ static void svc_fs_directory_61(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
                 // `find -inum`, and hardlink detection work on a layered image. The old `pos+1` fabricated a
                 // unique per-position number -> every entry looked like a distinct inode (hardlinks/du/rsync
                 // dedup broke). Fall back to pos+1 only if the entry can't be stat'd.
-                uint64_t d_ino = (uint64_t)g_ovldents[fd].pos + 1;
+                uint64_t d_ino = (uint64_t)snapshot->pos + 1;
                 if (nl < 200) {
                     char egp[4300], ehp[4300];
                     int gl = snprintf(egp, sizeof egp, "%s/%s", g_ovldir[fd], nm);
@@ -86,9 +89,13 @@ static void svc_fs_directory_61(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
                     }
                 }
                 *(uint64_t *)(ld + 0) = d_ino;
-                *(uint64_t *)(ld + 8) = o + lr;
+                // d_off is the cookie for the next directory entry, not an offset within this one
+                // result buffer.  The overlay cursor is stored as the shared descriptor offset, so
+                // publishing the same position here keeps seekdir and dup aliases in one coordinate
+                // system.  A buffer-relative cookie restarts at 24 on every single-entry read.
+                *(uint64_t *)(ld + 8) = (uint64_t)snapshot->pos + 1;
                 *(uint16_t *)(ld + 16) = (uint16_t)lr;
-                *(ld + 18) = g_ovldents[fd].ty[g_ovldents[fd].pos];
+                *(ld + 18) = snapshot->ty[snapshot->pos];
                 memcpy(ld + 19, nm, nl);
                 ld[19 + nl] = 0;
                 if (guest_copy_to(a1 + o, record, lr) != (ssize_t)lr) {
@@ -96,12 +103,9 @@ static void svc_fs_directory_61(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
                     break;
                 }
                 o += lr;
-                g_ovldents[fd].pos++;
+                snapshot->pos++;
             }
-            // Publish the cursor through the real descriptor so every alias and fork peer observes it.
-            // The snapshot remains owned until the last descriptor number using it is closed; retaining an
-            // exhausted snapshot is what makes repeated getdents64 calls continue to report EOF.
-            if (!einval) (void)lseek(fd, (off_t)g_ovldents[fd].pos, SEEK_SET);
+            // Retaining an exhausted snapshot makes repeated getdents64 calls continue to report EOF.
             G_RET(c) = einval > 0   ? (uint64_t)(int64_t)(-EINVAL)
                        : einval < 0 ? (uint64_t)(int64_t)(-EFAULT)
                                     : (uint64_t)o;
@@ -248,10 +252,29 @@ static void readlink_copy(struct cpu *c, char *buf, size_t size, const char *tar
     G_RET(c) = (uint64_t)length;
 }
 
+static void readlink_filesystem(struct cpu *c, int dirfd, const char *path, const char *guest_path, char *buf,
+                                size_t size);
+
 static int readlink_empty_path(struct cpu *c, int fd, const char *path, char *buf, size_t size) {
     if (!path || path[0] || fd < 0) return 0;
+    hl_linux_fd_snapshot snapshot;
+    if (bound_snapshot((uint64_t)(uint32_t)fd, &snapshot)) {
+        if (g_host_services == NULL || g_host_services->file == NULL || g_host_services->file->readlink == NULL) {
+            G_RET(c) = (uint64_t)(int64_t)(-ENOSYS);
+            return 1;
+        }
+        hl_host_result linked = g_host_services->file->readlink(
+            g_host_services->context, snapshot.host_handle, (hl_host_bytes){.data = buf, .size = size});
+        G_RET(c) = linked.status == HL_STATUS_OK ? linked.value
+                                                 : (uint64_t)(int64_t)vfs_host_error((hl_status)linked.status);
+        return 1;
+    }
     char fd_path[4200];
     const char *named = NULL;
+    if (fd < HL_NFD && g_opath[fd] && g_fdpath[fd][0] && g_fdpath_guest[fd]) {
+        readlink_filesystem(c, AT_FDCWD, g_fdpath[fd], g_fdpath[fd], buf, size);
+        return 1;
+    }
     if (fd < HL_NFD && g_opath[fd] && g_fdpath[fd][0])
         named = g_fdpath[fd];
     else if (hl_native_fd_path(fd, fd_path, sizeof fd_path) == 0)
@@ -530,23 +553,6 @@ static void readlink_filesystem(struct cpu *c, int dirfd, const char *path, cons
     char executable[1024];
     if (proc_self_exe(guest_path, executable, sizeof executable)) {
         readlink_copy(c, buf, size, executable, strlen(executable));
-        return;
-    }
-    if (hl_provider_tree_files_active()) {
-        char projected[4200];
-        guest_abspath_at(dirfd, path, projected, sizeof projected);
-        hl_host_result opened = hl_provider_tree_open_root(
-            projected, strlen(projected), HL_HOST_FILE_READ | HL_HOST_FILE_PATH_ONLY | HL_HOST_FILE_NOFOLLOW, 0, 0,
-            HL_PROVIDER_TREE_LINK);
-        if (opened.status != HL_STATUS_OK) {
-            G_RET(c) = (uint64_t)(int64_t)vfs_host_error((hl_status)opened.status);
-            return;
-        }
-        hl_host_result linked = g_host_services->file->readlink(g_host_services->context, opened.value,
-                                                                (hl_host_bytes){.data = buf, .size = size});
-        (void)g_host_services->file->close(g_host_services->context, opened.value);
-        G_RET(c) =
-            linked.status == HL_STATUS_OK ? linked.value : (uint64_t)(int64_t)vfs_host_error((hl_status)linked.status);
         return;
     }
     if (readlink_synth_regular(c, path, guest_path)) return;

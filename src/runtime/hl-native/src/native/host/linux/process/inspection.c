@@ -134,6 +134,8 @@ int hl_host_process_read(int64_t pid, hl_host_process_info *info) {
     info->parent_pid = (int64_t)fields[4];
     info->process_group = (int64_t)fields[5];
     info->session = (int64_t)fields[6];
+    info->terminal_device = (int64_t)fields[7];
+    info->foreground_group = (int64_t)fields[8];
     info->threads = fields[20] > UINT32_MAX ? UINT32_MAX : (uint32_t)fields[20];
     ticks = sysconf(_SC_CLK_TCK);
     if (ticks <= 0) ticks = 100;

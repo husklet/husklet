@@ -1,7 +1,7 @@
 // Extracted from service(): Process & scheduling -- clone/fork/execve/wait/exit, pid/uid/gid identity,
 // prctl/futex/caps/sched/affinity. Returns 1 if nr was handled, 0 otherwise. Because its cases call
 // service.c-local helpers (nonpie_p/cpu_online_mask/affinity_mask), it is #included after them, before
-// service(). NOTE: execve sets c->redirect; svc_done() (the shared tail) skips errno xlate when redirect
+// service(). NOTE: execve sets c->redirect; svc_done_host() (the shared tail) skips errno xlate when redirect
 // is set, so a redirect's already-Linux G_RET is never re-translated.
 
 // Restore guest GPRs that a per-arch fork/vfork->clone normalization repurposed as clone arguments (the x86
@@ -20,6 +20,12 @@
 
 enum { HL_EXEC_ARGUMENT_BYTES = 128 * 1024 };
 
+/* Diagnostic counters remain enabled in a fork child because they participate
+ * in translation-cache identity.  Only the process that began the execution
+ * owns the external profile stream; otherwise a fork-heavy guest emits one
+ * report per child and diagnostics become an unbounded guest-output amplifier. */
+static int g_profile_output_owner = 1;
+
 // execve env forwarding: serialize the guest's envp array into HL_GUEST_ENV (the "K=V\nK=V..." string
 // build_stack reads when laying out the new process stack), so the guest's actual environment crosses the
 // re-exec. A guest-initiated exec makes the guest's envp AUTHORITATIVE (like Linux): whatever the guest
@@ -29,16 +35,13 @@ enum { HL_EXEC_ARGUMENT_BYTES = 128 * 1024 };
 // sets HL_GUEST_ENV_EXACT); a guest execve that curates its env -- or clears it -- must match Linux, where
 // `execve(path, argv, NULL)` yields an empty environment and `execve(path,argv,["FOO=bar"])` yields exactly
 // one entry. Each pointer may be a low non-PIE address, so rebase the array base and every element with
-// nonpie_p(), exactly as the argv loop does. hl_option_set() copies the buffer, so it survives the teardown.
-static void exec_forward_env(uint64_t envp_guest) {
+// nonpie_p(), exactly as the argv loop does. Publication is deliberately separate from serialization so a
+// failed exec leaves the current process environment untouched.
+static char *exec_stage_env(uint64_t envp_guest) {
     if (!envp_guest) {
-        // Linux: NULL envp -> the new program runs with an EMPTY environment. Publish an empty, authoritative
-        // env (do not leak stale initial HL_GUEST_ENV data) and flag it exact so build_stack adds
-        // no defaults -> the guest sees envc==0, byte-exact with the native oracle.
-        hl_process_guest_environment_set("");
-        hl_option_set("HL_GUEST_ENV_ESC", "1", 1);
-        hl_option_set("HL_GUEST_ENV_EXACT", "1", 1);
-        return;
+        // Linux: NULL envp becomes an empty authoritative environment, but keep it private until every
+        // fallible exec check has succeeded so a failed exec cannot mutate the old process.
+        return strdup("");
     }
     // The dispatcher already rebases the envp array base for a displaced
     // ET_EXEC image. Rebase only its pointer elements here; applying the
@@ -46,7 +49,7 @@ static void exec_forward_env(uint64_t envp_guest) {
     uint64_t *ev = (uint64_t *)envp_guest;
     size_t cap = 4096, len = 0;
     char *buf = malloc(cap);
-    if (!buf) return;
+    if (!buf) return NULL;
     buf[0] = 0;
     for (int i = 0; ev[i]; i++) {
         const char *e = (const char *)nonpie_p(ev[i]);
@@ -59,7 +62,7 @@ static void exec_forward_env(uint64_t envp_guest) {
             char *nb = realloc(buf, cap);
             if (!nb) {
                 free(buf);
-                return;
+                return NULL;
             }
             buf = nb;
         }
@@ -78,10 +81,13 @@ static void exec_forward_env(uint64_t envp_guest) {
         buf[len++] = '\n'; // HL_GUEST_ENV record separator (build_stack splits on '\n')
         buf[len] = 0;
     }
-    hl_process_guest_environment_set(buf);
-    hl_option_set("HL_GUEST_ENV_ESC", "1", 1);   // tell build_stack the records are escape-encoded
-    hl_option_set("HL_GUEST_ENV_EXACT", "1", 1); // guest-initiated exec: this env is authoritative, inject no defaults
-    free(buf);
+    return buf;
+}
+
+static void exec_publish_env(hl_exec_environment_update *update) {
+    // No allocation or other fallible operation occurs here: prepare cloned and populated both option stores.
+    // The old stores remain authoritative until these infallible swaps make the complete update visible.
+    hl_exec_environment_commit(update);
 }
 
 // Fill a guest `struct rlimit { rlim_cur; rlim_max; }` for {get,set}rlimit/prlimit64 (cases 163/261).
@@ -298,6 +304,7 @@ static void vfork_import_guest_memory(pid_t child) {
 // never drift (clone3 was missing the W^X re-assert and the DIR*-cache drop).
 
 static void fork_child_hooks(struct cpu *c) {
+    g_profile_output_owner = 0;
 #ifdef G_SOFT_STATE_RESET
     G_SOFT_STATE_RESET(c);
 #endif
@@ -335,6 +342,11 @@ static void fork_child_hooks(struct cpu *c) {
     // S2: invalidate inherited path/metadata caches so the child cannot serve an
     // entry populated before the filesystem diverged.
     hl_fdcache_reset();
+    if (hl_vfs_cursor_state_after_fork() != 0) {
+        c->exit_code = 70;
+        c->exited = 1;
+        return;
+    }
     g_ndirs = 0;                 // the getdents DIR* cache is the PARENT's -- closedir'ing inherited handles
                                  // (on the child's close) crashes; drop it so the child re-fdopendir's fresh
     kqueue_rebuild_after_fork(); // macOS kqueue() fds (epoll/timerfd/inotify) don't survive fork ->
@@ -460,10 +472,11 @@ static int bound_fork_prepare(bound_fork_state *state) {
 
 static int bound_fork_complete(bound_fork_state *state, int child, int child_pid) {
     hl_status status;
+    int fdvis_status = 0;
     if (state->seq_prepared && child_pid < 0) seq_ref_fork_cancel();
     if (state->fdvis_prepared) {
         if (child_pid > 0)
-            proc_fdvis_after_fork(&state->fdvis_plan, child_pid, child);
+            fdvis_status = proc_fdvis_after_fork(&state->fdvis_plan, child_pid, child);
         else
             proc_fdvis_fork_cancel(&state->fdvis_plan);
         free(state->fdvis_plan.entries);
@@ -476,6 +489,7 @@ static int bound_fork_complete(bound_fork_state *state, int child, int child_pid
     if (state->watch_prepared && bound_mapping_fork_complete(&state->watch_plan, child) != 0 && status == HL_STATUS_OK)
         status = HL_STATUS_PLATFORM_FAILURE;
     if (private_status != 0 && status == HL_STATUS_OK) status = HL_STATUS_OUT_OF_MEMORY;
+    if (fdvis_status != 0 && status == HL_STATUS_OK) status = HL_STATUS_OUT_OF_MEMORY;
     free(state->plan.records);
     state->plan.records = NULL;
     free(state->watch_plan.records);
@@ -493,12 +507,33 @@ static int bound_fork_complete(bound_fork_state *state, int child, int child_pid
 // prctl per-process flags the kernel tracks and reports back on the matching GET (lsys-prctl-*):
 // no-new-privs is sticky (once set it can never clear), dumpable defaults to 1, pdeathsig defaults to 0.
 // (g_nnp lives in container/state.c so the /proc/self/status builder can report NoNewPrivs consistently.)
-static int g_dumpable = 1;                 // PR_SET/GET_DUMPABLE
 static int g_pdeathsig;                    // PR_SET/GET_PDEATHSIG
 static unsigned long g_timerslack = 50000; // PR_SET/GET_TIMERSLACK (ns); Linux default is 50us
 static int g_thp_disable;                  // PR_SET/GET_THP_DISABLE (per-process transparent-hugepage opt-out)
 static int g_subreaper;                    // PR_SET/GET_CHILD_SUBREAPER (this process is a reaper for orphans)
 static int g_mce_kill = 2; // PR_MCE_KILL/PR_MCE_KILL_GET machine-check policy: LATE=0, EARLY=1, DEFAULT=2
+#if defined(HL_NATIVE_TEST_HOOKS)
+// Deterministic in-process exec authority rendezvous. This is deliberately reachable only from native-test-hook
+// builds: a helper guest thread arms one acquisition boundary, observes the pinned-image phase, replaces the
+// pathname, and releases the exec thread. Production builds contain neither the private prctl option nor the wait.
+#define HL_EXEC_PIN_TEST_PRCTL 0x48504e54u
+#define HL_EXEC_PIN_TEST_MAIN 1u
+#define HL_EXEC_PIN_TEST_FINAL 2u
+#define HL_EXEC_PIN_TEST_ENV_SEED 5u
+#define HL_EXEC_PIN_TEST_ENV_CHECK 6u
+#define HL_EXEC_PIN_TEST_SHEBANG_HOP 4u
+static atomic_uint g_exec_pin_test_mode;
+static atomic_uint g_exec_pin_test_phase;
+
+static void exec_pin_test_wait(unsigned stage) {
+    if (atomic_load_explicit(&g_exec_pin_test_mode, memory_order_acquire) != stage) return;
+    atomic_store_explicit(&g_exec_pin_test_phase, stage, memory_order_release);
+    while (atomic_load_explicit(&g_exec_pin_test_phase, memory_order_acquire) != 3u)
+        sched_yield();
+    atomic_store_explicit(&g_exec_pin_test_mode, 0, memory_order_release);
+    atomic_store_explicit(&g_exec_pin_test_phase, 0, memory_order_release);
+}
+#endif
 // The process EFFECTIVE capability set. The container starts as full root (all caps); we don't model
 // per-capability ENFORCEMENT in general, but we DO track what capset(2) leaves in the effective set so the
 // few prctl options the kernel gates on a specific capability (PR_SET_SECUREBITS / PR_CAPBSET_DROP need
@@ -599,10 +634,8 @@ static int credential_publish_or_fault(struct cpu *c) {
 #include "process/clone.c"
 #include "process/wait.c"
 
-#define HL_PROC_CASE(number)                                                                                          \
-    case number:                                                                                                      \
-        (void)svc_proc_##number(c, nr, a0, a1, a2, a3, a4, a5);                                                      \
-        break
+#define HL_PROC_CASE(number)                                                                                           \
+    case number: (void)svc_proc_##number(c, nr, a0, a1, a2, a3, a4, a5); break
 
 static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
                     uint64_t a5) {
@@ -663,7 +696,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         HL_PROC_CASE(435);
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 #undef HL_PROC_CASE

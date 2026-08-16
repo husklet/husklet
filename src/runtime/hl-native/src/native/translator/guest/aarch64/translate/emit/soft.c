@@ -58,12 +58,12 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
     assert(ea != tmp && ea != tmp2 && tmp != tmp2);
     assert(bytes != 0 && bytes <= 4096);
     /*
-     * With the shadow-RAS disabled x30 carries no live engine return link.
-     * Use it as the resolver's per-site continuation, normalize every EA in
-     * x16, and share the complete interval/permission check once per block.
+     * Normalize every EA in x16 and share the complete interval/permission
+     * check once per block. x15 is saved at each site and is the resolver's
+     * scratch: real x18 is reserved by Darwin and may be cleared asynchronously.
      * Shadow-enabled builds retain the proven inline guard below.
      */
-    guard.shared = shadowgate() < 0 && !g_tier2_build && !guard.profile_sample;
+    guard.shared = shadowgate() < 0 && !g_tier2_build && !guard.profile_sample && resume_ea != 15;
     if (guard.shared) {
         if (ea != 16) e_movr(16, ea);
         guard.ea = 16;
@@ -80,6 +80,7 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
          * resolver. The native continuation immediately follows metadata:
          *   [pc:u64, miss_delta:i32, pad:u32]
          */
+        e_str(15, CPUREG, 15 * 8);
         uint32_t *metadata_address = (uint32_t *)g_cp;
         emit32(0); /* adr x17,metadata */
         if (g_soft_resolver_patch_count >= SOFT_STUB_PATCH_MAX) {
@@ -104,6 +105,7 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
         *g_cp++ = (uint8_t)required;
         *g_cp++ = 0;
         guard.native = g_cp;
+        e_ldr(15, CPUREG, 15 * 8);
         if (resume_ea != 16) e_movr(resume_ea, 16);
         return guard;
     }
@@ -252,7 +254,7 @@ static void emit_a64_soft_stub(void) {
     if (!g_soft_stub_patch_count && !g_soft_resolver_patch_count && !g_soft_legacy_stub_patch_count) return;
     if (g_soft_resolver_patch_count) {
         uint32_t *cold_miss_patches[1024];
-        int cold_miss_bits[1024]; /* -1 = CBNZ x18, otherwise TBZ x18,bit */
+        int cold_miss_bits[1024]; /* -1 = CBNZ x15, otherwise TBZ x15,bit */
         unsigned cold_miss_count = 0;
         for (;;) {
             uint32_t first = 0;
@@ -276,43 +278,43 @@ static void emit_a64_soft_stub(void) {
                 g_soft_resolver_patches[i] = NULL;
             }
 
-            /* x16 = guest EA, x17 = immutable site metadata. Only x18 is
-               scratch; x30 remains untouched for precise host-link state. */
-            e_ldr(18, CPUREG, OFF_SOFT_PAGE);
-            emit32(0xCB000000u | (18u << 16) | (16u << 5) | 18u);
-            emit32(0xD37FFC00u | (18u << 5) | 18u);
+            /* x16 = guest EA, x17 = immutable site metadata. x15 was saved by
+               the site and is safe scratch; x18 must never be used on Darwin. */
+            e_ldr(15, CPUREG, OFF_SOFT_PAGE);
+            emit32(0xCB000000u | (15u << 16) | (16u << 5) | 15u);
+            emit32(0xD37FFC00u | (15u << 5) | 15u);
             assert(cold_miss_count < sizeof cold_miss_patches / sizeof cold_miss_patches[0]);
             cold_miss_patches[cold_miss_count] = (uint32_t *)g_cp;
             cold_miss_bits[cold_miss_count++] = -1;
             emit32(0);
 
-            e_ldr(18, CPUREG, OFF_SOFT_LIMIT);
+            e_ldr(15, CPUREG, OFF_SOFT_LIMIT);
             if (bytes == 4096)
-                emit32(0xD1400000u | (1u << 10) | (18u << 5) | 18u);
+                emit32(0xD1400000u | (1u << 10) | (15u << 5) | 15u);
             else
-                e_subi(18, 18, bytes);
-            emit32(0xCB000000u | (16u << 16) | (18u << 5) | 18u);
-            emit32(0xD37FFC00u | (18u << 5) | 18u);
+                e_subi(15, 15, bytes);
+            emit32(0xCB000000u | (16u << 16) | (15u << 5) | 15u);
+            emit32(0xD37FFC00u | (15u << 5) | 15u);
             assert(cold_miss_count < sizeof cold_miss_patches / sizeof cold_miss_patches[0]);
             cold_miss_patches[cold_miss_count] = (uint32_t *)g_cp;
             cold_miss_bits[cold_miss_count++] = -1;
             emit32(0);
 
-            e_ldr(18, CPUREG, OFF_SOFT_PROTECTION);
+            e_ldr(15, CPUREG, OFF_SOFT_PROTECTION);
             if (required & HL_LOGICAL_VMA_READ) {
                 assert(cold_miss_count < sizeof cold_miss_patches / sizeof cold_miss_patches[0]);
                 cold_miss_patches[cold_miss_count] = (uint32_t *)g_cp;
                 cold_miss_bits[cold_miss_count++] = 0;
-                emit32(0); /* tbz x18,#READ,miss */
+                emit32(0); /* tbz x15,#READ,miss */
             }
             if (required & HL_LOGICAL_VMA_WRITE) {
                 assert(cold_miss_count < sizeof cold_miss_patches / sizeof cold_miss_patches[0]);
                 cold_miss_patches[cold_miss_count] = (uint32_t *)g_cp;
                 cold_miss_bits[cold_miss_count++] = 1;
-                emit32(0); /* tbz x18,#WRITE,miss */
+                emit32(0); /* tbz x15,#WRITE,miss */
             }
-            e_ldr(18, CPUREG, OFF_SOFT_DELTA);
-            emit32(0x8B000000u | (18u << 16) | (16u << 5) | 16u);
+            e_ldr(15, CPUREG, OFF_SOFT_DELTA);
+            emit32(0x8B000000u | (15u << 16) | (16u << 5) | 16u);
             e_addi(17, 17, 16);
             e_br(17);
         }
@@ -320,21 +322,22 @@ static void emit_a64_soft_stub(void) {
         for (unsigned i = 0; i < cold_miss_count; ++i) {
             uint32_t *patch = cold_miss_patches[i];
             int64_t displacement = (resolver_miss - (uint8_t *)patch) / 4;
-            *patch = cold_miss_bits[i] < 0 ? a64_cbnz_x(18, displacement)
-                                           : a64_tbz_x(18, (unsigned)cold_miss_bits[i], displacement);
+            *patch = cold_miss_bits[i] < 0 ? a64_cbnz_x(15, displacement)
+                                           : a64_tbz_x(15, (unsigned)cold_miss_bits[i], displacement);
         }
         e_str(16, CPUREG, OFF_SOFT_EA);
-        emit32(0x79400000u | (6u << 10) | (17u << 5) | 18u); /* ldrh w18,[meta,#12] */
-        e_str(18, CPUREG, OFF_SOFT_BYTES);
-        emit32(0x39400000u | (14u << 10) | (17u << 5) | 18u); /* ldrb w18,[meta,#14] */
-        e_str(18, CPUREG, OFF_SOFT_REQUIRED);
-        e_ldr(18, 17, 0);
-        e_str(18, CPUREG, OFF_SOFT_PC);
-        e_str(18, CPUREG, OFF_PC);
-        emit32(0xB9800000u | (2u << 10) | (17u << 5) | 18u); /* ldrsw x18,[meta,#8] */
+        emit32(0x79400000u | (6u << 10) | (17u << 5) | 15u); /* ldrh w15,[meta,#12] */
+        e_str(15, CPUREG, OFF_SOFT_BYTES);
+        emit32(0x39400000u | (14u << 10) | (17u << 5) | 15u); /* ldrb w15,[meta,#14] */
+        e_str(15, CPUREG, OFF_SOFT_REQUIRED);
+        e_ldr(15, 17, 0);
+        e_str(15, CPUREG, OFF_SOFT_PC);
+        e_str(15, CPUREG, OFF_PC);
+        emit32(0xB9800000u | (2u << 10) | (17u << 5) | 15u); /* ldrsw x15,[meta,#8] */
         e_addi(17, 17, 16);
-        emit32(0x8B000000u | (18u << 16) | (17u << 5) | 18u);
-        e_br(18);
+        emit32(0x8B000000u | (15u << 16) | (17u << 5) | 16u);
+        e_ldr(15, CPUREG, 15 * 8);
+        e_br(16);
     }
 
     if (g_soft_stub_patch_count) {
@@ -393,6 +396,30 @@ static void emit_a64_soft_bounce_commit(uint64_t next_pc) {
     *clear = 0xB4000000u | (((uint32_t)((resume - (uint8_t *)clear) / 4) & 0x7ffffu) << 5) | 16u;
 }
 
+static void emit_a64_soft_fold_address(int address, int temporary, int flags) {
+    if (!guestbase_on()) return;
+    emit32(0xD360FC00u | ((unsigned)address << 5) | (unsigned)temporary); // lsr temporary, address, #32
+    uint32_t *high = (uint32_t *)g_cp;
+    emit32(0);                             // cbnz temporary, done
+    emit32(0xD53B4200u | (unsigned)flags); // mrs flags, nzcv
+    e_movconst(temporary, g_nonpie_lo);
+    emit32(0xEB000000u | ((unsigned)temporary << 16) | ((unsigned)address << 5) | 31u); // cmp address, lo
+    uint32_t *below = (uint32_t *)g_cp;
+    emit32(0); // b.lo restore
+    e_movconst(temporary, g_nonpie_hi);
+    emit32(0xEB000000u | ((unsigned)temporary << 16) | ((unsigned)address << 5) | 31u); // cmp address, hi
+    uint32_t *above = (uint32_t *)g_cp;
+    emit32(0); // b.hs restore
+    e_movconst(temporary, g_nonpie_bias);
+    emit32(0x8B000000u | ((unsigned)temporary << 16) | ((unsigned)address << 5) | (unsigned)address);
+    uint8_t *restore = g_cp;
+    emit32(0xD51B4200u | (unsigned)flags); // msr nzcv, flags
+    uint8_t *done = g_cp;
+    *high = 0xB5000000u | (((uint32_t)((done - (uint8_t *)high) / 4) & 0x7ffffu) << 5) | (unsigned)temporary;
+    *below = 0x54000000u | (((uint32_t)((restore - (uint8_t *)below) / 4) & 0x7ffffu) << 5) | 3u;
+    *above = 0x54000000u | (((uint32_t)((restore - (uint8_t *)above) / 4) & 0x7ffffu) << 5) | 2u;
+}
+
 static void emit_a64_soft_exclusive(uint32_t in) {
     int base = (int)((in >> 5) & 31u);
     if (base == 31)
@@ -401,6 +428,7 @@ static void emit_a64_soft_exclusive(uint32_t in) {
         e_ldr(16, CPUREG, base * 8);
     else
         e_movr(16, base);
+    emit_a64_soft_fold_address(16, 17, 18);
     emit_a64_bus_guard(16, a64_mem_bytes(in), g_emit_gpc);
 
     int mask = gpr_field_mask(in);

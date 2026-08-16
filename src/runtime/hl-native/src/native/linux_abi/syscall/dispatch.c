@@ -1,10 +1,5 @@
 // brk arena
 static uint64_t brk_lo, brk_cur, brk_hi;
-// W3D fork-server prewarm/worker: when set, the guest's exit_group UNWINDS run_guest (sets c->exited
-// + c->exit_code) instead of _exit()ing, so the resident engine server survives pre-translating a
-// binary into the COW arena and a worker can report its exit code before dying. 0 on every normal
-// (standalone) run -> exit_group behaves exactly as before.
-int g_noexit;
 // W6A item 3: set the first time a guest requests a PROT_EXEC (RWX) anonymous mapping -- i.e. a
 // guest with its own in-process JIT (JVM/V8/LuaJIT/.NET/PyPy). Normal guests never set it, so the
 // SMC write-fault invalidation path (frontend/x86_64) stays completely inert for the whole existing
@@ -657,6 +652,7 @@ static void guest_abspath_at(int dirfd, const char *raw, char *out, size_t n) {
  * projected/typed descriptor must be duplicated through the Linux fd model rather than reopening its
  * native sentinel path; binding.c supplies the allocator after the syscall families are included. */
 static int64_t bound_dup_at_least(hl_linux_fd source, int minimum, uint32_t descriptor_flags);
+static int bound_exec_descriptor(int descriptor);
 #include "fs.c"
 static void bound_mapping_reset(void);
 static size_t bound_mapping_watch_capacity(void);
@@ -896,7 +892,7 @@ static void service_local(struct cpu *c) {
         };
         if (hl_linux_misc_dispatch(&misc, nr, arguments, &result)) {
             G_RET(c) = (uint64_t)result;
-            (void)svc_done(c);
+            (void)svc_done_host(c);
             return;
         }
     }
@@ -921,6 +917,6 @@ static void service_local(struct cpu *c) {
     // expects. Skip redirect (sigreturn restored an already-Linux x0 from the signal frame).
     if (!c->redirect) {
         int64_t rv = (int64_t)G_RET(c);
-        if (rv < 0 && rv >= -4095) G_RET(c) = (uint64_t)(-(int64_t)hl_linux_errno_from_macos((int)(-rv)));
+        if (rv < 0 && rv >= -4095) G_RET(c) = (uint64_t)(-(int64_t)hl_linux_errno_from_host((int)(-rv)));
     }
 }

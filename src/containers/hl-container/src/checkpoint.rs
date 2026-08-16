@@ -1,4 +1,5 @@
 use std::fmt;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 /// Failure from durable checkpoint object storage.
@@ -6,6 +7,7 @@ use std::sync::Arc;
 pub struct CheckpointError {
     message: String,
     deadline: bool,
+    busy: bool,
     published: bool,
 }
 
@@ -15,6 +17,7 @@ impl CheckpointError {
         Self {
             message: message.into(),
             deadline: false,
+            busy: false,
             published: false,
         }
     }
@@ -24,6 +27,17 @@ impl CheckpointError {
         Self {
             message: "checkpoint storage deadline exceeded".into(),
             deadline: true,
+            busy: false,
+            published: false,
+        }
+    }
+
+    #[must_use]
+    pub fn busy() -> Self {
+        Self {
+            message: "checkpoint transaction is busy".into(),
+            deadline: false,
+            busy: true,
             published: false,
         }
     }
@@ -33,6 +47,7 @@ impl CheckpointError {
         Self {
             message: message.into(),
             deadline: false,
+            busy: false,
             published: true,
         }
     }
@@ -40,6 +55,11 @@ impl CheckpointError {
     #[must_use]
     pub const fn is_deadline(&self) -> bool {
         self.deadline
+    }
+
+    #[must_use]
+    pub(crate) const fn is_busy(&self) -> bool {
+        self.busy
     }
 
     #[must_use]
@@ -58,17 +78,32 @@ impl std::error::Error for CheckpointError {}
 
 /// One complete, named process-tree checkpoint image.
 pub trait CheckpointImage: Send + Sync {
+    /// Acquires exclusive ownership of one unpublished generation.
+    fn begin_until(&self, deadline: std::time::Instant) -> Result<NonZeroU64, CheckpointError>;
+
     /// Stores one object in the unpublished checkpoint generation.
     ///
     /// # Errors
     /// Returns a storage or object-name failure.
-    fn put(&self, name: &str, bytes: &[u8]) -> Result<(), CheckpointError>;
-
     /// Cooperatively stores an object before an absolute monotonic deadline.
     /// Implementations must bound waits under their control. A blocking kernel
     /// filesystem call may still outlive the deadline and return an error after it
     /// completes; this API does not create or abandon background work.
-    fn put_until(&self, name: &str, bytes: &[u8], deadline: std::time::Instant) -> Result<(), CheckpointError>;
+    fn put_until(
+        &self,
+        transaction: NonZeroU64,
+        name: &str,
+        bytes: &[u8],
+        deadline: std::time::Instant,
+    ) -> Result<(), CheckpointError>;
+
+    /// Discards the unpublished generation without changing the generation
+    /// visible through `get` and `list`.
+    ///
+    /// # Errors
+    /// Returns a storage failure when the unpublished generation cannot be
+    /// discarded completely.
+    fn abort_until(&self, transaction: NonZeroU64, deadline: std::time::Instant) -> Result<(), CheckpointError>;
 
     /// Reads one object from the committed checkpoint generation.
     ///
@@ -88,18 +123,15 @@ pub trait CheckpointImage: Send + Sync {
     /// Cooperatively lists objects before an absolute monotonic deadline.
     fn list_until(&self, deadline: std::time::Instant) -> Result<Vec<String>, CheckpointError>;
 
-    /// Publishes a complete generation after its manifest is durable.
-    ///
-    /// # Errors
-    /// Returns a storage failure.
-    fn commit(&self, manifest: &[u8]) -> Result<(), CheckpointError> {
-        self.put("MANIFEST", manifest)
-    }
-
     /// Publishes only if the deadline is live immediately before the atomic
     /// pointer replacement. Once replacement starts, its result is authoritative:
     /// successful publication is never reported as a timeout.
-    fn commit_until(&self, manifest: &[u8], deadline: std::time::Instant) -> Result<(), CheckpointError>;
+    fn commit_until(
+        &self,
+        transaction: NonZeroU64,
+        manifest: &[u8],
+        deadline: std::time::Instant,
+    ) -> Result<(), CheckpointError>;
 }
 
 /// Opens checkpoint images by stable container generation namespace.

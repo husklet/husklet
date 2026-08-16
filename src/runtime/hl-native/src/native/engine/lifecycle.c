@@ -2,6 +2,7 @@
 #include "backend.h"
 #include "result.h"
 #include "options.h"
+#include "executable_authority.h"
 #include "hl/syscall_trap.h"
 #if defined(__APPLE__)
 #include "../linux_abi/dns.h"
@@ -23,6 +24,7 @@
 
 extern int hl_ckpt_channel_adopt(const char *broker, const char *trigger);
 extern int hl_ckpt_interrupt_executors(void);
+extern void hl_ckpt_interrupt_block(void);
 
 #ifndef HL_PRODUCTION_GUEST_ISA
 #error HL_PRODUCTION_GUEST_ISA is required
@@ -30,7 +32,9 @@ extern int hl_ckpt_interrupt_executors(void);
 
 int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const char *rootfs, hl_host_handle executable,
                        const void *executable_image, size_t executable_size,
-                       const hl_engine_main_image_plan *main_image_plan, uint32_t argc, char *const argv[]);
+                       const hl_executable_authority *executable_authority,
+                       const hl_engine_main_image_plan *main_image_plan, const void *interpreter_image,
+                       size_t interpreter_size, uint32_t argc, char *const argv[]);
 hl_status hl_run_linux_guest_status(void);
 uint64_t hl_run_linux_guest_translations(void);
 
@@ -95,6 +99,8 @@ typedef struct hl_production_entry_context {
     int checkpoint_broker;
     int checkpoint_trigger;
     int checkpoint_control;
+    const void *interpreter_image;
+    size_t interpreter_size;
 } hl_production_entry_context;
 
 #if defined(_WIN32)
@@ -134,7 +140,7 @@ typedef struct hl_production_entry_context {
 #include "hl/windows.h"
 
 #define HL_PRODUCTION_LAUNCH_MAGIC UINT32_C(0x484c4357)
-#define HL_PRODUCTION_LAUNCH_VERSION 1u
+#define HL_PRODUCTION_LAUNCH_VERSION 2u
 
 typedef struct hl_production_launch_header {
     uint32_t magic;
@@ -152,6 +158,7 @@ typedef struct hl_production_launch_header {
     uint64_t options_size;
     uint64_t image_offset; /* 0 when the engine carried no executable image */
     uint64_t image_size;
+    hl_executable_authority executable_authority;
 } hl_production_launch_header;
 
 typedef struct hl_production_launch_option {
@@ -166,13 +173,15 @@ static size_t hl_production_launch_text(const char *text) {
     return text == NULL ? 0 : strlen(text) + 1u;
 }
 
-static void *hl_production_launch_encode(const hl_engine_config *config, const hl_options *options, uint32_t argc,
-                                         const char *const argv[], size_t *out_size) {
+static void *hl_production_launch_encode(const hl_host_services *host, const hl_engine_config *config,
+                                         const hl_options *options, uint32_t argc, const char *const argv[],
+                                         size_t *out_size, hl_status *out_status) {
     hl_production_launch_header header;
     const hl_engine_executable *spec = config->executable;
     unsigned char *bytes;
     size_t offset;
     size_t index;
+    *out_status = HL_STATUS_OK;
     memset(&header, 0, sizeof(header));
     header.magic = HL_PRODUCTION_LAUNCH_MAGIC;
     header.version = HL_PRODUCTION_LAUNCH_VERSION;
@@ -190,6 +199,22 @@ static void *hl_production_launch_encode(const hl_engine_config *config, const h
             header.options_size += sizeof(hl_production_launch_option) + options->value_sizes[index];
         }
     header.image_size = spec == NULL || spec->image == NULL ? 0u : (uint64_t)spec->image_size;
+    if (spec != NULL && spec->host_handle != HL_HOST_HANDLE_INVALID && host != NULL && host->file != NULL &&
+        host->file->metadata != NULL) {
+        hl_host_file_metadata metadata = {0};
+        /* The presence of an engine executable in this launch record is the
+         * parent's explicit execute authority. Windows metadata deliberately
+         * has no execute bits, so carry the policy separately from host DAC. */
+        if (host->file->metadata(host->context, spec->host_handle, &metadata).status != HL_STATUS_OK ||
+            !hl_executable_authority_from_metadata(&metadata, 1, &header.executable_authority)) {
+            *out_status = HL_STATUS_PLATFORM_FAILURE;
+            return NULL;
+        }
+    }
+    if (header.image_size != 0 && !header.executable_authority.ready) {
+        *out_status = HL_STATUS_PLATFORM_FAILURE;
+        return NULL;
+    }
 
     offset = sizeof(header);
     if (header.rootfs_size != 0) {
@@ -439,8 +464,8 @@ static int32_t hl_production_cold_entry(void *opaque) {
      * not return until the run is over, which is the same lifetime the call
      * below already relies on for the services pointer itself. */
     box = hl_production_cold_box(&services);
-    result = hl_run_linux_guest(&services, box, rootfs, HL_HOST_HANDLE_INVALID, image, (size_t)header.image_size, NULL,
-                                header.argc, argv);
+    result = hl_run_linux_guest(&services, box, rootfs, HL_HOST_HANDLE_INVALID, image, (size_t)header.image_size,
+                                &header.executable_authority, NULL, NULL, 0, header.argc, argv);
     (void)hl_options_bind_process_state(previous_state);
     (void)hl_options_bind_process(previous);
     hl_options_destroy(&process_state);
@@ -461,13 +486,11 @@ static hl_status hl_production_claim_terminal(const hl_production_entry_context 
     hl_host_result borrowed;
     int descriptor;
     int saved_errno;
-    if (context->box == NULL ||
-        hl_linux_fd_snapshot_get(context->box, 0, &input) != HL_STATUS_OK ||
+    if (context->box == NULL || hl_linux_fd_snapshot_get(context->box, 0, &input) != HL_STATUS_OK ||
         input.host_handle == HL_HOST_HANDLE_INVALID)
         return HL_STATUS_OK;
     attachments = context->host->posix_attachment;
-    if (attachments == NULL || attachments->borrow_file == NULL || attachments->release == NULL)
-        return HL_STATUS_OK;
+    if (attachments == NULL || attachments->borrow_file == NULL || attachments->release == NULL) return HL_STATUS_OK;
     borrowed = attachments->borrow_file(context->host->context, input.host_handle);
     if (borrowed.status != HL_STATUS_OK) return (hl_status)borrowed.status;
     descriptor = (int)borrowed.value;
@@ -509,6 +532,11 @@ static void *hl_checkpoint_control_main(void *opaque) {
 
 static int32_t hl_production_entry(void *opaque) {
     hl_production_entry_context *context = opaque;
+    hl_engine_checkpoint_fork_child(context->checkpoint_broker, context->checkpoint_trigger,
+                                    context->checkpoint_control);
+    /* Keep process-directed checkpoint kicks away from helper/control threads.
+     * Guest executor registration selectively unblocks the reserved signal. */
+    hl_ckpt_interrupt_block();
     hl_status terminal_status = hl_production_claim_terminal(context);
     if (terminal_status != HL_STATUS_OK) return terminal_status;
     active_result = context->result;
@@ -536,10 +564,10 @@ static int32_t hl_production_entry(void *opaque) {
             if (pthread_detach(control) != 0) return HL_STATUS_PLATFORM_FAILURE;
         }
     }
-    int32_t result =
-        hl_run_linux_guest(context->host, context->box, context->config->rootfs, executable,
-                           spec == NULL ? NULL : spec->image, spec == NULL ? 0 : spec->image_size,
-                           context->config->main_image_plan, context->argc, (char *const *)(uintptr_t)context->argv);
+    int32_t result = hl_run_linux_guest(
+        context->host, context->box, context->config->rootfs, executable, spec == NULL ? NULL : spec->image,
+        spec == NULL ? 0 : spec->image_size, NULL, context->config->main_image_plan, context->interpreter_image,
+        context->interpreter_size, context->argc, (char *const *)(uintptr_t)context->argv);
     (void)hl_options_bind_process_state(previous_state);
     (void)hl_options_bind_process(previous);
     hl_options_destroy(&process_state);
@@ -559,8 +587,8 @@ static void hl_production_result_release(const hl_host_services *host, hl_host_h
 static hl_status hl_production_start_process(const hl_host_services *host, hl_linux_abi *box, hl_options *options,
                                              const hl_engine_config *config, uint32_t argc, const char *const argv[],
                                              void *syscall_context, hl_syscall_trap_fn syscall_dispatch,
-                                             int checkpoint_broker, int checkpoint_trigger,
-                                             int checkpoint_control,
+                                             int checkpoint_broker, int checkpoint_trigger, int checkpoint_control,
+                                             const void *interpreter_image, size_t interpreter_size,
                                              hl_host_handle *process, hl_host_handle *result_token) {
 #if !defined(_WIN32)
     hl_production_entry_context entry = {0};
@@ -606,11 +634,12 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     (void)box;
     {
         size_t payload_size = 0;
-        void *payload = hl_production_launch_encode(config, options, argc, argv, &payload_size);
+        hl_status encode_status;
+        void *payload = hl_production_launch_encode(host, config, options, argc, argv, &payload_size, &encode_status);
         hl_status published;
         if (payload == NULL) {
             hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);
-            return HL_STATUS_OUT_OF_MEMORY;
+            return encode_status == HL_STATUS_OK ? HL_STATUS_OUT_OF_MEMORY : encode_status;
         }
         published = hl_host_windows_launch_publish(payload, payload_size, result->mapping.handle);
         spawned = published == HL_STATUS_OK ? host->process->spawn_cloned(host->context, hl_production_cold_entry, NULL)
@@ -630,16 +659,20 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     entry.checkpoint_broker = checkpoint_broker;
     entry.checkpoint_trigger = checkpoint_trigger;
     entry.checkpoint_control = checkpoint_control;
+    entry.interpreter_image = interpreter_image;
+    entry.interpreter_size = interpreter_size;
+    hl_engine_checkpoint_fork_prepare();
     if (box == NULL) {
         spawned = host->process->spawn_cloned(host->context, hl_production_entry, &entry);
     } else {
         hl_status status = hl_linux_abi_spawn(box, hl_production_entry, &entry, process);
         if (status != HL_STATUS_OK) {
-            hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);
-            return status;
+            spawned = (hl_host_result){(int32_t)status, 0, HL_HOST_HANDLE_INVALID, 0};
+        } else {
+            spawned = (hl_host_result){HL_STATUS_OK, 0, *process, 0};
         }
-        spawned = (hl_host_result){HL_STATUS_OK, 0, *process, 0};
     }
+    hl_engine_checkpoint_fork_parent();
 #endif
     if (spawned.status != HL_STATUS_OK) {
         hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);

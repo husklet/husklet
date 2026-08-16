@@ -12,9 +12,9 @@ pub use catalogue::Catalogue;
 pub use session::{serve, Outcome};
 pub use view::{Actions, View};
 
-use hl_gui::RowRequest;
 use hl_extension::port::ContainerSummary;
 use hl_extension::{Capability, Grant, Manifest, RelativePath, Request, Topic};
+use hl_gui::RowRequest;
 
 /// The source the container table is drawn from.
 pub const SOURCE: hl_gui::SourceId = hl_gui::SourceId::new(1);
@@ -33,22 +33,14 @@ pub fn requested() -> Grant {
 /// # Errors
 /// Returns why the manifest could not be built.
 pub fn manifest() -> Result<Manifest, hl_extension::Invalid> {
-    Ok(Manifest {
-        name: hl_extension::ExtensionName::new("containers")?,
-        display_name: "Containers".into(),
-        version: env!("CARGO_PKG_VERSION").into(),
-        protocol: hl_extension::PROTOCOL,
-        capabilities: requested(),
-        entrypoint: Some(vec!["/usr/local/bin/hl-extension-containers".into()]),
-        activation: hl_extension::Activation::Tab,
-        interface: Some(hl_extension::Presentation {
-            tab_title: "Containers".into(),
-            icon: Some("view-list-symbolic".into()),
-        }),
-        resources: hl_extension::Resources::default(),
-        filesystem_roots: Vec::<RelativePath>::new(),
-    })
+    // The document that ships in the image is the only description of this
+    // extension. Building a second one in code invites the two to disagree,
+    // and the one on disk is the one a host actually reads.
+    Manifest::parse(DOCUMENT, hl_extension::PROTOCOL)
 }
+
+/// The manifest this extension ships, embedded from the file the image copies.
+pub const DOCUMENT: &str = include_str!("../extension.toml");
 
 /// The calls this extension makes when it starts.
 ///

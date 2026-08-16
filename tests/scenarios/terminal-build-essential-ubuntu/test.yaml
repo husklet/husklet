@@ -1,0 +1,30 @@
+cases:
+- id: terminal-build-essential-ubuntu/apt-install-compile-run-recover
+  image: ubuntu:24.04
+  resources: [network, registry, disk_heavy, process_heavy, pty]
+  environment: { LC_ALL: C.UTF-8 }
+  timeout: 540
+  actions:
+  - terminal:
+      argv: [/bin/bash, --noprofile, --norc]
+      steps:
+      - write: { text: "(sleep 45; printf '\\125\\120\\104\\101\\124\\105\\055\\103\\110\\105\\103\\113\\055\\061\\n'; sleep 45; printf '\\125\\120\\104\\101\\124\\105\\055\\103\\110\\105\\103\\113\\055\\062\\n') & update_watch=$!; apt-get update -qq; update_rc=$?; wait $update_watch; test $update_rc -eq 0 && printf '\\125\\120\\104\\101\\124\\105\\055\\117\\113\\n'\r" }
+      - await_output: { contains: UPDATE-CHECK-1, timeout_ms: 50000 }
+      - await_output: { contains: UPDATE-CHECK-2, timeout_ms: 50000 }
+      - await_output: { contains: UPDATE-OK, timeout_ms: 60000 }
+      - write: { text: "(sleep 45; printf '\\104\\117\\127\\116\\114\\117\\101\\104\\055\\103\\110\\105\\103\\113\\055\\061\\n'; sleep 45; printf '\\104\\117\\127\\116\\114\\117\\101\\104\\055\\103\\110\\105\\103\\113\\055\\062\\n') & download_watch=$!; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --download-only build-essential; download_rc=$?; wait $download_watch; test $download_rc -eq 0 && printf '\\104\\117\\127\\116\\114\\117\\101\\104\\055\\117\\113\\n'\r" }
+      - await_output: { contains: DOWNLOAD-CHECK-1, timeout_ms: 50000 }
+      - await_output: { contains: DOWNLOAD-CHECK-2, timeout_ms: 50000 }
+      - await_output: { contains: DOWNLOAD-OK, timeout_ms: 60000 }
+      - write: { text: "(sleep 45; printf '\\111\\116\\123\\124\\101\\114\\114\\055\\103\\110\\105\\103\\113\\055\\061\\n'; sleep 45; printf '\\111\\116\\123\\124\\101\\114\\114\\055\\103\\110\\105\\103\\113\\055\\062\\n'; sleep 45; printf '\\111\\116\\123\\124\\101\\114\\114\\055\\103\\110\\105\\103\\113\\055\\063\\n') & install_watch=$!; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-download build-essential; install_rc=$?; wait $install_watch; test $install_rc -eq 0 && stty -onlcr && printf '\\101\\120\\124\\055\\117\\113\\n'\r" }
+      - await_output: { contains: INSTALL-CHECK-1, timeout_ms: 50000 }
+      - await_output: { contains: INSTALL-CHECK-2, timeout_ms: 50000 }
+      - await_output: { contains: INSTALL-CHECK-3, timeout_ms: 50000 }
+      - await_output: { contains: APT-OK, timeout_ms: 60000 }
+      - write: { text: "printf '%s\\n' '#include <stdio.h>' 'int main(void){puts(\"\\104\\105\\126\\124\\117\\117\\114\\123\\055\\103\\055\\117\\113\");return 0;}' > /tmp/husklet-hello.c && cc -Wall -Wextra -Werror -O2 /tmp/husklet-hello.c -o /tmp/husklet-hello && /tmp/husklet-hello\r" }
+      - await_output: { contains: DEVTOOLS-C-OK, timeout_ms: 30000 }
+      - write: { text: "printf '\\123\\110\\105\\114\\114\\055\\122\\105\\103\\117\\126\\105\\122\\105\\104\\n'; exit\r" }
+      - await_output: { contains: SHELL-RECOVERED, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains: [golden/apt_ok.txt, golden/devtools_ok.txt, golden/shell_recovered.txt]

@@ -143,7 +143,7 @@ static int svc_readv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     }
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_writev(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
@@ -228,7 +228,7 @@ static int svc_writev(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
     }
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_preadv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
@@ -248,7 +248,7 @@ static int svc_preadv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
     }
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_pwritev(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
@@ -272,5 +272,5 @@ static int svc_pwritev(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
     }
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }

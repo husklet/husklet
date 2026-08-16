@@ -466,7 +466,7 @@ impl WorkingDirectory {
             None => return None,
         };
         let decoded = Self::decode(path);
-        if decoded.is_empty() {
+        if decoded.is_empty() || decoded.bytes().any(|byte| byte.is_ascii_control()) {
             None
         } else {
             Some(Self(decoded))
@@ -497,6 +497,30 @@ impl WorkingDirectory {
             }
         }
         String::from_utf8_lossy(&decoded).into_owned()
+    }
+}
+
+#[cfg(test)]
+mod working_directory_tests {
+    use super::WorkingDirectory;
+
+    #[test]
+    fn osc7_preserves_percent_encoded_unicode_paths() {
+        let cwd = WorkingDirectory::from_osc7("file://guest/work/%E4%B8%AD").unwrap();
+        assert_eq!(cwd.into_string(), "/work/中");
+    }
+
+    #[test]
+    fn osc7_rejects_literal_and_percent_encoded_controls() {
+        for uri in [
+            "file://guest/work/%00hidden",
+            "file://guest/work/%0Ahidden",
+            "file://guest/work/%09hidden",
+            "file://guest/work/\nnewline",
+            "file://guest/work/\x7fdelete",
+        ] {
+            assert!(WorkingDirectory::from_osc7(uri).is_none(), "accepted {uri:?}");
+        }
     }
 }
 

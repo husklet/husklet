@@ -31,12 +31,6 @@ static void tier2_promote(uint64_t gpc) {
     void *nh = translate_block(gpc); // folded recompile; no counter, no map_put
     void *nb = g_last_body;
     g_tier2_build = 0;
-    if (0) {
-        fprintf(stderr, "[t2dump] gpc=%llx body+%ld:", (unsigned long long)gpc, (long)((uint8_t *)nb - (uint8_t *)nh));
-        for (uint32_t *p = (uint32_t *)nb; (uint8_t *)p < g_cp; p++)
-            fprintf(stderr, " %08x", *p);
-        fprintf(stderr, "\n");
-    }
     // make the tier-2 code coherent on all cores BEFORE anything can branch into it
     if (!jit_publish_code(g_emit_start, (size_t)(g_cp - g_emit_start))) {
         (void)jit_wprot(1);

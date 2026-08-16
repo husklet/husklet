@@ -18,7 +18,7 @@ enum { X86_SOFT_READ = 1u, X86_SOFT_WRITE = 2u };
 
 struct cpu;
 
-typedef void (*hl_x86_rep_store_commit_fn)(uint64_t guest, uint64_t size);
+typedef void (*hl_x86_rep_store_commit_fn)(uint64_t guest, size_t size);
 typedef int (*hl_x86_rep_store_observation_active_fn)(void);
 typedef int (*hl_x86_rep_access_fn)(uint64_t guest, size_t size);
 typedef int (*hl_x86_rep_access_special_fn)(uint64_t guest, size_t size, int write);

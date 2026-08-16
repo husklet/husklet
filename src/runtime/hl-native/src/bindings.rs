@@ -91,10 +91,36 @@ unsafe extern "C" {
         calls: *mut c_uint,
         bytes: *mut c_ulonglong,
     ) -> c_int;
-    #[cfg(test)]
+    #[cfg(all(test, feature = "native-test-hooks"))]
+    fn hl_aarch64_fdvis_path_publication_test(scenario: c_uint) -> c_int;
+    #[cfg(all(test, feature = "native-test-hooks"))]
+    fn hl_x86_64_fdvis_path_publication_test(scenario: c_uint) -> c_int;
+    #[cfg(feature = "native-test-hooks")]
+    fn hl_x86_64_store_preflight_test() -> c_int;
+    #[cfg(feature = "native-test-hooks")]
+    fn hl_aarch64_signal_errno_frame_test(
+        domain: c_uint,
+        redirect: c_uint,
+        nr: c_ulonglong,
+        raw: i64,
+        observed: *mut i64,
+        completed: *mut i64,
+    ) -> c_int;
+    #[cfg(feature = "native-test-hooks")]
+    fn hl_x86_64_signal_errno_frame_test(
+        domain: c_uint,
+        redirect: c_uint,
+        nr: c_ulonglong,
+        raw: i64,
+        observed: *mut i64,
+        completed: *mut i64,
+    ) -> c_int;
+    #[cfg(feature = "native-test-hooks")]
+    fn hl_c_backend_errno_from_host_test(domain: c_uint, host_errno: c_int) -> c_int;
     pub(super) fn hl_engine_abi() -> c_uint;
-    #[cfg(test)]
     pub(super) fn hl_engine_version() -> *const c_char;
+    #[cfg(unix)]
+    fn dladdr(address: *const c_void, information: *mut DynamicSymbol) -> c_int;
     pub(super) fn hl_c_backend_leak_check_nonvacuity() -> c_int;
     #[cfg(unix)]
     pub(super) fn hl_c_backend_checkpoint_broker_pair(parent: *mut c_int, child: *mut c_int) -> c_int;
@@ -118,6 +144,8 @@ unsafe extern "C" {
         executable_host: *const c_char,
         executable_fd: c_int,
         image_plan: *const MainImagePlan,
+        interpreter_image: *const c_void,
+        interpreter_size: usize,
         option_count: c_uint,
         option_names: *const *const c_char,
         option_values: *const *const c_char,
@@ -130,13 +158,25 @@ unsafe extern "C" {
     pub(super) fn hl_c_backend_run(backend: *mut Backend, argc: c_int, argv: *const *const c_char) -> c_int;
     pub(super) fn hl_c_backend_request(backend: *mut Backend, request: c_uint, signal: c_int) -> c_int;
     #[cfg(all(test, feature = "native-test-hooks"))]
+    #[allow(dead_code)]
     pub(super) fn hl_c_backend_checkpoint_test_arm() -> c_uint;
     #[cfg(all(test, feature = "native-test-hooks"))]
+    #[allow(dead_code)]
     pub(super) fn hl_c_backend_checkpoint_test_phase() -> c_uint;
     #[cfg(all(test, feature = "native-test-hooks"))]
+    #[allow(dead_code)]
     pub(super) fn hl_c_backend_checkpoint_test_release();
     #[cfg(all(test, feature = "native-test-hooks"))]
+    #[allow(dead_code)]
     pub(super) fn hl_c_backend_checkpoint_test_reset();
+    #[allow(dead_code)]
+    pub(super) fn hl_c_backend_checkpoint_test_prune_foreign_descriptors() -> c_uint;
+    #[allow(dead_code)]
+    pub(super) fn hl_c_backend_checkpoint_test_fail_registry_allocation();
+    #[allow(dead_code)]
+    pub(super) fn hl_c_backend_checkpoint_test_fail_private_adopt(position: c_uint);
+    #[allow(dead_code)]
+    pub(super) fn hl_c_backend_checkpoint_test_private_descriptor_count() -> u64;
     pub(super) fn hl_c_backend_exit(backend: *mut Backend, result: *mut EngineExit) -> c_int;
     #[cfg(test)]
     pub(super) fn hl_c_backend_exit_kind(backend: *const Backend) -> c_uint;
@@ -147,6 +187,15 @@ unsafe extern "C" {
     #[cfg(test)]
     pub(super) fn hl_c_backend_translation_count(backend: *const Backend) -> c_ulonglong;
     pub(super) fn hl_c_backend_destroy(backend: *mut Backend);
+}
+
+#[cfg(unix)]
+#[repr(C)]
+struct DynamicSymbol {
+    filename: *const c_char,
+    base: *mut c_void,
+    symbol: *const c_char,
+    address: *mut c_void,
 }
 
 #[cfg(feature = "native-test-hooks")]
@@ -166,17 +215,117 @@ pub(crate) fn bound_vector_io_test(isa: u32, scenario: u32) -> Result<(i64, u32,
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "native-test-hooks"))]
+pub(crate) fn fdvis_path_publication_test(isa: u32, scenario: u32) -> bool {
+    let hook = match isa {
+        1 => hl_aarch64_fdvis_path_publication_test,
+        2 => hl_x86_64_fdvis_path_publication_test,
+        _ => return false,
+    };
+    // SAFETY: the feature-gated hook owns and restores its isolated descriptor-path fixture.
+    unsafe { hook(scenario) == 1 }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn x86_store_preflight_test() -> bool {
+    // SAFETY: the feature-gated hook owns its local emitter and CPU fixtures.
+    unsafe { hl_x86_64_store_preflight_test() == 0 }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn linux_errno_from_host(domain: u32, host_errno: i32) -> i32 {
+    // SAFETY: this pure test export accepts and returns one scalar value.
+    unsafe { hl_c_backend_errno_from_host_test(domain, host_errno) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn signal_errno_frame_test(
+    isa: u32,
+    domain: u32,
+    redirect: bool,
+    nr: u64,
+    raw: i64,
+) -> Result<(i64, i64), i32> {
+    let hook = match isa {
+        1 => hl_aarch64_signal_errno_frame_test,
+        2 => hl_x86_64_signal_errno_frame_test,
+        _ => return Err(-22),
+    };
+    let (mut observed, mut completed) = (i64::MIN, i64::MIN);
+    // SAFETY: the feature-gated hook owns its CPU fixture and writes two scalar outputs.
+    let status = unsafe {
+        hook(
+            domain,
+            u32::from(redirect),
+            nr,
+            raw,
+            &raw mut observed,
+            &raw mut completed,
+        )
+    };
+    if status == 0 {
+        Ok((observed, completed))
+    } else {
+        Err(status)
+    }
+}
+
 pub(super) fn engine_metadata_is_valid() -> bool {
     // SAFETY: both functions are immutable metadata queries exported by the
     // package-owned shared library and take no caller-provided pointers.
     unsafe { hl_engine_abi() == 5 && !hl_engine_version().is_null() }
 }
 
+#[cfg(unix)]
+fn symbol_library_path(address: *const c_void) -> Option<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let mut information = DynamicSymbol {
+        filename: std::ptr::null(),
+        base: std::ptr::null_mut(),
+        symbol: std::ptr::null(),
+        address: std::ptr::null_mut(),
+    };
+    // SAFETY: `hl_engine_abi` is a linked function address and `information` is a live writable
+    // `Dl_info`-compatible record. `dladdr` owns no returned storage; copy the filename now.
+    let found = unsafe { dladdr(address, &raw mut information) };
+    if found == 0 || information.filename.is_null() {
+        return None;
+    }
+    // SAFETY: successful `dladdr` returns a process-lifetime NUL-terminated filename.
+    let bytes = unsafe { std::ffi::CStr::from_ptr(information.filename) }.to_bytes();
+    Some(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
+}
+
+#[cfg(unix)]
+pub(super) fn engine_library_paths() -> Option<Vec<std::path::PathBuf>> {
+    [
+        (hl_engine_abi as *const ()).cast::<c_void>(),
+        (hl_engine_version as *const ()).cast::<c_void>(),
+        (hl_c_backend_create as *const ()).cast::<c_void>(),
+        (hl_c_backend_run as *const ()).cast::<c_void>(),
+        (hl_c_backend_destroy as *const ()).cast::<c_void>(),
+    ]
+    .into_iter()
+    .map(symbol_library_path)
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::ptr;
+
+    const STATUS_NOT_SUPPORTED: i32 = 3;
+
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn descriptor_path_publication_copies_and_clears_on_both_guest_isas() {
+        for scenario in [0, 1, 2, 3, 4, 5, 6, 7] {
+            assert!(fdvis_path_publication_test(1, scenario), "arm64 scenario {scenario}");
+            assert!(fdvis_path_publication_test(2, scenario), "x86 scenario {scenario}");
+        }
+    }
 
     #[test]
     fn exported_bridge_contract_is_callable() {
@@ -194,6 +343,8 @@ mod tests {
                     ptr::null(),
                     -1,
                     ptr::null(),
+                    ptr::null(),
+                    0,
                     0,
                     ptr::null(),
                     ptr::null(),
@@ -235,6 +386,8 @@ mod tests {
                 ptr::null(),
                 -1,
                 ptr::null(),
+                ptr::null(),
+                0,
                 0,
                 ptr::null(),
                 ptr::null(),
@@ -247,5 +400,42 @@ mod tests {
         };
         assert_ne!(status, 0);
         assert!(output.is_null());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsupported_provider_descriptor_is_consumed_after_output_is_cleared() {
+        let mut descriptors = [-1; 2];
+        // SAFETY: the array has room for both descriptors produced by pipe.
+        assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);
+        let mut output = ptr::dangling_mut::<Backend>();
+        // SAFETY: output is writable. Provider rejection happens before the deliberately invalid image inputs
+        // are inspected, and ownership of descriptors[0] transfers to this call.
+        let status = unsafe {
+            hl_c_backend_create(
+                0,
+                ptr::null(),
+                ptr::null(),
+                -1,
+                ptr::null(),
+                ptr::null(),
+                0,
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                descriptors[0],
+                ptr::null_mut(),
+                None,
+                &raw mut output,
+            )
+        };
+        assert_eq!(status, STATUS_NOT_SUPPORTED);
+        assert!(output.is_null());
+        // SAFETY: fcntl retains no pointer and must report that create consumed the descriptor.
+        assert_eq!(unsafe { libc::fcntl(descriptors[0], libc::F_GETFD) }, -1);
+        assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EBADF));
+        // SAFETY: the write end remains owned by this test.
+        assert_eq!(unsafe { libc::close(descriptors[1]) }, 0);
     }
 }

@@ -366,14 +366,7 @@ impl ContainerSpec {
     fn validate_mounts(&self) -> Result<()> {
         let mut targets = std::collections::BTreeSet::new();
         for mount in &self.mounts {
-            if !mount.target.is_absolute()
-                || mount.target.components().any(|component| {
-                    !matches!(
-                        component,
-                        std::path::Component::RootDir | std::path::Component::Normal(_)
-                    )
-                })
-            {
+            if !mount.target.to_str().is_some_and(crate::normalized_mount_target) {
                 return Err(Error::InvalidSpec(
                     "mount target must be a normalized absolute path".into(),
                 ));
@@ -406,6 +399,42 @@ const fn default_stop_timeout_seconds() -> u64 {
 mod tests {
     use super::ContainerSpec;
     use crate::{Guest, Process, Size};
+
+    #[test]
+    fn runtime_admission_rejects_mount_aliases_before_identity_and_deduplication() {
+        for target in ["//guest", "/guest//nested", "/guest/./nested", "/guest/nested/"] {
+            let spec = ContainerSpec::from_directory("/rootfs", Process::new("/bin/true"))
+                .mount(crate::Mount::read_only("/host", target));
+            assert!(spec.validate().is_err(), "runtime admitted {target:?}");
+        }
+
+        let duplicate = ContainerSpec::from_directory("/rootfs", Process::new("/bin/true"))
+            .mount(crate::Mount::read_only("/first", "/guest"))
+            .mount(crate::Mount::read_only("/second", "/guest"));
+        assert!(duplicate.validate().is_err());
+
+        let persisted = serde_json::to_vec(
+            &ContainerSpec::from_directory("/rootfs", Process::new("/bin/true"))
+                .mount(crate::Mount::read_only("/host", "/guest/./alias")),
+        )
+        .unwrap();
+        let restored: ContainerSpec = serde_json::from_slice(&persisted).unwrap();
+        assert!(
+            restored.validate().is_err(),
+            "persisted aliases bypassed runtime admission"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_admission_rejects_non_utf8_guest_targets() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let target = std::path::PathBuf::from(std::ffi::OsString::from_vec(b"/guest/\xff".to_vec()));
+        let spec = ContainerSpec::from_directory("/rootfs", Process::new("/bin/true"))
+            .mount(crate::Mount::read_only("/host", target));
+        assert!(spec.validate().is_err());
+    }
 
     #[test]
     fn terminal_size_rejects_empty_dimensions() {

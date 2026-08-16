@@ -183,6 +183,39 @@ int64_t hl_linux_map_file(hl_linux_abi *linux_abi, hl_linux_fd fd, uint64_t addr
     return result.status == HL_STATUS_OK ? 0 : hl_linux_error((hl_status)result.status);
 }
 
+int hl_linux_writable_identity_open(hl_linux_abi *linux_abi, uint64_t device, uint64_t object) {
+    if (linux_abi == NULL || linux_abi->host == NULL || linux_abi->host->file == NULL ||
+        linux_abi->host->file->metadata == NULL)
+        return 0;
+    for (uint32_t index = 1; index < linux_abi->ofd_watermark; ++index) {
+        hl_host_handle handle = HL_HOST_HANDLE_INVALID;
+        uint32_t generation = 0;
+        hl_linux_lock(linux_abi);
+        hl_linux_ofd_entry *ofd = &linux_abi->ofds[index];
+        if (ofd->references != 0 && ofd->object_ops == NULL &&
+            (ofd->status_flags & HL_LINUX_O_ACCMODE) != HL_LINUX_O_RDONLY) {
+            ofd->active_operations++;
+            handle = ofd->host_handle;
+            generation = ofd->generation;
+        }
+        hl_linux_unlock(linux_abi);
+        if (handle == HL_HOST_HANDLE_INVALID) continue;
+        hl_host_file_metadata metadata;
+        hl_host_result result = linux_abi->host->file->metadata(linux_abi->host->context, handle, &metadata);
+        int finalize = 0;
+        hl_linux_lock(linux_abi);
+        if (ofd->generation == generation && ofd->active_operations != 0) {
+            ofd->active_operations--;
+            finalize = ofd->active_operations == 0 && ofd->references == 0 && ofd->closing != 0;
+        }
+        hl_linux_unlock(linux_abi);
+        if (finalize) (void)hl_linux_ofd_finalize_owned(linux_abi, ofd);
+        if (result.status == HL_STATUS_OK && metadata.stable_device == device && metadata.stable_object == object)
+            return 1;
+    }
+    return 0;
+}
+
 /* All helpers below through hl_linux_fd_get_unlocked require table_lock. */
 static hl_status hl_linux_find_fd(const hl_linux_abi *linux_abi, hl_linux_fd *out_fd) {
     uint32_t fd;

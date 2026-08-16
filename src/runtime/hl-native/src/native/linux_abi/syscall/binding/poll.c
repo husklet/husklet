@@ -405,7 +405,7 @@ static int64_t bound_stream_read(const hl_linux_fd_snapshot *file, int native_fd
         return offset != NULL ? hl_linux_pread64(g_linux_box, file->fd, buffer, size, (uint64_t)*offset)
                               : hl_linux_read(g_linux_box, file->fd, buffer, size);
     ssize_t count = offset != NULL ? pread(native_fd, buffer, size, *offset) : read(native_fd, buffer, size);
-    return count < 0 ? -errno : count;
+    return count < 0 ? -hl_linux_errno_from_host(errno) : count;
 }
 
 static int64_t bound_stream_write(const hl_linux_fd_snapshot *file, int native_fd, const void *buffer, size_t size,
@@ -414,7 +414,7 @@ static int64_t bound_stream_write(const hl_linux_fd_snapshot *file, int native_f
         return offset != NULL ? hl_linux_pwrite64(g_linux_box, file->fd, buffer, size, (uint64_t)*offset)
                               : hl_linux_write(g_linux_box, file->fd, buffer, size);
     ssize_t count = offset != NULL ? pwrite(native_fd, buffer, size, *offset) : write(native_fd, buffer, size);
-    return count < 0 ? -errno : count;
+    return count < 0 ? -hl_linux_errno_from_host(errno) : count;
 }
 
 static int64_t bound_guest_read(const hl_linux_fd_snapshot *file, uint64_t guest, size_t size, uint64_t offset,
@@ -452,6 +452,7 @@ static int64_t bound_guest_write(const hl_linux_fd_snapshot *file, uint64_t gues
     int64_t result = positioned ? hl_linux_pwrite64(g_linux_box, file->fd, buffer, (size_t)copied, offset)
                                 : hl_linux_write(g_linux_box, file->fd, buffer, (size_t)copied);
     free(buffer);
+    if (result > 0) bound_evict_handle(file->host_handle);
     return result;
 }
 
@@ -509,6 +510,79 @@ static int64_t bound_sendfile(const hl_linux_fd_snapshot *output, int output_fd,
     }
     if (offset_address != 0 &&
         guest_copy_to(offset_address, &supplied_offset, sizeof(supplied_offset)) != (ssize_t)sizeof(supplied_offset))
+        return done != 0 ? (int64_t)done : -EFAULT;
+    return done != 0 ? (int64_t)done : error;
+}
+
+static int64_t bound_copy_file_range(const hl_linux_fd_snapshot *input, int input_fd, uint64_t input_offset_address,
+                                     const hl_linux_fd_snapshot *output, int output_fd,
+                                     uint64_t output_offset_address, uint64_t count, uint64_t flags) {
+    off_t input_value = 0, output_value = 0;
+    off_t *input_offset = input_offset_address != 0 ? &input_value : NULL;
+    off_t *output_offset = output_offset_address != 0 ? &output_value : NULL;
+    uint64_t done = 0;
+    int64_t error = 0;
+    char buffer[8192];
+    if (flags != 0) return -EINVAL;
+    if ((input_offset != NULL &&
+         guest_copy_from(input_offset, input_offset_address, sizeof(*input_offset)) !=
+             (ssize_t)sizeof(*input_offset)) ||
+        (output_offset != NULL &&
+         guest_copy_from(output_offset, output_offset_address, sizeof(*output_offset)) !=
+             (ssize_t)sizeof(*output_offset)))
+        return -EFAULT;
+    if ((input_offset != NULL && *input_offset < 0) || (output_offset != NULL && *output_offset < 0)) return -EINVAL;
+    if (count > UINT64_C(0x7ffff000)) count = UINT64_C(0x7ffff000);
+    if (count != 0 && input != NULL && output != NULL && g_host_services != NULL &&
+        g_host_services->file != NULL && g_host_services->file->metadata != NULL) {
+        hl_host_file_metadata input_metadata, output_metadata;
+        hl_host_result input_status =
+            g_host_services->file->metadata(g_host_services->context, input->host_handle, &input_metadata);
+        hl_host_result output_status =
+            g_host_services->file->metadata(g_host_services->context, output->host_handle, &output_metadata);
+        if (input_status.status == HL_STATUS_OK && output_status.status == HL_STATUS_OK &&
+            input_metadata.stable_device == output_metadata.stable_device &&
+            input_metadata.stable_object == output_metadata.stable_object) {
+            uint64_t input_start = input_offset != NULL ? (uint64_t)*input_offset : input->offset;
+            uint64_t output_start = output_offset != NULL ? (uint64_t)*output_offset : output->offset;
+            if (input_start < output_start + count && output_start < input_start + count) return -EINVAL;
+        }
+    }
+    while (done < count) {
+        uint64_t remaining = count - done;
+        size_t chunk = remaining < sizeof(buffer) ? (size_t)remaining : sizeof(buffer);
+        int64_t read_count = bound_stream_read(input, input_fd, buffer, chunk, input_offset);
+        if (read_count <= 0) {
+            error = read_count;
+            break;
+        }
+        int64_t written = bound_stream_write(output, output_fd, buffer, (size_t)read_count, output_offset);
+        if (written <= 0) {
+            error = written;
+            if (input_offset == NULL)
+                (void)(input != NULL ? hl_linux_lseek(g_linux_box, input->fd, -read_count, SEEK_CUR)
+                                     : lseek(input_fd, (off_t)-read_count, SEEK_CUR));
+            break;
+        }
+        if (input_offset != NULL) *input_offset += (off_t)written;
+        if (output_offset != NULL) *output_offset += (off_t)written;
+        if (output != NULL)
+            bound_mapping_file_written(output, output_offset != NULL ? (uint64_t)(*output_offset - written)
+                                                                     : output->offset + done,
+                                       (uint64_t)written);
+        done += (uint64_t)written;
+        if (written != read_count) {
+            if (input_offset == NULL)
+                (void)(input != NULL ? hl_linux_lseek(g_linux_box, input->fd, written - read_count, SEEK_CUR)
+                                     : lseek(input_fd, (off_t)(written - read_count), SEEK_CUR));
+            break;
+        }
+    }
+    if (done != 0 && output != NULL) bound_evict_handle(output->host_handle);
+    if ((input_offset_address != 0 &&
+         guest_copy_to(input_offset_address, &input_value, sizeof(input_value)) != (ssize_t)sizeof(input_value)) ||
+        (output_offset_address != 0 &&
+         guest_copy_to(output_offset_address, &output_value, sizeof(output_value)) != (ssize_t)sizeof(output_value)))
         return done != 0 ? (int64_t)done : -EFAULT;
     return done != 0 ? (int64_t)done : error;
 }

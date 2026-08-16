@@ -81,12 +81,13 @@ pub(super) fn calibration(campaign: &Campaign, arms: &[String], rounds: u32) -> 
         .iter()
         .flat_map(|(workload, definition)| {
             definition.commands.keys().flat_map(move |layout| {
-                arms.iter().filter_map(move |arm| {
-                    definition.arm_support[layout]
-                        .get(arm)
-                        .is_some_and(ArmSupport::available)
-                        .then(|| cell_steps_owned(workload, layout, arm, rounds))
-                })
+                arms.iter()
+                    .filter(move |arm| {
+                        definition.arm_support[layout]
+                            .get(*arm)
+                            .is_some_and(ArmSupport::available)
+                    })
+                    .map(move |arm| cell_steps_owned(workload, layout, arm, rounds))
             })
         })
         .flatten()

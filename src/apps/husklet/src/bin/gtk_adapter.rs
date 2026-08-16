@@ -123,13 +123,35 @@ impl Uri {
 pub struct ColorPicker {
     button: gtk::Button,
     color: Rc<RefCell<gtk::gdk::RGBA>>,
+    stored: Rc<RefCell<String>>,
     label: gtk::Label,
     swatch: gtk::DrawingArea,
+}
+
+enum ColorValue {
+    Valid(gtk::gdk::RGBA, String),
+    Invalid(String),
+}
+
+impl ColorValue {
+    fn parse(value: &str) -> Self {
+        gtk::gdk::RGBA::parse(value).map_or_else(
+            |_| Self::Invalid(value.to_owned()),
+            |color| Self::Valid(color, ColorPicker::format(&color)),
+        )
+    }
+
+    fn stored(&self) -> &str {
+        match self {
+            Self::Valid(_, value) | Self::Invalid(value) => value,
+        }
+    }
 }
 
 impl ColorPicker {
     pub fn new(value: &str) -> Self {
         let color = Rc::new(RefCell::new(gtk::gdk::RGBA::BLACK));
+        let stored = Rc::new(RefCell::new(value.to_owned()));
         let label = gtk::Label::new(None);
         let swatch = gtk::DrawingArea::new();
         swatch.set_content_width(28);
@@ -167,16 +189,18 @@ impl ColorPicker {
         {
             let active = active.clone();
             let color = color.clone();
+            let stored = stored.clone();
             let label = label.clone();
             let swatch = swatch.clone();
             button.connect_clicked(move |button| {
-                Self::choose(button, &dialog, &active, &color, &label, &swatch);
+                Self::choose(button, &dialog, &active, &color, &stored, &label, &swatch);
             });
         }
 
         let picker = Self {
             button,
             color,
+            stored,
             label,
             swatch,
         };
@@ -189,6 +213,7 @@ impl ColorPicker {
         dialog: &gtk::ColorDialog,
         active: &Rc<Cell<bool>>,
         color: &Rc<RefCell<gtk::gdk::RGBA>>,
+        stored: &Rc<RefCell<String>>,
         label: &gtk::Label,
         swatch: &gtk::DrawingArea,
     ) {
@@ -198,7 +223,9 @@ impl ColorPicker {
         let parent = button.root().and_downcast::<gtk::Window>();
         let initial = *color.borrow();
         let active = active.clone();
+        let button = button.clone();
         let color = color.clone();
+        let stored = stored.clone();
         let label = label.clone();
         let swatch = swatch.clone();
         dialog.choose_rgba(
@@ -206,21 +233,27 @@ impl ColorPicker {
             Some(&initial),
             gtk::gio::Cancellable::NONE,
             move |result| {
-                Self::apply(&result, &active, &color, &label, &swatch);
+                Self::apply(&result, &button, &active, &color, &stored, &label, &swatch);
             },
         );
     }
 
     fn apply(
         result: &Result<gtk::gdk::RGBA, gtk::glib::Error>,
+        button: &gtk::Button,
         active: &Rc<Cell<bool>>,
         color: &Rc<RefCell<gtk::gdk::RGBA>>,
+        stored: &Rc<RefCell<String>>,
         label: &gtk::Label,
         swatch: &gtk::DrawingArea,
     ) {
         if let Ok(selected) = result {
+            let value = Self::format(selected);
             *color.borrow_mut() = *selected;
-            label.set_text(&Self::format(selected));
+            stored.replace(value.clone());
+            label.set_text(&value);
+            swatch.set_visible(true);
+            button.set_tooltip_text(None);
             swatch.queue_draw();
         }
         active.set(false);
@@ -231,15 +264,27 @@ impl ColorPicker {
     }
 
     pub fn set_value(&self, value: &str) {
-        if let Ok(color) = gtk::gdk::RGBA::parse(value) {
-            *self.color.borrow_mut() = color;
-            self.label.set_text(&Self::format(&color));
-            self.swatch.queue_draw();
+        let value = ColorValue::parse(value);
+        self.stored.replace(value.stored().to_owned());
+        match value {
+            ColorValue::Valid(color, text) => {
+                *self.color.borrow_mut() = color;
+                self.label.set_text(&text);
+                self.swatch.set_visible(true);
+                self.button.set_tooltip_text(None);
+                self.swatch.queue_draw();
+            }
+            ColorValue::Invalid(original) => {
+                self.label.set_text("Invalid color");
+                self.swatch.set_visible(false);
+                self.button
+                    .set_tooltip_text(Some(&format!("Invalid terminal color: {original}")));
+            }
         }
     }
 
     pub fn value(&self) -> String {
-        Self::format(&self.color.borrow())
+        self.stored.borrow().clone()
     }
 
     fn format(color: &gtk::gdk::RGBA) -> String {
@@ -249,6 +294,17 @@ impl ColorPicker {
             (color.green().clamp(0.0, 1.0) * 255.0).round() as u8,
             (color.blue().clamp(0.0, 1.0) * 255.0).round() as u8
         )
+    }
+}
+
+#[cfg(test)]
+mod color_picker_tests {
+    use super::ColorValue;
+
+    #[test]
+    fn invalid_colors_are_preserved_until_the_user_replaces_them() {
+        assert_eq!(ColorValue::parse("legacy-not-a-color").stored(), "legacy-not-a-color");
+        assert_eq!(ColorValue::parse("#AABBCC").stored(), "#aabbcc");
     }
 }
 

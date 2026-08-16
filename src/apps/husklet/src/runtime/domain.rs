@@ -24,6 +24,8 @@ use runtime::Runtime;
 
 const CONTAINER: &str = "workspace";
 const SIGNATURE: &str = "husklet.workspace.signature";
+const CONFIGURATION_SIGNATURE: &str = "husklet.workspace.configuration";
+const RUNTIME_SIGNATURE: &str = "husklet.workspace.runtime";
 const PROTOCOL: &str = "3";
 
 /// Owns the host process and socket serving one workspace's persistent execution domain.
@@ -117,6 +119,7 @@ impl Domain {
     /// A live socket carrying a compatible publication is always kept: a healthy domain is never
     /// replaced, and nothing on this path touches the socket file.
     fn decide(&self, workspace: &WorkspaceConfig) -> io::Result<Decision> {
+        Configuration::new(workspace).signature()?;
         let deadline = std::time::Instant::now() + SETTLE;
         loop {
             let Ok(connection) = std::os::unix::net::UnixStream::connect(self.socket()) else {

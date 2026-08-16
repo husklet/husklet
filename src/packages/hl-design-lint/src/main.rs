@@ -51,6 +51,7 @@ impl Arguments {
         if self.paths.is_empty() {
             self.paths.push(PathBuf::from("src"));
         }
+        let policy = self.policy.map(Policy::load).transpose()?.unwrap_or_default();
 
         if let Some(compilation_database) = self.c_analyzers {
             let config = hl_design_lint::CAnalyzerConfig {
@@ -59,7 +60,7 @@ impl Arguments {
                 cppcheck: self.cppcheck,
                 compilation_database,
             };
-            return hl_design_lint::run_c_analyzers(&config, &self.paths)
+            return hl_design_lint::run_c_analyzers(&config, &self.paths, &policy.source)
                 .map_err(hl_design_lint::LintError::configuration);
         }
 
@@ -69,7 +70,6 @@ impl Arguments {
             Output::Markdown => Box::new(Markdown::default()),
             Output::Cases(root) => Box::new(Cases::new(root)),
         };
-        let policy = self.policy.map(Policy::load).transpose()?.unwrap_or_default();
         let linter = if self.c {
             Linter::new(
                 hl_design_lint::Registry::new()

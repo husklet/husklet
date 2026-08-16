@@ -1044,6 +1044,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
+name = "hl-cc"
+version = "0.1.0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "hl-client"
 version = "0.1.0"
 dependencies = [
@@ -1231,7 +1238,8 @@ version = "0.1.0"
 name = "hl-native"
 version = "0.1.0"
 dependencies = [
- "cc",
+ "hl-cc",
+ "libc",
  "sha2",
  "tempfile",
 ]
@@ -2725,6 +2733,7 @@ dependencies = [
  "hl-process",
  "reflink-copy",
  "ring",
+ "rustix",
  "serde",
  "serde_json",
  "serde_yaml",

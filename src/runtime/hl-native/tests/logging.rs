@@ -1,5 +1,117 @@
 use std::{fs, path::PathBuf, process::Command};
 
+#[test]
+fn x86_dispatch_bookkeeping_is_diagnostic_only() {
+    let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
+    let target = fs::read_to_string(native.join("engine/target/x86_64.c")).expect("read x86 target");
+    assert!(
+        target.contains("g_dispatch_diagnostics = g_prof || g_trace || g_nochain;"),
+        "x86 target does not bind every diagnostic mode to dispatcher bookkeeping"
+    );
+    for relative in [
+        "translator/guest/x86_64/dispatch.h",
+        "translator/guest/x86_64/interp_dispatch.h",
+    ] {
+        let source = fs::read_to_string(native.join(relative)).expect("read x86 dispatcher");
+        let start = source
+            .find("#define G_DISPATCH_DEBUG")
+            .expect("x86 dispatcher debug hook");
+        let end = source[start..].find("\n\n").map_or(source.len(), |end| start + end);
+        let body = &source[start..end];
+        let gate = body
+            .find("if (g_dispatch_diagnostics)")
+            .expect("diagnostic bookkeeping gate");
+        for write in ["g_prevpc =", "g_curpc =", "g_disp_n++"] {
+            let position = body
+                .find(write)
+                .unwrap_or_else(|| panic!("{relative} is missing {write}"));
+            assert!(
+                position > gate,
+                "{relative} performs {write} before its diagnostic gate"
+            );
+        }
+    }
+}
+
+#[test]
+fn x86_dispatch_has_no_executable_specific_malloc_probe() {
+    let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native/translator/guest/x86_64");
+    for relative in ["dispatch.h", "glue.c", "glue.h"] {
+        let source = fs::read_to_string(native.join(relative)).expect("read x86 diagnostic source");
+        for legacy in ["g_malloc_n", "g_w8", "avail_mask", "__libc_malloc_impl"] {
+            assert!(
+                !source.contains(legacy),
+                "{relative} retains legacy diagnostic {legacy}"
+            );
+        }
+    }
+}
+
+#[test]
+fn aarch64_ibtc_profile_counters_are_diagnostic_only() {
+    let dispatch = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native/translator/guest/aarch64/dispatch.h"),
+    )
+    .expect("AArch64 dispatcher source");
+    for counter in ["g_prof_miss++", "g_mtfill++"] {
+        assert!(
+            dispatch.contains(&format!("if (g_prof) {counter};")),
+            "{counter} is updated while diagnostics are disabled"
+        );
+    }
+}
+
+#[test]
+fn aarch64_shared_soft_resolver_avoids_darwin_reserved_x18() {
+    let source = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native/translator/guest/aarch64/translate/emit/soft.c"),
+    )
+    .expect("AArch64 soft-memory emitter source");
+    let start = source
+        .find("if (g_soft_resolver_patch_count) {")
+        .expect("shared soft resolver");
+    let end = source[start..]
+        .find("\n    if (g_soft_stub_patch_count)")
+        .map(|end| start + end)
+        .expect("end of shared soft resolver");
+    let resolver = &source[start..end];
+    for forbidden in [
+        "e_ldr(18,",
+        "e_str(18,",
+        "e_br(18)",
+        "(18u <<",
+        "a64_cbnz_x(18",
+        "a64_tbz_x(18",
+    ] {
+        assert!(
+            !resolver.contains(forbidden),
+            "shared soft resolver uses Darwin-reserved x18 via {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn faccessat2_uses_linux_guest_flag_values() {
+    let source = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native/linux_abi/syscall/fs/extended_status.c"),
+    )
+    .expect("extended status syscall source");
+    for declaration in [
+        "GUEST_AT_SYMLINK_NOFOLLOW = 0x100",
+        "GUEST_AT_EACCESS = 0x200",
+        "GUEST_AT_EMPTY_PATH = 0x1000",
+    ] {
+        assert!(
+            source.contains(declaration),
+            "missing Linux ABI declaration {declaration}"
+        );
+    }
+    assert!(
+        !source.contains("(a3 & AT_"),
+        "guest faccessat2 flags depend on host AT_* values"
+    );
+}
+
 const MACRO_CONTRACT_PROBE: &str = r#"
 #include "hl/log.h"
 #include <string.h>

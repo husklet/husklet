@@ -274,6 +274,11 @@ static void svc_fs_extended_status_264(struct cpu *c, uint64_t nr, uint64_t a0, 
 
 static void svc_fs_extended_status_265(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                                        uint64_t a4, uint64_t a5) {
+    enum {
+        GUEST_AT_SYMLINK_NOFOLLOW = 0x100,
+        GUEST_AT_EACCESS = 0x200,
+        GUEST_AT_EMPTY_PATH = 0x1000,
+    };
     switch (nr) {
     case 265: G_RET(c) = (uint64_t)(int64_t)(-EPERM); break;
     // faccessat2(dirfd,path,mode,flags) -- glibc access() uses it; same path/confinement, flags ignored
@@ -286,16 +291,23 @@ static void svc_fs_extended_status_265(struct cpu *c, uint64_t nr, uint64_t a0, 
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
         }
+        if (nr == 439 &&
+            (a3 & ~(uint64_t)(GUEST_AT_EACCESS | GUEST_AT_SYMLINK_NOFOLLOW | GUEST_AT_EMPTY_PATH))) {
+            G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
+            break;
+        }
         // Linux: an empty pathname is ENOENT for faccessat(48), and for faccessat2(439) unless
         // AT_EMPTY_PATH(0x1000) is set. hl used to resolve "" to the rootfs root (a searchable dir) and
         // report it executable, so `[ -x "$(command -v missing)" ]` (dash's `command -v` yields "" for a
         // missing command) wrongly passed and ran a nonexistent `update-menus` -> exit 127. That is the
         // dh_installmenu postinst guard in fish/lynx/many packages, so it broke `dpkg --configure`.
         if (!a1 || !((const char *)a1)[0]) {
-            if (!(nr == 439 && (a3 & 0x1000))) {
+            if (!(nr == 439 && (a3 & GUEST_AT_EMPTY_PATH))) {
                 G_RET(c) = (uint64_t)(int64_t)(-ENOENT);
                 break;
             }
+            G_RET(c) = (uint64_t)(int64_t)dac_access_fd((int)a0, (int)a2, (a3 & GUEST_AT_EACCESS) != 0);
+            break;
         }
         // /proc/[self|pid]/exe magic symlink -> access the actual executable (matched on the
         // guest-absolute path so dirfd-relative and cwd-relative spellings work too)
@@ -305,17 +317,14 @@ static void svc_fs_extended_status_265(struct cpu *c, uint64_t nr, uint64_t a0, 
             guest_abspath_at((int)a0, gp48, gsyn48, sizeof gsyn48);
             if (!strncmp(gsyn48, "/proc/", 6) || !strncmp(gsyn48, "/dev/fd/", 8)) gp48 = gsyn48;
         }
-        if (proc_self_exe(gp48, ep, sizeof ep)) {
-            char hb[4200];
-            const char *hp = xresolve_overlay(ep, hb, sizeof hb);
-            int r = access(hp, (int)a2);
-            G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
+        if (!g_rootfs && proc_self_exe(gp48, ep, sizeof ep)) {
+            G_RET(c) = (uint64_t)(int64_t)dac_access_executable((int)a2, nr == 439 && (a3 & GUEST_AT_EACCESS));
             break;
         }
         // pseudo /dev char devices (open() backs them with a host node) must also test as present: e.g.
         // libgcrypt probes access("/dev/urandom",R_OK) to pick its RNG module -- an ENOENT there aborts
         // gpgv and breaks `apt-get update`. Test the host device with the requested mode.
-        {
+        if (!g_rootfs) {
             const char *hd = dev_node_hostpath((const char *)a1);
             if (hd) {
                 int r = access(hd, (int)a2);
@@ -327,7 +336,50 @@ static void svc_fs_extended_status_265(struct cpu *c, uint64_t nr, uint64_t a0, 
         // hl ignored the flag and always followed, so faccessat(dangling-symlink, F_OK, AT_SYMLINK_NOFOLLOW)
         // wrongly ENOENT'd (the link exists) instead of succeeding. Resolve the final component unfollowed
         // and evaluate the link node directly. (faccessat(48) has no flags word; a3 is unused there.)
-        int access_nofollow = (nr == 439) && (a3 & 0x100);
+        int access_nofollow = (nr == 439) && (a3 & GUEST_AT_SYMLINK_NOFOLLOW);
+        char canonical_access[4200];
+        int final_requires_directory = 0;
+        int search_result = dac_search_at((int)a0, (const char *)a1, access_nofollow,
+                                          nr == 439 && (a3 & GUEST_AT_EACCESS),
+                                          canonical_access, sizeof canonical_access, &final_requires_directory);
+        const char *synthetic_device = search_result == 0 ? dev_node_hostpath(canonical_access) : NULL;
+        if (g_rootfs && synthetic_device != NULL) {
+            int result = final_requires_directory ? -ENOTDIR : search_result;
+            if (result == 0 && access(synthetic_device, F_OK) != 0) result = -errno;
+            if (result == 0)
+                result = dac_access_synthetic(canonical_access, (int)a2, nr == 439 && (a3 & GUEST_AT_EACCESS));
+            G_RET(c) = (uint64_t)(int64_t)result;
+            break;
+        }
+        if (g_rootfs && a1 && ((const char *)a1)[0]) {
+            int cursor_access = dac_access_at((int)a0, (const char *)a1, access_nofollow, (int)a2,
+                                              nr == 439 && (a3 & GUEST_AT_EACCESS));
+            // Synthetic /proc, /sys, and device entries may not have an on-disk cursor node. Let their
+            // established providers below answer absence; every other cursor verdict is authoritative.
+            if (cursor_access != -ENOENT && cursor_access != -ENOSYS) {
+                G_RET(c) = (uint64_t)(int64_t)cursor_access;
+                break;
+            }
+        }
+        const char *proc_candidate = search_result == 0 ? canonical_access : gp48;
+        if (proc_self_exe(proc_candidate, ep, sizeof ep)) {
+            G_RET(c) = final_requires_directory
+                           ? (uint64_t)(int64_t)(-ENOTDIR)
+                           : (uint64_t)(int64_t)dac_access_executable((int)a2,
+                                                                      nr == 439 && (a3 & GUEST_AT_EACCESS));
+            break;
+        }
+        {
+            const char *host_device = synthetic_device;
+            if (host_device) {
+                int result = final_requires_directory ? -ENOTDIR : access(host_device, F_OK);
+                if (result < 0 && !final_requires_directory) result = -errno;
+                G_RET(c) = result < 0 ? (uint64_t)(int64_t)result
+                                      : (uint64_t)(int64_t)dac_access_synthetic(
+                                            canonical_access, (int)a2, nr == 439 && (a3 & GUEST_AT_EACCESS));
+                break;
+            }
+        }
         // faccessat
         const char *p = procfd_directory_path(gp48)
                             ? gp48

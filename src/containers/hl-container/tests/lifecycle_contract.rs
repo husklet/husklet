@@ -12,10 +12,12 @@ use std::{future::Future, path::Path, time::Duration};
 type Error = Box<dyn std::error::Error>;
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
+static LIFECYCLE_PROCESS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test]
 #[ignore = "requires HL_ALPINE_ARCHIVE"]
 async fn hangup_reaches_the_guest_signal_handler() -> Result<(), Error> {
+    let _process = LIFECYCLE_PROCESS.lock().await;
     let fixture = bounded("HUP fixture", Fixture::new()).await?;
     let name = "lifecycle-hup";
     let outcome = bounded("HUP lifecycle", async {
@@ -39,6 +41,7 @@ async fn hangup_reaches_the_guest_signal_handler() -> Result<(), Error> {
 #[tokio::test]
 #[ignore = "requires HL_ALPINE_ARCHIVE"]
 async fn configured_quit_reaches_the_guest_signal_handler() -> Result<(), Error> {
+    let _process = LIFECYCLE_PROCESS.lock().await;
     let fixture = bounded("QUIT fixture", Fixture::new()).await?;
     let name = "lifecycle-quit";
     let outcome = bounded("QUIT lifecycle", async {
@@ -68,6 +71,7 @@ async fn configured_quit_reaches_the_guest_signal_handler() -> Result<(), Error>
 #[tokio::test]
 #[ignore = "requires HL_ALPINE_ARCHIVE"]
 async fn pause_stops_guest_progress_until_unpause() -> Result<(), Error> {
+    let _process = LIFECYCLE_PROCESS.lock().await;
     let fixture = bounded("pause fixture", Fixture::new()).await?;
     let name = "lifecycle-pause";
     let outcome = bounded("pause lifecycle", async {
@@ -76,12 +80,52 @@ async fn pause_stops_guest_progress_until_unpause() -> Result<(), Error> {
         fixture.containers.start(name).await?;
         let progress = fixture.rootfs.join("tmp/progress");
         wait_for_size(&progress, 2).await?;
+        for _ in 0..3 {
+            fixture.containers.pause(name).await?;
+            let paused = std::fs::metadata(&progress)?.len();
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            require(
+                std::fs::metadata(&progress)?.len() == paused,
+                "guest progressed while paused",
+            )?;
+            fixture.containers.unpause(name).await?;
+            wait_for_size(&progress, paused + 1).await?;
+        }
+        Ok(())
+    })
+    .await;
+    finish(outcome, cleanup(&fixture.containers, name).await)
+}
+
+#[tokio::test]
+#[ignore = "requires HL_ALPINE_ARCHIVE"]
+async fn checkpoint_restore_preserves_filesystem_and_container_control() -> Result<(), Error> {
+    let _process = LIFECYCLE_PROCESS.lock().await;
+    let fixture = bounded("checkpoint fixture", Fixture::new()).await?;
+    let name = "lifecycle-checkpoint";
+    let outcome = bounded("checkpoint lifecycle", async {
+        let process = Process::new("/bin/sh").args([
+            "-c",
+            "echo durable > /tmp/checkpoint-marker; while true; do printf x >> /tmp/checkpoint-progress; i=0; while [ $i -lt 10000 ]; do i=$((i + 1)); done; done",
+        ]);
+        fixture.containers.create(fixture.spec(name, process)).await?;
+        fixture.containers.start(name).await?;
+        let progress = fixture.rootfs.join("tmp/checkpoint-progress");
+        wait_for_size(&progress, 2).await?;
+        fixture.containers.checkpoint(name, Duration::from_secs(10)).await?;
+        fixture.containers.start(name).await?;
+        let resumed = std::fs::metadata(&progress)?.len();
+        wait_for_size(&progress, resumed + 1).await?;
+        require(
+            std::fs::read_to_string(fixture.rootfs.join("tmp/checkpoint-marker"))? == "durable\n",
+            "checkpoint restore lost the guest filesystem marker",
+        )?;
         fixture.containers.pause(name).await?;
         let paused = std::fs::metadata(&progress)?.len();
         tokio::time::sleep(Duration::from_millis(250)).await;
         require(
             std::fs::metadata(&progress)?.len() == paused,
-            "guest progressed while paused",
+            "restored guest progressed while paused",
         )?;
         fixture.containers.unpause(name).await?;
         wait_for_size(&progress, paused + 1).await
@@ -93,6 +137,7 @@ async fn pause_stops_guest_progress_until_unpause() -> Result<(), Error> {
 #[tokio::test]
 #[ignore = "requires HL_ALPINE_ARCHIVE"]
 async fn health_probes_reach_healthy_and_unhealthy_states() -> Result<(), Error> {
+    let _process = LIFECYCLE_PROCESS.lock().await;
     let fixture = bounded("health fixture", Fixture::new()).await?;
     for (name, program, expected) in [
         ("lifecycle-healthy", "/bin/true", HealthStatus::Healthy),

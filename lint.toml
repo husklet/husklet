@@ -28,7 +28,7 @@ may_depend_on = ["package", "runtime", "container", "workspace", "application"]
 
 [[dependency.package_budgets]]
 package = "hl-native"
-maximum = 0
+maximum = 1
 
 [documentation]
 allowed = [
@@ -83,7 +83,7 @@ tool_suffixes = ["-test", "-tests", "-tool", "-tools"]
 destination_domain = "src/apps"
 
 [source]
-ignored_directories = [".git", "target", "vendor", "lint", "node_modules"]
+ignored_directories = [".codegraph", ".git", "target", "vendor", "lint", "node_modules"]
 ignored_markers = [".hl-external-corpus", ".hl-generated-artifacts"]
 self_packages = ["hl-design-lint"]
 foreign_source_directories = ["native", "schema"]

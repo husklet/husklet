@@ -3,7 +3,7 @@ use super::*;
 pub(super) fn raw_sha256(path: &Path) -> Result<String, Error> {
     let mut file = fs::File::open(path)?;
     let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
     loop {
         let count = file.read(&mut buffer)?;
         if count == 0 {
@@ -97,8 +97,7 @@ pub(super) fn husklet_rootfs_guest(
     ];
     arguments.extend(guest_arguments.iter().map(|argument| (*argument).to_owned()));
     let captured = HostProcess::bounded_capture(Path::new(MAC), &arguments, PYTHON_TIMEOUT)?;
-    let displaced = b"hl-test-displaced-et-exec: displaced\n";
-    if captured.outcome != Outcome::Exited(Some(0)) || (!captured.stderr.is_empty() && captured.stderr != displaced) {
+    if captured.outcome != Outcome::Exited(Some(0)) || !captured.stderr.is_empty() {
         return Err(format!(
             "native-arm64 Husklet x86 rootfs guest failed with {:?}: {}",
             captured.outcome,

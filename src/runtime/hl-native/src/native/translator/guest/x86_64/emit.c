@@ -296,7 +296,7 @@ void e_nzcv_load(void) {
 // Carry convention: cpu->nzcv stores the ARM *borrow* C (= NOT x86 CF), which ARM SUBS/
 // SBCS produce naturally and the jcc table assumes. ARM ADDS/ADCS produce C = x86 CF
 // (the opposite), so flags coming from an x86 add/adc must have C flipped to match.
-void e_nzcv_save_ci(void) {  // save flags, inverting C (scratch x22: x21 may hold a result)
+void e_nzcv_save_ci(void) {         // save flags, inverting C (scratch x22: x21 may hold a result)
     emit32(0xD53B4200u | 20);       // mrs x20, nzcv
     e_movconst(22, 1u << 29);       // C is bit 29 of nzcv
     e_rrr(A_EOR, 20, 20, 22, 1, 0); // eor x20, x20, #(1<<29)
@@ -315,8 +315,8 @@ void e_nzcv_load_ci(void) { // load flags into live nzcv, inverting C
     emit32(0xD51B4200u | 20); // msr nzcv, x20
 }
 
-void e_nzcv_save_c1(void) { // logical ops: x86 CF=0,OF=0; ARM ANDS/TST leave C,V stale
-    emit32(0xD53B4200u | 20);      // mrs x20, nzcv
+void e_nzcv_save_c1(void) {   // logical ops: x86 CF=0,OF=0; ARM ANDS/TST leave C,V stale
+    emit32(0xD53B4200u | 20); // mrs x20, nzcv
     e_movconst(22, 1u << 28);
     e_rrr(A_BIC, 20, 20, 22, 1, 0); // clear V (bit 28) -> OF=0  (jg/jle test SF==OF)
     e_movconst(22, 1u << 29);
@@ -389,8 +389,8 @@ void e_nzcv_setcf_op(uint32_t op) {
 }
 
 void e_nzcv_save_keepC(void) { // inc/dec: take new N/Z/V, KEEP stored C (x86 inc/dec don't touch CF)
-    emit32(0xD53B4200u | 20);         // mrs x20, nzcv (new N,Z,V; C junk) -- scratch x24/x25 (x21 may hold a result)
-    e_ldr(24, 28, OFF_NZCV);          // x24 = old stored flags (has the C to keep)
+    emit32(0xD53B4200u | 20);  // mrs x20, nzcv (new N,Z,V; C junk) -- scratch x24/x25 (x21 may hold a result)
+    e_ldr(24, 28, OFF_NZCV);   // x24 = old stored flags (has the C to keep)
     e_movconst(25, 1u << 29);
     e_rrr(A_BIC, 20, 20, 25, 1, 0); // clear C in new
     e_rrr(A_AND, 24, 24, 25, 1, 0); // isolate old C
@@ -1029,6 +1029,89 @@ static void emit_soft_guard(int address_register, uint64_t size, uint64_t rip, u
 #undef PATCH_CBZ_X
 }
 
+/* AArch64 may split an unaligned store at a host page boundary before the
+   second fragment faults.  x86 does not architecturally commit that prefix.
+   Soft mappings already prove the complete span above; identity mappings need
+   this four-instruction fast check so only the rare cross-page store returns to
+   the dispatcher for side-effect-free validation. */
+static void emit_direct_store_span_guard(int address_register, uint64_t size, uint64_t rip, uint32_t required) {
+    if (jit_guest_soft_active() || !(required & X86_SOFT_WRITE) || size <= 1) return;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    ++g_test_direct_store_guard_emissions;
+#endif
+    e_addi(16, address_register, (unsigned)size - 1u, 1);
+    e_rrr(A_EOR, 16, 16, address_register, 1, 0);
+    e_lsr_i(16, 16, 12, 1);
+    uint32_t *same_page = (uint32_t *)g_cp;
+    emit32(0); /* cbz x16,resume */
+
+    /* A validated cross-page identity span is cached by soft_tlb_miss.  The
+       first execution exits for validation; the retry must consume that cache
+       instead of returning R_SOFTMISS forever. */
+    e_str(9, 28, OFF_BUS_SCRATCH);
+    e_ldr(16, 28, OFF_SOFT_SNAPSHOT);
+    uint32_t *invalid = (uint32_t *)g_cp;
+    emit32(0); /* cbz x16,miss */
+    e_ldr(16, 28, OFF_BUS_EA);
+    e_rrr(A_EOR, 16, 16, address_register, 1, 0);
+    uint32_t *wrong_address = (uint32_t *)g_cp;
+    emit32(0); /* cbnz x16,miss */
+    e_ldr(16, 28, OFF_SOFT_WIDTH);
+    e_subi_s(31, 16, (unsigned)size, 1);
+    uint32_t *wrong_width = (uint32_t *)g_cp;
+    emit32(0); /* b.ne miss */
+    e_ldr(16, 28, OFF_SOFT_REQUIRED);
+    e_subi_s(31, 16, required, 1);
+    uint32_t *wrong_access = (uint32_t *)g_cp;
+    emit32(0); /* b.ne miss */
+    e_lsr_i(16, address_register, 12, 1);
+    emit32(0xD374CC00u | (16u << 5) | 16u); /* lsl x16,x16,#12 */
+    e_ldr(9, 28, OFF_SOFT_PAGE);
+    e_rrr(A_EOR, 16, 16, 9, 1, 0);
+    uint32_t *wrong_page = (uint32_t *)g_cp;
+    emit32(0); /* cbnz x16,miss */
+    e_ldr(16, 28, OFF_SOFT_PROTECTION);
+    uint32_t *denied_write = (uint32_t *)g_cp;
+    emit32(0); /* tbz x16,#1,miss */
+    e_addi(16, address_register, (unsigned)size, 1);
+    e_ldr(9, 28, OFF_SOFT_LAST);
+    emit32(0xEB00001Fu | (9u << 16) | (16u << 5)); /* cmp end,last */
+    uint32_t *past_last = (uint32_t *)g_cp;
+    emit32(0); /* b.hi miss */
+    e_movconst(16, 0);
+    e_str(16, 28, OFF_SOFT_SNAPSHOT); /* consume the exact validation once */
+    e_ldr(9, 28, OFF_BUS_SCRATCH);
+    uint32_t *cached = (uint32_t *)g_cp;
+    emit32(0); /* b resume */
+
+    uint8_t *miss = g_cp;
+    e_ldr(9, 28, OFF_BUS_SCRATCH);
+    e_str(address_register, 28, OFF_BUS_EA);
+    emit_spill();
+    e_movconst(16, size);
+    e_str(16, 28, OFF_SOFT_WIDTH);
+    e_movconst(16, required);
+    e_str(16, 28, OFF_SOFT_REQUIRED);
+    e_movconst(16, rip);
+    e_str(16, 28, OFF_RIP);
+    e_movconst(16, R_SOFTMISS);
+    e_str(16, 28, OFF_RSN);
+    emit_host_ptr(16, (uint64_t)block_return, PRELOC_BLOCKRET);
+    e_br(16);
+
+    uint8_t *resume = g_cp;
+    *same_page = 0xB4000000u | (((uint32_t)((resume - (uint8_t *)same_page) / 4) & 0x7ffffu) << 5) | 16u;
+    *invalid = 0xB4000000u | (((uint32_t)((miss - (uint8_t *)invalid) / 4) & 0x7ffffu) << 5) | 16u;
+    *wrong_address =
+        0xB5000000u | (((uint32_t)((miss - (uint8_t *)wrong_address) / 4) & 0x7ffffu) << 5) | 16u;
+    *wrong_width = 0x54000001u | (((uint32_t)((miss - (uint8_t *)wrong_width) / 4) & 0x7ffffu) << 5);
+    *wrong_access = 0x54000001u | (((uint32_t)((miss - (uint8_t *)wrong_access) / 4) & 0x7ffffu) << 5);
+    *wrong_page = 0xB5000000u | (((uint32_t)((miss - (uint8_t *)wrong_page) / 4) & 0x7ffffu) << 5) | 16u;
+    *denied_write = 0x36080000u | (((uint32_t)((miss - (uint8_t *)denied_write) / 4) & 0x3fffu) << 5) | 16u;
+    *past_last = 0x54000008u | (((uint32_t)((miss - (uint8_t *)past_last) / 4) & 0x7ffffu) << 5);
+    *cached = 0x14000000u | ((uint32_t)((resume - (uint8_t *)cached) / 4) & 0x03ffffffu);
+}
+
 void emit_memory_guard(int address_register, uint64_t size, uint64_t rip, uint32_t required) {
     /*
      * The post-store executable-alias observer consumes the original guest
@@ -1042,6 +1125,7 @@ void emit_memory_guard(int address_register, uint64_t size, uint64_t rip, uint32
     if (!g_address_recorded) e_str(address_register, 28, OFF_SOFT_GUEST_EA);
     g_address_recorded = 0;
     if (!jit_guest_soft_active() && g_rwx_guest) e_str(address_register, 28, OFF_BUS_EA);
+    emit_direct_store_span_guard(address_register, size, rip, required);
     emit_soft_guard(address_register, size, rip, required);
     if (!jit_guest_bus_active()) return;
     /* Sticky guarded translations become nearly inert after the final BUS
@@ -1100,6 +1184,12 @@ void emit_memory_guard(int address_register, uint64_t size, uint64_t rip, uint32
     uint8_t *resume_inactive = g_cp;
     *inactive_fast =
         0x36000000u | (((uint32_t)((resume_inactive - (uint8_t *)inactive_fast) / 4) & 0x3FFFu) << 5) | 16u;
+}
+
+void emit_guest_address_store(int address_register, int cpu_offset) {
+    if (g_address_recorded) e_ldr(address_register, 28, OFF_SOFT_GUEST_EA);
+    g_address_recorded = 0;
+    e_str(address_register, 28, cpu_offset);
 }
 
 void emit_bus_guard(int address_register, uint64_t size, uint64_t rip) {

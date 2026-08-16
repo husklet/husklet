@@ -301,6 +301,54 @@ int hl_process_guest_environment_unset(void) {
     return hl_options_unset(options, "HL_GUEST_ENV");
 }
 
+static int hl_options_clone_or_init(hl_options *destination, const hl_options *source) {
+    if (source != NULL && source->values != NULL) return hl_options_clone(destination, source);
+    return hl_options_init(destination);
+}
+
+void hl_exec_environment_discard(hl_exec_environment_update *update) {
+    if (update == NULL) return;
+    hl_options_destroy(&update->process);
+    hl_options_destroy(&update->state);
+    memset(update, 0, sizeof(*update));
+}
+
+int hl_exec_environment_prepare(hl_exec_environment_update *update, const char *serialized) {
+    hl_options *current;
+    if (update == NULL || serialized == NULL) return -1;
+    memset(update, 0, sizeof(*update));
+    current = hl_options_current();
+    if (current == NULL || hl_options_clone_or_init(&update->process, current) != 0) goto fail;
+    update->process_target = current;
+    update->state_target = hl_process_state != NULL ? hl_process_state : current;
+    update->separate_state = update->state_target != update->process_target;
+    if (update->separate_state && hl_options_clone_or_init(&update->state, update->state_target) != 0) goto fail;
+    if (hl_options_set(update->separate_state ? &update->state : &update->process, "HL_GUEST_ENV", serialized, 1) !=
+            0 ||
+        hl_options_set(&update->process, "HL_GUEST_ENV_ESC", "1", 1) != 0 ||
+        hl_options_set(&update->process, "HL_GUEST_ENV_EXACT", "1", 1) != 0)
+        goto fail;
+    update->prepared = 1;
+    return 0;
+fail:
+    hl_exec_environment_discard(update);
+    return -1;
+}
+
+static void hl_options_swap(hl_options *left, hl_options *right) {
+    hl_options temporary = *left;
+    *left = *right;
+    *right = temporary;
+}
+
+void hl_exec_environment_commit(hl_exec_environment_update *update) {
+    if (update == NULL || !update->prepared) return;
+    hl_options_swap(update->process_target, &update->process);
+    if (update->separate_state) hl_options_swap(update->state_target, &update->state);
+    update->prepared = 0;
+    hl_exec_environment_discard(update);
+}
+
 void hl_option_reset(void) {
     hl_options *options = hl_options_current();
     if (options == NULL) return;

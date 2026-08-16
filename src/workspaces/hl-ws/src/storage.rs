@@ -3,6 +3,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 static REPLACEMENT: AtomicU64 = AtomicU64::new(0);
 
@@ -52,6 +53,7 @@ impl fmt::Display for Key {
 /// Failure from workspace byte storage.
 #[derive(Debug)]
 pub enum Error {
+    Deadline,
     InvalidKey(String),
     Io(std::io::Error),
 }
@@ -59,6 +61,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Deadline => formatter.write_str("workspace storage deadline exceeded"),
             Self::InvalidKey(key) => write!(formatter, "invalid workspace storage key: {key:?}"),
             Self::Io(error) => error.fmt(formatter),
         }
@@ -68,6 +71,7 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Deadline => None,
             Self::InvalidKey(_) => None,
             Self::Io(error) => Some(error),
         }
@@ -87,7 +91,9 @@ pub trait Storage: Send + Sync {
     fn put(&self, key: &Key, bytes: &[u8]) -> Result<(), Self::Error>;
     fn get(&self, key: &Key) -> Result<Vec<u8>, Self::Error>;
     fn list(&self, prefix: Option<&Key>) -> Result<Vec<Key>, Self::Error>;
+    fn list_until(&self, prefix: Option<&Key>, deadline: Instant) -> Result<Vec<Key>, Self::Error>;
     fn remove(&self, key: &Key) -> Result<(), Self::Error>;
+    fn remove_until(&self, key: &Key, deadline: Instant) -> Result<(), Self::Error>;
 }
 
 /// A storage view that transparently places every operation below one key.
@@ -139,9 +145,31 @@ impl<S: Storage> Storage for Namespace<S> {
         })
     }
 
+    fn list_until(&self, prefix: Option<&Key>, deadline: Instant) -> Result<Vec<Key>, Self::Error> {
+        let absolute = match prefix {
+            Some(prefix) => self.prefix.join(prefix.as_str()).expect("validated keys join"),
+            None => self.prefix.clone(),
+        };
+        let base = format!("{}/", self.prefix.as_str());
+        self.storage.list_until(Some(&absolute), deadline).map(|keys| {
+            keys.into_iter()
+                .filter_map(|key| {
+                    key.as_str()
+                        .strip_prefix(&base)
+                        .and_then(|relative| Key::parse(relative).ok())
+                })
+                .collect()
+        })
+    }
+
     fn remove(&self, key: &Key) -> Result<(), Self::Error> {
         self.storage
             .remove(&self.prefix.join(key.as_str()).expect("validated keys join"))
+    }
+
+    fn remove_until(&self, key: &Key, deadline: Instant) -> Result<(), Self::Error> {
+        self.storage
+            .remove_until(&self.prefix.join(key.as_str()).expect("validated keys join"), deadline)
     }
 }
 
@@ -168,28 +196,43 @@ impl Directory {
     }
 
     fn path_for(&self, key: &Key) -> Result<PathBuf, Error> {
+        self.path_for_checked(key, &mut || Ok(()))
+    }
+
+    fn path_for_checked(&self, key: &Key, check: &mut impl FnMut() -> Result<(), Error>) -> Result<PathBuf, Error> {
         let mut path = self.root.clone();
         for component in key.as_str().split('/') {
+            check()?;
             path.push(component);
             if path.exists() && std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
                 return Err(Error::InvalidKey(key.to_string()));
             }
         }
+        check()?;
         Ok(path)
     }
 
-    fn collect(&self, directory: &Path, keys: &mut Vec<Key>) -> Result<(), Error> {
+    fn collect_checked(
+        &self,
+        directory: &Path,
+        keys: &mut Vec<Key>,
+        check: &mut impl FnMut() -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        check()?;
         if !directory.exists() {
             return Ok(());
         }
+        check()?;
         for entry in std::fs::read_dir(directory)? {
+            check()?;
             let entry = entry?;
+            check()?;
             let kind = entry.file_type()?;
             if kind.is_symlink() {
                 continue;
             }
             if kind.is_dir() {
-                self.collect(&entry.path(), keys)?;
+                self.collect_checked(&entry.path(), keys, check)?;
             } else if kind.is_file() {
                 let relative = entry
                     .path()
@@ -202,7 +245,12 @@ impl Directory {
                 keys.push(Key::parse(relative)?);
             }
         }
+        check()?;
         Ok(())
+    }
+
+    fn collect(&self, directory: &Path, keys: &mut Vec<Key>) -> Result<(), Error> {
+        self.collect_checked(directory, keys, &mut || Ok(()))
     }
 }
 
@@ -240,8 +288,35 @@ impl Storage for Directory {
         Ok(keys)
     }
 
+    fn list_until(&self, prefix: Option<&Key>, deadline: Instant) -> Result<Vec<Key>, Self::Error> {
+        let directory = match prefix {
+            Some(prefix) => self.path_for(prefix)?,
+            None => self.root.clone(),
+        };
+        let mut keys = Vec::new();
+        self.collect_checked(&directory, &mut keys, &mut || {
+            (Instant::now() < deadline).then_some(()).ok_or(Error::Deadline)
+        })?;
+        keys.sort();
+        Ok(keys)
+    }
+
     fn remove(&self, key: &Key) -> Result<(), Self::Error> {
         match std::fs::remove_file(self.path_for(key)?) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn remove_until(&self, key: &Key, deadline: Instant) -> Result<(), Self::Error> {
+        if Instant::now() >= deadline {
+            return Err(Error::Deadline);
+        }
+        let path = self.path_for_checked(key, &mut || {
+            (Instant::now() < deadline).then_some(()).ok_or(Error::Deadline)
+        })?;
+        match std::fs::remove_file(path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error.into()),
@@ -309,5 +384,39 @@ mod tests {
 
         assert!(directory.put(&Key::parse("escape/value").unwrap(), b"bad").is_err());
         assert!(!outside.path.join("value").exists());
+    }
+
+    #[test]
+    fn collection_checks_deadline_during_traversal() {
+        let temporary = TestDirectory::new("collection-deadline");
+        let directory = Directory::open(&temporary.path).unwrap();
+        directory.put(&Key::parse("one/value").unwrap(), b"one").unwrap();
+        directory.put(&Key::parse("two/value").unwrap(), b"two").unwrap();
+        let mut checks = 0;
+        let mut keys = Vec::new();
+
+        let error = directory
+            .collect_checked(&temporary.path, &mut keys, &mut || {
+                checks += 1;
+                (checks < 4).then_some(()).ok_or(Error::Deadline)
+            })
+            .unwrap_err();
+
+        assert!(matches!(error, Error::Deadline));
+        assert_eq!(checks, 4);
+    }
+
+    #[test]
+    fn expired_remove_preserves_object() {
+        let temporary = TestDirectory::new("remove-deadline");
+        let directory = Directory::open(&temporary.path).unwrap();
+        let key = Key::parse("checkpoint/object").unwrap();
+        directory.put(&key, b"value").unwrap();
+
+        assert!(matches!(
+            directory.remove_until(&key, Instant::now()),
+            Err(Error::Deadline)
+        ));
+        assert_eq!(directory.get(&key).unwrap(), b"value");
     }
 }

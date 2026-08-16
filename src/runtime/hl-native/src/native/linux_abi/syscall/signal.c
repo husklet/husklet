@@ -349,6 +349,7 @@ static int svc_signal_target(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         sigprocmask(SIG_BLOCK, &allblk, &prev); // close the check/sleep race (see case 133)
         ts_wait_enter();                        // pause -> interruptible sleep ('S') until a deliverable signal arrives
         while (!c->exited) {
+            if (ckpt_pending()) break;
             if (ptrace_stop_requested()) break;
             int deliv = 0;
             for (int s = 1; s <= 64; s++) {
@@ -418,6 +419,7 @@ static int svc_signal_wait(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1,
         ts_wait_enter(); // rt_sigsuspend -> interruptible sleep ('S')
         int deliv = 0;
         while (!c->exited) {
+            if (ckpt_pending()) break;
             deliv = 0;
             for (int s = 1; s <= 64; s++) {
                 if (!process_pending_test(s) || (newmask & (UINT64_C(1) << (s - 1)))) continue;
@@ -567,7 +569,7 @@ static int svc_signal_wait(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1,
             }
             if ((finite && budget_ns == 0) || (finite && fallback_waited >= budget_ns) ||
                 __atomic_load_n(&c->exited, __ATOMIC_SEQ_CST)) {
-                G_RET(c) = (uint64_t)(-HL_LINUX_EAGAIN);
+                G_RET(c) = (uint64_t)(-EAGAIN);
                 break;
             }
             uint64_t interval = UINT64_C(2000000);
@@ -579,7 +581,7 @@ static int svc_signal_wait(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1,
                     uint64_t slice_deadline = now.value > UINT64_MAX - interval ? UINT64_MAX : now.value + interval;
                     if (finite && deadline_valid) {
                         if (now.value >= deadline) {
-                            G_RET(c) = (uint64_t)(-HL_LINUX_EAGAIN);
+                            G_RET(c) = (uint64_t)(-EAGAIN);
                             break;
                         }
                         if (slice_deadline > deadline) slice_deadline = deadline;
@@ -875,6 +877,39 @@ static int svc_signal_mask(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1,
     return 1;
 }
 
+typedef void (*svc_signal_delivery)(struct cpu *, void *);
+
+static int svc_signal_complete_with(struct cpu *c, uint64_t nr, svc_errno_converter converter,
+                                    svc_signal_delivery delivery, void *context) {
+    int completed = svc_done_with(c, converter);
+    if (nr != 139 && delivery != NULL) delivery(c, context);
+    return completed;
+}
+
+static void svc_signal_deliver(struct cpu *c, void *context) {
+    (void)context;
+    maybe_deliver_signal(c);
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static void svc_signal_errno_observe(struct cpu *c, void *context) {
+    *(int64_t *)context = (int64_t)G_RET(c);
+}
+
+HL_API int HL_TARGET_LOCAL(signal_errno_frame_test)(uint32_t domain, uint32_t redirect, uint64_t nr, int64_t raw,
+                                                     int64_t *observed, int64_t *completed) {
+    struct cpu cpu = {0};
+    svc_errno_converter converter = domain == 1 ? hl_linux_errno_from_darwin : hl_linux_errno_from_ucrt;
+    if ((domain != 1 && domain != 2) || observed == NULL || completed == NULL) return -EINVAL;
+    cpu.redirect = (int)redirect;
+    G_RET(&cpu) = (uint64_t)raw;
+    *observed = INT64_MIN;
+    (void)svc_signal_complete_with(&cpu, nr, converter, svc_signal_errno_observe, observed);
+    *completed = (int64_t)G_RET(&cpu);
+    return 0;
+}
+#endif
+
 static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
                       uint64_t a5) {
     (void)a4;
@@ -890,7 +925,8 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
        this point their architectural return value has been committed, so an
        unblocked pending signal can build its frame with the correct saved
        RAX and SA_NODEFER recursion nests before the handler continues. */
-    if (nr != 139) maybe_deliver_signal(c);
+    return svc_signal_complete_with(c, nr, hl_linux_errno_from_host, svc_signal_deliver, NULL);
+#else
+    return svc_signal_complete_with(c, nr, hl_linux_errno_from_host, NULL, NULL);
 #endif
-    return 1;
 }

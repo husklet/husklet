@@ -192,6 +192,69 @@ fn summaries_with_shared_size_batch_unique_targets_and_propagate_reads() {
 }
 
 #[test]
+fn summaries_skip_other_platforms_without_hiding_identity_failures() {
+    let graph = |digit: char| hl_images::Graph {
+        target: serde_json::from_value(serde_json::json!({
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "digest": format!("sha256:{}", digit.to_string().repeat(64)),
+            "size": 23
+        }))
+        .unwrap(),
+        names: [format!("example:{digit}")
+            .parse::<hl_images::Reference>()
+            .unwrap()
+            .to_string()]
+        .into_iter()
+        .collect(),
+        created_at_ms: None,
+        labels: None,
+        build_cache: false,
+        metadata_known: false,
+    };
+
+    let summaries = build_image_summaries(
+        vec![graph('1'), graph('2'), graph('3')],
+        false,
+        |_| Ok(101),
+        |_| panic!("shared descriptor accounting must be skipped"),
+        |target| {
+            if target.digest().to_string().ends_with('2') {
+                return Err(hl_images::Error::UnsupportedPlatform {
+                    os: "linux".into(),
+                    architecture: "amd64".into(),
+                    variant: String::new(),
+                });
+            }
+            Ok(target.digest().to_string())
+        },
+        |target| {
+            if target.digest().to_string().ends_with('3') {
+                return Err(hl_images::Error::UnsupportedPlatform {
+                    os: "linux".into(),
+                    architecture: "amd64".into(),
+                    variant: String::new(),
+                });
+            }
+            Ok(BTreeMap::new())
+        },
+    )
+    .unwrap();
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].repo_tags, ["docker.io/library/example:1"]);
+
+    let error = build_image_summaries(
+        vec![graph('4')],
+        false,
+        |_| panic!("size must not run after an identity failure"),
+        |_| panic!("shared descriptor accounting must be skipped"),
+        |_| Err(hl_images::Error::InvalidMetadata("unreadable identity".into())),
+        |_| panic!("labels must not run after an identity failure"),
+    )
+    .unwrap_err();
+    assert!(matches!(error, hl_images::Error::InvalidMetadata(message) if message == "unreadable identity"));
+}
+
+#[test]
 fn summaries_project_tagged_and_dangling_graphs_without_inventing_names() {
     let descriptor = |digit: char| {
         serde_json::from_value::<hl_images::Descriptor>(serde_json::json!({

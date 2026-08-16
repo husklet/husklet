@@ -430,9 +430,10 @@ static int ckpt_restore_file_fd(const struct ckpt_fd *record) {
     }
     if (record->offset > 0) lseek(record->gfd, (off_t)record->offset, SEEK_SET);
     if (record->descriptor_flags & FD_CLOEXEC) fcntl(record->gfd, F_SETFD, FD_CLOEXEC);
-    if (record->gfd >= 0 && record->gfd < 1024 &&
+    if (record->gfd >= 0 && record->gfd < HL_NFD &&
         path_copy(g_fdpath[record->gfd], sizeof g_fdpath[record->gfd], record->path) != 0)
         g_fdpath[record->gfd][0] = 0;
+    if (record->gfd >= 0 && record->gfd < HL_NFD) g_fdpath_guest[record->gfd] = 0;
     return proc_fdvis_publish_native_fd(record->gfd);
 }
 
@@ -939,8 +940,7 @@ static int ckpt_validate_process_image(const struct ckpt_proc *process, struct c
         struct ckpt_region region;
         if (ckpt_read_region(pages, &region) != 0 || region.addr == 0 || region.len == 0 ||
             region.addr > UINT64_MAX - region.len || region.glen > region.len ||
-            region.npages > (region.len - 1) / meta->pagesz + 1 || region.format_version != CKPT_REGION_VERSION ||
-            region.logical > 1 ||
+            region.npages > (region.len - 1) / meta->pagesz + 1 || !ckpt_region_valid(&region) ||
             (region.backing_object != 0 && (region.backing_offset > UINT64_MAX - region.glen ||
                                             region.backing_offset + region.glen > (uint64_t)INT64_MAX)) ||
             (region.logical && (region.backing_object == 0 || !region.backing_shared || region.backing_emulated ||

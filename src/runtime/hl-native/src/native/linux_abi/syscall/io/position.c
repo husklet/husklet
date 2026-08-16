@@ -68,7 +68,7 @@ static int svc_lseek(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     }
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_pread64(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -106,7 +106,7 @@ static int svc_pread64(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
     }
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_pwrite64(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -172,7 +172,7 @@ static int svc_pwrite64(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     // sendfile(out,in,off*,count)
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_sendfile(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -236,7 +236,7 @@ static int svc_sendfile(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     // bytes back into user memory (read end). Direction follows the pipe fd's access mode, matching Linux.
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_tee(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -263,7 +263,7 @@ static int svc_tee(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     // splice(fd_in,off_in,fd_out,off_out,len,fl): move bytes between two fds (consumes the source).
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_splice(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -341,7 +341,7 @@ static int svc_splice(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
     // source. macOS has no tee, so peek fd_in (drain then re-queue as read-pushback) and copy to fd_out.
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }
 
 static int svc_ftruncate(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
@@ -394,5 +394,5 @@ static int svc_ftruncate(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, u
     }
     default: return 0;
     }
-    return svc_done(c);
+    return svc_done_host(c);
 }

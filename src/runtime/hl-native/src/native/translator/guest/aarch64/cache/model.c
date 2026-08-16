@@ -74,7 +74,7 @@
 // interpreter). Opt in via HL_PCACHE=1.
 
 #define PC_MAGIC 0x34414350544a4c48ull // "HLJTPCA4" (LE tag)
-#define PC_VERSION 11                  // v11 adds the identity-validated dynamic-library manifest.
+#define PC_VERSION 13                  // v13 disables persistence for mutable file-backed library mappings.
 #define PC_VERSION_EFF PC_VERSION
 #define PC_TRANSLATOR_ABI HL_PCACHE_ABI_AARCH64
 #define PC_IMG_BASE 0x0000040000000000ull    // 4 TB -- fixed guest image base (probed free on Apple silicon)
@@ -110,7 +110,7 @@ static hl_persist_directory g_pc_directory;
 static char g_pc_directory_path[1024];
 static uint64_t g_force_base;   // if nonzero, load_elf() maps the NEXT image MAP_FIXED here (one-shot; elf.c)
 static int g_force_base_failed; // a fixed-VA map fell back to a kernel base -> this image can't hit OR save
-static uint64_t g_pc_binid;     // identity of the guest binary+interp+argv0+engine+mode (cache file key)
+static hl_identity_digest g_pc_binid; // full identity of guest+interp+argv0+engine+mode
 static uint64_t g_pc_entry;     // initial guest pc (sanity key)
 static int g_pcache_poison;     // an unrecorded baked host pointer may exist -> save() refuses (correctness)
 static int g_pcache_loaded;     // this run restored from cache -> never re-save (arena would snowball)

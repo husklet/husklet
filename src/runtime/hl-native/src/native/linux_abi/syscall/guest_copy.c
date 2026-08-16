@@ -212,6 +212,17 @@ static int guest_fd_rejects(int fd, int for_read) {
 }
 
 /*
+ * A pipe write no larger than PIPE_BUF is atomic even when copy_from_user faults: Linux publishes
+ * none of its accessible prefix.  Passing only that prefix to host writev would turn EFAULT into a
+ * successful short write, unlike regular files and larger pipe writes where a prefix is permitted.
+ */
+static int guest_pipe_write_is_atomic(int fd, size_t length) {
+    struct stat status;
+    if (fstat(fd, &status) != 0 || !S_ISFIFO(status.st_mode)) return 0;
+    return length <= 4096; // Linux UAPI PIPE_BUF, independent of the host pipe implementation.
+}
+
+/*
  * Would this read have moved zero bytes anyway?  Linux resolves the descriptor and consults the source
  * before ->read_iter reaches copy_to_user, so a read that transfers nothing never observes a bad buffer:
  * EOF returns 0 and a non-blocking source with nothing ready returns EAGAIN.  Both must be reported
@@ -351,10 +362,15 @@ static ssize_t guest_fd_vector_flags(int fd, uint64_t guest_vectors, size_t gues
                           : (output ? readv(fd, NULL, 0) : writev(fd, NULL, 0));
     }
 
+    size_t requested = 0;
+    for (size_t index = 0; index < guest_count; ++index)
+        requested = guest_iov[index].iov_len > SIZE_MAX - requested ? SIZE_MAX : requested + guest_iov[index].iov_len;
+
     struct iovec host_iov[GUEST_IOV_STACK_MAX];
     hl_logical_vma_pin pins[GUEST_IOV_STACK_MAX] = {0};
     uint64_t guest_bases[GUEST_IOV_STACK_MAX];
     size_t host_count = 0;
+    int payload_fault = 0;
     for (size_t index = 0; index < guest_count && host_count < GUEST_IOV_STACK_MAX; ++index) {
         uint64_t guest = (uint64_t)(uintptr_t)guest_iov[index].iov_base;
         size_t covered = 0;
@@ -379,8 +395,19 @@ static ssize_t guest_fd_vector_flags(int fd, uint64_t guest_vectors, size_t gues
         }
         host_count += (size_t)count;
         if (covered != guest_iov[index].iov_len) {
+            payload_fault = 1;
             break;
         }
+    }
+
+    // A true positional pipe write fails with ESPIPE before touching the payload. pwritev2's
+    // offset=-1 spelling is deliberately non-positional and therefore retains writev atomicity.
+    int current_position = !positional || (current_offset && offset == (off_t)-1);
+    if (!output && current_position && payload_fault && guest_pipe_write_is_atomic(fd, requested)) {
+        for (size_t index = 0; index < host_count; ++index)
+            hl_logical_vma_unpin(&pins[index]);
+        errno = EFAULT;
+        return -1;
     }
 
     /*

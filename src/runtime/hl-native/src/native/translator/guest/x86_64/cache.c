@@ -58,7 +58,7 @@
 #include "../../persist.h"
 
 #define PC_MAGIC 0x31304350544a4c48ull // "HLJTPC01" (LE)
-#define PC_VERSION 9                   // v9 records the translated-code ABI independently from the file layout.
+#define PC_VERSION 11                  // v11 disables persistence for mutable file-backed library mappings.
 #define PC_VERSION_EFF PC_VERSION
 #define PC_TRANSLATOR_ABI HL_PCACHE_ABI_X86_64
 // Fixed guest VA bases (high, reliably free above the kernel-chosen heap/stack and below the dyld shared
@@ -78,7 +78,7 @@ struct pc_hdr {
     uint64_t translator_abi;
     uint64_t cpu_sz, map_n, ibtc_n;
     uint64_t img_base, interp_base;
-    uint64_t bin_id;     // identity of guest binary + interp + argv0 + engine build
+    hl_identity_digest bin_id; // full identity of guest binary + interp + argv0 + engine build
     uint64_t entry_jump; // initial rip (sanity)
     uint64_t arena_used; // bytes of translated code
     uint64_t n_mapent, n_pend, n_reloc, n_lib;
@@ -162,6 +162,13 @@ static uint64_t pcache_engine_id(void) {
     return hl_identity_configuration(h, 2, HL_HOST_CPU_ISA, modes);
 }
 
+static hl_identity_digest pcache_translator_identity(void) {
+    static const char tag[] = __DATE__ " " __TIME__;
+    uint64_t modes = (uint64_t)(g_fastsys != 0) | ((uint64_t)(g_fastclk != 0) << 1) |
+                     ((uint64_t)(g_siginline != 0) << 2) | ((uint64_t)(slimsys_on() != 0) << 3);
+    return hl_identity_engine_digest(tag, sizeof tag - 1, PC_TRANSLATOR_ABI, 2, HL_HOST_CPU_ISA, modes);
+}
+
 // hash the BASENAME of argv[0]. A multicall binary (busybox, toolchain drivers) runs a DIFFERENT
 // code path per applet, and with the exec re-key each epoch persists its own arena -- so the key must
 // separate `sh` from `tar` or one applet's arena would shadow the other's. Basename (not full argv) so a
@@ -170,10 +177,9 @@ static uint64_t pcache_argv0_id(const char *argv0) {
     return hl_identity_name(argv0);
 }
 
-static uint64_t pcache_make_id(const char *prog_host, const char *interp_host, const char *argv0) {
-    uint64_t a = pcache_id_of(prog_host);
-    uint64_t b = interp_host ? pcache_id_of(interp_host) : 0xABCDEFull;
-    return hl_identity_mix(a, b, pcache_engine_id(), pcache_argv0_id(argv0));
+static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity_digest interpreter,
+                                        const char *argv0) {
+    return hl_identity_digest_mix(program, interpreter, pcache_translator_identity(), argv0);
 }
 
 static int pcache_file(char *out, size_t n) {
@@ -194,8 +200,14 @@ static int pcache_file(char *out, size_t n) {
             return 0;
         }
     }
-    int written = snprintf(out, n, "%016llx.pcache", (unsigned long long)g_pc_binid);
-    return written > 0 && (size_t)written < n;
+    static const char hex[] = "0123456789abcdef";
+    if (n < 72) return 0;
+    for (size_t i = 0; i < sizeof g_pc_binid.bytes; ++i) {
+        out[i * 2] = hex[g_pc_binid.bytes[i] >> 4];
+        out[i * 2 + 1] = hex[g_pc_binid.bytes[i] & 15];
+    }
+    memcpy(out + 64, ".pcache", 8);
+    return 1;
 }
 
 static void pcache_directory_close(void) {
@@ -236,8 +248,6 @@ static uint64_t pcache_mmap_hint(uint64_t len) {
     if (a + span > PC_LIB_BASE + PC_LIB_SPAN) return 0;
     return a;
 }
-
-#define PCACHE_MMAP_HINT 1
 
 // Called by mem.c after a hinted file-backed mmap SUCCEEDED AT ITS HINT (r == hint). Cold epoch: record
 // the mapping in the manifest so its blocks persist. Warm epoch: this is the activation gate -- if the
@@ -316,7 +326,7 @@ static int pcache_warm_should_skip(const struct pc_hdr *h) {
 // wholesale flush mid-run dropped the restored blocks -> the restore was oversized for this guest anyway,
 // report it fully dead so later runs skip.
 static void pcache_warm_note(void) {
-    if (!g_pc_binid || !g_pc_restored_n || g_pcache_forked) return;
+    if (hl_identity_digest_empty(&g_pc_binid) || !g_pc_restored_n || g_pcache_forked) return;
     uint64_t used = g_pc_live_n + g_pc_activated;
     uint64_t waste = (g_pc_flushed || used > g_pc_restored_n) ? g_pc_restored_n : g_pc_restored_n - used;
     struct pc_warm w = {PC_WARM_MAGIC, g_pc_restored_arena, g_pc_restored_n, waste};
@@ -358,9 +368,9 @@ static int pcache_load(uint64_t entry_jump) {
     }
     if (h.magic != PC_MAGIC || !hl_pcache_compatible(h.version, h.translator_abi, PC_VERSION_EFF, PC_TRANSLATOR_ABI) ||
         h.cpu_sz != sizeof(struct cpu) || h.map_n != JIT_MAP_N || h.ibtc_n != IBTC_N || h.img_base != PC_IMG_BASE ||
-        h.interp_base != PC_INTERP_BASE || h.bin_id != g_pc_binid || h.entry_jump != entry_jump ||
+        h.interp_base != PC_INTERP_BASE || !hl_identity_digest_equal(&h.bin_id, &g_pc_binid) || h.entry_jump != entry_jump ||
         h.arena_used > CACHE_SZ || h.n_mapent > JIT_MAP_N || h.n_pend > (1u << 16) || h.n_reloc > PC_RELOC_CAP ||
-        h.n_lib > PC_LIB_MAX) { // n_reloc bound tracks the g_reloc cap
+        h.n_lib != 0) { // mutable file mappings are never persistent translation authority
         free(image);
         return 0;
     }
@@ -480,7 +490,7 @@ static int pcache_load(uint64_t entry_jump) {
 // Persist the current arena + maps (atomic temp+rename). Called at guest exit AND at execve,
 // right before the exec flushes the arena -- each image epoch persists under its OWN key exactly once.
 static void pcache_save(void) {
-    if (!g_pcache || !g_pc_binid || g_cp == g_cache) return;
+    if (!g_pcache || hl_identity_digest_empty(&g_pc_binid) || g_cp == g_cache) return;
     if (g_force_base_failed) return; // #210: mixed-base arena (a fixed-VA image map fell back) -> not revivable
     if (g_pcache_poison) return;     // arena has un-recorded baked host pointers -> not safely relocatable
     // NEVER save from a fork child. jit_after_fork rebuilt a FRESH EMPTY arena in the child, but
@@ -615,7 +625,8 @@ static void pcache_exec_force_interp(void) {
     if (g_pcache) g_force_base = PC_INTERP_BASE;
 }
 
-static void pcache_exec_reload(const char *prog_host, const char *interp_host, const char *argv0, uint64_t jump) {
+static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest interpreter, const char *argv0,
+                               uint64_t jump) {
     if (!g_pcache) return;
     // execve is a full identity + arena reset (thread_exit_others ran; the old image was unmapped and the
     // arena/map/ibtc flushed by case 221), so the recording state resets with it and saving becomes safe
@@ -632,7 +643,7 @@ static void pcache_exec_reload(const char *prog_host, const char *interp_host, c
     g_pc_ndefer = 0;
     g_pc_nlib = 0;
     __atomic_store_n(&g_pc_lib_next, PC_LIB_BASE, __ATOMIC_RELAXED); // fresh image, fresh hint sequence
-    g_pc_binid = pcache_make_id(prog_host, interp_host, argv0);
+    g_pc_binid = pcache_make_id(program, interpreter, argv0);
     g_pc_entry = jump;
     int hit = pcache_load(jump);
     if (g_coldprof) fprintf(stderr, "[pcache] exec %s reloc=%d\n", hit ? "HIT" : "MISS", g_nreloc);

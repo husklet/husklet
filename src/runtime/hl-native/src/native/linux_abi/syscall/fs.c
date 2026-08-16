@@ -3,7 +3,7 @@
 // otherwise. Included by service.c AFTER its local helpers (overlay_*/proc_self_exe/synth_str_fd/
 // cpu_range_str it calls) and before service() -- same TU scope.
 #include "../device.h"
-#include "../proc_fd_target.h"
+#include "fs/procfd.h"
 
 #if defined(__linux__)
 #include <linux/stat.h>
@@ -17,10 +17,99 @@ static int guest_fill_linux_stat(uint64_t destination, const struct stat *status
     return guest_copy_to(destination, encoded, sizeof encoded) == sizeof encoded ? 0 : -EFAULT;
 }
 
+static int dac_snapshot_host_metadata(const hl_vfs_cursor_authority *authority, hl_dac_snapshot *snapshot) {
+    if (authority->value.host.services == NULL || authority->value.host.services->file == NULL ||
+        authority->value.host.services->file->metadata == NULL)
+        return -ENOSYS;
+    hl_host_file_metadata metadata;
+    int error = hl_vfs_cursor_host_error(authority->value.host.services->file->metadata(
+        authority->value.host.services->context, authority->value.host.handle, &metadata));
+    if (error != 0) return error;
+    uint32_t type = metadata.type == HL_HOST_FILE_TYPE_DIRECTORY   ? S_IFDIR
+                    : metadata.type == HL_HOST_FILE_TYPE_SYMLINK  ? S_IFLNK
+                    : metadata.type == HL_HOST_FILE_TYPE_REGULAR  ? S_IFREG
+                    : metadata.type == HL_HOST_FILE_TYPE_CHARACTER ? S_IFCHR
+                    : metadata.type == HL_HOST_FILE_TYPE_BLOCK    ? S_IFBLK
+                    : metadata.type == HL_HOST_FILE_TYPE_FIFO     ? S_IFIFO
+                    : metadata.type == HL_HOST_FILE_TYPE_SOCKET   ? S_IFSOCK
+                                                                  : 0;
+    snapshot->uid = metadata.user;
+    snapshot->gid = metadata.group;
+    snapshot->mode = type | (metadata.permissions & 07777u);
+    return type != 0 ? 0 : -EIO;
+}
+
+static int dac_snapshot_cursor_authority(const hl_vfs_cursor_authority *authority, hl_dac_snapshot *snapshot) {
+    if (authority->kind == HL_VFS_CURSOR_AUTHORITY_NATIVE) {
+#if defined(__linux__)
+        char descriptor_path[64];
+        int length = snprintf(descriptor_path, sizeof descriptor_path, "/proc/self/fd/%d", authority->value.descriptor);
+        if (length < 0 || (size_t)length >= sizeof descriptor_path) return -ENAMETOOLONG;
+        return dac_snapshot_path(descriptor_path, 0, snapshot);
+#else
+        return dac_snapshot_fd(authority->value.descriptor, snapshot);
+#endif
+    }
+    if (authority->kind != HL_VFS_CURSOR_AUTHORITY_HOST || authority->value.host.services == NULL)
+        return -ENOSYS;
+    if (authority->value.host.services->posix_attachment == NULL ||
+        authority->value.host.services->posix_attachment->borrow_file_at_least == NULL ||
+        authority->value.host.services->posix_attachment->release == NULL)
+        return dac_snapshot_host_metadata(authority, snapshot);
+    const hl_host_posix_attachment_services *attachment = authority->value.host.services->posix_attachment;
+    hl_host_result borrowed = attachment->borrow_file_at_least(authority->value.host.services->context,
+                                                               authority->value.host.handle, 1u << 20);
+    if (borrowed.status != HL_STATUS_OK)
+        borrowed = attachment->borrow_file_at_least(authority->value.host.services->context,
+                                                    authority->value.host.handle, 64);
+    int error = hl_vfs_cursor_host_error(borrowed);
+    if (error == -ENOSYS) return dac_snapshot_host_metadata(authority, snapshot);
+    if (error != 0) return error;
+    if (borrowed.value > INT_MAX) {
+        (void)attachment->release(authority->value.host.services->context, borrowed.value);
+        return -EMFILE;
+    }
+#if defined(__linux__)
+    char descriptor_path[64];
+    int length = snprintf(descriptor_path, sizeof descriptor_path, "/proc/self/fd/%d", (int)borrowed.value);
+    error = length < 0 || (size_t)length >= sizeof descriptor_path ? -ENAMETOOLONG
+                                                                  : dac_snapshot_path(descriptor_path, 0, snapshot);
+#else
+    error = dac_snapshot_fd((int)borrowed.value, snapshot);
+#endif
+    (void)attachment->release(authority->value.host.services->context, borrowed.value);
+    return error;
+}
+
+static int dac_snapshot_cursor_entry(const hl_vfs_cursor_entry *entry, hl_dac_snapshot *snapshot) {
+    if (entry->kind == HL_VFS_CURSOR_FILE ||
+        (entry->kind == HL_VFS_CURSOR_SYMLINK && entry->file.kind != HL_VFS_CURSOR_AUTHORITY_INVALID))
+        return dac_snapshot_cursor_authority(&entry->file, snapshot);
+    if (entry->kind == HL_VFS_CURSOR_DIRECTORY && entry->directory.count != 0)
+        return dac_snapshot_cursor_authority(&entry->directory.layers[0], snapshot);
+    return -ENOSYS;
+}
+
 static int dac_snapshot_at(int directory, const char *raw, int nofollow, hl_dac_snapshot *snapshot) {
     char guest[4200], host[4300], path[4200];
     const char *resolved;
     if (g_rootfs) {
+        // Resolve against the merged namespace first so DAC observes the VFS walk's exact failure. The
+        // pathname compatibility resolver returns only present/absent and therefore collapses ELOOP into
+        // ENOENT before open(2) gets a chance to report the original error.
+        hl_vfs_cursor_entry entry;
+        memset(&entry, 0, sizeof entry);
+        int resolution = hl_vfs_cursor_resolve_metadata_at(directory, raw, nofollow, &entry);
+        if (resolution == 0) {
+            int snapshot_error = dac_snapshot_cursor_entry(&entry, snapshot);
+            hl_vfs_cursor_entry_release(&entry);
+            if (snapshot_error != -ENOSYS) return snapshot_error;
+        } else {
+            hl_vfs_cursor_entry_release(&entry);
+        }
+        // Symlink-inode snapshots and hosts without POSIX attachment still use the pathname compatibility
+        // resolver. Preserve the loop verdict that its present/absent result cannot represent.
+        if (resolution == -ELOOP) return resolution;
         abs_guest(directory, raw, guest, sizeof guest);
         if (!overlay_resolve(guest, host, sizeof host, nofollow)) {
             int ancestor_error = overlay_ancestor_error(guest);
@@ -38,6 +127,14 @@ static int dac_snapshot_at(int directory, const char *raw, int nofollow, hl_dac_
         }
     }
     return dac_snapshot_path(resolved, nofollow, snapshot);
+}
+
+static int dac_authorize_cursor_search(const hl_vfs_cursor *directory, void *context) {
+    const hl_dac_credentials *credentials = context;
+    if (directory == NULL || credentials == NULL || directory->count == 0) return -EACCES;
+    hl_dac_snapshot snapshot;
+    int status = dac_snapshot_cursor_authority(&directory->layers[0], &snapshot);
+    return status != 0 ? status : -hl_dac_authorize_access(&snapshot, credentials, HL_DAC_EXECUTE);
 }
 
 static int dac_snapshot_parent_at(int directory, const char *raw, hl_dac_snapshot *snapshot) {
@@ -168,6 +265,132 @@ static int dac_open_at(int directory, const char *raw, int flags, int path_only)
     return -hl_dac_authorize_access(&snapshot, &credentials, requested);
 }
 
+static int dac_access_at(int directory, const char *raw, int nofollow, int mode, int effective) {
+    hl_dac_snapshot snapshot;
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    hl_vfs_cursor_entry entry;
+    memset(&entry, 0, sizeof entry);
+    credentials.fsuid = (uint32_t)(effective ? cred_euid() : cred_ruid());
+    credentials.fsgid = (uint32_t)(effective ? cred_egid() : cred_rgid());
+    credentials.capabilities = effective ? g_cap_eff : (credentials.fsuid == 0 ? g_cap_prm : 0);
+    int status = hl_vfs_cursor_resolve_metadata_search_at(directory, raw, nofollow, dac_authorize_cursor_search,
+                                                          &credentials, &entry);
+    uint32_t mount_flags = status == 0 ? entry.mount_flags : 0;
+    if (status == 0 && mode != F_OK) status = dac_snapshot_cursor_entry(&entry, &snapshot);
+    hl_vfs_cursor_entry_release(&entry);
+    if (status == -ENOSYS) status = dac_snapshot_at(directory, raw, nofollow, &snapshot);
+    if (status != 0) return status;
+    if (mode == F_OK) return 0;
+    unsigned requested = 0;
+    if (mode & R_OK) requested |= HL_DAC_READ;
+    if (mode & W_OK) requested |= HL_DAC_WRITE;
+    if (mode & X_OK) requested |= HL_DAC_EXECUTE;
+    if ((requested & HL_DAC_EXECUTE) && (mount_flags & HL_VFS_MOUNT_NOEXEC)) return -EACCES;
+    return -hl_dac_authorize_access(&snapshot, &credentials, requested);
+}
+
+static int dac_access_fd(int descriptor, int mode, int effective) {
+    hl_dac_snapshot snapshot;
+    hl_linux_fd_snapshot source;
+    int status;
+    if (bound_snapshot((uint64_t)(uint32_t)descriptor, &source)) {
+        hl_vfs_cursor_authority authority = {0};
+        authority.kind = HL_VFS_CURSOR_AUTHORITY_HOST;
+        authority.value.host.handle = source.host_handle;
+        authority.value.host.services = g_host_services;
+        status = dac_snapshot_cursor_authority(&authority, &snapshot);
+    } else {
+        status = dac_snapshot_fd(descriptor, &snapshot);
+    }
+    if (status != 0 || mode == F_OK) return status;
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    credentials.fsuid = (uint32_t)(effective ? cred_euid() : cred_ruid());
+    credentials.fsgid = (uint32_t)(effective ? cred_egid() : cred_rgid());
+    credentials.capabilities = effective ? g_cap_eff : (credentials.fsuid == 0 ? g_cap_prm : 0);
+    unsigned requested = 0;
+    if (mode & R_OK) requested |= HL_DAC_READ;
+    if (mode & W_OK) requested |= HL_DAC_WRITE;
+    if (mode & X_OK) requested |= HL_DAC_EXECUTE;
+    return -hl_dac_authorize_access(&snapshot, &credentials, requested);
+}
+
+static int dac_access_synthetic(const char *guest, int mode, int effective) {
+    struct stat status;
+    if (!synth_stat_raw(guest, &status)) return -ENOENT;
+    hl_dac_snapshot snapshot = {
+        .uid = (uint32_t)status.st_uid,
+        .gid = (uint32_t)status.st_gid,
+        .mode = (uint32_t)status.st_mode,
+    };
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    credentials.fsuid = (uint32_t)(effective ? cred_euid() : cred_ruid());
+    credentials.fsgid = (uint32_t)(effective ? cred_egid() : cred_rgid());
+    credentials.capabilities = effective ? g_cap_eff : (credentials.fsuid == 0 ? g_cap_prm : 0);
+    unsigned requested = 0;
+    if (mode & R_OK) requested |= HL_DAC_READ;
+    if (mode & W_OK) requested |= HL_DAC_WRITE;
+    if (mode & X_OK) requested |= HL_DAC_EXECUTE;
+    if ((requested & HL_DAC_EXECUTE) &&
+        (hl_vfs_mount_flags_for_guest(guest, 0) & HL_VFS_MOUNT_NOEXEC))
+        return -EACCES;
+    return -hl_dac_authorize_access(&snapshot, &credentials, requested);
+}
+
+static int dac_access_executable(int mode, int effective) {
+    if (!g_authorized_executable_metadata_ready) return -ENOENT;
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    credentials.fsuid = (uint32_t)(effective ? cred_euid() : cred_ruid());
+    credentials.fsgid = (uint32_t)(effective ? cred_egid() : cred_rgid());
+    credentials.capabilities = effective ? g_cap_eff : (credentials.fsuid == 0 ? g_cap_prm : 0);
+    unsigned requested = 0;
+    if (mode & R_OK) requested |= HL_DAC_READ;
+    if (mode & W_OK) requested |= HL_DAC_WRITE;
+    if (mode & X_OK) requested |= HL_DAC_EXECUTE;
+    return -hl_dac_authorize_access(&g_authorized_executable_dac, &credentials, requested);
+}
+
+static int dac_synthetic_terminal(const char *guest, void *context) {
+    if (dev_node_hostpath(guest) != NULL) return 1;
+    char executable[1024];
+    if (!proc_self_exe(guest, executable, sizeof executable)) return 0;
+    char ancestor[4200];
+    if (!strcmp(guest, "/proc/self/exe") || !strcmp(guest, "/proc/thread-self/exe"))
+        snprintf(ancestor, sizeof ancestor, "/proc/%d", container_pid());
+    else {
+        if (snprintf(ancestor, sizeof ancestor, "%s", guest) >= (int)sizeof ancestor) return -ENAMETOOLONG;
+        char *leaf = strrchr(ancestor, '/');
+        if (leaf == NULL || strcmp(leaf, "/exe")) return -EINVAL;
+        *leaf = 0;
+    }
+    struct stat status;
+    if (!synth_stat_raw(ancestor, &status) || !S_ISDIR(status.st_mode)) return -ENOENT;
+    const hl_dac_credentials *credentials = context;
+    hl_dac_snapshot snapshot = {
+        .uid = (uint32_t)status.st_uid,
+        .gid = (uint32_t)status.st_gid,
+        .mode = (uint32_t)status.st_mode,
+    };
+    return credentials != NULL && hl_dac_authorize_access(&snapshot, credentials, HL_DAC_EXECUTE) == 0 ? 1 : -EACCES;
+}
+
+static int dac_search_at(int directory, const char *raw, int nofollow_final, int effective, char *resolved,
+                         size_t resolved_size,
+                         int *final_requires_directory) {
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    credentials.fsuid = (uint32_t)(effective ? cred_euid() : cred_ruid());
+    credentials.fsgid = (uint32_t)(effective ? cred_egid() : cred_rgid());
+    credentials.capabilities = effective ? g_cap_eff : (credentials.fsuid == 0 ? g_cap_prm : 0);
+    return hl_vfs_cursor_search_parent_at(directory, raw, nofollow_final, dac_authorize_cursor_search, &credentials,
+                                          resolved,
+                                          resolved_size, final_requires_directory, dac_synthetic_terminal,
+                                          &credentials);
+}
+
 static int dac_sticky_at(int directory, const char *raw) {
     hl_dac_snapshot parent, entry;
     uint32_t groups[HL_NGROUPS_MAX];
@@ -260,7 +483,6 @@ static _Thread_local uint32_t g_openat2_resolve_intent;
 
 static int jail_routed_at(int dirfd, const char *path) {
     (void)dirfd;
-    if (hl_provider_tree_files_active()) return path != NULL;
     if (g_rootfs) return 1;
     if (!path || path[0] != '/') return 0;
     char normalized[4200];
@@ -400,32 +622,53 @@ static void tty_ctl_restore(const sigset_t *saved) {
 // broke deep `find`: a recursive walk keeps one open dir fd per level, so past 16 concurrent overlay dirs
 // an ancestor's snapshot was evicted and its next getdents re-snapshotted from pos 0 -> re-descended the
 // same subtree forever (loop threshold was exactly depth 16).
-static struct {
+typedef struct {
+    unsigned references;
     int taken; // 1 = this fd's snapshot is live
     int n, pos;
     char (*nm)[256];
     uint8_t *ty;
-} g_ovldents[HL_NFD]; // [HL_NFD], not [1024]: case 61 below guards with `fd < HL_NFD` before indexing this.
+} ovldents_snapshot;
 
-static void ovldents_free(int i) {
-    free(g_ovldents[i].nm);
-    free(g_ovldents[i].ty);
-    g_ovldents[i].nm = NULL;
-    g_ovldents[i].ty = NULL;
-    g_ovldents[i].taken = 0;
-    g_ovldents[i].n = g_ovldents[i].pos = 0;
+static ovldents_snapshot
+    *g_ovldents[HL_NFD]; // [HL_NFD], not [1024]: case 61 below guards with `fd < HL_NFD` before indexing this.
+
+static ovldents_snapshot *ovldents_require(int fd) {
+    if (fd < 0 || fd >= HL_NFD) return NULL;
+    if (g_ovldents[fd] == NULL) {
+        g_ovldents[fd] = calloc(1, sizeof *g_ovldents[fd]);
+        if (g_ovldents[fd] != NULL) g_ovldents[fd]->references = 1;
+    }
+    return g_ovldents[fd];
 }
 
 static void ovldents_drop(int fd) {
-    if (fd >= 0 && fd < HL_NFD && g_ovldents[fd].taken) ovldents_free(fd);
+    if (fd < 0 || fd >= HL_NFD || g_ovldents[fd] == NULL) return;
+    ovldents_snapshot *snapshot = g_ovldents[fd];
+    g_ovldents[fd] = NULL;
+    if (--snapshot->references == 0) {
+        free(snapshot->nm);
+        free(snapshot->ty);
+        free(snapshot);
+    }
+}
+
+static void ovldents_duplicate(int source, int destination) {
+    if (source < 0 || source >= HL_NFD || destination < 0 || destination >= HL_NFD || source == destination) return;
+    ovldents_snapshot *snapshot = ovldents_require(source);
+    if (snapshot == NULL) return;
+    ovldents_drop(destination);
+    snapshot->references++;
+    g_ovldents[destination] = snapshot;
 }
 
 // rewinddir/seekdir on an overlay-merged dir: reset the replay cursor. pos<=0 (or out of range) restarts
 // from the top; an untaken snapshot is left alone (the next getdents re-snapshots from 0). Forward-declared
 // in vfs.c for the lseek handler (io.c), which is compiled into this TU before fs.c.
 static void ovldents_rewind(int fd, int pos) {
-    if (fd < 0 || fd >= HL_NFD || !g_ovldents[fd].taken) return;
-    g_ovldents[fd].pos = (pos > 0 && pos <= g_ovldents[fd].n) ? pos : 0;
+    if (fd < 0 || fd >= HL_NFD || g_ovldents[fd] == NULL || !g_ovldents[fd]->taken) return;
+    ovldents_snapshot *snapshot = g_ovldents[fd];
+    snapshot->pos = (pos > 0 && pos <= snapshot->n) ? pos : 0;
 }
 
 // POSIX shm / named semaphores live under /dev/shm, for which the guest /dev tmpfs has no real host tmpfs;
@@ -515,6 +758,7 @@ static void pts_master_retain_input(int slave) {
 // close(fd) itself -- the caller owns the real fd's lifetime. Safe on a non-emulated fd (every branch is
 // guarded / idempotent). Mirrors case 57's teardown exactly so close(2) semantics are unchanged.
 static void fd_reset_emul(int fd) {
+    hl_vfs_fd_cursor_drop(fd);
     if (fd >= 0 && fd < HL_NFD) {
         /* Linux's kqueue compatibility owns private eventfd/timerfd wake descriptors keyed by the
          * kqueue's native identity. Tear those registrations down before the guest closes/reuses the fd. */
@@ -1090,11 +1334,11 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     int path_import_status;
     if (path_arg0 && (path_import_status = guest_copy_string(imported_path0, sizeof imported_path0, *path_arg0)) < 0) {
         G_RET(c) = (uint64_t)(int64_t)path_import_status;
-        return svc_done(c);
+        return svc_done_host(c);
     }
     if (path_arg1 && (path_import_status = guest_copy_string(imported_path1, sizeof imported_path1, *path_arg1)) < 0) {
         G_RET(c) = (uint64_t)(int64_t)path_import_status;
-        return svc_done(c);
+        return svc_done_host(c);
     }
     if (path_arg0) *path_arg0 = (uint64_t)(uintptr_t)imported_path0;
     if (path_arg1) *path_arg1 = (uint64_t)(uintptr_t)imported_path1;
@@ -1114,7 +1358,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         if (!strcmp(opened_path, "/proc") || !strncmp(opened_path, "/proc/", 6) || !strcmp(opened_path, "/dev/fd"))
             snprintf(g_fdpath[(int)G_RET(c)], sizeof g_fdpath[(int)G_RET(c)], "%s", opened_path);
     }
-    int handled = svc_done(c); // boundary errno xlate (host macOS -> Linux); see helpers.c svc_done
+    int handled = svc_done_host(c); // boundary errno xlate (host macOS -> Linux); see helpers.c svc_done_host
     if (nr == 56 || nr == 437)
         HL_LOGF(&g_jit_log, HL_LOG_TAG_FS, "%s path=%s flags=%#llx result=%lld", operation != NULL ? operation : "open",
                 (const char *)a1, (unsigned long long)a2, (long long)(int64_t)G_RET(c));

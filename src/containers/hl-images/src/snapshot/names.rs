@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::BTreeMap,
     fs::{self, File},
     io::Write,
@@ -173,6 +174,52 @@ impl Names {
             .0
             .get(physical.to_str().unwrap_or_default())
             .map_or(physical, Path::new)
+    }
+
+    /// Resolve both durable sidecar mappings and reversible names emitted by the live macOS runtime.
+    #[must_use]
+    pub fn visible<'a>(&'a self, physical: &'a Path) -> Cow<'a, Path> {
+        let mapped = self.guest(physical);
+        if mapped != physical {
+            return Cow::Borrowed(mapped);
+        }
+        let mut decoded = PathBuf::new();
+        let mut changed = false;
+        for component in physical.components() {
+            let std::path::Component::Normal(component) = component else {
+                return Cow::Borrowed(physical);
+            };
+            let Some(component) = component.to_str() else {
+                return Cow::Borrowed(physical);
+            };
+            let Some(encoded) = component.strip_prefix(".hl-case-v1-") else {
+                decoded.push(component);
+                continue;
+            };
+            if encoded.is_empty() || encoded.len() % 2 != 0 {
+                return Cow::Borrowed(physical);
+            }
+            let bytes = (0..encoded.len())
+                .step_by(2)
+                .map(|index| u8::from_str_radix(&encoded[index..index + 2], 16))
+                .collect::<std::result::Result<Vec<_>, _>>();
+            let Ok(bytes) = bytes else {
+                return Cow::Borrowed(physical);
+            };
+            let Ok(component) = String::from_utf8(bytes) else {
+                return Cow::Borrowed(physical);
+            };
+            if component.is_empty() || component.contains('/') || component.contains('\0') {
+                return Cow::Borrowed(physical);
+            }
+            decoded.push(component);
+            changed = true;
+        }
+        if changed {
+            Cow::Owned(decoded)
+        } else {
+            Cow::Borrowed(physical)
+        }
     }
 
     /// Iterate encoded mappings as `(physical, guest)` pairs in deterministic order.

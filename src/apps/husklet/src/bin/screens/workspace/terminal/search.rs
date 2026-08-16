@@ -1,5 +1,11 @@
 use super::*;
 
+const INCREMENTAL_SEARCH_MAX_ROWS: f64 = 25_000.0;
+
+fn incremental_search_allowed(first: f64, last: f64) -> bool {
+    (last - first).max(0.0) <= INCREMENTAL_SEARCH_MAX_ROWS
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct FocusTransition {
     clear_previous: bool,
@@ -111,6 +117,7 @@ impl Search {
         let text = self.entry.text().to_string();
         if text.is_empty() {
             t.search_set_regex(None, 0);
+            t.unselect_all();
             self.info.set_text("");
             self.info.remove_css_class("nomatch");
             return;
@@ -127,8 +134,17 @@ impl Search {
             Ok(re) => {
                 t.search_set_regex(Some(&re), 0);
                 t.search_set_wrap_around(true);
-                let found = t.search_find_next();
-                self.set_state(found);
+                let incremental = t
+                    .vadjustment()
+                    .is_none_or(|adjustment| incremental_search_allowed(adjustment.lower(), adjustment.upper()));
+                if incremental {
+                    let found = t.search_find_next();
+                    self.set_state(found);
+                } else {
+                    t.unselect_all();
+                    self.info.set_text("press Enter");
+                    self.info.remove_css_class("nomatch");
+                }
             }
             Err(_) => self.set_state(false),
         }
@@ -162,7 +178,15 @@ impl Search {
 
 #[cfg(test)]
 mod tests {
-    use super::FocusTransition;
+    use super::{incremental_search_allowed, FocusTransition};
+
+    #[test]
+    fn incremental_search_is_bounded_for_large_scrollback() {
+        assert!(incremental_search_allowed(0.0, 25_000.0));
+        assert!(incremental_search_allowed(975_000.0, 1_000_000.0));
+        assert!(!incremental_search_allowed(0.0, 25_001.0));
+        assert!(!incremental_search_allowed(0.0, 1_000_001.0));
+    }
 
     #[test]
     fn pane_focus_transfers_only_visible_search_state() {

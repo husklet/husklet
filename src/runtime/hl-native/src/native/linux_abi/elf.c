@@ -22,9 +22,11 @@ static uint64_t rd64(const uint8_t *p) {
 }
 
 // Read PT_INTERP (the dynamic loader path) out of an ELF.
-static int elf_interp(const char *path, char *out, size_t n) {
+static int elf_interp(const char *path, char *out, size_t n, const hl_linux_image *pinned) {
     hl_linux_image image;
-    if (aarch64_image_read(path, &image) != 0) return -1;
+    if ((pinned != NULL ? hl_linux_image_read_bytes(pinned->bytes, pinned->size, &image)
+                        : aarch64_image_read(path, &image)) != 0)
+        return -1;
     hl_linux_elf64_layout layout;
     if (n == 0 || hl_linux_elf64_validate(&image, 0xB7, &layout) != 0) {
         hl_linux_image_release(&image);
@@ -612,7 +614,7 @@ static void nonpie_guard(int sig, siginfo_t *si, void *uc) {
     if (hrm_fault_hook(si)) return; // never actually returns on a claim (siglongjmp); shape-only
     if (nonpie_fixup(si, uc)) return;
     // The host representation may be narrower than the guest mapping when 4 KiB ELF segment edges share
-    // a 16 KiB macOS page, or after fork-server protection restoration. Re-open only a logically writable,
+    // a 16 KiB macOS page. Re-open only a logically writable,
     // tracked private-anonymous guest page; PROT_NONE/read-only and file-EOF ledgers remain authoritative.
     // This is a representation repair, not lazy allocation: the address must already belong to gmap.
     if (si && si->si_addr) {
@@ -636,61 +638,6 @@ static void nonpie_guard(int sig, siginfo_t *si, void *uc) {
     // registered guest handler is the guest's to handle: synthesize+deliver the guest signal. nonpie_fixup
     // (absolute-data) already won above.
     if (deliver_guest_fault(sig, si, uc)) return;
-    // DIAGNOSTIC (gated, async-signal-safe, NO user-pointer deref): every no-handler fault about to be
-    // turned into a fatal guest termination or re-raised. Prints sig / host PC / fault addr / host SP +
-    // whether the host PC is inside the RX code cache (1 = a wild jump in translated guest code).
-    if (0) {
-        extern int jit_pc_in_cache(uint64_t pc, uint64_t *base);
-        ucontext_t *u = (ucontext_t *)uc;
-        uint64_t hpc = u ? (uint64_t)HL_HOST_UC_PC(u) : 0;
-        uint64_t hsp = u ? (uint64_t)HL_HOST_UC_SP(u) : 0;
-        uint64_t rxb = 0;
-        int inc = jit_pc_in_cache(hpc, &rxb);
-        char b[224];
-        int o = 0;
-        const char *H = "0123456789abcdef";
-        memcpy(b, "[HL-ENGINE-FAULT] sig=", 22);
-        o = 22;
-        b[o++] = '0' + (sig / 10 % 10);
-        b[o++] = '0' + (sig % 10);
-
-        struct {
-            const char *l;
-            uint64_t v;
-        } F[] = {{" hpc=0x", hpc}, {" fault=0x", (uint64_t)si->si_addr}, {" hsp=0x", hsp}, {" rxbase=0x", rxb}};
-
-        for (int f = 0; f < 4; f++) {
-            for (const char *L = F[f].l; *L;)
-                b[o++] = *L++;
-            for (int i = 15; i >= 0; i--)
-                b[o++] = H[(F[f].v >> (i * 4)) & 0xf];
-        }
-        memcpy(b + o, " incache=", 9);
-        o += 9;
-        b[o++] = '0' + inc;
-        b[o++] = '\n';
-        if (write(2, b, o) < 0) {}
-        // Name the faulting engine function where the host supplies dladdr. It is not strictly
-        // async-signal-safe, but we exit immediately after this diagnostics-only path.
-#if !defined(_WIN32)
-        Dl_info di;
-        if (hpc && dladdr((void *)hpc, &di) && di.dli_sname) {
-            char c[160];
-            int p = 0;
-            memcpy(c, "[HL-ENGINE-FAULT] fn=", 21);
-            p = 21;
-            for (const char *s = di.dli_sname; *s && p < 140; s++)
-                c[p++] = *s;
-            memcpy(c + p, " +0x", 4);
-            p += 4;
-            uint64_t off = hpc - (uint64_t)di.dli_saddr;
-            for (int i = 12; i >= 0; i -= 4)
-                c[p++] = H[(off >> i) & 0xf];
-            c[p++] = '\n';
-            if (write(2, c, p) < 0) {}
-        }
-#endif
-    }
     // no guest handler -> a fatal, unmaskable synchronous fault. Terminate the guest process through
     // hl's fatal-signal machinery so its parent's wait4 sees WIFSIGNALED/WTERMSIG=sig (a raw host raise()
     // degrades to exit(255) across hl's fork). Declines (returns 0) for a genuine ENGINE fault -> re-raise.
@@ -707,8 +654,7 @@ static void nonpie_guard(int sig, siginfo_t *si, void *uc) {
 // records the guest handler but does not install a host handler for synchronous signals (they are served by
 // the guards installed here), so without this the trap is fatal instead of reaching the guest's handler.
 // nonpie_guard already routes any signal to deliver_guest_fault (nonpie_fixup self-declines: its si_addr is
-// the high faulting PC, never in the low link range), so reuse it. CRASHDBG handles these via its mach
-// exception port + diag_crash instead, so leave its diagnostics untouched.
+// the high faulting PC, never in the low link range), so reuse it.
 static void install_sync_fault_guards(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
@@ -801,19 +747,26 @@ static int main_placement_from_plan(const hl_engine_main_image_plan *plan, struc
     return 0;
 }
 
-static void load_elf(const char *path, struct loaded *out, const struct main_placement *placement) {
+static void load_elf(const char *path, struct loaded *out, const struct main_placement *placement,
+                     const hl_linux_image *pinned) {
     hl_linux_image image;
-    if (aarch64_image_read(path, &image) != 0) {
+    if ((pinned != NULL ? hl_linux_image_read_bytes(pinned->bytes, pinned->size, &image)
+                        : aarch64_image_read(path, &image)) != 0) {
         fprintf(stderr, "hl-engine: cannot read guest ELF %s through host services\n", path);
         exit(1);
     }
     uint8_t *f = image.bytes;
+    out->identity = hl_identity_image_digest(image.bytes, image.size);
     hl_linux_elf64_layout layout;
     if (hl_linux_elf64_validate(&image, 0xB7, &layout) != 0) {
         hl_linux_image_release(&image);
         fprintf(stderr, "hl-engine: %s: malformed aarch64 ELF image\n", path);
         exit(1);
     }
+    /* Publish the identity of the image this load consumes.  elf_interp also
+     * reads an image, but parsing metadata must never overwrite the cache key
+     * for a different load. */
+    g_loaded_image_identity = g_pcache ? hl_digest_bytes(HL_DIGEST_SEED, image.bytes, image.size) : 0;
     // Refuse a foreign-arch ELF up front: this engine only translates aarch64 (e_machine==EM_AARCH64).
     // Without this guard an x86-64 image's bytes are decoded as aarch64 instructions -- the translator
     // runs off into a zero/garbage region and dies deep inside translate_block with a cryptic SIGSEGV.
@@ -914,8 +867,6 @@ static void load_elf(const char *path, struct loaded *out, const struct main_pla
         g_nonpie_hi = image_projection.guest_end;
         g_nonpie_bias = image_projection.storage_bias;
     }
-    if (force_displaced && (image_projection.flags & HL_NATIVE_ADDRESS_PROJECTION_DISPLACED) != 0)
-        nonpie_report_forced_displacement();
     for (int i = 0; i < phnum; i++) {
         uint8_t *ph = f + phoff + (uint64_t)i * phentsize;
         if (rd32(ph) != 1) continue;
@@ -1092,10 +1043,10 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
         {7, at_base},
         {8, 0},
         {9, lm->entry},
-        {11, (uint64_t)cuid()},
-        {12, (uint64_t)cuid()},
-        {13, (uint64_t)cgid()},
-        {14, (uint64_t)cgid()},
+        {11, (uint64_t)cred_ruid()},
+        {12, (uint64_t)cred_euid()},
+        {13, (uint64_t)cred_rgid()},
+        {14, (uint64_t)cred_egid()},
         {16, g_aarch64_cpu_model.hwcap},
         // AT_HWCAP2 is where arm64 keeps BF16/I8MM/SVE2/MTE/BTI. arm64's ARCH_DLINFO emits it unconditionally,
         // so omitting it was not "advertise nothing" but a shape no kernel produces; the value stays 0 until
@@ -1104,7 +1055,7 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
         {17, 100},
         {15, plat},
         {25, rnd},
-        {23, 0},
+        {23, (uint64_t)g_exec_secure},
         {31, execfn},
         {0, 0},
     };

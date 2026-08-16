@@ -351,20 +351,31 @@ impl TryFrom<&str> for Target {
     type Error = ApiError;
 
     fn try_from(target: &str) -> Result<Self, Self::Error> {
-        let path = std::path::Path::new(target);
-        if !path.is_absolute()
-            || path.components().any(|component| {
-                matches!(
-                    component,
-                    std::path::Component::CurDir | std::path::Component::ParentDir
-                )
-            })
-        {
+        if !hl_container::normalized_mount_target(target) {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
                 format!("mount target {target:?} must be absolute and normalized"),
             ));
         }
         Ok(Self(target.into()))
+    }
+}
+
+#[cfg(test)]
+mod target_tests {
+    use super::Target;
+
+    #[test]
+    fn docker_mount_target_uses_container_admission_contract() {
+        assert!(Target::try_from("/guest").is_ok());
+        for target in [
+            "guest",
+            "//guest",
+            "/guest//nested",
+            "/guest/./nested",
+            "/guest/nested/",
+        ] {
+            assert!(Target::try_from(target).is_err(), "daemon admitted {target:?}");
+        }
     }
 }

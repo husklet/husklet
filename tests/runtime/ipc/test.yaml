@@ -441,16 +441,34 @@ cases:
     targets: [amd64]
     build: { source: source/tso_unaligned.c, output: tso-unaligned, flags: [-static, -O2, -std=gnu11, -pthread] }
     artifact: { destination: /opt/husklet/tso-unaligned }
-    run: []
+    run: ["2000"]
     expect: { exit: 0, stdout: golden/tso_unaligned.out }
+  - id: runtime/ipc/tso-unaligned-soak
+    status: active
+    compat: { class: soak }
+    targets: [amd64]
+    build: { source: source/tso_unaligned.c, output: tso-unaligned-soak, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/tso-unaligned-soak }
+    soak: { duration_seconds: 900, repetitions: 1, resources: { cpu: 2, memory_mib: 1024, processes: 64 } }
+    run: ["100000"]
+    expect: { exit: 0, stdout: golden/tso_unaligned_soak.out }
   - id: runtime/ipc/tso-simd-mp
     status: active
     compat: { class: compatibility }
     targets: [amd64]
     build: { source: source/tso_simdmp.c, output: tso-simd-mp, flags: [-static, -O2, -std=gnu11, -pthread] }
     artifact: { destination: /opt/husklet/tso-simd-mp }
-    run: []
+    run: ["10000"]
     expect: { exit: 0, stdout: golden/tso_simdmp.out }
+  - id: runtime/ipc/tso-simd-mp-soak
+    status: active
+    compat: { class: soak }
+    targets: [amd64]
+    build: { source: source/tso_simdmp.c, output: tso-simd-mp-soak, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/tso-simd-mp-soak }
+    soak: { duration_seconds: 900, repetitions: 1, resources: { cpu: 2, memory_mib: 1024, processes: 64 } }
+    run: ["400000"]
+    expect: { exit: 0, stdout: golden/tso_simdmp_soak.out }
   - id: runtime/ipc/efd-xproc
     status: active
     compat: { class: compatibility }

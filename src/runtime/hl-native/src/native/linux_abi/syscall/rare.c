@@ -1368,6 +1368,11 @@ static int svc_rare_timer_control(struct cpu *c, uint64_t nr, uint64_t a0, uint6
             G_RET(c) = (uint64_t)(int64_t)(-EROFS);
             break;
         }
+        hl_dac_snapshot snapshot;
+        if (dac_snapshot_at(-100, guest_path, 1, &snapshot) == 0 && S_ISDIR(snapshot.mode)) {
+            G_RET(c) = (uint64_t)(int64_t)(-EISDIR);
+            break;
+        }
         char pb[4200];
         const char *p = xresolve_overlay(guest_path, pb, sizeof pb);
         // RLIMIT_FSIZE: a truncate whose target length exceeds the soft file-size limit raises SIGXFSZ and
@@ -1538,15 +1543,16 @@ static int svc_rare_timer_control(struct cpu *c, uint64_t nr, uint64_t a0, uint6
 
 static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
                     uint64_t a5) {
-    if (svc_rare_security_descriptor(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
-    if (svc_rare_process_descriptor(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
-    if (svc_rare_message_queue_open(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
-    if (svc_rare_message_queue_send(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
-    if (svc_rare_message_queue_receive(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
-    if (svc_rare_message_queue_control(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
-    if (svc_rare_scheduler_memory(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
-    if (svc_rare_identity_system(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
-    if (svc_rare_timer_query(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
-    if (svc_rare_timer_control(c, nr, a0, a1, a2, a3, a4, a5)) return 1;
+    int handled = svc_rare_security_descriptor(c, nr, a0, a1, a2, a3, a4, a5) ||
+                  svc_rare_process_descriptor(c, nr, a0, a1, a2, a3, a4, a5) ||
+                  svc_rare_message_queue_open(c, nr, a0, a1, a2, a3, a4, a5) ||
+                  svc_rare_message_queue_send(c, nr, a0, a1, a2, a3, a4, a5) ||
+                  svc_rare_message_queue_receive(c, nr, a0, a1, a2, a3, a4, a5) ||
+                  svc_rare_message_queue_control(c, nr, a0, a1, a2, a3, a4, a5) ||
+                  svc_rare_scheduler_memory(c, nr, a0, a1, a2, a3, a4, a5) ||
+                  svc_rare_identity_system(c, nr, a0, a1, a2, a3, a4, a5) ||
+                  svc_rare_timer_query(c, nr, a0, a1, a2, a3, a4, a5) ||
+                  svc_rare_timer_control(c, nr, a0, a1, a2, a3, a4, a5);
+    if (handled) return svc_done_host(c);
     return 0;
 }

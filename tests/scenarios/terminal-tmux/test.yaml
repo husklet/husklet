@@ -1,0 +1,43 @@
+cases:
+- id: terminal-tmux/nested-resize-detach-recovery
+  image: ubuntu:22.04
+  class: long
+  timeout: 300
+  resources: [network, registry, disk_heavy, process_heavy, pty]
+  actions:
+  - shell:
+      script: |
+        set -eu
+        export DEBIAN_FRONTEND=noninteractive
+        rm -rf /var/lib/apt/lists/*
+        apt-get update >/tmp/apt-update.log 2>&1
+        apt-get install -y --no-install-recommends tmux >/tmp/apt-install.log 2>&1
+  - terminal:
+      argv: [/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - write: { text: "stty -echo; export PS1=''; tmux -L husklet new-session -d -s ux; tmux -L husklet set-option -g status off; tmux -L husklet run-shell -b -d 8 \"tmux -L husklet send-keys -t ux \\\"printf '\\\\127\\\\101\\\\124\\\\103\\\\110\\\\104\\\\117\\\\107\\\\055\\\\103\\\\114\\\\105\\\\101\\\\116\\\\105\\\\104\\\\n'\\\" C-m; tmux -L husklet kill-server\"; tmux -L husklet send-keys -t ux \"stty -echo; printf '\\124\\115\\125\\130\\055\\122\\105\\101\\104\\131\\012'\" C-m; tmux -L husklet attach -t ux; printf '\\117\\125\\124\\105\\122\\055\\104\\105\\124\\101\\103\\110\\105\\104\\n'\r" }
+      - await_output: { contains: TMUX-READY, timeout_ms: 10000 }
+      - write: { text: "printf '\\124\\115\\125\\130\\055\\105\\116\\124\\105\\122\\105\\104\\n'; test -n \"$TMUX\" && printf '\\124\\115\\125\\130\\055\\105\\116\\126\\055\\117\\113\\n'\r" }
+      - await_output: { contains: TMUX-ENTERED, timeout_ms: 10000 }
+      - await_output: { contains: TMUX-ENV-OK, timeout_ms: 5000 }
+      - resize: { rows: 10, columns: 30 }
+      - write: { text: "i=0; while test \"$(stty size)\" != '10 30' && test $i -lt 100; do i=$((i+1)); sleep .05; done; stty size; printf '\\124\\115\\125\\130\\055\\122\\105\\123\\111\\132\\105\\104\\n'\r" }
+      - await_output: { contains: "10 30", timeout_ms: 10000 }
+      - await_output: { contains: TMUX-RESIZED, timeout_ms: 5000 }
+      - write: { text: "\u0002" }
+      - write: { text: "d" }
+      - await_output: { contains: OUTER-DETACHED, timeout_ms: 10000 }
+      - write: { text: "tmux -L husklet has-session -t ux && tmux -L husklet kill-server && printf '\\117\\125\\124\\105\\122\\055\\123\\110\\105\\114\\114\\055\\117\\113\\n'; exit\r" }
+      - await_output: { contains: OUTER-SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/ready.txt
+    - golden/entered.txt
+    - golden/environment.txt
+    - golden/dimensions.txt
+    - golden/resized.txt
+    - golden/detached.txt
+    - golden/shell_ok.txt

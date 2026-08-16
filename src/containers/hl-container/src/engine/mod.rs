@@ -3,7 +3,6 @@ use crate::{
     service::{OverlayConfig, ProcessConfig, Running, Runtime},
 };
 use async_trait::async_trait;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     collections::VecDeque,
     sync::{Arc, Condvar, Mutex as StdMutex},
@@ -33,6 +32,8 @@ impl CheckpointTransport {
     fn storage_error(error: &crate::CheckpointError) -> hl_engine::composition::CompositionError {
         if error.is_deadline() {
             hl_engine::composition::CompositionError::DeadlineExceeded
+        } else if error.is_busy() {
+            hl_engine::composition::CompositionError::TransactionBusy
         } else if error.publication_occurred() {
             hl_engine::composition::CompositionError::PublishedNotDurable
         } else {
@@ -43,47 +44,61 @@ impl CheckpointTransport {
 
 impl hl_engine::composition::CheckpointSink for CheckpointTransport {
     fn replace(&self, bytes: &[u8]) -> std::result::Result<(), hl_engine::composition::CompositionError> {
+        let deadline = std::time::Instant::now() + hl_engine::composition::DEFAULT_CHECKPOINT_TIMEOUT;
+        let transaction = self
+            .image
+            .begin_until(deadline)
+            .map_err(|error| Self::storage_error(&error))?;
         self.image
-            .put(CHECKPOINT_OBJECT, bytes)
+            .put_until(transaction, CHECKPOINT_OBJECT, bytes, deadline)
             .map_err(|_| hl_engine::composition::CompositionError::RuntimeConstruction)?;
         let mut manifest = Vec::with_capacity(16);
         manifest.extend_from_slice(CHECKPOINT_MANIFEST_MAGIC);
         manifest.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
         self.image
-            .commit(&manifest)
+            .commit_until(transaction, &manifest, deadline)
             .map_err(|_| hl_engine::composition::CompositionError::RuntimeConstruction)
     }
 
-    fn put(&self, name: &str, bytes: &[u8]) -> std::result::Result<(), hl_engine::composition::CompositionError> {
+    fn begin_until(
+        &self,
+        deadline: std::time::Instant,
+    ) -> std::result::Result<std::num::NonZeroU64, hl_engine::composition::CompositionError> {
         self.image
-            .put(name, bytes)
-            .map_err(|_| hl_engine::composition::CompositionError::RuntimeConstruction)
-    }
-
-    fn commit(&self, manifest: &[u8]) -> std::result::Result<(), hl_engine::composition::CompositionError> {
-        self.image
-            .commit(manifest)
-            .map_err(|_| hl_engine::composition::CompositionError::RuntimeConstruction)
+            .begin_until(deadline)
+            .map_err(|error| Self::storage_error(&error))
     }
 
     fn put_until(
         &self,
+        transaction: std::num::NonZeroU64,
         name: &str,
         bytes: &[u8],
         deadline: std::time::Instant,
     ) -> std::result::Result<(), hl_engine::composition::CompositionError> {
         self.image
-            .put_until(name, bytes, deadline)
+            .put_until(transaction, name, bytes, deadline)
+            .map_err(|error| Self::storage_error(&error))
+    }
+
+    fn abort_until(
+        &self,
+        transaction: std::num::NonZeroU64,
+        deadline: std::time::Instant,
+    ) -> std::result::Result<(), hl_engine::composition::CompositionError> {
+        self.image
+            .abort_until(transaction, deadline)
             .map_err(|error| Self::storage_error(&error))
     }
 
     fn commit_until(
         &self,
+        transaction: std::num::NonZeroU64,
         manifest: &[u8],
         deadline: std::time::Instant,
     ) -> std::result::Result<(), hl_engine::composition::CompositionError> {
         self.image
-            .commit_until(manifest, deadline)
+            .commit_until(transaction, manifest, deadline)
             .map_err(|error| Self::storage_error(&error))
     }
 }
@@ -166,20 +181,64 @@ struct TerminalChannel {
 }
 
 struct OutputChannel {
+    state: StdMutex<TerminalState>,
+    changed: Condvar,
     output: crate::service::LogSender,
-    closed: AtomicBool,
 }
 
 impl OutputChannel {
-    fn new(output: crate::service::LogSender) -> Self {
+    fn new(receiver: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>, output: crate::service::LogSender) -> Self {
         Self {
+            state: StdMutex::new(TerminalState {
+                receiver,
+                pending: VecDeque::new(),
+                closed: false,
+            }),
+            changed: Condvar::new(),
             output,
-            closed: AtomicBool::new(false),
         }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, TerminalState> {
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
 impl hl_engine::composition::StandardStreamPort for OutputChannel {
+    fn read(&self, output: &mut [u8]) -> std::io::Result<usize> {
+        if output.is_empty() {
+            return Ok(0);
+        }
+        let mut state = self.lock();
+        loop {
+            if state.closed {
+                return Ok(0);
+            }
+            if !state.pending.is_empty() {
+                let length = output.len().min(state.pending.len());
+                for destination in &mut output[..length] {
+                    *destination = state.pending.pop_front().expect("bounded by pending length");
+                }
+                return Ok(length);
+            }
+            let received = match state.receiver.as_mut() {
+                Some(receiver) => receiver.try_recv(),
+                None => return Ok(0),
+            };
+            match received {
+                Ok(bytes) => state.pending.extend(bytes),
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => state.receiver = None,
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                    state = self
+                        .changed
+                        .wait_timeout(state, TerminalChannel::CANCELLATION_POLL)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .0;
+                }
+            }
+        }
+    }
+
     fn write(&self, stream: hl_engine::composition::StandardStream, input: &[u8]) -> std::io::Result<usize> {
         if input.is_empty() {
             return Ok(0);
@@ -194,7 +253,7 @@ impl hl_engine::composition::StandardStreamPort for OutputChannel {
             bytes: input[..length].to_vec(),
         };
         loop {
-            if self.closed.load(Ordering::Acquire) {
+            if self.lock().closed {
                 return Err(std::io::ErrorKind::BrokenPipe.into());
             }
             match self.output.try_send(chunk) {
@@ -211,7 +270,8 @@ impl hl_engine::composition::StandardStreamPort for OutputChannel {
     }
 
     fn close(&self) {
-        self.closed.store(true, Ordering::Release);
+        self.lock().closed = true;
+        self.changed.notify_all();
     }
 }
 
@@ -341,9 +401,8 @@ impl Runtime for Engine {
                     .map_err(|_| Error::Runtime("terminal construction failed".into()))?;
                 hl_engine::composition::StandardStreams::default().with_terminal(terminal)
             }
-            None => {
-                hl_engine::composition::StandardStreams::default().with_output(Arc::new(OutputChannel::new(sender)))
-            }
+            None => hl_engine::composition::StandardStreams::default()
+                .with_output(Arc::new(OutputChannel::new(config.input.take(), sender))),
         };
         let checkpoint = config
             .checkpoint
@@ -383,13 +442,27 @@ mod tests {
     use crate::service::{NetworkConfig, ProcessConfig};
     use hl_engine::composition::{CheckpointSink as _, CheckpointSource as _, TerminalPort as _};
     use std::collections::BTreeMap;
+    use std::num::NonZeroU64;
     use std::sync::{Arc, Mutex};
 
     #[derive(Default)]
     struct Image(Mutex<BTreeMap<String, Vec<u8>>>);
 
     impl crate::CheckpointImage for Image {
-        fn put(&self, name: &str, bytes: &[u8]) -> Result<(), crate::CheckpointError> {
+        fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, crate::CheckpointError> {
+            Ok(NonZeroU64::MIN)
+        }
+
+        fn put_until(
+            &self,
+            _: NonZeroU64,
+            name: &str,
+            bytes: &[u8],
+            deadline: std::time::Instant,
+        ) -> Result<(), crate::CheckpointError> {
+            (std::time::Instant::now() < deadline)
+                .then_some(())
+                .ok_or_else(|| crate::CheckpointError::new("deadline exceeded"))?;
             self.0.lock().unwrap().insert(name.to_owned(), bytes.to_vec());
             Ok(())
         }
@@ -407,16 +480,8 @@ mod tests {
             Ok(self.0.lock().unwrap().keys().cloned().collect())
         }
 
-        fn put_until(
-            &self,
-            name: &str,
-            bytes: &[u8],
-            deadline: std::time::Instant,
-        ) -> Result<(), crate::CheckpointError> {
-            (std::time::Instant::now() < deadline)
-                .then_some(())
-                .ok_or_else(|| crate::CheckpointError::new("deadline exceeded"))?;
-            self.put(name, bytes)
+        fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), crate::CheckpointError> {
+            Ok(())
         }
 
         fn get_until(&self, name: &str, deadline: std::time::Instant) -> Result<Vec<u8>, crate::CheckpointError> {
@@ -433,11 +498,16 @@ mod tests {
             self.list()
         }
 
-        fn commit_until(&self, manifest: &[u8], deadline: std::time::Instant) -> Result<(), crate::CheckpointError> {
+        fn commit_until(
+            &self,
+            transaction: NonZeroU64,
+            manifest: &[u8],
+            deadline: std::time::Instant,
+        ) -> Result<(), crate::CheckpointError> {
             (std::time::Instant::now() < deadline)
                 .then_some(())
                 .ok_or_else(|| crate::CheckpointError::new("deadline exceeded"))?;
-            self.commit(manifest)
+            self.put_until(transaction, "MANIFEST", manifest, deadline)
         }
     }
 
@@ -454,11 +524,61 @@ mod tests {
     #[test]
     fn checkpoint_transport_rejects_uncommitted_or_torn_images() {
         let image = Arc::new(Image::default());
-        image.put("rust/image", b"partial").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let transaction = image.begin_until(deadline).unwrap();
+        image
+            .put_until(transaction, "rust/image", b"partial", deadline)
+            .unwrap();
         let transport = CheckpointTransport::new(image.clone());
         assert!(transport.read(64).is_err());
-        image.put("MANIFEST", b"not-a-rust-manifest").unwrap();
+        image
+            .put_until(transaction, "MANIFEST", b"not-a-rust-manifest", deadline)
+            .unwrap();
         assert!(transport.read(64).is_err());
+    }
+
+    struct BusyImage;
+
+    impl crate::CheckpointImage for BusyImage {
+        fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, crate::CheckpointError> {
+            Err(crate::CheckpointError::busy())
+        }
+        fn put_until(
+            &self,
+            _: NonZeroU64,
+            _: &str,
+            _: &[u8],
+            _: std::time::Instant,
+        ) -> Result<(), crate::CheckpointError> {
+            unreachable!()
+        }
+        fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), crate::CheckpointError> {
+            unreachable!()
+        }
+        fn get(&self, _: &str) -> Result<Vec<u8>, crate::CheckpointError> {
+            unreachable!()
+        }
+        fn get_until(&self, _: &str, _: std::time::Instant) -> Result<Vec<u8>, crate::CheckpointError> {
+            unreachable!()
+        }
+        fn list(&self) -> Result<Vec<String>, crate::CheckpointError> {
+            unreachable!()
+        }
+        fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, crate::CheckpointError> {
+            unreachable!()
+        }
+        fn commit_until(&self, _: NonZeroU64, _: &[u8], _: std::time::Instant) -> Result<(), crate::CheckpointError> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn checkpoint_transport_preserves_transaction_busy() {
+        let transport = CheckpointTransport::new(Arc::new(BusyImage));
+        assert_eq!(
+            transport.begin_until(std::time::Instant::now() + std::time::Duration::from_secs(1)),
+            Err(hl_engine::composition::CompositionError::TransactionBusy)
+        );
     }
 
     fn launch() -> ProcessConfig {
@@ -506,6 +626,20 @@ mod tests {
         assert_eq!(spec.plan.rootfs.as_deref(), Some(b"/rootfs".as_slice()));
         assert_eq!(spec.plan.arguments[0], b"/bin/true");
         assert_eq!(spec.plan.options.get("HL_NETNS"), Some("container-test"));
+    }
+
+    #[test]
+    fn checkpoint_transport_arms_capture_and_requested_restore() {
+        for restore in [false, true] {
+            let mut launch = launch();
+            launch.checkpoint = Some(crate::service::CheckpointConfig {
+                image: Arc::new(Image::default()),
+                restore,
+            });
+            let spec = Spec::try_from(&launch).unwrap();
+            assert_eq!(spec.plan.options.get("HL_CHECKPOINT"), Some("1"));
+            assert_eq!(spec.plan.options.get("HL_RESTORE"), restore.then_some("1"));
+        }
     }
 
     #[test]

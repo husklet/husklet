@@ -1,8 +1,7 @@
 // F_ADD_SEALS(1033)/F_GET_SEALS(1034) differential probe. Two surfaces:
-//   1. A NON-memfd fd on a sealing-capable filesystem (tmpfs /tmp): native reports the real seal state
-//      (shmem files are born F_SEAL_SEAL, so F_GET_SEALS -> F_SEAL_SEAL and a further F_ADD_SEALS -> EPERM),
-//      NOT the blanket EINVAL an unconditional memfd-only emulation would return. The engine forwards these
-//      commands to the guest's real host fd on Linux, so the answer matches the host kernel.
+//   1. A NON-memfd fd on the ordinary working filesystem: Linux rejects both commands with EINVAL.
+//      Keep this control off /tmp because whether /tmp is tmpfs is an environment property (it is tmpfs on
+//      the development host but part of the overlay in Docker and Husklet), not a syscall invariant.
 //   2. A real memfd created with MFD_ALLOW_SEALING: seal round-trip, the F_SEAL_WRITE-while-mapped EBUSY
 //      guard, write-after-seal EPERM, and F_SEAL_SHRINK ftruncate EPERM.
 // Output is arch-neutral (booleans + errnos), so one golden covers aarch64 and x86_64.
@@ -30,8 +29,8 @@
 #endif
 
 int main(void) {
-    // ---- 1. non-memfd fd on tmpfs (/tmp) ----
-    char path[] = "/tmp/memfdseals.XXXXXX";
+    // ---- 1. non-memfd fd on the ordinary working filesystem ----
+    char path[] = "./memfdseals.XXXXXX";
     int fd = mkstemp(path);
     unlink(path);
     int gs = fcntl(fd, F_GET_SEALS);

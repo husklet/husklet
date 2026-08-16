@@ -152,6 +152,27 @@ static enum translation_step translate_system_instruction(uint64_t guest_pc, uin
         else
             e_movr(16, source);
         emit32(0x927AE610u);
+        // A displaced ET_EXEC keeps absolute data pointers in the guest's low image range. The lowered
+        // stores must use the high backing address just like every other folded memory operation; otherwise
+        // the software-VMA guard reports a guest SIGSEGV before the non-PIE hardware-fault fixup can see the
+        // original DC ZVA instruction. Preserve NZCV because DC ZVA does not change flags.
+        if (guestbase_on()) {
+            emit32(0xD53B4212u); // mrs x18, nzcv
+            e_movconst(17, g_nonpie_lo);
+            emit32(0xEB11021Fu); // cmp x16, x17
+            uint32_t *below = (uint32_t *)g_cp;
+            emit32(0); // b.lo restore
+            e_movconst(17, g_nonpie_hi);
+            emit32(0xEB11021Fu); // cmp x16, x17
+            uint32_t *above = (uint32_t *)g_cp;
+            emit32(0); // b.hs restore
+            e_movconst(17, g_nonpie_bias);
+            emit32(0x8B110210u); // add x16, x16, x17
+            uint8_t *restore = g_cp;
+            emit32(0xD51B4212u); // msr nzcv, x18
+            *below = 0x54000003u | (((uint32_t)((restore - (uint8_t *)below) / 4) & 0x7FFFFu) << 5);
+            *above = 0x54000002u | (((uint32_t)((restore - (uint8_t *)above) / 4) & 0x7FFFFu) << 5);
+        }
         if (jit_guest_bus_active()) emit_a64_bus_guard(16, 64, guest_pc);
         struct a64_soft_guard soft = emit_a64_soft_guard_begin(16, 17, 18, 64, HL_LOGICAL_VMA_WRITE, guest_pc);
         for (unsigned offset = 0; offset < 64; offset += 16)

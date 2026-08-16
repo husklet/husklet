@@ -179,13 +179,18 @@ restart:;
                 dk == 0 && !strcmp(dcanon, dkey)) {
                 int d = open(dcanon, O_RDONLY | O_DIRECTORY);
                 if (d >= 0) {
+                    char physical[768];
+                    if (hl_case_component(d, fcomp, physical, sizeof physical) != 0) {
+                        close(d);
+                        return -ENAMETOOLONG;
+                    }
                     if (nofollow) {
-                        snprintf(final, fn, "%s", fcomp);
+                        snprintf(final, fn, "%s", physical);
                         return d;
                     }
                     struct stat fst;
-                    if (fstatat(d, fcomp, &fst, AT_SYMLINK_NOFOLLOW) != 0 || !S_ISLNK(fst.st_mode)) {
-                        snprintf(final, fn, "%s", fcomp);
+                    if (fstatat(d, physical, &fst, AT_SYMLINK_NOFOLLOW) != 0 || !S_ISLNK(fst.st_mode)) {
+                        snprintf(final, fn, "%s", physical);
                         return d;
                     }
                     close(d); // final component is a symlink: the full walk must resplice it
@@ -247,6 +252,15 @@ restart:;
             // rootfs root (or crossing budget spent) -> clamp; the walk never escapes the rootfs
             snprintf(rest, sizeof rest, "%s", tail);
             continue;
+        }
+        char physical[768];
+        if (hl_case_component(fds[nf - 1], comp, physical, sizeof physical) != 0) {
+            ret = -ENAMETOOLONG;
+            goto out;
+        }
+        if (snprintf(comp, sizeof comp, "%s", physical) >= (int)sizeof comp) {
+            ret = -ENAMETOOLONG;
+            goto out;
         }
         if (last && nofollow) {
             snprintf(final, fn, "%s", comp);
@@ -320,7 +334,6 @@ out:
 // Confined (parent-fd, final) for a guest *at path: absolute or tracked-dir-fd-relative; else deny.
 static int jail_at(int dirfd, const char *raw, char *final, size_t fn, int nofollow) {
     char abs[8192];
-    if (hl_provider_tree_files_active()) return -EACCES;
     if (raw[0] == '/')
         snprintf(abs, sizeof abs, "%s", raw);
     else if (dirfd == -100)
@@ -389,48 +402,6 @@ static int jail_open_plan(int dirfd, const char *raw, uint32_t intent, uint32_t 
     }
     request = (hl_open_request){
         absolute, strlen(absolute), HL_HOST_HANDLE_INVALID, intent, g_nlower != 0, jail_ro(absolute), 0};
-    if (hl_provider_tree_files_active()) {
-        hl_host_result opened;
-        hl_host_file_metadata metadata;
-        int descriptors[2];
-        int reserve_result = reserve != NULL ? reserve(reserve_opaque) : 0;
-        uint32_t kind = (intent & HL_OPEN_DIRECTORY) != 0 ? HL_PROVIDER_TREE_DIRECTORY
-                        : (intent & (HL_OPEN_PATH_ONLY | HL_OPEN_NOFOLLOW)) == (HL_OPEN_PATH_ONLY | HL_OPEN_NOFOLLOW)
-                            ? HL_PROVIDER_TREE_LINK
-                            : HL_PROVIDER_TREE_FILE;
-        if (reserve_result < 0) return reserve_result;
-        if ((intent & HL_OPEN_NOFOLLOW) != 0 && (intent & HL_OPEN_PATH_ONLY) == 0) {
-            hl_host_result probe = hl_provider_tree_open_root(
-                absolute, strlen(absolute), HL_HOST_FILE_READ | HL_HOST_FILE_PATH_ONLY | HL_HOST_FILE_NOFOLLOW, 0, 0,
-                HL_PROVIDER_TREE_LINK);
-            hl_host_result inspected;
-            unsigned char target;
-            if (probe.status != HL_STATUS_OK) return vfs_host_error((hl_status)probe.status);
-            inspected = g_host_services->file->readlink(g_host_services->context, probe.value,
-                                                        (hl_host_bytes){.data = &target, .size = sizeof(target)});
-            (void)g_host_services->file->close(g_host_services->context, probe.value);
-            if (inspected.status == HL_STATUS_OK) return -ELOOP;
-            if (inspected.status != HL_STATUS_INVALID_ARGUMENT) return vfs_host_error((hl_status)inspected.status);
-        }
-        opened = hl_provider_tree_open_root(absolute, strlen(absolute), host_access, host_creation, permissions, kind);
-        if (opened.status != HL_STATUS_OK) return vfs_host_error((hl_status)opened.status);
-        if (g_host_services->file->metadata(g_host_services->context, opened.value, &metadata).status != HL_STATUS_OK) {
-            (void)g_host_services->file->close(g_host_services->context, opened.value);
-            return -EIO;
-        }
-        if (pipe(descriptors) != 0) {
-            (void)g_host_services->file->close(g_host_services->context, opened.value);
-            return -errno;
-        }
-        close(descriptors[1]);
-        plan->directory = HL_HOST_HANDLE_INVALID;
-        plan->target = opened.value;
-        plan->target_type = metadata.type;
-        plan->path_size = 0;
-        plan->path[0] = 0;
-        if (created != NULL) *created = (host_creation & HL_HOST_FILE_CREATE) != 0;
-        return descriptors[0];
-    }
     {
         const hl_provider_node *service = hl_provider_namespace_launch_resolve(absolute, strlen(absolute));
         if (service != NULL) {

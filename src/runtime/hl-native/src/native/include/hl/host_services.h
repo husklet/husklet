@@ -758,7 +758,9 @@ enum {
     HL_HOST_PROCESS_TERMINATE_INTERRUPT = 1,
     HL_HOST_PROCESS_TERMINATE_FORCE = 2,
     /* Add a Linux guest signal number (1..64) to this base. */
-    HL_HOST_PROCESS_TERMINATE_SIGNAL = 0x100
+    HL_HOST_PROCESS_TERMINATE_SIGNAL = 0x100,
+    /* Add a host-native engine-control signal number (1..64) to this base. */
+    HL_HOST_PROCESS_TERMINATE_NATIVE_SIGNAL = 0x200
 };
 
 typedef struct hl_host_process_services {

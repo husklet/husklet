@@ -1,0 +1,230 @@
+use std::{fs, path::PathBuf, process::Command};
+
+#[test]
+fn provider_cursor_owns_and_walks_mutable_handles() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-cursor-authority-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("cursor probe directory");
+    let source = scratch.join("cursor_authority.c");
+    let executable = scratch.join("cursor_authority");
+    fs::write(
+        &source,
+        r#"
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <stdatomic.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include "hl/host_services.h"
+
+#define HL_LINUX_VFS_LOWER_CAPACITY 1
+#define HL_NFD 16
+
+static int references[4];
+static int clones;
+static int closes;
+static int child_present = 1;
+static int clone_fails;
+static int context_poisoned;
+static unsigned child_permissions = 0755;
+
+static hl_host_result result(int32_t status, uint64_t value) {
+    return (hl_host_result){.status = status, .value = value};
+}
+
+static hl_host_result clone_file(void *context, hl_host_handle handle) {
+    (void)context;
+    if (context_poisoned) abort();
+    if (clone_fails) return result(HL_STATUS_OUT_OF_MEMORY, 0);
+    references[handle]++;
+    clones++;
+    return result(HL_STATUS_OK, handle);
+}
+
+static hl_host_result close_file(void *context, hl_host_handle handle) {
+    (void)context;
+    if (context_poisoned) abort();
+    if (handle > 3 || references[handle] == 0) return result(HL_STATUS_INVALID_ARGUMENT, 0);
+    references[handle]--;
+    closes++;
+    return result(HL_STATUS_OK, 0);
+}
+
+static hl_host_result open_relative(void *context, hl_host_handle directory, const char *path, size_t size,
+                                    uint32_t access, uint32_t creation, uint32_t permissions) {
+    (void)context; (void)creation; (void)permissions;
+    if (directory != 1) return result(HL_STATUS_NOT_DIRECTORY, 0);
+    hl_host_handle opened = 0;
+    if (size == 1 && path[0] == '.') opened = 1;
+    if (size == 3 && !memcmp(path, "dir", 3) && child_present) opened = 2;
+    if (size == 4 && !memcmp(path, "link", 4)) opened = 3;
+    if (size == 12 && !memcmp(path, ".wh.missing", 11)) opened = 0;
+    if (opened == 0) return result(HL_STATUS_NOT_FOUND, 0);
+    if ((access & HL_HOST_FILE_DIRECTORY) && opened != 1 && opened != 2)
+        return result(HL_STATUS_NOT_DIRECTORY, 0);
+    references[opened]++;
+    return result(HL_STATUS_OK, opened);
+}
+
+static hl_host_result metadata(void *context, hl_host_handle handle, hl_host_file_metadata *output) {
+    (void)context;
+    memset(output, 0, sizeof *output);
+    output->stable_device = 7;
+    output->stable_object = handle;
+    output->permissions = handle == 2 ? child_permissions : 0755;
+    output->type = handle == 3 ? HL_HOST_FILE_TYPE_SYMLINK : HL_HOST_FILE_TYPE_DIRECTORY;
+    return result(HL_STATUS_OK, 0);
+}
+
+static hl_host_result readlink_file(void *context, hl_host_handle handle, hl_host_bytes output) {
+    (void)context;
+    static const char target[] = "dir";
+    if (handle != 3 || output.size < sizeof target - 1) return result(HL_STATUS_INVALID_ARGUMENT, 0);
+    memcpy(output.data, target, sizeof target - 1);
+    return result(HL_STATUS_OK, sizeof target - 1);
+}
+
+static const hl_host_file_services files = {
+    .abi = HL_HOST_FILE_ABI, .size = sizeof files, .open_relative = open_relative, .metadata = metadata,
+    .close = close_file, .readlink = readlink_file, .clone_for_fork = clone_file,
+};
+static const hl_host_services services = {
+    .abi = HL_HOST_SERVICES_ABI, .size = sizeof services, .file = &files,
+};
+
+#include "linux_abi/container/vfs/cursor.c"
+
+static int search_hook(const hl_vfs_cursor *directory, void *context) {
+    int *calls = context;
+    (*calls)++;
+    if (directory->count != 0 && directory->layers[0].kind == HL_VFS_CURSOR_AUTHORITY_HOST) {
+        const hl_vfs_cursor_authority *authority = &directory->layers[0];
+        hl_host_file_metadata status;
+        if (authority->value.host.services->file->metadata(authority->value.host.services->context,
+                                                           authority->value.host.handle, &status).status != HL_STATUS_OK)
+            return -EIO;
+        if ((status.permissions & 0111) == 0) return -EACCES;
+    }
+    return 0;
+}
+
+static int terminal_hook(const char *guest, void *context) {
+    (void)context;
+    return !strcmp(guest, "/dir/missing");
+}
+
+static int terminal_denied(const char *guest, void *context) {
+    (void)context;
+    return !strcmp(guest, "/dir/missing") ? -EACCES : 0;
+}
+
+int main(void) {
+    references[1] = 1;
+    hl_vfs_cursor_authority root_authority = {
+        .kind = HL_VFS_CURSOR_AUTHORITY_HOST,
+        .value.host = {.handle = 1, .services = &services},
+    };
+    hl_vfs_cursor root;
+    if (hl_vfs_cursor_root_authorities(&root_authority, NULL, 0, &root) != 0 || clones != 1) return 1;
+    hl_vfs_cursor_entry entry;
+    if (hl_vfs_cursor_lookup(&root, "dir", &entry) != 0 || entry.kind != HL_VFS_CURSOR_DIRECTORY) return 2;
+    hl_vfs_cursor_entry_release(&entry);
+    if (hl_vfs_cursor_lookup(&root, "link", &entry) != 0 || entry.kind != HL_VFS_CURSOR_SYMLINK ||
+        strcmp(entry.symlink, "dir")) return 3;
+    hl_vfs_cursor_entry_release(&entry);
+    child_present = 0;
+    if (hl_vfs_cursor_lookup(&root, "dir", &entry) != -ENOENT) return 4;
+    child_present = 1;
+    child_permissions = 0;
+    int search_calls = 0;
+    if (hl_vfs_cursor_walk(&root, &root, "link/missing", 0, 1, 0, NULL, 0, NULL, NULL, NULL, search_hook, &search_calls, &entry) != -EACCES ||
+        search_calls < 2) return 12;
+    search_calls = 0;
+    if (hl_vfs_cursor_walk(&root, &root, "dir/", 0, 1, 0, NULL, 0, NULL, NULL, NULL, search_hook, &search_calls, &entry) != -EACCES ||
+        search_calls < 2) return 13;
+    search_calls = 0;
+    char denied_terminal[16] = "uninitialized";
+    int denied_requires_directory = 7;
+    if (hl_vfs_cursor_walk(&root, &root, "dir/missing", 0, 1, 1, denied_terminal, sizeof denied_terminal,
+                           &denied_requires_directory, terminal_hook, NULL, search_hook, &search_calls, &entry) !=
+            -EACCES ||
+        search_calls < 2 || denied_terminal[0] != 0 || denied_requires_directory != 0) return 20;
+    child_permissions = 0755;
+    search_calls = 0;
+    if (hl_vfs_cursor_walk(&root, &root, "dir/missing", 0, 1, 1, denied_terminal, sizeof denied_terminal,
+                           &denied_requires_directory, terminal_denied, NULL, search_hook, &search_calls, &entry) !=
+            -EACCES ||
+        search_calls < 2 || denied_terminal[0] != 0 || denied_requires_directory != 0) return 22;
+    for (size_t index = 0; index < 3; ++index) {
+        const char *no_final[] = {"/", ".", ".."};
+        char resolved[16] = "uninitialized";
+        int requires_directory = 7;
+        if (hl_vfs_cursor_walk(&root, &root, no_final[index], 0, 1, 1, resolved, sizeof resolved,
+                               &requires_directory, NULL, NULL, search_hook, &search_calls, &entry) != HL_VFS_CURSOR_NO_FINAL ||
+            resolved[0] != 0 || requires_directory != 0) return 14 + (int)index;
+    }
+    char resolved_link[16];
+    int requires_directory = 0;
+    if (hl_vfs_cursor_walk(&root, &root, "link", 0, 1, 1, resolved_link, sizeof resolved_link,
+                           &requires_directory, NULL, NULL, search_hook, &search_calls, &entry) != 0 ||
+        strcmp(resolved_link, "/dir") || requires_directory) return 17;
+    if (hl_vfs_cursor_walk(&root, &root, "link", 1, 1, 1, resolved_link, sizeof resolved_link,
+                           &requires_directory, NULL, NULL, search_hook, &search_calls, &entry) != 0 ||
+        strcmp(resolved_link, "/link") || requires_directory) return 18;
+    if (hl_vfs_cursor_walk(&root, &root, "link/", 1, 1, 1, resolved_link, sizeof resolved_link,
+                           &requires_directory, NULL, NULL, search_hook, &search_calls, &entry) != 0 ||
+        strcmp(resolved_link, "/dir") || !requires_directory) return 21;
+    if (hl_vfs_cursor_walk(&root, &root, "link/missing", 0, 1, 1, resolved_link, sizeof resolved_link,
+                           &requires_directory, terminal_hook, NULL, search_hook, &search_calls, &entry) != 0 ||
+        strcmp(resolved_link, "/dir/missing") || requires_directory) return 19;
+    hl_vfs_cursor clone;
+    if (hl_vfs_cursor_clone(&root, &clone) != 0 || clones < 3) return 5;
+    hl_vfs_cursor_release(&clone);
+    if (hl_vfs_fd_cursor_publish(4, &root) != 0) return 6;
+    int before_fork_clones = clones;
+    int before_failure_references = references[1];
+    clone_fails = 1;
+    hl_vfs_cursor **failed = calloc(HL_NFD, sizeof *failed);
+    if (hl_vfs_fd_cursor_clone_table(failed) == 0 || hl_vfs_fd_cursor_get(4) == NULL ||
+        references[1] != before_failure_references) return 7;
+    hl_vfs_fd_cursor_release_table(failed);
+    free(failed);
+    clone_fails = 0;
+    hl_vfs_cursor **forked = calloc(HL_NFD, sizeof *forked);
+    if (hl_vfs_fd_cursor_clone_table(forked) != 0) return 8;
+    hl_vfs_fd_cursor_replace_table(forked);
+    free(forked);
+    if (hl_vfs_fd_cursor_get(4) == NULL || clones <= before_fork_clones) return 9;
+    hl_vfs_fd_cursor_clear();
+    if (hl_vfs_fd_cursor_get(4) != NULL) return 10;
+    context_poisoned = 1;
+    /* A subsequent run begins only after teardown emptied the table; it must never call the poisoned old host. */
+    hl_vfs_fd_cursor_clear();
+    context_poisoned = 0;
+    hl_vfs_cursor_release(&root);
+    if (references[1] != 1 || closes == 0) return 11;
+    return 0;
+}
+"#,
+    )
+    .expect("cursor probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function"])
+        .arg(format!("-I{}", native.display()))
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("cursor probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable).status().expect("cursor probe execution");
+    assert!(run.success(), "cursor probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove cursor probe directory");
+}

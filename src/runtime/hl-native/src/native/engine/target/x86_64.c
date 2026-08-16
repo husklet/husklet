@@ -1,7 +1,17 @@
 #include "namespace.h"
+#include "../executable_authority.h"
+#include "../../translator/digest.h"
 #include "../checkpoint_channel.c"
 #include "../bus.h"
 #include "../../linux_abi/dns.h"
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int g_test_direct_store_guard_emissions;
+static int g_test_store_preflight_active;
+static int g_test_store_preflight_protected;
+static size_t g_test_store_preflight_prefix;
+static int g_test_store_preflight_calls;
+#endif
 
 // hl/core/target -- x86-64 Linux guest target composition.
 //
@@ -125,9 +135,11 @@ uint64_t hl_x86_guest_pointer(uint64_t address);
 #include "../../translator/guest/x86_64/abi.h" // cpu-interface seam (G_* contract + sysmap + normalize)
 // The dispatch seam is per (guest ISA, HOST CPU): dispatch.h patches AArch64 branch encodings.
 #include "../../host/cpu.h"
+#include "../../translator/guest_memory.h"
 #if defined(HL_HOST_CPU_AARCH64)
-#include "../../translator/guest/x86_64/smc_page_index.h"
+#include "../../translator/guest/x86_64/smc/index.h"
 #include "../../translator/guest/x86_64/smc_address.h"
+#include "../../translator/guest/x86_64/smc/protection.c"
 #include "../../translator/guest/x86_64/dispatch.h" // x86 dispatch seam for the SHARED engine/dispatch.c
 #else
 #include "../../translator/guest/x86_64/interp_dispatch.h"
@@ -156,7 +168,6 @@ static const hl_x86_avx_state g_avx_state = {&g_nonpie_lo, &g_nonpie_hi, &g_nonp
                                              jit86_avx_memory_write};
 #include "../../translator/guest/x86_64/glue.h" // independently compiled x86 target state
 #include "../../translator/guest_fetch.h"
-#include "../../translator/guest_memory.h"
 #include "../../translator/guest/x86_64/rep_runtime.h" // string-op helpers + the hooks engine_global_init sets
 #include "../../translator/cache.c"                    // SHARED translator: code cache + block map
 
@@ -172,8 +183,11 @@ static const hl_host_services *effective_host_services(void) {
     return hl_target_services_effective(&g_target_services);
 }
 
-static void jit86_store_alias_changed(uint64_t guest, uint64_t size);
+static void jit86_store_alias_changed(uint64_t guest, size_t size);
 static int jit86_store_alias_observation_active(void);
+static void gbus_mapping_transition_lock(void);
+static void gbus_mapping_transition_unlock(void);
+static size_t x86_store_writable_prefix(uintptr_t address, size_t length);
 
 static void jit86_smc_queue_range(uint64_t lo, uint64_t hi, void *opaque) {
     struct cpu *cpu = opaque;
@@ -215,6 +229,11 @@ static int jit86_avx_memory_write(uint64_t guest, const void *source, size_t len
     int logical = hl_logical_vma_pin_data(guest, length, HL_LOGICAL_VMA_WRITE, &pin);
     if (logical < 0) return -1;
     if (logical == 0) {
+        // AVX helpers execute in the dispatcher rather than translated code, so no emitted soft guard
+        // protects this direct copy. Validate the complete guest span before touching its first byte;
+        // otherwise a cross-page store partially commits and then faults in engine C code, where the
+        // guest's synchronous-fault landing authority is not armed.
+        if (!hl_x86_guest_writable(guest, length)) return -1;
         memcpy((void *)(uintptr_t)guest, source, length);
         jit86_store_alias_changed(guest, length);
         return 1;
@@ -273,8 +292,17 @@ static int jit86_guest_memory_pin(uint64_t guest, size_t length, hl_guest_memory
     uint32_t required = access == HL_GUEST_MEMORY_WRITE ? HL_LOGICAL_VMA_WRITE : HL_LOGICAL_VMA_READ;
     int logical = hl_logical_vma_pin_data(guest, length, required, &logical_pin);
     if (logical < 0) return HL_GUEST_MEMORY_FAULT;
+    size_t direct_contiguous = length;
+    if (logical == 0) {
+        if (access == HL_GUEST_MEMORY_WRITE) {
+            direct_contiguous = x86_store_writable_prefix((uintptr_t)hl_x86_guest_pointer(guest), length);
+            if (direct_contiguous == 0) return HL_GUEST_MEMORY_FAULT;
+        } else if (!hl_x86_guest_readable(guest, length)) {
+            return HL_GUEST_MEMORY_FAULT;
+        }
+    }
     pin->host = logical ? logical_pin.host : (void *)(uintptr_t)hl_x86_guest_pointer(guest);
-    pin->contiguous = logical_pin.contiguous;
+    pin->contiguous = logical ? logical_pin.contiguous : direct_contiguous;
     pin->token = logical_pin.token;
     if (!logical && g_nonpie_lo) {
         uint64_t boundary = guest < g_nonpie_lo ? g_nonpie_lo : (guest < g_nonpie_hi ? g_nonpie_hi : UINT64_MAX);
@@ -299,6 +327,8 @@ static const hl_guest_memory_ops g_guest_memory_ops = {
     .exec_generation = hl_logical_vma_global_exec_generation,
     .pin = jit86_guest_memory_pin,
     .unpin = jit86_guest_memory_unpin,
+    .transaction_begin = gbus_mapping_transition_lock,
+    .transaction_end = gbus_mapping_transition_unlock,
     .store_observe = jit86_store_alias_changed,
 };
 
@@ -581,7 +611,7 @@ static uint64_t jit86_store_alias_segment(struct cpu *cpu, uint64_t cursor, uint
     return segment_last;
 }
 
-static void jit86_store_alias_changed(uint64_t guest, uint64_t size) {
+static void jit86_store_alias_changed(uint64_t guest, size_t size) {
     if (size == 0 || guest > UINT64_MAX - size) return;
     struct cpu *cpu = pthread_getspecific(g_cpu_key);
     if (cpu == NULL) return;
@@ -640,6 +670,23 @@ static void jit86_smc_commit(struct cpu *cpu) {
 #define HL_DISPATCH_FAULT_ADDRESS(c)                                                                                   \
     ((c)->bus_ea != 0 && (c)->fault_addr == (c)->bus_ea ? (c)->soft_guest_ea : nonpie_unfold((c)->fault_addr))
 #include "../../linux_abi/signal.c" // SHARED: signal delivery driver + translation
+
+static size_t x86_store_writable_prefix(uintptr_t address, size_t length) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (g_test_store_preflight_active) {
+        ++g_test_store_preflight_calls;
+        return g_test_store_preflight_prefix < length ? g_test_store_preflight_prefix : length;
+    }
+#endif
+    return host_range_writable_prefix(address, length);
+}
+
+static int x86_store_fault_is_protected(uint64_t address) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (g_test_store_preflight_active) return g_test_store_preflight_protected;
+#endif
+    return gna_hit(address, 1) || gro_hit(address, 1);
+}
 
 static int soft_tlb_miss(struct cpu *c) {
     uint64_t address = c->bus_ea;
@@ -724,13 +771,23 @@ static int soft_tlb_miss(struct cpu *c) {
            handling remains authoritative after the identity rewrite. */
         c->soft_delta = 0;
         c->soft_protection = HL_LOGICAL_VMA_READ | HL_LOGICAL_VMA_WRITE | HL_LOGICAL_VMA_EXEC;
-        if (width > UINT64_MAX - address
-#if !defined(__APPLE__)
-            || !host_range_mapped((uintptr_t)address, (size_t)width)
-#endif
-        ) {
+        if (width > UINT64_MAX - address) {
             c->fault_addr = address;
             return raise_guest_data_map_fault(c);
+        }
+        if (required & HL_LOGICAL_VMA_WRITE) {
+            size_t writable = x86_store_writable_prefix((uintptr_t)nonpie_fold(address), (size_t)width);
+            if (writable < width) {
+                c->fault_addr = address + writable;
+                if (x86_store_fault_is_protected(c->fault_addr)) return raise_guest_fetch_fault(c);
+                return raise_guest_data_map_fault(c);
+            }
+#if !defined(__APPLE__)
+        } else if (!host_range_mapped((uintptr_t)nonpie_fold(address), (size_t)width)) {
+            uint64_t readable = gna_prefix(address, width);
+            c->fault_addr = address + (readable < width ? readable : 0);
+            return raise_guest_data_map_fault(c);
+#endif
         }
         /* The string-op helper rejects a store into a read-only mapping itself (it copies with the host
            memcpy, several C frames below translated code, where a hardware fault is unattributable) and
@@ -773,6 +830,56 @@ static int soft_tlb_miss(struct cpu *c) {
     c->reason = R_BRANCH;
     return 0;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+HL_API int hl_x86_64_store_preflight_test(void) {
+    uint32_t code[256] = {0};
+    uint8_t *saved_cp = g_cp;
+    int saved_recorded = g_address_recorded;
+    int saved_rwx = g_rwx_guest;
+    uint64_t saved_handler = g_sigact[11].handler;
+    g_cp = (uint8_t *)code;
+    g_address_recorded = 0;
+    g_rwx_guest = 0;
+    g_test_direct_store_guard_emissions = 0;
+    emit_memory_guard(17, 8, UINT64_C(0x1000), X86_SOFT_WRITE);
+    emit_memory_guard(17, 16, UINT64_C(0x2000), X86_SOFT_WRITE);
+    int emitted = g_test_direct_store_guard_emissions == 2;
+    g_cp = saved_cp;
+    g_address_recorded = saved_recorded;
+    g_rwx_guest = saved_rwx;
+
+    unsigned char bytes[32];
+    memset(bytes, 0xa5, sizeof bytes);
+    g_sigact[11].handler = 2;
+    g_test_store_preflight_active = 1;
+    g_test_store_preflight_calls = 0;
+    int valid = emitted;
+    for (size_t width = 8; width <= 16; width *= 2) {
+        for (int classification = 0; classification < 3; ++classification) {
+            struct cpu cpu;
+            memset(&cpu, 0, sizeof cpu);
+            uint64_t address = (uint64_t)(uintptr_t)bytes;
+            g_test_store_preflight_prefix = width / 2;
+            /* Exercise absent, protected and read-only second-page classifications. */
+            g_test_store_preflight_protected = classification != 0;
+            cpu.bus_ea = address;
+            cpu.soft_guest_ea = address;
+            cpu.soft_width = width;
+            cpu.soft_required = X86_SOFT_WRITE;
+            int result = soft_tlb_miss(&cpu);
+            valid &= result == 1 && cpu.fault_addr == address + width / 2 && cpu.sync_address == address + width / 2 &&
+                     cpu.sync_code == (classification == 0 ? 1 : 2);
+            for (size_t index = 0; index < sizeof bytes; ++index)
+                valid &= bytes[index] == 0xa5;
+        }
+    }
+    valid &= g_test_store_preflight_calls == 6;
+    g_test_store_preflight_active = 0;
+    g_sigact[11].handler = saved_handler;
+    return valid ? 0 : 1;
+}
+#endif
 
 static int x86_signal_cache_contains(void *context, uint64_t pc) {
     (void)context;
@@ -894,8 +1001,9 @@ static uint64_t eflags_to_nzcv(uint64_t eflags) {
 
 #include "../../linux_abi/container/vfs.c"   // SHARED: rootfs jail, overlay, /proc synth, stat
 #include "../../linux_abi/container/netns.c" // SHARED: sockets, loopback netns, termios
-static void load_elf(const char *path, struct loaded *out, const void *placement);
-static int elf_interp(const char *path, char *out, size_t n);
+#include "../../linux_abi/image.h"
+static void load_elf(const char *path, struct loaded *out, const void *placement, const hl_linux_image *pinned);
+static int elf_interp(const char *path, char *out, size_t n, const hl_linux_image *pinned);
 static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t at_base);
 
 static int64_t legacy_time_seconds(void *context) {
@@ -923,6 +1031,13 @@ static int legacy_set_alarm(void *context, uint64_t seconds, uint64_t *remaining
 }
 
 static char g_authorized_executable_path[4200];
+static const void *g_authorized_executable_image;
+static size_t g_authorized_executable_size;
+static void *g_authorized_executable_owned;
+static struct stat g_authorized_executable_status;
+static hl_dac_snapshot g_authorized_executable_dac;
+static hl_exec_file_capabilities g_authorized_executable_file_capabilities;
+static int g_authorized_executable_metadata_ready;
 #include "../../linux_abi/syscall/dispatch.c" // SHARED: the canonical syscall layer
 #include "../../linux_abi/sentry.c"           // untrusted-guest isolation: SPSC ring + sentry split (g_untrusted)
 static void ckpt_poll(struct cpu *c);
@@ -952,20 +1067,13 @@ static int engine_global_init(void);
 // keeps its own run_block/block_return in translate.c, G_OWN_TRAMPOLINES)
 static const void *g_initial_executable_image;
 static size_t g_initial_executable_size;
-static const void *g_authorized_executable_image;
-static size_t g_authorized_executable_size;
+static const void *g_initial_interpreter_image;
+static size_t g_initial_interpreter_size;
+static uint64_t g_loaded_image_identity;
 #include "../../linux_abi/x86.c" // Linux x86-64 ELF loader + stack + fault handlers
 #include "../../linux_abi/checkpoint.c"
 
-// ---- entry + main ----
 // ---------------- entry ----------------
-// Fork-server refactor: the original guest entry inlined container init, engine init,
-// (pthread key + MAP_JIT arena + signal handlers + trace env), and (3) per-launch load+run. The
-// resident engine server pays (1)+(2) once and shares them COW with every forked worker, so
-// those two phases are factored into container_init()/engine_global_init(). engine_global_init()
-// is idempotent (g_engine_inited) so the standalone path is byte-for-byte unchanged: standalone
-// hl_run_linux_guest() composes container_init -> engine_global_init -> load_program -> run_loaded in the
-// exact original order, with the identical operations in each phase.
 static int g_engine_inited;
 
 static int container_init(const char *rootfs) {
@@ -981,17 +1089,15 @@ static int container_init(const char *rootfs) {
     // returned the real host pid, and bash's setpgid(0,1)/tcsetpgrp targeted host pid 1 (launchd) -> the
     // foreground command got SIGTTOU/SIGTTIN-stopped ("[N]+ Stopped  ls") instead of running.
     if (rootfs) g_init_hostpid = getpid();
-    // cross-engine-process cgroup accounting: a FRESH shared slot table for THIS container init, inherited
-    // by every guest fork (see state.c). Per-container so sibling forkserver workers never share a total.
+    // Cross-process cgroup accounting: a fresh shared slot table for this container init is inherited
+    // by every guest fork (see state.c).
     if (rootfs) acct_container_reset(effective_host_services());
     container_read_resource_env(); // Docker CPU, read-only-root, and ulimit values from centralized HL options.
     // The final typed launch hands the container model to the engine as HL options, not as the
     // --hostname/--mem-max/--pids-max CLI flags. aarch64's container_init() already reads these options;
     // (linux_aarch64.c); x86-64 did not, so a `docker run --hostname h` on x86 dropped the hostname
     // (uname/gethostname/`/etc/hostname` returned "jit") and --memory/--pids-limit were ignored. The
-    // out-of-process SpawnConfig::script() path passes them as CLI flags, which is why the default test
-    // matrix missed this. Guard on the CLI value (only fill when the flag path left it unset), matching
-    // aarch64, so a genuine --hostname flag still wins.
+    // Guard on an existing value so explicitly supplied configuration still wins.
     if (hl_option_get("HL_NET_HOST") == NULL) {
         const char *h = hl_option_get("HL_HOSTNAME");
         if (h && h[0] && !g_hostname[0]) {
@@ -1086,7 +1192,7 @@ static int guest_fetch_direct_valid(uint64_t address, size_t length) {
 }
 
 static int guest_store_direct_valid(uint64_t address, size_t length) {
-    return !gro_hit(address, (uint64_t)length) && host_range_mapped((uintptr_t)nonpie_fold(address), length);
+    return x86_store_writable_prefix((uintptr_t)nonpie_fold(address), length) == length;
 }
 
 static int x86_guest_fetch_exec(uint64_t guest, void *destination, size_t length) {
@@ -1134,6 +1240,8 @@ static int engine_global_init(void) {
     g_trace = 0;
     g_systrace = 0;
     g_prof = hl_option_get("HL_C_DIAGNOSTICS") != NULL;
+    g_profile_output_owner = 1;
+    g_dispatch_diagnostics = g_prof || g_trace || g_nochain;
     g_fwdskip = 8;
     g_notier2x = 0;
     extern void jit86_lazyguard(int, siginfo_t *, void *);
@@ -1178,10 +1286,8 @@ static int engine_global_init(void) {
     return 0;
 }
 
-// W3D: load main program + (optional) interp, recording the load base/entry/at_base into *lm/*li.
-// Used both by the standalone path and by the fork-server's parent preload (so the COW-inherited
-// image is byte-identical and the warm worker re-runs from the same entry at the same base). The
-// gb/pb/ib buffers are static because g_exe_path = prog points into gb and must outlive this call.
+// Load the main program and optional interpreter, recording their entry metadata. The gb/pb/ib
+// buffers are static because g_exe_path points into gb and must outlive this call.
 static const char *load_program(const char *prog, struct loaded *lm, struct loaded *li, uint64_t *jump,
                                 uint64_t *at_base, int *have_interp, const hl_engine_main_image_plan *image_plan) {
     static char gb[1024];
@@ -1197,14 +1303,17 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
     g_exe_path = bootexe;
 
     static char pb[4200];
-    const char *prog_host = xresolve_overlay(prog, pb, sizeof pb); // upper, then lowers (pure --lower image)
+    const char *prog_host =
+        g_initial_executable_image != NULL ? prog : xresolve_overlay(prog, pb, sizeof pb); // named fallback only
     // Authorize the launched image for the bare-mode execve gate (proc.c) and the by-path image reader.
     // This must be set even when no executable image was embedded (the macOS embedding/bridge path launches
     // the guest purely by path): otherwise a guest re-exec of /proc/self/exe fails the authorized-target
     // check with ENOENT. In the normal production path g_initial_executable_image is always set, so only the
     // embedded by-path case changes here.
     if (!g_authorized_executable_path[0]) {
-        if (realpath(prog_host, g_authorized_executable_path) == NULL)
+        if (g_rootfs != NULL)
+            snprintf(g_authorized_executable_path, sizeof g_authorized_executable_path, "%s", g_exe_path);
+        else if (realpath(prog_host, g_authorized_executable_path) == NULL)
             snprintf(g_authorized_executable_path, sizeof g_authorized_executable_path, "%s", prog_host);
     }
     // opt8: load the guest image + interp at FIXED VAs so the translated arena is byte-identical across
@@ -1219,21 +1328,26 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         }
         placement = &main_placement;
     }
-    load_elf(prog_host, lm, placement);
+    load_elf(prog_host, lm, placement, NULL);
     g_loadbase = lm->base;
     *jump = lm->entry;
     *at_base = 0;
     *have_interp = 0;
     const char *interp_host = NULL;
+    uint64_t interpreter_identity = 0xABCDEFull;
     char interp[256];
-    int has_interp = elf_interp(prog_host, interp, sizeof interp) == 0;
+    int has_interp = elf_interp(prog_host, interp, sizeof interp, NULL) == 0;
     g_initial_executable_image = NULL;
     g_initial_executable_size = 0;
     if (has_interp) {
         static char ib[4200];
-        interp_host = xresolve_overlay(interp, ib, sizeof ib);
+        interp_host = g_initial_interpreter_image != NULL ? interp : xresolve_overlay(interp, ib, sizeof ib);
+        g_initial_executable_image = g_initial_interpreter_image;
+        g_initial_executable_size = g_initial_interpreter_size;
         if (g_pcache || hl_option_get("HL_CHECKPOINT")) g_force_base = PC_INTERP_BASE;
-        load_elf(interp_host, li, NULL);
+        load_elf(interp_host, li, NULL, NULL);
+        g_initial_executable_image = NULL;
+        g_initial_executable_size = 0;
         *jump = li->entry;
         *at_base = li->base;
         *have_interp = 1;
@@ -1241,7 +1355,8 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
     // opt8: key the cache by the identity (dev/ino/size/mtime) of the guest binary AND its interpreter,
     // plus the argv[0] basename -- a multicall binary (busybox) runs a different applet per
     // argv[0], and with the exec re-key each image epoch persists its own arena under its own key.
-    if (g_pcache) g_pc_binid = pcache_make_id(prog_host, interp_host, prog);
+    if (g_pcache)
+        g_pc_binid = pcache_make_id(lm->identity, *have_interp ? li->identity : (hl_identity_digest){0}, prog);
     return prog;
 }
 
@@ -1275,7 +1390,7 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
     // Fast-syscall counters are host telemetry, never guest output.  Explicit retained-C diagnostics
     // remain available through the canonical [prof] report emitted by the exit path; normal launches
     // must not synthesize a guest stderr line merely because an inline clock call happened.
-    if (g_prof) {
+    if (g_prof && g_profile_output_owner) {
         char profile[256];
         int profile_size = snprintf(profile, sizeof profile,
                                     "[prof] dispatcher crossings=%llu translations=%llu\n"
@@ -1293,14 +1408,19 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
 
 int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const char *rootfs, hl_host_handle executable,
                        const void *executable_image, size_t executable_size,
-                       const hl_engine_main_image_plan *image_plan, uint32_t argument_count, char *const argv[]) {
+                       const hl_executable_authority *executable_authority, const hl_engine_main_image_plan *image_plan,
+                       const void *interpreter_image, size_t interpreter_size, uint32_t argument_count,
+                       char *const argv[]) {
     int argc;
     g_engine_result_status = HL_STATUS_OK;
     (void)executable;
     g_initial_executable_image = executable_image;
     g_initial_executable_size = executable_size;
+    g_initial_interpreter_image = interpreter_image;
+    g_initial_interpreter_size = interpreter_size;
     g_authorized_executable_image = executable_image;
     g_authorized_executable_size = executable_size;
+    exec_authority_seed_initial(host, executable, executable_authority);
     if (argument_count > (uint32_t)INT_MAX) return 2;
     argc = (int)argument_count;
     hl_target_services_inject(&g_target_services, host);
@@ -1318,21 +1438,21 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     g_host_launch_monotonic_ns = 0;
     if (host != NULL) {
         hl_host_result now;
-        if (hl_host_services_validate(host, HL_HOST_CAP_CLOCK) != HL_STATUS_OK) return 70;
+        if (hl_host_services_validate(host, HL_HOST_CAP_CLOCK) != HL_STATUS_OK) return hl_vfs_cursor_state_finish(70);
         now = host->clock->monotonic_ns(host->context);
-        if (now.status != HL_STATUS_OK) return 70;
+        if (now.status != HL_STATUS_OK) return hl_vfs_cursor_state_finish(70);
         g_host_launch_monotonic_ns = now.value;
     }
-    if (bound_shadow_activate() != 0) return 70;
+    if (bound_shadow_activate() != 0) return hl_vfs_cursor_state_finish(70);
     const char *rdir = hl_option_get("HL_RESTORE");
-    if (rdir != NULL) return ckpt_restore_tree(rootfs);
-    if (argc < 1 || !argv || !argv[0]) return 2;
+    if (rdir != NULL) return hl_vfs_cursor_state_finish(ckpt_restore_tree(rootfs));
+    if (argc < 1 || !argv || !argv[0]) return hl_vfs_cursor_state_finish(2);
     // Persistent translated-code cache: enabled only by the centralized HL_PCACHE option.
     g_coldprof = 0;
     g_pcache = hl_option_get("HL_PCACHE") != NULL;
-    if (container_init(rootfs) != 0) return 70;
+    if (container_init(rootfs) != 0) return hl_vfs_cursor_state_finish(70);
     int rc = engine_global_init();
-    if (rc) return rc;
+    if (rc) return hl_vfs_cursor_state_finish(rc);
     // Initial-exec shebang handling -- mirror of linux_aarch64.c (and execve case 221) via the shared
     // resolve_shebang_chain(). The container entry may itself be a "#!" script (redis/postgres'
     // docker-entrypoint.sh), and that script's interpreter may ITSELF be a "#!" script (nested, Linux
@@ -1356,7 +1476,7 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
         resolve_shebang_chain(sb_argv, sb_argc, 256, sb_prog_host, sb_store, sb_fhb, sizeof sb_fhb, &sb_finalhost);
     if (sb_new < 0) {
         fprintf(stderr, "hl-engine: too many nested #! interpreters (ELOOP): %s\n", argv[0]);
-        return 40; // ELOOP
+        return hl_vfs_cursor_state_finish(40); // ELOOP
     }
     if (sb_new != sb_argc) { // a shebang chain resolved -> run the final interpreter, not the script
         argc = sb_new;
@@ -1377,7 +1497,7 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
         if (hl_fatal_status(&g_jit_fatal) != HL_STATUS_OK) {
             g_engine_result_status = hl_fatal_status(&g_jit_fatal);
             pcache_directory_close();
-            return 70;
+            return hl_vfs_cursor_state_finish(70);
         }
     }
     int ec = run_loaded(argc, argv, &lm, jump, at_base);
@@ -1388,32 +1508,8 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
         ec = 70;
     }
     pcache_directory_close();
-    return ec;
+    return hl_vfs_cursor_state_finish(ec);
 }
-
-// resident engine fork server (server/client/worker), shared with the AArch64 target and driven
-// through the container-init/engine-init/load/run seam defined above.
-// x86-only knobs: the warm re-run must re-point g_loadbase, and the x86 container model chdir()s the
-// engine process into the rootfs (container_init does; the warm path must match it per request).
-#define FSRV_SET_LOADBASE(b) (g_loadbase = (b))
-#define FSRV_WARM_CHDIR_ROOTFS()                                                                                       \
-    do {                                                                                                               \
-        if (g_rootfs) {                                                                                                \
-            if (chdir(g_rootfs)) {}                                                                                    \
-        }                                                                                                              \
-    } while (0)
-// Bind the same per-guest host-service tables a cold hl_run_linux_guest() would, so the fork-server prewarm
-// parent (which runs guests via run_loaded()) allocates them once and every warm COW worker inherits them.
-#define FSRV_GUEST_HOST_INIT()                                                                                         \
-    do {                                                                                                               \
-        const hl_host_services *fsrv_host_ = hl_target_services_effective(&g_target_services);                         \
-        futex_table_init(fsrv_host_);                                                                                  \
-        seq_ref_arena_init(fsrv_host_);                                                                                \
-        eventfd_count_init(fsrv_host_);                                                                                \
-        fdvis_init(fsrv_host_);                                                                                        \
-        ts_init(fsrv_host_);                                                                                           \
-    } while (0)
-#include "../../linux_abi/fork.c"
 
 void hl_target_runtime_init(void) {
     jit86_install_sync_fault_guards();
@@ -1424,103 +1520,3 @@ void hl_target_runtime_init(void) {
 uint64_t hl_run_linux_guest_translations(void) {
     return g_dispatch_profile.translations;
 }
-
-#ifndef HL_ENGINE_NO_STANDALONE
-// The engine entry point uses the public HL prefix so the runtime can be linked as a library and launched
-// by an in-process fork()+call; the thin `main` shim below keeps the standalone binary (used by the test
-// harness) launching identically.
-int hl_engine_entry(int argc, char **argv);
-
-static int hl_standalone_run(const char *rootfs, const char *executable_host, uint32_t argc, char *const argv[],
-                             const hl_options *options, const char *result_path) {
-    (void)executable_host;
-    // Earliest point that knows this launch is a restore: cover the whole rebuild against a terminal signal
-    // typed at the pty before the tree exists (ckpt_restore_hold_tty_signals).
-    if (options == NULL ? hl_option_get("HL_RESTORE") != NULL : hl_options_get(options, "HL_RESTORE") != NULL)
-        ckpt_restore_hold_tty_signals();
-    return hl_native_engine_run(HL_GUEST_ISA_X86_64, rootfs, argc, argv, options, result_path);
-}
-
-int main(int argc, char **argv) {
-    return hl_engine_entry(argc, argv);
-}
-
-int hl_engine_entry(int argc, char **argv) {
-    hl_cli_route route = hl_cli_route_parse(argc, argv);
-    int ai = 1;
-    const char *rootfs = NULL;
-    static char self[4200];
-    hl_option_reset();
-    if (realpath(argv[0], self))
-        g_self_path = self;
-    else
-        g_self_path = argv[0];
-    // Final-product launch: the host provides one serialized, validated HL config file.
-    if (route.mode == HL_CLI_CONFIG) return hl_run_config_file_with(route.config_path, hl_standalone_run);
-    // W3D fork-server dispatch (gated; standalone path untouched when neither flag is present):
-    //   --server SOCK [--rootfs DIR] [--prewarm PROG] : run the resident engine server
-    //   --client SOCK [--rootfs DIR] PROG [args...]   : forward a launch request to that server
-    if (route.mode == HL_CLI_SERVER) return hl_server_main(argc, argv);
-    if (route.mode == HL_CLI_CLIENT) return hl_client_main(argc, argv);
-    // Valued options need a following argument; the checkpoint flags do not.
-    while (ai < argc && argv[ai][0] == '-') {
-        int valued = ai + 1 < argc;
-        if (strcmp(argv[ai], "--checkpoint") == 0) {
-            hl_option_set("HL_CHECKPOINT", "1", 1);
-            ai += 1;
-        } else if (strcmp(argv[ai], "--restore") == 0) {
-            hl_option_set("HL_RESTORE", "1", 1);
-            ai += 1;
-        } else if (!valued) {
-            break;
-        } else if (strcmp(argv[ai], "--rootfs") == 0) {
-            rootfs = argv[ai + 1];
-            ai += 2;
-        } else if (strcmp(argv[ai], "--checkpoint-store") == 0 && ai + 2 < argc) {
-            if (hl_ckpt_channel_adopt(argv[ai + 1], argv[ai + 2]) != 0) {
-                fprintf(stderr, "hl-engine: --checkpoint-store %s %s is not an inherited descriptor pair\n",
-                        argv[ai + 1], argv[ai + 2]);
-                return 2;
-            }
-            ai += 3;
-        } else if (strcmp(argv[ai], "--restore-policy") == 0) {
-            if (ckpt_recovery_policy_set(argv[ai + 1]) != 0) return 2;
-            ai += 2;
-        } else if (strcmp(argv[ai], "--vol") == 0) {
-            add_vol(argv[ai + 1]);
-            ai += 2;
-        } else if (strcmp(argv[ai], "--publish") == 0 || strcmp(argv[ai], "-p") == 0) { // docker -p H:C (port-map)
-            parse_publish(argv[ai + 1]);
-            hl_option_set("HL_PUBLISH", argv[ai + 1], 1);
-            ai += 2;
-        } else if (strcmp(argv[ai], "--lower") == 0) {
-            add_lower(argv[ai + 1]);
-            ai += 2;
-        } // overlay read-only layer
-        else if (strcmp(argv[ai], "--hostname") == 0) { // docker --hostname -> uname/gethostname + /etc/hostname
-            strncpy(g_hostname, argv[ai + 1], 64);
-            g_hostname[64] = 0;
-            ai += 2;
-        } else if (strcmp(argv[ai], "--mem-max") == 0) { // docker --memory -> brk/mmap charge + /proc reporting
-            g_mem_max = parse_size(argv[ai + 1]);
-            ai += 2;
-        } else if (strcmp(argv[ai], "--pids-max") == 0) { // docker --pids-limit -> pids.max reporting
-            g_pids_max = hl_parse_id("--pids-max", argv[ai + 1]);
-            ai += 2;
-        } else if (strcmp(argv[ai], "--uid") == 0) { // docker --user uid (USER-ns uid); else container default 0
-            g_uid = hl_parse_id("--uid", argv[ai + 1]);
-            ai += 2;
-        } else if (strcmp(argv[ai], "--gid") == 0) {
-            g_gid = hl_parse_id("--gid", argv[ai + 1]);
-            ai += 2;
-        } else
-            break;
-    }
-    if (hl_option_get("HL_RESTORE")) return hl_standalone_run(rootfs, NULL, 0, NULL, NULL, NULL);
-    if (ai >= argc) {
-        fprintf(stderr, "usage: %s [--rootfs DIR] [--vol guest:host]... [-p H:C]... <x86-64-elf> [args...]\n", argv[0]);
-        return 2;
-    }
-    return hl_standalone_run(rootfs, NULL, (uint32_t)(argc - ai), argv + ai, NULL, NULL);
-}
-#endif

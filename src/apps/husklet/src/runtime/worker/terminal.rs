@@ -133,7 +133,12 @@ pub(super) struct TerminalSession<'a> {
     last_size: Option<(u16, u16)>,
     ticks: u32,
     stdin_open: bool,
+    pending_input: Option<Vec<u8>>,
 }
+
+// Keep a productive child from monopolising the relay loop. Each pass must return to
+// input, resize, and exit handling even when more output is immediately available.
+const OUTPUT_DRAIN_BUDGET: usize = 256 * 1024;
 
 impl<'a> TerminalSession<'a> {
     pub(super) fn run(pty: &'a mut dyn hl_ws_term::PtyBackend) -> i32 {
@@ -155,6 +160,7 @@ impl<'a> TerminalSession<'a> {
             last_size,
             ticks: 0,
             stdin_open: true,
+            pending_input: None,
         }
     }
 
@@ -168,6 +174,9 @@ impl<'a> TerminalSession<'a> {
                 return 1;
             }
             let Some(code) = self.pty.try_wait() else {
+                if self.pending_input.is_some() {
+                    Self::pace();
+                }
                 continue;
             };
             if self.drain_output().is_err() {
@@ -194,6 +203,9 @@ impl<'a> TerminalSession<'a> {
     }
 
     fn poll_input(&mut self) -> std::io::Result<()> {
+        if flush_pending_input(self.pty, &mut self.pending_input)? {
+            return Ok(());
+        }
         if !self.stdin_open {
             Self::pace();
             return Ok(());
@@ -218,7 +230,8 @@ impl<'a> TerminalSession<'a> {
         // SAFETY: the destination is this frame's buffer and the length is its own capacity.
         let count = unsafe { libc::read(libc::STDIN_FILENO, self.buffer.as_mut_ptr().cast(), self.buffer.len()) };
         if count > 0 {
-            self.pty.write(&self.buffer[..count as usize])?;
+            self.pending_input = Some(self.buffer[..count as usize].to_vec());
+            let _ = flush_pending_input(self.pty, &mut self.pending_input)?;
             return Ok(());
         }
         if count == 0 {
@@ -229,20 +242,47 @@ impl<'a> TerminalSession<'a> {
     }
 
     fn drain_output(&mut self) -> std::io::Result<()> {
-        let mut wrote = false;
-        loop {
-            let count = self.pty.read(&mut self.buffer)?;
-            if count == 0 {
-                break;
-            }
-            self.output.write_all(&self.buffer[..count])?;
-            wrote = true;
-        }
-        if wrote {
-            self.output.flush()?;
-        }
-        Ok(())
+        drain_output_to(self.pty, &mut self.buffer, &mut self.output)
     }
+}
+
+fn flush_pending_input(pty: &mut dyn hl_ws_term::PtyBackend, pending: &mut Option<Vec<u8>>) -> std::io::Result<bool> {
+    let Some(bytes) = pending.as_deref() else {
+        return Ok(false);
+    };
+    match pty.write(bytes) {
+        Ok(()) => {
+            pending.take();
+            Ok(false)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(true),
+        Err(error) => Err(error),
+    }
+}
+
+fn drain_output_to(
+    pty: &mut dyn hl_ws_term::PtyBackend,
+    buffer: &mut [u8; 8192],
+    output: &mut impl Write,
+) -> std::io::Result<()> {
+    let mut wrote = false;
+    let mut drained = 0;
+    loop {
+        let count = pty.read(buffer)?;
+        if count == 0 {
+            break;
+        }
+        output.write_all(&buffer[..count])?;
+        wrote = true;
+        drained += count;
+        if drained >= OUTPUT_DRAIN_BUDGET {
+            break;
+        }
+    }
+    if wrote {
+        output.flush()?;
+    }
+    Ok(())
 }
 
 /// Query the controlling terminal's size (cols, rows).
@@ -332,6 +372,97 @@ mod open_files_tests {
         let error = terminal.drain_output().unwrap_err();
 
         assert_eq!(error.kind(), io::ErrorKind::ConnectionReset);
+    }
+
+    #[test]
+    fn productive_output_yields_to_the_relay_loop() {
+        let expected_reads = super::OUTPUT_DRAIN_BUDGET / 8192;
+        let mut backend = ProductiveBackend {
+            reads: 0,
+            available_reads: expected_reads + 1,
+        };
+        let mut buffer = [0; 8192];
+
+        super::drain_output_to(&mut backend, &mut buffer, &mut io::sink()).unwrap();
+
+        assert_eq!(backend.reads, expected_reads);
+    }
+
+    #[test]
+    fn saturated_input_is_retained_until_the_backend_accepts_it() {
+        let mut backend = BackpressuredBackend {
+            reject_next: true,
+            writes: Vec::new(),
+        };
+        let mut pending = Some(b"large paste".to_vec());
+
+        assert!(super::flush_pending_input(&mut backend, &mut pending).unwrap());
+        assert_eq!(pending.as_deref(), Some(b"large paste".as_slice()));
+        assert!(backend.writes.is_empty());
+
+        assert!(!super::flush_pending_input(&mut backend, &mut pending).unwrap());
+        assert!(pending.is_none());
+        assert_eq!(backend.writes, [b"large paste".to_vec()]);
+    }
+
+    struct BackpressuredBackend {
+        reject_next: bool,
+        writes: Vec<Vec<u8>>,
+    }
+
+    impl PtyBackend for BackpressuredBackend {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
+            if self.reject_next {
+                self.reject_next = false;
+                return Err(io::ErrorKind::WouldBlock.into());
+            }
+            self.writes.push(bytes.to_vec());
+            Ok(())
+        }
+
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            Ok(0)
+        }
+
+        fn resize(&mut self, _columns: u16, _rows: u16) {}
+
+        fn master_fd(&self) -> Option<RawFd> {
+            None
+        }
+
+        fn try_wait(&mut self) -> Option<i32> {
+            None
+        }
+    }
+
+    struct ProductiveBackend {
+        reads: usize,
+        available_reads: usize,
+    }
+
+    impl PtyBackend for ProductiveBackend {
+        fn write(&mut self, _bytes: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            self.reads += 1;
+            if self.reads > self.available_reads {
+                return Ok(0);
+            }
+            buffer.fill(b'x');
+            Ok(buffer.len())
+        }
+
+        fn resize(&mut self, _columns: u16, _rows: u16) {}
+
+        fn master_fd(&self) -> Option<RawFd> {
+            None
+        }
+
+        fn try_wait(&mut self) -> Option<i32> {
+            None
+        }
     }
 
     struct FailingBackend;

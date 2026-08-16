@@ -22,18 +22,352 @@ static const char *xresolve_exec(const char *p, char *buf,
                                  size_t n);
 
 static struct hl_linux_vfs_lower g_lower[HL_LINUX_VFS_LOWER_CAPACITY];
+static hl_host_handle g_lower_handle[HL_LINUX_VFS_LOWER_CAPACITY] = {0};
+static unsigned char g_lower_borrowed[HL_LINUX_VFS_LOWER_CAPACITY] = {0};
 // [0] = highest-priority lower (searched first)
 static int g_nlower = 0;
 
-// register a read-only lower layer (image layer)
+#include "cursor.c"
+
+static void hl_vfs_lower_release_at(int index) {
+    if (index < 0 || index >= g_nlower) return;
+    if (g_lower_borrowed[index] && g_host_services != NULL && g_host_services->posix_attachment != NULL &&
+        g_host_services->posix_attachment->release != NULL)
+        (void)g_host_services->posix_attachment->release(g_host_services->context,
+                                                         (uint64_t)(unsigned)g_lower[index].descriptor);
+    else if (g_lower[index].descriptor >= 0)
+        close(g_lower[index].descriptor);
+    if (g_lower_handle[index] != HL_HOST_HANDLE_INVALID && g_host_services != NULL &&
+        g_host_services->file != NULL && g_host_services->file->close != NULL)
+        (void)g_host_services->file->close(g_host_services->context, g_lower_handle[index]);
+    memset(&g_lower[index], 0, sizeof g_lower[index]);
+    g_lower[index].descriptor = -1;
+    g_lower_handle[index] = HL_HOST_HANDLE_INVALID;
+    g_lower_borrowed[index] = 0;
+}
+
+static void hl_vfs_lower_state_clear(void) {
+    while (g_nlower != 0) {
+        hl_vfs_lower_release_at(g_nlower - 1);
+        g_nlower--;
+    }
+}
+
+static int hl_vfs_lower_state_after_fork(void) {
+    hl_host_handle handles[HL_LINUX_VFS_LOWER_CAPACITY] = {0};
+    int descriptors[HL_LINUX_VFS_LOWER_CAPACITY];
+    for (int index = 0; index < HL_LINUX_VFS_LOWER_CAPACITY; index++)
+        descriptors[index] = -1;
+    if (g_host_services == NULL || g_host_services->file == NULL ||
+        g_host_services->file->clone_for_fork == NULL || g_host_services->file->close == NULL ||
+        g_host_services->posix_attachment == NULL ||
+        g_host_services->posix_attachment->borrow_file_at_least == NULL ||
+        g_host_services->posix_attachment->release == NULL)
+        return 0;
+    for (int index = 0; index < g_nlower; index++) {
+        if (!g_lower_borrowed[index]) continue;
+        hl_host_result cloned = g_host_services->file->clone_for_fork(g_host_services->context, g_lower_handle[index]);
+        if (cloned.status != HL_STATUS_OK) goto fail;
+        handles[index] = cloned.value;
+        hl_host_result borrowed =
+            g_host_services->posix_attachment->borrow_file_at_least(g_host_services->context, cloned.value, 1u << 20);
+        if (borrowed.status != HL_STATUS_OK)
+            borrowed =
+                g_host_services->posix_attachment->borrow_file_at_least(g_host_services->context, cloned.value, 64);
+        if (borrowed.status != HL_STATUS_OK || borrowed.value > INT_MAX) goto fail;
+        descriptors[index] = (int)borrowed.value;
+    }
+    for (int index = 0; index < g_nlower; index++) {
+        if (!g_lower_borrowed[index]) continue;
+        (void)g_host_services->posix_attachment->release(g_host_services->context,
+                                                         (uint64_t)(unsigned)g_lower[index].descriptor);
+        (void)g_host_services->file->close(g_host_services->context, g_lower_handle[index]);
+        g_lower[index].descriptor = descriptors[index];
+        g_lower_handle[index] = handles[index];
+    }
+    return 0;
+fail:
+    for (int index = 0; index < g_nlower; index++) {
+        if (descriptors[index] >= 0)
+            (void)g_host_services->posix_attachment->release(g_host_services->context,
+                                                             (uint64_t)(unsigned)descriptors[index]);
+        if (handles[index] != HL_HOST_HANDLE_INVALID)
+            (void)g_host_services->file->close(g_host_services->context, handles[index]);
+    }
+    return -1;
+}
+
+// Register a read-only lower layer. When opaque host services are active, the native descriptor is borrowed
+// from the same pinned host handle; the two compatibility views can therefore never authorize different trees.
 static void add_lower(const char *dir) {
-    if (g_nlower >= 8 || !dir || !dir[0]) return;
-    if (canonicalize_path(dir, g_lower[g_nlower].canon, sizeof g_lower[g_nlower].canon) != 0 &&
-        snprintf(g_lower[g_nlower].canon, sizeof g_lower[g_nlower].canon, "%s", dir) >=
-            (int)sizeof g_lower[g_nlower].canon)
+    if (g_nlower >= HL_LINUX_VFS_LOWER_CAPACITY || !dir || !dir[0]) return;
+    struct hl_linux_vfs_lower *lower = &g_lower[g_nlower];
+    lower->descriptor = -1;
+    if (canonicalize_path(dir, lower->canon, sizeof lower->canon) != 0 &&
+        snprintf(lower->canon, sizeof lower->canon, "%s", dir) >= (int)sizeof lower->canon)
         return;
-    g_lower[g_nlower].clen = strlen(g_lower[g_nlower].canon);
+    const hl_host_file_services *file = g_host_services != NULL ? g_host_services->file : NULL;
+    const hl_host_posix_attachment_services *attachment =
+        g_host_services != NULL ? g_host_services->posix_attachment : NULL;
+    if (file != NULL && file->open_relative != NULL && file->close != NULL && attachment != NULL &&
+        attachment->borrow_file_at_least != NULL && attachment->release != NULL) {
+        hl_host_result opened = file->open_relative(
+            g_host_services->context, HL_HOST_HANDLE_CWD, lower->canon, strlen(lower->canon),
+            HL_HOST_FILE_READ | HL_HOST_FILE_DIRECTORY | HL_HOST_FILE_PATH_ONLY, 0, 0);
+        if (opened.status == HL_STATUS_OK) {
+            hl_host_result borrowed =
+                attachment->borrow_file_at_least(g_host_services->context, opened.value, 1u << 20);
+            if (borrowed.status != HL_STATUS_OK)
+                borrowed = attachment->borrow_file_at_least(g_host_services->context, opened.value, 64);
+            if (borrowed.status == HL_STATUS_OK && borrowed.value <= INT_MAX) {
+                lower->descriptor = (int)borrowed.value;
+                g_lower_handle[g_nlower] = opened.value;
+                g_lower_borrowed[g_nlower] = 1;
+            } else {
+                (void)file->close(g_host_services->context, opened.value);
+            }
+        }
+    }
+    // Hosts without opaque/attachment support retain the established native implementation.
+    if (lower->descriptor < 0) lower->descriptor = open(lower->canon, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (lower->descriptor < 0) return;
+    lower->clen = strlen(lower->canon);
     g_nlower++;
+}
+
+static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_namespace_root(hl_vfs_cursor *output) {
+    hl_vfs_cursor_authority lowers[HL_LINUX_VFS_LOWER_CAPACITY];
+    for (int index = 0; index < g_nlower; index++)
+        if (g_linux_box != NULL && g_lower_handle[index] != HL_HOST_HANDLE_INVALID) {
+            lowers[index].kind = HL_VFS_CURSOR_AUTHORITY_HOST;
+            lowers[index].value.host.handle = g_lower_handle[index];
+            lowers[index].value.host.services = g_host_services;
+        } else {
+            lowers[index] = hl_vfs_cursor_native(g_lower[index].descriptor);
+        }
+    hl_vfs_cursor_authority upper = hl_vfs_cursor_native(g_root_fd);
+    if (g_root_handle != HL_HOST_HANDLE_INVALID && g_host_services != NULL) {
+        upper.kind = HL_VFS_CURSOR_AUTHORITY_HOST;
+        upper.value.host.handle = g_root_handle;
+        upper.value.host.services = g_host_services;
+    }
+    return hl_vfs_cursor_root_authorities(&upper, lowers, (size_t)g_nlower, output);
+}
+
+/* Directory descriptors retain the native twin so ordinary openat/renameat users keep one kernel-owned
+ * directory object while the published cursor carries every merged lower. Regular files use opaque handles. */
+static int hl_vfs_cursor_namespace_root_native_lowers(hl_vfs_cursor *output) {
+    hl_vfs_cursor_authority lowers[HL_LINUX_VFS_LOWER_CAPACITY];
+    for (int index = 0; index < g_nlower; index++)
+        lowers[index] = hl_vfs_cursor_native(g_lower[index].descriptor);
+    hl_vfs_cursor_authority upper = hl_vfs_cursor_native(g_root_fd);
+    if (g_root_handle != HL_HOST_HANDLE_INVALID && g_host_services != NULL) {
+        upper.kind = HL_VFS_CURSOR_AUTHORITY_HOST;
+        upper.value.host.handle = g_root_handle;
+        upper.value.host.services = g_host_services;
+    }
+    return hl_vfs_cursor_root_authorities(&upper, lowers, (size_t)g_nlower, output);
+}
+
+static hl_vfs_cursor *g_vfs_cwd_cursor;
+
+static int hl_vfs_cwd_cursor_set(const hl_vfs_cursor *cursor) {
+    hl_vfs_cursor *copy = calloc(1, sizeof *copy);
+    if (copy == NULL) return -ENOMEM;
+    int error = hl_vfs_cursor_clone(cursor, copy);
+    if (error != 0) {
+        free(copy);
+        return error;
+    }
+    if (g_vfs_cwd_cursor != NULL) {
+        hl_vfs_cursor_release(g_vfs_cwd_cursor);
+        free(g_vfs_cwd_cursor);
+    }
+    g_vfs_cwd_cursor = copy;
+    return 0;
+}
+
+static void hl_vfs_cursor_state_clear(void) {
+    if (g_vfs_cwd_cursor != NULL) {
+        hl_vfs_cursor_release(g_vfs_cwd_cursor);
+        free(g_vfs_cwd_cursor);
+        g_vfs_cwd_cursor = NULL;
+    }
+    hl_vfs_fd_cursor_clear();
+}
+
+static int hl_vfs_cursor_state_after_fork(void) {
+    if (hl_vfs_lower_state_after_fork() != 0) return -1;
+    hl_vfs_cursor **replacements = calloc(HL_NFD, sizeof *replacements);
+    if (replacements == NULL) return -1;
+    hl_vfs_cursor *cwd_replacement = NULL;
+    if (g_vfs_cwd_cursor != NULL) {
+        cwd_replacement = calloc(1, sizeof *cwd_replacement);
+        if (cwd_replacement == NULL || hl_vfs_cursor_clone(g_vfs_cwd_cursor, cwd_replacement) != 0) {
+            free(cwd_replacement);
+            free(replacements);
+            return -1;
+        }
+    }
+    if (hl_vfs_fd_cursor_clone_table(replacements) != 0) {
+        if (cwd_replacement != NULL) {
+            hl_vfs_cursor_release(cwd_replacement);
+            free(cwd_replacement);
+        }
+        hl_vfs_fd_cursor_release_table(replacements);
+        free(replacements);
+        return -1;
+    }
+    if (cwd_replacement != NULL) {
+        hl_vfs_cursor_release(g_vfs_cwd_cursor);
+        free(g_vfs_cwd_cursor);
+        g_vfs_cwd_cursor = cwd_replacement;
+    }
+    hl_vfs_fd_cursor_replace_table(replacements);
+    free(replacements);
+    return 0;
+}
+
+static int hl_vfs_cursor_state_finish(int result) {
+    hl_vfs_cursor_state_clear();
+    hl_vfs_lower_state_clear();
+    return result;
+}
+
+static int hl_vfs_cwd_cursor_require(void) {
+    if (g_vfs_cwd_cursor != NULL) return 0;
+    hl_vfs_cursor root;
+    int error = hl_vfs_cursor_namespace_root(&root);
+    if (error != 0) return error;
+    if (!strcmp(g_cwd, "/")) {
+        error = hl_vfs_cwd_cursor_set(&root);
+    } else {
+        hl_vfs_cursor_entry entry;
+        error = hl_vfs_cursor_walk(&root, &root, g_cwd, 0, 0, 0, NULL, 0, NULL, NULL, NULL, NULL, NULL, &entry);
+        if (error == 0) {
+            error = entry.kind == HL_VFS_CURSOR_DIRECTORY ? hl_vfs_cwd_cursor_set(&entry.directory) : -ENOTDIR;
+            hl_vfs_cursor_entry_release(&entry);
+        }
+    }
+    hl_vfs_cursor_release(&root);
+    return error;
+}
+
+static int hl_vfs_cursor_resolve_at(int dirfd, const char *path, int nofollow_final, hl_vfs_cursor_entry *output) {
+    hl_vfs_cursor root;
+    int error = hl_vfs_cursor_namespace_root(&root);
+    if (error != 0) return error;
+    const hl_vfs_cursor *start = &root;
+    if (path != NULL && path[0] != '/') {
+        if (dirfd == -100) {
+            error = hl_vfs_cwd_cursor_require();
+            if (error == 0) start = g_vfs_cwd_cursor;
+        } else {
+            start = hl_vfs_fd_cursor_get(dirfd);
+            if (start == NULL) error = -EBADF;
+        }
+    }
+    if (error == 0)
+        error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, 0, 0, NULL, 0, NULL, NULL, NULL, NULL, NULL,
+                                   output);
+    hl_vfs_cursor_release(&root);
+    return error;
+}
+
+static int hl_vfs_cursor_resolve_metadata_at(int dirfd, const char *path, int nofollow_final,
+                                             hl_vfs_cursor_entry *output) {
+    hl_vfs_cursor root;
+    int error = hl_vfs_cursor_namespace_root(&root);
+    if (error != 0) return error;
+    const hl_vfs_cursor *start = &root;
+    if (path != NULL && path[0] != '/') {
+        if (dirfd == -100) {
+            error = hl_vfs_cwd_cursor_require();
+            if (error == 0) start = g_vfs_cwd_cursor;
+        } else {
+            start = hl_vfs_fd_cursor_get(dirfd);
+            if (start == NULL) error = -EBADF;
+        }
+    }
+    if (error == 0)
+        error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, 1, 0, NULL, 0, NULL, NULL, NULL, NULL, NULL,
+                                   output);
+    hl_vfs_cursor_release(&root);
+    return error;
+}
+
+static int hl_vfs_cursor_resolve_metadata_search_at(int dirfd, const char *path, int nofollow_final,
+                                                    hl_vfs_cursor_search_hook search, void *search_context,
+                                                    hl_vfs_cursor_entry *output) {
+    hl_vfs_cursor root;
+    int error = hl_vfs_cursor_namespace_root(&root);
+    if (error != 0) return error;
+    const hl_vfs_cursor *start = &root;
+    if (path != NULL && path[0] != '/') {
+        if (dirfd == -100) {
+            error = hl_vfs_cwd_cursor_require();
+            if (error == 0) start = g_vfs_cwd_cursor;
+        } else {
+            start = hl_vfs_fd_cursor_get(dirfd);
+            if (start == NULL) error = -EBADF;
+        }
+    }
+    if (error == 0)
+        error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, 1, 0, NULL, 0, NULL, NULL, NULL, search,
+                                   search_context, output);
+    hl_vfs_cursor_release(&root);
+    return error;
+}
+
+static int hl_vfs_cursor_search_parent_at(int dirfd, const char *path, int nofollow_final,
+                                          hl_vfs_cursor_search_hook search,
+                                          void *search_context, char *resolved_final, size_t resolved_final_size,
+                                          int *final_requires_directory, hl_vfs_cursor_terminal_hook terminal,
+                                          void *terminal_context) {
+    if (resolved_final != NULL && resolved_final_size != 0) resolved_final[0] = 0;
+    if (final_requires_directory != NULL) *final_requires_directory = 0;
+    hl_vfs_cursor root;
+    int error = hl_vfs_cursor_namespace_root(&root);
+    if (error != 0) return error;
+    const hl_vfs_cursor *start = &root;
+    if (path != NULL && path[0] != '/') {
+        if (dirfd == -100) {
+            error = hl_vfs_cwd_cursor_require();
+            if (error == 0) start = g_vfs_cwd_cursor;
+        } else {
+            start = hl_vfs_fd_cursor_get(dirfd);
+            if (start == NULL) error = -EBADF;
+        }
+    }
+    hl_vfs_cursor_entry ignored;
+    if (error == 0)
+        error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, 1, 1, resolved_final, resolved_final_size,
+                                   final_requires_directory, terminal, terminal_context, search, search_context,
+                                   &ignored);
+    hl_vfs_cursor_release(&root);
+    return error;
+}
+
+static int hl_vfs_cursor_resolve_at_native_lowers(int dirfd, const char *path, int nofollow_final,
+                                                  hl_vfs_cursor_entry *output) {
+    hl_vfs_cursor root;
+    int error = hl_vfs_cursor_namespace_root_native_lowers(&root);
+    if (error != 0) return error;
+    const hl_vfs_cursor *start = &root;
+    if (path != NULL && path[0] != '/') {
+        if (dirfd == -100) {
+            error = hl_vfs_cwd_cursor_require();
+            if (error == 0) start = g_vfs_cwd_cursor;
+        } else {
+            start = hl_vfs_fd_cursor_get(dirfd);
+            if (start == NULL) error = -EBADF;
+        }
+    }
+    if (error == 0)
+        error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, 0, 0, NULL, 0, NULL, NULL, NULL, NULL, NULL,
+                                   output);
+    hl_vfs_cursor_release(&root);
+    return error;
 }
 
 static void wh_hostpath(const char *jcanon, size_t jclen, const char *guest, char *out,
@@ -472,20 +806,28 @@ static void overlay_mkparents(const char *guest) {
         confine_in(g_rootfs_canon, g_rootfs_canon_len, acc, up, sizeof up, 1);
         struct stat st;
         if (lstat(up, &st) != 0)
-            // missing in the upper -> copy it up from the first lower that has it as a directory
+            // Missing in the upper: preserve a relative lower symlink instead of replacing it with a
+            // directory. Replacing `/lib -> usr/lib` with an upper `/lib` directory masks the lower link
+            // and makes package-installed development loaders disappear from `/lib`.
             for (int i = 0; i < g_nlower; i++) {
                 char lo[4300];
-                layer_follow(g_lower[i].canon, g_lower[i].clen, acc, lo, sizeof lo, 0);
-                if (lstat(lo, &st) == 0 && S_ISDIR(st.st_mode)) {
-                    if (hl_compat_mkdir(up, st.st_mode & 0777) == 0) {
+                layer_follow(g_lower[i].canon, g_lower[i].clen, acc, lo, sizeof lo, 1);
+                if (lstat(lo, &st) != 0) continue;
+                if (S_ISLNK(st.st_mode)) {
+                    char target[4200];
+                    ssize_t length = readlink(lo, target, sizeof target - 1);
+                    if (length > 0) {
+                        target[length] = 0;
+                        if (target[0] != '/' && symlink(target, up) == 0) made = 1;
+                    }
+                } else if (S_ISDIR(st.st_mode) && hl_compat_mkdir(up, st.st_mode & 0777) == 0) {
                         // mkdir is umask-filtered and its creation mode omits special bits. Preserve the
                         // lower directory exactly: Ubuntu's /tmp is 01777, and apt delegates signature
                         // verification to an unprivileged helper which must create files there.
                         ovl_copy_meta(lo, up, &st);
                         made = 1;
-                    }
-                    break;
                 }
+                break;
             }
         if (!next) break;
         *next = '/';
@@ -524,6 +866,40 @@ static void ovl_copy_meta(const char *src, const char *dst, const struct stat *s
                              {(time_t)HL_HOST_STAT_MTIME_SEC(st), (long)HL_HOST_STAT_MTIME_NSEC(st)}};
     utimensat(AT_FDCWD, dst, ts, AT_SYMLINK_NOFOLLOW);
     ovl_copy_xattrs(src, dst);
+}
+
+// A copied-up inode is still the same logical overlay file. POSIX record locks therefore need one stable
+// identity on descriptors opened before and after copy-up, even though the host backing inode changes.
+// Keep the lower identity private from the guest in the engine-owned xattr namespace; guest xattr APIs
+// expose only user.hl.guest.*. The marker is replaced on every copy-up, so it always names this overlay's
+// immediate lower backing rather than an identity inherited from an older committed layer.
+#define HL_OVERLAY_LOCK_IDENTITY_XATTR "user.hl.overlay.lock-identity"
+#define HL_OVERLAY_LOCK_IDENTITY_VERSION UINT64_C(1)
+struct hl_overlay_lock_identity {
+    uint64_t version;
+    uint64_t device;
+    uint64_t object;
+};
+
+static void overlay_lock_identity_store(const char *upper, const struct stat *lower) {
+    const struct hl_overlay_lock_identity identity = {
+        .version = HL_OVERLAY_LOCK_IDENTITY_VERSION,
+        .device = (uint64_t)lower->st_dev,
+        .object = (uint64_t)lower->st_ino,
+    };
+    (void)hl_native_setxattr(upper, HL_OVERLAY_LOCK_IDENTITY_XATTR, &identity, sizeof identity, 0, XATTR_NOFOLLOW);
+}
+
+static void overlay_lock_identity_resolve(int descriptor, const struct stat *status, dev_t *device, ino_t *object) {
+    struct hl_overlay_lock_identity identity;
+    ssize_t length = hl_native_fgetxattr(descriptor, HL_OVERLAY_LOCK_IDENTITY_XATTR, &identity, sizeof identity, 0, 0);
+    if (length == (ssize_t)sizeof identity && identity.version == HL_OVERLAY_LOCK_IDENTITY_VERSION) {
+        *device = (dev_t)identity.device;
+        *object = (ino_t)identity.object;
+    } else {
+        *device = status->st_dev;
+        *object = status->st_ino;
+    }
 }
 
 // Recursively remove a host path (file, symlink, or a whole directory subtree). Used to whiteout a
@@ -666,6 +1042,7 @@ static void overlay_copyup(const char *guest, char *host, size_t hn) {
     // Preserve the lower inode's mode (incl S_ISUID/S_ISGID/S_ISVTX), atime/mtime and xattrs -- real
     // overlayfs copy-up semantics (security-critical for setuid/file-cap binaries; correctness for mtime).
     ovl_copy_meta(src, up, &st);
+    overlay_lock_identity_store(up, &st);
     // The file (and possibly its parent dirs) now lives in the UPPER: its resolved host path relocated
     // lower->upper. Bump the namespace epoch so the guest->host path caches (rc_/oc_) and the updirneg
     // memo can't keep serving the stale LOWER path -- fchmodat/fchownat/utimensat/setxattr copy-ups reach
@@ -892,9 +1269,12 @@ static int overlay_readdir(const char *gdir, char (**names_out)[256], uint8_t **
         if (!d) continue;
         struct dirent *e;
         while ((e = readdir(d))) {
-            if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-            int wh = !strncmp(e->d_name, ".wh.", 4);
-            const char *name = wh ? e->d_name + 4 : e->d_name;
+            char decoded[256];
+            const char *visible =
+                hl_case_name_decode(e->d_name, decoded, sizeof decoded) ? decoded : e->d_name;
+            if (!strcmp(visible, ".") || !strcmp(visible, "..")) continue;
+            int wh = !strncmp(visible, ".wh.", 4);
+            const char *name = wh ? visible + 4 : visible;
             int dup = 0;
             for (int i = 0; i < ns; i++)
                 if (!strcmp(seen[i], name)) {

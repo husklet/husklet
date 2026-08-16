@@ -1,0 +1,31 @@
+cases:
+- id: terminal-completion-list/readline-ambiguous-candidates
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "stty -echo; printf '\\105\\103\\110\\117\\055\\117\\106\\106\\n'\r" }
+      - await_output: { contains: ECHO-OFF, timeout_ms: 5000 }
+      - write: { text: "touch /tmp/husklet-alpha /tmp/husklet-beta; printf '\\106\\111\\114\\105\\055\\122\\105\\101\\104\\131\\n'\r" }
+      - await_output: { contains: FILE-READY, timeout_ms: 5000 }
+      - write: { text: "printf '<%s>\\n' /tmp/husklet-" }
+      - write: { text: "\u0009" }
+      - write: { text: "\u0009" }
+      - await_output: { contains: husklet-alpha, timeout_ms: 5000 }
+      - await_output: { contains: husklet-beta, timeout_ms: 5000 }
+      - write: { text: "\u0003" }
+      - await_output: { contains: "^C", timeout_ms: 5000 }
+      - write: { text: "printf '\\123\\110\\105\\114\\114\\055\\117\\113\\n'; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/alpha.txt
+    - golden/beta.txt
+    - golden/shell_ok.txt

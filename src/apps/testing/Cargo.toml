@@ -17,7 +17,7 @@ hl-container = { path = "../../containers/hl-container" }
 hl-design = { path = "../../packages/hl-design" }
 hl-images = { path = "../../containers/hl-images" }
 hl-log = { path = "../../packages/hl-log" }
-hl-native = { path = "../../runtime/hl-native" }
+hl-native = { path = "../../runtime/hl-native", features = ["native-test-hooks"] }
 hl-process = { path = "../../packages/hl-process" }
 hl-engine = { path = "../../containers/hl-engine" }
 reflink-copy.workspace = true
@@ -32,6 +32,9 @@ tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", 
 
 [target.'cfg(unix)'.dependencies]
 xattr = "1.6.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1", features = ["fs"] }
 
 [[bin]]
 name = "testing"

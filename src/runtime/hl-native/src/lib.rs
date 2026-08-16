@@ -18,7 +18,40 @@ mod artifact;
 #[cfg(unix)]
 pub use checkpoint::{CheckpointBroker, CheckpointTransport};
 pub use engine::{Engine, EngineConfig, Exit};
+#[cfg(unix)]
+pub use provider::artifact_lifecycle_smoke;
 pub use provider::leak_check_nonvacuity;
+
+/// Verifies that the dynamically loaded private engine exposes the ABI this Rust wrapper expects.
+///
+/// This hidden packaging probe crosses the real C boundary after artifact relocation.
+#[doc(hidden)]
+#[must_use]
+pub fn artifact_smoke() -> bool {
+    bindings::engine_metadata_is_valid()
+}
+
+/// Returns the exact dynamic export contract for the Cargo-selected native library.
+#[doc(hidden)]
+#[must_use]
+pub const fn artifact_export_manifest() -> &'static str {
+    #[cfg(feature = "native-test-hooks")]
+    {
+        include_str!("native/bridge/test_exports.txt")
+    }
+    #[cfg(not(feature = "native-test-hooks"))]
+    {
+        include_str!("native/bridge/exports.txt")
+    }
+}
+
+/// Resolves the shared objects that supplied the linked engine lifecycle symbols.
+#[cfg(unix)]
+#[doc(hidden)]
+#[must_use]
+pub fn artifact_paths() -> Option<Vec<std::path::PathBuf>> {
+    bindings::engine_library_paths()
+}
 
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
@@ -28,6 +61,26 @@ pub fn bound_vector_io_test(isa: u32, scenario: u32) -> Result<(i64, u32, u64), 
     static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     bindings::bound_vector_io_test(isa, scenario)
+}
+
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+#[must_use]
+pub fn x86_store_preflight_test() -> bool {
+    bindings::x86_store_preflight_test()
+}
+
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+#[must_use]
+pub fn linux_errno_from_host(domain: u32, host_errno: i32) -> i32 {
+    bindings::linux_errno_from_host(domain, host_errno)
+}
+
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn signal_errno_frame_test(isa: u32, domain: u32, redirect: bool, nr: u64, raw: i64) -> Result<(i64, i64), i32> {
+    bindings::signal_errno_frame_test(isa, domain, redirect, nr, raw)
 }
 
 #[cfg(test)]

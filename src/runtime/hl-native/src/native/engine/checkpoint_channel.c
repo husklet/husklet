@@ -105,6 +105,7 @@ void hl_ckpt_trigger_destroy(void *mapping, hl_activation_descriptor descriptor)
 
 #include "../host/fork_wire.h"
 #include "../host/system.h"
+#include "backend.h"
 
 static int checkpoint_broker = -1;
 static int checkpoint_trigger = -1;
@@ -295,6 +296,13 @@ int hl_ckpt_broker_pair(hl_activation_descriptor *out_parent, hl_activation_desc
     }
     *out_parent = (hl_activation_descriptor)pair[0];
     *out_child = (hl_activation_descriptor)pair[1];
+    if (hl_engine_checkpoint_descriptors_register(pair[0], pair[1]) != 0) {
+        (void)close(pair[0]);
+        (void)close(pair[1]);
+        *out_parent = HL_ACTIVATION_DESCRIPTOR_NONE;
+        *out_child = HL_ACTIVATION_DESCRIPTOR_NONE;
+        return -1;
+    }
     return 0;
 }
 
@@ -325,6 +333,10 @@ hl_activation_descriptor hl_ckpt_broker_accept(hl_activation_descriptor broker, 
     }
     channel = checkpoint_reserve_descriptor(descriptors[0]);
     if (channel < 0) return HL_ACTIVATION_DESCRIPTOR_NONE;
+    if (hl_engine_checkpoint_descriptors_register(channel, -1) != 0) {
+        (void)close(channel);
+        return HL_ACTIVATION_DESCRIPTOR_NONE;
+    }
     if (out_host_pid != NULL) *out_host_pid = hello.host_pid;
     return (hl_activation_descriptor)channel;
 }
@@ -366,6 +378,13 @@ int hl_ckpt_trigger_create(hl_activation_descriptor *out_descriptor, void **out_
     }
     *out_descriptor = (hl_activation_descriptor)descriptor;
     *out_mapping = mapping;
+    if (hl_engine_checkpoint_descriptors_register(descriptor, -1) != 0) {
+        (void)munmap(mapping, sizeof(uint32_t));
+        (void)close(descriptor);
+        *out_descriptor = HL_ACTIVATION_DESCRIPTOR_NONE;
+        *out_mapping = NULL;
+        return -1;
+    }
     return 0;
 }
 

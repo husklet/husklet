@@ -42,8 +42,6 @@ futures-util = "0.3"
 fs2 = "0.4"
 http = "1"
 http-body-util = "0.1"
-hl-engine = { path = "src/containers/hl-engine" }
-hl-design = { path = "src/packages/hl-design" }
 hyper = "1"
 hyper-util = "0.1"
 oci-client = { version = "0.17", default-features = false, features = ["rustls-tls"] }

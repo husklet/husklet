@@ -59,7 +59,7 @@ struct LaunchArguments {
     guest: Option<String>,
     #[arg(long)]
     report_exit: bool,
-    /// Existing container root used to resolve the guest entry and PT_INTERP.
+    /// Existing container root used to resolve the guest entry and `PT_INTERP`.
     #[arg(long)]
     rootfs: Option<PathBuf>,
     executable: PathBuf,

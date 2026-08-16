@@ -99,7 +99,8 @@ struct pc_hdr {
     uint64_t translator_abi;
     uint64_t cpu_sz, jit_map_n, ibtc_n;
     uint64_t img_base, interp_base;
-    uint64_t bin_id, entry_jump;
+    hl_identity_digest bin_id;
+    uint64_t entry_jump;
     uint64_t arena_used;
     uint64_t n_reloc, n_mapent, n_pend, n_t2, n_txpg, n_prov, n_lib;
     uint64_t csum;                     // FNV-1a over every byte after this header

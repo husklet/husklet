@@ -1,0 +1,25 @@
+cases:
+- id: terminal-command-not-found/status-and-recovery
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "stty -echo; PS1='RECOVERED# '; printf '%s%s%s\n' COMMAND- NOT-FOUND- READY\r" }
+      - await_output: { contains: COMMAND-NOT-FOUND-READY, timeout_ms: 5000 }
+      - write: { text: "definitely_missing_husklet_command\r" }
+      - await_output: { contains: "command not found", timeout_ms: 5000 }
+      - write: { text: "status=$?; test \"$status\" = 127 && printf '%s%s\n' COMMAND-NOT-FOUND- STATUS-127\r" }
+      - await_output: { contains: COMMAND-NOT-FOUND-STATUS-127, timeout_ms: 5000 }
+      - write: { text: "printf '%s%s\n' COMMAND-NOT-FOUND- SHELL-USABLE; stty echo; exit\r" }
+      - await_output: { contains: COMMAND-NOT-FOUND-SHELL-USABLE, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/status_127.txt
+    - golden/shell_usable.txt

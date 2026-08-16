@@ -46,14 +46,30 @@ pub(crate) struct Url(String);
 
 impl Url {
     pub(crate) fn new(url: &str) -> Self {
-        Self(if url.starts_with("www.") {
-            format!("https://{url}")
-        } else {
-            url.to_string()
-        })
+        Self(
+            // A person types WWW as readily as www, and a host name does not
+            // care which; refusing the capital would open nothing.
+            if url.get(..4).is_some_and(|prefix| prefix.eq_ignore_ascii_case("www.")) {
+                format!("https://{url}")
+            } else {
+                url.to_string()
+            },
+        )
     }
 
     pub(crate) fn open(&self) {
         let _ = crate::gtk_adapter::Uri::new(&self.0).open();
+    }
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::Url;
+
+    #[test]
+    fn case_insensitive_www_matches_always_receive_a_scheme() {
+        assert_eq!(Url::new("www.example.com").0, "https://www.example.com");
+        assert_eq!(Url::new("WWW.Example.com/path").0, "https://WWW.Example.com/path");
+        assert_eq!(Url::new("https://example.com").0, "https://example.com");
     }
 }

@@ -1,0 +1,1 @@
+main_pinned=1 final_shebang_pinned=1 shebang_hop_pinned=1 pt_interp_pinned=1 failed_env_atomic=1

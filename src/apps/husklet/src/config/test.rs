@@ -100,6 +100,149 @@ fn rich_config_roundtrips() {
 }
 
 #[test]
+fn legacy_missing_scrollback_migrates_to_the_bounded_default() {
+    let path = tmp_path("legacy-scrollback-default");
+    std::fs::write(&path, "[workspace]\nname = legacy\nimage = alpine\narch = arm64\n").unwrap();
+
+    let loaded = WorkspaceStore::load(&path).unwrap();
+    assert_eq!(loaded.get("legacy").unwrap().scrollback, Some(DEFAULT_SCROLLBACK_LINES));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn explicit_unlimited_scrollback_roundtrips_without_becoming_default() {
+    let path = tmp_path("unlimited-scrollback");
+    let _ = std::fs::remove_file(&path);
+    let mut workspace = WorkspaceConfig::new("unlimited", "alpine", Arch::Arm64);
+    workspace.scrollback = None;
+    let mut store = WorkspaceStore::load(&path).unwrap();
+    store.upsert(workspace).unwrap();
+
+    let persisted = std::fs::read_to_string(&path).unwrap();
+    assert!(persisted.contains("scrollback = unlimited\n"));
+    assert_eq!(
+        WorkspaceStore::load(&path)
+            .unwrap()
+            .get("unlimited")
+            .unwrap()
+            .scrollback,
+        None
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn mount_paths_roundtrip_delimiters_and_unicode_through_the_store() {
+    let path = tmp_path("mount-path-encoding");
+    let _ = std::fs::remove_file(&path);
+    let mut workspace = WorkspaceConfig::new("mounts", "ubuntu:24.04", Arch::Arm64);
+    workspace.mounts = vec![
+        Mount {
+            host: "/Users/me/project:archive with spaces/naïve\\source".into(),
+            container: "/work:tree/資料\\target".into(),
+            ro: false,
+        },
+        Mount {
+            host: "/read:only".into(),
+            container: "/guest:readonly".into(),
+            ro: true,
+        },
+    ];
+    let mut store = WorkspaceStore::load(&path).unwrap();
+    store.upsert(workspace.clone()).unwrap();
+
+    let persisted = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        persisted
+            .lines()
+            .filter(|line| line.starts_with("mount = v2::"))
+            .count(),
+        2
+    );
+    let reloaded = WorkspaceStore::load(&path).unwrap();
+    assert_eq!(reloaded.get("mounts"), Some(&workspace));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn legacy_mount_records_remain_readable() {
+    let path = tmp_path("legacy-mount");
+    std::fs::write(
+        &path,
+        concat!(
+            "[workspace]\nname = legacy\nimage = alpine\narch = arm64\n",
+            "mount = /host/path:/guest/path:ro\n",
+            "mount = v2:/guest:rw\n",
+        ),
+    )
+    .unwrap();
+
+    let loaded = WorkspaceStore::load(&path).unwrap();
+    assert_eq!(
+        loaded.get("legacy").unwrap().mounts,
+        [
+            Mount {
+                host: "/host/path".into(),
+                container: "/guest/path".into(),
+                ro: true,
+            },
+            Mount {
+                host: "v2".into(),
+                container: "/guest".into(),
+                ro: false,
+            },
+        ]
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn versioned_mount_records_reject_malformed_encodings() {
+    let path = tmp_path("malformed-versioned-mount");
+    for malformed in [
+        "v2::F:2F6775657374:rw",
+        "v2::GG:2F6775657374:rw",
+        "v2::FF:2F6775657374:rw",
+        "v2::2F686F7374:2F6775657374:invalid",
+        "v2::2F686F7374:2F6775657374:rw:extra",
+        "v2:::2F6775657374:rw",
+    ] {
+        std::fs::write(
+            &path,
+            format!("[workspace]\nname = malformed\nimage = alpine\narch = arm64\nmount = {malformed}\n"),
+        )
+        .unwrap();
+        let error = WorkspaceStore::load(&path).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{malformed}");
+        assert!(error.to_string().contains("line 5"), "{malformed}: {error}");
+    }
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn versioned_mount_serialization_is_canonical_across_repeated_saves() {
+    let path = tmp_path("canonical-versioned-mount");
+    let _ = std::fs::remove_file(&path);
+    let mut workspace = WorkspaceConfig::new("canonical", "alpine", Arch::Arm64);
+    workspace.mounts.push(Mount {
+        host: "/a:b".into(),
+        container: "/c\\d".into(),
+        ro: false,
+    });
+    let mut store = WorkspaceStore::load(&path).unwrap();
+    store.upsert(workspace.clone()).unwrap();
+    let first = std::fs::read(&path).unwrap();
+    assert!(first
+        .windows(b"mount = v2::2F613A62:2F635C64:rw\n".len())
+        .any(|window| { window == b"mount = v2::2F613A62:2F635C64:rw\n" }));
+
+    let mut reloaded = WorkspaceStore::load(&path).unwrap();
+    reloaded.upsert(workspace).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), first);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn workspace_scrollback_never_wraps_negative_at_the_vte_boundary() {
     let mut workspace = WorkspaceConfig::new("large-scrollback", "alpine", Arch::Arm64);
     workspace.scrollback = Some(i64::MAX as u64);

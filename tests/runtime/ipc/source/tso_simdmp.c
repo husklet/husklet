@@ -17,9 +17,10 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <emmintrin.h>
+#include <stdlib.h>
 
-enum { ROUNDS = 400000 };
-
+/* The manifest supplies the round count: bounded compatibility and the full
+ * historical stress use this identical guest binary and assertion path. */
 struct cell {
     _Atomic uint32_t flag; /* publication flag; on x86 release/acquire == plain MOV */
     unsigned char pad[12];
@@ -33,9 +34,9 @@ static __m128i mk(uint32_t n) {
     return _mm_set_epi32((int)~n, (int)(n * 2654435761u), (int)(n ^ 0x5a5a5a5au), (int)n);
 }
 
-static void *consumer(void *unused) {
-    (void)unused;
-    for (uint32_t n = 1; n <= ROUNDS; n++) {
+static void *consumer(void *argument) {
+    uint32_t rounds = *(const uint32_t *)argument;
+    for (uint32_t n = 1; n <= rounds; n++) {
         while (atomic_load_explicit(&fwd.flag, memory_order_acquire) != n) {
         }
         __m128i got = _mm_loadu_si128((const __m128i *)fwd.payload);
@@ -46,10 +47,14 @@ static void *consumer(void *unused) {
     return NULL;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    char *end = NULL;
+    unsigned long parsed = argc == 2 ? strtoul(argv[1], &end, 10) : 0;
+    if (argc != 2 || !end || *end || parsed == 0 || parsed > UINT32_MAX) return 2;
+    uint32_t rounds = (uint32_t)parsed;
     pthread_t th;
-    if (pthread_create(&th, NULL, consumer, NULL)) return 2;
-    for (uint32_t n = 1; n <= ROUNDS; n++) {
+    if (pthread_create(&th, NULL, consumer, &rounds)) return 2;
+    for (uint32_t n = 1; n <= rounds; n++) {
         _mm_storeu_si128((__m128i *)fwd.payload, mk(n));           /* payload first */
         atomic_store_explicit(&fwd.flag, n, memory_order_release); /* ...then flag */
         while (atomic_load_explicit(&bwd.flag, memory_order_acquire) != n) {
@@ -58,6 +63,6 @@ int main(void) {
         if (_mm_movemask_epi8(_mm_cmpeq_epi8(got, mk(~n))) != 0xFFFF) bad = 1;
     }
     pthread_join(th, NULL);
-    printf("simd_mp rounds=%u bad=%d\n", ROUNDS, bad);
+    printf("simd_mp rounds=%u bad=%d\n", rounds, bad);
     return bad;
 }

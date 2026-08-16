@@ -18,9 +18,11 @@ pub(super) fn validate(
             .chars()
             .take(4096)
             .collect::<String>();
-        let suffix = (!diagnostic.is_empty())
-            .then(|| format!("; stderr={diagnostic:?}"))
-            .unwrap_or_default();
+        let suffix = if diagnostic.is_empty() {
+            String::new()
+        } else {
+            format!("; stderr={diagnostic:?}")
+        };
         return Err(format!("exit {status:?}, expected {expected:?}{suffix}").into());
     }
     if logs.stdout != expected_stdout {

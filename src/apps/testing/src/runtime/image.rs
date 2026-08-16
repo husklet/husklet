@@ -1,4 +1,4 @@
-use super::{Error, workspace};
+use super::Error;
 use hl_images::{
     Image, Images, Platform, Reference, RuntimeConfig, UnpackedImage,
     remote::{Auth, Registry},
@@ -55,7 +55,7 @@ pub struct TestImage {
     root: Root,
     runtime: RuntimeConfig,
     /// A scratch case owns its isolated image catalog for the full container lifetime.
-    _scratch_store: Option<tempfile::TempDir>,
+    scratch_store: Option<tempfile::TempDir>,
 }
 
 impl TestImage {
@@ -106,7 +106,7 @@ impl TestImage {
             unpacked: matches!(mode, Materialization::Overlay).then_some(unpacked),
             root,
             runtime,
-            _scratch_store: None,
+            scratch_store: None,
         })
     }
 
@@ -116,7 +116,9 @@ impl TestImage {
     /// this root. The regular materialization path still supplies durable reference ownership and
     /// exercises the same copy/overlay container launch contract as a registry image.
     pub fn materialize_scratch(platform: &Platform, mode: Materialization) -> Result<Self, Error> {
-        let store = tempfile::tempdir().map_err(|error| format!("create scratch image store: {error}"))?;
+        let root = super::work_root::WorkRoot::open()?.scratch_images();
+        std::fs::create_dir_all(&root)?;
+        let store = tempfile::tempdir_in(root).map_err(|error| format!("create scratch image store: {error}"))?;
         let images = Images::open(store.path())?;
         let mut archive = tar::Builder::new(Vec::new());
         archive.finish()?;
@@ -131,7 +133,7 @@ impl TestImage {
         let name: Reference = "husklet.invalid/testing-scratch:empty".parse()?;
         let image = images.commit(&layer, &runtime, platform, &name)?;
         let mut fixture = Self::from_image(images, &image, platform, mode)?;
-        fixture._scratch_store = Some(store);
+        fixture.scratch_store = Some(store);
         Ok(fixture)
     }
 
@@ -252,7 +254,7 @@ fn report_reflink_support(root: &Path) {
         if reflink_copy::reflink(&source, &destination).is_err() {
             eprintln!(
                 "image cache {} is on a filesystem without reflink support; every copy-materialized \
-                 rootfs is a full byte copy. Set HL_SCENARIO_IMAGE_CACHE to a reflink-capable \
+                 rootfs is a full byte copy. Set HL_RUNTIME_WORK_ROOT to a reflink-capable local \
                  filesystem before taking materialization measurements.",
                 root.display()
             );
@@ -272,19 +274,12 @@ impl ImageCache {
     /// # Errors
     /// Returns a failure when the workspace root cannot be located.
     pub fn for_platform(platform: &Platform) -> Result<Self, Error> {
-        let configured = env::var_os("HL_SCENARIO_IMAGE_CACHE").map(PathBuf::from);
-        let root = Self::locate(configured, platform, &workspace()?);
+        let root = super::work_root::WorkRoot::open()?.images(platform.architecture.as_str());
         report_reflink_support(&root);
         Ok(Self {
             root,
             platform: platform.clone(),
         })
-    }
-
-    fn locate(configured: Option<PathBuf>, platform: &Platform, workspace: &Path) -> PathBuf {
-        let path =
-            configured.unwrap_or_else(|| PathBuf::from("target/testing/images").join(platform.architecture.as_str()));
-        if path.is_absolute() { path } else { workspace.join(path) }
     }
 
     fn open(&self) -> Result<Images, Error> {
@@ -427,32 +422,13 @@ impl FailureText for str {
 
 #[cfg(test)]
 mod tests {
-    use super::{FailureText as _, ImageCache, Materialization, TestImage};
+    use super::{FailureText as _, Materialization, Platform, TestImage};
 
     #[test]
     fn only_shared_store_races_are_retried() {
         assert!("fork rootfs from sha256:a: No such file or directory (os error 2)".store_race());
         assert!("File exists (os error 17)".store_race());
         assert!(!"layer DiffID mismatch".store_race());
-    }
-
-    use hl_images::Platform;
-
-    #[test]
-    fn cache_is_platform_specific_unless_exact_leaf_is_configured() {
-        let workspace = std::path::Path::new("/workspace");
-        assert_eq!(
-            ImageCache::locate(None, &Platform::linux_arm64(), workspace),
-            workspace.join("target/testing/images/arm64")
-        );
-        assert_eq!(
-            ImageCache::locate(Some("persistent/amd64".into()), &Platform::linux_amd64(), workspace),
-            workspace.join("persistent/amd64")
-        );
-        assert_eq!(
-            ImageCache::locate(Some("/cache/arm64".into()), &Platform::linux_arm64(), workspace),
-            std::path::Path::new("/cache/arm64")
-        );
     }
 
     #[test]

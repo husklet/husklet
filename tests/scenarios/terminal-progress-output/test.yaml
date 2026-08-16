@@ -1,0 +1,23 @@
+cases:
+- id: terminal-progress-output/carriage-return-updates
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "stty -echo -onlcr; printf 'PROGRESS-%s\\r' ONE; printf 'PROGRESS-%s\\r' TWO; printf 'PROGRESS-%s\\n' DONE\r" }
+      - await_output: { contains: PROGRESS-ONE, timeout_ms: 5000 }
+      - await_output: { contains: PROGRESS-TWO, timeout_ms: 5000 }
+      - await_output: { contains: PROGRESS-DONE, timeout_ms: 5000 }
+      - write: { text: "printf 'SHELL-%s\\n' RECOVERED; stty onlcr echo; exit\r" }
+      - await_output: { contains: SHELL-RECOVERED, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/order.txt
+    - golden/recovered.txt

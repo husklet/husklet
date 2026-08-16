@@ -27,6 +27,18 @@ pub enum HostArch {
     X86_64,
 }
 
+/// Guest instruction sets compiled into a native-engine host artifact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GuestIsa {
+    Aarch64,
+    X86_64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BuildPlan {
+    pub guests: &'static [GuestIsa],
+}
+
 impl HostArch {
     #[must_use]
     pub const fn from_cfg(value: &str) -> Option<Self> {
@@ -76,11 +88,24 @@ impl HostTarget {
                 (HostOs::Macos | HostOs::Windows, HostArch::X86_64)
             )
     }
+
+    /// Guest translators that can be linked for this host artifact.
+    #[must_use]
+    pub const fn build_plan(self) -> BuildPlan {
+        const BOTH: &[GuestIsa] = &[GuestIsa::Aarch64, GuestIsa::X86_64];
+        const X86_64: &[GuestIsa] = &[GuestIsa::X86_64];
+
+        match (self.os, self.arch) {
+            // Darwin/x86 cannot compile the AArch64 target's signal context.
+            (HostOs::Macos, HostArch::X86_64) => BuildPlan { guests: X86_64 },
+            _ => BuildPlan { guests: BOTH },
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{HostArch, HostOs, HostTarget};
+    use super::{GuestIsa, HostArch, HostOs, HostTarget};
 
     #[test]
     fn host_matrix_is_explicit_and_complete() {
@@ -114,5 +139,17 @@ mod tests {
         let windows = HostTarget::from_cfg("windows", "x86_64").unwrap();
         assert!(windows.planned());
         assert!(!windows.supported());
+    }
+
+    #[test]
+    fn guest_capabilities_are_declared_by_host_target() {
+        assert_eq!(
+            HostTarget::from_cfg("linux", "x86_64").unwrap().build_plan().guests,
+            &[GuestIsa::Aarch64, GuestIsa::X86_64]
+        );
+        assert_eq!(
+            HostTarget::from_cfg("macos", "x86_64").unwrap().build_plan().guests,
+            &[GuestIsa::X86_64]
+        );
     }
 }

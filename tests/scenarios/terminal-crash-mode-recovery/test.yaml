@@ -1,0 +1,27 @@
+cases:
+- id: terminal-crash-mode-recovery/foreground-raw-child-terminated
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "export saved=$(stty -g); printf \"MODE-${x}READY\\n\"\r" }
+      - await_output: { contains: MODE-READY, timeout_ms: 5000 }
+      - write: { text: "sh -c 'stty raw -echo; test \"$(stty -g)\" != \"$saved\" && printf \"RAW-${x}ACTIVE\\n\"; kill -TERM $$'\r" }
+      - await_output: { contains: RAW-ACTIVE, timeout_ms: 5000 }
+      - await_output: { contains: Terminated, timeout_ms: 5000 }
+      - write: { text: "test \"$(stty -g)\" = \"$saved\" && printf \"MODE-${x}RESTORED\\n\"\r" }
+      - await_output: { contains: MODE-RESTORED, timeout_ms: 5000 }
+      - write: { text: "printf \"SHELL-${x}OK\\n\"; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/raw_active.txt
+    - golden/restored.txt
+    - golden/shell_ok.txt

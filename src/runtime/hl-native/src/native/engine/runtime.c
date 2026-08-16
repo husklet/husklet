@@ -9,9 +9,15 @@
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <signal.h>
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#if !defined(_WIN32)
+#include <pthread.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#endif
 
 #define HL_ENGINE_REQUEST_CHECKPOINT_PRIVATE 4u
 #if !defined(_WIN32)
@@ -58,6 +64,8 @@ struct hl_engine {
     hl_engine_executable executable_config;
     hl_engine_main_image_plan main_image_plan;
     unsigned char *owned_executable_image;
+    unsigned char *owned_interpreter_image;
+    size_t interpreter_image_size;
     uint64_t translations;
     int checkpoint_broker;
     int checkpoint_trigger;
@@ -65,6 +73,128 @@ struct hl_engine {
     int checkpoint_control_child;
     uint32_t checkpoint_control_ready;
 };
+
+#if !defined(_WIN32)
+static pthread_mutex_t checkpoint_registry_lock = PTHREAD_MUTEX_INITIALIZER;
+typedef struct hl_checkpoint_descriptor {
+    int descriptor;
+    dev_t device;
+    ino_t inode;
+} hl_checkpoint_descriptor;
+static hl_checkpoint_descriptor *checkpoint_registry;
+static size_t checkpoint_registry_count;
+static size_t checkpoint_registry_capacity;
+#if defined(HL_NATIVE_TEST_HOOKS)
+static _Thread_local int checkpoint_registry_fail_allocation;
+static _Thread_local uint32_t checkpoint_adopt_failure_position;
+static _Thread_local uint32_t checkpoint_adopt_position;
+#endif
+
+static void hl_engine_checkpoint_registry_compact_locked(void) {
+    size_t index;
+    for (index = 0; index < checkpoint_registry_count; ++index) {
+        hl_checkpoint_descriptor *entry = &checkpoint_registry[index];
+        struct stat current;
+        if (fstat(entry->descriptor, &current) != 0 || current.st_dev != entry->device || current.st_ino != entry->inode)
+            *entry = checkpoint_registry[--checkpoint_registry_count];
+        else
+            continue;
+        --index;
+    }
+}
+
+static int hl_engine_checkpoint_registry_reserve_locked(size_t additional) {
+    size_t required = checkpoint_registry_count + additional;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (checkpoint_registry_fail_allocation) {
+        checkpoint_registry_fail_allocation = 0;
+        return -1;
+    }
+#endif
+    if (required > checkpoint_registry_capacity) {
+        size_t capacity = checkpoint_registry_capacity == 0 ? 16 : checkpoint_registry_capacity;
+        while (capacity < required) capacity *= 2;
+        hl_checkpoint_descriptor *grown = realloc(checkpoint_registry, capacity * sizeof(*grown));
+        if (grown == NULL) return -1;
+        checkpoint_registry = grown;
+        checkpoint_registry_capacity = capacity;
+    }
+    return 0;
+}
+
+static int hl_engine_checkpoint_descriptor_identity(int descriptor, hl_checkpoint_descriptor *out) {
+    struct stat identity;
+    if (descriptor < 0 || fstat(descriptor, &identity) != 0) return -1;
+    *out = (hl_checkpoint_descriptor){descriptor, identity.st_dev, identity.st_ino};
+    return 0;
+}
+
+static void hl_engine_checkpoint_descriptor_append_locked(hl_checkpoint_descriptor descriptor) {
+    size_t index;
+    for (index = 0; index < checkpoint_registry_count; ++index) {
+        hl_checkpoint_descriptor *entry = &checkpoint_registry[index];
+        if (entry->descriptor == descriptor.descriptor && entry->device == descriptor.device &&
+            entry->inode == descriptor.inode)
+            return;
+    }
+    checkpoint_registry[checkpoint_registry_count++] = descriptor;
+}
+
+int hl_engine_checkpoint_descriptors_register(int first, int second) {
+    hl_checkpoint_descriptor descriptors[2];
+    size_t count = second < 0 ? 1 : 2;
+    int status = -1;
+    (void)pthread_mutex_lock(&checkpoint_registry_lock);
+    hl_engine_checkpoint_registry_compact_locked();
+    if (hl_engine_checkpoint_descriptor_identity(first, &descriptors[0]) == 0 &&
+        (count == 1 || hl_engine_checkpoint_descriptor_identity(second, &descriptors[1]) == 0) &&
+        hl_engine_checkpoint_registry_reserve_locked(count) == 0) {
+        hl_engine_checkpoint_descriptor_append_locked(descriptors[0]);
+        if (count == 2) hl_engine_checkpoint_descriptor_append_locked(descriptors[1]);
+        status = 0;
+    }
+    (void)pthread_mutex_unlock(&checkpoint_registry_lock);
+    return status;
+}
+
+void hl_engine_checkpoint_fork_prepare(void) {
+    (void)pthread_mutex_lock(&checkpoint_registry_lock);
+}
+
+void hl_engine_checkpoint_fork_parent(void) {
+    (void)pthread_mutex_unlock(&checkpoint_registry_lock);
+}
+
+static void hl_engine_checkpoint_fork_close(int descriptor, int broker, int trigger, int control) {
+    if (descriptor < 0 || descriptor == broker || descriptor == trigger || descriptor == control) return;
+    hl_host_process_fd_private_remove(descriptor);
+    (void)close(descriptor);
+}
+
+void hl_engine_checkpoint_fork_child(int broker, int trigger, int control) {
+    size_t index;
+    for (index = 0; index < checkpoint_registry_count; ++index) {
+        hl_checkpoint_descriptor *entry = &checkpoint_registry[index];
+        struct stat identity;
+        if (fstat(entry->descriptor, &identity) == 0 && identity.st_dev == entry->device && identity.st_ino == entry->inode)
+            hl_engine_checkpoint_fork_close(entry->descriptor, broker, trigger, control);
+    }
+    (void)pthread_mutex_unlock(&checkpoint_registry_lock);
+}
+#else
+void hl_engine_checkpoint_fork_prepare(void) {}
+void hl_engine_checkpoint_fork_parent(void) {}
+void hl_engine_checkpoint_fork_child(int broker, int trigger, int control) {
+    (void)broker;
+    (void)trigger;
+    (void)control;
+}
+int hl_engine_checkpoint_descriptors_register(int first, int second) {
+    (void)first;
+    (void)second;
+    return 0;
+}
+#endif
 
 enum {
     HL_ENGINE_CREATED = 0,
@@ -100,6 +230,10 @@ HL_API uint32_t hl_c_backend_checkpoint_test_arm(void);
 HL_API uint32_t hl_c_backend_checkpoint_test_phase(void);
 HL_API void hl_c_backend_checkpoint_test_release(void);
 HL_API void hl_c_backend_checkpoint_test_reset(void);
+HL_API uint32_t hl_c_backend_checkpoint_test_prune_foreign_descriptors(void);
+HL_API void hl_c_backend_checkpoint_test_fail_registry_allocation(void);
+HL_API void hl_c_backend_checkpoint_test_fail_private_adopt(uint32_t position);
+HL_API uint64_t hl_c_backend_checkpoint_test_private_descriptor_count(void);
 
 HL_API uint32_t hl_c_backend_checkpoint_test_arm(void) {
     atomic_store_explicit(&checkpoint_test_phase, 1, memory_order_release);
@@ -118,12 +252,90 @@ HL_API void hl_c_backend_checkpoint_test_reset(void) {
     atomic_store_explicit(&checkpoint_test_phase, 0, memory_order_release);
 }
 
+HL_API void hl_c_backend_checkpoint_test_fail_registry_allocation(void) {
+#if !defined(_WIN32)
+    checkpoint_registry_fail_allocation = 1;
+#endif
+}
+
+HL_API void hl_c_backend_checkpoint_test_fail_private_adopt(uint32_t position) {
+#if !defined(_WIN32)
+    checkpoint_adopt_failure_position = position;
+    checkpoint_adopt_position = 0;
+#else
+    (void)position;
+#endif
+}
+
+HL_API uint64_t hl_c_backend_checkpoint_test_private_descriptor_count(void) {
+#if defined(_WIN32)
+    return 0;
+#else
+    return (uint64_t)hl_host_process_fd_private_count_current();
+#endif
+}
+
+HL_API uint32_t hl_c_backend_checkpoint_test_prune_foreign_descriptors(void) {
+#if defined(_WIN32)
+    return 0;
+#else
+    int foreign[2] = {-1, -1};
+    int active[2] = {-1, -1};
+    int release[2] = {-1, -1};
+    pid_t child;
+    int status = 0;
+    unsigned char byte = 1;
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, foreign) != 0 || socketpair(AF_UNIX, SOCK_STREAM, 0, active) != 0 ||
+        pipe(release) != 0)
+        goto cleanup;
+    if (hl_engine_checkpoint_descriptors_register(foreign[0], foreign[1]) != 0 ||
+        hl_engine_checkpoint_descriptors_register(active[0], active[1]) != 0)
+        goto cleanup;
+    hl_engine_checkpoint_fork_prepare();
+    child = fork();
+    if (child == 0) {
+        int valid;
+        hl_engine_checkpoint_fork_child(active[0], active[1], -1);
+        (void)close(release[1]);
+        if (read(release[0], &byte, sizeof(byte)) != (ssize_t)sizeof(byte)) _exit(2);
+        valid = fcntl(foreign[0], F_GETFD) < 0 && errno == EBADF && fcntl(foreign[1], F_GETFD) < 0 &&
+                errno == EBADF && fcntl(active[0], F_GETFD) >= 0 && fcntl(active[1], F_GETFD) >= 0;
+        _exit(valid ? 0 : 3);
+    }
+    hl_engine_checkpoint_fork_parent();
+    if (child < 0) goto cleanup;
+    (void)close(release[0]);
+    release[0] = -1;
+    (void)close(foreign[0]);
+    (void)close(foreign[1]);
+    if (dup2(active[0], foreign[0]) < 0 || dup2(active[1], foreign[1]) < 0) goto cleanup_child;
+    if (write(release[1], &byte, sizeof(byte)) != (ssize_t)sizeof(byte)) goto cleanup_child;
+    if (waitpid(child, &status, 0) != child) goto cleanup;
+    child = -1;
+    status = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    goto cleanup;
+cleanup_child:
+    (void)close(release[1]);
+    release[1] = -1;
+    (void)waitpid(child, NULL, 0);
+cleanup:
+    if (foreign[0] >= 0) (void)close(foreign[0]);
+    if (foreign[1] >= 0) (void)close(foreign[1]);
+    if (active[0] >= 0) (void)close(active[0]);
+    if (active[1] >= 0) (void)close(active[1]);
+    if (release[0] >= 0) (void)close(release[0]);
+    if (release[1] >= 0) (void)close(release[1]);
+    return status ? 1u : 0u;
+#endif
+}
+
 static void hl_engine_checkpoint_test_pause(hl_engine *engine) {
     unsigned int expected = 1;
     if (!atomic_compare_exchange_strong_explicit(&checkpoint_test_phase, &expected, 2, memory_order_acq_rel,
                                                  memory_order_acquire))
         return;
-    while (atomic_load_explicit(&checkpoint_test_phase, memory_order_acquire) != 5) hl_engine_yield(engine);
+    while (atomic_load_explicit(&checkpoint_test_phase, memory_order_acquire) != 5)
+        hl_engine_yield(engine);
 }
 
 static void hl_engine_checkpoint_test_process_started(void) {
@@ -186,56 +398,113 @@ uint64_t hl_engine_translation_count(const hl_engine *engine) {
     return engine == NULL ? 0 : engine->translations;
 }
 
+#if !defined(_WIN32)
+static void hl_engine_checkpoint_descriptor_close(int *descriptor) {
+    if (*descriptor < 0) return;
+    hl_host_process_fd_private_remove(*descriptor);
+    (void)close(*descriptor);
+    *descriptor = -1;
+}
+
+static int hl_engine_checkpoint_descriptor_adopt(int *descriptor) {
+    int original = *descriptor;
+    int adopted;
+    int fail_adopt = 0;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    checkpoint_adopt_position++;
+    if (checkpoint_adopt_failure_position == checkpoint_adopt_position) {
+        checkpoint_adopt_failure_position = 0;
+        fail_adopt = 1;
+    }
+#endif
+    adopted = fail_adopt ? -1 : hl_host_process_fd_private_adopt(original);
+    if (adopted < 0) {
+        (void)close(original);
+        *descriptor = -1;
+        return -1;
+    }
+    *descriptor = adopted;
+    return 0;
+}
+#endif
+
 hl_status hl_engine_checkpoint_configure(hl_engine *engine, int broker, int trigger) {
 #if defined(_WIN32)
     if (engine == NULL || broker < 0 || trigger < 0) return HL_STATUS_INVALID_ARGUMENT;
     return HL_STATUS_NOT_SUPPORTED;
 #else
-    int broker_copy;
-    int trigger_copy;
+    int broker_copy = -1;
+    int trigger_copy = -1;
+    int control_parent = engine == NULL ? -1 : engine->checkpoint_control_parent;
+    int control_child = engine == NULL ? -1 : engine->checkpoint_control_child;
+    int control_created = 0;
+    hl_status status = HL_STATUS_PLATFORM_FAILURE;
     if (engine == NULL || broker < 0 || trigger < 0) return HL_STATUS_INVALID_ARGUMENT;
-    broker_copy = dup(broker);
-    if (broker_copy < 0) return HL_STATUS_PLATFORM_FAILURE;
-    trigger_copy = dup(trigger);
-    if (trigger_copy < 0) {
-        (void)close(broker_copy);
-        return HL_STATUS_PLATFORM_FAILURE;
+    (void)pthread_mutex_lock(&checkpoint_registry_lock);
+    hl_engine_checkpoint_registry_compact_locked();
+    if (hl_engine_checkpoint_registry_reserve_locked(4) != 0) {
+        (void)pthread_mutex_unlock(&checkpoint_registry_lock);
+        return HL_STATUS_OUT_OF_MEMORY;
     }
+    broker_copy = dup(broker);
+    if (broker_copy < 0) goto fail;
+    trigger_copy = dup(trigger);
+    if (trigger_copy < 0) goto fail;
     (void)fcntl(broker_copy, F_SETFD, FD_CLOEXEC);
     (void)fcntl(trigger_copy, F_SETFD, FD_CLOEXEC);
-    broker_copy = hl_host_process_fd_private_adopt(broker_copy);
-    trigger_copy = hl_host_process_fd_private_adopt(trigger_copy);
-    if (broker_copy < 0 || trigger_copy < 0) {
-        if (broker_copy >= 0) (void)close(broker_copy);
-        if (trigger_copy >= 0) (void)close(trigger_copy);
-        return HL_STATUS_PLATFORM_FAILURE;
-    }
     if (engine->checkpoint_control_parent < 0) {
         int control[2];
-        if (socketpair(AF_UNIX, SOCK_STREAM, 0, control) != 0) {
-            (void)close(broker_copy);
-            (void)close(trigger_copy);
-            return HL_STATUS_PLATFORM_FAILURE;
-        }
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, control) != 0) goto fail;
         (void)fcntl(control[0], F_SETFD, FD_CLOEXEC);
         (void)fcntl(control[1], F_SETFD, FD_CLOEXEC);
-        engine->checkpoint_control_parent = hl_host_process_fd_private_adopt(control[0]);
-        engine->checkpoint_control_child = hl_host_process_fd_private_adopt(control[1]);
-        if (engine->checkpoint_control_parent < 0 || engine->checkpoint_control_child < 0) {
-            if (engine->checkpoint_control_parent >= 0) (void)close(engine->checkpoint_control_parent);
-            if (engine->checkpoint_control_child >= 0) (void)close(engine->checkpoint_control_child);
-            engine->checkpoint_control_parent = -1;
-            engine->checkpoint_control_child = -1;
-            (void)close(broker_copy);
-            (void)close(trigger_copy);
-            return HL_STATUS_PLATFORM_FAILURE;
-        }
+        control_parent = control[0];
+        control_child = control[1];
+        control_created = 1;
     }
-    if (engine->checkpoint_broker >= 0) (void)close(engine->checkpoint_broker);
-    if (engine->checkpoint_trigger >= 0) (void)close(engine->checkpoint_trigger);
+    if (hl_engine_checkpoint_descriptor_adopt(&broker_copy) != 0 ||
+        hl_engine_checkpoint_descriptor_adopt(&trigger_copy) != 0 ||
+        (control_created && hl_engine_checkpoint_descriptor_adopt(&control_parent) != 0) ||
+        (control_created && hl_engine_checkpoint_descriptor_adopt(&control_child) != 0))
+        goto fail;
+    {
+        hl_checkpoint_descriptor registered[4];
+        if (hl_engine_checkpoint_descriptor_identity(broker_copy, &registered[0]) != 0 ||
+            hl_engine_checkpoint_descriptor_identity(trigger_copy, &registered[1]) != 0 ||
+            hl_engine_checkpoint_descriptor_identity(control_parent, &registered[2]) != 0 ||
+            hl_engine_checkpoint_descriptor_identity(control_child, &registered[3]) != 0)
+            goto fail;
+        /* A configured transport is the authority that capture is available. Keep the guest-side
+         * trigger arm coupled to that capability instead of relying on every embedder to duplicate
+         * the private launch option correctly. Restore remains independently selected by HL_RESTORE,
+         * while the restored process is immediately armed for its next capture. */
+        if (hl_options_set(&engine->options, "HL_CHECKPOINT", "1", 1) != 0) {
+            status = HL_STATUS_OUT_OF_MEMORY;
+            goto fail;
+        }
+        hl_engine_checkpoint_descriptor_append_locked(registered[0]);
+        hl_engine_checkpoint_descriptor_append_locked(registered[1]);
+        hl_engine_checkpoint_descriptor_append_locked(registered[2]);
+        hl_engine_checkpoint_descriptor_append_locked(registered[3]);
+    }
+    hl_engine_checkpoint_descriptor_close(&engine->checkpoint_broker);
+    hl_engine_checkpoint_descriptor_close(&engine->checkpoint_trigger);
     engine->checkpoint_broker = broker_copy;
     engine->checkpoint_trigger = trigger_copy;
+    if (control_created) {
+        engine->checkpoint_control_parent = control_parent;
+        engine->checkpoint_control_child = control_child;
+    }
+    (void)pthread_mutex_unlock(&checkpoint_registry_lock);
     return HL_STATUS_OK;
+fail:
+    hl_engine_checkpoint_descriptor_close(&broker_copy);
+    hl_engine_checkpoint_descriptor_close(&trigger_copy);
+    if (control_created) {
+        hl_engine_checkpoint_descriptor_close(&control_parent);
+        hl_engine_checkpoint_descriptor_close(&control_child);
+    }
+    (void)pthread_mutex_unlock(&checkpoint_registry_lock);
+    return status;
 #endif
 }
 
@@ -646,58 +915,74 @@ static hl_status hl_engine_create_validate(const hl_engine_config *config, const
     return hl_host_services_validate(host, HL_HOST_CAP_MEMORY | HL_HOST_CAP_CLOCK | HL_HOST_CAP_SYNC);
 }
 
-static hl_status hl_engine_create_with_options_mode(const hl_engine_config *config, const hl_host_services *host,
-                                                    const hl_options *source_options, uint32_t borrow_options,
-                                                    hl_engine **out_engine) {
-    hl_engine *engine;
-    hl_host_handle *candidate_handles = NULL;
-    hl_status status;
-    status = hl_engine_create_validate(config, host, source_options, borrow_options, out_engine);
-    if (status != HL_STATUS_OK) return status;
-    engine = calloc(1, sizeof(*engine));
-    if (engine == NULL) return HL_STATUS_OUT_OF_MEMORY;
+static hl_status hl_engine_interpreter_validate(const hl_engine_config *config, const void *interpreter_image,
+                                                size_t interpreter_size) {
+    if ((interpreter_image == NULL) != (interpreter_size == 0) || interpreter_size > 64u * 1024u * 1024u)
+        return HL_STATUS_INVALID_ARGUMENT;
+#if defined(_WIN32)
+    if (interpreter_size != 0) return HL_STATUS_NOT_SUPPORTED;
+#endif
+    if (interpreter_size != 0 && (config->main_image_plan == NULL || config->main_image_plan->has_interpreter == 0))
+        return HL_STATUS_INVALID_ARGUMENT;
+    return HL_STATUS_OK;
+}
+
+static hl_engine *hl_engine_allocate(const hl_engine_config *config, const hl_host_services *host) {
+    hl_engine *engine = calloc(1, sizeof(*engine));
+    if (engine == NULL) return NULL;
     engine->checkpoint_broker = -1;
     engine->checkpoint_trigger = -1;
     engine->checkpoint_control_parent = -1;
     engine->checkpoint_control_child = -1;
     memcpy(&engine->config, config, sizeof(*config));
-    if (config->main_image_plan != NULL) {
-        engine->main_image_plan = *config->main_image_plan;
-        engine->config.main_image_plan = &engine->main_image_plan;
-    }
     memcpy(&engine->host, host, sizeof(*host));
     engine->executable = HL_HOST_HANDLE_INVALID;
-    if (config->executable != NULL) {
-        hl_host_result cloned;
-        status = hl_host_services_validate(host, HL_HOST_CAP_FILE);
-        if (status != HL_STATUS_OK) goto fail;
-        if (host->file->clone_for_fork == NULL || host->file->close == NULL) {
-            status = HL_STATUS_ABI_MISMATCH;
-            goto fail;
-        }
-        cloned = host->file->clone_for_fork(host->context, config->executable->host_handle);
-        if (cloned.status != HL_STATUS_OK || cloned.value == HL_HOST_HANDLE_INVALID) {
-            status = cloned.status == HL_STATUS_OK ? HL_STATUS_PLATFORM_FAILURE : (hl_status)cloned.status;
-            goto fail;
-        }
-        engine->executable = cloned.value;
-        engine->executable_config = (hl_engine_executable){
-            HL_ENGINE_ABI, sizeof(engine->executable_config), HL_ENGINE_FD_BORROW, 0, cloned.value, NULL, 0};
-        status = hl_engine_read_executable(engine, cloned.value);
-        if (status != HL_STATUS_OK) goto fail;
-        (void)engine->host.file->close(engine->host.context, cloned.value);
-        engine->executable = HL_HOST_HANDLE_INVALID;
-        engine->executable_config.host_handle = HL_HOST_HANDLE_INVALID;
-        engine->config.executable = &engine->executable_config;
+    return engine;
+}
+
+static hl_status hl_engine_copy_image_plan(hl_engine *engine, const hl_engine_config *config,
+                                           const void *interpreter_image, size_t interpreter_size) {
+    if (config->main_image_plan == NULL) return HL_STATUS_OK;
+    engine->main_image_plan = *config->main_image_plan;
+    if (interpreter_size != 0) {
+        engine->owned_interpreter_image = malloc(interpreter_size);
+        if (engine->owned_interpreter_image == NULL) return HL_STATUS_OUT_OF_MEMORY;
+        memcpy(engine->owned_interpreter_image, interpreter_image, interpreter_size);
+        engine->interpreter_image_size = interpreter_size;
     }
+    engine->config.main_image_plan = &engine->main_image_plan;
+    return HL_STATUS_OK;
+}
+
+static hl_status hl_engine_pin_executable(hl_engine *engine, const hl_engine_config *config,
+                                          const hl_host_services *host) {
+    hl_host_result cloned;
+    hl_status status;
+    if (config->executable == NULL) return HL_STATUS_OK;
+    status = hl_host_services_validate(host, HL_HOST_CAP_FILE);
+    if (status != HL_STATUS_OK) return status;
+    if (host->file->clone_for_fork == NULL || host->file->close == NULL) return HL_STATUS_ABI_MISMATCH;
+    cloned = host->file->clone_for_fork(host->context, config->executable->host_handle);
+    if (cloned.status != HL_STATUS_OK || cloned.value == HL_HOST_HANDLE_INVALID)
+        return cloned.status == HL_STATUS_OK ? HL_STATUS_PLATFORM_FAILURE : (hl_status)cloned.status;
+    engine->executable = cloned.value;
+    engine->executable_config = (hl_engine_executable){
+        HL_ENGINE_ABI, sizeof(engine->executable_config), HL_ENGINE_FD_BORROW, 0, cloned.value, NULL, 0};
+    status = hl_engine_read_executable(engine, cloned.value);
+    if (status != HL_STATUS_OK) return status;
+    engine->config.executable = &engine->executable_config;
+    return HL_STATUS_OK;
+}
+
+static hl_status hl_engine_initialize_options(hl_engine *engine, const hl_engine_config *config,
+                                              const hl_options *source_options, uint32_t borrow_options) {
+    char value[32];
     if (borrow_options) {
         engine->options = *source_options;
     } else {
         if ((source_options == NULL ? hl_options_clone_current(&engine->options)
-                                    : hl_options_clone(&engine->options, source_options)) != 0) {
-            status = HL_STATUS_OUT_OF_MEMORY;
-            goto fail;
-        }
+                                    : hl_options_clone(&engine->options, source_options)) != 0)
+            return HL_STATUS_OUT_OF_MEMORY;
         engine->options_owned = 1;
     }
     /* An explicit per-engine snapshot is authoritative. Embedders must not
@@ -706,158 +991,190 @@ static hl_status hl_engine_create_with_options_mode(const hl_engine_config *conf
     if (source_options == NULL) hl_options_import_environment(&engine->options);
     engine->options_initialized = 1;
     engine->owned_rootfs = hl_engine_copy_string(config->rootfs);
-    if (config->rootfs != NULL && engine->owned_rootfs == NULL) {
-        status = HL_STATUS_OUT_OF_MEMORY;
-        goto fail;
-    }
+    if (config->rootfs != NULL && engine->owned_rootfs == NULL) return HL_STATUS_OUT_OF_MEMORY;
     engine->config.rootfs = engine->owned_rootfs;
-    {
-        char value[32];
-        if (config->memory_limit != 0) {
-            snprintf(value, sizeof(value), "%llu", (unsigned long long)config->memory_limit);
-            if (hl_options_set(&engine->options, "HL_MEM_MAX", value, 1) != 0) goto option_fail;
-        }
-        if (config->pid_limit != 0) {
-            snprintf(value, sizeof(value), "%u", config->pid_limit);
-            if (hl_options_set(&engine->options, "HL_PIDS_MAX", value, 1) != 0) goto option_fail;
-        }
-        if (config->cpu_limit != 0) {
-            snprintf(value, sizeof(value), "%u", config->cpu_limit);
-            if (hl_options_set(&engine->options, "HL_CPUS", value, 1) != 0) goto option_fail;
-        }
+    if (config->memory_limit != 0) {
+        snprintf(value, sizeof(value), "%llu", (unsigned long long)config->memory_limit);
+        if (hl_options_set(&engine->options, "HL_MEM_MAX", value, 1) != 0) return HL_STATUS_OUT_OF_MEMORY;
     }
-    status = hl_engine_apply_box(engine, config->box);
-    if (status != HL_STATUS_OK) goto fail;
+    if (config->pid_limit != 0) {
+        snprintf(value, sizeof(value), "%u", config->pid_limit);
+        if (hl_options_set(&engine->options, "HL_PIDS_MAX", value, 1) != 0) return HL_STATUS_OUT_OF_MEMORY;
+    }
+    if (config->cpu_limit != 0) {
+        snprintf(value, sizeof(value), "%u", config->cpu_limit);
+        if (hl_options_set(&engine->options, "HL_CPUS", value, 1) != 0) return HL_STATUS_OUT_OF_MEMORY;
+    }
+    return hl_engine_apply_box(engine, config->box);
+}
+
+static hl_status hl_engine_initialize_linux_abi(hl_engine *engine) {
+    hl_status status;
     engine->box_fds = calloc(HL_LINUX_FD_LIMIT, sizeof(*engine->box_fds));
     engine->box_ofds = calloc(HL_LINUX_OFD_LIMIT, sizeof(*engine->box_ofds));
-    if (engine->box_fds == NULL || engine->box_ofds == NULL) {
-        status = HL_STATUS_OUT_OF_MEMORY;
-        goto fail;
-    }
+    if (engine->box_fds == NULL || engine->box_ofds == NULL) return HL_STATUS_OUT_OF_MEMORY;
     status = hl_linux_abi_init(&engine->box, &engine->host, engine->box_fds, HL_LINUX_FD_LIMIT, engine->box_ofds,
                                HL_LINUX_OFD_LIMIT);
-    if (status != HL_STATUS_OK) goto fail;
+    if (status != HL_STATUS_OK) return status;
     engine->box_initialized = 1;
-    if (config->fd_binding_count != 0) {
-        uint32_t index;
-        status = hl_host_services_validate(host, HL_HOST_CAP_FILE);
-        if (status != HL_STATUS_OK) goto fail;
-        for (index = 0; index < config->fd_binding_count; ++index) {
-            const hl_engine_fd_binding *binding = &config->fd_bindings[index];
-            uint32_t previous;
-            if (binding->abi != HL_ENGINE_ABI || binding->size < sizeof(*binding) ||
-                binding->host_handle == HL_HOST_HANDLE_INVALID || binding->guest_fd >= HL_LINUX_FD_LIMIT ||
-                (binding->ownership != HL_ENGINE_FD_TRANSFER && binding->ownership != HL_ENGINE_FD_BORROW)) {
-                status = HL_STATUS_INVALID_ARGUMENT;
-                goto fail;
-            }
-            for (previous = 0; previous < index; ++previous) {
-                if (config->fd_bindings[previous].guest_fd == binding->guest_fd) {
-                    status = HL_STATUS_INVALID_ARGUMENT;
-                    goto fail;
-                }
-            }
-        }
-        candidate_handles = malloc(config->fd_binding_count * sizeof(*candidate_handles));
-        if (candidate_handles == NULL) {
-            status = HL_STATUS_OUT_OF_MEMORY;
-            goto fail;
-        }
-        for (index = 0; index < config->fd_binding_count; ++index)
-            candidate_handles[index] = HL_HOST_HANDLE_INVALID;
-        for (index = 0; index < config->fd_binding_count; ++index) {
-            const hl_engine_fd_binding *binding = &config->fd_bindings[index];
-            hl_host_result cloned = engine->host.file->clone_for_fork(engine->host.context, binding->host_handle);
-            if (cloned.status != HL_STATUS_OK || cloned.value == HL_HOST_HANDLE_INVALID) {
-                status = cloned.status == HL_STATUS_OK ? HL_STATUS_PLATFORM_FAILURE : (hl_status)cloned.status;
-                goto fail;
-            }
-            candidate_handles[index] = cloned.value;
-            status = hl_linux_fd_install_at(&engine->box, binding->guest_fd, candidate_handles[index],
-                                            binding->status_flags, binding->descriptor_flags);
-            if (status != HL_STATUS_OK) goto fail;
-            candidate_handles[index] = HL_HOST_HANDLE_INVALID;
-        }
-        for (index = 0; index < config->fd_binding_count; ++index) {
-            const hl_engine_fd_binding *binding = &config->fd_bindings[index];
-            if (binding->ownership == HL_ENGINE_FD_TRANSFER)
-                (void)engine->host.file->close(engine->host.context, binding->host_handle);
-        }
-        engine->config.fd_bindings = NULL;
-        engine->config.fd_binding_count = 0;
+    return HL_STATUS_OK;
+}
+
+static hl_status hl_engine_validate_fd_bindings(const hl_engine_config *config) {
+    uint32_t index;
+    for (index = 0; index < config->fd_binding_count; ++index) {
+        const hl_engine_fd_binding *binding = &config->fd_bindings[index];
+        uint32_t previous;
+        if (binding->abi != HL_ENGINE_ABI || binding->size < sizeof(*binding) ||
+            binding->host_handle == HL_HOST_HANDLE_INVALID || binding->guest_fd >= HL_LINUX_FD_LIMIT ||
+            (binding->ownership != HL_ENGINE_FD_TRANSFER && binding->ownership != HL_ENGINE_FD_BORROW))
+            return HL_STATUS_INVALID_ARGUMENT;
+        for (previous = 0; previous < index; ++previous)
+            if (config->fd_bindings[previous].guest_fd == binding->guest_fd) return HL_STATUS_INVALID_ARGUMENT;
     }
+    return HL_STATUS_OK;
+}
+
+static hl_status hl_engine_install_fd_bindings(hl_engine *engine, const hl_engine_config *config,
+                                               const hl_host_services *host) {
+    hl_host_handle *candidate_handles;
+    hl_status status;
+    uint32_t index;
+    if (config->fd_binding_count == 0) return HL_STATUS_OK;
+    status = hl_host_services_validate(host, HL_HOST_CAP_FILE);
+    if (status != HL_STATUS_OK) return status;
+    status = hl_engine_validate_fd_bindings(config);
+    if (status != HL_STATUS_OK) return status;
+    candidate_handles = malloc(config->fd_binding_count * sizeof(*candidate_handles));
+    if (candidate_handles == NULL) return HL_STATUS_OUT_OF_MEMORY;
+    for (index = 0; index < config->fd_binding_count; ++index)
+        candidate_handles[index] = HL_HOST_HANDLE_INVALID;
+    for (index = 0; index < config->fd_binding_count; ++index) {
+        const hl_engine_fd_binding *binding = &config->fd_bindings[index];
+        hl_host_result cloned = engine->host.file->clone_for_fork(engine->host.context, binding->host_handle);
+        if (cloned.status != HL_STATUS_OK || cloned.value == HL_HOST_HANDLE_INVALID) {
+            status = cloned.status == HL_STATUS_OK ? HL_STATUS_PLATFORM_FAILURE : (hl_status)cloned.status;
+            goto cleanup;
+        }
+        candidate_handles[index] = cloned.value;
+        status = hl_linux_fd_install_at(&engine->box, binding->guest_fd, candidate_handles[index],
+                                        binding->status_flags, binding->descriptor_flags);
+        if (status != HL_STATUS_OK) goto cleanup;
+        candidate_handles[index] = HL_HOST_HANDLE_INVALID;
+    }
+    for (index = 0; index < config->fd_binding_count; ++index) {
+        const hl_engine_fd_binding *binding = &config->fd_bindings[index];
+        if (binding->ownership == HL_ENGINE_FD_TRANSFER)
+            (void)engine->host.file->close(engine->host.context, binding->host_handle);
+    }
+    engine->config.fd_bindings = NULL;
+    engine->config.fd_binding_count = 0;
+    status = HL_STATUS_OK;
+cleanup:
+    for (index = 0; index < config->fd_binding_count; ++index)
+        if (candidate_handles[index] != HL_HOST_HANDLE_INVALID)
+            (void)engine->host.file->close(engine->host.context, candidate_handles[index]);
+    free(candidate_handles);
+    return status;
+}
+
+static void hl_engine_create_cleanup(hl_engine *engine) {
+    uint32_t fd;
+    size_t index;
+    if (engine == NULL) return;
+    if (engine->box_initialized) {
+        for (fd = 0; fd < engine->box.fd_capacity; ++fd) {
+            hl_host_handle handle;
+            if (hl_linux_fd_close(&engine->box, fd, &handle) == HL_STATUS_OK && handle != HL_HOST_HANDLE_INVALID)
+                (void)engine->host.file->close(engine->host.context, handle);
+        }
+        (void)hl_linux_abi_destroy(&engine->box);
+    }
+    free(engine->box_fds);
+    free(engine->box_ofds);
+    if (engine->options_initialized && engine->options_owned) hl_options_destroy(&engine->options);
+    free(engine->owned_rootfs);
+    if (engine->owned_executable_image != NULL) {
+        memset(engine->owned_executable_image, 0, engine->executable_config.image_size);
+        free(engine->owned_executable_image);
+    }
+    if (engine->owned_interpreter_image != NULL) {
+        memset(engine->owned_interpreter_image, 0, engine->interpreter_image_size);
+        free(engine->owned_interpreter_image);
+    }
+    if (engine->executable != HL_HOST_HANDLE_INVALID)
+        (void)engine->host.file->close(engine->host.context, engine->executable);
+    free(engine->owned_working_directory);
+    free(engine->owned_hostname);
+    free(engine->owned_environment);
+    if (engine->checkpoint_broker >= 0) (void)close(engine->checkpoint_broker);
+    if (engine->checkpoint_trigger >= 0) (void)close(engine->checkpoint_trigger);
+    if (engine->checkpoint_control_parent >= 0) (void)close(engine->checkpoint_control_parent);
+    if (engine->checkpoint_control_child >= 0) (void)close(engine->checkpoint_control_child);
+    for (index = 0; index < sizeof(engine->owned_box_strings) / sizeof(engine->owned_box_strings[0]); ++index)
+        free(engine->owned_box_strings[index]);
+    free(engine->owned_publish);
+    free(engine);
+}
+
+static hl_status hl_engine_create_with_options_mode(const hl_engine_config *config, const hl_host_services *host,
+                                                    const hl_options *source_options, uint32_t borrow_options,
+                                                    const void *interpreter_image, size_t interpreter_size,
+                                                    hl_engine **out_engine) {
+    hl_engine *engine;
+    hl_status status;
+    status = hl_engine_create_validate(config, host, source_options, borrow_options, out_engine);
+    if (status != HL_STATUS_OK) return status;
+    status = hl_engine_interpreter_validate(config, interpreter_image, interpreter_size);
+    if (status != HL_STATUS_OK) return status;
+    engine = hl_engine_allocate(config, host);
+    if (engine == NULL) return HL_STATUS_OUT_OF_MEMORY;
+    status = hl_engine_copy_image_plan(engine, config, interpreter_image, interpreter_size);
+    if (status != HL_STATUS_OK) goto fail;
+    status = hl_engine_pin_executable(engine, config, host);
+    if (status != HL_STATUS_OK) goto fail;
+    status = hl_engine_initialize_options(engine, config, source_options, borrow_options);
+    if (status != HL_STATUS_OK) goto fail;
+    status = hl_engine_initialize_linux_abi(engine);
+    if (status != HL_STATUS_OK) goto fail;
+    status = hl_engine_install_fd_bindings(engine, config, host);
+    if (status != HL_STATUS_OK) goto fail;
     atomic_flag_clear(&engine->lock);
     atomic_init(&engine->checkpoint_control_lock, false);
     engine->backend = production_backends[config->guest_isa];
-    free(candidate_handles);
     *out_engine = engine;
     if (config->executable != NULL && config->executable->ownership == HL_ENGINE_FD_TRANSFER)
         (void)host->file->close(host->context, config->executable->host_handle);
     return HL_STATUS_OK;
-option_fail:
-    status = HL_STATUS_OUT_OF_MEMORY;
 fail:
-    if (candidate_handles != NULL && engine != NULL) {
-        uint32_t index;
-        for (index = 0; index < config->fd_binding_count; ++index) {
-            if (candidate_handles[index] != HL_HOST_HANDLE_INVALID)
-                (void)engine->host.file->close(engine->host.context, candidate_handles[index]);
-        }
-    }
-    free(candidate_handles);
-    if (engine != NULL) {
-        uint32_t fd;
-        if (engine->box_initialized) {
-            for (fd = 0; fd < engine->box.fd_capacity; ++fd) {
-                hl_host_handle handle;
-                if (hl_linux_fd_close(&engine->box, fd, &handle) == HL_STATUS_OK && handle != HL_HOST_HANDLE_INVALID)
-                    (void)engine->host.file->close(engine->host.context, handle);
-            }
-            (void)hl_linux_abi_destroy(&engine->box);
-        }
-        free(engine->box_fds);
-        free(engine->box_ofds);
-        if (engine->options_initialized && engine->options_owned) hl_options_destroy(&engine->options);
-        free(engine->owned_rootfs);
-        if (engine->owned_executable_image != NULL) {
-            memset(engine->owned_executable_image, 0, engine->executable_config.image_size);
-            free(engine->owned_executable_image);
-        }
-        if (engine->executable != HL_HOST_HANDLE_INVALID)
-            (void)engine->host.file->close(engine->host.context, engine->executable);
-        free(engine->owned_working_directory);
-        free(engine->owned_hostname);
-        free(engine->owned_environment);
-        if (engine->checkpoint_broker >= 0) (void)close(engine->checkpoint_broker);
-        if (engine->checkpoint_trigger >= 0) (void)close(engine->checkpoint_trigger);
-        if (engine->checkpoint_control_parent >= 0) (void)close(engine->checkpoint_control_parent);
-        if (engine->checkpoint_control_child >= 0) (void)close(engine->checkpoint_control_child);
-        {
-            size_t index;
-            for (index = 0; index < sizeof(engine->owned_box_strings) / sizeof(engine->owned_box_strings[0]); ++index)
-                free(engine->owned_box_strings[index]);
-            free(engine->owned_publish);
-        }
-        free(engine);
-    }
+    hl_engine_create_cleanup(engine);
     return status;
 }
 
 hl_status hl_engine_create_with_options(const hl_engine_config *config, const hl_host_services *host,
                                         const hl_options *source_options, hl_engine **out_engine) {
-    return hl_engine_create_with_options_mode(config, host, source_options, 0, out_engine);
+    return hl_engine_create_with_options_mode(config, host, source_options, 0, NULL, 0, out_engine);
 }
 
 hl_status hl_engine_create_with_borrowed_options(const hl_engine_config *config, const hl_host_services *host,
                                                  const hl_options *source_options, hl_engine **out_engine) {
-    return hl_engine_create_with_options_mode(config, host, source_options, 1, out_engine);
+    return hl_engine_create_with_options_mode(config, host, source_options, 1, NULL, 0, out_engine);
 }
 
 hl_status
 hl_engine_create_with_borrowed_options_and_syscall_trap(const hl_engine_config *config, const hl_host_services *host,
                                                         const hl_options *source_options, void *syscall_context,
                                                         hl_syscall_trap_fn syscall_dispatch, hl_engine **out_engine) {
-    hl_status status = hl_engine_create_with_options_mode(config, host, source_options, 1, out_engine);
+    return hl_engine_create_with_borrowed_options_and_syscall_trap_and_interpreter(
+        config, host, source_options, syscall_context, syscall_dispatch, NULL, 0, out_engine);
+}
+
+hl_status hl_engine_create_with_borrowed_options_and_syscall_trap_and_interpreter(
+    const hl_engine_config *config, const hl_host_services *host, const hl_options *source_options,
+    void *syscall_context, hl_syscall_trap_fn syscall_dispatch, const void *interpreter_image, size_t interpreter_size,
+    hl_engine **out_engine) {
+    hl_status status = hl_engine_create_with_options_mode(config, host, source_options, 1, interpreter_image,
+                                                          interpreter_size, out_engine);
     if (status == HL_STATUS_OK) {
         (*out_engine)->syscall_context = syscall_context;
         (*out_engine)->syscall_dispatch = syscall_dispatch;
@@ -909,7 +1226,8 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
     status = engine->backend->start_process(
         &engine->host, engine->box_initialized ? &engine->box : NULL, &engine->options, &engine->config, (uint32_t)argc,
         argv, engine->syscall_context, engine->syscall_dispatch, engine->checkpoint_broker, engine->checkpoint_trigger,
-        engine->checkpoint_control_child, &process, &process_result);
+        engine->checkpoint_control_child, engine->owned_interpreter_image,
+        engine->owned_interpreter_image == NULL ? 0 : engine->interpreter_image_size, &process, &process_result);
     if (status != HL_STATUS_OK) {
         hl_engine_lock(engine);
         engine->state = HL_ENGINE_FINISHED;
@@ -977,23 +1295,25 @@ hl_status hl_engine_request(hl_engine *engine, uint32_t request, const void *dat
     hl_status status;
     if (engine == NULL || (data_size != 0 && data == NULL)) return HL_STATUS_INVALID_ARGUMENT;
     if (request == HL_ENGINE_REQUEST_CHECKPOINT_PRIVATE) {
-        if (data_size != 0) return HL_STATUS_INVALID_ARGUMENT;
+        uint32_t signal_number;
 #if defined(_WIN32)
         return HL_STATUS_NOT_SUPPORTED;
 #else
+        if (data == NULL || data_size != sizeof(signal_number)) return HL_STATUS_INVALID_ARGUMENT;
+        memcpy(&signal_number, data, sizeof(signal_number));
+        if (signal_number == 0 || signal_number > 64) return HL_STATUS_INVALID_ARGUMENT;
         if (engine->checkpoint_control_parent < 0) return HL_STATUS_NOT_SUPPORTED;
         hl_engine_checkpoint_control_lock(engine);
 #if defined(HL_NATIVE_TEST_HOOKS)
         hl_engine_checkpoint_test_pause(engine);
 #endif
         status = hl_engine_checkpoint_control_ready(engine);
-        if (status != HL_STATUS_OK) {
-            hl_engine_checkpoint_control_unlock(engine);
-            return status;
-        }
-        for (;;) {
+        if (status == HL_STATUS_OK) {
             unsigned char command = 1;
-            ssize_t written = write(engine->checkpoint_control_parent, &command, sizeof(command));
+            ssize_t written;
+            do {
+                written = write(engine->checkpoint_control_parent, &command, sizeof(command));
+            } while (written < 0 && errno == EINTR);
             if (written == (ssize_t)sizeof(command)) {
                 unsigned char interrupted = 0;
                 struct pollfd waiting = {.fd = engine->checkpoint_control_parent, .events = POLLIN};
@@ -1001,27 +1321,26 @@ hl_status hl_engine_request(hl_engine *engine, uint32_t request, const void *dat
                 do {
                     ready = poll(&waiting, 1, 5000);
                 } while (ready < 0 && errno == EINTR);
-                if (ready > 0 && read(waiting.fd, &interrupted, sizeof(interrupted)) == (ssize_t)sizeof(interrupted) &&
-                    interrupted != 0)
-                    status = HL_STATUS_OK;
-                else
+                if (ready <= 0 || read(waiting.fd, &interrupted, sizeof(interrupted)) !=
+                                      (ssize_t)sizeof(interrupted) ||
+                    interrupted == 0)
                     status = HL_STATUS_PLATFORM_FAILURE;
-                hl_engine_checkpoint_control_unlock(engine);
-#if defined(HL_NATIVE_TEST_HOOKS)
-                hl_engine_checkpoint_test_request_completed();
-#endif
-                return status;
+            } else {
+                status = HL_STATUS_PLATFORM_FAILURE;
             }
-            if (written < 0 && errno == EINTR) continue;
-            hl_engine_checkpoint_control_unlock(engine);
-            return HL_STATUS_PLATFORM_FAILURE;
         }
+        hl_engine_checkpoint_control_unlock(engine);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        hl_engine_checkpoint_test_request_completed();
+#endif
+        if (status != HL_STATUS_OK) return status;
+        reason = HL_HOST_PROCESS_TERMINATE_NATIVE_SIGNAL + signal_number;
 #endif
     } else if (request == HL_ENGINE_REQUEST_SIGNAL) {
         uint32_t signal_number;
         if (data == NULL || data_size != sizeof(signal_number)) return HL_STATUS_INVALID_ARGUMENT;
         memcpy(&signal_number, data, sizeof(signal_number));
-        if (signal_number == 0 || signal_number > 64 || signal_number == 9 || signal_number == 19)
+        if (signal_number == 0 || signal_number > 64 || signal_number == 9)
             return HL_STATUS_INVALID_ARGUMENT;
         reason = HL_HOST_PROCESS_TERMINATE_SIGNAL + signal_number;
     } else if (data_size != 0) {
@@ -1089,6 +1408,10 @@ void hl_engine_destroy(hl_engine *engine) {
     if (engine->owned_executable_image != NULL) {
         memset(engine->owned_executable_image, 0, engine->executable_config.image_size);
         free(engine->owned_executable_image);
+    }
+    if (engine->owned_interpreter_image != NULL) {
+        memset(engine->owned_interpreter_image, 0, engine->interpreter_image_size);
+        free(engine->owned_interpreter_image);
     }
     if (engine->executable != HL_HOST_HANDLE_INVALID)
         (void)engine->host.file->close(engine->host.context, engine->executable);

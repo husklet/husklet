@@ -53,7 +53,7 @@ pub struct View {
     pub widget: gtk::Box,
     sidebar: gtk::Box,
     pages: gtk::Stack,
-    items: Rc<RefCell<Vec<gtk::Box>>>,
+    items: Rc<RefCell<Vec<gtk::Button>>>,
 }
 
 impl View {
@@ -69,7 +69,7 @@ impl View {
         pages.set_hexpand(true);
         pages.set_vexpand(true);
         pages.set_transition_type(gtk::StackTransitionType::None);
-        let items: Rc<RefCell<Vec<gtk::Box>>> = Rc::new(RefCell::new(Vec::new()));
+        let items: Rc<RefCell<Vec<gtk::Button>>> = Rc::new(RefCell::new(Vec::new()));
 
         for (index, (page, content)) in content.into_iter().enumerate() {
             let item = Self::entry(&pages, &items, page.title(), &content);
@@ -135,8 +135,7 @@ impl View {
         self.items
             .borrow()
             .iter()
-            .filter_map(|item| item.first_child().and_downcast::<gtk::Label>())
-            .map(|label| label.text().to_string())
+            .filter_map(|item| item.label().map(|label| label.to_string()))
             .collect()
     }
 
@@ -154,23 +153,30 @@ impl View {
 
     /// One sidebar entry and the page it selects, which is the whole of what a
     /// page is on this shell.
-    fn entry(pages: &gtk::Stack, items: &Rc<RefCell<Vec<gtk::Box>>>, name: &str, content: &gtk::Widget) -> gtk::Box {
+    fn entry(
+        pages: &gtk::Stack,
+        items: &Rc<RefCell<Vec<gtk::Button>>>,
+        name: &str,
+        content: &gtk::Widget,
+    ) -> gtk::Button {
         pages.add_named(content, Some(name));
-        let item = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let item = gtk::Button::with_label(name);
         item.add_css_class("dsi");
-        let label = gtk::Label::new(Some(name));
-        label.set_xalign(0.0);
-        label.set_hexpand(true);
-        item.append(&label);
-        let click = gtk::GestureClick::new();
+        item.set_has_frame(false);
+        item.set_hexpand(true);
+        item.set_halign(gtk::Align::Fill);
+        if let Some(label) = item.child().and_downcast::<gtk::Label>() {
+            label.set_xalign(0.0);
+        }
         let stack = pages.clone();
         let event_items = items.clone();
+        // An attached page is named at runtime, so the name is owned rather
+        // than borrowed from the fixed page list.
         let selected = name.to_owned();
-        click.connect_released(move |_, _, _, _| {
+        item.connect_clicked(move |_| {
             stack.set_visible_child_name(&selected);
             Self::select_items(&event_items.borrow(), &selected);
         });
-        item.add_controller(click);
         items.borrow_mut().push(item.clone());
         item
     }
@@ -180,7 +186,7 @@ impl View {
         Self::select_items(&self.items.borrow(), name);
     }
 
-    fn select_items(items: &[gtk::Box], selected: &str) {
+    fn select_items(items: &[gtk::Button], selected: &str) {
         for item in items {
             if Self::names(item, selected) {
                 item.add_css_class("on");
@@ -191,9 +197,7 @@ impl View {
     }
 
     /// Whether one sidebar entry is the entry for this page.
-    fn names(item: &gtk::Box, name: &str) -> bool {
-        item.first_child()
-            .and_downcast::<gtk::Label>()
-            .is_some_and(|label| label.text() == name)
+    fn names(item: &gtk::Button, name: &str) -> bool {
+        item.label().as_deref() == Some(name)
     }
 }

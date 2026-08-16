@@ -30,8 +30,6 @@ pub(crate) struct ProductionMachine {
     output: Option<NativeOutputBridge>,
     #[cfg(unix)]
     checkpoint: Option<CheckpointControl>,
-    #[cfg(unix)]
-    recovery: Mutex<Option<RecoveryAdmission>>,
     engine: Mutex<Option<Arc<hl_native::Engine>>>,
 }
 
@@ -77,8 +75,6 @@ impl RuntimeFactory for ProductionFactory {
             output,
             #[cfg(unix)]
             checkpoint,
-            #[cfg(unix)]
-            recovery: Mutex::new(None),
             engine: Mutex::new(None),
         })
     }
@@ -155,7 +151,9 @@ impl ProductionMachine {
             provider_fd: -1,
         };
         // SAFETY: all pointers in config remain live for this call and there is no callback state.
-        let mut engine = unsafe { hl_native::Engine::create(config) }.map_err(EngineError::NativeCreateFailed)?;
+        let engine = unsafe { hl_native::Engine::create(config) }.map_err(EngineError::NativeCreateFailed)?;
+        #[cfg(unix)]
+        let mut engine = engine;
         #[cfg(unix)]
         if let Some(checkpoint) = &self.checkpoint {
             engine
@@ -224,7 +222,7 @@ impl GuestMachine for ProductionMachine {
         run?;
         #[cfg(unix)]
         if let Some(recovery) = recovery {
-            *self.recovery.lock().map_err(|_| EngineError::Synchronization)? = Some(recovery);
+            recovery.wait()?;
         }
         #[cfg(unix)]
         if let Some(terminal) = &self.terminal {
@@ -250,7 +248,7 @@ impl GuestMachine for ProductionMachine {
         };
         self.current()?
             .request(kind, signal)
-            .map_err(|_| EngineError::StopFailed)
+            .map_err(EngineError::NativeStopFailed)
     }
 
     fn checkpoint_supported(&self) -> Result<(), EngineError> {
@@ -266,6 +264,8 @@ impl GuestMachine for ProductionMachine {
     }
 
     fn capture_checkpoint_until(&self, deadline: std::time::Instant) -> Result<(), EngineError> {
+        #[cfg(not(unix))]
+        let _ = deadline;
         #[cfg(unix)]
         if let Some(checkpoint) = &self.checkpoint {
             let engine = self.current()?;
@@ -315,18 +315,12 @@ impl CheckpointControl {
         let capture = self
             .server
             .begin_capture(generation, deadline)
-            .map_err(|failure| match failure {
-                super::checkpoint::CaptureFailure::Busy => EngineError::Busy,
-                super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
-                super::checkpoint::CaptureFailure::Failed | super::checkpoint::CaptureFailure::Poisoned => {
-                    EngineError::LaunchFailed
-                }
-            })?;
+            .map_err(Self::capture_failure)?;
         let signal = hl_native::CheckpointTransport::interrupt_signal(match isa {
             crate::activation::GuestIsa::Aarch64 => 1,
             crate::activation::GuestIsa::X86_64 => 2,
         });
-        if signal <= 0 || engine.request(REQUEST_CHECKPOINT, 0).is_err() {
+        if signal <= 0 || engine.request(REQUEST_CHECKPOINT, signal).is_err() {
             self.server
                 .abort_capture(capture)
                 .map_err(|_| EngineError::LaunchFailed)?;
@@ -339,16 +333,10 @@ impl CheckpointControl {
                 .wait_capture(capture, next_interrupt)
                 .map_err(|_| EngineError::LaunchFailed)?;
             if let Some(result) = result {
-                return result.map_err(|failure| match failure {
-                    super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
-                    super::checkpoint::CaptureFailure::Busy => EngineError::Busy,
-                    super::checkpoint::CaptureFailure::Failed | super::checkpoint::CaptureFailure::Poisoned => {
-                        EngineError::LaunchFailed
-                    }
-                });
+                return result.map_err(Self::capture_failure);
             }
             if Instant::now() >= next_interrupt {
-                let _ = engine.request(REQUEST_CHECKPOINT, 0);
+                let _ = engine.request(REQUEST_CHECKPOINT, signal);
                 next_interrupt = Instant::now() + Duration::from_millis(100);
             }
         }
@@ -359,11 +347,21 @@ impl CheckpointControl {
         let id = self
             .server
             .begin_recovery(generation, deadline)
-            .map_err(capture_failure)?;
+            .map_err(Self::capture_failure)?;
         Ok(RecoveryAdmission {
             server: Arc::clone(&self.server),
             id,
         })
+    }
+
+    fn capture_failure(failure: super::checkpoint::CaptureFailure) -> EngineError {
+        match failure {
+            super::checkpoint::CaptureFailure::Busy => EngineError::Busy,
+            super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
+            super::checkpoint::CaptureFailure::Failed | super::checkpoint::CaptureFailure::Poisoned => {
+                EngineError::LaunchFailed
+            }
+        }
     }
 }
 
@@ -381,13 +379,11 @@ impl Drop for RecoveryAdmission {
 }
 
 #[cfg(unix)]
-fn capture_failure(failure: super::checkpoint::CaptureFailure) -> EngineError {
-    match failure {
-        super::checkpoint::CaptureFailure::Busy => EngineError::Busy,
-        super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
-        super::checkpoint::CaptureFailure::Failed | super::checkpoint::CaptureFailure::Poisoned => {
-            EngineError::LaunchFailed
-        }
+impl RecoveryAdmission {
+    fn wait(&self) -> Result<(), EngineError> {
+        self.server
+            .wait_recovery(self.id)
+            .map_err(CheckpointControl::capture_failure)
     }
 }
 
@@ -414,11 +410,30 @@ mod tests {
             Err(CompositionError::RuntimeConstruction)
         }
 
-        fn put_until(&self, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        fn begin_until(&self, _: std::time::Instant) -> Result<std::num::NonZeroU64, CompositionError> {
+            Ok(std::num::NonZeroU64::MIN)
+        }
+
+        fn put_until(
+            &self,
+            _: std::num::NonZeroU64,
+            _: &str,
+            _: &[u8],
+            _: std::time::Instant,
+        ) -> Result<(), CompositionError> {
             Err(CompositionError::RuntimeConstruction)
         }
 
-        fn commit_until(&self, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        fn abort_until(&self, _: std::num::NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
+            Ok(())
+        }
+
+        fn commit_until(
+            &self,
+            _: std::num::NonZeroU64,
+            _: &[u8],
+            _: std::time::Instant,
+        ) -> Result<(), CompositionError> {
             Err(CompositionError::RuntimeConstruction)
         }
     }

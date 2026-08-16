@@ -17,6 +17,56 @@ fn headers(directory: &Path, output: &mut Vec<PathBuf>) {
 }
 
 #[test]
+fn serialized_windows_executable_authority_is_distinct_and_executable() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-windows-authority-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("authority probe directory");
+    let source = scratch.join("authority.c");
+    let executable = scratch.join("authority");
+    fs::write(
+        &source,
+        r#"
+#include "engine/executable_authority.h"
+#include "linux_abi/container/dac_policy.h"
+int main(void) {
+    hl_host_file_metadata first = {.stable_device=7, .stable_object=11, .type=HL_HOST_FILE_TYPE_REGULAR,
+                                   .permissions=0444, .user=1000, .group=1000};
+    hl_host_file_metadata second = first;
+    second.stable_object = 12;
+    hl_executable_authority a = {0}, b = {0};
+    if (!hl_executable_authority_from_metadata(&first, 1, &a) ||
+        !hl_executable_authority_from_metadata(&second, 1, &b)) return 1;
+    if (a.stable_device == b.stable_device && a.stable_object == b.stable_object) return 2;
+    hl_dac_snapshot dac = {.uid=a.user, .gid=a.group, .mode=hl_executable_authority_guest_mode(&a)};
+    hl_dac_credentials credentials = {.fsuid=1000, .fsgid=1000};
+    if (hl_dac_authorize_access(&dac, &credentials, HL_DAC_EXECUTE) != 0) return 3;
+    first.stable_device = 0;
+    if (hl_executable_authority_from_metadata(&first, 1, &a)) return 4;
+    first.stable_device = 7;
+    if (hl_executable_authority_from_metadata(&first, 0, &a)) return 5;
+    return 0;
+}
+"#,
+    )
+    .expect("authority probe source");
+    let compiler = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+    let built = Command::new(&compiler)
+        .args(["-std=c11", "-D_GNU_SOURCE"])
+        .arg(format!("-I{}", native.display()))
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .status()
+        .expect("compile authority probe");
+    assert!(built.success(), "authority probe did not compile");
+    let ran = Command::new(&executable).status().expect("run authority probe");
+    assert!(ran.success(), "authority probe failed with {ran}");
+    fs::remove_dir_all(scratch).expect("remove authority probe directory");
+}
+
+#[test]
 fn guest_memory_pin_projects_data_and_owns_each_span() {
     let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let native = package.join("src/native");
@@ -30,16 +80,22 @@ fn guest_memory_pin_projects_data_and_owns_each_span() {
 #define _GNU_SOURCE
 #include <stdint.h>
 #include <string.h>
+#include <pthread.h>
+#include <sched.h>
+#include <stdatomic.h>
 #include <setjmp.h>
 #include <signal.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include "translator/guest_memory.h"
 #include "translator/guest/x86_64/guest_data.h"
+#include "translator/guest/x86_64/xsave.h"
 
-static unsigned char identity[512], projected[512];
-static int pins, unpins, observations;
-static int fail_second;
+static unsigned char identity[HL_X86_XSAVE_SPAN], projected[HL_X86_XSAVE_SPAN];
+static int pins, unpins, observations, transactions, transaction_ends;
+static pthread_mutex_t transaction_lock = PTHREAD_MUTEX_INITIALIZER;
+static atomic_int contender_started, contender_acquired;
+static size_t fail_at;
 static int deny_read, deny_write;
 static unsigned char *fault_host;
 static sigjmp_buf fault_pad;
@@ -51,7 +107,7 @@ static int pin(uint64_t guest, size_t length, hl_guest_memory_access access, hl_
     uintptr_t first = (uintptr_t)identity;
     if (guest < first || guest >= first + sizeof(identity)) return HL_GUEST_MEMORY_FAULT;
     size_t offset = (size_t)(guest - first);
-    if (fail_second && offset >= 8) return HL_GUEST_MEMORY_FAULT;
+    if (fail_at && offset >= fail_at) return HL_GUEST_MEMORY_FAULT;
 #ifdef IDENTITY_PROJECTION
     out->host = identity + offset;
 #else
@@ -65,12 +121,24 @@ static int pin(uint64_t guest, size_t length, hl_guest_memory_access access, hl_
 }
 static void unpin(hl_guest_memory_pin *pin_) { if (pin_->token) ++unpins; }
 static void observe(uint64_t guest, size_t length) { (void)guest; (void)length; ++observations; }
+static void transaction_begin(void) { pthread_mutex_lock(&transaction_lock); ++transactions; }
+static void transaction_end(void) { ++transaction_ends; pthread_mutex_unlock(&transaction_lock); }
+static void *contend(void *unused) {
+    (void)unused;
+    atomic_store_explicit(&contender_started, 1, memory_order_release);
+    transaction_begin();
+    atomic_store_explicit(&contender_acquired, 1, memory_order_release);
+    transaction_end();
+    return 0;
+}
 
 int main(void) {
     for (size_t i = 0; i < sizeof(projected); ++i) { identity[i] = 0xa5; projected[i] = (unsigned char)i; }
-    const hl_guest_memory_ops ops = {.indirect = indirect, .pin = pin, .unpin = unpin, .store_observe = observe};
+    const hl_guest_memory_ops ops = {.indirect = indirect, .pin = pin, .unpin = unpin,
+                                     .transaction_begin = transaction_begin, .transaction_end = transaction_end,
+                                     .store_observe = observe};
     hl_guest_memory_bind(&ops);
-    unsigned char scalar[8], cross[12], sse[16], stack[32], xsave[512];
+    unsigned char scalar[8], cross[12], sse[16], stack[32], xsave[HL_X86_XSAVE_SPAN];
     for (size_t width = 1; width <= 8; width *= 2)
         if (hl_x86_guest_data_read((uintptr_t)identity + 3, scalar, width, 0) != 0 || memcmp(scalar, projected + 3, width)) return 1;
     if (hl_x86_guest_data_read((uintptr_t)identity + 5, cross, sizeof(cross), 0) != 0 ||
@@ -86,14 +154,30 @@ int main(void) {
     unsigned char before[sizeof(projected)], replacement[12];
     memcpy(before, projected, sizeof(before));
     memset(replacement, 0x77, sizeof(replacement));
-    fail_second = 1;
+    fail_at = 8;
     if (hl_x86_guest_data_write((uintptr_t)identity + 5, replacement, sizeof(replacement), 0) == 0) return 7;
-    fail_second = 0;
+    fail_at = 0;
     if (memcmp(before, projected, sizeof(before))) return 8;
     deny_write = 1;
     if (hl_x86_guest_data_write((uintptr_t)identity + 5, replacement, sizeof(replacement), 0) == 0) return 9;
     deny_write = 0;
     if (memcmp(before, projected, sizeof(before))) return 10;
+    fail_at = 520;
+    hl_x86_guest_data_pins failed_transaction;
+    if (hl_x86_guest_data_prepare_transaction(&failed_transaction, (uintptr_t)identity, sizeof(projected),
+                                              HL_GUEST_MEMORY_WRITE, 0) == 0) return 16;
+    fail_at = 0;
+    if (memcmp(before, projected, sizeof(before))) return 17;
+    hl_x86_guest_data_pins mapping_transaction;
+    if (hl_x86_guest_data_prepare_transaction(&mapping_transaction, (uintptr_t)identity, sizeof(projected),
+                                              HL_GUEST_MEMORY_WRITE, 0) != 0) return 18;
+    pthread_t contender;
+    if (pthread_create(&contender, 0, contend, 0) != 0) return 19;
+    while (!atomic_load_explicit(&contender_started, memory_order_acquire)) sched_yield();
+    for (int spin = 0; spin < 10000; ++spin) sched_yield();
+    if (atomic_load_explicit(&contender_acquired, memory_order_acquire)) return 20;
+    hl_x86_guest_data_release(&mapping_transaction);
+    if (pthread_join(contender, 0) != 0 || !atomic_load_explicit(&contender_acquired, memory_order_acquire)) return 21;
     deny_read = 1;
     if (hl_x86_guest_data_read((uintptr_t)identity + 5, cross, sizeof(cross), 0) == 0) return 11;
     deny_read = 0;
@@ -107,6 +191,7 @@ int main(void) {
     action.sa_handler = fault_handler;
     sigemptyset(&action.sa_mask);
     sigaction(SIGSEGV, &action, 0);
+    sigaction(SIGBUS, &action, 0);
     if (sigsetjmp(fault_pad, 1) == 0) {
         hl_x86_guest_data_copy_to(&retained, replacement);
         return 14;
@@ -116,14 +201,16 @@ int main(void) {
 #endif
     mprotect(fault_host, page, PROT_READ | PROT_WRITE);
     munmap(fault_host, page);
-    return pins == unpins && pins != 0 && observations == 2 ? 0 : 15;
+    return pins == unpins && pins != 0 && observations == 2 && transactions == transaction_ends && transactions != 0
+               ? 0
+               : 15;
 }
 "#,
     )
     .expect("guest pin probe source");
     let compile = |output: &Path, mutation: bool| {
         let mut command = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()));
-        command.args(["-std=c11", "-Wall", "-Wextra", "-Werror"]);
+        command.args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-pthread"]);
         if mutation {
             command.arg("-DIDENTITY_PROJECTION");
         }
@@ -139,7 +226,8 @@ int main(void) {
     };
     let built = compile(&executable, false);
     assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
-    assert!(Command::new(&executable).status().expect("guest pin probe").success());
+    let run = Command::new(&executable).status().expect("guest pin probe");
+    assert!(run.success(), "guest pin probe failed with {run}");
     let mutation = scratch.join("guest_pin_identity");
     let built = compile(&mutation, true);
     assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
@@ -153,7 +241,14 @@ int main(void) {
     let mutation = scratch.join("guest_pin_leak");
     let mut command = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()));
     let built = command
-        .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-DOMIT_ABANDON_RELEASE"])
+        .args([
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-pthread",
+            "-DOMIT_ABANDON_RELEASE",
+        ])
         .arg(format!("-I{}", native.display()))
         .arg(&source)
         .arg(native.join("translator/guest_memory.c"))
@@ -163,8 +258,73 @@ int main(void) {
         .output()
         .expect("guest pin leak mutation compiler");
     assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
-    assert!(!Command::new(&mutation).status().expect("guest pin leak mutation").success());
+    assert!(
+        !Command::new(&mutation)
+            .status()
+            .expect("guest pin leak mutation")
+            .success()
+    );
     fs::remove_dir_all(scratch).expect("remove guest pin probe directory");
+}
+
+#[test]
+fn executable_cache_identity_follows_pinned_bytes_not_a_reused_path() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-image-identity-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("identity probe directory");
+    let source = scratch.join("probe.c");
+    let executable = scratch.join("probe");
+    fs::write(
+        &source,
+        r#"
+#include <stdint.h>
+#include <string.h>
+#include "translator/identity.h"
+
+int main(void) {
+    static const unsigned char first[] = {0x7f, 'E', 'L', 'F', 1};
+    static const unsigned char replacement[] = {0x7f, 'E', 'L', 'F', 2};
+    static const unsigned char abc_sha256[32] = {
+        0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
+        0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad,
+    };
+    hl_identity_digest pinned = hl_identity_image_digest(first, sizeof first);
+    hl_identity_digest same = hl_identity_image_digest(first, sizeof first);
+    hl_identity_digest changed = hl_identity_image_digest(replacement, sizeof replacement);
+    hl_identity_digest abc = hl_identity_image_digest("abc", 3);
+    if (!hl_identity_digest_equal(&pinned, &same)) return 1;
+    if (hl_identity_digest_equal(&pinned, &changed)) return 2;
+    if (memcmp(abc.bytes, abc_sha256, sizeof abc.bytes) != 0) return 3;
+
+    /* Regression: equality must inspect all 256 bits, not just the old 64-bit-sized prefix. */
+    same.bytes[31] ^= 1;
+    if (hl_identity_digest_equal(&pinned, &same)) return 4;
+
+    hl_identity_digest none = {0};
+    hl_identity_digest engine = hl_identity_engine_digest("build", 5, 7, 1, 1, 0);
+    hl_identity_digest first_key = hl_identity_digest_mix(pinned, none, engine, "applet");
+    hl_identity_digest replacement_key = hl_identity_digest_mix(changed, none, engine, "applet");
+    if (hl_identity_digest_equal(&first_key, &replacement_key)) return 5;
+    return 0;
+}
+"#,
+    )
+    .expect("identity probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg(native.join("translator/identity.c"))
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("identity probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable).status().expect("identity probe execution");
+    assert!(run.success(), "identity probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove identity probe directory");
 }
 
 #[test]
@@ -185,20 +345,32 @@ static void claim_barrier(void);
 #ifdef OMIT_LIFECYCLE_INDEX_REMOVE
 #define HL_SMC_PAGE_INDEX_LIFECYCLE_REMOVE(index, page) ((void)(index), (void)(page), 0)
 #endif
-#include "translator/guest/x86_64/smc_page_index.h"
+#include "translator/guest/x86_64/smc/index.h"
 
 static _Atomic uint64_t slots[8];
 static hl_smc_page_index index_ = {slots, 8};
 static _Atomic int start;
 static _Atomic int claim_sync;
-static pthread_barrier_t claims;
+static pthread_mutex_t claims_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t claims_condition = PTHREAD_COND_INITIALIZER;
+static unsigned claims_arrived;
+static unsigned claims_generation;
 static _Thread_local int claim_waited;
 static uint64_t concurrent_pages[2];
 
 static void claim_barrier(void) {
     if (atomic_load_explicit(&claim_sync, memory_order_acquire) && !claim_waited) {
         claim_waited = 1;
-        pthread_barrier_wait(&claims);
+        pthread_mutex_lock(&claims_mutex);
+        unsigned generation = claims_generation;
+        if (++claims_arrived == 2) {
+            claims_arrived = 0;
+            ++claims_generation;
+            pthread_cond_broadcast(&claims_condition);
+        } else {
+            while (generation == claims_generation) pthread_cond_wait(&claims_condition, &claims_mutex);
+        }
+        pthread_mutex_unlock(&claims_mutex);
     }
 }
 
@@ -237,7 +409,6 @@ int main(void) {
     concurrent_pages[1] = collision;
     unsigned which[] = {0, 1};
     pthread_t adders[2];
-    if (pthread_barrier_init(&claims, NULL, 2) != 0) return 11;
     atomic_store_explicit(&claim_sync, 1, memory_order_release);
     atomic_store_explicit(&start, 0, memory_order_release);
     if (pthread_create(&adders[0], NULL, adder, &which[0]) != 0 ||
@@ -246,7 +417,6 @@ int main(void) {
     void *left = NULL, *right = NULL;
     if (pthread_join(adders[0], &left) != 0 || pthread_join(adders[1], &right) != 0 || left || right) return 12;
     atomic_store_explicit(&claim_sync, 0, memory_order_release);
-    pthread_barrier_destroy(&claims);
     if (!hl_smc_page_index_contains(&index_, first) || !hl_smc_page_index_contains(&index_, collision)) return 13;
     for (unsigned i = 0; i < 8; ++i) atomic_store_explicit(&slots[i], 0, memory_order_release);
     if (hl_smc_page_index_contains(&index_, first) || hl_smc_page_index_contains(&index_, collision)) return 14;
@@ -368,7 +538,7 @@ fn proc_fd_pseudo_targets_exclude_host_filesystem_spellings() {
     fs::write(
         &source,
         r#"
-#include "linux_abi/proc_fd_target.h"
+#include "linux_abi/syscall/fs/procfd.h"
 
 int main(void) {
     const char *accepted[] = {
@@ -454,6 +624,10 @@ int main(void) {
     valid(bytes, 0xb7); put16(bytes + 56, 2); memcpy(bytes + 120, bytes + 64, 56);
     put64(bytes + 96, 0); put64(bytes + 104, 0); put64(bytes + 80, 0);
     if (hl_linux_elf64_validate(&image, 0xb7, &layout) != 0 || layout.load_start != 0x400000) return 10;
+    valid(bytes, 0xb7); put16(bytes + 56, 2); memcpy(bytes + 120, bytes + 64, 56);
+    put64(bytes + 120 + 8, 0x10000); put64(bytes + 120 + 16, 0x410000);
+    put64(bytes + 120 + 32, 0); put64(bytes + 120 + 40, 4096); put64(bytes + 120 + 48, 0x10000);
+    if (hl_linux_elf64_validate(&image, 0xb7, &layout) != 0 || layout.load_end != 0x411000) return 12;
     valid(bytes, 0xb7); put16(bytes + 56, 3); memcpy(bytes + 120, bytes + 64, 56);
     memcpy(bytes + 176, bytes + 64, 56); put32(bytes + 120, 3); put32(bytes + 176, 3);
     put64(bytes + 128, 240); put64(bytes + 152, 2); put64(bytes + 184, 240); put64(bytes + 208, 2);
@@ -529,6 +703,11 @@ int main(void) {
     if (hl_dac_authorize_create(&closed, &user) != EACCES) return 10;
     user.capabilities = UINT64_C(1) << HL_DAC_CAP_DAC_OVERRIDE;
     if (hl_dac_authorize_create(&closed, &user) != 0) return 11;
+    const hl_dac_snapshot closed_directory = {0, 0, 0040000};
+    const hl_dac_snapshot closed_regular = {0, 0, 0100000};
+    user.capabilities = UINT64_C(1) << HL_DAC_CAP_DAC_READ_SEARCH;
+    if (hl_dac_authorize_access(&closed_directory, &user, HL_DAC_EXECUTE) != 0) return 17;
+    if (hl_dac_authorize_access(&closed_regular, &user, HL_DAC_EXECUTE) != EACCES) return 18;
     const hl_dac_snapshot sticky = {1000, 1000, 01777};
     hl_dac_credentials owner = user;
     owner.fsuid = 2000;
@@ -536,6 +715,7 @@ int main(void) {
     if (hl_dac_authorize_sticky(&sticky, &owned, &owner) != 0) return 16;
     return 0;
 }
+
 "#,
     )
     .expect("write DAC policy probe source");
@@ -551,6 +731,111 @@ int main(void) {
     let run = Command::new(&executable).status().expect("DAC policy probe execution");
     assert!(run.success(), "DAC policy probe failed with {run}");
     fs::remove_dir_all(scratch).expect("remove DAC policy probe directory");
+}
+
+#[test]
+fn exec_credential_policy_copies_saved_ids_and_keeps_capability_state_coherent() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-exec-credentials-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("create exec credential probe directory");
+    let source = scratch.join("exec_credentials.c");
+    let executable = scratch.join("exec_credentials");
+    fs::write(&source, r#"
+#include "linux_abi/container/credentials.h"
+static hl_exec_credential_state user(void) {
+    return (hl_exec_credential_state){1000,1000,0,1000,1000,0,0,0,UINT64_C(0xff),0,0,0,0};
+}
+int main(void) {
+    hl_exec_file_capabilities none={0};
+    unsigned char v2[20]={1,0,0,2,0x42,0,0,0};
+    if(hl_exec_file_capabilities_parse(v2,sizeof v2,&none)||none.permitted!=UINT64_C(0x42)||!none.effective)return 10;
+    if(hl_exec_file_capabilities_parse(v2,3,&none)!=-EINVAL)return 11;
+    v2[1]=1;
+    if(hl_exec_file_capabilities_parse(v2,sizeof v2,&none)!=-EINVAL)return 16;
+    v2[1]=0;
+    v2[4]=0;v2[15]=0x80;
+    if(hl_exec_file_capabilities_parse(v2,sizeof v2,&none)||none.permitted)return 20;
+    v2[4]=0x42;v2[15]=0;
+    unsigned char v3[24]={1,0,0,3};v3[20]=1;
+    if(hl_exec_file_capabilities_parse(v3,sizeof v3,&none)||none.present||none.permitted)return 12;
+    none=(hl_exec_file_capabilities){0};
+    hl_exec_credential_result r=hl_exec_credential_transition(user(),0755,0,0,none);
+    if(r.state.suid!=1000||r.state.sgid!=1000||r.state.permitted||r.state.effective||r.secure_exec||r.dumpable!=1)return 1;
+    hl_exec_credential_state s=user(); r=hl_exec_credential_transition(s,04755,0,0,none);
+    if(r.state.euid||r.state.suid||r.state.permitted!=UINT64_C(0xff)||r.state.effective!=UINT64_C(0xff)||!r.secure_exec||r.dumpable!=2)return 2;
+    s.no_new_privileges=1; r=hl_exec_credential_transition(s,04755,0,0,none);
+    if(r.state.euid!=1000||r.state.suid!=1000||r.state.permitted||r.state.effective||r.secure_exec)return 3;
+    hl_exec_file_capabilities file={UINT64_C(0x42),0,1,1}; s=user();s.suid=1000;
+    r=hl_exec_credential_transition(s,0755,1000,1000,file);
+    if(r.state.permitted!=UINT64_C(0x42)||r.state.effective!=UINT64_C(0x42)||!r.secure_exec)return 4;
+    hl_exec_credential_state root={0,0,0,0,0,0,3,1,UINT64_C(0x55),0,0,0,0};
+    r=hl_exec_credential_transition(root,0755,0,0,none);
+    if(r.state.permitted!=UINT64_C(0x55)||r.state.effective!=UINT64_C(0x55)||r.secure_exec)return 5;
+    if((r.state.effective&~r.state.permitted)||(r.state.permitted&~r.state.bounding))return 6;
+    root.securebits=HL_EXEC_SECURE_NOROOT;r=hl_exec_credential_transition(root,0755,0,0,none);
+    if(r.state.permitted||r.state.effective)return 7;
+    s=user();s.suid=1000;s.sgid=1000;s.permitted=s.effective=s.inheritable=s.ambient=UINT64_C(0x40);
+    s.securebits=HL_EXEC_SECURE_KEEP_CAPS|HL_EXEC_SECURE_KEEP_CAPS_LOCKED;
+    r=hl_exec_credential_transition(s,0755,1000,1000,none);
+    if(r.state.permitted!=UINT64_C(0x40)||r.state.effective!=UINT64_C(0x40)||
+       r.state.inheritable!=UINT64_C(0x40)||r.state.ambient!=UINT64_C(0x40))return 8;
+    if((r.state.securebits&HL_EXEC_SECURE_KEEP_CAPS)||
+       !(r.state.securebits&HL_EXEC_SECURE_KEEP_CAPS_LOCKED))return 9;
+    /* A real UID of zero supplies notional permitted/inheritable sets, but a
+       nonzero effective UID must not receive notional effective caps. */
+    hl_exec_credential_state mixed={0,1000,0,1000,1000,0,UINT64_C(0x11),UINT64_C(0x11),UINT64_C(0x7f),0,0,0,0};
+    r=hl_exec_credential_transition(mixed,0755,1000,1000,none);
+    if(r.state.permitted!=UINT64_C(0x7f)||r.state.effective)return 13;
+    /* NNP may retain current authority but cannot let root magic regain the
+       rest of the bounding set. */
+    root=(hl_exec_credential_state){0,0,0,0,0,0,UINT64_C(0x5),UINT64_C(0x5),UINT64_C(0xff),0,0,0,1};
+    r=hl_exec_credential_transition(root,0755,0,0,none);
+    if(r.state.permitted!=UINT64_C(0x5)||r.state.effective!=UINT64_C(0x5))return 14;
+    /* Merely carrying a set-ID bit clears ambient authority, even where the
+       owner already matches and no numeric ID transition occurs. */
+    s=user();s.permitted=s.inheritable=s.ambient=UINT64_C(0x40);
+    r=hl_exec_credential_transition(s,04755,1000,1000,none);
+    if(r.state.ambient||r.state.effective)return 15;
+    s=user();s.bounding=UINT64_C(0x1);
+    file=(hl_exec_file_capabilities){UINT64_C(0x3),0,1,1};
+    r=hl_exec_credential_transition(s,0755,1000,1000,file);
+    if(r.error!=EPERM)return 17;
+    file.effective=0;r=hl_exec_credential_transition(s,0755,1000,1000,file);
+    if(r.error||r.state.permitted!=UINT64_C(0x1)||r.state.effective)return 18;
+    s=user();s.bounding=UINT64_C(0xff);file=(hl_exec_file_capabilities){UINT64_C(0x2),0,1,1};
+    r=hl_exec_credential_transition(s,04755,0,1000,file);
+    if(r.error||r.state.euid!=0||r.state.permitted!=UINT64_C(0x2)||r.state.effective!=UINT64_C(0x2))return 19;
+    /* An identity mismatch remains secure when exec does not numerically
+       change the effective ID. Conversely, setuid back to the real ID is not
+       secure merely because it changed the pre-exec effective ID. */
+    s=user();s.euid=s.suid=0;s.securebits=HL_EXEC_SECURE_NOROOT;
+    r=hl_exec_credential_transition(s,0755,1000,1000,none);
+    if(!r.secure_exec||r.dumpable!=2)return 21;
+    r=hl_exec_credential_transition(s,04755,1000,1000,none);
+    if(r.state.euid!=1000||r.secure_exec||r.dumpable!=1)return 22;
+    /* S_ISGID without S_IXGRP is not an exec-time group transition. */
+    s=user();r=hl_exec_credential_transition(s,02700,1000,0,none);
+    if(r.state.egid!=1000||r.state.sgid!=1000||r.secure_exec)return 23;
+    r=hl_exec_credential_transition(s,02710,1000,0,none);
+    if(r.state.egid!=0||r.state.sgid!=0||!r.secure_exec)return 24;
+    return 0;
+}
+"#).expect("write exec credential probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("exec credential policy probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable)
+        .status()
+        .expect("exec credential policy probe execution");
+    assert!(run.success(), "exec credential policy probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove exec credential probe directory");
 }
 
 #[cfg(target_os = "linux")]
@@ -1442,6 +1727,7 @@ int main(void) {
     if (ckpt_fixed_payload_object_size(48, 16, 2, 16, 2, 0) == 0) return 38;
     return 0;
 }
+
 "#,
     )
     .expect("write checkpoint bounds probe source");
@@ -1459,4 +1745,53 @@ int main(void) {
         .expect("checkpoint bounds probe execution");
     assert!(run.success(), "checkpoint bounds probe failed with {run}");
     fs::remove_dir_all(scratch).expect("remove checkpoint bounds probe directory");
+}
+
+#[test]
+fn checkpoint_region_validation_rejects_non_boolean_fields() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-checkpoint-region-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("create checkpoint region probe directory");
+    let source = scratch.join("checkpoint_region.c");
+    let executable = scratch.join("checkpoint_region");
+    fs::write(
+        &source,
+        r#"
+#include "linux_abi/checkpoint/region.h"
+
+int main(void) {
+    struct ckpt_region region = {.format_version = CKPT_REGION_VERSION};
+    if (!ckpt_region_valid(&region)) return 1;
+    region.logical = 2;
+    if (ckpt_region_valid(&region)) return 2;
+    region.logical = 0;
+    region.backing_shared = 2;
+    if (ckpt_region_valid(&region)) return 3;
+    region.backing_shared = 0;
+    region.backing_emulated = 2;
+    if (ckpt_region_valid(&region)) return 4;
+    region.backing_emulated = 0;
+    region.format_version = CKPT_REGION_VERSION + 1;
+    if (ckpt_region_valid(&region)) return 5;
+    if (ckpt_region_valid(0)) return 6;
+    return 0;
+}
+"#,
+    )
+    .expect("write checkpoint region probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("checkpoint region probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable)
+        .status()
+        .expect("checkpoint region probe execution");
+    assert!(run.success(), "checkpoint region probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove checkpoint region probe directory");
 }

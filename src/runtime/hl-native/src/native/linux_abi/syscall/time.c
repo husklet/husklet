@@ -455,7 +455,7 @@ static int svc_clock_sleep(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1,
         const struct timespec *req = &request;
         // validate the clockid before touching anything (LTP clock_nanosleep01). An unknown/negative
         // clock is -EINVAL; CLOCK_THREAD_CPUTIME_ID(3) has no kernel nsleep so the raw syscall returns
-        // -EOPNOTSUPP (Linux errno 95 -- svc_time is NOT run through svc_done's m2l map, so hard-code the
+        // -EOPNOTSUPP (Linux errno 95 -- svc_time is NOT run through svc_done_host's m2l map, so hard-code the
         // Linux value; glibc's wrapper remaps this to EINVAL, which the libc variant of the test expects).
         if (clk < 0 || clk > 11) {
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);

@@ -27,8 +27,9 @@ pub use rule::{
     ConstructorOwnership, DependencyDirection, Documentation, DuplicateEntity, EmptyDirectory, EnvironmentAccess,
     FileLength, FileName, FiniteStateString, FolderNoun, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult,
     IntegrationCandidate, ManualDispatch, MaximumNesting, ModelDuplication, ModulePrefix, PathModules, PlatformCommand,
-    PrefixDirectory, ReceiverRepetition, Registry, RepositoryEscape, Rule, RuntimeTool, SingleFileDirectory,
-    StructNaming, SuffixRole, TestDependency, TestDirectory, TestName, UnsafeBoundary, run_c_analyzers,
+    PrefixDirectory, ProvisionalDiagnostic, ReceiverRepetition, Registry, RepositoryEscape, Rule, RuntimeTool,
+    SingleFileDirectory, StructNaming, SuffixRole, TestDependency, TestDirectory, TestName, UnsafeBoundary,
+    run_c_analyzers,
 };
 pub use source::{Source, Workspace};
 
@@ -101,6 +102,7 @@ impl Linter {
                 .register(rule::FileLength)
                 .register(rule::FileName)
                 .register(rule::ParentName)
+                .register(rule::ProvisionalDiagnostic)
                 .register(rule::TestName)
                 .register(rule::PrefixDirectory)
                 .register(rule::SuffixRole)
@@ -241,6 +243,7 @@ mod tests {
             "file-length",
             "file-name-density",
             "redundant-parent-name",
+            "provisional-diagnostic",
             "singular-test-file",
             "flat-prefix-density",
             "flat-role-density",
@@ -323,7 +326,7 @@ fn caller() {
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
 
-        assert_eq!(summaries.len(), 47);
+        assert_eq!(summaries.len(), 48);
         assert!(
             reporter
                 .0

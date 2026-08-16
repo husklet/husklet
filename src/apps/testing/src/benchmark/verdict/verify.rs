@@ -1,4 +1,4 @@
-use super::*;
+use super::{BTreeMap, BTreeSet, CELLS, Campaign, Error, Row, Step};
 
 pub(super) fn verify_complete_plan(campaign: &Campaign, plan: &[Step]) -> Result<(), Error> {
     let expected = campaign

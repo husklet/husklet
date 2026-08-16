@@ -37,7 +37,8 @@ static void *elf_host_map(void *context, void *address, size_t length, uint32_t 
 static int x86_image_read(const char *path, hl_linux_image *image) {
     if (g_initial_executable_image != NULL)
         return hl_linux_image_read_bytes(g_initial_executable_image, g_initial_executable_size, image);
-    if (g_authorized_executable_image != NULL && path != NULL && g_authorized_executable_path[0]) {
+    if (g_rootfs == NULL && g_authorized_executable_image != NULL && path != NULL &&
+        g_authorized_executable_path[0]) {
         char canonical[4200];
         if (realpath(path, canonical) != NULL && strcmp(canonical, g_authorized_executable_path) == 0)
             return hl_linux_image_read_bytes(g_authorized_executable_image, g_authorized_executable_size, image);
@@ -69,6 +70,11 @@ static int x86_image_read(const char *path, hl_linux_image *image) {
             request = guest;
         }
     }
+    /* Container authorization is a guest-image identity.  It deliberately
+     * survives unlink of the backing name for /proc/self/exe re-exec. */
+    if (g_authorized_executable_image != NULL && request != NULL && g_authorized_executable_path[0] &&
+        strcmp(request, g_authorized_executable_path) == 0)
+        return hl_linux_image_read_bytes(g_authorized_executable_image, g_authorized_executable_size, image);
     if (request != NULL && request[0] == '/' && (g_rootfs != NULL || jail_match(request) >= 0)) {
         if (g_nlower) {
             char backing[4200];
@@ -116,9 +122,11 @@ static void wr64(uint8_t *p, uint64_t v) {
 
 // struct loaded is defined by the shared os/linux (container/netns.c).
 
-static int elf_interp(const char *path, char *out, size_t n) {
+static int elf_interp(const char *path, char *out, size_t n, const hl_linux_image *pinned) {
     hl_linux_image image;
-    if (x86_image_read(path, &image) != 0) return -1;
+    if ((pinned != NULL ? hl_linux_image_read_bytes(pinned->bytes, pinned->size, &image) : x86_image_read(path, &image)) !=
+        0)
+        return -1;
     hl_linux_elf64_layout layout;
     if (n == 0 || hl_linux_elf64_validate(&image, 0x3E, &layout) != 0) {
         hl_linux_image_release(&image);
@@ -161,20 +169,26 @@ static int main_placement_from_plan(const hl_engine_main_image_plan *plan, struc
     return 0;
 }
 
-static void load_elf(const char *path, struct loaded *out, const void *placement_argument) {
+static void load_elf(const char *path, struct loaded *out, const void *placement_argument,
+                     const hl_linux_image *pinned) {
     const struct main_placement *placement = placement_argument;
     hl_linux_image image;
-    if (x86_image_read(path, &image) != 0) {
+    if ((pinned != NULL ? hl_linux_image_read_bytes(pinned->bytes, pinned->size, &image) : x86_image_read(path, &image)) !=
+        0) {
         fprintf(stderr, "hl-engine: cannot read guest ELF %s through host services\n", path);
         exit(1);
     }
     uint8_t *f = image.bytes;
+    out->identity = hl_identity_image_digest(image.bytes, image.size);
     hl_linux_elf64_layout layout;
     if (hl_linux_elf64_validate(&image, 0x3E, &layout) != 0) {
         hl_linux_image_release(&image);
         fprintf(stderr, "hl-engine: %s: malformed x86-64 ELF image\n", path);
         exit(1);
     }
+    /* Cache identity belongs to the bytes mapped by this load, not to a
+     * preceding PT_INTERP metadata read. */
+    g_loaded_image_identity = g_pcache ? hl_digest_bytes(HL_DIGEST_SEED, image.bytes, image.size) : 0;
     if (rd16(f + 18) != 0x3E) fprintf(stderr, "[hl] warning: e_machine=%u (want 62=x86-64)\n", rd16(f + 18));
     uint64_t e_entry = rd64(f + 24), phoff = layout.program_offset;
     int phnum = layout.program_count, phentsize = layout.program_size;
@@ -258,7 +272,6 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
         g_nonpie_hi = basepage + span;
         g_nonpie_bias = bias;
     }
-    if (force_displaced && bias != 0) nonpie_report_forced_displacement();
     for (int i = 0; i < phnum; i++) {
         uint8_t *ph = f + phoff + (uint64_t)i * phentsize;
         if (rd32(ph) != 1) continue;
@@ -435,14 +448,14 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
         // identity (state.c: configured id, else the host's) and are what container_init seeds g_ruid/g_euid
         // from -- so the constant did not mean root, it meant auxv contradicted this guest's own getuid() and
         // the aarch64 engine. Measured: aarch64 guest 1000, x86-64 guest 0, same uncontainerised run.
-        {11, (uint64_t)cuid()},
-        {12, (uint64_t)cuid()},
-        {13, (uint64_t)cgid()},
-        {14, (uint64_t)cgid()},
+        {11, (uint64_t)cred_ruid()},
+        {12, (uint64_t)cred_euid()},
+        {13, (uint64_t)cred_rgid()},
+        {14, (uint64_t)cred_egid()},
         {16, x86_guest_hwcap()},
         {15, plat},
         {25, rnd},
-        {23, 0},      // AT_SECURE 0
+        {23, (uint64_t)g_exec_secure},
         {17, 100},    // AT_CLKTCK
         {26, 0},      // AT_HWCAP2 -- 0 by derivation, see x86_guest_hwcap()
         {31, execfn}, // AT_EXECFN -> execve pathname string (glibc/Rust/uutils multicall read it). Missing it
@@ -515,9 +528,6 @@ static int lazy_budget(void) {
 
 static int lazy_nofix(void) {
     return 0;
-}
-
-static void lazy_diag(void) {
 }
 
 // W6A item 1: emulate a faulting host load/store against the biased non-PIE image. A non-PIE guest's
@@ -993,11 +1003,6 @@ void jit86_lazyguard(int sig, siginfo_t *si, void *uc) {
         int ok = adjacent ? (g_growmaps < (256 << 10)) /* 1GB of grow pages */ : (g_lazymaps < lazy_budget());
 #endif
         if (ok) {
-            static int hooked;
-            if (!hooked) {
-                hooked = 1;
-                atexit(lazy_diag);
-            }
             // This executes inside a synchronous signal handler. Use only the host service's explicitly
             // signal-context-safe, non-owning exact-page repair; ordinary mapping services take registry locks.
             /* The accessor only reads immutable process-global pointers. Cache it so the signal path
@@ -1035,7 +1040,6 @@ void jit86_lazyguard(int sig, siginfo_t *si, void *uc) {
 // deliver_guest_fault, and mprotect/retry the PC page in a loop. Instead route straight to nonpie_fixup
 // (which self-declines: si_addr is the high faulting PC, never in the low non-PIE link range) and then
 // deliver_guest_fault (delivers the guest signal when the guest has a handler, else re-raises the default).
-// CRASHDBG handles these via its mach exception port + diagnostics instead, so leave that path untouched.
 static void jit86_syncguard(int sig, siginfo_t *si, void *uc) {
     if (nonpie_fixup(si, uc)) return;
     if (deliver_guest_fault(sig, si, uc)) return;
@@ -1117,75 +1121,3 @@ static int hl_windows_guest_fault(hl_windows_fault *fault, void *context) {
     }
 }
 #endif
-
-void jit86_faulth(int sig, siginfo_t *si, void *uc) {
-    // host_range_mapped probe fault (thread.c) -- resolve it silently even on this diagnostic path, so a
-    // FAULT_ON trace run doesn't dump a bogus [FAULT] for every EFAULT-probing syscall and die.
-    if (hrm_fault_hook(si)) return; // never actually returns on a claim (siglongjmp); shape-only
-    // a non-PIE absolute DATA ref into the low link range is a LEGITIMATE access served at +bias, not a
-    // crash -- consult nonpie_fixup FIRST (as the run-path jit86_lazyguard / jit86_syncguard do) so a FAULT_ON
-    // diagnostic run of a non-PIE glibc binary (e.g. node --version) resolves and continues instead of dumping
-    // a bogus [FAULT] and _exit(133)ing. Self-declines (returns 0) for any address outside [lo,hi) or a host
-    // form it can't decode, falling through to the real diagnostics below. Inert for PIE (g_nonpie_lo == 0).
-    if (nonpie_fixup(si, uc)) return;
-    struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
-    extern uint64_t g_prevpc, g_curpc;
-    int diagnostic = open("/tmp/hl-engine-fault.log", O_WRONLY | O_CREAT | O_APPEND, 0600);
-    if (diagnostic >= 0) {
-        char line[256];
-        int length = snprintf(line, sizeof line, "pid=%d sig=%d addr=%p rip=%#llx curpc=%#llx prevpc=%#llx\n",
-                              (int)getpid(), sig, si ? si->si_addr : 0,
-                              (unsigned long long)(c ? c->rip : 0), (unsigned long long)g_curpc,
-                              (unsigned long long)g_prevpc);
-        if (length > 0) {
-            size_t bytes = (size_t)length < sizeof line ? (size_t)length : sizeof line - 1;
-            if (write(diagnostic, line, bytes) < 0) {}
-        }
-        close(diagnostic);
-    }
-    static const char *nm[16] = {"rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
-                                 "r8",  "r9",  "r10", "r11", "r12", "r13", "r14", "r15"};
-    fprintf(stderr, "[FAULT] sig=%d addr=%p  guest rip(last blk)=%llx  curpc=%llx prevblk=%llx ibranch_src=%llx\n", sig,
-            si ? si->si_addr : 0, c ? (unsigned long long)c->rip : 0, (unsigned long long)g_curpc,
-            (unsigned long long)g_prevpc, c ? (unsigned long long)c->dbg_ibsrc : 0);
-    if (c)
-        for (int i = 0; i < 16; i++)
-            fprintf(stderr, "  %s=%llx%s", nm[i], (unsigned long long)c->r[i], (i % 4 == 3) ? "\n" : "");
-    if (c && c->rip) {
-        fprintf(stderr, "  bytes@rip:");
-        uint8_t *p = (uint8_t *)c->rip;
-        for (int i = 0; i < 24; i++)
-            fprintf(stderr, " %02x", p[i]);
-        fprintf(stderr, "\n");
-    }
-    if (c) {
-        uint64_t pp = c->r[7];
-        if (pp > 0x100000000ull && pp < 0x200000000ull) { // rdi: dump chunk header [p-16..p+8)
-            fprintf(stderr, "  hdr[rdi-16..p+8):");
-            uint8_t *b = (uint8_t *)(pp - 16);
-            for (int i = 0; i < 24; i++)
-                fprintf(stderr, " %02x", b[i]);
-            fprintf(stderr, "  (p-8 u32=%x p-4 u8=%x p-2 u16=%x)\n", *(uint32_t *)(pp - 8), *(uint8_t *)(pp - 4),
-                    *(uint16_t *)(pp - 2));
-            fprintf(stderr, "  scan-back for group->meta (qword at p-16*off-16):");
-            for (int off = 0; off <= 32; off++) {
-                uint64_t bv = *(uint64_t *)(pp - 16 * off - 16);
-                if (bv > 0x100000000ull && bv < 0x200000000ull)
-                    fprintf(stderr, " off=%d->%llx", off, (unsigned long long)bv);
-            }
-            fprintf(stderr, "\n");
-        }
-    }
-    if (c)
-        for (int rr = 0; rr < 16; rr++) { // dump memory at any reg that looks like a heap pointer
-            uint64_t v = c->r[rr];
-            if (v > 0x100000000ull && v < 0x200000000ull && (v & 7) == 0) {
-                fprintf(stderr, "  mem[%d=%llx]:", rr, (unsigned long long)v);
-                for (int i = 0; i < 6; i++)
-                    fprintf(stderr, " %016llx", (unsigned long long)((uint64_t *)v)[i]);
-                fprintf(stderr, "\n");
-                if (rr >= 3) break; // a couple is enough
-            }
-        }
-    _exit(133);
-}

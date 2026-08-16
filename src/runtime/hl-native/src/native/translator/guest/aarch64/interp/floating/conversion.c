@@ -1,3 +1,5 @@
+
+// SatQ()'s out-of-range value; a 32-bit destination comes back sign-extended to 64.
 static uint64_t interp_fp_int_saturate(unsigned sign, unsigned dest_bits, int is_signed) {
     if (!is_signed) return sign ? UINT64_C(0) : (dest_bits == 64 ? UINT64_MAX : ((UINT64_C(1) << dest_bits) - 1u));
     uint64_t limit = UINT64_C(1) << (dest_bits - 1u);

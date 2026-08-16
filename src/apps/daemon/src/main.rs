@@ -84,6 +84,9 @@ struct Arguments {
     /// Linux guest platform used to resolve images and create containers.
     #[arg(long, default_value_t = default_platform())]
     platform: Platform,
+    /// Use the checkpoint-capable execution policy for API-created containers.
+    #[arg(long, hide = true)]
+    checkpoint_compatible: bool,
 }
 
 fn unix_socket(value: &str) -> Result<PathBuf, String> {
@@ -227,6 +230,11 @@ impl Arguments {
         };
         Daemon::new(containers)
             .platform(self.platform)
+            .sandbox(if self.checkpoint_compatible {
+                hl_container::Sandbox::Disabled
+            } else {
+                hl_container::Sandbox::default()
+            })
             .image_source(Registry::new(Auth::Anonymous))
             .process_sampler(HostProcesses)
             .release(Release::new(

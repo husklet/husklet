@@ -1,0 +1,28 @@
+cases:
+- id: terminal-canonical-reprint/foreground-redraw
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "echo REPRINT-${x}READY; cat; echo REPRINT-${x}DONE\r" }
+      - await_output: { contains: REPRINT-READY, timeout_ms: 5000 }
+      - write: { text: "PENDING-" }
+      - write: { text: "\u0012" }
+      - write: { text: "LINE\r" }
+      - await_output: { contains: "PENDING-^R\r\nPENDING-LINE", timeout_ms: 5000 }
+      - write: { text: "\u0004" }
+      - await_output: { contains: REPRINT-DONE, timeout_ms: 5000 }
+      - write: { text: "printf \"SHELL-${x}OK\\n\"; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/redraw.txt
+    - golden/reprint_done.txt
+    - golden/shell_ok.txt

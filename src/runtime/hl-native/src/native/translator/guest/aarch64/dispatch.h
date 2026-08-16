@@ -1,5 +1,5 @@
 // translator/guest/aarch64/dispatch.h -- the aarch64 guest's definitions of the shared run_guest()
-// dispatch seam. The shared jit/dispatch.c calls these hooks at the four
+// dispatch seam. The shared engine/dispatch.c calls these hooks at the four
 // spots where the dispatcher differs per guest architecture:
 //
 //   G_DISPATCH_DEBUG(c)   top-of-loop debug instrumentation       (x86-only; EMPTY on aarch64)
@@ -7,11 +7,9 @@
 //   G_IBTC_FILL(c)        IBTC miss fill keyed on ic_site/body-8   (per-arch IBTC contract)
 //   G_DISPATCH_REASON(c)  post-run_block reason handling + the per-arch syscall pc-advance
 //
-// Each macro below expands to EXACTLY the code that used to be inline in jit/dispatch.c's run_guest(), so
-// the aarch64 engine is bit-identical after the refactor. The macros are expanded at their call sites
-// inside the dispatcher loop (not here), so `break` reaches the loop and engine globals (g_ibtc, map_body,
-// g_prof_*, IBTC_N, R_SYSCALL, ...) are in scope there even though this header is included early via abi.h.
-// The x86 frontend supplies its own definitions of these names in a later PR (PR3/PR4).
+// The macros expand at their call sites inside the dispatcher loop, so `break` reaches that loop and engine
+// globals (g_ibtc, map_body, g_prof_*, IBTC_N, R_SYSCALL, ...) are in scope even though this header is
+// included early via abi.h. The x86 frontend implements the same hook contract in its dispatch header.
 
 // ---- SMC (self-modifying code) for in-process JIT guests ----  gate NOSMC=1
 // A guest that mmaps RWX (g_rwx_guest, set in os/linux/service/mem.c) or otherwise generates code can
@@ -33,8 +31,7 @@ static inline int smc_seen(void) {
 
 static uint64_t g_smc_flushes;
 
-// (4) x86-only top-of-loop instrumentation (g_prevpc/g_disp_n/trace cap/g_w8 watchpoint/malloc track).
-// aarch64 has no such block -> empty.
+// x86 has top-of-loop dispatch diagnostics; aarch64 has no corresponding hook work.
 #define G_DISPATCH_DEBUG(c) ((void)0)
 
 // §B shadow stack: on a wholesale cache flush the shadow host_rets point into the cache we just dropped,
@@ -66,7 +63,7 @@ static uint64_t g_smc_flushes;
  * path (threaded indirect branches miss to C every time). */
 #define G_IBTC_FILL(c)                                                                                                 \
     if ((c)->ic_site) {                                                                                                \
-        g_prof_miss++;                                                                                                 \
+        if (g_prof) g_prof_miss++;                                                                                     \
         int _mt = g_threaded;                                                                                          \
         void *bd = (_mt && !g_mtibtc) ? NULL : map_body((c)->pc);                                                      \
         if (bd) {                                                                                                      \
@@ -81,7 +78,7 @@ static uint64_t g_smc_flushes;
             if (_mt) {                                                                                                 \
                 /* threaded: single 128-bit atomic release publish; consumed by an atomic ldp reader */                \
                 ibtc_publish(&g_ibtc[h], (c)->pc, bind);                                                               \
-                g_mtfill++;                                                                                            \
+                if (g_prof) g_mtfill++;                                                                                \
             } else {                                                                                                   \
                 g_ibtc[h].body = bind; /* body_ind; written first */                                                   \
                 __atomic_store_n(&g_ibtc[h].target, (c)->pc, __ATOMIC_RELEASE);                                        \

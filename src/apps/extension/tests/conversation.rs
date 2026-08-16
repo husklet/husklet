@@ -10,11 +10,11 @@ use std::os::unix::net::UnixStream;
 /// Calls to read before giving up on an extension that never finishes.
 const EXCHANGES: usize = 8;
 
-use hl_gui::{Patch, Prop, PropValue, RequestId, RowRange, RowRequest, Tag, Tree, Version};
 use hl_extension::port::ContainerSummary;
 use hl_extension::{
     ChannelId, ExtensionName, Frame, Grant, Kind, Limits, Reply, Request, Transit, Welcome, Wire, PROTOCOL,
 };
+use hl_gui::{Patch, Prop, PropValue, RequestId, RowRange, RowRequest, Tag, Tree, Version};
 
 /// Runs the extension against a scripted host and returns everything it said.
 fn converse(exchanges: usize) -> Vec<Request> {
@@ -274,11 +274,10 @@ impl hl_gui::Renderer for Ignore {
 #[test]
 fn the_manifest_this_extension_ships_is_one_a_host_accepts() {
     let manifest = extension::manifest().expect("a manifest");
-    let label = manifest.label().expect("a label");
 
-    let parsed = hl_extension::Manifest::parse(&label, PROTOCOL).expect("a host accepts it");
+    let parsed = hl_extension::Manifest::parse(extension::DOCUMENT, PROTOCOL).expect("a host accepts it");
 
-    assert_eq!(parsed, manifest, "the label round-trips unchanged");
+    assert_eq!(parsed, manifest, "the shipped document is the manifest");
     assert_eq!(parsed.name.as_str(), "containers");
     assert!(
         parsed.interface.is_some(),

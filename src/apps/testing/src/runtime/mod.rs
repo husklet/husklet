@@ -20,21 +20,29 @@ mod diagnostic;
 mod execution;
 mod fingerprint;
 pub(crate) mod image;
+mod inventory_report;
 mod ledger;
 pub(crate) mod load;
+mod options;
 mod outcome;
 mod output;
 pub(crate) mod profile;
 pub(crate) mod scheduler;
+mod stage;
+mod work_root;
 
 use crate::suite::{Error, Target};
-use clap::Args;
 use definition::{App, EngineHost};
 use diagnostic::BoundedDiagnostic as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub(crate) use execution::WorkerOptions;
+pub(crate) use execution::{WorkerOptions, worker};
+pub(crate) use inventory_report::run as inventory;
+pub(crate) use options::Options;
+pub(crate) use stage::Options as StageOptions;
+pub(crate) use stage::artifact_smoke;
+pub(crate) use stage::run as stage;
 
 pub(crate) fn preflight_image(name: &str, target: Target) -> Result<bool, Error> {
     image::ImageCache::for_platform(&target.platform())?.preflight(name)
@@ -42,6 +50,7 @@ pub(crate) fn preflight_image(name: &str, target: Target) -> Result<bool, Error>
 
 pub async fn run(options: Options) -> Result<(), Error> {
     options.engine_profile.require()?;
+    work_root::WorkRoot::configure(options.work_root.clone())?.preflight()?;
     let runner = profile::identity()?;
     println!("runtime: engine profile={} runner={}", profile::PROFILE, &runner[..16]);
     let apps = apps(&options)?;
@@ -95,36 +104,9 @@ pub async fn run(options: Options) -> Result<(), Error> {
         println!("runtime: SUSPECT {contended} case(s) ran under a saturated host; their elapsed_ms is not comparable");
     }
     match &options.baseline {
-        Some(mark) => compare(&workspace()?.join(mark), &workspace()?.join(&options.results)),
+        Some(mark) => baseline::compare(&workspace()?.join(mark), &workspace()?.join(&options.results)),
         None if failed.is_empty() => Ok(()),
         None => Err(failed.join("\n").into()),
-    }
-}
-
-/// Judges the published ledger against a recorded mark: only a row that moved the wrong way fails
-/// the sweep, so a known failing set stays green and a new failure cannot hide inside the count.
-fn compare(mark: &Path, results: &Path) -> Result<(), Error> {
-    let mark = baseline::load(mark)?;
-    println!("runtime: baseline {}", mark.describe());
-    let changes = mark.diff(&baseline::observed(results)?);
-    if changes.is_empty() {
-        println!("runtime: no case moved against the baseline");
-        return Ok(());
-    }
-    // A regressing row is printed by the error below, so printing it here too double-counts it: a
-    // lane read one regression as two on first pass. The summary carries only what the error omits.
-    for change in changes.iter().filter(|change| !change.regression) {
-        println!("runtime: {}", change.line);
-    }
-    let regressions: Vec<&str> = changes
-        .iter()
-        .filter(|change| change.regression)
-        .map(|change| change.line.as_str())
-        .collect();
-    if regressions.is_empty() {
-        Ok(())
-    } else {
-        Err(regressions.join("\n").into())
     }
 }
 
@@ -174,10 +156,6 @@ async fn record_all(ledger: &Arc<ledger::Ledger>, rows: Vec<ledger::Row>) -> Res
     Ok(())
 }
 
-pub async fn worker(options: WorkerOptions) -> Result<(), Error> {
-    execution::worker(options).await
-}
-
 fn worker_work(app: String, case: String, target: Target) -> Result<Work, Error> {
     let options = Options {
         app: Some(app),
@@ -185,6 +163,7 @@ fn worker_work(app: String, case: String, target: Target) -> Result<Work, Error>
         results: PathBuf::from("target/testing/runtime/worker.tsv"),
         baseline: None,
         engine_profile: profile::Requested::Release,
+        work_root: None,
     };
     let apps = apps(&options)?;
     validate_case_ids(&apps)?;
@@ -200,7 +179,15 @@ async fn drain(
     ledger: &Arc<ledger::Ledger>,
 ) -> Result<Vec<Completion>, Error> {
     let mut completed = Vec::new();
-    while let Some(result) = running.next(Work::execute).await? {
+    loop {
+        let result = match running.next(Work::execute).await {
+            Ok(Some(result)) => result,
+            Ok(None) => break,
+            Err(error) => {
+                running.shutdown().await;
+                return Err(error.into());
+            }
+        };
         let row = result.row();
         let recording = Arc::clone(ledger);
         tokio::task::spawn_blocking(move || recording.record(row).map_err(|error| error.to_string())).await??;
@@ -502,28 +489,6 @@ pub(crate) fn workspace() -> Result<PathBuf, Error> {
         path = path.parent().ok_or("workspace root not found")?;
     }
     Ok(path.to_path_buf())
-}
-
-#[derive(Args)]
-pub(crate) struct Options {
-    /// Run only the named runtime application.
-    app: Option<String>,
-    #[command(flatten)]
-    selection: crate::suite::Selection,
-    /// Relative durable result path beneath the repository workspace.
-    #[arg(long, default_value = "target/testing/runtime/results.tsv", value_parser = crate::suite::parse::results)]
-    results: PathBuf,
-    /// Diff the sweep against a recorded corpus mark instead of against "everything passes".
-    #[arg(
-        long,
-        num_args = 0..=1,
-        default_missing_value = "tests/runtime/baseline.tsv",
-        value_parser = crate::suite::parse::results,
-    )]
-    baseline: Option<PathBuf>,
-    /// Engine build profile this sweep is measuring; must match how the runner was built.
-    #[arg(long, value_enum, env = "HL_COMPAT_ENGINE_PROFILE", default_value_t = profile::Requested::Release)]
-    engine_profile: profile::Requested,
 }
 
 #[cfg(test)]

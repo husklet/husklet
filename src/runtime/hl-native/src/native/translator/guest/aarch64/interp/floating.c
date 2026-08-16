@@ -1,4 +1,5 @@
 #include "floating/arithmetic.c"
+#include "floating/estimate.c"
 #include "floating/conversion.c"
 
 // The scalar FP encoding space: bits[30:29] == 00, bits[28:24] == 11110 (11111 for the three-source

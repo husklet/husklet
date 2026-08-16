@@ -3,18 +3,28 @@
 use std::{
     ffi::{c_char, c_int, c_uint},
     fs::File,
-    io::{Read, Seek, SeekFrom},
+    io::{Seek, SeekFrom},
     ptr::NonNull,
 };
 
 use crate::bindings::{self, Backend};
 
+#[cfg(unix)]
+mod image;
+#[cfg(unix)]
+use image::pin_guest_image;
+#[cfg(all(test, unix))]
+use image::{resolve_layered_guest, resolve_through_merged_directory_symlink};
+mod layout;
+use layout::validate_elf_image;
+
 pub const STATUS_OK: i32 = 0;
 
-/// Borrowed, low-level creation arguments for the native engine.
+/// Low-level creation arguments for the native engine.
 ///
-/// The safe high-level container adapter owns the strings, arrays and image
-/// plan. This package deliberately does not depend on application domain types.
+/// Strings, arrays, image descriptors, and standard descriptors are borrowed
+/// for the duration of creation. `provider_fd`, when nonnegative, transfers
+/// ownership to create even though provider transport is currently unsupported.
 #[derive(Clone, Copy)]
 pub struct EngineConfig<'a> {
     pub isa: u32,
@@ -28,15 +38,6 @@ pub struct EngineConfig<'a> {
 }
 
 type Plan = crate::bindings::MainImagePlan;
-
-/// Validated information derived from an ELF program-header table before it
-/// is projected into the stable native ABI plan.
-struct ProgramLayout {
-    load_start: u64,
-    load_end: u64,
-    interpreter: Option<Vec<u8>>,
-    entry_is_executable: bool,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Exit {
@@ -70,11 +71,37 @@ impl Engine {
     /// Borrowed create inputs need only remain valid for this call; C copies
     /// configuration.
     pub unsafe fn create(config: EngineConfig<'_>) -> Result<Self, i32> {
+        // SAFETY: forwarded unchanged; the hook does not observe raw inputs.
+        unsafe { Self::create_after_pinning(config, || {}) }
+    }
+
+    unsafe fn create_after_pinning(config: EngineConfig<'_>, after_pin: impl FnOnce()) -> Result<Self, i32> {
         if config.option_names.len() != config.option_values.len() {
             return Err(STATUS_OK.wrapping_add(1));
         }
         let count = c_uint::try_from(config.option_names.len()).map_err(|_| 1)?;
+        #[cfg(unix)]
+        let pinned_executable = open_main_image(&config)?;
+        #[cfg(unix)]
+        let config = {
+            use std::os::fd::AsRawFd as _;
+            EngineConfig {
+                executable_fd: pinned_executable.as_raw_fd(),
+                ..config
+            }
+        };
+        after_pin();
         let image_plan = Plan::inspect(&config)?;
+        #[cfg(unix)]
+        let interpreter_image = Plan::interpreter(&config)?
+            .map(|path| pin_guest_image(&config, &path))
+            .transpose()?;
+        #[cfg(unix)]
+        if let Some(image) = interpreter_image.as_deref() {
+            validate_elf_image(&mut std::io::Cursor::new(image), image.len() as u64, config.isa)?;
+        }
+        #[cfg(not(unix))]
+        let interpreter_image: Option<Vec<u8>> = None;
         let mut output = std::ptr::null_mut();
         // SAFETY: the caller guarantees that the raw option and callback
         // pointers satisfy the documented C ABI. All Rust-owned arrays and
@@ -86,6 +113,10 @@ impl Engine {
                 config.executable_host.map_or(std::ptr::null(), std::ffi::CStr::as_ptr),
                 config.executable_fd,
                 &raw const image_plan,
+                interpreter_image
+                    .as_deref()
+                    .map_or(std::ptr::null(), |image| image.as_ptr().cast()),
+                interpreter_image.as_deref().map_or(0, <[u8]>::len),
                 count,
                 config.option_names.as_ptr(),
                 config.option_values.as_ptr(),
@@ -142,49 +173,9 @@ impl Engine {
 impl Plan {
     fn inspect(config: &EngineConfig<'_>) -> Result<Self, i32> {
         let mut file = open_main_image(config)?;
+        file.seek(SeekFrom::Start(0)).map_err(|_| 1)?;
         let image_length = file.metadata().map_err(|_| 1)?.len();
-        if image_length < 64 {
-            return Err(1);
-        }
-        let mut header = [0_u8; 64];
-        file.read_exact(&mut header).map_err(|_| 1)?;
-        if &header[..7] != b"\x7fELF\x02\x01\x01" || !matches!(header[7], 0 | 3) {
-            return Err(1);
-        }
-        let word16 = |offset| u16::from_le_bytes(header[offset..offset + 2].try_into().expect("fixed header"));
-        let word32 = |offset| u32::from_le_bytes(header[offset..offset + 4].try_into().expect("fixed header"));
-        let word64 = |offset| u64::from_le_bytes(header[offset..offset + 8].try_into().expect("fixed header"));
-        let kind = match word16(16) {
-            2 => 1,
-            3 => 2,
-            _ => return Err(1),
-        };
-        let machine = match config.isa {
-            1 => 0xb7,
-            2 => 0x3e,
-            _ => return Err(1),
-        };
-        if word16(18) != machine {
-            return Err(1);
-        }
-        if word32(20) != 1 || word16(52) != 64 {
-            return Err(1);
-        }
-        let entry = word64(24);
-        if config.isa == 1 && !entry.is_multiple_of(4) {
-            return Err(1);
-        }
-        let layout = ProgramLayout::inspect(
-            &mut file,
-            image_length,
-            entry,
-            word64(32),
-            u64::from(word16(54)),
-            word16(56),
-        )?;
-        if !layout.entry_is_executable {
-            return Err(1);
-        }
+        let (kind, layout) = validate_elf_image(&mut file, image_length, config.isa)?;
         let link_start = layout.load_start & !0xfff;
         let span = layout.load_end.checked_sub(link_start).ok_or(1)?;
         let link_end = link_start
@@ -209,6 +200,14 @@ impl Plan {
             flags: u32::from(kind == 1),
             interpreter_identity,
         })
+    }
+
+    #[cfg(unix)]
+    fn interpreter(config: &EngineConfig<'_>) -> Result<Option<Vec<u8>>, i32> {
+        let mut file = open_main_image(config)?;
+        file.seek(SeekFrom::Start(0)).map_err(|_| 1)?;
+        let image_length = file.metadata().map_err(|_| 1)?.len();
+        validate_elf_image(&mut file, image_length, config.isa).map(|(_, layout)| layout.interpreter)
     }
 }
 
@@ -237,96 +236,182 @@ fn open_main_image(config: &EngineConfig<'_>) -> Result<File, i32> {
     return Err(3);
 }
 
-impl ProgramLayout {
-    fn inspect(
-        file: &mut File,
-        image_length: u64,
-        entry: u64,
-        phoff: u64,
-        phentsize: u64,
-        phnum: u16,
-    ) -> Result<Self, i32> {
-        const PROGRAM_HEADER_SIZE: u64 = 56;
-        const MAX_PROGRAM_HEADERS: u16 = 1024;
-        const MAX_LOAD_SEGMENTS: u16 = 128;
-        if phentsize != PROGRAM_HEADER_SIZE || phnum == 0 || phnum > MAX_PROGRAM_HEADERS {
+#[cfg(unix)]
+fn launch_roots(config: &EngineConfig<'_>) -> Result<Vec<File>, i32> {
+    use std::os::unix::{ffi::OsStrExt as _, fs::OpenOptionsExt as _};
+    let mut roots = Vec::new();
+    let open = |path: &std::ffi::OsStr| {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(path)
+            .map_err(|_| 1)
+    };
+    if let Some(root) = config.rootfs {
+        roots.push(open(std::ffi::OsStr::from_bytes(root.to_bytes()))?);
+    }
+    for (&name, &value) in config.option_names.iter().zip(config.option_values) {
+        if name.is_null() || value.is_null() {
             return Err(1);
         }
-        let table_size = phentsize.checked_mul(u64::from(phnum)).ok_or(1)?;
-        if phoff.checked_add(table_size).is_none_or(|end| end > image_length) {
-            return Err(1);
+        // SAFETY: EngineConfig guarantees live NUL-terminated option strings.
+        let name = unsafe { std::ffi::CStr::from_ptr(name) };
+        if name.to_bytes() != b"HL_LOWER" {
+            continue;
         }
-        let mut first = u64::MAX;
-        let mut last = 0_u64;
-        let mut interpreter = None;
-        let mut loads = 0_u16;
-        let mut entry_is_executable = false;
-        for index in 0..phnum {
-            let offset = phoff
-                .checked_add(u64::from(index).checked_mul(phentsize).ok_or(1)?)
-                .ok_or(1)?;
-            file.seek(SeekFrom::Start(offset)).map_err(|_| 1)?;
-            let mut program = [0_u8; 56];
-            file.read_exact(&mut program).map_err(|_| 1)?;
-            let u32_at = |offset| u32::from_le_bytes(program[offset..offset + 4].try_into().expect("program header"));
-            let u64_at = |offset| u64::from_le_bytes(program[offset..offset + 8].try_into().expect("program header"));
-            match u32_at(0) {
-                1 => {
-                    loads = loads.checked_add(1).ok_or(1)?;
-                    if loads > MAX_LOAD_SEGMENTS {
-                        return Err(1);
-                    }
-                    let file_offset = u64_at(8);
-                    let start = u64_at(16);
-                    let file_size = u64_at(32);
-                    let memory_size = u64_at(40);
-                    let alignment = u64_at(48);
-                    if file_size > memory_size
-                        || (file_size != 0 && file_offset.checked_add(file_size).is_none_or(|end| end > image_length))
-                        || (alignment > 1
-                            && (!alignment.is_power_of_two() || start % alignment != file_offset % alignment))
-                    {
-                        return Err(1);
-                    }
-                    let end = start.checked_add(memory_size).ok_or(1)?;
-                    first = first.min(start);
-                    last = last.max(end);
-                    entry_is_executable |= u32_at(4) & 1 != 0 && entry >= start && entry < end;
-                }
-                3 => {
-                    if interpreter.is_some() {
-                        return Err(1);
-                    }
-                    interpreter = Some(read_interpreter(file, u64_at(8), u64_at(32))?);
-                }
-                _ => {}
-            }
+        // SAFETY: same EngineConfig string contract as the name above.
+        for record in unsafe { std::ffi::CStr::from_ptr(value) }
+            .to_bytes()
+            .split(|byte| *byte == b'\n')
+            .filter(|record| !record.is_empty())
+        {
+            roots.push(open(std::ffi::OsStr::from_bytes(record))?);
         }
-        if first == u64::MAX {
-            return Err(1);
+    }
+    Ok(roots)
+}
+
+#[cfg(unix)]
+enum EntryKind {
+    Directory,
+    Regular,
+    Symlink(std::path::PathBuf),
+}
+
+#[cfg(unix)]
+fn entry_is_opaque(root: &File, parts: &[std::ffi::OsString]) -> bool {
+    open_components(root, parts, true).ok().is_some_and(|directory| {
+        entry_mode(&directory, std::ffi::OsStr::new(".wh..wh..opq"))
+            .ok()
+            .flatten()
+            .is_some()
+    })
+}
+
+#[cfg(unix)]
+fn layered_entry(parts: &[std::ffi::OsString], roots: &[File]) -> std::io::Result<Option<(usize, EntryKind)>> {
+    let Some((leaf, parent)) = parts.split_last() else {
+        return Ok(None);
+    };
+    let mut whiteout = std::ffi::OsString::from(".wh.");
+    whiteout.push(leaf);
+    for (index, root) in roots.iter().enumerate() {
+        let directory = match open_components(root, parent, true) {
+            Ok(directory) => directory,
+            Err(error) if error.raw_os_error() == Some(libc::ENOENT) => continue,
+            Err(error) => return Err(error),
+        };
+        if entry_mode(&directory, &whiteout)?.is_some() {
+            return Ok(None);
         }
-        Ok(Self {
-            load_start: first,
-            load_end: last,
-            interpreter,
-            entry_is_executable,
-        })
+        if let Some(mode) = entry_mode(&directory, leaf)? {
+            let kind = if mode & libc::S_IFMT == libc::S_IFLNK {
+                EntryKind::Symlink(read_link(&directory, leaf)?)
+            } else if mode & libc::S_IFMT == libc::S_IFDIR {
+                EntryKind::Directory
+            } else if mode & libc::S_IFMT == libc::S_IFREG {
+                EntryKind::Regular
+            } else {
+                return Ok(None);
+            };
+            return Ok(Some((index, kind)));
+        }
+        if entry_mode(&directory, std::ffi::OsStr::new(".wh..wh..opq"))?.is_some() {
+            return Ok(None);
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(unix)]
+fn open_components(root: &File, parts: &[std::ffi::OsString], directory: bool) -> std::io::Result<File> {
+    use std::os::{
+        fd::{AsRawFd as _, FromRawFd as _},
+        unix::ffi::OsStrExt as _,
+    };
+    // SAFETY: root is live and fcntl receives no pointer arguments.
+    let duplicate = unsafe { libc::fcntl(root.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+    if duplicate < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: fcntl returned a new owned descriptor.
+    let mut current = unsafe { File::from_raw_fd(duplicate) };
+    for (index, part) in parts.iter().enumerate() {
+        let name = std::ffi::CString::new(part.as_bytes())
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        let final_part = index + 1 == parts.len();
+        let flags = libc::O_RDONLY
+            | libc::O_NOFOLLOW
+            | libc::O_CLOEXEC
+            | if !final_part || directory { libc::O_DIRECTORY } else { 0 };
+        // SAFETY: current is live and name is NUL-terminated for this call.
+        let descriptor = unsafe { libc::openat(current.as_raw_fd(), name.as_ptr(), flags) };
+        if descriptor < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: openat returned a new owned descriptor.
+        current = unsafe { File::from_raw_fd(descriptor) };
+    }
+    Ok(current)
+}
+
+#[cfg(unix)]
+fn entry_mode(directory: &File, name: &std::ffi::OsStr) -> std::io::Result<Option<libc::mode_t>> {
+    use std::{
+        mem::MaybeUninit,
+        os::{fd::AsRawFd as _, unix::ffi::OsStrExt as _},
+    };
+    let name =
+        std::ffi::CString::new(name.as_bytes()).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let mut metadata = MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: inputs are live and metadata is writable for one stat.
+    let status = unsafe {
+        libc::fstatat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            metadata.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if status == 0 {
+        // SAFETY: successful fstatat initialized metadata.
+        return Ok(Some(unsafe { metadata.assume_init().st_mode }));
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ENOENT) {
+        Ok(None)
+    } else {
+        Err(error)
     }
 }
 
-fn read_interpreter(file: &mut File, offset: u64, encoded_size: u64) -> Result<Vec<u8>, i32> {
-    let size = usize::try_from(encoded_size).map_err(|_| 1)?;
-    if size == 0 || size > 4096 {
-        return Err(1);
+#[cfg(unix)]
+fn read_link(directory: &File, name: &std::ffi::OsStr) -> std::io::Result<std::path::PathBuf> {
+    use std::os::{
+        fd::AsRawFd as _,
+        unix::ffi::{OsStrExt as _, OsStringExt as _},
+    };
+    let name =
+        std::ffi::CString::new(name.as_bytes()).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let mut bytes = vec![0_u8; 4096];
+    // SAFETY: inputs stay live and bytes is writable for its initialized length.
+    let count = unsafe {
+        libc::readlinkat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            bytes.as_mut_ptr().cast(),
+            bytes.len(),
+        )
+    };
+    if count < 0 || count as usize == bytes.len() {
+        return Err(if count < 0 {
+            std::io::Error::last_os_error()
+        } else {
+            std::io::Error::from_raw_os_error(libc::ENAMETOOLONG)
+        });
     }
-    let mut path = vec![0; size];
-    file.seek(SeekFrom::Start(offset)).map_err(|_| 1)?;
-    file.read_exact(&mut path).map_err(|_| 1)?;
-    if path.last() != Some(&0) || path[..path.len() - 1].contains(&0) {
-        return Err(1);
-    }
-    path.pop();
-    Ok(path)
+    bytes.truncate(count as usize);
+    Ok(std::path::PathBuf::from(std::ffi::OsString::from_vec(bytes)))
 }
 
 impl Drop for Engine {
@@ -339,17 +424,155 @@ impl Drop for Engine {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{Engine, EngineConfig, Exit, Plan};
+    use super::{Engine, EngineConfig, Exit, Plan, resolve_layered_guest};
     use std::{
         ffi::CString,
-        fs::OpenOptions,
-        io::{Seek, SeekFrom, Write},
-        os::fd::AsRawFd,
+        fs::{File, OpenOptions},
+        io::{Read as _, Seek, SeekFrom, Write},
+        os::{fd::AsRawFd, unix::fs::PermissionsExt as _},
         path::PathBuf,
     };
 
     #[cfg(feature = "native-test-hooks")]
     use std::time::{Duration, Instant};
+
+    #[cfg(feature = "native-test-hooks")]
+    struct IsolatedTestChild(Option<std::process::Child>);
+
+    #[cfg(feature = "native-test-hooks")]
+    impl IsolatedTestChild {
+        fn spawn(mut command: std::process::Command) -> std::io::Result<Self> {
+            use std::os::unix::process::CommandExt as _;
+
+            // SAFETY: setsid is async-signal-safe and touches no Rust-owned state.
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() < 0 {
+                        Err(std::io::Error::last_os_error())
+                    } else {
+                        Ok(())
+                    }
+                });
+            }
+            command.spawn().map(|child| Self(Some(child)))
+        }
+
+        fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+            self.0.as_mut().expect("live isolated child").try_wait()
+        }
+
+        fn terminate(&mut self) -> std::io::Result<()> {
+            self.terminate_with(|group| {
+                // SAFETY: spawn made the child a session and process-group leader, so the
+                // negative identifier is confined to this test's descendants.
+                if unsafe { libc::kill(group, libc::SIGKILL) } < 0 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            })
+        }
+
+        fn terminate_with(&mut self, deliver: impl FnOnce(i32) -> std::io::Result<()>) -> std::io::Result<()> {
+            let Some(child) = self.0.as_mut() else {
+                return Ok(());
+            };
+            let process = i32::try_from(child.id())
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "child PID exceeds i32"))?;
+            if let Err(error) = deliver(-process)
+                && error.raw_os_error() != Some(libc::ESRCH)
+            {
+                return Err(error);
+            }
+            // Once delivery succeeds (or the group is already absent), retaining the
+            // numeric PID would let a later Drop signal an unrelated, reused group.
+            let mut child = self.0.take().expect("live isolated child");
+            child.wait().map(drop)
+        }
+    }
+
+    #[cfg(feature = "native-test-hooks")]
+    impl Drop for IsolatedTestChild {
+        fn drop(&mut self) {
+            let _ = self.terminate();
+        }
+    }
+
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn isolated_test_child_termination_is_retryable_idempotent_and_closes_descendant_descriptors() {
+        use std::io::BufRead as _;
+        use std::process::Stdio;
+
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "sleep 60 & echo $!; wait"]).stdout(Stdio::piped());
+        let mut child = IsolatedTestChild::spawn(command).unwrap();
+        let output = child.0.as_mut().unwrap().stdout.take().unwrap();
+        let mut output = std::io::BufReader::new(output);
+        let mut line = String::new();
+        output.read_line(&mut line).unwrap();
+        let descendant = line.trim().parse::<i32>().unwrap();
+        // SAFETY: signal zero only probes the PID printed by the live test child.
+        assert_eq!(
+            unsafe { libc::kill(descendant, 0) },
+            0,
+            "descendant was not live before cleanup"
+        );
+
+        let mut deliveries = 0;
+        assert_eq!(
+            child
+                .terminate_with(|_| {
+                    deliveries += 1;
+                    Err(std::io::Error::from_raw_os_error(libc::EPERM))
+                })
+                .unwrap_err()
+                .raw_os_error(),
+            Some(libc::EPERM)
+        );
+        child
+            .terminate_with(|group| {
+                deliveries += 1;
+                // SAFETY: the helper supplied the negative identifier of its isolated group.
+                if unsafe { libc::kill(group, libc::SIGKILL) } < 0 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap();
+        child
+            .terminate_with(|_| {
+                deliveries += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(deliveries, 2, "termination was not retryable and idempotent");
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            sender
+                .send(output.bytes().collect::<std::io::Result<Vec<_>>>())
+                .unwrap();
+        });
+        let closed = receiver.recv_timeout(Duration::from_secs(2));
+        if closed.is_err() {
+            // SAFETY: this is the exact PID reported by the deliberately spawned descendant.
+            unsafe { libc::kill(descendant, libc::SIGKILL) };
+        }
+        assert_eq!(
+            closed.unwrap().unwrap(),
+            Vec::<u8>::new(),
+            "a descendant retained the inherited descriptor"
+        );
+    }
+
+    fn guest_compiler(name: &str) -> std::process::Command {
+        let mut command = std::process::Command::new(name);
+        // The Nix Darwin shell exports host linker flags such as `-lintl`.
+        // Linux cross-linkers must not inherit flags for Darwin libraries.
+        command.env_remove("NIX_LDFLAGS").env_remove("NIX_LDFLAGS_FOR_BUILD");
+        command
+    }
 
     fn put16(bytes: &mut [u8], offset: usize, value: u16) {
         bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
@@ -387,7 +610,47 @@ mod tests {
         bytes
     }
 
+    fn dynamic_image(interpreter: &[u8], isa: u32) -> Vec<u8> {
+        let mut bytes = image();
+        if isa == 2 {
+            put16(&mut bytes, 18, 0x3e);
+            bytes[0x100..0x102].copy_from_slice(&[0xeb, 0xfe]);
+        }
+        put16(&mut bytes, 56, 2);
+        put32(&mut bytes, 120, 3);
+        put64(&mut bytes, 128, 0x200);
+        put64(&mut bytes, 152, u64::try_from(interpreter.len() + 1).unwrap());
+        bytes[0x200..0x200 + interpreter.len()].copy_from_slice(interpreter);
+        bytes[0x200 + interpreter.len()] = 0;
+        bytes
+    }
+
+    fn exiting_interpreter(isa: u32) -> Vec<u8> {
+        let mut bytes = image();
+        put16(&mut bytes, 16, 3);
+        put64(&mut bytes, 24, 0x100);
+        put64(&mut bytes, 80, 0);
+        put64(&mut bytes, 88, 0);
+        if isa == 1 {
+            bytes[0x100..0x104].copy_from_slice(&0xd280_0000_u32.to_le_bytes());
+            bytes[0x104..0x108].copy_from_slice(&0xd280_0ba8_u32.to_le_bytes());
+            bytes[0x108..0x10c].copy_from_slice(&0xd400_0001_u32.to_le_bytes());
+        } else {
+            put16(&mut bytes, 18, 0x3e);
+            bytes[0x100..0x109].copy_from_slice(&[0x31, 0xff, 0xb8, 0x3c, 0, 0, 0, 0x0f, 0x05]);
+        }
+        bytes
+    }
+
     fn create_engine(isa: u32) -> (Engine, std::fs::File) {
+        create_engine_with_options(isa, &[], &[])
+    }
+
+    fn create_engine_with_options(
+        isa: u32,
+        option_names: &[*const std::ffi::c_char],
+        option_values: &[*const std::ffi::c_char],
+    ) -> (Engine, std::fs::File) {
         let mut executable = tempfile::tempfile().unwrap();
         let mut bytes = image();
         if isa == 2 {
@@ -403,8 +666,8 @@ mod tests {
             rootfs: None,
             executable_host: None,
             executable_fd: executable.as_raw_fd(),
-            option_names: &[],
-            option_values: &[],
+            option_names,
+            option_values,
             standard_fds: [standard.as_raw_fd(); 3],
             provider_fd: -1,
         };
@@ -412,6 +675,471 @@ mod tests {
         // the bridge copies configuration and imports its own descriptor handles.
         let engine = unsafe { Engine::create(config) }.unwrap();
         (engine, standard)
+    }
+
+    #[test]
+    fn armed_running_guest_reaches_checkpoint_broker() {
+        const CHILD: &str = "HL_NATIVE_ARMED_CHECKPOINT_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "engine::tests::armed_running_guest_reaches_checkpoint_broker",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .spawn()
+                .unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert!(status.success(), "armed checkpoint child failed: {status}");
+                    return;
+                }
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("armed checkpoint child exceeded 15 seconds");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+
+        for isa in [1, 2] {
+            let (mut engine, _standard) = create_engine(isa);
+            let (broker, transport) = crate::CheckpointTransport::create().unwrap();
+            engine.configure_checkpoint(&transport).unwrap();
+            let argument = CString::new("guest").unwrap();
+            std::thread::scope(|scope| {
+                let running = scope.spawn(|| engine.run(&[argument.as_ptr()]));
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                let _generation = transport.bump();
+                let signal = crate::CheckpointTransport::interrupt_signal(isa);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                let channel = loop {
+                    engine.request(4, signal).unwrap();
+                    if let Some(channel) = broker.accept(std::time::Duration::from_millis(100)) {
+                        break Some(channel);
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        break None;
+                    }
+                };
+                let _ = engine.request(2, 0);
+                let _ = running.join().unwrap();
+                assert!(channel.is_some(), "ISA {isa} did not publish a checkpoint channel");
+            });
+        }
+    }
+
+    #[test]
+    fn pathname_replacement_cannot_change_pinned_initial_image() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("guest");
+        std::fs::write(&path, image()).unwrap();
+        let executable = CString::new(path.to_str().unwrap()).unwrap();
+        let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
+        let config = EngineConfig {
+            isa: 1,
+            rootfs: None,
+            executable_host: Some(&executable),
+            executable_fd: -1,
+            option_names: &[],
+            option_values: &[],
+            standard_fds: [standard.as_raw_fd(); 3],
+            provider_fd: -1,
+        };
+        let displaced = directory.path().join("displaced");
+        // SAFETY: all pointers and descriptors remain live through creation. The hook runs only after
+        // the engine has pinned the path's file description and replaces the directory entry, not that
+        // open description.
+        let engine = unsafe {
+            Engine::create_after_pinning(config, || {
+                std::fs::rename(&path, &displaced).unwrap();
+                std::fs::write(&path, b"not an ELF image").unwrap();
+            })
+        };
+        assert!(engine.is_ok(), "creation reopened the replaced executable pathname");
+    }
+
+    #[test]
+    fn interpreter_replacement_between_create_and_run_cannot_change_image() {
+        for isa in [1, 2] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(root.path().join("bin")).unwrap();
+            std::fs::create_dir_all(root.path().join("lib")).unwrap();
+            let main = root.path().join("bin/main");
+            let interpreter = root.path().join("lib/ld-test.so");
+            std::fs::write(&main, dynamic_image(b"/lib/ld-test.so", isa)).unwrap();
+            std::fs::write(&interpreter, exiting_interpreter(isa)).unwrap();
+            let main = CString::new(main.to_str().unwrap()).unwrap();
+            let root_path = CString::new(root.path().to_str().unwrap()).unwrap();
+            let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
+            let config = EngineConfig {
+                isa,
+                rootfs: Some(&root_path),
+                executable_host: Some(&main),
+                executable_fd: -1,
+                option_names: &[],
+                option_values: &[],
+                standard_fds: [standard.as_raw_fd(); 3],
+                provider_fd: -1,
+            };
+            // SAFETY: every borrowed string and descriptor remains live through create.
+            let engine = unsafe { Engine::create(config) }.unwrap();
+            std::fs::remove_file(root.path().join("bin/main")).unwrap();
+            std::fs::remove_dir(root.path().join("bin")).unwrap();
+            std::fs::remove_file(&interpreter).unwrap();
+            std::fs::remove_dir(root.path().join("lib")).unwrap();
+            let argument = CString::new("/bin/main").unwrap();
+            engine.run(&[argument.as_ptr()]).unwrap();
+            assert_eq!(engine.exit().status, 0);
+        }
+    }
+
+    #[test]
+    fn malformed_pinned_interpreter_is_rejected_during_create() {
+        for isa in [1, 2] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(root.path().join("bin")).unwrap();
+            std::fs::create_dir_all(root.path().join("lib")).unwrap();
+            let main = root.path().join("bin/main");
+            let interpreter = root.path().join("lib/ld-test.so");
+            std::fs::write(&main, dynamic_image(b"/lib/ld-test.so", isa)).unwrap();
+            let mut malformed = exiting_interpreter(isa);
+            put64(&mut malformed, 32, u64::MAX - 32);
+            std::fs::write(&interpreter, malformed).unwrap();
+            let main = CString::new(main.to_str().unwrap()).unwrap();
+            let root_path = CString::new(root.path().to_str().unwrap()).unwrap();
+            let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
+            let config = EngineConfig {
+                isa,
+                rootfs: Some(&root_path),
+                executable_host: Some(&main),
+                executable_fd: -1,
+                option_names: &[],
+                option_values: &[],
+                standard_fds: [standard.as_raw_fd(); 3],
+                provider_fd: -1,
+            };
+            // SAFETY: every borrowed string and descriptor remains live through create.
+            assert!(unsafe { Engine::create(config) }.is_err());
+        }
+    }
+
+    #[test]
+    fn unlinked_pinned_image_can_reexec_proc_self_exe_on_both_isas() {
+        const SOURCE: &str = r#"
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <string.h>
+int main(int argc, char **argv) {
+#if IMAGE_ID == 1
+    char *next[] = { (char *)"/next", (char *)"stage-b", 0 };
+    syscall(SYS_execve, next[0], next, (char *[]){ 0 });
+    return errno;
+#elif IMAGE_ID == 2
+    if (argc == 2 && !strcmp(argv[1], "stage-b")) {
+        unlink("/next");
+        char *next[] = { (char *)"/proc/self/exe", (char *)"verify-b", 0 };
+        syscall(SYS_execve, next[0], next, (char *[]){ 0 });
+        return errno;
+    }
+
+    return argc == 2 && !strcmp(argv[1], "verify-b") ? 0 : 92;
+#elif IMAGE_ID == 3
+    char *next[] = { (char *)"/proc/self/exe", (char *)"again", 0 };
+    syscall(SYS_execve, next[0], next, (char *[]){ 0 });
+    return errno == EACCES ? 0 : errno;
+#else
+    if (argc == 2) return !strcmp(argv[1], "verify-a") ? 0 : 96;
+    int held = open("/next", O_WRONLY);
+    if (held < 0) return 94;
+    char *next[] = { (char *)"/next", (char *)"stage-b", 0 };
+    syscall(SYS_execve, next[0], next, (char *[]){ 0 });
+    if (errno != ETXTBSY) return 95;
+    close(held);
+    char *self[] = { (char *)"/proc/self/exe", (char *)"verify-a", 0 };
+    syscall(SYS_execve, self[0], self, (char *[]){ 0 });
+    return errno;
+#endif
+}
+"#;
+        for (isa, compiler) in [(1, "aarch64-linux-gnu-gcc"), (2, "x86_64-linux-gnu-gcc")] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(root.path().join("bin")).unwrap();
+            let source = root.path().join("self.c");
+            let main_path = root.path().join("bin/main");
+            let second_path = root.path().join("next");
+            let dac_path = root.path().join("dac");
+            let busy_path = root.path().join("busy");
+            std::fs::write(&source, SOURCE).unwrap();
+            for (identity, output) in [(1, &main_path), (2, &second_path), (3, &dac_path), (4, &busy_path)] {
+                let compile = guest_compiler(compiler)
+                    .args(["-static", "-no-pie", "-O2"])
+                    .arg(format!("-DIMAGE_ID={identity}"))
+                    .arg(&source)
+                    .arg("-o")
+                    .arg(output)
+                    .output()
+                    .unwrap_or_else(|error| panic!("{compiler} is required for ISA {isa}: {error}"));
+                assert!(
+                    compile.status.success(),
+                    "{compiler} failed: {}",
+                    String::from_utf8_lossy(&compile.stderr)
+                );
+            }
+            let root_path = CString::new(root.path().to_str().unwrap()).unwrap();
+            let run = |host: &std::path::Path, guest: &str, after_create: &dyn Fn()| {
+                let executable = CString::new(host.to_str().unwrap()).unwrap();
+                let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
+                let config = EngineConfig {
+                    isa,
+                    rootfs: Some(&root_path),
+                    executable_host: Some(&executable),
+                    executable_fd: -1,
+                    option_names: &[],
+                    option_values: &[],
+                    standard_fds: [standard.as_raw_fd(); 3],
+                    provider_fd: -1,
+                };
+                // SAFETY: every borrowed string and descriptor remains live through create.
+                let engine = unsafe { Engine::create(config) }.unwrap();
+                after_create();
+                let argument = CString::new(guest).unwrap();
+                engine.run(&[argument.as_ptr()]).unwrap();
+                engine.exit().status
+            };
+            assert_eq!(
+                run(&busy_path, "/busy", &|| {}),
+                0,
+                "ISA {isa} rotated authority after failed exec"
+            );
+            assert_eq!(
+                run(&main_path, "/bin/main", &|| {
+                    std::fs::remove_file(&main_path).unwrap();
+                    std::fs::remove_dir(root.path().join("bin")).unwrap();
+                }),
+                0,
+                "ISA {isa} did not rotate and re-exec image B"
+            );
+            let mut permissions = std::fs::metadata(&dac_path).unwrap().permissions();
+            permissions.set_mode(0o644);
+            std::fs::set_permissions(&dac_path, permissions).unwrap();
+            assert_eq!(
+                run(&dac_path, "/dac", &|| std::fs::remove_file(&dac_path).unwrap()),
+                0,
+                "ISA {isa} self authority lost execute DAC metadata"
+            );
+        }
+    }
+
+    #[test]
+    fn failed_prepared_exec_never_publishes_candidate_authority() {
+        const SOURCE: &str = r#"
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <string.h>
+#define STRINGIFY_INNER(value) #value
+#define STRINGIFY(value) STRINGIFY_INNER(value)
+int main(int argc, char **argv) {
+#ifdef CANDIDATE
+    return 99;
+#else
+    if (argc == 2) return !strcmp(argv[1], "verify-a-" STRINGIFY(SCENARIO)) ? 0 : 98;
+#if SCENARIO == 1
+    int held = open("/candidate", O_WRONLY);
+    if (held < 0) return 91;
+    const char *path = "/candidate";
+    int expected = ETXTBSY;
+#elif SCENARIO == 2
+    const char *path = "/denied";
+    int expected = EACCES;
+#elif SCENARIO == 3
+    const char *path = "/malformed";
+    int expected = ENOEXEC;
+#elif SCENARIO == 4
+    const char *path = "/script";
+    int expected = ENOENT;
+#else
+    const char *path = "/dynamic";
+    int expected = ENOENT;
+#endif
+    char *candidate[] = { (char *)path, 0 };
+    syscall(SYS_execve, path, candidate, (char *[]){ 0 });
+    if (errno != expected) return 20 + errno;
+    char *self[] = { (char *)"/proc/self/exe", (char *)"verify-a-" STRINGIFY(SCENARIO), 0 };
+    syscall(SYS_execve, self[0], self, (char *[]){ 0 });
+    return errno;
+#endif
+}
+"#;
+        use std::os::unix::fs::PermissionsExt as _;
+        for (isa, compiler) in [(1, "aarch64-linux-gnu-gcc"), (2, "x86_64-linux-gnu-gcc")] {
+            let root = tempfile::tempdir().unwrap();
+            let source = root.path().join("authority.c");
+            std::fs::write(&source, SOURCE).unwrap();
+            let compile = |arguments: &[&str], input: &std::path::Path, output: &std::path::Path| {
+                let result = guest_compiler(compiler)
+                    .args(arguments)
+                    .arg(input)
+                    .arg("-o")
+                    .arg(output)
+                    .output()
+                    .unwrap();
+                assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+            };
+            let candidate = root.path().join("candidate");
+            compile(&["-static", "-no-pie", "-O2", "-DCANDIDATE"], &source, &candidate);
+            std::fs::copy(&candidate, root.path().join("denied")).unwrap();
+            let mut denied = std::fs::metadata(root.path().join("denied")).unwrap().permissions();
+            denied.set_mode(0o644);
+            std::fs::set_permissions(root.path().join("denied"), denied).unwrap();
+            std::fs::write(root.path().join("malformed"), b"not an executable\n").unwrap();
+            std::fs::write(root.path().join("script"), b"#!/missing-interpreter\n").unwrap();
+            for path in [root.path().join("malformed"), root.path().join("script")] {
+                let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+                permissions.set_mode(0o755);
+                std::fs::set_permissions(path, permissions).unwrap();
+            }
+            std::fs::write(root.path().join("dynamic"), dynamic_image(b"/missing-loader", isa)).unwrap();
+            let mut dynamic_permissions = std::fs::metadata(root.path().join("dynamic")).unwrap().permissions();
+            dynamic_permissions.set_mode(0o755);
+            std::fs::set_permissions(root.path().join("dynamic"), dynamic_permissions).unwrap();
+            let root_path = CString::new(root.path().to_str().unwrap()).unwrap();
+            for scenario in 1..=5 {
+                let main = root.path().join(format!("main-{scenario}"));
+                compile(
+                    &["-static", "-no-pie", "-O2", &format!("-DSCENARIO={scenario}")],
+                    &source,
+                    &main,
+                );
+                let executable = CString::new(main.to_str().unwrap()).unwrap();
+                let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
+                let config = EngineConfig {
+                    isa,
+                    rootfs: Some(&root_path),
+                    executable_host: Some(&executable),
+                    executable_fd: -1,
+                    option_names: &[],
+                    option_values: &[],
+                    standard_fds: [standard.as_raw_fd(); 3],
+                    provider_fd: -1,
+                };
+                // SAFETY: borrowed strings and descriptors remain live through creation.
+                let engine = unsafe { Engine::create(config) }.unwrap();
+                let argument = CString::new(format!("/main-{scenario}")).unwrap();
+                engine.run(&[argument.as_ptr()]).unwrap();
+                assert_eq!(engine.exit().status, 0, "ISA {isa} scenario {scenario}");
+            }
+        }
+    }
+
+    fn resolved(mut roots: Vec<std::fs::File>, path: &str) -> Option<String> {
+        let mut file = resolve_layered_guest(std::path::Path::new(path), &roots).ok()??;
+        let mut value = String::new();
+        file.read_to_string(&mut value).ok()?;
+        roots.clear();
+        Some(value)
+    }
+
+    #[test]
+    fn interpreter_union_authority_handles_layers_links_and_deletions() {
+        use std::os::unix::fs::symlink;
+        let upper = tempfile::tempdir().unwrap();
+        let lower = tempfile::tempdir().unwrap();
+        let lower_second = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(lower.path().join("lib/real")).unwrap();
+        std::fs::create_dir_all(lower_second.path().join("lib")).unwrap();
+        std::fs::write(lower.path().join("lib/real/loader"), "lower").unwrap();
+        std::fs::write(lower_second.path().join("lib/fallback"), "second").unwrap();
+        symlink("real/loader", lower.path().join("lib/relative")).unwrap();
+        symlink("/lib/real/loader", lower.path().join("lib/absolute")).unwrap();
+        let roots = || {
+            vec![
+                File::open(upper.path()).unwrap(),
+                File::open(lower.path()).unwrap(),
+                File::open(lower_second.path()).unwrap(),
+            ]
+        };
+        assert_eq!(resolved(roots(), "/lib/real/loader").as_deref(), Some("lower"));
+        assert_eq!(resolved(roots(), "/lib/relative").as_deref(), Some("lower"));
+        assert_eq!(resolved(roots(), "/lib/absolute").as_deref(), Some("lower"));
+        assert_eq!(resolved(roots(), "/lib/fallback").as_deref(), Some("second"));
+        std::fs::write(lower.path().join("lib/fallback"), "first").unwrap();
+        assert_eq!(resolved(roots(), "/lib/fallback").as_deref(), Some("first"));
+
+        std::fs::create_dir_all(upper.path().join("lib/real")).unwrap();
+        std::fs::write(upper.path().join("lib/real/loader"), "upper").unwrap();
+        assert_eq!(resolved(roots(), "/lib/real/loader").as_deref(), Some("upper"));
+        std::fs::remove_file(upper.path().join("lib/real/loader")).unwrap();
+        std::fs::write(upper.path().join("lib/real/.wh.loader"), "").unwrap();
+        assert!(resolved(roots(), "/lib/real/loader").is_none());
+        std::fs::remove_file(upper.path().join("lib/real/.wh.loader")).unwrap();
+        std::fs::write(upper.path().join("lib/real/.wh..wh..opq"), "").unwrap();
+        assert!(resolved(roots(), "/lib/real/loader").is_none());
+        std::fs::create_dir_all(lower.path().join("lib/sub")).unwrap();
+        std::fs::write(lower.path().join("lib/sub/loader"), "hidden").unwrap();
+        std::fs::create_dir_all(upper.path().join("lib/sub")).unwrap();
+        std::fs::write(upper.path().join("lib/.wh..wh..opq"), "").unwrap();
+        assert!(resolved(roots(), "/lib/sub/loader").is_none());
+        assert!(resolved(roots(), "/lib/.wh..wh..opq").is_none());
+        assert!(resolved(roots(), "/lib/real/.wh.loader").is_none());
+        assert!(resolved(roots(), "/../../proc/self/fd/0").is_none());
+    }
+
+    #[test]
+    fn upper_non_directory_ancestor_masks_lower_directory() {
+        let upper = tempfile::tempdir().unwrap();
+        let lower = tempfile::tempdir().unwrap();
+        std::fs::write(upper.path().join("lib"), "not a directory").unwrap();
+        std::fs::create_dir_all(lower.path().join("lib")).unwrap();
+        std::fs::write(lower.path().join("lib/loader"), "must stay hidden").unwrap();
+        let roots = vec![File::open(upper.path()).unwrap(), File::open(lower.path()).unwrap()];
+        let error = resolve_layered_guest(std::path::Path::new("/lib/loader"), &roots).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::ENOTDIR));
+    }
+
+    #[test]
+    fn upper_merged_directory_keeps_lower_symlink_children_reachable() {
+        use std::os::unix::fs::symlink;
+        let upper = tempfile::tempdir().unwrap();
+        let lower = tempfile::tempdir().unwrap();
+        std::fs::create_dir(upper.path().join("lib")).unwrap();
+        std::fs::create_dir_all(lower.path().join("usr/lib")).unwrap();
+        std::fs::write(lower.path().join("usr/lib/loader"), "lower loader").unwrap();
+        symlink("usr/lib", lower.path().join("lib")).unwrap();
+        let roots = vec![File::open(upper.path()).unwrap(), File::open(lower.path()).unwrap()];
+        let error = resolve_layered_guest(std::path::Path::new("/lib/loader"), &roots).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::ENOTDIR));
+        let mut loader = super::resolve_through_merged_directory_symlink(std::path::Path::new("/lib/loader"), &roots)
+            .unwrap()
+            .unwrap();
+        let mut contents = String::new();
+        loader.read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, "lower loader");
+    }
+
+    #[test]
+    fn pinned_interpreter_survives_ancestor_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("lib/live")).unwrap();
+        std::fs::write(root.path().join("lib/live/loader"), "original").unwrap();
+        let roots = vec![File::open(root.path()).unwrap()];
+        let mut pinned = resolve_layered_guest(std::path::Path::new("/lib/live/loader"), &roots)
+            .unwrap()
+            .unwrap();
+        std::fs::rename(root.path().join("lib/live"), root.path().join("lib/displaced")).unwrap();
+        std::fs::create_dir_all(root.path().join("lib/live")).unwrap();
+        std::fs::write(root.path().join("lib/live/loader"), "replacement").unwrap();
+        let mut value = String::new();
+        pinned.read_to_string(&mut value).unwrap();
+        assert_eq!(value, "original");
     }
 
     fn inspect(bytes: &[u8]) -> Result<Plan, i32> {
@@ -526,88 +1254,86 @@ mod tests {
 
     #[cfg(feature = "native-test-hooks")]
     #[test]
-    fn checkpoint_control_transaction_serializes_readiness_and_acknowledgement() {
-        const CHILD: &str = "HL_NATIVE_CHECKPOINT_TRANSACTION_CHILD";
+    fn fork_child_prunes_foreign_checkpoint_descriptors_before_fd_reuse() {
+        const CHILD: &str = "HL_NATIVE_CHECKPOINT_PRUNE_CHILD";
         if std::env::var_os(CHILD).is_none() {
-            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
                 .args([
                     "--exact",
-                    "engine::tests::checkpoint_control_transaction_serializes_readiness_and_acknowledgement",
+                    "engine::tests::fork_child_prunes_foreign_checkpoint_descriptors_before_fd_reuse",
                     "--nocapture",
+                    "--test-threads=1",
                 ])
-                .env(CHILD, "1")
-                .spawn()
-                .unwrap();
+                .env(CHILD, "1");
+            let mut child = IsolatedTestChild::spawn(command).unwrap();
             let deadline = Instant::now() + Duration::from_secs(15);
             loop {
                 if let Some(status) = child.try_wait().unwrap() {
-                    assert!(status.success(), "checkpoint transaction child failed: {status}");
+                    assert!(status.success(), "checkpoint prune child failed: {status}");
                     return;
                 }
-                if Instant::now() >= deadline {
-                    child.kill().unwrap();
-                    let _ = child.wait();
-                    panic!("checkpoint transaction child exceeded 15 seconds");
-                }
+                assert!(Instant::now() < deadline, "checkpoint prune child exceeded 15 seconds");
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
 
-        for isa in [1, 2] {
-            let (mut engine, _standard) = create_engine(isa);
-            let (_broker, transport) = crate::CheckpointTransport::create().unwrap();
-            engine.configure_checkpoint(&transport).unwrap();
-            let argument = CString::new("guest").unwrap();
+        // SAFETY: the test hook creates, forks, verifies, and closes its own descriptors.
+        assert_eq!(
+            unsafe { crate::bindings::hl_c_backend_checkpoint_test_prune_foreign_descriptors() },
+            1
+        );
+    }
 
-            // SAFETY: these test-feature-only functions own a process-global
-            // deterministic barrier and take no caller-provided pointers.
-            assert_eq!(unsafe { crate::bindings::hl_c_backend_checkpoint_test_arm() }, 1);
-            std::thread::scope(|scope| {
-                let request = scope.spawn(|| engine.request(4, 0));
-                let deadline = Instant::now() + Duration::from_secs(5);
-                while unsafe { crate::bindings::hl_c_backend_checkpoint_test_phase() } != 2 {
-                    assert!(
-                        Instant::now() < deadline,
-                        "ISA {isa} request did not acquire checkpoint transaction"
-                    );
-                    std::thread::yield_now();
-                }
-                let running = scope.spawn(|| engine.run(&[argument.as_ptr()]));
-                while unsafe { crate::bindings::hl_c_backend_checkpoint_test_phase() } != 3 {
-                    assert!(
-                        Instant::now() < deadline,
-                        "ISA {isa} guest process did not reach checkpoint control"
-                    );
-                    std::thread::yield_now();
-                }
-                let _generation = transport.bump();
-                // SAFETY: phase 2 proves the request owns the transaction lock;
-                // release lets it consume the sole readiness byte and complete
-                // the full command/ack exchange before run may inspect it.
-                unsafe { crate::bindings::hl_c_backend_checkpoint_test_release() };
-                assert_eq!(
-                    request.join().unwrap(),
-                    Err(12),
-                    "ISA {isa} zero-executor acknowledgement changed"
-                );
-                assert_eq!(unsafe { crate::bindings::hl_c_backend_checkpoint_test_phase() }, 6);
-                let deadline = Instant::now() + Duration::from_secs(5);
-                while unsafe { crate::bindings::hl_c_backend_checkpoint_test_phase() } != 7 {
-                    assert!(
-                        Instant::now() < deadline,
-                        "ISA {isa} run did not cross serialized readiness"
-                    );
-                    std::thread::yield_now();
-                }
-                engine.request(2, 0).unwrap();
-                assert_eq!(
-                    running.join().unwrap(),
-                    Ok(()),
-                    "ISA {isa} run failed after checkpoint ack"
-                );
-            });
-            // SAFETY: the child has joined every user of the feature-only hook.
-            unsafe { crate::bindings::hl_c_backend_checkpoint_test_reset() };
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn checkpoint_configuration_adopt_failures_preserve_descriptor_ownership() {
+        const CHILD: &str = "HL_NATIVE_CHECKPOINT_ADOPT_FAILURE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "engine::tests::checkpoint_configuration_adopt_failures_preserve_descriptor_ownership",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1");
+            let status = command.status().unwrap();
+            assert!(status.success(), "checkpoint adoption child failed: {status}");
+            return;
+        }
+
+        let descriptor_directory = if cfg!(target_os = "linux") {
+            "/proc/self/fd"
+        } else {
+            "/dev/fd"
+        };
+        for position in 1..=4 {
+            let (mut engine, _standard) = create_engine(1);
+            let (_broker, transport) = crate::CheckpointTransport::create().unwrap();
+            let descriptors_before = std::fs::read_dir(descriptor_directory).unwrap().count();
+            // SAFETY: the feature-only hook affects only this thread's next configure transaction.
+            unsafe { crate::bindings::hl_c_backend_checkpoint_test_fail_private_adopt(position) };
+            // SAFETY: this feature-only observation hook takes no pointers and only reads the
+            // checkpoint test ledger while no configure transaction is active.
+            let private_before = unsafe { crate::bindings::hl_c_backend_checkpoint_test_private_descriptor_count() };
+            assert!(
+                engine.configure_checkpoint(&transport).is_err(),
+                "position {position} unexpectedly succeeded"
+            );
+            let descriptors_after = std::fs::read_dir(descriptor_directory).unwrap().count();
+            // SAFETY: the failed configure transaction has returned, so this feature-only hook
+            // only reads the settled checkpoint test ledger and does not alias mutable state.
+            let private_after = unsafe { crate::bindings::hl_c_backend_checkpoint_test_private_descriptor_count() };
+            assert_eq!(
+                descriptors_after, descriptors_before,
+                "position {position} leaked a descriptor"
+            );
+            assert_eq!(
+                private_after, private_before,
+                "position {position} changed private ownership"
+            );
+            engine.configure_checkpoint(&transport).unwrap();
         }
     }
 }

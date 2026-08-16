@@ -1,6 +1,7 @@
 // hl/linux_abi -- native checkpoint/restore ("CRIU-equivalent"), MULTI-PROCESS.
 #include "../host_errno.h"
 #include "../pipe.h"
+#include "region.h"
 //
 // Freezes a running guest -- a WHOLE process tree (multiple shells, background jobs, their children) -- to an
 // on-disk directory (RAM + CPU + fds, per process), so every host engine process can exit and free its
@@ -61,7 +62,7 @@
 
 #define CKPT_MAGIC UINT64_C(0x373054504b434c48)          // "HLCKPT07" (LE) -- per-process meta
 #define CKPT_MANIFEST_MAGIC UINT64_C(0x3730304e414d4c48) // "HLMAN007" (LE) -- workspace manifest
-#define CKPT_VERSION 4 // v4 preserves process and thread signal-64 pending state
+#define CKPT_VERSION 5 // v5 validates the full translator identity on restore
 #define CKPT_ARCH_X86_64 1
 #define CKPT_ARCH_AARCH64 2
 #define CKPT_CPU_MAGIC UINT64_C(0x31305550434c4848) // "HHLCPU01" (LE)
@@ -144,7 +145,8 @@ struct ckpt_manifest {
 };
 
 struct ckpt_meta {
-    uint64_t magic, version, arch, engine_id;
+    uint64_t magic, version, arch;
+    hl_identity_digest engine_identity;
     uint64_t cpu_sz, pagesz;
     uint64_t n_regions, n_threads, n_fds;
     uint64_t brk_lo, brk_cur, brk_hi;
@@ -160,21 +162,6 @@ struct ckpt_meta {
     // replayed on restore (ckpt_reinstall_sigacts) so async signals route back through the engine handler.
     uint64_t sig_handler[65], sig_flags[65], sig_mask[65];
 };
-
-struct ckpt_region {
-    uint64_t addr, len, glen;
-    int32_t prot;   // guest-intent protection (from the anon registry; PROT_READ|WRITE default)
-    int32_t is_gna; // 1 if this region is guest-PROT_NONE (rebuild the g_gna EFAULT registry on restore)
-    uint64_t npages;
-    uint64_t backing_object;
-    uint64_t backing_offset;
-    uint32_t backing_shared;
-    uint32_t backing_emulated;
-    uint32_t format_version;
-    uint32_t logical;
-};
-
-#define CKPT_REGION_VERSION 1
 
 static int ckpt_rd_all(FILE *f, void *buf, size_t n);
 
@@ -933,6 +920,8 @@ static int ckpt_capture_file_blob(int fd, char *record_path, size_t record_capac
     return result;
 }
 
+int hl_ckpt_interrupt_executors(void);
+
 // Called at the top of the dispatcher loop (a clean safepoint: all guest arch state is spilled into `c`).
 // Referenced by engine/dispatch.c via the G_CKPT_POLL seam (aarch64-only). Cheap: a NULL test + one shared
 // memory load on the hot path. When the trigger generation advances, the container INIT coordinates the
@@ -944,7 +933,13 @@ static void ckpt_poll(struct cpu *c) {
     // One deterministic coordinator per host process: the thread-group leader owns generation consumption.
     // A peer that observes the trigger returns to translated execution with irq armed by the process kick;
     // the leader will shortly arm the strict barrier and park it at this dispatcher boundary.
-    if (c->tid != 0) return;
+    if (c->tid != 0) {
+        /* A process-directed host kick may wake any executor. Fan it out from
+         * this safe dispatcher context so the leader always consumes the new
+         * generation and blocked peers are released as well. */
+        (void)hl_ckpt_interrupt_executors();
+        return;
+    }
     g_ckpt_seen_gen = g;
     if (container_pid() == 1) {
         ckpt_coordinate_and_exit(c); // never returns (dumps the tree + _exit)
@@ -960,6 +955,13 @@ static void ckpt_poll(struct cpu *c) {
 // reconstruct it from libc's SIGRTMIN: host_signal.h owns a separate Linux signal namespace, and
 // repeating the arithmetic outside this translation unit can turn a safepoint kick into termination.
 #if G_CKPT_ARCH == 2 || defined(HL_CKPT_INTERRUPT_EXPORT)
+void hl_ckpt_interrupt_block(void) {
+    sigset_t blocked;
+    sigemptyset(&blocked);
+    sigaddset(&blocked, THREAD_INT_SIG);
+    pthread_sigmask(SIG_BLOCK, &blocked, NULL);
+}
+
 int hl_ckpt_interrupt_signal(void) {
     return THREAD_INT_SIG;
 }
@@ -973,7 +975,11 @@ int hl_ckpt_interrupt_executors(void) {
         if (g_threg[i].c == NULL) continue;
         __atomic_store_n(&g_threg[i].c->irq, 1, __ATOMIC_SEQ_CST);
         if (pthread_kill(g_threg[i].th, THREAD_INT_SIG) != 0) continue;
-        pthread_kill(g_threg[i].th, STW_SIG);
+        /* THREAD_INT_SIG is the activation kick.  Do not queue STW_SIG here:
+         * delivery can be delayed until the leader has armed its own checkpoint
+         * gate, at which point the gate owner parks in stw_park_handler waiting
+         * for itself to release that gate.  ckpt_dump_self() sends STW_SIG only
+         * to peer threads after the barrier is armed. */
         interrupted++;
         if (g_threg[i].c->tid == 0) leader_interrupted = 1;
     }

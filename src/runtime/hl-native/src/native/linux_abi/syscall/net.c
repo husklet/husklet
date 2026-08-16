@@ -127,7 +127,7 @@ static int unix_dgram_dest(const uint8_t *sa, socklen_t l, char *host, size_t hn
 //   3. proto layer -> EISCONN (connect on a connected stream socket),
 //                     EAFNOSUPPORT (sa_family != the socket's family),
 //                     EINVAL (addrlen < sizeof(sockaddr_in/in6))              [AF_INET/INET6 sockets only]
-// Returns 0 to continue, or a negative *macOS* errno to return now (svc_done does the m2l boundary xlate,
+// Returns 0 to continue, or a negative *macOS* errno to return now (svc_done_host does the m2l boundary xlate,
 // exactly as for a real failed syscall). Family/length checks are gated on the socket actually being
 // AF_INET/AF_INET6 (the family recorded at socket()/accept(), see g_sock_fam) so AF_UNIX / AF_NETLINK /
 // AF_PACKET bind+connect are untouched.
@@ -399,40 +399,40 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         switch (nr) {
         case 200: // bind(sockaddr_nl): no-op success (our socketpair is already connected)
             G_RET(c) = 0;
-            return svc_done(c);
+            return svc_done_host(c);
         case 204: // getsockname -> sockaddr_nl { family, pid=getpid() }
         {
             net_sockaddr_copyout address_copyout __attribute__((cleanup(net_sockaddr_copyout_finish)));
             int error = net_sockaddr_copyout_begin(&address_copyout, c, a1, a2);
             if (error < 0) {
                 G_RET(c) = (uint64_t)(int64_t)error;
-                return svc_done(c);
+                return svc_done_host(c);
             }
             nl_getsockname(address_copyout.active ? address_copyout.address : NULL,
                            address_copyout.active ? &address_copyout.length : NULL);
             G_RET(c) = 0;
-            return svc_done(c);
+            return svc_done_host(c);
         }
         case 206: { // sendto/send: parse the RTNETLINK request, queue the dump
             void *payload __attribute__((cleanup(guest_free_bounce))) = malloc(a2 ? (size_t)a2 : 1);
             if (!payload) {
                 G_RET(c) = (uint64_t)(int64_t)(-ENOMEM);
-                return svc_done(c);
+                return svc_done_host(c);
             }
             if (a2 && guest_copy_from(payload, a1, (size_t)a2) != (ssize_t)a2) {
                 G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
-                return svc_done(c);
+                return svc_done_host(c);
             }
             int64_t s = nl_send((int)a0, payload, (size_t)a2);
             G_RET(c) = (uint64_t)s;
-            return svc_done(c);
+            return svc_done_host(c);
         }
         case 211: { // sendmsg: gather the iov into a scratch buffer, then queue the dump
             net_message_bounce message_bounce __attribute__((cleanup(net_message_bounce_finish)));
             int error = net_message_bounce_begin(&message_bounce, c, a1, 0);
             if (error < 0) {
                 G_RET(c) = (uint64_t)(int64_t)error;
-                return svc_done(c);
+                return svc_done_host(c);
             }
             uint8_t *g = message_bounce.header;
             struct iovec *iv = (struct iovec *)*(uint64_t *)(g + 16);
@@ -447,13 +447,13 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             }
             nl_send((int)a0, tmp, tl);
             G_RET(c) = (uint64_t)tl;
-            return svc_done(c);
+            return svc_done_host(c);
         }
         case 207: { // recvfrom/recv: drain our queued dump (Linux MSG_PEEK/TRUNC); kernel (pid 0) source
             void *payload __attribute__((cleanup(guest_free_bounce))) = calloc(a2 ? (size_t)a2 : 1, 1);
             if (!payload) {
                 G_RET(c) = (uint64_t)(int64_t)(-ENOMEM);
-                return svc_done(c);
+                return svc_done_host(c);
             }
             struct iovec iov = {payload, (size_t)a2};
             int64_t r = nl_recv((int)a0, &iov, 1, (int)a3, NULL);
@@ -466,22 +466,22 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 int error = net_sockaddr_copyout_begin(&address_copyout, c, a4, a5);
                 if (error < 0) {
                     G_RET(c) = (uint64_t)(int64_t)error;
-                    return svc_done(c);
+                    return svc_done_host(c);
                 }
                 nl_fill_src(address_copyout.address, address_copyout.capacity);
                 address_copyout.length = 12;
                 G_RET(c) = (uint64_t)r;
-                return svc_done(c);
+                return svc_done_host(c);
             }
             G_RET(c) = (uint64_t)r; // nl_recv already returns -errno on failure
-            return svc_done(c);
+            return svc_done_host(c);
         }
         case 212: { // recvmsg: read into the guest iov (Linux MSG_PEEK/TRUNC); report a kernel source addr
             net_message_bounce message_bounce __attribute__((cleanup(net_message_bounce_finish)));
             int error = net_message_bounce_begin(&message_bounce, c, a1, 1);
             if (error < 0) {
                 G_RET(c) = (uint64_t)(int64_t)error;
-                return svc_done(c);
+                return svc_done_host(c);
             }
             uint8_t *g = message_bounce.header;
             struct iovec *iov = (struct iovec *)*(uint64_t *)(g + 16);
@@ -500,7 +500,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 *(uint32_t *)(g + 48) = (uint32_t)mf; // msg_flags (Linux MSG_TRUNC iff the copy truncated)
             }
             G_RET(c) = (uint64_t)r; // nl_recv already returns -errno on failure
-            return svc_done(c);
+            return svc_done_host(c);
         }
         default: break; // setsockopt/getsockopt/shutdown/etc.: generic path on the AF_UNIX socket
         }
@@ -511,5 +511,5 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
 #include "net/message.inc"
     default: return 0;
     }
-    return svc_done(c); // boundary errno xlate (host macOS -> Linux); see helpers.c svc_done
+    return svc_done_host(c); // boundary errno xlate (host macOS -> Linux); see helpers.c svc_done_host
 }

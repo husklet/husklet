@@ -56,7 +56,8 @@ static void pcache_exec_force_interp(void) {
     if (g_pcache) g_force_base = PC_INTERP_BASE;
 }
 
-static void pcache_exec_reload(const char *prog_host, const char *interp_host, const char *argv0, uint64_t jump) {
+static void pcache_exec_reload(hl_identity_digest program, hl_identity_digest interpreter, const char *argv0,
+                               uint64_t jump) {
     if (!g_pcache) return;
     // Execve has flushed the old arena and installed a new fixed-base image. Reset every cache-production
     // datum in lockstep with that identity boundary. The new epoch may publish even when its process was
@@ -76,7 +77,7 @@ static void pcache_exec_reload(const char *prog_host, const char *interp_host, c
     g_pc_nprov_defer = 0;
     g_pc_nlib = 0;
     __atomic_store_n(&g_pc_lib_next, PC_LIB_BASE, __ATOMIC_RELAXED);
-    g_pc_binid = pcache_make_id(prog_host, interp_host, argv0);
+    g_pc_binid = pcache_make_id(program, interpreter, argv0);
     g_pc_entry = jump;
     int hit = pcache_load(jump);
     if (g_coldprof) fprintf(stderr, "[pcache] exec %s reloc=%d\n", hit ? "HIT" : "MISS", g_nreloc);

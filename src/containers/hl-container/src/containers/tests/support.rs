@@ -66,6 +66,7 @@ pub(super) struct FakeRuntime {
     pub(super) next: AtomicU64,
     pub(super) fail: AtomicBool,
     pub(super) fail_wait: AtomicBool,
+    pub(super) fail_checkpoint: AtomicU64,
     pub(super) hold_logs: AtomicBool,
     pub(super) checkpointable: AtomicBool,
     pub(super) delay: Duration,
@@ -92,6 +93,7 @@ impl FakeRuntime {
             next: AtomicU64::new(40),
             fail: AtomicBool::new(false),
             fail_wait: AtomicBool::new(false),
+            fail_checkpoint: AtomicU64::new(0),
             hold_logs: AtomicBool::new(false),
             checkpointable: AtomicBool::new(true),
             delay: Duration::from_millis(10),
@@ -125,6 +127,7 @@ struct FakeProcess {
     logs: std::sync::Mutex<Option<crate::service::LogReceiver>>,
     _log_owner: Option<crate::service::LogSender>,
     checkpoint_armed: bool,
+    checkpoint_failure: bool,
     domain: hl_engine::Domain,
     domain_reads: Arc<AtomicU64>,
 }
@@ -161,6 +164,9 @@ impl Running for FakeProcess {
         Ok(())
     }
     async fn checkpoint(&self, _timeout: Duration) -> Result<()> {
+        if self.checkpoint_failure {
+            return Err(Error::Runtime("injected checkpoint failure".into()));
+        }
         if self.checkpoint_armed {
             Ok(())
         } else {
@@ -227,8 +233,9 @@ impl Runtime for FakeRuntime {
         } else {
             (self.delay, self.result)
         };
+        let id = self.next.fetch_add(1, Ordering::SeqCst);
         Ok(Arc::new(FakeProcess {
-            id: self.next.fetch_add(1, Ordering::SeqCst),
+            id,
             delay,
             result,
             fail_wait: self.fail_wait.load(Ordering::SeqCst),
@@ -238,6 +245,7 @@ impl Runtime for FakeRuntime {
             logs: std::sync::Mutex::new(Some(receiver)),
             _log_owner: log_owner,
             checkpoint_armed: launch.checkpoint.is_some() && self.checkpointable.load(Ordering::SeqCst),
+            checkpoint_failure: self.fail_checkpoint.load(Ordering::SeqCst) == id,
             domain,
             domain_reads: Arc::clone(&self.domain_reads),
         }))

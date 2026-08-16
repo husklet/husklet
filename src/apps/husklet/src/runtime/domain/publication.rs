@@ -64,7 +64,7 @@ impl ConfigurationIdentity {
     }
 
     pub(super) fn publish(&self, workspace: &WorkspaceConfig) -> io::Result<()> {
-        hl_fs::File::from(self.path.clone()).replace(Configuration::new(workspace).signature())
+        hl_fs::File::from(self.path.clone()).replace(Configuration::new(workspace).signature()?)
     }
 
     /// Returns whether the live domain was published for this exact workspace
@@ -77,7 +77,7 @@ impl ConfigurationIdentity {
                 format!("live workspace domain has no verifiable configuration identity: {error}"),
             )
         })?;
-        Ok(effective.trim() == Configuration::new(workspace).signature())
+        Ok(effective.trim() == Configuration::new(workspace).signature()?)
     }
 
     pub(super) fn remove(&self) -> io::Result<()> {

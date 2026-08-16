@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
+#include <time.h>
 #include <unistd.h>
 
 /* A translated store site caches the projected host address of its window. When a
@@ -19,14 +20,15 @@
    straight-line probe never qualifies. The counted walk in front of the probe is what
    carries the body past NATIVE_SOLO_BUDGET and gets it translated. */
 #define WALK 64
-#define WARM_ITERATIONS 50000u
-#define SETTLE_ITERATIONS 50000u
+#define WARM_ITERATIONS 500u
+#define REBIND_ITERATIONS 1000u
+#define OVERLAP_ITERATIONS 100u
+#define SETTLE_ITERATIONS 500u
 
 static volatile uint64_t *window;
 static _Atomic unsigned long iterations;
 static _Atomic unsigned long rebinds;
 static _Atomic int running = 1;
-static _Atomic int flipping = 1;
 static _Atomic int rebind_failed;
 static int backing;
 static uint64_t scratch[WALK];
@@ -36,7 +38,8 @@ static uint64_t scratch[WALK];
 static void *flipper(void *unused) {
     (void)unused;
     unsigned long n = 0;
-    while (atomic_load_explicit(&flipping, memory_order_acquire)) {
+    const struct timespec scheduling_gap = {.tv_nsec = 50000};
+    while (n < REBIND_ITERATIONS) {
         off_t offset = (n & 1u) ? (off_t)PAGE : (off_t)0;
         if (mmap((void *)window, PAGE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, backing, offset) !=
             (void *)window) {
@@ -45,6 +48,7 @@ static void *flipper(void *unused) {
         }
         ++n;
         atomic_store_explicit(&rebinds, n, memory_order_release);
+        (void)nanosleep(&scheduling_gap, NULL);
     }
     return NULL;
 }
@@ -98,12 +102,18 @@ int main(void) {
     /* Let the store site translate and latch the first backing. */
     advance(WARM_ITERATIONS);
 
-    /* Race rebinds against the hot store site, then quiesce onto the second backing. */
+    /* Race a fixed number of rebinds against the hot store site.  Basing the
+       remap lifetime on store progress creates a circular starvation loop:
+       every MAP_FIXED transition stops that same storer, so an unbounded
+       flipper can prevent the progress used to stop it. */
+    unsigned long overlap_start = atomic_load_explicit(&iterations, memory_order_acquire);
     if (pthread_create(&flip, NULL, flipper, NULL) != 0) return 5;
-    advance(WARM_ITERATIONS);
-    atomic_store_explicit(&flipping, 0, memory_order_release);
     pthread_join(flip, NULL);
-    if (atomic_load_explicit(&rebind_failed, memory_order_acquire)) return 6;
+    unsigned long overlap_end = atomic_load_explicit(&iterations, memory_order_acquire);
+    if (atomic_load_explicit(&rebind_failed, memory_order_acquire) ||
+        atomic_load_explicit(&rebinds, memory_order_acquire) != REBIND_ITERATIONS)
+        return 6;
+    if (overlap_end - overlap_start < OVERLAP_ITERATIONS) return 11;
     if (mmap(slot, PAGE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, (off_t)PAGE) != slot) return 7;
 
     /* Well after the last transition, so no in-flight store is still ambiguous. */

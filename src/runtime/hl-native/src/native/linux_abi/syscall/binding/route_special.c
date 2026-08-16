@@ -276,10 +276,20 @@ static int bound_route_transfer(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
     }
     if (nr == 76) {
         hl_linux_fd_snapshot second;
-        int second_bound = bound_snapshot(a2, &second);
+        int second_bound = !g_bound_second_native && bound_snapshot(a2, &second);
         if (source_bound || second_bound) {
             G_RET(c) = (uint64_t)bound_splice(source_bound ? &source : NULL, (int)a0, a1, second_bound ? &second : NULL,
                                               (int)a2, a3, G_A4(c), G_A5(c));
+            return 1;
+        }
+    }
+    if (nr == 285) {
+        hl_linux_fd_snapshot second;
+        int second_bound = !g_bound_second_native && bound_snapshot(a2, &second);
+        if (source_bound || second_bound) {
+            G_RET(c) = (uint64_t)bound_copy_file_range(
+                source_bound ? &source : NULL, (int)a0, a1, second_bound ? &second : NULL, (int)a2, a3, G_A4(c),
+                G_A5(c));
             return 1;
         }
     }
@@ -612,7 +622,7 @@ static int bound_route_attributes(struct cpu *c, uint64_t nr, uint64_t a0, uint6
             result = guest_xattr_list(path, (char *)a1, (size_t)a2, 0);
         else
             result = guest_xattr_remove(path, (const char *)a1, 0);
-        if (result < 0) result = -hl_linux_errno_from_macos((int)-result);
+        if (result < 0) result = -hl_linux_errno_from_host((int)-result);
         break;
     }
     case 33: {

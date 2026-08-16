@@ -1,4 +1,5 @@
-use super::{App, Args, Error, Options, workspace};
+use super::{App, Error, Options, workspace};
+use clap::Args;
 
 pub fn oracle(options: OracleOptions) -> Result<(), Error> {
     let apps = apps(&options.runtime)?;

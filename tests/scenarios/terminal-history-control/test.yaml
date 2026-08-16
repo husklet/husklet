@@ -1,0 +1,31 @@
+cases:
+- id: terminal-history-control/previous-next-line
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "stty -echo; PS1=\"HIST-${x}PROMPT# \"\r" }
+      - await_output: { contains: "HIST-PROMPT# ", timeout_ms: 5000 }
+      - write: { text: "printf '<%s>\\n' HISTORY-OLD\r" }
+      - await_output: { contains: "<HISTORY-OLD>", timeout_ms: 5000 }
+      - write: { text: "\u0010\u0017HISTORY-RECALLED\r" }
+      - await_output: { contains: "<HISTORY-RECALLED>", timeout_ms: 5000 }
+      - write: { text: "printf '<%s>\\n' HISTORY-PENDING" }
+      - write: { text: "\u0010" }
+      - write: { text: "\u000e" }
+      - write: { text: "\r" }
+      - await_output: { contains: "<HISTORY-PENDING>", timeout_ms: 5000 }
+      - write: { text: "printf 'HISTORY-SHELL-%s\\n' RECOVERED; stty echo; exit\r" }
+      - await_output: { contains: HISTORY-SHELL-RECOVERED, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/recalled.txt
+    - golden/pending.txt
+    - golden/recovered.txt

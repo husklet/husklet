@@ -1,4 +1,4 @@
-use super::{scheduler, workspace};
+use super::scheduler;
 use crate::suite::SafePath as _;
 pub(super) mod diagnostics;
 pub(crate) mod elf;
@@ -245,10 +245,7 @@ impl App {
 
     /// Each build owns a private directory, so concurrent runners of one case never share an artifact.
     pub fn build(&self, case: &Workload, target: Target) -> Result<GuestBuild, Error> {
-        let root = workspace()?
-            .join("target/testing/runtime")
-            .join(&self.name)
-            .join(target.name());
+        let root = super::work_root::WorkRoot::open()?.builds(&self.name, target.name());
         fs::create_dir_all(&root).map_err(|error| format!("create build directory {}: {error}", root.display()))?;
         let directory = tempfile::Builder::new()
             .prefix("build-")
@@ -682,10 +679,9 @@ mod tests {
         }
         drop((first, second));
         let _ = fs::remove_dir_all(
-            super::workspace()
+            super::super::work_root::WorkRoot::open()
                 .unwrap()
-                .join("target/testing/runtime")
-                .join(&app.name),
+                .builds(&app.name, "arm64"),
         );
     }
 

@@ -271,6 +271,9 @@ _Static_assert(__builtin_offsetof(struct cpu, mmscratch) == OFF_MM, "OFF_MM drif
 // move TOP and two convert eight ext80 registers, so they are C rather than 200 emitted instructions.
 // cpu->x87_ea = the host EA, cpu->divop = an X87ENV_* selector.
 #define R_X87ENV 21
+// XSAVE m512+header. x87_ea is the architectural guest address and divop is
+// the success continuation PC; the helper owns projection and publication.
+#define R_XSAVE 22
 #define OFF_SMC_RANGE_COUNT ((int)__builtin_offsetof(struct cpu, smc_range_count))
 #define G_SMC_QUEUE_RESET(c)                                                                                           \
     do {                                                                                                               \

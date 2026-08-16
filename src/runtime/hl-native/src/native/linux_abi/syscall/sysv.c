@@ -1,5 +1,16 @@
 #include "sysv_state.h"
 
+// SysV IPC waits are polled because their state is shared by independently
+// translated processes. Guest timers and process-directed signals are modeled
+// in the engine and may be delivered to a helper host thread, so the worker's
+// nanosleep is not guaranteed to return EINTR. Check the guest-visible pending
+// state after every bounded slice. Linux never restarts semop, msgsnd, or
+// msgrcv after a handler, even when it was installed with SA_RESTART.
+static int sysv_wait_interrupted(struct cpu *c, int sleep_result) {
+    return signal_deliverable_for_cpu(c) || ptrace_stop_requested() || ckpt_pending() ||
+           __atomic_load_n(&c->exited, __ATOMIC_SEQ_CST) || (sleep_result < 0 && errno == EINTR);
+}
+
 static void svc_shmget(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2) {
     struct hl_ipc_ctrl *C;
     do {
@@ -546,7 +557,8 @@ static void svc_semop(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
                 }
             }
             struct timespec ts = {0, 200000}; // 200us poll
-            if (nanosleep(&ts, NULL) < 0 && errno == EINTR) {
+            int sleep_result = nanosleep(&ts, NULL);
+            if (sysv_wait_interrupted(c, sleep_result)) {
                 hl_ipc_lock(&C->lock);
                 struct hl_sem_entry *s2 = sem_by_id(C, id);
                 if (s2) sem_waiters_adjust(s2, sops, nsops, -1);
@@ -910,7 +922,8 @@ static void svc_msgsnd(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2, uin
                 hl_ipc_unlock(&C->lock);
                 did_wait = 1;
                 struct timespec ts = {0, 200000};
-                if (nanosleep(&ts, NULL) < 0 && errno == EINTR) {
+                int sleep_result = nanosleep(&ts, NULL);
+                if (sysv_wait_interrupted(c, sleep_result)) {
                     G_RET(c) = (uint64_t)(-EINTR);
                     break;
                 }
@@ -925,7 +938,8 @@ static void svc_msgsnd(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2, uin
                 }
                 did_wait = 1;
                 struct timespec ts = {0, 200000};
-                if (nanosleep(&ts, NULL) < 0 && errno == EINTR) {
+                int sleep_result = nanosleep(&ts, NULL);
+                if (sysv_wait_interrupted(c, sleep_result)) {
                     G_RET(c) = (uint64_t)(-EINTR);
                     break;
                 }
@@ -1067,7 +1081,8 @@ static void svc_msgrcv(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2, uin
             hl_ipc_unlock(&C->lock);
             did_wait = 1;
             struct timespec ts = {0, 200000};
-            if (nanosleep(&ts, NULL) < 0 && errno == EINTR) {
+            int sleep_result = nanosleep(&ts, NULL);
+            if (sysv_wait_interrupted(c, sleep_result)) {
                 G_RET(c) = (uint64_t)(-EINTR);
                 break;
             }
@@ -1205,5 +1220,5 @@ static int svc_sysv(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // Map the host(macOS) errno left in G_RET to the Linux errno the guest expects (e.g. ENOMSG 91->42,
     // EIDRM 90->43, EAGAIN 35->11). Like every other svc_<family>() tail, sysv early-returns from
     // service_local before its trailing m2l boundary, so it must translate here.
-    return svc_done(c);
+    return svc_done_host(c);
 }

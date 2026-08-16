@@ -158,7 +158,7 @@ pub struct WorkspaceConfig {
     pub ws: Workspace,
     /// Mount the docker socket + set `DOCKER_HOST` so `docker` works inside (default on).
     pub docker_sock: bool,
-    /// Terminal scrollback (lines of history each shell retains). `None` = unlimited (the default). A
+    /// Terminal scrollback (lines of history each shell retains). `None` = explicitly unlimited. A
     /// TERMINAL knob (see `hl-ws-term`'s `TermConfig::scrollback`) persisted per-workspace here.
     pub scrollback: Option<u64>,
     /// Per-workspace VPN/proxy egress setting. `None` = direct (default).
@@ -166,6 +166,8 @@ pub struct WorkspaceConfig {
     /// Terminal appearance persisted with this workspace.
     pub terminal: TerminalPreferences,
 }
+
+pub(super) const DEFAULT_SCROLLBACK_LINES: u64 = 100_000;
 
 impl Deref for WorkspaceConfig {
     type Target = Workspace;
@@ -196,7 +198,7 @@ impl WorkspaceConfig {
         WorkspaceConfig {
             ws,
             docker_sock: true,
-            scrollback: None,
+            scrollback: Some(DEFAULT_SCROLLBACK_LINES),
             vpn: None,
             terminal: TerminalPreferences::default(),
         }
@@ -233,10 +235,23 @@ impl WorkspaceConfig {
         if let Some(value) = self.terminal.cursor_blink {
             config.cursor_blink = value;
         }
-        if self.scrollback.is_some() {
-            config.scrollback = self.scrollback;
-        }
+        config.scrollback = self.scrollback;
         config
+    }
+}
+
+#[cfg(all(test, feature = "gui"))]
+mod terminal_tests {
+    use super::*;
+
+    #[test]
+    fn terminal_config_preserves_explicit_scrollback_policy() {
+        let mut workspace = WorkspaceConfig::new("test", "image", Arch::Arm64);
+        workspace.scrollback = None;
+        assert_eq!(workspace.terminal_config().scrollback, None);
+
+        workspace.scrollback = Some(42);
+        assert_eq!(workspace.terminal_config().scrollback, Some(42));
     }
 }
 
@@ -323,8 +338,9 @@ impl WorkspaceStore {
                 out.field("memory", &m.to_string());
             }
             out.field("docker_sock", if w.docker_sock { "true" } else { "false" });
-            if let Some(sb) = w.scrollback {
-                out.field("scrollback", &sb.to_string());
+            match w.scrollback {
+                Some(sb) => out.field("scrollback", &sb.to_string()),
+                None => out.field("scrollback", "unlimited"),
             }
             if let Some(vpn) = &w.vpn {
                 out.field("vpn", &vpn.to_spec());
@@ -351,10 +367,7 @@ impl WorkspaceStore {
                 out.field("env", &format!("{k}={v}"));
             }
             for m in &w.mounts {
-                out.field(
-                    "mount",
-                    &format!("{}:{}:{}", m.host, m.container, if m.ro { "ro" } else { "rw" }),
-                );
+                out.mount(m);
             }
         }
         hl_fs::File::from(self.path.clone()).replace(out.into_string()?)

@@ -1,24 +1,42 @@
 use hl_container::{CheckpointError, CheckpointImage, CheckpointImages};
 use hl_ws::{Directory, Key, Namespace, Storage};
+use std::collections::HashMap;
+use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
 
 static GENERATION: AtomicU64 = AtomicU64::new(0);
+static TRANSACTION: AtomicU64 = AtomicU64::new(1);
+static IMAGES: OnceLock<Mutex<HashMap<String, std::sync::Weak<WorkspaceImage>>>> = OnceLock::new();
 
 /// Workspace-owned checkpoint generations with atomic manifest publication.
 pub(super) struct WorkspaceCheckpoints {
     storage: Directory,
+    identity: String,
 }
 
 impl WorkspaceCheckpoints {
     pub(super) fn open(workspace: &std::path::Path) -> Result<Self, CheckpointError> {
+        let identity = workspace
+            .canonicalize()
+            .map_err(Self::error)?
+            .to_string_lossy()
+            .into_owned();
         Directory::open(workspace)
-            .map(|storage| Self { storage })
+            .map(|storage| Self { storage, identity })
             .map_err(Self::error)
     }
 
     fn error(error: impl std::fmt::Display) -> CheckpointError {
         CheckpointError::new(error.to_string())
+    }
+
+    fn storage_error(error: hl_ws::storage::Error) -> CheckpointError {
+        match error {
+            hl_ws::storage::Error::Deadline => CheckpointError::deadline(),
+            error => Self::error(error),
+        }
     }
 
     fn generation() -> String {
@@ -35,6 +53,14 @@ impl WorkspaceCheckpoints {
 
 impl CheckpointImages for WorkspaceCheckpoints {
     fn open(&self, namespace: &str) -> Result<Arc<dyn CheckpointImage>, CheckpointError> {
+        let key = format!("{}:{namespace}", self.identity);
+        let mut images = IMAGES
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .map_err(|_| CheckpointError::new("checkpoint image cache is poisoned"))?;
+        if let Some(image) = images.get(&key).and_then(std::sync::Weak::upgrade) {
+            return Ok(image);
+        }
         let root = Key::parse("checkpoints")
             .and_then(|key| key.join(namespace))
             .map_err(Self::error)?;
@@ -52,7 +78,7 @@ impl CheckpointImages for WorkspaceCheckpoints {
         };
         let generation = Self::generation();
         let staging = Namespace::new(self.storage.clone(), root.join(&generation).map_err(Self::error)?);
-        Ok(Arc::new(WorkspaceImage {
+        let image = Arc::new(WorkspaceImage {
             storage: self.storage.clone(),
             root,
             current_key,
@@ -60,8 +86,11 @@ impl CheckpointImages for WorkspaceCheckpoints {
                 current,
                 staging,
                 generation,
+                transaction: None,
             }),
-        }))
+        });
+        images.insert(key, Arc::downgrade(&image));
+        Ok(image)
     }
 }
 
@@ -76,6 +105,7 @@ struct ImageState {
     current: Option<Namespace<Directory>>,
     staging: Namespace<Directory>,
     generation: String,
+    transaction: Option<(NonZeroU64, std::time::Instant)>,
 }
 
 impl WorkspaceImage {
@@ -112,24 +142,99 @@ impl WorkspaceImage {
             }
         }
     }
+
+    fn abort_state<'a>(
+        &self,
+        mut state: std::sync::MutexGuard<'a, ImageState>,
+        deadline: std::time::Instant,
+    ) -> Result<std::sync::MutexGuard<'a, ImageState>, CheckpointError> {
+        for key in state
+            .staging
+            .list_until(None, deadline)
+            .map_err(WorkspaceCheckpoints::storage_error)?
+        {
+            state
+                .staging
+                .remove_until(&key, deadline)
+                .map_err(WorkspaceCheckpoints::storage_error)?;
+        }
+        state.generation = WorkspaceCheckpoints::generation();
+        state.staging = Namespace::new(
+            self.storage.clone(),
+            self.root.join(&state.generation).map_err(WorkspaceCheckpoints::error)?,
+        );
+        state.transaction = None;
+        Ok(state)
+    }
+
+    fn next_transaction() -> NonZeroU64 {
+        loop {
+            if let Some(transaction) = NonZeroU64::new(TRANSACTION.fetch_add(1, Ordering::Relaxed)) {
+                return transaction;
+            }
+        }
+    }
+
+    fn validate_transaction(
+        state: &ImageState,
+        transaction: NonZeroU64,
+        deadline: std::time::Instant,
+    ) -> Result<(), CheckpointError> {
+        let now = std::time::Instant::now();
+        match state.transaction {
+            Some((active, lease)) if active == transaction && now < deadline && now < lease => Ok(()),
+            Some((active, _)) if active != transaction => {
+                Err(CheckpointError::new("checkpoint transaction is not owned"))
+            }
+            _ => Err(CheckpointError::deadline()),
+        }
+    }
 }
 
 impl CheckpointImage for WorkspaceImage {
-    fn put(&self, name: &str, bytes: &[u8]) -> Result<(), CheckpointError> {
-        self.state()?
-            .staging
-            .put(&Self::key(name)?, bytes)
-            .map_err(WorkspaceCheckpoints::error)
+    fn begin_until(&self, deadline: std::time::Instant) -> Result<NonZeroU64, CheckpointError> {
+        if std::time::Instant::now() >= deadline {
+            return Err(CheckpointError::deadline());
+        }
+        let mut state = self.state_until(deadline)?;
+        if let Some((_, lease)) = state.transaction {
+            if std::time::Instant::now() < lease {
+                return Err(CheckpointError::busy());
+            }
+            state = self.abort_state(state, deadline)?;
+        }
+        let transaction = Self::next_transaction();
+        state.transaction = Some((transaction, deadline));
+        Ok(transaction)
     }
 
-    fn put_until(&self, name: &str, bytes: &[u8], deadline: std::time::Instant) -> Result<(), CheckpointError> {
-        self.state_until(deadline)?
+    fn put_until(
+        &self,
+        transaction: NonZeroU64,
+        name: &str,
+        bytes: &[u8],
+        deadline: std::time::Instant,
+    ) -> Result<(), CheckpointError> {
+        let state = self.state_until(deadline)?;
+        Self::validate_transaction(&state, transaction, deadline)?;
+        state
             .staging
             .put(&Self::key(name)?, bytes)
             .map_err(WorkspaceCheckpoints::error)?;
         (std::time::Instant::now() < deadline)
             .then_some(())
             .ok_or_else(CheckpointError::deadline)
+    }
+
+    fn abort_until(&self, transaction: NonZeroU64, deadline: std::time::Instant) -> Result<(), CheckpointError> {
+        if std::time::Instant::now() >= deadline {
+            return Err(CheckpointError::deadline());
+        }
+        let state = self.state_until(deadline)?;
+        if !matches!(state.transaction, Some((active, _)) if active == transaction) {
+            return Err(CheckpointError::new("checkpoint transaction is not owned"));
+        }
+        self.abort_state(state, deadline).map(|_| ())
     }
 
     fn get(&self, name: &str) -> Result<Vec<u8>, CheckpointError> {
@@ -173,34 +278,38 @@ impl CheckpointImage for WorkspaceImage {
                 .ok_or_else(CheckpointError::deadline);
         };
         let names = current
-            .list(None)
+            .list_until(None, deadline)
             .map(|keys| keys.into_iter().map(|key| key.as_str().to_owned()).collect())
-            .map_err(WorkspaceCheckpoints::error)?;
+            .map_err(WorkspaceCheckpoints::storage_error)?;
         (std::time::Instant::now() < deadline)
             .then_some(names)
             .ok_or_else(CheckpointError::deadline)
     }
 
-    fn commit(&self, manifest: &[u8]) -> Result<(), CheckpointError> {
-        self.commit_inner(manifest, None)
-    }
-
-    fn commit_until(&self, manifest: &[u8], deadline: std::time::Instant) -> Result<(), CheckpointError> {
-        self.commit_inner(manifest, Some(deadline))
+    fn commit_until(
+        &self,
+        transaction: NonZeroU64,
+        manifest: &[u8],
+        deadline: std::time::Instant,
+    ) -> Result<(), CheckpointError> {
+        self.commit_inner(transaction, manifest, deadline)
     }
 }
 
 impl WorkspaceImage {
-    fn commit_inner(&self, manifest: &[u8], deadline: Option<std::time::Instant>) -> Result<(), CheckpointError> {
-        let mut state = match deadline {
-            Some(deadline) => self.state_until(deadline)?,
-            None => self.state()?,
-        };
+    fn commit_inner(
+        &self,
+        transaction: NonZeroU64,
+        manifest: &[u8],
+        deadline: std::time::Instant,
+    ) -> Result<(), CheckpointError> {
+        let mut state = self.state_until(deadline)?;
+        Self::validate_transaction(&state, transaction, deadline)?;
         state
             .staging
             .put(&Self::key("MANIFEST")?, manifest)
             .map_err(WorkspaceCheckpoints::error)?;
-        if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+        if std::time::Instant::now() >= deadline {
             return Err(CheckpointError::deadline());
         }
         // Publication is the transaction's irrevocable point. Once this write
@@ -216,6 +325,7 @@ impl WorkspaceImage {
             self.storage.clone(),
             self.root.join(&state.generation).map_err(WorkspaceCheckpoints::error)?,
         );
+        state.transaction = None;
         Ok(())
     }
 }
@@ -223,6 +333,80 @@ impl WorkspaceImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    trait TestCheckpoint {
+        fn put(&self, name: &str, bytes: &[u8]) -> Result<(), CheckpointError>;
+        fn commit(&self, manifest: &[u8]) -> Result<(), CheckpointError>;
+        fn abort(&self) -> Result<(), CheckpointError>;
+        fn transaction(&self) -> NonZeroU64;
+    }
+
+    thread_local! {
+        static TRANSACTIONS: RefCell<HashMap<usize, NonZeroU64>> = RefCell::new(HashMap::new());
+    }
+
+    impl<T: CheckpointImage + ?Sized> TestCheckpoint for T {
+        fn put(&self, name: &str, bytes: &[u8]) -> Result<(), CheckpointError> {
+            let key = std::ptr::from_ref(self).cast::<()>() as usize;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let transaction =
+                if let Some(transaction) = TRANSACTIONS.with(|transactions| transactions.borrow().get(&key).copied()) {
+                    transaction
+                } else {
+                    let transaction = self.begin_until(deadline)?;
+                    TRANSACTIONS.with(|transactions| transactions.borrow_mut().insert(key, transaction));
+                    transaction
+                };
+            self.put_until(transaction, name, bytes, deadline)
+        }
+
+        fn commit(&self, manifest: &[u8]) -> Result<(), CheckpointError> {
+            let key = std::ptr::from_ref(self).cast::<()>() as usize;
+            let transaction = TRANSACTIONS.with(|transactions| transactions.borrow()[&key]);
+            let result = self.commit_until(
+                transaction,
+                manifest,
+                std::time::Instant::now() + std::time::Duration::from_secs(10),
+            );
+            if result.is_ok() {
+                TRANSACTIONS.with(|transactions| transactions.borrow_mut().remove(&key));
+            }
+            result
+        }
+
+        fn abort(&self) -> Result<(), CheckpointError> {
+            let key = std::ptr::from_ref(self).cast::<()>() as usize;
+            let transaction = TRANSACTIONS
+                .with(|transactions| transactions.borrow_mut().remove(&key))
+                .expect("test transaction");
+            self.abort_until(
+                transaction,
+                std::time::Instant::now() + std::time::Duration::from_secs(10),
+            )
+        }
+
+        fn transaction(&self) -> NonZeroU64 {
+            let key = std::ptr::from_ref(self).cast::<()>() as usize;
+            TRANSACTIONS.with(|transactions| transactions.borrow()[&key])
+        }
+    }
+
+    #[test]
+    fn providers_for_one_workspace_share_capture_ownership() {
+        let temporary = tempfile::tempdir().unwrap();
+        let first_images = WorkspaceCheckpoints::open(temporary.path()).unwrap();
+        let second_images = WorkspaceCheckpoints::open(temporary.path()).unwrap();
+        let first = first_images.open("shared").unwrap();
+        let second = second_images.open("shared").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let owner = first.begin_until(deadline).unwrap();
+        first.put_until(owner, "first", b"owned", deadline).unwrap();
+        assert!(second.begin_until(deadline).is_err());
+        first.abort_until(owner, deadline).unwrap();
+        assert!(second.begin_until(deadline).is_ok());
+    }
 
     #[test]
     fn incomplete_capture_never_replaces_current_generation() {
@@ -277,5 +461,28 @@ mod tests {
         let reopened = images.open("terminal").unwrap();
         assert_eq!(reopened.get("proc.1/pages").unwrap(), b"second");
         assert_eq!(reopened.get("MANIFEST").unwrap(), b"manifest-two");
+    }
+
+    #[test]
+    fn abort_preserves_committed_generation_and_clears_retry_staging() {
+        let temporary = tempfile::tempdir().unwrap();
+        let images = WorkspaceCheckpoints::open(temporary.path()).unwrap();
+        let image = images.open("terminal-abort").unwrap();
+        image.put("state", b"first").unwrap();
+        image.commit(b"manifest-one").unwrap();
+
+        image.put("stale", b"must-not-survive").unwrap();
+        assert!(image
+            .abort_until(image.transaction(), std::time::Instant::now())
+            .unwrap_err()
+            .is_deadline());
+        image.abort().unwrap();
+        assert_eq!(image.get("state").unwrap(), b"first");
+        assert_eq!(image.get("MANIFEST").unwrap(), b"manifest-one");
+
+        image.put("state", b"second").unwrap();
+        image.commit(b"manifest-two").unwrap();
+        assert_eq!(image.get("state").unwrap(), b"second");
+        assert!(!image.list().unwrap().iter().any(|name| name == "stale"));
     }
 }

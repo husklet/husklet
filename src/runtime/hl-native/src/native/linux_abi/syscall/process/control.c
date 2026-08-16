@@ -135,7 +135,7 @@ static int svc_proc_155(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     case 155: {
         // Map the guest's view of the init (pid 1) to its real host pid, then query. Linux getpgid fails
         // ONLY with ESRCH (no process with that pid) -- never EPERM/EINVAL. The old handler returned the
-        // raw -1 on failure, which svc_done then misread as -EPERM (errno "1"): getpgid02's -99/unused_pid
+        // raw -1 on failure, which svc_done_host then misread as -EPERM (errno "1"): getpgid02's -99/unused_pid
         // wrongly reported EPERM instead of ESRCH. Force ESRCH for any lookup failure.
         pid_t pid = ((pid_t)a0 == 1 && g_init_hostpid) ? g_init_hostpid : (pid_t)a0;
         pid_t r = getpgid(pid);
@@ -157,7 +157,7 @@ static int svc_proc_156(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     switch (nr) {
     case 156: {
         // getsid: same contract as getpgid above -- fails only with ESRCH for a pid that names no process
-        // (getsid02's unused_pid), so map a raw -1 to ESRCH rather than let svc_done coin it into EPERM.
+        // (getsid02's unused_pid), so map a raw -1 to ESRCH rather than let svc_done_host coin it into EPERM.
         pid_t pid = ((pid_t)a0 == 1 && g_init_hostpid) ? g_init_hostpid : (pid_t)a0;
         pid_t r = getsid(pid);
         if (r < 0) {
@@ -339,14 +339,32 @@ static int proc_prctl_ambient(struct cpu *c, uint64_t option, uint64_t subop, ui
                               uint64_t arg5) {
     if ((int)option != 47) return 0;
     if (subop == 4) {
-        G_RET(c) = (cap || arg4 || arg5) ? (uint64_t)(-EINVAL) : 0;
+        if (cap || arg4 || arg5)
+            G_RET(c) = (uint64_t)(-EINVAL);
+        else {
+            g_cap_amb = 0;
+            G_RET(c) = 0;
+        }
         return 1;
     }
     if (arg4 || arg5 || (subop != 1 && subop != 2 && subop != 3) || cap > 40) {
         G_RET(c) = (uint64_t)(-EINVAL);
         return 1;
     }
-    G_RET(c) = subop == 2 ? (uint64_t)(-EPERM) : 0;
+    uint64_t bit = UINT64_C(1) << cap;
+    if (subop == 1)
+        G_RET(c) = (g_cap_amb & bit) != 0;
+    else if (subop == 2) {
+        if ((g_securebits & HL_EXEC_SECURE_NO_CAP_AMBIENT_RAISE) || !(g_cap_prm & bit) || !(g_cap_inh & bit))
+            G_RET(c) = (uint64_t)(-EPERM);
+        else {
+            g_cap_amb |= bit;
+            G_RET(c) = 0;
+        }
+    } else {
+        g_cap_amb &= ~bit;
+        G_RET(c) = 0;
+    }
     return 1;
 }
 
@@ -367,8 +385,19 @@ static int proc_prctl_capability(struct cpu *c, uint64_t option, uint64_t arg) {
     case 28:
         if (!(g_cap_eff & (1ull << CAP_SETPCAP)))
             G_RET(c) = (uint64_t)(-EPERM);
+        else if (arg & ~(uint64_t)HL_EXEC_SECURE_ALL)
+            G_RET(c) = (uint64_t)(-EINVAL);
         else {
-            g_securebits = (int)arg;
+            int requested = (int)arg;
+            int locked = g_securebits & (HL_EXEC_SECURE_NOROOT_LOCKED | HL_EXEC_SECURE_NO_SETUID_FIXUP_LOCKED |
+                                         HL_EXEC_SECURE_KEEP_CAPS_LOCKED | HL_EXEC_SECURE_NO_CAP_AMBIENT_RAISE_LOCKED);
+            int protected_bits = locked | (locked >> 1);
+            if ((requested & locked) != locked || ((requested ^ g_securebits) & protected_bits) != 0) {
+                G_RET(c) = (uint64_t)(-EPERM);
+                return 1;
+            }
+            g_securebits = requested;
+            g_keepcaps = (requested & HL_EXEC_SECURE_KEEP_CAPS) != 0;
             G_RET(c) = 0;
         }
         return 1;
@@ -398,6 +427,38 @@ static int svc_proc_167(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
                         uint64_t a5) {
     switch (nr) {
     case 167: {
+#if defined(HL_NATIVE_TEST_HOOKS)
+        if ((uint32_t)a0 == HL_EXEC_PIN_TEST_PRCTL) {
+            if (a1 == HL_EXEC_PIN_TEST_MAIN || a1 == HL_EXEC_PIN_TEST_FINAL || a1 == HL_EXEC_PIN_TEST_SHEBANG_HOP) {
+                atomic_store_explicit(&g_exec_pin_test_phase, 0, memory_order_release);
+                atomic_store_explicit(&g_exec_pin_test_mode, (unsigned)a1, memory_order_release);
+                G_RET(c) = 0;
+            } else if (a1 == 0) {
+                G_RET(c) = atomic_load_explicit(&g_exec_pin_test_phase, memory_order_acquire);
+            } else if (a1 == 3) {
+                atomic_store_explicit(&g_exec_pin_test_phase, 3, memory_order_release);
+                G_RET(c) = 0;
+            } else if (a1 == HL_EXEC_PIN_TEST_ENV_SEED) {
+                G_RET(c) = hl_process_guest_environment_set("HL_EXEC_SENTINEL=old\n") == 0 &&
+                                   hl_option_set("HL_GUEST_ENV_ESC", "sentinel-escape", 1) == 0 &&
+                                   hl_option_set("HL_GUEST_ENV_EXACT", "sentinel-exact", 1) == 0
+                               ? 0
+                               : (uint64_t)(int64_t)-ENOMEM;
+            } else if (a1 == HL_EXEC_PIN_TEST_ENV_CHECK) {
+                const char *environment = hl_process_guest_environment_get();
+                const char *escape = hl_option_get("HL_GUEST_ENV_ESC");
+                const char *exact = hl_option_get("HL_GUEST_ENV_EXACT");
+                G_RET(c) = environment != NULL && strcmp(environment, "HL_EXEC_SENTINEL=old\n") == 0 &&
+                                   escape != NULL && strcmp(escape, "sentinel-escape") == 0 && exact != NULL &&
+                                   strcmp(exact, "sentinel-exact") == 0
+                               ? 0
+                               : 1;
+            } else {
+                G_RET(c) = (uint64_t)(int64_t)-EINVAL;
+            }
+            break;
+        }
+#endif
         if (proc_prctl_name(c, a0, a1)) break;
         // PR_SET_TIMERSLACK(29)/PR_GET_TIMERSLACK(30): the per-process timer slack (ns) round-trips. SET with
         // arg2==0 resets to the default (Linux copies the process's default_timer_slack_ns); GET returns the
@@ -415,8 +476,20 @@ static int svc_proc_167(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // PR_SET_KEEPCAPS(8)/PR_GET_KEEPCAPS(7) drive the CAP_SETID retention model -- setpriv arms
         // KEEPCAPS so its post-uid-drop capset can re-raise CAP_SETGID (see cred_uid_changed/capset).
         if ((int)a0 == 8) {
-            g_keepcaps = (a1 != 0);
-            G_RET(c) = 0;
+            /* Linux validates only arg2 here. prctl(3) is variadic, so a
+               two-argument caller may leave the unused registers nonzero. */
+            if (a1 > 1)
+                G_RET(c) = (uint64_t)(-EINVAL);
+            else if (g_securebits & HL_EXEC_SECURE_KEEP_CAPS_LOCKED)
+                G_RET(c) = (uint64_t)(-EPERM);
+            else {
+                g_keepcaps = (int)a1;
+                if (a1)
+                    g_securebits |= HL_EXEC_SECURE_KEEP_CAPS;
+                else
+                    g_securebits &= ~HL_EXEC_SECURE_KEEP_CAPS;
+                G_RET(c) = 0;
+            }
             break;
         }
         if ((int)a0 == 7) {

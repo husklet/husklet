@@ -457,9 +457,12 @@ static void sentry_cmsg_translate_in(struct sentry_proc *p, uint8_t *ctl, size_t
 // pselect fd containers) are handled explicitly in sentry_service_one.
 static int fd_in_a0(uint64_t nr) {
     switch (nr) {
+    case 32: // flock
     case 46:
     case 47: // ftruncate/fallocate
     case 50: // fchdir
+    case 52: // fchmod
+    case 55: // fchown
     case 61:
     case 62:
     case 63:
@@ -470,6 +473,9 @@ static int fd_in_a0(uint64_t nr) {
     case 68:
     case 71:
     case 80: // fs r/w/seek/stat
+    case 82:
+    case 83:
+    case 84: // fsync/fdatasync/sync_file_range
     case 200:
     case 201:
     case 202:
@@ -484,6 +490,7 @@ static int fd_in_a0(uint64_t nr) {
     case 211:
     case 212:
     case 242: // sockopt/shutdown/msg/accept4
+    case 267: // syncfs
     case 23:
     case 25:
     case 29:
@@ -519,6 +526,40 @@ static int sentry_control_operation(uint64_t number) {
     }
 }
 
+static int sentry_lend_file(struct sentry_proc *process, int descriptor, uint64_t *borrowed) {
+    const hl_host_posix_attachment_services *attachments;
+    hl_linux_fd_snapshot snapshot;
+    hl_host_result result;
+
+    *borrowed = UINT64_MAX;
+    if (process == NULL || descriptor < 0 || (uint32_t)descriptor >= SENTRY_VFD_MAX ||
+        process->real[descriptor] < 0)
+        return -1;
+    if (!process->typed[descriptor]) return process->real[descriptor];
+    if (!bound_snapshot((uint64_t)(uint32_t)process->real[descriptor], &snapshot)) return -1;
+    attachments = g_host_services == NULL ? NULL : g_host_services->posix_attachment;
+    if (attachments == NULL || attachments->abi != HL_HOST_POSIX_ATTACHMENT_ABI ||
+        attachments->size < sizeof(*attachments) || attachments->borrow_file == NULL || attachments->release == NULL)
+        return -1;
+    result = attachments->borrow_file(g_host_services->context, snapshot.host_handle);
+    if (result.status != HL_STATUS_OK) return -1;
+    if (result.value > INT_MAX) {
+        (void)attachments->release(g_host_services->context, result.value);
+        return -1;
+    }
+    *borrowed = result.value;
+    return (int)result.value;
+}
+
+static void sentry_release_lent_file(uint64_t borrowed) {
+    const hl_host_posix_attachment_services *attachments;
+
+    if (borrowed == UINT64_MAX || g_host_services == NULL) return;
+    attachments = g_host_services->posix_attachment;
+    if (attachments != NULL && attachments->release != NULL)
+        (void)attachments->release(g_host_services->context, borrowed);
+}
+
 static void sentry_service_control(struct sentry_ring *R) {
     // fd-lend (item 3): not a syscall -- lend a sentry-owned fd to the worker over THIS ring's control
     // socketpair (SCM_RIGHTS) for a file-backed mmap; the worker maps it locally then drops it. OWNERSHIP
@@ -532,10 +573,12 @@ static void sentry_service_control(struct sentry_ring *R) {
         pthread_mutex_lock(&g_fd_lock);
         struct sentry_proc *p = binding_table_locked((pid_t)R->wpid, R->wtid, R->inherit_wtid, 1);
         int vfd = (int)(int64_t)R->a[0];
-        int rfd = p ? hl_sentry_native_fd(p->real, p->typed, SENTRY_VFD_MAX, vfd) : -1;
+        uint64_t borrowed;
+        int rfd = sentry_lend_file(p, vfd, &borrowed);
         pthread_mutex_unlock(&g_fd_lock);
         if (rfd >= 0) {
             sentry_send_fd(g_ctl[idx][1], rfd);
+            sentry_release_lent_file(borrowed);
             R->ret = 0;
         } else {
             sentry_send_fd(g_ctl[idx][1], -1); // empty datagram: keep the worker recv in lockstep
@@ -850,11 +893,15 @@ static int sentry_translate_inputs(struct sentry_ring *R, struct cpu *tmp, uint6
             }
             case 76:
             case 285: { // splice/copy_file_range(fd_in=a0, fd_out=a2): translate BOTH virtual descriptors
-                int r0 = vfd_real(p, (int)(int64_t)G_A0(tmp));
-                int r2 = vfd_real(p, (int)(int64_t)G_A2(tmp));
+                int input = (int)(int64_t)G_A0(tmp);
+                int output = (int)(int64_t)G_A2(tmp);
+                int r0 = vfd_real(p, input);
+                int r2 = vfd_real(p, output);
                 if (r0 < 0 || r2 < 0)
                     eb = 1;
                 else {
+                    g_bound_source_native = !p->typed[input];
+                    g_bound_second_native = !p->typed[output];
                     G_A0(tmp) = (uint64_t)(int64_t)r0;
                     G_A2(tmp) = (uint64_t)(int64_t)r2;
                 }
@@ -1122,6 +1169,7 @@ static void sentry_service_one(struct sentry_ring *R) {
         sentry_service_control(R);
         return;
     }
+    g_sentry_credentials_override = &R->credentials;
     struct cpu tmp;
     // Snapshot scalars and pointer redirects before validation to avoid shared-ring TOCTOU races.
     uint32_t iovn;
@@ -1356,31 +1404,40 @@ static void sentry_service_one(struct sentry_ring *R) {
 // and the shared quit flag both _exit() the WHOLE sentry process (killing every servicer thread).
 static void sentry_ring_loop(struct sentry_ring *R) {
     for (;;) {
-        uint32_t spins = 0;
-        uint32_t idle_rounds = 0; // yield rounds since the last serviced request (resets per request)
-        while (atomic_load_explicit(&R->turn, memory_order_acquire) != 1 ||
-               atomic_load_explicit(&R->request, memory_order_acquire) ==
-                   atomic_load_explicit(&R->response, memory_order_acquire)) {
-            if (atomic_load_explicit(&g_shm->quit, memory_order_acquire)) _exit(0);
-            if (++spins > 256) {
-                if (getppid() == 1) _exit(0); // orphan-guard: worker died/crashed -> don't spin forever
-                // A quiet lane must not burn a core forever: with a 64-lane pool most lanes are idle most
-                // of the time, so after ~1k yield rounds fall back to a real sleep. A newly armed turn is
-                // still observed within ~100us -- negligible against a forwarded syscall's round-trip --
-                // and a BUSY lane (request in flight or back-to-back traffic) never reaches the sleep.
-                if (++idle_rounds > 1024) {
-                    struct timespec nap = {0, 100000}; // 100us
-                    nanosleep(&nap, NULL);
-                } else {
-                    sched_yield();
+        if (R->wake_ready) {
+            pthread_mutex_lock(&R->wake_lock);
+            while (atomic_load_explicit(&R->turn, memory_order_acquire) != 1 ||
+                   atomic_load_explicit(&R->request, memory_order_acquire) ==
+                       atomic_load_explicit(&R->response, memory_order_acquire)) {
+                struct timespec deadline;
+                if (atomic_load_explicit(&g_shm->quit, memory_order_acquire) || getppid() == 1) _exit(0);
+                clock_gettime(CLOCK_REALTIME, &deadline);
+                deadline.tv_sec++;
+                (void)pthread_cond_timedwait(&R->wake_cond, &R->wake_lock, &deadline);
+            }
+            pthread_mutex_unlock(&R->wake_lock);
+        } else {
+            uint32_t spins = 0;
+            uint32_t idle_rounds = 0;
+            while (atomic_load_explicit(&R->turn, memory_order_acquire) != 1 ||
+                   atomic_load_explicit(&R->request, memory_order_acquire) ==
+                       atomic_load_explicit(&R->response, memory_order_acquire)) {
+                if (atomic_load_explicit(&g_shm->quit, memory_order_acquire)) _exit(0);
+                if (++spins > 256) {
+                    if (getppid() == 1) _exit(0);
+                    if (++idle_rounds > 1024) {
+                        struct timespec nap = {0, 100000};
+                        nanosleep(&nap, NULL);
+                    } else {
+                        sched_yield();
+                    }
+                    spins = 0;
                 }
-                spins = 0;
             }
         }
         uint64_t request = atomic_load_explicit(&R->request, memory_order_acquire);
         sentry_service_one(R);
-        atomic_store_explicit(&R->turn, 0, memory_order_release); // hand back to the worker
-        atomic_store_explicit(&R->response, request, memory_order_release);
+        sentry_response_publish(R, request);
     }
 }
 

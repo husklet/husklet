@@ -1,0 +1,26 @@
+cases:
+- id: terminal-no-newline-output/prompt-boundary
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      rows: 24
+      columns: 80
+      steps:
+      - await_output: { contains: "bash-5.2#", timeout_ms: 5000 }
+      - write: { text: "stty -echo; PS1='BEFORE-TAIL# '; printf 'PARTIAL-%s\\n' READY\r" }
+      - await_output: { contains: PARTIAL-READY, timeout_ms: 5000 }
+      - await_output: { contains: "BEFORE-TAIL# ", timeout_ms: 5000 }
+      - write: { text: "PS1=$(printf '\\120\\117\\123\\124\\055\\124\\101\\111\\114\\055\\120\\122\\117\\115\\120\\124\\043\\040'); printf 'TAIL-%s' NO-NL\r" }
+      - await_output: { contains: TAIL-NO-NL, timeout_ms: 5000 }
+      - await_output: { contains: "POST-TAIL-PROMPT# ", timeout_ms: 5000 }
+      - write: { text: "printf '\\nSHELL-%s\\n' RECOVERED; stty echo; exit\r" }
+      - await_output: { contains: SHELL-RECOVERED, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains:
+    - golden/tail.txt
+    - golden/prompt.txt
+    - golden/recovered.txt

@@ -14,8 +14,11 @@ workspace = true
 [features]
 native-test-hooks = []
 
+[dependencies]
+libc = "0.2"
+
 [build-dependencies]
-cc = "1.4.0"
+hl-cc = { path = "../../packages/hl-cc" }
 
 [dev-dependencies]
 sha2.workspace = true
@@ -24,3 +27,15 @@ tempfile.workspace = true
 [lib]
 name = "hl_native"
 path = "src/lib.rs"
+
+[[test]]
+name = "bound_vector_io"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "errno_namespace"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "x86_store_preflight"
+required-features = ["native-test-hooks"]

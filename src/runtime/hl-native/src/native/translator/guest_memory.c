@@ -66,6 +66,14 @@ void hl_guest_memory_unpin_data(hl_guest_memory_pin *pin) {
     *pin = (hl_guest_memory_pin){0};
 }
 
+void hl_guest_memory_transaction_begin(void) {
+    if (g_ops != NULL && g_ops->transaction_begin != NULL) g_ops->transaction_begin();
+}
+
+void hl_guest_memory_transaction_end(void) {
+    if (g_ops != NULL && g_ops->transaction_end != NULL) g_ops->transaction_end();
+}
+
 void hl_guest_memory_store_observe(uint64_t guest, size_t length) {
     if (length != 0 && g_ops != NULL && g_ops->store_observe != NULL) g_ops->store_observe(guest, length);
 }

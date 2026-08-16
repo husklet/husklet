@@ -1,6 +1,7 @@
 // Buffers straddling a PROT_NONE guard page: Linux copies what it can and only reports EFAULT
-// when nothing was transferred, so a straddling read is a short read, a straddling write to a
-// pipe is a short write, writev stops at the fault, and a wholly-unreadable buffer is EFAULT.
+// when nothing was transferred. A straddling read is therefore a short read, while an atomic
+// pipe write/writev publishes no prefix and reports EFAULT. Positional pipe writes reject the
+// descriptor with ESPIPE before inspecting the payload; pwritev2 offset -1 retains writev semantics.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -30,6 +31,10 @@ int main(void) {
     struct iovec iov[2] = {{r, 8}, {straddle, 32}};
     ssize_t v = writev(nfd, iov, 2);
     int ev = (v == -1) ? errno : 0;
+    ssize_t pv = pwritev(nfd, iov, 2, 0);
+    int epv = (pv == -1) ? errno : 0;
+    ssize_t cv = pwritev2(nfd, iov, 2, -1, 0);
+    int ecv = (cv == -1) ? errno : 0;
     char *guard = r + ps;
     ssize_t g = read(zfd, guard, 1);
     int eg = (g == -1) ? errno : 0;
@@ -38,7 +43,7 @@ int main(void) {
     char big[4096];
     int ecwd2 = (getcwd(guard, sizeof big) == NULL) ? errno : 0;
     (void)big;
-    printf("rd=%zd erd=%d wr=%zd ewr=%d fit=%zd wfit=%zd v=%zd ev=%d g=%zd eg=%d ecwd=%d ecwd2=%d\n",
-           rd, erd, wr, ewr, fit, wfit, v, ev, g, eg, ecwd, ecwd2);
+    printf("rd=%zd erd=%d wr=%zd ewr=%d fit=%zd wfit=%zd v=%zd ev=%d pv=%zd epv=%d cv=%zd ecv=%d g=%zd eg=%d ecwd=%d ecwd2=%d\n",
+           rd, erd, wr, ewr, fit, wfit, v, ev, pv, epv, cv, ecv, g, eg, ecwd, ecwd2);
     return 0;
 }

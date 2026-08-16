@@ -1,5 +1,6 @@
 use crate::suite::Error;
 use clap::ValueEnum;
+use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 
 /// The cargo profile the engine this runner links was compiled with.
@@ -47,17 +48,123 @@ pub(crate) fn runner() -> Result<std::path::PathBuf, Error> {
     std::env::current_exe().map_err(|error| format!("resolve runtime runner: {error}").into())
 }
 
+/// Resolves the executable that must create a runtime worker.
+///
+/// Release workers re-enter through the immutable artifact launcher's private-library
+/// environment instead of depending on whichever loader variables reached the corpus process.
+pub(crate) fn worker_launcher() -> Result<std::path::PathBuf, Error> {
+    worker_launcher_for(&runner()?, PROFILE)
+}
+
+fn worker_launcher_for(runner: &std::path::Path, profile: &str) -> Result<std::path::PathBuf, Error> {
+    if profile != "release" {
+        return Ok(runner.to_owned());
+    }
+    let bin = runner.parent().ok_or("release runtime runner has no bin directory")?;
+    let prefix = bin.parent().ok_or("release runtime runner has no artifact prefix")?;
+    if bin.file_name().and_then(|name| name.to_str()) != Some("bin")
+        || runner.file_name().and_then(|name| name.to_str()) != Some("testing")
+    {
+        return Err("release runtime corpus must execute an immutable <prefix>/bin/testing artifact".into());
+    }
+    let launcher = prefix.join("run");
+    if !launcher.is_file() {
+        return Err(format!("immutable runtime launcher {} is missing", launcher.display()).into());
+    }
+    Ok(launcher)
+}
+
 /// Identifies the exact runner binary, so a stale build cannot silently resume another one's rows.
 pub(crate) fn identity() -> Result<String, Error> {
     let path = runner()?;
     let bytes = std::fs::read(&path).map_err(|error| format!("read runner {}: {error}", path.display()))?;
-    let digest = Sha256::digest(&bytes);
-    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+    if PROFILE != "release" {
+        return Ok(hex(&Sha256::digest(&bytes)));
+    }
+    release_identity(&path, &bytes)
+}
+
+fn release_identity(path: &std::path::Path, bytes: &[u8]) -> Result<String, Error> {
+    let bin = path.parent().ok_or("release runtime runner has no bin directory")?;
+    let prefix = bin.parent().ok_or("release runtime runner has no artifact prefix")?;
+    if bin.file_name().and_then(|name| name.to_str()) != Some("bin")
+        || path.file_name().and_then(|name| name.to_str()) != Some("testing")
+    {
+        return Err("release runtime corpus must execute an immutable <prefix>/bin/testing artifact".into());
+    }
+    let receipt_bytes = std::fs::read(prefix.join("receipt.yaml"))?;
+    let receipt: Receipt = serde_yaml::from_slice(&receipt_bytes)?;
+    if receipt.schema != "husklet-runtime-corpus-artifacts-v1"
+        || receipt.profile != "release"
+        || receipt.smoke != "hl-native-artifact-smoke-v1"
+        || receipt.commit.len() != 40
+        || !receipt.commit.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || receipt.runner.path != "bin/testing"
+        || receipt.library.path != native_library_path()
+    {
+        return Err("runtime corpus artifact receipt has an invalid layout or schema".into());
+    }
+    let library = std::fs::read(prefix.join(&receipt.library.path))?;
+    if hex(&Sha256::digest(bytes)) != receipt.runner.sha256
+        || u64::try_from(bytes.len())? != receipt.runner.bytes
+        || hex(&Sha256::digest(&library)) != receipt.library.sha256
+        || u64::try_from(library.len())? != receipt.library.bytes
+    {
+        return Err("runtime corpus runner or native library differs from its immutable receipt".into());
+    }
+    let mut digest = Sha256::new();
+    hash_field(&mut digest, b"husklet-runtime-artifact-set-v1");
+    hash_field(&mut digest, &receipt_bytes);
+    hash_field(&mut digest, bytes);
+    hash_field(&mut digest, &library);
+    Ok(hex(&digest.finalize()))
+}
+
+#[derive(Deserialize)]
+struct Receipt {
+    schema: String,
+    commit: String,
+    profile: String,
+    runner: Artifact,
+    library: Artifact,
+    smoke: String,
+}
+
+#[derive(Deserialize)]
+struct Artifact {
+    path: String,
+    sha256: String,
+    bytes: u64,
+}
+
+fn hash_field(digest: &mut impl sha2::Digest, bytes: &[u8]) {
+    digest.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_be_bytes());
+    digest.update(bytes);
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+const fn native_library_path() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "lib/libhl_native_engine.dylib"
+    }
+    #[cfg(target_os = "linux")]
+    {
+        "lib/libhl_native_engine.so"
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        "bin/hl_native_engine.dll"
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PROFILE, Requested, identity};
+    use super::{PROFILE, Requested, identity, release_identity, worker_launcher_for};
+    use sha2::{Digest as _, Sha256};
 
     #[test]
     fn the_built_profile_is_named_and_accepted_only_by_itself() {
@@ -74,7 +181,108 @@ mod tests {
 
     #[test]
     fn the_runner_identity_is_a_stable_digest() {
-        assert_eq!(identity().unwrap(), identity().unwrap());
-        assert_eq!(identity().unwrap().len(), 64);
+        if PROFILE == "release" {
+            let error = identity().unwrap_err().to_string();
+            assert!(error.contains("immutable <prefix>/bin/testing"), "{error}");
+        } else {
+            assert_eq!(identity().unwrap(), identity().unwrap());
+            assert_eq!(identity().unwrap().len(), 64);
+        }
+    }
+
+    #[test]
+    fn release_workers_reenter_through_the_immutable_launcher() {
+        let directory = tempfile::tempdir().unwrap();
+        let runner = directory.path().join("bin/testing");
+        std::fs::create_dir_all(runner.parent().unwrap()).unwrap();
+        std::fs::write(&runner, b"runner").unwrap();
+        std::fs::write(directory.path().join("run"), b"launcher").unwrap();
+
+        assert_eq!(
+            worker_launcher_for(&runner, "release").unwrap(),
+            directory.path().join("run")
+        );
+        assert_eq!(worker_launcher_for(&runner, "debug").unwrap(), runner);
+    }
+
+    #[test]
+    fn release_worker_refuses_a_missing_launcher() {
+        let directory = tempfile::tempdir().unwrap();
+        let runner = directory.path().join("bin/testing");
+        std::fs::create_dir_all(runner.parent().unwrap()).unwrap();
+        std::fs::write(&runner, b"runner").unwrap();
+
+        let error = worker_launcher_for(&runner, "release").unwrap_err().to_string();
+        assert!(error.contains("launcher"), "{error}");
+    }
+
+    #[test]
+    fn release_identity_binds_the_runner_and_private_library_to_the_receipt() {
+        let directory = tempfile::tempdir().unwrap();
+        let runner = directory.path().join("bin/testing");
+        let library = directory.path().join(super::native_library_path());
+        std::fs::create_dir_all(runner.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(library.parent().unwrap()).unwrap();
+        let runner_bytes = b"runner";
+        let library_bytes = b"native-library";
+        std::fs::write(&runner, runner_bytes).unwrap();
+        std::fs::write(&library, library_bytes).unwrap();
+        let hash = |bytes: &[u8]| {
+            Sha256::digest(bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+        let receipt = |commit: &str, smoke: &str| {
+            format!(
+                "schema: husklet-runtime-corpus-artifacts-v1\ncommit: 0123456789abcdef0123456789abcdef01234567\nprofile: release\nrunner:\n  path: bin/testing\n  sha256: {}\n  bytes: {}\nlibrary:\n  path: {}\n  sha256: {}\n  bytes: {}\nsmoke: hl-native-artifact-smoke-v1\n",
+                hash(runner_bytes),
+                runner_bytes.len(),
+                super::native_library_path(),
+                hash(library_bytes),
+                library_bytes.len()
+            )
+            .replace("0123456789abcdef0123456789abcdef01234567", commit)
+            .replace("hl-native-artifact-smoke-v1", smoke)
+        };
+        let receipt_path = directory.path().join("receipt.yaml");
+        std::fs::write(
+            &receipt_path,
+            receipt(
+                "0123456789abcdef0123456789abcdef01234567",
+                "hl-native-artifact-smoke-v1",
+            ),
+        )
+        .unwrap();
+        let identity = release_identity(&runner, runner_bytes).unwrap();
+
+        std::fs::write(
+            &receipt_path,
+            receipt(
+                "fedcba9876543210fedcba9876543210fedcba98",
+                "hl-native-artifact-smoke-v1",
+            ),
+        )
+        .unwrap();
+        assert_ne!(release_identity(&runner, runner_bytes).unwrap(), identity);
+        std::fs::write(
+            &receipt_path,
+            receipt("0123456789abcdef0123456789abcdef01234567", "foreign-smoke"),
+        )
+        .unwrap();
+        assert!(release_identity(&runner, runner_bytes).is_err());
+        std::fs::write(
+            &receipt_path,
+            receipt(
+                "0123456789abcdef0123456789abcdef01234567",
+                "hl-native-artifact-smoke-v1",
+            ),
+        )
+        .unwrap();
+
+        std::fs::write(&library, b"wrong-native-library").unwrap();
+        assert!(release_identity(&runner, runner_bytes).is_err());
+        std::fs::remove_file(&library).unwrap();
+        assert!(release_identity(&runner, runner_bytes).is_err());
     }
 }

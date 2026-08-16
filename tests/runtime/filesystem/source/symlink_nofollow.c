@@ -63,9 +63,26 @@ int main(void) {
     snprintf(path, sizeof path, "%s/link", dir);
     int lfd = open(path, O_PATH | O_NOFOLLOW);
     char rl[256];
+    struct stat link_status;
+    int opath_link_type = lfd >= 0 && fstat(lfd, &link_status) == 0 && S_ISLNK(link_status.st_mode);
     ssize_t n = lfd >= 0 ? readlinkat(lfd, "", rl, sizeof rl) : -1;
-    int opath_link = n == (ssize_t)strlen(t) && !memcmp(rl, t, (size_t)n);
+    int opath_link_target = n == (ssize_t)strlen(t) && !memcmp(rl, t, (size_t)n);
+    errno = 0;
+    int opath_link_io = lfd >= 0 && read(lfd, rl, sizeof rl) < 0 && errno == EBADF;
     if (lfd >= 0) close(lfd);
+
+    // The same node semantics apply when the target does not exist: opening and inspecting the link itself
+    // succeeds, while following it still fails below.
+    snprintf(path, sizeof path, "%s/dangling", dir);
+    int dangling_fd = open(path, O_PATH | O_NOFOLLOW);
+    struct stat dangling_status;
+    int dangling_opath_type =
+        dangling_fd >= 0 && fstat(dangling_fd, &dangling_status) == 0 && S_ISLNK(dangling_status.st_mode);
+    n = dangling_fd >= 0 ? readlinkat(dangling_fd, "", rl, sizeof rl) : -1;
+    static const char dangling_target[] = "no-such-target";
+    int dangling_opath_target =
+        n == (ssize_t)(sizeof dangling_target - 1) && !memcmp(rl, dangling_target, (size_t)n);
+    if (dangling_fd >= 0) close(dangling_fd);
 
     // faccessat2 AT_SYMLINK_NOFOLLOW: the dangling link node exists; following it is ENOENT.
     snprintf(path, sizeof path, "%s/dangling", dir);
@@ -87,9 +104,10 @@ int main(void) {
     unlink(path);
     rmdir(dir);
 
-    printf("symlink-nofollow eloop=%d reg=%d mid-follows=%d opath-link=%d dangling-node=%d "
+    printf("symlink-nofollow eloop=%d reg=%d mid-follows=%d opath-link-type=%d opath-link-target=%d "
+           "opath-link-io=%d dangling-opath-type=%d dangling-opath-target=%d dangling-node=%d "
            "dangling-follow-enoent=%d\n",
-           nofollow_eloop, nofollow_reg_ok, mid_follows, opath_link, dangling_nofollow,
-           dangling_follow_enoent);
+           nofollow_eloop, nofollow_reg_ok, mid_follows, opath_link_type, opath_link_target, opath_link_io,
+           dangling_opath_type, dangling_opath_target, dangling_nofollow, dangling_follow_enoent);
     return 0;
 }

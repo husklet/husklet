@@ -167,26 +167,13 @@ static int g_self_cmdline_len = 0;
 
 static void set_guest_cmdline(int argc, char *const argv[]) {
     int o = 0;
-    int diagnostic_offset = 0;
     for (int i = 0; i < argc && argv && argv[i]; i++) {
         int L = (int)strlen(argv[i]);
         if (o + L + 1 > (int)sizeof g_self_cmdline) break;
         memcpy(g_self_cmdline + o, argv[i], (size_t)L);
         o += L;
         g_self_cmdline[o++] = 0;
-        if (diagnostic_offset < (int)sizeof g_fault_cmdline - 1) {
-            int remaining = (int)sizeof g_fault_cmdline - diagnostic_offset;
-            int written = snprintf(g_fault_cmdline + diagnostic_offset, (size_t)remaining, "%s%s",
-                                   diagnostic_offset ? " " : "", argv[i]);
-            if (written < 0)
-                diagnostic_offset = 0;
-            else if (written >= remaining)
-                diagnostic_offset = (int)sizeof g_fault_cmdline - 1;
-            else
-                diagnostic_offset += written;
-        }
     }
-    g_fault_cmdline[diagnostic_offset] = 0;
     g_self_cmdline_len = o;
 }
 
@@ -671,7 +658,7 @@ static int proc_reg_read(int hostpid, char *comm, size_t csz, char *cmd, size_t 
 // Live per-process stats from the host backend. rss/cpu-times/state are REAL (coarse beats
 // zero); comm here is the HOST comm (the DBT binary) -- the guest comm comes from the registry instead.
 struct hl_procinfo {
-    int ppid_host, pgid_host, nthreads;
+    int ppid_host, pgid_host, tty_host, tpgid_host, nthreads;
     char state;
     unsigned long long rss, vsize, utime_ns, stime_ns;
     long start_sec;
@@ -683,6 +670,8 @@ static int hl_get_procinfo(int pid, struct hl_procinfo *pi) {
     if (!hl_host_process_read(pid, &host)) return 0;
     pi->ppid_host = (int)host.parent_pid;
     pi->pgid_host = (int)host.process_group;
+    pi->tty_host = (int)host.terminal_device;
+    pi->tpgid_host = (int)host.foreground_group;
     pi->start_sec = (long)host.start_time_seconds;
     pi->state = host.state;
     pi->rss = host.resident_bytes;
@@ -762,19 +751,27 @@ static int proc_fd_link_pid(int host, int fd, char *out, size_t n) {
         memcpy(out, logical, (size_t)length);
         return length;
     }
-    /* A provider-backed descriptor has no reliable native descriptor in this
-     * process's fd table -- resolving it by device/object identity can collide
-     * with an unrelated engine-private fd. The engine's fd->path table is
-     * authoritative for every tracked self descriptor, including directories. */
-    if (host == (int)getpid() && logical_found && fd >= 0 && fd < HL_NFD && g_fdpath[fd][0]) {
+    /* A provider-backed descriptor has no reliable native descriptor in the
+     * process's fd table. Its shared logical record carries the authoritative
+     * path so peers observe the same target as /proc/self/fd without mistaking
+     * the provider shadow for the guest object. */
+    if (logical_found && logical_kind == HL_HOST_FD_FILE) {
         char tracked[4200];
-        snprintf(tracked, sizeof tracked, "%s", g_fdpath[fd]);
-        int mapped = g_fdpath_guest[fd] ? 1 : proc_fd_rebase(tracked, sizeof tracked);
-        if (mapped < 0 || (g_rootfs && mapped == 0)) return -1;
-        size_t l = strlen(tracked);
-        if (l > n) l = n;
-        memcpy(out, tracked, l);
-        return (int)l;
+        int tracked_is_guest = 0;
+        int tracked_found = proc_fdvis_lookup_path(host, fd, tracked, sizeof tracked, &tracked_is_guest);
+        if (!tracked_found && host == (int)getpid() && fd >= 0 && fd < HL_NFD && g_fdpath[fd][0]) {
+            snprintf(tracked, sizeof tracked, "%s", g_fdpath[fd]);
+            tracked_is_guest = g_fdpath_guest[fd] != 0;
+            tracked_found = 1;
+        }
+        if (tracked_found) {
+            int mapped = tracked_is_guest ? 1 : proc_fd_rebase(tracked, sizeof tracked);
+            if (mapped < 0 || (g_rootfs && mapped == 0)) return -1;
+            size_t l = strlen(tracked);
+            if (l > n) l = n;
+            memcpy(out, tracked, l);
+            return (int)l;
+        }
     }
     inspected_fd = proc_fdvis_resolve_host(host, fd);
     if (inspected_fd < 0) return -1;
@@ -915,6 +912,10 @@ static int proc_fd_dir_pid_open(int guest, int host) {
         if (fstat(d, &status) == 0) {
             /* This directory is returned to the guest and therefore is not engine-private. Publish its
              * logical identity normally; private adoption would move it outside the guest fd range. */
+            if (d >= 0 && d < HL_NFD) {
+                g_fdpath[d][0] = 0;
+                g_fdpath_guest[d] = 0;
+            }
             if (proc_fdvis_publish(d, HL_HOST_FD_FILE, (uint64_t)status.st_dev, (uint64_t)status.st_ino) != 0) {
                 close(d);
                 procfd_dir_rm(tmpl);
@@ -926,6 +927,11 @@ static int proc_fd_dir_pid_open(int guest, int host) {
         /* Tag the materialized directory with its guest namespace path. Relative openat/stat/readlink
          * operations must re-enter procfd synthesis instead of following the temporary host symlinks. */
         proc_dir_register(d, tmpl, "/proc/self/fd");
+        if (d >= 0 && d < HL_NFD) {
+            snprintf(g_fdpath[d], sizeof g_fdpath[d], "/proc/self/fd");
+            g_fdpath_guest[d] = 1;
+            proc_fdvis_publish_path(d);
+        }
     } else {
         for (int i = 0; i < 64; i++)
             if (!g_procfd_dirs[i].path[0]) {

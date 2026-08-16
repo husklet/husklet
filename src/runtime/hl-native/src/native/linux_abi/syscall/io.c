@@ -100,6 +100,9 @@ static int fd_virt_reserve_at(int oldfd, int newfd, struct fdvis_reservation *re
 
 static void fd_carry_virt(int newfd, int oldfd, struct fdvis_reservation *reservation) {
     if (newfd < 0 || newfd >= HL_NFD || oldfd < 0 || oldfd >= HL_NFD || newfd == oldfd) return;
+    hl_vfs_fd_cursor_duplicate(oldfd, newfd);
+    memmove(g_ovldir[newfd], g_ovldir[oldfd], sizeof g_ovldir[newfd]);
+    ovldents_duplicate(oldfd, newfd);
     // Tag both fds as the same open file description so a later close of one (while the other survives) can
     // find the surviving alias -- e.g. epoll readiness must persist while a dup keeps the watched OFD open.
     ofd_link_dup(newfd, oldfd);
@@ -478,7 +481,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     if ((nr == 65 || nr == 66 || nr == 69 || nr == 70) &&
         ((int64_t)a0 < 0 || a0 >= HL_NFD || fcntl((int)a0, F_GETFD) == -1)) {
         G_RET(c) = (uint64_t)(int64_t)(-EBADF);
-        return svc_done(c);
+        return svc_done_host(c);
     }
     // Scatter/gather iovcnt bound (readv/writev/preadv/pwritev). Linux (fs/read_write.c) rejects nr_segs
     // above UIO_MAXIOV(1024) with -EINVAL before touching the iovec array. The plain host path delegates
@@ -489,7 +492,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     // The kernel looks up the fd first, so a bad fd must still win with EBADF: gate on the fd being open.
     if ((nr == 65 || nr == 66 || nr == 69 || nr == 70) && a2 > 1024 && (int)a0 >= 0 && fcntl((int)a0, F_GETFD) != -1) {
         G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
-        return svc_done(c);
+        return svc_done_host(c);
     }
     // Empty scatter/gather (iovcnt == 0). Linux (fs/read_write.c: import_iovec with nr_segs 0) transfers
     // nothing and returns 0 for readv/writev/preadv/pwritev. The plain host path forwards to the host libc,
@@ -498,7 +501,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     // EBADF, which the host path below reports on either kernel).
     if ((nr == 65 || nr == 66 || nr == 69 || nr == 70) && a2 == 0 && (int)a0 >= 0 && fcntl((int)a0, F_GETFD) != -1) {
         G_RET(c) = 0;
-        return svc_done(c);
+        return svc_done_host(c);
     }
     // Scatter/gather segment address validation. Linux (fs/read_write.c: import_iovec -> access_ok per
     // segment) rejects an iovec whose [base, base+len) leaves the user address window with -EFAULT, before
@@ -512,7 +515,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         struct iovec imported[1024];
         if (guest_iov_import(a1, (size_t)a2, imported) < 0) {
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
-            return svc_done(c);
+            return svc_done_host(c);
         }
         /*
          * Linux validates each vector entry in order: an entry that takes the
@@ -527,10 +530,16 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                                                   (uint64_t)imported[i].iov_len, &total);
             if (validated != 0) {
                 G_RET(c) = (uint64_t)(int64_t)validated;
-                return svc_done(c);
+                return svc_done_host(c);
             }
         }
     }
+    /* The emulated eventfd owns its descriptor even if a reused number still
+       has stale generic path classification.  Resolve its vectored operation
+       after Linux's common fd/iovec validation but before generic O_PATH,
+       device, and host-access-mode gates inspect the backing pipe read end. */
+    if (nr == 65 && eventfd_vector_read(c, (int)a0, a1, (size_t)a2)) return svc_done_host(c);
+    if (nr == 66 && eventfd_vector_write(c, (int)a0, a1, (size_t)a2)) return svc_done_host(c);
     // An O_PATH fd names a file but is not open for I/O -- Linux rejects the read/write family through it
     // with EBADF (fs/read_write.c). It stays valid as a dirfd for *at() and for fstat/fchdir (served by
     // svc_fs), so only the I/O syscalls are gated here.
@@ -545,7 +554,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         case 69:
         case 70:
         case 82: /* fsync */
-        case 83: /* fdatasync */ G_RET(c) = (uint64_t)(int64_t)(-EBADF); return svc_done(c);
+        case 83: /* fdatasync */ G_RET(c) = (uint64_t)(int64_t)(-EBADF); return svc_done_host(c);
         default: break;
         }
     }
@@ -560,7 +569,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // A description that is not open for writing loses first, as everywhere else in the family:
             // write(fd_opened_O_RDONLY_on_/dev/full, buf, 1) is EBADF on Linux, not ENOSPC.
             G_RET(c) = (uint64_t)(int64_t)(guest_fd_rejects((int)a0, 0) ? -EBADF : -ENOSPC);
-            return svc_done(c);
+            return svc_done_host(c);
         default: break;
         }
     }
@@ -576,7 +585,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         case 70:
             if (guest_fd_rejects((int)a0, 0)) {
                 G_RET(c) = (uint64_t)(int64_t)(-EBADF);
-                return svc_done(c);
+                return svc_done_host(c);
             }
             break;
         default: break;
@@ -586,21 +595,21 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         case 68: // write / pwrite64: count = a2
             if (a2 && guest_accessible_prefix(a1, (size_t)a2, HL_LOGICAL_VMA_READ) != (size_t)a2) {
                 G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
-                return svc_done(c);
+                return svc_done_host(c);
             }
             G_RET(c) = a2;
-            return svc_done(c);
+            return svc_done_host(c);
         case 66:
         case 70: { // writev / pwritev: sum the iovec lengths
             if (a2 > GUEST_IOV_STACK_MAX) {
                 G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
-                return svc_done(c);
+                return svc_done_host(c);
             }
             // The array itself lives in guest memory, so import it instead of dereferencing a1 directly.
             struct iovec vectors[GUEST_IOV_STACK_MAX];
             if (guest_iov_import(a1, (size_t)a2, vectors) < 0) {
                 G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
-                return svc_done(c);
+                return svc_done_host(c);
             }
             uint64_t total = 0;
             for (size_t index = 0; index < (size_t)a2; ++index) {
@@ -608,12 +617,12 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 uint64_t base = (uint64_t)(uintptr_t)vectors[index].iov_base;
                 if (length && guest_accessible_prefix(base, length, HL_LOGICAL_VMA_READ) != length) {
                     G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
-                    return svc_done(c);
+                    return svc_done_host(c);
                 }
                 total += length;
             }
             G_RET(c) = total;
-            return svc_done(c);
+            return svc_done_host(c);
         }
         default: break;
         }
@@ -632,7 +641,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             uint64_t good = gna_prefix(a1, a2);
             if (a2 && !good) {
                 G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
-                return svc_done(c);
+                return svc_done_host(c);
             }
             a2 = good;
             break;
@@ -642,7 +651,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                  // Linux reports EFAULT for the call rather than a short write, so keep this all-or-nothing.
             if (gna_hit(a1, a2)) {
                 G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
-                return svc_done(c);
+                return svc_done_host(c);
             }
             break;
         case 66:   // writev / pwritev: Linux can publish the readable prefix of one segment that straddles an
@@ -651,7 +660,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                    // before the host sees the force-mapped tail. The array is already validated and bounded.
             if (guest_fd_rejects((int)a0, 0)) {
                 G_RET(c) = (uint64_t)(int64_t)(-EBADF);
-                return svc_done(c);
+                return svc_done_host(c);
             }
             if (a1 && a2 && a2 <= 1024) {
                 const struct iovec *iov = (const struct iovec *)a1;
@@ -659,7 +668,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                     if (iov[i].iov_len && guest_accessible_prefix((uint64_t)(uintptr_t)iov[i].iov_base,
                                                                   iov[i].iov_len, HL_LOGICAL_VMA_READ) == 0) {
                         G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
-                        return svc_done(c);
+                        return svc_done_host(c);
                     }
             }
             break;
@@ -692,5 +701,5 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     case 84: return svc_sync_file_range(c,nr,a0,a1,a2,a3,a4,a5);
     default: return 0;
     }
-    return svc_done(c); // boundary errno xlate (host macOS -> Linux); see helpers.c svc_done
+    return svc_done_host(c); // boundary errno xlate (host macOS -> Linux); see helpers.c svc_done_host
 }

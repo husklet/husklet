@@ -94,6 +94,8 @@ int hl_host_process_read(int64_t pid, hl_host_process_info *info) {
     info->parent_pid = bsd.pbi_ppid;
     info->process_group = bsd.pbi_pgid;
     info->session = getsid((pid_t)pid);
+    info->terminal_device = bsd.e_tdev;
+    info->foreground_group = bsd.e_tpgid;
     info->start_time_seconds = bsd.pbi_start_tvsec;
     info->start_time_ns =
         (uint64_t)bsd.pbi_start_tvsec * UINT64_C(1000000000) + (uint64_t)bsd.pbi_start_tvusec * UINT64_C(1000);
@@ -120,6 +122,15 @@ static uint32_t hl_macos_fd_kind(uint32_t kind) {
     if (kind == PROX_FDTYPE_PIPE) return HL_HOST_FD_PIPE;
     if (kind == PROX_FDTYPE_SOCKET) return HL_HOST_FD_SOCKET;
     return HL_HOST_FD_OTHER;
+}
+
+static void hl_macos_pipe_identity(int pid, int descriptor, hl_host_process_fd *entry) {
+    struct pipe_fdinfo info;
+    if (proc_pidfdinfo(pid, descriptor, PROC_PIDFDPIPEINFO, &info, sizeof info) != (int)sizeof info) return;
+    uint64_t handle = info.pipeinfo.pipe_handle;
+    uint64_t peer = info.pipeinfo.pipe_peerhandle;
+    entry->stable_device = info.pipeinfo.pipe_stat.vst_dev;
+    entry->stable_object = handle == 0 ? peer : peer == 0 ? handle : handle < peer ? handle : peer;
 }
 
 int hl_host_process_fds(int64_t pid, hl_host_process_fd *entries, size_t capacity, size_t *count) {
@@ -149,6 +160,8 @@ int hl_host_process_fds(int64_t pid, hl_host_process_fd *entries, size_t capacit
         entries[index].reserved = 0;
         entries[index].stable_device = 0;
         entries[index].stable_object = 0;
+        if (entries[index].kind == HL_HOST_FD_PIPE)
+            hl_macos_pipe_identity((int)pid, native[index].proc_fd, &entries[index]);
     }
     free(native);
     *count = total;
@@ -207,6 +220,7 @@ int hl_host_process_fd_read(int64_t pid, int32_t descriptor, hl_host_process_fd 
     entry->reserved = 0;
     entry->stable_device = 0;
     entry->stable_object = 0;
+    if (entry->kind == HL_HOST_FD_PIPE) hl_macos_pipe_identity((int)pid, descriptor, entry);
     *path_size = 0;
     return 1;
 }

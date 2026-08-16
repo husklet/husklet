@@ -1,0 +1,21 @@
+cases:
+- id: terminal-line-ends/readline-start-end
+  image: bash:5.2
+  resources: [pty]
+  timeout: 15
+  actions:
+  - terminal:
+      argv: [/usr/local/bin/bash, --noprofile, --norc]
+      steps:
+      - write: { text: "printf '<%s>\\n' \"$X-RIGHT\"" }
+      - write: { text: "\u0001" }
+      - write: { text: "X=LEFT; " }
+      - write: { text: "\u0005" }
+      - write: { text: "; printf '<END>\\n'\r" }
+      - await_output: { contains: "<LEFT-RIGHT>", timeout_ms: 5000 }
+      - await_output: { contains: "<END>", timeout_ms: 5000 }
+      - write: { text: "printf '\\123\\110\\105\\114\\114\\055\\117\\113\\n'; exit\r" }
+      - await_output: { contains: SHELL-OK, timeout_ms: 5000 }
+      - close: {}
+  expect:
+    stdout_contains: [golden/start.txt, golden/end.txt, golden/shell_ok.txt]

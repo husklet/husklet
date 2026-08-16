@@ -147,14 +147,21 @@ impl Workspace {
 
     /// Returns repository-owned Rust, C, and C-header files below a source or test root.
     pub(crate) fn source_files(&self) -> Result<Vec<PathBuf>> {
-        let mut files = Vec::new();
-        for path in &self.paths {
-            source_files(path, &mut files, true, &self.policy)?;
-        }
-        files.sort();
-        files.dedup();
-        Ok(files)
+        source_files_with_policy(&self.paths, &self.policy)
     }
+}
+
+pub(crate) fn source_files_with_policy(
+    paths: &[PathBuf],
+    policy: &crate::policy::SourcePolicy,
+) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for path in paths {
+        source_files(path, &mut files, policy)?;
+    }
+    files.sort();
+    files.dedup();
+    Ok(files)
 }
 
 fn line_offsets(source: &str) -> Vec<usize> {
@@ -309,13 +316,17 @@ fn rust_files(
     {
         return Ok(());
     }
-    if fs::symlink_metadata(path)?.file_type().is_symlink() {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
         return Ok(());
     }
-    if path.is_file() {
+    if metadata.is_file() {
         if path.extension().is_some_and(|extension| extension == "rs") {
             files.push(path.to_owned());
         }
+        return Ok(());
+    }
+    if !metadata.is_dir() {
         return Ok(());
     }
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
@@ -334,23 +345,22 @@ fn rust_files(
     Ok(())
 }
 
-fn source_files(
-    path: &Path,
-    files: &mut Vec<PathBuf>,
-    explicitly_requested: bool,
-    policy: &crate::policy::SourcePolicy,
-) -> Result<()> {
+fn source_files(path: &Path, files: &mut Vec<PathBuf>, policy: &crate::policy::SourcePolicy) -> Result<()> {
+    if is_ignored_subtree(path, policy) {
+        return Ok(());
+    }
     let metadata = fs::symlink_metadata(path).map_err(|error| LintError::io("inspect", path, error))?;
     if metadata.file_type().is_symlink() {
         return Ok(());
     }
     if metadata.is_file() {
         let extension = path.extension().and_then(|value| value.to_str());
-        if matches!(extension, Some("rs" | "c" | "h" | "m" | "mm"))
-            && (explicitly_requested || below_architecture_root(path))
-        {
+        if matches!(extension, Some("rs" | "c" | "h" | "m" | "mm")) {
             files.push(path.to_owned());
         }
+        return Ok(());
+    }
+    if !metadata.is_dir() {
         return Ok(());
     }
     if path
@@ -366,14 +376,9 @@ fn source_files(
         .map_err(|error| LintError::io("read source directory", path, error))?;
     entries.sort_by_key(std::fs::DirEntry::path);
     for entry in entries {
-        source_files(&entry.path(), files, false, policy)?;
+        source_files(&entry.path(), files, policy)?;
     }
     Ok(())
-}
-
-fn below_architecture_root(path: &Path) -> bool {
-    path.components()
-        .any(|component| matches!(component.as_os_str().to_str(), Some("src" | "tests")))
 }
 
 fn directory_shapes(
@@ -383,8 +388,11 @@ fn directory_shapes(
     include_linter: bool,
     policy: &crate::policy::SourcePolicy,
 ) -> io::Result<()> {
-    if excluded(path, include_linter, policy) || fs::symlink_metadata(path)?.file_type().is_symlink() || path.is_file()
-    {
+    if excluded(path, include_linter, policy) {
+        return Ok(());
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Ok(());
     }
 
@@ -440,10 +448,14 @@ fn excluded(path: &Path, include_linter: bool, policy: &crate::policy::SourcePol
 
 fn is_ignored_subtree(path: &Path, policy: &crate::policy::SourcePolicy) -> bool {
     path.ancestors().any(|ancestor| {
-        policy
-            .ignored_markers
-            .iter()
-            .any(|marker| ancestor.join(marker).is_file())
+        ancestor
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| policy.ignored_directories.iter().any(|ignored| ignored == name))
+            || policy
+                .ignored_markers
+                .iter()
+                .any(|marker| ancestor.join(marker).is_file())
     })
 }
 

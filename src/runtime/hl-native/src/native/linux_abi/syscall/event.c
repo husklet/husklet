@@ -771,6 +771,194 @@ static int socket_poll_error_fixup(struct pollfd *fds, nfds_t n, int r) {
     return r;
 }
 
+static void epoll_deadline_from_timeout(int64_t timeout_ns, struct timespec *deadline) {
+    *deadline = (struct timespec){0, 0};
+    if (timeout_ns <= 0) return;
+    hl_production_clock_gettime(effective_host_services(), HL_PRODUCTION_CLOCK_MONOTONIC, deadline);
+    deadline->tv_sec += (time_t)(timeout_ns / 1000000000LL);
+    deadline->tv_nsec += (long)(timeout_ns % 1000000000LL);
+    if (deadline->tv_nsec >= 1000000000L) {
+        ++deadline->tv_sec;
+        deadline->tv_nsec -= 1000000000L;
+    }
+}
+
+static int64_t epoll_deadline_remaining(const struct timespec *deadline) {
+    struct timespec now;
+    hl_production_clock_gettime(effective_host_services(), HL_PRODUCTION_CLOCK_MONOTONIC, &now);
+    return (int64_t)(deadline->tv_sec - now.tv_sec) * 1000000000LL + (deadline->tv_nsec - now.tv_nsec);
+}
+
+static struct timespec *epoll_wait_timeout(int64_t timeout_ns, const struct timespec *deadline,
+                                           struct timespec *timeout) {
+    if (timeout_ns < 0) return NULL;
+    int64_t remaining = timeout_ns == 0 ? 0 : epoll_deadline_remaining(deadline);
+    if (remaining < 0) remaining = 0;
+    timeout->tv_sec = (time_t)(remaining / 1000000000LL);
+    timeout->tv_nsec = (long)(remaining % 1000000000LL);
+    return timeout;
+}
+
+static int epoll_native_ready_for_cpu(int ep, struct cpu *cpu) {
+    for (uint32_t index = 0; index < EP_NATIVE_WATCH_LIMIT; ++index) {
+        ep_native_watch *watch = &g_ep_native_watches[index];
+        if (__atomic_load_n(&watch->active, __ATOMIC_ACQUIRE) == 1 && watch->epoll == epoll_slot(ep) &&
+            (watch->events & 1u) && sfd_ready_for_cpu(watch->logical_descriptor, cpu))
+            return 1;
+    }
+    return 0;
+}
+
+static uint32_t epoll_kevent_events(const struct kevent *event) {
+    uint32_t events = event->filter == EVFILT_READ ? 0x1u : event->filter == EVFILT_WRITE ? 0x4u : 0u;
+    if (!(event->flags & EV_EOF)) return events;
+    int hangup = 1;
+    if (event->filter == EVFILT_READ) {
+        struct pollfd pollfd = {.fd = (int)event->ident, .events = POLLIN, .revents = 0};
+        int poll_status = poll(&pollfd, 1, 0);
+        if (poll_status >= 0) {
+            hangup = (pollfd.revents & POLLHUP) != 0;
+        } else {
+            int socket_type;
+            socklen_t socket_type_size = sizeof(socket_type);
+            if (getsockopt((int)event->ident, SOL_SOCKET, SO_TYPE, &socket_type, &socket_type_size) == 0) hangup = 0;
+        }
+    }
+    if (hangup) events |= 0x10u;
+    if (event->ident < HL_NFD && (g_ep_events[event->ident] & 0x2000u)) events |= 0x2000u;
+    return events;
+}
+
+static int epoll_append_kevents(int ep, int optimized, const struct kevent *events, int count, uint8_t *output,
+                                int maximum) {
+    int used = 0;
+    for (int index = 0; index < count && used < maximum; ++index) {
+        const struct kevent *event = &events[index];
+        if (event->filter == EVFILT_USER || (optimized && (event->flags & EV_ERROR))) continue;
+        uint32_t ready = epoll_kevent_events(event);
+        if (!optimized && (event->flags & EV_ERROR)) ready |= 0x8u;
+        *(uint32_t *)(output + (size_t)used * G_EPEV_SZ) = ready;
+        memcpy(output + (size_t)used * G_EPEV_SZ + G_EPEV_DOFF, &event->udata, 8);
+        if (event->ident < HL_NFD && g_ep_os[event->ident]) {
+            if (event->filter == EVFILT_READ)
+                g_ep_rd[event->ident] = 0;
+            else if (event->filter == EVFILT_WRITE)
+                g_ep_wr[event->ident] = 0;
+        }
+        if (event->ident < HL_NFD) ep_native_disarm(epoll_slot(ep), (int)event->ident, event->filter);
+        ++used;
+    }
+    return used;
+}
+
+static int epoll_append_native_ready(int ep, struct cpu *cpu, uint8_t *output, int used, int maximum) {
+    for (uint32_t index = 0; index < EP_NATIVE_WATCH_LIMIT && used < maximum; ++index) {
+        ep_native_watch *watch = &g_ep_native_watches[index];
+        if (__atomic_load_n(&watch->active, __ATOMIC_ACQUIRE) != 1 || watch->epoll != epoll_slot(ep) ||
+            !(watch->events & 1u) || !(watch->armed & 1u) || !sfd_ready_for_cpu(watch->logical_descriptor, cpu))
+            continue;
+        int duplicate = 0;
+        for (int prior = 0; prior < used; ++prior) {
+            uint64_t data;
+            memcpy(&data, output + (size_t)prior * G_EPEV_SZ + G_EPEV_DOFF, sizeof(data));
+            if (data == watch->data) duplicate = 1;
+        }
+        if (duplicate) continue;
+        *(uint32_t *)(output + (size_t)used * G_EPEV_SZ) = 1u;
+        memcpy(output + (size_t)used * G_EPEV_SZ + G_EPEV_DOFF, &watch->data, sizeof(watch->data));
+        if (watch->events & (UINT32_C(0x40000000) | UINT32_C(0x80000000))) watch->armed &= ~1u;
+        ++used;
+    }
+    return used;
+}
+
+static int epoll_append_provider_ready(int registry_ep, uint8_t *output, int used, int maximum) {
+    uint32_t generation = registry_ep >= 0 && registry_ep < HL_NFD ? g_ep_provider_generations[registry_ep] : 0;
+    for (uint32_t index = 0; index < EP_PROVIDER_WATCH_LIMIT && used < maximum; ++index) {
+        ep_provider_watch *watch = &g_ep_provider_watches[index];
+        if (atomic_load_explicit(&watch->state, memory_order_acquire) != EP_PROVIDER_ACTIVE ||
+            watch->epoll != registry_ep || watch->epoll_generation != generation)
+            continue;
+        hl_linux_fd_snapshot snapshot;
+        if (g_linux_box == NULL ||
+            hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)watch->descriptor, &snapshot) != HL_STATUS_OK ||
+            snapshot.descriptor_generation != watch->descriptor_generation || snapshot.host_handle != watch->handle) {
+            ep_provider_retire(watch);
+            continue;
+        }
+        uint32_t level = 0;
+        if (!(watch->events & 0x80000000u) && !(watch->events & 0x40000000u))
+            level = hl_provider_files_cached_readiness(watch->handle, watch->interests);
+        int unsubscribe = 0;
+        uint32_t ready = ep_provider_take_ready(watch, level, &unsubscribe);
+        if (ready == 0) continue;
+        *(uint32_t *)(output + (size_t)used * G_EPEV_SZ) = ep_provider_linux_events(ready);
+        memcpy(output + (size_t)used * G_EPEV_SZ + G_EPEV_DOFF, &watch->data, sizeof(watch->data));
+        if (unsubscribe) hl_provider_files_unsubscribe(watch->handle, watch, atomic_load(&watch->serial));
+        ++used;
+    }
+    return used;
+}
+
+static int epoll_append_primes(int ep, uint8_t *output, int used, int maximum) {
+    if (ep < 0 || ep >= HL_NFD || g_ep_primen[ep] <= 0) return used;
+    int kept = 0;
+    for (int index = 0; index < g_ep_primen[ep]; ++index) {
+        struct kevent *prime = &g_ep_prime[ep][index];
+        uint32_t ready = prime->filter == EVFILT_READ ? 0x1u : 0x4u;
+        int duplicate = 0;
+        for (int prior = 0; prior < used; ++prior) {
+            uint32_t prior_ready;
+            uint64_t prior_data;
+            memcpy(&prior_ready, output + (size_t)prior * G_EPEV_SZ, 4);
+            memcpy(&prior_data, output + (size_t)prior * G_EPEV_SZ + G_EPEV_DOFF, 8);
+            if (prior_data == (uint64_t)prime->udata && (prior_ready & ready)) {
+                duplicate = 1;
+                break;
+            }
+        }
+        if (duplicate) continue;
+        if (used >= maximum) {
+            g_ep_prime[ep][kept++] = *prime;
+            continue;
+        }
+        *(uint32_t *)(output + (size_t)used * G_EPEV_SZ) = ready;
+        memcpy(output + (size_t)used * G_EPEV_SZ + G_EPEV_DOFF, &prime->udata, 8);
+        ++used;
+    }
+    g_ep_primen[ep] = kept;
+    return used;
+}
+
+static int epoll_append_object_ready(int registry_ep, uint8_t *output, int used, int maximum) {
+    if (registry_ep < 0 || registry_ep >= HL_NFD || g_ep_object_count[registry_ep] <= 0) return used;
+    uint32_t generation = g_ep_provider_generations[registry_ep];
+    for (uint32_t index = 0; index < EP_OBJECT_WATCH_LIMIT && used < maximum; ++index) {
+        ep_object_watch *watch = &g_ep_object_watches[index];
+        if (atomic_load_explicit(&watch->active, memory_order_acquire) == 0 || watch->epoll != registry_ep ||
+            watch->epoll_generation != generation)
+            continue;
+        hl_linux_fd_snapshot snapshot;
+        hl_linux_object_pin pin;
+        if (g_linux_box == NULL ||
+            hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)watch->descriptor, &snapshot) != HL_STATUS_OK ||
+            snapshot.descriptor_generation != watch->descriptor_generation) {
+            ep_object_free(watch);
+            continue;
+        }
+        if (hl_linux_object_pin_fd(g_linux_box, (hl_linux_fd)watch->descriptor, &pin) != HL_STATUS_OK) continue;
+        uint32_t readiness = hl_linux_object_ready(&pin, watch->interests);
+        hl_linux_object_unpin(&pin);
+        uint32_t events = ep_provider_linux_events(readiness);
+        if (events == 0) continue;
+        *(uint32_t *)(output + (size_t)used * G_EPEV_SZ) = events;
+        memcpy(output + (size_t)used * G_EPEV_SZ + G_EPEV_DOFF, &watch->data, sizeof(watch->data));
+        ++used;
+        if (watch->events & 0x40000000u) ep_object_free(watch);
+    }
+    return used;
+}
+
 // Shared epoll_wait core for epoll_pwait (case 22, int-ms timeout) and epoll_pwait2 (case 441,
 // struct timespec ns timeout). `ep` is the epoll fd, `out` the guest event out-array, `maxev` the
 // already-validated (>0, capped 256) maxevents, `timeout_ns` the wait budget in NANOSECONDS with the
@@ -793,33 +981,13 @@ static void svc_epoll_wait_common(struct cpu *c, int ep, uint64_t guest_out, int
     // capture a monotonic deadline at entry and, whenever we produced no guest event but the guest still
     // wants to block, re-enter kevent for the time that remains. Each re-block genuinely sleeps in kevent
     // (the EVFILT_USER knote is EV_CLEAR, already consumed) -- no busy spin.
-    struct timespec deadline = {0, 0};
-    if (timeout_ns > 0) {
-        hl_production_clock_gettime(effective_host_services(), HL_PRODUCTION_CLOCK_MONOTONIC, &deadline);
-        deadline.tv_sec += (time_t)(timeout_ns / 1000000000LL);
-        deadline.tv_nsec += (long)(timeout_ns % 1000000000LL);
-        if (deadline.tv_nsec >= 1000000000L) {
-            deadline.tv_sec++;
-            deadline.tv_nsec -= 1000000000L;
-        }
-    }
+    struct timespec deadline;
+    epoll_deadline_from_timeout(timeout_ns, &deadline);
     int oi = 0;
     int sm_on = poll_sigmask_enter(c, have_mask, sm_set, &sm_saved);
     for (;;) {
-        struct timespec ts, *tp = NULL;
-        if (timeout_ns == 0) {
-            ts.tv_sec = 0;
-            ts.tv_nsec = 0;
-            tp = &ts; // non-blocking poll
-        } else if (timeout_ns > 0) {
-            struct timespec now;
-            hl_production_clock_gettime(effective_host_services(), HL_PRODUCTION_CLOCK_MONOTONIC, &now);
-            int64_t rem = (int64_t)(deadline.tv_sec - now.tv_sec) * 1000000000LL + (deadline.tv_nsec - now.tv_nsec);
-            if (rem < 0) rem = 0;
-            ts.tv_sec = (time_t)(rem / 1000000000LL);
-            ts.tv_nsec = (long)(rem % 1000000000LL);
-            tp = &ts;
-        } // timeout_ns < 0 -> tp stays NULL (block forever)
+        struct timespec ts;
+        struct timespec *tp = epoll_wait_timeout(timeout_ns, &deadline, &ts);
         // Multi-threaded guest: serialize against peer Ms doing epoll_ctl on this instance. Arm the wake
         // knote and push any deferred changelist to the kernel BEFORE we block, so a peer's registration is
         // kernel-visible to us and its NOTE_TRIGGER can wake us. We then block on a pure wait (no changelist)
@@ -839,15 +1007,10 @@ static void svc_epoll_wait_common(struct cpu *c, int ep, uint64_t guest_out, int
         }
         // Thread-directed signalfd instances deliberately have no process-wide pipe token.  Derive their
         // readiness from queue ownership and turn this wait into a poll only for the addressed thread.
-        for (uint32_t index = 0; index < EP_NATIVE_WATCH_LIMIT; ++index) {
-            ep_native_watch *watch = &g_ep_native_watches[index];
-            if (__atomic_load_n(&watch->active, __ATOMIC_ACQUIRE) == 1 && watch->epoll == epoll_slot(ep) &&
-                (watch->events & 1u) && sfd_ready_for_cpu(watch->logical_descriptor, c)) {
-                ts.tv_sec = 0;
-                ts.tv_nsec = 0;
-                tp = &ts;
-                break;
-            }
+        if (epoll_native_ready_for_cpu(ep, c)) {
+            ts.tv_sec = 0;
+            ts.tv_nsec = 0;
+            tp = &ts;
         }
         // Object-backed watches (inotify) have no host descriptor on this kqueue, so a blocking wait would
         // never surface their readiness. Like poll()/select() over the same objects, cap the sleep to a
@@ -883,172 +1046,20 @@ static void svc_epoll_wait_common(struct cpu *c, int ep, uint64_t guest_out, int
             break;
         }
         lk = opt ? ep_lock() : 0; // re-acquire to guard the armed-map updates + prime scan below
-        oi = 0;
-        for (int i = 0; i < r && oi < maxev; i++) {
-            // The EVFILT_USER self-wake knote is an internal cross-thread nudge, not a guest event -- drop it.
-            if (kv[i].filter == EVFILT_USER) continue;
-            // An EV_ERROR entry is a *changelist* processing result (errno in .data), NOT a readiness
-            // event. With correct armed-state tracking these do not occur; skip them if they do.
-            if (opt && (kv[i].flags & EV_ERROR)) continue;
-            uint32_t ev = (kv[i].filter == EVFILT_READ) ? 0x1u : (kv[i].filter == EVFILT_WRITE) ? 0x4u : 0u;
-            if (kv[i].flags & EV_EOF) {
-                // kqueue raises EV_EOF for BOTH a peer half-close (shutdown SHUT_WR: the read side hits
-                // EOF but the socket is still writable) and a full hangup. Linux distinguishes them:
-                // EPOLLRDHUP on a peer close, EPOLLHUP only once the local connection is also closed.
-                // The AF_UNIX transport collapses a peer close into host POLLHUP, so its socket EOF must
-                // not become guest EPOLLHUP. Non-sockets retain the poll distinction. EPOLLRDHUP is
-                // edge-reported only when the guest registered it (unlike EPOLLHUP/EPOLLERR).
-                int hup = 1;
-                if (kv[i].filter == EVFILT_READ) {
-                    struct pollfd pf = {.fd = (int)kv[i].ident, .events = POLLIN, .revents = 0};
-                    if (poll(&pf, 1, 0) >= 0) hup = (pf.revents & POLLHUP) != 0;
-                    {
-                        int socket_type;
-                        socklen_t socket_type_size = sizeof(socket_type);
-                        if (getsockopt((int)kv[i].ident, SOL_SOCKET, SO_TYPE, &socket_type, &socket_type_size) == 0)
-                            hup = 0;
-                    }
-                }
-                if (hup) ev |= 0x10u;                                                            // EPOLLHUP
-                if (kv[i].ident < HL_NFD && (g_ep_events[kv[i].ident] & 0x2000u)) ev |= 0x2000u; // EPOLLRDHUP
-            }
-            // EPOLLERR (immediate-path semantics preserved when opt is off)
-            if (!opt && (kv[i].flags & EV_ERROR)) ev |= 0x8u;
-            *(uint32_t *)(out + (size_t)oi * G_EPEV_SZ) = ev;
-            memcpy(out + (size_t)oi * G_EPEV_SZ + G_EPEV_DOFF, &kv[i].udata, 8);
-            // EPOLLONESHOT: the kernel auto-removed this registration; keep our armed map in sync.
-            if (kv[i].ident < HL_NFD && g_ep_os[kv[i].ident]) {
-                if (kv[i].filter == EVFILT_READ)
-                    g_ep_rd[kv[i].ident] = 0;
-                else if (kv[i].filter == EVFILT_WRITE)
-                    g_ep_wr[kv[i].ident] = 0;
-            }
-            if (kv[i].ident < HL_NFD) ep_native_disarm(epoll_slot(ep), (int)kv[i].ident, kv[i].filter);
-            oi++;
-        }
-        // Synthesize per-thread signalfd readiness.  A shared host kqueue cannot represent that ownership,
-        // whereas the native watch table retains the Linux event mask and user data exactly.
-        for (uint32_t index = 0; index < EP_NATIVE_WATCH_LIMIT && oi < maxev; ++index) {
-            ep_native_watch *watch = &g_ep_native_watches[index];
-            if (__atomic_load_n(&watch->active, __ATOMIC_ACQUIRE) != 1 || watch->epoll != epoll_slot(ep) ||
-                !(watch->events & 1u) || !(watch->armed & 1u) || !sfd_ready_for_cpu(watch->logical_descriptor, c))
-                continue;
-            int duplicate = 0;
-            for (int prior = 0; prior < oi; ++prior) {
-                uint64_t data;
-                memcpy(&data, out + (size_t)prior * G_EPEV_SZ + G_EPEV_DOFF, sizeof(data));
-                if (data == watch->data) duplicate = 1;
-            }
-            if (duplicate) continue;
-            *(uint32_t *)(out + (size_t)oi * G_EPEV_SZ) = 1u;
-            memcpy(out + (size_t)oi * G_EPEV_SZ + G_EPEV_DOFF, &watch->data, sizeof(watch->data));
-            if (watch->events & (UINT32_C(0x40000000) | UINT32_C(0x80000000))) watch->armed &= ~1u;
-            ++oi;
-        }
-        /* Provider pumps only publish an atomic readiness mark and trigger the
-         * EVFILT_USER wake.  The epoll owner consumes and formats it here, so
-         * callbacks never mutate epoll queues or acquire inherited locks. */
+        oi = epoll_append_kevents(ep, opt, kv, r, out, maxev);
+        oi = epoll_append_native_ready(ep, c, out, oi, maxev);
         int registry_ep = epoll_slot(ep);
-        uint32_t provider_ep_generation =
-            registry_ep >= 0 && registry_ep < HL_NFD ? g_ep_provider_generations[registry_ep] : 0;
-        for (uint32_t provider_index = 0; provider_index < EP_PROVIDER_WATCH_LIMIT && oi < maxev; ++provider_index) {
-            ep_provider_watch *provider_watch = &g_ep_provider_watches[provider_index];
-            if (atomic_load_explicit(&provider_watch->state, memory_order_acquire) != EP_PROVIDER_ACTIVE ||
-                provider_watch->epoll != registry_ep || provider_watch->epoll_generation != provider_ep_generation)
-                continue;
-            hl_linux_fd_snapshot provider_snapshot;
-            if (g_linux_box == NULL ||
-                hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)provider_watch->descriptor, &provider_snapshot) !=
-                    HL_STATUS_OK ||
-                provider_snapshot.descriptor_generation != provider_watch->descriptor_generation ||
-                provider_snapshot.host_handle != provider_watch->handle) {
-                ep_provider_retire(provider_watch);
-                continue;
-            }
-            uint32_t level = 0;
-            if (!(provider_watch->events & 0x80000000u) && !(provider_watch->events & 0x40000000u))
-                level = hl_provider_files_cached_readiness(provider_watch->handle, provider_watch->interests);
-            int unsubscribe = 0;
-            uint32_t provider_ready = ep_provider_take_ready(provider_watch, level, &unsubscribe);
-            if (provider_ready == 0) continue;
-            *(uint32_t *)(out + (size_t)oi * G_EPEV_SZ) = ep_provider_linux_events(provider_ready);
-            memcpy(out + (size_t)oi * G_EPEV_SZ + G_EPEV_DOFF, &provider_watch->data, sizeof(provider_watch->data));
-            if (unsubscribe) {
-                hl_provider_files_unsubscribe(provider_watch->handle, provider_watch,
-                                              atomic_load(&provider_watch->serial));
-            }
-            oi++;
-        }
-        // Deliver edge-triggered primes that kqueue didn't surface (fds already ready at registration).
-        // This is the cross-thread-readiness delivery: a peer M that registered an already-ready fd
-        // stashed a prime here, so a wake that carried no kqueue edge still hands the guest the ready fd.
-        if (ep >= 0 && ep < HL_NFD && g_ep_primen[ep] > 0) {
-            int kept = 0;
-            for (int i = 0; i < g_ep_primen[ep]; i++) {
-                struct kevent *pk = &g_ep_prime[ep][i];
-                uint32_t pev = (pk->filter == EVFILT_READ) ? 0x1u : 0x4u;
-                int dup = 0;
-                for (int j = 0; j < oi; j++) {
-                    uint32_t jev;
-                    uint64_t ju;
-                    memcpy(&jev, out + (size_t)j * G_EPEV_SZ, 4);
-                    memcpy(&ju, out + (size_t)j * G_EPEV_SZ + G_EPEV_DOFF, 8);
-                    if (ju == (uint64_t)pk->udata && (jev & pev)) {
-                        dup = 1;
-                        break;
-                    }
-                }
-                if (dup) continue; // kqueue already reported it
-                if (oi >= maxev) {
-                    g_ep_prime[ep][kept++] = *pk;
-                    continue;
-                } // no room -> keep for next wait
-                *(uint32_t *)(out + (size_t)oi * G_EPEV_SZ) = pev;
-                memcpy(out + (size_t)oi * G_EPEV_SZ + G_EPEV_DOFF, &pk->udata, 8);
-                oi++;
-            }
-            g_ep_primen[ep] = kept;
-        }
+        oi = epoll_append_provider_ready(registry_ep, out, oi, maxev);
+        oi = epoll_append_primes(ep, out, oi, maxev);
         ep_unlock(lk);
-        // Object-backed watches (inotify): no host fd feeds the kqueue, so sample the object's readiness
-        // on this bounded tick and format the event here, exactly as poll()/select() observe the same
-        // typed objects. Runs after ep_unlock so the object mutex is never taken under the epoll lock.
-        if (registry_ep >= 0 && registry_ep < HL_NFD && g_ep_object_count[registry_ep] > 0) {
-            uint32_t obj_ep_generation = g_ep_provider_generations[registry_ep];
-            for (uint32_t oidx = 0; oidx < EP_OBJECT_WATCH_LIMIT && oi < maxev; ++oidx) {
-                ep_object_watch *ow = &g_ep_object_watches[oidx];
-                if (atomic_load_explicit(&ow->active, memory_order_acquire) == 0 || ow->epoll != registry_ep ||
-                    ow->epoll_generation != obj_ep_generation)
-                    continue;
-                hl_linux_fd_snapshot osnap;
-                hl_linux_object_pin opin;
-                if (g_linux_box == NULL ||
-                    hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)ow->descriptor, &osnap) != HL_STATUS_OK ||
-                    osnap.descriptor_generation != ow->descriptor_generation) {
-                    ep_object_free(ow); // the watched fd was closed or reused
-                    continue;
-                }
-                if (hl_linux_object_pin_fd(g_linux_box, (hl_linux_fd)ow->descriptor, &opin) != HL_STATUS_OK) continue;
-                uint32_t readiness = hl_linux_object_ready(&opin, ow->interests);
-                hl_linux_object_unpin(&opin);
-                uint32_t oev = ep_provider_linux_events(readiness);
-                if (oev == 0) continue;
-                *(uint32_t *)(out + (size_t)oi * G_EPEV_SZ) = oev;
-                memcpy(out + (size_t)oi * G_EPEV_SZ + G_EPEV_DOFF, &ow->data, sizeof(ow->data));
-                oi++;
-                if (ow->events & 0x40000000u) ep_object_free(ow); // EPOLLONESHOT: one delivery only
-            }
-        }
+        oi = epoll_append_object_ready(registry_ep, out, oi, maxev);
         // Re-block instead of returning a spurious 0. A bare cross-thread wake (or a changelist that only
         // produced EV_ERROR echoes) leaves oi==0 while the guest still asked to block. timeout_ns<0: always
         // loop (epoll_wait(-1) must never return 0). timeout_ns>0: loop until the monotonic deadline elapses.
         // timeout_ns==0: returning 0 is correct (non-blocking poll) -- never loop.
         if (oi == 0 && timeout_ns != 0) {
             if (timeout_ns < 0) continue;
-            struct timespec now;
-            hl_production_clock_gettime(effective_host_services(), HL_PRODUCTION_CLOCK_MONOTONIC, &now);
-            int64_t rem = (int64_t)(deadline.tv_sec - now.tv_sec) * 1000000000LL + (deadline.tv_nsec - now.tv_nsec);
-            if (rem > 0) continue;
+            if (epoll_deadline_remaining(&deadline) > 0) continue;
         }
         if (oi > 0 && guest_copy_to(guest_out, out, (size_t)oi * G_EPEV_SZ) != (ssize_t)((size_t)oi * G_EPEV_SZ))
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);

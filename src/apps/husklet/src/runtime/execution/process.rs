@@ -1,4 +1,4 @@
-use hl_client::api::{Size, TerminalInput};
+use hl_client::api::Size;
 use hl_client::Client;
 use hl_ws_term::PtyBackend;
 use std::collections::VecDeque;
@@ -21,7 +21,7 @@ pub(super) struct ExecPty {
     pub(super) runtime: tokio::runtime::Runtime,
     pub(super) client: Client,
     pub(super) execution: String,
-    pub(super) input: TerminalInput,
+    pub(super) input: tokio::sync::mpsc::Sender<Vec<u8>>,
     pub(super) output: Output,
     pub(super) exited: Arc<Mutex<Option<i32>>>,
     pub(super) pane: Option<PaneExecution>,
@@ -67,13 +67,15 @@ where
 }
 
 pub(super) struct Output {
-    receiver: std::sync::mpsc::Receiver<Vec<u8>>,
+    receiver: tokio::sync::mpsc::Receiver<Vec<u8>>,
     pending: VecDeque<u8>,
     closed: bool,
 }
 
+pub(super) const OUTPUT_QUEUE_RECORDS: usize = 64;
+
 impl Output {
-    pub(super) fn new(receiver: std::sync::mpsc::Receiver<Vec<u8>>) -> Self {
+    pub(super) fn new(receiver: tokio::sync::mpsc::Receiver<Vec<u8>>) -> Self {
         Self {
             receiver,
             pending: VecDeque::new(),
@@ -91,8 +93,8 @@ impl Output {
             }
             match self.receiver.try_recv() {
                 Ok(bytes) => self.pending.extend(bytes),
-                Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
                     self.closed = true;
                     break;
                 }
@@ -108,7 +110,13 @@ impl Output {
 
 impl PtyBackend for ExecPty {
     fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
-        self.runtime.block_on(self.input.write(bytes)).map_err(io::Error::other)
+        if self.input.capacity() == 0 {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        self.input.try_send(bytes.to_vec()).map_err(|error| match error {
+            tokio::sync::mpsc::error::TrySendError::Full(_) => io::ErrorKind::WouldBlock.into(),
+            tokio::sync::mpsc::error::TrySendError::Closed(_) => io::ErrorKind::BrokenPipe.into(),
+        })
     }
 
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
@@ -181,9 +189,9 @@ mod tests {
 
     #[test]
     fn output_finishes_only_after_every_chunk_is_drained() {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        sender.send(b"last ".to_vec()).unwrap();
-        sender.send(b"line\n".to_vec()).unwrap();
+        let (sender, receiver) = tokio::sync::mpsc::channel(super::OUTPUT_QUEUE_RECORDS);
+        sender.try_send(b"last ".to_vec()).unwrap();
+        sender.try_send(b"line\n".to_vec()).unwrap();
         drop(sender);
         let mut output = Output::new(receiver);
         let mut bytes = [0; 5];
@@ -196,6 +204,34 @@ mod tests {
         assert_eq!(&bytes[..count], b"line\n");
         assert!(!output.finished());
         assert_eq!(output.read(&mut bytes), 0);
+        assert!(output.finished());
+    }
+
+    #[test]
+    fn terminal_output_is_bounded_and_preserves_record_order() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(super::OUTPUT_QUEUE_RECORDS);
+        for byte in 0..super::OUTPUT_QUEUE_RECORDS {
+            sender.try_send(vec![byte as u8]).unwrap();
+        }
+        assert!(matches!(
+            sender.try_send(vec![255]),
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_))
+        ));
+
+        let mut output = super::Output::new(receiver);
+        let mut first = [0; 2];
+        assert_eq!(output.read(&mut first), first.len());
+        assert_eq!(first, [0, 1]);
+        sender.try_send(vec![super::OUTPUT_QUEUE_RECORDS as u8]).unwrap();
+
+        let mut remaining = [0; 128];
+        let count = output.read(&mut remaining);
+        assert_eq!(
+            &remaining[..count],
+            &(2..=super::OUTPUT_QUEUE_RECORDS as u8).collect::<Vec<_>>()
+        );
+        drop(sender);
+        assert_eq!(output.read(&mut remaining), 0);
         assert!(output.finished());
     }
 
