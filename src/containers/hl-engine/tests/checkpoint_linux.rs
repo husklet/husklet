@@ -11,14 +11,24 @@ use std::{
     collections::BTreeMap,
     num::NonZeroU64,
     path::{Path, PathBuf},
-    sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock},
+    sync::{Arc, Condvar, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard},
     time::{Duration, Instant},
 };
 
-fn exclusive_checkpoint_test() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
+fn checkpoint_test_gate() -> &'static RwLock<()> {
+    static LOCK: OnceLock<RwLock<()>> = OnceLock::new();
+    LOCK.get_or_init(|| RwLock::new(()))
+}
+
+fn fixture_compilation() -> RwLockReadGuard<'static, ()> {
+    checkpoint_test_gate()
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn exclusive_checkpoint_test() -> RwLockWriteGuard<'static, ()> {
+    checkpoint_test_gate()
+        .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
@@ -312,7 +322,7 @@ fn wait_cycle_ready(path: &Path) -> bool {
 }
 
 fn checkpoint_deadline() -> Instant {
-    Instant::now() + Duration::from_secs(10)
+    Instant::now() + hl_engine::composition::DEFAULT_CHECKPOINT_TIMEOUT
 }
 
 fn capture_after_plain_engine(isa: GuestIsa, plain_executable: &Path, checkpoint_executable: &Path) {
@@ -460,8 +470,10 @@ fn checkpoint_round_trip(
 
 #[test]
 fn retained_c_round_trips_three_process_tree_on_both_isas() {
+    let compiling = fixture_compilation();
     let fixtures = tempfile::tempdir().unwrap();
     let executables = [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, fixture(isa, fixtures.path())));
+    drop(compiling);
     let _exclusive = exclusive_checkpoint_test();
     for (isa, executable) in executables {
         assert!(
@@ -475,8 +487,10 @@ fn retained_c_round_trips_three_process_tree_on_both_isas() {
 
 #[test]
 fn terminal_process_tree_survives_capture_restore_and_recapture_on_both_isas() {
+    let compiling = fixture_compilation();
     let fixtures = tempfile::tempdir().unwrap();
     let executables = [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, fixture(isa, fixtures.path())));
+    drop(compiling);
     let _exclusive = exclusive_checkpoint_test();
     for (isa, executable) in executables {
         checkpoint_round_trip(isa, &executable, None, true);
@@ -485,8 +499,10 @@ fn terminal_process_tree_survives_capture_restore_and_recapture_on_both_isas() {
 
 #[test]
 fn terminal_waiting_for_sleep_survives_capture_restore_and_recapture_on_both_isas() {
+    let compiling = fixture_compilation();
     let fixtures = tempfile::tempdir().unwrap();
     let executables = [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, sleep_tree_fixture(isa, fixtures.path())));
+    drop(compiling);
     let _exclusive = exclusive_checkpoint_test();
     for (isa, executable) in executables {
         let temporary = tempfile::tempdir().unwrap();
@@ -572,9 +588,11 @@ fn terminal_waiting_for_sleep_survives_capture_restore_and_recapture_on_both_isa
 
 #[test]
 fn checkpoint_arms_after_a_plain_engine_on_both_isas() {
+    let compiling = fixture_compilation();
     let fixtures = tempfile::tempdir().unwrap();
     let executables = [GuestIsa::Aarch64, GuestIsa::X86_64]
         .map(|isa| (isa, exit_fixture(isa, fixtures.path()), fixture(isa, fixtures.path())));
+    drop(compiling);
     let _exclusive = exclusive_checkpoint_test();
     for (isa, plain, checkpoint) in executables {
         capture_after_plain_engine(isa, &plain, &checkpoint);
@@ -583,11 +601,13 @@ fn checkpoint_arms_after_a_plain_engine_on_both_isas() {
 
 #[test]
 fn concurrent_engines_keep_second_generation_checkpoint_channels_private() {
+    let compiling = fixture_compilation();
     let fixtures = tempfile::tempdir().unwrap();
     let executables = [
         (GuestIsa::Aarch64, signalfd_fixture(GuestIsa::Aarch64, fixtures.path())),
         (GuestIsa::X86_64, signalfd_fixture(GuestIsa::X86_64, fixtures.path())),
     ];
+    drop(compiling);
     let _exclusive = exclusive_checkpoint_test();
     let (first_ready, second_start) = std::sync::mpsc::channel();
     let (second_ready, first_capture) = std::sync::mpsc::channel();
@@ -699,8 +719,10 @@ fn concurrent_signalfd_recapture(
 
 #[test]
 fn signalfd_readiness_and_signal64_defer_survive_two_generations_on_both_isas() {
+    let compiling = fixture_compilation();
     let fixtures = tempfile::tempdir().unwrap();
     let executables = [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, signalfd_fixture(isa, fixtures.path())));
+    drop(compiling);
     let _exclusive = exclusive_checkpoint_test();
     for (isa, executable) in executables {
         let temporary = tempfile::tempdir().unwrap();
@@ -730,7 +752,14 @@ fn signalfd_readiness_and_signal64_defer_survive_two_generations_on_both_isas() 
             before_capture.contains("READY targeted_wrong_read=1 targeted_wrong_ready=1"),
             "guest did not reach decisive first checkpoint state: {before_capture}"
         );
-        capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+        capture
+            .capture_checkpoint_until(checkpoint_deadline())
+            .unwrap_or_else(|error| {
+                panic!(
+                    "first signalfd checkpoint failed: {error:?}: {}",
+                    std::fs::read_to_string(&output).unwrap_or_default()
+                )
+            });
         assert_transient_signalfd_slots_absent(&first);
         let capture_result = capture.wait();
         assert!(
