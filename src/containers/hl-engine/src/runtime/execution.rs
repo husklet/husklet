@@ -360,6 +360,7 @@ impl CheckpointControl {
         Ok(RecoveryAdmission {
             server: Arc::clone(&self.server),
             id,
+            state: std::sync::atomic::AtomicU8::new(RECOVERY_OPEN),
         })
     }
 
@@ -395,27 +396,66 @@ impl CheckpointControl {
 struct RecoveryAdmission {
     server: Arc<Server>,
     id: u64,
+    state: std::sync::atomic::AtomicU8,
 }
+
+#[cfg(unix)]
+const RECOVERY_OPEN: u8 = 0;
+#[cfg(unix)]
+const RECOVERY_WAIT_CLAIMED: u8 = 1;
+#[cfg(unix)]
+const RECOVERY_RETURNED_NEEDS_ABORT: u8 = 2;
+#[cfg(unix)]
+const RECOVERY_SETTLED: u8 = 3;
 
 #[cfg(unix)]
 impl Drop for RecoveryAdmission {
     fn drop(&mut self) {
-        let _ = self.server.abort_recovery(self.id);
+        if self.state.load(std::sync::atomic::Ordering::Acquire) != RECOVERY_SETTLED {
+            let _ = self.abort_recovery();
+        }
     }
 }
 
 #[cfg(unix)]
 impl RecoveryAdmission {
     fn abort(&self) -> Result<(), EngineError> {
-        self.server
-            .abort_recovery(self.id)
-            .map_err(CheckpointControl::capture_failure)
+        self.abort_recovery().map_err(CheckpointControl::capture_failure)
+    }
+
+    fn abort_recovery(&self) -> Result<(), super::checkpoint::CaptureFailure> {
+        let result = self.server.abort_recovery(self.id);
+        if result == Err(super::checkpoint::CaptureFailure::Poisoned) {
+            // capture_lock reports mutex poison once after converting the phase to Poisoned and
+            // clearing the mutex flag. No replacement generation can admit in that phase, so one
+            // bounded retry safely performs the transaction discard without reopening an ABA gap.
+            self.server.abort_recovery(self.id)
+        } else {
+            result
+        }
     }
 
     fn wait(&self) -> Result<(), EngineError> {
-        self.server
-            .wait_recovery(self.id)
-            .map_err(CheckpointControl::capture_failure)
+        if self
+            .state
+            .compare_exchange(
+                RECOVERY_OPEN,
+                RECOVERY_WAIT_CLAIMED,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .is_err()
+        {
+            return Err(EngineError::Busy);
+        }
+        let result = self.server.wait_recovery(self.id);
+        let state = if matches!(result, Err(super::checkpoint::CaptureFailure::Poisoned)) {
+            RECOVERY_RETURNED_NEEDS_ABORT
+        } else {
+            RECOVERY_SETTLED
+        };
+        self.state.store(state, std::sync::atomic::Ordering::Release);
+        result.map_err(CheckpointControl::capture_failure)
     }
 }
 
@@ -521,6 +561,7 @@ mod tests {
             let _admission = RecoveryAdmission {
                 server: Arc::clone(&server),
                 id: first,
+                state: std::sync::atomic::AtomicU8::new(RECOVERY_OPEN),
             };
         }
         let second = server
@@ -544,6 +585,7 @@ mod tests {
         let admission = RecoveryAdmission {
             server: Arc::clone(&server),
             id,
+            state: std::sync::atomic::AtomicU8::new(RECOVERY_OPEN),
         };
         let started = std::time::Instant::now();
         assert_eq!(
@@ -551,9 +593,86 @@ mod tests {
             Err(EngineError::NativeRunFailed(7))
         );
         assert!(started.elapsed() < std::time::Duration::from_millis(250));
+        assert_eq!(admission.wait(), Err(EngineError::Busy));
         let retry = server
             .begin_recovery(22, std::time::Instant::now() + std::time::Duration::from_secs(1))
             .unwrap();
+        server.abort_recovery(retry).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dropping_consumed_admission_cannot_abort_reused_generation() {
+        let store = Arc::new(EmptyCheckpointStore);
+        let server = Arc::new(Server::new(store.clone(), store));
+        let id = server
+            .begin_recovery(23, std::time::Instant::now() + std::time::Duration::from_secs(1))
+            .unwrap();
+        let admission = RecoveryAdmission {
+            server: Arc::clone(&server),
+            id,
+            state: std::sync::atomic::AtomicU8::new(RECOVERY_OPEN),
+        };
+        admission.abort().unwrap();
+        let _ = admission.wait();
+
+        let reused = server
+            .begin_recovery(23, std::time::Instant::now() + std::time::Duration::from_secs(1))
+            .unwrap();
+        drop(admission);
+        server
+            .fail_recovery(reused, super::super::checkpoint::CaptureFailure::Deadline)
+            .expect("a consumed admission must not abort the reused generation");
+        assert_eq!(
+            server.wait_recovery(reused),
+            Err(super::super::checkpoint::CaptureFailure::Deadline)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn poisoned_wait_is_aborted_by_admission_drop_and_allows_retry() {
+        let store = Arc::new(EmptyCheckpointStore);
+        let server = Arc::new(Server::new(store.clone(), store));
+        let id = server
+            .begin_recovery(24, std::time::Instant::now() + std::time::Duration::from_secs(1))
+            .unwrap();
+        let admission = RecoveryAdmission {
+            server: Arc::clone(&server),
+            id,
+            state: std::sync::atomic::AtomicU8::new(RECOVERY_OPEN),
+        };
+        let poison = Arc::clone(&server);
+        let _ = std::thread::spawn(move || poison.poison_coordination()).join();
+
+        assert_eq!(admission.wait(), Err(EngineError::LaunchFailed));
+        drop(admission);
+        let retry = server
+            .begin_recovery(25, std::time::Instant::now() + std::time::Duration::from_secs(1))
+            .expect("dropping a poisoned admission must release its recovery transaction");
+        server.abort_recovery(retry).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn poisoned_unwaited_admission_drop_allows_retry() {
+        let store = Arc::new(EmptyCheckpointStore);
+        let server = Arc::new(Server::new(store.clone(), store));
+        let id = server
+            .begin_recovery(26, std::time::Instant::now() + std::time::Duration::from_secs(1))
+            .unwrap();
+        let admission = RecoveryAdmission {
+            server: Arc::clone(&server),
+            id,
+            state: std::sync::atomic::AtomicU8::new(RECOVERY_OPEN),
+        };
+        let poison = Arc::clone(&server);
+        let _ = std::thread::spawn(move || poison.poison_coordination()).join();
+
+        drop(admission);
+        let retry = server
+            .begin_recovery(27, std::time::Instant::now() + std::time::Duration::from_secs(1))
+            .expect("dropping an unwaited poisoned admission must release its recovery transaction");
         server.abort_recovery(retry).unwrap();
     }
 }

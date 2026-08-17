@@ -914,6 +914,23 @@ fn delayed_recovery_waiter_keeps_its_result_across_new_capture_admission() {
 }
 
 #[test]
+fn reused_recovery_generation_cannot_observe_its_previous_result() {
+    let store = Arc::new(RecoveryStore::default());
+    let server = Server::new(store.clone(), store);
+    let first = server
+        .begin_recovery(29, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    server.fail_recovery(first, CaptureFailure::Failed).unwrap();
+    assert_eq!(server.wait_recovery(first), Err(CaptureFailure::Failed));
+
+    let reused = server
+        .begin_recovery(29, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    server.fail_recovery(reused, CaptureFailure::Deadline).unwrap();
+    assert_eq!(server.wait_recovery(reused), Err(CaptureFailure::Deadline));
+}
+
+#[test]
 fn every_capture_waiter_observes_the_same_terminal_error() {
     let store = Arc::new(RecoveryStore::default());
     let server = Server::new(store.clone(), store);

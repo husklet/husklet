@@ -244,6 +244,10 @@ impl Server {
             discarded?;
             return Err(CaptureFailure::Poisoned);
         }
+        // RecoveryAdmission is a linear owner: its scoped waiter must finish before another recovery
+        // can admit. Clearing the sole retained result here is therefore both bounded retention and
+        // an explicit fence against 32-bit generation reuse.
+        capture.recovery_result = None;
         capture.phase = CapturePhase::Recovery { id, deadline };
         capture.mutations = 0;
         capture.recovery_report_published = false;
@@ -254,7 +258,7 @@ impl Server {
         self.settle_recovery(id, None)
     }
 
-    fn fail_recovery(&self, id: u64, failure: CaptureFailure) -> Result<(), CaptureFailure> {
+    pub(crate) fn fail_recovery(&self, id: u64, failure: CaptureFailure) -> Result<(), CaptureFailure> {
         self.settle_recovery(id, Some(failure))
     }
 
@@ -377,6 +381,12 @@ impl Server {
                 _ => return Err(CaptureFailure::Busy),
             }
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn poison_coordination(&self) -> ! {
+        let _held = self.capture.lock().unwrap();
+        panic!("intentional recovery coordination poison");
     }
 
     fn capture_lock(&self) -> Result<std::sync::MutexGuard<'_, CaptureState>, CaptureFailure> {
