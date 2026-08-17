@@ -11,9 +11,16 @@ use std::{
     collections::BTreeMap,
     num::NonZeroU64,
     path::{Path, PathBuf},
-    sync::{Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock},
     time::{Duration, Instant},
 };
+
+fn exclusive_checkpoint_test() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 fn fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     let (variable, compiler, name) = match isa {
@@ -453,6 +460,7 @@ fn checkpoint_round_trip(
 
 #[test]
 fn retained_c_round_trips_three_process_tree_on_both_isas() {
+    let _exclusive = exclusive_checkpoint_test();
     let fixtures = tempfile::tempdir().unwrap();
     for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
         let executable = fixture(isa, fixtures.path());
@@ -467,6 +475,7 @@ fn retained_c_round_trips_three_process_tree_on_both_isas() {
 
 #[test]
 fn terminal_process_tree_survives_capture_restore_and_recapture_on_both_isas() {
+    let _exclusive = exclusive_checkpoint_test();
     let fixtures = tempfile::tempdir().unwrap();
     for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
         let executable = fixture(isa, fixtures.path());
@@ -476,6 +485,7 @@ fn terminal_process_tree_survives_capture_restore_and_recapture_on_both_isas() {
 
 #[test]
 fn terminal_waiting_for_sleep_survives_capture_restore_and_recapture_on_both_isas() {
+    let _exclusive = exclusive_checkpoint_test();
     let fixtures = tempfile::tempdir().unwrap();
     for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
         let executable = sleep_tree_fixture(isa, fixtures.path());
@@ -562,6 +572,7 @@ fn terminal_waiting_for_sleep_survives_capture_restore_and_recapture_on_both_isa
 
 #[test]
 fn checkpoint_arms_after_a_plain_engine_on_both_isas() {
+    let _exclusive = exclusive_checkpoint_test();
     let fixtures = tempfile::tempdir().unwrap();
     for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
         let plain = exit_fixture(isa, fixtures.path());
@@ -572,6 +583,7 @@ fn checkpoint_arms_after_a_plain_engine_on_both_isas() {
 
 #[test]
 fn concurrent_engines_keep_second_generation_checkpoint_channels_private() {
+    let _exclusive = exclusive_checkpoint_test();
     let fixtures = tempfile::tempdir().unwrap();
     let executables = [
         (GuestIsa::Aarch64, signalfd_fixture(GuestIsa::Aarch64, fixtures.path())),
@@ -687,6 +699,7 @@ fn concurrent_signalfd_recapture(
 
 #[test]
 fn signalfd_readiness_and_signal64_defer_survive_two_generations_on_both_isas() {
+    let _exclusive = exclusive_checkpoint_test();
     let fixtures = tempfile::tempdir().unwrap();
     for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
         let executable = signalfd_fixture(isa, fixtures.path());
