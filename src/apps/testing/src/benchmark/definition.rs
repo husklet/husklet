@@ -39,12 +39,55 @@ pub(super) struct Artifact {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Arm {
+    pub primary: Profile,
+    #[serde(default)]
+    pub independent_null: Option<Profile>,
+    pub null_unqualified_reason: Option<String>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Profile {
     pub command: Vec<String>,
     pub artifacts: BTreeMap<String, Artifact>,
     pub smoke: Vec<String>,
     pub guest_path: GuestPath,
     #[serde(default)]
     pub guest_map: BTreeMap<PathBuf, PathBuf>,
+    pub build: BuildReceipt,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct BuildReceipt {
+    pub command: Vec<String>,
+    pub inputs: BTreeMap<String, String>,
+    pub outputs: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum ProfileKind {
+    Primary,
+    IndependentNull,
+}
+
+impl ProfileKind {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Primary => "primary",
+            Self::IndependentNull => "independent-null",
+        }
+    }
+}
+
+impl Arm {
+    pub(super) fn profile(&self, kind: ProfileKind) -> Option<&Profile> {
+        match kind {
+            ProfileKind::Primary => Some(&self.primary),
+            ProfileKind::IndependentNull => self.independent_null.as_ref(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -120,7 +163,7 @@ impl Campaign {
         if self.arms.keys().map(String::as_str).collect::<Vec<_>>() != ["E", "I", "R"] {
             return Err("benchmark arms must be exactly E, I, and R".into());
         }
-        if !command_profiles_distinct(self.arms.values().map(|arm| &arm.command)) {
+        if !command_profiles_distinct(self.arms.values().map(|arm| &arm.primary.command)) {
             return Err("benchmark E, I, and R command profiles must be distinct".into());
         }
         validate_arm_profiles(&self.arms, &self.rootfs.path)?;
@@ -131,16 +174,32 @@ impl Campaign {
             return Err("benchmark workloads must be exactly malloc, python, and sqlite".into());
         }
         for (name, arm) in &self.arms {
-            if arm.command.is_empty() || arm.artifacts.is_empty() || arm.smoke.is_empty() {
-                return Err(format!("benchmark arm {name} is incomplete").into());
+            validate_profile(name, "primary", &arm.primary)?;
+            if let Some(profile) = &arm.independent_null {
+                validate_profile(name, "independent-null", profile)?;
+                if arm.null_unqualified_reason.is_some()
+                    || profile.build.inputs != arm.primary.build.inputs
+                    || profile.command == arm.primary.command
+                    || profile.build.outputs.keys().any(|name| {
+                        arm.primary.build.outputs.contains_key(name)
+                            && profile.artifacts[name].path == arm.primary.artifacts[name].path
+                    })
+                {
+                    return Err(format!("benchmark arm {name} has invalid independent-null provenance").into());
+                }
+            } else if arm
+                .null_unqualified_reason
+                .as_deref()
+                .is_none_or(|reason| reason.trim().is_empty())
+            {
+                return Err(format!("benchmark arm {name} must explain its missing independent null").into());
             }
-            if arm.guest_map.values().any(|guest| {
-                !guest.is_absolute()
-                    || !guest.is_file()
-                    || !arm.artifacts.values().any(|artifact| artifact.path == *guest)
-            }) {
-                return Err(format!("benchmark arm {name} guest map is not bound to hashed artifacts").into());
-            }
+        }
+        if self.arms["E"].independent_null.is_none()
+            || self.arms["I"].independent_null.is_none()
+            || self.arms["R"].independent_null.is_some()
+        {
+            return Err("benchmark requires independent nulls for E and I and an explicit retained exclusion".into());
         }
         for (name, layout) in &self.layouts {
             if !phase_names_valid(&layout.phases, false) {
@@ -205,7 +264,13 @@ impl Campaign {
             .flat_map(|workload| workload.commands.values())
             .map(|command| PathBuf::from(&command[0]))
             .collect::<BTreeSet<_>>();
-        if self.arms["E"].guest_map.keys().collect::<BTreeSet<_>>() != guests.iter().collect() {
+        if [
+            &self.arms["E"].primary,
+            self.arms["E"].independent_null.as_ref().unwrap(),
+        ]
+        .into_iter()
+        .any(|profile| profile.guest_map.keys().collect::<BTreeSet<_>>() != guests.iter().collect())
+        {
             return Err("native/Rosetta arm must map every Linux guest to its hashed macOS equivalent".into());
         }
         Ok(())
@@ -221,27 +286,35 @@ impl Campaign {
     pub fn verify_artifacts(&self) -> Result<(), Error> {
         verify_artifact("rootfs", &self.rootfs, true)?;
         for (label, arm) in &self.arms {
-            for (name, artifact) in &arm.artifacts {
-                verify_artifact(&format!("arm {label} artifact {name}"), artifact, false)?;
-            }
-            let executable = Path::new(&arm.command[0]);
-            if !executable.is_absolute()
-                || !executable.is_file()
-                || !smoke_binds_profile(&arm.command, &arm.smoke)
-                || !command_is_hashed(executable, arm.artifacts.values())
-            {
-                return Err(format!("arm {label} command is not bound to a hashed artifact").into());
-            }
-            let outcome = HostProcess::bounded(&arm.smoke[0], &arm.smoke[1..], SMOKE_TIMEOUT)?;
-            if outcome != hl_process::Outcome::Exited(Some(0)) {
-                return Err(format!("arm {label} smoke execution failed with {outcome:?}").into());
+            for (kind, profile) in [
+                ("primary", Some(&arm.primary)),
+                ("independent-null", arm.independent_null.as_ref()),
+            ] {
+                let Some(profile) = profile else { continue };
+                for (name, artifact) in &profile.artifacts {
+                    verify_artifact(&format!("arm {label} {kind} artifact {name}"), artifact, false)?;
+                }
+                let executable = Path::new(&profile.command[0]);
+                if !executable.is_absolute()
+                    || !executable.is_file()
+                    || !smoke_binds_profile(&profile.command, &profile.smoke)
+                    || !command_is_hashed(executable, profile.artifacts.values())
+                {
+                    return Err(format!("arm {label} {kind} command is not bound to a hashed artifact").into());
+                }
+                let outcome = HostProcess::bounded(&profile.smoke[0], &profile.smoke[1..], SMOKE_TIMEOUT)?;
+                if outcome != hl_process::Outcome::Exited(Some(0)) {
+                    return Err(format!("arm {label} {kind} smoke execution failed with {outcome:?}").into());
+                }
             }
         }
         Ok(())
     }
 
-    pub fn guest(&self, arm: &str, guest: &Path) -> Result<PathBuf, Error> {
-        let definition = &self.arms[arm];
+    pub fn guest(&self, arm: &str, profile: ProfileKind, guest: &Path) -> Result<PathBuf, Error> {
+        let definition = self.arms[arm]
+            .profile(profile)
+            .ok_or("benchmark profile is unavailable")?;
         if let Some(mapped) = definition.guest_map.get(guest) {
             return Ok(mapped.clone());
         }
@@ -252,6 +325,49 @@ impl Campaign {
             GuestPath::RootfsAbsolute => Ok(guest.strip_prefix(&self.rootfs.path)?.to_owned()),
         }
     }
+}
+
+fn sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn validate_profile(arm: &str, kind: &str, profile: &Profile) -> Result<(), Error> {
+    if profile.command.is_empty()
+        || profile.artifacts.is_empty()
+        || profile.smoke.is_empty()
+        || profile.build.command.is_empty()
+        || profile.build.inputs.is_empty()
+        || profile.build.outputs.is_empty()
+        || profile
+            .build
+            .inputs
+            .keys()
+            .chain(profile.build.outputs.keys())
+            .any(String::is_empty)
+        || profile
+            .build
+            .inputs
+            .values()
+            .chain(profile.build.outputs.values())
+            .any(|digest| !sha256(digest))
+        || profile.build.outputs.iter().any(|(name, digest)| {
+            profile
+                .artifacts
+                .get(name)
+                .is_none_or(|artifact| artifact.sha256 != *digest)
+        })
+    {
+        return Err(format!("benchmark arm {arm} {kind} profile or build receipt is incomplete").into());
+    }
+    if profile.guest_map.values().any(|guest| {
+        !guest.is_absolute() || !guest.is_file() || !profile.artifacts.values().any(|artifact| artifact.path == *guest)
+    }) {
+        return Err(format!("benchmark arm {arm} {kind} guest map is not bound to hashed artifacts").into());
+    }
+    Ok(())
 }
 
 fn command_is_hashed<'a>(executable: &Path, artifacts: impl IntoIterator<Item = &'a Artifact>) -> bool {
@@ -273,26 +389,34 @@ fn command_profiles_distinct<'a>(commands: impl IntoIterator<Item = &'a Vec<Stri
 }
 
 fn validate_arm_profiles(arms: &BTreeMap<String, Arm>, rootfs: &Path) -> Result<(), Error> {
-    let external = &arms["E"];
-    if external.command.len() != 3
-        || external.command[2] != "-x86_64"
-        || !matches!(external.guest_path, GuestPath::HostAbsolute)
-        || !profile_argument_matches_artifact(&external.command[0], external.artifacts.get("command"))
-        || !profile_argument_matches_artifact(&external.command[1], external.artifacts.get("arch"))
+    for external in [Some(&arms["E"].primary), arms["E"].independent_null.as_ref()]
+        .into_iter()
+        .flatten()
     {
-        return Err("benchmark E arm must be the hashed macOS x86-64 native/Rosetta profile".into());
+        if external.command.len() != 3
+            || external.command[2] != "-x86_64"
+            || !matches!(external.guest_path, GuestPath::HostAbsolute)
+            || !profile_argument_matches_artifact(&external.command[0], external.artifacts.get("command"))
+            || !profile_argument_matches_artifact(&external.command[1], external.artifacts.get("arch"))
+        {
+            return Err("benchmark E arm must contain hashed macOS x86-64 native/Rosetta profiles".into());
+        }
     }
     for label in ["I", "R"] {
-        let arm = &arms[label];
-        if arm.command.len() != 4
-            || arm.command[2] != "--rootfs"
-            || Path::new(&arm.command[3]) != rootfs
-            || !matches!(arm.guest_path, GuestPath::RootfsAbsolute)
-            || !arm.guest_map.is_empty()
-            || !profile_argument_matches_artifact(&arm.command[0], arm.artifacts.get("command"))
-            || !profile_argument_matches_artifact(&arm.command[1], arm.artifacts.get("engine"))
+        for arm in [Some(&arms[label].primary), arms[label].independent_null.as_ref()]
+            .into_iter()
+            .flatten()
         {
-            return Err(format!("benchmark {label} arm is not bound to its hashed rootfs engine profile").into());
+            if arm.command.len() != 4
+                || arm.command[2] != "--rootfs"
+                || Path::new(&arm.command[3]) != rootfs
+                || !matches!(arm.guest_path, GuestPath::RootfsAbsolute)
+                || !arm.guest_map.is_empty()
+                || !profile_argument_matches_artifact(&arm.command[0], arm.artifacts.get("command"))
+                || !profile_argument_matches_artifact(&arm.command[1], arm.artifacts.get("engine"))
+            {
+                return Err(format!("benchmark {label} arm is not bound to its hashed rootfs engine profiles").into());
+            }
         }
     }
     Ok(())
@@ -496,12 +620,32 @@ fn file_hash(path: &Path) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Arm, ArmSupport, Artifact, Campaign, GuestPath, Layout, Workload, command_profiles_distinct, guest_is_hashed,
-        invariant_phases_valid, phase_names_valid, profile_argument_matches_artifact, smoke_binds_profile,
-        validate_arm_profiles, verify_artifact, workload_judgments_covered,
+        Arm, ArmSupport, Artifact, BuildReceipt, Campaign, GuestPath, Layout, Profile, ProfileKind, Workload,
+        command_profiles_distinct, guest_is_hashed, invariant_phases_valid, phase_names_valid,
+        profile_argument_matches_artifact, smoke_binds_profile, validate_arm_profiles, verify_artifact,
+        workload_judgments_covered,
     };
     use crate::record::FramedIdentity;
     use std::{collections::BTreeMap, fs, path::Path};
+
+    fn test_receipt(artifacts: &BTreeMap<String, Artifact>) -> BuildReceipt {
+        BuildReceipt {
+            command: vec!["test-build".into()],
+            inputs: BTreeMap::from([("source".into(), "a".repeat(64))]),
+            outputs: artifacts
+                .iter()
+                .map(|(name, artifact)| (name.clone(), artifact.sha256.clone()))
+                .collect(),
+        }
+    }
+
+    fn primary(profile: Profile) -> Arm {
+        Arm {
+            primary: profile,
+            independent_null: None,
+            null_unqualified_reason: Some("unit fixture has no null".into()),
+        }
+    }
 
     #[test]
     fn arm_can_map_shared_linux_guest_to_hashed_host_native_equivalent() {
@@ -512,19 +656,21 @@ mod tests {
         let native = temporary.path().join("bench-macho-x86_64");
         fs::write(&linux, b"linux elf").unwrap();
         fs::write(&native, b"mach-o x86_64").unwrap();
-        let arm = Arm {
+        let artifacts = BTreeMap::from([(
+            "guest".into(),
+            Artifact {
+                path: native.clone(),
+                sha256: super::file_hash(&native).unwrap(),
+            },
+        )]);
+        let arm = primary(Profile {
             command: vec!["/usr/bin/arch".into(), "-x86_64".into()],
-            artifacts: BTreeMap::from([(
-                "guest".into(),
-                Artifact {
-                    path: native.clone(),
-                    sha256: super::file_hash(&native).unwrap(),
-                },
-            )]),
+            build: test_receipt(&artifacts),
+            artifacts,
             smoke: vec!["/usr/bin/arch".into(), "-x86_64".into(), native.display().to_string()],
             guest_path: GuestPath::HostAbsolute,
             guest_map: BTreeMap::from([(linux.clone(), native.clone())]),
-        };
+        });
         let campaign = Campaign {
             schema: super::SCHEMA.into(),
             rounds: 4,
@@ -538,7 +684,7 @@ mod tests {
             workloads: BTreeMap::new(),
             invariant_phases: Vec::new(),
         };
-        assert_eq!(campaign.guest("E", &linux).unwrap(), native);
+        assert_eq!(campaign.guest("E", ProfileKind::Primary, &linux).unwrap(), native);
     }
 
     #[test]
@@ -546,13 +692,18 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let rootfs = temporary.path().join("rootfs");
         let guest = rootfs.join("benchmark/malloc-plain");
-        let arm = Arm {
+        let arm = primary(Profile {
             command: vec!["/engine".into()],
             artifacts: BTreeMap::new(),
             smoke: vec!["/engine".into(), "--smoke".into()],
             guest_path: GuestPath::RootfsAbsolute,
             guest_map: BTreeMap::new(),
-        };
+            build: BuildReceipt {
+                command: vec!["test-build".into()],
+                inputs: BTreeMap::from([("source".into(), "a".repeat(64))]),
+                outputs: BTreeMap::new(),
+            },
+        });
         let campaign = Campaign {
             schema: super::SCHEMA.into(),
             rounds: 4,
@@ -567,7 +718,7 @@ mod tests {
             invariant_phases: Vec::new(),
         };
         assert_eq!(
-            campaign.guest("I", &guest).unwrap(),
+            campaign.guest("I", ProfileKind::Primary, &guest).unwrap(),
             Path::new("benchmark/malloc-plain")
         );
     }
@@ -716,20 +867,28 @@ mod tests {
         let mut arms = BTreeMap::from([
             (
                 "E".into(),
-                Arm {
+                primary(Profile {
                     command: vec!["/stage/mac".into(), "/mnt/mac/stage/arch".into(), "-x86_64".into()],
-                    artifacts: BTreeMap::from([
-                        ("command".into(), proxy.clone()),
-                        ("arch".into(), artifact("/stage/arch")),
-                    ]),
+                    artifacts: {
+                        let artifacts = BTreeMap::from([
+                            ("command".into(), proxy.clone()),
+                            ("arch".into(), artifact("/stage/arch")),
+                        ]);
+                        artifacts
+                    },
                     smoke: vec!["unused".into()],
                     guest_path: GuestPath::HostAbsolute,
                     guest_map: BTreeMap::new(),
-                },
+                    build: BuildReceipt {
+                        command: vec!["build-E".into()],
+                        inputs: BTreeMap::from([("source".into(), "a".repeat(64))]),
+                        outputs: BTreeMap::new(),
+                    },
+                }),
             ),
             (
                 "I".into(),
-                Arm {
+                primary(Profile {
                     command: vec![
                         "/stage/mac".into(),
                         "/mnt/mac/stage/integrated".into(),
@@ -743,11 +902,16 @@ mod tests {
                     smoke: vec!["unused".into()],
                     guest_path: GuestPath::RootfsAbsolute,
                     guest_map: BTreeMap::new(),
-                },
+                    build: BuildReceipt {
+                        command: vec!["build-I".into()],
+                        inputs: BTreeMap::from([("source".into(), "a".repeat(64))]),
+                        outputs: BTreeMap::new(),
+                    },
+                }),
             ),
             (
                 "R".into(),
-                Arm {
+                primary(Profile {
                     command: vec![
                         "/stage/mac".into(),
                         "/mnt/mac/stage/retained".into(),
@@ -761,27 +925,38 @@ mod tests {
                     smoke: vec!["unused".into()],
                     guest_path: GuestPath::RootfsAbsolute,
                     guest_map: BTreeMap::new(),
-                },
+                    build: BuildReceipt {
+                        command: vec!["build-R".into()],
+                        inputs: BTreeMap::from([("source".into(), "a".repeat(64))]),
+                        outputs: BTreeMap::new(),
+                    },
+                }),
             ),
         ]);
         validate_arm_profiles(&arms, Path::new("/stage/rootfs")).unwrap();
-        arms.get_mut("E").unwrap().command[2] = "-arm64".into();
+        arms.get_mut("E").unwrap().primary.command[2] = "-arm64".into();
         assert!(validate_arm_profiles(&arms, Path::new("/stage/rootfs")).is_err());
-        arms.get_mut("E").unwrap().command[2] = "-x86_64".into();
-        let arch = arms["E"].artifacts["arch"].clone();
-        arms.get_mut("E").unwrap().artifacts.insert("command".into(), arch);
+        arms.get_mut("E").unwrap().primary.command[2] = "-x86_64".into();
+        let arch = arms["E"].primary.artifacts["arch"].clone();
+        arms.get_mut("E")
+            .unwrap()
+            .primary
+            .artifacts
+            .insert("command".into(), arch);
         assert!(validate_arm_profiles(&arms, Path::new("/stage/rootfs")).is_err());
         arms.get_mut("E")
             .unwrap()
+            .primary
             .artifacts
             .insert("command".into(), artifact("/stage/mac"));
-        arms.get_mut("E").unwrap().artifacts.remove("arch");
+        arms.get_mut("E").unwrap().primary.artifacts.remove("arch");
         assert!(validate_arm_profiles(&arms, Path::new("/stage/rootfs")).is_err());
         arms.get_mut("E")
             .unwrap()
+            .primary
             .artifacts
             .insert("arch".into(), artifact("/stage/arch"));
-        arms.get_mut("I").unwrap().command[1] = "/mnt/mac/stage/unhashed".into();
+        arms.get_mut("I").unwrap().primary.command[1] = "/mnt/mac/stage/unhashed".into();
         assert!(validate_arm_profiles(&arms, Path::new("/stage/rootfs")).is_err());
     }
 

@@ -10,6 +10,7 @@ fn row(key: &str, arm: &str, us: u64) -> Row {
         round: 0,
         position: 0,
         arm: arm.into(),
+        profile: crate::benchmark::definition::ProfileKind::Primary,
         output: "same".into(),
         output_frame: "frame".into(),
         diagnostic: None,
@@ -29,6 +30,7 @@ fn null_qualification_is_fail_closed() {
     assert!((super::qualify_null(&[1.02, 0.98, 1.02, 0.98], false).unwrap() - 0.02).abs() < 1e-9);
     assert!(super::qualify_null(&[1.02; 4], false).is_err());
     assert!(super::qualify_null(&[1.051, 0.983, 0.983, 0.983], false).is_err());
+    assert!(super::qualified_null_spread(&[1.02; 4], false).is_none());
 }
 
 #[test]
@@ -47,6 +49,29 @@ fn control_correction_accounts_for_drift_in_both_arms() {
 }
 
 #[test]
+fn effect_inside_independent_build_spread_is_inconclusive() {
+    assert_eq!(
+        super::classify_effect(true, 0.992, 0.010, 1.002, 1.10),
+        super::Verdict::Inconclusive
+    );
+    assert_eq!(
+        super::classify_effect(true, 0.970, 0.010, 0.980, 1.10),
+        super::Verdict::Pass
+    );
+    assert_eq!(
+        super::classify_effect(true, 1.080, 0.010, 1.110, 1.10),
+        super::Verdict::Fail
+    );
+}
+
+#[test]
+fn missing_reproducible_null_blocks_a_pass_claim() {
+    assert!(super::Verdict::Blocked > super::Verdict::Inconclusive);
+    assert!(super::Verdict::Fail > super::Verdict::Blocked);
+    assert_ne!(super::Verdict::Blocked.as_str(), "PASS");
+}
+
+#[test]
 fn declared_invariant_must_hold_across_engine_arms() {
     super::qualify_control(1.015, true).unwrap();
     super::qualify_control(0.985, true).unwrap();
@@ -58,15 +83,26 @@ fn declared_invariant_must_hold_across_engine_arms() {
 
 #[test]
 fn same_arm_null_compares_first_and_second_positions() {
-    let first = row("malloc|plain|EE|0|0", "E", 100);
-    let second = row("malloc|plain|EE|0|1", "E", 120);
+    let first = row("malloc|plain|EE|primary|0|0", "E", 100);
+    let mut second = row("malloc|plain|EE|independent-null|0|1", "E", 120);
+    second.profile = crate::benchmark::definition::ProfileKind::IndependentNull;
     let rows = [first, second];
     let by_key = rows
         .iter()
         .map(|row| (row.key.as_str(), row))
         .collect::<BTreeMap<_, _>>();
     assert_eq!(
-        super::paired(&by_key, "malloc", "plain", "EE", "E", "E", "malloc", 1).unwrap(),
+        super::paired(
+            &by_key,
+            "malloc",
+            "plain",
+            "EE",
+            ("E", crate::benchmark::definition::ProfileKind::Primary),
+            ("E", crate::benchmark::definition::ProfileKind::IndependentNull),
+            "malloc",
+            1,
+        )
+        .unwrap(),
         [1.2]
     );
 }
@@ -80,6 +116,8 @@ fn evidence_provenance_must_match_the_scheduled_binary_and_layout() {
         round: 0,
         position: 0,
         arm: "E".into(),
+        profile: crate::benchmark::definition::ProfileKind::Primary,
+        paired_profile: crate::benchmark::definition::ProfileKind::IndependentNull,
     };
     let valid = row("malloc|plain|EE|0|0", "E", 100);
     super::verify_row_provenance(&step, &valid).unwrap();
@@ -195,6 +233,8 @@ fn crossed_schedule_balance_is_independently_validated() {
                         round: round as u32,
                         position,
                         arm: arm.into(),
+                        profile: crate::benchmark::definition::ProfileKind::Primary,
+                        paired_profile: crate::benchmark::definition::ProfileKind::Primary,
                     })
             })
             .collect::<Vec<_>>()
@@ -217,6 +257,8 @@ fn campaign_coverage_is_independent_of_the_scheduler() {
                     round,
                     position,
                     arm: arm.into(),
+                    profile: crate::benchmark::definition::ProfileKind::Primary,
+                    paired_profile: crate::benchmark::definition::ProfileKind::Primary,
                 })
             })
         })

@@ -16,10 +16,12 @@ pub(super) fn sample(
     campaign: &Campaign,
     step: &Step,
 ) -> Result<(BTreeMap<String, Phase>, String, String, Option<String>), Error> {
-    let arm = &campaign.arms[&step.arm];
+    let arm = campaign.arms[&step.arm]
+        .profile(step.profile)
+        .ok_or_else(|| format!("benchmark arm {} has no {} profile", step.arm, step.profile.as_str()))?;
     let workload = &campaign.workloads[&step.workload];
     let guest = &workload.commands[&step.layout];
-    let executable = campaign.guest(&step.arm, Path::new(&guest[0]))?;
+    let executable = campaign.guest(&step.arm, step.profile, Path::new(&guest[0]))?;
     let mut command = HostProcess::standard(&arm.command[0]);
     command
         .args(&arm.command[1..])
@@ -242,6 +244,7 @@ pub(super) fn measure(campaign: &Campaign, step: &Step) -> Result<Row, Error> {
         round: step.round,
         position: step.position,
         arm: step.arm.clone(),
+        profile: step.profile,
         output,
         output_frame,
         diagnostic,
@@ -471,6 +474,8 @@ mod tests {
             round: 3,
             position: 0,
             arm: "R".into(),
+            profile: crate::benchmark::definition::ProfileKind::Primary,
+            paired_profile: crate::benchmark::definition::ProfileKind::Primary,
         };
         let stdout = [b'M'; 5000];
         let error = parse_failure(
@@ -481,7 +486,7 @@ mod tests {
             "incomplete phase set".into(),
         )
         .to_string();
-        assert!(error.contains("sqlite|sqlite|RR|3|0"));
+        assert!(error.contains("sqlite|sqlite|RR|primary|3|0"));
         assert!(error.contains("status=exit status: 0"));
         assert!(error.contains("bytes=5000 sha256="));
         assert!(error.contains("incomplete phase set"));

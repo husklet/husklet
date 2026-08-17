@@ -1,5 +1,5 @@
 use super::{
-    definition::Campaign,
+    definition::{Campaign, ProfileKind},
     evidence::Row,
     schedule::{self, CELLS, Step},
 };
@@ -33,12 +33,12 @@ impl Report {
         for (workload, definition) in &campaign.workloads {
             collect_nulls(campaign, &by_key, &invariant, workload, definition, &mut nulls)?;
         }
-        let mut verdict = "PASS";
-        let mut lines = vec!["workload\tlayout\tcell\tphase\tratio\tnull_floor\tupper\tverdict".to_owned()];
+        let mut verdict = Verdict::Pass;
+        let mut lines = vec!["workload\tlayout\tcell\tphase\tratio\tnull_spread\tupper\tverdict".to_owned()];
         for (workload, definition) in &campaign.workloads {
-            if append_comparisons(campaign, &by_key, &nulls, workload, definition, limit, &mut lines)? {
-                verdict = "FAIL";
-            }
+            verdict = verdict.max(append_comparisons(
+                campaign, &by_key, &nulls, workload, definition, limit, &mut lines,
+            )?);
         }
         lines.push("arm\trole".to_owned());
         lines.extend([
@@ -48,8 +48,27 @@ impl Report {
         ]);
         lines.push("artifact\tsha256".to_owned());
         for (arm, definition) in &campaign.arms {
-            for (name, artifact) in &definition.artifacts {
-                lines.push(format!("{arm}/{name}\t{}", artifact.sha256));
+            for (kind, profile) in [
+                ("primary", Some(&definition.primary)),
+                ("independent-null", definition.independent_null.as_ref()),
+            ] {
+                let Some(profile) = profile else {
+                    lines.push(format!(
+                        "{arm}/{kind}\tUNQUALIFIED:{}",
+                        definition
+                            .null_unqualified_reason
+                            .as_deref()
+                            .unwrap_or("missing build receipt")
+                    ));
+                    continue;
+                };
+                for (name, artifact) in &profile.artifacts {
+                    lines.push(format!("{arm}/{kind}/{name}\t{}", artifact.sha256));
+                }
+                lines.push(format!(
+                    "{arm}/{kind}/build-receipt\t{}",
+                    FramedIdentity::of(&serde_json::to_vec(&profile.build)?)
+                ));
             }
         }
         append_compatibility(campaign, &mut lines);
@@ -65,9 +84,28 @@ impl Report {
             }
         }
         Ok(Self {
-            verdict,
+            verdict: verdict.as_str(),
             text: lines.join("\n") + "\n",
         })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq)]
+enum Verdict {
+    Pass,
+    Inconclusive,
+    Blocked,
+    Fail,
+}
+
+impl Verdict {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "PASS",
+            Self::Inconclusive => "INCONCLUSIVE",
+            Self::Blocked => "BLOCKED",
+            Self::Fail => "FAIL",
+        }
     }
 }
 
@@ -108,7 +146,7 @@ fn collect_nulls<'a>(
     invariant: &BTreeSet<&str>,
     workload: &'a str,
     definition: &'a super::definition::Workload,
-    nulls: &mut BTreeMap<NullKey<'a>, f64>,
+    nulls: &mut BTreeMap<NullKey<'a>, Option<f64>>,
 ) -> Result<(), Error> {
     for layout in definition.commands.keys() {
         collect_layout_nulls(campaign, rows, invariant, workload, layout, nulls)?;
@@ -122,18 +160,27 @@ fn collect_layout_nulls<'a>(
     invariant: &BTreeSet<&str>,
     workload: &'a str,
     layout: &'a str,
-    nulls: &mut BTreeMap<NullKey<'a>, f64>,
+    nulls: &mut BTreeMap<NullKey<'a>, Option<f64>>,
 ) -> Result<(), Error> {
-    for arm in ["E", "R", "I"]
-        .into_iter()
-        .filter(|arm| campaign.workloads[workload].arm_support[layout][*arm].available())
-    {
+    for arm in ["E", "R", "I"].into_iter().filter(|arm| {
+        campaign.workloads[workload].arm_support[layout][*arm].available()
+            && campaign.arms[*arm].independent_null.is_some()
+    }) {
         let cell = format!("{arm}{arm}");
         for phase in phases(campaign, workload, layout) {
-            let ratios = paired(rows, workload, layout, &cell, arm, arm, phase, campaign.rounds)?;
+            let ratios = paired(
+                rows,
+                workload,
+                layout,
+                &cell,
+                (arm, ProfileKind::Primary),
+                (arm, ProfileKind::IndependentNull),
+                phase,
+                campaign.rounds,
+            )?;
             nulls.insert(
                 (workload, layout, arm, phase),
-                qualify_null(&ratios, invariant.contains(phase.as_str()))?,
+                qualified_null_spread(&ratios, invariant.contains(phase.as_str())),
             );
         }
     }
@@ -143,61 +190,91 @@ fn collect_layout_nulls<'a>(
 fn append_comparisons(
     campaign: &Campaign,
     rows: &BTreeMap<&str, &Row>,
-    nulls: &BTreeMap<NullKey<'_>, f64>,
+    nulls: &BTreeMap<NullKey<'_>, Option<f64>>,
     workload: &str,
     definition: &super::definition::Workload,
     limit: f64,
     lines: &mut Vec<String>,
-) -> Result<bool, Error> {
-    let mut failed = false;
+) -> Result<Verdict, Error> {
+    let mut verdict = Verdict::Pass;
     for layout in definition.commands.keys() {
         for &(left, right) in &CELLS[3..] {
             let support = &definition.arm_support[layout];
             if !support[left].available() || !support[right].available() {
                 continue;
             }
-            failed |= append_cell(campaign, rows, nulls, workload, layout, left, right, limit, lines)?;
+            verdict = verdict.max(append_cell(
+                campaign, rows, nulls, workload, layout, left, right, limit, lines,
+            )?);
         }
     }
-    Ok(failed)
+    Ok(verdict)
 }
 
 fn append_cell(
     campaign: &Campaign,
     rows: &BTreeMap<&str, &Row>,
-    nulls: &BTreeMap<NullKey<'_>, f64>,
+    nulls: &BTreeMap<NullKey<'_>, Option<f64>>,
     workload: &str,
     layout: &str,
     left: &str,
     right: &str,
     limit: f64,
     lines: &mut Vec<String>,
-) -> Result<bool, Error> {
+) -> Result<Verdict, Error> {
     let cell = format!("{left}{right}");
-    let mut failed = false;
+    let mut verdict = Verdict::Pass;
     for phase in phases(campaign, workload, layout) {
-        let mut ratios = paired(rows, workload, layout, &cell, left, right, phase, campaign.rounds)?;
+        let mut ratios = paired(
+            rows,
+            workload,
+            layout,
+            &cell,
+            (left, ProfileKind::Primary),
+            (right, ProfileKind::Primary),
+            phase,
+            campaign.rounds,
+        )?;
         let ratio = median(&mut ratios);
         let phase_name = phase.as_str();
-        let left_floor = nulls[&(workload, layout, left, phase_name)];
-        let right_floor = nulls[&(workload, layout, right, phase_name)];
-        let floor = left_floor.max(right_floor);
-        let upper = corrected_upper(ratio, left_floor, right_floor)?;
+        let Some(Some(left_floor)) = nulls.get(&(workload, layout, left, phase_name)) else {
+            lines.push(format!(
+                "{workload}\t{layout}\t{cell}\t{phase}\t{ratio:.6}\tNA\tNA\tBLOCKED"
+            ));
+            verdict = verdict.max(Verdict::Blocked);
+            continue;
+        };
+        let Some(Some(right_floor)) = nulls.get(&(workload, layout, right, phase_name)) else {
+            lines.push(format!(
+                "{workload}\t{layout}\t{cell}\t{phase}\t{ratio:.6}\tNA\tNA\tBLOCKED"
+            ));
+            verdict = verdict.max(Verdict::Blocked);
+            continue;
+        };
+        let floor = left_floor.max(*right_floor);
+        let upper = corrected_upper(ratio, *left_floor, *right_floor)?;
         qualify_control(ratio, campaign.invariant_phases.iter().any(|item| item == phase))?;
         let judged = right == "I" && campaign.workloads[workload].phases.iter().any(|item| item == phase);
-        let result = if judged && upper > limit {
-            failed = true;
-            "FAIL"
-        } else if judged {
-            "PASS"
-        } else {
-            "INFO"
-        };
+        let result = classify_effect(judged, ratio, floor, upper, limit);
+        verdict = verdict.max(result);
+        let result = if judged { result.as_str() } else { "INFO" };
         lines.push(format!(
             "{workload}\t{layout}\t{cell}\t{phase}\t{ratio:.6}\t{floor:.6}\t{upper:.6}\t{result}"
         ));
     }
-    Ok(failed)
+    Ok(verdict)
+}
+
+fn classify_effect(judged: bool, ratio: f64, null_spread: f64, upper: f64, limit: f64) -> Verdict {
+    if !judged {
+        Verdict::Pass
+    } else if upper > limit {
+        Verdict::Fail
+    } else if (ratio - 1.0).abs() <= null_spread {
+        Verdict::Inconclusive
+    } else {
+        Verdict::Pass
+    }
 }
 
 fn qualify_control(ratio: f64, invariant: bool) -> Result<(), Error> {
@@ -262,38 +339,52 @@ fn paired(
     workload: &str,
     layout: &str,
     cell: &str,
-    left: &str,
-    right: &str,
+    left: (&str, ProfileKind),
+    right: (&str, ProfileKind),
     phase: &str,
     rounds: u32,
 ) -> Result<Vec<f64>, Error> {
     let mut values = Vec::new();
     for round in 0..rounds {
-        let first = by_key
-            .get(format!("{workload}|{layout}|{cell}|{round}|0").as_str())
-            .ok_or("missing first paired row")?;
-        let second = by_key
-            .get(format!("{workload}|{layout}|{cell}|{round}|1").as_str())
-            .ok_or("missing second paired row")?;
+        let candidates = by_key
+            .values()
+            .copied()
+            .filter(|row| row.workload == workload && row.layout == layout && row.cell == cell && row.round == round)
+            .collect::<Vec<_>>();
+        let sample = |identity: (&str, ProfileKind)| {
+            candidates
+                .iter()
+                .copied()
+                .find(|row| row.arm == identity.0 && row.profile == identity.1)
+                .ok_or("pair omitted arm profile")
+        };
         let (a, b) = if left == right {
+            let rows = candidates
+                .iter()
+                .copied()
+                .filter(|row| row.arm == left.0 && row.profile == left.1)
+                .collect::<Vec<_>>();
+            if rows.len() != 2 {
+                return Err("same-profile pair did not contain two positions".into());
+            }
             (
-                first.phases.get(phase).ok_or("pair omitted phase")?.us,
-                second.phases.get(phase).ok_or("pair omitted phase")?.us,
+                rows[0].phases.get(phase).ok_or("pair omitted phase")?.us,
+                rows[1].phases.get(phase).ok_or("pair omitted phase")?.us,
             )
         } else {
-            let samples = [(first.arm.as_str(), first), (second.arm.as_str(), second)]
+            let samples = [(left, sample(left)?), (right, sample(right)?)]
                 .into_iter()
                 .collect::<BTreeMap<_, _>>();
             (
                 samples
-                    .get(left)
+                    .get(&left)
                     .ok_or("pair omitted left arm")?
                     .phases
                     .get(phase)
                     .ok_or("pair omitted phase")?
                     .us,
                 samples
-                    .get(right)
+                    .get(&right)
                     .ok_or("pair omitted right arm")?
                     .phases
                     .get(phase)
@@ -353,6 +444,10 @@ fn qualify_null(values: &[f64], invariant: bool) -> Result<f64, Error> {
         .into());
     }
     Ok(floor)
+}
+
+fn qualified_null_spread(values: &[f64], invariant: bool) -> Option<f64> {
+    qualify_null(values, invariant).ok()
 }
 
 fn median(values: &mut [f64]) -> f64 {
