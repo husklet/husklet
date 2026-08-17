@@ -277,27 +277,50 @@ impl Runtime {
     }
 
     pub(super) async fn restore_checkpoints(containers: &Containers) -> io::Result<Vec<String>> {
-        let mut failures = Vec::new();
-        for container in containers.list().await.map_err(io::Error::other)? {
-            if container.spec.name.as_deref() == Some(CONTAINER)
-                || container.state.is_active()
-                || container.checkpoint.is_none()
-            {
-                continue;
-            }
-            if let Err(error) = containers.start(container.id.as_str()).await {
-                failures.push(format!(
-                    "{}: {error}",
-                    container.spec.name.as_deref().unwrap_or(container.id.as_str())
-                ));
-            }
-        }
-        for (id, error) in containers
-            .executions()
-            .restore_checkpoints()
+        let targets = containers
+            .list()
             .await
             .map_err(io::Error::other)?
-        {
+            .into_iter()
+            .filter(|container| {
+                container.spec.name.as_deref() != Some(CONTAINER)
+                    && !container.state.is_active()
+                    && container.checkpoint.is_some()
+            })
+            .map(|container| {
+                let label = container.spec.name.clone().unwrap_or_else(|| container.id.to_string());
+                (container.id.to_string(), label)
+            });
+        Self::restore_independently(
+            targets,
+            |id| async move { containers.start(&id).await.map(|_| ()) },
+            || async { containers.executions().restore_checkpoints().await },
+        )
+        .await
+        .map_err(io::Error::other)
+    }
+
+    pub(super) async fn restore_independently<I, J, E, S, SF, X, XF>(
+        targets: I,
+        mut start: S,
+        restore_executions: X,
+    ) -> Result<Vec<String>, E>
+    where
+        I: IntoIterator<Item = (String, String)>,
+        J: std::fmt::Display,
+        E: std::fmt::Display,
+        S: FnMut(String) -> SF,
+        SF: std::future::Future<Output = Result<(), E>>,
+        X: FnOnce() -> XF,
+        XF: std::future::Future<Output = Result<Vec<(J, E)>, E>>,
+    {
+        let mut failures = Vec::new();
+        for (id, label) in targets {
+            if let Err(error) = start(id).await {
+                failures.push(format!("{label}: {error}"));
+            }
+        }
+        for (id, error) in restore_executions().await? {
             failures.push(format!("execution {id}: {error}"));
         }
         Ok(failures)

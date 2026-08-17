@@ -458,6 +458,63 @@ fn successful_restore_removes_an_obsolete_failure_summary() {
     assert_eq!(summary.read().unwrap(), None);
 }
 
+#[tokio::test]
+async fn auxiliary_restore_failure_does_not_abort_later_restore_or_domain_serving() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let starts = Rc::clone(&events);
+    let executions = Rc::clone(&events);
+    let serving = Rc::clone(&events);
+
+    // This mirrors the `?` boundary in `Domain::serve`: an independent process
+    // failure is diagnostic data, so only a repository-level error may prevent
+    // the daemon from being constructed and served.
+    let startup: Result<Vec<String>, &'static str> = async {
+        let failures = Runtime::restore_independently(
+            [
+                ("broken-id".into(), "broken-cache".into()),
+                ("healthy-id".into(), "healthy-database".into()),
+            ],
+            move |id| {
+                let starts = Rc::clone(&starts);
+                async move {
+                    starts.borrow_mut().push(format!("container {id}"));
+                    if id == "broken-id" {
+                        Err("missing optional volume")
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+            move || {
+                let executions = Rc::clone(&executions);
+                async move {
+                    executions.borrow_mut().push("executions".into());
+                    Ok(vec![("pane-2", "terminal endpoint unavailable")])
+                }
+            },
+        )
+        .await?;
+        serving.borrow_mut().push("serve".into());
+        Ok(failures)
+    }
+    .await;
+
+    assert_eq!(
+        startup.unwrap(),
+        [
+            "broken-cache: missing optional volume",
+            "execution pane-2: terminal endpoint unavailable",
+        ]
+    );
+    assert_eq!(
+        events.borrow().as_slice(),
+        ["container broken-id", "container healthy-id", "executions", "serve"]
+    );
+}
+
 #[test]
 fn docker_warning_survives_relaunch_until_the_ui_acknowledges_it() {
     let root = tempfile::tempdir().unwrap();
