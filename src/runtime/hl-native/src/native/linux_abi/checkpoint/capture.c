@@ -1371,24 +1371,30 @@ static int ckpt_is_descendant(int64_t candidate, int64_t root) {
 
 // ================================ CHECKPOINT (per process) ================================
 
-// A descriptor for the container's controlling terminal, or -1. Close it with ckpt_ctty_close.
-//
-// Probing the engine's own 0/1/2 is not enough: they are the launcher's pty only in the launch shapes that
-// leave them inherited. Where the embedder asks for a terminal, the guest's terminal descriptors are hoisted
-// into the engine's private descriptor band and its own 0/1/2 are redirected, so every isatty() there says
-// "no" and the terminal is invisible to the capture. /dev/tty names the controlling terminal however the
-// descriptor table happens to look.
+// A duplicate of the container terminal attachment, or -1. The duplicate makes the caller's close operation
+// independent of whether the attachment service lent us a scoped handle or the direct launcher supplied a
+// native standard descriptor. Never use /dev/tty here: when an embedder itself runs under a terminal that
+// path names the embedder's outer terminal, not the private PTY attached to guest descriptor zero.
 static int ckpt_ctty_open(void) {
-    if (isatty(0)) return 0;
-    if (isatty(1)) return 1;
-    if (isatty(2)) return 2;
-    int fd = open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC);
-    if (fd < 0) fd = open("/dev/tty", O_RDONLY | O_NOCTTY | O_CLOEXEC);
-    return fd;
+    int descriptor = -1;
+    int borrowed = bound_attachment_borrow(STDIN_FILENO, &descriptor);
+    if (borrowed >= 0 && isatty(descriptor)) {
+        int duplicate = fcntl(descriptor, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+        if (borrowed > 0) bound_attachment_release(descriptor);
+        return duplicate;
+    }
+    if (borrowed > 0) bound_attachment_release(descriptor);
+
+    pid_t session = getsid(0);
+    for (int fd = STDIN_FILENO; fd <= STDERR_FILENO; ++fd)
+        if (isatty(fd) && session > 0 && tcgetsid(fd) == session)
+            return fcntl(fd, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+    errno = ENOTTY;
+    return -1;
 }
 
 static void ckpt_ctty_close(int fd) {
-    if (fd > STDERR_FILENO) (void)close(fd);
+    if (fd >= 0) (void)close(fd);
 }
 
 // Does `path` name the container's controlling terminal?

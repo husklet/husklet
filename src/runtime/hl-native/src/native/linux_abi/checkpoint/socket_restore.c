@@ -429,11 +429,6 @@ static int ckpt_restore_eventfds_initialize(void) {
 static int g_ckpt_fg_gpid = 0;
 static pid_t ckpt_restore_live_pid(int guest);
 
-static int ckpt_restore_ctty_open(void) {
-    int fd = open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC);
-    return fd >= 0 ? fd : ckpt_ctty_open();
-}
-
 // The restored init owns the controlling terminal and performs the handoff only after every descendant has
 // rebuilt its process group and reached the publication barrier. A descendant cannot reliably open the
 // launcher's controlling tty during recovery; ignoring that failure leaves terminal SIGINT aimed at init.
@@ -445,7 +440,7 @@ static int ckpt_claim_tty_fg(int guest_group) {
         return -1;
     }
 #endif
-    int tf = ckpt_restore_ctty_open();
+    int tf = ckpt_ctty_open();
     if (tf < 0) return -1;
     sigset_t sv, bl;
     sigemptyset(&bl);
@@ -475,7 +470,7 @@ static int ckpt_claim_tty_fg(int guest_group) {
 // non-tty or an unsettable mode just leaves the launcher's default cooked terminal.
 static int ckpt_restore_tty_mode(const struct ckpt_manifest *man) {
     struct termios tio;
-    int tf = man->tty_termios ? ckpt_restore_ctty_open() : -1;
+    int tf = man->tty_termios ? ckpt_ctty_open() : -1;
     if (tf < 0 || tcgetattr(tf, &tio) != 0) {
         ckpt_ctty_close(tf);
         return 0;
