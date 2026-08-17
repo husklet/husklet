@@ -273,15 +273,7 @@ impl Service {
                 ));
             }
         };
-        if !reaped {
-            self.exec_live.lock().await.insert(id.clone(), Arc::clone(&process));
-            let failure = format!("unpublished exec cleanup is quarantined: {}", cleanup.join("; "));
-            self.failures.lock().await.insert(journal.clone(), failure.clone());
-            self.exec_cleanup_failures.lock().await.insert(id.clone(), failure);
-            if let Some(waiters) = self.exec_waiters.lock().await.get(&id) {
-                waiters.notify_waiters();
-            }
-        } else {
+        if reaped {
             if let Some(error) = terminal_failure {
                 self.failures
                     .lock()
@@ -294,6 +286,14 @@ impl Service {
             let io = self.io.lock().await.remove(journal);
             if let Some(io) = io {
                 io.finish().await;
+            }
+        } else {
+            self.exec_live.lock().await.insert(id.clone(), Arc::clone(&process));
+            let failure = format!("unpublished exec cleanup is quarantined: {}", cleanup.join("; "));
+            self.failures.lock().await.insert(journal.clone(), failure.clone());
+            self.exec_cleanup_failures.lock().await.insert(id.clone(), failure);
+            if let Some(waiters) = self.exec_waiters.lock().await.get(&id) {
+                waiters.notify_waiters();
             }
         }
         if cleanup.is_empty() {
