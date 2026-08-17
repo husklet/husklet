@@ -519,6 +519,7 @@ static uint64_t fdvis_key(int pid, int fd);
 static void fdpath_sweep_stale_locked(void);
 #if defined(HL_NATIVE_TEST_HOOKS)
 static int fdvis_after_fork_rollback_test(void);
+static int fdvis_stalled_parent_test(void);
 #endif
 
 static struct fdpath_slot *fdpath_find(uint64_t key, uint64_t owner_start_ns, int claim) {
@@ -671,7 +672,7 @@ HL_API int HL_TARGET_LOCAL(fdvis_path_publication_test)(uint32_t scenario) {
                         fdpath_find(fdvis_key(7, descriptor), 9, 0) != NULL;
         g_fdpaths = saved_paths;
         free(paths);
-        return reclaimed && fdvis_after_fork_rollback_test();
+        return reclaimed && fdvis_after_fork_rollback_test() && fdvis_stalled_parent_test();
     }
     int first = proc_fdvis_publish_path_locked(7, 9, descriptor);
     struct fdpath_slot *slot = fdpath_find(fdvis_key(7, descriptor), 9, 0);
@@ -1168,6 +1169,57 @@ static void proc_fdvis_fork_child_abort(struct fdvis_fork_plan *plan, int child)
     fdvis_unlock();
 }
 
+static void proc_fdvis_fork_child_timeout(struct fdvis_fork_plan *plan, int child) {
+    uint64_t child_start = fdvis_process_token(child);
+    fdvis_lock();
+    for (size_t index = 0; index < plan->count; ++index) {
+        const struct fdvis_fork_entry *entry = &plan->entries[index];
+        struct fdvis_slot *slot = &g_fdvis[entry->slot];
+        uint64_t key = fdvis_key(child, entry->guest_fd);
+        if (slot->key != UINT64_MAX &&
+            (slot->key != key || (slot->owner_start_ns != 0 && slot->owner_start_ns != child_start)))
+            continue;
+        if (slot->key == key) {
+            struct fdpath_slot *path = fdpath_find(key, slot->owner_start_ns, 0);
+            if (path) fdpath_delete_locked(path);
+        }
+        memset(slot, 0, sizeof *slot);
+        slot->key = key;
+        slot->owner_start_ns = UINT64_MAX;
+        slot->generation = ++g_fdvis_control->generation;
+    }
+    fdvis_unlock();
+}
+
+static void proc_fdvis_fork_parent_clear_timeout(struct fdvis_fork_plan *plan, int child) {
+    fdvis_lock();
+    for (size_t index = 0; index < plan->count; ++index) {
+        const struct fdvis_fork_entry *entry = &plan->entries[index];
+        struct fdvis_slot *slot = &g_fdvis[entry->slot];
+        if (slot->key == fdvis_key(child, entry->guest_fd) && slot->owner_start_ns == UINT64_MAX)
+            memset(slot, 0, sizeof *slot);
+    }
+    fdvis_unlock();
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static uint64_t g_fdvis_fork_wait_milliseconds = UINT64_C(5000);
+#endif
+
+static uint64_t fdvis_fork_wait_milliseconds(void) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    return g_fdvis_fork_wait_milliseconds;
+#else
+    return UINT64_C(5000);
+#endif
+}
+
+static uint64_t fdvis_monotonic_milliseconds(void) {
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+    return (uint64_t)now.tv_sec * UINT64_C(1000) + (uint64_t)now.tv_nsec / UINT64_C(1000000);
+}
+
 struct fdvis_fork_journal {
     struct fdvis_slot *identity;
     struct fdvis_slot previous_identity;
@@ -1215,12 +1267,11 @@ static void fdvis_fork_rollback_locked(struct fdvis_fork_journal *journal, size_
                 *change->identity = change->previous_identity;
             else
                 memset(change->identity, 0, sizeof *change->identity);
-        }
-        else if (change->reservation_owned && change->identity->key == UINT64_MAX)
+        } else if (change->reservation_owned && change->identity->key == UINT64_MAX)
             memset(change->identity, 0, sizeof *change->identity);
         if (change->identity_replaced && change->provisional_path_existed) {
-            struct fdpath_slot *provisional = fdpath_find(change->provisional_path.key,
-                                                          change->provisional_path.owner_start_ns, 1);
+            struct fdpath_slot *provisional =
+                fdpath_find(change->provisional_path.key, change->provisional_path.owner_start_ns, 1);
             if (provisional) *provisional = change->provisional_path;
         }
     }
@@ -1230,8 +1281,8 @@ static void fdvis_fork_commit_locked(struct fdvis_fork_journal *journal, size_t 
     for (size_t index = 0; index < count; ++index) {
         struct fdvis_fork_journal *change = &journal[index];
         if (!change->identity_replaced || !change->provisional_path_existed) continue;
-        struct fdpath_slot *provisional = fdpath_find(change->provisional_path.key,
-                                                      change->provisional_path.owner_start_ns, 0);
+        struct fdpath_slot *provisional =
+            fdpath_find(change->provisional_path.key, change->provisional_path.owner_start_ns, 0);
         if (provisional && provisional->path_is_guest == change->provisional_path.path_is_guest &&
             strcmp(provisional->path, change->provisional_path.path) == 0)
             fdpath_delete_locked(provisional);
@@ -1249,6 +1300,7 @@ static int proc_fdvis_after_fork(struct fdvis_fork_plan *plan, int child, int in
      * visible, so wait here and then use the transaction below only for the
      * possible start-token upgrade. */
     if (in_child) {
+        uint64_t deadline = fdvis_monotonic_milliseconds() + fdvis_fork_wait_milliseconds();
         for (;;) {
             int published = 1;
             fdvis_lock();
@@ -1266,7 +1318,13 @@ static int proc_fdvis_after_fork(struct fdvis_fork_plan *plan, int child, int in
                 proc_fdvis_fork_child_abort(plan, child);
                 return -ECHILD;
             }
-            sched_yield();
+            uint64_t now = fdvis_monotonic_milliseconds();
+            if (now == 0 || now >= deadline) {
+                proc_fdvis_fork_child_timeout(plan, child);
+                return -ETIMEDOUT;
+            }
+            struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+            (void)nanosleep(&pause, NULL);
         }
         child_start = fdvis_process_token(child);
     }
@@ -1340,6 +1398,7 @@ static int proc_fdvis_after_fork(struct fdvis_fork_plan *plan, int child, int in
         }
     }
     fdvis_unlock();
+    if (status != 0 && !in_child) proc_fdvis_fork_parent_clear_timeout(plan, child);
     free(journal);
     return status;
 }
@@ -1367,10 +1426,20 @@ static int fdvis_after_fork_rollback_test(void) {
     identities[0].key = UINT64_MAX;
     identities[1].key = UINT64_MAX;
     struct fdvis_fork_entry entries[2] = {
-        {.slot = 0, .guest_fd = HL_NFD - 2, .kind = 1, .device = 2, .object = 3,
-         .path_is_guest = 1, .path = "/rollback/first"},
-        {.slot = 1, .guest_fd = HL_NFD - 1, .kind = 4, .device = 5, .object = 6,
-         .path_is_guest = 1, .path = "/rollback/second"},
+        {.slot = 0,
+         .guest_fd = HL_NFD - 2,
+         .kind = 1,
+         .device = 2,
+         .object = 3,
+         .path_is_guest = 1,
+         .path = "/rollback/first"},
+        {.slot = 1,
+         .guest_fd = HL_NFD - 1,
+         .kind = 4,
+         .device = 5,
+         .object = 6,
+         .path_is_guest = 1,
+         .path = "/rollback/second"},
     };
     struct fdvis_fork_plan plan = {.entries = entries, .count = 2};
     g_fdvis = identities;
@@ -1380,8 +1449,7 @@ static int fdvis_after_fork_rollback_test(void) {
     uint64_t first_key = fdvis_key(child, entries[0].guest_fd);
     uint64_t second_key = fdvis_key(child, entries[1].guest_fd);
     int rolled_back = status == -ENOSPC && identities[0].key == 0 && identities[1].key == 0 &&
-                      fdpath_find(first_key, child_start, 0) == NULL &&
-                      fdpath_find(second_key, child_start, 0) == NULL;
+                      fdpath_find(first_key, child_start, 0) == NULL && fdpath_find(second_key, child_start, 0) == NULL;
     memset(identities, 0, sizeof *identities * FDVIS_N);
     memset(paths, 0, sizeof *paths * FDPATH_N);
     memset(control, 0, sizeof *control);
@@ -1435,8 +1503,8 @@ static int fdvis_after_fork_rollback_test(void) {
     struct fdpath_slot *partial_path = fdpath_find(first_key, child_start, 1);
     if (partial_path) snprintf(partial_path->path, sizeof partial_path->path, "%s", entries[0].path);
     proc_fdvis_fork_child_abort(&plan, child);
-    int abandoned_cleanly = identities[0].key == 0 && identities[1].key == 0 &&
-                            fdpath_find(first_key, child_start, 0) == NULL;
+    int abandoned_cleanly =
+        identities[0].key == 0 && identities[1].key == 0 && fdpath_find(first_key, child_start, 0) == NULL;
     struct fdvis_reservation reusable;
     int reserve_status = proc_fdvis_reserve(&reusable);
     abandoned_cleanly = abandoned_cleanly && reserve_status == 0;
@@ -1448,6 +1516,67 @@ static int fdvis_after_fork_rollback_test(void) {
     free(paths);
     free(control);
     return rolled_back && preserved && upgrade_rolled_back && upgraded_cleanly && abandoned_cleanly;
+}
+
+static int fdvis_stalled_parent_test(void) {
+    struct fdvis_slot *identities =
+        mmap(NULL, sizeof *identities * FDVIS_N, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    struct fdpath_slot *paths =
+        mmap(NULL, sizeof *paths * FDPATH_N, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    struct fdvis_control *control =
+        mmap(NULL, sizeof *control, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (identities == MAP_FAILED || paths == MAP_FAILED || control == MAP_FAILED) {
+        if (identities != MAP_FAILED) (void)munmap(identities, sizeof *identities * FDVIS_N);
+        if (paths != MAP_FAILED) (void)munmap(paths, sizeof *paths * FDPATH_N);
+        if (control != MAP_FAILED) (void)munmap(control, sizeof *control);
+        return 0;
+    }
+    memset(identities, 0, sizeof *identities * FDVIS_N);
+    memset(paths, 0, sizeof *paths * FDPATH_N);
+    memset(control, 0, sizeof *control);
+    struct fdvis_slot *saved_identities = g_fdvis;
+    struct fdpath_slot *saved_paths = g_fdpaths;
+    struct fdvis_control *saved_control = g_fdvis_control;
+    g_fdvis = identities;
+    g_fdpaths = paths;
+    g_fdvis_control = control;
+    int parent = (int)getpid();
+    uint64_t parent_start = fdvis_process_token(parent);
+    identities[0] = (struct fdvis_slot){.key = fdvis_key(parent, 3),
+                                        .owner_start_ns = parent_start,
+                                        .generation = 1,
+                                        .kind = 1,
+                                        .device = 2,
+                                        .object = 3};
+    struct fdvis_fork_plan plan;
+    int prepared = proc_fdvis_fork_prepare(&plan);
+    pid_t child = prepared == 0 ? fork() : -1;
+    if (child == 0) {
+        g_fdvis_fork_wait_milliseconds = 20;
+        int status = proc_fdvis_after_fork(&plan, (int)getpid(), 1);
+        _exit(status == -ETIMEDOUT ? 0 : 1);
+    }
+    int child_status = 1;
+    int parent_status = -1;
+    if (child > 0) {
+        struct timespec hold = {.tv_sec = 0, .tv_nsec = 100000000};
+        (void)nanosleep(&hold, NULL);
+        parent_status = proc_fdvis_after_fork(&plan, (int)child, 0);
+        while (waitpid(child, &child_status, 0) < 0 && errno == EINTR) {}
+    }
+    struct fdvis_fork_plan retry;
+    int retry_status = proc_fdvis_fork_prepare(&retry);
+    if (retry_status == 0) proc_fdvis_fork_cancel(&retry);
+    int clean = child > 0 && WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0 && parent_status != 0 &&
+                identities[1].key == 0 && retry_status == 0;
+    free(plan.entries);
+    g_fdvis = saved_identities;
+    g_fdpaths = saved_paths;
+    g_fdvis_control = saved_control;
+    (void)munmap(identities, sizeof *identities * FDVIS_N);
+    (void)munmap(paths, sizeof *paths * FDPATH_N);
+    (void)munmap(control, sizeof *control);
+    return clean;
 }
 #endif
 
