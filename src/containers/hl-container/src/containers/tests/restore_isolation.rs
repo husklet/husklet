@@ -72,6 +72,21 @@ async fn restore_isolates_launch_failures_and_keeps_every_failed_process_retryab
         }
     }
 
+    // A failed restored process is degradation of that process, not of the
+    // workspace execution domain. Prove the live workspace can still accept a
+    // completely new execution before any failed checkpoint dependency is
+    // repaired.
+    let fresh = reopened
+        .executions()
+        .create("workspace", ExecSpec::new(Process::new("/fresh/process")))
+        .await
+        .unwrap();
+    let _fresh_session = reopened.executions().start(&fresh.id).await.unwrap();
+    assert!(matches!(
+        reopened.executions().inspect(&fresh.id).await.unwrap().state,
+        ExecState::Running { .. }
+    ));
+
     recovery_runtime.launch_failures.lock().unwrap().clear();
     assert!(reopened.executions().restore_checkpoints().await.unwrap().is_empty());
     for execution in &executions {
