@@ -30,6 +30,7 @@ hl_c_backend_exit_detail
 hl_c_backend_exit_kind
 hl_c_backend_exit_status
 hl_c_backend_host_process_force_test
+hl_c_backend_identity_registry_test
 hl_c_backend_leak_check_nonvacuity
 hl_c_backend_request
 hl_c_backend_run

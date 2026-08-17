@@ -38,6 +38,9 @@ int hl_linux_identity_registry_prepare(hl_linux_identity_registry *registry, hl_
                                        hl_linux_pidmap *pgid, hl_linux_pidmap *sid);
 int hl_linux_identity_registry_add(const hl_linux_pidmap_update *updates, size_t count);
 uint64_t hl_linux_identity_registry_commit_word(const hl_linux_identity_registry *registry);
+#if defined(HL_NATIVE_TEST_HOOKS)
+int hl_c_backend_identity_registry_test(uint32_t scenario, uint32_t iterations);
+#endif
 int hl_linux_pidmap_add(hl_linux_pidmap *map, int32_t guest, int32_t host);
 int32_t hl_linux_pidmap_allocate_guest(hl_linux_pidmap *map);
 int32_t hl_linux_pidmap_register_host(hl_linux_pidmap *map, int32_t host);

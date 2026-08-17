@@ -3,14 +3,17 @@
 #endif
 
 #include "pidmap.h"
+#include "hl/base.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #ifndef MAP_ANONYMOUS
@@ -44,6 +47,18 @@ struct hl_linux_identity_registry_storage {
 
 static pthread_mutex_t g_pidmap_thread_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_once_t g_pidmap_atfork_once = PTHREAD_ONCE_INIT;
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int g_pidmap_test_crash_phase;
+
+static void pidmap_test_crash(int phase) {
+    if (g_pidmap_test_crash_phase == phase) _exit(190 + phase);
+}
+#else
+static void pidmap_test_crash(int phase) {
+    (void)phase;
+}
+#endif
 
 static void pidmap_after_fork(void) {
     // POSIX record locks are not inherited. Match that property for the process-local thread lock.
@@ -129,6 +144,7 @@ static void registry_recover_locked(hl_linux_identity_registry_storage *registry
                                               memory_order_acquire);
         atomic_store_explicit(&registry->map[entry.kind].bank[inactive][entry.index].identity, value,
                               memory_order_release);
+        if (position == 0) pidmap_test_crash(5);
     }
     atomic_store_explicit(&registry->journal_count, 0, memory_order_release);
 }
@@ -168,6 +184,44 @@ static void pidmap_raise_next(hl_linux_pidmap_storage *storage, int32_t guest) {
                                                   memory_order_relaxed, memory_order_relaxed)) {}
 }
 
+static int registry_apply_locked(hl_linux_identity_registry *owner, const hl_linux_pidmap_update *updates,
+                                 size_t count) {
+    hl_linux_identity_registry_storage *registry = owner->storage;
+    pidmap_test_crash(1);
+    registry_recover_locked(registry);
+    uint64_t base = atomic_load_explicit(&registry->commit_word, memory_order_acquire);
+    unsigned active = (unsigned)(base & 1u);
+    unsigned inactive = active ^ 1u;
+    unsigned journaled = 0;
+    for (size_t position = 0; position < count; ++position) {
+        const hl_linux_pidmap_update *update = &updates[position];
+        hl_linux_pidmap_storage *map = update->map->storage;
+        // Recovery has made the banks identical. Search the staged bank so a later update in this same
+        // transaction observes every slot reserved by an earlier update.
+        int slot = map_find_guest(map, inactive, update->guest);
+        if (slot < 0 && update->host > 0) slot = map_find_empty(map, inactive);
+        if (slot < 0) {
+            registry_recover_locked(registry);
+            errno = update->host == 0 ? ESRCH : ENOSPC;
+            return -1;
+        }
+        if (registry_publish_journal(registry, update->map->kind, (uint32_t)slot, &journaled) != 0) {
+            registry_recover_locked(registry);
+            return -1;
+        }
+        if (position == 0) pidmap_test_crash(2);
+        atomic_store_explicit(&map->bank[inactive][slot].identity,
+                              update->host == 0 ? 0 : identity_pack(update->guest, update->host), memory_order_release);
+        if (position == 0) pidmap_test_crash(3);
+        if (update->host > 0) pidmap_raise_next(map, update->guest);
+    }
+    uint64_t committed = ((base >> 1) + 1u) << 1 | inactive;
+    atomic_store_explicit(&registry->commit_word, committed, memory_order_release);
+    pidmap_test_crash(4);
+    registry_recover_locked(registry);
+    return 0;
+}
+
 static int registry_apply(const hl_linux_pidmap_update *updates, size_t count) {
     if (updates == NULL || count == 0 || count > PIDMAP_JOURNAL_CAPACITY) {
         errno = EINVAL;
@@ -181,37 +235,9 @@ static int registry_apply(const hl_linux_pidmap_update *updates, size_t count) {
             return -1;
         }
     if (registry_lock(owner) != 0) return -1;
-    hl_linux_identity_registry_storage *registry = owner->storage;
-    registry_recover_locked(registry);
-    uint64_t base = atomic_load_explicit(&registry->commit_word, memory_order_acquire);
-    unsigned active = (unsigned)(base & 1u);
-    unsigned inactive = active ^ 1u;
-    unsigned journaled = 0;
-    for (size_t position = 0; position < count; ++position) {
-        const hl_linux_pidmap_update *update = &updates[position];
-        hl_linux_pidmap_storage *map = update->map->storage;
-        int slot = map_find_guest(map, active, update->guest);
-        if (slot < 0 && update->host > 0) slot = map_find_empty(map, active);
-        if (slot < 0) {
-            registry_recover_locked(registry);
-            registry_unlock(owner);
-            errno = update->host == 0 ? ESRCH : ENOSPC;
-            return -1;
-        }
-        if (registry_publish_journal(registry, update->map->kind, (uint32_t)slot, &journaled) != 0) {
-            registry_recover_locked(registry);
-            registry_unlock(owner);
-            return -1;
-        }
-        atomic_store_explicit(&map->bank[inactive][slot].identity,
-                              update->host == 0 ? 0 : identity_pack(update->guest, update->host), memory_order_release);
-        if (update->host > 0) pidmap_raise_next(map, update->guest);
-    }
-    uint64_t committed = ((base >> 1) + 1u) << 1 | inactive;
-    atomic_store_explicit(&registry->commit_word, committed, memory_order_release);
-    registry_recover_locked(registry);
+    int result = registry_apply_locked(owner, updates, count);
     registry_unlock(owner);
-    return 0;
+    return result;
 }
 
 void hl_linux_pidmap_init(hl_linux_pidmap *map) {
@@ -286,10 +312,23 @@ int hl_linux_pidmap_add(hl_linux_pidmap *map, int32_t guest, int32_t host) {
 int32_t hl_linux_pidmap_register_host(hl_linux_pidmap *map, int32_t host) {
     if (map == NULL || host <= 0) return -1;
     if (map->storage == NULL && hl_linux_pidmap_prepare_shared(map) != 0) return -1;
-    int32_t guest;
-    if (hl_linux_pidmap_guest_checked(map, host, &guest) == 0) return guest;
-    guest = atomic_fetch_add_explicit(&map->storage->next_guest, 1, memory_order_relaxed);
-    return guest > 0 && guest < INT32_MAX && hl_linux_pidmap_add(map, guest, host) == 0 ? guest : -1;
+    hl_linux_identity_registry *owner = map->registry;
+    if (registry_lock(owner) != 0) return -1;
+    registry_recover_locked(owner->storage);
+    uint64_t word = atomic_load_explicit(&owner->storage->commit_word, memory_order_acquire);
+    unsigned bank = (unsigned)(word & 1u);
+    for (uint32_t index = 0; index < HL_LINUX_PIDMAP_CAPACITY; ++index) {
+        int32_t guest, current_host;
+        if (slot_snapshot(&map->storage->bank[bank][index], &guest, &current_host) && current_host == host) {
+            registry_unlock(owner);
+            return guest;
+        }
+    }
+    int32_t guest = atomic_fetch_add_explicit(&map->storage->next_guest, 1, memory_order_relaxed);
+    const hl_linux_pidmap_update update = {.map = map, .guest = guest, .host = host};
+    int result = guest > 0 && guest < INT32_MAX ? registry_apply_locked(owner, &update, 1) : -1;
+    registry_unlock(owner);
+    return result == 0 ? guest : -1;
 }
 
 int32_t hl_linux_pidmap_allocate_guest(hl_linux_pidmap *map) {
@@ -395,3 +434,108 @@ uint32_t hl_linux_pidmap_count(const hl_linux_pidmap *map) {
     size_t count = hl_linux_pidmap_snapshot(map, NULL, 0);
     return count > UINT32_MAX ? UINT32_MAX : (uint32_t)count;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int pidmap_test_prepare(hl_linux_identity_registry *registry, hl_linux_pidmap maps[PIDMAP_KINDS]) {
+    memset(registry, 0, sizeof *registry);
+    registry->lock_fd = -1;
+    memset(maps, 0, sizeof(*maps) * PIDMAP_KINDS);
+    return hl_linux_identity_registry_prepare(registry, &maps[0], &maps[1], &maps[2]);
+}
+
+static int pidmap_test_values(hl_linux_pidmap maps[PIDMAP_KINDS], int32_t guest, int32_t expected) {
+    for (uint32_t kind = 0; kind < PIDMAP_KINDS; ++kind) {
+        int32_t host = 0;
+        if (hl_linux_pidmap_host_checked(&maps[kind], guest, &host) != 0 || host != expected) return -1;
+    }
+    return 0;
+}
+
+static int pidmap_test_crash_recovery(uint32_t scenario) {
+    hl_linux_identity_registry registry;
+    hl_linux_pidmap maps[PIDMAP_KINDS];
+    if (pidmap_test_prepare(&registry, maps) != 0) return -1;
+    hl_linux_pidmap_update initial[PIDMAP_KINDS];
+    hl_linux_pidmap_update replacement[PIDMAP_KINDS];
+    for (uint32_t kind = 0; kind < PIDMAP_KINDS; ++kind) {
+        initial[kind] = (hl_linux_pidmap_update){.map = &maps[kind], .guest = 10, .host = 110};
+        replacement[kind] = (hl_linux_pidmap_update){.map = &maps[kind], .guest = 10, .host = 120};
+    }
+    if (registry_apply(initial, PIDMAP_KINDS) != 0) return -1;
+    pid_t child = fork();
+    if (child < 0) return -1;
+    if (child == 0) {
+        g_pidmap_test_crash_phase = (int)scenario;
+        int result = registry_apply(replacement, PIDMAP_KINDS);
+        _exit(result == 0 ? 80 : 81);
+    }
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0)
+        if (errno != EINTR) return -1;
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 190 + (int)scenario) return -1;
+    if (registry_lock(&registry) != 0) return -1;
+    registry_recover_locked(registry.storage);
+    registry_unlock(&registry);
+    return pidmap_test_values(maps, 10, scenario < 4 ? 110 : 120);
+}
+
+static int pidmap_test_concurrent(uint32_t iterations) {
+    hl_linux_identity_registry registry;
+    hl_linux_pidmap maps[PIDMAP_KINDS];
+    if (pidmap_test_prepare(&registry, maps) != 0) return -1;
+    hl_linux_pidmap_update updates[PIDMAP_KINDS];
+    for (uint32_t kind = 0; kind < PIDMAP_KINDS; ++kind)
+        updates[kind] = (hl_linux_pidmap_update){.map = &maps[kind], .guest = 10, .host = 110};
+    if (registry_apply(updates, PIDMAP_KINDS) != 0) return -1;
+    pid_t child = fork();
+    if (child < 0) return -1;
+    if (child == 0) {
+        for (uint32_t iteration = 0; iteration < iterations; ++iteration) {
+            int32_t host = (iteration & 1u) == 0 ? 120 : 110;
+            for (uint32_t kind = 0; kind < PIDMAP_KINDS; ++kind) updates[kind].host = host;
+            if (registry_apply(updates, PIDMAP_KINDS) != 0) _exit(82);
+        }
+        _exit(0);
+    }
+    int status = 0;
+    for (;;) {
+        pid_t waited = waitpid(child, &status, WNOHANG);
+        if (waited < 0) return -1;
+        uint64_t before = hl_linux_identity_registry_commit_word(&registry);
+        int32_t values[PIDMAP_KINDS];
+        int valid = 1;
+        for (uint32_t kind = 0; kind < PIDMAP_KINDS; ++kind)
+            valid &= hl_linux_pidmap_host_checked(&maps[kind], 10, &values[kind]) == 0;
+        uint64_t after = hl_linux_identity_registry_commit_word(&registry);
+        if (before == after && (!valid || values[0] != values[1] || values[1] != values[2])) {
+            (void)kill(child, SIGKILL);
+            (void)waitpid(child, &status, 0);
+            return -1;
+        }
+        if (waited == child) break;
+    }
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
+}
+
+static int pidmap_test_churn(uint32_t iterations) {
+    hl_linux_identity_registry registry;
+    hl_linux_pidmap maps[PIDMAP_KINDS];
+    if (pidmap_test_prepare(&registry, maps) != 0) return -1;
+    for (uint32_t iteration = 0; iteration < iterations; ++iteration) {
+        int32_t guest = (int32_t)iteration + 1;
+        int32_t host = (int32_t)iteration + 10000;
+        if (hl_linux_pidmap_add(&maps[0], guest, host) != 0 || hl_linux_pidmap_remove_host(&maps[0], host) != 0 ||
+            hl_linux_pidmap_count(&maps[0]) != 0)
+            return -1;
+    }
+    return 0;
+}
+
+HL_API int hl_c_backend_identity_registry_test(uint32_t scenario, uint32_t iterations) {
+    if (scenario >= 1 && scenario <= 5) return pidmap_test_crash_recovery(scenario);
+    if (scenario == 6) return pidmap_test_concurrent(iterations == 0 ? 10000 : iterations);
+    if (scenario == 7) return pidmap_test_churn(iterations == 0 ? 2 * HL_LINUX_PIDMAP_CAPACITY + 32 : iterations);
+    errno = EINVAL;
+    return -1;
+}
+#endif
