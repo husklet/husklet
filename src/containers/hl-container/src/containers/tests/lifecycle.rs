@@ -466,11 +466,17 @@ async fn execution_checkpoint_restores_without_capturing_the_container_init() {
 
     containers.shutdown(Duration::from_secs(1)).await.unwrap();
     containers.start("workspace").await.unwrap();
-    let restored = containers.executions().start(&exec.id).await.unwrap();
-    drop(restored);
-    tokio::time::sleep(Duration::from_millis(25)).await;
-    let mut attached = containers.executions().attach(&exec.id, None).await.unwrap();
-    let resumed_output = attached.history().await.unwrap();
+    let mut restored = containers.executions().start(&exec.id).await.unwrap();
+    let mut resumed_output = restored.history().await.unwrap();
+    while resumed_output.len() < 3 {
+        resumed_output.push(
+            tokio::time::timeout(Duration::from_millis(250), restored.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+        );
+    }
     assert_eq!(
         resumed_output
             .iter()
@@ -483,6 +489,12 @@ async fn execution_checkpoint_restores_without_capturing_the_container_init() {
         ],
         "delivered pre-checkpoint output is skipped while queued output and post-restore output are replayed"
     );
+    for entry in &resumed_output {
+        restored.acknowledge(entry.sequence);
+    }
+    drop(restored);
+    let mut attached = containers.executions().attach(&exec.id, None).await.unwrap();
+    assert!(attached.history().await.unwrap().is_empty());
     drop(attached);
     assert!(matches!(
         containers.executions().inspect(&exec.id).await.unwrap().state,

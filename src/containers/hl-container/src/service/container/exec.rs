@@ -94,10 +94,21 @@ impl Service {
                 .map_err(Error::Checkpoint)?,
             restore: exec.checkpoint.is_some(),
         };
+        let (cursor, live_at) = if let Some(cursor) = exec.attachment_cursor {
+            (cursor, self.logs.cursor(&journal).await?)
+        } else {
+            (0, 0)
+        };
         // Input ownership is the only destructive preparation step. Keep it
         // after every fallible filesystem, volume, network, identity, domain,
         // and checkpoint lookup so a repaired dependency can be retried.
         let io = self.exec_io(&exec).await;
+        let session = crate::Session::new(Arc::clone(self), Arc::clone(&io), journal.clone(), cursor, live_at);
+        let session = if claim_attachment {
+            session.claim_attachment()?
+        } else {
+            session
+        };
         if exec.checkpoint.is_some() {
             io.rearm_input().await;
         }
@@ -152,18 +163,13 @@ impl Service {
             .lock()
             .await
             .insert(exec.id.clone(), Arc::clone(&process));
-        let session = crate::Session::new(Arc::clone(self), io, journal.clone(), 0, 0);
         let service = Arc::clone(self);
         let exec_id = exec.id;
         tokio::spawn(async move {
             let result = Arc::clone(&service).own(process, journal).await;
             service.finish_exec(exec_id, process_id, started_at_ms, result).await;
         });
-        if claim_attachment {
-            session.claim_attachment()
-        } else {
-            Ok(session)
-        }
+        Ok(session)
     }
 
     pub(crate) async fn attach_exec(
@@ -182,7 +188,6 @@ impl Service {
         }
         let journal = JournalId::exec(exec.id.clone());
         let live_at = self.logs.cursor(&journal).await?;
-        let cursor = exec.attachment_cursor.unwrap_or(live_at);
         let io = self
             .io
             .lock()
@@ -190,6 +195,7 @@ impl Service {
             .get(&journal)
             .cloned()
             .ok_or_else(|| Error::Runtime(format!("running exec {id} has no live I/O")))?;
+        let cursor = exec.attachment_cursor.unwrap_or(live_at).max(io.delivered_cursor());
         let session = crate::Session::new(Arc::clone(self), io, journal, cursor, live_at).claim_attachment()?;
         if let Some(size) = size {
             let Some(previous) = exec.spec.process.console.terminal else {
