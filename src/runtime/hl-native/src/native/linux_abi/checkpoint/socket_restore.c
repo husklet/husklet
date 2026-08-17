@@ -432,17 +432,28 @@ static int g_ckpt_fg_gpid = 0;
 // Make THIS process's group the controlling terminal's foreground group. Called by the process that led the
 // foreground job's group at checkpoint, right AFTER it re-creates that group (ckpt_restore_pgrp), so the pgid
 // argument names a group that already exists. SIGTTOU is blocked so a background caller isn't stopped by the
-// handoff. Best-effort -- a failure just leaves the (safe) inherited foreground group.
-static void ckpt_claim_tty_fg(void) {
+// handoff. A requested handoff is architectural state: silently leaving the launcher or init in front makes the
+// next terminal SIGINT kill that host process instead of the restored foreground job.
+static int ckpt_claim_tty_fg(void) {
     int tf = ckpt_ctty_open();
-    if (tf < 0) return;
+    if (tf < 0) return -1;
     sigset_t sv, bl;
     sigemptyset(&bl);
     sigaddset(&bl, SIGTTOU);
-    sigprocmask(SIG_BLOCK, &bl, &sv);
-    (void)tcsetpgrp(tf, getpgrp());
-    sigprocmask(SIG_SETMASK, &sv, NULL);
+    if (sigprocmask(SIG_BLOCK, &bl, &sv) != 0) {
+        int error = errno;
+        ckpt_ctty_close(tf);
+        errno = error;
+        return -1;
+    }
+    pid_t group = getpgrp();
+    int result = group > 0 && tcsetpgrp(tf, group) == 0 && tcgetpgrp(tf) == group ? 0 : -1;
+    int error = result == 0 ? 0 : errno;
+    if (result != 0 && error == 0) error = EIO;
+    (void)sigprocmask(SIG_SETMASK, &sv, NULL);
     ckpt_ctty_close(tf);
+    if (result != 0) errno = error;
+    return result;
 }
 
 // Replay the captured line discipline onto the fresh pty. The restored guest keeps its in-memory belief about
@@ -473,17 +484,22 @@ static void ckpt_restore_tty_mode(const struct ckpt_manifest *man) {
     ckpt_ctty_close(tf);
 }
 
-// Best-effort reconstruction of this process's group/session relative to the LIVE (re-forked) tree. A
-// process that led its own group/session re-creates it; otherwise it joins its (already-inherited) parent
-// group. Errors are ignored (the process is at worst left in its inherited group -- never fatal).
-static void ckpt_restore_pgrp(int gpid, int pgid_gpid, int sid_gpid) {
-    if (sid_gpid == gpid && getsid(0) != getpid()) setsid(); // was a session leader
-    if (pgid_gpid == gpid) {
-        setpgid(0, 0); // was its own group leader
-    } else if (pgid_gpid > 0) {
-        int leader = (pgid_gpid == 1 && g_init_hostpid) ? g_init_hostpid : hl_linux_pidmap_host(&g_pidmap, pgid_gpid);
-        setpgid(0, leader); // join the (usually already-inherited) parent group
+// Reconstruct this process's group/session relative to the LIVE (re-forked) tree. Idempotent verification
+// accepts a relation already inherited from the parent, but a requested relation that cannot be established
+// fails this process's atomic restore instead of publishing a tree with misdirected terminal signals.
+static int ckpt_restore_pgrp(int gpid, int pgid_gpid, int sid_gpid) {
+    if (sid_gpid == gpid && getsid(0) != getpid() && setsid() < 0 && getsid(0) != getpid()) return -1;
+    if (pgid_gpid <= 0) return 0;
+    pid_t leader = pgid_gpid == gpid
+                       ? getpid()
+                       : (pgid_gpid == 1 && g_init_hostpid) ? g_init_hostpid
+                                                            : hl_linux_pidmap_host(&g_pidmap, pgid_gpid);
+    if (leader <= 0) {
+        errno = ESRCH;
+        return -1;
     }
+    if (getpgrp() != leader && setpgid(0, leader) < 0 && getpgrp() != leader) return -1;
+    return getpgrp() == leader ? 0 : (errno = EIO, -1);
 }
 
 struct ckpt_restore_commit {
@@ -713,8 +729,15 @@ static void ckpt_restore_proc_run(int gpid) {
     ckpt_reinstall_sigacts(&m); // restore guest signal dispositions (AFTER the fork hooks reset host state)
 
     if (ckpt_restore_fds_dir(pd) != 0 || ckpt_restore_signal_state(pd) != 0) ckpt_restore_commit_failed();
-    ckpt_restore_pgrp(gpid, m.pgid_gpid, m.sid_gpid);
-    if (g_ckpt_fg_gpid == gpid) ckpt_claim_tty_fg(); // this process led the tty's foreground job -> reclaim it
+    if (ckpt_restore_pgrp(gpid, m.pgid_gpid, m.sid_gpid) != 0) {
+        fprintf(stderr, "[restore] cannot restore process group for gpid %d: %s\n", gpid, strerror(errno));
+        ckpt_restore_commit_failed();
+    }
+    if (g_ckpt_fg_gpid == gpid && ckpt_claim_tty_fg() != 0) {
+        fprintf(stderr, "[restore] cannot restore terminal foreground group for gpid %d: %s\n", gpid,
+                strerror(errno));
+        ckpt_restore_commit_failed();
+    }
 
     static char exe[512];
     snprintf(exe, sizeof exe, "%s", m.exe_path);
@@ -834,7 +857,10 @@ static int ckpt_restore_tree(const char *rootfs) {
     // terminal's foreground on that empty group, its next read on the ctty is a background read, and with
     // SIGTTIN blocked that read fails EIO -- readline reports EOF and the shell logs out after one line.
     // Only the GROUP is re-created: the session belongs to the launcher, which owns the pty.
-    if (im.pgid_gpid == 1) (void)setpgid(0, 0);
+    if (im.pgid_gpid == 1 && getpgrp() != getpid() && setpgid(0, 0) < 0 && getpgrp() != getpid()) {
+        fprintf(stderr, "[restore] cannot restore init process group: %s\n", strerror(errno));
+        return 70;
+    }
     ckpt_restore_tty_mode(&man);
     // Publish which guest group owned the tty foreground, so whichever re-forked process is that group's leader
     // claims the controlling terminal AFTER it re-creates its group (see ckpt_claim_tty_fg). Set before the fork
@@ -870,7 +896,10 @@ static int ckpt_restore_tree(const char *rootfs) {
     ckpt_restore_signalfd_seeds_close();
     ckpt_restore_socket_seeds_close();
     ckpt_restore_commit_destroy();
-    if (g_ckpt_fg_gpid == 1) ckpt_claim_tty_fg(); // the init itself was foreground (idle prompt)
+    if (g_ckpt_fg_gpid == 1 && ckpt_claim_tty_fg() != 0) {
+        fprintf(stderr, "[restore] cannot restore init terminal foreground group: %s\n", strerror(errno));
+        return 70;
+    }
     if (ckpt_stream_recovery_complete() != 0) {
         fprintf(stderr, "[restore] cannot close recovery publication scope\n");
         return 70;
