@@ -309,13 +309,19 @@ impl Measurement {
 
 fn lock(path: &Path, deadline: Instant) -> Result<File, Error> {
     let file = open_lock(path)?;
-    while file.try_lock_exclusive().is_err() {
+    loop {
+        match file.try_lock_exclusive() {
+            Ok(()) => return Ok(file),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) => {
+                return Err(format!("cannot acquire {}: {error}", path.display()).into());
+            }
+        }
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
             return Err(format!("timed out acquiring {}", path.display()).into());
         };
         std::thread::sleep(remaining.min(Duration::from_secs(1)));
     }
-    Ok(file)
 }
 
 fn open_lock(path: &Path) -> Result<File, Error> {
@@ -366,7 +372,10 @@ fn host_quiet(max_load: f64, box_path: &Path, lock_held: bool) -> Result<bool, E
     }
     // Cargo's hl-engine test executables are named `hl_engine-<hash>`. They can
     // saturate a CPU while remaining invisible to every exact-name probe above.
-    busy |= process_name_prefix_count("hl_engine-")? != 0;
+    #[cfg(target_os = "linux")]
+    {
+        busy |= process_name_prefix_count("hl_engine-")? != 0;
+    }
     let allowed_holders = u64::from(lock_held);
     Ok(!busy && load <= max_load && box_lock_holder_count(box_path)? == allowed_holders)
 }
@@ -389,10 +398,14 @@ fn box_lock_holder_count(path: &Path) -> Result<u64, Error> {
 fn count_lock_records(records: &str, major: u32, minor: u32, inode: u64) -> Result<u64, Error> {
     let mut count = 0;
     for line in records.lines() {
-        let Some(device) = line
-            .split_ascii_whitespace()
-            .find(|field| field.matches(':').count() == 2)
-        else {
+        let fields = line.split_ascii_whitespace().collect::<Vec<_>>();
+        // A record prefixed by `->` is a waiter chained beneath the lock that
+        // blocks it, not another holder. Counting waiters makes a compliant
+        // builder waiting on our exclusive lock look like competing load.
+        if fields.get(1).is_some_and(|field| *field == "->") {
+            continue;
+        }
+        let Some(device) = fields.iter().copied().find(|field| field.matches(':').count() == 2) else {
             return Err("/proc/locks record omitted its device and inode".into());
         };
         let mut fields = device.split(':');
@@ -575,10 +588,12 @@ mod tests {
             "1: FLOCK ADVISORY WRITE 12 00:2a:99 0 EOF\n",
             "2: POSIX ADVISORY READ 13 00:2a:100 0 EOF\n",
             "3: FLOCK ADVISORY READ 14 01:2a:99 0 EOF\n",
+            "3: -> FLOCK ADVISORY WRITE 15 00:2a:99 0 EOF\n",
         );
         assert_eq!(super::count_lock_records(records, 0, 0x2a, 99).unwrap(), 1);
         assert_eq!(super::count_lock_records(records, 0, 0x2a, 100).unwrap(), 1);
         assert_eq!(super::count_lock_records(records, 2, 0x2a, 99).unwrap(), 0);
+        assert!(super::count_lock_records("1: FLOCK ADVISORY WRITE 12 missing 0 EOF\n", 0, 0, 0).is_err());
     }
 
     #[test]
