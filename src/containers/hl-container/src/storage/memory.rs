@@ -13,6 +13,15 @@ pub(crate) struct Memory {
     logs: RwLock<BTreeMap<JournalId, Vec<Entry>>>,
     volumes: RwLock<BTreeMap<String, Volume>>,
     networks: RwLock<BTreeMap<String, Network>>,
+    #[cfg(test)]
+    fail_exec_replace: std::sync::atomic::AtomicU64,
+}
+
+#[cfg(test)]
+impl Memory {
+    pub(crate) fn fail_next_exec_replace(&self) {
+        self.fail_exec_replace.store(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 #[async_trait]
@@ -98,6 +107,18 @@ impl Execs for Memory {
     }
 
     async fn replace(&self, exec: &Exec) -> Result<()> {
+        #[cfg(test)]
+        if self
+            .fail_exec_replace
+            .fetch_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |remaining| remaining.checked_sub(1),
+            )
+            .is_ok()
+        {
+            return Err(Error::Corrupt("injected exec replace failure".into()));
+        }
         let mut values = self.execs.write().await;
         if !values.contains_key(&exec.id) {
             return Err(Error::NotFound(exec.id.to_string()));

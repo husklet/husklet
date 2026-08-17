@@ -143,7 +143,7 @@ impl Service {
             Ok(process) => process,
             Err(error) => {
                 if let Some(io) = self.io.lock().await.remove(&journal) {
-                    io.finish();
+                    io.finish().await;
                 }
                 return Err(error);
             }
@@ -156,11 +156,7 @@ impl Service {
         };
         exec.checkpoint = None;
         if let Err(error) = self.execs.replace(&exec).await {
-            let _ = process.signal(Signal::KILL).await;
-            if let Some(io) = self.io.lock().await.remove(&journal) {
-                io.finish();
-            }
-            return Err(error);
+            return Err(self.rollback_unpublished_exec(process, &journal, error).await);
         }
         self.exec_live
             .lock()
@@ -173,6 +169,34 @@ impl Service {
             service.finish_exec(exec_id, process_id, started_at_ms, result).await;
         });
         Ok(session)
+    }
+
+    async fn rollback_unpublished_exec(
+        &self,
+        process: Arc<dyn crate::service::Running>,
+        journal: &JournalId,
+        publication: Error,
+    ) -> Error {
+        let mut cleanup = Vec::new();
+        if let Err(error) = process.signal(Signal::KILL).await {
+            cleanup.push(format!("kill failed: {error}"));
+        }
+        match tokio::time::timeout(std::time::Duration::from_secs(5), Arc::clone(&process).wait()).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => cleanup.push(format!("reap failed: {error}")),
+            Err(_) => cleanup.push("reap timed out after 5s".into()),
+        }
+        if let Some(io) = self.io.lock().await.remove(journal) {
+            io.finish().await;
+        }
+        if cleanup.is_empty() {
+            publication
+        } else {
+            Error::Runtime(format!(
+                "exec state publication failed: {publication}; rollback cleanup failed: {}",
+                cleanup.join("; ")
+            ))
+        }
     }
 
     pub(crate) async fn attach_exec(
@@ -271,7 +295,7 @@ impl Service {
             waiters.notify_waiters();
         }
         if let Some(io) = self.io.lock().await.remove(&JournalId::exec(id)) {
-            io.finish();
+            io.finish().await;
         }
     }
 
@@ -324,11 +348,15 @@ impl Service {
             }
             captured.push(id);
         }
-        let mut ios = self.io.lock().await;
-        for id in captured {
-            if let Some(io) = ios.remove(&JournalId::exec(id)) {
-                io.finish();
-            }
+        let finished = {
+            let mut ios = self.io.lock().await;
+            captured
+                .into_iter()
+                .filter_map(|id| ios.remove(&JournalId::exec(id)))
+                .collect::<Vec<_>>()
+        };
+        for io in finished {
+            io.finish().await;
         }
         Ok(())
     }

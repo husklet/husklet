@@ -27,7 +27,7 @@ impl Service {
         let live_at = self.logs.cursor(&journal).await?;
         let io = self.io(&container).await;
         if matches!(container.state, ContainerState::Exited { .. }) {
-            io.finish();
+            io.finish().await;
         }
         Ok(crate::Session::new(Arc::clone(self), io, journal, 0, live_at))
     }

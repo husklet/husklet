@@ -488,6 +488,107 @@ async fn failed_exec_volume_resolution_preserves_input_for_repair_and_retry() {
 }
 
 #[tokio::test]
+async fn failed_restored_exec_publication_is_killed_reaped_and_retryable() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    runtime.restore_delay = Some(Duration::from_millis(10));
+    let runtime = Arc::new(runtime);
+    let storage = Arc::new(Memory::default());
+    let containers = test_containers(storage.clone(), runtime.clone()).await.unwrap();
+    containers.create(spec("publication-parent")).await.unwrap();
+    containers.start("publication-parent").await.unwrap();
+    let mut process = Process::new("/bin/sh");
+    process.console.stdin = true;
+    let exec = containers
+        .executions()
+        .create(
+            "publication-parent",
+            ExecSpec::new(process).streams(Streams {
+                stdin: true,
+                stdout: true,
+                stderr: true,
+            }),
+        )
+        .await
+        .unwrap();
+    let original = containers.executions().start(&exec.id).await.unwrap();
+    containers
+        .executions()
+        .checkpoint_all(Duration::from_secs(1))
+        .await
+        .unwrap();
+    let checkpoint = containers.executions().inspect(&exec.id).await.unwrap().checkpoint;
+    assert!(checkpoint.is_some());
+    tokio::time::timeout(Duration::from_millis(100), async {
+        while runtime.waits.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let waits_before = runtime.waits.load(Ordering::SeqCst);
+    storage.fail_next_exec_replace();
+
+    let error = containers.executions().start(&exec.id).await.err().unwrap();
+
+    assert!(matches!(error, Error::Corrupt(ref message) if message == "injected exec replace failure"));
+    assert_eq!(*runtime.signals.lock().unwrap().last().unwrap(), Signal::KILL);
+    assert_eq!(runtime.waits.load(Ordering::SeqCst), waits_before + 1);
+    let preserved = containers.executions().inspect(&exec.id).await.unwrap();
+    assert_eq!(preserved.state, ExecState::Created);
+    assert_eq!(preserved.checkpoint, checkpoint);
+    assert!(
+        original.write(b"stale\n").await.is_err(),
+        "checkpointed owner retained writable I/O"
+    );
+
+    let retry = containers.executions().start(&exec.id).await.unwrap();
+    retry.write(b"fresh\n").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert!(
+        runtime
+            .inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, bytes)| bytes == b"fresh\n")
+    );
+}
+
+#[tokio::test]
+async fn failed_publication_reports_kill_and_reap_failures_without_losing_created_state() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_millis(100);
+    let runtime = Arc::new(runtime);
+    let storage = Arc::new(Memory::default());
+    let containers = test_containers(storage.clone(), runtime.clone()).await.unwrap();
+    containers.create(spec("cleanup-error-parent")).await.unwrap();
+    containers.start("cleanup-error-parent").await.unwrap();
+    let exec = containers
+        .executions()
+        .create("cleanup-error-parent", ExecSpec::new(Process::new("/bin/sh")))
+        .await
+        .unwrap();
+    runtime.fail_signal.store(true, Ordering::SeqCst);
+    runtime.fail_wait.store(true, Ordering::SeqCst);
+    storage.fail_next_exec_replace();
+
+    let error = containers.executions().start(&exec.id).await.err().unwrap();
+    let message = error.to_string();
+    assert!(message.contains("injected exec replace failure"), "{message}");
+    assert!(message.contains("injected signal failure"), "{message}");
+    assert!(message.contains("injected wait failure"), "{message}");
+    assert_eq!(
+        containers.executions().inspect(&exec.id).await.unwrap().state,
+        ExecState::Created
+    );
+
+    runtime.fail_signal.store(false, Ordering::SeqCst);
+    runtime.fail_wait.store(false, Ordering::SeqCst);
+    containers.executions().start(&exec.id).await.unwrap();
+}
+
+#[tokio::test]
 async fn execution_wait_started_while_created_survives_start_and_returns_the_exit() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(23));
     runtime.delay = Duration::from_millis(30);

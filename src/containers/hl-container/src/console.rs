@@ -222,7 +222,8 @@ impl Io {
         self.input.lock().await.take();
     }
 
-    pub(crate) fn finish(&self) {
+    pub(crate) async fn finish(&self) {
+        self.input.lock().await.take();
         self.done.store(true, std::sync::atomic::Ordering::Release);
         self.notify.notify_waiters();
     }

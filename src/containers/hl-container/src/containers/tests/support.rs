@@ -68,6 +68,7 @@ pub(super) struct FakeRuntime {
     pub(super) fail: AtomicBool,
     pub(super) launch_failures: Arc<std::sync::Mutex<std::collections::BTreeMap<String, String>>>,
     pub(super) fail_wait: AtomicBool,
+    pub(super) fail_signal: AtomicBool,
     pub(super) fail_checkpoint: Arc<AtomicU64>,
     pub(super) hold_logs: AtomicBool,
     pub(super) checkpointable: AtomicBool,
@@ -75,6 +76,7 @@ pub(super) struct FakeRuntime {
     pub(super) restore_delay: Option<Duration>,
     pub(super) result: ExitStatus,
     pub(super) signals: Arc<std::sync::Mutex<Vec<Signal>>>,
+    pub(super) waits: Arc<AtomicU64>,
     pub(super) suspensions: Arc<std::sync::Mutex<Vec<bool>>>,
     pub(super) mounts: RecordedMounts,
     pub(super) networks: Arc<std::sync::Mutex<Vec<Vec<NetworkConfig>>>>,
@@ -98,6 +100,7 @@ impl FakeRuntime {
             fail: AtomicBool::new(false),
             launch_failures: Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new())),
             fail_wait: AtomicBool::new(false),
+            fail_signal: AtomicBool::new(false),
             fail_checkpoint: Arc::new(AtomicU64::new(0)),
             hold_logs: AtomicBool::new(false),
             checkpointable: AtomicBool::new(true),
@@ -105,6 +108,7 @@ impl FakeRuntime {
             restore_delay: None,
             result,
             signals: Arc::new(std::sync::Mutex::new(Vec::new())),
+            waits: Arc::new(AtomicU64::new(0)),
             suspensions: Arc::new(std::sync::Mutex::new(Vec::new())),
             mounts: Arc::new(std::sync::Mutex::new(Vec::new())),
             networks: Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -128,7 +132,9 @@ struct FakeProcess {
     delay: Duration,
     result: ExitStatus,
     fail_wait: bool,
+    fail_signal: bool,
     signals: Arc<std::sync::Mutex<Vec<Signal>>>,
+    waits: Arc<AtomicU64>,
     suspensions: Arc<std::sync::Mutex<Vec<bool>>>,
     resizes: Arc<std::sync::Mutex<Vec<crate::Size>>>,
     logs: std::sync::Mutex<Option<crate::service::LogReceiver>>,
@@ -152,6 +158,7 @@ impl Running for FakeProcess {
         self.checkpoint_armed
     }
     async fn wait(self: Arc<Self>) -> Result<ExitStatus> {
+        self.waits.fetch_add(1, Ordering::SeqCst);
         tokio::time::sleep(self.delay).await;
         if self.fail_wait {
             return Err(Error::Runtime("injected wait failure".into()));
@@ -160,6 +167,9 @@ impl Running for FakeProcess {
     }
     async fn signal(&self, signal: Signal) -> Result<()> {
         self.signals.lock().unwrap().push(signal);
+        if self.fail_signal {
+            return Err(Error::Runtime("injected signal failure".into()));
+        }
         Ok(())
     }
     async fn pause(&self) -> Result<()> {
@@ -271,7 +281,9 @@ impl Runtime for FakeRuntime {
             delay,
             result,
             fail_wait: self.fail_wait.load(Ordering::SeqCst),
+            fail_signal: self.fail_signal.load(Ordering::SeqCst),
             signals: Arc::clone(&self.signals),
+            waits: Arc::clone(&self.waits),
             suspensions: Arc::clone(&self.suspensions),
             resizes: Arc::clone(&self.resizes),
             logs: std::sync::Mutex::new(Some(receiver)),

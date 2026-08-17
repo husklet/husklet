@@ -163,7 +163,7 @@ impl Service {
             let _ = run.health.send(true);
         }
         if let Some(io) = self.io.lock().await.remove(&JournalId::container(id.clone())) {
-            io.finish();
+            io.finish().await;
         }
         if restart {
             let Some(_) = run else { return };
