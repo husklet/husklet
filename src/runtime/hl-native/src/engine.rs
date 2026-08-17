@@ -1319,17 +1319,28 @@ int main(int argc, char **argv) {
             let observed = std::thread::scope(|scope| {
                 let running = scope.spawn(|| engine.run(&[argument.as_ptr()]));
                 let reading = scope.spawn(|| {
-                    let mut values = Vec::with_capacity(50_000);
+                    let mut values = vec![initial];
                     for _ in 0..50_000 {
-                        values.push(engine.exit());
+                        let value = engine.exit();
+                        if !values.contains(&value) {
+                            values.push(value);
+                        }
                     }
                     engine.request(2, 0).unwrap();
-                    for _ in 0..1_000_000 {
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    loop {
                         let value = engine.exit();
-                        values.push(value);
+                        if !values.contains(&value) {
+                            values.push(value);
+                        }
                         if value != initial {
                             break;
                         }
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "ISA {isa} did not publish an exit within five seconds"
+                        );
+                        std::thread::yield_now();
                     }
                     values
                 });
