@@ -40,6 +40,12 @@ impl Report {
                 verdict = "FAIL";
             }
         }
+        lines.push("arm\trole".to_owned());
+        lines.extend([
+            "E\tnative-rosetta-x86_64".to_owned(),
+            "R\tstandalone-retained-c-x86_64".to_owned(),
+            "I\tintegrated-husklet-c-x86_64".to_owned(),
+        ]);
         lines.push("artifact\tsha256".to_owned());
         for (arm, definition) in &campaign.arms {
             for (name, artifact) in &definition.artifacts {

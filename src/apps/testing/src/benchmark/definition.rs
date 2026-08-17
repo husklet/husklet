@@ -123,6 +123,7 @@ impl Campaign {
         if !command_profiles_distinct(self.arms.values().map(|arm| &arm.command)) {
             return Err("benchmark E, I, and R command profiles must be distinct".into());
         }
+        validate_arm_profiles(&self.arms, &self.rootfs.path)?;
         if !self.layouts.contains_key("plain") || !self.layouts.contains_key("sqlite") || self.layouts.len() != 2 {
             return Err("benchmark layouts must be exactly plain and sqlite".into());
         }
@@ -198,6 +199,15 @@ impl Campaign {
         if !self.workloads["sqlite"].commands.contains_key("sqlite") {
             return Err("sqlite must run on the sqlite-linked layout".into());
         }
+        let guests = self
+            .workloads
+            .values()
+            .flat_map(|workload| workload.commands.values())
+            .map(|command| PathBuf::from(&command[0]))
+            .collect::<BTreeSet<_>>();
+        if self.arms["E"].guest_map.keys().collect::<BTreeSet<_>>() != guests.iter().collect() {
+            return Err("native/Rosetta arm must map every Linux guest to its hashed macOS equivalent".into());
+        }
         Ok(())
     }
 
@@ -260,6 +270,35 @@ fn smoke_binds_profile(command: &[String], smoke: &[String]) -> bool {
 fn command_profiles_distinct<'a>(commands: impl IntoIterator<Item = &'a Vec<String>>) -> bool {
     let commands = commands.into_iter().collect::<Vec<_>>();
     commands.len() == 3 && commands.iter().collect::<BTreeSet<_>>().len() == 3
+}
+
+fn validate_arm_profiles(arms: &BTreeMap<String, Arm>, rootfs: &Path) -> Result<(), Error> {
+    let external = &arms["E"];
+    if external.command.len() != 3
+        || external.command[2] != "-x86_64"
+        || !matches!(external.guest_path, GuestPath::HostAbsolute)
+        || !profile_argument_is_hashed(&external.command[1], &external.artifacts)
+    {
+        return Err("benchmark E arm must be the hashed macOS x86-64 native/Rosetta profile".into());
+    }
+    for label in ["I", "R"] {
+        let arm = &arms[label];
+        if arm.command.len() != 4
+            || arm.command[2] != "--rootfs"
+            || Path::new(&arm.command[3]) != rootfs
+            || !matches!(arm.guest_path, GuestPath::RootfsAbsolute)
+            || !arm.guest_map.is_empty()
+            || !profile_argument_is_hashed(&arm.command[1], &arm.artifacts)
+        {
+            return Err(format!("benchmark {label} arm is not bound to its hashed rootfs engine profile").into());
+        }
+    }
+    Ok(())
+}
+
+fn profile_argument_is_hashed(argument: &str, artifacts: &BTreeMap<String, Artifact>) -> bool {
+    let path = Path::new(argument.strip_prefix("/mnt/mac").unwrap_or(argument));
+    artifacts.values().any(|artifact| artifact.path == path)
 }
 
 fn workload_judgments_covered(name: &str, workload: &Workload, layouts: &BTreeMap<String, Layout>) -> bool {
@@ -453,7 +492,8 @@ fn file_hash(path: &Path) -> Result<String, Error> {
 mod tests {
     use super::{
         Arm, ArmSupport, Artifact, Campaign, GuestPath, Layout, Workload, command_profiles_distinct, guest_is_hashed,
-        invariant_phases_valid, phase_names_valid, smoke_binds_profile, verify_artifact, workload_judgments_covered,
+        invariant_phases_valid, phase_names_valid, profile_argument_is_hashed, smoke_binds_profile,
+        validate_arm_profiles, verify_artifact, workload_judgments_covered,
     };
     use crate::record::FramedIdentity;
     use std::{collections::BTreeMap, fs, path::Path};
@@ -636,6 +676,91 @@ mod tests {
         ];
         assert!(!command_profiles_distinct(aliased.iter()));
         assert!(!command_profiles_distinct(distinct[..2].iter()));
+    }
+
+    #[test]
+    fn measured_profile_arguments_must_name_hashed_host_artifacts() {
+        let artifacts = BTreeMap::from([(
+            "engine".into(),
+            Artifact {
+                path: "/Users/test/stage/hl-x86_64".into(),
+                sha256: "a".repeat(64),
+            },
+        )]);
+        assert!(profile_argument_is_hashed(
+            "/mnt/mac/Users/test/stage/hl-x86_64",
+            &artifacts
+        ));
+        assert!(!profile_argument_is_hashed(
+            "/mnt/mac/Users/test/stage/unhashed-engine",
+            &artifacts
+        ));
+    }
+
+    #[test]
+    fn arm_roles_are_bound_to_rosetta_and_rootfs_execution_profiles() {
+        let artifact = |path: &str| Artifact {
+            path: path.into(),
+            sha256: "a".repeat(64),
+        };
+        let proxy = artifact("/stage/mac");
+        let mut arms = BTreeMap::from([
+            (
+                "E".into(),
+                Arm {
+                    command: vec!["/stage/mac".into(), "/mnt/mac/stage/arch".into(), "-x86_64".into()],
+                    artifacts: BTreeMap::from([
+                        ("proxy".into(), proxy.clone()),
+                        ("arch".into(), artifact("/stage/arch")),
+                    ]),
+                    smoke: vec!["unused".into()],
+                    guest_path: GuestPath::HostAbsolute,
+                    guest_map: BTreeMap::new(),
+                },
+            ),
+            (
+                "I".into(),
+                Arm {
+                    command: vec![
+                        "/stage/mac".into(),
+                        "/mnt/mac/stage/integrated".into(),
+                        "--rootfs".into(),
+                        "/stage/rootfs".into(),
+                    ],
+                    artifacts: BTreeMap::from([
+                        ("proxy".into(), proxy.clone()),
+                        ("engine".into(), artifact("/stage/integrated")),
+                    ]),
+                    smoke: vec!["unused".into()],
+                    guest_path: GuestPath::RootfsAbsolute,
+                    guest_map: BTreeMap::new(),
+                },
+            ),
+            (
+                "R".into(),
+                Arm {
+                    command: vec![
+                        "/stage/mac".into(),
+                        "/mnt/mac/stage/retained".into(),
+                        "--rootfs".into(),
+                        "/stage/rootfs".into(),
+                    ],
+                    artifacts: BTreeMap::from([
+                        ("proxy".into(), proxy),
+                        ("engine".into(), artifact("/stage/retained")),
+                    ]),
+                    smoke: vec!["unused".into()],
+                    guest_path: GuestPath::RootfsAbsolute,
+                    guest_map: BTreeMap::new(),
+                },
+            ),
+        ]);
+        validate_arm_profiles(&arms, Path::new("/stage/rootfs")).unwrap();
+        arms.get_mut("E").unwrap().command[2] = "-arm64".into();
+        assert!(validate_arm_profiles(&arms, Path::new("/stage/rootfs")).is_err());
+        arms.get_mut("E").unwrap().command[2] = "-x86_64".into();
+        arms.get_mut("I").unwrap().command[1] = "/mnt/mac/stage/unhashed".into();
+        assert!(validate_arm_profiles(&arms, Path::new("/stage/rootfs")).is_err());
     }
 
     #[cfg(unix)]

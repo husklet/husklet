@@ -364,66 +364,65 @@ fn host_quiet(max_load: f64, box_path: &Path, lock_held: bool) -> Result<bool, E
     for (name, allowance) in [("testing", 1_u64), ("cargo", 0), ("hl-aarch64", 0), ("hl-x86_64", 0)] {
         busy |= HostProcess::exact_process_count(name)? > allowance;
     }
+    // Cargo's hl-engine test executables are named `hl_engine-<hash>`. They can
+    // saturate a CPU while remaining invisible to every exact-name probe above.
+    busy |= process_name_prefix_count("hl_engine-")? != 0;
     let allowed_holders = u64::from(lock_held);
     Ok(!busy && load <= max_load && box_lock_holder_count(box_path)? == allowed_holders)
 }
 
 #[cfg(target_os = "linux")]
 fn box_lock_holder_count(path: &Path) -> Result<u64, Error> {
+    use std::os::unix::fs::MetadataExt as _;
+
     let target = fs::metadata(path)?;
-    let mut holders = 0_u64;
+    let device = target.dev();
+    count_lock_records(
+        &fs::read_to_string("/proc/locks")?,
+        rustix::fs::major(device),
+        rustix::fs::minor(device),
+        target.ino(),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn count_lock_records(records: &str, major: u32, minor: u32, inode: u64) -> Result<u64, Error> {
+    let mut count = 0;
+    for line in records.lines() {
+        let Some(device) = line
+            .split_ascii_whitespace()
+            .find(|field| field.matches(':').count() == 2)
+        else {
+            return Err("/proc/locks record omitted its device and inode".into());
+        };
+        let mut fields = device.split(':');
+        let observed_major = u32::from_str_radix(fields.next().ok_or("lock device omitted major")?, 16)?;
+        let observed_minor = u32::from_str_radix(fields.next().ok_or("lock device omitted minor")?, 16)?;
+        let observed_inode = fields.next().ok_or("lock device omitted inode")?.parse::<u64>()?;
+        count += u64::from((observed_major, observed_minor, observed_inode) == (major, minor, inode));
+    }
+    Ok(count)
+}
+
+#[cfg(target_os = "linux")]
+fn process_name_prefix_count(prefix: &str) -> Result<u64, Error> {
+    let mut count = 0;
     for process in fs::read_dir("/proc")? {
         let process = process?;
         if !process.file_name().as_encoded_bytes().iter().all(u8::is_ascii_digit) {
             continue;
         }
-        holders += process_lock_holders(&process, &target)?;
-    }
-    Ok(holders)
-}
-
-#[cfg(target_os = "linux")]
-fn process_lock_holders(process: &fs::DirEntry, target: &fs::Metadata) -> Result<u64, Error> {
-    let descriptors = match fs::read_dir(process.path().join("fd")) {
-        Ok(descriptors) => descriptors,
-        Err(error)
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
-            ) =>
-        {
-            return Ok(0);
+        match fs::read_to_string(process.path().join("comm")) {
+            Ok(name) => count += u64::from(name.trim_end().starts_with(prefix)),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+                ) => {}
+            Err(error) => return Err(error.into()),
         }
-        Err(error) => return Err(error.into()),
-    };
-    let mut holders = 0;
-    for descriptor in descriptors {
-        holders += u64::from(descriptor_matches_lock(descriptor, target)?);
     }
-    Ok(holders)
-}
-
-#[cfg(target_os = "linux")]
-fn descriptor_matches_lock(descriptor: std::io::Result<fs::DirEntry>, target: &fs::Metadata) -> Result<bool, Error> {
-    use std::os::unix::fs::MetadataExt as _;
-
-    let descriptor = match descriptor {
-        Ok(descriptor) => descriptor,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(error.into()),
-    };
-    match fs::metadata(descriptor.path()) {
-        Ok(metadata) => Ok(metadata.dev() == target.dev() && metadata.ino() == target.ino()),
-        Err(error)
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
-            ) =>
-        {
-            Ok(false)
-        }
-        Err(error) => Err(error.into()),
-    }
+    Ok(count)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -558,15 +557,28 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn holder_count_observes_the_box_descriptor() {
+    fn holder_count_observes_locks_not_merely_open_descriptors() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("box");
         let held = super::open_lock(&path).unwrap();
-        assert_eq!(super::box_lock_holder_count(&path).unwrap(), 1);
+        assert_eq!(super::box_lock_holder_count(&path).unwrap(), 0);
         fs2::FileExt::lock_shared(&held).unwrap();
         assert_eq!(super::box_lock_holder_count(&path).unwrap(), 1);
         drop(held);
         assert_eq!(super::box_lock_holder_count(&path).unwrap(), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn proc_lock_parser_matches_device_and_inode_exactly() {
+        let records = concat!(
+            "1: FLOCK ADVISORY WRITE 12 00:2a:99 0 EOF\n",
+            "2: POSIX ADVISORY READ 13 00:2a:100 0 EOF\n",
+            "3: FLOCK ADVISORY READ 14 01:2a:99 0 EOF\n",
+        );
+        assert_eq!(super::count_lock_records(records, 0, 0x2a, 99).unwrap(), 1);
+        assert_eq!(super::count_lock_records(records, 0, 0x2a, 100).unwrap(), 1);
+        assert_eq!(super::count_lock_records(records, 2, 0x2a, 99).unwrap(), 0);
     }
 
     #[test]
