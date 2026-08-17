@@ -260,8 +260,8 @@ async fn failed_exec_launches_are_process_local_and_retryable() -> Result<(), Er
                 .await?;
             assert_exec_retry(&executions, &executable_retry.id, None, b"EXECUTABLE_RETRIED\n").await?;
 
-            let volume_record = fixture._work.path().join("state/state/volumes/late-volume.json");
-            let unavailable_volume = fixture._work.path().join("state/state/volumes/late-volume.unavailable");
+            let volume_record = fixture.work.path().join("state/state/volumes/late-volume.json");
+            let unavailable_volume = fixture.work.path().join("state/state/volumes/late-volume.unavailable");
             std::fs::rename(&volume_record, &unavailable_volume)?;
             let volume_phase = async {
                 let volume = executions
@@ -286,7 +286,7 @@ async fn failed_exec_launches_are_process_local_and_retryable() -> Result<(), Er
             volume_restore?;
             assert_exec_retry(&executions, &volume.id, Some(b"VOLUME_RETRIED\n"), b"VOLUME_RETRIED\n").await?;
 
-            let network_record = fixture._work.path().join("state/state/networks/exec-isolation.json");
+            let network_record = fixture.work.path().join("state/state/networks/exec-isolation.json");
             let saved_network = std::fs::read(&network_record)?;
             std::fs::write(&network_record, b"{\"version\":1,\"network\":")?;
             let network_phase = async {
@@ -448,7 +448,7 @@ async fn within_deadline<T>(future: impl Future<Output = Result<T, Error>>) -> R
 }
 
 struct Fixture {
-    _work: tempfile::TempDir,
+    work: tempfile::TempDir,
     rootfs: std::path::PathBuf,
     containers: Containers,
     guest: Guest,
@@ -463,7 +463,7 @@ impl Fixture {
             .build()
             .await?;
         Ok(Self {
-            _work: work,
+            work,
             rootfs,
             containers,
             guest: guest()?,
