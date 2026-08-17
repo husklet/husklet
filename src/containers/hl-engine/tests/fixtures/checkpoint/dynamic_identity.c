@@ -30,6 +30,16 @@ static void wait_ok(pid_t child) {
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) fail("wait-child");
 }
 
+static void wait_release(void) {
+    char bytes[32];
+    for (;;) {
+        ssize_t count = read(STDIN_FILENO, bytes, sizeof(bytes));
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) fail("read-release");
+        if (memchr(bytes, '\n', (size_t)count) != NULL) return;
+    }
+}
+
 static void credential_boundary(void) {
     int sockets[2];
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sockets) != 0) fail("socketpair-credentials");
@@ -76,8 +86,7 @@ static pid_t spawn_paused(void) {
 
 int main(void) {
     write_all("DYNAMIC-IDENTITY-READY\n");
-    char byte;
-    while (read(STDIN_FILENO, &byte, 1) < 0 && errno == EINTR) {}
+    wait_release();
 
     pid_t short_lived = fork();
     if (short_lived < 0) fail("fork-short");
@@ -108,7 +117,7 @@ int main(void) {
     char identities[128];
     int count = snprintf(identities, sizeof(identities), "DYNAMIC-CHILDREN %d %d %d\n", session, leader, sibling);
     if (count <= 0 || write(STDOUT_FILENO, identities, (size_t)count) != count) fail("publish-identities");
-    while (read(STDIN_FILENO, &byte, 1) < 0 && errno == EINTR) {}
+    wait_release();
 
     if (getsid(session) != session || getpgid(session) != session) fail("restored-session-identity");
     if (getpgid(leader) != leader || getpgid(sibling) != leader) fail("restored-sibling-group");

@@ -8,7 +8,7 @@ use hl_engine::{
     runtime::Engine,
 };
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     num::NonZeroU64,
     path::{Path, PathBuf},
     sync::{Arc, Condvar, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard},
@@ -1321,6 +1321,15 @@ fn identities_created_after_restore_survive_recapture_on_both_isas() {
             "{isa:?}: {}",
             recapture_port.output()
         );
+        let captured_processes = second
+            .0
+            .lock()
+            .unwrap()
+            .keys()
+            .filter_map(|name| name.split_once('/').map(|(group, _)| group.to_owned()))
+            .filter(|group| group.starts_with("proc."))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(captured_processes.len(), 4, "{isa:?}: recapture omitted live descendants");
 
         let restore_port = Arc::new(TestTerminal::default());
         let restore = Engine::with_checkpoint(
