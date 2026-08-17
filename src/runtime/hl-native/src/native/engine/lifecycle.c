@@ -101,7 +101,13 @@ typedef struct hl_production_entry_context {
     int checkpoint_control;
     const void *interpreter_image;
     size_t interpreter_size;
+    int activation_ready_read;
+    int activation_ready_write;
 } hl_production_entry_context;
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+void hl_host_activation_ready_test_wait(void);
+#endif
 
 #if defined(_WIN32)
 /*
@@ -505,7 +511,7 @@ static hl_status hl_production_claim_terminal(const hl_production_entry_context 
         (void)attachments->release(context->host->context, borrowed.value);
         return HL_STATUS_OK;
     }
-    if (setsid() < 0 || ioctl(descriptor, TIOCSCTTY, 0) < 0 || tcsetpgrp(descriptor, getpgrp()) < 0) {
+    if (ioctl(descriptor, TIOCSCTTY, 0) < 0 || tcsetpgrp(descriptor, getpgrp()) < 0) {
         saved_errno = errno;
         (void)attachments->release(context->host->context, borrowed.value);
         errno = saved_errno;
@@ -532,6 +538,16 @@ static void *hl_checkpoint_control_main(void *opaque) {
 
 static int32_t hl_production_entry(void *opaque) {
     hl_production_entry_context *context = opaque;
+    unsigned char ready = 1;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    hl_host_activation_ready_test_wait();
+#endif
+    if (setsid() < 0) return HL_STATUS_PLATFORM_FAILURE;
+    if (context->activation_ready_read >= 0) close(context->activation_ready_read);
+    if (context->activation_ready_write < 0 ||
+        write(context->activation_ready_write, &ready, sizeof(ready)) != (ssize_t)sizeof(ready))
+        return HL_STATUS_PLATFORM_FAILURE;
+    close(context->activation_ready_write);
     hl_engine_checkpoint_fork_child(context->checkpoint_broker, context->checkpoint_trigger,
                                     context->checkpoint_control);
     /* Keep process-directed checkpoint kicks away from helper/control threads.
@@ -647,6 +663,11 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
         free(payload);
     }
 #else
+    int activation_ready[2] = {-1, -1};
+    if (pipe(activation_ready) < 0) {
+        hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);
+        return HL_STATUS_RESOURCE_LIMIT;
+    }
     entry.config = config;
     entry.argc = argc;
     entry.argv = argv;
@@ -661,6 +682,8 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     entry.checkpoint_control = checkpoint_control;
     entry.interpreter_image = interpreter_image;
     entry.interpreter_size = interpreter_size;
+    entry.activation_ready_read = activation_ready[0];
+    entry.activation_ready_write = activation_ready[1];
     hl_engine_checkpoint_fork_prepare();
     if (box == NULL) {
         spawned = host->process->spawn_cloned(host->context, hl_production_entry, &entry);
@@ -673,8 +696,23 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
         }
     }
     hl_engine_checkpoint_fork_parent();
+    close(activation_ready[1]);
+    if (spawned.status == HL_STATUS_OK) {
+        unsigned char ready = 0;
+        ssize_t received;
+        do {
+            received = read(activation_ready[0], &ready, sizeof(ready));
+        } while (received < 0 && errno == EINTR);
+        if (received != (ssize_t)sizeof(ready) || ready != 1) spawned.status = HL_STATUS_PLATFORM_FAILURE;
+    }
+    close(activation_ready[0]);
 #endif
     if (spawned.status != HL_STATUS_OK) {
+        if (spawned.value != HL_HOST_HANDLE_INVALID) {
+            (void)host->process->terminate(host->context, spawned.value, HL_HOST_PROCESS_TERMINATE_FORCE);
+            (void)host->process->wait(host->context, spawned.value, HL_HOST_DEADLINE_INFINITE);
+            (void)host->process->close(host->context, spawned.value);
+        }
         hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);
         return (hl_status)spawned.status;
     }

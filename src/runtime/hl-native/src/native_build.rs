@@ -131,7 +131,7 @@ fn main() {
             )
             .unwrap_or_else(|error| panic!("{error}"));
 
-        let lifecycle_definitions = [
+        let mut lifecycle_definitions = vec![
             Definition::value("HL_ENABLE_LOGGING", "0"),
             Definition::value("HL_TRANSLIT_DEFAULT", "0"),
             Definition::flag("_GNU_SOURCE"),
@@ -151,6 +151,7 @@ fn main() {
                 },
             ),
         ];
+        add_test_hooks(&mut lifecycle_definitions, test_hooks);
         let lifecycle_archive = compiler
             .archive(
                 &archive(&environment, target, sanitizer, lifecycle_archive, false)

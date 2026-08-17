@@ -52,6 +52,33 @@ cases:
             echo HTOP_INSTALLED_AND_RUNNABLE
     expect: { stdout_contains: golden/htop.txt }
 
+  - id: netinstall/ubuntu24-apt-install-htop
+    image: ubuntu:24.04
+    class: long
+    timeout: 240
+    resources: [network, registry, disk_heavy]
+    actions:
+      - shell:
+          script: |
+            set -eu
+            export DEBIAN_FRONTEND=noninteractive
+            rm -rf /var/lib/apt/lists/*
+            apt-get update >/tmp/apt-update.log 2>&1
+            inrelease=$(find /var/lib/apt/lists -type f -name '*InRelease' -print -quit)
+            test -n "$inrelease"
+            gpgv --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg "$inrelease" \
+                >/tmp/apt-signature.log 2>&1
+            apt-get install -y --no-install-recommends htop >/tmp/apt-install.log 2>&1
+            command -v htop >/dev/null
+            dpkg -s htop | grep -q '^Status: install ok installed'
+            apt-cache policy htop | grep -q 'Installed: [0-9]'
+            htop --version | grep -Eq '^htop [0-9]'
+            if command -v ldd >/dev/null; then
+                ! ldd "$(command -v htop)" | grep -q 'not found'
+            fi
+            echo HTOP_INSTALLED_AND_RUNNABLE
+    expect: { stdout_contains: golden/htop.txt }
+
   - id: netinstall/ubuntu-apt-update-clean
     image: ubuntu:22.04
     class: long

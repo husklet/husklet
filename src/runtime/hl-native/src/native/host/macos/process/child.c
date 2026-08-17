@@ -1,3 +1,16 @@
+#if defined(HL_NATIVE_TEST_HOOKS)
+static _Atomic int hl_activation_ready_pause;
+HL_API void hl_c_backend_activation_ready_pause(int paused) {
+    atomic_store_explicit(&hl_activation_ready_pause, paused != 0, memory_order_release);
+}
+void hl_host_activation_ready_test_wait(void) {
+    if (atomic_load_explicit(&hl_activation_ready_pause, memory_order_acquire)) {
+        struct timespec delay = {.tv_sec = 0, .tv_nsec = 250000000};
+        while (nanosleep(&delay, &delay) != 0 && errno == EINTR) {}
+    }
+}
+#endif
+
 static hl_macos_process *hl_macos_process_lookup(hl_host_macos *host, hl_host_handle handle) {
     uint32_t index;
     if (!hl_macos_handle_index(handle, HL_MACOS_HANDLE_PROCESS, host->process_capacity, &index) ||
@@ -147,18 +160,31 @@ static hl_host_result hl_macos_process_wait(void *context, hl_host_handle handle
     }
     pid = process != NULL ? process->pid : -1;
     if (process != NULL) process->waiting = 1;
-    pthread_mutex_unlock(&host->lock);
-    if (pid < 0) return hl_macos_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
-    options = deadline_ns == HL_HOST_DEADLINE_INFINITE ? 0 : WNOHANG;
+    if (pid < 0) {
+        pthread_mutex_unlock(&host->lock);
+        return hl_macos_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
+    }
+    options = WNOHANG;
     for (;;) {
         do {
             waited = waitpid(pid, &status, options);
         } while (waited < 0 && errno == EINTR);
         if (waited != 0) break;
-        if (deadline_ns == 0 || hl_macos_monotonic_value() >= deadline_ns) break;
-        hl_macos_sleep_until(deadline_ns);
+        if (deadline_ns == 0 ||
+            (deadline_ns != HL_HOST_DEADLINE_INFINITE && hl_macos_monotonic_value() >= deadline_ns))
+            break;
+        pthread_mutex_unlock(&host->lock);
+        hl_macos_sleep_until(deadline_ns == HL_HOST_DEADLINE_INFINITE
+                                 ? hl_macos_monotonic_value() + UINT64_C(1000000)
+                                 : deadline_ns);
+        pthread_mutex_lock(&host->lock);
+        process = hl_macos_process_lookup(host, handle);
+        if (process == NULL || process->reaped || host->destroying) {
+            waited = -1;
+            errno = EINVAL;
+            break;
+        }
     }
-    pthread_mutex_lock(&host->lock);
     process = hl_macos_process_lookup(host, handle);
     if (process != NULL) {
         process->waiting = 0;
@@ -180,6 +206,18 @@ static hl_host_result hl_macos_process_wait(void *context, hl_host_handle handle
     return hl_macos_result(HL_STATUS_CORRUPT, 0, (uint64_t)(uint32_t)status);
 }
 
+static int hl_macos_process_signal(pid_t pid, uint32_t reason, int signal_number) {
+    pid_t target = reason == HL_HOST_PROCESS_TERMINATE_FORCE ? -pid : pid;
+    return kill(target, signal_number);
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+HL_API int32_t hl_c_backend_host_process_force_test(int32_t pid) {
+    if (pid <= 1) return EINVAL;
+    return hl_macos_process_signal((pid_t)pid, HL_HOST_PROCESS_TERMINATE_FORCE, SIGKILL) == 0 ? 0 : errno;
+}
+#endif
+
 static hl_host_result hl_macos_process_terminate(void *context, hl_host_handle handle, uint32_t reason) {
     hl_host_macos *host = context;
     hl_macos_process *process;
@@ -192,8 +230,10 @@ static hl_host_result hl_macos_process_terminate(void *context, hl_host_handle h
     pthread_mutex_lock(&host->lock);
     process = hl_macos_process_lookup(host, handle);
     pid = process != NULL && !process->reaped && !host->destroying ? process->pid : -1;
-    pthread_mutex_unlock(&host->lock);
-    if (pid < 0) return hl_macos_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
+    if (pid < 0) {
+        pthread_mutex_unlock(&host->lock);
+        return hl_macos_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
+    }
     int signal_number;
     if (reason == HL_HOST_PROCESS_TERMINATE_INTERRUPT)
         signal_number = SIGINT;
@@ -208,7 +248,12 @@ static hl_host_result hl_macos_process_terminate(void *context, hl_host_handle h
         uint32_t guest = reason - HL_HOST_PROCESS_TERMINATE_SIGNAL;
         signal_number = guest < 32 ? linux_to_macos[guest] : (int)guest;
     }
-    if (kill(pid, signal_number) != 0) return hl_macos_errno();
+    if (hl_macos_process_signal(pid, reason, signal_number) != 0) {
+        hl_host_result result = hl_macos_errno();
+        pthread_mutex_unlock(&host->lock);
+        return result;
+    }
+    pthread_mutex_unlock(&host->lock);
     return hl_macos_result(HL_STATUS_OK, 0, 0);
 }
 

@@ -566,6 +566,104 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn host_force_stop_kills_exact_activation_group_and_preserves_unrelated_process() {
+        use std::io::BufRead as _;
+        use std::process::Stdio;
+
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "sleep 60 & echo $!; wait"]).stdout(Stdio::piped());
+        let mut activation = IsolatedTestChild::spawn(command).unwrap();
+        let leader = i32::try_from(activation.0.as_ref().unwrap().id()).unwrap();
+        let output = activation.0.as_mut().unwrap().stdout.take().unwrap();
+        let mut output = std::io::BufReader::new(output);
+        let mut line = String::new();
+        output.read_line(&mut line).unwrap();
+        let descendant = line.trim().parse::<i32>().unwrap();
+        let mut unrelated = std::process::Command::new("/bin/sleep").arg("60").spawn().unwrap();
+        let unrelated_pid = i32::try_from(unrelated.id()).unwrap();
+
+        // SAFETY: these are exact live PIDs created and still owned by this test.
+        unsafe {
+            assert_eq!(libc::getpgid(leader), leader);
+            assert_eq!(libc::getpgid(descendant), leader);
+            assert_eq!(libc::kill(unrelated_pid, 0), 0);
+            assert_eq!(crate::bindings::hl_c_backend_host_process_force_test(leader), 0);
+        }
+        activation.0.as_mut().unwrap().wait().unwrap();
+        activation.0 = None;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            // SAFETY: signal zero probes only the exact descendant PID printed above.
+            if unsafe { libc::kill(descendant, 0) } != 0
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "force-stopped descendant {descendant} remained live"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            unrelated.try_wait().unwrap().is_none(),
+            "force stop killed unrelated PID {unrelated_pid}"
+        );
+        unrelated.kill().unwrap();
+        unrelated.wait().unwrap();
+        assert_eq!(
+            output.bytes().collect::<std::io::Result<Vec<_>>>().unwrap(),
+            Vec::<u8>::new()
+        );
+    }
+
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn production_force_stop_is_safe_before_session_ready_and_while_waiting() {
+        struct ResumeActivation;
+        impl Drop for ResumeActivation {
+            fn drop(&mut self) {
+                // SAFETY: the test hook only releases the deliberately paused child.
+                unsafe { crate::bindings::hl_c_backend_activation_ready_pause(0) };
+            }
+        }
+
+        let mut unrelated = std::process::Command::new("/bin/sleep").arg("60").spawn().unwrap();
+        // SAFETY: this arms a test-only pause before the activation child's setsid handshake.
+        unsafe { crate::bindings::hl_c_backend_activation_ready_pause(1) };
+        let resume = ResumeActivation;
+        let (engine, _standard) = create_engine(1);
+        let argument = CString::new("guest").unwrap();
+        std::thread::scope(|scope| {
+            let running = scope.spawn(|| engine.run(&[argument.as_ptr()]));
+            engine.request(2, 0).unwrap();
+            drop(resume);
+            running.join().unwrap().unwrap();
+        });
+        assert!(
+            unrelated.try_wait().unwrap().is_none(),
+            "pre-session force stop killed an unrelated process"
+        );
+
+        for _ in 0..32 {
+            let (engine, _standard) = create_engine(1);
+            std::thread::scope(|scope| {
+                let running = scope.spawn(|| engine.run(&[argument.as_ptr()]));
+                std::thread::yield_now();
+                engine.request(2, 0).unwrap();
+                running.join().unwrap().unwrap();
+            });
+            assert!(
+                unrelated.try_wait().unwrap().is_none(),
+                "force/wait race killed an unrelated process"
+            );
+        }
+        unrelated.kill().unwrap();
+        unrelated.wait().unwrap();
+    }
+
     fn guest_compiler(name: &str) -> std::process::Command {
         let mut command = std::process::Command::new(name);
         // The Nix Darwin shell exports host linker flags such as `-lintl`.

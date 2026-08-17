@@ -1,6 +1,7 @@
 hl_aarch64_bound_vector_io_test
 hl_aarch64_fdvis_path_publication_test
 hl_aarch64_signal_errno_frame_test
+hl_c_backend_activation_ready_pause
 hl_c_backend_checkpoint_adopt
 hl_c_backend_checkpoint_broker_accept
 hl_c_backend_checkpoint_broker_pair
@@ -26,6 +27,7 @@ hl_c_backend_exit
 hl_c_backend_exit_detail
 hl_c_backend_exit_kind
 hl_c_backend_exit_status
+hl_c_backend_host_process_force_test
 hl_c_backend_leak_check_nonvacuity
 hl_c_backend_request
 hl_c_backend_run
