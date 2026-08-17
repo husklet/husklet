@@ -206,3 +206,15 @@ uint32_t hl_linux_pidmap_count(const hl_linux_pidmap *map) {
     }
     return count;
 }
+
+size_t hl_linux_pidmap_snapshot(const hl_linux_pidmap *map, hl_linux_pidmap_entry *entries, size_t capacity) {
+    size_t count = 0;
+    if (map == NULL || map->storage == NULL || (capacity != 0 && entries == NULL)) return 0;
+    for (uint32_t index = 0; index < HL_LINUX_PIDMAP_CAPACITY; ++index) {
+        int32_t guest, host;
+        if (!slot_snapshot(&map->storage->slot[index], &guest, &host)) continue;
+        if (count < capacity) entries[count] = (hl_linux_pidmap_entry){.guest = guest, .host = host};
+        ++count;
+    }
+    return count;
+}

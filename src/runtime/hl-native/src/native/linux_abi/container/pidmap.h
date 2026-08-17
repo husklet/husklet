@@ -2,6 +2,7 @@
 #define HL_LINUX_ABI_CONTAINER_PIDMAP_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #define HL_LINUX_PIDMAP_CAPACITY 4096
 
@@ -29,5 +30,6 @@ int hl_linux_pidmap_guest_checked(const hl_linux_pidmap *map, int32_t host, int3
 int32_t hl_linux_pidmap_host(const hl_linux_pidmap *map, int32_t guest);
 int32_t hl_linux_pidmap_guest(const hl_linux_pidmap *map, int32_t host);
 uint32_t hl_linux_pidmap_count(const hl_linux_pidmap *map);
+size_t hl_linux_pidmap_snapshot(const hl_linux_pidmap *map, hl_linux_pidmap_entry *entries, size_t capacity);
 
 #endif

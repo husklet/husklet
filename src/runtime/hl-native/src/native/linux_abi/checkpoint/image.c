@@ -893,6 +893,31 @@ done:
 // peers only; native process-table details stay in the backend.
 // The container INIT (guest pid 1) coordinates a whole-tree checkpoint at its safepoint: freeze + dump every
 // peer, then itself, then publish the MANIFEST. Never returns (_exit frees init's RAM).
+static int ckpt_live_process_peers(hl_host_process_peer *peers, size_t capacity, size_t *count) {
+    if (!g_pidmap.active) return hl_host_process_peers(peers, capacity, count);
+
+    size_t mapped_capacity = hl_linux_pidmap_count(&g_pidmap);
+    hl_linux_pidmap_entry *mapped = malloc((mapped_capacity ? mapped_capacity : 1) * sizeof *mapped);
+    if (mapped == NULL) return 0;
+    size_t mapped_count = hl_linux_pidmap_snapshot(&g_pidmap, mapped, mapped_capacity);
+    if (mapped_count > mapped_capacity) {
+        free(mapped);
+        *count = mapped_count;
+        return 1;
+    }
+    size_t total = 0;
+    for (size_t index = 0; index < mapped_count; ++index) {
+        int host = mapped[index].host;
+        if (host <= 0 || host == (int)getpid()) continue;
+        if (kill(host, 0) != 0 && errno == ESRCH) continue;
+        if (total < capacity) peers[total].identity = host;
+        ++total;
+    }
+    free(mapped);
+    *count = total;
+    return 1;
+}
+
 static void ckpt_coordinate_and_exit(struct cpu *c) {
     struct ckpt_sink *sink = ckpt_sink_current();
 
@@ -901,7 +926,7 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     size_t observed = 0;
     if (foll == NULL) _exit(70);
     for (;;) {
-        if (!hl_host_process_peers(foll, peer_capacity, &observed)) _exit(70);
+        if (!ckpt_live_process_peers(foll, peer_capacity, &observed)) _exit(70);
         if (observed <= peer_capacity) break;
         if (observed > (size_t)INT_MAX || observed > SIZE_MAX / sizeof *foll) _exit(70);
         hl_host_process_peer *expanded = realloc(foll, observed * sizeof *foll);
