@@ -425,17 +425,20 @@ static int ckpt_restore_eventfds_initialize(void) {
 }
 
 // The guest group (guest pgid; 1 == init) that owned the controlling terminal's foreground at checkpoint,
-// carried from the manifest so the matching re-forked leader can reclaim the tty. Inherited across the
-// restore forks (set in the init before it forks the tree).
+// carried from the manifest so the restored init can publish the handoff after every group exists.
 static int g_ckpt_fg_gpid = 0;
 
-// Make THIS process's group the controlling terminal's foreground group. Called by the process that led the
-// foreground job's group at checkpoint, right AFTER it re-creates that group (ckpt_restore_pgrp), so the pgid
-// argument names a group that already exists. SIGTTOU is blocked so a background caller isn't stopped by the
-// handoff. A requested handoff is architectural state: silently leaving the launcher or init in front makes the
-// next terminal SIGINT kill that host process instead of the restored foreground job.
-static int ckpt_claim_tty_fg(void) {
-    int tf = ckpt_ctty_open();
+static int ckpt_restore_ctty_open(void) {
+    int fd = open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC);
+    return fd >= 0 ? fd : ckpt_ctty_open();
+}
+
+// The restored init owns the controlling terminal and performs the handoff only after every descendant has
+// rebuilt its process group and reached the publication barrier. A descendant cannot reliably open the
+// launcher's controlling tty during recovery; ignoring that failure leaves terminal SIGINT aimed at init.
+static int ckpt_claim_tty_fg(int guest_group) {
+    if (guest_group <= 0) return 0;
+    int tf = ckpt_restore_ctty_open();
     if (tf < 0) return -1;
     sigset_t sv, bl;
     sigemptyset(&bl);
@@ -446,7 +449,7 @@ static int ckpt_claim_tty_fg(void) {
         errno = error;
         return -1;
     }
-    pid_t group = getpgrp();
+    pid_t group = guest_group == 1 ? g_init_hostpid : hl_linux_pidmap_host(&g_pidmap, guest_group);
     int result = group > 0 && tcsetpgrp(tf, group) == 0 && tcgetpgrp(tf) == group ? 0 : -1;
     int error = result == 0 ? 0 : errno;
     if (result != 0 && error == 0) error = EIO;
@@ -462,7 +465,7 @@ static int ckpt_claim_tty_fg(void) {
 // non-tty or an unsettable mode just leaves the launcher's default cooked terminal.
 static void ckpt_restore_tty_mode(const struct ckpt_manifest *man) {
     struct termios tio;
-    int tf = man->tty_termios ? ckpt_ctty_open() : -1;
+    int tf = man->tty_termios ? ckpt_restore_ctty_open() : -1;
     if (tf < 0 || tcgetattr(tf, &tio) != 0) {
         ckpt_ctty_close(tf);
         return;
@@ -490,10 +493,9 @@ static void ckpt_restore_tty_mode(const struct ckpt_manifest *man) {
 static int ckpt_restore_pgrp(int gpid, int pgid_gpid, int sid_gpid) {
     if (sid_gpid == gpid && getsid(0) != getpid() && setsid() < 0 && getsid(0) != getpid()) return -1;
     if (pgid_gpid <= 0) return 0;
-    pid_t leader = pgid_gpid == gpid
-                       ? getpid()
-                       : (pgid_gpid == 1 && g_init_hostpid) ? g_init_hostpid
-                                                            : hl_linux_pidmap_host(&g_pidmap, pgid_gpid);
+    pid_t leader = pgid_gpid == gpid                    ? getpid()
+                   : (pgid_gpid == 1 && g_init_hostpid) ? g_init_hostpid
+                                                        : hl_linux_pidmap_host(&g_pidmap, pgid_gpid);
     if (leader <= 0) {
         errno = ESRCH;
         return -1;
@@ -635,6 +637,7 @@ static int ckpt_restore_commit_publish(void) {
         (void)ckpt_restore_commit_futex(&g_restore_commit->ready, CKPT_FUTEX_WAIT,
                                         atomic_load_explicit(&g_restore_commit->ready, memory_order_relaxed), &pause);
     }
+    if (ckpt_claim_tty_fg(g_ckpt_fg_gpid) != 0) return -1;
     atomic_store_explicit(&g_restore_commit->decision, 1, memory_order_release);
     ckpt_restore_commit_wake();
     while (atomic_load_explicit(&g_restore_commit->released, memory_order_acquire) < expected) {
@@ -731,11 +734,6 @@ static void ckpt_restore_proc_run(int gpid) {
     if (ckpt_restore_fds_dir(pd) != 0 || ckpt_restore_signal_state(pd) != 0) ckpt_restore_commit_failed();
     if (ckpt_restore_pgrp(gpid, m.pgid_gpid, m.sid_gpid) != 0) {
         fprintf(stderr, "[restore] cannot restore process group for gpid %d: %s\n", gpid, strerror(errno));
-        ckpt_restore_commit_failed();
-    }
-    if (g_ckpt_fg_gpid == gpid && ckpt_claim_tty_fg() != 0) {
-        fprintf(stderr, "[restore] cannot restore terminal foreground group for gpid %d: %s\n", gpid,
-                strerror(errno));
         ckpt_restore_commit_failed();
     }
 
@@ -896,10 +894,6 @@ static int ckpt_restore_tree(const char *rootfs) {
     ckpt_restore_signalfd_seeds_close();
     ckpt_restore_socket_seeds_close();
     ckpt_restore_commit_destroy();
-    if (g_ckpt_fg_gpid == 1 && ckpt_claim_tty_fg() != 0) {
-        fprintf(stderr, "[restore] cannot restore init terminal foreground group: %s\n", strerror(errno));
-        return 70;
-    }
     if (ckpt_stream_recovery_complete() != 0) {
         fprintf(stderr, "[restore] cannot close recovery publication scope\n");
         return 70;

@@ -270,7 +270,6 @@ impl TestTerminal {
     fn output(&self) -> String {
         String::from_utf8_lossy(&self.state.lock().unwrap().output).into_owned()
     }
-
 }
 
 impl TerminalPort for TestTerminal {
@@ -403,6 +402,12 @@ impl CheckpointSource for Store {
             .ok_or(CompositionError::DeadlineExceeded)?;
         self.list()
     }
+}
+
+fn manifest_foreground_group(store: &Store) -> i32 {
+    let image = store.0.lock().unwrap();
+    let manifest = image.get("MANIFEST").expect("checkpoint manifest");
+    i32::from_ne_bytes(manifest[60..64].try_into().expect("foreground process-group field"))
 }
 
 fn assert_transient_signalfd_slots_absent(store: &Store) {
@@ -894,24 +899,33 @@ fn restored_foreground_sleep_takes_ctrl_c_without_killing_shell_on_both_isas() {
         capture_port.wait_output(b"SLEEPING");
         capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
         assert_eq!(capture.wait().unwrap().guest_status, 0);
+        assert!(
+            manifest_foreground_group(&store) > 1,
+            "checkpoint did not retain the foreground child group"
+        );
 
         let restore_port = Arc::new(TestTerminal::default());
         let restore_terminal = Terminal::new(restore_port.clone(), 24, 80).unwrap();
-        let restore = Arc::new(Engine::with_checkpoint(
-            isa,
-            plan(&executable, &release, &final_release, &["HL_RESTORE"]),
-            StandardStreams::default().with_terminal(restore_terminal),
-            store.clone(),
-            store.clone(),
-        )
-        .unwrap());
+        let restore = Arc::new(
+            Engine::with_checkpoint(
+                isa,
+                plan(&executable, &release, &final_release, &["HL_RESTORE"]),
+                StandardStreams::default().with_terminal(restore_terminal),
+                store.clone(),
+                store.clone(),
+            )
+            .unwrap(),
+        );
         restore.start().unwrap();
         let (finished, completion) = std::sync::mpsc::channel();
         let waiting = restore.clone();
         std::thread::spawn(move || finished.send(waiting.wait()).unwrap());
         std::thread::sleep(Duration::from_millis(500));
         match completion.try_recv() {
-            Ok(result) => panic!("{isa:?} restore ended before input: {result:?}\n{}", restore_port.output()),
+            Ok(result) => panic!(
+                "{isa:?} restore ended before input: {result:?}\n{}",
+                restore_port.output()
+            ),
             Err(std::sync::mpsc::TryRecvError::Disconnected) => panic!("restore waiter disconnected"),
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
         }

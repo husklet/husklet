@@ -624,7 +624,16 @@ static int64_t bound_native_control(hl_linux_fd_snapshot source, uint32_t reques
                 memcpy(&encoded, argument, sizeof(encoded));
                 pid_t group = encoded;
                 if (group == 1 && g_init_hostpid) group = g_init_hostpid;
-                result = tcsetpgrp(native_fd, group) == 0 ? 0 : -errno;
+                // A borrowed attachment may be the pty master. It can report the foreground group but is not
+                // the caller's controlling-terminal descriptor, so tcsetpgrp rejects it with ENOTTY. Perform
+                // the session ownership change through /dev/tty and mirror the direct-fd path's SIGTTOU guard.
+                int control = open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC);
+                if (control < 0) control = native_fd;
+                sigset_t saved;
+                tty_ctl_block(&saved);
+                result = tcsetpgrp(control, group) == 0 ? 0 : -errno;
+                tty_ctl_restore(&saved);
+                if (control != native_fd) close(control);
             }
         } else { /* TIOCSCTTY */
             result = ioctl(native_fd, TIOCSCTTY, 0) == 0 || errno == EPERM ? 0 : -errno;

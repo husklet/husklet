@@ -14,7 +14,8 @@ static void fail(const char *operation) {
 
 static void write_all(const char *text) {
     size_t length = 0;
-    while (text[length] != 0) length++;
+    while (text[length] != 0)
+        length++;
     while (length != 0) {
         ssize_t written = write(STDOUT_FILENO, text, length);
         if (written < 0 && errno == EINTR) continue;
@@ -22,6 +23,16 @@ static void write_all(const char *text) {
         text += written;
         length -= (size_t)written;
     }
+}
+
+static void foreground(pid_t group) {
+    sigset_t blocked;
+    sigset_t saved;
+    sigemptyset(&blocked);
+    sigaddset(&blocked, SIGTTOU);
+    if (sigprocmask(SIG_BLOCK, &blocked, &saved) != 0) fail("block-sigttou");
+    if (tcsetpgrp(STDIN_FILENO, group) != 0) fail("tcsetpgrp");
+    if (sigprocmask(SIG_SETMASK, &saved, NULL) != 0) fail("restore-sigmask");
 }
 
 int main(void) {
@@ -42,7 +53,7 @@ int main(void) {
         }
     }
     if (setpgid(child, child) != 0 && errno != EACCES) fail("setpgid-child-parent");
-    if (tcsetpgrp(STDIN_FILENO, child) != 0) fail("tcsetpgrp-child");
+    foreground(child);
     write_all("SLEEPING\n");
 
     int status = 0;
@@ -53,7 +64,7 @@ int main(void) {
         write_all("WRONG-CHILD-STATUS\n");
         return 71;
     }
-    if (tcsetpgrp(STDIN_FILENO, getpgrp()) != 0) fail("tcsetpgrp-parent");
+    foreground(getpgrp());
     write_all("PROMPT-SURVIVED\n");
     return 0;
 }
