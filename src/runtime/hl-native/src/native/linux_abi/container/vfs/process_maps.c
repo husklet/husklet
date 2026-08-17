@@ -1086,7 +1086,8 @@ static void proc_self_terminal_identity(int *tty_device, int *foreground_group) 
         struct stat status;
         pid_t foreground = tcgetpgrp(descriptor);
         if (foreground <= 0 || fstat(descriptor, &status) != 0 || !S_ISCHR(status.st_mode)) continue;
-        uint32_t device = hl_linux_device_make(major(status.st_rdev), minor(status.st_rdev));
+        uint32_t device = hl_linux_device_make(hl_host_device_major((uint64_t)status.st_rdev),
+                                               hl_host_device_minor((uint64_t)status.st_rdev));
         *tty_device = (int)device;
         *foreground_group = (g_init_hostpid && foreground == g_init_hostpid) ? 1 : (int)foreground;
         return;

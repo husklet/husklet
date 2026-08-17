@@ -1032,6 +1032,47 @@ fn owned_native_headers_are_self_contained() {
     fs::remove_dir_all(scratch).expect("remove header probe directory");
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn host_device_split_uses_the_native_platform_encoding() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-host-device-probe-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("host device probe directory");
+    let source = scratch.join("probe.c");
+    let executable = scratch.join("probe");
+    let (device, major, minor) = if cfg!(target_os = "macos") {
+        ("UINT64_C(0x12345678)", "0x12u", "0x345678u")
+    } else {
+        ("UINT64_C(0x00412356)", "0x123u", "0x456u")
+    };
+    fs::write(
+        &source,
+        format!(
+            r#"#include <stdint.h>
+#include "linux_abi/host_system.h"
+int main(void) {{
+    uint64_t device = {device};
+    return hl_host_device_major(device) == {major} && hl_host_device_minor(device) == {minor} ? 0 : 1;
+}}
+"#,
+        ),
+    )
+    .expect("write host device probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(format!("-I{}", native.display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("host device probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable).status().expect("host device probe execution");
+    assert!(run.success(), "host device probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove host device probe directory");
+}
+
 #[test]
 fn public_abi_is_self_contained_for_c_and_cpp_consumers() {
     let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

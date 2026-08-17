@@ -224,12 +224,13 @@ static int hl_vfs_cursor_authority_open_path(const hl_vfs_cursor_authority *auth
                                              int directory, hl_vfs_cursor_authority *output) {
     if (authority == NULL || component == NULL || output == NULL) return -EINVAL;
     if (authority->kind == HL_VFS_CURSOR_AUTHORITY_NATIVE) {
+        int descriptor;
 #if defined(__linux__)
-        int descriptor = openat(authority->value.descriptor, component,
-                                O_PATH | O_CLOEXEC | O_NOFOLLOW | (directory ? O_DIRECTORY : 0));
+        descriptor = openat(authority->value.descriptor, component,
+                            O_PATH | O_CLOEXEC | O_NOFOLLOW | (directory ? O_DIRECTORY : 0));
 #elif defined(__APPLE__)
-        int descriptor = openat(authority->value.descriptor, component,
-                                O_SYMLINK | O_CLOEXEC | (directory ? O_DIRECTORY : 0));
+        descriptor = openat(authority->value.descriptor, component,
+                            O_SYMLINK | O_CLOEXEC | (directory ? O_DIRECTORY : 0));
 #else
         return -ENOSYS;
 #endif

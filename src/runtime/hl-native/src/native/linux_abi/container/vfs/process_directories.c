@@ -390,7 +390,8 @@ static int proc_stat_pid_text(char *b, size_t n, int gp, int host) {
     int psess = (hsid > 0) ? ((g_init_hostpid && hsid == g_init_hostpid) ? 1 : hsid) : gp;
     int tty_device = 0;
     if (ok && pi.tty_host > 0)
-        tty_device = (int)hl_linux_device_make(major((dev_t)pi.tty_host), minor((dev_t)pi.tty_host));
+        tty_device = (int)hl_linux_device_make(hl_host_device_major((uint64_t)pi.tty_host),
+                                               hl_host_device_minor((uint64_t)pi.tty_host));
     int foreground_group = ok ? pi.tpgid_host : -1;
     if (g_init_hostpid && foreground_group == g_init_hostpid) foreground_group = 1;
     long hz = sysconf(_SC_CLK_TCK);

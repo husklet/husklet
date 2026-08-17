@@ -24,6 +24,7 @@
 #include <limits.h>
 #include <time.h>
 #include <sys/time.h>
+#include "../../linux_abi/host_system.h"
 #include "../../linux_abi/host_uio.h" // <sys/uio.h>, or the guest iovec layout where the host has none
 #include "../../linux_abi/host_socket.h"
 #include "../../linux_abi/host_poll.h" // <poll.h>, or a typed absence where the host has no mixed-handle readiness
