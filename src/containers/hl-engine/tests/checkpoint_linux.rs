@@ -347,6 +347,23 @@ fn dynamic_identity_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     output
 }
 
+fn identity_churn_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    let (compiler, name) = match isa {
+        GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-identity-churn-aarch64"),
+        GuestIsa::X86_64 => ("x86_64-linux-gnu-gcc", "checkpoint-identity-churn-x86_64"),
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/identity_churn.c");
+    let output = directory.join(name);
+    let status = std::process::Command::new(compiler)
+        .args(["-static", "-O2", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
+    assert!(status.success(), "{compiler} failed with {status}");
+    output
+}
+
 #[derive(Default)]
 struct TerminalState {
     input: VecDeque<u8>,
@@ -1545,6 +1562,54 @@ fn identities_created_after_restore_survive_recapture_on_both_isas() {
             )
         });
         assert_eq!(restored.guest_status, 0, "{isa:?}: {}", restore_port.output());
+    }
+}
+
+#[test]
+#[ignore = "long-running capacity and reclamation stress gate"]
+fn restored_typed_identity_registry_reuses_capacity_on_both_isas() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executables =
+        [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, identity_churn_fixture(isa, fixtures.path())));
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+
+    for (isa, executable) in executables {
+        let temporary = tempfile::tempdir().unwrap();
+        let release = temporary.path().join("release");
+        let final_release = temporary.path().join("final-release");
+        let store = Arc::new(Store::default());
+        let capture_port = Arc::new(TestTerminal::default());
+        let capture = Engine::with_checkpoint(
+            isa,
+            plan(&executable, &release, &final_release, &["HL_CHECKPOINT"]),
+            StandardStreams::default().with_terminal(Terminal::new(capture_port.clone(), 24, 80).unwrap()),
+            store.clone(),
+            store.clone(),
+        )
+        .unwrap();
+        capture.start().unwrap();
+        capture_port.wait_output(b"IDENTITY-CHURN-READY");
+        capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+        assert_eq!(capture.wait().unwrap().guest_status, 0);
+
+        let restore_port = Arc::new(TestTerminal::default());
+        let restore = Engine::with_checkpoint(
+            isa,
+            plan(&executable, &release, &final_release, &["HL_RESTORE"]),
+            StandardStreams::default().with_terminal(Terminal::new(restore_port.clone(), 24, 80).unwrap()),
+            store.clone(),
+            store.clone(),
+        )
+        .unwrap();
+        restore.start().unwrap();
+        restore_port.input(b"x\n");
+        let restored = restore
+            .wait()
+            .unwrap_or_else(|error| panic!("{isa:?} identity churn failed: {error:?}\n{}", restore_port.output()));
+        assert_eq!(restored.guest_status, 0, "{isa:?}: {}", restore_port.output());
+        restore_port.wait_output(b"IDENTITY-CHURN-COMPLETE");
     }
 }
 
