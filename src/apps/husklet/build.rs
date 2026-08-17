@@ -76,7 +76,7 @@ fn identity(workspace: &Path, inputs: impl IntoIterator<Item = PathBuf>) -> Stri
     let mut digest = sha2::Sha256::new();
     for file in RuntimeIdentityInputs::discover(inputs) {
         println!("cargo:rerun-if-changed={}", file.display());
-        let relative = file.strip_prefix(&workspace).unwrap_or(&file);
+        let relative = file.strip_prefix(workspace).unwrap_or(&file);
         let bytes = std::fs::read(&file)
             .unwrap_or_else(|error| panic!("read runtime identity input {}: {error}", file.display()));
         digest.update(
