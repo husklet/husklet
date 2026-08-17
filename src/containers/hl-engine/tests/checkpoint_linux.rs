@@ -722,7 +722,54 @@ fn wait_for_running_marker(engine: &Arc<Engine>, path: &Path, marker: &str) {
     }
 }
 
-fn daily_dev_round_trip(isa: GuestIsa, executable: &Path) {
+struct PhaseTimings {
+    isa: GuestIsa,
+    started: Instant,
+    prior: Duration,
+}
+
+impl PhaseTimings {
+    fn new(isa: GuestIsa, prior: Duration) -> Self {
+        Self {
+            isa,
+            started: Instant::now(),
+            prior,
+        }
+    }
+
+    fn observe(&self, phase: &str, started: Instant) {
+        eprintln!(
+            "checkpoint_phase_timing\tisa={}\tphase={phase}\tduration_us={}",
+            match self.isa {
+                GuestIsa::Aarch64 => "aarch64",
+                GuestIsa::X86_64 => "x86_64",
+            },
+            started.elapsed().as_micros()
+        );
+    }
+
+    fn finish(&self) {
+        eprintln!(
+            "checkpoint_phase_timing\tisa={}\tphase=total\tduration_us={}",
+            match self.isa {
+                GuestIsa::Aarch64 => "aarch64",
+                GuestIsa::X86_64 => "x86_64",
+            },
+            (self.prior + self.started.elapsed()).as_micros()
+        );
+    }
+}
+
+fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Duration) {
+    let timings = PhaseTimings::new(isa, fixture_compile);
+    eprintln!(
+        "checkpoint_phase_timing\tisa={}\tphase=fixture_compile\tduration_us={}",
+        match isa {
+            GuestIsa::Aarch64 => "aarch64",
+            GuestIsa::X86_64 => "x86_64",
+        },
+        fixture_compile.as_micros()
+    );
     let directory = tempfile::tempdir().unwrap();
     let output_path = directory.path().join("output");
     let first = Arc::new(Store::default());
@@ -736,14 +783,21 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path) {
         )
         .unwrap(),
     );
+    let initial_ready = Instant::now();
     capture.start().unwrap();
     wait_for(&output_path, "READY leader=");
     wait_for(&directory.path().join("state"), "5");
+    timings.observe("initial_guest_ready", initial_ready);
+    let capture_request = Instant::now();
     capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+    timings.observe("capture_request_return", capture_request);
+    let capture_wait = Instant::now();
     assert_eq!(wait_bounded(&capture, "initial daily-dev capture").guest_status, 0);
     wait_for_exact_process_reap(executable);
+    timings.observe("capture_wait_reap", capture_wait);
 
     std::fs::write(directory.path().join("cycle1"), []).unwrap();
+    let restore1_ready = Instant::now();
     let second = Arc::new(Store::default());
     let recapture = Arc::new(
         Engine::with_checkpoint(
@@ -757,11 +811,17 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path) {
     );
     recapture.start().unwrap();
     wait_for_running_marker(&recapture, &output_path, "CYCLE 1 progress=");
+    timings.observe("restore1_start_ready", restore1_ready);
+    let recapture_request = Instant::now();
     recapture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+    timings.observe("recapture_request_return", recapture_request);
+    let recapture_wait = Instant::now();
     assert_eq!(wait_bounded(&recapture, "daily-dev recapture").guest_status, 0);
     wait_for_exact_process_reap(executable);
+    timings.observe("recapture_wait_reap", recapture_wait);
 
     std::fs::write(directory.path().join("cycle2"), []).unwrap();
+    let restore2_ready = Instant::now();
     let restore = Arc::new(
         Engine::with_checkpoint(
             isa,
@@ -774,9 +834,12 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path) {
     );
     restore.start().unwrap();
     wait_for_running_marker(&restore, &output_path, "CYCLE 2 progress=");
+    timings.observe("restore2_start_ready", restore2_ready);
+    let final_shutdown = Instant::now();
     std::fs::write(directory.path().join("stop"), []).unwrap();
     assert_eq!(wait_bounded(&restore, "final daily-dev restore").guest_status, 0);
     wait_for_exact_process_reap(executable);
+    timings.observe("final_shutdown_reap", final_shutdown);
 
     let output = std::fs::read_to_string(&output_path).unwrap();
     assert_eq!(output.matches("READY leader=").count(), 1, "{output}");
@@ -815,6 +878,7 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path) {
         "durable state regressed: {persisted} < {}",
         progress[1]
     );
+    timings.finish();
 }
 
 fn capture_after_plain_engine(isa: GuestIsa, plain_executable: &Path, checkpoint_executable: &Path) {
@@ -1082,11 +1146,15 @@ fn terminal_waiting_for_sleep_survives_capture_restore_and_recapture_on_both_isa
 fn daily_development_workload_survives_two_checkpoint_cycles_on_both_isas() {
     let compiling = fixture_compilation();
     let fixtures = tempfile::tempdir().unwrap();
-    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, daily_dev_fixture(isa, fixtures.path())));
+    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| {
+        let started = Instant::now();
+        let executable = daily_dev_fixture(isa, fixtures.path());
+        (isa, executable, started.elapsed())
+    });
     drop(compiling);
     let _exclusive = exclusive_checkpoint_test();
-    for (isa, executable) in executables {
-        daily_dev_round_trip(isa, &executable);
+    for (isa, executable, fixture_compile) in executables {
+        daily_dev_round_trip(isa, &executable, fixture_compile);
     }
 }
 
