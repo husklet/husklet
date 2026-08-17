@@ -558,7 +558,7 @@ async fn failed_restored_exec_publication_is_killed_reaped_and_retryable() {
 #[tokio::test]
 async fn failed_publication_reports_kill_and_reap_failures_without_losing_created_state() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
-    runtime.delay = Duration::from_millis(100);
+    runtime.delay = Duration::from_millis(1);
     let runtime = Arc::new(runtime);
     let storage = Arc::new(Memory::default());
     let containers = test_containers(storage.clone(), runtime.clone()).await.unwrap();
@@ -583,9 +583,85 @@ async fn failed_publication_reports_kill_and_reap_failures_without_losing_create
         ExecState::Created
     );
 
-    runtime.fail_signal.store(false, Ordering::SeqCst);
-    runtime.fail_wait.store(false, Ordering::SeqCst);
+    assert!(
+        containers
+            .executions()
+            .start(&exec.id)
+            .await
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("quarantined")
+    );
+    assert!(
+        containers
+            .executions()
+            .remove(&exec.id)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("not running")
+    );
+}
+
+#[tokio::test]
+async fn timed_out_publication_cleanup_quarantines_until_reap_then_allows_one_retry() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(29));
+    runtime.delay = Duration::from_secs(1);
+    runtime.restore_delay = Some(Duration::from_millis(100));
+    let runtime = Arc::new(runtime);
+    let storage = Arc::new(Memory::default());
+    let containers = test_containers(storage.clone(), runtime).await.unwrap();
+    containers.create(spec("quarantine-parent")).await.unwrap();
+    containers.start("quarantine-parent").await.unwrap();
+    let exec = containers
+        .executions()
+        .create("quarantine-parent", ExecSpec::new(Process::new("/bin/sh")))
+        .await
+        .unwrap();
     containers.executions().start(&exec.id).await.unwrap();
+    containers
+        .executions()
+        .checkpoint_all(Duration::from_secs(1))
+        .await
+        .unwrap();
+    let waiting = containers.executions();
+    let wait_id = exec.id.clone();
+    let waiter = tokio::spawn(async move { waiting.wait(&wait_id).await });
+    tokio::task::yield_now().await;
+    storage.fail_next_exec_replace();
+
+    let error = containers.executions().start(&exec.id).await.err().unwrap();
+
+    assert!(error.to_string().contains("reap timed out"), "{error}");
+    assert!(!waiter.is_finished(), "Created waiter escaped during quarantine");
+    assert!(
+        containers
+            .executions()
+            .start(&exec.id)
+            .await
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("quarantined")
+    );
+    assert!(containers.executions().remove(&exec.id).await.is_err());
+    assert!(!waiter.is_finished(), "quarantine completion invented an exec exit");
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            match containers.executions().start(&exec.id).await {
+                Ok(_) => break,
+                Err(Error::Runtime(message)) if message.contains("quarantined") => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("unexpected retry failure: {error}"),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(waiter.await.unwrap().unwrap(), ExitStatus::Code(29));
 }
 
 #[tokio::test]

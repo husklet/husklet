@@ -70,6 +70,11 @@ impl Service {
                 expected: "exec has not been started",
             });
         }
+        if self.exec_live.lock().await.contains_key(id) {
+            return Err(Error::Runtime(format!(
+                "exec {id} is quarantined while its previous process is being reaped"
+            )));
+        }
         if let Some(size) = size {
             if exec.spec.process.console.terminal.is_none() {
                 return Err(Error::NoTerminal(exec.id.to_string()));
@@ -156,7 +161,9 @@ impl Service {
         };
         exec.checkpoint = None;
         if let Err(error) = self.execs.replace(&exec).await {
-            return Err(self.rollback_unpublished_exec(process, &journal, error).await);
+            return Err(self
+                .rollback_unpublished_exec(exec.id.clone(), process, &journal, error)
+                .await);
         }
         self.exec_live
             .lock()
@@ -172,7 +179,8 @@ impl Service {
     }
 
     async fn rollback_unpublished_exec(
-        &self,
+        self: &Arc<Self>,
+        id: ExecId,
         process: Arc<dyn crate::service::Running>,
         journal: &JournalId,
         publication: Error,
@@ -181,13 +189,60 @@ impl Service {
         if let Err(error) = process.signal(Signal::KILL).await {
             cleanup.push(format!("kill failed: {error}"));
         }
-        match tokio::time::timeout(std::time::Duration::from_secs(5), Arc::clone(&process).wait()).await {
-            Ok(Ok(_)) => {}
-            Ok(Err(error)) => cleanup.push(format!("reap failed: {error}")),
-            Err(_) => cleanup.push("reap timed out after 5s".into()),
-        }
-        if let Some(io) = self.io.lock().await.remove(journal) {
-            io.finish().await;
+        let reaped = match tokio::time::timeout(unpublished_reap_timeout(), Arc::clone(&process).wait()).await {
+            Ok(Ok(_)) => true,
+            Ok(Err(error)) => {
+                cleanup.push(format!("reap failed: {error}"));
+                false
+            }
+            Err(_) => {
+                cleanup.push(format!("reap timed out after {:?}", unpublished_reap_timeout()));
+                false
+            }
+        };
+        if !reaped {
+            self.exec_live.lock().await.insert(id.clone(), Arc::clone(&process));
+            let service = Arc::clone(self);
+            let journal = journal.clone();
+            tokio::spawn(async move {
+                loop {
+                    match Arc::clone(&process).wait().await {
+                        Ok(_) => {
+                            let _guard = service.operations.lock().await;
+                            let owned = service
+                                .exec_live
+                                .lock()
+                                .await
+                                .get(&id)
+                                .is_some_and(|candidate| Arc::ptr_eq(candidate, &process));
+                            if owned {
+                                service.exec_live.lock().await.remove(&id);
+                                let io = service.io.lock().await.remove(&journal);
+                                if let Some(io) = io {
+                                    io.finish().await;
+                                }
+                                if let Some(waiters) = service.exec_waiters.lock().await.get(&id) {
+                                    waiters.notify_waiters();
+                                }
+                            }
+                            break;
+                        }
+                        Err(error) => {
+                            hl_log::hl_error!(
+                                hl_log::tag::CONTAINER,
+                                "quarantined exec reap failed id={} error={error}",
+                                id
+                            );
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        }
+                    }
+                }
+            });
+        } else {
+            let io = self.io.lock().await.remove(journal);
+            if let Some(io) = io {
+                io.finish().await;
+            }
         }
         if cleanup.is_empty() {
             publication
@@ -440,7 +495,7 @@ impl Service {
         let _guard = self.operations.lock().await;
         let exec = self.inspect_exec(id).await?;
         let live = self.exec_live.lock().await.contains_key(&exec.id);
-        if matches!(exec.state, ExecState::Running { .. }) && live {
+        if live {
             return Err(Error::InvalidExecState {
                 id: exec.id,
                 actual: exec.state,
@@ -470,4 +525,14 @@ impl Service {
         values.insert(id, Arc::clone(&io));
         io
     }
+}
+
+#[cfg(test)]
+fn unpublished_reap_timeout() -> std::time::Duration {
+    std::time::Duration::from_millis(25)
+}
+
+#[cfg(not(test))]
+fn unpublished_reap_timeout() -> std::time::Duration {
+    std::time::Duration::from_secs(5)
 }
