@@ -65,6 +65,15 @@ pub fn bound_vector_io_test(isa: u32, scenario: u32) -> Result<(i64, u32, u64), 
 
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
+pub fn identity_registry_test(scenario: u32, iterations: u32) -> Result<(), i32> {
+    // Each scenario owns process-global fault injection state in the C test boundary.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    bindings::identity_registry_test(scenario, iterations)
+}
+
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
 #[must_use]
 pub fn x86_store_preflight_test() -> bool {
     bindings::x86_store_preflight_test()

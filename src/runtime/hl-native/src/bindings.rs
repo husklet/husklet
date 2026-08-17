@@ -125,6 +125,8 @@ unsafe extern "C" {
     ) -> c_int;
     #[cfg(feature = "native-test-hooks")]
     fn hl_c_backend_errno_from_host_test(domain: c_uint, host_errno: c_int) -> c_int;
+    #[cfg(feature = "native-test-hooks")]
+    fn hl_c_backend_identity_registry_test(scenario: c_uint, iterations: c_uint) -> c_int;
     pub(super) fn hl_engine_abi() -> c_uint;
     pub(super) fn hl_engine_version() -> *const c_char;
     #[cfg(unix)]
@@ -225,6 +227,14 @@ pub(crate) fn bound_vector_io_test(isa: u32, scenario: u32) -> Result<(i64, u32,
     } else {
         Err(status)
     }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn identity_registry_test(scenario: u32, iterations: u32) -> Result<(), i32> {
+    // SAFETY: the feature-gated native hook owns its private shared registry and child processes. Inputs are
+    // scalar scenario controls, and the hook returns only after every child has been reaped.
+    let status = unsafe { hl_c_backend_identity_registry_test(scenario, iterations) };
+    if status == 0 { Ok(()) } else { Err(status) }
 }
 
 #[cfg(all(test, feature = "native-test-hooks"))]

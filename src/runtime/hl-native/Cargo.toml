@@ -37,5 +37,9 @@ name = "errno_namespace"
 required-features = ["native-test-hooks"]
 
 [[test]]
+name = "identity_registry"
+required-features = ["native-test-hooks"]
+
+[[test]]
 name = "x86_store_preflight"
 required-features = ["native-test-hooks"]
