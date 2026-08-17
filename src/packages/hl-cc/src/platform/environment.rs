@@ -106,6 +106,11 @@ impl BuildEnvironment {
             .map(Some)
             .map_err(|error| format!("{}: {error}", key.name))
     }
+
+    #[must_use]
+    pub(crate) fn variable(&self, name: &str) -> Option<&std::ffi::OsStr> {
+        self.variables.get(OsString::from(name).as_os_str()).map(AsRef::as_ref)
+    }
 }
 
 fn required(variables: &BTreeMap<OsString, OsString>, name: &str) -> Result<String, String> {
