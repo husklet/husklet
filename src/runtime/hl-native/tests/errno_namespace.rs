@@ -57,3 +57,11 @@ fn sigreturn_redirect_preserves_restored_linux_value_without_delivery() {
         );
     }
 }
+
+#[test]
+fn checkpoint_signal_precedence_and_restart_registers_hold_on_both_isas() {
+    for isa in [1, 2] {
+        hl_native::checkpoint_continuation_contract_test(isa)
+            .unwrap_or_else(|status| panic!("ISA {isa} checkpoint continuation contract failed at {status}"));
+    }
+}

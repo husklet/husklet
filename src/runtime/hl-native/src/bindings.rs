@@ -107,6 +107,14 @@ unsafe extern "C" {
         completed: *mut i64,
     ) -> c_int;
     #[cfg(feature = "native-test-hooks")]
+    fn hl_aarch64_checkpoint_signal_precedence_test() -> c_int;
+    #[cfg(feature = "native-test-hooks")]
+    fn hl_x86_64_checkpoint_signal_precedence_test() -> c_int;
+    #[cfg(feature = "native-test-hooks")]
+    fn hl_aarch64_checkpoint_restart_register_test() -> c_int;
+    #[cfg(feature = "native-test-hooks")]
+    fn hl_x86_64_checkpoint_restart_register_test() -> c_int;
+    #[cfg(feature = "native-test-hooks")]
     fn hl_x86_64_signal_errno_frame_test(
         domain: c_uint,
         redirect: c_uint,
@@ -272,6 +280,24 @@ pub(crate) fn signal_errno_frame_test(
     } else {
         Err(status)
     }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn checkpoint_continuation_contract_test(isa: u32) -> Result<(), i32> {
+    type Hook = unsafe extern "C" fn() -> c_int;
+    let (signal, registers): (Hook, Hook) = match isa {
+        1 => (hl_aarch64_checkpoint_signal_precedence_test, hl_aarch64_checkpoint_restart_register_test),
+        2 => (hl_x86_64_checkpoint_signal_precedence_test, hl_x86_64_checkpoint_restart_register_test),
+        _ => return Err(-22),
+    };
+    // SAFETY: feature-gated hooks own their local CPU fixtures and return scalar status only.
+    for hook in [signal, registers] {
+        let status = unsafe { hook() };
+        if status != 0 {
+            return Err(status);
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn engine_metadata_is_valid() -> bool {

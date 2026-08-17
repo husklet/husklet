@@ -33,12 +33,25 @@ static int checkpoint_resume_timeout(uint64_t syscall, struct timespec *timeout)
     return 1;
 }
 
-static int checkpoint_prepare_syscall(struct cpu *c) {
-    if (!ckpt_pending()) return 0;
+static void checkpoint_mark_syscall(struct cpu *c) {
     c->checkpoint_continuation = CKPT_CONTINUATION_SYSCALL;
     c->checkpoint_timeout_ns = -1;
     c->redirect = 1;
     g_syscall_restart = 1;
+}
+
+static int checkpoint_resolve_interrupt(struct cpu *c, int deliverable, int all_sa_restart, int checkpoint) {
+    if (deliverable) {
+        if (all_sa_restart) {
+            c->redirect = 1;
+            g_syscall_restart = 1;
+        }
+        return 0;
+    }
+    if (checkpoint) {
+        checkpoint_mark_syscall(c);
+        return 0;
+    }
     return 1;
 }
 
@@ -64,10 +77,7 @@ static int syscall_should_restart(struct cpu *c) {
     }
     // Nothing runnable pending: a spurious/host-actioned EINTR a real kernel would not surface -> re-block the
     // host call transparently in place (the old restart-in-loop behaviour, kept for this case only).
-    if (!deliverable) {
-        if (checkpoint_prepare_syscall(c)) return 0;
-        return 1;
-    }
+    if (!deliverable) return checkpoint_resolve_interrupt(c, 0, 1, ckpt_pending());
     // A runnable guest handler MUST run before the interrupted call proceeds -- Linux runs the handler on EVERY
     // interrupted slow syscall, THEN (for SA_RESTART) restarts it. Restarting in place here never returns to the
     // dispatcher, so maybe_deliver_signal never fires and the handler is stranded until the call finally
@@ -76,11 +86,7 @@ static int syscall_should_restart(struct cpu *c) {
     // SA_RESTART, leave the guest PC on the SVC (c->redirect) so the syscall re-executes AFTER the handler runs
     // (transparent restart); otherwise advance past it and let the guest observe EINTR. Either way the pending
     // handler is delivered by the dispatcher's maybe_deliver_signal at the next block boundary.
-    if (all_sa_restart) {
-        c->redirect = 1;
-        g_syscall_restart = 1; // service() restores the arg0/return-aliased register before re-executing
-    }
-    return 0;
+    return checkpoint_resolve_interrupt(c, 1, all_sa_restart, ckpt_pending());
 }
 
 // An interruptible host syscall failed: should the caller retry it? True iff it was interrupted (EINTR)
@@ -109,9 +115,33 @@ static int svc_poll_retry(struct cpu *c) {
         if (!signal_deliverable(c, s)) continue;
         if (g_sigact[s].handler > 1) return 0;        // guest signal semantics take precedence over checkpointing
     }
-    if (checkpoint_prepare_syscall(c)) return 0;
+    if (ckpt_pending()) {
+        checkpoint_mark_syscall(c);
+        return 0;
+    }
     return 1; // nothing deliverable -> hide this EINTR and re-block (spurious/internal wakeup)
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+HL_API int HL_TARGET_LOCAL(checkpoint_signal_precedence_test)(void) {
+    struct cpu cpu = {0};
+    g_syscall_restart = 0;
+    if (checkpoint_resolve_interrupt(&cpu, 1, 0, 1) != 0 || cpu.redirect ||
+        cpu.checkpoint_continuation != CKPT_CONTINUATION_NONE || g_syscall_restart)
+        return 1;
+    memset(&cpu, 0, sizeof cpu);
+    g_syscall_restart = 0;
+    if (checkpoint_resolve_interrupt(&cpu, 1, 1, 1) != 0 || !cpu.redirect ||
+        cpu.checkpoint_continuation != CKPT_CONTINUATION_NONE || !g_syscall_restart)
+        return 2;
+    memset(&cpu, 0, sizeof cpu);
+    g_syscall_restart = 0;
+    if (checkpoint_resolve_interrupt(&cpu, 0, 1, 1) != 0 || !cpu.redirect ||
+        cpu.checkpoint_continuation != CKPT_CONTINUATION_SYSCALL || !g_syscall_restart)
+        return 3;
+    return 0;
+}
+#endif
 
 // Route a thread-directed signal (tkill/tgkill at `tid`). If it names ANOTHER live thread and the signal
 // has a real guest handler, deliver it to exactly that thread (its cpu->tpending) -- a process-wide

@@ -663,6 +663,16 @@ static int bound_mapping_fork_complete(hl_linux_watch_fork_plan *plan, int child
 #include "ptrace.c" // bug real ptrace tracer/tracee coordination (uses helpers above + G_* macros)
 #include "binding.c"
 
+static void syscall_restart_architectural_state(struct cpu *c, uint64_t argument_zero, uint64_t number_register) {
+    G_A0(c) = argument_zero;
+#if defined(HL_GUEST_SIGACTION_HAS_RESTORER)
+    G_PC(c) -= 2;
+    G_RET(c) = number_register;
+#else
+    (void)number_register;
+#endif
+}
+
 static void service(struct cpu *c) {
     // Mark this thread as "in a host syscall" for the whole service window (incl. any blocking wait such
     // as pause()/ppoll()/read()): the fault-class-signal handlers use it to tell an external kill of
@@ -690,8 +700,9 @@ static void service(struct cpu *c) {
     // On x86-64 the syscall NUMBER and the return value share RAX (G_RET), so once the interrupted call wrote
     // its -EINTR result the number is gone -- a transparent restart would re-issue `syscall` with -EINTR as
     // the number. Preserve the entry number register so the SA_RESTART restart re-executes the SAME syscall.
+    uint64_t _svc_nrreg = 0;
 #if defined(HL_GUEST_SIGACTION_HAS_RESTORER)
-    uint64_t _svc_nrreg = G_RET(c);
+    _svc_nrreg = G_RET(c);
 #endif
     g_syscall_restart = 0;
     // Preserve the canonical syscall number across dispatch. x86 aliases the syscall-number and return-value
@@ -764,17 +775,13 @@ static void service(struct cpu *c) {
     // register the dispatch overwrote with the (discarded) EINTR result. The negative EINTR already made the
     // fd-publish block above a no-op, so this runs strictly after it.
     if (g_syscall_restart && c->redirect) {
-        G_A0(c) = _svc_arg0;
+        syscall_restart_architectural_state(c, _svc_arg0, _svc_nrreg);
 #if defined(HL_GUEST_SIGACTION_HAS_RESTORER)
         // x86 pre-advances rip past the `syscall` instruction (0F 05, 2 bytes) at emit time, so `redirect`
         // alone -- which only suppresses aarch64's post-service pc+=4 -- cannot re-execute it. Rewind rip to
         // the syscall instruction so the pending SA_RESTART handler's sigframe saves that pc and sigreturn
         // resumes ON it, transparently restarting the interrupted read()/waitpid() (eintr_restart_read/wait,
         // sarestart). aarch64 needs no rewind: leaving pc on the SVC is exactly what skipping the +4 does.
-        G_PC(c) -= 2;
-        // Restore RAX to the original syscall number (it shares the register with the just-written -EINTR
-        // return), so the re-executed `syscall` re-issues the same call rather than a garbage number.
-        G_RET(c) = _svc_nrreg;
 #endif
     }
 #if HL_ENABLE_LOGGING
@@ -785,6 +792,26 @@ static void service(struct cpu *c) {
     __atomic_store_n(&c->in_service, 0, __ATOMIC_SEQ_CST);
     g_in_service = 0;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+HL_API int HL_TARGET_LOCAL(checkpoint_restart_register_test)(void) {
+    struct cpu cpu = {0};
+    const uint64_t argument = UINT64_C(0x123456789abcdef0);
+    const uint64_t number = UINT64_C(0x135);
+    const uint64_t pc = UINT64_C(0x400020);
+    G_A0(&cpu) = UINT64_C(0xdead);
+    G_RET(&cpu) = UINT64_C(0xbeef);
+    G_PC(&cpu) = pc;
+    syscall_restart_architectural_state(&cpu, argument, number);
+    if (G_A0(&cpu) != argument) return 1;
+#if defined(HL_GUEST_SIGACTION_HAS_RESTORER)
+    if (G_RET(&cpu) != number || G_PC(&cpu) != pc - 2) return 2;
+#else
+    if (G_PC(&cpu) != pc) return 3;
+#endif
+    return 0;
+}
+#endif
 
 static void service_local(struct cpu *c) {
     // Frontends whose guest has legacy syscalls without a canonical (aarch64) equivalent rewrite them

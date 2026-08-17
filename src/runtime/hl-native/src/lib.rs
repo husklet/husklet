@@ -83,6 +83,12 @@ pub fn signal_errno_frame_test(isa: u32, domain: u32, redirect: bool, nr: u64, r
     bindings::signal_errno_frame_test(isa, domain, redirect, nr, raw)
 }
 
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn checkpoint_continuation_contract_test(isa: u32) -> Result<(), i32> {
+    bindings::checkpoint_continuation_contract_test(isa)
+}
+
 #[cfg(test)]
 mod platform;
 
