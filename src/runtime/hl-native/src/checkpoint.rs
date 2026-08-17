@@ -172,6 +172,39 @@ mod tests {
         transport.adopt(1).expect("adopt transport descriptors");
     }
 
+    #[test]
+    fn transport_generation_rollover_never_publishes_zero() {
+        use std::collections::BTreeSet;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let (_broker, transport) = CheckpointTransport::create().expect("checkpoint transport");
+        let transport = Arc::new(transport);
+        // SAFETY: the transport uniquely owns a live, properly aligned u32 mapping.
+        let generation = unsafe { AtomicU32::from_ptr(transport.trigger_mapping.as_ptr().cast()) };
+        generation.store(u32::MAX - 1, Ordering::Release);
+        assert_eq!(transport.bump(), u32::MAX);
+        assert_eq!(transport.bump(), 1);
+        assert_eq!(generation.load(Ordering::Acquire), 1);
+
+        generation.store(u32::MAX - 3, Ordering::Release);
+        let workers = (0..8)
+            .map(|_| {
+                let transport = Arc::clone(&transport);
+                std::thread::spawn(move || (0..100).map(|_| transport.bump()).collect::<Vec<_>>())
+            })
+            .collect::<Vec<_>>();
+        let published = workers
+            .into_iter()
+            .flat_map(|worker| worker.join().expect("generation bump worker"))
+            .collect::<Vec<_>>();
+        assert!(published.iter().all(|generation| *generation != 0));
+        assert_eq!(
+            published.iter().copied().collect::<BTreeSet<_>>().len(),
+            published.len()
+        );
+    }
+
     #[cfg(feature = "native-test-hooks")]
     #[test]
     fn registry_allocation_failure_rejects_transport_without_leaking_descriptors() {

@@ -248,12 +248,12 @@ static hl_linux_snapshot g_ckpt_snapshot;
 // generation this process last acted on. Both stay 0/NULL unless armed, so ckpt_pending() is inert on a
 // normal launch (and always for x86, which never arms checkpoint) -- the whole gate is unaffected.
 static volatile uint32_t *g_ckpt_trigger;
-static uint32_t g_ckpt_seen_gen;
+static _Atomic uint32_t g_ckpt_seen_gen;
 static _Atomic int g_ckpt_barrier_active;
 static _Atomic uint32_t g_ckpt_fanout_gen;
 
 uint32_t ckpt_request_generation(void) {
-    return g_ckpt_seen_gen;
+    return atomic_load_explicit(&g_ckpt_seen_gen, memory_order_acquire);
 }
 
 // A whole-tree checkpoint has been requested. Consulted by syscall_should_restart / svc_poll_retry so a
@@ -265,7 +265,8 @@ static int ckpt_pending(void) __attribute__((unused));
 
 static int ckpt_pending(void) {
     return atomic_load_explicit(&g_ckpt_barrier_active, memory_order_acquire) ||
-           (g_ckpt_trigger && (*g_ckpt_trigger != g_ckpt_seen_gen));
+           (g_ckpt_trigger && (__atomic_load_n(g_ckpt_trigger, __ATOMIC_ACQUIRE) !=
+                               atomic_load_explicit(&g_ckpt_seen_gen, memory_order_acquire)));
 }
 
 // This restored process's OWN guest pid (0 => normal launch, report the host pid). A checkpoint restore

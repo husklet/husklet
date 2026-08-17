@@ -579,6 +579,24 @@ fn panicking_storage_abort_cannot_strand_the_server_in_aborting() {
 }
 
 #[test]
+fn failed_activation_cleanup_poisons_authority_and_propagates_abort_failure() {
+    let store = Arc::new(PanickingAbortStore::default());
+    let server = Server::new(store.clone(), store);
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+
+    assert_eq!(
+        server.begin_capture_after_admission(deadline, || 0),
+        Err(CaptureFailure::Poisoned)
+    );
+    assert_eq!(
+        server.begin_capture_after_admission(deadline, || 1),
+        Err(CaptureFailure::Poisoned),
+        "failed cleanup must not expose an apparently idle capture authority"
+    );
+    assert_eq!(server.transaction_state(), (0, 0, 0, 0, 0));
+}
+
+#[test]
 fn poisoned_server_state_is_recovered_and_cleared_during_abort() {
     let store = Arc::new(TransactionStore::default());
     let server = Arc::new(Server::new(store.clone(), store.clone()));

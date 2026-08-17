@@ -389,11 +389,15 @@ int hl_ckpt_trigger_create(hl_activation_descriptor *out_descriptor, void **out_
 }
 
 uint32_t hl_ckpt_trigger_bump(void *mapping) {
-    volatile uint32_t *generation = mapping;
+    uint32_t *generation = mapping;
+    uint32_t current;
     uint32_t next;
     if (mapping == NULL) return 0;
-    next = *generation + 1u;
-    *generation = next;
+    current = __atomic_load_n(generation, __ATOMIC_ACQUIRE);
+    do {
+        next = current + 1u;
+        if (next == 0u) next = 1u;
+    } while (!__atomic_compare_exchange_n(generation, &current, next, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE));
     return next;
 }
 

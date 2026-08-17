@@ -928,8 +928,8 @@ int hl_ckpt_interrupt_executors(void);
 // whole tree; a peer dumps only itself. Never returns once it fires (all processes _exit after snapshotting).
 static void ckpt_poll(struct cpu *c) {
     if (!g_ckpt_trigger) return;
-    uint32_t g = *g_ckpt_trigger;
-    if (g == g_ckpt_seen_gen) return;
+    uint32_t g = __atomic_load_n(g_ckpt_trigger, __ATOMIC_ACQUIRE);
+    if (g == atomic_load_explicit(&g_ckpt_seen_gen, memory_order_acquire)) return;
     // One deterministic coordinator per host process: the thread-group leader owns generation consumption.
     // A peer that observes the trigger returns to translated execution with irq armed by the process kick;
     // the leader will shortly arm the strict barrier and park it at this dispatcher boundary.
@@ -944,7 +944,7 @@ static void ckpt_poll(struct cpu *c) {
             (void)hl_ckpt_interrupt_executors();
         return;
     }
-    g_ckpt_seen_gen = g;
+    atomic_store_explicit(&g_ckpt_seen_gen, g, memory_order_release);
     if (container_pid() == 1) {
         ckpt_coordinate_and_exit(c); // never returns (dumps the tree + _exit)
     }
@@ -1013,7 +1013,7 @@ static int ckpt_control_init(void) {
        and RECOVERY.jsonl traffic from falling back to the globally reusable generation zero. */
     g_ckpt_trigger = ckpt_map_trigger();
     if (!g_ckpt_trigger) return -1;
-    g_ckpt_seen_gen = *g_ckpt_trigger;
+    atomic_store_explicit(&g_ckpt_seen_gen, __atomic_load_n(g_ckpt_trigger, __ATOMIC_ACQUIRE), memory_order_release);
     return 0;
 }
 

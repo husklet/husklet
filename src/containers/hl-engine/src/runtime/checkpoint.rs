@@ -167,7 +167,10 @@ impl Server {
         self.begin_transaction(deadline)?;
         let id = u64::from(activate());
         if id == 0 {
-            let _ = self.discard_transaction(deadline);
+            let discarded = self.discard_transaction(deadline);
+            capture.phase = CapturePhase::Poisoned;
+            self.capture_changed.notify_all();
+            discarded?;
             return Err(CaptureFailure::Poisoned);
         }
         self.committed.store(false, Ordering::Release);
@@ -200,7 +203,10 @@ impl Server {
         self.begin_transaction(deadline)?;
         let id = u64::from(activate());
         if id == 0 {
-            let _ = self.discard_transaction(deadline);
+            let discarded = self.discard_transaction(deadline);
+            capture.phase = CapturePhase::Poisoned;
+            self.capture_changed.notify_all();
+            discarded?;
             return Err(CaptureFailure::Poisoned);
         }
         capture.phase = CapturePhase::Recovery { id, deadline };
