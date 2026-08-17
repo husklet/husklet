@@ -266,6 +266,12 @@ mod tests {
                     "{path} restore keeps host-transient CPU state: {statement}"
                 );
             }
+            for preserved in ["G_SMC_QUEUE_RESET", "smc_range_count = 0", "smc_range_overflow = 0"] {
+                assert!(
+                    !sanitize.contains(preserved),
+                    "{path} restore discards pending guest SMC work: {preserved}"
+                );
+            }
         }
     }
 
