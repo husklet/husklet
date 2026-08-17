@@ -706,7 +706,14 @@ fn checkpoint_continuation_preserves_relative_timeout_on_both_isas() {
     let fixtures = tempfile::tempdir().unwrap();
     for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
         let executable = timeout_fixture(isa, fixtures.path());
-        for mode in ["nanosleep", "clock_nanosleep", "ppoll", "pselect"] {
+        for mode in [
+            "nanosleep",
+            "clock_nanosleep",
+            "ppoll",
+            "pselect",
+            "epoll_pwait",
+            "epoll_pwait2",
+        ] {
             let temporary = tempfile::tempdir().unwrap();
             let ready = temporary.path().join("ready");
             let result = temporary.path().join("result");
@@ -748,6 +755,12 @@ fn checkpoint_continuation_preserves_relative_timeout_on_both_isas() {
             assert!(output.starts_with("result=0 errno=0"), "{isa:?} {mode}: {output}");
             if matches!(mode, "nanosleep" | "clock_nanosleep") {
                 assert!(output.contains("rem=73.000000041"), "{isa:?} {mode} mutated remainder: {output}");
+            }
+            if mode.starts_with("epoll_") {
+                assert!(
+                    output.contains("event=deadbeef/123456789abcdef0"),
+                    "{isa:?} {mode} mutated the event output on checkpoint: {output}"
+                );
             }
         }
     }

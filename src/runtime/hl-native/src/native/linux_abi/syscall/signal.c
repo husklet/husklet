@@ -22,14 +22,21 @@ enum checkpoint_continuation_kind {
 static _Thread_local uint32_t g_checkpoint_resume_kind;
 static _Thread_local int64_t g_checkpoint_resume_timeout_ns;
 
+static int checkpoint_resume_timeout_ns(int64_t *timeout_ns) {
+    if (g_checkpoint_resume_kind != CKPT_CONTINUATION_TIMEOUT || timeout_ns == NULL) return 0;
+    *timeout_ns = g_checkpoint_resume_timeout_ns;
+    g_checkpoint_resume_kind = CKPT_CONTINUATION_NONE;
+    g_checkpoint_resume_timeout_ns = -1;
+    return 1;
+}
+
 static int checkpoint_resume_timeout(uint64_t syscall, struct timespec *timeout) {
     if (g_checkpoint_resume_kind != CKPT_CONTINUATION_TIMEOUT || timeout == NULL) return 0;
     (void)syscall;
-    int64_t ns = g_checkpoint_resume_timeout_ns;
+    int64_t ns;
+    (void)checkpoint_resume_timeout_ns(&ns);
     timeout->tv_sec = (time_t)(ns / 1000000000LL);
     timeout->tv_nsec = (long)(ns % 1000000000LL);
-    g_checkpoint_resume_kind = CKPT_CONTINUATION_NONE;
-    g_checkpoint_resume_timeout_ns = -1;
     return 1;
 }
 
