@@ -169,6 +169,7 @@ impl Service {
             .lock()
             .await
             .insert(exec.id.clone(), Arc::clone(&process));
+        self.failures.lock().await.remove(&journal);
         let service = Arc::clone(self);
         let exec_id = exec.id;
         tokio::spawn(async move {
@@ -190,11 +191,13 @@ impl Service {
             cleanup.push(format!("kill failed: {error}"));
         }
         let mut wait = tokio::spawn(Arc::clone(&process).wait());
+        let mut terminal_failure = None;
         let reaped = match tokio::time::timeout(unpublished_reap_timeout(), &mut wait).await {
             Ok(Ok(Ok(_))) => true,
             Ok(Ok(Err(error))) => {
                 cleanup.push(format!("reap failed: {error}"));
-                false
+                terminal_failure = Some(error.to_string());
+                true
             }
             Ok(Err(error)) => {
                 cleanup.push(format!("reap task failed: {error}"));
@@ -205,7 +208,8 @@ impl Service {
                 self.exec_live.lock().await.insert(id.clone(), Arc::clone(&process));
                 let service = Arc::downgrade(self);
                 let journal = journal.clone();
-                tokio::spawn(async move {
+                let cleanup_id = id.clone();
+                let cleanup_task = tokio::spawn(async move {
                     let result = wait.await;
                     let Some(service) = service.upgrade() else {
                         return;
@@ -231,11 +235,19 @@ impl Service {
                             }
                         }
                         Ok(Err(error)) => {
-                            hl_log::hl_error!(
-                                hl_log::tag::CONTAINER,
-                                "quarantined exec reap failed id={} error={error}",
-                                id
-                            );
+                            service.exec_live.lock().await.remove(&id);
+                            service
+                                .failures
+                                .lock()
+                                .await
+                                .insert(journal.clone(), format!("unpublished exec cleanup failed: {error}"));
+                            let io = service.io.lock().await.remove(&journal);
+                            if let Some(io) = io {
+                                io.finish().await;
+                            }
+                            if let Some(waiters) = service.exec_waiters.lock().await.get(&id) {
+                                waiters.notify_waiters();
+                            }
                         }
                         Err(error) => {
                             hl_log::hl_error!(
@@ -245,7 +257,12 @@ impl Service {
                             );
                         }
                     }
+                    service.exec_cleanups.lock().await.remove(&id);
                 });
+                self.exec_cleanups
+                    .lock()
+                    .await
+                    .insert(cleanup_id, cleanup_task.abort_handle());
                 return Error::Runtime(format!(
                     "exec state publication failed: {publication}; rollback cleanup failed: {}",
                     cleanup.join("; ")
@@ -254,7 +271,21 @@ impl Service {
         };
         if !reaped {
             self.exec_live.lock().await.insert(id.clone(), Arc::clone(&process));
+            let failure = format!("unpublished exec cleanup is quarantined: {}", cleanup.join("; "));
+            self.failures.lock().await.insert(journal.clone(), failure);
+            if let Some(waiters) = self.exec_waiters.lock().await.get(&id) {
+                waiters.notify_waiters();
+            }
         } else {
+            if let Some(error) = terminal_failure {
+                self.failures
+                    .lock()
+                    .await
+                    .insert(journal.clone(), format!("unpublished exec cleanup failed: {error}"));
+                if let Some(waiters) = self.exec_waiters.lock().await.get(&id) {
+                    waiters.notify_waiters();
+                }
+            }
             let io = self.io.lock().await.remove(journal);
             if let Some(io) = io {
                 io.finish().await;
@@ -540,6 +571,24 @@ impl Service {
         let io = Arc::new(Io::new(exec.spec.streams.stdin));
         values.insert(id, Arc::clone(&io));
         io
+    }
+
+    pub(crate) async fn await_exec_cleanups(&self, timeout: std::time::Duration) -> Result<()> {
+        self.exec_cleanups.lock().await.retain(|_, task| !task.is_finished());
+        if self.exec_cleanups.lock().await.is_empty() {
+            return Ok(());
+        }
+        tokio::time::timeout(timeout, async {
+            loop {
+                self.exec_cleanups.lock().await.retain(|_, task| !task.is_finished());
+                if self.exec_cleanups.lock().await.is_empty() {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .map_err(|_| Error::Runtime("timed out waiting for quarantined exec cleanup".into()))
     }
 }
 

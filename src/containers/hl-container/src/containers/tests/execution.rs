@@ -558,7 +558,8 @@ async fn failed_restored_exec_publication_is_killed_reaped_and_retryable() {
 #[tokio::test]
 async fn failed_publication_reports_kill_and_reap_failures_without_losing_created_state() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
-    runtime.delay = Duration::from_millis(1);
+    runtime.delay = Duration::from_secs(1);
+    runtime.restore_delay = Some(Duration::from_millis(1));
     let runtime = Arc::new(runtime);
     let storage = Arc::new(Memory::default());
     let containers = test_containers(storage.clone(), runtime.clone()).await.unwrap();
@@ -569,8 +570,18 @@ async fn failed_publication_reports_kill_and_reap_failures_without_losing_create
         .create("cleanup-error-parent", ExecSpec::new(Process::new("/bin/sh")))
         .await
         .unwrap();
+    containers.executions().start(&exec.id).await.unwrap();
+    containers
+        .executions()
+        .checkpoint_all(Duration::from_secs(1))
+        .await
+        .unwrap();
     runtime.fail_signal.store(true, Ordering::SeqCst);
     runtime.fail_wait.store(true, Ordering::SeqCst);
+    let waiting = containers.executions();
+    let wait_id = exec.id.clone();
+    let waiter = tokio::spawn(async move { waiting.wait(&wait_id).await });
+    tokio::task::yield_now().await;
     storage.fail_next_exec_replace();
 
     let error = containers.executions().start(&exec.id).await.err().unwrap();
@@ -584,24 +595,16 @@ async fn failed_publication_reports_kill_and_reap_failures_without_losing_create
     );
 
     assert!(
-        containers
-            .executions()
-            .start(&exec.id)
+        waiter
             .await
-            .err()
             .unwrap()
-            .to_string()
-            .contains("quarantined")
-    );
-    assert!(
-        containers
-            .executions()
-            .remove(&exec.id)
-            .await
             .unwrap_err()
             .to_string()
-            .contains("not running")
+            .contains("unpublished exec cleanup failed")
     );
+    runtime.fail_signal.store(false, Ordering::SeqCst);
+    runtime.fail_wait.store(false, Ordering::SeqCst);
+    containers.executions().start(&exec.id).await.unwrap();
 }
 
 #[tokio::test]
@@ -625,6 +628,7 @@ async fn timed_out_publication_cleanup_quarantines_until_reap_then_allows_one_re
         .checkpoint_all(Duration::from_secs(1))
         .await
         .unwrap();
+    runtime.blocking_wait.store(true, Ordering::SeqCst);
     let waiting = containers.executions();
     let wait_id = exec.id.clone();
     let waiter = tokio::spawn(async move { waiting.wait(&wait_id).await });
@@ -648,12 +652,26 @@ async fn timed_out_publication_cleanup_quarantines_until_reap_then_allows_one_re
     );
     assert!(containers.executions().remove(&exec.id).await.is_err());
     assert!(!waiter.is_finished(), "quarantine completion invented an exec exit");
+    assert!(
+        containers
+            .service
+            .await_exec_cleanups(Duration::from_millis(5))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("timed out")
+    );
     tokio::time::sleep(Duration::from_millis(125)).await;
     assert_eq!(
         runtime.waits.load(Ordering::SeqCst),
         waits_before + 1,
         "publication cleanup started more than one runtime waiter"
     );
+    containers
+        .service
+        .await_exec_cleanups(Duration::from_millis(5))
+        .await
+        .unwrap();
 
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {

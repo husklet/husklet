@@ -99,9 +99,16 @@ impl Running for Process {
 
     async fn wait(self: Arc<Self>) -> Result<ExitStatus> {
         let engine = self.engine()?;
-        let exit = tokio::task::spawn_blocking(move || engine.wait())
+        let (result, wait) = tokio::sync::oneshot::channel();
+        std::thread::Builder::new()
+            .name(format!("hl-engine-wait-{}", self.id))
+            .spawn(move || {
+                let _ = result.send(engine.wait());
+            })
+            .map_err(|error| Error::Runtime(format!("engine wait thread: {error}")))?;
+        let exit = wait
             .await
-            .map_err(|error| Error::Runtime(format!("engine wait task: {error}")))?
+            .map_err(|_| Error::Runtime("engine wait thread ended without a result".into()))?
             .map_err(|error| Error::Runtime(format!("engine wait: {error:?}")))?;
         self.child
             .lock()

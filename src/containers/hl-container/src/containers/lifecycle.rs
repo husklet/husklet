@@ -158,6 +158,11 @@ impl Containers {
                 failure = error;
             }
         }
+        if let Err(error) = self.service.await_exec_cleanups(timeout).await
+            && failure.is_none()
+        {
+            failure = Some(error);
+        }
         failure.map_or(Ok(()), Err)
     }
 

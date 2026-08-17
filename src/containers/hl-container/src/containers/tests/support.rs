@@ -69,6 +69,7 @@ pub(super) struct FakeRuntime {
     pub(super) launch_failures: Arc<std::sync::Mutex<std::collections::BTreeMap<String, String>>>,
     pub(super) fail_wait: AtomicBool,
     pub(super) fail_signal: AtomicBool,
+    pub(super) blocking_wait: AtomicBool,
     pub(super) fail_checkpoint: Arc<AtomicU64>,
     pub(super) hold_logs: AtomicBool,
     pub(super) checkpointable: AtomicBool,
@@ -101,6 +102,7 @@ impl FakeRuntime {
             launch_failures: Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new())),
             fail_wait: AtomicBool::new(false),
             fail_signal: AtomicBool::new(false),
+            blocking_wait: AtomicBool::new(false),
             fail_checkpoint: Arc::new(AtomicU64::new(0)),
             hold_logs: AtomicBool::new(false),
             checkpointable: AtomicBool::new(true),
@@ -133,6 +135,7 @@ struct FakeProcess {
     result: ExitStatus,
     fail_wait: bool,
     fail_signal: bool,
+    blocking_wait: bool,
     signals: Arc<std::sync::Mutex<Vec<Signal>>>,
     waits: Arc<AtomicU64>,
     suspensions: Arc<std::sync::Mutex<Vec<bool>>>,
@@ -159,7 +162,14 @@ impl Running for FakeProcess {
     }
     async fn wait(self: Arc<Self>) -> Result<ExitStatus> {
         self.waits.fetch_add(1, Ordering::SeqCst);
-        tokio::time::sleep(self.delay).await;
+        if self.blocking_wait {
+            let delay = self.delay;
+            tokio::task::spawn_blocking(move || std::thread::sleep(delay))
+                .await
+                .unwrap();
+        } else {
+            tokio::time::sleep(self.delay).await;
+        }
         if self.fail_wait {
             return Err(Error::Runtime("injected wait failure".into()));
         }
@@ -282,6 +292,7 @@ impl Runtime for FakeRuntime {
             result,
             fail_wait: self.fail_wait.load(Ordering::SeqCst),
             fail_signal: self.fail_signal.load(Ordering::SeqCst),
+            blocking_wait: self.blocking_wait.load(Ordering::SeqCst),
             signals: Arc::clone(&self.signals),
             waits: Arc::clone(&self.waits),
             suspensions: Arc::clone(&self.suspensions),
