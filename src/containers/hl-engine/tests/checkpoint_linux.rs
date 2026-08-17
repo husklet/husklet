@@ -8,7 +8,7 @@ use hl_engine::{
     runtime::Engine,
 };
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     num::NonZeroU64,
     path::{Path, PathBuf},
     sync::{Arc, Condvar, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard},
@@ -150,6 +150,23 @@ fn continuation_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     output
 }
 
+fn foreground_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    let (compiler, name) = match isa {
+        GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-foreground-aarch64"),
+        GuestIsa::X86_64 => ("x86_64-linux-gnu-gcc", "checkpoint-foreground-x86_64"),
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/foreground.c");
+    let output = directory.join(name);
+    let status = std::process::Command::new(compiler)
+        .args(["-static", "-O2", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
+    assert!(status.success(), "{compiler} failed with {status}");
+    output
+}
+
 fn timeout_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     let (compiler, name) = match isa {
         GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-timeout-aarch64"),
@@ -199,6 +216,93 @@ fn continuation_plan(executable: &Path, ready: &Path, release: &Path, result: &P
         environment: Vec::new(),
         result_path: None,
         options,
+    }
+}
+
+#[derive(Default)]
+struct TerminalState {
+    input: VecDeque<u8>,
+    output: Vec<u8>,
+    closed: bool,
+}
+
+#[derive(Default)]
+struct TestTerminal {
+    state: Mutex<TerminalState>,
+    changed: Condvar,
+}
+
+impl TestTerminal {
+    fn input(&self, bytes: &[u8]) {
+        let mut state = self.state.lock().unwrap();
+        state.input.extend(bytes);
+        self.changed.notify_all();
+    }
+
+    fn wait_output(&self, marker: &[u8]) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut state = self.state.lock().unwrap();
+        while !state.output.windows(marker.len()).any(|window| window == marker) {
+            assert!(
+                !state.closed,
+                "terminal closed before {:?}:\n{}",
+                String::from_utf8_lossy(marker),
+                String::from_utf8_lossy(&state.output)
+            );
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "terminal did not produce {:?}:\n{}",
+                String::from_utf8_lossy(marker),
+                String::from_utf8_lossy(&state.output)
+            );
+            let (next, timeout) = self.changed.wait_timeout(state, remaining).unwrap();
+            state = next;
+            assert!(
+                !timeout.timed_out(),
+                "terminal did not produce {:?}:\n{}",
+                String::from_utf8_lossy(marker),
+                String::from_utf8_lossy(&state.output)
+            );
+        }
+    }
+
+    fn output(&self) -> String {
+        String::from_utf8_lossy(&self.state.lock().unwrap().output).into_owned()
+    }
+
+}
+
+impl TerminalPort for TestTerminal {
+    fn read(&self, output: &mut [u8]) -> std::io::Result<usize> {
+        let mut state = self.state.lock().unwrap();
+        while state.input.is_empty() && !state.closed {
+            state = self.changed.wait(state).unwrap();
+        }
+        if state.closed {
+            return Ok(0);
+        }
+        let count = output.len().min(state.input.len());
+        for byte in &mut output[..count] {
+            *byte = state.input.pop_front().unwrap();
+        }
+        Ok(count)
+    }
+
+    fn write(&self, input: &[u8]) -> std::io::Result<usize> {
+        let mut state = self.state.lock().unwrap();
+        if state.closed {
+            return Err(std::io::ErrorKind::BrokenPipe.into());
+        }
+        state.output.extend(input);
+        self.changed.notify_all();
+        Ok(input.len())
+    }
+
+    fn close(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.closed = true;
+        self.changed.notify_all();
     }
 }
 
@@ -763,6 +867,61 @@ fn checkpoint_continuation_preserves_relative_timeout_on_both_isas() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn restored_foreground_sleep_takes_ctrl_c_without_killing_shell_on_both_isas() {
+    let fixtures = tempfile::tempdir().unwrap();
+    for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
+        let executable = foreground_fixture(isa, fixtures.path());
+        let temporary = tempfile::tempdir().unwrap();
+        let release = temporary.path().join("release");
+        let final_release = temporary.path().join("final-release");
+        let store = Arc::new(Store::default());
+
+        let capture_port = Arc::new(TestTerminal::default());
+        let capture_terminal = Terminal::new(capture_port.clone(), 24, 80).unwrap();
+        let capture = Engine::with_checkpoint(
+            isa,
+            plan(&executable, &release, &final_release, &["HL_CHECKPOINT"]),
+            StandardStreams::default().with_terminal(capture_terminal),
+            store.clone(),
+            store.clone(),
+        )
+        .unwrap();
+        capture.start().unwrap();
+        capture_port.wait_output(b"SLEEPING");
+        capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+        assert_eq!(capture.wait().unwrap().guest_status, 0);
+
+        let restore_port = Arc::new(TestTerminal::default());
+        let restore_terminal = Terminal::new(restore_port.clone(), 24, 80).unwrap();
+        let restore = Arc::new(Engine::with_checkpoint(
+            isa,
+            plan(&executable, &release, &final_release, &["HL_RESTORE"]),
+            StandardStreams::default().with_terminal(restore_terminal),
+            store.clone(),
+            store.clone(),
+        )
+        .unwrap());
+        restore.start().unwrap();
+        let (finished, completion) = std::sync::mpsc::channel();
+        let waiting = restore.clone();
+        std::thread::spawn(move || finished.send(waiting.wait()).unwrap());
+        std::thread::sleep(Duration::from_millis(500));
+        match completion.try_recv() {
+            Ok(result) => panic!("{isa:?} restore ended before input: {result:?}\n{}", restore_port.output()),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => panic!("restore waiter disconnected"),
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+        restore_port.input(&[3]);
+        let restored = completion
+            .recv_timeout(Duration::from_secs(60))
+            .unwrap_or_else(|_| panic!("{isa:?} restore did not exit after Ctrl-C:\n{}", restore_port.output()))
+            .unwrap_or_else(|error| panic!("{isa:?} restore failed: {error:?}\n{}", restore_port.output()));
+        assert_eq!(restored.guest_status, 0, "{}", restore_port.output());
+        restore_port.wait_output(b"PROMPT-SURVIVED");
     }
 }
 
