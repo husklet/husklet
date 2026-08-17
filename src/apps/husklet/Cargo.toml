@@ -32,6 +32,7 @@ hl-client = { path = "../../containers/hl-client", optional = true }
 hl-images = { path = "../../containers/hl-images", optional = true }
 hl-gui = { path = "../../workspaces/hl-gui", optional = true }
 libc = { version = "0.2", optional = true }
+fs2 = { workspace = true, optional = true }
 tokio = { version = "1", features = ["fs", "rt-multi-thread", "macros", "signal"], optional = true }
 serde_json = { version = "1", optional = true }
 sha2 = { workspace = true, optional = true }
@@ -62,6 +63,7 @@ runtime = [
     "dep:hl-daemon",
     "dep:hl-client",
     "dep:hl-images",
+    "dep:fs2",
     "dep:libc",
     "dep:tokio",
     "dep:serde_json",

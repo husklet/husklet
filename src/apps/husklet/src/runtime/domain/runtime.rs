@@ -8,7 +8,7 @@ use hl_ws::Arch;
 use crate::config::WorkspaceConfig;
 use crate::paths;
 
-use super::{CONFIGURATION_SIGNATURE, CONTAINER, Configuration, RUNTIME_SIGNATURE, SIGNATURE};
+use super::{Configuration, CONFIGURATION_SIGNATURE, CONTAINER, RUNTIME_SIGNATURE, SIGNATURE};
 
 /// Composes the container capabilities that back one workspace execution domain.
 pub(super) struct Runtime;
@@ -59,9 +59,15 @@ impl Runtime {
     ) -> io::Result<()> {
         let executions = containers.executions();
         executions.require_checkpointable().await.map_err(io::Error::other)?;
-        if let Some(daemon) = docker {
-            daemon.close(crate::runtime::resources::Close::Checkpoint)?;
-        }
+        let docker_preparation = if let Some(daemon) = docker {
+            let preparation = daemon.prepare_checkpoint()?;
+            if let Some(warning) = preparation.warning() {
+                hl_log::hl_error!(hl_log::tag::CONTAINER, "{warning}");
+            }
+            Some(preparation)
+        } else {
+            None
+        };
         let checkpoint = match containers.checkpoint_all(std::time::Duration::from_secs(30)).await {
             Ok(()) => containers
                 .shutdown(std::time::Duration::from_secs(5))
@@ -72,6 +78,7 @@ impl Runtime {
         let Err(checkpoint) = checkpoint else {
             return Ok(());
         };
+        drop(docker_preparation);
         let Some(daemon) = docker else {
             return Err(checkpoint);
         };

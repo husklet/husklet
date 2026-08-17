@@ -26,15 +26,16 @@ impl RestoreSummary {
         hl_fs::File::from(self.path.clone()).replace(summary)
     }
 
-    pub(super) fn take(&self) -> io::Result<Option<String>> {
+    pub(super) fn read(&self) -> io::Result<Option<String>> {
         match std::fs::read_to_string(&self.path) {
-            Ok(summary) => {
-                self.remove()?;
-                Ok(Some(summary))
-            }
+            Ok(summary) => Ok(Some(summary)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error),
         }
+    }
+
+    pub(super) fn clear(&self) -> io::Result<()> {
+        self.remove()
     }
 
     fn remove(&self) -> io::Result<()> {

@@ -270,7 +270,24 @@ impl Domain {
     }
 
     pub fn take_restore_summary(workspace: &WorkspaceConfig) -> io::Result<Option<String>> {
-        RestoreSummary::new(workspace).take()
+        let restore = RestoreSummary::new(workspace);
+        let Some(summary) = restore.read()? else {
+            return Ok(None);
+        };
+        restore.clear()?;
+        if workspace.docker_sock {
+            crate::runtime::resources::Daemon::new(workspace).clear_checkpoint_warning()?;
+        }
+        Ok(Some(summary))
+    }
+
+    fn publish_restore_summary(workspace: &WorkspaceConfig, failures: &mut Vec<String>) -> io::Result<()> {
+        if workspace.docker_sock {
+            if let Some(warning) = crate::runtime::resources::Daemon::new(workspace).checkpoint_warning()? {
+                failures.push(warning);
+            }
+        }
+        RestoreSummary::new(workspace).publish(failures)
     }
 
     fn wait_for_start(&self, mut child: std::process::Child, timeout: std::time::Duration) -> io::Result<PathBuf> {
@@ -326,7 +343,7 @@ impl Domain {
         let mut failures = Runtime::remove_stale_executions(&containers).await?;
         failures.extend(Runtime::ensure_container(&containers, workspace).await?);
         failures.extend(Runtime::restore_checkpoints(&containers).await?);
-        RestoreSummary::new(workspace).publish(&failures)?;
+        Self::publish_restore_summary(workspace, &mut failures)?;
         let configuration = PublishedConfiguration::new(&owner.directory);
         let protocol = PublishedProtocol::new(&owner.directory);
         let close_result = ResultFile::new(&owner.directory);

@@ -437,11 +437,12 @@ fn restore_summary_is_consumed_once_and_names_each_failure() {
         ])
         .unwrap();
 
-    let text = summary.take().unwrap().unwrap();
+    let text = summary.read().unwrap().unwrap();
     assert!(text.contains("workspace restored with 2 failure(s)"));
     assert!(text.contains("terminal pane-1: restored process cannot be attached"));
     assert!(text.contains("container database: checkpoint object is incomplete"));
-    assert_eq!(summary.take().unwrap(), None);
+    summary.clear().unwrap();
+    assert_eq!(summary.read().unwrap(), None);
 }
 
 #[test]
@@ -454,5 +455,34 @@ fn successful_restore_removes_an_obsolete_failure_summary() {
     summary.publish(&["old failure".into()]).unwrap();
     summary.publish(&[]).unwrap();
 
-    assert_eq!(summary.take().unwrap(), None);
+    assert_eq!(summary.read().unwrap(), None);
+}
+
+#[test]
+fn docker_warning_survives_relaunch_until_the_ui_acknowledges_it() {
+    let root = tempfile::tempdir().unwrap();
+    let mut workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);
+    workspace.storage = Some(root.path().join("x".repeat(192)));
+    workspace.docker_sock = true;
+    let daemon = crate::runtime::resources::Daemon::new(&workspace);
+    let preparation = daemon.prepare_checkpoint().unwrap();
+    let warning = preparation.warning().unwrap().to_owned();
+    drop(preparation);
+
+    Domain::publish_restore_summary(&workspace, &mut Vec::new()).unwrap();
+    assert!(RestoreSummary::new(&workspace)
+        .read()
+        .unwrap()
+        .unwrap()
+        .contains(&warning));
+    assert_eq!(daemon.checkpoint_warning().unwrap().as_deref(), Some(warning.as_str()));
+
+    // A second domain launch before any terminal/UI consumer must republish, not acknowledge, it.
+    Domain::publish_restore_summary(&workspace, &mut Vec::new()).unwrap();
+    assert_eq!(daemon.checkpoint_warning().unwrap().as_deref(), Some(warning.as_str()));
+
+    let delivered = Domain::take_restore_summary(&workspace).unwrap().unwrap();
+    assert!(delivered.contains(&warning));
+    assert_eq!(daemon.checkpoint_warning().unwrap(), None);
+    assert_eq!(Domain::take_restore_summary(&workspace).unwrap(), None);
 }

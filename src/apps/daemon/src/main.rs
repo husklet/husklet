@@ -4,11 +4,12 @@
 use std::path::PathBuf;
 
 use clap::{CommandFactory, Parser};
+use fs2::FileExt as _;
 use hl_container::{Config, Containers};
 use hl_daemon::{Daemon, ProcessSample, ProcessSampler, Release};
+use hl_images::remote::{Auth, Registry};
 use hl_images::Images;
 use hl_images::Platform;
-use hl_images::remote::{Auth, Registry};
 
 mod host;
 
@@ -21,7 +22,12 @@ enum Disposition {
 struct Shutdown {
     cleanup: Containers,
     completed: std::sync::Arc<std::sync::Mutex<Option<hl_container::Result<()>>>>,
-    response: PathBuf,
+    failure: PathBuf,
+    success: PathBuf,
+    #[cfg(unix)]
+    terminate: tokio::signal::unix::Signal,
+    #[cfg(unix)]
+    hangup: tokio::signal::unix::Signal,
 }
 
 struct HostProcesses;
@@ -135,30 +141,23 @@ impl Logging {
 
 impl Shutdown {
     #[cfg(unix)]
-    async fn wait() -> Disposition {
-        let terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate());
-        let hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup());
-        if let (Ok(mut terminate), Ok(mut hangup)) = (terminate, hangup) {
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => Disposition::Kill,
-                _ = terminate.recv() => Disposition::Kill,
-                _ = hangup.recv() => Disposition::Checkpoint,
-            }
-        } else {
-            let _ = tokio::signal::ctrl_c().await;
-            Disposition::Kill
+    async fn wait(&mut self) -> Disposition {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => Disposition::Kill,
+            _ = self.terminate.recv() => Disposition::Kill,
+            _ = self.hangup.recv() => Disposition::Checkpoint,
         }
     }
 
     #[cfg(not(unix))]
-    async fn wait() -> Disposition {
+    async fn wait(&mut self) -> Disposition {
         let _ = tokio::signal::ctrl_c().await;
         Disposition::Kill
     }
 
-    async fn run(self) {
+    async fn run(mut self) {
         loop {
-            let disposition = Self::wait().await;
+            let disposition = self.wait().await;
             let stopped = match disposition {
                 Disposition::Kill => self.cleanup.shutdown(std::time::Duration::from_secs(5)).await,
                 Disposition::Checkpoint => self.cleanup.checkpoint_all(std::time::Duration::from_secs(30)).await,
@@ -179,10 +178,10 @@ impl Shutdown {
     async fn record_checkpoint(&self, stopped: &hl_container::Result<()>) {
         match stopped {
             Ok(()) => {
-                let _ = tokio::fs::remove_file(&self.response).await;
+                let _ = tokio::fs::write(&self.success, b"ok\n").await;
             }
             Err(error) => {
-                let _ = tokio::fs::write(&self.response, error.to_string()).await;
+                let _ = tokio::fs::write(&self.failure, error.to_string()).await;
             }
         }
     }
@@ -205,6 +204,15 @@ async fn main() {
 
 impl Arguments {
     async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
+        std::fs::create_dir_all(&self.root)?;
+        let owner = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.root.join("daemon.owner.lock"))?;
+        owner
+            .try_lock_exclusive()
+            .map_err(|error| format!("another daemon owns this data root: {error}"))?;
         let mut containers = Containers::builder(Config::new(&self.root));
         match (self.images, self.external_images) {
             (Some(local), Some(external)) => {
@@ -215,10 +223,13 @@ impl Arguments {
         }
         let containers = containers.build().await?;
         let failure = self.root.join("shutdown.error");
-        match tokio::fs::remove_file(&failure).await {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
+        let success = self.root.join("shutdown.success");
+        for outcome in [&failure, &success] {
+            match tokio::fs::remove_file(outcome).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
         }
         let cleanup = containers.clone();
         let result = std::sync::Arc::new(std::sync::Mutex::new(None));
@@ -226,7 +237,12 @@ impl Arguments {
         let shutdown = Shutdown {
             cleanup,
             completed,
-            response: failure.clone(),
+            failure: failure.clone(),
+            success,
+            #[cfg(unix)]
+            terminate: tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?,
+            #[cfg(unix)]
+            hangup: tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?,
         };
         Daemon::new(containers)
             .platform(self.platform)
@@ -260,8 +276,8 @@ impl Arguments {
 
 #[cfg(test)]
 mod tests {
-    use super::{Arguments, Logging, cpu_seconds, default_platform};
-    use clap::{Parser, error::ErrorKind};
+    use super::{cpu_seconds, default_platform, Arguments, Logging};
+    use clap::{error::ErrorKind, Parser};
     use hl_images::Platform;
     use std::path::PathBuf;
 

@@ -99,3 +99,89 @@ async fn process_restart_preserves_container_state() {
         daemon.wait().await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn data_root_has_exactly_one_durable_daemon_owner() {
+    let work = tempfile::tempdir().unwrap();
+    let root = work.path().join("state");
+    let first_socket = work.path().join("first.sock");
+    let second_socket = work.path().join("second.sock");
+    let mut first = Command::new(env!("CARGO_BIN_EXE_dockerd"))
+        .args([
+            "--root",
+            root.to_str().unwrap(),
+            "--socket",
+            first_socket.to_str().unwrap(),
+        ])
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while UnixStream::connect(&first_socket).await.is_err() {
+            assert!(
+                first.try_wait().unwrap().is_none(),
+                "first daemon exited before binding"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let second = tokio::time::timeout(
+        Duration::from_secs(2),
+        Command::new(env!("CARGO_BIN_EXE_dockerd"))
+            .args([
+                "--root",
+                root.to_str().unwrap(),
+                "--socket",
+                second_socket.to_str().unwrap(),
+            ])
+            .output(),
+    )
+    .await
+    .expect("competing daemon did not reject ownership")
+    .unwrap();
+
+    assert!(!second.status.success());
+    assert!(String::from_utf8_lossy(&second.stderr).contains("another daemon owns this data root"));
+    Client::unix(&first_socket).unwrap().ping().await.unwrap();
+    assert!(!second_socket.exists());
+    first.kill().await.unwrap();
+    first.wait().await.unwrap();
+}
+
+#[tokio::test]
+async fn successful_checkpoint_publishes_commit_acknowledgement_before_exit() {
+    let work = tempfile::tempdir().unwrap();
+    let root = work.path().join("state");
+    let socket = work.path().join("daemon.sock");
+    let mut daemon = Command::new(env!("CARGO_BIN_EXE_dockerd"))
+        .args(["--root", root.to_str().unwrap(), "--socket", socket.to_str().unwrap()])
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while UnixStream::connect(&socket).await.is_err() {
+            assert!(daemon.try_wait().unwrap().is_none(), "daemon exited before binding");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let signal = Command::new("/bin/kill")
+        .args(["-HUP", &daemon.id().unwrap().to_string()])
+        .status()
+        .await
+        .unwrap();
+    assert!(signal.success());
+    let status = tokio::time::timeout(Duration::from_secs(15), daemon.wait())
+        .await
+        .expect("checkpointed daemon did not exit")
+        .unwrap();
+
+    assert!(status.success());
+    assert_eq!(std::fs::read(root.join("shutdown.success")).unwrap(), b"ok\n");
+    assert!(!root.join("shutdown.error").exists());
+}
