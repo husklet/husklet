@@ -190,7 +190,7 @@ jobs:
               export CARGO_TARGET_DIR="$PWD/target-macos"
               export HL_BUNDLE_TARGET="$PWD/target"
               export HL_VERSION="$RELEASE_VERSION"
-              src/apps/husklet/package/bundle.sh "$RELEASE_VERSION"
+              src/apps/husklet/package/bundle.sh "$RELEASE_VERSION" com.husklet.app
               src/apps/husklet/package/make-dmg.sh "$RELEASE_VERSION"
             '
 

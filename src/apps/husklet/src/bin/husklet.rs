@@ -49,7 +49,6 @@ use host::{
 use screens::workspace::overview::Overview;
 use screens::workspace::terminal::{Terminal, Window as TerminalWindow};
 
-const APP_ID: &str = "com.husklet.app";
 const MANAGER_WINDOW_NAME: &str = "husklet-manager";
 
 // One committed near-black palette (matches the design mockup).
@@ -130,9 +129,8 @@ static APP_CONFIG: std::sync::OnceLock<AppConfig> = std::sync::OnceLock::new();
 /// Gives one source generation one primary while preventing a rebuilt/test bundle from activating
 /// an unrelated primary that happens to use Husklet's public bundle identifier. Test automation can
 /// add an explicit run scope without weakening normal single-instance behavior.
-fn application_id(build_identity: &str, instance: Option<&std::ffi::OsStr>) -> String {
-    let build = &build_identity[..build_identity.len().min(16)];
-    let mut id = format!("{APP_ID}.b{build}");
+fn application_id(base: &str, instance: Option<&std::ffi::OsStr>) -> String {
+    let mut id = base.to_owned();
     if let Some(instance) = instance {
         let digest = sha2::Sha256::digest(instance.as_encoded_bytes());
         let suffix = digest[..8].iter().fold(String::new(), |mut value, byte| {
@@ -157,7 +155,7 @@ fn main() -> glib::ExitCode {
         .ok()
         .expect("application config initialized once");
     let id = application_id(
-        env!("HUSKLET_APPLICATION_BUILD_ID"),
+        env!("HUSKLET_APPLICATION_ID"),
         std::env::var_os("HL_APP_INSTANCE").as_deref(),
     );
     let app = gtk::Application::builder().application_id(&id).build();
@@ -312,20 +310,19 @@ mod application_identity_tests {
     use std::ffi::OsStr;
 
     #[test]
-    fn source_generations_get_distinct_single_instance_names() {
-        let first = application_id("0123456789abcdefaaaaaaaaaaaaaaaa", None);
-        let same = application_id("0123456789abcdefbbbbbbbbbbbbbbbb", None);
-        let next = application_id("fedcba9876543210aaaaaaaaaaaaaaaa", None);
-        assert_eq!(first, same);
-        assert_ne!(first, next);
-        assert_eq!(first, "com.husklet.app.b0123456789abcdef");
+    fn configured_bundle_identity_is_preserved() {
+        assert_eq!(
+            application_id("com.husklet.app.b0123456789abcdef", None),
+            "com.husklet.app.b0123456789abcdef"
+        );
     }
 
     #[test]
     fn explicit_test_scopes_are_stable_and_isolated() {
-        let first = application_id("0123456789abcdef", Some(OsStr::new("run-one")));
-        let repeated = application_id("0123456789abcdef", Some(OsStr::new("run-one")));
-        let second = application_id("0123456789abcdef", Some(OsStr::new("run-two")));
+        let base = "com.husklet.app.b0123456789abcdef";
+        let first = application_id(base, Some(OsStr::new("run-one")));
+        let repeated = application_id(base, Some(OsStr::new("run-one")));
+        let second = application_id(base, Some(OsStr::new("run-two")));
         assert_eq!(first, repeated);
         assert_ne!(first, second);
         assert!(first.starts_with("com.husklet.app.b0123456789abcdef.i"));

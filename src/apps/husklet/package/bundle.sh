@@ -15,6 +15,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 VERSION="${1:-0.1.0}"
+BUNDLE_ID="${2:-}"
 export HL_VERSION="${HL_VERSION:-$VERSION}"
 BUILD_TARGET="${CARGO_TARGET_DIR:-$ROOT/target-macos}"
 export CARGO_TARGET_DIR="$BUILD_TARGET"
@@ -53,6 +54,18 @@ source_changes() {
 
 SOURCE_REVISION="$(git -C "$ROOT" rev-parse HEAD)"
 SOURCE_CHANGES="$(source_changes)"
+if [ -n "$BUNDLE_ID" ]; then
+  APPLICATION_ID="$BUNDLE_ID"
+else
+  # Ad-hoc development/test bundles must not be activated through an installed or stale Husklet
+  # primary merely because both bundles share the public release identifier. Release packaging
+  # passes the stable public id explicitly; local bundles are isolated by exact source generation.
+  APPLICATION_GENERATION="$(printf '%s\0%s' "$SOURCE_REVISION" "$SOURCE_CHANGES" | shasum -a 256 | awk '{print $1}')"
+  APPLICATION_ID="com.husklet.app.b${APPLICATION_GENERATION:0:16}"
+fi
+[[ "$APPLICATION_ID" =~ ^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)+$ ]] \
+  || die "invalid application identifier $APPLICATION_ID"
+export HL_APPLICATION_ID="$APPLICATION_ID"
 
 # 1. Release product binaries. Cargo links the native archive shipped by the selected `hl-engine` crate,
 # keeping the Rust API and native ABI on one published version.
@@ -74,7 +87,8 @@ mkdir -p "$MACOS" "$RES" "$FW"
 cp "$BUILD_TARGET/release/husklet" "$MACOS/husklet"
 cp "$BUILD_TARGET/release/dockerd" "$RES/dockerd"
 printf 'APPL????' > "$C/PkgInfo"
-sed -e "s/@VERSION@/$VERSION/g" -e "s/@REVISION@/$SOURCE_REVISION/g" -e "s/@CHANGES@/$SOURCE_CHANGES/g" \
+sed -e "s/@VERSION@/$VERSION/g" -e "s/@APPLICATION_ID@/$APPLICATION_ID/g" \
+  -e "s/@REVISION@/$SOURCE_REVISION/g" -e "s/@CHANGES@/$SOURCE_CHANGES/g" \
   "$ROOT/src/apps/husklet/package/Info.plist.in" > "$C/Info.plist"
 [ -f "$ROOT/src/apps/husklet/package/husklet.icns" ] && cp "$ROOT/src/apps/husklet/package/husklet.icns" "$RES/husklet.icns" || true
 [ -f "$ROOT/assets/logo.png" ] && cp "$ROOT/assets/logo.png" "$RES/logo.png" || true # onboarding logo

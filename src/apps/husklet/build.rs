@@ -66,7 +66,10 @@ fn main() {
     // code must isolate the app primary without invalidating otherwise compatible checkpoints.
     let application_inputs = [workspace.join("Cargo.lock"), workspace.join("src")];
     let application_identity = identity(&workspace, application_inputs);
-    println!("cargo:rustc-env=HUSKLET_APPLICATION_BUILD_ID={application_identity}");
+    println!("cargo:rerun-if-env-changed=HL_APPLICATION_ID");
+    let application_id = std::env::var("HL_APPLICATION_ID")
+        .unwrap_or_else(|_| format!("com.husklet.app.b{}", &application_identity[..16]));
+    println!("cargo:rustc-env=HUSKLET_APPLICATION_ID={application_id}");
 }
 
 fn identity(workspace: &Path, inputs: impl IntoIterator<Item = PathBuf>) -> String {
