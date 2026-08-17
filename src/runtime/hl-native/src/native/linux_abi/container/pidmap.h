@@ -18,6 +18,7 @@ typedef struct hl_linux_pidmap {
 } hl_linux_pidmap;
 
 void hl_linux_pidmap_init(hl_linux_pidmap *map);
+int hl_linux_pidmap_prepare_shared(hl_linux_pidmap *map);
 int hl_linux_pidmap_add(hl_linux_pidmap *map, int32_t guest, int32_t host);
 int32_t hl_linux_pidmap_allocate_guest(hl_linux_pidmap *map);
 int32_t hl_linux_pidmap_register_host(hl_linux_pidmap *map, int32_t host);

@@ -29,6 +29,10 @@ static hl_linux_pidmap_storage *pidmap_storage(hl_linux_pidmap *map) {
     return map->storage;
 }
 
+int hl_linux_pidmap_prepare_shared(hl_linux_pidmap *map) {
+    return map != NULL && pidmap_storage(map) != NULL ? 0 : -1;
+}
+
 static void pidmap_raise_next(hl_linux_pidmap_storage *storage, int32_t guest) {
     int current = atomic_load_explicit(&storage->next_guest, memory_order_relaxed);
     while (current <= guest &&

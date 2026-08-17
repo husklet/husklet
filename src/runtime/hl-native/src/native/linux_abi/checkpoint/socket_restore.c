@@ -1135,6 +1135,10 @@ static int ckpt_restore_tree(const char *rootfs) {
         fprintf(stderr, "[restore] init signal-state restore failed\n");
         return 70;
     }
+    if (ckpt_restore_identity_prepare_shared() != 0) {
+        fprintf(stderr, "[restore] cannot prepare shared identity authority\n");
+        return 70;
+    }
     if (ckpt_restore_commit_create() != 0) {
         fprintf(stderr, "[restore] cannot create process-tree commit barrier\n");
         return 70;

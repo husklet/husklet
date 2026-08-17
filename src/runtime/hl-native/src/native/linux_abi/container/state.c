@@ -314,6 +314,13 @@ static int restore_process_identity_add(int guest, int host) {
     return hl_linux_pidmap_add(&g_pidmap, guest, host);
 }
 
+static int ckpt_restore_identity_prepare_shared(void) {
+    return hl_linux_pidmap_prepare_shared(&g_pidmap) == 0 && hl_linux_pidmap_prepare_shared(&g_pgidmap) == 0 &&
+                   hl_linux_pidmap_prepare_shared(&g_sidmap) == 0
+               ? 0
+               : -1;
+}
+
 // A post-restore fork must extend the live namespace in shared memory. Both sides may race here; the
 // registry serializes allocation and returns the same guest id for an already-published host process.
 static int restore_process_identity_publish(int guest, int host) {
