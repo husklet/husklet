@@ -871,6 +871,71 @@ fn capture_readiness_waits_for_recovery_completion() {
 }
 
 #[test]
+fn every_recovery_waiter_observes_the_same_terminal_result() {
+    let store = Arc::new(RecoveryStore::default());
+    let server = Arc::new(Server::new(store.clone(), store));
+    let recovery = server
+        .begin_recovery(23, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    let one = Arc::clone(&server);
+    let two = Arc::clone(&server);
+    let first = std::thread::spawn(move || one.wait_recovery(recovery));
+    let second = std::thread::spawn(move || two.wait_recovery(recovery));
+    assert_eq!(
+        publish_recovery(&server, 23, 1),
+        (protocol::STATUS_OK, protocol::STATUS_OK)
+    );
+    let complete = object_request(protocol::RECOVERY_COMPLETE, 0, 23);
+    assert_eq!(server.dispatch(7, &complete, "", &[]).status, protocol::STATUS_OK);
+    assert_eq!(first.join().unwrap(), Ok(()));
+    assert_eq!(second.join().unwrap(), Ok(()));
+}
+
+#[test]
+fn every_capture_waiter_observes_the_same_terminal_error() {
+    let store = Arc::new(RecoveryStore::default());
+    let server = Server::new(store.clone(), store);
+    let capture = server
+        .begin_capture(24, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    server.finish_failed(capture, CaptureFailure::Failed).unwrap();
+    let wake = std::time::Instant::now() + Duration::from_secs(1);
+    assert_eq!(
+        server.wait_capture(capture, wake),
+        Ok(Some(Err(CaptureFailure::Failed)))
+    );
+    assert_eq!(
+        server.wait_capture(capture, wake),
+        Ok(Some(Err(CaptureFailure::Failed)))
+    );
+}
+
+#[test]
+fn poisoned_recovery_coordination_discards_and_reopens_cleanly() {
+    let store = Arc::new(FailingRecoveryStore::default());
+    let server = Arc::new(Server::new(store.clone(), store.clone()));
+    let recovery = server
+        .begin_recovery(25, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    let poison = Arc::clone(&server);
+    let _ = std::thread::spawn(move || {
+        let _held = poison.capture.lock().unwrap();
+        panic!("intentional recovery coordination poison");
+    })
+    .join();
+
+    assert_eq!(server.wait_recovery(recovery), Err(CaptureFailure::Poisoned));
+    server.abort_recovery(recovery).unwrap();
+    let retry = server
+        .begin_recovery(26, std::time::Instant::now() + Duration::from_secs(1))
+        .expect("settled mutex poison must permit a defined retry");
+    server.abort_recovery(retry).unwrap();
+    let state = store.0.lock().unwrap();
+    assert_eq!((state.begins, state.aborts), (2, 2));
+    assert!(state.staged.is_empty());
+}
+
+#[test]
 fn capture_readiness_bounds_an_incomplete_recovery() {
     let store = Arc::new(RecoveryStore::default());
     let server = Server::new(store.clone(), store);

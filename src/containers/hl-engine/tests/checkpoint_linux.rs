@@ -460,10 +460,10 @@ fn checkpoint_round_trip(
 
 #[test]
 fn retained_c_round_trips_three_process_tree_on_both_isas() {
-    let _exclusive = exclusive_checkpoint_test();
     let fixtures = tempfile::tempdir().unwrap();
-    for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
-        let executable = fixture(isa, fixtures.path());
+    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, fixture(isa, fixtures.path())));
+    let _exclusive = exclusive_checkpoint_test();
+    for (isa, executable) in executables {
         assert!(
             executable.is_file(),
             "missing checkpoint fixture: {}",
@@ -475,20 +475,20 @@ fn retained_c_round_trips_three_process_tree_on_both_isas() {
 
 #[test]
 fn terminal_process_tree_survives_capture_restore_and_recapture_on_both_isas() {
-    let _exclusive = exclusive_checkpoint_test();
     let fixtures = tempfile::tempdir().unwrap();
-    for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
-        let executable = fixture(isa, fixtures.path());
+    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, fixture(isa, fixtures.path())));
+    let _exclusive = exclusive_checkpoint_test();
+    for (isa, executable) in executables {
         checkpoint_round_trip(isa, &executable, None, true);
     }
 }
 
 #[test]
 fn terminal_waiting_for_sleep_survives_capture_restore_and_recapture_on_both_isas() {
-    let _exclusive = exclusive_checkpoint_test();
     let fixtures = tempfile::tempdir().unwrap();
-    for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
-        let executable = sleep_tree_fixture(isa, fixtures.path());
+    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, sleep_tree_fixture(isa, fixtures.path())));
+    let _exclusive = exclusive_checkpoint_test();
+    for (isa, executable) in executables {
         let temporary = tempfile::tempdir().unwrap();
         let release = temporary.path().join("release");
         let final_release = temporary.path().join("final-release");
@@ -572,23 +572,23 @@ fn terminal_waiting_for_sleep_survives_capture_restore_and_recapture_on_both_isa
 
 #[test]
 fn checkpoint_arms_after_a_plain_engine_on_both_isas() {
-    let _exclusive = exclusive_checkpoint_test();
     let fixtures = tempfile::tempdir().unwrap();
-    for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
-        let plain = exit_fixture(isa, fixtures.path());
-        let checkpoint = fixture(isa, fixtures.path());
+    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64]
+        .map(|isa| (isa, exit_fixture(isa, fixtures.path()), fixture(isa, fixtures.path())));
+    let _exclusive = exclusive_checkpoint_test();
+    for (isa, plain, checkpoint) in executables {
         capture_after_plain_engine(isa, &plain, &checkpoint);
     }
 }
 
 #[test]
 fn concurrent_engines_keep_second_generation_checkpoint_channels_private() {
-    let _exclusive = exclusive_checkpoint_test();
     let fixtures = tempfile::tempdir().unwrap();
     let executables = [
         (GuestIsa::Aarch64, signalfd_fixture(GuestIsa::Aarch64, fixtures.path())),
         (GuestIsa::X86_64, signalfd_fixture(GuestIsa::X86_64, fixtures.path())),
     ];
+    let _exclusive = exclusive_checkpoint_test();
     let (first_ready, second_start) = std::sync::mpsc::channel();
     let (second_ready, first_capture) = std::sync::mpsc::channel();
     let (first_done, second_capture) = std::sync::mpsc::channel();
@@ -699,10 +699,10 @@ fn concurrent_signalfd_recapture(
 
 #[test]
 fn signalfd_readiness_and_signal64_defer_survive_two_generations_on_both_isas() {
-    let _exclusive = exclusive_checkpoint_test();
     let fixtures = tempfile::tempdir().unwrap();
-    for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
-        let executable = signalfd_fixture(isa, fixtures.path());
+    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, signalfd_fixture(isa, fixtures.path())));
+    let _exclusive = exclusive_checkpoint_test();
+    for (isa, executable) in executables {
         let temporary = tempfile::tempdir().unwrap();
         let release = temporary.path().join("release");
         let final_release = temporary.path().join("final-release");

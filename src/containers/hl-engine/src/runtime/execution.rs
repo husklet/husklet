@@ -225,12 +225,7 @@ impl GuestMachine for ProductionMachine {
             // after `run` returns lets a later checkpoint reuse the server
             // state first; the stale recovery waiter then observes that newer
             // generation and reports `Busy` despite a successful checkpoint.
-            std::thread::scope(|scope| {
-                let waiting = scope.spawn(|| recovery.wait());
-                let run = engine.run(&pointers).map_err(native_run_failure);
-                let restored = waiting.join().map_err(|_| EngineError::WaitFailed)?;
-                run.and(restored)
-            })
+            run_with_recovery(recovery, || engine.run(&pointers).map_err(native_run_failure))
         } else {
             engine.run(&pointers).map_err(native_run_failure)
         };
@@ -411,11 +406,36 @@ impl Drop for RecoveryAdmission {
 
 #[cfg(unix)]
 impl RecoveryAdmission {
+    fn abort(&self) -> Result<(), EngineError> {
+        self.server
+            .abort_recovery(self.id)
+            .map_err(CheckpointControl::capture_failure)
+    }
+
     fn wait(&self) -> Result<(), EngineError> {
         self.server
             .wait_recovery(self.id)
             .map_err(CheckpointControl::capture_failure)
     }
+}
+
+#[cfg(unix)]
+fn run_with_recovery<T>(
+    recovery: &RecoveryAdmission,
+    run: impl FnOnce() -> Result<T, EngineError>,
+) -> Result<T, EngineError> {
+    std::thread::scope(|scope| {
+        let waiting = scope.spawn(|| recovery.wait());
+        let run = run();
+        if run.is_err() {
+            // A launch can fail before native code adopts a checkpoint channel.
+            // With no broker EOF to wake the waiter, settle at the failure site.
+            let _ = recovery.abort();
+        }
+        let restored = waiting.join().map_err(|_| EngineError::WaitFailed)?;
+        restored?;
+        run
+    })
 }
 
 #[cfg(unix)]
@@ -511,5 +531,29 @@ mod tests {
             Err(super::super::checkpoint::CaptureFailure::Busy)
         );
         server.abort_recovery(second).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pre_channel_run_failure_aborts_recovery_without_waiting_for_deadline() {
+        let store = Arc::new(EmptyCheckpointStore);
+        let server = Arc::new(Server::new(store.clone(), store));
+        let id = server
+            .begin_recovery(21, std::time::Instant::now() + std::time::Duration::from_secs(5))
+            .unwrap();
+        let admission = RecoveryAdmission {
+            server: Arc::clone(&server),
+            id,
+        };
+        let started = std::time::Instant::now();
+        assert_eq!(
+            run_with_recovery(&admission, || Err::<(), _>(EngineError::NativeRunFailed(7))),
+            Err(EngineError::NativeRunFailed(7))
+        );
+        assert!(started.elapsed() < std::time::Duration::from_millis(250));
+        let retry = server
+            .begin_recovery(22, std::time::Instant::now() + std::time::Duration::from_secs(1))
+            .unwrap();
+        server.abort_recovery(retry).unwrap();
     }
 }

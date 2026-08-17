@@ -89,6 +89,8 @@ struct CaptureState {
     phase: CapturePhase,
     mutations: usize,
     recovery_report_published: bool,
+    recovery_result: Option<(u64, Result<(), CaptureFailure>)>,
+    capture_result: Option<(u64, Result<(), CaptureFailure>)>,
 }
 
 struct MutationAdmission<'a> {
@@ -138,6 +140,8 @@ impl Server {
                 phase: CapturePhase::Idle,
                 mutations: 0,
                 recovery_report_published: false,
+                recovery_result: None,
+                capture_result: None,
             }),
             capture_changed: Condvar::new(),
             channels: Mutex::new(HashMap::new()),
@@ -189,7 +193,9 @@ impl Server {
         loop {
             match capture.phase {
                 CapturePhase::Idle => return Ok(()),
-                CapturePhase::Recovery { .. } | CapturePhase::RecoveryFinished { .. } => {
+                CapturePhase::Recovery { .. }
+                | CapturePhase::RecoveryFinished { .. }
+                | CapturePhase::Aborting { .. } => {
                     let now = std::time::Instant::now();
                     if now >= deadline {
                         return Err(CaptureFailure::Deadline);
@@ -325,6 +331,11 @@ impl Server {
     pub(crate) fn wait_recovery(&self, id: u64) -> Result<(), CaptureFailure> {
         let mut capture = self.capture_lock()?;
         loop {
+            if let Some((completed, result)) = capture.recovery_result
+                && completed == id
+            {
+                return result;
+            }
             match capture.phase {
                 CapturePhase::Recovery { id: active, deadline } if active == id => {
                     let now = std::time::Instant::now();
@@ -352,6 +363,7 @@ impl Server {
                         .map_err(|_| CaptureFailure::Poisoned)?;
                 }
                 CapturePhase::RecoveryFinished { id: active, result } if active == id => {
+                    capture.recovery_result = Some((id, result));
                     capture.phase = CapturePhase::Idle;
                     self.capture_changed.notify_all();
                     return result;
@@ -374,6 +386,7 @@ impl Server {
                 let mut capture = poisoned.into_inner();
                 capture.phase = CapturePhase::Poisoned;
                 self.capture_changed.notify_all();
+                self.capture.clear_poison();
                 Err(CaptureFailure::Poisoned)
             }
         }
@@ -517,6 +530,7 @@ impl Server {
                         return Err(CaptureFailure::Poisoned);
                     }
                     capture.phase = CapturePhase::Poisoned;
+                    capture.capture_result = Some((id, Err(failure)));
                     self.capture_changed.notify_all();
                     transition.finished = true;
                     return discarded.map(|()| failure);
@@ -570,6 +584,11 @@ impl Server {
     ) -> Result<Option<Result<(), CaptureFailure>>, CaptureFailure> {
         let mut capture = self.capture_lock()?;
         loop {
+            if let Some((completed, result)) = capture.capture_result
+                && completed == id
+            {
+                return Ok(Some(result));
+            }
             match capture.phase {
                 CapturePhase::Active { id: active, deadline } if active == id => {
                     let now = std::time::Instant::now();
@@ -650,6 +669,7 @@ impl Server {
                             .settle_failed_capture(id, failure)
                             .map(|failure| Some(Err(failure)));
                     }
+                    capture.capture_result = Some((id, result));
                     capture.phase = CapturePhase::Complete;
                     return Ok(Some(Ok(())));
                 }
