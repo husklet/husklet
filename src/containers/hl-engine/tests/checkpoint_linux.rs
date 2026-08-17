@@ -3,6 +3,7 @@
 use hl_engine::{
     activation::GuestIsa,
     composition::{CheckpointSink, CheckpointSource, CompositionError, StandardStreams, Terminal, TerminalPort},
+    engine::{EngineError, StopRequest},
     launcher::plan::RuntimePlan,
     options::Options,
     runtime::Engine,
@@ -1447,9 +1448,17 @@ fn reaped_group_leader_keeps_typed_identity_fail_closed_on_both_isas() {
             .unwrap(),
         );
         restore.start().unwrap();
-        std::fs::write(&release, b"release").unwrap();
-        restore_port.wait_output(b"REAPED-GROUP-MEMBER-SIGNALED");
-        restore_port.wait_output(b"REAPED-GROUP-IDENTITIES-PRESERVED");
+        // Release the background init directly. Terminal input would target the surviving foreground group,
+        // while an init-side terminal read would be stopped with SIGTTIN and could never be a control channel.
+        restore_port.wait_output(b"REAPED-GROUP-CONTROL-READY");
+        let signal_deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match restore.stop(StopRequest::Signal(libc::SIGUSR1)) {
+                Ok(()) => break,
+                Err(EngineError::NotStarted) if Instant::now() < signal_deadline => std::thread::yield_now(),
+                Err(error) => panic!("{isa:?} could not release restored init: {error:?}"),
+            }
+        }
         let restored = restore.wait().unwrap_or_else(|error| {
             panic!(
                 "{isa:?} reaped-group restore failed: {error:?}\n{}",

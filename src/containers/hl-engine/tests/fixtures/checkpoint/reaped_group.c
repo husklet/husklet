@@ -1,15 +1,16 @@
 #define _GNU_SOURCE
 #include <errno.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/prctl.h>
-#include <time.h>
 #include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
 
 static volatile sig_atomic_t released;
+static volatile sig_atomic_t proceed;
 
 static void fail(const char *operation) {
     perror(operation);
@@ -43,22 +44,22 @@ static void release_member(int signal) {
     released = 1;
 }
 
+static void proceed_root(int signal) {
+    (void)signal;
+    proceed = 1;
+}
+
 static void expect_esrch(int status, const char *operation) {
     if (status != -1 || errno != ESRCH) fail(operation);
 }
 
-static void wait_release(const char *path) {
-    const struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
-    while (access(path, F_OK) != 0) {
-        if (errno != ENOENT) fail("release-access");
-        if (nanosleep(&pause, NULL) != 0 && errno != EINTR) fail("release-sleep");
-    }
-}
-
-int main(int argc, char **argv) {
-    if (argc < 2) return 69;
+int main(void) {
     if (!isatty(STDIN_FILENO)) fail("terminal");
     if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0) fail("subreaper");
+    struct sigaction proceed_action = {0};
+    proceed_action.sa_handler = proceed_root;
+    sigemptyset(&proceed_action.sa_mask);
+    if (sigaction(SIGUSR1, &proceed_action, NULL) != 0) fail("sigusr1-action");
     int identities[2];
     if (pipe(identities) != 0) fail("pipe");
 
@@ -95,10 +96,13 @@ int main(int argc, char **argv) {
     foreground(leader);
     write_all("REAPED-GROUP-READY\n");
 
-    // The dead leader's surviving group owns the terminal foreground by design, so init is a
-    // background group and cannot use the terminal as a release channel without SIGTTIN.  A
-    // host-owned release file is terminal-independent and survives the checkpoint boundary.
-    wait_release(argv[1]);
+    // The root is deliberately outside the terminal foreground group. Reading the tty here would stop it
+    // with SIGTTIN, so the harness releases the restored root with a process-directed control signal.
+    while (!proceed) {
+        int polled = poll(NULL, 0, 100);
+        if (polled < 0 && errno != EINTR) fail("control-poll");
+        if (!proceed) write_all("REAPED-GROUP-CONTROL-READY\n");
+    }
 
     if (getpgid(member) != leader) fail("member-getpgid");
     if (getsid(member) != getsid(0)) fail("member-getsid");
