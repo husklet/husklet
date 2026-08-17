@@ -455,8 +455,15 @@ static int svc_proc_154(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         if ((int)a1 == 0)
             host_pgid = 0;
         else if (hl_linux_pidmap_host_checked(&g_pgidmap, (int)a1, &host_pgid) != 0) {
-            G_RET(c) = (uint64_t)(int64_t)(-EPERM);
-            break;
+            // Creating a process group names the target process as its new leader before that group has an
+            // entry of its own. Resolve that one Linux-defined creation case through the process map; every
+            // other unknown group remains EPERM. This matters after restore, where guest and host pids differ.
+            int guest_pid = (int)a0 != 0 ? (int)a0 : container_pid();
+            if ((int)a1 != guest_pid) {
+                G_RET(c) = (uint64_t)(int64_t)(-EPERM);
+                break;
+            }
+            host_pgid = host_pid != 0 ? host_pid : (int)getpid();
         }
         if (!g_pgidmap.active && (int)a1 == 1 && g_init_hostpid) host_pgid = g_init_hostpid;
         pid_t pid = (pid_t)host_pid;
