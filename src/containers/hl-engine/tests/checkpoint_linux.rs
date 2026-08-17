@@ -253,6 +253,23 @@ fn pipeline_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     output
 }
 
+fn nested_pipeline_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    let (compiler, name) = match isa {
+        GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-nested-pipeline-aarch64"),
+        GuestIsa::X86_64 => ("x86_64-linux-gnu-gcc", "checkpoint-nested-pipeline-x86_64"),
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/nested_pipeline.c");
+    let output = directory.join(name);
+    let status = std::process::Command::new(compiler)
+        .args(["-static", "-O2", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
+    assert!(status.success(), "{compiler} failed with {status}");
+    output
+}
+
 #[derive(Default)]
 struct TerminalState {
     input: VecDeque<u8>,
@@ -442,6 +459,33 @@ fn manifest_foreground_group(store: &Store) -> i32 {
     let image = store.0.lock().unwrap();
     let manifest = image.get("MANIFEST").expect("checkpoint manifest");
     i32::from_ne_bytes(manifest[60..64].try_into().expect("foreground process-group field"))
+}
+
+fn process_ids_for_executable(executable: &Path) -> Vec<u32> {
+    let needle = executable.as_os_str().as_encoded_bytes();
+    let mut pids = std::fs::read_dir("/proc")
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().to_string_lossy().parse::<u32>().ok())
+        .filter(|pid| {
+            std::fs::read(format!("/proc/{pid}/cmdline"))
+                .is_ok_and(|command| command.split(|byte| *byte == 0).any(|argument| argument == needle))
+        })
+        .collect::<Vec<_>>();
+    pids.sort_unstable();
+    pids
+}
+
+fn wait_for_exact_process_reap(executable: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let pids = process_ids_for_executable(executable);
+        if pids.is_empty() {
+            return;
+        }
+        assert!(Instant::now() < deadline, "guest processes were not reaped: {pids:?}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn assert_transient_signalfd_slots_absent(store: &Store) {
@@ -1056,11 +1100,9 @@ fn later_sibling_pipeline_leader_restores_before_members_resume_on_both_isas() {
     }
 }
 
-#[test]
-fn terminal_claim_mask_failure_aborts_before_any_restored_process_resumes() {
+fn nested_pipeline_round_trip(isa: GuestIsa) {
     let fixtures = tempfile::tempdir().unwrap();
-    let isa = GuestIsa::Aarch64;
-    let executable = foreground_fixture(isa, fixtures.path());
+    let executable = nested_pipeline_fixture(isa, fixtures.path());
     let temporary = tempfile::tempdir().unwrap();
     let release = temporary.path().join("release");
     let final_release = temporary.path().join("final-release");
@@ -1076,35 +1118,103 @@ fn terminal_claim_mask_failure_aborts_before_any_restored_process_resumes() {
     )
     .unwrap();
     capture.start().unwrap();
-    capture_port.wait_output(b"SLEEPING");
+    capture_port.wait_output(b"NESTED-MEMBER-ALIVE");
+    capture_port.wait_output(b"NESTED-LEADER-ALIVE");
     capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
     assert_eq!(capture.wait().unwrap().guest_status, 0);
 
     let restore_port = Arc::new(TestTerminal::default());
-    let restore = Engine::with_checkpoint(
-        isa,
-        plan(
-            &executable,
-            &release,
-            &final_release,
-            &["HL_RESTORE", "HL_CKPT_TEST_FAIL_TTY_MASK"],
-        ),
-        StandardStreams::default().with_terminal(Terminal::new(restore_port.clone(), 24, 80).unwrap()),
-        store.clone(),
-        store,
-    )
-    .unwrap();
-    restore.start().unwrap();
-    assert!(matches!(
-        restore.wait(),
-        Err(hl_engine::engine::EngineError::NativeCreateFailed(_))
-    ));
-    std::thread::sleep(Duration::from_millis(100));
-    assert!(
-        !restore_port.output().contains("CHILD-ALIVE"),
-        "a descendant resumed after atomic terminal-claim failure:\n{}",
-        restore_port.output()
+    let restore = Arc::new(
+        Engine::with_checkpoint(
+            isa,
+            plan(&executable, &release, &final_release, &["HL_RESTORE"]),
+            StandardStreams::default().with_terminal(Terminal::new(restore_port.clone(), 24, 80).unwrap()),
+            store.clone(),
+            store,
+        )
+        .unwrap(),
     );
+    restore.start().unwrap();
+    let (finished, completion) = std::sync::mpsc::channel();
+    let waiting = restore.clone();
+    std::thread::spawn(move || finished.send(waiting.wait()).unwrap());
+    restore_port.wait_output(b"NESTED-MEMBER-ALIVE");
+    restore_port.wait_output(b"NESTED-LEADER-ALIVE");
+    assert!(matches!(
+        completion.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    restore_port.input(&[3]);
+    let restored = completion
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap_or_else(|_| panic!("{isa:?} nested pipeline did not exit:\n{}", restore_port.output()))
+        .unwrap_or_else(|error| panic!("{isa:?} nested pipeline failed: {error:?}\n{}", restore_port.output()));
+    assert_eq!(restored.guest_status, 0, "{isa:?}: {}", restore_port.output());
+    restore_port.wait_output(b"NESTED-SHELL-SURVIVED");
+    restore_port.wait_output(b"NESTED-INIT-SURVIVED");
+}
+
+#[test]
+fn nested_pipeline_foreground_restores_on_aarch64() {
+    nested_pipeline_round_trip(GuestIsa::Aarch64);
+}
+
+#[test]
+fn nested_pipeline_foreground_restores_on_x86_64() {
+    nested_pipeline_round_trip(GuestIsa::X86_64);
+}
+
+#[test]
+fn terminal_claim_mask_failure_aborts_before_any_restored_process_resumes() {
+    let fixtures = tempfile::tempdir().unwrap();
+    for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
+        let executable = foreground_fixture(isa, fixtures.path());
+        let temporary = tempfile::tempdir().unwrap();
+        let release = temporary.path().join("release");
+        let final_release = temporary.path().join("final-release");
+        let store = Arc::new(Store::default());
+
+        let capture_port = Arc::new(TestTerminal::default());
+        let capture = Engine::with_checkpoint(
+            isa,
+            plan(&executable, &release, &final_release, &["HL_CHECKPOINT"]),
+            StandardStreams::default().with_terminal(Terminal::new(capture_port.clone(), 24, 80).unwrap()),
+            store.clone(),
+            store.clone(),
+        )
+        .unwrap();
+        capture.start().unwrap();
+        capture_port.wait_output(b"SLEEPING");
+        capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+        assert_eq!(capture.wait().unwrap().guest_status, 0);
+        wait_for_exact_process_reap(&executable);
+
+        let restore_port = Arc::new(TestTerminal::default());
+        let restore = Engine::with_checkpoint(
+            isa,
+            plan(
+                &executable,
+                &release,
+                &final_release,
+                &["HL_RESTORE", "HL_CKPT_TEST_FAIL_TTY_MASK"],
+            ),
+            StandardStreams::default().with_terminal(Terminal::new(restore_port.clone(), 24, 80).unwrap()),
+            store.clone(),
+            store,
+        )
+        .unwrap();
+        restore.start().unwrap();
+        assert!(matches!(
+            restore.wait(),
+            Err(hl_engine::engine::EngineError::NativeCreateFailed(_))
+        ));
+        wait_for_exact_process_reap(&executable);
+        assert!(
+            !restore_port.output().contains("CHILD-ALIVE"),
+            "a descendant resumed after atomic terminal-claim failure:\n{}",
+            restore_port.output()
+        );
+    }
 }
 
 #[test]

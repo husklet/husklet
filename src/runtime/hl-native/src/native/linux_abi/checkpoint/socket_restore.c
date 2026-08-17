@@ -427,6 +427,7 @@ static int ckpt_restore_eventfds_initialize(void) {
 // The guest group (guest pgid; 1 == init) that owned the controlling terminal's foreground at checkpoint,
 // carried from the manifest so the restored init can publish the handoff after every group exists.
 static int g_ckpt_fg_gpid = 0;
+static pid_t ckpt_restore_live_pid(int guest);
 
 static int ckpt_restore_ctty_open(void) {
     int fd = open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC);
@@ -455,7 +456,7 @@ static int ckpt_claim_tty_fg(int guest_group) {
         errno = error;
         return -1;
     }
-    pid_t group = guest_group == 1 ? g_init_hostpid : hl_linux_pidmap_host(&g_pidmap, guest_group);
+    pid_t group = ckpt_restore_live_pid(guest_group);
     int result = group > 0 && tcsetpgrp(tf, group) == 0 && tcgetpgrp(tf) == group ? 0 : -1;
     int error = result == 0 ? 0 : errno;
     if (result != 0 && error == 0) error = EIO;
