@@ -45,8 +45,11 @@ impl Launch<'_> {
         let pid = self.pid.clone();
         glib::child_watch_add_local(glib::Pid(child), move |_pid, status| {
             let status = ChildStatus::finish(&pid, status);
-            if !status.succeeded() {
+            if status.should_report(window.closing.get()) {
                 terminal.feed(format!("\r\n\x1b[31mworkspace session ended ({status})\x1b[0m\r\n").as_bytes());
+                return;
+            }
+            if !status.succeeded() {
                 return;
             }
             PaneView::new(&window, &terminal).close();
@@ -81,6 +84,10 @@ impl ChildStatus {
 
     fn succeeded(self) -> bool {
         self == Self::Exited(0)
+    }
+
+    fn should_report(self, closing: bool) -> bool {
+        !closing && !self.succeeded()
     }
 }
 
@@ -222,5 +229,18 @@ mod child_status_tests {
             let _ = ChildStatus::finish(&pid, status);
             assert_eq!(pid.get(), 0);
         }
+    }
+
+    #[test]
+    fn intentional_workspace_close_suppresses_launcher_exit_diagnostics() {
+        for status in [
+            ChildStatus::Signaled(libc::SIGHUP),
+            ChildStatus::Signaled(libc::SIGKILL),
+            ChildStatus::Exited(70),
+        ] {
+            assert!(!status.should_report(true));
+            assert!(status.should_report(false));
+        }
+        assert!(!ChildStatus::Exited(0).should_report(false));
     }
 }
