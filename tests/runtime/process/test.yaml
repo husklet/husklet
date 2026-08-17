@@ -463,6 +463,15 @@ cases:
     run: []
     timeout: 120
     expect: { exit: 0, stdout: golden/vfork_wait.txt }
+  - id: runtime/process/vfork-failed-exec-heap
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/vfork_failed_exec_heap.c, output: vfork-failed-exec-heap, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/vfork-failed-exec-heap }
+    run: []
+    timeout: 30
+    expect: { exit: 0, stdout: golden/vfork_failed_exec_heap.txt }
   - id: runtime/process/pgroup-session
     targets: [arm64, amd64]
     status: active

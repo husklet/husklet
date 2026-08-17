@@ -54,6 +54,15 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         int vfork_pipe[2] = {-1, -1};
         int vfork_ack[2] = {-1, -1};
         int is_vfork = (a0 & 0x4000) != 0;
+        // The host implements a guest vfork with process-private COW memory. On
+        // child _exit we import that memory to preserve Linux's shared-address-
+        // space behavior, but only when the parent has no peer that could have
+        // changed the same mappings after fork. Importing a fork-time snapshot
+        // into a live multithreaded parent rolls allocator and application state
+        // backward (a failed posix_spawn followed by malloc hit glibc's heap
+        // consistency abort). The only defined multithreaded vfork-child actions
+        // are exec/_exit, neither of which requires child writes to be published.
+        int import_vfork_exit_memory = is_vfork && thread_live_count() == 1;
         if (is_vfork && (pipe(vfork_pipe) != 0 || pipe(vfork_ack) != 0)) {
             bound_fork_complete(&bound_fork, 0, -1);
             G_RET(c) = (uint64_t)(int64_t)(-errno);
@@ -159,7 +168,10 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
                 received = read(vfork_pipe[0], &committed, sizeof committed);
             while (received < 0 && errno == EINTR);
             if (received == 1 && committed == 2) {
-                vfork_import_guest_memory(pid);
+                if (import_vfork_exit_memory) vfork_import_guest_memory(pid);
+                // The child waits for this acknowledgement before exiting so
+                // process_vm_readv could inspect it. Release it even when a live
+                // peer makes importing the snapshot unsafe.
                 while (write(vfork_ack[1], &committed, sizeof committed) < 0 && errno == EINTR) {}
             }
             close(vfork_pipe[0]);
