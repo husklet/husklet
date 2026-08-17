@@ -324,6 +324,9 @@ impl CheckpointControl {
         if Instant::now() >= deadline {
             return Err(EngineError::WaitFailed);
         }
+        self.server
+            .wait_capture_ready(deadline)
+            .map_err(Self::capture_failure)?;
         let capture = self
             .server
             .begin_capture_after_admission(deadline, || self.transport.bump())

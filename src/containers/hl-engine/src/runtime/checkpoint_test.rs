@@ -143,6 +143,63 @@ impl CheckpointSource for RecoveryStore {
     }
 }
 
+#[derive(Default)]
+struct FailingRecoveryState {
+    begins: usize,
+    aborts: usize,
+    staged: Vec<(String, Vec<u8>)>,
+    fail_put: bool,
+}
+
+#[derive(Default)]
+struct FailingRecoveryStore(Mutex<FailingRecoveryState>);
+
+impl CheckpointSink for FailingRecoveryStore {
+    fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+    fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
+        self.0.lock().unwrap().begins += 1;
+        Ok(test_transaction())
+    }
+    fn put_until(
+        &self,
+        _: NonZeroU64,
+        name: &str,
+        bytes: &[u8],
+        _: std::time::Instant,
+    ) -> Result<(), CompositionError> {
+        let mut state = self.0.lock().unwrap();
+        if state.fail_put {
+            state.fail_put = false;
+            return Err(CompositionError::RuntimeConstruction);
+        }
+        state.staged.push((name.to_owned(), bytes.to_vec()));
+        Ok(())
+    }
+    fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
+        let mut state = self.0.lock().unwrap();
+        state.aborts += 1;
+        state.staged.clear();
+        Ok(())
+    }
+    fn commit_until(&self, _: NonZeroU64, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+}
+
+impl CheckpointSource for FailingRecoveryStore {
+    fn read(&self, _: usize) -> Result<Vec<u8>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+    fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
+        Ok(Vec::new())
+    }
+    fn get_until(&self, _: &str, _: std::time::Instant) -> Result<Vec<u8>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+}
+
 fn object_request(op: u32, stream: u64, generation: u32) -> protocol::Request {
     protocol::Request {
         op,
@@ -717,6 +774,32 @@ fn recovery_readiness_times_out_and_settles_the_transaction() {
 }
 
 #[test]
+fn failed_recovery_publication_aborts_staging_and_allows_immediate_retry() {
+    let store = Arc::new(FailingRecoveryStore::default());
+    store.0.lock().unwrap().fail_put = true;
+    let server = Server::new(store.clone(), store.clone());
+    let recovery = server
+        .begin_recovery(31, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+
+    assert_ne!(publish_recovery(&server, 31, 1).1, protocol::STATUS_OK);
+    assert_eq!(server.wait_recovery(recovery), Err(CaptureFailure::Poisoned));
+    {
+        let state = store.0.lock().unwrap();
+        assert_eq!((state.begins, state.aborts), (1, 1));
+        assert!(state.staged.is_empty());
+    }
+
+    let retry = server
+        .begin_recovery(32, std::time::Instant::now() + Duration::from_secs(1))
+        .expect("a settled storage failure must not poison the next restore");
+    server.abort_recovery(retry).unwrap();
+    let state = store.0.lock().unwrap();
+    assert_eq!((state.begins, state.aborts), (2, 2));
+    assert!(state.staged.is_empty());
+}
+
+#[test]
 fn idle_and_stale_scopes_cannot_publish_recovery_reports() {
     let store = Arc::new(RecoveryStore::default());
     let server = Server::new(store.clone(), store.clone());
@@ -758,6 +841,46 @@ fn recovery_and_capture_scopes_are_mutually_exclusive() {
         Err(CaptureFailure::Busy)
     );
     assert!(!recovery_activated.get());
+}
+
+#[test]
+fn capture_readiness_waits_for_recovery_completion() {
+    let store = Arc::new(RecoveryStore::default());
+    let server = Arc::new(Server::new(store.clone(), store));
+    let recovery = server
+        .begin_recovery(21, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    let recovering = Arc::clone(&server);
+    let recovery_waiter = std::thread::spawn(move || recovering.wait_recovery(recovery));
+    let waiting = Arc::clone(&server);
+    let (sent, received) = mpsc::sync_channel(1);
+    let waiter = std::thread::spawn(move || {
+        sent.send(waiting.wait_capture_ready(std::time::Instant::now() + Duration::from_secs(1)))
+            .unwrap();
+    });
+    assert!(received.recv_timeout(Duration::from_millis(20)).is_err());
+    assert_eq!(
+        publish_recovery(&server, 21, 1),
+        (protocol::STATUS_OK, protocol::STATUS_OK)
+    );
+    let complete = object_request(protocol::RECOVERY_COMPLETE, 0, 21);
+    assert_eq!(server.dispatch(7, &complete, "", &[]).status, protocol::STATUS_OK);
+    assert_eq!(received.recv_timeout(Duration::from_secs(1)).unwrap(), Ok(()));
+    waiter.join().unwrap();
+    assert_eq!(recovery_waiter.join().unwrap(), Ok(()));
+}
+
+#[test]
+fn capture_readiness_bounds_an_incomplete_recovery() {
+    let store = Arc::new(RecoveryStore::default());
+    let server = Server::new(store.clone(), store);
+    server
+        .begin_recovery(22, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    assert_eq!(
+        server.wait_capture_ready(std::time::Instant::now() + Duration::from_millis(5)),
+        Err(CaptureFailure::Deadline)
+    );
 }
 
 #[test]
@@ -875,6 +998,29 @@ fn last_checkpoint_channel_exit_fails_an_active_capture_immediately() {
     );
     serving.join().unwrap();
     assert_eq!(server.connections.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn last_checkpoint_channel_exit_aborts_recovery_immediately() {
+    let store = Arc::new(FailingRecoveryStore::default());
+    let server = Arc::new(Server::new(store.clone(), store.clone()));
+    let recovery = server
+        .begin_recovery(41, std::time::Instant::now() + Duration::from_secs(5))
+        .unwrap();
+    let (channel, peer) = UnixStream::pair().unwrap();
+    let worker = Arc::clone(&server);
+    let serving = std::thread::spawn(move || worker.serve(channel, 1));
+    while server.connections.load(Ordering::Acquire) == 0 {
+        std::thread::yield_now();
+    }
+
+    drop(peer);
+
+    assert_eq!(server.wait_recovery(recovery), Err(CaptureFailure::Failed));
+    serving.join().unwrap();
+    let state = store.0.lock().unwrap();
+    assert_eq!((state.begins, state.aborts), (1, 1));
+    assert!(state.staged.is_empty());
 }
 
 #[test]

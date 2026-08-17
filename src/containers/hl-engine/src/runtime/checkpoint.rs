@@ -63,6 +63,10 @@ enum CapturePhase {
         id: u64,
         deadline: std::time::Instant,
     },
+    RecoveryFinished {
+        id: u64,
+        result: Result<(), CaptureFailure>,
+    },
     Active {
         id: u64,
         deadline: std::time::Instant,
@@ -180,6 +184,31 @@ impl Server {
         Ok(id)
     }
 
+    pub(crate) fn wait_capture_ready(&self, deadline: std::time::Instant) -> Result<(), CaptureFailure> {
+        let mut capture = self.capture_lock()?;
+        loop {
+            match capture.phase {
+                CapturePhase::Idle => return Ok(()),
+                CapturePhase::Recovery { .. } | CapturePhase::RecoveryFinished { .. } => {
+                    let now = std::time::Instant::now();
+                    if now >= deadline {
+                        return Err(CaptureFailure::Deadline);
+                    }
+                    let (next, timeout) = self
+                        .capture_changed
+                        .wait_timeout(capture, deadline.saturating_duration_since(now))
+                        .map_err(|_| CaptureFailure::Poisoned)?;
+                    capture = next;
+                    if timeout.timed_out() && !matches!(capture.phase, CapturePhase::Idle) {
+                        return Err(CaptureFailure::Deadline);
+                    }
+                }
+                CapturePhase::Poisoned => return Err(CaptureFailure::Poisoned),
+                _ => return Err(CaptureFailure::Busy),
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn begin_recovery(&self, generation: u32, deadline: std::time::Instant) -> Result<u64, CaptureFailure> {
         self.begin_recovery_after_admission(deadline, || generation)
@@ -216,6 +245,14 @@ impl Server {
     }
 
     pub(crate) fn abort_recovery(&self, id: u64) -> Result<(), CaptureFailure> {
+        self.settle_recovery(id, None)
+    }
+
+    fn fail_recovery(&self, id: u64, failure: CaptureFailure) -> Result<(), CaptureFailure> {
+        self.settle_recovery(id, Some(failure))
+    }
+
+    fn settle_recovery(&self, id: u64, failure: Option<CaptureFailure>) -> Result<(), CaptureFailure> {
         let settlement_deadline = std::time::Instant::now() + ABORT_SETTLEMENT_TIMEOUT;
         let mut capture = self.capture_lock()?;
         match capture.phase {
@@ -252,15 +289,35 @@ impl Server {
                     return Err(CaptureFailure::Poisoned);
                 }
                 capture.phase = if discarded.is_ok() {
-                    CapturePhase::Idle
+                    failure.map_or(CapturePhase::Idle, |failure| CapturePhase::RecoveryFinished {
+                        id,
+                        result: Err(failure),
+                    })
                 } else {
                     CapturePhase::Poisoned
                 };
                 self.capture_changed.notify_all();
                 discarded
             }
+            CapturePhase::RecoveryFinished { id: active, result } if active == id => {
+                capture.phase = CapturePhase::Idle;
+                self.capture_changed.notify_all();
+                result
+            }
             CapturePhase::Idle => Ok(()),
-            CapturePhase::Poisoned => Err(CaptureFailure::Poisoned),
+            CapturePhase::Poisoned => {
+                drop(capture);
+                let discarded = self.discard_transaction(settlement_deadline);
+                if discarded.is_ok() {
+                    let mut capture = self.capture_lock()?;
+                    capture.phase = failure.map_or(CapturePhase::Idle, |failure| CapturePhase::RecoveryFinished {
+                        id,
+                        result: Err(failure),
+                    });
+                    self.capture_changed.notify_all();
+                }
+                discarded
+            }
             _ => Err(CaptureFailure::Busy),
         }
     }
@@ -273,8 +330,9 @@ impl Server {
                     let now = std::time::Instant::now();
                     if now >= deadline {
                         drop(capture);
-                        self.abort_recovery(id)?;
-                        return Err(CaptureFailure::Deadline);
+                        self.fail_recovery(id, CaptureFailure::Deadline)?;
+                        capture = self.capture_lock()?;
+                        continue;
                     }
                     let (next, timeout) = self
                         .capture_changed
@@ -283,8 +341,8 @@ impl Server {
                     capture = next;
                     if timeout.timed_out() {
                         drop(capture);
-                        self.abort_recovery(id)?;
-                        return Err(CaptureFailure::Deadline);
+                        self.fail_recovery(id, CaptureFailure::Deadline)?;
+                        capture = self.capture_lock()?;
                     }
                 }
                 CapturePhase::Aborting { id: active } if active == id => {
@@ -293,8 +351,17 @@ impl Server {
                         .wait(capture)
                         .map_err(|_| CaptureFailure::Poisoned)?;
                 }
+                CapturePhase::RecoveryFinished { id: active, result } if active == id => {
+                    capture.phase = CapturePhase::Idle;
+                    self.capture_changed.notify_all();
+                    return result;
+                }
                 CapturePhase::Idle => return Ok(()),
-                CapturePhase::Poisoned => return Err(CaptureFailure::Poisoned),
+                CapturePhase::Poisoned => {
+                    drop(capture);
+                    self.fail_recovery(id, CaptureFailure::Poisoned)?;
+                    capture = self.capture_lock()?;
+                }
                 _ => return Err(CaptureFailure::Busy),
             }
         }
@@ -309,16 +376,6 @@ impl Server {
                 self.capture_changed.notify_all();
                 Err(CaptureFailure::Poisoned)
             }
-        }
-    }
-
-    fn active_deadline(&self) -> Result<(u64, std::time::Instant), CaptureFailure> {
-        let capture = self.capture_lock()?;
-        match capture.phase {
-            CapturePhase::Active { id, deadline } if std::time::Instant::now() < deadline => Ok((id, deadline)),
-            CapturePhase::Active { .. } => Err(CaptureFailure::Deadline),
-            CapturePhase::Poisoned => Err(CaptureFailure::Poisoned),
-            _ => Err(CaptureFailure::Busy),
         }
     }
 
@@ -385,6 +442,8 @@ impl Server {
             CapturePhase::Idle => Ok(None),
             CapturePhase::Recovery { deadline, .. } if std::time::Instant::now() < deadline => Ok(Some(deadline)),
             CapturePhase::Recovery { .. } => Err(CaptureFailure::Deadline),
+            CapturePhase::RecoveryFinished { result: Ok(()), .. } => Ok(None),
+            CapturePhase::RecoveryFinished { result: Err(error), .. } => Err(error),
             CapturePhase::Active { deadline, .. } if std::time::Instant::now() < deadline => Ok(Some(deadline)),
             CapturePhase::Active { .. } => Err(CaptureFailure::Deadline),
             CapturePhase::Publishing { .. } => Err(CaptureFailure::Busy),

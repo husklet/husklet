@@ -216,10 +216,9 @@ impl Server {
         if !matches!(capture.phase, CapturePhase::Aborting { id: active } if active == id) || capture.mutations != 0 {
             return Reply::error();
         }
-        capture.phase = if discarded.is_ok() {
-            CapturePhase::Idle
-        } else {
-            CapturePhase::Poisoned
+        capture.phase = CapturePhase::RecoveryFinished {
+            id,
+            result: discarded,
         };
         self.capture_changed.notify_all();
         if discarded.is_ok() { Reply::ok() } else { Reply::error() }

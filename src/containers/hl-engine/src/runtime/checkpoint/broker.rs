@@ -44,11 +44,19 @@ impl Server {
 
     pub(super) fn fail(&self, message: String) {
         hl_log::hl_error!(hl_log::tag::CHECKPOINT, "{message}");
-        let capture = self.active_deadline().ok().map(|(id, _)| id);
-        if let Some(id) = capture
-            && self.finish_failed(id, CaptureFailure::Failed).is_err()
-        {
-            self.interrupt_channels();
+        let phase = self.capture_lock().ok().map(|capture| capture.phase);
+        match phase {
+            Some(CapturePhase::Active { id, .. }) => {
+                if self.finish_failed(id, CaptureFailure::Failed).is_err() {
+                    self.interrupt_channels();
+                }
+            }
+            Some(CapturePhase::Recovery { id, .. }) => {
+                if self.fail_recovery(id, CaptureFailure::Failed).is_err() {
+                    self.interrupt_channels();
+                }
+            }
+            _ => {}
         }
     }
 

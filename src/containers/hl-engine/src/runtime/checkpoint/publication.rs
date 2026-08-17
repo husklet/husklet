@@ -220,7 +220,7 @@ impl Server {
                         || request.op == RECOVERY_COMPLETE
                         || self.recovery_object_request(connection, request, name))
             }
-            CapturePhase::Complete | CapturePhase::Aborting { .. } => false,
+            CapturePhase::Complete | CapturePhase::Aborting { .. } | CapturePhase::RecoveryFinished { .. } => false,
             CapturePhase::Active { id, .. } | CapturePhase::Publishing { id } => u64::from(request.generation) == id,
             CapturePhase::Finished { id, .. } => u64::from(request.generation) == id && request.op == COMMIT,
             CapturePhase::Poisoned => false,
