@@ -122,7 +122,9 @@ impl Service {
         let process = match process {
             Ok(process) => process,
             Err(error) => {
-                self.io.lock().await.remove(&journal);
+                if let Some(io) = self.io.lock().await.remove(&journal) {
+                    io.finish();
+                }
                 return Err(error);
             }
         };
