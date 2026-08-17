@@ -892,6 +892,28 @@ fn every_recovery_waiter_observes_the_same_terminal_result() {
 }
 
 #[test]
+fn delayed_recovery_waiter_keeps_its_result_across_new_capture_admission() {
+    let store = Arc::new(RecoveryStore::default());
+    let server = Server::new(store.clone(), store);
+    let recovery = server
+        .begin_recovery(29, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    server.fail_recovery(recovery, CaptureFailure::Failed).unwrap();
+
+    assert_eq!(server.wait_recovery(recovery), Err(CaptureFailure::Failed));
+    let capture = server
+        .begin_capture(30, std::time::Instant::now() + Duration::from_secs(1))
+        .expect("completed recovery ownership must not block the next capture");
+
+    assert_eq!(
+        server.wait_recovery(recovery),
+        Err(CaptureFailure::Failed),
+        "new capture admission replaced the completed recovery result with Busy"
+    );
+    server.abort_capture(capture).unwrap();
+}
+
+#[test]
 fn every_capture_waiter_observes_the_same_terminal_error() {
     let store = Arc::new(RecoveryStore::default());
     let server = Server::new(store.clone(), store);
