@@ -157,6 +157,9 @@ impl Service {
         exec.checkpoint = None;
         if let Err(error) = self.execs.replace(&exec).await {
             let _ = process.signal(Signal::KILL).await;
+            if let Some(io) = self.io.lock().await.remove(&journal) {
+                io.finish();
+            }
             return Err(error);
         }
         self.exec_live
