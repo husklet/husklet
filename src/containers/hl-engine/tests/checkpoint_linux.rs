@@ -461,6 +461,12 @@ fn manifest_foreground_group(store: &Store) -> i32 {
     i32::from_ne_bytes(manifest[60..64].try_into().expect("foreground process-group field"))
 }
 
+fn set_manifest_foreground_group(store: &Store, group: i32) {
+    let mut image = store.0.lock().unwrap();
+    let manifest = image.get_mut("MANIFEST").expect("checkpoint manifest");
+    manifest[60..64].copy_from_slice(&group.to_ne_bytes());
+}
+
 fn process_ids_for_executable(executable: &Path) -> Vec<u32> {
     let needle = executable.as_os_str().as_encoded_bytes();
     let mut pids = std::fs::read_dir("/proc")
@@ -1212,6 +1218,54 @@ fn terminal_claim_mask_failure_aborts_before_any_restored_process_resumes() {
         assert!(
             !restore_port.output().contains("CHILD-ALIVE"),
             "a descendant resumed after atomic terminal-claim failure:\n{}",
+            restore_port.output()
+        );
+    }
+}
+
+#[test]
+fn stale_foreground_guest_pid_is_rejected_without_resuming_on_both_isas() {
+    let fixtures = tempfile::tempdir().unwrap();
+    for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
+        let executable = foreground_fixture(isa, fixtures.path());
+        let temporary = tempfile::tempdir().unwrap();
+        let release = temporary.path().join("release");
+        let final_release = temporary.path().join("final-release");
+        let store = Arc::new(Store::default());
+        let capture_port = Arc::new(TestTerminal::default());
+        let capture = Engine::with_checkpoint(
+            isa,
+            plan(&executable, &release, &final_release, &["HL_CHECKPOINT"]),
+            StandardStreams::default().with_terminal(Terminal::new(capture_port.clone(), 24, 80).unwrap()),
+            store.clone(),
+            store.clone(),
+        )
+        .unwrap();
+        capture.start().unwrap();
+        capture_port.wait_output(b"SLEEPING");
+        capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+        assert_eq!(capture.wait().unwrap().guest_status, 0);
+        wait_for_exact_process_reap(&executable);
+        set_manifest_foreground_group(&store, i32::MAX - 17);
+
+        let restore_port = Arc::new(TestTerminal::default());
+        let restore = Engine::with_checkpoint(
+            isa,
+            plan(&executable, &release, &final_release, &["HL_RESTORE"]),
+            StandardStreams::default().with_terminal(Terminal::new(restore_port.clone(), 24, 80).unwrap()),
+            store.clone(),
+            store,
+        )
+        .unwrap();
+        restore.start().unwrap();
+        assert!(
+            restore.wait().is_err(),
+            "stale foreground gpid restore unexpectedly succeeded"
+        );
+        wait_for_exact_process_reap(&executable);
+        assert!(
+            !restore_port.output().contains("CHILD-ALIVE"),
+            "a stale foreground gpid released a descendant:\n{}",
             restore_port.output()
         );
     }
