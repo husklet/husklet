@@ -153,6 +153,44 @@ impl Service {
         Ok(session)
     }
 
+    pub(crate) async fn attach_exec(
+        self: &Arc<Self>,
+        id: &ExecId,
+        size: Option<crate::Size>,
+    ) -> Result<crate::Session> {
+        let _guard = self.operations.lock().await;
+        let mut exec = self.inspect_exec(id).await?;
+        if !matches!(exec.state, ExecState::Running { .. }) {
+            return Err(Error::InvalidExecState {
+                id: exec.id,
+                actual: exec.state,
+                expected: "running",
+            });
+        }
+        if let Some(size) = size {
+            let Some(previous) = exec.spec.process.console.terminal else {
+                return Err(Error::NoTerminal(exec.id.to_string()));
+            };
+            let process = self
+                .exec_live
+                .lock()
+                .await
+                .get(&exec.id)
+                .cloned()
+                .ok_or_else(|| Error::Runtime("running exec has no runtime process".into()))?;
+            process.resize(size).await?;
+            exec.spec.process.console.terminal = Some(size);
+            if let Err(error) = self.execs.replace(&exec).await {
+                let _ = process.resize(previous).await;
+                return Err(error);
+            }
+        }
+        let journal = JournalId::exec(exec.id.clone());
+        let cursor = self.logs.cursor(&journal).await?;
+        let io = self.exec_io(&exec).await;
+        Ok(crate::Session::new(Arc::clone(self), io, journal, cursor, cursor))
+    }
+
     async fn finish_exec(&self, id: ExecId, owner: u64, generation: u64, result: Result<ExitStatus>) {
         let _guard = self.operations.lock().await;
         let (result, mut failure) = match result {

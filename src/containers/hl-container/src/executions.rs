@@ -64,6 +64,17 @@ impl Executions {
         self.service.start_exec(id, Some(size)).await
     }
 
+    /// Attaches to an execution which is already running.
+    ///
+    /// Unlike [`Self::start`], this never creates or restarts a process. It is
+    /// intended for reconnecting to a checkpoint-restored interactive exec.
+    ///
+    /// # Errors
+    /// Returns lookup, lifecycle, missing-terminal, runtime, or persistence failures.
+    pub async fn attach(&self, id: &ExecId, size: Option<crate::Size>) -> Result<Session> {
+        self.service.attach_exec(id, size).await
+    }
+
     /// Changes the size of a running execution's terminal.
     ///
     /// # Errors

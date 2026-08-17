@@ -325,6 +325,62 @@ async fn executions_are_single_use_and_keep_independent_output() {
 }
 
 #[tokio::test]
+async fn running_execution_can_be_reattached_without_starting_a_replacement() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("reattach-parent")).await.unwrap();
+    containers.start("reattach-parent").await.unwrap();
+    let initial = Size::new(24, 80).unwrap();
+    let resized = Size::new(42, 132).unwrap();
+    let exec = containers
+        .executions()
+        .create(
+            "reattach-parent",
+            ExecSpec::new(Process::new("/bin/sh").console(Console::default().terminal(initial))),
+        )
+        .await
+        .unwrap();
+    let _original = containers.executions().start(&exec.id).await.unwrap();
+    let launches_before = runtime.programs.lock().unwrap().len();
+
+    let _reattached = containers.executions().attach(&exec.id, Some(resized)).await.unwrap();
+
+    assert_eq!(runtime.programs.lock().unwrap().len(), launches_before);
+    assert_eq!(runtime.resizes.lock().unwrap().as_slice(), [resized]);
+    assert!(matches!(
+        containers.executions().inspect(&exec.id).await.unwrap().state,
+        ExecState::Running { .. }
+    ));
+    assert!(matches!(
+        containers.executions().start(&exec.id).await,
+        Err(Error::InvalidExecState { .. })
+    ));
+}
+
+#[tokio::test]
+async fn execution_attach_rejects_created_records_instead_of_starting_them() {
+    let containers = service(Arc::new(FakeRuntime::new(ExitStatus::Code(0)))).await;
+    containers.create(spec("attach-created-parent")).await.unwrap();
+    containers.start("attach-created-parent").await.unwrap();
+    let exec = containers
+        .executions()
+        .create("attach-created-parent", ExecSpec::new(Process::new("/bin/sh")))
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        containers.executions().attach(&exec.id, None).await,
+        Err(Error::InvalidExecState { .. })
+    ));
+    assert_eq!(
+        containers.executions().inspect(&exec.id).await.unwrap().state,
+        ExecState::Created
+    );
+}
+
+#[tokio::test]
 async fn execution_wait_started_while_created_survives_start_and_returns_the_exit() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(23));
     runtime.delay = Duration::from_millis(30);

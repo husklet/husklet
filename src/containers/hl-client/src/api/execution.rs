@@ -1,6 +1,6 @@
 use http::Method;
 
-use crate::model::{ExecConfig, ExecCreated, ExecInspect, ExecStart, Wait};
+use crate::model::{ExecAttach, ExecConfig, ExecCreated, ExecInspect, ExecStart, Wait};
 use crate::transport::Transport;
 use crate::uri::Component;
 use crate::{Error, Result};
@@ -83,6 +83,26 @@ impl<'a> Executions<'a> {
         self.transport
             .empty_json(Method::POST, &format!("/exec/{}/start", Component::segment(id)), config)
             .await
+    }
+
+    /// Attach to an already-running execution without starting it again.
+    ///
+    /// # Errors
+    /// Returns transport, upgrade, state, and framing failures from the daemon.
+    pub async fn attach(&self, id: &str, config: &ExecAttach) -> Result<Session> {
+        let stream = self
+            .transport
+            .upgrade_json(
+                Method::POST,
+                &format!("/exec/{}/attach", Component::segment(id)),
+                config,
+            )
+            .await?;
+        if config.tty {
+            Ok(Session::terminal(stream, self.transport.response_limit()))
+        } else {
+            Ok(Session::pipes(stream, self.transport.response_limit()))
+        }
     }
 
     /// Resize a running execution terminal.

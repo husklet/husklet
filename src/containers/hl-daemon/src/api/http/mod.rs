@@ -89,6 +89,7 @@ pub(crate) fn router(
         .route("/containers/:id/checkpoint", post(container::checkpoint))
         .route("/containers/:id/exec", post(exec::create))
         .route("/exec/:id/start", post(exec::start))
+        .route("/exec/:id/attach", post(exec::attach))
         .route("/exec/:id/resize", post(exec::resize))
         .route("/exec/:id/kill", post(exec::signal))
         .route("/exec/:id/json", get(exec::inspect))

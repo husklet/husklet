@@ -117,6 +117,28 @@ pub struct ExecStart {
     pub unsupported: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
+/// Husklet extension for reconnecting streams to an already-running exec.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct ExecAttach {
+    #[serde(default, rename = "Tty")]
+    pub tty: bool,
+    #[serde(default, rename = "KillOnDisconnect")]
+    pub kill_on_disconnect: bool,
+    #[serde(default, rename = "ConsoleSize", skip_serializing_if = "Option::is_none")]
+    pub console_size: Option<[u64; 2]>,
+}
+
+#[cfg(feature = "runtime")]
+impl ExecAttach {
+    pub(crate) fn size(&self) -> Result<Option<hl_container::Size>, String> {
+        let size = console_size(self.console_size)?;
+        if size.is_some() && !self.tty {
+            return Err("ConsoleSize requires Tty=true".into());
+        }
+        Ok(size)
+    }
+}
+
 #[cfg(feature = "runtime")]
 impl ExecStart {
     pub(crate) fn size(&self) -> Result<Option<hl_container::Size>, String> {

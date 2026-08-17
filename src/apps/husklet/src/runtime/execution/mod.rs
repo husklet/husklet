@@ -2,7 +2,7 @@
 
 use crate::config::WorkspaceConfig;
 use hl_client::api::Size;
-use hl_client::model::{Attachment, ExecConfig, ExecStart};
+use hl_client::model::{Attachment, ExecAttach, ExecConfig, ExecStart};
 use hl_ws::{Directory, Key, Storage};
 use hl_ws_term::PtyBackend;
 use std::io;
@@ -64,6 +64,18 @@ impl PaneExecution {
 
 struct LauncherError;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PersistedAction {
+    Attach,
+    Restore,
+}
+
+impl PersistedAction {
+    fn for_running(running: bool) -> Self {
+        if running { Self::Attach } else { Self::Restore }
+    }
+}
+
 impl LauncherError {
     fn io(error: impl std::fmt::Display) -> io::Error {
         io::Error::other(error.to_string())
@@ -124,9 +136,31 @@ pub fn launch(
     };
     let mut restore_failure = None;
     let previous = pane.as_ref().map(PaneExecution::id).transpose()?.flatten();
-    let restoring = previous.is_some();
+    let mut restored_running = false;
+    let mut restoring = false;
     let mut execution = if let Some(id) = previous {
-        id
+        match runtime.block_on(client.executions().inspect(&id)) {
+            Ok(inspection) => {
+                match PersistedAction::for_running(inspection.running) {
+                    PersistedAction::Attach => restored_running = true,
+                    PersistedAction::Restore => restoring = true,
+                }
+                id
+            }
+            Err(hl_client::Error::Docker { status, .. }) if status.as_u16() == 404 => {
+                if let Some(pane) = &pane {
+                    let _ = pane.clear(&id);
+                }
+                let created = runtime
+                    .block_on(client.executions().create("workspace", &config))
+                    .map_err(LauncherError::io)?;
+                if let Some(pane) = &pane {
+                    pane.save(&created.id)?;
+                }
+                created.id
+            }
+            Err(error) => return Err(LauncherError::io(error)),
+        }
     } else {
         let created = runtime
             .block_on(client.executions().create("workspace", &config))
@@ -136,7 +170,19 @@ pub fn launch(
         }
         created.id
     };
-    let session = match runtime.block_on(client.executions().start(&execution, &start)) {
+    let session = if restored_running {
+        runtime
+            .block_on(client.executions().attach(
+                &execution,
+                &ExecAttach {
+                    tty: true,
+                    kill_on_disconnect: true,
+                    console_size: start.console_size,
+                },
+            ))
+            .map_err(LauncherError::io)?
+    } else {
+        match runtime.block_on(client.executions().start(&execution, &start)) {
         Ok(session) => session,
         Err(error) if restoring => {
             restore_failure = Some(format!(
@@ -157,7 +203,8 @@ pub fn launch(
                 .block_on(client.executions().start(&execution, &start))
                 .map_err(LauncherError::io)?
         }
-        Err(error) => return Err(LauncherError::io(error)),
+            Err(error) => return Err(LauncherError::io(error)),
+        }
     };
     let (mut input, stream) = session.into_terminal().map_err(LauncherError::io)?;
 
@@ -327,13 +374,19 @@ impl WorkspaceContainer {
 
 #[cfg(test)]
 mod pane_execution_tests {
-    use super::{terminal_identity, PaneExecution};
+    use super::{PaneExecution, PersistedAction, terminal_identity};
     use crate::config::WorkspaceConfig;
     use hl_ws::Arch;
 
     #[test]
     fn terminal_defaults_to_the_administrative_workspace_identity() {
         assert_eq!(terminal_identity(), ("0:0", "/root"));
+    }
+
+    #[test]
+    fn restored_running_panes_attach_while_created_panes_resume() {
+        assert_eq!(PersistedAction::for_running(true), PersistedAction::Attach);
+        assert_eq!(PersistedAction::for_running(false), PersistedAction::Restore);
     }
 
     #[test]
