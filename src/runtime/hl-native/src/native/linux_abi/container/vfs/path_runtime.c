@@ -1169,26 +1169,32 @@ static void proc_fdvis_fork_child_abort(struct fdvis_fork_plan *plan, int child)
     fdvis_unlock();
 }
 
-static void proc_fdvis_fork_child_timeout(struct fdvis_fork_plan *plan, int child) {
-    uint64_t child_start = fdvis_process_token(child);
+static int proc_fdvis_fork_child_timeout(struct fdvis_fork_plan *plan, int child) {
     fdvis_lock();
+    int published = 1;
+    for (size_t index = 0; index < plan->count; ++index) {
+        const struct fdvis_fork_entry *entry = &plan->entries[index];
+        if (g_fdvis[entry->slot].key != fdvis_key(child, entry->guest_fd)) {
+            published = 0;
+            break;
+        }
+    }
+    if (published) {
+        fdvis_unlock();
+        return 1;
+    }
     for (size_t index = 0; index < plan->count; ++index) {
         const struct fdvis_fork_entry *entry = &plan->entries[index];
         struct fdvis_slot *slot = &g_fdvis[entry->slot];
         uint64_t key = fdvis_key(child, entry->guest_fd);
-        if (slot->key != UINT64_MAX &&
-            (slot->key != key || (slot->owner_start_ns != 0 && slot->owner_start_ns != child_start)))
-            continue;
-        if (slot->key == key) {
-            struct fdpath_slot *path = fdpath_find(key, slot->owner_start_ns, 0);
-            if (path) fdpath_delete_locked(path);
-        }
+        if (slot->key != UINT64_MAX) continue;
         memset(slot, 0, sizeof *slot);
         slot->key = key;
         slot->owner_start_ns = UINT64_MAX;
         slot->generation = ++g_fdvis_control->generation;
     }
     fdvis_unlock();
+    return 0;
 }
 
 static void proc_fdvis_fork_parent_clear_timeout(struct fdvis_fork_plan *plan, int child) {
@@ -1320,7 +1326,7 @@ static int proc_fdvis_after_fork(struct fdvis_fork_plan *plan, int child, int in
             }
             uint64_t now = fdvis_monotonic_milliseconds();
             if (now == 0 || now >= deadline) {
-                proc_fdvis_fork_child_timeout(plan, child);
+                if (proc_fdvis_fork_child_timeout(plan, child)) break;
                 return -ETIMEDOUT;
             }
             struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
@@ -1509,13 +1515,36 @@ static int fdvis_after_fork_rollback_test(void) {
     int reserve_status = proc_fdvis_reserve(&reusable);
     abandoned_cleanly = abandoned_cleanly && reserve_status == 0;
     if (reserve_status == 0) proc_fdvis_reservation_cancel(&reusable);
+    memset(identities, 0, sizeof *identities * FDVIS_N);
+    memset(paths, 0, sizeof *paths * FDPATH_N);
+    identities[0] = (struct fdvis_slot){.key = first_key,
+                                        .owner_start_ns = child_start,
+                                        .generation = 11,
+                                        .kind = entries[0].kind,
+                                        .device = entries[0].device,
+                                        .object = entries[0].object};
+    identities[1] = (struct fdvis_slot){.key = second_key,
+                                        .owner_start_ns = child_start,
+                                        .generation = 12,
+                                        .kind = entries[1].kind,
+                                        .device = entries[1].device,
+                                        .object = entries[1].object};
+    struct fdpath_slot *committed_path = fdpath_find(first_key, child_start, 1);
+    if (committed_path) snprintf(committed_path->path, sizeof committed_path->path, "%s", entries[0].path);
+    int timeout_observed_commit = proc_fdvis_fork_child_timeout(&plan, child);
+    committed_path = fdpath_find(first_key, child_start, 0);
+    int commit_survived_timeout = timeout_observed_commit == 1 && identities[0].key == first_key &&
+                                  identities[0].generation == 11 && identities[1].key == second_key &&
+                                  identities[1].generation == 12 && committed_path &&
+                                  strcmp(committed_path->path, entries[0].path) == 0;
     g_fdvis = saved_identities;
     g_fdpaths = saved_paths;
     g_fdvis_control = saved_control;
     free(identities);
     free(paths);
     free(control);
-    return rolled_back && preserved && upgrade_rolled_back && upgraded_cleanly && abandoned_cleanly;
+    return rolled_back && preserved && upgrade_rolled_back && upgraded_cleanly && abandoned_cleanly &&
+           commit_survived_timeout;
 }
 
 static int fdvis_stalled_parent_test(void) {
