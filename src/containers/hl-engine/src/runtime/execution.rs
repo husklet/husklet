@@ -218,12 +218,25 @@ impl GuestMachine for ProductionMachine {
             .map(|argument| CString::new(argument.as_slice()).map_err(|_| EngineError::LaunchFailed))
             .collect::<Result<Vec<_>, _>>()?;
         let pointers = arguments.iter().map(|argument| argument.as_ptr()).collect::<Vec<_>>();
+        #[cfg(unix)]
+        let run = if let Some(recovery) = recovery.as_ref() {
+            // Recovery publication is completed by the restored process while
+            // `run` is still waiting for that process to exit. Waiting only
+            // after `run` returns lets a later checkpoint reuse the server
+            // state first; the stale recovery waiter then observes that newer
+            // generation and reports `Busy` despite a successful checkpoint.
+            std::thread::scope(|scope| {
+                let waiting = scope.spawn(|| recovery.wait());
+                let run = engine.run(&pointers).map_err(native_run_failure);
+                let restored = waiting.join().map_err(|_| EngineError::WaitFailed)?;
+                run.and(restored)
+            })
+        } else {
+            engine.run(&pointers).map_err(native_run_failure)
+        };
+        #[cfg(not(unix))]
         let run = engine.run(&pointers).map_err(native_run_failure);
         run?;
-        #[cfg(unix)]
-        if let Some(recovery) = recovery {
-            recovery.wait()?;
-        }
         #[cfg(unix)]
         if let Some(terminal) = &self.terminal {
             terminal.flush();

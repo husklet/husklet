@@ -2,7 +2,7 @@
 
 use hl_engine::{
     activation::GuestIsa,
-    composition::{CheckpointSink, CheckpointSource, CompositionError, StandardStreams},
+    composition::{CheckpointSink, CheckpointSource, CompositionError, StandardStreams, Terminal, TerminalPort},
     launcher::plan::RuntimePlan,
     options::Options,
     runtime::Engine,
@@ -11,7 +11,7 @@ use std::{
     collections::BTreeMap,
     num::NonZeroU64,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
     time::{Duration, Instant},
 };
 
@@ -71,6 +71,34 @@ fn signalfd_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     output
 }
 
+fn sleep_tree_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    let (variable, compiler, name) = match isa {
+        GuestIsa::Aarch64 => (
+            "HL_CHECKPOINT_SLEEP_TREE_AARCH64",
+            "aarch64-linux-gnu-gcc",
+            "checkpoint-sleep-tree-aarch64",
+        ),
+        GuestIsa::X86_64 => (
+            "HL_CHECKPOINT_SLEEP_TREE_X86_64",
+            "x86_64-linux-gnu-gcc",
+            "checkpoint-sleep-tree-x86_64",
+        ),
+    };
+    if let Some(path) = std::env::var_os(variable) {
+        return PathBuf::from(path);
+    }
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/sleep_tree.c");
+    let output = directory.join(name);
+    let status = std::process::Command::new(compiler)
+        .args(["-static", "-O2", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
+    assert!(status.success(), "{compiler} failed with {status}");
+    output
+}
+
 fn exit_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     let (compiler, name) = match isa {
         GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-exit-aarch64"),
@@ -90,6 +118,39 @@ fn exit_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
 
 #[derive(Default)]
 struct Store(Mutex<BTreeMap<String, Vec<u8>>>);
+
+#[derive(Default)]
+struct TestTerminalPort {
+    closed: Mutex<bool>,
+    changed: Condvar,
+}
+
+impl TerminalPort for TestTerminalPort {
+    fn read(&self, _: &mut [u8]) -> std::io::Result<usize> {
+        let mut closed = self.closed.lock().unwrap();
+        while !*closed {
+            closed = self.changed.wait(closed).unwrap();
+        }
+        Ok(0)
+    }
+
+    fn write(&self, input: &[u8]) -> std::io::Result<usize> {
+        Ok(input.len())
+    }
+
+    fn close(&self) {
+        *self.closed.lock().unwrap() = true;
+        self.changed.notify_all();
+    }
+}
+
+fn streams(terminal: bool) -> StandardStreams {
+    if terminal {
+        StandardStreams::default().with_terminal(Terminal::new(Arc::new(TestTerminalPort::default()), 24, 80).unwrap())
+    } else {
+        StandardStreams::default()
+    }
+}
 
 impl CheckpointSink for Store {
     fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
@@ -217,6 +278,17 @@ fn wait_ready(path: &Path) {
     panic!("guest process tree did not become ready");
 }
 
+fn wait_for(path: &Path, marker: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if std::fs::read_to_string(path).unwrap_or_default().contains(marker) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    panic!("guest did not publish {marker}");
+}
+
 fn wait_cycle_ready(path: &Path) -> bool {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
@@ -265,7 +337,12 @@ fn capture_after_plain_engine(isa: GuestIsa, plain_executable: &Path, checkpoint
     assert!(store.0.lock().unwrap().contains_key("MANIFEST"));
 }
 
-fn checkpoint_round_trip(isa: GuestIsa, executable: &Path, recapture_barrier: Option<&std::sync::Barrier>) {
+fn checkpoint_round_trip(
+    isa: GuestIsa,
+    executable: &Path,
+    recapture_barrier: Option<&std::sync::Barrier>,
+    terminal: bool,
+) {
     let temporary = tempfile::tempdir().unwrap();
     let release = temporary.path().join("release");
     let final_release = temporary.path().join("final-release");
@@ -275,7 +352,7 @@ fn checkpoint_round_trip(isa: GuestIsa, executable: &Path, recapture_barrier: Op
     let capture = Engine::with_checkpoint(
         isa,
         plan(executable, &release, &final_release, &["HL_CHECKPOINT"]),
-        StandardStreams::default(),
+        streams(terminal),
         store.clone(),
         store.clone(),
     )
@@ -305,7 +382,7 @@ fn checkpoint_round_trip(isa: GuestIsa, executable: &Path, recapture_barrier: Op
             &final_release,
             &["HL_RESTORE", "HL_CKPT_TEST_FAIL_AFTER_FORK"],
         ),
-        StandardStreams::default(),
+        streams(terminal),
         store.clone(),
         store.clone(),
     )
@@ -326,7 +403,7 @@ fn checkpoint_round_trip(isa: GuestIsa, executable: &Path, recapture_barrier: Op
     let recapture = Engine::with_checkpoint(
         isa,
         plan(executable, &release, &final_release, &["HL_RESTORE", "HL_CHECKPOINT"]),
-        StandardStreams::default(),
+        streams(terminal),
         second_store.clone(),
         store.clone(),
     )
@@ -355,7 +432,7 @@ fn checkpoint_round_trip(isa: GuestIsa, executable: &Path, recapture_barrier: Op
     let restore = Engine::with_checkpoint(
         isa,
         plan(executable, &release, &final_release, &["HL_RESTORE"]),
-        StandardStreams::default(),
+        streams(terminal),
         second_store.clone(),
         second_store,
     )
@@ -384,7 +461,102 @@ fn retained_c_round_trips_three_process_tree_on_both_isas() {
             "missing checkpoint fixture: {}",
             executable.display()
         );
-        checkpoint_round_trip(isa, &executable, None);
+        checkpoint_round_trip(isa, &executable, None, false);
+    }
+}
+
+#[test]
+fn terminal_process_tree_survives_capture_restore_and_recapture_on_both_isas() {
+    let fixtures = tempfile::tempdir().unwrap();
+    for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
+        let executable = fixture(isa, fixtures.path());
+        checkpoint_round_trip(isa, &executable, None, true);
+    }
+}
+
+#[test]
+fn terminal_waiting_for_sleep_survives_capture_restore_and_recapture_on_both_isas() {
+    let fixtures = tempfile::tempdir().unwrap();
+    for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
+        let executable = sleep_tree_fixture(isa, fixtures.path());
+        let temporary = tempfile::tempdir().unwrap();
+        let release = temporary.path().join("release");
+        let final_release = temporary.path().join("final-release");
+        let output = temporary.path().join("release.output");
+        let first = Arc::new(Store::default());
+        let capture = Engine::with_checkpoint(
+            isa,
+            plan(&executable, &release, &final_release, &["HL_CHECKPOINT"]),
+            streams(true),
+            first.clone(),
+            first.clone(),
+        )
+        .unwrap();
+        capture.start().unwrap();
+        wait_for(&output, "READY");
+        capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+        assert_eq!(capture.wait().unwrap().guest_status, 0);
+
+        let failed = Arc::new(Store::default());
+        let failed_restore = Engine::with_checkpoint(
+            isa,
+            plan(
+                &executable,
+                &release,
+                &final_release,
+                &["HL_RESTORE", "HL_CKPT_TEST_FAIL_TRIGGER_REATTACH"],
+            ),
+            streams(true),
+            failed,
+            first.clone(),
+        )
+        .unwrap();
+        failed_restore.start().unwrap();
+        assert!(matches!(
+            failed_restore.wait(),
+            Err(hl_engine::engine::EngineError::NativeCreateFailed(_))
+        ));
+
+        let second = Arc::new(Store::default());
+        let recapture = Engine::with_checkpoint(
+            isa,
+            plan(&executable, &release, &final_release, &["HL_RESTORE", "HL_CHECKPOINT"]),
+            streams(true),
+            second.clone(),
+            first,
+        )
+        .unwrap();
+        recapture.start().unwrap();
+        std::fs::write(&release, []).unwrap();
+        wait_for(&output, "CHILD-RESTORED");
+        recapture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+        assert_eq!(recapture.wait().unwrap().guest_status, 0);
+        {
+            let image = second.0.lock().unwrap();
+            assert!(image.contains_key("MANIFEST"));
+            assert_eq!(
+                image
+                    .keys()
+                    .filter(|name| name.starts_with("proc.") && name.ends_with("/meta"))
+                    .count(),
+                2
+            );
+        }
+
+        std::fs::write(&final_release, []).unwrap();
+        let restore = Engine::with_checkpoint(
+            isa,
+            plan(&executable, &release, &final_release, &["HL_RESTORE"]),
+            streams(true),
+            second.clone(),
+            second,
+        )
+        .unwrap();
+        restore.start().unwrap();
+        assert_eq!(restore.wait().unwrap().guest_status, 0);
+        let output = std::fs::read_to_string(output).unwrap();
+        assert!(output.contains("CHILD-FINAL"), "{output}");
+        assert!(output.contains("PARENT-FINAL"), "{output}");
     }
 }
 

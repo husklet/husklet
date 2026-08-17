@@ -695,6 +695,9 @@ static void ckpt_restore_proc_run(int gpid) {
     // (si_addr == sp, pc at glibc's __syscall_cancel_arch_end).
     fork_child_hooks(&c); // shared after-fork engine reset (cache re-alias, kqueue rebuild, lock/threg/Mach)
 
+    int trigger_detached = ckpt_trigger_detach_for_restore();
+    if (trigger_detached < 0) ckpt_restore_commit_failed();
+
     // drop the COW-inherited parent guest memory + registries, then load our own
     /* The forked restorer inherited a COW copy of the parent's typed VMA ledger and
      * host mapping ownership. Release those handles before forgetting the generic
@@ -705,6 +708,7 @@ static void ckpt_restore_proc_run(int gpid) {
     g_nanonmap = 0;
     gna_reset();
     if (ckpt_restore_mem_dir(pd, &m) != 0) ckpt_restore_commit_failed();
+    if (ckpt_trigger_reattach_after_restore(trigger_detached) != 0) ckpt_restore_commit_failed();
 
     ckpt_reinstall_sigacts(&m); // restore guest signal dispositions (AFTER the fork hooks reset host state)
 

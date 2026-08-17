@@ -166,6 +166,11 @@ const DEFINITIONS: &[Definition] = &[
         "test-only restore failure after rebuilding descendants",
         Flag
     ),
+    internal!(
+        "HL_CKPT_TEST_FAIL_TRIGGER_REATTACH",
+        "test-only restored checkpoint trigger reattachment failure",
+        Flag
+    ),
     launch!("HL_ROOTFS_RO", "mount the guest root filesystem read-only", Flag),
     launch!("HL_SANDBOX", "apply host confinement to the untrusted worker", Flag),
     launch!("HL_SECCOMP_BASELINE", "guest-visible launch seccomp baseline", Text),

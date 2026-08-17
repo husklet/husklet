@@ -526,6 +526,25 @@ static volatile uint32_t *ckpt_map_trigger(void) {
     return ckpt_map_trigger_descriptor(inherited);
 }
 
+// A restored child rebuilds its guest address space with MAP_FIXED. It inherited
+// the parent's trigger mapping at an address chosen for the parent's layout;
+// that address can belong to the child's saved guest image. Detach it before
+// replay so MAP_FIXED cannot silently replace engine state, then map the same
+// shared descriptor again after the guest topology owns all of its addresses.
+static int ckpt_trigger_detach_for_restore(void) {
+    if (g_ckpt_trigger == NULL) return 0;
+    if (munmap((void *)g_ckpt_trigger, sizeof *g_ckpt_trigger) != 0) return -1;
+    g_ckpt_trigger = NULL;
+    return 1;
+}
+
+static int ckpt_trigger_reattach_after_restore(int detached) {
+    if (!detached) return 0;
+    if (hl_option_get("HL_CKPT_TEST_FAIL_TRIGGER_REATTACH") != NULL) return -1;
+    g_ckpt_trigger = ckpt_map_trigger();
+    return g_ckpt_trigger == NULL ? -1 : 0;
+}
+
 static int ckpt_rd_all(FILE *f, void *buf, size_t n) {
     return fread(buf, 1, n, f) == n ? 0 : -1;
 }
