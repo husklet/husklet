@@ -16,11 +16,13 @@ enum { ALLOCATIONS = 512, ALLOCATION_SIZE = 4096 };
 static int child_ready[2];
 static int allocations_ready[2];
 static unsigned char *allocations[ALLOCATIONS];
+static unsigned char *concurrent;
 
 static void *allocate_while_child_lives(void *unused) {
     (void)unused;
     unsigned char byte;
     if (read(child_ready[0], &byte, 1) != 1) return (void *)(uintptr_t)1;
+    memset(concurrent, 0xa5, ALLOCATION_SIZE);
     for (size_t index = 0; index < ALLOCATIONS; index++) {
         allocations[index] = malloc(ALLOCATION_SIZE);
         if (allocations[index] == NULL) return (void *)(uintptr_t)2;
@@ -52,18 +54,24 @@ static int healthy_child(void) {
 
 int main(void) {
     if (pipe(child_ready) != 0 || pipe(allocations_ready) != 0) return 2;
+    concurrent = malloc(ALLOCATION_SIZE);
+    if (concurrent == NULL) return 3;
+    memset(concurrent, 0, ALLOCATION_SIZE);
     pthread_t worker;
-    if (pthread_create(&worker, NULL, allocate_while_child_lives, NULL) != 0) return 3;
+    if (pthread_create(&worker, NULL, allocate_while_child_lives, NULL) != 0) return 4;
     int failed_isolated = failed_child();
     void *worker_result = NULL;
     int joined = pthread_join(worker, &worker_result) == 0 && worker_result == NULL;
     int heap_ok = joined;
+    for (size_t offset = 0; offset < ALLOCATION_SIZE; offset += 257)
+        heap_ok &= concurrent[offset] == 0xa5;
     for (size_t index = 0; index < ALLOCATIONS && heap_ok; index++) {
         for (size_t offset = 0; offset < ALLOCATION_SIZE; offset += 257)
             heap_ok &= allocations[index][offset] == (unsigned char)(index & 0xff);
     }
     for (size_t index = 0; index < ALLOCATIONS; index++)
         free(allocations[index]);
+    free(concurrent);
     void *probe = malloc(2 * ALLOCATION_SIZE);
     heap_ok &= probe != NULL;
     free(probe);
