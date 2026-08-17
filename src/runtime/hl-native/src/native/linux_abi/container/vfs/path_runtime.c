@@ -1149,6 +1149,25 @@ static void proc_fdvis_fork_cancel(struct fdvis_fork_plan *plan) {
     fdvis_unlock();
 }
 
+static void proc_fdvis_fork_child_abort(struct fdvis_fork_plan *plan, int child) {
+    uint64_t child_start = fdvis_process_token(child);
+    fdvis_lock();
+    for (size_t index = 0; index < plan->count; ++index) {
+        const struct fdvis_fork_entry *entry = &plan->entries[index];
+        struct fdvis_slot *slot = &g_fdvis[entry->slot];
+        uint64_t key = fdvis_key(child, entry->guest_fd);
+        if (slot->key == UINT64_MAX) {
+            memset(slot, 0, sizeof *slot);
+            continue;
+        }
+        if (slot->key != key || (slot->owner_start_ns != 0 && slot->owner_start_ns != child_start)) continue;
+        struct fdpath_slot *path = fdpath_find(key, slot->owner_start_ns, 0);
+        if (path) fdpath_delete_locked(path);
+        memset(slot, 0, sizeof *slot);
+    }
+    fdvis_unlock();
+}
+
 struct fdvis_fork_journal {
     struct fdvis_slot *identity;
     struct fdvis_slot previous_identity;
@@ -1243,7 +1262,10 @@ static int proc_fdvis_after_fork(struct fdvis_fork_plan *plan, int child, int in
             }
             fdvis_unlock();
             if (published) break;
-            if ((int)getppid() != g_fdvis_fork_parent) return -ECHILD;
+            if ((int)getppid() != g_fdvis_fork_parent) {
+                proc_fdvis_fork_child_abort(plan, child);
+                return -ECHILD;
+            }
             sched_yield();
         }
         child_start = fdvis_process_token(child);
@@ -1406,13 +1428,26 @@ static int fdvis_after_fork_rollback_test(void) {
     struct fdpath_slot *upgraded = fdpath_find(first_key, child_start, 0);
     int upgraded_cleanly = upgrade_success == 0 && identities[0].owner_start_ns == child_start && upgraded &&
                            strcmp(upgraded->path, entries[0].path) == 0 && fdpath_find(first_key, 0, 0) == NULL;
+    memset(identities, 0, sizeof *identities * FDVIS_N);
+    memset(paths, 0, sizeof *paths * FDPATH_N);
+    identities[0] = (struct fdvis_slot){.key = first_key, .owner_start_ns = child_start};
+    identities[1].key = UINT64_MAX;
+    struct fdpath_slot *partial_path = fdpath_find(first_key, child_start, 1);
+    if (partial_path) snprintf(partial_path->path, sizeof partial_path->path, "%s", entries[0].path);
+    proc_fdvis_fork_child_abort(&plan, child);
+    int abandoned_cleanly = identities[0].key == 0 && identities[1].key == 0 &&
+                            fdpath_find(first_key, child_start, 0) == NULL;
+    struct fdvis_reservation reusable;
+    int reserve_status = proc_fdvis_reserve(&reusable);
+    abandoned_cleanly = abandoned_cleanly && reserve_status == 0;
+    if (reserve_status == 0) proc_fdvis_reservation_cancel(&reusable);
     g_fdvis = saved_identities;
     g_fdpaths = saved_paths;
     g_fdvis_control = saved_control;
     free(identities);
     free(paths);
     free(control);
-    return rolled_back && preserved && upgrade_rolled_back && upgraded_cleanly;
+    return rolled_back && preserved && upgrade_rolled_back && upgraded_cleanly && abandoned_cleanly;
 }
 #endif
 
