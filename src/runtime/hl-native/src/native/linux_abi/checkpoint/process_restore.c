@@ -700,35 +700,97 @@ static int ckpt_scan_procs(void) {
     return g_nrprocs > 0 ? 0 : -1;
 }
 
+static int ckpt_proc_index(int gpid) {
+    for (int i = 0; i < g_nrprocs; ++i)
+        if (g_rprocs[i].gpid == gpid) return i;
+    return -1;
+}
+
 static int ckpt_validate_proc_tree(const struct ckpt_manifest *man) {
-    if ((uint64_t)g_nrprocs != man->n_procs) return -1;
+    // This table is copied into the fixed-capacity guest/host pid map after fork. Refuse an image which
+    // cannot fit before creating even the first child; silently truncating it would make wait/kill target
+    // unrelated host identities after restore.
+    if (man->n_procs == 0 || man->n_procs > HL_LINUX_PIDMAP_CAPACITY ||
+        (uint64_t)g_nrprocs != man->n_procs || man->root_gpid != 1)
+        return -1;
+
+    int *relations = malloc((size_t)g_nrprocs * 3 * sizeof *relations);
+    if (!relations) return -1;
+    int *parents = relations;
+    int *groups = relations + g_nrprocs;
+    int *sessions = relations + 2 * g_nrprocs;
     int roots = 0;
     for (int i = 0; i < g_nrprocs; i++) {
-        if (g_rprocs[i].version != man->version) return -1;
-        if (g_rprocs[i].gpid == man->root_gpid) {
-            if (g_rprocs[i].ppid != 0) return -1;
+        const struct ckpt_proc *process = &g_rprocs[i];
+        if (process->version != man->version || process->gpid <= 0 || process->pgid <= 0 || process->sid <= 0)
+            goto invalid;
+        for (int j = 0; j < i; ++j)
+            if (g_rprocs[j].gpid == process->gpid) goto invalid;
+
+        if (process->gpid == man->root_gpid) {
+            if (process->ppid != 0) goto invalid;
             roots++;
-            continue;
+        } else if (process->ppid <= 0) {
+            goto invalid;
         }
-        int ancestor = g_rprocs[i].ppid;
-        int reached_root = 0;
-        for (int depth = 0; depth < g_nrprocs; depth++) {
-            if (ancestor == man->root_gpid) {
-                reached_root = 1;
+    }
+    if (roots != 1) goto invalid;
+
+    for (int i = 0; i < g_nrprocs; ++i) {
+        const struct ckpt_proc *process = &g_rprocs[i];
+        parents[i] = process->ppid == 0 ? -1 : ckpt_proc_index(process->ppid);
+        groups[i] = -1;
+        for (int j = 0; j < g_nrprocs; ++j) {
+            if (g_rprocs[j].pgid != process->pgid) continue;
+            if (g_rprocs[j].sid != process->sid) goto invalid;
+            if (groups[i] < 0) groups[i] = j;
+        }
+        sessions[i] = ckpt_proc_index(process->sid);
+        if (process->gpid != man->root_gpid && parents[i] < 0) goto invalid;
+    }
+
+    for (int i = 0; i < g_nrprocs; ++i) {
+        const struct ckpt_proc *process = &g_rprocs[i];
+        // Walking at most n indexed parent links proves both reachability and acyclicity without recursion.
+        int ancestor = i;
+        for (int depth = 0;; ++depth) {
+            if (ancestor < 0 || depth >= g_nrprocs) goto invalid;
+            if (g_rprocs[ancestor].gpid == man->root_gpid) break;
+            ancestor = parents[ancestor];
+        }
+
+        int group_index = groups[i];
+        int session_index = sessions[i];
+        if (group_index < 0 || session_index < 0 || g_rprocs[session_index].sid != process->sid ||
+            g_rprocs[session_index].pgid != process->sid)
+            goto invalid;
+
+        // setsid creates a process which is simultaneously the session and process-group leader. Every other
+        // process inherits its saved parent's session; accepting any other transition creates a leaderless or
+        // cross-session group which the host cannot reconstruct faithfully.
+        if (process->gpid == process->sid) {
+            if (process->pgid != process->gpid) goto invalid;
+        } else if (parents[i] < 0 || process->sid != g_rprocs[parents[i]].sid) {
+            goto invalid;
+        }
+    }
+
+    if (man->fg_pgid_gpid < 0) goto invalid;
+    if (man->fg_pgid_gpid > 0) {
+        int foreground = -1;
+        for (int i = 0; i < g_nrprocs; ++i)
+            if (g_rprocs[i].pgid == man->fg_pgid_gpid) {
+                foreground = i;
                 break;
             }
-            int parent = -1;
-            for (int j = 0; j < g_nrprocs; j++)
-                if (g_rprocs[j].gpid == ancestor) {
-                    parent = g_rprocs[j].ppid;
-                    break;
-                }
-            if (parent <= 0) break;
-            ancestor = parent;
-        }
-        if (!reached_root) return -1; // missing parent or detached cycle
+        if (foreground < 0) goto invalid;
     }
-    return roots == 1 ? 0 : -1;
+    free(relations);
+    return 0;
+
+invalid:
+    free(relations);
+    return -1;
 }
 
 // The requested policy, or -1 when the caller never asked for one (unset, or the DEFAULT wire value).
@@ -1104,6 +1166,28 @@ static int ckpt_restore_preflight(int policy) {
         }
         if (!feof(file) && process->viable) ckpt_process_stop(process, "descriptor image is corrupt");
         ckpt_source_fclose(file);
+    }
+    // A permissive recovery may remove members of a group or session. A process group remains reconstructible
+    // while any same-session member survives (restore elects a replacement host leader), but a session cannot
+    // exist without its saved leader. Apply this after resource preflight and before any restore-side fork.
+    for (int changed = 1; changed;) {
+        changed = 0;
+        for (int i = 0; i < g_nrprocs; ++i) {
+            struct ckpt_proc *process = &g_rprocs[i];
+            if (!process->viable) continue;
+            struct ckpt_proc *session = ckpt_proc_find(process->sid);
+            int group_viable = 0;
+            for (int j = 0; j < g_nrprocs; ++j)
+                group_viable |= g_rprocs[j].viable && g_rprocs[j].pgid == process->pgid &&
+                                g_rprocs[j].sid == process->sid;
+            if (!group_viable) {
+                ckpt_process_stop(process, "process group is not recoverable");
+                changed = 1;
+            } else if (!session || !session->viable) {
+                ckpt_process_stop(process, "session leader is not recoverable");
+                changed = 1;
+            }
+        }
     }
     struct ckpt_proc *root = ckpt_proc_find(1);
     int stopped = 0;
