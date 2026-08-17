@@ -21,7 +21,6 @@ enum avx_dispatch_result {
     AVX_DISPATCH_HANDLED = 1,
 };
 
-void xs_note(int vex, int map, int op, uint64_t rip);
 uint64_t avx_ea(const hl_x86_avx_state *state, struct cpu *cpu, struct insn *instruction, uint64_t next, int width);
 int avx_memory_read(const hl_x86_avx_state *state, uint64_t guest, void *destination, size_t length);
 int avx_memory_write(const hl_x86_avx_state *state, uint64_t guest, const void *source, size_t length);

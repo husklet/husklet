@@ -1047,7 +1047,6 @@ void hl_x86_sse_execute(const hl_x86_avx_state *state, struct cpu *c) {
     hl_x86_decode(c->rip, &I);
     uint64_t next = c->rip + (uint64_t)I.len;
     int map = I.map3, op = I.op;
-    xs_note(0, map, op, c->rip);              // EXITSTAT diagnostic (no-op unless env set)
     uint8_t *D = (uint8_t *)&c->v[2 * I.reg]; // dst xmm == src1 (destructive)
     uint8_t s[16], r[16];
 

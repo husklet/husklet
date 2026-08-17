@@ -48,6 +48,17 @@ fn x86_dispatch_has_no_executable_specific_malloc_probe() {
 }
 
 #[test]
+fn x86_emulation_has_no_unreachable_exit_profiler() {
+    let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native/translator/guest/x86_64");
+    for relative in ["avx.c", "avx.h", "avx_internal.h", "sse.c"] {
+        let source = fs::read_to_string(native.join(relative)).expect("read x86 emulation source");
+        for legacy in ["g_xs_on", "g_xs_rip", "xs_note", "hl_x86_avx_dump", "exitstat"] {
+            assert!(!source.contains(legacy), "{relative} retains unreachable profiler {legacy}");
+        }
+    }
+}
+
+#[test]
 fn aarch64_ibtc_profile_counters_are_diagnostic_only() {
     let dispatch = std::fs::read_to_string(
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native/translator/guest/aarch64/dispatch.h"),
