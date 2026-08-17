@@ -257,11 +257,22 @@ static void ioctl_descriptor_request(struct cpu *c, int fd, unsigned long rq, vo
             // STOP it mid-handoff -> the foreground command freezes ("[1]+ Stopped"). Block SIGTTOU so
             // the real tcsetpgrp installs the fg group cleanly (kernel still routes ^C/^Z afterwards).
             sigset_t sv;
-            tty_ctl_block(&sv);
-            (void)tcsetpgrp(fd, pg);
-            tty_ctl_restore(&sv);
+            if (tty_ctl_block(&sv) != 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-errno);
+                break;
+            }
+            int control_result = tcsetpgrp(fd, pg);
+            int control_error = control_result == 0 ? 0 : errno;
+            if (tty_ctl_restore(&sv) != 0 && control_result == 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-errno);
+                break;
+            }
+            if (control_result != 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-control_error);
+                break;
+            }
         }
-        G_RET(c) = 0; // never surface an error -> bash never warns
+        G_RET(c) = 0;
         break;
     }
     // TIOCSCTTY -- acquire the controlling terminal for real when `fd` is a tty (best effort; the

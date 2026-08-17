@@ -36,6 +36,10 @@ static void foreground(pid_t group) {
 }
 
 int main(void) {
+    sigset_t original_mask;
+    sigemptyset(&original_mask);
+    sigaddset(&original_mask, SIGUSR1);
+    if (sigprocmask(SIG_BLOCK, &original_mask, NULL) != 0) fail("initial-sigmask");
     struct termios mode;
     if (!isatty(STDIN_FILENO) || tcgetattr(STDIN_FILENO, &mode) != 0) fail("terminal");
     mode.c_lflag |= ISIG;
@@ -64,7 +68,15 @@ int main(void) {
         write_all("WRONG-CHILD-STATUS\n");
         return 71;
     }
+    write_all("CHILD-SIGINT\n");
     foreground(getpgrp());
+    sigset_t resumed_mask;
+    if (sigprocmask(SIG_BLOCK, NULL, &resumed_mask) != 0 || !sigismember(&resumed_mask, SIGUSR1) ||
+        sigismember(&resumed_mask, SIGTTOU)) {
+        write_all("WRONG-SIGNAL-MASK\n");
+        return 72;
+    }
+    write_all("MASK-RESTORED\n");
     write_all("PROMPT-SURVIVED\n");
     return 0;
 }

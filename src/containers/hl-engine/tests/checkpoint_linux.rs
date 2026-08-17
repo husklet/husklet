@@ -184,6 +184,23 @@ fn timeout_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     output
 }
 
+fn secondary_tty_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    let (compiler, name) = match isa {
+        GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-secondary-tty-aarch64"),
+        GuestIsa::X86_64 => ("x86_64-linux-gnu-gcc", "checkpoint-secondary-tty-x86_64"),
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/secondary_tty.c");
+    let output = directory.join(name);
+    let status = std::process::Command::new(compiler)
+        .args(["-static", "-O2", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
+    assert!(status.success(), "{compiler} failed with {status}");
+    output
+}
+
 fn timeout_plan(executable: &Path, mode: &str, ready: &Path, result: &Path, restore: bool) -> RuntimePlan {
     let mut options = Options::default();
     options.set(if restore { "HL_RESTORE" } else { "HL_CHECKPOINT" }, "1", true).unwrap();
@@ -217,6 +234,23 @@ fn continuation_plan(executable: &Path, ready: &Path, release: &Path, result: &P
         result_path: None,
         options,
     }
+}
+
+fn pipeline_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    let (compiler, name) = match isa {
+        GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-pipeline-aarch64"),
+        GuestIsa::X86_64 => ("x86_64-linux-gnu-gcc", "checkpoint-pipeline-x86_64"),
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/pipeline.c");
+    let output = directory.join(name);
+    let status = std::process::Command::new(compiler)
+        .args(["-static", "-O2", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
+    assert!(status.success(), "{compiler} failed with {status}");
+    output
 }
 
 #[derive(Default)]
@@ -920,7 +954,7 @@ fn restored_foreground_sleep_takes_ctrl_c_without_killing_shell_on_both_isas() {
         let (finished, completion) = std::sync::mpsc::channel();
         let waiting = restore.clone();
         std::thread::spawn(move || finished.send(waiting.wait()).unwrap());
-        std::thread::sleep(Duration::from_millis(500));
+        restore_port.wait_output(b"CHILD-ALIVE");
         match completion.try_recv() {
             Ok(result) => panic!(
                 "{isa:?} restore ended before input: {result:?}\n{}",
@@ -935,8 +969,142 @@ fn restored_foreground_sleep_takes_ctrl_c_without_killing_shell_on_both_isas() {
             .unwrap_or_else(|_| panic!("{isa:?} restore did not exit after Ctrl-C:\n{}", restore_port.output()))
             .unwrap_or_else(|error| panic!("{isa:?} restore failed: {error:?}\n{}", restore_port.output()));
         assert_eq!(restored.guest_status, 0, "{}", restore_port.output());
+        restore_port.wait_output(b"CHILD-SIGINT");
+        restore_port.wait_output(b"MASK-RESTORED");
         restore_port.wait_output(b"PROMPT-SURVIVED");
     }
+}
+
+#[test]
+fn secondary_pty_cannot_redirect_the_controlling_terminal_on_both_isas() {
+    let fixtures = tempfile::tempdir().unwrap();
+    for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
+        let executable = secondary_tty_fixture(isa, fixtures.path());
+        let temporary = tempfile::tempdir().unwrap();
+        let release = temporary.path().join("release");
+        let final_release = temporary.path().join("final-release");
+        let port = Arc::new(TestTerminal::default());
+        let terminal = Terminal::new(port.clone(), 24, 80).unwrap();
+        let store = Arc::new(Store::default());
+        let engine = Engine::with_checkpoint(
+            isa,
+            plan(&executable, &release, &final_release, &[]),
+            StandardStreams::default().with_terminal(terminal),
+            store.clone(),
+            store,
+        )
+        .unwrap();
+        engine.start().unwrap();
+        assert_eq!(engine.wait().unwrap().guest_status, 0, "{isa:?}: {}", port.output());
+        port.wait_output(b"SECONDARY-PTY-PRESERVED");
+    }
+}
+
+#[test]
+fn later_sibling_pipeline_leader_restores_before_members_resume_on_both_isas() {
+    let fixtures = tempfile::tempdir().unwrap();
+    for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
+        let executable = pipeline_fixture(isa, fixtures.path());
+        let temporary = tempfile::tempdir().unwrap();
+        let release = temporary.path().join("release");
+        let final_release = temporary.path().join("final-release");
+        let store = Arc::new(Store::default());
+
+        let capture_port = Arc::new(TestTerminal::default());
+        let capture = Engine::with_checkpoint(
+            isa,
+            plan(&executable, &release, &final_release, &["HL_CHECKPOINT"]),
+            StandardStreams::default().with_terminal(Terminal::new(capture_port.clone(), 24, 80).unwrap()),
+            store.clone(),
+            store.clone(),
+        )
+        .unwrap();
+        capture.start().unwrap();
+        capture_port.wait_output(b"MEMBER-ALIVE");
+        capture_port.wait_output(b"LEADER-ALIVE");
+        capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+        assert_eq!(capture.wait().unwrap().guest_status, 0);
+
+        let restore_port = Arc::new(TestTerminal::default());
+        let restore = Arc::new(
+            Engine::with_checkpoint(
+                isa,
+                plan(&executable, &release, &final_release, &["HL_RESTORE"]),
+                StandardStreams::default().with_terminal(Terminal::new(restore_port.clone(), 24, 80).unwrap()),
+                store.clone(),
+                store.clone(),
+            )
+            .unwrap(),
+        );
+        restore.start().unwrap();
+        let (finished, completion) = std::sync::mpsc::channel();
+        let waiting = restore.clone();
+        std::thread::spawn(move || finished.send(waiting.wait()).unwrap());
+        restore_port.wait_output(b"MEMBER-ALIVE");
+        restore_port.wait_output(b"LEADER-ALIVE");
+        assert!(matches!(
+            completion.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        restore_port.input(&[3]);
+        let restored = completion
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap_or_else(|_| panic!("{isa:?} pipeline did not exit:\n{}", restore_port.output()))
+            .unwrap_or_else(|error| panic!("{isa:?} pipeline restore failed: {error:?}\n{}", restore_port.output()));
+        assert_eq!(restored.guest_status, 0, "{isa:?}: {}", restore_port.output());
+        restore_port.wait_output(b"PIPELINE-PROMPT-SURVIVED");
+    }
+}
+
+#[test]
+fn terminal_claim_mask_failure_aborts_before_any_restored_process_resumes() {
+    let fixtures = tempfile::tempdir().unwrap();
+    let isa = GuestIsa::Aarch64;
+    let executable = foreground_fixture(isa, fixtures.path());
+    let temporary = tempfile::tempdir().unwrap();
+    let release = temporary.path().join("release");
+    let final_release = temporary.path().join("final-release");
+    let store = Arc::new(Store::default());
+
+    let capture_port = Arc::new(TestTerminal::default());
+    let capture = Engine::with_checkpoint(
+        isa,
+        plan(&executable, &release, &final_release, &["HL_CHECKPOINT"]),
+        StandardStreams::default().with_terminal(Terminal::new(capture_port.clone(), 24, 80).unwrap()),
+        store.clone(),
+        store.clone(),
+    )
+    .unwrap();
+    capture.start().unwrap();
+    capture_port.wait_output(b"SLEEPING");
+    capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+    assert_eq!(capture.wait().unwrap().guest_status, 0);
+
+    let restore_port = Arc::new(TestTerminal::default());
+    let restore = Engine::with_checkpoint(
+        isa,
+        plan(
+            &executable,
+            &release,
+            &final_release,
+            &["HL_RESTORE", "HL_CKPT_TEST_FAIL_TTY_MASK"],
+        ),
+        StandardStreams::default().with_terminal(Terminal::new(restore_port.clone(), 24, 80).unwrap()),
+        store.clone(),
+        store,
+    )
+    .unwrap();
+    restore.start().unwrap();
+    assert!(matches!(
+        restore.wait(),
+        Err(hl_engine::engine::EngineError::NativeCreateFailed(_))
+    ));
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        !restore_port.output().contains("CHILD-ALIVE"),
+        "a descendant resumed after atomic terminal-claim failure:\n{}",
+        restore_port.output()
+    );
 }
 
 #[test]

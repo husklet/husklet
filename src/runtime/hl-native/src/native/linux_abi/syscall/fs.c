@@ -592,15 +592,15 @@ static int64_t guest_statfs_magic(const char *g, int *zero) {
     return 0x794c7630;                                                            // OVERLAYFS_SUPER_MAGIC (rootfs)
 }
 
-static void tty_ctl_block(sigset_t *saved) {
+static int tty_ctl_block(sigset_t *saved) {
     sigset_t blk;
     sigemptyset(&blk);
     sigaddset(&blk, SIGTTOU);
-    sigprocmask(SIG_BLOCK, &blk, saved);
+    return sigprocmask(SIG_BLOCK, &blk, saved);
 }
 
-static void tty_ctl_restore(const sigset_t *saved) {
-    sigprocmask(SIG_SETMASK, saved, NULL);
+static int tty_ctl_restore(const sigset_t *saved) {
+    return sigprocmask(SIG_SETMASK, saved, NULL);
 }
 
 // statx returns device numbers as separate major/minor u32s, whereas struct stat packs them into a

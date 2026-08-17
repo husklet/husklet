@@ -438,6 +438,12 @@ static int ckpt_restore_ctty_open(void) {
 // launcher's controlling tty during recovery; ignoring that failure leaves terminal SIGINT aimed at init.
 static int ckpt_claim_tty_fg(int guest_group) {
     if (guest_group <= 0) return 0;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (hl_option_get("HL_CKPT_TEST_FAIL_TTY_MASK") != NULL) {
+        errno = EIO;
+        return -1;
+    }
+#endif
     int tf = ckpt_restore_ctty_open();
     if (tf < 0) return -1;
     sigset_t sv, bl;
@@ -453,7 +459,10 @@ static int ckpt_claim_tty_fg(int guest_group) {
     int result = group > 0 && tcsetpgrp(tf, group) == 0 && tcgetpgrp(tf) == group ? 0 : -1;
     int error = result == 0 ? 0 : errno;
     if (result != 0 && error == 0) error = EIO;
-    (void)sigprocmask(SIG_SETMASK, &sv, NULL);
+    if (sigprocmask(SIG_SETMASK, &sv, NULL) != 0 && result == 0) {
+        result = -1;
+        error = errno;
+    }
     ckpt_ctty_close(tf);
     if (result != 0) errno = error;
     return result;
@@ -463,12 +472,12 @@ static int ckpt_claim_tty_fg(int guest_group) {
 // the terminal (readline's "already prepared" flag), so a mode it set before the capture has to be there when
 // it resumes. SIGTTOU is blocked: the init is not yet the foreground group at this point. Best effort -- a
 // non-tty or an unsettable mode just leaves the launcher's default cooked terminal.
-static void ckpt_restore_tty_mode(const struct ckpt_manifest *man) {
+static int ckpt_restore_tty_mode(const struct ckpt_manifest *man) {
     struct termios tio;
     int tf = man->tty_termios ? ckpt_restore_ctty_open() : -1;
     if (tf < 0 || tcgetattr(tf, &tio) != 0) {
         ckpt_ctty_close(tf);
-        return;
+        return 0;
     }
     size_t cc = sizeof tio.c_cc < sizeof man->tty_cc ? sizeof tio.c_cc : sizeof man->tty_cc;
     tio.c_iflag = (tcflag_t)man->tty_iflag;
@@ -481,28 +490,20 @@ static void ckpt_restore_tty_mode(const struct ckpt_manifest *man) {
     sigset_t sv, bl;
     sigemptyset(&bl);
     sigaddset(&bl, SIGTTOU);
-    sigprocmask(SIG_BLOCK, &bl, &sv);
+    if (sigprocmask(SIG_BLOCK, &bl, &sv) != 0) {
+        ckpt_ctty_close(tf);
+        return -1;
+    }
     (void)tcsetattr(tf, TCSANOW, &tio);
-    sigprocmask(SIG_SETMASK, &sv, NULL);
+    int result = sigprocmask(SIG_SETMASK, &sv, NULL);
     ckpt_ctty_close(tf);
+    return result;
 }
 
 // Reconstruct this process's group/session relative to the LIVE (re-forked) tree. Idempotent verification
 // accepts a relation already inherited from the parent, but a requested relation that cannot be established
 // fails this process's atomic restore instead of publishing a tree with misdirected terminal signals.
-static int ckpt_restore_pgrp(int gpid, int pgid_gpid, int sid_gpid) {
-    if (sid_gpid == gpid && getsid(0) != getpid() && setsid() < 0 && getsid(0) != getpid()) return -1;
-    if (pgid_gpid <= 0) return 0;
-    pid_t leader = pgid_gpid == gpid                    ? getpid()
-                   : (pgid_gpid == 1 && g_init_hostpid) ? g_init_hostpid
-                                                        : hl_linux_pidmap_host(&g_pidmap, pgid_gpid);
-    if (leader <= 0) {
-        errno = ESRCH;
-        return -1;
-    }
-    if (getpgrp() != leader && setpgid(0, leader) < 0 && getpgrp() != leader) return -1;
-    return getpgrp() == leader ? 0 : (errno = EIO, -1);
-}
+static int ckpt_restore_pgrp(int gpid, int pgid_gpid, int sid_gpid);
 
 struct ckpt_restore_commit {
     _Atomic int decision;
@@ -517,6 +518,58 @@ enum { CKPT_FUTEX_WAIT = 0, CKPT_FUTEX_WAKE = 1 };
 
 static struct ckpt_restore_commit *g_restore_commit;
 static size_t g_restore_commit_size;
+static int ckpt_restore_process_index(int gpid);
+
+static pid_t ckpt_restore_live_pid(int guest) {
+    if (guest == 1) return g_init_hostpid;
+    int index = ckpt_restore_process_index(guest);
+    if (g_restore_commit == NULL || index < 0) {
+        errno = ESRCH;
+        return -1;
+    }
+    struct timespec deadline;
+    if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0) return -1;
+    deadline.tv_sec += 10;
+    for (;;) {
+        pid_t host = atomic_load_explicit(&g_restore_commit->pids[index], memory_order_acquire);
+        if (host > 0) {
+            (void)hl_linux_pidmap_add(&g_pidmap, guest, (int)host);
+            return host;
+        }
+        struct timespec now;
+        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0 || now.tv_sec > deadline.tv_sec ||
+            (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec)) {
+            errno = ETIMEDOUT;
+            return -1;
+        }
+        struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+        (void)nanosleep(&pause, NULL);
+    }
+}
+
+static int ckpt_restore_pgrp(int gpid, int pgid_gpid, int sid_gpid) {
+    if (sid_gpid == gpid && getsid(0) != getpid() && setsid() < 0 && getsid(0) != getpid()) return -1;
+    if (pgid_gpid <= 0) return 0;
+    pid_t leader = pgid_gpid == gpid ? getpid() : ckpt_restore_live_pid(pgid_gpid);
+    if (leader <= 0) return -1;
+    if (getpgrp() == leader) return 0;
+
+    struct timespec deadline;
+    if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0) return -1;
+    deadline.tv_sec += 10;
+    for (;;) {
+        if (setpgid(0, leader) == 0 || getpgrp() == leader) return 0;
+        int error = errno;
+        struct timespec now;
+        if ((error != EPERM && error != EACCES && error != ESRCH) || clock_gettime(CLOCK_MONOTONIC, &now) != 0 ||
+            now.tv_sec > deadline.tv_sec || (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec)) {
+            errno = error;
+            return -1;
+        }
+        struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+        (void)nanosleep(&pause, NULL);
+    }
+}
 
 static int ckpt_restore_commit_futex(_Atomic int *word, int operation, int value, const struct timespec *timeout) {
 #if defined(_WIN32)
@@ -859,7 +912,10 @@ static int ckpt_restore_tree(const char *rootfs) {
         fprintf(stderr, "[restore] cannot restore init process group: %s\n", strerror(errno));
         return 70;
     }
-    ckpt_restore_tty_mode(&man);
+    if (ckpt_restore_tty_mode(&man) != 0) {
+        fprintf(stderr, "[restore] cannot restore terminal mode signal mask: %s\n", strerror(errno));
+        return 70;
+    }
     // Publish which guest group owned the tty foreground, so whichever re-forked process is that group's leader
     // claims the controlling terminal AFTER it re-creates its group (see ckpt_claim_tty_fg). Set before the fork
     // so every child inherits it. Without this the resumed tree's fg group defaults to the init's, and a tty

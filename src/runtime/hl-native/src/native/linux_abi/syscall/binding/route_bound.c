@@ -624,16 +624,29 @@ static int64_t bound_native_control(hl_linux_fd_snapshot source, uint32_t reques
                 memcpy(&encoded, argument, sizeof(encoded));
                 pid_t group = encoded;
                 if (group == 1 && g_init_hostpid) group = g_init_hostpid;
-                // A borrowed attachment may be the pty master. It can report the foreground group but is not
-                // the caller's controlling-terminal descriptor, so tcsetpgrp rejects it with ENOTTY. Perform
-                // the session ownership change through /dev/tty and mirror the direct-fd path's SIGTTOU guard.
-                int control = open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC);
-                if (control < 0) control = native_fd;
+                // Standard streams are bound through the embedder's PTY attachment, whose borrowed side can be
+                // the master. Substitute /dev/tty only when the requested same-number standard descriptor is
+                // positively the caller's controlling terminal. Other PTYs retain requested-fd ENOTTY/session
+                // semantics through native_fd.
+                int control = native_fd;
+                int owned_control = -1;
+                pid_t session = getsid(0);
+                int controlling_binding = session > 0 && tcgetsid(native_fd) == session;
+                if (controlling_binding && source.fd <= STDERR_FILENO && isatty((int)source.fd) &&
+                    tcgetsid((int)source.fd) == session) {
+                    owned_control = open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC);
+                    if (owned_control >= 0) control = owned_control;
+                }
                 sigset_t saved;
-                tty_ctl_block(&saved);
-                result = tcsetpgrp(control, group) == 0 ? 0 : -errno;
-                tty_ctl_restore(&saved);
-                if (control != native_fd) close(control);
+                if (!controlling_binding) {
+                    result = -ENOTTY;
+                } else if (tty_ctl_block(&saved) != 0) {
+                    result = -errno;
+                } else {
+                    result = tcsetpgrp(control, group) == 0 ? 0 : -errno;
+                    if (tty_ctl_restore(&saved) != 0 && result == 0) result = -errno;
+                }
+                if (owned_control >= 0) close(owned_control);
             }
         } else { /* TIOCSCTTY */
             result = ioctl(native_fd, TIOCSCTTY, 0) == 0 || errno == EPERM ? 0 : -errno;
