@@ -8,10 +8,31 @@ use hl_ws::Arch;
 use crate::config::WorkspaceConfig;
 use crate::paths;
 
-use super::{Configuration, CONFIGURATION_SIGNATURE, CONTAINER, RUNTIME_SIGNATURE, SIGNATURE};
+use super::{CONFIGURATION_SIGNATURE, CONTAINER, Configuration, RUNTIME_SIGNATURE, SIGNATURE};
 
 /// Composes the container capabilities that back one workspace execution domain.
 pub(super) struct Runtime;
+
+trait PrimaryLifecycle {
+    async fn start_primary(&self) -> Result<(), String>;
+    async fn discard_primary_checkpoint(&self) -> Result<(), String>;
+}
+
+#[cfg(test)]
+mod test;
+
+impl PrimaryLifecycle for Containers {
+    async fn start_primary(&self) -> Result<(), String> {
+        self.start(CONTAINER).await.map_err(|error| error.to_string())
+    }
+
+    async fn discard_primary_checkpoint(&self) -> Result<(), String> {
+        self.discard_checkpoint(CONTAINER)
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+}
 
 impl Runtime {
     pub(super) async fn checkpoint(
@@ -68,13 +89,17 @@ impl Runtime {
         Ok((containers, platform))
     }
 
-    pub(super) async fn ensure_container(containers: &Containers, workspace: &WorkspaceConfig) -> io::Result<()> {
+    pub(super) async fn ensure_container(
+        containers: &Containers,
+        workspace: &WorkspaceConfig,
+    ) -> io::Result<Vec<String>> {
         let configuration = Configuration::new(workspace);
         let signature = configuration.signature()?;
         let configuration_signature = configuration.configuration_signature()?;
         let runtime_signature = configuration.runtime_signature();
         match containers.inspect(CONTAINER).await {
             Ok(container) => {
+                let mut checkpointed = container.checkpoint.is_some();
                 let stored = container.spec.labels.get(SIGNATURE);
                 let stored_configuration = container.spec.labels.get(CONFIGURATION_SIGNATURE);
                 let stored_runtime = container.spec.labels.get(RUNTIME_SIGNATURE);
@@ -93,6 +118,7 @@ impl Runtime {
                             .discard_checkpoint(CONTAINER)
                             .await
                             .map_err(io::Error::other)?;
+                        checkpointed = false;
                         let executions = containers.executions();
                         for execution in executions.list().await.map_err(io::Error::other)? {
                             executions.remove(&execution.id).await.map_err(io::Error::other)?;
@@ -119,11 +145,12 @@ impl Runtime {
                             .map_err(io::Error::other)?;
                     }
                 }
-                if reusable && !container.state.is_active() {
-                    containers.start(CONTAINER).await.map_err(io::Error::other)?;
-                }
                 if reusable {
-                    return Ok(());
+                    return if container.state.is_active() {
+                        Ok(Vec::new())
+                    } else {
+                        Self::start_primary(containers, checkpointed).await
+                    };
                 }
                 hl_log::hl_info!(
                     hl_log::tag::CONTAINER,
@@ -174,7 +201,31 @@ impl Runtime {
                 ))),
             };
         }
-        containers.start(CONTAINER).await.map_err(io::Error::other)
+        Self::start_primary(containers, false).await
+    }
+
+    /// Starts the workspace's primary process without making one process-local launch failure fatal
+    /// to the execution domain. A failed checkpoint gets one clean-start attempt after its durable
+    /// marker is removed; inability to update that durable marker remains a repository-wide error.
+    async fn start_primary(lifecycle: &impl PrimaryLifecycle, checkpointed: bool) -> io::Result<Vec<String>> {
+        let Err(first) = lifecycle.start_primary().await else {
+            return Ok(Vec::new());
+        };
+        if !checkpointed {
+            return Ok(vec![format!("workspace: start failed: {first}")]);
+        }
+        lifecycle
+            .discard_primary_checkpoint()
+            .await
+            .map_err(|error| io::Error::other(format!("discard workspace checkpoint: {error}")))?;
+        match lifecycle.start_primary().await {
+            Ok(()) => Ok(vec![format!(
+                "workspace: checkpoint restore failed ({first}); started a fresh primary process"
+            )]),
+            Err(fresh) => Ok(vec![format!(
+                "workspace: checkpoint restore failed ({first}); fresh start failed: {fresh}"
+            )]),
+        }
     }
 
     pub(super) async fn remove_stale_executions(containers: &Containers) -> io::Result<Vec<String>> {

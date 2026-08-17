@@ -276,7 +276,7 @@ impl Domain {
         let _lease = Lease::acquire(&owner.directory.join("domain.lock"))?;
         let (containers, platform) = Runtime::open(workspace).await?;
         let mut failures = Runtime::remove_stale_executions(&containers).await?;
-        Runtime::ensure_container(&containers, workspace).await?;
+        failures.extend(Runtime::ensure_container(&containers, workspace).await?);
         failures.extend(Runtime::restore_checkpoints(&containers).await?);
         RestoreSummary::new(workspace).publish(&failures)?;
         let configuration = PublishedConfiguration::new(&owner.directory);
