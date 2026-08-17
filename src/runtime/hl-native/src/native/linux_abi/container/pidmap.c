@@ -20,6 +20,48 @@ int hl_linux_pidmap_add(hl_linux_pidmap *map, int32_t guest, int32_t host) {
     return 0;
 }
 
+void hl_linux_pidmap_activate(hl_linux_pidmap *map) {
+    if (map != NULL) map->active = 1;
+}
+
+int hl_linux_pidmap_host_checked(const hl_linux_pidmap *map, int32_t guest, int32_t *host) {
+    uint32_t index;
+    if (host == NULL || guest <= 0) return -1;
+    if (map == NULL) {
+        *host = guest;
+        return 0;
+    }
+    for (index = 0; index < map->count; ++index)
+        if (map->entries[index].guest == guest) {
+            *host = map->entries[index].host;
+            return 0;
+        }
+    if (!map->active) {
+        *host = guest;
+        return 0;
+    }
+    return -1;
+}
+
+int hl_linux_pidmap_guest_checked(const hl_linux_pidmap *map, int32_t host, int32_t *guest) {
+    uint32_t index;
+    if (guest == NULL || host <= 0) return -1;
+    if (map == NULL) {
+        *guest = host;
+        return 0;
+    }
+    for (index = 0; index < map->count; ++index)
+        if (map->entries[index].host == host) {
+            *guest = map->entries[index].guest;
+            return 0;
+        }
+    if (!map->active) {
+        *guest = host;
+        return 0;
+    }
+    return -1;
+}
+
 int hl_linux_pidmap_remove_host(hl_linux_pidmap *map, int32_t host) {
     uint32_t index;
 

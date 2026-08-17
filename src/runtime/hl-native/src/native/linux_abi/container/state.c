@@ -305,6 +305,23 @@ static int container_pid(void) {
 // reaped-child pid, bash's job table, kill(pid)). It is empty on every normal launch, so every translation is
 // an identity no-op and behavior outside the restore path is unchanged.
 static hl_linux_pidmap g_pidmap;
+// Process, process-group and session identifiers share Linux's numeric namespace but not their lifetime.
+// In particular, reaping a group leader retires its process identity without retiring the group identity.
+static hl_linux_pidmap g_pgidmap;
+static hl_linux_pidmap g_sidmap;
+
+static int restore_process_identity_add(int guest, int host) {
+    return hl_linux_pidmap_add(&g_pidmap, guest, host);
+}
+
+// Activate only after the restore barrier has hydrated every live identity. Until then a child inherits a
+// deliberately incomplete snapshot while its siblings are still being forked, so fail-closed lookup would
+// reject identities which are merely not published yet.
+static __attribute__((unused)) void ckpt_restore_identity_activate(void) {
+    hl_linux_pidmap_activate(&g_pidmap);
+    hl_linux_pidmap_activate(&g_pgidmap);
+    hl_linux_pidmap_activate(&g_sidmap);
+}
 
 // HL_NET_ISOLATE makes the guest loopback-only: no
 // eth0 is presented in the interface model (netlink RTM_GETLINK/GETADDR/GETROUTE dumps + SIOCGIFCONF in

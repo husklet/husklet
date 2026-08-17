@@ -238,8 +238,13 @@ static void ioctl_descriptor_request(struct cpu *c, int fd, unsigned long rq, vo
         }
         pid_t fg = tcgetpgrp(fd);
         if (fg <= 0) fg = getpgrp();
-        if (g_init_hostpid && fg == g_init_hostpid) fg = 1; // init's real group -> guest pgid 1
-        if (arg) *(int *)arg = (int)fg;
+        int guest_fg;
+        if (hl_linux_pidmap_guest_checked(&g_pgidmap, (int)fg, &guest_fg) != 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-ENOTTY);
+            break;
+        }
+        if (!g_pgidmap.active && g_init_hostpid && fg == g_init_hostpid) guest_fg = 1;
+        if (arg) *(int *)arg = guest_fg;
         G_RET(c) = 0;
         break;
     }
@@ -250,7 +255,13 @@ static void ioctl_descriptor_request(struct cpu *c, int fd, unsigned long rq, vo
             break;
         }
         pid_t pg = arg ? *(int *)arg : 0;
-        if (pg == 1 && g_init_hostpid) pg = g_init_hostpid; // guest pgid 1 -> init's real host group
+        int host_pg;
+        if (pg > 0 && hl_linux_pidmap_host_checked(&g_pgidmap, (int)pg, &host_pg) != 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+            break;
+        }
+        if (pg > 0) pg = (pid_t)host_pg;
+        if (!g_pgidmap.active && pg == 1 && g_init_hostpid) pg = g_init_hostpid;
         if (isatty(fd) && pg > 0) {
             // A pipeline leader calls tcsetpgrp while still in a background group (the parent shell sets
             // the foreground group concurrently); without blocking SIGTTOU here the host kernel would
@@ -310,8 +321,13 @@ static void ioctl_descriptor_request(struct cpu *c, int fd, unsigned long rq, vo
             G_RET(c) = (uint64_t)(int64_t)(-errno);
             break;
         }
-        if (g_init_hostpid && sid == g_init_hostpid) sid = 1; // init's real session -> guest sid 1
-        if (arg) *(int *)arg = (int)sid;
+        int guest_sid;
+        if (hl_linux_pidmap_guest_checked(&g_sidmap, (int)sid, &guest_sid) != 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-ENOTTY);
+            break;
+        }
+        if (!g_sidmap.active && g_init_hostpid && sid == g_init_hostpid) guest_sid = 1;
+        if (arg) *(int *)arg = guest_sid;
         G_RET(c) = 0;
 #else
         G_RET(c) = (uint64_t)(-25); // ENOTTY (host lacks TIOCGSID, e.g. Darwin build)

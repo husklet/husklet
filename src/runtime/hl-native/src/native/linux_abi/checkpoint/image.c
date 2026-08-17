@@ -692,7 +692,7 @@ static int ckpt_dump_pages(struct ckpt_sink *sink, struct ckpt_sink_stream *f, s
 // This process's guest identity (pid / parent / group / session), mapped from host ids to guest space (the
 // container init's real host pid/group/session all read back as 1). getppid()==g_init_hostpid means "child
 // of init"; a host pgid/sid equal to g_init_hostpid is the container's own group/session (guest 1).
-static void ckpt_self_identity(struct ckpt_meta *m) {
+static int ckpt_self_identity(struct ckpt_meta *m) {
     hl_host_process_info process;
     int self = container_pid();
     m->self_gpid = self;
@@ -700,12 +700,16 @@ static void ckpt_self_identity(struct ckpt_meta *m) {
         m->ppid_gpid = 0;
     } else {
         int pp = getppid();
-        m->ppid_gpid = (g_init_hostpid && pp == g_init_hostpid) ? 1 : pp;
+        if (hl_linux_pidmap_guest_checked(&g_pidmap, (int32_t)pp, &m->ppid_gpid) != 0) return -1;
+        if (!g_pidmap.active && g_init_hostpid && pp == g_init_hostpid) m->ppid_gpid = 1;
     }
     int pg = getpgid(0);
-    m->pgid_gpid = (g_init_hostpid && pg == g_init_hostpid) ? 1 : pg;
+    if (hl_linux_pidmap_guest_checked(&g_pgidmap, (int32_t)pg, &m->pgid_gpid) != 0) return -1;
+    if (!g_pgidmap.active && g_init_hostpid && pg == g_init_hostpid) m->pgid_gpid = 1;
     int sd = hl_host_process_read(getpid(), &process) ? (int)process.session : getsid(0);
-    m->sid_gpid = (g_init_hostpid && sd == g_init_hostpid) ? 1 : sd;
+    if (hl_linux_pidmap_guest_checked(&g_sidmap, (int32_t)sd, &m->sid_gpid) != 0) return -1;
+    if (!g_sidmap.active && g_init_hostpid && sd == g_init_hostpid) m->sid_gpid = 1;
+    return 0;
 }
 
 // Dump THIS process (RAM + cpu + fds) into `procdir` (temp dir + rename). Returns 0 on success, -1 on any
@@ -806,7 +810,7 @@ static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
     m.stack_lo = g_stack_lo;
     m.stack_hi = g_stack_hi;
     m.n_fds = (uint64_t)nfd;
-    ckpt_self_identity(&m);
+    if (ckpt_self_identity(&m) != 0) return -1;
     snprintf(m.exe_path, sizeof m.exe_path, "%s", g_exe_path ? g_exe_path : "");
     for (int s = 0; s < 65; s++) { // capture this process's guest signal dispositions (restored on thaw)
         m.sig_handler[s] = g_sigact[s].handler;
@@ -987,7 +991,15 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
         int tf = ckpt_ctty_open();
         int fgh = (tf >= 0) ? tcgetpgrp(tf) : -1;
         struct termios tio;
-        man.fg_pgid_gpid = (fgh <= 0) ? 0 : (g_init_hostpid && fgh == g_init_hostpid) ? 1 : fgh;
+        if (fgh <= 0)
+            man.fg_pgid_gpid = 0;
+        else if (hl_linux_pidmap_guest_checked(&g_pgidmap, (int32_t)fgh, &man.fg_pgid_gpid) != 0) {
+            ckpt_ctty_close(tf);
+            fprintf(stderr, "[ckpt] foreground process group is outside restored namespace\n");
+            _exit(70);
+        }
+        else if (!g_pgidmap.active && g_init_hostpid && fgh == g_init_hostpid)
+            man.fg_pgid_gpid = 1;
         if (tf >= 0 && tcgetattr(tf, &tio) == 0) {
             size_t cc = sizeof tio.c_cc < sizeof man.tty_cc ? sizeof tio.c_cc : sizeof man.tty_cc;
             man.tty_termios = 1;

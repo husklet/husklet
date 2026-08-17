@@ -466,9 +466,15 @@ static int svc_fcntl_extended(struct cpu *c, int descriptor, int lcmd, uint64_t 
 }
 
 static int fcntl_owner_guest_to_host(int owner) {
+    if (owner == 0) return 0;
     if (owner == container_pid()) return (int)getpid();
-    if (owner == 1 && g_init_hostpid) return g_init_hostpid;
-    int host = hl_linux_pidmap_host(&g_pidmap, owner);
+    int host;
+    if (owner < 0) {
+        if (hl_linux_pidmap_host_checked(&g_pgidmap, -owner, &host) != 0) return -1;
+        return -host;
+    }
+    if (hl_linux_pidmap_host_checked(&g_pidmap, owner, &host) != 0) return -1;
+    if (!g_pidmap.active && owner == 1 && g_init_hostpid) host = g_init_hostpid;
     // In container mode a raw, unmapped guest PID must never become authority
     // over an unrelated host process.  The process registry is the same strict
     // membership boundary used by kill/pidfd; report ESRCH for non-members.
@@ -476,9 +482,16 @@ static int fcntl_owner_guest_to_host(int owner) {
 }
 
 static int fcntl_owner_host_to_guest(int owner) {
+    if (owner == 0) return 0;
     if (owner == (int)getpid()) return container_pid();
-    if (g_init_hostpid && owner == g_init_hostpid) return 1;
-    return hl_linux_pidmap_guest(&g_pidmap, owner);
+    int guest;
+    if (owner < 0) {
+        if (hl_linux_pidmap_guest_checked(&g_pgidmap, -owner, &guest) != 0) return -1;
+        return -guest;
+    }
+    if (hl_linux_pidmap_guest_checked(&g_pidmap, owner, &guest) != 0) return -1;
+    if (!g_pidmap.active && g_init_hostpid && owner == g_init_hostpid) guest = 1;
+    return guest;
 }
 
 // Linux libc implements F_GETOWN through F_GETOWN_EX so a negative process-group
