@@ -41,7 +41,10 @@ int main(void) {
 
     for (int iteration = 0; iteration < CHURN_ITERATIONS; ++iteration) {
         pid_t child = fork();
-        if (child < 0) fail("fork-churn");
+        if (child < 0) {
+            dprintf(STDERR_FILENO, "identity-churn iteration=%d fork errno=%d\n", iteration, errno);
+            fail("fork-churn");
+        }
         if (child == 0) {
             if (setsid() != getpid()) fail("setsid-churn");
             if (getsid(0) != getpid() || getpgid(0) != getpid()) fail("typed-identity-churn");
@@ -50,6 +53,8 @@ int main(void) {
         int status = 0;
         while (waitpid(child, &status, 0) < 0) {
             if (errno == EINTR) continue;
+            dprintf(STDERR_FILENO, "identity-churn iteration=%d waitpid child=%d errno=%d\n", iteration, (int)child,
+                    errno);
             fail("waitpid-churn");
         }
         if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) fail("child-status-churn");

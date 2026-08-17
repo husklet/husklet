@@ -1222,6 +1222,32 @@ static void fdvis_fork_commit_locked(struct fdvis_fork_journal *journal, size_t 
 static int proc_fdvis_after_fork(struct fdvis_fork_plan *plan, int child, int in_child) {
     uint64_t child_start = fdvis_process_token(child);
     if (!g_fdvis || !g_fdvis_control || child <= 0) return -EINVAL;
+    /* The parent owns publication of the pre-fork reservations.  Letting both
+     * branches publish races the child's immediate exit cleanup against the
+     * parent's commit: cleanup can clear a slot between the two commits and
+     * turn the parent's still-valid reservation into EAGAIN.  The child may
+     * not expose its inherited descriptors until the parent's atomic batch is
+     * visible, so wait here and then use the transaction below only for the
+     * possible start-token upgrade. */
+    if (in_child) {
+        for (;;) {
+            int published = 1;
+            fdvis_lock();
+            for (size_t index = 0; index < plan->count; ++index) {
+                const struct fdvis_fork_entry *entry = &plan->entries[index];
+                const struct fdvis_slot *slot = &g_fdvis[entry->slot];
+                if (slot->key != fdvis_key(child, entry->guest_fd)) {
+                    published = 0;
+                    break;
+                }
+            }
+            fdvis_unlock();
+            if (published) break;
+            if ((int)getppid() != g_fdvis_fork_parent) return -ECHILD;
+            sched_yield();
+        }
+        child_start = fdvis_process_token(child);
+    }
     struct fdvis_fork_journal *journal = calloc(plan->count, sizeof *journal);
     if (plan->count != 0 && !journal) {
         proc_fdvis_fork_cancel(plan);
