@@ -137,14 +137,14 @@ static void pt_usleep(long us) {
 static int pt_gpid(int hostpid) {
     int guest;
     if (hl_linux_pidmap_guest_checked(&g_pidmap, hostpid, &guest) == 0) return guest;
-    return (g_init_hostpid && hostpid == g_init_hostpid && !g_pidmap.active) ? 1 : -1;
+    return (g_init_hostpid && hostpid == g_init_hostpid && !hl_linux_pidmap_is_active(&g_pidmap)) ? 1 : -1;
 }
 
 // host pid for a guest pid (inverse; used to kill(2)/existence-check the target host process)
 static int pt_hostpid(int gpid) {
     int host;
     if (hl_linux_pidmap_host_checked(&g_pidmap, gpid, &host) == 0) return host;
-    return (gpid == 1 && g_init_hostpid && !g_pidmap.active) ? g_init_hostpid : -1;
+    return (gpid == 1 && g_init_hostpid && !hl_linux_pidmap_is_active(&g_pidmap)) ? g_init_hostpid : -1;
 }
 
 static void pt_lock(void) {

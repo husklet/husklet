@@ -170,7 +170,7 @@ static int host_pid_registered_checked(int host);
 // Is guest pid `gp` a live member of this container? Fills *hostout with its host pid (gp==1 -> init).
 static int guest_pid_member_checked(int guest, int *hostout) {
     int host = (guest == 1 && g_init_hostpid) ? g_init_hostpid : guest;
-    if (g_pidmap.active) {
+    if (hl_linux_pidmap_is_active(&g_pidmap)) {
         if (hl_linux_pidmap_host_checked(&g_pidmap, guest, &host) != 0) return 0;
         *hostout = host;
         return host_pid_registered_checked(host);
@@ -193,7 +193,7 @@ static int guest_pid_member_checked(int guest, int *hostout) {
 // equal a restored guest PID from being accepted through a try-both fallback.
 static int host_pid_member_checked(int host, int *guestout) {
     int guest = host;
-    if (g_pidmap.active && hl_linux_pidmap_guest_checked(&g_pidmap, host, &guest) != 0) return 0;
+    if (hl_linux_pidmap_is_active(&g_pidmap) && hl_linux_pidmap_guest_checked(&g_pidmap, host, &guest) != 0) return 0;
     int resolved;
     if (!guest_pid_member_checked(guest, &resolved) || resolved != host) return 0;
     if (guestout) *guestout = guest;
@@ -304,7 +304,7 @@ static int guest_pid_registered_checked(int gp, int *hostout) __attribute__((unu
 
 static int guest_pid_registered_checked(int gp, int *hostout) {
     int host = (gp == 1 && g_init_hostpid) ? g_init_hostpid : gp;
-    if (g_pidmap.active && hl_linux_pidmap_host_checked(&g_pidmap, gp, &host) != 0) return 0;
+    if (hl_linux_pidmap_is_active(&g_pidmap) && hl_linux_pidmap_host_checked(&g_pidmap, gp, &host) != 0) return 0;
     if (hostout) *hostout = host;
     return host_pid_registered_checked(host);
 }

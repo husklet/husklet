@@ -474,7 +474,7 @@ static int fcntl_owner_guest_to_host(int owner) {
         return -host;
     }
     if (hl_linux_pidmap_host_checked(&g_pidmap, owner, &host) != 0) return -1;
-    if (!g_pidmap.active && owner == 1 && g_init_hostpid) host = g_init_hostpid;
+    if (!hl_linux_pidmap_is_active(&g_pidmap) && owner == 1 && g_init_hostpid) host = g_init_hostpid;
     // In container mode a raw, unmapped guest PID must never become authority
     // over an unrelated host process.  The process registry is the same strict
     // membership boundary used by kill/pidfd; report ESRCH for non-members.
@@ -490,7 +490,7 @@ static int fcntl_owner_host_to_guest(int owner) {
         return -guest;
     }
     if (hl_linux_pidmap_guest_checked(&g_pidmap, owner, &guest) != 0) return -1;
-    if (!g_pidmap.active && g_init_hostpid && owner == g_init_hostpid) guest = 1;
+    if (!hl_linux_pidmap_is_active(&g_pidmap) && g_init_hostpid && owner == g_init_hostpid) guest = 1;
     return guest;
 }
 

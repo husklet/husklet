@@ -701,14 +701,14 @@ static int ckpt_self_identity(struct ckpt_meta *m) {
     } else {
         int pp = getppid();
         if (hl_linux_pidmap_guest_checked(&g_pidmap, (int32_t)pp, &m->ppid_gpid) != 0) return -1;
-        if (!g_pidmap.active && g_init_hostpid && pp == g_init_hostpid) m->ppid_gpid = 1;
+        if (!hl_linux_pidmap_is_active(&g_pidmap) && g_init_hostpid && pp == g_init_hostpid) m->ppid_gpid = 1;
     }
     int pg = getpgid(0);
     if (hl_linux_pidmap_guest_checked(&g_pgidmap, (int32_t)pg, &m->pgid_gpid) != 0) return -1;
-    if (!g_pgidmap.active && g_init_hostpid && pg == g_init_hostpid) m->pgid_gpid = 1;
+    if (!hl_linux_pidmap_is_active(&g_pgidmap) && g_init_hostpid && pg == g_init_hostpid) m->pgid_gpid = 1;
     int sd = hl_host_process_read(getpid(), &process) ? (int)process.session : getsid(0);
     if (hl_linux_pidmap_guest_checked(&g_sidmap, (int32_t)sd, &m->sid_gpid) != 0) return -1;
-    if (!g_sidmap.active && g_init_hostpid && sd == g_init_hostpid) m->sid_gpid = 1;
+    if (!hl_linux_pidmap_is_active(&g_sidmap) && g_init_hostpid && sd == g_init_hostpid) m->sid_gpid = 1;
     return 0;
 }
 
@@ -894,7 +894,7 @@ done:
 // The container INIT (guest pid 1) coordinates a whole-tree checkpoint at its safepoint: freeze + dump every
 // peer, then itself, then publish the MANIFEST. Never returns (_exit frees init's RAM).
 static int ckpt_live_process_peers(hl_host_process_peer *peers, size_t capacity, size_t *count) {
-    if (!g_pidmap.active) return hl_host_process_peers(peers, capacity, count);
+    if (!hl_linux_pidmap_is_active(&g_pidmap)) return hl_host_process_peers(peers, capacity, count);
 
     size_t mapped_capacity = hl_linux_pidmap_count(&g_pidmap);
     hl_linux_pidmap_entry *mapped = malloc((mapped_capacity ? mapped_capacity : 1) * sizeof *mapped);
@@ -1023,7 +1023,7 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
             fprintf(stderr, "[ckpt] foreground process group is outside restored namespace\n");
             _exit(70);
         }
-        else if (!g_pgidmap.active && g_init_hostpid && fgh == g_init_hostpid)
+        else if (!hl_linux_pidmap_is_active(&g_pgidmap) && g_init_hostpid && fgh == g_init_hostpid)
             man.fg_pgid_gpid = 1;
         if (tf >= 0 && tcgetattr(tf, &tio) == 0) {
             size_t cc = sizeof tio.c_cc < sizeof man.tty_cc ? sizeof tio.c_cc : sizeof man.tty_cc;

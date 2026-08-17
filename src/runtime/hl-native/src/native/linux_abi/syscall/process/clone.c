@@ -86,8 +86,8 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
             break;
         }
-        int guest_child_pid = g_pidmap.active ? (int)hl_linux_pidmap_allocate_guest(&g_pidmap) : 0;
-        if (g_pidmap.active && guest_child_pid <= 0) {
+        int guest_child_pid = hl_linux_pidmap_is_active(&g_pidmap) ? (int)hl_linux_pidmap_allocate_guest(&g_pidmap) : 0;
+        if (hl_linux_pidmap_is_active(&g_pidmap) && guest_child_pid <= 0) {
             G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
             break;
         }
@@ -141,7 +141,7 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             }
         }
         if (pid == 0) {
-            if (g_pidmap.active) g_self_gpid = guest_child_pid;
+            if (hl_linux_pidmap_is_active(&g_pidmap)) g_self_gpid = guest_child_pid;
             guest_fs_after_fork(share_fs);
             // clone(child_stack): Linux resumes the child on the supplied stack regardless of CLONE_VM.
             // glibc seeds its clone trampoline (fn ptr + arg) there before the syscall. Restricting this to
@@ -353,8 +353,8 @@ static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
             break;
         }
-        int guest_child_pid = g_pidmap.active ? (int)hl_linux_pidmap_allocate_guest(&g_pidmap) : 0;
-        if (g_pidmap.active && guest_child_pid <= 0) {
+        int guest_child_pid = hl_linux_pidmap_is_active(&g_pidmap) ? (int)hl_linux_pidmap_allocate_guest(&g_pidmap) : 0;
+        if (hl_linux_pidmap_is_active(&g_pidmap) && guest_child_pid <= 0) {
             G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
             break;
         }
@@ -400,7 +400,7 @@ static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // path caches / kqueues / fork-unsafe locks). clone3 historically lacked the W^X re-assert and the
         // DIR*-cache drop the clone site had; the shared helper closes that drift.
         if (pid == 0) {
-            if (g_pidmap.active) g_self_gpid = guest_child_pid;
+            if (hl_linux_pidmap_is_active(&g_pidmap)) g_self_gpid = guest_child_pid;
             guest_fs_after_fork(share_fs);
             if ((flags & 0x100) && ca[5]) G_SP(c) = ca[5] + ca[6];
             fork_child_hooks(c);

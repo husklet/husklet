@@ -212,14 +212,14 @@ static int svc_signal_target(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         // checkpoint restore: a kill naming a checkpoint-time guest pid/pgid must reach the live host process
         // the tree was re-forked with (identity no-op on a normal launch when the pid map is empty). Self / own-group /
         // broadcast (a0 == self, 0, -1) are left untranslated so the self path below still matches.
-        if (g_pidmap.active && (int)a0 > 0 && (int)a0 != container_pid()) {
+        if (hl_linux_pidmap_is_active(&g_pidmap) && (int)a0 > 0 && (int)a0 != container_pid()) {
             int host;
             if (hl_linux_pidmap_host_checked(&g_pidmap, (int)a0, &host) != 0) {
                 G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
                 break;
             }
             a0 = (uint64_t)(unsigned)host;
-        } else if (g_pgidmap.active && (int)a0 < -1) {
+        } else if (hl_linux_pidmap_is_active(&g_pgidmap) && (int)a0 < -1) {
             int host;
             if (hl_linux_pidmap_host_checked(&g_pgidmap, -(int)a0, &host) != 0) {
                 G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
@@ -258,7 +258,7 @@ static int svc_signal_target(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             // back through host_sigh, same as any other cross-process delivery. pgid 1 is the container
             // init <-> its real host group leader.
             pid_t gpgid = (pid_t)(-(int)a0);
-            if (!g_pgidmap.active && gpgid == 1 && g_init_hostpid) gpgid = g_init_hostpid;
+            if (!hl_linux_pidmap_is_active(&g_pgidmap) && gpgid == 1 && g_init_hostpid) gpgid = g_init_hostpid;
             int delivered = container_group_kill(gpgid, sig_l2m((int)a1), (int)getpid());
             if (getpgrp() == gpgid) {
                 if ((int)a1 != 0) raise_guest_signal(c, (int)a1);

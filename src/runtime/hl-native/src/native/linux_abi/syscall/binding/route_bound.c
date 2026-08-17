@@ -617,7 +617,7 @@ static int64_t bound_native_control(hl_linux_fd_snapshot source, uint32_t reques
                     if (hl_linux_pidmap_guest_checked(&g_pgidmap, (int)group, &encoded) != 0)
                         result = -ENOTTY;
                     else {
-                        if (!g_pgidmap.active && group == g_init_hostpid) encoded = 1;
+                        if (!hl_linux_pidmap_is_active(&g_pgidmap) && group == g_init_hostpid) encoded = 1;
                         memcpy(argument, &encoded, sizeof(encoded));
                         result = 0;
                     }
@@ -633,7 +633,7 @@ static int64_t bound_native_control(hl_linux_fd_snapshot source, uint32_t reques
                     goto bound_ioctl_done;
                 }
                 pid_t group = encoded > 0 ? (pid_t)host_group : encoded;
-                if (!g_pgidmap.active && group == 1 && g_init_hostpid) group = g_init_hostpid;
+                if (!hl_linux_pidmap_is_active(&g_pgidmap) && group == 1 && g_init_hostpid) group = g_init_hostpid;
                 // The borrowed attachment is the terminal selected by the embedder. Require it to belong to
                 // this session and operate on it directly; /dev/tty may name an unrelated outer runner PTY.
                 // Other PTYs retain requested-fd ENOTTY/session semantics through native_fd.

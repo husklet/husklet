@@ -70,14 +70,14 @@ static int svc_proc_260(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         }
         // checkpoint restore: a wait targeting a specific checkpoint-time guest pid must name the live host
         // pid the tree was re-forked with (identity no-op on a normal launch when the pid map is empty).
-        if (g_pidmap.active && (int)a0 > 0) {
+        if (hl_linux_pidmap_is_active(&g_pidmap) && (int)a0 > 0) {
             int host;
             if (hl_linux_pidmap_host_checked(&g_pidmap, (int)a0, &host) != 0) {
                 G_RET(c) = (uint64_t)(int64_t)(-ECHILD);
                 break;
             }
             a0 = (uint64_t)(unsigned)host;
-        } else if (g_pgidmap.active && (int)a0 < -1) {
+        } else if (hl_linux_pidmap_is_active(&g_pgidmap) && (int)a0 < -1) {
             int host;
             if (hl_linux_pidmap_host_checked(&g_pgidmap, -(int)a0, &host) != 0) {
                 G_RET(c) = (uint64_t)(int64_t)(-ECHILD);
@@ -234,7 +234,7 @@ static int svc_proc_260(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         if (r > 0 && (st & 0xff) != 0x7f && st != 0xffff) host_pid_unregister_reaped((int)r);
         // checkpoint restore: report the reaped child under the guest pid the checkpoint recorded, and drop
         // its translation once it is reaped so a future host pid can never alias it (no-op on normal launch).
-        if (g_pidmap.active && r > 0) {
+        if (hl_linux_pidmap_is_active(&g_pidmap) && r > 0) {
             int gp;
             if (hl_linux_pidmap_guest_checked(&g_pidmap, (int)r, &gp) == 0) {
                 if (((st & 0x7f) == 0) || (((st & 0x7f) != 0x7f) && ((st & 0x7f) != 0)))

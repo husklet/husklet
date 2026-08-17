@@ -261,7 +261,7 @@
                         G_RET(c) = (uint64_t)(int64_t)-ESRCH;
                         break;
                     }
-                    ppid = (!g_pidmap.active && g_init_hostpid && ppid == g_init_hostpid) ? 1 : guest_peer;
+                    ppid = (!hl_linux_pidmap_is_active(&g_pidmap) && g_init_hostpid && ppid == g_init_hostpid) ? 1 : guest_peer;
                 }
                 size_t ln2 = cmsg_add_cred(gc, 0, gcl, ppid, cuid(), cgid());
                 if (ln2 == 0)

@@ -1134,7 +1134,7 @@ static ssize_t cmsg_m2l(const struct msghdr *mh, uint8_t *g, size_t cap, size_t 
                 errno = ESRCH;
                 return -1;
             }
-            if (!g_pidmap.active && g_init_hostpid && guest_pid == g_init_hostpid) guest_pid = 1;
+            if (!hl_linux_pidmap_is_active(&g_pidmap) && g_init_hostpid && guest_pid == g_init_hostpid) guest_pid = 1;
             *(uint32_t *)(g + go + LX_CMSGHDR) = (uint32_t)guest_pid;
             *(uint32_t *)(g + go + LX_CMSGHDR + 4) = (uint32_t)cuid();
             *(uint32_t *)(g + go + LX_CMSGHDR + 8) = (uint32_t)cgid();

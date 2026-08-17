@@ -451,7 +451,7 @@ static int svc_proc_154(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
             break;
         }
-        if (!g_pidmap.active && (int)a0 == 1 && g_init_hostpid) host_pid = g_init_hostpid;
+        if (!hl_linux_pidmap_is_active(&g_pidmap) && (int)a0 == 1 && g_init_hostpid) host_pid = g_init_hostpid;
         if ((int)a1 == 0)
             host_pgid = 0;
         else if (hl_linux_pidmap_host_checked(&g_pgidmap, (int)a1, &host_pgid) != 0) {
@@ -465,7 +465,7 @@ static int svc_proc_154(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             }
             host_pgid = host_pid != 0 ? host_pid : (int)getpid();
         }
-        if (!g_pgidmap.active && (int)a1 == 1 && g_init_hostpid) host_pgid = g_init_hostpid;
+        if (!hl_linux_pidmap_is_active(&g_pgidmap) && (int)a1 == 1 && g_init_hostpid) host_pgid = g_init_hostpid;
         pid_t pid = (pid_t)host_pid;
         pid_t pgid = (pid_t)host_pgid;
         int r = setpgid(pid, pgid);

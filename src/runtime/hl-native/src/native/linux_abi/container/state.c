@@ -309,22 +309,20 @@ static hl_linux_pidmap g_pidmap;
 // In particular, reaping a group leader retires its process identity without retiring the group identity.
 static hl_linux_pidmap g_pgidmap;
 static hl_linux_pidmap g_sidmap;
+static hl_linux_identity_registry g_identity_registry = {.lock_fd = -1};
 
 static int restore_process_identity_add(int guest, int host) {
     return hl_linux_pidmap_add(&g_pidmap, guest, host);
 }
 
 static int ckpt_restore_identity_prepare_shared(void) {
-    return hl_linux_pidmap_prepare_shared(&g_pidmap) == 0 && hl_linux_pidmap_prepare_shared(&g_pgidmap) == 0 &&
-                   hl_linux_pidmap_prepare_shared(&g_sidmap) == 0
-               ? 0
-               : -1;
+    return hl_linux_identity_registry_prepare(&g_identity_registry, &g_pidmap, &g_pgidmap, &g_sidmap);
 }
 
 // A post-restore fork must extend the live namespace in shared memory. Both sides may race here; the
 // registry serializes allocation and returns the same guest id for an already-published host process.
 static int restore_process_identity_publish(int guest, int host) {
-    if (!g_pidmap.active) return host;
+    if (!hl_linux_pidmap_is_active(&g_pidmap)) return host;
     return hl_linux_pidmap_add(&g_pidmap, guest, host) == 0 ? guest : -1;
 }
 
