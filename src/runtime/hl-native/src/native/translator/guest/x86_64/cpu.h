@@ -160,6 +160,10 @@ struct cpu {
 #define X86_STORE_RANGE_CAP 32
     uint64_t store_ranges[X86_STORE_RANGE_CAP][2];
     uint64_t store_range_count;
+    /* Serialized syscall continuation; non-baked tail state. */
+    uint64_t checkpoint_syscall;
+    int64_t checkpoint_timeout_ns;
+    uint32_t checkpoint_continuation;
 };
 
 #define OFF_FCPTR ((int)__builtin_offsetof(struct cpu, fastclk_ptr))

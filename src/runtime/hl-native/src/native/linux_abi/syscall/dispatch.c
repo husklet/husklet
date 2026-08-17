@@ -698,6 +698,14 @@ static void service(struct cpu *c) {
     // register (RAX), so G_NR(c) after service_local() would translate the result instead of identifying the
     // completed syscall. Post-dispatch FD publication and restart bookkeeping must never depend on tracing.
     uint64_t _rnr = G_NR(c);
+    g_checkpoint_resume_kind = CKPT_CONTINUATION_NONE;
+    g_checkpoint_resume_timeout_ns = -1;
+    if (c->checkpoint_continuation != CKPT_CONTINUATION_NONE && c->checkpoint_syscall == _rnr) {
+        g_checkpoint_resume_kind = c->checkpoint_continuation;
+        g_checkpoint_resume_timeout_ns = c->checkpoint_timeout_ns;
+    }
+    c->checkpoint_continuation = CKPT_CONTINUATION_NONE;
+    c->checkpoint_timeout_ns = -1;
     // seccomp gate: run the guest's installed cBPF filter(s) / STRICT policy against this syscall BEFORE it
     // is routed anywhere. On an intercepted syscall (ERRNO/TRAP/TRACE/KILL/strict-violation) the result is
     // already set in G_RET / a signal is queued / the process is killed, so we must NOT service it. Inert
@@ -722,6 +730,7 @@ static void service(struct cpu *c) {
     } else {
         service_local(c); // trusted: byte-identical path
     }
+    if (c->checkpoint_continuation != CKPT_CONTINUATION_NONE) c->checkpoint_syscall = _rnr;
     if (!g_untrusted && (int64_t)G_RET(c) >= 0) {
         int fd = (int)G_RET(c);
         switch (_rnr) {

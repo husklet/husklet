@@ -140,6 +140,12 @@ struct cpu {
     // needs a host interrupt only in that window; translated code observes
     // irq itself and dispatcher code is already at a delivery boundary.
     volatile uint64_t in_service;
+    /* A host EINTR used solely to reach a checkpoint safepoint must not become
+       a guest-visible EINTR.  This tail is architectural checkpoint state;
+       emitted code has no offsets into it. */
+    uint64_t checkpoint_syscall;
+    int64_t checkpoint_timeout_ns;
+    uint32_t checkpoint_continuation;
 };
 
 // One coherent description of the AArch64 CPU exposed to the Linux guest.  Every discovery surface

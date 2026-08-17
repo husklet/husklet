@@ -13,11 +13,43 @@
 // EINTR) we restart too -- there is no SA_RESTART-less handler whose contract we'd be breaking. The
 // awaited handler stays pending and is delivered by the dispatcher's maybe_deliver_signal once the
 // restarted syscall finally returns.
+enum checkpoint_continuation_kind {
+    CKPT_CONTINUATION_NONE = 0,
+    CKPT_CONTINUATION_SYSCALL = 1,
+    CKPT_CONTINUATION_TIMEOUT = 2,
+};
+
+static _Thread_local uint32_t g_checkpoint_resume_kind;
+static _Thread_local int64_t g_checkpoint_resume_timeout_ns;
+
+static int checkpoint_resume_timeout(uint64_t syscall, struct timespec *timeout) {
+    if (g_checkpoint_resume_kind != CKPT_CONTINUATION_TIMEOUT || timeout == NULL) return 0;
+    (void)syscall;
+    int64_t ns = g_checkpoint_resume_timeout_ns;
+    timeout->tv_sec = (time_t)(ns / 1000000000LL);
+    timeout->tv_nsec = (long)(ns % 1000000000LL);
+    g_checkpoint_resume_kind = CKPT_CONTINUATION_NONE;
+    g_checkpoint_resume_timeout_ns = -1;
+    return 1;
+}
+
+static int checkpoint_prepare_syscall(struct cpu *c) {
+    if (!ckpt_pending()) return 0;
+    c->checkpoint_continuation = CKPT_CONTINUATION_SYSCALL;
+    c->checkpoint_timeout_ns = -1;
+    c->redirect = 1;
+    g_syscall_restart = 1;
+    return 1;
+}
+
+static void checkpoint_prepare_timeout(struct cpu *c, int64_t remaining_ns) {
+    if (c->checkpoint_continuation != CKPT_CONTINUATION_SYSCALL) return;
+    c->checkpoint_continuation = CKPT_CONTINUATION_TIMEOUT;
+    c->checkpoint_timeout_ns = remaining_ns < 0 ? 0 : remaining_ns;
+}
+
 static int syscall_should_restart(struct cpu *c) {
     if (ptrace_stop_requested()) return 0; // ATTACH/INTERRUPT must reach the ptrace dispatcher
-    if (ckpt_pending())
-        return 0; // a whole-tree checkpoint was requested: return EINTR so this process reaches
-                  // its dispatcher safepoint (ckpt_poll) instead of transparently re-blocking
     if (__atomic_load_n(&c->exited, __ATOMIC_SEQ_CST)) return 0; // execve teardown: don't re-block, unwind out
     // Process-wide pending (g_pending) AND this thread's directed-pending (c->tpending, set by tkill/tgkill):
     // a thread blocked in read/accept/recv must be interrupted by a thread-directed signal too, not only a
@@ -32,7 +64,10 @@ static int syscall_should_restart(struct cpu *c) {
     }
     // Nothing runnable pending: a spurious/host-actioned EINTR a real kernel would not surface -> re-block the
     // host call transparently in place (the old restart-in-loop behaviour, kept for this case only).
-    if (!deliverable) return 1;
+    if (!deliverable) {
+        if (checkpoint_prepare_syscall(c)) return 0;
+        return 1;
+    }
     // A runnable guest handler MUST run before the interrupted call proceeds -- Linux runs the handler on EVERY
     // interrupted slow syscall, THEN (for SA_RESTART) restarts it. Restarting in place here never returns to the
     // dispatcher, so maybe_deliver_signal never fires and the handler is stranded until the call finally
@@ -69,12 +104,12 @@ static int syscall_should_restart(struct cpu *c) {
 static int svc_poll_retry(struct cpu *c) {
     if (errno != EINTR) return 0;                                // a genuine error -> let it propagate
     if (ptrace_stop_requested()) return 0;                       // publish an ATTACH/INTERRUPT stop
-    if (ckpt_pending()) return 0;                                // checkpoint requested: return EINTR -> safepoint
     if (__atomic_load_n(&c->exited, __ATOMIC_SEQ_CST)) return 0; // execve teardown: stop re-blocking, unwind out
     for (int s = 1; s <= 64; s++) {
         if (!signal_deliverable(c, s)) continue;
-        if (g_sigact[s].handler > 1) return 0;        // a runnable guest handler -> return EINTR + deliver it
+        if (g_sigact[s].handler > 1) return 0;        // guest signal semantics take precedence over checkpointing
     }
+    if (checkpoint_prepare_syscall(c)) return 0;
     return 1; // nothing deliverable -> hide this EINTR and re-block (spurious/internal wakeup)
 }
 

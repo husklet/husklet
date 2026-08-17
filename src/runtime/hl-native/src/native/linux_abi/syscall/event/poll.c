@@ -37,6 +37,7 @@ static int svc_pselect6(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
                 G_RET(c) = (uint64_t)(-EINVAL);
                 break;
             }
+            (void)checkpoint_resume_timeout(nr, &timeout_value);
         }
         // pselect6 6th arg (a5): pointer to { const sigset_t *ss; size_t ss_len; }. Resolve the guest sigset
         // address so the wait honours the temporary signal mask Linux swaps in atomically (see
@@ -110,6 +111,13 @@ static int svc_pselect6(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             // pselect is never restarted by a handler; loop only on a spurious EINTR (svc_poll_retry),
             // and then only for the time that remains (recomputed above), never the full budget again.
             if (r < 0 && svc_poll_retry(c)) continue;
+            if (r < 0 && have_to) {
+                struct timespec now;
+                hl_production_clock_gettime(effective_host_services(), HL_PRODUCTION_CLOCK_MONOTONIC, &now);
+                int64_t ns = (int64_t)(deadline.tv_sec - now.tv_sec) * 1000000000LL +
+                             (deadline.tv_nsec - now.tv_nsec);
+                checkpoint_prepare_timeout(c, ns);
+            }
             break;
         }
         if (sm_on) poll_sigmask_leave(c, sm_saved);
@@ -175,6 +183,7 @@ static int svc_ppoll(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             G_RET(c) = (uint64_t)(-EINVAL);
             break;
         }
+        if (ts) (void)checkpoint_resume_timeout(nr, ts);
         // ppoll(fds, n, tmo, sigmask, sigsetsize): a3 is the guest sigset_t pointer, a4 its size. Apply the
         // temporary signal mask for the duration of the wait (Linux swaps it atomically); NULL a3 = no mask.
         uint64_t sm_set = 0, sm_saved = 0;
@@ -258,6 +267,13 @@ static int svc_ppoll(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             }
             // poll/ppoll is never restarted by a handler; loop only on a spurious EINTR (svc_poll_retry).
             if (r < 0 && svc_poll_retry(c)) continue;
+            if (r < 0 && have_to) {
+                struct timespec now;
+                hl_production_clock_gettime(effective_host_services(), HL_PRODUCTION_CLOCK_MONOTONIC, &now);
+                int64_t ns = (int64_t)(deadline.tv_sec - now.tv_sec) * 1000000000LL +
+                             (deadline.tv_nsec - now.tv_nsec);
+                checkpoint_prepare_timeout(c, ns);
+            }
             break;
         }
         r = eventfd_poll_writable_fixup(fds, (nfds_t)a1, r);

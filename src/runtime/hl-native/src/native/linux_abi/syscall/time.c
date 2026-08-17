@@ -293,6 +293,7 @@ static int svc_sleep(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1) {
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
             break;
         }
+        (void)checkpoint_resume_timeout(nr, &request);
         const struct timespec *req = &request;
         if (req->tv_sec < 0 || req->tv_nsec < 0 || req->tv_nsec >= 1000000000L) {
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL); // out-of-range/negative timespec (LTP nanosleep02)
@@ -329,8 +330,12 @@ static int svc_sleep(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1) {
             r = engine_sleep_until_monotonic(&deadline);
             if (r == 0) break;
             if (svc_poll_retry(c)) continue; // internal/spurious wakeup -> re-sleep the true remainder
+            engine_clock_gettime(CLOCK_MONOTONIC, &now);
+            int64_t checkpoint_ns = (int64_t)(deadline.tv_sec - now.tv_sec) * 1000000000LL +
+                                    (deadline.tv_nsec - now.tv_nsec);
+            checkpoint_prepare_timeout(c, checkpoint_ns);
             // A deliverable guest signal (or a real error): surface it, writing the remaining time to rem.
-            if (a1) {
+            if (a1 && c->checkpoint_continuation == CKPT_CONTINUATION_NONE) {
                 struct timespec rem;
                 engine_clock_gettime(CLOCK_MONOTONIC, &now);
                 rem.tv_sec = deadline.tv_sec - now.tv_sec;
@@ -480,6 +485,7 @@ static int svc_clock_sleep(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1,
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
             break;
         }
+        if (!(flags & 1)) (void)checkpoint_resume_timeout(nr, &request);
         // timespec range validity -> EINVAL (tv_nsec out of [0,1e9) or negative tv_sec). LTP passes
         // tv_nsec=-1 and tv_nsec=1000000000; macOS nanosleep is lax about the upper bound, so check here.
         if ((unsigned long)req->tv_nsec >= 1000000000ul || req->tv_sec < 0) {
@@ -563,7 +569,11 @@ static int svc_clock_sleep(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1,
             rr = engine_sleep_until_monotonic(&deadline);
             if (rr == 0) break;
             if (svc_poll_retry(c)) continue; // internal/spurious wakeup -> re-sleep the true remainder
-            if (a3) {                        // deliverable guest signal: report the remaining time in rem
+            engine_clock_gettime(CLOCK_MONOTONIC, &now);
+            int64_t checkpoint_ns = (int64_t)(deadline.tv_sec - now.tv_sec) * 1000000000LL +
+                                    (deadline.tv_nsec - now.tv_nsec);
+            checkpoint_prepare_timeout(c, checkpoint_ns);
+            if (a3 && c->checkpoint_continuation == CKPT_CONTINUATION_NONE) {
                 struct timespec rem;
                 engine_clock_gettime(CLOCK_MONOTONIC, &now);
                 rem.tv_sec = deadline.tv_sec - now.tv_sec;
