@@ -1,29 +1,50 @@
-use super::{PrimaryLifecycle, Runtime};
+use super::{PrimaryLifecycle, PrimaryStartError, Runtime};
 use std::collections::VecDeque;
+use std::io;
 use std::sync::Mutex;
 
 struct Primary {
-    starts: Mutex<VecDeque<Result<(), String>>>,
+    starts: Mutex<VecDeque<Result<(), PrimaryStartError>>>,
     discards: Mutex<Vec<Result<(), String>>>,
 }
 
 impl Primary {
     fn new(starts: impl IntoIterator<Item = Result<(), &'static str>>, discard: Result<(), &'static str>) -> Self {
         Self {
-            starts: Mutex::new(starts.into_iter().map(|result| result.map_err(str::to_owned)).collect()),
+            starts: Mutex::new(
+                starts
+                    .into_iter()
+                    .map(|result| result.map_err(|error| PrimaryStartError::Process(error.to_owned())))
+                    .collect(),
+            ),
             discards: Mutex::new(vec![discard.map_err(str::to_owned)]),
         }
     }
 }
 
 impl PrimaryLifecycle for Primary {
-    async fn start_primary(&self) -> Result<(), String> {
+    async fn start_primary(&self) -> Result<(), PrimaryStartError> {
         self.starts.lock().unwrap().pop_front().expect("expected start")
     }
 
     async fn discard_primary_checkpoint(&self) -> Result<(), String> {
         self.discards.lock().unwrap().pop().expect("expected discard")
     }
+}
+
+#[tokio::test]
+async fn corrupt_repository_start_failure_remains_a_global_startup_error() {
+    let primary = Primary {
+        starts: Mutex::new(VecDeque::from([Err(PrimaryStartError::Repository(io::Error::other(
+            "container catalog corrupt",
+        )))])),
+        discards: Mutex::new(vec![Ok(())]),
+    };
+
+    let error = Runtime::start_primary(&primary, true).await.unwrap_err();
+
+    assert!(error.to_string().contains("container catalog corrupt"));
+    assert_eq!(primary.discards.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]

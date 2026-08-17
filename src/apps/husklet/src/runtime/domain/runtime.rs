@@ -14,16 +14,34 @@ use super::{CONFIGURATION_SIGNATURE, CONTAINER, Configuration, RUNTIME_SIGNATURE
 pub(super) struct Runtime;
 
 trait PrimaryLifecycle {
-    async fn start_primary(&self) -> Result<(), String>;
+    async fn start_primary(&self) -> Result<(), PrimaryStartError>;
     async fn discard_primary_checkpoint(&self) -> Result<(), String>;
+}
+
+enum PrimaryStartError {
+    Process(String),
+    Repository(io::Error),
+}
+
+impl PrimaryStartError {
+    fn from_container(error: hl_container::Error) -> Self {
+        match error {
+            hl_container::Error::Io(error) => Self::Repository(error),
+            error @ (hl_container::Error::Corrupt(_)
+            | hl_container::Error::Json(_)
+            | hl_container::Error::Image(_)
+            | hl_container::Error::TranslationCache(_)) => Self::Repository(io::Error::other(error)),
+            error => Self::Process(error.to_string()),
+        }
+    }
 }
 
 #[cfg(test)]
 mod test;
 
 impl PrimaryLifecycle for Containers {
-    async fn start_primary(&self) -> Result<(), String> {
-        self.start(CONTAINER).await.map_err(|error| error.to_string())
+    async fn start_primary(&self) -> Result<(), PrimaryStartError> {
+        self.start(CONTAINER).await.map_err(PrimaryStartError::from_container)
     }
 
     async fn discard_primary_checkpoint(&self) -> Result<(), String> {
@@ -208,8 +226,10 @@ impl Runtime {
     /// to the execution domain. A failed checkpoint gets one clean-start attempt after its durable
     /// marker is removed; inability to update that durable marker remains a repository-wide error.
     async fn start_primary(lifecycle: &impl PrimaryLifecycle, checkpointed: bool) -> io::Result<Vec<String>> {
-        let Err(first) = lifecycle.start_primary().await else {
-            return Ok(Vec::new());
+        let first = match lifecycle.start_primary().await {
+            Ok(()) => return Ok(Vec::new()),
+            Err(PrimaryStartError::Process(error)) => error,
+            Err(PrimaryStartError::Repository(error)) => return Err(error),
         };
         if !checkpointed {
             return Ok(vec![format!("workspace: start failed: {first}")]);
@@ -222,9 +242,10 @@ impl Runtime {
             Ok(()) => Ok(vec![format!(
                 "workspace: checkpoint restore failed ({first}); started a fresh primary process"
             )]),
-            Err(fresh) => Ok(vec![format!(
+            Err(PrimaryStartError::Process(fresh)) => Ok(vec![format!(
                 "workspace: checkpoint restore failed ({first}); fresh start failed: {fresh}"
             )]),
+            Err(PrimaryStartError::Repository(error)) => Err(error),
         }
     }
 
