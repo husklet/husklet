@@ -257,6 +257,7 @@ impl Service {
                             if let Some(waiters) = service.exec_waiters.lock().await.get(&id) {
                                 waiters.notify_waiters();
                             }
+                            service.exec_cleanups.lock().await.remove(&id);
                             return;
                         }
                     }
@@ -578,10 +579,10 @@ impl Service {
     }
 
     pub(crate) async fn await_exec_cleanups(&self, timeout: std::time::Duration) -> Result<()> {
+        self.exec_cleanups.lock().await.retain(|_, task| !task.is_finished());
         if let Some((id, error)) = self.exec_cleanup_failures.lock().await.iter().next() {
             return Err(Error::Runtime(format!("exec {id} cleanup is poisoned: {error}")));
         }
-        self.exec_cleanups.lock().await.retain(|_, task| !task.is_finished());
         if self.exec_cleanups.lock().await.is_empty() {
             return Ok(());
         }

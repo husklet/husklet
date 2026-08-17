@@ -9,6 +9,18 @@ use std::sync::{
 
 static NEXT_PROCESS: AtomicU64 = AtomicU64::new(1);
 
+fn wait_thread<T, F>(name: String, operation: F) -> std::io::Result<tokio::sync::oneshot::Receiver<T>>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (result, wait) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new().name(name).spawn(move || {
+        let _ = result.send(operation());
+    })?;
+    Ok(wait)
+}
+
 pub(super) struct Process {
     pub(super) id: u64,
     pub(super) child: Mutex<Option<Arc<hl_engine::runtime::Engine>>>,
@@ -99,12 +111,7 @@ impl Running for Process {
 
     async fn wait(self: Arc<Self>) -> Result<ExitStatus> {
         let engine = self.engine()?;
-        let (result, wait) = tokio::sync::oneshot::channel();
-        std::thread::Builder::new()
-            .name(format!("hl-engine-wait-{}", self.id))
-            .spawn(move || {
-                let _ = result.send(engine.wait());
-            })
+        let wait = wait_thread(format!("hl-engine-wait-{}", self.id), move || engine.wait())
             .map_err(|error| Error::Runtime(format!("engine wait thread: {error}")))?;
         let exit = wait
             .await
@@ -165,6 +172,60 @@ impl Running for Process {
 
     fn take_logs(&self) -> Option<crate::service::LogReceiver> {
         self.logs.lock().ok()?.take()
+    }
+}
+
+#[cfg(test)]
+mod runtime_drop_tests {
+    use super::wait_thread;
+
+    #[test]
+    fn indefinite_native_wait_does_not_block_runtime_drop() {
+        const CHILD: &str = "HL_TEST_INDEFINITE_WAIT_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let wait = wait_thread("hl-test-indefinite-native-wait".into(), || {
+                    loop {
+                        std::thread::park();
+                    }
+                })
+                .unwrap();
+                assert!(
+                    tokio::time::timeout(std::time::Duration::from_millis(10), wait)
+                        .await
+                        .is_err()
+                );
+            });
+            drop(runtime);
+            return;
+        }
+
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "engine::process::runtime_drop_tests::indefinite_native_wait_does_not_block_runtime_drop",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success(), "wait subprocess failed: {status}");
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("indefinite native wait blocked Tokio runtime drop");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 }
 
