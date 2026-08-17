@@ -116,6 +116,23 @@ fn sleep_tree_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     output
 }
 
+fn daily_dev_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    let (compiler, name) = match isa {
+        GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-daily-dev-aarch64"),
+        GuestIsa::X86_64 => ("x86_64-linux-gnu-gcc", "checkpoint-daily-dev-x86_64"),
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/daily_dev.c");
+    let output = directory.join(name);
+    let status = std::process::Command::new(compiler)
+        .args(["-static", "-O2", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
+    assert!(status.success(), "{compiler} failed with {status}");
+    output
+}
+
 fn exit_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     let (compiler, name) = match isa {
         GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-exit-aarch64"),
@@ -231,6 +248,27 @@ fn continuation_plan(executable: &Path, ready: &Path, release: &Path, result: &P
         rootfs: None,
         executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
         arguments: [executable, ready, release, result]
+            .into_iter()
+            .map(|path| path.as_os_str().as_encoded_bytes().to_vec())
+            .collect(),
+        environment: Vec::new(),
+        result_path: None,
+        options,
+    }
+}
+
+fn daily_dev_plan(executable: &Path, directory: &Path, restore: bool, capture: bool) -> RuntimePlan {
+    let mut options = Options::default();
+    if restore {
+        options.set("HL_RESTORE", "1", true).unwrap();
+    }
+    if capture {
+        options.set("HL_CHECKPOINT", "1", true).unwrap();
+    }
+    RuntimePlan {
+        rootfs: None,
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: [executable, directory]
             .into_iter()
             .map(|path| path.as_os_str().as_encoded_bytes().to_vec())
             .collect(),
@@ -603,7 +641,10 @@ fn wait_for(path: &Path, marker: &str) {
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    panic!("guest did not publish {marker}");
+    panic!(
+        "guest did not publish {marker}:\n{}",
+        std::fs::read_to_string(path).unwrap_or_default()
+    );
 }
 
 fn wait_cycle_ready(path: &Path) -> bool {
@@ -623,6 +664,139 @@ fn wait_cycle_ready(path: &Path) -> bool {
 
 fn checkpoint_deadline() -> Instant {
     Instant::now() + hl_engine::composition::DEFAULT_CHECKPOINT_TIMEOUT
+}
+
+fn wait_bounded(engine: &Arc<Engine>, context: &str) -> hl_engine::engine::EngineExit {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let waiting = engine.clone();
+    std::thread::spawn(move || {
+        let _ = sender.send(waiting.wait());
+    });
+    match receiver.recv_timeout(Duration::from_secs(10)) {
+        Ok(result) => result.unwrap_or_else(|error| panic!("{context} failed: {error:?}")),
+        Err(error) => {
+            let _ = engine.stop(hl_engine::engine::StopRequest::Force);
+            panic!("{context} did not exit within 10 seconds: {error}");
+        }
+    }
+}
+
+fn wait_for_running_marker(engine: &Arc<Engine>, path: &Path, marker: &str) {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let waiting = engine.clone();
+    std::thread::spawn(move || {
+        let _ = sender.send(waiting.wait());
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let output = std::fs::read_to_string(path).unwrap_or_default();
+        if output.contains(marker) {
+            return;
+        }
+        if let Ok(result) = receiver.try_recv() {
+            panic!("guest exited before {marker}: {result:?}\n{output}");
+        }
+        if Instant::now() >= deadline {
+            let _ = engine.stop(hl_engine::engine::StopRequest::Force);
+            panic!("guest did not publish {marker} within 10 seconds:\n{output}");
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn daily_dev_round_trip(isa: GuestIsa, executable: &Path) {
+    let directory = tempfile::tempdir().unwrap();
+    let output_path = directory.path().join("output");
+    let first = Arc::new(Store::default());
+    let capture = Arc::new(
+        Engine::with_checkpoint(
+            isa,
+            daily_dev_plan(executable, directory.path(), false, true),
+            streams(true),
+            first.clone(),
+            first.clone(),
+        )
+        .unwrap(),
+    );
+    capture.start().unwrap();
+    wait_for(&output_path, "READY leader=");
+    wait_for(&directory.path().join("state"), "5");
+    capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+    assert_eq!(wait_bounded(&capture, "initial daily-dev capture").guest_status, 0);
+    wait_for_exact_process_reap(executable);
+
+    std::fs::write(directory.path().join("cycle1"), []).unwrap();
+    let second = Arc::new(Store::default());
+    let recapture = Arc::new(
+        Engine::with_checkpoint(
+            isa,
+            daily_dev_plan(executable, directory.path(), true, true),
+            streams(true),
+            second.clone(),
+            first,
+        )
+        .unwrap(),
+    );
+    recapture.start().unwrap();
+    wait_for_running_marker(&recapture, &output_path, "CYCLE 1 progress=");
+    recapture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+    assert_eq!(wait_bounded(&recapture, "daily-dev recapture").guest_status, 0);
+    wait_for_exact_process_reap(executable);
+
+    std::fs::write(directory.path().join("cycle2"), []).unwrap();
+    let restore = Arc::new(
+        Engine::with_checkpoint(
+            isa,
+            daily_dev_plan(executable, directory.path(), true, false),
+            streams(true),
+            second.clone(),
+            second,
+        )
+        .unwrap(),
+    );
+    restore.start().unwrap();
+    wait_for_running_marker(&restore, &output_path, "CYCLE 2 progress=");
+    std::fs::write(directory.path().join("stop"), []).unwrap();
+    assert_eq!(wait_bounded(&restore, "final daily-dev restore").guest_status, 0);
+    wait_for_exact_process_reap(executable);
+
+    let output = std::fs::read_to_string(&output_path).unwrap();
+    assert_eq!(output.matches("READY leader=").count(), 1, "{output}");
+    assert_eq!(output.matches("SLEEP-READY ").count(), 1, "{output}");
+    assert_eq!(output.matches("CYCLE 1 ").count(), 1, "{output}");
+    assert_eq!(output.matches("CYCLE 2 ").count(), 1, "{output}");
+    assert_eq!(output.matches("DONE progress=").count(), 1, "{output}");
+    assert!(
+        !output.contains("SLEEP-RETURN"),
+        "sleep(1000) returned during checkpointing:\n{output}"
+    );
+    let progress = output
+        .lines()
+        .filter_map(|line| line.strip_prefix("CYCLE "))
+        .map(|line| {
+            line.split("progress=")
+                .nth(1)
+                .and_then(|value| value.split_ascii_whitespace().next())
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(progress.len(), 2, "{output}");
+    assert!(
+        progress[1] >= progress[0] + 5,
+        "workload did not progress across restore: {progress:?}\n{output}"
+    );
+    let persisted = std::fs::read_to_string(directory.path().join("state"))
+        .unwrap()
+        .trim()
+        .parse::<u64>()
+        .unwrap();
+    assert!(
+        persisted >= progress[1],
+        "durable state regressed: {persisted} < {}",
+        progress[1]
+    );
 }
 
 fn capture_after_plain_engine(isa: GuestIsa, plain_executable: &Path, checkpoint_executable: &Path) {
@@ -883,6 +1057,18 @@ fn terminal_waiting_for_sleep_survives_capture_restore_and_recapture_on_both_isa
         let output = std::fs::read_to_string(output).unwrap();
         assert!(output.contains("CHILD-FINAL"), "{output}");
         assert!(output.contains("PARENT-FINAL"), "{output}");
+    }
+}
+
+#[test]
+fn daily_development_workload_survives_two_checkpoint_cycles_on_both_isas() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, daily_dev_fixture(isa, fixtures.path())));
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+    for (isa, executable) in executables {
+        daily_dev_round_trip(isa, &executable);
     }
 }
 
