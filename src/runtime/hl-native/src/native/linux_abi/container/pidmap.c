@@ -97,6 +97,11 @@ static int slot_snapshot(const hl_linux_pidmap_slot *slot, int32_t *guest, int32
 }
 
 static int registry_file(void) {
+#if defined(_WIN32)
+    // Checkpoint restore is unavailable on the Windows host. Keep the registry buildable for the normal
+    // identity path; the process-local mutex below is the only writer there.
+    return 0;
+#else
     char path[] = "/tmp/husklet-pidmap-XXXXXX";
     int descriptor = mkstemp(path);
     if (descriptor < 0) return -1;
@@ -109,6 +114,7 @@ static int registry_file(void) {
         return -1;
     }
     return descriptor;
+#endif
 }
 
 static hl_linux_identity_registry_storage *registry_storage(void) {
@@ -132,18 +138,24 @@ static int registry_lock(hl_linux_identity_registry *registry) {
         errno = EDEADLK;
         return -1;
     }
+#if !defined(_WIN32)
     struct flock lock = {.l_type = F_WRLCK, .l_whence = SEEK_SET, .l_start = 0, .l_len = 1};
     while (fcntl(registry->lock_fd, F_SETLKW, &lock) != 0) {
         if (errno == EINTR) continue;
         (void)pthread_mutex_unlock(&g_pidmap_thread_lock);
         return -1;
     }
+#endif
     return 0;
 }
 
 static void registry_unlock(hl_linux_identity_registry *registry) {
+#if !defined(_WIN32)
     struct flock lock = {.l_type = F_UNLCK, .l_whence = SEEK_SET, .l_start = 0, .l_len = 1};
     (void)fcntl(registry->lock_fd, F_SETLK, &lock);
+#else
+    (void)registry;
+#endif
     (void)pthread_mutex_unlock(&g_pidmap_thread_lock);
 }
 
