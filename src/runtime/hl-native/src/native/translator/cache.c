@@ -175,6 +175,9 @@ static pthread_mutex_t g_cache_lock = PTHREAD_MUTEX_INITIALIZER;
     } while (0)
 // >0 once a guest thread is spawned
 static int g_threaded;
+// Monotonic synchronization authority for decisions which must not race the
+// interval between authorizing a guest peer and registering its host thread.
+static _Atomic int g_ever_threaded;
 
 // gpc->host block map capacity. Sized so the CACHE_SZ arena fills (-> the dispatcher's wholesale
 // flush) LONG before this open-addressed table does: even all-minimum-size blocks (prologue + a one-insn

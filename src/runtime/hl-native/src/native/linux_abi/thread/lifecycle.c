@@ -469,6 +469,7 @@ static int thread_restore_group(const struct cpu *images, int count, const struc
     // See spawn_thread: discard single-threaded (barrier-elided) blocks before the restored peers run.
     if (!g_threaded && !G_THREAD_START_FLUSH()) return -EAGAIN;
     g_threaded = 1;
+    atomic_store_explicit(&g_ever_threaded, 1, memory_order_release);
     for (int i = 0; i < count; i++) {
         if (images[i].tid == 0) continue;
         struct cpu *child = malloc(sizeof *child);
@@ -568,6 +569,10 @@ static int spawn_thread(struct cpu *parent, uint64_t flags, uint64_t stack_top, 
         return -EAGAIN;
     }
     g_threaded = 1;
+    // Publish threading authority before sentry preparation and pthread_create.
+    // A concurrent vfork must never mistake an authorized, not-yet-registered
+    // peer for a single-threaded process and import a stale COW snapshot.
+    atomic_store_explicit(&g_ever_threaded, 1, memory_order_release);
     if (sentry_thread_prepare(child) != 0) {
         (void)hl_target_task_event(child, HL_TASK_EVENT_EXIT_THREAD, 0, (uint64_t)tid, 0);
         free(child);
