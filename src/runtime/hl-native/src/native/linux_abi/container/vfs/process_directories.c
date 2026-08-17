@@ -165,10 +165,16 @@ static int proc_pid_descendant(int host) {
     return 0;
 }
 
+static int host_pid_registered_checked(int host);
+
 // Is guest pid `gp` a live member of this container? Fills *hostout with its host pid (gp==1 -> init).
 static int guest_pid_member_checked(int guest, int *hostout) {
     int host = (guest == 1 && g_init_hostpid) ? g_init_hostpid : guest;
-    if (g_pidmap.active && hl_linux_pidmap_host_checked(&g_pidmap, guest, &host) != 0) return 0;
+    if (g_pidmap.active) {
+        if (hl_linux_pidmap_host_checked(&g_pidmap, guest, &host) != 0) return 0;
+        *hostout = host;
+        return host_pid_registered_checked(host);
+    }
     *hostout = host;
     if (host == (int)getpid()) return 1;
     if (host <= 0) return 0;
@@ -177,9 +183,9 @@ static int guest_pid_member_checked(int guest, int *hostout) {
     snprintf(path, sizeof path, "%s/%d", dir, host);
     if (access(path, F_OK) == 0 && !(kill(host, 0) != 0 && errno == ESRCH)) return 1;
     if (kill(host, 0) != 0) return 0;
-    // registry may lag (or is off outside container mode): accept a live session peer, or a descendant of
-    // ours that left the session.
-    return getsid(host) == getsid(0) || proc_pid_descendant(host);
+    // Outside restored typed mode, tolerate a lagging marker only for a process whose host ancestry proves
+    // container ownership. Host sessions are shared by unrelated engines and are never membership authority.
+    return proc_pid_descendant(host);
 }
 
 // Translate a host identity obtained from host process metadata into the guest namespace, then apply the
