@@ -28,6 +28,13 @@ cases:
     artifact: { destination: /opt/husklet/posix-apt-pty-devpts }
     run: []
     expect: { exit: 0, stdout: golden/apt_devpts.out }
+  - id: runtime/posix/apt-runtime-contract
+    status: active
+    compat: { class: compatibility }
+    build: { source: apt_runtime_contract.c, output: apt-runtime-contract, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-apt-runtime-contract }
+    run: []
+    expect: { exit: 0, stdout: golden/apt_runtime_contract.out }
   - id: runtime/posix/chmodchown
     status: !oracle-excluded
       reason: "Unprivileged QEMU cannot satisfy the engine-root chown/fchown fixture contract"
