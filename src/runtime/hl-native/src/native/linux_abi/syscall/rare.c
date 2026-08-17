@@ -268,7 +268,7 @@ static int svc_rare_process_descriptor(struct cpu *c, uint64_t nr, uint64_t a0, 
             hpid = (pid_t)getpid();
         } else if (g_init_hostpid) {
             int h;
-            if (!container_gpid_member((int)pid, &h)) {
+            if (!guest_pid_registered_checked((int)pid, &h)) {
                 G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
                 break;
             }
@@ -312,7 +312,7 @@ static int svc_rare_process_descriptor(struct cpu *c, uint64_t nr, uint64_t a0, 
             // guest-pid namespace: reject a pidfd whose target is no longer a live member of this container
             // -> ESRCH (matches a real pidfd to an exited/departed process, and closes the same host-pid
             // authority leak as kill, case 129 -- the pidfd could otherwise deliver to an arbitrary host pid).
-            if (g_init_hostpid && !container_host_member((int)pid)) {
+            if (g_init_hostpid && !host_pid_registered_checked((int)pid)) {
                 G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
                 break;
             }
@@ -1359,7 +1359,7 @@ static void svc_rare_waitid(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2
     if (si.si_pid != 0 && !(lopt & 0x01000000) &&
         (si.si_code == CLD_EXITED || si.si_code == CLD_KILLED || si.si_code == CLD_DUMPED))
     {
-        proc_reg_reap((int)si.si_pid);
+        host_pid_unregister_reaped((int)si.si_pid);
         if (g_pidmap.active) (void)hl_linux_pidmap_remove_host(&g_pidmap, (int)si.si_pid);
     }
     // Raw waitid(2) fills arg 5 (struct rusage *) when non-NULL (glibc's wrapper passes NULL, but the

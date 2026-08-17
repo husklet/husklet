@@ -175,7 +175,7 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         }
         if (pid > 0) { // parent side of a successful fork: count it for /proc/stat processes + pids.current
             atomic_fetch_add(&g_forks_since_boot, 1);
-            proc_reg_mark_child((int)pid); // guest-pid namespace: register the child NOW (parent-side, race-
+            host_pid_register_child((int)pid); // host registry: register the child NOW (parent-side, race-
                                            // free) so a kill/pidfd membership check can never ESRCH it before
                                            // it runs its own proc_reg_after_fork publish
             acct_child_born((int)pid);     // register the child's OWN task slot (container-wide pids.current)
@@ -424,7 +424,7 @@ static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         }
         if (pid > 0) { // parent side of a successful clone3 fork: count it (see case 220)
             atomic_fetch_add(&g_forks_since_boot, 1);
-            proc_reg_mark_child((int)pid); // guest-pid namespace: parent-side registration (see case 220)
+            host_pid_register_child((int)pid); // host registry: parent-side registration (see case 220)
             acct_child_born((int)pid);     // register the child's OWN task slot (container-wide pids.current)
         }
         // clone_args: parent_tid = ca[3]. CLONE_PARENT_SETTID stores the child's tid (pid) into the PARENT's

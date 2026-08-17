@@ -580,7 +580,7 @@ static int proc_self_exe(const char *p, char *tgt, size_t cap) {
             // a PEER container process's /proc/<pid>/exe: serve its published canonical exe path
             // (each engine process publishes it at boot + execve -- see proc_reg_publish).
             int host;
-            if (strcmp(end + 1, "exe") || !proc_pid_member((int)pid, &host)) return 0;
+            if (strcmp(end + 1, "exe") || !guest_pid_member_checked((int)pid, &host)) return 0;
             return proc_reg_exe_read(host, tgt, cap);
         }
         rest = end + 1;

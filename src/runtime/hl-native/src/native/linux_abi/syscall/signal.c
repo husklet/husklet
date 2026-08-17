@@ -283,7 +283,7 @@ static int svc_signal_target(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             // pid -- a sibling engine (another container), the launcher, or any of the hl user's processes.
             // Legitimate cross-guest-process signalling still works (a real peer IS a registry member). Gated
             // on container mode (g_init_hostpid); bare (non-container) mode keeps the historical host model.
-            if (g_init_hostpid && !container_host_member((int)tgt)) {
+            if (g_init_hostpid && !host_pid_registered_checked((int)tgt)) {
                 G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
                 break;
             }

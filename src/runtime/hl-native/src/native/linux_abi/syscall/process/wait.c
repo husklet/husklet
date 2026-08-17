@@ -231,7 +231,7 @@ static int svc_proc_260(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // 0x7f / continued 0xffff) leaves the pid table; drop its container-registry record here so a
         // signal-killed child (which never ran its own exit cleanup) can't leave a stale membership marker
         // that a recycled host pid could inherit. Use the host pid `r` before the restore remap below.
-        if (r > 0 && (st & 0xff) != 0x7f && st != 0xffff) proc_reg_reap((int)r);
+        if (r > 0 && (st & 0xff) != 0x7f && st != 0xffff) host_pid_unregister_reaped((int)r);
         // checkpoint restore: report the reaped child under the guest pid the checkpoint recorded, and drop
         // its translation once it is reaped so a future host pid can never alias it (no-op on normal launch).
         if (g_pidmap.active && r > 0) {

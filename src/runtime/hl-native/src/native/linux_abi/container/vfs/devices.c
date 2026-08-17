@@ -411,7 +411,7 @@ static int synth_namespace_stat(const char *gp, struct stat *s) {
     int pid = 0, host = 0;
     const char *leaf = proc_any_leaf(proc_deself(gp, self_path, sizeof self_path), &pid);
     if (!leaf || strncmp(leaf, "ns/", 3) || !leaf[3] ||
-        (pid != container_pid() && pid != (int)getpid() && !proc_pid_member(pid, &host)))
+        (pid != container_pid() && pid != (int)getpid() && !guest_pid_member_checked(pid, &host)))
         return 0;
     char target[64];
     int length = ns_link_target(leaf + 3, target, sizeof target);
@@ -572,7 +572,7 @@ static int synth_proc_root_stat(const char *gp, struct stat *s) {
             int pid = atoi(q), host;
             // our own pid / the init "1", OR any live PEER container process -> a /proc/<pid> directory,
             // so `ps`/htop can descend into a peer it saw in the /proc listing.
-            if (pid == (int)getpid() || pid == container_pid() || pid == 1 || proc_pid_member(pid, &host)) {
+            if (pid == (int)getpid() || pid == container_pid() || pid == 1 || guest_pid_member_checked(pid, &host)) {
                 synth_stat_set(s, S_IFDIR | 0555, 8);
                 return 1;
             }
@@ -588,7 +588,7 @@ static int synth_proc_task_stat(const char *gp, struct stat *s) {
         const char *lf = proc_any_leaf(proc_deself(gp, dsb, sizeof dsb), &pid); // resolve /proc/self/task/*
         if (lf && pid > 0) {
             int host;
-            if (pid == (int)getpid() || pid == container_pid() || pid == 1 || proc_pid_member(pid, &host)) {
+            if (pid == (int)getpid() || pid == container_pid() || pid == 1 || guest_pid_member_checked(pid, &host)) {
                 int istaskdir = !strcmp(lf, "task") || !strcmp(lf, "task/"); // guests stat "self/task/"
                 int istid = 0;
                 if (!istaskdir && !strncmp(lf, "task/", 5) && lf[5]) {
@@ -680,7 +680,7 @@ static int synth_proc_peer_fd_stat(const char *gp, struct stat *s) {
     {
         int peer = -1, hp = 0;
         const char *aleaf = proc_any_leaf(gp, &peer);
-        if (aleaf && proc_pid_member(peer, &hp)) {
+        if (aleaf && guest_pid_member_checked(peer, &hp)) {
             if (!strcmp(aleaf, "fd")) {
                 synth_stat_set(s, S_IFDIR | 0555, 2);
                 return 1;

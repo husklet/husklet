@@ -478,7 +478,7 @@ static int fcntl_owner_guest_to_host(int owner) {
     // In container mode a raw, unmapped guest PID must never become authority
     // over an unrelated host process.  The process registry is the same strict
     // membership boundary used by kill/pidfd; report ESRCH for non-members.
-    return g_init_hostpid && !container_host_member(host) ? -1 : host;
+    return g_init_hostpid && !host_pid_registered_checked(host) ? -1 : host;
 }
 
 static int fcntl_owner_host_to_guest(int owner) {

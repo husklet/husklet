@@ -514,7 +514,7 @@ static int readlink_peer(struct cpu *c, const char *path, char *buf, size_t size
     if (!path) return 0;
     int peer = -1, host_pid = 0;
     const char *leaf = proc_any_leaf(path, &peer);
-    if (!leaf || !proc_pid_member(peer, &host_pid)) return 0;
+    if (!leaf || !guest_pid_member_checked(peer, &host_pid)) return 0;
     if (!strncmp(leaf, "ns/", 3) && leaf[3]) {
         char target[64];
         int length = ns_link_target(leaf + 3, target, sizeof target);

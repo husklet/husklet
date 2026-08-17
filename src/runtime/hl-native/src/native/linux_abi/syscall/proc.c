@@ -592,7 +592,7 @@ static int sched_pid_live(int gpid) {
     // close via container_host_member. A genuine in-container peer is a registry member -> still resolvable.
     if (g_init_hostpid) {
         int host;
-        return container_gpid_member(gpid, &host) ? 0 : -ESRCH;
+        return guest_pid_registered_checked(gpid, &host) ? 0 : -ESRCH;
     }
     if (kill((pid_t)gpid, 0) == 0) return 0; // bare (non-container) mode: historical host-pid probe
     return (errno == ESRCH) ? -ESRCH : 0;    // EPERM etc. -> the task exists, just not signalable

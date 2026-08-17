@@ -584,7 +584,7 @@ static int proc_open_peer_process(const char *rp) {
         if (fl && gp2 > 0) {
             int host;
             int is_oom_leaf = !strcmp(fl, "oom_score_adj") || !strcmp(fl, "oom_adj") || !strcmp(fl, "oom_score");
-            if (proc_pid_member(gp2, &host) ||
+            if (guest_pid_member_checked(gp2, &host) ||
                 (is_oom_leaf && (host = (gp2 == 1 && g_init_hostpid) ? g_init_hostpid : gp2) > 0 &&
                  !(kill(host, 0) != 0 && errno == ESRCH))) {
                 if (!strncmp(fl, "ns/", 3) && fl[3] && ns_clone_flag(fl + 3)) {
