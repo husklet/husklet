@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/prctl.h>
+#include <time.h>
 #include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
@@ -46,7 +47,16 @@ static void expect_esrch(int status, const char *operation) {
     if (status != -1 || errno != ESRCH) fail(operation);
 }
 
-int main(void) {
+static void wait_release(const char *path) {
+    const struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+    while (access(path, F_OK) != 0) {
+        if (errno != ENOENT) fail("release-access");
+        if (nanosleep(&pause, NULL) != 0 && errno != EINTR) fail("release-sleep");
+    }
+}
+
+int main(int argc, char **argv) {
+    if (argc < 2) return 69;
     if (!isatty(STDIN_FILENO)) fail("terminal");
     if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0) fail("subreaper");
     int identities[2];
@@ -85,8 +95,10 @@ int main(void) {
     foreground(leader);
     write_all("REAPED-GROUP-READY\n");
 
-    char byte;
-    while (read(STDIN_FILENO, &byte, 1) < 0 && errno == EINTR) {}
+    // The dead leader's surviving group owns the terminal foreground by design, so init is a
+    // background group and cannot use the terminal as a release channel without SIGTTIN.  A
+    // host-owned release file is terminal-independent and survives the checkpoint boundary.
+    wait_release(argv[1]);
 
     if (getpgid(member) != leader) fail("member-getpgid");
     if (getsid(member) != getsid(0)) fail("member-getsid");

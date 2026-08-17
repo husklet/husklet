@@ -1447,7 +1447,9 @@ fn reaped_group_leader_keeps_typed_identity_fail_closed_on_both_isas() {
             .unwrap(),
         );
         restore.start().unwrap();
-        restore_port.input(b"x");
+        std::fs::write(&release, b"release").unwrap();
+        restore_port.wait_output(b"REAPED-GROUP-MEMBER-SIGNALED");
+        restore_port.wait_output(b"REAPED-GROUP-IDENTITIES-PRESERVED");
         let restored = restore.wait().unwrap_or_else(|error| {
             panic!(
                 "{isa:?} reaped-group restore failed: {error:?}\n{}",
@@ -1455,7 +1457,6 @@ fn reaped_group_leader_keeps_typed_identity_fail_closed_on_both_isas() {
             )
         });
         assert_eq!(restored.guest_status, 0, "{isa:?}: {}", restore_port.output());
-        restore_port.wait_output(b"REAPED-GROUP-MEMBER-SIGNALED");
     }
 }
 
