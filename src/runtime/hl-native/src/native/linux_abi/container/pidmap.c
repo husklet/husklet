@@ -117,7 +117,8 @@ static hl_linux_identity_registry_storage *registry_storage(void) {
     if (memory == MAP_FAILED) return NULL;
     memset(memory, 0, sizeof(hl_linux_identity_registry_storage));
     hl_linux_identity_registry_storage *storage = memory;
-    for (uint32_t kind = 0; kind < PIDMAP_KINDS; ++kind) atomic_init(&storage->map[kind].next_guest, 1);
+    for (uint32_t kind = 0; kind < PIDMAP_KINDS; ++kind)
+        atomic_init(&storage->map[kind].next_guest, 1);
     return storage;
 }
 
@@ -155,8 +156,8 @@ static void registry_recover_banks_locked(hl_linux_identity_registry_storage *re
     for (unsigned position = 0; position < count; ++position) {
         hl_linux_identity_journal_entry entry = registry->journal[position];
         if (entry.kind >= PIDMAP_KINDS || entry.index >= HL_LINUX_PIDMAP_CAPACITY) continue;
-        uint64_t value = atomic_load_explicit(&registry->map[entry.kind].bank[active][entry.index].identity,
-                                              memory_order_acquire);
+        uint64_t value =
+            atomic_load_explicit(&registry->map[entry.kind].bank[active][entry.index].identity, memory_order_acquire);
         atomic_store_explicit(&registry->map[entry.kind].bank[inactive][entry.index].identity, value,
                               memory_order_release);
         if (position == 0) pidmap_test_crash(5);
@@ -244,10 +245,9 @@ static int map_find_empty(const hl_linux_pidmap_storage *map, unsigned bank) {
 
 static void pidmap_raise_next(hl_linux_pidmap_storage *storage, int32_t guest) {
     int current = atomic_load_explicit(&storage->next_guest, memory_order_relaxed);
-    while (current <= guest &&
-           !atomic_compare_exchange_weak_explicit(&storage->next_guest, &current,
-                                                  guest == INT32_MAX ? INT32_MAX : guest + 1,
-                                                  memory_order_relaxed, memory_order_relaxed)) {}
+    while (current <= guest && !atomic_compare_exchange_weak_explicit(&storage->next_guest, &current,
+                                                                      guest == INT32_MAX ? INT32_MAX : guest + 1,
+                                                                      memory_order_relaxed, memory_order_relaxed)) {}
 }
 
 static int registry_apply_staged_locked(hl_linux_identity_registry *owner, const hl_linux_pidmap_update *updates,
@@ -400,8 +400,8 @@ static int registry_semantic_begin(hl_linux_identity_registry *owner, unsigned s
     return 0;
 }
 
-int hl_linux_identity_registry_setsid(hl_linux_pidmap *pid, hl_linux_pidmap *pgid, hl_linux_pidmap *sid,
-                                      int32_t guest, int32_t *host_sid) {
+int hl_linux_identity_registry_setsid(hl_linux_pidmap *pid, hl_linux_pidmap *pgid, hl_linux_pidmap *sid, int32_t guest,
+                                      int32_t *host_sid) {
     if (pid == NULL || pgid == NULL || sid == NULL || host_sid == NULL || guest <= 0 || pid->registry == NULL ||
         pgid->registry != pid->registry || sid->registry != pid->registry) {
         errno = EINVAL;
@@ -409,8 +409,7 @@ int hl_linux_identity_registry_setsid(hl_linux_pidmap *pid, hl_linux_pidmap *pgi
     }
     hl_linux_identity_registry *owner = pid->registry;
     int32_t host = (int32_t)getpid();
-    if (registry_semantic_begin(owner, PIDMAP_SEMANTIC_SETSID, guest, host, guest, host) != 0)
-        return -1;
+    if (registry_semantic_begin(owner, PIDMAP_SEMANTIC_SETSID, guest, host, guest, host) != 0) return -1;
     pid_t result = setsid();
     if (result < 0) {
         int saved = errno;
@@ -433,8 +432,8 @@ int hl_linux_identity_registry_setsid(hl_linux_pidmap *pid, hl_linux_pidmap *pgi
 
 int hl_linux_identity_registry_setpgid(hl_linux_pidmap *pid, hl_linux_pidmap *pgid, int32_t guest_process,
                                        int32_t host_process, int32_t guest_group, int32_t host_group) {
-    if (pid == NULL || pgid == NULL || guest_process <= 0 || guest_group <= 0 || host_process < 0 ||
-        host_group < 0 || pid->registry == NULL || pgid->registry != pid->registry) {
+    if (pid == NULL || pgid == NULL || guest_process <= 0 || guest_group <= 0 || host_process < 0 || host_group < 0 ||
+        pid->registry == NULL || pgid->registry != pid->registry) {
         errno = EINVAL;
         return -1;
     }
@@ -614,8 +613,7 @@ static int pidmap_checked(const hl_linux_pidmap *map, int32_t identity, int32_t 
                 errno = EIO;
                 return -1;
             }
-            if (atomic_load_explicit(&map->registry->storage->semantic, memory_order_acquire) !=
-                PIDMAP_SEMANTIC_NONE) {
+            if (atomic_load_explicit(&map->registry->storage->semantic, memory_order_acquire) != PIDMAP_SEMANTIC_NONE) {
                 errno = EAGAIN;
                 return -1;
             }
@@ -685,8 +683,7 @@ int hl_linux_pidmap_snapshot_checked(const hl_linux_pidmap *map, hl_linux_pidmap
         }
         if (before == hl_linux_identity_registry_commit_word(map->registry) &&
             atomic_load_explicit(&map->registry->storage->poisoned, memory_order_acquire) == 0 &&
-            atomic_load_explicit(&map->registry->storage->semantic, memory_order_acquire) ==
-                PIDMAP_SEMANTIC_NONE) {
+            atomic_load_explicit(&map->registry->storage->semantic, memory_order_acquire) == PIDMAP_SEMANTIC_NONE) {
             *count_out = count;
             return 0;
         }
@@ -771,7 +768,8 @@ static int pidmap_test_concurrent(uint32_t iterations) {
     if (child == 0) {
         for (uint32_t iteration = 0; iteration < iterations; ++iteration) {
             int32_t host = (iteration & 1u) == 0 ? 120 : 110;
-            for (uint32_t kind = 0; kind < PIDMAP_KINDS; ++kind) updates[kind].host = host;
+            for (uint32_t kind = 0; kind < PIDMAP_KINDS; ++kind)
+                updates[kind].host = host;
             if (registry_apply(updates, PIDMAP_KINDS) != 0) _exit(82);
         }
         _exit(0);
@@ -814,7 +812,8 @@ static int pidmap_test_semantic_death(uint32_t scenario) {
     hl_linux_identity_registry registry;
     hl_linux_pidmap maps[PIDMAP_KINDS];
     if (pidmap_test_prepare(&registry, maps) != 0) return -1;
-    for (uint32_t kind = 0; kind < PIDMAP_KINDS; ++kind) hl_linux_pidmap_activate(&maps[kind]);
+    for (uint32_t kind = 0; kind < PIDMAP_KINDS; ++kind)
+        hl_linux_pidmap_activate(&maps[kind]);
     int descriptors[2];
     if (pipe(descriptors) != 0) return -1;
     pid_t writer = fork();
@@ -825,18 +824,17 @@ static int pidmap_test_semantic_death(uint32_t scenario) {
         if (target < 0) _exit(84);
         if (target == 0) {
             (void)close(descriptors[1]);
-            for (;;) pause();
+            for (;;)
+                pause();
         }
         ssize_t written;
         do {
             written = write(descriptors[1], &target, sizeof target);
         } while (written < 0 && errno == EINTR);
         (void)close(descriptors[1]);
-        if (written != (ssize_t)sizeof target || hl_linux_pidmap_add(&maps[0], 20, (int32_t)target) != 0)
-            _exit(85);
+        if (written != (ssize_t)sizeof target || hl_linux_pidmap_add(&maps[0], 20, (int32_t)target) != 0) _exit(85);
         g_pidmap_test_crash_phase = (int)scenario;
-        (void)hl_linux_identity_registry_setpgid(&maps[0], &maps[1], 20, (int32_t)target, 20,
-                                                 (int32_t)target);
+        (void)hl_linux_identity_registry_setpgid(&maps[0], &maps[1], 20, (int32_t)target, 20, (int32_t)target);
         _exit(86);
     }
     (void)close(descriptors[1]);

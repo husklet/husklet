@@ -39,8 +39,8 @@ int hl_linux_identity_registry_prepare(hl_linux_identity_registry *registry, hl_
                                        hl_linux_pidmap *pgid, hl_linux_pidmap *sid);
 int hl_linux_identity_registry_add(const hl_linux_pidmap_update *updates, size_t count);
 uint64_t hl_linux_identity_registry_commit_word(const hl_linux_identity_registry *registry);
-int hl_linux_identity_registry_setsid(hl_linux_pidmap *pid, hl_linux_pidmap *pgid, hl_linux_pidmap *sid,
-                                      int32_t guest, int32_t *host_sid);
+int hl_linux_identity_registry_setsid(hl_linux_pidmap *pid, hl_linux_pidmap *pgid, hl_linux_pidmap *sid, int32_t guest,
+                                      int32_t *host_sid);
 int hl_linux_identity_registry_setpgid(hl_linux_pidmap *pid, hl_linux_pidmap *pgid, int32_t guest_process,
                                        int32_t host_process, int32_t guest_group, int32_t host_group);
 int hl_linux_identity_registry_reap(hl_linux_pidmap *pid, hl_linux_pidmap *pgid, hl_linux_pidmap *sid,
