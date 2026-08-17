@@ -1,4 +1,3 @@
-use crate::benchmark::definition::ProfileKind;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -23,7 +22,6 @@ pub(in crate::benchmark) struct Row {
     pub round: u32,
     pub position: usize,
     pub arm: String,
-    pub profile: ProfileKind,
     pub output: String,
     pub output_frame: String,
     #[serde(default)]

@@ -7,16 +7,13 @@ pub(super) struct Layout {
     pub name: &'static str,
     pub linux: PathBuf,
     pub native: PathBuf,
-    pub native_null: PathBuf,
     pub native_arguments: Vec<String>,
-    pub native_null_arguments: Vec<String>,
 }
 
 impl Layout {
     fn new(name: &'static str, sqlite: bool, source: &Path, rootfs: &Path, output: &Path) -> Self {
         let linux = rootfs.join(format!("benchmark/malloc-{name}"));
-        let native = output.join(format!("native/primary/malloc-{name}"));
-        let native_null = output.join(format!("native/independent-null/malloc-{name}"));
+        let native = output.join(format!("native/malloc-{name}"));
         let mut native_arguments = vec![
             "/mnt/mac/usr/bin/clang".into(),
             "-O3".into(),
@@ -35,16 +32,11 @@ impl Layout {
         if sqlite {
             native_arguments.push("-lsqlite3".into());
         }
-        let mut native_null_arguments = native_arguments.clone();
-        let output_index = native_null_arguments.len() - usize::from(sqlite) - 1;
-        native_null_arguments[output_index] = mac_path(&native_null);
         Self {
             name,
             linux,
             native,
-            native_null,
             native_arguments,
-            native_null_arguments,
         }
     }
 }

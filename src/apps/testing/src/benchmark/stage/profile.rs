@@ -85,31 +85,15 @@ pub(super) fn classified_failure(
 }
 
 pub(super) struct HuskletProfile {
-    pub(super) primary: HuskletBuild,
-    pub(super) independent_null: HuskletBuild,
-    pub(super) source_identity: String,
-}
-
-pub(super) struct HuskletBuild {
     pub(super) command: PathBuf,
     pub(super) library: PathBuf,
     pub(super) receipt: String,
-    pub(super) build_command: Vec<String>,
 }
 
 impl HuskletProfile {
     pub(super) fn stage(workspace: &Path, output: &Path, cargo: &Path) -> Result<Self, Error> {
-        let source_identity = super::artifact_identity(&workspace.join("src"))?;
-        Ok(Self {
-            primary: Self::stage_build("primary", workspace, output, cargo)?,
-            independent_null: Self::stage_build("independent-null", workspace, output, cargo)?,
-            source_identity,
-        })
-    }
-
-    fn stage_build(label: &str, workspace: &Path, output: &Path, cargo: &Path) -> Result<HuskletBuild, Error> {
-        let build = output.join(format!("husklet-build-{label}"));
-        let build_command = vec![
+        let build = output.join("husklet-build");
+        mac(&[
             "env".into(),
             "HL_NATIVE_COMPILE_CHECK=1".into(),
             "RUSTFLAGS=-C link-arg=-Wl,-rpath,@executable_path".into(),
@@ -124,12 +108,11 @@ impl HuskletProfile {
             "--bin".into(),
             "hl-x86_64".into(),
             "--release".into(),
-        ];
-        mac(&build_command)?;
+        ])?;
 
         let built_command = build.join("release/hl-x86_64");
         let built_library = native_library(&build)?;
-        let profile = output.join(format!("husklet-x86_64-macos-{label}"));
+        let profile = output.join("husklet-x86_64-macos");
         fs::create_dir(&profile)?;
         let command = profile.join("hl-x86_64");
         let library = profile.join("libhl_native_engine.dylib");
@@ -155,11 +138,10 @@ impl HuskletProfile {
         if reported != raw_sha256(&command)? {
             return Err("Husklet backend receipt is not bound to the staged command".into());
         }
-        Ok(HuskletBuild {
+        Ok(Self {
             command,
             library,
             receipt,
-            build_command,
         })
     }
 }

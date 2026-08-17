@@ -1,4 +1,4 @@
-use super::{BTreeMap, BTreeSet, CELLS, Campaign, Error, ProfileKind, Row, Step};
+use super::{BTreeMap, BTreeSet, CELLS, Campaign, Error, Row, Step};
 
 pub(super) fn verify_complete_plan(campaign: &Campaign, plan: &[Step]) -> Result<(), Error> {
     let expected = campaign
@@ -7,40 +7,16 @@ pub(super) fn verify_complete_plan(campaign: &Campaign, plan: &[Step]) -> Result
         .flat_map(|(workload, definition)| {
             definition.commands.keys().flat_map(move |layout| {
                 let support = &definition.arm_support[layout];
-                let crossed = CELLS
+                CELLS
                     .into_iter()
                     .filter(move |(left, right)| support[*left].available() && support[*right].available())
                     .flat_map(move |(left, right)| {
                         (0..campaign.rounds).flat_map(move |round| {
                             [left, right].into_iter().map(move |arm| {
-                                (
-                                    workload.as_str(),
-                                    layout.as_str(),
-                                    format!("{left}{right}"),
-                                    round,
-                                    arm,
-                                    ProfileKind::Primary,
-                                )
+                                (workload.as_str(), layout.as_str(), format!("{left}{right}"), round, arm)
                             })
                         })
-                    });
-                let nulls = ["E", "I"].into_iter().flat_map(move |arm| {
-                    (0..campaign.rounds).flat_map(move |round| {
-                        [ProfileKind::Primary, ProfileKind::IndependentNull]
-                            .into_iter()
-                            .map(move |profile| {
-                                (
-                                    workload.as_str(),
-                                    layout.as_str(),
-                                    format!("{arm}{arm}"),
-                                    round,
-                                    arm,
-                                    profile,
-                                )
-                            })
                     })
-                });
-                crossed.chain(nulls)
             })
         })
         .fold(BTreeMap::new(), |mut counts, key| {
@@ -51,7 +27,7 @@ pub(super) fn verify_complete_plan(campaign: &Campaign, plan: &[Step]) -> Result
 }
 
 pub(super) fn verify_expected_plan(
-    expected: BTreeMap<(&str, &str, String, u32, &str, ProfileKind), u8>,
+    expected: BTreeMap<(&str, &str, String, u32, &str), u8>,
     plan: &[Step],
 ) -> Result<(), Error> {
     let observed = plan.iter().fold(BTreeMap::new(), |mut counts, step| {
@@ -62,7 +38,6 @@ pub(super) fn verify_expected_plan(
                 step.cell.clone(),
                 step.round,
                 step.arm.as_str(),
-                step.profile,
             ))
             .or_insert(0_u8) += 1;
         counts
@@ -80,16 +55,9 @@ pub(super) fn verify_context_plan(contexts: &[(&str, &str)], rounds: u32, plan: 
         .flat_map(|&(workload, layout)| {
             CELLS.into_iter().flat_map(move |(left, right)| {
                 (0..rounds).flat_map(move |round| {
-                    [left, right].into_iter().map(move |arm| {
-                        (
-                            workload,
-                            layout,
-                            format!("{left}{right}"),
-                            round,
-                            arm,
-                            ProfileKind::Primary,
-                        )
-                    })
+                    [left, right]
+                        .into_iter()
+                        .map(move |arm| (workload, layout, format!("{left}{right}"), round, arm))
                 })
             })
         })
@@ -106,10 +74,13 @@ pub(super) fn verify_balanced_order(plan: &[Step]) -> Result<(), Error> {
         if step.cell.len() != 2 {
             return Err("benchmark schedule has an invalid cell".into());
         }
-        cells
-            .entry((&step.workload, &step.layout, &step.cell))
-            .or_default()
-            .push(step);
+        let (left, right) = step.cell.split_at(1);
+        if left != right {
+            cells
+                .entry((&step.workload, &step.layout, &step.cell))
+                .or_default()
+                .push(step);
+        }
     }
     for ((workload, layout, cell), steps) in cells {
         if !steps.len().is_multiple_of(8) {
@@ -122,11 +93,11 @@ pub(super) fn verify_balanced_order(plan: &[Step]) -> Result<(), Error> {
                     if pair[0].round != pair[1].round
                         || pair[0].position != 0
                         || pair[1].position != 1
-                        || (pair[0].arm == pair[1].arm && pair[0].profile == pair[1].profile)
+                        || pair[0].arm == pair[1].arm
                     {
                         return Err("benchmark pair does not contain both arms in two positions");
                     }
-                    Ok((pair[0].arm.as_str(), pair[0].profile))
+                    Ok(pair[0].arm.as_str())
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             if first[0] == first[1] || first[2] == first[3] || first[0] != first[3] || first[1] != first[2] {
