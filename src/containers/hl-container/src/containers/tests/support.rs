@@ -65,6 +65,7 @@ type CheckpointLaunch = Option<bool>;
 pub(super) struct FakeRuntime {
     pub(super) next: AtomicU64,
     pub(super) fail: AtomicBool,
+    pub(super) launch_failures: Arc<std::sync::Mutex<std::collections::BTreeMap<String, String>>>,
     pub(super) fail_wait: AtomicBool,
     pub(super) fail_checkpoint: AtomicU64,
     pub(super) hold_logs: AtomicBool,
@@ -92,6 +93,7 @@ impl FakeRuntime {
         Self {
             next: AtomicU64::new(40),
             fail: AtomicBool::new(false),
+            launch_failures: Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new())),
             fail_wait: AtomicBool::new(false),
             fail_checkpoint: AtomicU64::new(0),
             hold_logs: AtomicBool::new(false),
@@ -211,6 +213,15 @@ impl Runtime for FakeRuntime {
         self.networks.lock().unwrap().push(launch.networks);
         if self.fail.load(Ordering::SeqCst) {
             return Err(Error::Runtime("injected launch failure".into()));
+        }
+        if let Some(error) = self
+            .launch_failures
+            .lock()
+            .unwrap()
+            .get(&launch.process.program)
+            .cloned()
+        {
+            return Err(Error::Runtime(error));
         }
         let (sender, receiver) = crate::service::log_channel();
         sender
