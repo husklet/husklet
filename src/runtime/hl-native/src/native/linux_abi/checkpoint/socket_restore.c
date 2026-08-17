@@ -428,6 +428,7 @@ static int ckpt_restore_eventfds_initialize(void) {
 // carried from the manifest so the restored init can publish the handoff after every group exists.
 static int g_ckpt_fg_gpid = 0;
 static pid_t ckpt_restore_live_pid(int guest);
+static pid_t ckpt_restore_live_group(int guest_group);
 
 // The restored init owns the controlling terminal and performs the handoff only after every descendant has
 // rebuilt its process group and reached the publication barrier. A descendant cannot reliably open the
@@ -451,7 +452,7 @@ static int ckpt_claim_tty_fg(int guest_group) {
         errno = error;
         return -1;
     }
-    pid_t group = ckpt_restore_live_pid(guest_group);
+    pid_t group = ckpt_restore_live_group(guest_group);
     int result = group > 0 && tcsetpgrp(tf, group) == 0 && tcgetpgrp(tf) == group ? 0 : -1;
     int error = result == 0 ? 0 : errno;
     if (result != 0 && error == 0) error = EIO;
@@ -501,13 +502,53 @@ static int ckpt_restore_tty_mode(const struct ckpt_manifest *man) {
 // fails this process's atomic restore instead of publishing a tree with misdirected terminal signals.
 static int ckpt_restore_pgrp(int gpid, int pgid_gpid, int sid_gpid);
 
+enum ckpt_restore_state {
+    CKPT_RESTORE_PLANNED = 0,
+    CKPT_RESTORE_SPAWNED = 1,
+    CKPT_RESTORE_SESSION_READY = 2,
+    CKPT_RESTORE_GROUP_READY = 3,
+    CKPT_RESTORE_READY = 4,
+    CKPT_RESTORE_RELEASED = 5,
+    CKPT_RESTORE_FAILED = 6,
+};
+
+struct ckpt_restore_process_slot {
+    int guest_pid;
+    int guest_ppid;
+    int guest_pgid;
+    int guest_sid;
+    _Atomic pid_t host_pid;
+    _Atomic int state;
+    _Atomic int error;
+};
+
+struct ckpt_restore_group_slot {
+    int guest_pgid;
+    int guest_sid;
+    int elected_guest;
+    int members;
+    _Atomic pid_t host_pgid;
+};
+
+struct ckpt_restore_session_slot {
+    int guest_sid;
+    int leader_guest;
+    int members;
+    _Atomic pid_t host_sid;
+};
+
 struct ckpt_restore_commit {
     _Atomic int decision;
     _Atomic int ready;
     _Atomic int failed;
     _Atomic int released;
     int processes;
-    _Atomic pid_t pids[];
+    int groups;
+    int sessions;
+    struct timespec deadline;
+    struct ckpt_restore_process_slot process[HL_LINUX_PIDMAP_CAPACITY];
+    struct ckpt_restore_group_slot group[HL_LINUX_PIDMAP_CAPACITY];
+    struct ckpt_restore_session_slot session[HL_LINUX_PIDMAP_CAPACITY];
 };
 
 enum { CKPT_FUTEX_WAIT = 0, CKPT_FUTEX_WAKE = 1 };
@@ -516,25 +557,52 @@ static struct ckpt_restore_commit *g_restore_commit;
 static size_t g_restore_commit_size;
 static int ckpt_restore_process_index(int gpid);
 
+static int ckpt_restore_group_index(int guest_pgid) {
+    if (g_restore_commit == NULL) return -1;
+    for (int index = 0; index < g_restore_commit->groups; ++index)
+        if (g_restore_commit->group[index].guest_pgid == guest_pgid) return index;
+    return -1;
+}
+
+static int ckpt_restore_session_index(int guest_sid) {
+    if (g_restore_commit == NULL) return -1;
+    for (int index = 0; index < g_restore_commit->sessions; ++index)
+        if (g_restore_commit->session[index].guest_sid == guest_sid) return index;
+    return -1;
+}
+
+static pid_t ckpt_restore_live_group(int guest_group) {
+    int index = ckpt_restore_group_index(guest_group);
+    if (index < 0) {
+        errno = ESRCH;
+        return -1;
+    }
+    pid_t host = atomic_load_explicit(&g_restore_commit->group[index].host_pgid, memory_order_acquire);
+    if (host <= 0) errno = ESRCH;
+    return host;
+}
+
+static int ckpt_restore_deadline_expired(void) {
+    struct timespec now;
+    return g_restore_commit == NULL || clock_gettime(CLOCK_MONOTONIC, &now) != 0 ||
+           now.tv_sec > g_restore_commit->deadline.tv_sec ||
+           (now.tv_sec == g_restore_commit->deadline.tv_sec && now.tv_nsec >= g_restore_commit->deadline.tv_nsec);
+}
+
 static pid_t ckpt_restore_live_pid(int guest) {
-    if (guest == 1) return g_init_hostpid;
     int index = ckpt_restore_process_index(guest);
     if (g_restore_commit == NULL || index < 0) {
         errno = ESRCH;
         return -1;
     }
-    struct timespec deadline;
-    if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0) return -1;
-    deadline.tv_sec += 10;
     for (;;) {
-        pid_t host = atomic_load_explicit(&g_restore_commit->pids[index], memory_order_acquire);
+        pid_t host = atomic_load_explicit(&g_restore_commit->process[index].host_pid, memory_order_acquire);
         if (host > 0) {
             (void)hl_linux_pidmap_add(&g_pidmap, guest, (int)host);
             return host;
         }
-        struct timespec now;
-        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0 || now.tv_sec > deadline.tv_sec ||
-            (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec)) {
+        if (atomic_load_explicit(&g_restore_commit->failed, memory_order_acquire) != 0 ||
+            ckpt_restore_deadline_expired()) {
             errno = ETIMEDOUT;
             return -1;
         }
@@ -544,27 +612,42 @@ static pid_t ckpt_restore_live_pid(int guest) {
 }
 
 static int ckpt_restore_pgrp(int gpid, int pgid_gpid, int sid_gpid) {
-    if (sid_gpid == gpid && getsid(0) != getpid() && setsid() < 0 && getsid(0) != getpid()) return -1;
-    if (pgid_gpid <= 0) return 0;
-    pid_t leader = pgid_gpid == gpid ? getpid() : ckpt_restore_live_pid(pgid_gpid);
-    if (leader <= 0) return -1;
-    if (getpgrp() == leader) return 0;
-
-    struct timespec deadline;
-    if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0) return -1;
-    deadline.tv_sec += 10;
-    for (;;) {
-        if (setpgid(0, leader) == 0 || getpgrp() == leader) return 0;
-        int error = errno;
-        struct timespec now;
-        if ((error != EPERM && error != EACCES && error != ESRCH) || clock_gettime(CLOCK_MONOTONIC, &now) != 0 ||
-            now.tv_sec > deadline.tv_sec || (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec)) {
-            errno = error;
-            return -1;
-        }
-        struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
-        (void)nanosleep(&pause, NULL);
+    int session_index = ckpt_restore_session_index(sid_gpid);
+    int group_index = ckpt_restore_group_index(pgid_gpid);
+    if (session_index < 0 || group_index < 0) {
+        errno = ESRCH;
+        return -1;
     }
+    pid_t expected_sid = atomic_load_explicit(&g_restore_commit->session[session_index].host_sid, memory_order_acquire);
+    if (expected_sid <= 0 || getsid(0) != expected_sid) {
+        errno = EPERM;
+        return -1;
+    }
+    struct ckpt_restore_group_slot *group = &g_restore_commit->group[group_index];
+    if (group->elected_guest == gpid) {
+        if (getpgrp() != getpid() && setpgid(0, 0) != 0) return -1;
+        atomic_store_explicit(&group->host_pgid, getpid(), memory_order_release);
+    } else {
+        pid_t host_group;
+        for (;;) {
+            host_group = atomic_load_explicit(&group->host_pgid, memory_order_acquire);
+            if (host_group > 0) break;
+            if (atomic_load_explicit(&g_restore_commit->failed, memory_order_acquire) != 0 ||
+                ckpt_restore_deadline_expired()) {
+                errno = ETIMEDOUT;
+                return -1;
+            }
+            struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+            (void)nanosleep(&pause, NULL);
+        }
+        if (getpgrp() != host_group && setpgid(0, host_group) != 0) return -1;
+    }
+    pid_t host_group = atomic_load_explicit(&group->host_pgid, memory_order_acquire);
+    if (host_group <= 0 || getpgrp() != host_group) {
+        errno = EIO;
+        return -1;
+    }
+    return 0;
 }
 
 static int ckpt_restore_commit_futex(_Atomic int *word, int operation, int value, const struct timespec *timeout) {
@@ -605,16 +688,52 @@ static int ckpt_restore_commit_create(void) {
     errno = ENOTSUP;
     return -1;
 #else
-    if ((size_t)g_nrprocs > (SIZE_MAX - sizeof(struct ckpt_restore_commit)) / sizeof(pid_t)) return -1;
-    g_restore_commit_size = sizeof(struct ckpt_restore_commit) + (size_t)g_nrprocs * sizeof(pid_t);
+    if (g_nrprocs <= 0 || g_nrprocs > HL_LINUX_PIDMAP_CAPACITY) return -1;
+    g_restore_commit_size = sizeof(struct ckpt_restore_commit);
     g_restore_commit = mmap(NULL, g_restore_commit_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (g_restore_commit == MAP_FAILED) {
         g_restore_commit = NULL;
         return -1;
     }
     g_restore_commit->processes = g_nrprocs;
+    if (clock_gettime(CLOCK_MONOTONIC, &g_restore_commit->deadline) != 0) return -1;
+    g_restore_commit->deadline.tv_sec += 10;
+    for (int index = 0; index < g_nrprocs; ++index) {
+        struct ckpt_proc *process = &g_rprocs[index];
+        struct ckpt_restore_process_slot *slot = &g_restore_commit->process[index];
+        slot->guest_pid = process->gpid;
+        slot->guest_ppid = process->ppid;
+        slot->guest_pgid = process->pgid;
+        slot->guest_sid = process->sid;
+        if (!process->viable) continue;
+        int group = ckpt_restore_group_index(process->pgid);
+        if (group < 0) {
+            group = g_restore_commit->groups++;
+            g_restore_commit->group[group].guest_pgid = process->pgid;
+            g_restore_commit->group[group].guest_sid = process->sid;
+            g_restore_commit->group[group].elected_guest = process->gpid;
+        }
+        struct ckpt_restore_group_slot *group_slot = &g_restore_commit->group[group];
+        group_slot->members++;
+        if (process->gpid == process->pgid ||
+            (group_slot->elected_guest != process->pgid && process->gpid < group_slot->elected_guest))
+            group_slot->elected_guest = process->gpid;
+        int session = ckpt_restore_session_index(process->sid);
+        if (session < 0) {
+            session = g_restore_commit->sessions++;
+            g_restore_commit->session[session].guest_sid = process->sid;
+            g_restore_commit->session[session].leader_guest = process->sid;
+        }
+        g_restore_commit->session[session].members++;
+    }
     int root = ckpt_restore_process_index(1);
-    if (root >= 0) atomic_store_explicit(&g_restore_commit->pids[root], getpid(), memory_order_release);
+    if (root >= 0) {
+        atomic_store_explicit(&g_restore_commit->process[root].host_pid, getpid(), memory_order_release);
+        atomic_store_explicit(&g_restore_commit->process[root].state, CKPT_RESTORE_SPAWNED, memory_order_release);
+    }
+    int root_session = ckpt_restore_session_index(g_rprocs[root].sid);
+    if (root_session >= 0)
+        atomic_store_explicit(&g_restore_commit->session[root_session].host_sid, getsid(0), memory_order_release);
     return 0;
 #endif
 }
@@ -623,6 +742,64 @@ static void ckpt_restore_commit_destroy(void) {
     if (g_restore_commit != NULL) (void)munmap(g_restore_commit, g_restore_commit_size);
     g_restore_commit = NULL;
     g_restore_commit_size = 0;
+}
+
+static int ckpt_restore_wait_spawned(void) {
+    for (;;) {
+        int complete = 1;
+        for (int index = 0; index < g_nrprocs; ++index) {
+            if (!g_rprocs[index].viable) continue;
+            if (atomic_load_explicit(&g_restore_commit->process[index].host_pid, memory_order_acquire) <= 0) {
+                complete = 0;
+                break;
+            }
+        }
+        if (complete) return 0;
+        if (atomic_load_explicit(&g_restore_commit->failed, memory_order_acquire) != 0 ||
+            ckpt_restore_deadline_expired()) {
+            errno = ETIMEDOUT;
+            return -1;
+        }
+        struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+        (void)nanosleep(&pause, NULL);
+    }
+}
+
+static int ckpt_restore_session_prepare(int gpid, int sid_gpid) {
+    int session_index = ckpt_restore_session_index(sid_gpid);
+    if (session_index < 0) {
+        errno = ESRCH;
+        return -1;
+    }
+    struct ckpt_restore_session_slot *session = &g_restore_commit->session[session_index];
+    if (session->leader_guest == gpid) {
+        if (getsid(0) != getpid() && setsid() < 0) return -1;
+        if (getsid(0) != getpid()) {
+            errno = EIO;
+            return -1;
+        }
+        atomic_store_explicit(&session->host_sid, getpid(), memory_order_release);
+    } else {
+        pid_t host_sid = atomic_load_explicit(&session->host_sid, memory_order_acquire);
+        if (host_sid <= 0 || getsid(0) != host_sid) {
+            errno = EPERM;
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int ckpt_restore_identity_hydrate(void) {
+    if (ckpt_restore_wait_spawned() != 0) return -1;
+    const char *fail = hl_option_get("HL_CKPT_TEST_FAIL_PIDMAP_AT");
+    for (int index = 0; index < g_nrprocs; ++index) {
+        if (!g_rprocs[index].viable) continue;
+        int guest = g_rprocs[index].gpid;
+        int host = atomic_load_explicit(&g_restore_commit->process[index].host_pid, memory_order_acquire);
+        if ((fail != NULL && atoi(fail) == guest) || host <= 0 || hl_linux_pidmap_add(&g_pidmap, guest, host) != 0)
+            return -1;
+    }
+    return 0;
 }
 
 static void ckpt_restore_commit_wake(void) {
@@ -634,7 +811,7 @@ static void ckpt_restore_commit_abort(void) {
     atomic_store_explicit(&g_restore_commit->decision, 2, memory_order_release);
     ckpt_restore_commit_wake();
     for (int index = 0; index < g_restore_commit->processes; ++index) {
-        pid_t process = atomic_load_explicit(&g_restore_commit->pids[index], memory_order_acquire);
+        pid_t process = atomic_load_explicit(&g_restore_commit->process[index].host_pid, memory_order_acquire);
         if (process > 0 && process != getpid()) (void)kill(process, SIGKILL);
     }
     for (;;) {
@@ -648,23 +825,37 @@ static void ckpt_restore_commit_abort(void) {
 
 static void ckpt_restore_commit_failed(void) {
     if (g_restore_commit != NULL) {
+        int index = ckpt_restore_process_index(g_self_gpid);
+        if (index >= 0) {
+            atomic_store_explicit(&g_restore_commit->process[index].error, errno ? errno : EIO, memory_order_release);
+            atomic_store_explicit(&g_restore_commit->process[index].state, CKPT_RESTORE_FAILED, memory_order_release);
+        }
         atomic_fetch_add_explicit(&g_restore_commit->failed, 1, memory_order_release);
         (void)ckpt_restore_commit_futex(&g_restore_commit->ready, CKPT_FUTEX_WAKE, INT_MAX, NULL);
+        ckpt_restore_commit_wake();
+        (void)ckpt_restore_commit_futex(&g_restore_commit->released, CKPT_FUTEX_WAKE, INT_MAX, NULL);
     }
     _exit(70);
 }
 
 static void ckpt_restore_commit_wait(void) {
+    int index = ckpt_restore_process_index(g_self_gpid);
+    if (index >= 0)
+        atomic_store_explicit(&g_restore_commit->process[index].state, CKPT_RESTORE_READY, memory_order_release);
     atomic_fetch_add_explicit(&g_restore_commit->ready, 1, memory_order_release);
     (void)ckpt_restore_commit_futex(&g_restore_commit->ready, CKPT_FUTEX_WAKE, INT_MAX, NULL);
     for (;;) {
         int decision = atomic_load_explicit(&g_restore_commit->decision, memory_order_acquire);
         if (decision == 1) {
+            if (index >= 0)
+                atomic_store_explicit(&g_restore_commit->process[index].state, CKPT_RESTORE_RELEASED,
+                                      memory_order_release);
             atomic_fetch_add_explicit(&g_restore_commit->released, 1, memory_order_release);
             (void)ckpt_restore_commit_futex(&g_restore_commit->released, CKPT_FUTEX_WAKE, INT_MAX, NULL);
             return;
         }
         if (decision == 2) _exit(70);
+        if (ckpt_restore_deadline_expired()) ckpt_restore_commit_failed();
         (void)ckpt_restore_commit_futex(&g_restore_commit->decision, CKPT_FUTEX_WAIT, 0, NULL);
     }
 }
@@ -673,15 +864,9 @@ static int ckpt_restore_commit_publish(void) {
     int expected = -1; /* exclude the init process itself */
     for (int index = 0; index < g_nrprocs; ++index)
         expected += g_rprocs[index].viable;
-    struct timespec deadline;
-    if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0) return -1;
-    deadline.tv_sec += 10;
     while (atomic_load_explicit(&g_restore_commit->ready, memory_order_acquire) < expected) {
         if (atomic_load_explicit(&g_restore_commit->failed, memory_order_acquire) != 0) return -1;
-        struct timespec now;
-        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0 || now.tv_sec > deadline.tv_sec ||
-            (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec))
-            return -1;
+        if (ckpt_restore_deadline_expired()) return -1;
         struct timespec pause = {.tv_sec = 0, .tv_nsec = 10000000};
         (void)ckpt_restore_commit_futex(&g_restore_commit->ready, CKPT_FUTEX_WAIT,
                                         atomic_load_explicit(&g_restore_commit->ready, memory_order_relaxed), &pause);
@@ -690,6 +875,9 @@ static int ckpt_restore_commit_publish(void) {
     atomic_store_explicit(&g_restore_commit->decision, 1, memory_order_release);
     ckpt_restore_commit_wake();
     while (atomic_load_explicit(&g_restore_commit->released, memory_order_acquire) < expected) {
+        if (atomic_load_explicit(&g_restore_commit->failed, memory_order_acquire) != 0 ||
+            ckpt_restore_deadline_expired())
+            return -1;
         struct timespec pause = {.tv_sec = 0, .tv_nsec = 10000000};
         (void)ckpt_restore_commit_futex(&g_restore_commit->released, CKPT_FUTEX_WAIT,
                                         atomic_load_explicit(&g_restore_commit->released, memory_order_relaxed),
@@ -729,7 +917,7 @@ static void ckpt_fork_children(int gpid, struct cpu *parent) {
             (void)hl_linux_pidmap_add(&g_pidmap, cg, (int)p);
             int index = ckpt_restore_process_index(cg);
             if (g_restore_commit != NULL && index >= 0)
-                atomic_store_explicit(&g_restore_commit->pids[index], p, memory_order_release);
+                atomic_store_explicit(&g_restore_commit->process[index].host_pid, p, memory_order_release);
         } else {
             fprintf(stderr, "[restore] fork for gpid %d failed: %s\n", cg, strerror(errno));
         }
@@ -763,6 +951,13 @@ static void ckpt_restore_proc_run(int gpid) {
     // (si_addr == sp, pc at glibc's __syscall_cancel_arch_end).
     fork_child_hooks(&c); // shared after-fork engine reset (cache re-alias, kqueue rebuild, lock/threg/Mach)
 
+    if (ckpt_restore_session_prepare(gpid, m.sid_gpid) != 0) ckpt_restore_commit_failed();
+    int process_index = ckpt_restore_process_index(gpid);
+    if (process_index >= 0)
+        atomic_store_explicit(&g_restore_commit->process[process_index].state, CKPT_RESTORE_SESSION_READY,
+                              memory_order_release);
+    ckpt_fork_children(gpid, &c); // publish the complete topology before any cousin/group dependency is awaited
+
     int trigger_detached = ckpt_trigger_detach_for_restore();
     if (trigger_detached < 0) ckpt_restore_commit_failed();
 
@@ -781,10 +976,14 @@ static void ckpt_restore_proc_run(int gpid) {
     ckpt_reinstall_sigacts(&m); // restore guest signal dispositions (AFTER the fork hooks reset host state)
 
     if (ckpt_restore_fds_dir(pd) != 0 || ckpt_restore_signal_state(pd) != 0) ckpt_restore_commit_failed();
+    if (ckpt_restore_identity_hydrate() != 0) ckpt_restore_commit_failed();
     if (ckpt_restore_pgrp(gpid, m.pgid_gpid, m.sid_gpid) != 0) {
         fprintf(stderr, "[restore] cannot restore process group for gpid %d: %s\n", gpid, strerror(errno));
         ckpt_restore_commit_failed();
     }
+    if (process_index >= 0)
+        atomic_store_explicit(&g_restore_commit->process[process_index].state, CKPT_RESTORE_GROUP_READY,
+                              memory_order_release);
 
     static char exe[512];
     snprintf(exe, sizeof exe, "%s", m.exe_path);
@@ -792,7 +991,6 @@ static void ckpt_restore_proc_run(int gpid) {
     char *pubargv[2] = {(char *)(exe[0] ? exe : "guest"), NULL};
     proc_reg_publish(g_exe_path, 1, pubargv);
 
-    ckpt_fork_children(gpid, &c); // re-fork our own children before we resume (so a wait finds them)
     if (thread_restore_group(images, (int)m.n_threads, &c) != 0) ckpt_restore_commit_failed();
     free(images);
     ckpt_restore_backings_close();
@@ -859,6 +1057,8 @@ static int ckpt_restore_tree(const char *rootfs) {
     } // init RAM before any engine allocation
 
     container_init(rootfs); // sets g_init_hostpid = getpid() -> this process becomes guest pid 1
+    g_self_gpid = 1;
+    g_self_gppid = 0;
     // container_init establishes the rootfs and its default cwd; replay the captured process context after it
     // so neither the rootfs chdir nor HL_CWD can overwrite the checkpointed directory.
     if (ckpt_restore_filesystem_state(ipd) != 0) return 2;
@@ -897,17 +1097,6 @@ static int ckpt_restore_tree(const char *rootfs) {
     char *pubargv[2] = {(char *)(exe[0] ? exe : "guest"), NULL};
     proc_reg_publish(g_exe_path, 1, pubargv);
 
-    // Re-create the init's OWN process group. Restore re-forks the init under the launcher, so it starts in
-    // the launcher's group, while at capture it led its own (an interactive shell's job-control setup does
-    // setpgid(0,1), which it never repeats after resume). Uncorrected, the guest pgid 1 -> g_init_hostpid
-    // translation names a group the shell is not in: its tcsetpgrp handoff after a foreground job puts the
-    // terminal's foreground on that empty group, its next read on the ctty is a background read, and with
-    // SIGTTIN blocked that read fails EIO -- readline reports EOF and the shell logs out after one line.
-    // Only the GROUP is re-created: the session belongs to the launcher, which owns the pty.
-    if (im.pgid_gpid == 1 && getpgrp() != getpid() && setpgid(0, 0) < 0 && getpgrp() != getpid()) {
-        fprintf(stderr, "[restore] cannot restore init process group: %s\n", strerror(errno));
-        return 70;
-    }
     if (ckpt_restore_tty_mode(&man) != 0) {
         fprintf(stderr, "[restore] cannot restore terminal mode signal mask: %s\n", strerror(errno));
         return 70;
@@ -925,6 +1114,17 @@ static int ckpt_restore_tree(const char *rootfs) {
         free(images);
         return 70;
     }
+    if (ckpt_restore_identity_hydrate() != 0 || ckpt_restore_pgrp(1, im.pgid_gpid, im.sid_gpid) != 0) {
+        fprintf(stderr, "[restore] cannot publish restored init identity: %s\n", strerror(errno));
+        ckpt_restore_commit_abort();
+        ckpt_restore_commit_destroy();
+        free(images);
+        return 70;
+    }
+    int root_index = ckpt_restore_process_index(1);
+    if (root_index >= 0)
+        atomic_store_explicit(&g_restore_commit->process[root_index].state, CKPT_RESTORE_GROUP_READY,
+                              memory_order_release);
     if (thread_restore_group(images, (int)im.n_threads, &c) != 0) {
         fprintf(stderr, "[restore] init thread-group restore failed\n");
         ckpt_restore_commit_abort();
