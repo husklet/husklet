@@ -532,6 +532,11 @@ static void ckpt_poll(struct cpu *c);
 #define G_CKPT_CPU_SANITIZE(c)                                                                                         \
     do {                                                                                                               \
         (c)->ic_site = 0;                                                                                              \
+        (c)->vdirty = 0;                                                                                               \
+        (c)->fault_addr = 0;                                                                                           \
+        (c)->bus_ea = 0;                                                                                               \
+        (c)->bus_filter = 0;                                                                                           \
+        (c)->bus_force = 0;                                                                                            \
         G_SOFT_STATE_RESET(c);                                                                                         \
     } while (0)
 // checkpoint.c's restore driver (included below) rebuilds the container from these, defined later in this TU.

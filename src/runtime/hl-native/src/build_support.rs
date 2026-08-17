@@ -226,6 +226,50 @@ mod tests {
     }
 
     #[test]
+    fn target_checkpoint_restore_discards_host_transient_cpu_state_on_both_isas() {
+        let contracts = [
+            (
+                "aarch64",
+                &[
+                    "(c)->vdirty = 0",
+                    "(c)->fault_addr = 0",
+                    "(c)->bus_ea = 0",
+                    "(c)->bus_filter = 0",
+                    "(c)->bus_force = 0",
+                    "G_SOFT_STATE_RESET(c)",
+                ][..],
+            ),
+            (
+                "x86_64",
+                &[
+                    "(c)->vdirty = 0",
+                    "(c)->fault_addr = 0",
+                    "(c)->bus_ea = 0",
+                    "(c)->bus_filter = 0",
+                    "(c)->bus_force = 0",
+                    "G_SOFT_TLB_CLEAR(c)",
+                ][..],
+            ),
+        ];
+        for (target, required) in contracts {
+            let path = format!("src/native/engine/target/{target}.c");
+            let source = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {path}: {error}"));
+            let (_, sanitize) = source
+                .split_once("#define G_CKPT_CPU_SANITIZE(c)")
+                .unwrap_or_else(|| panic!("{path} has no checkpoint CPU sanitizer"));
+            let (sanitize, _) = sanitize
+                .split_once("} while (0)")
+                .unwrap_or_else(|| panic!("{path} checkpoint CPU sanitizer is unterminated"));
+            for statement in required {
+                assert!(
+                    sanitize.contains(statement),
+                    "{path} restore keeps host-transient CPU state: {statement}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn windows_link_inputs_use_target_spelling() {
         assert!(super::WINDOWS_SYSTEM_LIBRARIES.contains(&"ws2_32"));
         assert!(super::WINDOWS_SYSTEM_LIBRARIES.contains(&"ntdll"));
