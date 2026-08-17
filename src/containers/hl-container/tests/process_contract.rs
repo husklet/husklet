@@ -4,7 +4,8 @@
 //! Public guest-process contracts against a pinned Alpine root filesystem.
 
 use hl_container::{
-    Config, ContainerSpec, Containers, ExecSpec, ExecState, ExitStatus, Guest, Isolation, Process, Sandbox,
+    Config, ContainerSpec, ContainerState, Containers, EndpointSpec, ExecSpec, ExecState, ExitStatus, Guest, Isolation,
+    Mount, NetworkSpec, Process, Sandbox, Streams, VolumeSpec,
 };
 use std::{future::Future, path::Path, time::Duration};
 
@@ -169,6 +170,275 @@ async fn signalling_an_exec_does_not_stop_its_container() -> Result<(), Error> {
         Ok(())
     })
     .await
+}
+
+#[tokio::test]
+#[ignore = "requires HL_ALPINE_ARCHIVE"]
+async fn failed_exec_launches_are_process_local_and_retryable() -> Result<(), Error> {
+    within_deadline(async {
+        let fixture = Fixture::new().await?;
+        let name = "process-local-launch-failure";
+        let missing_program = "/tmp/busybox";
+        fixture
+            .containers
+            .volumes()
+            .create(VolumeSpec::new("late-volume"))
+            .await?;
+        fixture
+            .containers
+            .create(
+                fixture
+                    .spec(name, Process::new("/bin/sleep").args(["30"]))
+                    .mount(Mount::volume_read_write("late-volume", "/mnt/late")),
+            )
+            .await?;
+        fixture
+            .containers
+            .networks()
+            .create(NetworkSpec::none("exec-isolation"))
+            .await?;
+        fixture
+            .containers
+            .networks()
+            .connect("exec-isolation", name, EndpointSpec::default())
+            .await?;
+        let outcome = async {
+            fixture.containers.start(name).await?;
+            let executions = fixture.containers.executions();
+            let sibling = executions
+                .create(
+                    name,
+                    ExecSpec::new(
+                        Process::new("/bin/sh")
+                            .args(["-c", "while read value; do printf 'HEARTBEAT:%s\\n' \"$value\"; done"]),
+                    )
+                    .streams(Streams {
+                        stdin: true,
+                        stdout: true,
+                        stderr: true,
+                    }),
+                )
+                .await?;
+            let mut sibling_session = executions.start(&sibling.id).await?;
+            assert_sibling_progress(&mut sibling_session, "ready").await?;
+
+            check_exec(
+                &fixture.containers,
+                name,
+                Process::new("/bin/cp").args(["/bin/busybox", missing_program]),
+                b"",
+            )
+            .await?;
+            check_exec(
+                &fixture.containers,
+                name,
+                Process::new("/bin/chmod").args(["644", missing_program]),
+                b"",
+            )
+            .await?;
+            let executable = executions
+                .create(
+                    name,
+                    ExecSpec::new(Process::new(missing_program).args(["echo", "EXECUTABLE_RETRIED"])),
+                )
+                .await?;
+            assert_started_exec_failed(&executions, &executable.id, "missing executable").await?;
+            assert_sibling_and_workspace_live(&fixture.containers, name, &sibling.id).await?;
+            assert_sibling_progress(&mut sibling_session, "after-executable-failure").await?;
+            check_exec(
+                &fixture.containers,
+                name,
+                Process::new("/bin/chmod").args(["755", missing_program]),
+                b"",
+            )
+            .await?;
+            let executable_retry = executions
+                .create(
+                    name,
+                    ExecSpec::new(Process::new(missing_program).args(["echo", "EXECUTABLE_RETRIED"])),
+                )
+                .await?;
+            assert_exec_retry(&executions, &executable_retry.id, None, b"EXECUTABLE_RETRIED\n").await?;
+
+            let volume_record = fixture._work.path().join("state/state/volumes/late-volume.json");
+            let unavailable_volume = fixture._work.path().join("state/state/volumes/late-volume.unavailable");
+            std::fs::rename(&volume_record, &unavailable_volume)?;
+            let volume_phase = async {
+                let volume = executions
+                    .create(
+                        name,
+                        ExecSpec::new(Process::new("/bin/sh").args(["-c", "read value; printf '%s\\n' \"$value\""]))
+                            .streams(Streams {
+                                stdin: true,
+                                stdout: true,
+                                stderr: true,
+                            }),
+                    )
+                    .await?;
+                assert_launch_failed(&executions, &volume.id, "missing volume").await?;
+                assert_sibling_and_workspace_live(&fixture.containers, name, &sibling.id).await?;
+                assert_sibling_progress(&mut sibling_session, "after-volume-failure").await?;
+                Ok::<_, Error>(volume)
+            }
+            .await;
+            let volume_restore = std::fs::rename(&unavailable_volume, &volume_record);
+            let volume = volume_phase?;
+            volume_restore?;
+            assert_exec_retry(&executions, &volume.id, Some(b"VOLUME_RETRIED\n"), b"VOLUME_RETRIED\n").await?;
+
+            let network_record = fixture._work.path().join("state/state/networks/exec-isolation.json");
+            let saved_network = std::fs::read(&network_record)?;
+            std::fs::write(&network_record, b"{\"version\":1,\"network\":")?;
+            let network_phase = async {
+                let network = executions
+                    .create(name, ExecSpec::new(Process::new("/bin/echo").args(["NETWORK_RETRIED"])))
+                    .await?;
+                assert_launch_failed(&executions, &network.id, "invalid network state").await?;
+                assert_sibling_and_workspace_live(&fixture.containers, name, &sibling.id).await?;
+                assert_sibling_progress(&mut sibling_session, "after-network-failure").await?;
+                Ok::<_, Error>(network)
+            }
+            .await;
+            let network_restore = std::fs::write(&network_record, saved_network);
+            let network = network_phase?;
+            network_restore?;
+            assert_exec_retry(&executions, &network.id, None, b"NETWORK_RETRIED\n").await?;
+            executions.signal(&sibling.id, hl_container::Signal::KILL).await?;
+            let _ = executions.wait(&sibling.id).await?;
+            Ok::<_, Error>(())
+        }
+        .await;
+        let cleanup = force_cleanup(&fixture.containers, name).await;
+        outcome?;
+        cleanup?;
+        Ok(())
+    })
+    .await
+}
+
+async fn force_cleanup(containers: &Containers, name: &str) -> Result<(), Error> {
+    let mut last = None;
+    for _ in 0..50 {
+        match containers.remove_force(name).await {
+            Ok(_) => return Ok(()),
+            Err(error) if error.to_string().contains("has no runtime process") => {
+                last = Some(error);
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(last.map_or_else(|| "workspace cleanup did not run".into(), Into::into))
+}
+
+async fn assert_started_exec_failed(
+    executions: &hl_container::Executions,
+    id: &hl_container::ExecId,
+    context: &str,
+) -> Result<(), Error> {
+    let mut session = executions.start(id).await?;
+    while session.next().await?.is_some() {}
+    let exec = executions.inspect(id).await?;
+    if !matches!(
+        &exec.state,
+        ExecState::Exited {
+            result: ExitStatus::Code(code),
+            ..
+        } if *code != 0
+    ) && !matches!(
+        &exec.state,
+        ExecState::Exited {
+            result: ExitStatus::Fault { .. } | ExitStatus::Signal(_),
+            ..
+        }
+    ) {
+        return Err(format!("{context}: expected a nonzero process-local exit, got {:?}", exec.state).into());
+    }
+    Ok(())
+}
+
+async fn assert_launch_failed(
+    executions: &hl_container::Executions,
+    id: &hl_container::ExecId,
+    context: &str,
+) -> Result<(), Error> {
+    if executions.start(id).await.is_ok() {
+        return Err(format!("{context}: launch unexpectedly succeeded").into());
+    }
+    let exec = executions.inspect(id).await?;
+    if exec.state != ExecState::Created {
+        return Err(format!("{context}: failed execution became {:?}", exec.state).into());
+    }
+    Ok(())
+}
+
+async fn assert_sibling_and_workspace_live(
+    containers: &Containers,
+    container: &str,
+    sibling: &hl_container::ExecId,
+) -> Result<(), Error> {
+    let sibling = containers.executions().inspect(sibling).await?;
+    if !matches!(sibling.state, ExecState::Running { .. }) {
+        return Err(format!(
+            "healthy sibling stopped after another launch failed: {:?}",
+            sibling.state
+        )
+        .into());
+    }
+    let workspace = containers.inspect(container).await?;
+    if !matches!(workspace.state, ContainerState::Running { .. }) {
+        return Err(format!("workspace stopped after an exec launch failed: {:?}", workspace.state).into());
+    }
+    Ok(())
+}
+
+async fn assert_sibling_progress(session: &mut hl_container::Session, token: &str) -> Result<(), Error> {
+    session.write(format!("{token}\n").into_bytes()).await?;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let record = session
+                .next()
+                .await?
+                .ok_or("healthy sibling ended before acknowledging liveness")?;
+            if record.stream == hl_container::Stream::Stdout
+                && String::from_utf8_lossy(&record.bytes).contains(&format!("HEARTBEAT:{token}"))
+            {
+                return Ok::<_, Error>(());
+            }
+        }
+    })
+    .await
+    .map_err(|_| -> Error { format!("healthy sibling did not make progress for {token}").into() })?
+}
+
+async fn assert_exec_retry(
+    executions: &hl_container::Executions,
+    id: &hl_container::ExecId,
+    input: Option<&[u8]>,
+    expected: &[u8],
+) -> Result<(), Error> {
+    let mut session = executions.start(id).await?;
+    if let Some(input) = input {
+        session.write(input.to_vec()).await?;
+    }
+    let mut stdout = Vec::new();
+    while let Some(record) = session.next().await? {
+        if record.stream == hl_container::Stream::Stdout {
+            stdout.extend(record.bytes);
+        }
+    }
+    let exec = executions.inspect(id).await?;
+    if !matches!(
+        exec.state,
+        ExecState::Exited {
+            result: ExitStatus::Code(0),
+            ..
+        }
+    ) || stdout != expected
+    {
+        return Err(format!("retry mismatch: state={:?} stdout={stdout:?}", exec.state).into());
+    }
+    Ok(())
 }
 
 async fn within_deadline<T>(future: impl Future<Output = Result<T, Error>>) -> Result<T, Error> {
