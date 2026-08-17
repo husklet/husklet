@@ -67,7 +67,32 @@ impl Processes {
     /// unrelated process.
     pub fn close_workspace(workspace: &str) -> std::io::Result<()> {
         let snapshot = Self::snapshot()?;
-        Self::close_workspace_with(&snapshot, workspace, ProcessId::close)
+        let closed = Self::close_workspace_with(&snapshot, workspace, ProcessId::close);
+        Self::wait_workspace_closed_with(workspace, closed, std::time::Duration::from_secs(2), Self::snapshot)
+    }
+
+    fn wait_workspace_closed_with(
+        workspace: &str,
+        delivered: std::io::Result<()>,
+        timeout: std::time::Duration,
+        mut snapshot: impl FnMut() -> std::io::Result<String>,
+    ) -> std::io::Result<()> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if Self::workspace_launchers(&snapshot()?, workspace).is_empty() {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return match delivered {
+                    Err(error) => Err(error),
+                    Ok(()) => Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!("workspace launcher processes for {workspace:?} did not exit"),
+                    )),
+                };
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 
     fn close_workspace_with(
@@ -343,6 +368,39 @@ mod tests {
 
         assert_eq!(closed, [42, 43, 44]);
         assert_eq!(error.raw_os_error(), Some(libc::EPERM));
+    }
+
+    #[test]
+    fn cleanup_waits_after_successful_signal_delivery_until_the_launcher_is_absent() {
+        let live = "42 1 00:01 /x/husklet --worker launch demo pane-1";
+        let mut snapshots = [live.to_owned(), live.to_owned(), String::new()].into_iter();
+        Processes::wait_workspace_closed_with("demo", Ok(()), std::time::Duration::from_secs(1), || {
+            Ok(snapshots.next().expect("cleanup polled beyond confirmed exit"))
+        })
+        .unwrap();
+        assert!(snapshots.next().is_none());
+    }
+
+    #[test]
+    fn cleanup_preserves_delivery_error_when_verified_descendants_persist() {
+        let live = "42 1 00:01 /x/husklet --worker launch demo pane-1".to_owned();
+        let error = Processes::wait_workspace_closed_with(
+            "demo",
+            Err(std::io::Error::from_raw_os_error(libc::EPERM)),
+            std::time::Duration::ZERO,
+            || Ok(live.clone()),
+        )
+        .unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::EPERM));
+    }
+
+    #[test]
+    fn cleanup_success_that_never_settles_becomes_a_timeout() {
+        let live = "42 1 00:01 /x/husklet --worker launch demo pane-1".to_owned();
+        let error =
+            Processes::wait_workspace_closed_with("demo", Ok(()), std::time::Duration::ZERO, || Ok(live.clone()))
+                .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     }
 
     #[cfg(unix)]

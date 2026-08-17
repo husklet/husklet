@@ -221,6 +221,54 @@ impl Domain {
         }
     }
 
+    /// Closes a domain and its owning attachments as one startup handover.
+    pub fn close_handover(&self, choice: Close, close_attachments: impl FnOnce() -> io::Result<()>) -> io::Result<()> {
+        std::fs::create_dir_all(&self.directory)?;
+        Self::handover_with(
+            choice,
+            || Lease::acquire_wait(&self.directory.join("startup.lock"), HANDOVER),
+            || match std::os::unix::net::UnixStream::connect(self.socket()) {
+                Ok(connection) => match choice {
+                    Close::Kill => {
+                        drop(connection);
+                        Shutdown::request(&self.control(), Disposition::Kill)
+                    }
+                    Close::Continue => {
+                        let result = ResultFile::new(&self.directory);
+                        result.clear()?;
+                        drop(connection);
+                        Shutdown::request(&self.control(), Disposition::Checkpoint)?;
+                        result.wait(&self.socket(), std::time::Duration::from_secs(90))
+                    }
+                },
+                Err(error) if Peer::offline(&error) => Ok(()),
+                Err(error) => Err(error),
+            },
+            close_attachments,
+            || Lease::wait_available(&self.directory.join("domain.lock"), HANDOVER),
+        )
+    }
+
+    fn handover_with<G>(
+        choice: Close,
+        acquire_startup: impl FnOnce() -> io::Result<G>,
+        request: impl FnOnce() -> io::Result<()>,
+        close_attachments: impl FnOnce() -> io::Result<()>,
+        wait_domain: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()> {
+        let _startup = acquire_startup()?;
+        let request = request();
+        let request = if choice == Close::Continue {
+            request?;
+            Ok(())
+        } else {
+            request
+        };
+        let attachments = close_attachments();
+        let settled = wait_domain();
+        request.and(attachments).and(settled)
+    }
+
     pub fn take_restore_summary(workspace: &WorkspaceConfig) -> io::Result<Option<String>> {
         RestoreSummary::new(workspace).take()
     }

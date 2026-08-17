@@ -319,6 +319,79 @@ fn a_socket_no_domain_owns_is_cleared_for_the_replacement() {
 }
 
 #[test]
+fn failed_continue_keeps_attachments_and_skips_domain_wait() {
+    let attachments = std::cell::Cell::new(false);
+    let waited = std::cell::Cell::new(false);
+    let error = Domain::handover_with(
+        Close::Continue,
+        || Ok(()),
+        || Err(io::Error::other("checkpoint rejected")),
+        || {
+            attachments.set(true);
+            Ok(())
+        },
+        || {
+            waited.set(true);
+            Ok(())
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "checkpoint rejected");
+    assert!(!attachments.get());
+    assert!(!waited.get());
+}
+
+#[test]
+fn handover_holds_startup_ownership_until_attachments_and_domain_are_closed() {
+    let root = tempfile::tempdir().unwrap();
+    let startup = root.path().join("startup.lock");
+    let domain = root.path().join("domain.lock");
+    let owner = Lease::acquire(&domain).unwrap();
+    let (attachments_closed, closed) = std::sync::mpsc::channel();
+    let (launcher_exited, exit_confirmed) = std::sync::mpsc::channel();
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+    let startup_in_thread = startup.clone();
+    let domain_in_thread = domain.clone();
+    let closing = std::thread::spawn(move || {
+        let result = Domain::handover_with(
+            Close::Kill,
+            || Lease::acquire_wait(&startup_in_thread, std::time::Duration::from_secs(1)),
+            || Ok(()),
+            || {
+                attachments_closed.send(()).unwrap();
+                exit_confirmed.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+                Ok(())
+            },
+            || Lease::wait_available(&domain_in_thread, std::time::Duration::from_secs(1)),
+        );
+        finished_tx.send(()).unwrap();
+        result
+    });
+
+    closed.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+    assert!(
+        finished_rx.try_recv().is_err(),
+        "handover returned while attachment cleanup was waiting for launcher exit"
+    );
+    let Err(error) = Lease::acquire(&startup) else {
+        panic!("a concurrent startup acquired the handover lease");
+    };
+    assert!(
+        matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::AlreadyExists),
+        "unexpected startup-lock contention error: {error}"
+    );
+    launcher_exited.send(()).unwrap();
+    assert!(
+        finished_rx.try_recv().is_err(),
+        "handover returned after launcher exit but while the domain lease was held"
+    );
+    drop(owner);
+    finished_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+    closing.join().unwrap().unwrap();
+    drop(Lease::acquire(&startup).unwrap());
+}
+
+#[test]
 fn a_restart_marks_its_boundary_in_the_appended_domain_log() {
     let root = tempfile::tempdir().unwrap();
     let workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);
