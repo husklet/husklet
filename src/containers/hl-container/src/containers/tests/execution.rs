@@ -611,7 +611,7 @@ async fn timed_out_publication_cleanup_quarantines_until_reap_then_allows_one_re
     runtime.restore_delay = Some(Duration::from_millis(100));
     let runtime = Arc::new(runtime);
     let storage = Arc::new(Memory::default());
-    let containers = test_containers(storage.clone(), runtime).await.unwrap();
+    let containers = test_containers(storage.clone(), runtime.clone()).await.unwrap();
     containers.create(spec("quarantine-parent")).await.unwrap();
     containers.start("quarantine-parent").await.unwrap();
     let exec = containers
@@ -629,6 +629,7 @@ async fn timed_out_publication_cleanup_quarantines_until_reap_then_allows_one_re
     let wait_id = exec.id.clone();
     let waiter = tokio::spawn(async move { waiting.wait(&wait_id).await });
     tokio::task::yield_now().await;
+    let waits_before = runtime.waits.load(Ordering::SeqCst);
     storage.fail_next_exec_replace();
 
     let error = containers.executions().start(&exec.id).await.err().unwrap();
@@ -647,6 +648,12 @@ async fn timed_out_publication_cleanup_quarantines_until_reap_then_allows_one_re
     );
     assert!(containers.executions().remove(&exec.id).await.is_err());
     assert!(!waiter.is_finished(), "quarantine completion invented an exec exit");
+    tokio::time::sleep(Duration::from_millis(125)).await;
+    assert_eq!(
+        runtime.waits.load(Ordering::SeqCst),
+        waits_before + 1,
+        "publication cleanup started more than one runtime waiter"
+    );
 
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
