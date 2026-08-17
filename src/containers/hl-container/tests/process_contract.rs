@@ -346,6 +346,13 @@ async fn failed_exec_launches_are_process_local_and_retryable() -> Result<(), Er
         let cleanup = force_cleanup(&fixture.containers, name).await;
         outcome?;
         cleanup?;
+        if fixture.containers.inspect(name).await.is_ok() {
+            return Err("removed workspace remained inspectable after process-local failure cleanup".into());
+        }
+        let stale = fixture.containers.executions().list().await?;
+        if !stale.is_empty() {
+            return Err(format!("removed workspace retained {} stale execution record(s)", stale.len()).into());
+        }
         Ok(())
     })
     .await

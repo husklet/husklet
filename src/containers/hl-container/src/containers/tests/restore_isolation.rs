@@ -44,7 +44,9 @@ async fn restore_isolates_launch_failures_and_keeps_every_failed_process_retryab
             "required network is unavailable".into(),
         ),
     ]);
-    let reopened = test_containers(repository, recovery_runtime.clone()).await.unwrap();
+    let reopened = test_containers(Arc::clone(&repository), recovery_runtime.clone())
+        .await
+        .unwrap();
     reopened.start("workspace").await.unwrap();
 
     let failures = reopened.executions().restore_checkpoints().await.unwrap();
@@ -72,9 +74,35 @@ async fn restore_isolates_launch_failures_and_keeps_every_failed_process_retryab
 
     recovery_runtime.launch_failures.lock().unwrap().clear();
     assert!(reopened.executions().restore_checkpoints().await.unwrap().is_empty());
-    for execution in executions {
+    for execution in &executions {
         let recovered = reopened.executions().inspect(&execution.id).await.unwrap();
         assert!(matches!(recovered.state, ExecState::Running { .. }));
+        assert!(recovered.checkpoint.is_none());
+    }
+
+    reopened.checkpoint_all(Duration::from_secs(1)).await.unwrap();
+    drop(reopened);
+
+    let mut second_runtime = FakeRuntime::new(ExitStatus::Code(0));
+    second_runtime.delay = Duration::from_secs(60);
+    let second_reopen = test_containers(repository, Arc::new(second_runtime)).await.unwrap();
+    second_reopen.start("workspace").await.unwrap();
+    assert!(
+        second_reopen
+            .executions()
+            .restore_checkpoints()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    for (index, execution) in executions.iter().enumerate() {
+        let recovered = second_reopen.executions().inspect(&execution.id).await.unwrap();
+        assert!(
+            matches!(recovered.state, ExecState::Running { .. }),
+            "{} execution did not survive the second reopen: {:?}",
+            if index == 3 { "healthy sibling" } else { "corrected" },
+            recovered.state
+        );
         assert!(recovered.checkpoint.is_none());
     }
 }
