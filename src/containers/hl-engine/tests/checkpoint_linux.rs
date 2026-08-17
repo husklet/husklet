@@ -133,6 +133,39 @@ fn exit_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     output
 }
 
+fn continuation_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    let (compiler, name) = match isa {
+        GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-continuation-aarch64"),
+        GuestIsa::X86_64 => ("x86_64-linux-gnu-gcc", "checkpoint-continuation-x86_64"),
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/continuation.c");
+    let output = directory.join(name);
+    let status = std::process::Command::new(compiler)
+        .args(["-static", "-O2", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
+    assert!(status.success(), "{compiler} failed with {status}");
+    output
+}
+
+fn continuation_plan(executable: &Path, ready: &Path, release: &Path, result: &Path, restore: bool) -> RuntimePlan {
+    let mut options = Options::default();
+    options.set(if restore { "HL_RESTORE" } else { "HL_CHECKPOINT" }, "1", true).unwrap();
+    RuntimePlan {
+        rootfs: None,
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: [executable, ready, release, result]
+            .into_iter()
+            .map(|path| path.as_os_str().as_encoded_bytes().to_vec())
+            .collect(),
+        environment: Vec::new(),
+        result_path: None,
+        options,
+    }
+}
+
 #[derive(Default)]
 struct Store(Mutex<BTreeMap<String, Vec<u8>>>);
 
@@ -583,6 +616,52 @@ fn terminal_waiting_for_sleep_survives_capture_restore_and_recapture_on_both_isa
         let output = std::fs::read_to_string(output).unwrap();
         assert!(output.contains("CHILD-FINAL"), "{output}");
         assert!(output.contains("PARENT-FINAL"), "{output}");
+    }
+}
+
+#[test]
+fn checkpoint_continuation_does_not_duplicate_read_or_wait_on_both_isas() {
+    let fixtures = tempfile::tempdir().unwrap();
+    for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
+        let executable = continuation_fixture(isa, fixtures.path());
+        let temporary = tempfile::tempdir().unwrap();
+        let ready = temporary.path().join("ready");
+        let release = temporary.path().join("release");
+        let result = temporary.path().join("result");
+        let store = Arc::new(Store::default());
+        let capture = Engine::with_checkpoint(
+            isa,
+            continuation_plan(&executable, &ready, &release, &result, false),
+            StandardStreams::default(),
+            store.clone(),
+            store.clone(),
+        )
+        .unwrap();
+        capture.start().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !ready.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(ready.exists(), "{isa:?} fixture did not block in read");
+        capture.capture_checkpoint_until(Instant::now() + Duration::from_secs(10)).unwrap();
+        assert_eq!(capture.wait().unwrap().guest_status, 0);
+
+        let restore = Engine::with_checkpoint(
+            isa,
+            continuation_plan(&executable, &ready, &release, &result, true),
+            StandardStreams::default(),
+            store.clone(),
+            store,
+        )
+        .unwrap();
+        restore.start().unwrap();
+        std::fs::write(&release, []).unwrap();
+        assert_eq!(restore.wait().unwrap().guest_status, 0);
+        assert_eq!(
+            std::fs::read_to_string(&result).unwrap(),
+            "read=1 byte=X second=0 wait=1 exit=37 duplicate=-1 errno=10\n",
+            "{isa:?} duplicated an interrupted read or wait"
+        );
     }
 }
 
