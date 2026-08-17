@@ -286,6 +286,26 @@ async fn failed_exec_launches_are_process_local_and_retryable() -> Result<(), Er
             volume_restore?;
             assert_exec_retry(&executions, &volume.id, Some(b"VOLUME_RETRIED\n"), b"VOLUME_RETRIED\n").await?;
 
+            let saved_volume = std::fs::read(&volume_record)?;
+            std::fs::write(&volume_record, b"{\"version\":1,\"volume\":")?;
+            let malformed_volume_phase = async {
+                let volume = executions
+                    .create(
+                        name,
+                        ExecSpec::new(Process::new("/bin/echo").args(["MALFORMED_VOLUME_RETRIED"])),
+                    )
+                    .await?;
+                assert_launch_failed(&executions, &volume.id, "malformed volume state").await?;
+                assert_sibling_and_workspace_live(&fixture.containers, name, &sibling.id).await?;
+                assert_sibling_progress(&mut sibling_session, "after-malformed-volume-failure").await?;
+                Ok::<_, Error>(volume)
+            }
+            .await;
+            let malformed_volume_restore = std::fs::write(&volume_record, saved_volume);
+            let malformed_volume = malformed_volume_phase?;
+            malformed_volume_restore?;
+            assert_exec_retry(&executions, &malformed_volume.id, None, b"MALFORMED_VOLUME_RETRIED\n").await?;
+
             let network_record = fixture.work.path().join("state/state/networks/exec-isolation.json");
             let saved_network = std::fs::read(&network_record)?;
             std::fs::write(&network_record, b"{\"version\":1,\"network\":")?;
