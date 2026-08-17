@@ -696,7 +696,12 @@ static int ckpt_restore_commit_create(void) {
         return -1;
     }
     g_restore_commit->processes = g_nrprocs;
-    if (clock_gettime(CLOCK_MONOTONIC, &g_restore_commit->deadline) != 0) return -1;
+    if (clock_gettime(CLOCK_MONOTONIC, &g_restore_commit->deadline) != 0) {
+        (void)munmap(g_restore_commit, g_restore_commit_size);
+        g_restore_commit = NULL;
+        g_restore_commit_size = 0;
+        return -1;
+    }
     g_restore_commit->deadline.tv_sec += 10;
     for (int index = 0; index < g_nrprocs; ++index) {
         struct ckpt_proc *process = &g_rprocs[index];
@@ -814,10 +819,22 @@ static void ckpt_restore_commit_abort(void) {
         pid_t process = atomic_load_explicit(&g_restore_commit->process[index].host_pid, memory_order_acquire);
         if (process > 0 && process != getpid()) (void)kill(process, SIGKILL);
     }
+    struct timespec deadline;
+    if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0) return;
+    deadline.tv_sec += 2;
     for (;;) {
         int status;
-        pid_t child = waitpid(-1, &status, 0);
+        pid_t child = waitpid(-1, &status, WNOHANG);
         if (child > 0) continue;
+        if (child == 0) {
+            struct timespec now;
+            if (clock_gettime(CLOCK_MONOTONIC, &now) != 0 || now.tv_sec > deadline.tv_sec ||
+                (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec))
+                break;
+            struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+            (void)nanosleep(&pause, NULL);
+            continue;
+        }
         if (child < 0 && errno == EINTR) continue;
         break;
     }
