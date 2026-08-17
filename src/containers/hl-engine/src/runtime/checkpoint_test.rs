@@ -814,6 +814,58 @@ fn stop_interrupts_silent_checkpoint_peer() {
 }
 
 #[test]
+fn last_checkpoint_channel_exit_fails_an_active_capture_immediately() {
+    let server = Arc::new(Server::new(Arc::new(Store), Arc::new(Store)));
+    let (channel, peer) = UnixStream::pair().unwrap();
+    let worker = Arc::clone(&server);
+    let serving = std::thread::spawn(move || worker.serve(channel, 1));
+    while server.connections.load(Ordering::Acquire) == 0 {
+        std::thread::yield_now();
+    }
+    let capture = server
+        .begin_capture(1, std::time::Instant::now() + Duration::from_secs(5))
+        .unwrap();
+
+    drop(peer);
+
+    assert_eq!(
+        server
+            .wait_capture(capture, std::time::Instant::now() + Duration::from_secs(1))
+            .unwrap(),
+        Some(Err(CaptureFailure::Failed))
+    );
+    serving.join().unwrap();
+    assert_eq!(server.connections.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn an_accepted_unscheduled_channel_prevents_a_false_last_channel_failure() {
+    let server = Arc::new(Server::new(Arc::new(Store), Arc::new(Store)));
+    let active = super::broker::AcceptedChannel::new(Arc::clone(&server));
+    let accepted_not_scheduled = super::broker::AcceptedChannel::new(Arc::clone(&server));
+    let capture = server
+        .begin_capture(1, std::time::Instant::now() + Duration::from_secs(5))
+        .unwrap();
+
+    drop(active);
+
+    assert_eq!(server.connections.load(Ordering::Acquire), 1);
+    assert_eq!(
+        server.wait_capture(capture, std::time::Instant::now()).unwrap(),
+        None,
+        "an accepted channel must count before its worker gets scheduled"
+    );
+
+    drop(accepted_not_scheduled);
+    assert_eq!(
+        server
+            .wait_capture(capture, std::time::Instant::now() + Duration::from_secs(1))
+            .unwrap(),
+        Some(Err(CaptureFailure::Failed))
+    );
+}
+
+#[test]
 fn peer_accepted_after_stop_cannot_escape_shutdown() {
     let server = Arc::new(Server::new(Arc::new(Store), Arc::new(Store)));
     let (channel, _silent) = UnixStream::pair().unwrap();

@@ -76,6 +76,9 @@ impl Service {
         let networks = self.launch_networks(&container).await?;
         let journal = JournalId::exec(exec.id.clone());
         let io = self.exec_io(&exec).await;
+        if exec.checkpoint.is_some() {
+            io.rearm_input().await;
+        }
         let input = io.take_input().await?;
         let process_spec = exec.spec.process.clone();
         let requested_mounts = container.spec.mounts.clone();
@@ -123,9 +126,11 @@ impl Service {
                 return Err(error);
             }
         };
+        let process_id = process.id();
+        let started_at_ms = now_ms();
         exec.state = ExecState::Running {
-            process_id: process.id(),
-            started_at_ms: now_ms(),
+            process_id,
+            started_at_ms,
         };
         exec.checkpoint = None;
         if let Err(error) = self.execs.replace(&exec).await {
@@ -141,12 +146,12 @@ impl Service {
         let exec_id = exec.id;
         tokio::spawn(async move {
             let result = Arc::clone(&service).own(process, journal).await;
-            service.finish_exec(exec_id, result).await;
+            service.finish_exec(exec_id, process_id, started_at_ms, result).await;
         });
         Ok(session)
     }
 
-    async fn finish_exec(&self, id: ExecId, result: Result<ExitStatus>) {
+    async fn finish_exec(&self, id: ExecId, owner: u64, generation: u64, result: Result<ExitStatus>) {
         let _guard = self.operations.lock().await;
         let (result, mut failure) = match result {
             Ok(result) => (result, None),
@@ -164,8 +169,11 @@ impl Service {
                 return;
             }
             let process_id = match exec.state {
-                ExecState::Running { process_id, .. } => Some(process_id),
-                ExecState::Created | ExecState::Exited { .. } => None,
+                ExecState::Running {
+                    process_id,
+                    started_at_ms,
+                } if process_id == owner && started_at_ms == generation => Some(process_id),
+                ExecState::Running { .. } | ExecState::Created | ExecState::Exited { .. } => return,
             };
             exec.state = ExecState::Exited {
                 result,
@@ -197,32 +205,50 @@ impl Service {
         }
     }
 
-    pub(crate) async fn checkpoint_execs(&self, timeout: std::time::Duration) -> Result<()> {
+    pub(crate) async fn checkpoint_execs(self: &Arc<Self>, timeout: std::time::Duration) -> Result<()> {
         let ids = self.checkpointable_execs().await?;
+        let mut captured = Vec::new();
         for id in ids {
-            let _guard = self.operations.lock().await;
-            let mut exec = self.inspect_exec(&id).await?;
-            let process = self
-                .exec_live
-                .lock()
-                .await
-                .get(&id)
-                .cloned()
-                .ok_or_else(|| Error::Runtime(format!("running exec {id} has no runtime process")))?;
-            process.checkpoint(timeout).await?;
-            let checkpoint = crate::Checkpoint {
-                namespace: format!("exec-{id}"),
-                created_at_ms: now_ms(),
+            let result = async {
+                let _guard = self.operations.lock().await;
+                let mut exec = self.inspect_exec(&id).await?;
+                let process = self
+                    .exec_live
+                    .lock()
+                    .await
+                    .get(&id)
+                    .cloned()
+                    .ok_or_else(|| Error::Runtime(format!("running exec {id} has no runtime process")))?;
+                process.checkpoint(timeout).await?;
+                let checkpoint = crate::Checkpoint {
+                    namespace: format!("exec-{id}"),
+                    created_at_ms: now_ms(),
+                };
+                exec.state = ExecState::Created;
+                exec.checkpoint = Some(checkpoint);
+                self.execs.replace(&exec).await?;
+                self.exec_live.lock().await.remove(&id);
+                if let Some(waiters) = self.exec_waiters.lock().await.get(&id) {
+                    waiters.notify_waiters();
+                }
+                Ok(())
             };
-            exec.state = ExecState::Created;
-            exec.checkpoint = Some(checkpoint);
-            self.execs.replace(&exec).await?;
-            self.exec_live.lock().await.remove(&id);
-            if let Some(io) = self.io.lock().await.remove(&JournalId::exec(id.clone())) {
-                io.finish();
+            if let Err(mut failure) = result.await {
+                for captured_id in captured {
+                    if let Err(rollback) = self.start_exec(&captured_id, None).await {
+                        failure = Error::Runtime(format!(
+                            "{failure}; checkpoint rollback failed for terminal {captured_id}: {rollback}"
+                        ));
+                    }
+                }
+                return Err(failure);
             }
-            if let Some(waiters) = self.exec_waiters.lock().await.get(&id) {
-                waiters.notify_waiters();
+            captured.push(id);
+        }
+        let mut ios = self.io.lock().await;
+        for id in captured {
+            if let Some(io) = ios.remove(&JournalId::exec(id)) {
+                io.finish();
             }
         }
         Ok(())

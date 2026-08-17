@@ -138,6 +138,16 @@ impl Io {
             .ok_or_else(|| Error::Runtime("container stdin is already owned".into()))
     }
 
+    pub(crate) async fn rearm_input(&self) {
+        if !self.stdin {
+            return;
+        }
+        let (input, receiver) = tokio::sync::mpsc::channel(64);
+        *self.input.lock().await = Some(input);
+        *self.receiver.lock().await = Some(receiver);
+        self.done.store(false, std::sync::atomic::Ordering::Release);
+    }
+
     async fn write(&self, bytes: Vec<u8>) -> Result<()> {
         let input = self
             .input

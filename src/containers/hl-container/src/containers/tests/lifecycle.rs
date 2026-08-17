@@ -575,6 +575,96 @@ async fn checkpoint_all_restores_earlier_captures_after_a_later_failure() {
 }
 
 #[tokio::test]
+async fn checkpoint_execs_restores_an_earlier_terminal_after_a_later_failure() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_millis(200);
+    runtime.restore_delay = Some(Duration::from_secs(2));
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("workspace")).await.unwrap();
+    containers.start("workspace").await.unwrap();
+    let first = containers
+        .executions()
+        .create(
+            "workspace",
+            ExecSpec::new(Process::new("/bin/sh").console(Console::default().terminal(Size::new(24, 80).unwrap())))
+                .streams(Streams {
+                    stdin: true,
+                    stdout: true,
+                    stderr: true,
+                }),
+        )
+        .await
+        .unwrap();
+    let first_session = containers.executions().start(&first.id).await.unwrap();
+    let second = containers
+        .executions()
+        .create(
+            "workspace",
+            ExecSpec::new(Process::new("/bin/sh").console(Console::default().terminal(Size::new(24, 80).unwrap())))
+                .streams(Streams {
+                    stdin: true,
+                    stdout: true,
+                    stderr: true,
+                }),
+        )
+        .await
+        .unwrap();
+    let second_session = containers.executions().start(&second.id).await.unwrap();
+
+    // Stored executions are visited by id. Runtime process ids are allocated in launch order:
+    // workspace=40, first=41, second=42. Fail the later stored terminal so the earlier one is
+    // destructively captured before the injected refusal.
+    let failing_runtime_id = if first.id.to_string() < second.id.to_string() {
+        42
+    } else {
+        41
+    };
+    runtime.fail_checkpoint.store(failing_runtime_id, Ordering::SeqCst);
+
+    let error = containers
+        .executions()
+        .checkpoint_all(Duration::from_secs(1))
+        .await
+        .unwrap_err();
+
+    assert!(error.to_string().contains("injected checkpoint failure"));
+    for execution in [&first, &second] {
+        let restored = containers.executions().inspect(&execution.id).await.unwrap();
+        assert!(matches!(restored.state, ExecState::Running { .. }));
+        assert_eq!(restored.checkpoint, None);
+    }
+    let surviving_session = if first.id.to_string() < second.id.to_string() {
+        &first_session
+    } else {
+        &second_session
+    };
+    surviving_session.write(b"after rollback\n".to_vec()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        runtime
+            .inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(process, bytes)| *process >= 43 && bytes == b"after rollback\n"),
+        "the pre-checkpoint session did not reach the restored process"
+    );
+    let surviving = if first.id.to_string() < second.id.to_string() {
+        &first.id
+    } else {
+        &second.id
+    };
+    assert!(
+        matches!(
+            containers.executions().inspect(surviving).await.unwrap().state,
+            ExecState::Running { process_id, .. } if process_id >= 43
+        ),
+        "the captured process's stale completion clobbered its restored replacement"
+    );
+}
+
+#[tokio::test]
 async fn failed_launch_does_not_publish_running_state() {
     let runtime = Arc::new(FakeRuntime::new(ExitStatus::Code(0)));
     runtime.fail.store(true, Ordering::SeqCst);

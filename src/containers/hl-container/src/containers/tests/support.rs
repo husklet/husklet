@@ -59,6 +59,7 @@ pub(super) const RESOLVE_B: &str = "bbbbbbbb-0000-4000-8000-000000000002";
 pub(super) const RESOLVE_AMBIGUOUS: &str = "aaaaaaaa-1111-4000-8000-000000000003";
 
 pub(super) type RecordedMounts = Arc<std::sync::Mutex<Vec<Vec<(std::path::PathBuf, std::path::PathBuf, Access)>>>>;
+pub(super) type RecordedInputs = Arc<std::sync::Mutex<Vec<(u64, Vec<u8>)>>>;
 
 type CheckpointLaunch = Option<bool>;
 
@@ -67,10 +68,11 @@ pub(super) struct FakeRuntime {
     pub(super) fail: AtomicBool,
     pub(super) launch_failures: Arc<std::sync::Mutex<std::collections::BTreeMap<String, String>>>,
     pub(super) fail_wait: AtomicBool,
-    pub(super) fail_checkpoint: AtomicU64,
+    pub(super) fail_checkpoint: Arc<AtomicU64>,
     pub(super) hold_logs: AtomicBool,
     pub(super) checkpointable: AtomicBool,
     pub(super) delay: Duration,
+    pub(super) restore_delay: Option<Duration>,
     pub(super) result: ExitStatus,
     pub(super) signals: Arc<std::sync::Mutex<Vec<Signal>>>,
     pub(super) suspensions: Arc<std::sync::Mutex<Vec<bool>>>,
@@ -83,6 +85,7 @@ pub(super) struct FakeRuntime {
     pub(super) terminals: Arc<std::sync::Mutex<Vec<Option<crate::Size>>>>,
     pub(super) checkpoints: Arc<std::sync::Mutex<Vec<CheckpointLaunch>>>,
     pub(super) domains: Arc<std::sync::Mutex<Vec<(hl_engine::Domain, bool)>>>,
+    pub(super) inputs: RecordedInputs,
     pub(super) domain_reads: Arc<AtomicU64>,
     pub(super) resizes: Arc<std::sync::Mutex<Vec<crate::Size>>>,
     pub(super) health: std::sync::Mutex<Option<(Duration, std::collections::VecDeque<ExitStatus>)>>,
@@ -95,10 +98,11 @@ impl FakeRuntime {
             fail: AtomicBool::new(false),
             launch_failures: Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new())),
             fail_wait: AtomicBool::new(false),
-            fail_checkpoint: AtomicU64::new(0),
+            fail_checkpoint: Arc::new(AtomicU64::new(0)),
             hold_logs: AtomicBool::new(false),
             checkpointable: AtomicBool::new(true),
             delay: Duration::from_millis(10),
+            restore_delay: None,
             result,
             signals: Arc::new(std::sync::Mutex::new(Vec::new())),
             suspensions: Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -111,6 +115,7 @@ impl FakeRuntime {
             terminals: Arc::new(std::sync::Mutex::new(Vec::new())),
             checkpoints: Arc::new(std::sync::Mutex::new(Vec::new())),
             domains: Arc::new(std::sync::Mutex::new(Vec::new())),
+            inputs: Arc::new(std::sync::Mutex::new(Vec::new())),
             domain_reads: Arc::new(AtomicU64::new(0)),
             resizes: Arc::new(std::sync::Mutex::new(Vec::new())),
             health: std::sync::Mutex::new(None),
@@ -129,7 +134,7 @@ struct FakeProcess {
     logs: std::sync::Mutex<Option<crate::service::LogReceiver>>,
     _log_owner: Option<crate::service::LogSender>,
     checkpoint_armed: bool,
-    checkpoint_failure: bool,
+    checkpoint_failure: Arc<AtomicU64>,
     domain: hl_engine::Domain,
     domain_reads: Arc<AtomicU64>,
 }
@@ -166,7 +171,7 @@ impl Running for FakeProcess {
         Ok(())
     }
     async fn checkpoint(&self, _timeout: Duration) -> Result<()> {
-        if self.checkpoint_failure {
+        if self.checkpoint_failure.load(Ordering::SeqCst) == self.id {
             return Err(Error::Runtime("injected checkpoint failure".into()));
         }
         if self.checkpoint_armed {
@@ -188,6 +193,7 @@ impl Running for FakeProcess {
 impl Runtime for FakeRuntime {
     async fn start(&self, launch: ProcessConfig) -> Result<Arc<dyn Running>> {
         assert!(launch.rootfs.is_absolute());
+        let restoring = launch.checkpoint.as_ref().is_some_and(|checkpoint| checkpoint.restore);
         let domain = launch.domain.unwrap_or(
             hl_engine::Domain::new().map_err(|error| Error::Runtime(format!("domain allocation failed: {error}")))?,
         );
@@ -242,9 +248,24 @@ impl Runtime for FakeRuntime {
             let (delay, results) = health.as_mut().expect("health runtime is configured");
             (*delay, results.pop_front().unwrap_or(self.result))
         } else {
-            (self.delay, self.result)
+            (
+                if restoring {
+                    self.restore_delay.unwrap_or(self.delay)
+                } else {
+                    self.delay
+                },
+                self.result,
+            )
         };
         let id = self.next.fetch_add(1, Ordering::SeqCst);
+        if let Some(mut input) = launch.input {
+            let received = Arc::clone(&self.inputs);
+            tokio::spawn(async move {
+                while let Some(bytes) = input.recv().await {
+                    received.lock().unwrap().push((id, bytes));
+                }
+            });
+        }
         Ok(Arc::new(FakeProcess {
             id,
             delay,
@@ -256,7 +277,7 @@ impl Runtime for FakeRuntime {
             logs: std::sync::Mutex::new(Some(receiver)),
             _log_owner: log_owner,
             checkpoint_armed: launch.checkpoint.is_some() && self.checkpointable.load(Ordering::SeqCst),
-            checkpoint_failure: self.fail_checkpoint.load(Ordering::SeqCst) == id,
+            checkpoint_failure: Arc::clone(&self.fail_checkpoint),
             domain,
             domain_reads: Arc::clone(&self.domain_reads),
         }))

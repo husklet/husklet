@@ -333,7 +333,7 @@ impl CheckpointControl {
                 .wait_capture(capture, next_interrupt)
                 .map_err(|_| EngineError::LaunchFailed)?;
             if let Some(result) = result {
-                return result.map_err(Self::capture_failure);
+                return result.map_err(|failure| Self::capture_failure_with_exit(engine, failure));
             }
             if Instant::now() >= next_interrupt {
                 let _ = engine.request(REQUEST_CHECKPOINT, signal);
@@ -362,6 +362,23 @@ impl CheckpointControl {
                 EngineError::LaunchFailed
             }
         }
+    }
+
+    fn capture_failure_with_exit(
+        engine: &hl_native::Engine,
+        failure: super::checkpoint::CaptureFailure,
+    ) -> EngineError {
+        // A channel EOF is observed just before the native child-reaper publishes its status. Give that
+        // publication a tightly bounded opportunity to win so a host SIGSEGV is reported as Signal(11)
+        // instead of the generic capture failure that triggered this diagnostic path.
+        for _ in 0..10 {
+            let native = engine.exit();
+            if native.kind != 0 {
+                return EngineError::CheckpointExited(ProductionMachine::exit(engine));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        Self::capture_failure(failure)
     }
 }
 

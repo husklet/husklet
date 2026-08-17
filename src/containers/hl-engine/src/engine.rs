@@ -105,6 +105,8 @@ pub enum EngineError {
     NativeRunFailed(i32),
     WorkspaceFailed,
     WaitFailed,
+    /// The native process reached a terminal state while a checkpoint transaction was still active.
+    CheckpointExited(EngineExit),
     StopFailed,
     NativeStopFailed(i32),
     Synchronization,

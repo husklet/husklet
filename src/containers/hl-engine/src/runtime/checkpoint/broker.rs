@@ -25,9 +25,15 @@ impl Server {
                     let Some((channel, host_pid)) = broker.accept(std::time::Duration::from_millis(50)) else {
                         continue;
                     };
-                    server.connections.fetch_add(1, Ordering::Release);
+                    let accepted = AcceptedChannel::new(Arc::clone(&server));
                     let worker = Arc::clone(&server);
-                    workers.push(std::thread::spawn(move || worker.serve(channel, host_pid)));
+                    match std::thread::Builder::new()
+                        .name("hl-checkpoint-channel".into())
+                        .spawn(move || worker.serve_accepted(channel, host_pid, accepted))
+                    {
+                        Ok(worker) => workers.push(worker),
+                        Err(error) => server.fail(format!("checkpoint channel worker construction failed: {error}")),
+                    }
                 }
                 for worker in workers {
                     let _ = worker.join();
@@ -46,9 +52,21 @@ impl Server {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn serve(self: &Arc<Self>, channel: UnixStream, id: u64) {
+        let accepted = AcceptedChannel::new(Arc::clone(self));
+        self.serve_accepted(channel, id, accepted);
+    }
+
+    fn serve_accepted(self: &Arc<Self>, channel: UnixStream, id: u64, accepted: AcceptedChannel) {
         let channel = Arc::new(channel);
         let descriptor = channel.as_raw_fd();
+        let _connection = Connection {
+            server: self,
+            descriptor,
+            id,
+            _accepted: accepted,
+        };
         let Ok(mut channels) = self.channels.lock() else {
             return;
         };
@@ -61,11 +79,6 @@ impl Server {
         {
             connections.insert(id, recovery);
         }
-        let _connection = Connection {
-            server: self,
-            descriptor,
-            id,
-        };
         if !self.running.load(Ordering::Acquire) {
             return;
         }
@@ -109,6 +122,7 @@ struct Connection<'a> {
     server: &'a Server,
     descriptor: i32,
     id: u64,
+    _accepted: AcceptedChannel,
 }
 
 impl Drop for Connection<'_> {
@@ -118,6 +132,28 @@ impl Drop for Connection<'_> {
         }
         if let Ok(mut connections) = self.server.recovery_connections.lock() {
             connections.remove(&self.id);
+        }
+    }
+}
+
+pub(super) struct AcceptedChannel {
+    server: Arc<Server>,
+}
+
+impl AcceptedChannel {
+    pub(super) fn new(server: Arc<Server>) -> Self {
+        server.connections.fetch_add(1, Ordering::AcqRel);
+        Self { server }
+    }
+}
+
+impl Drop for AcceptedChannel {
+    fn drop(&mut self) {
+        let previous = self.server.connections.fetch_sub(1, Ordering::AcqRel);
+        debug_assert_ne!(previous, 0, "checkpoint connection count underflow");
+        if previous == 1 && self.server.running.load(Ordering::Acquire) {
+            self.server
+                .fail("every native checkpoint channel closed before capture completion".into());
         }
     }
 }
