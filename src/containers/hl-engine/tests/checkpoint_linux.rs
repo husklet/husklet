@@ -620,3 +620,55 @@ fn signalfd_readiness_and_signal64_defer_survive_two_generations_on_both_isas() 
         assert!(observed.contains("DEFER-RESTORED seen=1 nested=1"), "{observed}");
     }
 }
+
+#[test]
+#[ignore = "50-round checkpoint activation stress"]
+fn signalfd_first_capture_activation_stress_on_both_isas() {
+    let fixtures = tempfile::tempdir().unwrap();
+    for round in 0..50 {
+        for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
+            let executable = signalfd_fixture(isa, fixtures.path());
+            let temporary = tempfile::tempdir().unwrap();
+            let release = temporary.path().join("release");
+            let final_release = temporary.path().join("final-release");
+            let output = temporary.path().join("release.output");
+            let store = Arc::new(Store::default());
+            let capture = Engine::with_checkpoint(
+                isa,
+                plan(&executable, &release, &final_release, &["HL_CHECKPOINT"]),
+                StandardStreams::default(),
+                store.clone(),
+                store,
+            )
+            .unwrap();
+            capture.start().unwrap();
+            let ready = Instant::now() + Duration::from_secs(10);
+            while Instant::now() < ready
+                && !std::fs::read_to_string(&output)
+                    .unwrap_or_default()
+                    .contains("READY targeted_wrong_read=1 targeted_wrong_ready=1")
+            {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let before = std::fs::read_to_string(&output).unwrap_or_default();
+            assert!(
+                before.contains("READY targeted_wrong_read=1 targeted_wrong_ready=1"),
+                "round {round} {isa:?} did not reach READY: {before}"
+            );
+            capture
+                .capture_checkpoint_until(checkpoint_deadline())
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "round {round} {isa:?} first checkpoint failed: {error:?}: {}",
+                        std::fs::read_to_string(&output).unwrap_or_default()
+                    )
+                });
+            let result = capture.wait();
+            assert!(
+                matches!(result, Ok(result) if result.guest_status == 0),
+                "round {round} {isa:?} capture exit failed: {result:?}: {}",
+                std::fs::read_to_string(&output).unwrap_or_default()
+            );
+        }
+    }
+}

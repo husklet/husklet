@@ -144,7 +144,16 @@ impl Server {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn begin_capture(&self, generation: u32, deadline: std::time::Instant) -> Result<u64, CaptureFailure> {
+        self.begin_capture_after_admission(deadline, || generation)
+    }
+
+    pub(crate) fn begin_capture_after_admission(
+        &self,
+        deadline: std::time::Instant,
+        activate: impl FnOnce() -> u32,
+    ) -> Result<u64, CaptureFailure> {
         if std::time::Instant::now() >= deadline {
             return Err(CaptureFailure::Deadline);
         }
@@ -155,11 +164,12 @@ impl Server {
                 _ => CaptureFailure::Busy,
             });
         }
-        let id = u64::from(generation);
+        self.begin_transaction(deadline)?;
+        let id = u64::from(activate());
         if id == 0 {
+            let _ = self.discard_transaction(deadline);
             return Err(CaptureFailure::Poisoned);
         }
-        self.begin_transaction(deadline)?;
         self.committed.store(false, Ordering::Release);
         capture.phase = CapturePhase::Active { id, deadline };
         capture.mutations = 0;
@@ -167,7 +177,16 @@ impl Server {
         Ok(id)
     }
 
+    #[cfg(test)]
     pub(crate) fn begin_recovery(&self, generation: u32, deadline: std::time::Instant) -> Result<u64, CaptureFailure> {
+        self.begin_recovery_after_admission(deadline, || generation)
+    }
+
+    pub(crate) fn begin_recovery_after_admission(
+        &self,
+        deadline: std::time::Instant,
+        activate: impl FnOnce() -> u32,
+    ) -> Result<u64, CaptureFailure> {
         if std::time::Instant::now() >= deadline {
             return Err(CaptureFailure::Deadline);
         }
@@ -178,11 +197,12 @@ impl Server {
                 _ => CaptureFailure::Busy,
             });
         }
-        let id = u64::from(generation);
+        self.begin_transaction(deadline)?;
+        let id = u64::from(activate());
         if id == 0 {
+            let _ = self.discard_transaction(deadline);
             return Err(CaptureFailure::Poisoned);
         }
-        self.begin_transaction(deadline)?;
         capture.phase = CapturePhase::Recovery { id, deadline };
         capture.mutations = 0;
         capture.recovery_report_published = false;

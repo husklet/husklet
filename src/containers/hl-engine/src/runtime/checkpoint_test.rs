@@ -396,7 +396,18 @@ fn shared_sink_refuses_second_server_without_erasing_first_staging() {
     let transaction = first.transaction_token().unwrap();
     store.put_until(transaction, "first", b"owned", deadline).unwrap();
 
-    assert_eq!(second.begin_capture(2, deadline), Err(CaptureFailure::Busy));
+    let activated = std::cell::Cell::new(false);
+    assert_eq!(
+        second.begin_capture_after_admission(deadline, || {
+            activated.set(true);
+            2
+        }),
+        Err(CaptureFailure::Busy)
+    );
+    assert!(
+        !activated.get(),
+        "a rejected capture must not publish its trigger generation"
+    );
     assert_eq!(store.snapshot().1, [("first".into(), b"owned".to_vec())]);
 
     first.discard_transaction(deadline).unwrap();
@@ -707,18 +718,28 @@ fn recovery_and_capture_scopes_are_mutually_exclusive() {
     let recovery = server
         .begin_recovery(3, std::time::Instant::now() + Duration::from_secs(1))
         .unwrap();
+    let capture_activated = std::cell::Cell::new(false);
     assert_eq!(
-        server.begin_capture(4, std::time::Instant::now() + Duration::from_secs(1)),
+        server.begin_capture_after_admission(std::time::Instant::now() + Duration::from_secs(1), || {
+            capture_activated.set(true);
+            4
+        }),
         Err(CaptureFailure::Busy)
     );
+    assert!(!capture_activated.get());
     server.abort_recovery(recovery).unwrap();
     server
         .begin_capture(4, std::time::Instant::now() + Duration::from_secs(1))
         .unwrap();
+    let recovery_activated = std::cell::Cell::new(false);
     assert_eq!(
-        server.begin_recovery(5, std::time::Instant::now() + Duration::from_secs(1)),
+        server.begin_recovery_after_admission(std::time::Instant::now() + Duration::from_secs(1), || {
+            recovery_activated.set(true);
+            5
+        }),
         Err(CaptureFailure::Busy)
     );
+    assert!(!recovery_activated.get());
 }
 
 #[test]

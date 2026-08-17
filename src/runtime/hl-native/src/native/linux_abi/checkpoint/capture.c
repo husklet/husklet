@@ -936,8 +936,12 @@ static void ckpt_poll(struct cpu *c) {
     if (c->tid != 0) {
         /* A process-directed host kick may wake any executor. Fan it out from
          * this safe dispatcher context so the leader always consumes the new
-         * generation and blocked peers are released as well. */
-        (void)hl_ckpt_interrupt_executors();
+         * generation and blocked peers are released as well. Only the first
+         * peer to observe a generation may fan it out: recursively signalling
+         * every executor on every peer poll creates a self-sustaining signal
+         * storm that can starve the leader before it reaches this safepoint. */
+        if (atomic_exchange_explicit(&g_ckpt_fanout_gen, g, memory_order_acq_rel) != g)
+            (void)hl_ckpt_interrupt_executors();
         return;
     }
     g_ckpt_seen_gen = g;

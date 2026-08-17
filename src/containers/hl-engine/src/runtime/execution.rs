@@ -311,10 +311,9 @@ impl CheckpointControl {
         if Instant::now() >= deadline {
             return Err(EngineError::WaitFailed);
         }
-        let generation = self.transport.bump();
         let capture = self
             .server
-            .begin_capture(generation, deadline)
+            .begin_capture_after_admission(deadline, || self.transport.bump())
             .map_err(Self::capture_failure)?;
         let signal = hl_native::CheckpointTransport::interrupt_signal(match isa {
             crate::activation::GuestIsa::Aarch64 => 1,
@@ -343,10 +342,9 @@ impl CheckpointControl {
     }
 
     fn begin_recovery(&self, deadline: std::time::Instant) -> Result<RecoveryAdmission, EngineError> {
-        let generation = self.transport.bump();
         let id = self
             .server
-            .begin_recovery(generation, deadline)
+            .begin_recovery_after_admission(deadline, || self.transport.bump())
             .map_err(Self::capture_failure)?;
         Ok(RecoveryAdmission {
             server: Arc::clone(&self.server),

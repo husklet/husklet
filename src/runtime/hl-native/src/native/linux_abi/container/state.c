@@ -250,6 +250,7 @@ static hl_linux_snapshot g_ckpt_snapshot;
 static volatile uint32_t *g_ckpt_trigger;
 static uint32_t g_ckpt_seen_gen;
 static _Atomic int g_ckpt_barrier_active;
+static _Atomic uint32_t g_ckpt_fanout_gen;
 
 uint32_t ckpt_request_generation(void) {
     return g_ckpt_seen_gen;
