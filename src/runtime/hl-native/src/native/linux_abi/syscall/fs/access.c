@@ -528,6 +528,14 @@ static int open_synthetic_device(struct cpu *c, const char *path, int flags, int
             return 1;
         }
         int open_flags = host_flags;
+        /* `typed_open_flags` erases the Linux O_NOCTTY bit because it is not
+           meaningful for ordinary typed filesystem opens.  A synthesized
+           devpts slave is the exception: dropping it lets a session leader
+           accidentally acquire the guest-created slave as its controlling
+           terminal, and closing the master then kills the guest with SIGHUP.
+           Preserve the guest's terminal-open intent at this boundary. */
+        const int guest_no_controlling_terminal = 0x100;
+        if (flags & guest_no_controlling_terminal) open_flags |= O_NOCTTY;
         if (flags & 0x800) open_flags |= O_NONBLOCK;
         if (flags & 0x80000) open_flags |= O_CLOEXEC;
         int descriptor = nofile_gate(duplicate_anchor ? dup(anchor) : open(slave, open_flags, 0));
