@@ -222,6 +222,17 @@ async fn failed_exec_launches_are_process_local_and_retryable() -> Result<(), Er
             let mut sibling_session = executions.start(&sibling.id).await?;
             assert_sibling_progress(&mut sibling_session, "ready").await?;
 
+            let absent_executable = executions
+                .create(
+                    name,
+                    ExecSpec::new(Process::new("/tmp/does-not-exist").args(["echo", "ABSENT_EXECUTABLE"])),
+                )
+                .await?;
+            assert_started_exec_failed(&executions, &absent_executable.id, "absent executable").await?;
+            assert_sibling_and_workspace_live(&fixture.containers, name, &sibling.id).await?;
+            assert_only_sibling_active(&executions, &sibling.id).await?;
+            assert_sibling_progress(&mut sibling_session, "after-absent-executable").await?;
+
             check_exec(
                 &fixture.containers,
                 name,
@@ -242,8 +253,9 @@ async fn failed_exec_launches_are_process_local_and_retryable() -> Result<(), Er
                     ExecSpec::new(Process::new(missing_program).args(["echo", "EXECUTABLE_RETRIED"])),
                 )
                 .await?;
-            assert_started_exec_failed(&executions, &executable.id, "missing executable").await?;
+            assert_started_exec_failed(&executions, &executable.id, "non-executable file").await?;
             assert_sibling_and_workspace_live(&fixture.containers, name, &sibling.id).await?;
+            assert_only_sibling_active(&executions, &sibling.id).await?;
             assert_sibling_progress(&mut sibling_session, "after-executable-failure").await?;
             check_exec(
                 &fixture.containers,
@@ -277,6 +289,7 @@ async fn failed_exec_launches_are_process_local_and_retryable() -> Result<(), Er
                     .await?;
                 assert_launch_failed(&executions, &volume.id, "missing volume").await?;
                 assert_sibling_and_workspace_live(&fixture.containers, name, &sibling.id).await?;
+                assert_only_sibling_active(&executions, &sibling.id).await?;
                 assert_sibling_progress(&mut sibling_session, "after-volume-failure").await?;
                 Ok::<_, Error>(volume)
             }
@@ -297,6 +310,7 @@ async fn failed_exec_launches_are_process_local_and_retryable() -> Result<(), Er
                     .await?;
                 assert_launch_failed(&executions, &volume.id, "malformed volume state").await?;
                 assert_sibling_and_workspace_live(&fixture.containers, name, &sibling.id).await?;
+                assert_only_sibling_active(&executions, &sibling.id).await?;
                 assert_sibling_progress(&mut sibling_session, "after-malformed-volume-failure").await?;
                 Ok::<_, Error>(volume)
             }
@@ -315,6 +329,7 @@ async fn failed_exec_launches_are_process_local_and_retryable() -> Result<(), Er
                     .await?;
                 assert_launch_failed(&executions, &network.id, "invalid network state").await?;
                 assert_sibling_and_workspace_live(&fixture.containers, name, &sibling.id).await?;
+                assert_only_sibling_active(&executions, &sibling.id).await?;
                 assert_sibling_progress(&mut sibling_session, "after-network-failure").await?;
                 Ok::<_, Error>(network)
             }
@@ -408,6 +423,23 @@ async fn assert_sibling_and_workspace_live(
     let workspace = containers.inspect(container).await?;
     if !matches!(workspace.state, ContainerState::Running { .. }) {
         return Err(format!("workspace stopped after an exec launch failed: {:?}", workspace.state).into());
+    }
+    Ok(())
+}
+
+async fn assert_only_sibling_active(
+    executions: &hl_container::Executions,
+    sibling: &hl_container::ExecId,
+) -> Result<(), Error> {
+    let active = executions
+        .list()
+        .await?
+        .into_iter()
+        .filter(|execution| execution.state.is_active())
+        .map(|execution| execution.id)
+        .collect::<Vec<_>>();
+    if active != [sibling.clone()] {
+        return Err(format!("failed launch left unexpected active executions: {active:?}").into());
     }
     Ok(())
 }
