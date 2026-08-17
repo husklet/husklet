@@ -690,6 +690,64 @@ async fn timed_out_publication_cleanup_quarantines_until_reap_then_allows_one_re
 }
 
 #[tokio::test]
+async fn panicked_quarantine_wait_is_waiter_visible_and_blocks_shutdown_success() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    runtime.restore_delay = Some(Duration::from_millis(75));
+    let runtime = Arc::new(runtime);
+    let storage = Arc::new(Memory::default());
+    let containers = test_containers(storage.clone(), runtime.clone()).await.unwrap();
+    containers.create(spec("poison-parent")).await.unwrap();
+    containers.start("poison-parent").await.unwrap();
+    let exec = containers
+        .executions()
+        .create("poison-parent", ExecSpec::new(Process::new("/bin/sh")))
+        .await
+        .unwrap();
+    containers.executions().start(&exec.id).await.unwrap();
+    containers
+        .executions()
+        .checkpoint_all(Duration::from_secs(1))
+        .await
+        .unwrap();
+    runtime.blocking_wait.store(true, Ordering::SeqCst);
+    runtime.panic_wait.store(true, Ordering::SeqCst);
+    let waiting = containers.executions();
+    let wait_id = exec.id.clone();
+    let waiter = tokio::spawn(async move { waiting.wait(&wait_id).await });
+    tokio::task::yield_now().await;
+    storage.fail_next_exec_replace();
+
+    let error = containers.executions().start(&exec.id).await.err().unwrap();
+    assert!(error.to_string().contains("reap timed out"), "{error}");
+    let waiter_error = tokio::time::timeout(Duration::from_secs(1), waiter)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert!(waiter_error.to_string().contains("reap task failed"), "{waiter_error}");
+    let shutdown_error = containers
+        .service
+        .await_exec_cleanups(Duration::from_millis(5))
+        .await
+        .unwrap_err();
+    assert!(
+        shutdown_error.to_string().contains("cleanup is poisoned"),
+        "{shutdown_error}"
+    );
+    assert!(
+        containers
+            .executions()
+            .start(&exec.id)
+            .await
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("quarantined")
+    );
+}
+
+#[tokio::test]
 async fn execution_wait_started_while_created_survives_start_and_returns_the_exit() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(23));
     runtime.delay = Duration::from_millis(30);

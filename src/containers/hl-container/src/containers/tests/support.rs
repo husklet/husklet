@@ -70,6 +70,7 @@ pub(super) struct FakeRuntime {
     pub(super) fail_wait: AtomicBool,
     pub(super) fail_signal: AtomicBool,
     pub(super) blocking_wait: AtomicBool,
+    pub(super) panic_wait: AtomicBool,
     pub(super) fail_checkpoint: Arc<AtomicU64>,
     pub(super) hold_logs: AtomicBool,
     pub(super) checkpointable: AtomicBool,
@@ -103,6 +104,7 @@ impl FakeRuntime {
             fail_wait: AtomicBool::new(false),
             fail_signal: AtomicBool::new(false),
             blocking_wait: AtomicBool::new(false),
+            panic_wait: AtomicBool::new(false),
             fail_checkpoint: Arc::new(AtomicU64::new(0)),
             hold_logs: AtomicBool::new(false),
             checkpointable: AtomicBool::new(true),
@@ -136,6 +138,7 @@ struct FakeProcess {
     fail_wait: bool,
     fail_signal: bool,
     blocking_wait: bool,
+    panic_wait: bool,
     signals: Arc<std::sync::Mutex<Vec<Signal>>>,
     waits: Arc<AtomicU64>,
     suspensions: Arc<std::sync::Mutex<Vec<bool>>>,
@@ -170,6 +173,7 @@ impl Running for FakeProcess {
         } else {
             tokio::time::sleep(self.delay).await;
         }
+        assert!(!self.panic_wait, "injected wait panic");
         if self.fail_wait {
             return Err(Error::Runtime("injected wait failure".into()));
         }
@@ -293,6 +297,7 @@ impl Runtime for FakeRuntime {
             fail_wait: self.fail_wait.load(Ordering::SeqCst),
             fail_signal: self.fail_signal.load(Ordering::SeqCst),
             blocking_wait: self.blocking_wait.load(Ordering::SeqCst),
+            panic_wait: self.panic_wait.load(Ordering::SeqCst),
             signals: Arc::clone(&self.signals),
             waits: Arc::clone(&self.waits),
             suspensions: Arc::clone(&self.suspensions),

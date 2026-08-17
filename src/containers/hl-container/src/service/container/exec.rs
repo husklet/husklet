@@ -250,11 +250,14 @@ impl Service {
                             }
                         }
                         Err(error) => {
-                            hl_log::hl_error!(
-                                hl_log::tag::CONTAINER,
-                                "quarantined exec reap task failed id={} error={error}",
-                                id
-                            );
+                            let failure = format!("quarantined exec reap task failed: {error}");
+                            hl_log::hl_error!(hl_log::tag::CONTAINER, "{} id={}", failure, id);
+                            service.failures.lock().await.insert(journal.clone(), failure.clone());
+                            service.exec_cleanup_failures.lock().await.insert(id.clone(), failure);
+                            if let Some(waiters) = service.exec_waiters.lock().await.get(&id) {
+                                waiters.notify_waiters();
+                            }
+                            return;
                         }
                     }
                     service.exec_cleanups.lock().await.remove(&id);
@@ -272,7 +275,8 @@ impl Service {
         if !reaped {
             self.exec_live.lock().await.insert(id.clone(), Arc::clone(&process));
             let failure = format!("unpublished exec cleanup is quarantined: {}", cleanup.join("; "));
-            self.failures.lock().await.insert(journal.clone(), failure);
+            self.failures.lock().await.insert(journal.clone(), failure.clone());
+            self.exec_cleanup_failures.lock().await.insert(id.clone(), failure);
             if let Some(waiters) = self.exec_waiters.lock().await.get(&id) {
                 waiters.notify_waiters();
             }
@@ -574,6 +578,9 @@ impl Service {
     }
 
     pub(crate) async fn await_exec_cleanups(&self, timeout: std::time::Duration) -> Result<()> {
+        if let Some((id, error)) = self.exec_cleanup_failures.lock().await.iter().next() {
+            return Err(Error::Runtime(format!("exec {id} cleanup is poisoned: {error}")));
+        }
         self.exec_cleanups.lock().await.retain(|_, task| !task.is_finished());
         if self.exec_cleanups.lock().await.is_empty() {
             return Ok(());
