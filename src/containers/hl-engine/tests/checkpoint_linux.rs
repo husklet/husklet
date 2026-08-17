@@ -1312,7 +1312,7 @@ fn identities_created_after_restore_survive_recapture_on_both_isas() {
         )
         .unwrap();
         recapture.start().unwrap();
-        recapture_port.input(b"x");
+        recapture_port.input(b"x\n");
         recapture_port.wait_output(b"DYNAMIC-CHILDREN");
         recapture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
         assert_eq!(
@@ -1332,7 +1332,7 @@ fn identities_created_after_restore_survive_recapture_on_both_isas() {
         )
         .unwrap();
         restore.start().unwrap();
-        restore_port.input(b"x");
+        restore_port.input(b"x\n");
         let restored = restore.wait().unwrap_or_else(|error| {
             panic!(
                 "{isa:?} dynamic identity restore failed: {error:?}\n{}",
