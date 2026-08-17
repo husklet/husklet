@@ -150,6 +150,42 @@ fn continuation_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     output
 }
 
+fn timeout_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    let (compiler, name) = match isa {
+        GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-timeout-aarch64"),
+        GuestIsa::X86_64 => ("x86_64-linux-gnu-gcc", "checkpoint-timeout-x86_64"),
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/timeout.c");
+    let output = directory.join(name);
+    let status = std::process::Command::new(compiler)
+        .args(["-static", "-O2", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
+    assert!(status.success(), "{compiler} failed with {status}");
+    output
+}
+
+fn timeout_plan(executable: &Path, mode: &str, ready: &Path, result: &Path, restore: bool) -> RuntimePlan {
+    let mut options = Options::default();
+    options.set(if restore { "HL_RESTORE" } else { "HL_CHECKPOINT" }, "1", true).unwrap();
+    RuntimePlan {
+        rootfs: None,
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: [
+            executable.as_os_str().as_encoded_bytes().to_vec(),
+            mode.as_bytes().to_vec(),
+            ready.as_os_str().as_encoded_bytes().to_vec(),
+            result.as_os_str().as_encoded_bytes().to_vec(),
+        ]
+        .into(),
+        environment: Vec::new(),
+        result_path: None,
+        options,
+    }
+}
+
 fn continuation_plan(executable: &Path, ready: &Path, release: &Path, result: &Path, restore: bool) -> RuntimePlan {
     let mut options = Options::default();
     options.set(if restore { "HL_RESTORE" } else { "HL_CHECKPOINT" }, "1", true).unwrap();
@@ -662,6 +698,58 @@ fn checkpoint_continuation_does_not_duplicate_read_or_wait_on_both_isas() {
             "read=1 byte=X second=0 wait=1 exit=37 duplicate=-1 errno=10\n",
             "{isa:?} duplicated an interrupted read or wait"
         );
+    }
+}
+
+#[test]
+fn checkpoint_continuation_preserves_relative_timeout_on_both_isas() {
+    let fixtures = tempfile::tempdir().unwrap();
+    for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
+        let executable = timeout_fixture(isa, fixtures.path());
+        for mode in ["nanosleep", "clock_nanosleep", "ppoll", "pselect"] {
+            let temporary = tempfile::tempdir().unwrap();
+            let ready = temporary.path().join("ready");
+            let result = temporary.path().join("result");
+            let store = Arc::new(Store::default());
+            let capture = Engine::with_checkpoint(
+                isa,
+                timeout_plan(&executable, mode, &ready, &result, false),
+                StandardStreams::default(),
+                store.clone(),
+                store.clone(),
+            )
+            .unwrap();
+            capture.start().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !ready.exists() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            assert!(ready.exists(), "{isa:?} {mode} fixture did not enter timeout");
+            capture.capture_checkpoint_until(Instant::now() + Duration::from_secs(10)).unwrap();
+            assert_eq!(capture.wait().unwrap().guest_status, 0);
+
+            let restore = Engine::with_checkpoint(
+                isa,
+                timeout_plan(&executable, mode, &ready, &result, true),
+                StandardStreams::default(),
+                store.clone(),
+                store,
+            )
+            .unwrap();
+            let started = Instant::now();
+            restore.start().unwrap();
+            assert_eq!(restore.wait().unwrap().guest_status, 0, "{isa:?} {mode}");
+            let elapsed = started.elapsed();
+            assert!(
+                elapsed >= Duration::from_millis(900) && elapsed < Duration::from_millis(1850),
+                "{isa:?} {mode} restored for {elapsed:?}; expected saved remainder, not full timeout"
+            );
+            let output = std::fs::read_to_string(&result).unwrap();
+            assert!(output.starts_with("result=0 errno=0"), "{isa:?} {mode}: {output}");
+            if matches!(mode, "nanosleep" | "clock_nanosleep") {
+                assert!(output.contains("rem=73.000000041"), "{isa:?} {mode} mutated remainder: {output}");
+            }
+        }
     }
 }
 
