@@ -495,8 +495,13 @@
 #else
                     ppid = sp ? sp : container_pid();
 #endif
-                } else if (g_init_hostpid && ppid == g_init_hostpid) {
-                    ppid = 1; // peer is the container init -> guest pid 1
+                } else {
+                    int guest_peer;
+                    if (hl_linux_pidmap_guest_checked(&g_pidmap, (int)ppid, &guest_peer) != 0) {
+                        G_RET(c) = (uint64_t)(int64_t)-ESRCH;
+                        break;
+                    }
+                    ppid = (!g_pidmap.active && g_init_hostpid && ppid == g_init_hostpid) ? 1 : guest_peer;
                 }
                 uint32_t *u = (uint32_t *)a3;
                 u[0] = (uint32_t)ppid; // pid (resolved above)

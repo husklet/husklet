@@ -168,6 +168,7 @@ static int proc_pid_descendant(int host) {
 // Is guest pid `gp` a live member of this container? Fills *hostout with its host pid (gp==1 -> init).
 static int proc_pid_member(int gp, int *hostout) {
     int host = (gp == 1 && g_init_hostpid) ? g_init_hostpid : gp;
+    if (g_pidmap.active && hl_linux_pidmap_host_checked(&g_pidmap, gp, &host) != 0) return 0;
     *hostout = host;
     if (host == (int)getpid()) return 1;
     if (host <= 0) return 0;
@@ -285,6 +286,7 @@ static int container_gpid_member(int gp, int *hostout) __attribute__((unused));
 
 static int container_gpid_member(int gp, int *hostout) {
     int host = (gp == 1 && g_init_hostpid) ? g_init_hostpid : gp;
+    if (g_pidmap.active && hl_linux_pidmap_host_checked(&g_pidmap, gp, &host) != 0) return 0;
     if (hostout) *hostout = host;
     return container_host_member(host);
 }

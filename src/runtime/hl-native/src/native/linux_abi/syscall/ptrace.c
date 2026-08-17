@@ -135,12 +135,16 @@ static void pt_usleep(long us) {
 
 // guest pid for a host pid (container init's host pid shows through as guest pid 1)
 static int pt_gpid(int hostpid) {
-    return (g_init_hostpid && hostpid == g_init_hostpid) ? 1 : hostpid;
+    int guest;
+    if (hl_linux_pidmap_guest_checked(&g_pidmap, hostpid, &guest) == 0) return guest;
+    return (g_init_hostpid && hostpid == g_init_hostpid && !g_pidmap.active) ? 1 : -1;
 }
 
 // host pid for a guest pid (inverse; used to kill(2)/existence-check the target host process)
 static int pt_hostpid(int gpid) {
-    return (gpid == 1 && g_init_hostpid) ? g_init_hostpid : gpid;
+    int host;
+    if (hl_linux_pidmap_host_checked(&g_pidmap, gpid, &host) == 0) return host;
+    return (gpid == 1 && g_init_hostpid && !g_pidmap.active) ? g_init_hostpid : -1;
 }
 
 static void pt_lock(void) {

@@ -590,7 +590,10 @@ static int sched_pid_live(int gpid) {
     // The old raw kill((pid_t)gpid, 0) probe leaked the existence of (and let sched_* operate on) ARBITRARY
     // same-user host processes outside the container -- the same host-pid authority leak the kill/pidfd paths
     // close via container_host_member. A genuine in-container peer is a registry member -> still resolvable.
-    if (g_init_hostpid) return container_host_member(gpid) ? 0 : -ESRCH;
+    if (g_init_hostpid) {
+        int host;
+        return container_gpid_member(gpid, &host) ? 0 : -ESRCH;
+    }
     if (kill((pid_t)gpid, 0) == 0) return 0; // bare (non-container) mode: historical host-pid probe
     return (errno == ESRCH) ? -ESRCH : 0;    // EPERM etc. -> the task exists, just not signalable
 }

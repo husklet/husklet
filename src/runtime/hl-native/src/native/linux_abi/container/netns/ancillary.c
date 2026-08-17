@@ -1129,8 +1129,12 @@ static ssize_t cmsg_m2l(const struct msghdr *mh, uint8_t *g, size_t cap, size_t 
 #if defined(SCM_CREDENTIALS)
         if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_CREDENTIALS && dlen >= 12) {
             const uint32_t *host = (const uint32_t *)CMSG_DATA(c);
-            int guest_pid = hl_linux_pidmap_guest(&g_pidmap, (int32_t)host[0]);
-            if (g_init_hostpid && guest_pid == g_init_hostpid) guest_pid = 1;
+            int guest_pid;
+            if (hl_linux_pidmap_guest_checked(&g_pidmap, (int32_t)host[0], &guest_pid) != 0) {
+                errno = ESRCH;
+                return -1;
+            }
+            if (!g_pidmap.active && g_init_hostpid && guest_pid == g_init_hostpid) guest_pid = 1;
             *(uint32_t *)(g + go + LX_CMSGHDR) = (uint32_t)guest_pid;
             *(uint32_t *)(g + go + LX_CMSGHDR + 4) = (uint32_t)cuid();
             *(uint32_t *)(g + go + LX_CMSGHDR + 8) = (uint32_t)cgid();

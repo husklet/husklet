@@ -10,14 +10,17 @@ typedef struct hl_linux_pidmap_entry {
     int32_t host;
 } hl_linux_pidmap_entry;
 
+typedef struct hl_linux_pidmap_storage hl_linux_pidmap_storage;
+
 typedef struct hl_linux_pidmap {
-    hl_linux_pidmap_entry entries[HL_LINUX_PIDMAP_CAPACITY];
-    uint32_t count;
+    hl_linux_pidmap_storage *storage;
     int active;
 } hl_linux_pidmap;
 
 void hl_linux_pidmap_init(hl_linux_pidmap *map);
 int hl_linux_pidmap_add(hl_linux_pidmap *map, int32_t guest, int32_t host);
+int32_t hl_linux_pidmap_allocate_guest(hl_linux_pidmap *map);
+int32_t hl_linux_pidmap_register_host(hl_linux_pidmap *map, int32_t host);
 int hl_linux_pidmap_remove_host(hl_linux_pidmap *map, int32_t host);
 void hl_linux_pidmap_activate(hl_linux_pidmap *map);
 int hl_linux_pidmap_host_checked(const hl_linux_pidmap *map, int32_t guest, int32_t *host);

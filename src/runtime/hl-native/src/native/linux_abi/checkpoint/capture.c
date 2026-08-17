@@ -1355,7 +1355,8 @@ static void ckpt_interrupt_threads(struct cpu *self) {
 // coordinator wait for proc.<new host pid> while the peer had committed proc.<guest pid>: re-capturing a
 // restored multi-process tree always refused as an incomplete manifest. Identity outside a restore.
 static int ckpt_peer_gpid(int64_t host_pid) {
-    return (int)hl_linux_pidmap_guest(&g_pidmap, (int32_t)host_pid);
+    int guest;
+    return hl_linux_pidmap_guest_checked(&g_pidmap, (int32_t)host_pid, &guest) == 0 ? guest : -1;
 }
 
 static int ckpt_is_descendant(int64_t candidate, int64_t root) {

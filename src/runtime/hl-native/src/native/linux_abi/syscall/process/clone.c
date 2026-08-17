@@ -86,8 +86,22 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
             break;
         }
+        int guest_child_pid = g_pidmap.active ? (int)hl_linux_pidmap_allocate_guest(&g_pidmap) : 0;
+        if (g_pidmap.active && guest_child_pid <= 0) {
+            G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
+            break;
+        }
         pid_t pid = hl_host_process_clone_current();
         int fork_error = errno;
+        guest_child_pid = pid < 0 ? -1 : restore_process_identity_publish(
+                                                   guest_child_pid, pid == 0 ? (int)getpid() : (int)pid);
+        if (pid >= 0 && guest_child_pid <= 0) {
+            if (pid == 0) _exit(127);
+            kill(pid, SIGKILL);
+            while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
+            G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
+            break;
+        }
         if (is_vfork) {
             if (pid == 0) {
                 close(vfork_pipe[0]);
@@ -127,6 +141,7 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             }
         }
         if (pid == 0) {
+            if (g_pidmap.active) g_self_gpid = guest_child_pid;
             guest_fs_after_fork(share_fs);
             // clone(child_stack): Linux resumes the child on the supplied stack regardless of CLONE_VM.
             // glibc seeds its clone trampoline (fn ptr + arg) there before the syscall. Restricting this to
@@ -140,7 +155,7 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             // zeroes it and FUTEX_WAKEs a joiner. The old code ignored both, so pthread/runtime handshakes
             // that read the child tid from these slots saw stale memory.
             if ((a0 & 0x01000000) && a4) {
-                int tid = (int)getpid();
+                int tid = guest_child_pid;
                 (void)guest_copy_to(a4, &tid, sizeof tid);
             }
             if (a0 & 0x00200000) c->ctid = a4;
@@ -187,14 +202,14 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // CLONE_PARENT_SETTID(0x00100000): store the child's tid (its pid) into the PARENT's *ptid (a2).
         // Mutually exclusive with CLONE_PIDFD (which also uses the ptid slot), so it never clobbers a pidfd.
         if (pid > 0 && (a0 & 0x00100000) && !(a0 & 0x1000) && a2) {
-            int parent_tid = (int)pid;
+            int parent_tid = guest_child_pid;
             if (guest_copy_to(a2, &parent_tid, sizeof parent_tid) != sizeof parent_tid) {
                 G_RET(c) = (uint64_t)(int64_t)-EFAULT;
                 break;
             }
         }
         // parent: pid, child: 0
-        G_RET(c) = pid < 0 ? (uint64_t)(-errno) : (uint64_t)pid;
+        G_RET(c) = pid < 0 ? (uint64_t)(-errno) : (uint64_t)(pid == 0 ? 0 : guest_child_pid);
         // A fork/vfork that was normalized to clone repurposed the guest's arg registers; put them back so
         // the syscall preserves every GPR but rax, as the real kernel does (no-op for a genuine clone).
         G_FORK_PRESERVE(c);
@@ -338,8 +353,22 @@ static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
             break;
         }
+        int guest_child_pid = g_pidmap.active ? (int)hl_linux_pidmap_allocate_guest(&g_pidmap) : 0;
+        if (g_pidmap.active && guest_child_pid <= 0) {
+            G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
+            break;
+        }
         pid_t pid = hl_host_process_clone_current();
         int fork_error = errno;
+        guest_child_pid = pid < 0 ? -1 : restore_process_identity_publish(
+                                                   guest_child_pid, pid == 0 ? (int)getpid() : (int)pid);
+        if (pid >= 0 && guest_child_pid <= 0) {
+            if (pid == 0) _exit(127);
+            kill(pid, SIGKILL);
+            while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
+            G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
+            break;
+        }
         bound_status = bound_fork_complete(&bound_fork, pid == 0, pid == 0 ? (int)getpid() : (int)pid);
         if (bound_status != 0) {
             (void)hl_target_task_event(c, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)runtime_source_tid, 0);
@@ -371,13 +400,14 @@ static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // path caches / kqueues / fork-unsafe locks). clone3 historically lacked the W^X re-assert and the
         // DIR*-cache drop the clone site had; the shared helper closes that drift.
         if (pid == 0) {
+            if (g_pidmap.active) g_self_gpid = guest_child_pid;
             guest_fs_after_fork(share_fs);
             if ((flags & 0x100) && ca[5]) G_SP(c) = ca[5] + ca[6];
             fork_child_hooks(c);
             // clone_args: child_tid = ca[2]. CLONE_CHILD_SETTID stores the child's tid there; CLONE_CHILD_
             // CLEARTID remembers it so exit zeroes it + wakes a joiner (mirrors case 220).
             if ((flags & 0x01000000) && ca[2]) {
-                int tid = (int)getpid();
+                int tid = guest_child_pid;
                 (void)guest_copy_to(ca[2], &tid, sizeof tid);
             }
             if (flags & 0x00200000) c->ctid = ca[2];
@@ -400,13 +430,13 @@ static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // clone_args: parent_tid = ca[3]. CLONE_PARENT_SETTID stores the child's tid (pid) into the PARENT's
         // parent_tid (a distinct field from pidfd in clone3, so it never conflicts with CLONE_PIDFD).
         if (pid > 0 && (flags & 0x00100000) && ca[3]) {
-            int tid = (int)pid;
+            int tid = guest_child_pid;
             if (guest_copy_to(ca[3], &tid, sizeof tid) != sizeof tid) {
                 G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
                 break;
             }
         }
-        G_RET(c) = pid < 0 ? (uint64_t)(-errno) : (uint64_t)pid;
+        G_RET(c) = pid < 0 ? (uint64_t)(-errno) : (uint64_t)(pid == 0 ? 0 : guest_child_pid);
         break;
     }
     default: return 0;

@@ -314,6 +314,13 @@ static int restore_process_identity_add(int guest, int host) {
     return hl_linux_pidmap_add(&g_pidmap, guest, host);
 }
 
+// A post-restore fork must extend the live namespace in shared memory. Both sides may race here; the
+// registry serializes allocation and returns the same guest id for an already-published host process.
+static int restore_process_identity_publish(int guest, int host) {
+    if (!g_pidmap.active) return host;
+    return hl_linux_pidmap_add(&g_pidmap, guest, host) == 0 ? guest : -1;
+}
+
 // Activate only after the restore barrier has hydrated every live identity. Until then a child inherits a
 // deliberately incomplete snapshot while its siblings are still being forked, so fail-closed lookup would
 // reject identities which are merely not published yet.

@@ -255,8 +255,14 @@
                     // peer node id stamped at socketpair(); fall back to this guest's own pid only if unstamped.
                     int sp = ((int)a0 >= 0 && (int)a0 < HL_NFD) ? g_sock_peer_pid[(int)a0] : 0;
                     ppid = sp ? sp : container_pid();
-                } else if (g_init_hostpid && ppid == g_init_hostpid)
-                    ppid = 1;
+                } else {
+                    int guest_peer;
+                    if (hl_linux_pidmap_guest_checked(&g_pidmap, ppid, &guest_peer) != 0) {
+                        G_RET(c) = (uint64_t)(int64_t)-ESRCH;
+                        break;
+                    }
+                    ppid = (!g_pidmap.active && g_init_hostpid && ppid == g_init_hostpid) ? 1 : guest_peer;
+                }
                 size_t ln2 = cmsg_add_cred(gc, 0, gcl, ppid, cuid(), cgid());
                 if (ln2 == 0)
                     cred_trunc = 1; // no room for the Linux-mandated credentials record
