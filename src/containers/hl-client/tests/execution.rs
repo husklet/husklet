@@ -218,13 +218,12 @@ async fn running_terminal_reattach_uses_the_distinct_attach_operation() {
         let captured = request(&mut peer).await;
         let (headers, body) = parts(&captured);
         assert!(headers.starts_with("POST /v1.43/exec/restored%2Fterminal/attach HTTP/1.1\r\n"));
-        assert_eq!(
-            body,
-            br#"{"Tty":true,"KillOnDisconnect":true,"ConsoleSize":[31,97]}"#
-        );
-        peer.write_all(b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\nrestored-once\r\n")
-            .await
-            .unwrap();
+        assert_eq!(body, br#"{"Tty":true,"KillOnDisconnect":true,"ConsoleSize":[31,97]}"#);
+        peer.write_all(
+            b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\nrestored-once\r\n",
+        )
+        .await
+        .unwrap();
     });
 
     let client = Client::unix(&socket).unwrap();

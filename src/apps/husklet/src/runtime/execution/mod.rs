@@ -72,7 +72,15 @@ enum PersistedAction {
 
 impl PersistedAction {
     fn for_running(running: bool) -> Self {
-        if running { Self::Attach } else { Self::Restore }
+        if running {
+            Self::Attach
+        } else {
+            Self::Restore
+        }
+    }
+
+    fn after_failed_attach(running: Option<bool>) -> Self {
+        running.map_or(Self::Restore, Self::for_running)
     }
 }
 
@@ -134,6 +142,11 @@ pub fn launch(
         console_size: Some([u64::from(size.rows()), u64::from(size.columns())]),
         ..ExecStart::default()
     };
+    let attach_request = ExecAttach {
+        tty: true,
+        kill_on_disconnect: true,
+        console_size: start.console_size,
+    };
     let mut restore_failure = None;
     let previous = pane.as_ref().map(PaneExecution::id).transpose()?.flatten();
     let mut restored_running = false;
@@ -170,39 +183,86 @@ pub fn launch(
         }
         created.id
     };
-    let session = if restored_running {
-        runtime
-            .block_on(client.executions().attach(
-                &execution,
-                &ExecAttach {
-                    tty: true,
-                    kill_on_disconnect: true,
-                    console_size: start.console_size,
+    let mut attached = None;
+    if restored_running {
+        match runtime.block_on(client.executions().attach(&execution, &attach_request)) {
+            Ok(session) => attached = Some(session),
+            Err(attach_error) => match runtime.block_on(client.executions().inspect(&execution)) {
+                // The process exited between inspect and attach. Reclassify it
+                // once in this launch so the pane can recover without asking
+                // the user to reopen the workspace again.
+                Ok(inspection) => match PersistedAction::after_failed_attach(Some(inspection.running)) {
+                    PersistedAction::Restore => restoring = true,
+                    PersistedAction::Attach => return Err(LauncherError::io(attach_error)),
                 },
-            ))
-            .map_err(LauncherError::io)?
+                Err(hl_client::Error::Docker { status, .. }) if status.as_u16() == 404 => {
+                    debug_assert_eq!(PersistedAction::after_failed_attach(None), PersistedAction::Restore);
+                    restoring = true;
+                }
+                Err(error) => return Err(LauncherError::io(error)),
+            },
+        }
+    }
+    let session = if let Some(session) = attached {
+        session
     } else {
         match runtime.block_on(client.executions().start(&execution, &start)) {
-        Ok(session) => session,
-        Err(error) if restoring => {
-            restore_failure = Some(format!(
-                "workspace restore incomplete: terminal {slot:?} could not resume its running command: {error}; opened a new shell\r\n"
-            ));
-            if let Some(pane) = &pane {
-                let _ = pane.clear(&execution);
+            Ok(session) => session,
+            Err(error) if restoring => {
+                // Reclassify immediately before replacement. A restored exec
+                // can become Running between the earlier inspect and this
+                // failed start; attaching it is always preferable to
+                // orphaning it and creating a second shell.
+                let running = match runtime.block_on(client.executions().inspect(&execution)) {
+                    Ok(inspection) => inspection.running,
+                    Err(hl_client::Error::Docker { status, .. }) if status.as_u16() == 404 => false,
+                    Err(inspect) => return Err(LauncherError::io(inspect)),
+                };
+                if running {
+                    runtime
+                        .block_on(client.executions().attach(&execution, &attach_request))
+                        .map_err(LauncherError::io)?
+                } else {
+                    let created = runtime
+                        .block_on(client.executions().create("workspace", &config))
+                        .map_err(LauncherError::io)?;
+                    if let Some(pane) = &pane {
+                        if let Err(save) = pane.save(&created.id) {
+                            let _ = runtime.block_on(client.executions().remove(&created.id));
+                            return Err(save);
+                        }
+                    }
+                    let raced_attachment = match runtime.block_on(client.executions().remove(&execution)) {
+                        Ok(()) => None,
+                        Err(hl_client::Error::Docker { status, .. }) if status.as_u16() == 404 => None,
+                        Err(remove) => {
+                            if let Some(pane) = &pane {
+                                let _ = pane.save(&execution);
+                            }
+                            let _ = runtime.block_on(client.executions().remove(&created.id));
+                            match runtime.block_on(client.executions().inspect(&execution)) {
+                                Ok(inspection) if inspection.running => Some(
+                                    runtime
+                                        .block_on(client.executions().attach(&execution, &attach_request))
+                                        .map_err(LauncherError::io)?,
+                                ),
+                                _ => return Err(LauncherError::io(remove)),
+                            }
+                        }
+                    };
+                    if let Some(session) = raced_attachment {
+                        session
+                    } else {
+                        execution = created.id;
+                        restore_failure = Some(format!(
+                            "workspace restore incomplete: terminal {slot:?} could not resume its running command: {error}; opened a new shell\r\n"
+                        ));
+                        runtime
+                            .block_on(client.executions().start(&execution, &start))
+                            .map_err(LauncherError::io)?
+                    }
+                }
             }
-            let _ = runtime.block_on(client.executions().remove(&execution));
-            let created = runtime
-                .block_on(client.executions().create("workspace", &config))
-                .map_err(LauncherError::io)?;
-            execution = created.id;
-            if let Some(pane) = &pane {
-                pane.save(&execution)?;
-            }
-            runtime
-                .block_on(client.executions().start(&execution, &start))
-                .map_err(LauncherError::io)?
-        }
             Err(error) => return Err(LauncherError::io(error)),
         }
     };
@@ -374,7 +434,7 @@ impl WorkspaceContainer {
 
 #[cfg(test)]
 mod pane_execution_tests {
-    use super::{PaneExecution, PersistedAction, terminal_identity};
+    use super::{terminal_identity, PaneExecution, PersistedAction};
     use crate::config::WorkspaceConfig;
     use hl_ws::Arch;
 
@@ -387,6 +447,15 @@ mod pane_execution_tests {
     fn restored_running_panes_attach_while_created_panes_resume() {
         assert_eq!(PersistedAction::for_running(true), PersistedAction::Attach);
         assert_eq!(PersistedAction::for_running(false), PersistedAction::Restore);
+        assert_eq!(
+            PersistedAction::after_failed_attach(Some(true)),
+            PersistedAction::Attach
+        );
+        assert_eq!(
+            PersistedAction::after_failed_attach(Some(false)),
+            PersistedAction::Restore
+        );
+        assert_eq!(PersistedAction::after_failed_attach(None), PersistedAction::Restore);
     }
 
     #[test]

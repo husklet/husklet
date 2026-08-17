@@ -11,6 +11,7 @@ pub struct Session {
     id: JournalId,
     cursor: u64,
     live_at: u64,
+    owns_attachment: bool,
 }
 
 /// Cloneable writer for one process stdin.
@@ -27,7 +28,20 @@ impl Session {
             id,
             cursor,
             live_at,
+            owns_attachment: false,
         }
+    }
+
+    /// Claims the single interactive attachment owned by this process.
+    ///
+    /// # Errors
+    /// Returns an error while another interactive client owns stdin and
+    /// disconnect authority for the same process.
+    pub fn claim_attachment(mut self) -> Result<Self> {
+        self.io.claim_attachment()?;
+        self.io.acknowledge(self.cursor);
+        self.owns_attachment = true;
+        Ok(self)
     }
 
     /// Reads output that was durable before this session was created.
@@ -85,6 +99,21 @@ impl Session {
             io: Arc::clone(&self.io),
         }
     }
+
+    /// Records output successfully delivered to this session's external owner.
+    pub fn acknowledge(&self, sequence: u64) {
+        if self.owns_attachment && sequence <= self.cursor {
+            self.io.acknowledge(sequence);
+        }
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        if self.owns_attachment {
+            self.io.release_attachment();
+        }
+    }
 }
 
 impl Input {
@@ -109,6 +138,8 @@ pub(crate) struct Io {
     stdin: bool,
     input: tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<Vec<u8>>>>,
     receiver: tokio::sync::Mutex<Option<tokio::sync::mpsc::Receiver<Vec<u8>>>>,
+    attachment: std::sync::atomic::AtomicBool,
+    delivered: std::sync::atomic::AtomicU64,
 }
 
 impl Io {
@@ -123,7 +154,33 @@ impl Io {
             stdin,
             input: tokio::sync::Mutex::new(stdin.then_some(input)),
             receiver: tokio::sync::Mutex::new(stdin.then_some(receiver)),
+            attachment: std::sync::atomic::AtomicBool::new(false),
+            delivered: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    fn claim_attachment(&self) -> Result<()> {
+        self.attachment
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .map(|_| ())
+            .map_err(|_| Error::Runtime("process already has an interactive attachment".into()))
+    }
+
+    fn release_attachment(&self) {
+        self.attachment.store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    fn acknowledge(&self, sequence: u64) {
+        self.delivered.fetch_max(sequence, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    pub(crate) fn delivered_cursor(&self) -> u64 {
+        self.delivered.load(std::sync::atomic::Ordering::Acquire)
     }
 
     pub(crate) async fn take_input(&self) -> Result<Option<tokio::sync::mpsc::Receiver<Vec<u8>>>> {

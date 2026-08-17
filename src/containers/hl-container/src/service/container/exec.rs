@@ -55,7 +55,12 @@ impl Service {
         self.execs.list().await
     }
 
-    pub(crate) async fn start_exec(self: &Arc<Self>, id: &ExecId, size: Option<crate::Size>) -> Result<crate::Session> {
+    pub(crate) async fn start_exec(
+        self: &Arc<Self>,
+        id: &ExecId,
+        size: Option<crate::Size>,
+        claim_attachment: bool,
+    ) -> Result<crate::Session> {
         let _guard = self.operations.lock().await;
         let mut exec = self.inspect_exec(id).await?;
         if !matches!(exec.state, ExecState::Created) {
@@ -75,11 +80,6 @@ impl Service {
         container.require_exec()?;
         let networks = self.launch_networks(&container).await?;
         let journal = JournalId::exec(exec.id.clone());
-        let io = self.exec_io(&exec).await;
-        if exec.checkpoint.is_some() {
-            io.rearm_input().await;
-        }
-        let input = io.take_input().await?;
         let process_spec = exec.spec.process.clone();
         let requested_mounts = container.spec.mounts.clone();
         let (rootfs, overlay, owners) = self.rootfs_launch(&container.spec.rootfs).await?;
@@ -87,6 +87,21 @@ impl Service {
         mounts.extend(self.identity.open(&container)?);
         let filesystem_generation = self.identity.generation(&container)?.path().to_owned();
         let domain = Some(self.process_domain(&container.id).await?);
+        let checkpoint = CheckpointConfig {
+            image: self
+                .checkpoints
+                .open(&format!("exec-{}", exec.id))
+                .map_err(Error::Checkpoint)?,
+            restore: exec.checkpoint.is_some(),
+        };
+        // Input ownership is the only destructive preparation step. Keep it
+        // after every fallible filesystem, volume, network, identity, domain,
+        // and checkpoint lookup so a repaired dependency can be retried.
+        let io = self.exec_io(&exec).await;
+        if exec.checkpoint.is_some() {
+            io.rearm_input().await;
+        }
+        let input = io.take_input().await?;
         let process = self
             .runtime
             .start(ProcessConfig {
@@ -96,13 +111,7 @@ impl Service {
                 owners,
                 filesystem_generation,
                 translation_cache: self.translation_cache.clone(),
-                checkpoint: Some(CheckpointConfig {
-                    image: self
-                        .checkpoints
-                        .open(&format!("exec-{}", exec.id))
-                        .map_err(Error::Checkpoint)?,
-                    restore: exec.checkpoint.is_some(),
-                }),
+                checkpoint: Some(checkpoint),
                 guest: container.spec.guest,
                 execution: container.spec.execution,
                 process: process_spec,
@@ -150,7 +159,11 @@ impl Service {
             let result = Arc::clone(&service).own(process, journal).await;
             service.finish_exec(exec_id, process_id, started_at_ms, result).await;
         });
-        Ok(session)
+        if claim_attachment {
+            session.claim_attachment()
+        } else {
+            Ok(session)
+        }
     }
 
     pub(crate) async fn attach_exec(
@@ -167,6 +180,17 @@ impl Service {
                 expected: "running",
             });
         }
+        let journal = JournalId::exec(exec.id.clone());
+        let live_at = self.logs.cursor(&journal).await?;
+        let cursor = exec.attachment_cursor.unwrap_or(live_at);
+        let io = self
+            .io
+            .lock()
+            .await
+            .get(&journal)
+            .cloned()
+            .ok_or_else(|| Error::Runtime(format!("running exec {id} has no live I/O")))?;
+        let session = crate::Session::new(Arc::clone(self), io, journal, cursor, live_at).claim_attachment()?;
         if let Some(size) = size {
             let Some(previous) = exec.spec.process.console.terminal else {
                 return Err(Error::NoTerminal(exec.id.to_string()));
@@ -185,10 +209,7 @@ impl Service {
                 return Err(error);
             }
         }
-        let journal = JournalId::exec(exec.id.clone());
-        let cursor = self.logs.cursor(&journal).await?;
-        let io = self.exec_io(&exec).await;
-        Ok(crate::Session::new(Arc::clone(self), io, journal, cursor, cursor))
+        Ok(session)
     }
 
     async fn finish_exec(&self, id: ExecId, owner: u64, generation: u64, result: Result<ExitStatus>) {
@@ -260,6 +281,15 @@ impl Service {
                     .cloned()
                     .ok_or_else(|| Error::Runtime(format!("running exec {id} has no runtime process")))?;
                 process.checkpoint(timeout).await?;
+                let journal = JournalId::exec(id.clone());
+                let delivered = self
+                    .io
+                    .lock()
+                    .await
+                    .get(&journal)
+                    .ok_or_else(|| Error::Runtime(format!("running exec {id} has no live I/O")))?
+                    .delivered_cursor();
+                exec.attachment_cursor = Some(exec.attachment_cursor.unwrap_or(0).max(delivered));
                 let checkpoint = crate::Checkpoint {
                     namespace: format!("exec-{id}"),
                     created_at_ms: now_ms(),
@@ -275,7 +305,7 @@ impl Service {
             };
             if let Err(mut failure) = result.await {
                 for captured_id in captured {
-                    if let Err(rollback) = self.start_exec(&captured_id, None).await {
+                    if let Err(rollback) = self.start_exec(&captured_id, None, false).await {
                         failure = Error::Runtime(format!(
                             "{failure}; checkpoint rollback failed for terminal {captured_id}: {rollback}"
                         ));

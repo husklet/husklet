@@ -431,7 +431,10 @@ async fn execution_checkpoint_restores_without_capturing_the_container_init() {
         )
         .await
         .unwrap();
-    let _session = containers.executions().start(&exec.id).await.unwrap();
+    let mut session = containers.executions().start(&exec.id).await.unwrap();
+    let delivered = session.next().await.unwrap().unwrap();
+    assert_eq!(delivered.bytes, b"fake-out\n");
+    session.acknowledge(delivered.sequence);
     let wait_id = exec.id.clone();
     let wait_containers = containers.clone();
     let mut wait = tokio::spawn(async move { wait_containers.executions().wait(&wait_id).await });
@@ -463,7 +466,24 @@ async fn execution_checkpoint_restores_without_capturing_the_container_init() {
 
     containers.shutdown(Duration::from_secs(1)).await.unwrap();
     containers.start("workspace").await.unwrap();
-    let _restored = containers.executions().start(&exec.id).await.unwrap();
+    let restored = containers.executions().start(&exec.id).await.unwrap();
+    drop(restored);
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    let mut attached = containers.executions().attach(&exec.id, None).await.unwrap();
+    let resumed_output = attached.history().await.unwrap();
+    assert_eq!(
+        resumed_output
+            .iter()
+            .map(|entry| entry.bytes.as_slice())
+            .collect::<Vec<_>>(),
+        [
+            b"fake-err\n".as_slice(),
+            b"fake-out\n".as_slice(),
+            b"fake-err\n".as_slice()
+        ],
+        "delivered pre-checkpoint output is skipped while queued output and post-restore output are replayed"
+    );
+    drop(attached);
     assert!(matches!(
         containers.executions().inspect(&exec.id).await.unwrap().state,
         ExecState::Running { .. }

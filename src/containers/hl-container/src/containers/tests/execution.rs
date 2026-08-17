@@ -342,10 +342,15 @@ async fn running_execution_can_be_reattached_without_starting_a_replacement() {
         )
         .await
         .unwrap();
-    let _original = containers.executions().start(&exec.id).await.unwrap();
+    let original = containers.executions().start(&exec.id).await.unwrap();
     let launches_before = runtime.programs.lock().unwrap().len();
 
-    let _reattached = containers.executions().attach(&exec.id, Some(resized)).await.unwrap();
+    assert!(matches!(
+        containers.executions().attach(&exec.id, Some(resized)).await,
+        Err(Error::Runtime(message)) if message.contains("already has an interactive attachment")
+    ));
+    drop(original);
+    let reattached = containers.executions().attach(&exec.id, Some(resized)).await.unwrap();
 
     assert_eq!(runtime.programs.lock().unwrap().len(), launches_before);
     assert_eq!(runtime.resizes.lock().unwrap().as_slice(), [resized]);
@@ -357,6 +362,12 @@ async fn running_execution_can_be_reattached_without_starting_a_replacement() {
         containers.executions().start(&exec.id).await,
         Err(Error::InvalidExecState { .. })
     ));
+    assert!(matches!(
+        containers.executions().attach(&exec.id, None).await,
+        Err(Error::Runtime(message)) if message.contains("already has an interactive attachment")
+    ));
+    drop(reattached);
+    containers.executions().attach(&exec.id, None).await.unwrap();
 }
 
 #[tokio::test]
@@ -377,6 +388,102 @@ async fn execution_attach_rejects_created_records_instead_of_starting_them() {
     assert_eq!(
         containers.executions().inspect(&exec.id).await.unwrap().state,
         ExecState::Created
+    );
+}
+
+#[tokio::test]
+async fn running_record_without_its_exact_live_io_cannot_fake_a_successful_attachment() {
+    let storage = Arc::new(Memory::default());
+    let containers = test_containers(storage.clone(), Arc::new(FakeRuntime::new(ExitStatus::Code(0))))
+        .await
+        .unwrap();
+    containers.create(spec("missing-io-parent")).await.unwrap();
+    containers.start("missing-io-parent").await.unwrap();
+    let exec = containers
+        .executions()
+        .create("missing-io-parent", ExecSpec::new(Process::new("/bin/sh")))
+        .await
+        .unwrap();
+    let mut corrupt = crate::storage::Execs::get(storage.as_ref(), &exec.id)
+        .await
+        .unwrap()
+        .unwrap();
+    corrupt.state = ExecState::Running {
+        process_id: 999,
+        started_at_ms: 1,
+    };
+    crate::storage::Execs::replace(storage.as_ref(), &corrupt)
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        containers.executions().attach(&exec.id, None).await,
+        Err(Error::Runtime(message)) if message.contains("has no live I/O")
+    ));
+}
+
+#[tokio::test]
+async fn failed_exec_volume_resolution_preserves_input_for_repair_and_retry() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let storage = Arc::new(Memory::default());
+    let containers = test_containers(storage.clone(), runtime.clone()).await.unwrap();
+    let volume = containers
+        .volumes()
+        .create(VolumeSpec::new("retry-volume"))
+        .await
+        .unwrap();
+    containers
+        .create(spec("retry-volume-owner").mount(Mount::volume("retry-volume", "/data", Access::ReadWrite)))
+        .await
+        .unwrap();
+    containers.start("retry-volume-owner").await.unwrap();
+    let mut process = Process::new("/bin/sh");
+    process.console.stdin = true;
+    let exec = containers
+        .executions()
+        .create(
+            "retry-volume-owner",
+            ExecSpec::new(process).streams(Streams {
+                stdin: true,
+                stdout: true,
+                stderr: true,
+            }),
+        )
+        .await
+        .unwrap();
+
+    crate::storage::VolumeStore::remove(storage.as_ref(), "retry-volume")
+        .await
+        .unwrap();
+    assert!(matches!(
+        containers.executions().start(&exec.id).await,
+        Err(Error::VolumeNotFound(name)) if name == "retry-volume"
+    ));
+    crate::storage::VolumeStore::insert(storage.as_ref(), &volume)
+        .await
+        .unwrap();
+
+    let session = containers.executions().start(&exec.id).await.unwrap();
+    session.write(b"retry-input\n").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert!(
+        runtime
+            .inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, bytes)| bytes == b"retry-input\n")
+    );
+    assert!(
+        containers
+            .executions()
+            .inspect(&exec.id)
+            .await
+            .unwrap()
+            .state
+            .is_active()
     );
 }
 

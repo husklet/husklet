@@ -145,6 +145,10 @@ pub struct Exec {
     pub state: ExecState,
     pub created_at_ms: u64,
     pub checkpoint: Option<crate::Checkpoint>,
+    /// First output record not represented by the terminal snapshot captured
+    /// with the most recent checkpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment_cursor: Option<u64>,
 }
 
 impl Exec {
@@ -156,6 +160,7 @@ impl Exec {
             state: ExecState::Created,
             created_at_ms: now_ms(),
             checkpoint: None,
+            attachment_cursor: None,
         }
     }
 

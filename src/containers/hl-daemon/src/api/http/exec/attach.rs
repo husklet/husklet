@@ -1,4 +1,4 @@
-use axum::body::{Body, to_bytes};
+use axum::body::to_bytes;
 use axum::extract::{OriginalUri, Path, Request, State};
 use axum::http::StatusCode;
 use axum::response::Response;
@@ -63,14 +63,6 @@ mod tests {
             ..ExecAttach::default()
         };
         assert!(attach.size().unwrap_err().contains("Tty=true"));
-        assert!(
-            ExecAttach {
-                tty: true,
-                ..attach
-            }
-            .size()
-            .unwrap()
-            .is_some()
-        );
+        assert!(ExecAttach { tty: true, ..attach }.size().unwrap().is_some());
     }
 }

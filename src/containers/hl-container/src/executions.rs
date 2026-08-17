@@ -51,7 +51,7 @@ impl Executions {
     /// # Errors
     /// Returns lookup, lifecycle, runtime, or persistence failures.
     pub async fn start(&self, id: &ExecId) -> Result<Session> {
-        self.service.start_exec(id, None).await
+        self.service.start_exec(id, None, true).await
     }
 
     /// Starts a terminal execution at an exact initial size.
@@ -61,7 +61,7 @@ impl Executions {
     /// # Errors
     /// Returns lookup, lifecycle, missing-terminal, runtime, or persistence failures.
     pub async fn start_at(&self, id: &ExecId, size: crate::Size) -> Result<Session> {
-        self.service.start_exec(id, Some(size)).await
+        self.service.start_exec(id, Some(size), true).await
     }
 
     /// Attaches to an execution which is already running.
@@ -128,7 +128,7 @@ impl Executions {
             if execution.checkpoint.is_none() || !matches!(execution.state, ExecState::Created) {
                 continue;
             }
-            if let Err(error) = self.start(&execution.id).await {
+            if let Err(error) = self.service.start_exec(&execution.id, None, false).await {
                 failures.push((execution.id, error));
             }
         }
