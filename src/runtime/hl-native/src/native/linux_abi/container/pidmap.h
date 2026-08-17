@@ -16,6 +16,7 @@ typedef struct hl_linux_identity_registry_storage hl_linux_identity_registry_sto
 
 typedef struct hl_linux_identity_registry {
     hl_linux_identity_registry_storage *storage;
+    struct hl_linux_pidmap *map[3];
     int lock_fd;
 } hl_linux_identity_registry;
 
@@ -38,6 +39,12 @@ int hl_linux_identity_registry_prepare(hl_linux_identity_registry *registry, hl_
                                        hl_linux_pidmap *pgid, hl_linux_pidmap *sid);
 int hl_linux_identity_registry_add(const hl_linux_pidmap_update *updates, size_t count);
 uint64_t hl_linux_identity_registry_commit_word(const hl_linux_identity_registry *registry);
+int hl_linux_identity_registry_setsid(hl_linux_pidmap *pid, hl_linux_pidmap *pgid, hl_linux_pidmap *sid,
+                                      int32_t guest, int32_t *host_sid);
+int hl_linux_identity_registry_setpgid(hl_linux_pidmap *pid, hl_linux_pidmap *pgid, int32_t guest_process,
+                                       int32_t host_process, int32_t guest_group, int32_t host_group);
+int hl_linux_identity_registry_reap(hl_linux_pidmap *pid, hl_linux_pidmap *pgid, hl_linux_pidmap *sid,
+                                    int32_t host_process);
 #if defined(HL_NATIVE_TEST_HOOKS)
 int hl_c_backend_identity_registry_test(uint32_t scenario, uint32_t iterations);
 #endif
@@ -53,5 +60,7 @@ int32_t hl_linux_pidmap_host(const hl_linux_pidmap *map, int32_t guest);
 int32_t hl_linux_pidmap_guest(const hl_linux_pidmap *map, int32_t host);
 uint32_t hl_linux_pidmap_count(const hl_linux_pidmap *map);
 size_t hl_linux_pidmap_snapshot(const hl_linux_pidmap *map, hl_linux_pidmap_entry *entries, size_t capacity);
+int hl_linux_pidmap_snapshot_checked(const hl_linux_pidmap *map, hl_linux_pidmap_entry *entries, size_t capacity,
+                                     size_t *count);
 
 #endif

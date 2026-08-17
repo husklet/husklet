@@ -876,19 +876,20 @@ static int svc_rare_scheduler_memory(struct cpu *c, uint64_t nr, uint64_t a0, ui
                                      uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 157: {
-        pid_t s = setsid();
+        int guest = container_pid();
+        int32_t shared_sid = 0;
+        pid_t s;
+        if (hl_linux_pidmap_is_active(&g_sidmap)) {
+            if (hl_linux_identity_registry_setsid(&g_pidmap, &g_pgidmap, &g_sidmap, guest, &shared_sid) != 0) {
+                G_RET(c) = (uint64_t)(-errno);
+                break;
+            }
+            s = (pid_t)shared_sid;
+        } else {
+            s = setsid();
+        }
         if (s < 0) {
             G_RET(c) = (uint64_t)(-errno);
-            break;
-        }
-        int guest = container_pid();
-        const hl_linux_pidmap_update identity[] = {
-            {.map = &g_sidmap, .guest = guest, .host = (int)s},
-            {.map = &g_pgidmap, .guest = guest, .host = (int)s},
-        };
-        if (hl_linux_pidmap_is_active(&g_sidmap) &&
-            hl_linux_identity_registry_add(identity, sizeof identity / sizeof identity[0]) != 0) {
-            G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
             break;
         }
         G_RET(c) = (uint64_t)(unsigned)guest;
@@ -1364,7 +1365,8 @@ static void svc_rare_waitid(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2
         (si.si_code == CLD_EXITED || si.si_code == CLD_KILLED || si.si_code == CLD_DUMPED))
     {
         host_pid_unregister_reaped((int)si.si_pid);
-        if (hl_linux_pidmap_is_active(&g_pidmap)) (void)hl_linux_pidmap_remove_host(&g_pidmap, (int)si.si_pid);
+        if (hl_linux_pidmap_is_active(&g_pidmap))
+            (void)hl_linux_identity_registry_reap(&g_pidmap, &g_pgidmap, &g_sidmap, (int)si.si_pid);
     }
     // Raw waitid(2) fills arg 5 (struct rusage *) when non-NULL (glibc's wrapper passes NULL, but the
     // raw syscall and some runtimes use it). macOS waitid has no rusage variant, so report the reaped

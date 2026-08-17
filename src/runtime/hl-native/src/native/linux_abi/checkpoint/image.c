@@ -896,10 +896,15 @@ done:
 static int ckpt_live_process_peers(hl_host_process_peer *peers, size_t capacity, size_t *count) {
     if (!hl_linux_pidmap_is_active(&g_pidmap)) return hl_host_process_peers(peers, capacity, count);
 
-    size_t mapped_capacity = hl_linux_pidmap_count(&g_pidmap);
+    size_t mapped_capacity = 0;
+    if (hl_linux_pidmap_snapshot_checked(&g_pidmap, NULL, 0, &mapped_capacity) != 0) return 0;
     hl_linux_pidmap_entry *mapped = malloc((mapped_capacity ? mapped_capacity : 1) * sizeof *mapped);
     if (mapped == NULL) return 0;
-    size_t mapped_count = hl_linux_pidmap_snapshot(&g_pidmap, mapped, mapped_capacity);
+    size_t mapped_count = 0;
+    if (hl_linux_pidmap_snapshot_checked(&g_pidmap, mapped, mapped_capacity, &mapped_count) != 0) {
+        free(mapped);
+        return 0;
+    }
     if (mapped_count > mapped_capacity) {
         free(mapped);
         *count = mapped_count;

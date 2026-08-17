@@ -468,11 +468,16 @@ static int svc_proc_154(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         if (!hl_linux_pidmap_is_active(&g_pgidmap) && (int)a1 == 1 && g_init_hostpid) host_pgid = g_init_hostpid;
         pid_t pid = (pid_t)host_pid;
         pid_t pgid = (pid_t)host_pgid;
-        int r = setpgid(pid, pgid);
+        int guest_process = (int)a0 != 0 ? (int)a0 : container_pid();
+        int guest_group = (int)a1 != 0 ? (int)a1 : guest_process;
+        int r = hl_linux_pidmap_is_active(&g_pgidmap)
+                    ? hl_linux_identity_registry_setpgid(&g_pidmap, &g_pgidmap, guest_process, (int32_t)pid,
+                                                         guest_group, (int32_t)pgid)
+                    : setpgid(pid, pgid);
         if (r == 0) {
-            int guest_group = (int)a1 != 0 ? (int)a1 : ((int)a0 != 0 ? (int)a0 : container_pid());
             pid_t group_host = getpgid(pid);
-            if (guest_group > 0 && group_host > 0) (void)hl_linux_pidmap_add(&g_pgidmap, guest_group, (int)group_host);
+            if (!hl_linux_pidmap_is_active(&g_pgidmap) && guest_group > 0 && group_host > 0)
+                (void)hl_linux_pidmap_add(&g_pgidmap, guest_group, (int)group_host);
             G_RET(c) = 0;
             break;
         }

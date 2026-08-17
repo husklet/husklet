@@ -21,3 +21,19 @@ fn readers_never_accept_cross_map_aba_snapshots() {
 fn reaped_slots_are_reusable_beyond_twice_capacity() {
     run(7, 8_224);
 }
+
+#[test]
+fn host_identity_mutation_recovers_across_writer_death() {
+    run(8, 0);
+    run(9, 0);
+}
+
+#[test]
+fn one_transaction_preserves_multiple_new_entries() {
+    run(10, 0);
+}
+
+#[test]
+fn concurrent_registration_assigns_one_guest_identity() {
+    run(11, 32);
+}

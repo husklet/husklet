@@ -238,7 +238,7 @@ static int svc_proc_260(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             int gp;
             if (hl_linux_pidmap_guest_checked(&g_pidmap, (int)r, &gp) == 0) {
                 if (((st & 0x7f) == 0) || (((st & 0x7f) != 0x7f) && ((st & 0x7f) != 0)))
-                    (void)hl_linux_pidmap_remove_host(&g_pidmap, (int)r);
+                    (void)hl_linux_identity_registry_reap(&g_pidmap, &g_pgidmap, &g_sidmap, (int)r);
                 r = (pid_t)gp;
             }
         }
