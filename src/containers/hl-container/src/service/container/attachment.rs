@@ -7,26 +7,36 @@ impl Service {
     }
 
     pub(crate) async fn attach(self: &Arc<Self>, reference: &str) -> Result<crate::Session> {
+        let _guard = self.operations.lock().await;
         let container = self.resolve(reference).await?;
-        if matches!(container.state, ContainerState::Exited { .. }) {
+        if matches!(container.state, ContainerState::Exited { .. }) && container.checkpoint.is_none() {
             return Err(Error::InvalidState {
                 id: container.id,
                 actual: container.state,
-                expected: "created, running, or paused",
+                expected: "created, running, paused, or checkpointed",
             });
         }
         let journal = JournalId::container(container.id.clone());
         let cursor = self.logs.cursor(&journal).await?;
-        let io = self.io(&container).await;
+        let io = self.attach_io(&container, cursor).await?;
         Ok(crate::Session::new(Arc::clone(self), io, journal, cursor, cursor))
     }
 
     pub(crate) async fn follow(self: &Arc<Self>, reference: &str) -> Result<crate::Session> {
+        let _guard = self.operations.lock().await;
         let container = self.resolve(reference).await?;
         let journal = JournalId::container(container.id.clone());
         let live_at = self.logs.cursor(&journal).await?;
-        let io = self.io(&container).await;
-        if matches!(container.state, ContainerState::Exited { .. }) {
+        let io = if container.state.is_active() {
+            self.attach_io(&container, live_at).await?
+        } else {
+            Arc::new(Io::new(
+                container.spec.process.console.stdin,
+                container.generation,
+                live_at,
+            ))
+        };
+        if !container.state.is_active() {
             io.finish().await;
         }
         Ok(crate::Session::new(Arc::clone(self), io, journal, 0, live_at))
@@ -89,6 +99,9 @@ impl Service {
 
     pub(crate) async fn output(&self, id: &JournalId, cursor: u64, io: &Io) -> Result<Option<crate::Entry>> {
         loop {
+            if io.is_past_terminal(cursor) {
+                return Ok(None);
+            }
             let notified = io.notify.notified();
             tokio::pin!(notified);
             if let Some(entry) = io.after(cursor) {
@@ -108,19 +121,56 @@ impl Service {
         self.logs.after(id, cursor, limit).await
     }
 
-    pub(super) async fn io(&self, container: &Container) -> Arc<Io> {
+    pub(super) async fn attach_io(&self, container: &Container, start_cursor: u64) -> Result<Arc<Io>> {
+        let generation = if container.state.is_active() {
+            container.generation
+        } else {
+            container
+                .generation
+                .checked_add(1)
+                .ok_or_else(|| Error::Runtime("container generation space is exhausted".into()))?
+        };
+        Ok(self.io_for_generation(container, generation, start_cursor).await)
+    }
+
+    pub(super) async fn io_for_generation(&self, container: &Container, generation: u64, start_cursor: u64) -> Arc<Io> {
         let mut values = self.io.lock().await;
         let id = JournalId::container(container.id.clone());
-        if let Some(io) = values.get(&id) {
+        if let Some(io) = values.get(&id)
+            && io.generation() == generation
+        {
             return Arc::clone(io);
         }
-        let io = Arc::new(Io::new(container.spec.process.console.stdin));
-        values.insert(id, Arc::clone(&io));
+        let io = Arc::new(Io::new(container.spec.process.console.stdin, generation, start_cursor));
+        let previous = values.insert(id, Arc::clone(&io));
+        drop(values);
+        if let Some(previous) = previous {
+            previous.finish().await;
+        }
         io
     }
 
+    pub(super) async fn retire_io_generation(&self, id: &JournalId, generation: &Arc<Io>) {
+        let removed = {
+            let mut values = self.io.lock().await;
+            values
+                .get(id)
+                .is_some_and(|current| Arc::ptr_eq(current, generation))
+                .then(|| values.remove(id).expect("matched I/O generation"))
+        };
+        if let Some(io) = removed {
+            io.finish().await;
+        } else {
+            generation.finish().await;
+        }
+    }
+
     async fn publish_output(&self, id: &JournalId, entry: crate::Entry) {
-        if let Some(io) = self.io.lock().await.get(id).cloned() {
+        // Removal/replacement takes the same map lock before finishing an I/O generation. Keep
+        // it through this synchronous publication so finish cannot freeze its terminal cursor
+        // between durable append and live publication.
+        let values = self.io.lock().await;
+        if let Some(io) = values.get(id) {
             io.publish(entry);
         }
     }

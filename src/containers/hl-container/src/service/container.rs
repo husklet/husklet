@@ -40,12 +40,15 @@ pub(crate) struct Service {
     exits: Mutex<HashMap<String, ExitStatus>>,
     failures: Mutex<HashMap<JournalId, String>>,
     live: Mutex<HashMap<ContainerId, Run>>,
+    launch_cleanups: Mutex<HashMap<ContainerId, tokio::task::AbortHandle>>,
+    launch_cleanup_failures: Mutex<HashMap<ContainerId, String>>,
     restarts: Mutex<HashMap<ContainerId, tokio::sync::watch::Sender<bool>>>,
     exec_live: Mutex<HashMap<ExecId, Arc<dyn Running>>>,
     exec_cleanups: Mutex<HashMap<ExecId, tokio::task::AbortHandle>>,
     exec_cleanup_failures: Mutex<HashMap<ExecId, String>>,
     exec_waiters: Mutex<HashMap<ExecId, Arc<Notify>>>,
     io: Mutex<HashMap<JournalId, Arc<Io>>>,
+    next_io_generation: AtomicU64,
     last_created_ms: AtomicU64,
     rootfs: Option<hl_images::rootfs::Roots>,
     images: Option<hl_images::Images>,
@@ -100,12 +103,15 @@ impl Service {
             exits: Mutex::new(HashMap::new()),
             failures: Mutex::new(HashMap::new()),
             live: Mutex::new(HashMap::new()),
+            launch_cleanups: Mutex::new(HashMap::new()),
+            launch_cleanup_failures: Mutex::new(HashMap::new()),
             restarts: Mutex::new(HashMap::new()),
             exec_live: Mutex::new(HashMap::new()),
             exec_cleanups: Mutex::new(HashMap::new()),
             exec_cleanup_failures: Mutex::new(HashMap::new()),
             exec_waiters: Mutex::new(HashMap::new()),
             io: Mutex::new(HashMap::new()),
+            next_io_generation: AtomicU64::new(1),
             last_created_ms: AtomicU64::new(0),
             rootfs,
             images,
@@ -146,5 +152,11 @@ impl Service {
                 sink.emit(event.clone());
             }
         }
+    }
+
+    fn next_io_generation(&self) -> Result<u64> {
+        self.next_io_generation
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| value.checked_add(1))
+            .map_err(|_| Error::Runtime("process I/O generation space is exhausted".into()))
     }
 }

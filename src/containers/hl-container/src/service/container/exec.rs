@@ -62,6 +62,15 @@ impl Service {
         claim_attachment: bool,
     ) -> Result<crate::Session> {
         let _guard = self.operations.lock().await;
+        self.start_exec_locked(id, size, claim_attachment).await
+    }
+
+    async fn start_exec_locked(
+        self: &Arc<Self>,
+        id: &ExecId,
+        size: Option<crate::Size>,
+        claim_attachment: bool,
+    ) -> Result<crate::Session> {
         let mut exec = self.inspect_exec(id).await?;
         if !matches!(exec.state, ExecState::Created) {
             return Err(Error::InvalidExecState {
@@ -107,16 +116,13 @@ impl Service {
         // Input ownership is the only destructive preparation step. Keep it
         // after every fallible filesystem, volume, network, identity, domain,
         // and checkpoint lookup so a repaired dependency can be retried.
-        let io = self.exec_io(&exec).await;
+        let io = self.new_exec_io(&exec, live_at).await?;
         let session = crate::Session::new(Arc::clone(self), Arc::clone(&io), journal.clone(), cursor, live_at);
         let session = if claim_attachment {
             session.claim_attachment()?
         } else {
             session
         };
-        if exec.checkpoint.is_some() {
-            io.rearm_input().await;
-        }
         let input = io.take_input().await?;
         let process = self
             .runtime
@@ -407,11 +413,11 @@ impl Service {
     }
 
     pub(crate) async fn checkpoint_execs(self: &Arc<Self>, timeout: std::time::Duration) -> Result<()> {
+        let _guard = self.operations.lock().await;
         let ids = self.checkpointable_execs().await?;
         let mut captured = Vec::new();
         for id in ids {
             let result = async {
-                let _guard = self.operations.lock().await;
                 let mut exec = self.inspect_exec(&id).await?;
                 let process = self
                     .exec_live
@@ -422,13 +428,14 @@ impl Service {
                     .ok_or_else(|| Error::Runtime(format!("running exec {id} has no runtime process")))?;
                 process.checkpoint(timeout).await?;
                 let journal = JournalId::exec(id.clone());
-                let delivered = self
+                let io = self
                     .io
                     .lock()
                     .await
                     .get(&journal)
-                    .ok_or_else(|| Error::Runtime(format!("running exec {id} has no live I/O")))?
-                    .delivered_cursor();
+                    .cloned()
+                    .ok_or_else(|| Error::Runtime(format!("running exec {id} has no live I/O")))?;
+                let delivered = io.delivered_cursor();
                 exec.attachment_cursor = Some(exec.attachment_cursor.unwrap_or(0).max(delivered));
                 let checkpoint = crate::Checkpoint {
                     namespace: format!("exec-{id}"),
@@ -441,25 +448,33 @@ impl Service {
                 if let Some(waiters) = self.exec_waiters.lock().await.get(&id) {
                     waiters.notify_waiters();
                 }
-                Ok(())
+                Ok(io)
             };
-            if let Err(mut failure) = result.await {
-                for captured_id in captured {
-                    if let Err(rollback) = self.start_exec(&captured_id, None, false).await {
-                        failure = Error::Runtime(format!(
-                            "{failure}; checkpoint rollback failed for terminal {captured_id}: {rollback}"
-                        ));
+            let io = match result.await {
+                Ok(io) => io,
+                Err(mut failure) => {
+                    for (captured_id, _) in captured {
+                        if let Err(rollback) = self.start_exec_locked(&captured_id, None, false).await {
+                            failure = Error::Runtime(format!(
+                                "{failure}; checkpoint rollback failed for terminal {captured_id}: {rollback}"
+                            ));
+                        }
                     }
+                    return Err(failure);
                 }
-                return Err(failure);
-            }
-            captured.push(id);
+            };
+            captured.push((id, io));
         }
         let finished = {
             let mut ios = self.io.lock().await;
             captured
                 .into_iter()
-                .filter_map(|id| ios.remove(&JournalId::exec(id)))
+                .filter_map(|(id, captured)| {
+                    let journal = JournalId::exec(id);
+                    ios.get(&journal)
+                        .is_some_and(|current| Arc::ptr_eq(current, &captured))
+                        .then(|| ios.remove(&journal).expect("matched I/O generation"))
+                })
                 .collect::<Vec<_>>()
         };
         for io in finished {
@@ -567,15 +582,17 @@ impl Service {
         self.execs.remove(id).await
     }
 
-    async fn exec_io(&self, exec: &Exec) -> Arc<Io> {
+    async fn new_exec_io(&self, exec: &Exec, start_cursor: u64) -> Result<Arc<Io>> {
         let mut values = self.io.lock().await;
         let id = JournalId::exec(exec.id.clone());
-        if let Some(io) = values.get(&id) {
-            return Arc::clone(io);
+        let generation = self.next_io_generation()?;
+        let io = Arc::new(Io::new(exec.spec.streams.stdin, generation, start_cursor));
+        let previous = values.insert(id, Arc::clone(&io));
+        drop(values);
+        if let Some(previous) = previous {
+            previous.finish().await;
         }
-        let io = Arc::new(Io::new(exec.spec.streams.stdin));
-        values.insert(id, Arc::clone(&io));
-        io
+        Ok(io)
     }
 
     pub(crate) async fn await_exec_cleanups(&self, timeout: std::time::Duration) -> Result<()> {
