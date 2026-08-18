@@ -67,8 +67,10 @@ typedef struct hl_lineage_registry {
  * is deliberately not a second policy lock. */
 size_t hl_lineage_registry_size(uint64_t capacity);
 int hl_lineage_registry_init(hl_lineage_registry *registry, size_t size, uint64_t capacity, uint64_t domain,
-                             int zero_storage);
+                             int storage_is_zeroed);
 int hl_lineage_registry_create(hl_lineage_registry *registry, hl_lineage_value value, hl_lineage_token *token);
+int hl_lineage_registry_insert(hl_lineage_registry *registry, hl_lineage_identity identity,
+                               hl_lineage_value value, hl_lineage_token *token);
 int hl_lineage_registry_find(const hl_lineage_registry *registry, hl_lineage_identity identity,
                              hl_lineage_token *token, hl_lineage_value *value);
 int hl_lineage_registry_lookup(const hl_lineage_registry *registry, hl_lineage_token token,
