@@ -66,7 +66,13 @@ impl RuntimeFactory for ProductionFactory {
                 sink,
                 source,
                 request.isa,
-                request.plan.options.get_bytes("HL_CHECKPOINT_PHASE_LEDGER").is_some(),
+                request
+                    .plan
+                    .options
+                    .get_bytes("HL_CHECKPOINT_PHASE_LEDGER")
+                    .and_then(|_| request.plan.options.get("HL_DIAGNOSTIC_PORT"))
+                    .and_then(|value| value.parse().ok()),
+                request.plan.options.get_bytes("HL_CHECKPOINT_PHASE_CLOCK_FAIL").is_some(),
             )?),
             (None, None) => None,
             _ => return Err(CompositionError::RuntimeConstruction),
@@ -309,7 +315,8 @@ impl CheckpointControl {
         sink: Arc<dyn CheckpointSink>,
         source: Arc<dyn CheckpointSource>,
         isa: crate::activation::GuestIsa,
-        phase_ledger: bool,
+        phase_ledger: Option<i32>,
+        phase_clock_failure: bool,
     ) -> Result<Self, CompositionError> {
         let (broker, transport) =
             hl_native::CheckpointTransport::create().map_err(|_| CompositionError::RuntimeConstruction)?;
@@ -319,7 +326,7 @@ impl CheckpointControl {
             server,
             transport,
             acceptor: Some(acceptor),
-            phases: CheckpointPhaseLedger::new(phase_ledger, isa),
+            phases: CheckpointPhaseLedger::new(phase_ledger, phase_clock_failure, isa),
         })
     }
 
@@ -332,17 +339,25 @@ impl CheckpointControl {
         use std::time::{Duration, Instant};
 
         if Instant::now() >= deadline {
+            self.phases.terminal(0, 1);
             return Err(EngineError::WaitFailed);
         }
         let ready = self.phases.begin();
-        self.server
-            .wait_capture_ready(deadline)
-            .map_err(Self::capture_failure)?;
+        if let Err(failure) = self.server.wait_capture_ready(deadline) {
+            self.phases.terminal(0, 1);
+            return Err(Self::capture_failure(failure));
+        }
         let admission = self.phases.begin();
-        let capture = self
+        let capture = match self
             .server
             .begin_capture_after_admission(deadline, || self.transport.bump())
-            .map_err(Self::capture_failure)?;
+        {
+            Ok(capture) => capture,
+            Err(failure) => {
+                self.phases.terminal(0, 1);
+                return Err(Self::capture_failure(failure));
+            }
+        };
         self.phases.finish(capture, "capture_ready_wait", ready);
         self.phases.finish(capture, "capture_admission", admission);
         let signal = hl_native::CheckpointTransport::interrupt_signal(match isa {
@@ -351,21 +366,27 @@ impl CheckpointControl {
         });
         let dispatch = self.phases.begin();
         if signal <= 0 || engine.request(REQUEST_CHECKPOINT, signal).is_err() {
-            self.server
-                .abort_capture(capture)
-                .map_err(|_| EngineError::LaunchFailed)?;
+            if self.server.abort_capture(capture).is_err() {
+                self.phases.terminal(capture, 1);
+                return Err(EngineError::LaunchFailed);
+            }
+            self.phases.terminal(capture, 1);
             return Err(EngineError::StopFailed);
         }
         self.phases.finish(capture, "request_dispatch", dispatch);
         let completion = self.phases.begin();
         let mut next_interrupt = Instant::now() + Duration::from_millis(100);
         loop {
-            let result = self
-                .server
-                .wait_capture(capture, next_interrupt)
-                .map_err(|_| EngineError::LaunchFailed)?;
+            let result = match self.server.wait_capture(capture, next_interrupt) {
+                Ok(result) => result,
+                Err(_) => {
+                    self.phases.terminal(capture, 1);
+                    return Err(EngineError::LaunchFailed);
+                }
+            };
             if let Some(result) = result {
                 self.phases.finish(capture, "completion_wait", completion);
+                self.phases.terminal(capture, u32::from(result.is_err()));
                 return result.map_err(|failure| Self::capture_failure_with_exit(engine, failure));
             }
             if Instant::now() >= next_interrupt {
@@ -376,10 +397,16 @@ impl CheckpointControl {
     }
 
     fn begin_recovery(&self, deadline: std::time::Instant) -> Result<RecoveryAdmission, EngineError> {
-        let id = self
+        let id = match self
             .server
             .begin_recovery_after_admission(deadline, || self.transport.bump())
-            .map_err(Self::capture_failure)?;
+        {
+            Ok(id) => id,
+            Err(failure) => {
+                self.phases.terminal(0, 1);
+                return Err(Self::capture_failure(failure));
+            }
+        };
         Ok(RecoveryAdmission {
             server: Arc::clone(&self.server),
             id,
@@ -419,30 +446,93 @@ impl CheckpointControl {
 #[cfg(unix)]
 #[derive(Clone, Copy)]
 struct CheckpointPhaseLedger {
-    enabled: bool,
+    descriptor: Option<i32>,
+    clock_failure: bool,
     isa: crate::activation::GuestIsa,
 }
 
 #[cfg(unix)]
 impl CheckpointPhaseLedger {
-    const fn new(enabled: bool, isa: crate::activation::GuestIsa) -> Self {
-        Self { enabled, isa }
+    const fn new(descriptor: Option<i32>, clock_failure: bool, isa: crate::activation::GuestIsa) -> Self {
+        Self {
+            descriptor,
+            clock_failure,
+            isa,
+        }
     }
 
-    fn begin(self) -> Option<std::time::Instant> {
-        self.enabled.then(std::time::Instant::now)
+    fn now(self) -> u64 {
+        if self.descriptor.is_none() {
+            return u64::MAX;
+        }
+        if self.clock_failure {
+            return 0;
+        }
+        let mut now = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        // SAFETY: `now` is writable storage of the exact ABI type; CLOCK_MONOTONIC
+        // retains no pointer and invokes no callback.
+        if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &raw mut now) } != 0 {
+            return 0;
+        }
+        u64::try_from(now.tv_sec)
+            .ok()
+            .and_then(|seconds| seconds.checked_mul(1_000_000))
+            .and_then(|micros| u64::try_from(now.tv_nsec).ok().map(|nanos| micros + nanos / 1_000))
+            .unwrap_or(0)
     }
 
-    fn finish(self, generation: u64, phase: &str, started: Option<std::time::Instant>) {
-        let Some(started) = started else { return };
-        eprintln!(
-            "checkpoint_phase_ledger\tcomponent=control\tisa={}\tsession={generation}\tattempt={generation}\tgeneration={generation}\tphase={phase}\tduration_us={}\tbudget_us=0\tclock=ok\toutcome=progress",
+    fn begin(self) -> u64 {
+        self.now()
+    }
+
+    fn finish(self, generation: u64, phase: &str, started: u64) {
+        if started == u64::MAX {
+            return;
+        }
+        let finished = self.now();
+        let (duration, clock) = if started == 0 || finished == 0 {
+            (0, "unavailable")
+        } else {
+            (finished.saturating_sub(started), "ok")
+        };
+        self.emit(format!(
+            "checkpoint_phase_ledger\tcomponent=control\tisa={}\tsession={generation}\tattempt={generation}\tgeneration={generation}\tphase={phase}\tduration_us={duration}\tbudget_us=0\tclock={clock}\toutcome=progress\tstatus=0",
+            match self.isa {
+                crate::activation::GuestIsa::Aarch64 => "aarch64",
+                crate::activation::GuestIsa::X86_64 => "x86_64",
+            }
+        ));
+    }
+
+    fn terminal(self, generation: u64, status: u32) {
+        if self.descriptor.is_none() {
+            return;
+        }
+        static NEXT_UNADMITTED_ATTEMPT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let correlation = if generation == 0 {
+            NEXT_UNADMITTED_ATTEMPT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        } else {
+            generation
+        };
+        let clock = if self.now() == 0 { "unavailable" } else { "ok" };
+        self.emit(format!(
+            "checkpoint_phase_ledger\tcomponent=control\tisa={}\tsession={correlation}\tattempt={correlation}\tgeneration={generation}\tphase=terminal\tduration_us=0\tbudget_us=0\tclock={}\toutcome={}\tstatus={status}",
             match self.isa {
                 crate::activation::GuestIsa::Aarch64 => "aarch64",
                 crate::activation::GuestIsa::X86_64 => "x86_64",
             },
-            started.elapsed().as_micros()
-        );
+            clock,
+            if status == 0 { "success" } else { "failure" },
+        ));
+    }
+
+    fn emit(self, mut record: String) {
+        let Some(descriptor) = self.descriptor else { return };
+        record.push('\n');
+        // SAFETY: the test harness owns this inherited append-only descriptor for
+        // the subprocess lifetime; the bounded record is borrowed for one write.
+        let written = unsafe { libc::write(descriptor, record.as_ptr().cast(), record.len()) };
+        assert_eq!(written, isize::try_from(record.len()).unwrap(), "checkpoint phase ledger write");
     }
 }
 
@@ -466,8 +556,12 @@ const RECOVERY_SETTLED: u8 = 3;
 #[cfg(unix)]
 impl Drop for RecoveryAdmission {
     fn drop(&mut self) {
-        if self.state.load(std::sync::atomic::Ordering::Acquire) != RECOVERY_SETTLED {
+        let state = self.state.load(std::sync::atomic::Ordering::Acquire);
+        if state != RECOVERY_SETTLED {
             let _ = self.abort_recovery();
+            if state == RECOVERY_OPEN {
+                self.phases.terminal(self.id, 1);
+            }
         }
     }
 }
@@ -512,6 +606,7 @@ impl RecoveryAdmission {
         };
         self.state.store(state, std::sync::atomic::Ordering::Release);
         self.phases.finish(self.id, "recovery_wait", started);
+        self.phases.terminal(self.id, u32::from(result.is_err()));
         result.map_err(CheckpointControl::capture_failure)
     }
 }

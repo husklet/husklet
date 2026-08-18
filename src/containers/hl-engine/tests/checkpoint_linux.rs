@@ -12,11 +12,13 @@ use hl_engine::{
     runtime::Engine,
 };
 use hl_process::unix_descriptor::{self as descriptor, Identity, Lock, StandardDescriptor};
-use hl_process::{Capture as ProcessCapture, Command as ProcessCommand, Outcome as ProcessOutcome};
+use hl_process::{
+    Capture as ProcessCapture, Command as ProcessCommand, EnvironmentEntry, Outcome as ProcessOutcome,
+};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     num::NonZeroU64,
-    os::fd::AsRawFd,
+    os::fd::{AsRawFd, IntoRawFd},
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{atomic::AtomicBool, Arc, Condvar, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard},
@@ -344,8 +346,21 @@ fn continuation_plan(executable: &Path, ready: &Path, release: &Path, result: &P
 
 fn daily_dev_plan(executable: &Path, directory: &Path, restore: bool, capture: bool) -> RuntimePlan {
     let mut options = Options::default();
-    if std::env::args_os().any(|argument| argument == "checkpoint_phase_ledger_probe_child") {
+    let phase_probe = std::env::args_os().any(|argument| {
+        matches!(
+            argument.to_str(),
+            Some("checkpoint_phase_ledger_probe_child" | "checkpoint_phase_ledger_clock_failure_probe_child")
+        )
+    });
+    let exact_probe = std::env::args_os().any(|argument| argument == "checkpoint_phase_ledger_exact_probe_child");
+    if phase_probe || exact_probe {
         options.set("HL_CHECKPOINT_PHASE_LEDGER", "1", true).unwrap();
+    }
+    if exact_probe {
+        options.set("HL_CKPT_TEST_EXACT_TOPOLOGY", "1", true).unwrap();
+    }
+    if std::env::args_os().any(|argument| argument == "checkpoint_phase_ledger_clock_failure_probe_child") {
+        options.set("HL_CHECKPOINT_PHASE_CLOCK_FAIL", "1", true).unwrap();
     }
     if restore {
         options.set("HL_RESTORE", "1", true).unwrap();
@@ -364,6 +379,41 @@ fn daily_dev_plan(executable: &Path, directory: &Path, restore: bool, capture: b
         result_path: None,
         options,
     }
+}
+
+fn daily_dev_phase_plan(
+    isa: GuestIsa,
+    executable: &Path,
+    directory: &Path,
+    restore: bool,
+    capture: bool,
+) -> RuntimePlan {
+    let mut plan = daily_dev_plan(executable, directory, restore, capture);
+    if let Some(path) = std::env::var_os("HL_CHECKPOINT_PHASE_LEDGER_PATH") {
+        let descriptor = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap()
+            .into_raw_fd();
+        plan.options
+            .set("HL_DIAGNOSTIC_PORT", &descriptor.to_string(), true)
+            .unwrap();
+        plan.options
+            .set(
+                "HL_CHECKPOINT_PHASE_ISA",
+                match isa {
+                    GuestIsa::Aarch64 => "aarch64",
+                    GuestIsa::X86_64 => "x86_64",
+                },
+                true,
+            )
+            .unwrap();
+        if restore {
+            plan.options.set("HL_CHECKPOINT_PHASE_GENERATION", "1", true).unwrap();
+        }
+    }
+    plan
 }
 
 fn pipeline_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
@@ -1555,6 +1605,7 @@ struct CheckpointPhaseRow<'a> {
     attempt: u64,
     clock: &'a str,
     outcome: &'a str,
+    status: u32,
     phase: &'a str,
     duration_us: u64,
     budget_us: u64,
@@ -1582,6 +1633,7 @@ fn checkpoint_phase_rows(output: &str) -> Vec<CheckpointPhaseRow<'_>> {
                     "outcome",
                     "phase",
                     "session",
+                    "status",
                 ],
                 "invalid checkpoint phase-ledger schema: {line}"
             );
@@ -1593,6 +1645,7 @@ fn checkpoint_phase_rows(output: &str) -> Vec<CheckpointPhaseRow<'_>> {
                 attempt: fields["attempt"].parse().unwrap(),
                 clock: fields["clock"],
                 outcome: fields["outcome"],
+                status: fields["status"].parse().unwrap(),
                 phase: fields["phase"],
                 duration_us: fields["duration_us"].parse().unwrap(),
                 budget_us: fields["budget_us"].parse().unwrap(),
@@ -1618,6 +1671,11 @@ fn outer_phase_us(output: &str, isa: &str, phase: &str) -> Vec<u64> {
 
 fn validate_phase_ledger_contract(output: &str) -> Result<(), String> {
     let rows = checkpoint_phase_rows(output);
+    if rows.iter().any(|row| {
+        !matches!(row.component, "native" | "control") || !matches!(row.isa, "aarch64" | "x86_64")
+    }) {
+        return Err("checkpoint ledger contains an unknown component or ISA".to_owned());
+    }
     let capture = [
         "peer_quiescence",
         "serialization",
@@ -1641,12 +1699,16 @@ fn validate_phase_ledger_contract(output: &str) -> Result<(), String> {
         "capture_admission",
         "request_dispatch",
         "completion_wait",
+        "terminal",
         "recovery_wait",
+        "terminal",
         "capture_ready_wait",
         "capture_admission",
         "request_dispatch",
         "completion_wait",
+        "terminal",
         "recovery_wait",
+        "terminal",
     ];
     for isa in ["aarch64", "x86_64"] {
         let native = rows
@@ -1664,13 +1726,17 @@ fn validate_phase_ledger_contract(output: &str) -> Result<(), String> {
             return Err(format!("{isa} control phase order/count mismatch"));
         }
         for row in native.iter().chain(&control) {
-            let expected_outcome = if row.phase == "terminal" { "success" } else { "progress" };
-            if row.clock != "ok"
-                || row.outcome != expected_outcome
-                || row.generation == 0
-                || row.session != row.generation
-                || row.attempt != row.generation
-            {
+            let valid_outcome = if row.phase == "terminal" {
+                matches!((row.outcome, row.status), ("success", 0) | ("failure", 1..=u32::MAX))
+            } else {
+                row.outcome == "progress" && row.status == 0
+            };
+            let correlated = if row.phase == "terminal" && row.outcome == "failure" && row.generation == 0 {
+                row.session != 0 && row.attempt == row.session
+            } else {
+                row.generation != 0 && row.session == row.generation && row.attempt == row.generation
+            };
+            if row.clock != "ok" || !valid_outcome || !correlated {
                 return Err(format!("{isa} invalid correlated phase row: {row:?}"));
             }
         }
@@ -1724,17 +1790,54 @@ fn validate_phase_ledger_contract(output: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn mutate_phase_field(output: &str, phase: &str, field: &str, value: &str) -> String {
+fn validate_early_failure_ledger(output: &str) -> Result<(), String> {
+    let rows = checkpoint_phase_rows(output);
+    if rows.len() != 1 {
+        return Err("early failure ledger must contain exactly one terminal row".to_owned());
+    }
+    let row = &rows[0];
+    if row.component != "control"
+        || !matches!(row.isa, "aarch64" | "x86_64")
+        || row.phase != "terminal"
+        || row.outcome != "failure"
+        || row.status == 0
+        || row.generation != 0
+        || row.session == 0
+        || row.attempt != row.session
+        || row.duration_us != 0
+        || row.budget_us != 0
+        || row.clock != "ok"
+    {
+        return Err(format!("invalid early failure terminal: {row:?}"));
+    }
+    Ok(())
+}
+
+fn mutate_phase_field(
+    output: &str,
+    isa: Option<&str>,
+    phase: &str,
+    occurrence: usize,
+    field: &str,
+    value: &str,
+) -> String {
     let marker = format!("phase={phase}");
     let prefix = format!("{field}=");
-    let mut changed = false;
+    let mut matched = 0;
     output
         .lines()
         .map(|line| {
-            if changed || !line.starts_with("checkpoint_phase_ledger\t") || !line.contains(&marker) {
+            if !line.starts_with("checkpoint_phase_ledger\t")
+                || !line.contains(&marker)
+                || isa.is_some_and(|isa| !line.contains(&format!("isa={isa}\t")))
+            {
                 return line.to_owned();
             }
-            changed = true;
+            let selected = matched == occurrence;
+            matched += 1;
+            if !selected {
+                return line.to_owned();
+            }
             line.split('\t')
                 .map(|item| {
                     item.strip_prefix(&prefix)
@@ -1742,6 +1845,26 @@ fn mutate_phase_field(output: &str, phase: &str, field: &str, value: &str) -> St
                 })
                 .collect::<Vec<_>>()
                 .join("\t")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn remove_or_duplicate_phase_row(output: &str, duplicate: bool) -> String {
+    let mut changed = false;
+    output
+        .lines()
+        .flat_map(|line| {
+            if !changed && line.starts_with("checkpoint_phase_ledger\t") && line.contains("phase=peer_quiescence") {
+                changed = true;
+                if duplicate {
+                    vec![line.to_owned(), line.to_owned()]
+                } else {
+                    Vec::new()
+                }
+            } else {
+                vec![line.to_owned()]
+            }
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -1795,7 +1918,7 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
     let capture = Arc::new(
         Engine::with_checkpoint(
             isa,
-            daily_dev_plan(executable, directory.path(), false, true),
+            daily_dev_phase_plan(isa, executable, directory.path(), false, true),
             streams(true),
             first.clone(),
             first.clone(),
@@ -1822,7 +1945,7 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
     let recapture = Arc::new(
         Engine::with_checkpoint(
             isa,
-            daily_dev_plan(executable, directory.path(), true, true),
+            daily_dev_phase_plan(isa, executable, directory.path(), true, true),
             streams(true),
             second.clone(),
             first,
@@ -1846,7 +1969,7 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
     let restore = Arc::new(
         Engine::with_checkpoint(
             isa,
-            daily_dev_plan(executable, directory.path(), true, false),
+            daily_dev_phase_plan(isa, executable, directory.path(), true, false),
             streams(true),
             second.clone(),
             second,
@@ -2762,6 +2885,22 @@ fn amd64_daily_development_workload_survives_two_checkpoint_cycles() {
 #[test]
 #[ignore = "subprocess target for the checkpoint phase-ledger regression gate"]
 fn checkpoint_phase_ledger_probe_child() {
+    checkpoint_phase_ledger_probe();
+}
+
+#[test]
+#[ignore = "subprocess target for exact-topology checkpoint phase timing"]
+fn checkpoint_phase_ledger_exact_probe_child() {
+    checkpoint_phase_ledger_probe();
+}
+
+#[test]
+#[ignore = "subprocess target for injected checkpoint phase-clock failure"]
+fn checkpoint_phase_ledger_clock_failure_probe_child() {
+    checkpoint_phase_ledger_probe();
+}
+
+fn checkpoint_phase_ledger_probe() {
     let compiling = fixture_compilation();
     let fixtures = tempfile::tempdir().unwrap();
     let started = Instant::now();
@@ -2774,22 +2913,35 @@ fn checkpoint_phase_ledger_probe_child() {
     let _exclusive = exclusive_checkpoint_test();
     daily_dev_round_trip(GuestIsa::Aarch64, &executable, fixture_compile);
     daily_dev_round_trip(GuestIsa::X86_64, &x86_executable, x86_fixture_compile);
+    let ledger = std::env::var_os("HL_CHECKPOINT_PHASE_LEDGER_PATH").expect("phase ledger path");
+    let ledger = std::fs::read_to_string(ledger).unwrap();
+    assert!(
+        ledger.contains("component=native")
+            && ledger.contains("phase=peer_quiescence")
+            && ledger.contains("phase=restore_process_commit"),
+        "native records did not survive guest stderr remapping: {ledger}"
+    );
+    eprint!("{ledger}");
 }
 
-#[test]
-fn checkpoint_phase_ledger_separates_the_fixed_wait_from_real_work() {
-    let _exclusive = exclusive_checkpoint_test();
+fn phase_probe_output(test: &str, timeout: Duration) -> String {
     let capture = tempfile::tempdir().unwrap();
     let stdout = capture.path().join("stdout");
     let stderr_path = capture.path().join("stderr");
+    let ledger_path = capture.path().join("ledger");
     let mut command = ProcessCommand::new(std::env::current_exe().unwrap());
-    command.args([
-        "--exact",
-        "checkpoint_phase_ledger_probe_child",
-        "--ignored",
-        "--nocapture",
-        "--test-threads=1",
-    ]);
+    command.args(["--exact", test, "--ignored", "--nocapture", "--test-threads=1"]);
+    let mut environment = std::env::vars_os()
+        .map(|(name, value)| EnvironmentEntry::new(name.as_encoded_bytes(), value.as_encoded_bytes()).unwrap())
+        .collect::<Vec<_>>();
+    environment.push(
+        EnvironmentEntry::new(
+            b"HL_CHECKPOINT_PHASE_LEDGER_PATH",
+            ledger_path.as_os_str().as_encoded_bytes(),
+        )
+        .unwrap(),
+    );
+    command.exact_environment(environment).unwrap();
     let outcome = hl_process::run(
         &command,
         &ProcessCapture {
@@ -2798,7 +2950,7 @@ fn checkpoint_phase_ledger_separates_the_fixed_wait_from_real_work() {
             stdout_limit: 4 * 1024 * 1024,
             stderr_limit: 4 * 1024 * 1024,
         },
-        Duration::from_secs(20),
+        timeout,
         &AtomicBool::new(false),
     )
     .unwrap();
@@ -2806,36 +2958,66 @@ fn checkpoint_phase_ledger_separates_the_fixed_wait_from_real_work() {
     assert_eq!(
         outcome,
         ProcessOutcome::Exited(Some(0)),
-        "phase-ledger child failed:\n{stderr}"
+        "phase-ledger child {test} failed:\n{stderr}"
     );
+    stderr
+}
+
+#[test]
+fn checkpoint_phase_ledger_separates_the_fixed_wait_from_real_work() {
+    let _exclusive = exclusive_checkpoint_test();
+    let stderr = phase_probe_output("checkpoint_phase_ledger_probe_child", Duration::from_secs(20));
     validate_phase_ledger_contract(&stderr).unwrap();
 
-    let exact_topology = stderr
-        .lines()
-        .map(|line| {
-            if line.starts_with("checkpoint_phase_ledger\t") && line.contains("phase=settlement") {
-                line.split('\t')
-                    .map(|field| match field.split_once('=') {
-                        Some(("budget_us", _)) => "budget_us=0".to_owned(),
-                        Some(("duration_us", _)) => "duration_us=50000".to_owned(),
-                        _ => field.to_owned(),
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\t")
-            } else {
-                line.to_owned()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    validate_phase_ledger_contract(&exact_topology).expect("zero-budget settlement must validate on both ISAs");
+    let exact_topology = phase_probe_output("checkpoint_phase_ledger_exact_probe_child", Duration::from_secs(12));
+    validate_phase_ledger_contract(&exact_topology).expect("real zero-budget settlement must validate on both ISAs");
+    let exact_rows = checkpoint_phase_rows(&exact_topology);
+    for isa in ["aarch64", "x86_64"] {
+        let settlements = exact_rows
+            .iter()
+            .filter(|row| row.isa == isa && row.phase == "settlement")
+            .collect::<Vec<_>>();
+        assert_eq!(settlements.len(), 2, "{isa} exact-topology settlement rows");
+        assert!(
+            settlements.iter().all(|row| row.budget_us == 0 && row.duration_us < 100_000),
+            "{isa} did not execute the real zero-budget settlement path: {settlements:?}"
+        );
+    }
+    let failed_clock = phase_probe_output(
+        "checkpoint_phase_ledger_clock_failure_probe_child",
+        Duration::from_secs(20),
+    );
+    let failed_clock_rows = checkpoint_phase_rows(&failed_clock);
+    assert!(!failed_clock_rows.is_empty());
+    assert!(
+        failed_clock_rows
+            .iter()
+            .all(|row| row.clock == "unavailable" && row.duration_us == 0),
+        "injected clock failure did not reach both native and control ledgers: {failed_clock}"
+    );
+    assert!(validate_phase_ledger_contract(&failed_clock).is_err());
+    let early_failure = "checkpoint_phase_ledger\tcomponent=control\tisa=aarch64\tsession=71\tattempt=71\tgeneration=0\tphase=terminal\tduration_us=0\tbudget_us=0\tclock=ok\toutcome=failure\tstatus=70";
+    validate_early_failure_ledger(early_failure).expect("well-formed early failure terminal must be accepted");
+    assert!(validate_phase_ledger_contract(early_failure).is_err());
+    assert!(validate_early_failure_ledger(&early_failure.replace("status=70", "status=0")).is_err());
+    assert!(validate_early_failure_ledger(&early_failure.replace("attempt=71", "attempt=72")).is_err());
+    assert!(validate_early_failure_ledger(&early_failure.replace("isa=aarch64", "isa=garbage")).is_err());
 
     let mutations = [
-        mutate_phase_field(&stderr, "peer_quiescence", "phase", "wrong_order"),
-        mutate_phase_field(&stderr, "capture_ready_wait", "generation", "0"),
-        mutate_phase_field(&stderr, "serialization", "clock", "unavailable"),
-        mutate_phase_field(&stderr, "serialization", "duration_us", "1000000"),
-        mutate_phase_field(&stderr, "terminal", "outcome", "failure"),
+        mutate_phase_field(&stderr, None, "peer_quiescence", 0, "phase", "wrong_order"),
+        mutate_phase_field(&stderr, None, "peer_quiescence", 0, "component", "garbage"),
+        mutate_phase_field(&stderr, None, "peer_quiescence", 0, "isa", "garbage"),
+        mutate_phase_field(&stderr, None, "capture_ready_wait", 0, "generation", "0"),
+        mutate_phase_field(&stderr, None, "capture_ready_wait", 0, "session", "0"),
+        mutate_phase_field(&stderr, None, "capture_ready_wait", 0, "attempt", "0"),
+        mutate_phase_field(&stderr, None, "settlement", 0, "budget_us", "17"),
+        mutate_phase_field(&stderr, None, "serialization", 0, "clock", "unavailable"),
+        mutate_phase_field(&stderr, None, "serialization", 0, "duration_us", "1000000"),
+        mutate_phase_field(&stderr, None, "terminal", 0, "outcome", "failure"),
+        mutate_phase_field(&stderr, Some("aarch64"), "settlement", 1, "duration_us", "1000000"),
+        mutate_phase_field(&stderr, Some("x86_64"), "serialization", 0, "clock", "unavailable"),
+        remove_or_duplicate_phase_row(&stderr, false),
+        remove_or_duplicate_phase_row(&stderr, true),
     ];
     for mutation in mutations {
         assert!(
@@ -2873,7 +3055,7 @@ fn checkpoint_phase_ledger_separates_the_fixed_wait_from_real_work() {
         .filter(|row| row.component == "control" && row.isa == "aarch64")
         .collect::<Vec<_>>();
     assert_eq!(native.len(), 20, "missing or duplicate native phases:\n{stderr}");
-    assert_eq!(control.len(), 10, "missing or duplicate control phases:\n{stderr}");
+    assert_eq!(control.len(), 14, "missing or duplicate control phases:\n{stderr}");
     let x86_native = rows
         .iter()
         .filter(|row| row.component == "native" && row.isa == "x86_64")
@@ -2883,7 +3065,7 @@ fn checkpoint_phase_ledger_separates_the_fixed_wait_from_real_work() {
         .filter(|row| row.component == "control" && row.isa == "x86_64")
         .collect::<Vec<_>>();
     assert_eq!(x86_native.len(), 20, "missing x86 native phases:\n{stderr}");
-    assert_eq!(x86_control.len(), 10, "missing x86 control phases:\n{stderr}");
+    assert_eq!(x86_control.len(), 14, "missing x86 control phases:\n{stderr}");
 
     let capture_phases = [
         "peer_quiescence",

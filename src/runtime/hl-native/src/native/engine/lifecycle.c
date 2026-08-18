@@ -18,6 +18,7 @@
 #include <pthread.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #if !defined(_WIN32)
 #include <sys/ioctl.h>
 #include <termios.h>
@@ -101,6 +102,7 @@ typedef struct hl_production_entry_context {
     int checkpoint_broker;
     int checkpoint_trigger;
     int checkpoint_control;
+    int diagnostic_port;
     const void *interpreter_image;
     size_t interpreter_size;
     int activation_ready_read;
@@ -561,8 +563,12 @@ static int32_t hl_production_entry(void *opaque) {
     /* The production worker is an exec-like boundary even though the host primitive is fork: only typed
      * bindings and the explicitly duplicated control channels cross. Caller/library ambient descriptors
      * remain untouched in the parent and cannot occupy or be named through the guest descriptor table. */
-    if (hl_host_process_fd_private_plan_child(context->child_descriptor_plan) != 0)
-        return HL_STATUS_PLATFORM_FAILURE;
+    if (hl_host_process_fd_private_plan_child(context->child_descriptor_plan) != 0) return HL_STATUS_PLATFORM_FAILURE;
+    if (context->diagnostic_port >= 0) {
+        char value[32];
+        snprintf(value, sizeof value, "%d", context->diagnostic_port);
+        if (hl_options_set(context->options, "HL_DIAGNOSTIC_PORT", value, 1) != 0) return HL_STATUS_OUT_OF_MEMORY;
+    }
     activation_ready_write = hl_host_process_fd_private_adopt(activation_ready_write);
     if (activation_ready_write < 0) return HL_STATUS_PLATFORM_FAILURE;
     /* Keep process-directed checkpoint kicks away from helper/control threads.
@@ -623,6 +629,14 @@ static void hl_production_result_release(const hl_host_services *host, hl_host_h
     if (state->mapping.handle != HL_HOST_HANDLE_INVALID)
         (void)host->memory->release(host->context, state->mapping.handle);
     free(state);
+}
+
+static int hl_production_diagnostic_port(const hl_options *options) {
+    const char *value = hl_options_get(options, "HL_DIAGNOSTIC_PORT");
+    if (value == NULL) return -1;
+    char *end = NULL;
+    long descriptor = strtol(value, &end, 10);
+    return end != value && *end == 0 && descriptor >= 0 && descriptor <= INT_MAX ? (int)descriptor : -2;
 }
 
 static hl_status hl_production_start_process(const hl_host_services *host, hl_linux_abi *box, hl_options *options,
@@ -689,7 +703,12 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     }
 #else
     int activation_ready[2] = {-1, -1};
+    int diagnostic_port = hl_production_diagnostic_port(options);
     hl_host_process_fd_private_plan *child_descriptor_plan = NULL;
+    if (diagnostic_port == -2) {
+        hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);
+        return HL_STATUS_INVALID_ARGUMENT;
+    }
     if (pipe(activation_ready) < 0) {
         hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);
         return HL_STATUS_RESOURCE_LIMIT;
@@ -706,13 +725,14 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     entry.checkpoint_broker = checkpoint_broker;
     entry.checkpoint_trigger = checkpoint_trigger;
     entry.checkpoint_control = checkpoint_control;
+    entry.diagnostic_port = diagnostic_port;
     entry.interpreter_image = interpreter_image;
     entry.interpreter_size = interpreter_size;
     entry.activation_ready_read = activation_ready[0];
     entry.activation_ready_write = activation_ready[1];
     if (box != NULL) {
         const int retained_descriptors[] = {activation_ready[1], checkpoint_broker, checkpoint_trigger,
-                                            checkpoint_control};
+                                            checkpoint_control, diagnostic_port};
         if (hl_host_process_fd_private_plan_prepare(STDERR_FILENO + 1, retained_descriptors,
                                                     sizeof(retained_descriptors) / sizeof(*retained_descriptors),
                                                     &child_descriptor_plan) != 0) {
@@ -724,13 +744,18 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     }
     if (box != NULL) {
         entry.checkpoint_broker = hl_host_process_fd_private_plan_descriptor(child_descriptor_plan, checkpoint_broker);
-        entry.checkpoint_trigger = hl_host_process_fd_private_plan_descriptor(child_descriptor_plan, checkpoint_trigger);
-        entry.checkpoint_control = hl_host_process_fd_private_plan_descriptor(child_descriptor_plan, checkpoint_control);
+        entry.checkpoint_trigger =
+            hl_host_process_fd_private_plan_descriptor(child_descriptor_plan, checkpoint_trigger);
+        entry.checkpoint_control =
+            hl_host_process_fd_private_plan_descriptor(child_descriptor_plan, checkpoint_control);
         entry.activation_ready_write =
             hl_host_process_fd_private_plan_descriptor(child_descriptor_plan, activation_ready[1]);
+        int child_diagnostic_port = hl_host_process_fd_private_plan_descriptor(child_descriptor_plan, diagnostic_port);
+        entry.diagnostic_port = child_diagnostic_port;
         if (entry.activation_ready_write < 0 ||
             (checkpoint_broker >= 0 && (entry.checkpoint_broker < 0 || entry.checkpoint_trigger < 0)) ||
-            (checkpoint_control >= 0 && entry.checkpoint_control < 0)) {
+            (checkpoint_control >= 0 && entry.checkpoint_control < 0) || diagnostic_port == -2 ||
+            (diagnostic_port >= 0 && child_diagnostic_port < 0)) {
             (void)hl_host_process_fd_private_plan_release(&child_descriptor_plan);
             close(activation_ready[0]);
             close(activation_ready[1]);

@@ -1287,7 +1287,7 @@ static int ckpt_restore_tree_body(const char *rootfs, const struct ckpt_phase_le
         return 70;
     }
     ckpt_phase_finish(phases, "restore_process_commit", phase, 0);
-    ckpt_phase_terminal(phases, "success");
+    ckpt_phase_terminal(phases, "success", 0);
     *completed = 1;
 
     run_guest(&c);
@@ -1295,13 +1295,18 @@ static int ckpt_restore_tree_body(const char *rootfs, const struct ckpt_phase_le
 }
 
 static int ckpt_restore_tree(const char *rootfs) {
+    const char *phase_isa = hl_option_get("HL_CHECKPOINT_PHASE_ISA");
+    const char *phase_generation = hl_option_get("HL_CHECKPOINT_PHASE_GENERATION");
     const struct ckpt_phase_ledger phases = {
         .enabled = hl_option_get("HL_CHECKPOINT_PHASE_LEDGER") != NULL,
-        .isa = G_CKPT_ARCH == 1 ? "aarch64" : "x86_64",
-        .generation = ckpt_request_generation(),
+        .isa = phase_isa != NULL ? phase_isa : ckpt_phase_isa_name(G_CKPT_ARCH),
+        .generation =
+            phase_generation != NULL ? (uint32_t)strtoul(phase_generation, NULL, 10) : ckpt_request_generation(),
+        .clock_failure = hl_option_get("HL_CHECKPOINT_PHASE_CLOCK_FAIL") != NULL,
+        .descriptor = ckpt_phase_descriptor(),
     };
     int completed = 0;
     int status = ckpt_restore_tree_body(rootfs, &phases, &completed);
-    if (!completed) ckpt_phase_terminal(&phases, "failure");
+    if (!completed) ckpt_phase_terminal(&phases, "failure", status);
     return status;
 }

@@ -1,3 +1,5 @@
+#include <stdarg.h>
+
 enum ckpt_fd_capture_result {
     CKPT_FD_CAPTURE_ERROR = -1,
     CKPT_FD_CAPTURE_NEXT = 0,
@@ -8,47 +10,83 @@ struct ckpt_phase_ledger {
     int enabled;
     const char *isa;
     uint32_t generation;
+    int clock_failure;
+    int descriptor;
 };
 
-static uint64_t ckpt_phase_now_us(void) {
+_Static_assert(CKPT_ARCH_X86_64 == 1 && CKPT_ARCH_AARCH64 == 2, "checkpoint diagnostic ISA wire values");
+
+static const char *ckpt_phase_isa_name(int architecture) {
+    return architecture == CKPT_ARCH_AARCH64 ? "aarch64" : "x86_64";
+}
+
+static void ckpt_phase_emit(const struct ckpt_phase_ledger *ledger, const char *format, ...) {
+    if (!ledger->enabled || ledger->descriptor < 0) return;
+    char record[512];
+    va_list arguments;
+    va_start(arguments, format);
+    int length = vsnprintf(record, sizeof record, format, arguments);
+    va_end(arguments);
+    if (length <= 0 || (size_t)length >= sizeof record) _exit(70);
+    ssize_t written;
+    do {
+        written = write(ledger->descriptor, record, (size_t)length);
+    } while (written < 0 && errno == EINTR);
+    if (written != (ssize_t)length) _exit(70);
+}
+
+static int ckpt_phase_descriptor(void) {
+    const char *value = hl_option_get("HL_DIAGNOSTIC_PORT");
+    if (value == NULL || value[0] == 0) return -1;
+    char *end = NULL;
+    long descriptor = strtol(value, &end, 10);
+    return end != value && *end == 0 && descriptor >= 0 && descriptor <= INT_MAX ? (int)descriptor : -1;
+}
+
+static uint64_t ckpt_phase_now_us(const struct ckpt_phase_ledger *ledger) {
+    if (ledger->clock_failure) return 0;
     struct timespec now;
     if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
     return (uint64_t)now.tv_sec * UINT64_C(1000000) + (uint64_t)now.tv_nsec / UINT64_C(1000);
 }
 
 static uint64_t ckpt_phase_begin(const struct ckpt_phase_ledger *ledger) {
-    return ledger->enabled ? ckpt_phase_now_us() : UINT64_MAX;
+    return ledger->enabled ? ckpt_phase_now_us(ledger) : UINT64_MAX;
 }
 
 static void ckpt_phase_finish(const struct ckpt_phase_ledger *ledger, const char *phase, uint64_t started,
                               uint64_t budget_us) {
     if (!ledger->enabled || started == UINT64_MAX) return;
-    uint64_t finished = ckpt_phase_now_us();
+    uint64_t finished = ckpt_phase_now_us(ledger);
     if (started == 0 || finished == 0) {
-        fprintf(stderr,
-                "checkpoint_phase_ledger\tcomponent=native\tisa=%s\tsession=%u\tattempt=%u\tgeneration=%u\tphase=%s\t"
-                "duration_us=0\tbudget_us=%llu\tclock=unavailable\toutcome=progress\n",
-                ledger->isa, ledger->generation, ledger->generation, ledger->generation, phase,
-                (unsigned long long)budget_us);
+        ckpt_phase_emit(
+            ledger,
+            "checkpoint_phase_ledger\tcomponent=native\tisa=%s\tsession=%u\tattempt=%u\tgeneration=%u\tphase=%s\t"
+            "duration_us=0\tbudget_us=%llu\tclock=unavailable\toutcome=progress\tstatus=0\n",
+            ledger->isa, ledger->generation, ledger->generation, ledger->generation, phase,
+            (unsigned long long)budget_us);
         return;
     }
-    fprintf(stderr,
-            "checkpoint_phase_ledger\tcomponent=native\tisa=%s\tsession=%u\tattempt=%u\tgeneration=%u\tphase=%s\t"
-            "duration_us=%llu\tbudget_us=%llu\tclock=ok\toutcome=progress\n",
-            ledger->isa, ledger->generation, ledger->generation, ledger->generation, phase,
-            (unsigned long long)(finished >= started ? finished - started : 0), (unsigned long long)budget_us);
+    ckpt_phase_emit(
+        ledger,
+        "checkpoint_phase_ledger\tcomponent=native\tisa=%s\tsession=%u\tattempt=%u\tgeneration=%u\tphase=%s\t"
+        "duration_us=%llu\tbudget_us=%llu\tclock=ok\toutcome=progress\tstatus=0\n",
+        ledger->isa, ledger->generation, ledger->generation, ledger->generation, phase,
+        (unsigned long long)(finished >= started ? finished - started : 0), (unsigned long long)budget_us);
 }
 
-static void ckpt_phase_terminal(const struct ckpt_phase_ledger *ledger, const char *outcome) {
+static void ckpt_phase_terminal(const struct ckpt_phase_ledger *ledger, const char *outcome, int status) {
     if (!ledger->enabled) return;
-    fprintf(stderr,
-            "checkpoint_phase_ledger\tcomponent=native\tisa=%s\tsession=%u\tattempt=%u\tgeneration=%u\tphase=terminal\t"
-            "duration_us=0\tbudget_us=0\tclock=ok\toutcome=%s\n",
-            ledger->isa, ledger->generation, ledger->generation, ledger->generation, outcome);
+    const char *clock = ckpt_phase_now_us(ledger) == 0 ? "unavailable" : "ok";
+    ckpt_phase_emit(
+        ledger,
+        "checkpoint_phase_ledger\tcomponent=native\tisa=%s\tsession=%u\tattempt=%u\tgeneration=%u\tphase=terminal\t"
+        "duration_us=0\tbudget_us=0\tclock=%s\toutcome=%s\tstatus=%d\n",
+        ledger->isa, ledger->generation, ledger->generation, ledger->generation, clock, outcome, status);
 }
 
 static _Noreturn void ckpt_phase_exit(const struct ckpt_phase_ledger *ledger, int status) {
-    ckpt_phase_terminal(ledger, status == 0 ? "success" : "failure");
+    ckpt_phase_terminal(ledger, status == 0 ? "success" : "failure", status);
     _exit(status);
 }
 
@@ -978,8 +1016,10 @@ static int ckpt_live_process_peers(hl_host_process_peer *peers, size_t capacity,
 static void ckpt_coordinate_and_exit(struct cpu *c) {
     const struct ckpt_phase_ledger phases = {
         .enabled = hl_option_get("HL_CHECKPOINT_PHASE_LEDGER") != NULL,
-        .isa = G_CKPT_ARCH == 1 ? "aarch64" : "x86_64",
+        .isa = ckpt_phase_isa_name(G_CKPT_ARCH),
         .generation = ckpt_request_generation(),
+        .clock_failure = hl_option_get("HL_CHECKPOINT_PHASE_CLOCK_FAIL") != NULL,
+        .descriptor = ckpt_phase_descriptor(),
     };
     uint64_t phase = ckpt_phase_begin(&phases);
     struct ckpt_sink *sink = ckpt_sink_current();
@@ -1059,12 +1099,14 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     // group. A fixed quiescence window also covers the registration gap where neither the peer snapshot nor
     // the store contains the child yet.
     phase = ckpt_phase_begin(&phases);
-    for (int settle = 0; settle < 200; settle++) {
+    int exact_topology_test = hl_option_get("HL_CKPT_TEST_EXACT_TOPOLOGY") != NULL;
+    int settlement_iterations = exact_topology_test ? 1 : 200;
+    for (int settle = 0; settle < settlement_iterations; settle++) {
         int complete = ckpt_sink_group_count(sink, "proc.");
         if (complete >= 0) nproc = complete;
-        usleep(10000);
+        if (!exact_topology_test) usleep(10000);
     }
-    ckpt_phase_finish(&phases, "settlement", phase, UINT64_C(200) * UINT64_C(10000));
+    ckpt_phase_finish(&phases, "settlement", phase, exact_topology_test ? 0 : UINT64_C(200) * UINT64_C(10000));
     if (nproc < nfoll + 1) {
         fprintf(stderr, "[ckpt] process-count mismatch: expected at least %d, captured %d; refusing manifest\n",
                 nfoll + 1, nproc);

@@ -31,6 +31,17 @@ enum { HL_OPTION_STORE_LIMIT = 64 * 1024 * 1024 };
 
 static const hl_option_definition hl_option_definitions[] = {
     HL_LAUNCH_OPTION("HL_CHECKPOINT", "arm checkpoint capture over the store channel", HL_OPTION_FLAG),
+    HL_INTERNAL_OPTION("HL_CHECKPOINT_PHASE_LEDGER", "emit checkpoint phase timing records for performance gates",
+                       HL_OPTION_FLAG),
+    HL_INTERNAL_OPTION("HL_DIAGNOSTIC_PORT", "private engine diagnostic writer descriptor", HL_OPTION_INTEGER),
+    HL_INTERNAL_OPTION("HL_CHECKPOINT_PHASE_CLOCK_FAIL", "inject an unavailable checkpoint phase clock",
+                       HL_OPTION_FLAG),
+    HL_INTERNAL_OPTION("HL_CKPT_TEST_EXACT_TOPOLOGY",
+                       "test a fixture-owned exact participant set without the legacy settlement delay",
+                       HL_OPTION_FLAG),
+    HL_INTERNAL_OPTION("HL_CHECKPOINT_PHASE_ISA", "checkpoint phase ledger guest ISA", HL_OPTION_TEXT),
+    HL_INTERNAL_OPTION("HL_CHECKPOINT_PHASE_GENERATION", "checkpoint restore phase ledger generation",
+                       HL_OPTION_INTEGER),
     HL_LAUNCH_OPTION("HL_CHECKPOINT_POLICY", "checkpoint incompatible-resource recovery policy", HL_OPTION_INTEGER),
     HL_LAUNCH_OPTION("HL_CPUS", "guest-visible CPU quota", HL_OPTION_INTEGER),
     HL_LAUNCH_OPTION("HL_C_DIAGNOSTICS", "report retained C translation and dispatch phase counters at launch exit",

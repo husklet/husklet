@@ -45,6 +45,23 @@ const DEFINITIONS: &[Definition] = &[
         "emit checkpoint phase timing records for performance gates",
         Flag
     ),
+    internal!("HL_DIAGNOSTIC_PORT", "private engine diagnostic writer descriptor", Integer),
+    internal!(
+        "HL_CHECKPOINT_PHASE_CLOCK_FAIL",
+        "inject an unavailable checkpoint phase clock",
+        Flag
+    ),
+    internal!(
+        "HL_CKPT_TEST_EXACT_TOPOLOGY",
+        "test a fixture-owned exact participant set without the legacy settlement delay",
+        Flag
+    ),
+    internal!("HL_CHECKPOINT_PHASE_ISA", "checkpoint phase ledger guest ISA", Text),
+    internal!(
+        "HL_CHECKPOINT_PHASE_GENERATION",
+        "checkpoint restore phase ledger generation",
+        Integer
+    ),
     launch!(
         "HL_CHECKPOINT_POLICY",
         "checkpoint incompatible-resource recovery policy",
