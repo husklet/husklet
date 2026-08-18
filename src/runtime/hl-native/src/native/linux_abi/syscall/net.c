@@ -122,12 +122,11 @@ static int unix_owner_rollback(const char *path, const struct stat *expected, ui
     return same && unlink(path) == 0 ? 0 : -1;
 }
 
-static int unix_owner_bind(int descriptor, const char *host, hl_owner_key *key) {
+static int unix_owner_bind(int descriptor, const char *host) {
     hl_socket_owner_publication publication;
     struct stat status;
     uint64_t birth;
     int error;
-    if (key != NULL) memset(key, 0, sizeof *key);
     if (g_socket_owner_registry == NULL) return unix_sock_at(descriptor, host, 0);
     error = hl_socket_owner_prepare(&publication);
     if (error != 0) {
@@ -167,9 +166,7 @@ static int unix_owner_bind(int descriptor, const char *host, hl_owner_key *key) 
         errno = error;
         return -1;
     }
-    hl_owner_key published_key = hl_socket_owner_key(&status, birth);
     if (hl_socket_owner_finish(&publication, 0) != 0) return errno = EOWNERDEAD, -1;
-    if (key != NULL) *key = published_key;
     return 0;
 }
 

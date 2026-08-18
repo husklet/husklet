@@ -300,6 +300,10 @@ static int hl_owner_set_metadata(const struct stat *status, uint64_t birth_ns, i
         hl_owner_namespace namespace;
         int error = hl_socket_owner_writer_context(&socket_writer, &namespace);
         if (error != 0) return errno = error, -1;
+        if (birth_ns == 0) {
+            socket_fallback_writer = 1;
+            goto socket_legacy_fallback;
+        }
         hl_owner_value value;
         hl_owner_key key = hl_socket_owner_key(status, birth_ns);
         int found = hl_owner_registry_writer_lookup(g_socket_owner_registry, namespace, socket_writer, key, &value);
@@ -316,10 +320,11 @@ static int hl_owner_set_metadata(const struct stat *status, uint64_t birth_ns, i
         }
         socket_fallback_writer = 1;
     }
+socket_legacy_fallback:;
     hl_owner_entry *entry = hl_owner_slot((uint64_t)status->st_dev, (uint64_t)status->st_ino, birth_ns, 1);
     if (entry == NULL) {
         if (socket_fallback_writer) hl_socket_owner_writer_end(socket_writer);
-        return 0;
+        return socket_fallback_writer ? (errno = ENOSPC, -1) : 0;
     }
     uint32_t metadata = 0;
     if (uid >= 0 && (uint64_t)uid <= UINT32_MAX) {
