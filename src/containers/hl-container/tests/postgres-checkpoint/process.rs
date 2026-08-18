@@ -99,16 +99,22 @@ impl Fixture {
                 Stream::Stderr => append_output(&mut stderr, &entry.bytes)?,
             }
         }
-        let state = executions.inspect(&execution.id).await?;
+        // The output owner closes the session before it publishes the durable
+        // exit state.  Observing EOF therefore does not prove that `inspect`
+        // has stopped reporting `Running`; wait for the lifecycle publication
+        // instead of racing it.
+        let result = bounded(
+            "PostgreSQL command exit",
+            PROBE,
+            executions.wait(&execution.id),
+        )
+        .await?;
         require(
-            matches!(
-                &state.state,
-                hl_container::ExecState::Exited {
-                    result: hl_container::ExitStatus::Code(0),
-                    ..
-                }
+            result == hl_container::ExitStatus::Code(0),
+            format!(
+                "command exited with {result:?}; stderr: {}",
+                String::from_utf8_lossy(&stderr)
             ),
-            format!("command failed or remained active: {:?}", state.state),
         )?;
         require(
             stderr.is_empty(),
