@@ -5,10 +5,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
+_Static_assert((sizeof(uint64_t) == sizeof(unsigned long) && ATOMIC_LONG_LOCK_FREE == 2) ||
+                   (sizeof(uint64_t) == sizeof(unsigned long long) && ATOMIC_LLONG_LOCK_FREE == 2),
+               "OFD namespace requires process-shared lock-free 64-bit atomics");
+
 #define HL_OFD_NAMESPACE_ABI UINT64_C(0x484c4f46444e5301)
 #define HL_OFD_NAMESPACE_EMPTY UINT64_C(0)
 #define HL_OFD_NAMESPACE_INITIALIZING UINT64_C(1)
 #define HL_OFD_NAMESPACE_ACTIVE UINT64_C(2)
+#define HL_OFD_NAMESPACE_UPDATING UINT64_C(3)
 
 typedef struct hl_ofd_lineage {
     uint64_t high;
