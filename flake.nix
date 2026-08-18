@@ -986,8 +986,12 @@
               test -s "$binary"
               ${windows.stdenv.cc.targetPrefix}objdump -f "$binary" \
                 | grep -F 'file format pei-x86-64' >/dev/null
-              ${windows.stdenv.cc.targetPrefix}objdump -p "$binary" \
+              ! ${windows.stdenv.cc.targetPrefix}objdump -p "$binary" \
                 | grep -F 'DLL Name: hl_native_engine.dll' >/dev/null
+              ${windows.stdenv.cc.targetPrefix}objdump -p "$binary" \
+                | grep -F 'LoadLibraryExW' >/dev/null
+              ${windows.stdenv.cc.targetPrefix}objdump -p "$binary" \
+                | grep -F 'GetProcAddress' >/dev/null
             done
             dll="$(find target/${target}/debug/build -path '*/out/hl_native_engine.dll' -print -quit)"
             import="$(find target/${target}/debug/build -path '*/out/libhl_native_engine.dll.a' -print -quit)"
@@ -1096,7 +1100,7 @@
           installPhase = ''
             mkdir -p "$out"
             printf '%s\n' \
-              'GNU Windows hl-native/hl-engine Rust target compile, final engine-executable links through the generated import library, complete engine DLL/import-library link with exact public exports, every Windows host-service translation unit, forced POSIX compatibility, and strict C/C++ public-header contracts; this is compile/link evidence, not MSVC SDK or runtime proof' \
+              'GNU Windows hl-native/hl-engine Rust target compile, engine executables use the explicit secure loader without a direct engine-DLL import, the C bridge links through the generated import library, complete engine DLL/import-library link with exact public exports, every Windows host-service translation unit, forced POSIX compatibility, and strict C/C++ public-header contracts; this is compile/link evidence, not MSVC SDK or runtime proof' \
               > "$out/evidence"
           '';
         };
