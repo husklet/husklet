@@ -1,6 +1,7 @@
 #ifndef HL_LINUX_OWNER_H
 #define HL_LINUX_OWNER_H
 
+#include <errno.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdint.h>
