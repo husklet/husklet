@@ -174,7 +174,7 @@ impl Fixture {
         let process = Process::new("/bin/sh")
             .args([
                 "-ceu",
-                "marker=/var/lib/postgresql/data/.acceptance-started; mkdir -p /var/lib/postgresql/data; if [ -e \"$marker\" ]; then echo FRESH_START_FORBIDDEN >&2; exit 97; fi; printf '%s\\n' \"$HL_ACCEPTANCE_RUN\" > \"$marker.tmp\"; mv \"$marker.tmp\" \"$marker\"; exec /usr/local/bin/docker-entrypoint.sh postgres",
+                "test -d /var/lib/postgresql && test -w /var/lib/postgresql; marker=/var/lib/postgresql/.acceptance-started; mkdir -p /var/lib/postgresql/data; if [ -e \"$marker\" ]; then echo FRESH_START_FORBIDDEN >&2; exit 97; fi; printf '%s\\n' \"$HL_ACCEPTANCE_RUN\" > \"$marker.tmp\"; mv \"$marker.tmp\" \"$marker\"; exec /usr/local/bin/docker-entrypoint.sh postgres",
             ])
             .env("POSTGRES_HOST_AUTH_METHOD", "trust")
             .env("PGDATA", "/var/lib/postgresql/data")
@@ -286,7 +286,9 @@ impl Fixture {
             self.containers.executions().wait(&exec),
         )
         .await?;
-        self.exec("rm -f /var/lib/postgresql/data/.acceptance-started && /usr/local/bin/su-exec postgres /usr/local/bin/pg_ctl -D /var/lib/postgresql/data -m fast -w stop")
+        self.exec("rm -f /var/lib/postgresql/.acceptance-started; test ! -e /var/lib/postgresql/.acceptance-started")
+            .await?;
+        self.exec("/usr/local/bin/su-exec postgres /usr/local/bin/pg_ctl -D /var/lib/postgresql/data -m fast -w stop")
             .await?;
         bounded("wait for clean PostgreSQL stop", PROBE, self.containers.wait(CONTAINER)).await?;
         bounded("cold PostgreSQL restart", PHASE, self.containers.start(CONTAINER)).await?;
@@ -299,10 +301,7 @@ impl Fixture {
             format!("cold restart durability mismatch: {final_rows:?}"),
         )?;
         require(
-            self.exec("cat /var/lib/postgresql/data/.acceptance-started")
-                .await?
-                .trim()
-                == run_id,
+            self.exec("cat /var/lib/postgresql/.acceptance-started").await?.trim() == run_id,
             "cold restart did not recreate the expected PID1 marker",
         )?;
         Ok(())
@@ -601,10 +600,7 @@ impl Fixture {
             format!("cycle {cycle}: postmaster PID lineage changed"),
         )?;
         require(
-            self.exec("cat /var/lib/postgresql/data/.acceptance-started")
-                .await?
-                .trim()
-                == context.run_id,
+            self.exec("cat /var/lib/postgresql/.acceptance-started").await?.trim() == context.run_id,
             format!("cycle {cycle}: PID1 fresh-start marker changed"),
         )?;
         session
