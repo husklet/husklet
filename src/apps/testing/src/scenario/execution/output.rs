@@ -145,6 +145,7 @@ pub(super) fn verify(case: &Sample, status: ExitStatus, stdout: &[u8], stderr: &
 }
 
 fn verify_fork_diagnostics(stderr: &[u8], maximum: usize) -> Result<String, Error> {
+    const LINUX_EAGAIN: i64 = 11;
     let text = std::str::from_utf8(stderr).map_err(|_| "native diagnostic stderr is not UTF-8")?;
     let native_records = text
         .lines()
@@ -180,7 +181,7 @@ fn verify_fork_diagnostics(stderr: &[u8], maximum: usize) -> Result<String, Erro
     for record in &records {
         let (stage, result_errno) = verify_fork_record(record)?;
         *stages.entry(stage).or_default() += 1;
-        retryable += usize::from(result_errno == libc::EAGAIN as i64);
+        retryable += usize::from(result_errno == LINUX_EAGAIN);
     }
     let stages = stages
         .into_iter()
