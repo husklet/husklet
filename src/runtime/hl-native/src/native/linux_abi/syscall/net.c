@@ -101,6 +101,53 @@ static int unix_path_routed(const char *guest) {
     return jail_match(normalized) >= 0;
 }
 
+static int unix_owner_same(const char *path, const struct stat *expected, uint64_t expected_birth) {
+    struct stat current;
+    if (path == NULL || expected == NULL || expected_birth == 0 ||
+        fstatat(AT_FDCWD, path, &current, AT_SYMLINK_NOFOLLOW) != 0 || !S_ISSOCK(current.st_mode))
+        return 0;
+    return current.st_dev == expected->st_dev && current.st_ino == expected->st_ino &&
+           hl_owner_birth(path, -1, 1, &current) == expected_birth;
+}
+
+static int unix_owner_bind(int descriptor, const char *host) {
+    hl_socket_owner_publication publication;
+    struct stat status;
+    uint64_t birth;
+    int error;
+    error = hl_socket_owner_prepare(&publication);
+    if (error != 0) {
+        errno = error;
+        return -1;
+    }
+    if (unix_sock_at(descriptor, host, 0) != 0) {
+        error = errno;
+        hl_socket_owner_cancel(&publication);
+        errno = error;
+        return -1;
+    }
+    errno = 0;
+    if (fstatat(AT_FDCWD, host, &status, AT_SYMLINK_NOFOLLOW) != 0 || !S_ISSOCK(status.st_mode)) {
+        error = errno != 0 ? errno : EIO;
+        hl_socket_owner_cancel(&publication);
+        errno = error;
+        return -1;
+    }
+    birth = hl_owner_birth(host, -1, 1, &status);
+    if (birth == 0) {
+        hl_socket_owner_cancel(&publication);
+        errno = EOPNOTSUPP;
+        return -1;
+    }
+    error = hl_socket_owner_publish(&publication, &status, birth, (uint32_t)newfile_uid(), (uint32_t)newfile_gid());
+    if (error != 0) {
+        if (unix_owner_same(host, &status, birth)) (void)unlink(host);
+        errno = error;
+        return -1;
+    }
+    return 0;
+}
+
 static int unix_dgram_dest(const uint8_t *sa, socklen_t l, char *host, size_t hn) {
     if (abs_is(sa, l)) { // abstract namespace (sun_path[0]==0): HL_NETNS-keyed fs socket (same as bind/connect)
         abs_path(sa, l, host, hn);

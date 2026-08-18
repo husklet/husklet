@@ -430,11 +430,10 @@
                 overlay_copyup(gp, host, sizeof host); // guest path -> upper host path (+ materialize parent dirs)
             else
                 xlate(gp, host, sizeof host); // missing final socket name inside the bare bind volume
-            unlink(host);                     // clear a stale inode (else EADDRINUSE)
             // bind at the FULL upper path (via unix_sock_at, which fchdir-shortens paths past sun_path[104])
             // so the socket inode lands exactly where the guest's stat/chmod/connect resolves -- a plain bind
             // would truncate the long upper path and strand the inode where nothing can find it.
-            int r = unix_sock_at((int)a0, host, 0);
+            int r = unix_owner_bind((int)a0, host);
             if (r == 0) unix_bind_note((int)a0, gp); // record the guest path for /proc/net/unix
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
             break;
