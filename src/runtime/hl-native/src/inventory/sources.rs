@@ -21,6 +21,10 @@ const EXPLICIT_ROOTS: &[&str] = &[
     "src/native/engine/checkpoint_channel.c",
 ];
 
+/* Format slices under independent review are compiled by their direct native
+ * probes, not shipped in the runtime archive before production integration. */
+const DEFERRED_ROOTS: &[&str] = &["src/native/engine/arena_sidecar.c"];
+
 pub fn emit_rerun_inputs(directory: &Path) {
     println!("cargo:rerun-if-changed={}", directory.display());
     for path in sorted_entries(directory) {
@@ -43,6 +47,7 @@ pub fn runtime_roots(target_os: &str, target_arch: &str, package: &Path) -> Vec<
         .into_iter()
         .filter(|source| !included.contains(source))
         .filter(|source| !EXPLICIT_ROOTS.contains(&source.to_string_lossy().as_ref()))
+        .filter(|source| !DEFERRED_ROOTS.contains(&source.to_string_lossy().as_ref()))
         .filter(|source| build_support::source_matches(target_os, &source.to_string_lossy()))
         .filter(|source| {
             target_arch == "aarch64" || !source.to_string_lossy().contains("/translator/guest/x86_64/lower/")

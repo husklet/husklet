@@ -47,3 +47,6 @@ required-features = ["native-test-hooks"]
 [[test]]
 name = "restore_collision"
 required-features = ["native-test-hooks"]
+
+[[test]]
+name = "arena_sidecar"
