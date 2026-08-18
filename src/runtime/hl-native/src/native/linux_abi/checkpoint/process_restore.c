@@ -34,17 +34,38 @@ static void ckpt_restore_reset_inherited_fds(const struct ckpt_fd *records, int 
     }
 }
 
-static void ckpt_restore_retire_typed_fd(const struct ckpt_fd *record) {
-    int kind = record->kind;
-    int native_kind = kind == CKF_FILE || kind == CKF_PIPE || kind == CKF_BLOB || kind == CKF_MEMFD ||
-                      kind == CKF_EVENTFD || kind == CKF_TIMERFD || kind == CKF_INOTIFY || kind == CKF_EPOLL ||
-                      kind == CKF_SOCKETPAIR || kind == CKF_SOCKET || kind == CKF_SIGNALFD;
-    if (!native_kind || g_linux_box == NULL ||
+static int ckpt_restore_record_replaces_typed_fd(int kind) {
+    switch (kind) {
+        case CKF_FILE:
+        case CKF_PIPE:
+        case CKF_BLOB:
+        case CKF_MEMFD:
+        case CKF_EVENTFD:
+        case CKF_TIMERFD:
+        case CKF_INOTIFY:
+        case CKF_EPOLL:
+        case CKF_SOCKETPAIR:
+        case CKF_SOCKET:
+        case CKF_SIGNALFD:
+        case CKF_DEVICE:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int ckpt_restore_retire_typed_fd(const struct ckpt_fd *record) {
+    if (!ckpt_restore_record_replaces_typed_fd(record->kind) || g_linux_box == NULL ||
         hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)record->gfd, &(hl_linux_fd_snapshot){0}) != HL_STATUS_OK)
-        return;
-    (void)hl_linux_close(g_linux_box, (hl_linux_fd)record->gfd);
+        return 0;
+    /* The typed table owns the provider handle while the process descriptor table owns the numeric shadow.
+     * A restore that replaces the object must retire both before publishing the native replacement.  In
+     * particular, CKF_DEVICE at fd 0 is commonly /dev/null; leaving its typed entry alive makes the next
+     * checkpoint inspect a stale provider handle instead of the newly opened native descriptor. */
+    if (hl_linux_close(g_linux_box, (hl_linux_fd)record->gfd) < 0) return -1;
     proc_fdvis_close(record->gfd);
-    (void)close(record->gfd);
+    if (close(record->gfd) != 0 && errno != EBADF) return -1;
+    return 0;
 }
 
 static void ckpt_restore_socket_state(int fd, const struct ckpt_socket_state *state) {
@@ -451,7 +472,7 @@ static int ckpt_restore_device_fd(const struct ckpt_fd *record) {
 
 static int ckpt_restore_fd_record(const char *procdir, const struct ckpt_fd *records, int count, int index) {
     const struct ckpt_fd *record = &records[index];
-    ckpt_restore_retire_typed_fd(record);
+    if (ckpt_restore_retire_typed_fd(record) != 0) return -1;
     if (record->kind == CKF_EPOLL) return 0;
     if (record->kind == CKF_SOCKETPAIR) return ckpt_restore_socketpair_fd(records, count, record);
     if (record->kind == CKF_SOCKET) return ckpt_restore_bound_socket_fd(records, index, record);
