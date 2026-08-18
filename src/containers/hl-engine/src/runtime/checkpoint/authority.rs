@@ -1766,6 +1766,15 @@ mod tests {
     }
 
     #[test]
+    fn settlement_barrier_token_constructor_stays_authority_private() {
+        let source = include_str!("authority.rs");
+        assert!(source.contains("fn after_joined_scope_closed() -> Self"));
+        assert!(!source.contains(concat!("pub(super) ", "fn after_joined_scope_closed() -> Self")));
+        assert!(!source.contains(concat!("pub(crate) ", "fn after_joined_scope_closed() -> Self")));
+        assert!(!source.contains(concat!("pub ", "fn after_joined_scope_closed() -> Self")));
+    }
+
+    #[test]
     fn empty_and_one_object_boundary_vectors() {
         let key = AuthorityKey::new([1; 32]);
         let context = AuthorityContext {
