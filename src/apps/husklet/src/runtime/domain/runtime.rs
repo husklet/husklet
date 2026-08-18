@@ -192,10 +192,18 @@ impl Runtime {
         let platform = Self::platform(workspace.arch);
         let image = match images.resolve(&reference).map_err(io::Error::other)? {
             Some(image) => image,
-            None => images
-                .pull(&Registry::new(Auth::Anonymous), reference, &platform)
-                .await
-                .map_err(io::Error::other)?,
+            None => {
+                #[cfg(test)]
+                if std::env::var_os("HL_TEST_FORBID_REMOTE_IMAGES").is_some() {
+                    return Err(io::Error::other(format!(
+                        "remote image resolution was reached for {reference}; the seeded workspace container was not reusable"
+                    )));
+                }
+                images
+                    .pull(&Registry::new(Auth::Anonymous), reference, &platform)
+                    .await
+                    .map_err(io::Error::other)?
+            }
         };
         let unpacked = images.unpack(&image, &platform).map_err(io::Error::other)?;
         let session = crate::runtime::session::Session::select(&images, &unpacked)?;

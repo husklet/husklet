@@ -42,7 +42,7 @@ impl Session {
         }
     }
 
-    fn from_root(image_user: &str, root: &Path) -> io::Result<Self> {
+    pub(super) fn from_root(image_user: &str, root: &Path) -> io::Result<Self> {
         let passwd = Self::read_optional(root.join("etc/passwd"))?;
         let group = Self::read_optional(root.join("etc/group"))?;
         let accounts = Accounts::parse(&passwd);

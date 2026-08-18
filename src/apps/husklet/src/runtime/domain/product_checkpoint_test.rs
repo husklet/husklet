@@ -9,6 +9,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 const CHILD_ENV: &str = "HL_PRODUCT_CHECKPOINT_DOMAIN_CHILD";
+const FORBID_REMOTE_ENV: &str = "HL_TEST_FORBID_REMOTE_IMAGES";
 const CHILD_TEST: &str = "runtime::domain::product_checkpoint_test::product_checkpoint_domain_worker";
 const PHASE: Duration = Duration::from_secs(45);
 const START: Duration = Duration::from_secs(180);
@@ -142,6 +143,10 @@ impl Fixture {
                 configuration.configuration_signature(),
             )?;
             let runtime_signature = configuration.runtime_signature();
+            let session = context(
+                format!("select workspace session from {}", rootfs.display()),
+                crate::runtime::session::Session::from_root("", &rootfs),
+            )?;
             let spec = ContainerSpec::from_directory(&rootfs, Process::new("/bin/sh").args(["-c", SCRIPT]))
                 .name(CONTAINER)
                 .guest(guest)
@@ -151,11 +156,16 @@ impl Fixture {
                     network_isolated: true,
                     seccomp_baseline: hl_container::SeccompBaseline::Container,
                 });
+            let spec =
+                session.label(configuration.container(spec, signature, configuration_signature, runtime_signature));
+            let seeded = context("seed workspace primary container", containers.create(spec).await)?;
             context(
-                "seed workspace primary container",
-                containers
-                    .create(configuration.container(spec, signature, configuration_signature, runtime_signature))
-                    .await,
+                "validate seeded workspace session authority",
+                crate::runtime::session::Session::from_labels(&seeded.spec.labels),
+            )?;
+            context(
+                "provision seeded workspace session",
+                session.provision(&containers).await,
             )?;
             drop(containers);
 
@@ -192,6 +202,7 @@ impl Fixture {
         command
             .args(["--exact", CHILD_TEST, "--nocapture", "--test-threads=1"])
             .env(CHILD_ENV, &self.workspace.name)
+            .env(FORBID_REMOTE_ENV, "1")
             .env("HOME", &self.home)
             .stdin(Stdio::null())
             .stdout(Stdio::from(output))
