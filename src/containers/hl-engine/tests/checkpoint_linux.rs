@@ -1774,8 +1774,17 @@ impl<'a> RestoreGateEngine<'a> {
         while self.waiter.as_ref().is_some_and(|waiter| !waiter.is_finished()) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(5));
         }
-        let wait = self.waiter.as_ref().is_some_and(std::thread::JoinHandle::is_finished).then(|| self.join_waiter());
-        format!("stop={stop:?} wait={wait:?} survivors={}", self.survivors())
+        let bounded = self.waiter.as_ref().is_none_or(std::thread::JoinHandle::is_finished);
+        let survivors_before_join = self.survivors();
+        // Force-stop is the engine's cancellation primitive. Always join after
+        // requesting it: the acceptance command wraps the entire test process
+        // in an outer timeout, so a broken cancellation contract kills and
+        // reaps that subprocess instead of detaching a Rust thread in-process.
+        let wait = self.waiter.is_some().then(|| self.join_waiter());
+        format!(
+            "stop={stop:?} bounded={bounded} wait={wait:?} survivors_before_join={survivors_before_join} survivors_after_join={}",
+            self.survivors()
+        )
     }
 
     fn survivors(&self) -> String {
@@ -1787,7 +1796,7 @@ impl Drop for RestoreGateEngine<'_> {
     fn drop(&mut self) {
         if self.waiter.is_some() {
             let cleanup = self.cleanup();
-            if self.waiter.is_some() || !process_ids_for_executable(self.executable).is_empty() {
+            if !process_ids_for_executable(self.executable).is_empty() {
                 eprintln!("amd64 checkpoint gate cleanup incomplete: {cleanup}");
             }
         }
