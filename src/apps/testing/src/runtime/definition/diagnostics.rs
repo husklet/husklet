@@ -236,16 +236,16 @@ impl RecordAssertion {
                 ));
             };
             for (name, expected) in &self.fields {
-                if fields.get(name).copied() != Some(expected.as_str()) {
+                if fields.get(name.as_str()).copied() != Some(expected.as_str()) {
                     return Some(format!(
                         "engine diagnostic record {:?} field {name:?} is {:?}, expected {expected:?}",
                         self.record,
-                        fields.get(name)
+                        fields.get(name.as_str())
                     ));
                 }
             }
             for name in &self.nonnegative {
-                let Some(value) = fields.get(name).and_then(|value| value.parse::<i128>().ok()) else {
+                let Some(value) = fields.get(name.as_str()).and_then(|value| value.parse::<i128>().ok()) else {
                     return Some(format!(
                         "engine diagnostic record {:?} field {name:?} is absent or not an integer",
                         self.record
