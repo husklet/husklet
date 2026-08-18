@@ -40,6 +40,11 @@ macro_rules! internal {
 
 const DEFINITIONS: &[Definition] = &[
     launch!("HL_CHECKPOINT", "arm checkpoint capture over the store channel", Flag),
+    internal!(
+        "HL_CHECKPOINT_PHASE_LEDGER",
+        "emit checkpoint phase timing records for performance gates",
+        Flag
+    ),
     launch!(
         "HL_CHECKPOINT_POLICY",
         "checkpoint incompatible-resource recovery policy",

@@ -62,7 +62,12 @@ impl RuntimeFactory for ProductionFactory {
             request.services.checkpoint_sink.clone(),
             request.services.checkpoint_source.clone(),
         ) {
-            (Some(sink), Some(source)) => Some(CheckpointControl::start(sink, source)?),
+            (Some(sink), Some(source)) => Some(CheckpointControl::start(
+                sink,
+                source,
+                request.isa,
+                request.plan.options.get_bytes("HL_CHECKPOINT_PHASE_LEDGER").is_some(),
+            )?),
             (None, None) => None,
             _ => return Err(CompositionError::RuntimeConstruction),
         };
@@ -295,11 +300,17 @@ struct CheckpointControl {
     server: Arc<Server>,
     transport: hl_native::CheckpointTransport,
     acceptor: Option<std::thread::JoinHandle<()>>,
+    phases: CheckpointPhaseLedger,
 }
 
 #[cfg(unix)]
 impl CheckpointControl {
-    fn start(sink: Arc<dyn CheckpointSink>, source: Arc<dyn CheckpointSource>) -> Result<Self, CompositionError> {
+    fn start(
+        sink: Arc<dyn CheckpointSink>,
+        source: Arc<dyn CheckpointSource>,
+        isa: crate::activation::GuestIsa,
+        phase_ledger: bool,
+    ) -> Result<Self, CompositionError> {
         let (broker, transport) =
             hl_native::CheckpointTransport::create().map_err(|_| CompositionError::RuntimeConstruction)?;
         let server = Arc::new(Server::new(sink, source));
@@ -308,6 +319,7 @@ impl CheckpointControl {
             server,
             transport,
             acceptor: Some(acceptor),
+            phases: CheckpointPhaseLedger::new(phase_ledger, isa),
         })
     }
 
@@ -322,23 +334,30 @@ impl CheckpointControl {
         if Instant::now() >= deadline {
             return Err(EngineError::WaitFailed);
         }
+        let ready = self.phases.begin();
         self.server
             .wait_capture_ready(deadline)
             .map_err(Self::capture_failure)?;
+        let admission = self.phases.begin();
         let capture = self
             .server
             .begin_capture_after_admission(deadline, || self.transport.bump())
             .map_err(Self::capture_failure)?;
+        self.phases.finish(capture, "capture_ready_wait", ready);
+        self.phases.finish(capture, "capture_admission", admission);
         let signal = hl_native::CheckpointTransport::interrupt_signal(match isa {
             crate::activation::GuestIsa::Aarch64 => 1,
             crate::activation::GuestIsa::X86_64 => 2,
         });
+        let dispatch = self.phases.begin();
         if signal <= 0 || engine.request(REQUEST_CHECKPOINT, signal).is_err() {
             self.server
                 .abort_capture(capture)
                 .map_err(|_| EngineError::LaunchFailed)?;
             return Err(EngineError::StopFailed);
         }
+        self.phases.finish(capture, "request_dispatch", dispatch);
+        let completion = self.phases.begin();
         let mut next_interrupt = Instant::now() + Duration::from_millis(100);
         loop {
             let result = self
@@ -346,6 +365,7 @@ impl CheckpointControl {
                 .wait_capture(capture, next_interrupt)
                 .map_err(|_| EngineError::LaunchFailed)?;
             if let Some(result) = result {
+                self.phases.finish(capture, "completion_wait", completion);
                 return result.map_err(|failure| Self::capture_failure_with_exit(engine, failure));
             }
             if Instant::now() >= next_interrupt {
@@ -364,6 +384,7 @@ impl CheckpointControl {
             server: Arc::clone(&self.server),
             id,
             state: std::sync::atomic::AtomicU8::new(RECOVERY_OPEN),
+            phases: self.phases,
         })
     }
 
@@ -396,10 +417,41 @@ impl CheckpointControl {
 }
 
 #[cfg(unix)]
+#[derive(Clone, Copy)]
+struct CheckpointPhaseLedger {
+    enabled: bool,
+    isa: crate::activation::GuestIsa,
+}
+
+#[cfg(unix)]
+impl CheckpointPhaseLedger {
+    const fn new(enabled: bool, isa: crate::activation::GuestIsa) -> Self {
+        Self { enabled, isa }
+    }
+
+    fn begin(self) -> Option<std::time::Instant> {
+        self.enabled.then(std::time::Instant::now)
+    }
+
+    fn finish(self, generation: u64, phase: &str, started: Option<std::time::Instant>) {
+        let Some(started) = started else { return };
+        eprintln!(
+            "checkpoint_phase_ledger\tcomponent=control\tisa={}\tsession={generation}\tattempt={generation}\tgeneration={generation}\tphase={phase}\tduration_us={}\tbudget_us=0\tclock=ok\toutcome=progress",
+            match self.isa {
+                crate::activation::GuestIsa::Aarch64 => "aarch64",
+                crate::activation::GuestIsa::X86_64 => "x86_64",
+            },
+            started.elapsed().as_micros()
+        );
+    }
+}
+
+#[cfg(unix)]
 struct RecoveryAdmission {
     server: Arc<Server>,
     id: u64,
     state: std::sync::atomic::AtomicU8,
+    phases: CheckpointPhaseLedger,
 }
 
 #[cfg(unix)]
@@ -439,6 +491,7 @@ impl RecoveryAdmission {
     }
 
     fn wait(&self) -> Result<(), EngineError> {
+        let started = self.phases.begin();
         if self
             .state
             .compare_exchange(
@@ -458,6 +511,7 @@ impl RecoveryAdmission {
             RECOVERY_SETTLED
         };
         self.state.store(state, std::sync::atomic::Ordering::Release);
+        self.phases.finish(self.id, "recovery_wait", started);
         result.map_err(CheckpointControl::capture_failure)
     }
 }

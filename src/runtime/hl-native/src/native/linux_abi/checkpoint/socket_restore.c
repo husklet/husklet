@@ -1129,7 +1129,8 @@ static void ckpt_restore_proc_run(int gpid) {
 
 // Full restore driver: rebuild the whole tree from the store and resume it. The INIT (gpid 1) restores its
 // RAM FIRST (before engine init, so MAP_FIXED lands on free VAs), then re-forks the tree.
-static int ckpt_restore_tree(const char *rootfs) {
+static int ckpt_restore_tree_body(const char *rootfs, const struct ckpt_phase_ledger *phases, int *completed) {
+    uint64_t phase = ckpt_phase_begin(phases);
     struct ckpt_manifest man;
     ckpt_restore_hold_tty_signals();
     // Bind the image source before anything is read; every re-forked child inherits the binding.
@@ -1148,6 +1149,8 @@ static int ckpt_restore_tree(const char *rootfs) {
     }
     int recovery_policy = ckpt_recovery_policy();
     if (ckpt_restore_preflight(recovery_policy) != 0) return 2;
+    ckpt_phase_finish(phases, "restore_validation", phase, 0);
+    phase = ckpt_phase_begin(phases);
     if (ckpt_prepare_restore_pipes() != 0) {
         fprintf(stderr, "[restore] cannot rebuild checkpoint pipe objects\n");
         return 2;
@@ -1176,6 +1179,8 @@ static int ckpt_restore_tree(const char *rootfs) {
         fprintf(stderr, "[restore] init memory restore failed\n");
         return 2;
     } // init RAM before any engine allocation
+    ckpt_phase_finish(phases, "restore_resources_memory", phase, 0);
+    phase = ckpt_phase_begin(phases);
 
     container_init(rootfs); // sets g_init_hostpid = getpid() -> this process becomes guest pid 1
     g_self_gpid = 1;
@@ -1281,7 +1286,22 @@ static int ckpt_restore_tree(const char *rootfs) {
         fprintf(stderr, "[restore] cannot close recovery publication scope\n");
         return 70;
     }
+    ckpt_phase_finish(phases, "restore_process_commit", phase, 0);
+    ckpt_phase_terminal(phases, "success");
+    *completed = 1;
 
     run_guest(&c);
     return c.exit_code;
+}
+
+static int ckpt_restore_tree(const char *rootfs) {
+    const struct ckpt_phase_ledger phases = {
+        .enabled = hl_option_get("HL_CHECKPOINT_PHASE_LEDGER") != NULL,
+        .isa = G_CKPT_ARCH == 1 ? "aarch64" : "x86_64",
+        .generation = ckpt_request_generation(),
+    };
+    int completed = 0;
+    int status = ckpt_restore_tree_body(rootfs, &phases, &completed);
+    if (!completed) ckpt_phase_terminal(&phases, "failure");
+    return status;
 }

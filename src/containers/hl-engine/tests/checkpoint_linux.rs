@@ -12,13 +12,14 @@ use hl_engine::{
     runtime::Engine,
 };
 use hl_process::unix_descriptor::{self as descriptor, Identity, Lock, StandardDescriptor};
+use hl_process::{Capture as ProcessCapture, Command as ProcessCommand, Outcome as ProcessOutcome};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     num::NonZeroU64,
     os::fd::AsRawFd,
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
-    sync::{Arc, Condvar, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    sync::{atomic::AtomicBool, Arc, Condvar, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard},
     time::{Duration, Instant},
 };
 
@@ -343,6 +344,9 @@ fn continuation_plan(executable: &Path, ready: &Path, release: &Path, result: &P
 
 fn daily_dev_plan(executable: &Path, directory: &Path, restore: bool, capture: bool) -> RuntimePlan {
     let mut options = Options::default();
+    if std::env::args_os().any(|argument| argument == "checkpoint_phase_ledger_probe_child") {
+        options.set("HL_CHECKPOINT_PHASE_LEDGER", "1", true).unwrap();
+    }
     if restore {
         options.set("HL_RESTORE", "1", true).unwrap();
     }
@@ -1542,6 +1546,207 @@ struct PhaseTimings {
     prior: Duration,
 }
 
+#[derive(Debug)]
+struct CheckpointPhaseRow<'a> {
+    component: &'a str,
+    isa: &'a str,
+    generation: u64,
+    session: u64,
+    attempt: u64,
+    clock: &'a str,
+    outcome: &'a str,
+    phase: &'a str,
+    duration_us: u64,
+    budget_us: u64,
+}
+
+fn checkpoint_phase_rows(output: &str) -> Vec<CheckpointPhaseRow<'_>> {
+    output
+        .lines()
+        .filter_map(|line| line.strip_prefix("checkpoint_phase_ledger\t"))
+        .map(|line| {
+            let fields = line
+                .split('\t')
+                .filter_map(|field| field.split_once('='))
+                .collect::<BTreeMap<_, _>>();
+            assert_eq!(
+                fields.keys().copied().collect::<Vec<_>>(),
+                [
+                    "attempt",
+                    "budget_us",
+                    "clock",
+                    "component",
+                    "duration_us",
+                    "generation",
+                    "isa",
+                    "outcome",
+                    "phase",
+                    "session",
+                ],
+                "invalid checkpoint phase-ledger schema: {line}"
+            );
+            CheckpointPhaseRow {
+                component: fields["component"],
+                isa: fields["isa"],
+                generation: fields["generation"].parse().unwrap(),
+                session: fields["session"].parse().unwrap(),
+                attempt: fields["attempt"].parse().unwrap(),
+                clock: fields["clock"],
+                outcome: fields["outcome"],
+                phase: fields["phase"],
+                duration_us: fields["duration_us"].parse().unwrap(),
+                budget_us: fields["budget_us"].parse().unwrap(),
+            }
+        })
+        .collect()
+}
+
+fn outer_phase_us(output: &str, isa: &str, phase: &str) -> Vec<u64> {
+    output
+        .lines()
+        .filter_map(|line| line.strip_prefix("checkpoint_phase_timing\t"))
+        .filter_map(|line| {
+            let fields = line
+                .split('\t')
+                .filter_map(|field| field.split_once('='))
+                .collect::<BTreeMap<_, _>>();
+            (fields.get("isa") == Some(&isa) && fields.get("phase") == Some(&phase))
+                .then(|| fields["duration_us"].parse().unwrap())
+        })
+        .collect()
+}
+
+fn validate_phase_ledger_contract(output: &str) -> Result<(), String> {
+    let rows = checkpoint_phase_rows(output);
+    let capture = [
+        "peer_quiescence",
+        "serialization",
+        "settlement",
+        "manifest_publication",
+        "native_reap",
+    ];
+    let restore = ["restore_validation", "restore_resources_memory", "restore_process_commit"];
+    let expected_native = capture
+        .into_iter()
+        .chain(["terminal"])
+        .chain(restore)
+        .chain(["terminal"])
+        .chain(capture)
+        .chain(["terminal"])
+        .chain(restore)
+        .chain(["terminal"])
+        .collect::<Vec<_>>();
+    let expected_control = [
+        "capture_ready_wait",
+        "capture_admission",
+        "request_dispatch",
+        "completion_wait",
+        "recovery_wait",
+        "capture_ready_wait",
+        "capture_admission",
+        "request_dispatch",
+        "completion_wait",
+        "recovery_wait",
+    ];
+    for isa in ["aarch64", "x86_64"] {
+        let native = rows
+            .iter()
+            .filter(|row| row.component == "native" && row.isa == isa)
+            .collect::<Vec<_>>();
+        let control = rows
+            .iter()
+            .filter(|row| row.component == "control" && row.isa == isa)
+            .collect::<Vec<_>>();
+        if native.iter().map(|row| row.phase).collect::<Vec<_>>() != expected_native {
+            return Err(format!("{isa} native phase order/count mismatch"));
+        }
+        if control.iter().map(|row| row.phase).collect::<Vec<_>>() != expected_control {
+            return Err(format!("{isa} control phase order/count mismatch"));
+        }
+        for row in native.iter().chain(&control) {
+            let expected_outcome = if row.phase == "terminal" { "success" } else { "progress" };
+            if row.clock != "ok"
+                || row.outcome != expected_outcome
+                || row.generation == 0
+                || row.session != row.generation
+                || row.attempt != row.generation
+            {
+                return Err(format!("{isa} invalid correlated phase row: {row:?}"));
+            }
+        }
+        let native_capture = native
+            .iter()
+            .filter(|row| capture.contains(&row.phase))
+            .copied()
+            .collect::<Vec<_>>();
+        let control_capture = control
+            .iter()
+            .filter(|row| row.phase == "capture_admission")
+            .collect::<Vec<_>>();
+        for (phases, control) in native_capture.chunks_exact(capture.len()).zip(control_capture) {
+            if phases.iter().any(|row| row.generation != control.generation) {
+                return Err(format!("{isa} native/control capture generation mismatch"));
+            }
+            let settlement = phases[2];
+            match settlement.budget_us {
+                2_000_000 if settlement.duration_us >= 1_800_000 => {}
+                0 if settlement.duration_us < 100_000 => {}
+                _ => return Err(format!("{isa} settlement threshold/contract mismatch: {settlement:?}")),
+            }
+            let real = phases
+                .iter()
+                .filter(|row| row.phase != "settlement")
+                .map(|row| row.duration_us)
+                .sum::<u64>();
+            if real >= 1_000_000 {
+                return Err(format!("{isa} non-settlement work exceeded one second"));
+            }
+        }
+        for row in native.iter().filter(|row| restore.contains(&row.phase)) {
+            if row.budget_us != 0 || row.duration_us >= 1_000_000 {
+                return Err(format!("{isa} restore phase threshold/contract mismatch: {row:?}"));
+            }
+        }
+        let native_restore = native
+            .iter()
+            .filter(|row| row.phase == "restore_validation")
+            .map(|row| row.generation)
+            .collect::<Vec<_>>();
+        let control_restore = control
+            .iter()
+            .filter(|row| row.phase == "recovery_wait")
+            .map(|row| row.generation)
+            .collect::<Vec<_>>();
+        if native_restore != control_restore {
+            return Err(format!("{isa} native/control restore generation mismatch"));
+        }
+    }
+    Ok(())
+}
+
+fn mutate_phase_field(output: &str, phase: &str, field: &str, value: &str) -> String {
+    let marker = format!("phase={phase}");
+    let prefix = format!("{field}=");
+    let mut changed = false;
+    output
+        .lines()
+        .map(|line| {
+            if changed || !line.starts_with("checkpoint_phase_ledger\t") || !line.contains(&marker) {
+                return line.to_owned();
+            }
+            changed = true;
+            line.split('\t')
+                .map(|item| {
+                    item.strip_prefix(&prefix)
+                        .map_or_else(|| item.to_owned(), |_| format!("{field}={value}"))
+                })
+                .collect::<Vec<_>>()
+                .join("\t")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 impl PhaseTimings {
     fn new(isa: GuestIsa, prior: Duration) -> Self {
         Self {
@@ -2552,6 +2757,354 @@ fn aarch64_daily_development_workload_survives_two_checkpoint_cycles() {
 #[test]
 fn amd64_daily_development_workload_survives_two_checkpoint_cycles() {
     daily_development_workload_survives_two_checkpoint_cycles(GuestIsa::X86_64);
+}
+
+#[test]
+#[ignore = "subprocess target for the checkpoint phase-ledger regression gate"]
+fn checkpoint_phase_ledger_probe_child() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let started = Instant::now();
+    let executable = daily_dev_fixture(GuestIsa::Aarch64, fixtures.path());
+    let fixture_compile = started.elapsed();
+    let x86_started = Instant::now();
+    let x86_executable = daily_dev_fixture(GuestIsa::X86_64, fixtures.path());
+    let x86_fixture_compile = x86_started.elapsed();
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+    daily_dev_round_trip(GuestIsa::Aarch64, &executable, fixture_compile);
+    daily_dev_round_trip(GuestIsa::X86_64, &x86_executable, x86_fixture_compile);
+}
+
+#[test]
+fn checkpoint_phase_ledger_separates_the_fixed_wait_from_real_work() {
+    let _exclusive = exclusive_checkpoint_test();
+    let capture = tempfile::tempdir().unwrap();
+    let stdout = capture.path().join("stdout");
+    let stderr_path = capture.path().join("stderr");
+    let mut command = ProcessCommand::new(std::env::current_exe().unwrap());
+    command.args([
+        "--exact",
+        "checkpoint_phase_ledger_probe_child",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1",
+    ]);
+    let outcome = hl_process::run(
+        &command,
+        &ProcessCapture {
+            stdout,
+            stderr: stderr_path.clone(),
+            stdout_limit: 4 * 1024 * 1024,
+            stderr_limit: 4 * 1024 * 1024,
+        },
+        Duration::from_secs(20),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    let stderr = std::fs::read_to_string(stderr_path).unwrap();
+    assert_eq!(
+        outcome,
+        ProcessOutcome::Exited(Some(0)),
+        "phase-ledger child failed:\n{stderr}"
+    );
+    validate_phase_ledger_contract(&stderr).unwrap();
+
+    let exact_topology = stderr
+        .lines()
+        .map(|line| {
+            if line.starts_with("checkpoint_phase_ledger\t") && line.contains("phase=settlement") {
+                line.split('\t')
+                    .map(|field| match field.split_once('=') {
+                        Some(("budget_us", _)) => "budget_us=0".to_owned(),
+                        Some(("duration_us", _)) => "duration_us=50000".to_owned(),
+                        _ => field.to_owned(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\t")
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    validate_phase_ledger_contract(&exact_topology).expect("zero-budget settlement must validate on both ISAs");
+
+    let mutations = [
+        mutate_phase_field(&stderr, "peer_quiescence", "phase", "wrong_order"),
+        mutate_phase_field(&stderr, "capture_ready_wait", "generation", "0"),
+        mutate_phase_field(&stderr, "serialization", "clock", "unavailable"),
+        mutate_phase_field(&stderr, "serialization", "duration_us", "1000000"),
+        mutate_phase_field(&stderr, "terminal", "outcome", "failure"),
+    ];
+    for mutation in mutations {
+        assert!(
+            std::panic::catch_unwind(|| validate_phase_ledger_contract(&mutation).unwrap()).is_err(),
+            "phase-ledger mutation was not detected"
+        );
+    }
+    let malformed = stderr.replacen("\tcomponent=", "\textra=1\tcomponent=", 1);
+    assert!(
+        std::panic::catch_unwind(|| validate_phase_ledger_contract(&malformed).unwrap()).is_err(),
+        "phase-ledger schema mutation was not detected"
+    );
+
+    let rows = checkpoint_phase_rows(&stderr);
+    assert!(
+        rows.iter().all(|row| matches!(row.isa, "aarch64" | "x86_64")),
+        "wrong or missing ISA tag:\n{stderr}"
+    );
+    assert!(
+        rows.iter().all(|row| {
+            row.clock == "ok"
+                && row.generation != 0
+                && row.session == row.generation
+                && row.attempt == row.generation
+                && matches!(row.component, "native" | "control")
+        }),
+        "uncorrelated or clock-invalid phase row:\n{stderr}"
+    );
+    let native = rows
+        .iter()
+        .filter(|row| row.component == "native" && row.isa == "aarch64")
+        .collect::<Vec<_>>();
+    let control = rows
+        .iter()
+        .filter(|row| row.component == "control" && row.isa == "aarch64")
+        .collect::<Vec<_>>();
+    assert_eq!(native.len(), 20, "missing or duplicate native phases:\n{stderr}");
+    assert_eq!(control.len(), 10, "missing or duplicate control phases:\n{stderr}");
+    let x86_native = rows
+        .iter()
+        .filter(|row| row.component == "native" && row.isa == "x86_64")
+        .collect::<Vec<_>>();
+    let x86_control = rows
+        .iter()
+        .filter(|row| row.component == "control" && row.isa == "x86_64")
+        .collect::<Vec<_>>();
+    assert_eq!(x86_native.len(), 20, "missing x86 native phases:\n{stderr}");
+    assert_eq!(x86_control.len(), 10, "missing x86 control phases:\n{stderr}");
+
+    let capture_phases = [
+        "peer_quiescence",
+        "serialization",
+        "settlement",
+        "manifest_publication",
+        "native_reap",
+    ];
+    let restore_phases = [
+        "restore_validation",
+        "restore_resources_memory",
+        "restore_process_commit",
+    ];
+    let expected_native = capture_phases
+        .into_iter()
+        .chain(["terminal"])
+        .chain(restore_phases)
+        .chain(["terminal"])
+        .chain(capture_phases)
+        .chain(["terminal"])
+        .chain(restore_phases)
+        .chain(["terminal"])
+        .collect::<Vec<_>>();
+    assert_eq!(
+        x86_native.iter().map(|row| row.phase).collect::<Vec<_>>(),
+        expected_native,
+        "x86 checkpoint/restore phases were reordered:\n{stderr}"
+    );
+    let x86_captures = x86_native
+        .iter()
+        .filter(|row| capture_phases.contains(&row.phase))
+        .copied()
+        .collect::<Vec<_>>();
+    for capture in x86_captures.chunks_exact(capture_phases.len()) {
+        assert!(capture.iter().all(|row| row.generation == capture[0].generation));
+        let settlement = capture[2];
+        match settlement.budget_us {
+            2_000_000 => assert!(settlement.duration_us >= settlement.budget_us * 9 / 10),
+            0 => assert!(settlement.duration_us < 100_000),
+            budget => panic!("unknown x86 settlement contract budget {budget}: {settlement:?}"),
+        }
+        assert!(
+            capture
+                .iter()
+                .filter(|row| row.phase != "settlement")
+                .map(|row| row.duration_us)
+                .sum::<u64>()
+                < 1_000_000,
+            "x86 non-settlement work regressed: {capture:?}"
+        );
+    }
+    assert_eq!(
+        native.iter().map(|row| row.phase).collect::<Vec<_>>(),
+        expected_native,
+        "native checkpoint/restore phases were reordered:\n{stderr}"
+    );
+    for terminal in native.iter().chain(&x86_native).filter(|row| row.phase == "terminal") {
+        assert_eq!(terminal.outcome, "success", "successful probe emitted failed terminal row: {terminal:?}");
+        assert_eq!(terminal.duration_us, 0);
+        assert_eq!(terminal.budget_us, 0);
+    }
+    let captures = native
+        .iter()
+        .filter(|row| capture_phases.contains(&row.phase))
+        .copied()
+        .collect::<Vec<_>>();
+    for capture in captures.chunks_exact(capture_phases.len()) {
+        assert_ne!(capture[0].generation, 0, "native capture has no generation: {capture:?}");
+        assert!(
+            capture.iter().all(|row| row.generation == capture[0].generation),
+            "native capture phases crossed generations: {capture:?}"
+        );
+        let settlement = capture[2];
+        let real_work = capture
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != 2)
+            .map(|(_, row)| row.duration_us)
+            .sum::<u64>();
+        match settlement.budget_us {
+            2_000_000 => assert!(
+                settlement.duration_us >= settlement.budget_us * 9 / 10,
+                "settlement did not execute its declared wait budget: {settlement:?}"
+            ),
+            0 => assert!(
+                settlement.duration_us < 100_000,
+                "exact-topology settlement regressed past 100 ms: {settlement:?}"
+            ),
+            budget => panic!("unknown settlement contract budget {budget}: {settlement:?}"),
+        }
+        assert!(
+            real_work < 1_000_000,
+            "checkpoint work outside settlement regressed past one second: {capture:?}"
+        );
+    }
+    for restore in native
+        .iter()
+        .chain(&x86_native)
+        .filter(|row| restore_phases.contains(&row.phase))
+    {
+        assert_eq!(restore.budget_us, 0, "restore phase unexpectedly declared a fixed wait: {restore:?}");
+        assert!(restore.duration_us < 1_000_000, "native restore phase regressed past one second: {restore:?}");
+    }
+    let capture_generations = captures
+        .chunks_exact(capture_phases.len())
+        .map(|capture| capture[0].generation)
+        .collect::<Vec<_>>();
+    let control_capture_generations = control
+        .iter()
+        .filter(|row| row.phase == "capture_admission")
+        .map(|row| row.generation)
+        .collect::<Vec<_>>();
+    assert_eq!(capture_generations, control_capture_generations, "native/control capture IDs diverged");
+    let restore_generations = native
+        .iter()
+        .filter(|row| row.phase == "restore_validation")
+        .map(|row| row.generation)
+        .collect::<Vec<_>>();
+    let control_restore_generations = control
+        .iter()
+        .filter(|row| row.phase == "recovery_wait")
+        .map(|row| row.generation)
+        .collect::<Vec<_>>();
+    assert_eq!(restore_generations, control_restore_generations, "native/control restore IDs diverged");
+    let x86_capture_generations = x86_captures
+        .chunks_exact(capture_phases.len())
+        .map(|capture| capture[0].generation)
+        .collect::<Vec<_>>();
+    let x86_control_capture_generations = x86_control
+        .iter()
+        .filter(|row| row.phase == "capture_admission")
+        .map(|row| row.generation)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        x86_capture_generations, x86_control_capture_generations,
+        "x86 native/control capture IDs diverged"
+    );
+    let x86_restore_generations = x86_native
+        .iter()
+        .filter(|row| row.phase == "restore_validation")
+        .map(|row| row.generation)
+        .collect::<Vec<_>>();
+    let x86_control_restore_generations = x86_control
+        .iter()
+        .filter(|row| row.phase == "recovery_wait")
+        .map(|row| row.generation)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        x86_restore_generations, x86_control_restore_generations,
+        "x86 native/control restore IDs diverged"
+    );
+
+    let completion = control
+        .iter()
+        .filter(|row| row.phase == "completion_wait")
+        .map(|row| row.duration_us)
+        .collect::<Vec<_>>();
+    let settlement = native
+        .iter()
+        .filter(|row| row.phase == "settlement")
+        .copied()
+        .collect::<Vec<_>>();
+    assert_eq!(completion.len(), 2, "capture completion phases:\n{stderr}");
+    assert_eq!(settlement.len(), 2, "capture settlement phases:\n{stderr}");
+    for (completion, settlement) in completion.into_iter().zip(settlement) {
+        assert!(
+            completion >= settlement.duration_us,
+            "settlement escaped capture interval:\n{stderr}"
+        );
+        assert!(
+            completion - settlement.duration_us < 1_000_000,
+            "non-settlement capture work regressed past one second: completion={completion} settlement={settlement:?}"
+        );
+        if settlement.budget_us != 0 {
+            assert!(
+                settlement.duration_us * 100 / completion >= 70,
+                "the known fixed wait no longer dominates capture; investigate before changing the heuristic: {stderr}"
+            );
+        } else {
+            assert!(completion < 1_000_000, "exact-topology capture regressed past one second: {completion} us");
+        }
+    }
+
+    let x86_completion = x86_control
+        .iter()
+        .filter(|row| row.phase == "completion_wait")
+        .map(|row| row.duration_us)
+        .collect::<Vec<_>>();
+    let x86_settlement = x86_native
+        .iter()
+        .filter(|row| row.phase == "settlement")
+        .copied()
+        .collect::<Vec<_>>();
+    assert_eq!(x86_completion.len(), 2, "x86 capture completion phases:\n{stderr}");
+    assert_eq!(x86_settlement.len(), 2, "x86 settlement phases:\n{stderr}");
+    for (completion, settlement) in x86_completion.into_iter().zip(x86_settlement) {
+        assert!(completion >= settlement.duration_us);
+        assert!(completion - settlement.duration_us < 1_000_000);
+        if settlement.budget_us == 0 {
+            assert!(completion < 1_000_000);
+        } else {
+            assert!(settlement.duration_us * 100 / completion >= 70);
+        }
+    }
+
+    for isa in ["aarch64", "x86_64"] {
+        for phase in [
+            "restore1_start_ready",
+            "restore2_start_ready",
+            "capture_wait_reap",
+            "recapture_wait_reap",
+        ] {
+            let durations = outer_phase_us(&stderr, isa, phase);
+            assert_eq!(durations.len(), 1, "missing outer phase {isa}/{phase}:\n{stderr}");
+            assert!(
+                durations[0] < 1_000_000,
+                "{isa}/{phase} regressed past one second: {} us",
+                durations[0]
+            );
+        }
+    }
 }
 
 #[test]

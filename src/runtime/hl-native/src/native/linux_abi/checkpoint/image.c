@@ -4,6 +4,54 @@ enum ckpt_fd_capture_result {
     CKPT_FD_CAPTURED = 1,
 };
 
+struct ckpt_phase_ledger {
+    int enabled;
+    const char *isa;
+    uint32_t generation;
+};
+
+static uint64_t ckpt_phase_now_us(void) {
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+    return (uint64_t)now.tv_sec * UINT64_C(1000000) + (uint64_t)now.tv_nsec / UINT64_C(1000);
+}
+
+static uint64_t ckpt_phase_begin(const struct ckpt_phase_ledger *ledger) {
+    return ledger->enabled ? ckpt_phase_now_us() : UINT64_MAX;
+}
+
+static void ckpt_phase_finish(const struct ckpt_phase_ledger *ledger, const char *phase, uint64_t started,
+                              uint64_t budget_us) {
+    if (!ledger->enabled || started == UINT64_MAX) return;
+    uint64_t finished = ckpt_phase_now_us();
+    if (started == 0 || finished == 0) {
+        fprintf(stderr,
+                "checkpoint_phase_ledger\tcomponent=native\tisa=%s\tsession=%u\tattempt=%u\tgeneration=%u\tphase=%s\t"
+                "duration_us=0\tbudget_us=%llu\tclock=unavailable\toutcome=progress\n",
+                ledger->isa, ledger->generation, ledger->generation, ledger->generation, phase,
+                (unsigned long long)budget_us);
+        return;
+    }
+    fprintf(stderr,
+            "checkpoint_phase_ledger\tcomponent=native\tisa=%s\tsession=%u\tattempt=%u\tgeneration=%u\tphase=%s\t"
+            "duration_us=%llu\tbudget_us=%llu\tclock=ok\toutcome=progress\n",
+            ledger->isa, ledger->generation, ledger->generation, ledger->generation, phase,
+            (unsigned long long)(finished >= started ? finished - started : 0), (unsigned long long)budget_us);
+}
+
+static void ckpt_phase_terminal(const struct ckpt_phase_ledger *ledger, const char *outcome) {
+    if (!ledger->enabled) return;
+    fprintf(stderr,
+            "checkpoint_phase_ledger\tcomponent=native\tisa=%s\tsession=%u\tattempt=%u\tgeneration=%u\tphase=terminal\t"
+            "duration_us=0\tbudget_us=0\tclock=ok\toutcome=%s\n",
+            ledger->isa, ledger->generation, ledger->generation, ledger->generation, outcome);
+}
+
+static _Noreturn void ckpt_phase_exit(const struct ckpt_phase_ledger *ledger, int status) {
+    ckpt_phase_terminal(ledger, status == 0 ? "success" : "failure");
+    _exit(status);
+}
+
 static int ckpt_fd_was_captured(const struct ckpt_fd *records, int count, int fd) {
     for (int prior = 0; prior < count; ++prior)
         if (records[prior].gfd == fd) return 1;
@@ -928,18 +976,24 @@ static int ckpt_live_process_peers(hl_host_process_peer *peers, size_t capacity,
 }
 
 static void ckpt_coordinate_and_exit(struct cpu *c) {
+    const struct ckpt_phase_ledger phases = {
+        .enabled = hl_option_get("HL_CHECKPOINT_PHASE_LEDGER") != NULL,
+        .isa = G_CKPT_ARCH == 1 ? "aarch64" : "x86_64",
+        .generation = ckpt_request_generation(),
+    };
+    uint64_t phase = ckpt_phase_begin(&phases);
     struct ckpt_sink *sink = ckpt_sink_current();
 
     size_t peer_capacity = 512;
     hl_host_process_peer *foll = malloc(peer_capacity * sizeof *foll);
     size_t observed = 0;
-    if (foll == NULL) _exit(70);
+    if (foll == NULL) ckpt_phase_exit(&phases, 70);
     for (;;) {
-        if (!ckpt_live_process_peers(foll, peer_capacity, &observed)) _exit(70);
+        if (!ckpt_live_process_peers(foll, peer_capacity, &observed)) ckpt_phase_exit(&phases, 70);
         if (observed <= peer_capacity) break;
-        if (observed > (size_t)INT_MAX || observed > SIZE_MAX / sizeof *foll) _exit(70);
+        if (observed > (size_t)INT_MAX || observed > SIZE_MAX / sizeof *foll) ckpt_phase_exit(&phases, 70);
         hl_host_process_peer *expanded = realloc(foll, observed * sizeof *foll);
-        if (expanded == NULL) _exit(70);
+        if (expanded == NULL) ckpt_phase_exit(&phases, 70);
         foll = expanded;
         peer_capacity = observed;
     }
@@ -959,7 +1013,7 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
                 kicked ? "interrupted" : "NOT interrupted (it cannot reach a safepoint)");
     }
     unsigned char *completed = calloc((size_t)(nfoll ? nfoll : 1), 1);
-    if (completed == NULL) _exit(70);
+    if (completed == NULL) ckpt_phase_exit(&phases, 70);
     int ndone = 0;
     for (int t = 0; t < 500 && ndone != nfoll; t++) { // one whole-tree deadline: at most ~5s total
         for (int i = 0; i < nfoll; i++) {
@@ -986,14 +1040,17 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
                         "[ckpt] participant %lld never committed proc.%d (it did not reach a checkpoint "
                         "safepoint, or its dump was refused); refusing incomplete manifest\n",
                         (long long)foll[i].identity, ckpt_peer_gpid(foll[i].identity));
-        _exit(70);
+        ckpt_phase_exit(&phases, 70);
     }
+    ckpt_phase_finish(&phases, "peer_quiescence", phase, 0);
 
     // Dump ourselves (the init) last.
+    phase = ckpt_phase_begin(&phases);
     if (ckpt_dump_self(c, "proc.1") != 0) {
         fprintf(stderr, "[ckpt] init dump FAILED -- checkpoint incomplete\n");
-        _exit(70);
+        ckpt_phase_exit(&phases, 70);
     }
+    ckpt_phase_finish(&phases, "serialization", phase, 0);
 
     // Publish the MANIFEST last: its presence == a complete, restorable checkpoint.
     int nproc = 0;
@@ -1001,17 +1058,20 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     // raced its registration. Do not commit while that independently frozen process is still assembling its
     // group. A fixed quiescence window also covers the registration gap where neither the peer snapshot nor
     // the store contains the child yet.
+    phase = ckpt_phase_begin(&phases);
     for (int settle = 0; settle < 200; settle++) {
         int complete = ckpt_sink_group_count(sink, "proc.");
         if (complete >= 0) nproc = complete;
         usleep(10000);
     }
+    ckpt_phase_finish(&phases, "settlement", phase, UINT64_C(200) * UINT64_C(10000));
     if (nproc < nfoll + 1) {
         fprintf(stderr, "[ckpt] process-count mismatch: expected at least %d, captured %d; refusing manifest\n",
                 nfoll + 1, nproc);
-        _exit(70);
+        ckpt_phase_exit(&phases, 70);
     }
     struct ckpt_manifest man;
+    phase = ckpt_phase_begin(&phases);
     memset(&man, 0, sizeof man);
     man.magic = CKPT_MANIFEST_MAGIC;
     man.version = CKPT_VERSION;
@@ -1030,7 +1090,7 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
         else if (hl_linux_pidmap_guest_checked(&g_pgidmap, (int32_t)fgh, &man.fg_pgid_gpid) != 0) {
             ckpt_ctty_close(tf);
             fprintf(stderr, "[ckpt] foreground process group is outside restored namespace\n");
-            _exit(70);
+            ckpt_phase_exit(&phases, 70);
         } else if (!hl_linux_pidmap_is_active(&g_pgidmap) && g_init_hostpid && fgh == g_init_hostpid)
             man.fg_pgid_gpid = 1;
         if (tf >= 0 && tcgetattr(tf, &tio) == 0) {
@@ -1050,18 +1110,21 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     // re-reads the embedder's store.
     if (ckpt_sink_digest(sink, &man.image_hash, &man.image_files, &man.image_bytes) != 0) {
         fprintf(stderr, "[ckpt] cannot hash checkpoint image: %s\n", strerror(errno));
-        _exit(70);
+        ckpt_phase_exit(&phases, 70);
     }
     // Explicit completion: the only signal that the image is complete.
     if (ckpt_sink_commit(sink, &man, sizeof man) != 0) {
         fprintf(stderr, "[ckpt] cannot publish checkpoint manifest: %s\n", strerror(errno));
-        _exit(70);
+        ckpt_phase_exit(&phases, 70);
     }
+    ckpt_phase_finish(&phases, "manifest_publication", phase, 0);
     fprintf(stderr, "[ckpt] checkpoint OK: %d process(es)\n", nproc);
     int st;
+    phase = ckpt_phase_begin(&phases);
     while (waitpid(-1, &st, WNOHANG) > 0) {} // final reap
+    ckpt_phase_finish(&phases, "native_reap", phase, 0);
     hl_engine_child_result_publish(0, HL_STATUS_OK, 0);
-    _exit(0);
+    ckpt_phase_exit(&phases, 0);
 }
 
 // ================================= RESTORE =================================
