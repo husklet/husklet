@@ -132,6 +132,14 @@ cases:
     artifact: { destination: /opt/husklet/network-poll_accept }
     run: []
     expect: { exit: 0, stdout: golden/poll_accept.out }
+  - id: runtime/network/postgres-socket
+    status: active
+    compat: { class: compatibility }
+    build: { source: postgres_socket.c, output: postgres_socket, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-postgres_socket }
+    environment: { HL_UID: "0", HL_GID: "0" }
+    run: []
+    expect: { exit: 0, stdout: golden/postgres_socket.out }
   - id: runtime/network/select-multi
     status: active
     compat: { class: compatibility }
