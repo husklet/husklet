@@ -171,31 +171,6 @@ static int hl_socket_owner_lookup(const struct stat *status, uint64_t birth_ns, 
     return -1;
 }
 
-static int hl_socket_owner_update(const struct stat *status, uint64_t birth_ns, int64_t uid, int64_t gid) {
-    hl_owner_writer writer;
-    hl_owner_value value;
-    hl_owner_key key;
-    int found;
-    int error;
-    if (g_socket_owner_registry == NULL || birth_ns == 0 || (uid < 0 && gid < 0) ||
-        (uid >= 0 && (uint64_t)uid > UINT32_MAX) || (gid >= 0 && (uint64_t)gid > UINT32_MAX))
-        return 0;
-    key = hl_socket_owner_key(status, birth_ns);
-    hl_owner_namespace namespace;
-    error = hl_socket_owner_writer_context(&writer, &namespace);
-    if (error != 0) return -error;
-    found = hl_owner_registry_writer_lookup(g_socket_owner_registry, namespace, writer, key, &value);
-    if (found != 0) {
-        hl_socket_owner_writer_end(writer);
-        return found == ENOENT ? 0 : -found;
-    }
-    error = hl_owner_registry_update(g_socket_owner_registry, namespace, writer, key,
-                                     uid < 0 ? value.uid : (uint32_t)uid,
-                                     gid < 0 ? value.gid : (uint32_t)gid);
-    hl_socket_owner_writer_end(writer);
-    return error == 0 ? 1 : -error;
-}
-
 typedef struct hl_socket_owner_publication {
     hl_owner_writer writer;
     hl_owner_namespace namespace;
@@ -203,6 +178,8 @@ typedef struct hl_socket_owner_publication {
     int active;
     int ticket_active;
 } hl_socket_owner_publication;
+
+static int hl_socket_owner_finish(hl_socket_owner_publication *publication, int poison);
 
 static int hl_socket_owner_prepare(hl_socket_owner_publication *publication) {
     int error;
@@ -226,7 +203,10 @@ static int hl_socket_owner_publish(hl_socket_owner_publication *publication, con
                                    uint64_t birth_ns, uint32_t uid, uint32_t gid, uint32_t descriptors) {
     int error;
     if (publication == NULL || !publication->active) return EINVAL;
-    if (status == NULL || birth_ns == 0 || descriptors == 0) return EINVAL;
+    if (status == NULL || birth_ns == 0 || descriptors == 0) {
+        (void)hl_socket_owner_finish(publication, 1);
+        return EINVAL;
+    }
     error = hl_owner_registry_commit(g_socket_owner_registry, publication->namespace, publication->writer,
                                      publication->ticket, hl_socket_owner_key(status, birth_ns),
                                      (hl_owner_value){uid, gid, 1, descriptors});
@@ -240,10 +220,6 @@ static int hl_socket_owner_publish(hl_socket_owner_publication *publication, con
         } else {
             publication->ticket_active = 0;
         }
-    }
-    if (error == 0) {
-        hl_socket_owner_writer_end(publication->writer);
-        publication->active = 0;
     }
     return error;
 }
@@ -330,18 +306,30 @@ static hl_owner_entry *hl_owner_slot(uint64_t device, uint64_t object, uint64_t 
 
 static int hl_owner_set_metadata(const struct stat *status, uint64_t birth_ns, int64_t uid, int64_t gid) {
     int socket_fallback_writer = 0;
-    if (S_ISSOCK(status->st_mode)) {
-        int result = hl_socket_owner_update(status, birth_ns, uid, gid);
-        if (result > 0) return 0;
-        if (result < 0) return errno = -result, -1;
-        if (g_socket_owner_registry != NULL) {
-            if (namespace_transaction_begin() != 0) return -1;
-            socket_fallback_writer = 1;
+    hl_owner_writer socket_writer;
+    if (S_ISSOCK(status->st_mode) && g_socket_owner_registry != NULL) {
+        hl_owner_namespace namespace;
+        int error = hl_socket_owner_writer_context(&socket_writer, &namespace);
+        if (error != 0) return errno = error, -1;
+        hl_owner_value value;
+        hl_owner_key key = hl_socket_owner_key(status, birth_ns);
+        int found = hl_owner_registry_writer_lookup(g_socket_owner_registry, namespace, socket_writer, key, &value);
+        if (found == 0) {
+            error = hl_owner_registry_update(g_socket_owner_registry, namespace, socket_writer, key,
+                                             uid < 0 ? value.uid : (uint32_t)uid,
+                                             gid < 0 ? value.gid : (uint32_t)gid);
+            hl_socket_owner_writer_end(socket_writer);
+            return error == 0 ? 0 : (errno = error, -1);
         }
+        if (found != ENOENT) {
+            hl_socket_owner_writer_end(socket_writer);
+            return errno = found, -1;
+        }
+        socket_fallback_writer = 1;
     }
     hl_owner_entry *entry = hl_owner_slot((uint64_t)status->st_dev, (uint64_t)status->st_ino, birth_ns, 1);
     if (entry == NULL) {
-        if (socket_fallback_writer) namespace_transaction_end();
+        if (socket_fallback_writer) hl_socket_owner_writer_end(socket_writer);
         return 0;
     }
     uint32_t metadata = 0;
@@ -354,7 +342,7 @@ static int hl_owner_set_metadata(const struct stat *status, uint64_t birth_ns, i
         metadata |= 2u;
     }
     if (metadata != 0) atomic_fetch_or_explicit(&entry->metadata, metadata, memory_order_release);
-    if (socket_fallback_writer) namespace_transaction_end();
+    if (socket_fallback_writer) hl_socket_owner_writer_end(socket_writer);
     return 0;
 }
 

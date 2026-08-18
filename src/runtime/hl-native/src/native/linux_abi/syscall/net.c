@@ -167,7 +167,10 @@ static int unix_owner_bind(int descriptor, const char *host, hl_owner_key *key) 
         errno = error;
         return -1;
     }
-    if (key != NULL) *key = hl_socket_owner_key(&status, birth);
+    hl_owner_key published_key = hl_socket_owner_key(&status, birth);
+    unix_owner_note(descriptor, published_key);
+    if (hl_socket_owner_finish(&publication, 0) != 0) return errno = EOWNERDEAD, -1;
+    if (key != NULL) *key = published_key;
     return 0;
 }
 

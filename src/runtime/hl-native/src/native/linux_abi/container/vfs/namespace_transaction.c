@@ -204,15 +204,16 @@ static int namespace_transaction_begin(void) {
         namespace_transaction_cancel_restore(g_namespace_transaction_cancel_state);
         return errno = EOVERFLOW, -1;
     }
-    uint64_t owner_sequence = atomic_fetch_add_explicit(&g_namespace_transaction->next_owner, 1, memory_order_relaxed);
-    if (owner_sequence >= UINT32_MAX) {
+    uint64_t owner_sequence = atomic_load_explicit(&g_namespace_transaction->next_owner, memory_order_relaxed);
+    if (owner_sequence == UINT64_MAX) {
         atomic_store_explicit(&g_namespace_transaction->poisoned, 1, memory_order_release);
         if (namespace_transaction_record_lock(NAMESPACE_UNLOCK) != 0) abort();
         atomic_flag_clear_explicit(&g_namespace_transaction_local, memory_order_release);
         namespace_transaction_cancel_restore(g_namespace_transaction_cancel_state);
         return errno = EOVERFLOW, -1;
     }
-    uint64_t identity = ((uint64_t)(uint32_t)getpid() << 32) | (owner_sequence + 1u);
+    uint64_t identity = owner_sequence + 1u;
+    atomic_store_explicit(&g_namespace_transaction->next_owner, identity, memory_order_relaxed);
     atomic_store_explicit(&g_namespace_transaction->owner, identity, memory_order_relaxed);
     atomic_store_explicit(&g_namespace_transaction->sequence, sequence + 1u, memory_order_release);
     g_namespace_transaction_writer_generation = sequence + 1u;

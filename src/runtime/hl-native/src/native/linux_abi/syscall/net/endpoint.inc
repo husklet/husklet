@@ -436,7 +436,6 @@
             // would truncate the long upper path and strand the inode where nothing can find it.
             int r = unix_owner_bind((int)a0, host, &owner_key);
             if (r == 0) {
-                if (owner_key.birth_ns != 0) unix_owner_note((int)a0, owner_key);
                 unix_bind_note((int)a0, gp); // record the guest path for /proc/net/unix
             }
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
