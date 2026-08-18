@@ -62,7 +62,7 @@
 
 #define CKPT_MAGIC UINT64_C(0x373054504b434c48)          // "HLCKPT07" (LE) -- per-process meta
 #define CKPT_MANIFEST_MAGIC UINT64_C(0x3730304e414d4c48) // "HLMAN007" (LE) -- workspace manifest
-#define CKPT_VERSION 6 // v6 serializes interrupted-syscall continuation state
+#define CKPT_VERSION 6                                   // v6 serializes interrupted-syscall continuation state
 #define CKPT_ARCH_X86_64 1
 #define CKPT_ARCH_AARCH64 2
 #define CKPT_CPU_MAGIC UINT64_C(0x31305550434c4848) // "HHLCPU01" (LE)
@@ -900,8 +900,7 @@ static int ckpt_capture_file_blob(int fd, char *record_path, size_t record_capac
     int access_mode = fcntl(fd, F_GETFL);
     if (access_mode >= 0 && (access_mode & O_ACCMODE) == O_WRONLY) {
         char descriptor_path[64];
-        if (snprintf(descriptor_path, sizeof descriptor_path, "/proc/self/fd/%d", fd) <
-            (int)sizeof descriptor_path)
+        if (snprintf(descriptor_path, sizeof descriptor_path, "/proc/self/fd/%d", fd) < (int)sizeof descriptor_path)
             reader = open(descriptor_path, O_RDONLY | O_CLOEXEC);
         if (reader >= 0) input = reader;
     }
@@ -990,14 +989,33 @@ int hl_ckpt_interrupt_signal(void) {
 }
 #endif
 
+// Wake an executor out of either a host syscall or an engine-managed condition wait. The irq store and
+// waitc load form the signaler half of the waiter's publish-then-check handshake: if we miss a not-yet-
+// published condition, the waiter must observe irq/checkpoint intent before it parks; if we observe it,
+// broadcasting under the wait mutex releases an already-published park.
+static int ckpt_executor_kick(int slot, int stop_the_world) {
+    struct cpu *cpu = g_threg[slot].c;
+    pthread_t thread = g_threg[slot].th;
+    __atomic_store_n(&cpu->irq, 1, __ATOMIC_SEQ_CST);
+    pthread_cond_t *condition = __atomic_load_n(&g_threg[slot].waitc, __ATOMIC_SEQ_CST);
+    if (condition) {
+        pthread_mutex_t *mutex = g_threg[slot].waitm;
+        pthread_mutex_lock(mutex);
+        pthread_cond_broadcast(condition);
+        pthread_mutex_unlock(mutex);
+    }
+    if (pthread_kill(thread, THREAD_INT_SIG) != 0) return 0;
+    if (stop_the_world) (void)pthread_kill(thread, STW_SIG);
+    return 1;
+}
+
 int hl_ckpt_interrupt_executors(void) {
     int interrupted = 0;
     int leader_interrupted = 0;
     pthread_mutex_lock(&g_threg_m);
     for (int i = 0; i < THREAD_REG_MAX; ++i) {
         if (g_threg[i].c == NULL) continue;
-        __atomic_store_n(&g_threg[i].c->irq, 1, __ATOMIC_SEQ_CST);
-        if (pthread_kill(g_threg[i].th, THREAD_INT_SIG) != 0) continue;
+        if (!ckpt_executor_kick(i, 0)) continue;
         /* THREAD_INT_SIG is the activation kick.  Do not queue STW_SIG here:
          * delivery can be delayed until the leader has armed its own checkpoint
          * gate, at which point the gate owner parks in stw_park_handler waiting
@@ -1018,6 +1036,7 @@ static int ckpt_control_init(void) {
     int restore = hl_option_get("HL_RESTORE") != NULL;
     int capture = hl_option_get("HL_CHECKPOINT") != NULL;
     if (!capture && !restore) return 0;
+    thread_int_ensure_installed();
     if (!g_init_hostpid) g_init_hostpid = getpid();
     hl_linux_snapshot_enable(&g_ckpt_snapshot);
     // One channel serves both directions. Restore binds the sink too: the recovery report is an object of
@@ -1033,6 +1052,10 @@ static int ckpt_control_init(void) {
     g_ckpt_trigger = ckpt_map_trigger();
     if (!g_ckpt_trigger) return -1;
     atomic_store_explicit(&g_ckpt_seen_gen, __atomic_load_n(g_ckpt_trigger, __ATOMIC_ACQUIRE), memory_order_release);
+    if (checkpoint_relay_start() != 0) {
+        fprintf(stderr, "[ckpt] unable to initialize process checkpoint relay\n");
+        return -1;
+    }
     return 0;
 }
 
@@ -1335,16 +1358,7 @@ static void ckpt_interrupt_threads(struct cpu *self) {
     for (int i = 0; i < THREAD_REG_MAX; i++) {
         struct cpu *peer = g_threg[i].c;
         if (!peer || peer == self) continue;
-        __atomic_store_n(&peer->irq, 1, __ATOMIC_SEQ_CST);
-        pthread_cond_t *condition = __atomic_load_n(&g_threg[i].waitc, __ATOMIC_SEQ_CST);
-        if (condition) {
-            pthread_mutex_t *mutex = g_threg[i].waitm;
-            pthread_mutex_lock(mutex);
-            pthread_cond_broadcast(condition);
-            pthread_mutex_unlock(mutex);
-        }
-        pthread_kill(g_threg[i].th, THREAD_INT_SIG);
-        pthread_kill(g_threg[i].th, STW_SIG);
+        (void)ckpt_executor_kick(i, 1);
     }
     pthread_mutex_unlock(&g_threg_m);
 }
@@ -1388,8 +1402,7 @@ static int ckpt_ctty_open(void) {
 
     pid_t session = getsid(0);
     for (int fd = STDIN_FILENO; fd <= STDERR_FILENO; ++fd)
-        if (isatty(fd) && session > 0 && tcgetsid(fd) == session)
-            return fcntl(fd, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+        if (isatty(fd) && session > 0 && tcgetsid(fd) == session) return fcntl(fd, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
     errno = ENOTTY;
     return -1;
 }

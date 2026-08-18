@@ -4,6 +4,7 @@
 
 #include "pidmap.h"
 #include "hl/base.h"
+#include "../../host/system.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -113,7 +114,14 @@ static int registry_file(void) {
         errno = saved;
         return -1;
     }
-    return descriptor;
+    int adopted = hl_host_process_fd_private_adopt(descriptor);
+    if (adopted < 0) {
+        int saved = -adopted;
+        (void)close(descriptor);
+        errno = saved;
+        return -1;
+    }
+    return adopted;
 #endif
 }
 

@@ -255,6 +255,27 @@ static int fdcache_copy_string(char *destination, size_t capacity, const char *s
     return 0;
 }
 
+static int fdcache_path_belongs_to(const char *path, const char *root, size_t root_length) {
+    if (!path || !root || root_length == 0 || strncmp(path, root, root_length) != 0) return 0;
+    return root[root_length - 1] == '/' || path[root_length] == '\0' || path[root_length] == '/';
+}
+
+// Result caches are safe only where the engine owns mutation invalidation. The writable upper is
+// cacheable when the daemon's shared generation page is live, and immutable image lowers are always
+// cacheable. Bare host paths, bind mounts, and unknown roots can change without a guest syscall, so
+// both cache lookup and store must bypass them.
+static int fdcache_result_cacheable(const char *path) {
+    const struct hl_linux_vfs_namespace *vfs = g_fdcache.binding.vfs;
+    if (!vfs) return 0;
+    if (vfs->root_canonical && vfs->root_length && g_fsgen_ptr != &g_fdcache.filesystem_generation_local &&
+        fdcache_path_belongs_to(path, vfs->root_canonical, hl_linux_vfs_root_length(vfs)))
+        return 1;
+    if (!vfs->lowers || !vfs->lower_count) return 0;
+    for (int i = 0; i < hl_linux_vfs_lower_count(vfs); ++i)
+        if (fdcache_path_belongs_to(path, vfs->lowers[i].canon, vfs->lowers[i].clen)) return 1;
+    return 0;
+}
+
 int hl_fdcache_metadata_lookup(const char *p, int *rc, struct stat *out) {
     if (!p || strlen(p) >= 192) return 0;
     CLK;
@@ -357,7 +378,7 @@ void hl_fdcache_readlink_evict(const char *p) {
 
 // access(F_OK) existence cache (ld.so probes every library candidate)
 int hl_fdcache_access_lookup(const char *p, int *rc) {
-    if (!p || strlen(p) >= 176) return 0;
+    if (!p || strlen(p) >= 176 || !fdcache_result_cacheable(p)) return 0;
     CLK;
     int hit = 0;
     uint64_t h = mc_hash(p);
@@ -371,7 +392,7 @@ int hl_fdcache_access_lookup(const char *p, int *rc) {
 }
 
 void hl_fdcache_access_store(const char *p, int rc) {
-    if (!p || strlen(p) >= 176) return;
+    if (!p || strlen(p) >= 176 || !fdcache_result_cacheable(p)) return;
     CLK;
     uint64_t h = mc_hash(p);
     struct hl_fdcache_access_entry *e = &g_ac[h & 2047];

@@ -11,6 +11,7 @@ use hl_engine::{
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     num::NonZeroU64,
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{Arc, Condvar, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard},
     time::{Duration, Instant},
@@ -126,6 +127,32 @@ fn daily_dev_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     let output = directory.join(name);
     let status = std::process::Command::new(compiler)
         .args(["-static", "-O2", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
+    assert!(status.success(), "{compiler} failed with {status}");
+    output
+}
+
+fn shared_state_fixture(isa: GuestIsa, directory: &Path, source_name: &str) -> PathBuf {
+    let compiler = match isa {
+        GuestIsa::Aarch64 => "aarch64-linux-gnu-gcc",
+        GuestIsa::X86_64 => "x86_64-linux-gnu-gcc",
+    };
+    let output = directory.join(format!(
+        "checkpoint-{}-{}",
+        source_name,
+        match isa {
+            GuestIsa::Aarch64 => "aarch64",
+            GuestIsa::X86_64 => "x86_64",
+        }
+    ));
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/checkpoint")
+        .join(format!("{source_name}.c"));
+    let status = std::process::Command::new(compiler)
+        .args(["-static", "-O2", "-pthread", "-o"])
         .arg(&output)
         .arg(source)
         .status()
@@ -576,6 +603,231 @@ fn process_ids_for_executable(executable: &Path) -> Vec<u32> {
     pids
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ProcessIdentity {
+    pid: u32,
+    parent: u32,
+    session: u32,
+    start_time: u64,
+    executable_device: u64,
+    executable_inode: u64,
+}
+
+fn verified_process_identity(pid: u32) -> Option<ProcessIdentity> {
+    let (before, before_state) = process_identity(pid)?;
+    if before_state == 'Z' {
+        return None;
+    }
+    let executable = std::fs::metadata(format!("/proc/{pid}/exe")).ok()?;
+    let (after, after_state) = process_identity(pid)?;
+    (before.pid == after.pid
+        && before.parent == after.parent
+        && before.session == after.session
+        && before.start_time == after.start_time
+        && after_state != 'Z')
+        .then_some(ProcessIdentity {
+            executable_device: executable.dev(),
+            executable_inode: executable.ino(),
+            ..after
+        })
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SharedProcessTree {
+    harness: ProcessIdentity,
+    root: ProcessIdentity,
+    child: ProcessIdentity,
+}
+
+fn revalidate_process_identity(expected: ProcessIdentity) -> ProcessIdentity {
+    verified_process_identity(expected.pid)
+        .filter(|actual| {
+            actual.parent == expected.parent
+                && actual.session == expected.session
+                && actual.start_time == expected.start_time
+        })
+        .filter(|actual| {
+            actual.executable_device == expected.executable_device
+                && actual.executable_inode == expected.executable_inode
+        })
+        .unwrap_or_else(|| panic!("shared fixture identity is stale, replaced, dead, or zombie: {expected:?}"))
+}
+
+fn revalidate_shared_process_tree(expected: SharedProcessTree) {
+    let harness = revalidate_process_identity(expected.harness);
+    let root = revalidate_process_identity(expected.root);
+    let child = revalidate_process_identity(expected.child);
+    assert_eq!(
+        root.parent, harness.pid,
+        "shared fixture harness/root lineage changed: {expected:?}"
+    );
+    assert_eq!(
+        root.session, root.pid,
+        "shared fixture root is not its session leader: {expected:?}"
+    );
+    assert_eq!(
+        child.parent, root.pid,
+        "shared fixture root/child lineage changed: {expected:?}"
+    );
+    assert_eq!(
+        child.session, root.pid,
+        "shared fixture workers changed session: {expected:?}"
+    );
+    assert_eq!(root.executable_device, harness.executable_device);
+    assert_eq!(root.executable_inode, harness.executable_inode);
+    assert_eq!(child.executable_device, harness.executable_device);
+    assert_eq!(child.executable_inode, harness.executable_inode);
+}
+
+struct SharedSession {
+    engine: Arc<Engine>,
+    exit: std::sync::mpsc::Receiver<Result<hl_engine::engine::EngineExit, EngineError>>,
+    processes: Option<SharedProcessTree>,
+    armed: bool,
+}
+
+impl SharedSession {
+    fn start(engine: Arc<Engine>) -> Result<Self, EngineError> {
+        engine.start()?;
+        let (sender, exit) = std::sync::mpsc::sync_channel(1);
+        let waiting = engine.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send(waiting.wait());
+        });
+        Ok(Self {
+            engine,
+            exit,
+            processes: None,
+            armed: true,
+        })
+    }
+
+    fn record(&mut self, processes: SharedProcessTree) {
+        self.processes = Some(processes);
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+
+    fn finish(&mut self, context: &str) -> Result<hl_engine::engine::EngineExit, String> {
+        let exit = self
+            .exit
+            .recv_timeout(Duration::from_secs(10))
+            .map_err(|error| format!("{context} did not exit within 10 seconds: {error}"))?
+            .map_err(|error| format!("{context} failed: {error:?}"))?;
+        if let Some(processes) = self.processes {
+            wait_for_shared_child_reap_result(processes)?;
+        }
+        self.disarm();
+        Ok(exit)
+    }
+}
+
+impl Drop for SharedSession {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let _ = self.engine.stop(StopRequest::Force);
+        if let Some(processes) = self.processes {
+            let _ = wait_for_shared_child_reap_result(processes);
+        }
+    }
+}
+
+fn process_identity(pid: u32) -> Option<(ProcessIdentity, char)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let fields = stat
+        .rsplit_once(')')?
+        .1
+        .trim_start()
+        .split_ascii_whitespace()
+        .collect::<Vec<_>>();
+    Some((
+        ProcessIdentity {
+            pid,
+            parent: fields.get(1)?.parse().ok()?,
+            session: fields.get(3)?.parse().ok()?,
+            start_time: fields.get(19)?.parse().ok()?,
+            executable_device: 0,
+            executable_inode: 0,
+        },
+        fields.first()?.chars().next()?,
+    ))
+}
+
+fn processes_holding_file(path: &Path) -> Vec<ProcessIdentity> {
+    let file = std::fs::metadata(path).expect("shared fixture output metadata");
+    let mut holders = std::fs::read_dir("/proc")
+        .expect("host process directory")
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().to_string_lossy().parse::<u32>().ok())
+        .filter(|pid| {
+            std::fs::read_dir(format!("/proc/{pid}/fd")).is_ok_and(|entries| {
+                entries.filter_map(Result::ok).any(|entry| {
+                    std::fs::metadata(entry.path())
+                        .is_ok_and(|candidate| candidate.dev() == file.dev() && candidate.ino() == file.ino())
+                })
+            })
+        })
+        .filter_map(verified_process_identity)
+        .collect::<Vec<_>>();
+    holders.sort_by_key(|identity| identity.pid);
+    holders
+}
+
+fn shared_process_tree(engine: &Arc<Engine>, output: &Path) -> SharedProcessTree {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let harness = verified_process_identity(std::process::id()).expect("stable checkpoint harness identity");
+    let (root, child) = loop {
+        revalidate_process_identity(harness);
+        let holders = processes_holding_file(output);
+        if holders.len() == 2 {
+            if let Some(root) = holders.iter().find(|candidate| candidate.session == candidate.pid) {
+                if let Some(child) = holders.iter().find(|candidate| candidate.parent == root.pid) {
+                    if child.session == root.pid {
+                        break (*root, *child);
+                    }
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            let transcript = std::fs::read_to_string(output).unwrap_or_default();
+            let _ = engine.stop(StopRequest::Force);
+            let _ = wait_bounded(engine, "incomplete shared-state inode-holder cleanup");
+            panic!("expected one session-leader root and its child holding output: {holders:?}\n{transcript}");
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let processes = SharedProcessTree { harness, root, child };
+    revalidate_shared_process_tree(processes);
+    processes
+}
+
+fn wait_for_shared_child_reap_result(processes: SharedProcessTree) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        revalidate_process_identity(processes.harness);
+        let live = [processes.root, processes.child]
+            .into_iter()
+            .filter_map(|expected| {
+                process_identity(expected.pid).filter(|(actual, _)| actual.start_time == expected.start_time)
+            })
+            .collect::<Vec<_>>();
+        if live.is_empty() {
+            return Ok(());
+        }
+        if let Some((actual, _)) = live.iter().find(|(_, state)| *state == 'Z') {
+            return Err(format!("guest worker became an unreaped zombie: {actual:?}"));
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("guest worker identities did not disappear: {live:?}"));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn wait_for_exact_process_reap(executable: &Path) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -720,6 +972,27 @@ fn wait_for_running_marker(engine: &Arc<Engine>, path: &Path, marker: &str) {
         }
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+fn wait_for_shared_marker(session: &mut SharedSession, path: &Path, marker: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let output = std::fs::read_to_string(path).unwrap_or_default();
+        if output.ends_with(marker) {
+            return;
+        }
+        if let Ok(result) = session.exit.try_recv() {
+            session.disarm();
+            panic!("guest exited before ordered marker {marker:?}: {result:?}\n{output}");
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let _ = session.engine.stop(StopRequest::Force);
+    let status = session.finish("forced shared-state cleanup");
+    panic!(
+        "guest did not publish ordered marker {marker:?}; cleanup={status:?}:\n{}",
+        std::fs::read_to_string(path).unwrap_or_default()
+    );
 }
 
 struct PhaseTimings {
@@ -879,6 +1152,142 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
         progress[1]
     );
     timings.finish();
+}
+
+fn shared_state_round_trip(isa: GuestIsa, executable: &Path, expected: &str) {
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("output");
+    let first = Arc::new(Store::default());
+    let capture = Arc::new(
+        Engine::with_checkpoint(
+            isa,
+            daily_dev_plan(executable, directory.path(), false, true),
+            StandardStreams::default(),
+            first.clone(),
+            first.clone(),
+        )
+        .unwrap(),
+    );
+    let mut capture_session = SharedSession::start(capture.clone()).unwrap();
+    wait_for_shared_marker(&mut capture_session, &output, "BOOT\nREADY\n");
+    let capture_processes = shared_process_tree(&capture, &output);
+    capture_session.record(capture_processes);
+    revalidate_shared_process_tree(capture_processes);
+    revalidate_shared_process_tree(capture_processes);
+    capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+    assert_eq!(
+        capture_session
+            .finish("shared-state initial capture")
+            .unwrap()
+            .guest_status,
+        0
+    );
+
+    std::fs::write(directory.path().join("cycle1"), []).unwrap();
+    let second = Arc::new(Store::default());
+    let recapture = Arc::new(
+        Engine::with_checkpoint(
+            isa,
+            daily_dev_plan(executable, directory.path(), true, true),
+            StandardStreams::default(),
+            second.clone(),
+            first,
+        )
+        .unwrap(),
+    );
+    let mut recapture_session = SharedSession::start(recapture.clone()).unwrap();
+    wait_for_shared_marker(&mut recapture_session, &output, "BOOT\nREADY\nCYCLE 1\n");
+    let recapture_processes = shared_process_tree(&recapture, &output);
+    recapture_session.record(recapture_processes);
+    revalidate_shared_process_tree(recapture_processes);
+    revalidate_shared_process_tree(recapture_processes);
+    recapture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+    assert_eq!(
+        recapture_session.finish("shared-state recapture").unwrap().guest_status,
+        0
+    );
+
+    std::fs::write(directory.path().join("cycle2"), []).unwrap();
+    let restore = Arc::new(
+        Engine::with_checkpoint(
+            isa,
+            daily_dev_plan(executable, directory.path(), true, false),
+            StandardStreams::default(),
+            second.clone(),
+            second,
+        )
+        .unwrap(),
+    );
+    let mut restore_session = SharedSession::start(restore.clone()).unwrap();
+    wait_for_shared_marker(
+        &mut restore_session,
+        &output,
+        &format!("BOOT\nREADY\nCYCLE 1\n{expected}\n"),
+    );
+    let restore_processes = shared_process_tree(&restore, &output);
+    restore_session.record(restore_processes);
+    revalidate_shared_process_tree(restore_processes);
+    std::fs::write(directory.path().join("finish"), []).unwrap();
+    assert_eq!(
+        restore_session
+            .finish("shared-state final restore")
+            .unwrap()
+            .guest_status,
+        0
+    );
+    let output = std::fs::read_to_string(output).unwrap();
+    assert_eq!(
+        output,
+        format!("BOOT\nREADY\nCYCLE 1\n{expected}\n"),
+        "fresh start, duplicate generation, missing generation, or reordered transcript"
+    );
+}
+
+fn external_access_round_trip(isa: GuestIsa, executable: &Path) {
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("output");
+    let inherited_create = directory.path().join("inherited-create");
+    let inherited_delete = directory.path().join("inherited-delete");
+    let restored_create = directory.path().join("restored-create");
+    let restored_delete = directory.path().join("restored-delete");
+    std::fs::write(&inherited_delete, []).unwrap();
+    std::fs::write(&restored_delete, []).unwrap();
+
+    let store = Arc::new(Store::default());
+    let capture = Engine::with_checkpoint(
+        isa,
+        daily_dev_plan(executable, directory.path(), false, true),
+        StandardStreams::default(),
+        store.clone(),
+        store.clone(),
+    )
+    .unwrap();
+    capture.start().unwrap();
+    wait_for(&output, "READY");
+    capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+    assert_eq!(capture.wait().unwrap().guest_status, 0);
+
+    std::fs::write(&inherited_create, []).unwrap();
+    std::fs::remove_file(&inherited_delete).unwrap();
+    let restore = Engine::with_checkpoint(
+        isa,
+        daily_dev_plan(executable, directory.path(), true, false),
+        StandardStreams::default(),
+        store.clone(),
+        store,
+    )
+    .unwrap();
+    restore.start().unwrap();
+    std::fs::write(directory.path().join("release"), []).unwrap();
+    wait_for(&output, "RESTORED-CACHED");
+    std::fs::write(&restored_create, []).unwrap();
+    std::fs::remove_file(&restored_delete).unwrap();
+    std::fs::write(directory.path().join("mutate"), []).unwrap();
+    assert_eq!(restore.wait().unwrap().guest_status, 0);
+    assert_eq!(
+        std::fs::read_to_string(output).unwrap(),
+        "READY\nRESTORED-CACHED\nDONE external-access-ok\n"
+    );
 }
 
 fn capture_after_plain_engine(isa: GuestIsa, plain_executable: &Path, checkpoint_executable: &Path) {
@@ -1155,6 +1564,51 @@ fn daily_development_workload_survives_two_checkpoint_cycles_on_both_isas() {
     let _exclusive = exclusive_checkpoint_test();
     for (isa, executable, fixture_compile) in executables {
         daily_dev_round_trip(isa, &executable, fixture_compile);
+    }
+}
+
+#[test]
+fn shared_memory_futex_and_pshared_sync_survive_two_checkpoint_cycles_on_both_isas() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let cases = [
+        ("shared_alias", "DONE shared-alias-ok"),
+        ("shared_futex", "DONE shared-futex-ok"),
+        ("pshared_cond", "DONE pshared-cond-ok"),
+    ];
+    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64]
+        .into_iter()
+        .flat_map(|isa| {
+            cases.map(|(source, expected)| (isa, shared_state_fixture(isa, fixtures.path(), source), expected))
+        })
+        .collect::<Vec<_>>();
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+    for (isa, executable, expected) in executables {
+        shared_state_round_trip(isa, &executable, expected);
+    }
+}
+
+#[test]
+fn arm64_cross_process_shared_futex_survives_two_checkpoint_cycles() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executable = shared_state_fixture(GuestIsa::Aarch64, fixtures.path(), "shared_futex");
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+    shared_state_round_trip(GuestIsa::Aarch64, &executable, "DONE shared-futex-ok");
+}
+
+#[test]
+fn externally_mutated_access_results_remain_coherent_across_restore_on_both_isas() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64]
+        .map(|isa| (isa, shared_state_fixture(isa, fixtures.path(), "external_access")));
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+    for (isa, executable) in executables {
+        external_access_round_trip(isa, &executable);
     }
 }
 
@@ -1610,7 +2064,11 @@ fn identities_created_after_restore_survive_recapture_on_both_isas() {
             .filter_map(|name| name.split_once('/').map(|(group, _)| group.to_owned()))
             .filter(|group| group.starts_with("proc."))
             .collect::<BTreeSet<_>>();
-        assert_eq!(captured_processes.len(), 4, "{isa:?}: recapture omitted live descendants");
+        assert_eq!(
+            captured_processes.len(),
+            4,
+            "{isa:?}: recapture omitted live descendants"
+        );
 
         let restore_port = Arc::new(TestTerminal::default());
         let restore = Engine::with_checkpoint(

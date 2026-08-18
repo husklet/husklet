@@ -1027,8 +1027,7 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
             ckpt_ctty_close(tf);
             fprintf(stderr, "[ckpt] foreground process group is outside restored namespace\n");
             _exit(70);
-        }
-        else if (!hl_linux_pidmap_is_active(&g_pgidmap) && g_init_hostpid && fgh == g_init_hostpid)
+        } else if (!hl_linux_pidmap_is_active(&g_pgidmap) && g_init_hostpid && fgh == g_init_hostpid)
             man.fg_pgid_gpid = 1;
         if (tf >= 0 && tcgetattr(tf, &tio) == 0) {
             size_t cc = sizeof tio.c_cc < sizeof man.tty_cc ? sizeof tio.c_cc : sizeof man.tty_cc;
