@@ -151,7 +151,10 @@ impl ProductionMachine {
             provider_fd: -1,
         };
         // SAFETY: all pointers in config remain live for this call and there is no callback state.
-        let engine = unsafe { hl_native::Engine::create(config) }.map_err(EngineError::NativeCreateFailed)?;
+        let engine = unsafe { hl_native::Engine::create(config) }.map_err(|error| match error {
+            hl_native::Error::Load(kind) => EngineError::NativeLoadFailed(kind),
+            hl_native::Error::Status(status) => EngineError::NativeCreateFailed(status),
+        })?;
         #[cfg(unix)]
         let mut engine = engine;
         #[cfg(unix)]

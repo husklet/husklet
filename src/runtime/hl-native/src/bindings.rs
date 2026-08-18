@@ -76,152 +76,381 @@ const _: () = assert!(offset_of!(SyscallTrapResult, image_generation) == 16);
 pub(super) type SyscallDispatch =
     unsafe extern "C" fn(*mut c_void, c_uint, *mut SyscallCpuAarch64, *mut SyscallTrapResult) -> c_int;
 
-unsafe extern "C" {
-    #[cfg(feature = "native-test-hooks")]
-    fn hl_aarch64_bound_vector_io_test(
-        scenario: c_uint,
-        result: *mut i64,
-        calls: *mut c_uint,
-        bytes: *mut c_ulonglong,
-    ) -> c_int;
-    #[cfg(feature = "native-test-hooks")]
-    fn hl_x86_64_bound_vector_io_test(
-        scenario: c_uint,
-        result: *mut i64,
-        calls: *mut c_uint,
-        bytes: *mut c_ulonglong,
-    ) -> c_int;
-    #[cfg(all(test, feature = "native-test-hooks"))]
-    fn hl_aarch64_fdvis_path_publication_test(scenario: c_uint) -> c_int;
-    #[cfg(all(test, feature = "native-test-hooks"))]
-    fn hl_x86_64_fdvis_path_publication_test(scenario: c_uint) -> c_int;
-    #[cfg(feature = "native-test-hooks")]
-    fn hl_aarch64_namespace_transaction_test(scenario: c_uint) -> c_int;
-    #[cfg(feature = "native-test-hooks")]
-    fn hl_x86_64_namespace_transaction_test(scenario: c_uint) -> c_int;
-    #[cfg(feature = "native-test-hooks")]
-    fn hl_x86_64_store_preflight_test() -> c_int;
-    #[cfg(feature = "native-test-hooks")]
-    fn hl_aarch64_signal_errno_frame_test(
-        domain: c_uint,
-        redirect: c_uint,
-        nr: c_ulonglong,
-        raw: i64,
-        observed: *mut i64,
-        completed: *mut i64,
-    ) -> c_int;
-    #[cfg(feature = "native-test-hooks")]
-    fn hl_aarch64_checkpoint_signal_precedence_test() -> c_int;
-    #[cfg(feature = "native-test-hooks")]
-    fn hl_x86_64_checkpoint_signal_precedence_test() -> c_int;
-    #[cfg(feature = "native-test-hooks")]
-    fn hl_aarch64_checkpoint_restart_register_test() -> c_int;
-    #[cfg(feature = "native-test-hooks")]
-    fn hl_x86_64_checkpoint_restart_register_test() -> c_int;
-    #[cfg(feature = "native-test-hooks")]
-    fn hl_aarch64_checkpoint_restore_claim_test(scenario: c_uint) -> c_int;
-    #[cfg(feature = "native-test-hooks")]
-    fn hl_x86_64_checkpoint_restore_claim_test(scenario: c_uint) -> c_int;
-    #[cfg(feature = "native-test-hooks")]
-    fn hl_aarch64_checkpoint_restore_rollback_test() -> c_int;
-    #[cfg(feature = "native-test-hooks")]
-    fn hl_x86_64_checkpoint_restore_rollback_test() -> c_int;
-    #[cfg(feature = "native-test-hooks")]
-    fn hl_x86_64_signal_errno_frame_test(
-        domain: c_uint,
-        redirect: c_uint,
-        nr: c_ulonglong,
-        raw: i64,
-        observed: *mut i64,
-        completed: *mut i64,
-    ) -> c_int;
-    #[cfg(feature = "native-test-hooks")]
-    fn hl_c_backend_errno_from_host_test(domain: c_uint, host_errno: c_int) -> c_int;
-    #[cfg(feature = "native-test-hooks")]
-    fn hl_c_backend_identity_registry_test(scenario: c_uint, iterations: c_uint) -> c_int;
-    pub(super) fn hl_engine_abi() -> c_uint;
-    pub(super) fn hl_engine_version() -> *const c_char;
-    #[cfg(unix)]
-    fn dladdr(address: *const c_void, information: *mut DynamicSymbol) -> c_int;
-    pub(super) fn hl_c_backend_leak_check_nonvacuity() -> c_int;
-    #[cfg(unix)]
-    pub(super) fn hl_c_backend_checkpoint_broker_pair(parent: *mut c_int, child: *mut c_int) -> c_int;
-    #[cfg(unix)]
-    pub(super) fn hl_c_backend_checkpoint_broker_accept(broker: c_int, timeout_ms: c_int, host_pid: *mut u64) -> c_int;
-    #[cfg(unix)]
-    pub(super) fn hl_c_backend_checkpoint_trigger_create(descriptor: *mut c_int, mapping: *mut *mut c_void) -> c_int;
-    #[cfg(unix)]
-    pub(super) fn hl_c_backend_checkpoint_trigger_bump(mapping: *mut c_void) -> c_uint;
-    #[cfg(unix)]
-    pub(super) fn hl_c_backend_checkpoint_trigger_destroy(mapping: *mut c_void, descriptor: c_int);
-    #[cfg(unix)]
-    pub(super) fn hl_c_backend_checkpoint_adopt(isa: c_uint, broker: c_int, trigger: c_int) -> c_int;
-    #[cfg(unix)]
-    pub(super) fn hl_c_backend_checkpoint_interrupt_signal(isa: c_uint) -> c_int;
-    #[cfg(unix)]
-    pub(super) fn hl_c_backend_checkpoint_configure(backend: *mut Backend, broker: c_int, trigger: c_int) -> c_int;
-    pub(super) fn hl_c_backend_create(
-        isa: c_uint,
-        rootfs: *const c_char,
-        executable_host: *const c_char,
-        executable_fd: c_int,
-        image_plan: *const MainImagePlan,
-        interpreter_image: *const c_void,
-        interpreter_size: usize,
-        option_count: c_uint,
-        option_names: *const *const c_char,
-        option_values: *const *const c_char,
-        standard_fds: *const c_int,
-        provider_fd: c_int,
-        syscall_context: *mut c_void,
-        syscall_dispatch: Option<SyscallDispatch>,
-        output: *mut *mut Backend,
-    ) -> c_int;
-    pub(super) fn hl_c_backend_run(backend: *mut Backend, argc: c_int, argv: *const *const c_char) -> c_int;
-    pub(super) fn hl_c_backend_request(backend: *mut Backend, request: c_uint, signal: c_int) -> c_int;
-    #[cfg(all(test, feature = "native-test-hooks"))]
-    #[allow(dead_code)]
-    pub(super) fn hl_c_backend_checkpoint_test_arm() -> c_uint;
-    #[cfg(all(test, feature = "native-test-hooks"))]
-    #[allow(dead_code)]
-    pub(super) fn hl_c_backend_checkpoint_test_phase() -> c_uint;
-    #[cfg(all(test, feature = "native-test-hooks"))]
-    #[allow(dead_code)]
-    pub(super) fn hl_c_backend_checkpoint_test_release();
-    #[cfg(all(test, feature = "native-test-hooks"))]
-    #[allow(dead_code)]
-    pub(super) fn hl_c_backend_checkpoint_test_reset();
-    #[allow(dead_code)]
-    pub(super) fn hl_c_backend_checkpoint_test_prune_foreign_descriptors() -> c_uint;
-    #[allow(dead_code)]
-    pub(super) fn hl_c_backend_checkpoint_test_fail_registry_allocation();
-    #[allow(dead_code)]
-    pub(super) fn hl_c_backend_checkpoint_test_fail_private_adopt(position: c_uint);
-    #[allow(dead_code)]
-    pub(super) fn hl_c_backend_checkpoint_test_private_descriptor_count() -> u64;
-    #[cfg(all(test, feature = "native-test-hooks", unix))]
-    pub(super) fn hl_c_backend_host_process_force_test(pid: c_int) -> c_int;
-    #[allow(dead_code)]
-    pub(super) fn hl_c_backend_activation_ready_pause(paused: c_int);
-    pub(super) fn hl_c_backend_exit(backend: *mut Backend, result: *mut EngineExit) -> c_int;
-    #[cfg(test)]
-    pub(super) fn hl_c_backend_exit_kind(backend: *const Backend) -> c_uint;
-    #[cfg(test)]
-    pub(super) fn hl_c_backend_exit_status(backend: *const Backend) -> c_int;
-    #[cfg(test)]
-    pub(super) fn hl_c_backend_exit_detail(backend: *const Backend) -> c_ulonglong;
-    #[cfg(test)]
-    pub(super) fn hl_c_backend_translation_count(backend: *const Backend) -> c_ulonglong;
-    pub(super) fn hl_c_backend_destroy(backend: *mut Backend);
+pub(super) unsafe fn hl_engine_abi() -> c_uint {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.engine_abi)
+        .map_or(0, |function| unsafe { function() })
+}
+
+pub(super) unsafe fn hl_engine_version() -> *const c_char {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.engine_version)
+        .map_or(std::ptr::null(), |function| unsafe { function() })
+}
+
+pub(super) unsafe fn hl_c_backend_leak_check_nonvacuity() -> c_int {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.leak_check_nonvacuity)
+        .map_or(3, |function| unsafe { function() })
 }
 
 #[cfg(unix)]
-#[repr(C)]
-struct DynamicSymbol {
-    filename: *const c_char,
-    base: *mut c_void,
-    symbol: *const c_char,
-    address: *mut c_void,
+pub(super) unsafe fn hl_c_backend_checkpoint_broker_pair(parent: *mut c_int, child: *mut c_int) -> c_int {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.checkpoint_broker_pair)
+        .map_or(3, |function| unsafe { function(parent, child) })
+}
+
+#[cfg(unix)]
+pub(super) unsafe fn hl_c_backend_checkpoint_broker_accept(
+    broker: c_int,
+    timeout_ms: c_int,
+    host_pid: *mut u64,
+) -> c_int {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.checkpoint_broker_accept)
+        .map_or(3, |function| unsafe { function(broker, timeout_ms, host_pid) })
+}
+
+#[cfg(unix)]
+pub(super) unsafe fn hl_c_backend_checkpoint_trigger_create(
+    descriptor: *mut c_int,
+    mapping: *mut *mut c_void,
+) -> c_int {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.checkpoint_trigger_create)
+        .map_or(3, |function| unsafe { function(descriptor, mapping) })
+}
+
+#[cfg(unix)]
+pub(super) unsafe fn hl_c_backend_checkpoint_trigger_bump(mapping: *mut c_void) -> c_uint {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.checkpoint_trigger_bump)
+        .map_or(0, |function| unsafe { function(mapping) })
+}
+
+#[cfg(unix)]
+pub(super) unsafe fn hl_c_backend_checkpoint_trigger_destroy(mapping: *mut c_void, descriptor: c_int) {
+    if let Some(function) = crate::loader::api()
+        .ok()
+        .and_then(|api| api.checkpoint_trigger_destroy)
+    {
+        unsafe { function(mapping, descriptor) };
+    }
+}
+
+#[cfg(unix)]
+pub(super) unsafe fn hl_c_backend_checkpoint_adopt(isa: c_uint, broker: c_int, trigger: c_int) -> c_int {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.checkpoint_adopt)
+        .map_or(3, |function| unsafe { function(isa, broker, trigger) })
+}
+
+#[cfg(unix)]
+pub(super) unsafe fn hl_c_backend_checkpoint_interrupt_signal(isa: c_uint) -> c_int {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.checkpoint_interrupt_signal)
+        .map_or(0, |function| unsafe { function(isa) })
+}
+
+#[cfg(unix)]
+pub(super) unsafe fn hl_c_backend_checkpoint_configure(
+    backend: *mut Backend,
+    broker: c_int,
+    trigger: c_int,
+) -> c_int {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.checkpoint_configure)
+        .map_or(3, |function| unsafe { function(backend, broker, trigger) })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn hl_c_backend_create(
+    isa: c_uint,
+    rootfs: *const c_char,
+    executable_host: *const c_char,
+    executable_fd: c_int,
+    image_plan: *const MainImagePlan,
+    interpreter_image: *const c_void,
+    interpreter_size: usize,
+    option_count: c_uint,
+    option_names: *const *const c_char,
+    option_values: *const *const c_char,
+    standard_fds: *const c_int,
+    provider_fd: c_int,
+    syscall_context: *mut c_void,
+    syscall_dispatch: Option<SyscallDispatch>,
+    output: *mut *mut Backend,
+) -> c_int {
+    let Ok(api) = crate::loader::api() else {
+        if !output.is_null() {
+            unsafe { output.write(std::ptr::null_mut()) };
+        }
+        #[cfg(unix)]
+        if provider_fd >= 0 {
+            // SAFETY: create owns every nonnegative provider descriptor even when loading fails.
+            unsafe { libc::close(provider_fd) };
+        }
+        return 3;
+    };
+    let Some(function) = api.create else {
+        return 3;
+    };
+    unsafe {
+        function(
+            isa,
+            rootfs,
+            executable_host,
+            executable_fd,
+            image_plan,
+            interpreter_image,
+            interpreter_size,
+            option_count,
+            option_names,
+            option_values,
+            standard_fds,
+            provider_fd,
+            syscall_context,
+            syscall_dispatch,
+            output,
+        )
+    }
+}
+
+pub(super) unsafe fn hl_c_backend_run(
+    backend: *mut Backend,
+    argc: c_int,
+    argv: *const *const c_char,
+) -> c_int {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.run)
+        .map_or(3, |function| unsafe { function(backend, argc, argv) })
+}
+
+pub(super) unsafe fn hl_c_backend_request(backend: *mut Backend, request: c_uint, signal: c_int) -> c_int {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.request)
+        .map_or(3, |function| unsafe { function(backend, request, signal) })
+}
+
+pub(super) unsafe fn hl_c_backend_exit(backend: *mut Backend, result: *mut EngineExit) -> c_int {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.exit)
+        .map_or(3, |function| unsafe { function(backend, result) })
+}
+
+pub(super) unsafe fn hl_c_backend_destroy(backend: *mut Backend) {
+    if let Some(function) = crate::loader::api().ok().and_then(|api| api.destroy) {
+        unsafe { function(backend) };
+    }
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_aarch64_bound_vector_io_test(
+    scenario: c_uint,
+    result: *mut i64,
+    calls: *mut c_uint,
+    bytes: *mut c_ulonglong,
+) -> c_int {
+    crate::loader::tests().map_or(3, |api| unsafe {
+        (api.aarch64_bound_vector_io)(scenario, result, calls, bytes)
+    })
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_x86_64_bound_vector_io_test(
+    scenario: c_uint,
+    result: *mut i64,
+    calls: *mut c_uint,
+    bytes: *mut c_ulonglong,
+) -> c_int {
+    crate::loader::tests().map_or(3, |api| unsafe {
+        (api.x86_64_bound_vector_io)(scenario, result, calls, bytes)
+    })
+}
+
+#[cfg(all(test, feature = "native-test-hooks"))]
+unsafe fn hl_aarch64_fdvis_path_publication_test(scenario: c_uint) -> c_int {
+    crate::loader::tests().map_or(0, |api| unsafe { (api.aarch64_fdvis_path_publication)(scenario) })
+}
+
+#[cfg(all(test, feature = "native-test-hooks"))]
+unsafe fn hl_x86_64_fdvis_path_publication_test(scenario: c_uint) -> c_int {
+    crate::loader::tests().map_or(0, |api| unsafe { (api.x86_64_fdvis_path_publication)(scenario) })
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_aarch64_namespace_transaction_test(scenario: c_uint) -> c_int {
+    crate::loader::tests().map_or(3, |api| unsafe { (api.aarch64_namespace_transaction)(scenario) })
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_x86_64_namespace_transaction_test(scenario: c_uint) -> c_int {
+    crate::loader::tests().map_or(3, |api| unsafe { (api.x86_64_namespace_transaction)(scenario) })
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_x86_64_store_preflight_test() -> c_int {
+    crate::loader::tests().map_or(3, |api| unsafe { (api.x86_64_store_preflight)() })
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_aarch64_signal_errno_frame_test(
+    domain: c_uint,
+    redirect: c_uint,
+    nr: c_ulonglong,
+    raw: i64,
+    observed: *mut i64,
+    completed: *mut i64,
+) -> c_int {
+    crate::loader::tests().map_or(3, |api| unsafe {
+        (api.aarch64_signal_errno_frame)(domain, redirect, nr, raw, observed, completed)
+    })
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_x86_64_signal_errno_frame_test(
+    domain: c_uint,
+    redirect: c_uint,
+    nr: c_ulonglong,
+    raw: i64,
+    observed: *mut i64,
+    completed: *mut i64,
+) -> c_int {
+    crate::loader::tests().map_or(3, |api| unsafe {
+        (api.x86_64_signal_errno_frame)(domain, redirect, nr, raw, observed, completed)
+    })
+}
+
+macro_rules! test_no_argument {
+    ($name:ident, $field:ident) => {
+        #[cfg(feature = "native-test-hooks")]
+        unsafe fn $name() -> c_int {
+            crate::loader::tests().map_or(3, |api| unsafe { (api.$field)() })
+        }
+    };
+}
+
+test_no_argument!(
+    hl_aarch64_checkpoint_signal_precedence_test,
+    aarch64_checkpoint_signal_precedence
+);
+test_no_argument!(
+    hl_x86_64_checkpoint_signal_precedence_test,
+    x86_64_checkpoint_signal_precedence
+);
+test_no_argument!(
+    hl_aarch64_checkpoint_restart_register_test,
+    aarch64_checkpoint_restart_register
+);
+test_no_argument!(
+    hl_x86_64_checkpoint_restart_register_test,
+    x86_64_checkpoint_restart_register
+);
+test_no_argument!(
+    hl_aarch64_checkpoint_restore_rollback_test,
+    aarch64_checkpoint_restore_rollback
+);
+test_no_argument!(
+    hl_x86_64_checkpoint_restore_rollback_test,
+    x86_64_checkpoint_restore_rollback
+);
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_aarch64_checkpoint_restore_claim_test(scenario: c_uint) -> c_int {
+    crate::loader::tests().map_or(3, |api| unsafe { (api.aarch64_checkpoint_restore_claim)(scenario) })
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_x86_64_checkpoint_restore_claim_test(scenario: c_uint) -> c_int {
+    crate::loader::tests().map_or(3, |api| unsafe { (api.x86_64_checkpoint_restore_claim)(scenario) })
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_c_backend_errno_from_host_test(domain: c_uint, host_errno: c_int) -> c_int {
+    crate::loader::tests().map_or(3, |api| unsafe { (api.errno_from_host)(domain, host_errno) })
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_c_backend_identity_registry_test(scenario: c_uint, iterations: c_uint) -> c_int {
+    crate::loader::tests().map_or(3, |api| unsafe { (api.identity_registry)(scenario, iterations) })
+}
+
+#[cfg(all(test, feature = "native-test-hooks"))]
+pub(super) unsafe fn hl_c_backend_checkpoint_test_arm() -> c_uint {
+    crate::loader::tests().map_or(0, |api| unsafe { (api.checkpoint_test_arm)() })
+}
+
+#[cfg(all(test, feature = "native-test-hooks"))]
+pub(super) unsafe fn hl_c_backend_checkpoint_test_phase() -> c_uint {
+    crate::loader::tests().map_or(0, |api| unsafe { (api.checkpoint_test_phase)() })
+}
+
+#[cfg(all(test, feature = "native-test-hooks"))]
+pub(super) unsafe fn hl_c_backend_checkpoint_test_release() {
+    if let Ok(api) = crate::loader::tests() {
+        unsafe { (api.checkpoint_test_release)() };
+    }
+}
+
+#[cfg(all(test, feature = "native-test-hooks"))]
+pub(super) unsafe fn hl_c_backend_checkpoint_test_reset() {
+    if let Ok(api) = crate::loader::tests() {
+        unsafe { (api.checkpoint_test_reset)() };
+    }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(super) unsafe fn hl_c_backend_checkpoint_test_prune_foreign_descriptors() -> c_uint {
+    crate::loader::tests().map_or(0, |api| unsafe {
+        (api.checkpoint_test_prune_foreign_descriptors)()
+    })
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(super) unsafe fn hl_c_backend_checkpoint_test_fail_registry_allocation() {
+    if let Ok(api) = crate::loader::tests() {
+        unsafe { (api.checkpoint_test_fail_registry_allocation)() };
+    }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(super) unsafe fn hl_c_backend_checkpoint_test_fail_private_adopt(position: c_uint) {
+    if let Ok(api) = crate::loader::tests() {
+        unsafe { (api.checkpoint_test_fail_private_adopt)(position) };
+    }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(super) unsafe fn hl_c_backend_checkpoint_test_private_descriptor_count() -> u64 {
+    crate::loader::tests().map_or(0, |api| unsafe {
+        (api.checkpoint_test_private_descriptor_count)()
+    })
+}
+
+#[cfg(all(test, feature = "native-test-hooks", unix))]
+pub(super) unsafe fn hl_c_backend_host_process_force_test(pid: c_int) -> c_int {
+    crate::loader::tests().map_or(3, |api| unsafe { (api.host_process_force)(pid) })
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(super) unsafe fn hl_c_backend_activation_ready_pause(paused: c_int) {
+    if let Ok(api) = crate::loader::tests() {
+        unsafe { (api.activation_ready_pause)(paused) };
+    }
 }
 
 #[cfg(feature = "native-test-hooks")]
@@ -372,38 +601,9 @@ pub(super) fn engine_metadata_is_valid() -> bool {
 }
 
 #[cfg(unix)]
-fn symbol_library_path(address: *const c_void) -> Option<std::path::PathBuf> {
-    use std::os::unix::ffi::OsStrExt as _;
-
-    let mut information = DynamicSymbol {
-        filename: std::ptr::null(),
-        base: std::ptr::null_mut(),
-        symbol: std::ptr::null(),
-        address: std::ptr::null_mut(),
-    };
-    // SAFETY: `hl_engine_abi` is a linked function address and `information` is a live writable
-    // `Dl_info`-compatible record. `dladdr` owns no returned storage; copy the filename now.
-    let found = unsafe { dladdr(address, &raw mut information) };
-    if found == 0 || information.filename.is_null() {
-        return None;
-    }
-    // SAFETY: successful `dladdr` returns a process-lifetime NUL-terminated filename.
-    let bytes = unsafe { std::ffi::CStr::from_ptr(information.filename) }.to_bytes();
-    Some(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
-}
-
-#[cfg(unix)]
 pub(super) fn engine_library_paths() -> Option<Vec<std::path::PathBuf>> {
-    [
-        (hl_engine_abi as *const ()).cast::<c_void>(),
-        (hl_engine_version as *const ()).cast::<c_void>(),
-        (hl_c_backend_create as *const ()).cast::<c_void>(),
-        (hl_c_backend_run as *const ()).cast::<c_void>(),
-        (hl_c_backend_destroy as *const ()).cast::<c_void>(),
-    ]
-    .into_iter()
-    .map(symbol_library_path)
-    .collect()
+    let path = crate::loader::path().ok()?.to_owned();
+    Some(vec![path; 5])
 }
 
 #[cfg(test)]
@@ -461,10 +661,6 @@ mod tests {
                 detail: 0,
             };
             assert_ne!(hl_c_backend_exit(ptr::null_mut(), &raw mut exit), 0);
-            assert_eq!(hl_c_backend_exit_kind(ptr::null()), 0);
-            assert_eq!(hl_c_backend_exit_status(ptr::null()), -1);
-            assert_eq!(hl_c_backend_exit_detail(ptr::null()), 0);
-            assert_eq!(hl_c_backend_translation_count(ptr::null()), 0);
             hl_c_backend_destroy(ptr::null_mut());
         }
     }

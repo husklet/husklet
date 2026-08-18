@@ -20,6 +20,23 @@ use layout::validate_elf_image;
 
 pub const STATUS_OK: i32 = 0;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Error {
+    Load(crate::LoadKind),
+    Status(i32),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Load(kind) => write!(formatter, "native library load failed: {kind:?}"),
+            Self::Status(status) => write!(formatter, "native engine status {status}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
 /// Low-level creation arguments for the native engine.
 ///
 /// Strings, arrays, image descriptors, and standard descriptors are borrowed
@@ -70,9 +87,10 @@ impl Engine {
     /// Option pointers must satisfy the C ABI.
     /// Borrowed create inputs need only remain valid for this call; C copies
     /// configuration.
-    pub unsafe fn create(config: EngineConfig<'_>) -> Result<Self, i32> {
+    pub unsafe fn create(config: EngineConfig<'_>) -> Result<Self, Error> {
+        crate::loader::api().map_err(|error| Error::Load(error.kind()))?;
         // SAFETY: forwarded unchanged; the hook does not observe raw inputs.
-        unsafe { Self::create_after_pinning(config, || {}) }
+        unsafe { Self::create_after_pinning(config, || {}) }.map_err(Error::Status)
     }
 
     unsafe fn create_after_pinning(config: EngineConfig<'_>, after_pin: impl FnOnce()) -> Result<Self, i32> {

@@ -10,6 +10,7 @@ mod build_support;
 #[cfg(unix)]
 mod checkpoint;
 mod engine;
+mod loader;
 mod provider;
 
 #[cfg(test)]
@@ -17,7 +18,8 @@ mod artifact;
 
 #[cfg(unix)]
 pub use checkpoint::{CheckpointBroker, CheckpointTransport};
-pub use engine::{Engine, EngineConfig, Exit};
+pub use engine::{Engine, EngineConfig, Error, Exit};
+pub use loader::{LoadError, LoadKind};
 #[cfg(unix)]
 pub use provider::artifact_lifecycle_smoke;
 pub use provider::leak_check_nonvacuity;

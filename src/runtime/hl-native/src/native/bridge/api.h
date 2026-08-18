@@ -11,7 +11,38 @@
 
 typedef struct hl_c_backend hl_c_backend;
 
+#define HL_C_BRIDGE_API_ABI 1u
+
+typedef struct hl_c_bridge_api {
+    uint32_t abi;
+    uint32_t size;
+    uint32_t (*engine_abi)(void);
+    const char *(*engine_version)(void);
+    int32_t (*leak_check_nonvacuity)(void);
+    int32_t (*checkpoint_broker_pair)(int32_t *parent, int32_t *child);
+    int32_t (*checkpoint_broker_accept)(int32_t broker, int32_t timeout_ms, uint64_t *host_pid);
+    int32_t (*checkpoint_trigger_create)(int32_t *descriptor, void **mapping);
+    uint32_t (*checkpoint_trigger_bump)(void *mapping);
+    void (*checkpoint_trigger_destroy)(void *mapping, int32_t descriptor);
+    int32_t (*checkpoint_adopt)(uint32_t isa, int32_t broker, int32_t trigger);
+    int32_t (*checkpoint_interrupt_signal)(uint32_t isa);
+    int32_t (*checkpoint_configure)(hl_c_backend *backend, int32_t broker, int32_t trigger);
+    int32_t (*create)(uint32_t isa, const char *rootfs, const char *executable_host,
+                      int32_t executable_fd, const hl_c_main_image_plan *image_plan,
+                      const void *interpreter_image, size_t interpreter_size,
+                      uint32_t option_count, const char *const *option_names,
+                      const char *const *option_values, const int32_t standard_fds[3],
+                      int32_t provider_fd, void *syscall_context,
+                      hl_syscall_trap_fn syscall_dispatch, hl_c_backend **output);
+    int32_t (*run)(hl_c_backend *backend, int32_t argc, const char *const *argv);
+    int32_t (*request)(hl_c_backend *backend, uint32_t request, int32_t signal);
+    int32_t (*exit)(hl_c_backend *backend, hl_engine_exit *result);
+    void (*destroy)(hl_c_backend *backend);
+} hl_c_bridge_api;
+
 HL_EXTERN_C_BEGIN
+
+HL_API const hl_c_bridge_api *hl_c_bridge_api_v1(void);
 
 HL_API int32_t hl_c_backend_leak_check_nonvacuity(void);
 /* Checkpoint transport descriptors are owned by the caller. Adoption borrows

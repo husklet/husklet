@@ -12,6 +12,7 @@ pub const NATIVE_ROOT: &str = "src/native";
 
 const EXPLICIT_ROOTS: &[&str] = &[
     "src/native/bridge/shim.c",
+    "src/native/bridge/table.c",
     "src/native/bridge/host.c",
     "src/native/bridge/executable_authority.c",
     "src/native/bridge/address_projection.c",

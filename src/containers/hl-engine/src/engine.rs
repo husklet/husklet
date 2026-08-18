@@ -101,6 +101,8 @@ pub enum EngineError {
     LaunchFailed,
     /// Native construction refused the configured engine with this stable `hl_status` value.
     NativeCreateFailed(i32),
+    /// The private native library could not be loaded or did not satisfy the bridge contract.
+    NativeLoadFailed(hl_native::LoadKind),
     /// The native engine completed its run boundary with this stable `hl_status` value.
     NativeRunFailed(i32),
     WorkspaceFailed,

@@ -63,6 +63,7 @@ fn main() {
             &archive(&environment, target, sanitizer, "hl_c_backend_shim", false)
                 .sources([
                     "src/native/bridge/shim.c",
+                    "src/native/bridge/table.c",
                     "src/native/bridge/host.c",
                     "src/native/bridge/executable_authority.c",
                     "src/native/bridge/address_projection.c",
@@ -201,13 +202,8 @@ fn main() {
         .unwrap_or_else(|error| panic!("{error}"));
     CargoDirectives::rustc_environment("HL_NATIVE_LIBRARY_NAME", filename);
     CargoDirectives::rustc_environment("HL_NATIVE_LIBRARY_PATH", environment.output.join(filename).display());
-    CargoDirectives::link_search(&environment.output);
-    CargoDirectives::link_library(Some("dylib"), "hl_native_engine");
-    for path in artifact::loader_paths(environment.target_os.as_str()) {
-        CargoDirectives::link_argument(format!("-Wl,-rpath,{path}"));
-    }
-    if target.os != platform::HostOs::Windows && environment.profile != hl_cc::Profile::Release {
-        CargoDirectives::link_argument(format!("-Wl,-rpath,{}", environment.output.display()));
+    if target.os == platform::HostOs::Linux {
+        CargoDirectives::link_library(None, "dl");
     }
     if sanitizer == NativeSanitizer::Leak && target.os == platform::HostOs::Linux {
         CargoDirectives::link_library(None, "lsan");
