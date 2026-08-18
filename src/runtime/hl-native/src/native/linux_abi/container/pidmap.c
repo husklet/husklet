@@ -17,6 +17,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#if defined(__APPLE__) && !defined(MAP_ANON)
+#error "Darwin native sources require _DARWIN_C_SOURCE before system headers"
+#endif
+
 #ifndef MAP_ANONYMOUS
 #define MAP_ANONYMOUS MAP_ANON
 #endif

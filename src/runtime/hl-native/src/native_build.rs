@@ -53,12 +53,7 @@ fn main() {
         .unwrap_or_else(|| panic!("no C tool plan for {}", environment.target.as_str()));
     let toolchain = Toolchain::discover(&environment).unwrap_or_else(|error| panic!("{error}"));
     let compiler = CCompiler::new(&environment, &toolchain, tools.compiler);
-    let platform_definition = if target.os == platform::HostOs::Macos {
-        "_DARWIN_C_SOURCE"
-    } else {
-        "_GNU_SOURCE"
-    };
-    let mut shim_definitions = vec![Definition::flag(platform_definition)];
+    let mut shim_definitions = Vec::new();
     add_test_hooks(&mut shim_definitions, test_hooks);
     if plan.guests == [GuestIsa::X86_64] {
         shim_definitions.push(Definition::value("HL_BUILD_TARGET_X86_64_ONLY", "1"));
@@ -109,7 +104,6 @@ fn main() {
         let mut target_definitions = vec![
             Definition::value("HL_ENABLE_LOGGING", "0"),
             Definition::value("HL_TRANSLIT_DEFAULT", "0"),
-            Definition::flag("_GNU_SOURCE"),
             Definition::value("HL_EMBEDDED_BUILD", "1"),
         ];
         target_definitions.push(Definition::value(
@@ -134,7 +128,6 @@ fn main() {
         let mut lifecycle_definitions = vec![
             Definition::value("HL_ENABLE_LOGGING", "0"),
             Definition::value("HL_TRANSLIT_DEFAULT", "0"),
-            Definition::flag("_GNU_SOURCE"),
             Definition::value("HL_EMBEDDED_BUILD", "1"),
             Definition::value(
                 "HL_TARGET_NAMESPACE",
@@ -242,6 +235,7 @@ fn archive(
     let mut spec = ArchiveSpec::new(name)
         .includes([NATIVE_ROOT, "src/native/include", "src/native"])
         .definitions(engine_definitions())
+        .definitions([Definition::flag(target.os.feature_definition())])
         .language(LanguageStandard::C11)
         .optimization(if sanitizer.compiler().is_some() { 1 } else { 2 })
         .debug(environment.profile != hl_cc::Profile::Release)

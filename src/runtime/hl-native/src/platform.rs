@@ -18,6 +18,16 @@ impl HostOs {
             _ => None,
         }
     }
+
+    /// Feature-test macro required before system headers in every native
+    /// translation unit for this host.
+    #[must_use]
+    pub const fn feature_definition(self) -> &'static str {
+        match self {
+            Self::Macos => "_DARWIN_C_SOURCE",
+            Self::Linux | Self::Windows => "_GNU_SOURCE",
+        }
+    }
 }
 
 /// CPUs for which the native engine can run as a host process.
@@ -151,5 +161,12 @@ mod tests {
             HostTarget::from_cfg("macos", "x86_64").unwrap().build_plan().guests,
             &[GuestIsa::X86_64]
         );
+    }
+
+    #[test]
+    fn host_feature_definitions_are_explicit() {
+        assert_eq!(HostOs::Linux.feature_definition(), "_GNU_SOURCE");
+        assert_eq!(HostOs::Macos.feature_definition(), "_DARWIN_C_SOURCE");
+        assert_eq!(HostOs::Windows.feature_definition(), "_GNU_SOURCE");
     }
 }
