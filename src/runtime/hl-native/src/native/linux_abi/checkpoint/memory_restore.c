@@ -208,6 +208,150 @@ static void ckpt_report_overlap(uint64_t lo, uint64_t hi) {
     fclose(maps);
 }
 
+static void *ckpt_map_exact_nonreplacing(uint64_t address, size_t length, int protection, int flags, int fd,
+                                         off_t offset) {
+    int claim_flags = (flags & ~MAP_FIXED) | MAP_FIXED_NOREPLACE;
+    return mmap((void *)(uintptr_t)address, length, protection, claim_flags, fd, offset);
+}
+
+typedef void *(*ckpt_exact_mapper)(uint64_t, size_t, int, int, int, off_t);
+typedef int (*ckpt_exact_unmapper)(void *, size_t);
+
+static int ckpt_claim_exact_with(ckpt_exact_mapper mapper, ckpt_exact_unmapper unmapper, uint64_t address,
+                                 size_t length, int protection, int flags, int fd, off_t offset, void **claimed) {
+    void *mapping = mapper(address, length, protection, flags, fd, offset);
+    if (mapping == MAP_FAILED || (uint64_t)(uintptr_t)mapping != address) {
+        int claim_errno = mapping == MAP_FAILED ? errno : EEXIST;
+        if (mapping != MAP_FAILED) (void)unmapper(mapping, length);
+        errno = claim_errno;
+        *claimed = MAP_FAILED;
+        return -1;
+    }
+    *claimed = mapping;
+    return 0;
+}
+
+static int ckpt_unmap_exact(void *address, size_t length) {
+    return munmap(address, length);
+}
+
+static int ckpt_claim_exact(uint64_t address, size_t length, int protection, int flags, int fd, off_t offset,
+                            void **claimed) {
+    return ckpt_claim_exact_with(ckpt_map_exact_nonreplacing, ckpt_unmap_exact, address, length, protection, flags,
+                                 fd, offset, claimed);
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+struct ckpt_claim_test_state {
+    void *mapping;
+    int map_errno;
+    unsigned unmaps;
+};
+static struct ckpt_claim_test_state g_ckpt_claim_test;
+static size_t g_ckpt_rollback_file_ranges;
+static size_t g_ckpt_rollback_logical_ranges;
+static size_t g_ckpt_rollback_direct_ranges;
+
+static void *ckpt_claim_test_map(uint64_t address, size_t length, int protection, int flags, int fd, off_t offset) {
+    (void)address;
+    (void)length;
+    (void)protection;
+    (void)flags;
+    (void)fd;
+    (void)offset;
+    errno = g_ckpt_claim_test.map_errno;
+    return g_ckpt_claim_test.mapping;
+}
+
+static int ckpt_claim_test_unmap(void *address, size_t length) {
+    (void)address;
+    (void)length;
+    g_ckpt_claim_test.unmaps++;
+    errno = ENOSPC; /* cleanup must not replace the claim verdict */
+    return 0;
+}
+
+HL_API int hl_checkpoint_restore_claim_test(uint32_t scenario) {
+    uint64_t requested = UINT64_C(0x200000);
+    void *claimed = NULL;
+    g_ckpt_claim_test = (struct ckpt_claim_test_state){0};
+    if (scenario == 0) {
+        g_ckpt_claim_test.mapping = MAP_FAILED;
+        g_ckpt_claim_test.map_errno = EEXIST;
+    } else if (scenario == 1) {
+        g_ckpt_claim_test.mapping = (void *)(uintptr_t)(requested + UINT64_C(0x10000));
+    } else {
+        return 10;
+    }
+    if (ckpt_claim_exact_with(ckpt_claim_test_map, ckpt_claim_test_unmap, requested, 4096, PROT_READ | PROT_WRITE,
+                              MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0, &claimed) == 0)
+        return 1;
+    if (claimed != MAP_FAILED || errno != EEXIST) return 2;
+    if (g_ckpt_claim_test.unmaps != (scenario == 1 ? 1u : 0u)) return 3;
+    return 0;
+}
+#endif
+
+static void ckpt_restore_rollback(const struct ckpt_region *topology, size_t processed, size_t registered,
+                                  const uint64_t *mapped_a, const uint64_t *mapped_e, size_t nmapped) {
+    int restore_errno = errno != 0 ? errno : EIO;
+    for (size_t index = 0; index < registered; ++index) {
+        const struct ckpt_region *region = &topology[index];
+        filemap_unmap(region->addr, region->addr + region->glen);
+        futex_shared_unmap(region->addr, region->addr + region->glen);
+#if defined(HL_NATIVE_TEST_HOOKS)
+        g_ckpt_rollback_file_ranges++;
+#endif
+    }
+    for (size_t index = 0; index < processed; ++index) {
+        const struct ckpt_region *region = &topology[index];
+        hl_gmap_unmap_range(region->addr, region->addr + region->len);
+        anon_split_unmap(region->addr, region->addr + region->len);
+        gna_clear(region->addr & ~(uint64_t)0xfff,
+                  (region->addr + region->glen + UINT64_C(0xfff)) & ~UINT64_C(0xfff));
+        if (region->logical) {
+            (void)hl_logical_vma_global_unmap(region->addr, region->glen);
+#if defined(HL_NATIVE_TEST_HOOKS)
+            g_ckpt_rollback_logical_ranges++;
+#endif
+        }
+    }
+    for (size_t index = nmapped; index != 0; --index) {
+        (void)munmap((void *)(uintptr_t)mapped_a[index - 1], (size_t)(mapped_e[index - 1] - mapped_a[index - 1]));
+#if defined(HL_NATIVE_TEST_HOOKS)
+        g_ckpt_rollback_direct_ranges++;
+#endif
+    }
+    errno = restore_errno;
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+HL_API int HL_TARGET_LOCAL(checkpoint_restore_rollback_test)(void) {
+    struct ckpt_region topology[2] = {
+        {.addr = UINT64_C(0x100000), .len = 4096, .glen = 4096, .format_version = CKPT_REGION_VERSION},
+        {.addr = UINT64_C(0x200000),
+         .len = 4096,
+         .glen = 4096,
+         .backing_object = 1,
+         .backing_shared = 1,
+         .format_version = CKPT_REGION_VERSION,
+         .logical = 1},
+    };
+    uint64_t mapped_a[1] = {UINT64_C(0x100000)};
+    uint64_t mapped_e[1] = {UINT64_C(0x101000)};
+    g_ckpt_rollback_file_ranges = 0;
+    g_ckpt_rollback_logical_ranges = 0;
+    g_ckpt_rollback_direct_ranges = 0;
+    errno = EEXIST;
+    ckpt_restore_rollback(topology, 2, 2, mapped_a, mapped_e, 1);
+    if (errno != EEXIST) return 1;
+    if (g_ckpt_rollback_file_ranges != 2) return 2;
+    if (g_ckpt_rollback_logical_ranges != 1) return 3;
+    if (g_ckpt_rollback_direct_ranges != 1) return 4;
+    return 0;
+}
+#endif
+
 // Rebuild this process's guest memory (MAP_FIXED) + the mapping side-registries from `procdir`. For the init
 // this runs BEFORE engine init (so MAP_FIXED lands on free VAs); a re-forked child calls hl_gmap_reset() +
 // clears the anon/gna counters FIRST (dropping the COW-inherited init mappings) so its own RAM lands clean.
@@ -217,6 +361,8 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
     uint64_t *mapped_a;
     uint64_t *mapped_e;
     size_t nmapped = 0;
+    size_t processed = 0;
+    size_t registered = 0;
     jit_guest_soft_restore_deactivate();
     char pf[1300];
     snprintf(pf, sizeof pf, "%s/pages", procdir);
@@ -301,26 +447,21 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
                 map_flags = MAP_FIXED | (reg.backing_shared ? MAP_SHARED : MAP_PRIVATE);
                 map_offset = (off_t)adjusted_offset;
             }
-            // A guest mmap's VA is an ordinary host mmap result, so a saved region can name VA the restoring
-            // process is already using for ENGINE state -- and MAP_FIXED would replace it silently. Probe
-            // with MAP_FIXED_NOREPLACE first so the collision is named; the retry keeps the guest's VA (the
-            // guest's own pointers are unrelocatable), but a corrupted engine is now diagnosed, not silent.
-#ifdef MAP_FIXED_NOREPLACE
-            int probe_flags = map_flags | MAP_FIXED_NOREPLACE;
-#else
-            int probe_flags = map_flags;
-#endif
-            void *r = mmap((void *)map_a, map_len, PROT_READ | PROT_WRITE, probe_flags, map_fd, map_offset);
-            if (r == MAP_FAILED || (uint64_t)(uintptr_t)r != map_a) {
-                if (r != MAP_FAILED) munmap(r, map_len);
-                fprintf(stderr, "[restore] guest region %llx+%llx overlaps a live host mapping; reclaiming it\n",
+            // A saved guest VA can name live restoring-engine state. Claim the exact range without
+            // replacement and fail closed when any byte is occupied. host_mman.h implements
+            // FIXED_NOREPLACE on every supported host: Linux uses the kernel flag, Darwin first claims an
+            // exact Mach reservation without VM_FLAGS_OVERWRITE, and Windows uses placeholders. Never retry
+            // with MAP_FIXED here: the guest's pointers are unrelocatable, but overwriting an unowned host
+            // mapping corrupts the process that is supposed to report the restore failure.
+            void *r = MAP_FAILED;
+            if (ckpt_claim_exact(map_a, map_len, PROT_READ | PROT_WRITE, map_flags, map_fd, map_offset, &r) != 0) {
+                int claim_errno = errno;
+                fprintf(stderr, "[restore] cannot claim guest region %llx+%llx without replacing a live host mapping\n",
                         (unsigned long long)a, (unsigned long long)reg.len);
                 ckpt_report_overlap(map_a, map_e);
-                r = mmap((void *)map_a, map_len, PROT_READ | PROT_WRITE, map_flags, map_fd, map_offset);
-            }
-            if (r == MAP_FAILED || (uint64_t)(uintptr_t)r != map_a) {
-                fprintf(stderr, "[restore] cannot map guest region %llx+%llx: %s\n", (unsigned long long)a,
-                        (unsigned long long)reg.len, strerror(errno));
+                errno = claim_errno;
+                fprintf(stderr, "[restore] exact guest-address claim failed: %s\n", strerror(errno));
+                errno = claim_errno;
                 goto fail;
             }
             mapped_a[nmapped] = map_a;
@@ -353,26 +494,26 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
             gna_add(reg.addr & ~(uint64_t)0xfff, (reg.addr + reg.glen + 0xfff) & ~(uint64_t)0xfff);
         else
             anon_track(reg.addr, reg.len, reg.prot);
+        processed++;
     }
     ckpt_source_fclose(f);
+    f = NULL;
     for (uint64_t i = 0; i < m->n_regions; i++) {
         struct ckpt_region *reg = &topology[i];
         if (reg->backing_object == 0) continue;
         if (reg->backing_offset > UINT64_MAX - reg->glen) {
-            free(mapped);
-            free(topology);
-            return -1;
+            errno = EOVERFLOW;
+            goto fail;
         }
         int seed = ckpt_restore_backing_seed(procdir, reg->backing_object, reg->backing_offset + reg->glen);
         if (seed < 0) {
             fprintf(stderr, "[restore] cannot rebuild backing object %llx\n", (unsigned long long)reg->backing_object);
-            free(mapped);
-            free(topology);
-            return -1;
+            goto fail;
         }
         filemap_register(reg->addr, reg->glen, seed, reg->backing_offset, reg->backing_shared, reg->backing_emulated);
         if (reg->backing_shared && !reg->backing_emulated)
             futex_shared_register(reg->addr, reg->glen, seed, reg->backing_offset);
+        registered = (size_t)i + 1;
     }
     free(mapped);
     free(topology);
@@ -386,7 +527,13 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
     g_stack_hi = m->stack_hi;
     return 0;
 fail:
-    ckpt_source_fclose(f);
+    {
+        int restore_errno = errno != 0 ? errno : EIO;
+        if (f != NULL) ckpt_source_fclose(f);
+        errno = restore_errno;
+        ckpt_restore_rollback(topology, processed, registered, mapped_a, mapped_e, nmapped);
+        errno = restore_errno;
+    }
     free(mapped);
     free(topology);
     return -1;

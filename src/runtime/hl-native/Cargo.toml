@@ -43,3 +43,7 @@ required-features = ["native-test-hooks"]
 [[test]]
 name = "x86_store_preflight"
 required-features = ["native-test-hooks"]
+
+[[test]]
+name = "restore_collision"
+required-features = ["native-test-hooks"]

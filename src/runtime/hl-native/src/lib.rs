@@ -98,6 +98,18 @@ pub fn checkpoint_continuation_contract_test(isa: u32) -> Result<(), i32> {
     bindings::checkpoint_continuation_contract_test(isa)
 }
 
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn checkpoint_restore_claim_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    bindings::checkpoint_restore_claim_test(isa, scenario)
+}
+
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn checkpoint_restore_rollback_test(isa: u32) -> Result<(), i32> {
+    bindings::checkpoint_restore_rollback_test(isa)
+}
+
 #[cfg(test)]
 mod platform;
 
