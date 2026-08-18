@@ -67,7 +67,7 @@ fn run(executable: &Path, scenario: u32, capacity: u64, iterations: u64) -> bool
 fn sparse_generational_lineage_registry_is_bounded_and_reusable() {
     let directory = tempfile::tempdir().expect("lineage-registry scratch directory");
     let executable = compile(directory.path(), None);
-    for scenario in 0..=14 {
+    for scenario in 0..=17 {
         if scenario == 3 {
             continue;
         }
@@ -100,6 +100,9 @@ fn lineage_registry_disabling_mutations_red_named_scenarios() {
         ("HL_LINEAGE_MUTATE_SKIP_TOMBSTONE_TRANSITION", 11),
         ("HL_LINEAGE_MUTATE_DISABLE_QUOTA", 2),
         ("HL_LINEAGE_MUTATE_ALLOW_GENERATION_WRAP", 6),
+        ("HL_LINEAGE_MUTATE_SKIP_RECOVERY_COUNTERS", 16),
+        ("HL_LINEAGE_MUTATE_REUSE_REVISION", 17),
+        ("HL_LINEAGE_MUTATE_REPLACE_WITHOUT_EXPECTED", 15),
     ] {
         let executable = compile(directory.path(), Some(mutation));
         assert!(

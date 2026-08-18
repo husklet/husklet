@@ -11,7 +11,7 @@
 #define HL_LINEAGE_STATE_ACTIVE UINT64_C(2)
 #define HL_LINEAGE_STATE_TOMBSTONE UINT64_C(3)
 #define HL_LINEAGE_REFERENCE_COUNT 5u
-#define HL_LINEAGE_PAYLOAD_WORDS 8u
+#define HL_LINEAGE_PAYLOAD_WORDS 12u
 
 typedef enum hl_lineage_reference {
     HL_LINEAGE_DESCRIPTOR_REFERENCE = 0,
@@ -40,12 +40,20 @@ typedef struct hl_lineage_value {
     uint64_t payload[HL_LINEAGE_PAYLOAD_WORDS];
 } hl_lineage_value;
 
-typedef struct hl_lineage_slot {
-    _Atomic uint64_t state;
+typedef struct hl_lineage_record {
     _Atomic uint64_t identity_domain;
     _Atomic uint64_t identity_sequence;
+    _Atomic uint64_t token_generation;
     _Atomic uint64_t references[HL_LINEAGE_REFERENCE_COUNT];
     _Atomic uint64_t payload[HL_LINEAGE_PAYLOAD_WORDS];
+} hl_lineage_record;
+
+typedef struct hl_lineage_slot {
+    /* state is the commit record. Bit 2 selects the immutable record visible
+     * to readers; writers prepare the other record and publish it with one
+     * atomic state transition. */
+    _Atomic uint64_t state;
+    hl_lineage_record records[2];
 } hl_lineage_slot;
 
 typedef struct hl_lineage_registry {
@@ -58,6 +66,12 @@ typedef struct hl_lineage_registry {
     _Atomic uint64_t occupied;
     _Atomic uint64_t tombstones;
     _Atomic uint64_t reclaim_cursor;
+    /* A mutating owner publishes writer_epoch before touching a slot and
+     * copies it to clean_epoch only after all derived counters are durable.
+     * A mismatch is an abandoned operation and is repaired deterministically
+     * by hl_lineage_registry_recover before the next mutation. */
+    _Atomic uint64_t writer_epoch;
+    _Atomic uint64_t clean_epoch;
     hl_lineage_slot slots[];
 } hl_lineage_registry;
 
@@ -75,10 +89,15 @@ int hl_lineage_registry_find(const hl_lineage_registry *registry, hl_lineage_ide
                              hl_lineage_token *token, hl_lineage_value *value);
 int hl_lineage_registry_lookup(const hl_lineage_registry *registry, hl_lineage_token token,
                                hl_lineage_value *value);
+int hl_lineage_registry_token_at(const hl_lineage_registry *registry, uint64_t index,
+                                 hl_lineage_token *token, hl_lineage_value *value);
+int hl_lineage_registry_replace(hl_lineage_registry *registry, hl_lineage_token token,
+                                const hl_lineage_value *expected, hl_lineage_value replacement);
 int hl_lineage_registry_reference(hl_lineage_registry *registry, hl_lineage_token token,
                                   hl_lineage_reference reference,
                                   int64_t delta);
 int hl_lineage_registry_reclaim(hl_lineage_registry *registry, uint64_t budget, uint64_t *reclaimed);
+int hl_lineage_registry_recover(hl_lineage_registry *registry);
 int hl_lineage_registry_validate(const hl_lineage_registry *registry);
 
 #ifdef HL_LINEAGE_TEST_HOOKS
