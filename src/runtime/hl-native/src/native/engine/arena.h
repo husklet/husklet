@@ -83,6 +83,8 @@ typedef struct hl_arena_authority {
     uint32_t transaction_reservation_count;
     uint32_t materialization_count;
     uint32_t transaction_materialization_count;
+    /* Process-only journal. Checkpoint reconstruction persists mapping sources
+     * and protections in a versioned sidecar, then rematerializes these IDs. */
     uint64_t materialized_identities[HL_ARENA_MAX_RESERVATIONS];
     _Atomic uint32_t fork_phase;
     uint64_t fork_process;
@@ -141,6 +143,7 @@ void hl_arena_test_lock(hl_arena_authority *authority);
 void hl_arena_test_unlock(hl_arena_authority *authority);
 void hl_arena_test_identity_sequence(uint64_t next);
 void hl_arena_test_generation(hl_arena_authority *authority, uint64_t generation);
+void hl_arena_test_fail_next_placeholder_restore(void);
 #endif
 
 #endif

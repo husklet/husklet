@@ -47,6 +47,10 @@ fn os_owned_arenas_are_transactional_and_collision_safe() {
 #define NORMAL4_LIMIT UINT64_C(0x80001000000)
 #define LOW4_BASE UINT64_C(0x46000000)
 #define LOW4_LIMIT UINT64_C(0x47000000)
+#define NORMAL5_BASE UINT64_C(0x90000000000)
+#define NORMAL5_LIMIT UINT64_C(0x90001000000)
+#define LOW5_BASE UINT64_C(0x48000000)
+#define LOW5_LIMIT UINT64_C(0x49000000)
 
 static unsigned char *claim_sentinel(uint64_t address, uint64_t length) {
 #if defined(__APPLE__)
@@ -85,6 +89,25 @@ static int write_faults(unsigned char *address) {
            (WTERMSIG(status) == SIGSEGV || WTERMSIG(status) == SIGBUS);
 }
 
+static int range_is_claimed(uint64_t address, uint64_t length) {
+#if defined(__APPLE__)
+    mach_vm_address_t region = (mach_vm_address_t)address;
+    mach_vm_size_t size = 0;
+    vm_region_basic_info_data_64_t information;
+    mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+    mach_port_t object = MACH_PORT_NULL;
+    kern_return_t status = mach_vm_region(mach_task_self(), &region, &size, VM_REGION_BASIC_INFO_64,
+                                          (vm_region_info_t)&information, &count, &object);
+    if (object != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), object);
+    return status == KERN_SUCCESS && region <= address && size >= length && address - region <= size - length;
+#else
+    long page = sysconf(_SC_PAGESIZE);
+    unsigned char resident[2] = {0};
+    return page > 0 && length <= 2 * (uint64_t)page &&
+           mincore((void *)(uintptr_t)address, (size_t)length, resident) == 0;
+#endif
+}
+
 typedef struct contender {
     hl_arena_authority *authority;
     int result;
@@ -114,11 +137,13 @@ int main(void) {
     const hl_arena_config config2 = {granule, NORMAL2_BASE, NORMAL2_LIMIT, LOW2_BASE, LOW2_LIMIT};
     const hl_arena_config config3 = {granule, NORMAL3_BASE, NORMAL3_LIMIT, LOW3_BASE, LOW3_LIMIT};
     const hl_arena_config config4 = {granule, NORMAL4_BASE, NORMAL4_LIMIT, LOW4_BASE, LOW4_LIMIT};
+    const hl_arena_config config5 = {granule, NORMAL5_BASE, NORMAL5_LIMIT, LOW5_BASE, LOW5_LIMIT};
     hl_arena_config invalid;
     hl_arena_authority authority = HL_ARENA_AUTHORITY_INIT;
     hl_arena_authority second = HL_ARENA_AUTHORITY_INIT;
     hl_arena_authority third = HL_ARENA_AUTHORITY_INIT;
     hl_arena_authority exhausted = HL_ARENA_AUTHORITY_INIT;
+    hl_arena_authority failed = HL_ARENA_AUTHORITY_INIT;
     hl_arena_transaction transaction;
     hl_arena_fork_context fork_context;
     hl_arena_reservation first;
@@ -171,6 +196,10 @@ int main(void) {
     forged = first;
     forged.identity++;
     if (hl_arena_reservation_owned(&authority, &forged)) return 10;
+    if (hl_arena_transaction_materialize_anonymous(&transaction, &first, 0) != -1 || errno != EINVAL ||
+        hl_arena_transaction_materialize_anonymous(&transaction, &first, HL_ARENA_PROTECTION_WRITE) != -1 ||
+        errno != EINVAL || hl_arena_transaction_materialize_anonymous(&transaction, &first, UINT32_MAX) != -1 ||
+        errno != EINVAL) return 82;
     if (hl_arena_transaction_materialize_anonymous(
             &transaction, &first, HL_ARENA_PROTECTION_READ | HL_ARENA_PROTECTION_WRITE) != 0) return 71;
     unsigned char *materialized = (unsigned char *)(uintptr_t)first.address;
@@ -190,20 +219,41 @@ int main(void) {
             &transaction, &forged, HL_ARENA_PROTECTION_READ | HL_ARENA_PROTECTION_WRITE) != -1 ||
         errno != EACCES || sentinel[0] != 0xa7 || sentinel[granule - 1] != 0xa7) return 75;
     if (release_sentinel(sentinel, granule) != 0) return 76;
+    if (hl_arena_transaction_materialize_anonymous(&transaction, &low, HL_ARENA_PROTECTION_READ) != 0 ||
+        *(const unsigned char *)(uintptr_t)low.address != 0) return 83;
     if (hl_arena_authority_fork_prepare(&authority) != -1 || errno != EBUSY) return 77;
 
     state.authority = &authority;
     if (pthread_create(&thread, NULL, contend, &state) != 0 || pthread_join(thread, NULL) != 0) return 11;
     if (state.result != -1 || state.error != EBUSY) return 12;
 
-    if (hl_arena_transaction_rollback(&transaction) != 0 || !write_faults(materialized)) return 78;
+    if (hl_arena_transaction_rollback(&transaction) != 0 || !write_faults(materialized) ||
+        !write_faults((unsigned char *)(uintptr_t)low.address)) return 78;
+    if (hl_arena_authority_fork_prepare(&authority) != 0 ||
+        hl_arena_fork_context_prepare(&fork_context) != 0) return 91;
+    pid_t rollback_child = fork();
+    if (rollback_child < 0) return 92;
+    if (rollback_child == 0) {
+        if (hl_arena_after_fork_child(&fork_context) != 0 || hl_arena_authority_fork_child(&authority) != 0 ||
+            !range_is_claimed(first.address, first.length) || !range_is_claimed(low.address, low.length))
+            _exit(93);
+        _exit(0);
+    }
+    if (hl_arena_authority_fork_parent(&authority) != 0 || hl_arena_fork_context_parent(&fork_context) != 0) return 94;
+    int rollback_status = 0;
+    if (waitpid(rollback_child, &rollback_status, 0) != rollback_child || !WIFEXITED(rollback_status) ||
+        WEXITSTATUS(rollback_status) != 0)
+        return 95;
     if (hl_arena_manifest_get(&authority, &after) != 0 || after.normal_cursor != before.normal_cursor ||
         after.low32_cursor != before.low32_cursor || hl_arena_reservation_owned(&authority, &first)) return 13;
 
     if (hl_arena_transaction_begin(&authority, &transaction) != 0 ||
         hl_arena_transaction_reserve(&transaction, HL_ARENA_NORMAL, granule, &first) != 0 ||
+        hl_arena_transaction_reserve(&transaction, HL_ARENA_LOW32, granule, &low) != 0 ||
         hl_arena_transaction_materialize_anonymous(
-            &transaction, &first, HL_ARENA_PROTECTION_READ | HL_ARENA_PROTECTION_WRITE) != 0)
+            &transaction, &first, HL_ARENA_PROTECTION_READ | HL_ARENA_PROTECTION_WRITE) != 0 ||
+        hl_arena_transaction_materialize_anonymous(
+            &transaction, &low, HL_ARENA_PROTECTION_READ | HL_ARENA_PROTECTION_EXECUTE) != 0)
         return 14;
     materialized = (unsigned char *)(uintptr_t)first.address;
     materialized[0] = 0xd4;
@@ -214,6 +264,22 @@ int main(void) {
             &transaction, &first, HL_ARENA_PROTECTION_READ | HL_ARENA_PROTECTION_WRITE) != -1 ||
         errno != EALREADY || hl_arena_transaction_rollback(&transaction) != 0 || materialized[0] != 0xd4)
         return 81;
+    if (hl_arena_authority_fork_prepare(&authority) != 0 ||
+        hl_arena_fork_context_prepare(&fork_context) != 0) return 84;
+    pid_t materialized_child = fork();
+    if (materialized_child < 0) return 85;
+    if (materialized_child == 0) {
+        if (hl_arena_after_fork_child(&fork_context) != 0 || hl_arena_authority_fork_child(&authority) != 0 ||
+            materialized[0] != 0xd4 || *(const unsigned char *)(uintptr_t)low.address != 0)
+            _exit(86);
+        materialized[0] = 0xe5;
+        _exit(0);
+    }
+    if (hl_arena_authority_fork_parent(&authority) != 0 || hl_arena_fork_context_parent(&fork_context) != 0) return 87;
+    int materialized_status = 0;
+    if (waitpid(materialized_child, &materialized_status, 0) != materialized_child ||
+        !WIFEXITED(materialized_status) || WEXITSTATUS(materialized_status) != 0 || materialized[0] != 0xd4)
+        return 88;
     hl_arena_persisted_state persisted;
     if (hl_arena_persisted_state_get(&authority, &persisted) != 0 ||
         !hl_arena_persisted_state_valid(&persisted)) return 15;
@@ -322,6 +388,17 @@ int main(void) {
     if (sentinel == NULL || normal == NULL) return 59;
     if (release_sentinel(sentinel, NORMAL4_LIMIT - NORMAL4_BASE) != 0 ||
         release_sentinel(normal, LOW4_LIMIT - LOW4_BASE) != 0) return 60;
+    if (hl_arena_authority_init(&failed, &config5) != 0 ||
+        hl_arena_transaction_begin(&failed, &transaction) != 0 ||
+        hl_arena_transaction_reserve(&transaction, HL_ARENA_NORMAL, granule, &first) != 0 ||
+        hl_arena_transaction_materialize_anonymous(
+            &transaction, &first, HL_ARENA_PROTECTION_READ | HL_ARENA_PROTECTION_WRITE) != 0)
+        return 89;
+    hl_arena_test_fail_next_placeholder_restore();
+    if (hl_arena_transaction_rollback(&transaction) != -1 || errno != EIO ||
+        hl_arena_manifest_get(&failed, &after) != -1 || errno != EINVAL ||
+        hl_arena_authority_destroy(&failed) != -1 || errno != EINVAL)
+        return 90;
     return hl_arena_authority_destroy(&third) == 0 ? 0 : 61;
 }
 "#,

@@ -42,6 +42,9 @@ static _Atomic uint64_t arena_fork_sequence = 1;
 static _Atomic uint64_t arena_nonce_process;
 static _Atomic uint64_t arena_nonce_initializer_process;
 static _Atomic uint64_t arena_process_nonce;
+#if defined(HL_NATIVE_TEST_HOOKS)
+static _Atomic uint32_t arena_test_restore_failure;
+#endif
 
 static void arena_lock(hl_arena_authority *authority);
 static void arena_unlock(hl_arena_authority *authority);
@@ -194,6 +197,10 @@ void hl_arena_test_generation(hl_arena_authority *authority, uint64_t generation
     authority->manifest.generation = generation;
     arena_unlock(authority);
 }
+
+void hl_arena_test_fail_next_placeholder_restore(void) {
+    atomic_store_explicit(&arena_test_restore_failure, 1, memory_order_relaxed);
+}
 #endif
 
 static int arena_claim(uint64_t base, uint64_t limit) {
@@ -292,13 +299,16 @@ static int arena_materialize_anonymous(uint64_t address, uint64_t length, uint32
 }
 
 static int arena_placeholder_restore(uint64_t address, uint64_t length) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (atomic_exchange_explicit(&arena_test_restore_failure, 0, memory_order_relaxed) != 0) return (errno = EIO, -1);
+#endif
 #if defined(_WIN32)
     return VirtualFree((void *)(uintptr_t)address, 0, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER) ? 0 : (errno = EIO, -1);
 #elif defined(__APPLE__)
     mach_vm_address_t mapped = (mach_vm_address_t)address;
     kern_return_t status =
         mach_vm_map(mach_task_self(), &mapped, (mach_vm_size_t)length, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
-                    MEMORY_OBJECT_NULL, 0, FALSE, VM_PROT_NONE, VM_PROT_NONE, VM_INHERIT_NONE);
+                    MEMORY_OBJECT_NULL, 0, FALSE, VM_PROT_NONE, VM_PROT_NONE, VM_INHERIT_COPY);
     return status == KERN_SUCCESS && mapped == (mach_vm_address_t)address ? 0 : (errno = EIO, -1);
 #else
     void *mapped =
