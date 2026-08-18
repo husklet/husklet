@@ -226,6 +226,7 @@ int main(void) {
     uint64_t child_nonce = 0;
     if (read(nonce_pipe[0], &child_nonce, sizeof(child_nonce)) != (ssize_t)sizeof(child_nonce) || child_nonce == 0)
         return 55;
+    if (child_nonce != fork_context.child_nonce) return 70;
     close(nonce_pipe[0]);
     hl_arena_transaction_rollback(&transaction);
     hl_arena_test_generation(&authority, UINT64_MAX - 1);
