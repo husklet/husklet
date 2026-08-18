@@ -1,6 +1,78 @@
 use super::*;
 
 impl Fixture {
+    pub(super) async fn failure_diagnostics(&self) -> String {
+        let immediate = self.failure_snapshot("immediate").await;
+        let wait = match tokio::time::timeout(Duration::from_secs(1), self.containers.wait(CONTAINER)).await {
+            Ok(Ok(result)) => format!("container_wait={result:?}"),
+            Ok(Err(error)) => format!("container_wait_error={error}"),
+            Err(_) => "container_wait=still-running-after-1s".to_owned(),
+        };
+        let final_snapshot = self.failure_snapshot("settled").await;
+        failure_diagnostic_report(&immediate, &wait, &final_snapshot)
+    }
+
+    async fn failure_snapshot(&self, label: &str) -> String {
+        let (container, logs, executions) = tokio::join!(
+            tokio::time::timeout(Duration::from_millis(250), self.containers.inspect(CONTAINER)),
+            tokio::time::timeout(Duration::from_millis(250), self.containers.logs(CONTAINER)),
+            tokio::time::timeout(Duration::from_millis(250), self.execution_diagnostics()),
+        );
+        let container = match container {
+            Ok(Ok(container)) => format!("{:?}", container.state),
+            Ok(Err(error)) => format!("error={error}"),
+            Err(_) => "timeout".to_owned(),
+        };
+        let logs = match logs {
+            Ok(Ok(logs)) => format!(
+                "stdout={:?},stderr={:?}",
+                bounded_text(&logs.stdout),
+                bounded_text(&logs.stderr)
+            ),
+            Ok(Err(error)) => format!("error={error}"),
+            Err(_) => "timeout".to_owned(),
+        };
+        let executions = match executions {
+            Ok(executions) => executions,
+            Err(_) => "timeout".to_owned(),
+        };
+        format!("{label}[container={container};pid1={logs};execs={executions}]")
+    }
+
+    async fn execution_diagnostics(&self) -> String {
+        let ids = self
+            .diagnostic_execs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|(role, id)| (*role, id.clone()))
+            .collect::<Vec<_>>();
+        let total = ids.len();
+        let mut states = Vec::with_capacity(total);
+        for (role, id) in ids {
+            let state = match tokio::time::timeout(
+                Duration::from_millis(25),
+                self.containers.executions().inspect(&id),
+            )
+            .await
+            {
+                Ok(Ok(execution)) => format!("{:?}", execution.state),
+                Ok(Err(error)) => format!("error={error}"),
+                Err(_) => "timeout".to_owned(),
+            };
+            states.push(format!("{role}:{id}={state}"));
+        }
+        format!("count={total},states=[{}]", states.join(","))
+    }
+
+    pub(super) fn remember_execution(&self, role: &'static str, id: &ExecId) {
+        let mut executions = self
+            .diagnostic_execs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        executions.insert(role, id.clone());
+    }
+
     pub(super) async fn background_roles(&self) -> Result<String, Error> {
         self.query("SELECT pid||':'||backend_type FROM pg_stat_activity WHERE backend_type <> 'client backend' ORDER BY backend_type,pid").await
     }
@@ -27,6 +99,7 @@ impl Fixture {
                 ),
             )
             .await?;
+        self.remember_execution("waiter", &execution.id);
         drop(self.containers.executions().start(&execution.id).await?);
         tokio::time::sleep(Duration::from_millis(100)).await;
         require(
@@ -70,6 +143,7 @@ impl Fixture {
             stderr: true,
         });
         let execution = self.containers.executions().create(CONTAINER, spec).await?;
+        self.remember_execution("persistent", &execution.id);
         let session = self.containers.executions().start(&execution.id).await?;
         Ok((execution.id, session))
     }
@@ -90,6 +164,7 @@ impl Fixture {
                 ExecSpec::new(Process::new("/bin/sh").env("PATH", POSTGRES_PATH).args(["-c", command])),
             )
             .await?;
+        self.remember_execution("query", &execution.id);
         let mut session = executions.start(&execution.id).await?;
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -134,11 +209,11 @@ impl Fixture {
             let remaining = PROBE.saturating_sub(started.elapsed());
             let probe = tokio::time::timeout(
                 remaining.min(Duration::from_secs(1)),
-                self.query("SELECT CASE WHEN pg_is_in_recovery() THEN 0 ELSE 1 END"),
+                self.exec(&readiness_command()),
             )
             .await;
             let last = match probe {
-                Ok(Ok(value)) if value.trim() == "1" => return Ok(()),
+                Ok(Ok(value)) if readiness_succeeded(&value) => return Ok(()),
                 Ok(Ok(value)) => format!("unexpected readiness value {value:?}"),
                 Ok(Err(error)) => bounded_text(error.to_string().as_bytes()),
                 Err(_) => "readiness query exceeded one second".to_owned(),
@@ -225,4 +300,27 @@ impl Fixture {
             .map_err(|_| "final cleanup execution-list timed out")??;
         require(executions.is_empty(), "execution records remained after cleanup")
     }
+}
+
+pub(super) fn readiness_succeeded(value: &str) -> bool {
+    value.trim() == "1"
+}
+
+pub(super) fn readiness_command() -> String {
+    let client = format!(
+        "/usr/local/bin/psql -X -qAt -v ON_ERROR_STOP=1 -U postgres -c {}",
+        shell_quote(READINESS_SQL)
+    );
+    readiness_command_with("/var/lib/postgresql/data/postmaster.pid", &client)
+}
+
+pub(super) fn readiness_command_with(postmaster: &str, client: &str) -> String {
+    format!(
+        "test \"$(sed -n '1p' {})\" = 1 && exec {client}",
+        shell_quote(postmaster)
+    )
+}
+
+pub(super) fn failure_diagnostic_report(immediate: &str, wait: &str, settled: &str) -> String {
+    format!("{immediate}; {wait}; {settled}")
 }

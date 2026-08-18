@@ -92,6 +92,7 @@ impl Fixture {
             containers,
             guest,
             postgres_version: manifest.postgres_version,
+            diagnostic_execs: std::sync::Mutex::new(std::collections::BTreeMap::new()),
         })
     }
 }

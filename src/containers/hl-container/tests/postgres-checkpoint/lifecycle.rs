@@ -74,6 +74,7 @@ impl Fixture {
                 ),
             )
             .await?;
+        self.remember_execution("sleeper", &sleeper.id);
         let _sleep_attachment = self.containers.executions().start(&sleeper.id).await?;
         drop(_sleep_attachment);
         session.write(format!(
