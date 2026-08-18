@@ -24,7 +24,14 @@ fn compile(directory: &Path, mutation: Option<&str>) -> std::path::PathBuf {
     fs::write(&probe, PROBE).expect("write lineage-registry probe");
     let mut command = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()));
     command
-        .args(["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-DHL_LINEAGE_TEST_HOOKS=1"])
+        .args([
+            "-std=c11",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-DHL_LINEAGE_TEST_HOOKS=1",
+        ])
         .arg(format!("-I{}", native.display()));
     if let Some(mutation) = mutation {
         command.arg(if mutation.contains('=') {
@@ -64,15 +71,13 @@ fn sparse_generational_lineage_registry_is_bounded_and_reusable() {
         if scenario == 3 {
             continue;
         }
-        assert!(run(&executable, scenario, 64, 0), "lineage registry scenario {scenario} failed");
+        assert!(
+            run(&executable, scenario, 64, 0),
+            "lineage registry scenario {scenario} failed"
+        );
     }
     assert!(
-        run(
-            &executable,
-            3,
-            1 << 20,
-            (1 << 20) + 1,
-        ),
+        run(&executable, 3, 1 << 20, (1 << 20) + 1,),
         "production-capacity registry did not survive more than 2^20 create/reclaim cycles"
     );
 }
