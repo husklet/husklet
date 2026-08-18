@@ -1,5 +1,7 @@
 // Shared ownership metadata for macOS's DGRAM-backed Linux SOCK_SEQPACKET emulation. Definitions live
 // ahead of ancillary translation because SCM_RIGHTS send/receive participates in the same lifetime.
+#include "../ownership/transport.h"
+
 #define SEQ_REF_N 4096
 
 struct seq_ref {
@@ -81,6 +83,9 @@ struct hl_cmsg_ofd_meta {
     uint32_t magic;
     uint32_t ordinal;
     uint64_t identity;
+    /* Version zero is deliberately valid and means no virtual socket owner.
+     * The fd-lifecycle layer fills this before descriptor accounting is wired. */
+    hl_socket_owner_transport owner;
 };
 
 struct hl_cmsg_memfd_meta {
