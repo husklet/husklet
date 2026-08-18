@@ -88,7 +88,10 @@ impl Engine {
     /// Borrowed create inputs need only remain valid for this call; C copies
     /// configuration.
     pub unsafe fn create(config: EngineConfig<'_>) -> Result<Self, Error> {
-        crate::loader::api().map_err(|error| Error::Load(error.kind()))?;
+        if let Err(error) = crate::loader::api() {
+            consume_provider(config.provider_fd);
+            return Err(Error::Load(error.kind()));
+        }
         // SAFETY: forwarded unchanged; the hook does not observe raw inputs.
         unsafe { Self::create_after_pinning(config, || {}) }.map_err(Error::Status)
     }
@@ -185,6 +188,25 @@ impl Engine {
             status: result.guest_status,
             detail: result.detail,
         }
+    }
+}
+
+fn consume_provider(descriptor: i32) {
+    if descriptor < 0 {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        // SAFETY: every nonnegative provider descriptor transfers to create, including loader failure.
+        unsafe { libc::close(descriptor) };
+    }
+    #[cfg(windows)]
+    {
+        unsafe extern "C" {
+            fn _close(descriptor: i32) -> i32;
+        }
+        // SAFETY: the bridge contract defines provider_fd as a C-runtime descriptor on Windows.
+        unsafe { _close(descriptor) };
     }
 }
 

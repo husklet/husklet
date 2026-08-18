@@ -404,7 +404,9 @@ fn candidates() -> Result<Vec<PathBuf>, LoadError> {
         directory.join("../lib").join(name),
         directory.join(name),
     ]);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    return Ok(vec![directory.join(name)]);
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     Ok(vec![directory.join("../lib").join(name), directory.join(name)])
 }
 
