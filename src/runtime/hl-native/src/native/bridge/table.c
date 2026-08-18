@@ -1,4 +1,5 @@
 #include "api.h"
+#include "executable_authority.h"
 
 static const hl_c_bridge_api HL_C_BRIDGE_API = {
     .abi = HL_C_BRIDGE_API_ABI,
@@ -14,6 +15,8 @@ static const hl_c_bridge_api HL_C_BRIDGE_API = {
     .checkpoint_adopt = hl_c_backend_checkpoint_adopt,
     .checkpoint_interrupt_signal = hl_c_backend_checkpoint_interrupt_signal,
     .checkpoint_configure = hl_c_backend_checkpoint_configure,
+    .executable_open = hl_c_backend_executable_open,
+    .executable_discard = hl_c_backend_executable_discard,
     .create = hl_c_backend_create,
     .run = hl_c_backend_run,
     .request = hl_c_backend_request,

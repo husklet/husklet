@@ -78,7 +78,7 @@ fn a_valid_shared_image_for_the_wrong_architecture_is_rejected() {
 
 #[test]
 fn a_same_architecture_shared_object_with_the_wrong_contract_is_rejected() {
-    let runner = " 0x1 (NEEDED) Shared library: [libhl_native_engine.so]\n";
+    let runner = " 0x1 (NEEDED) Shared library: [libc.so.6]\n";
     let library = " 0xe (SONAME) Library soname: [libhl_native_engine.so]\n";
     let exports = concat!(
         " 1: 1 1 FUNC GLOBAL DEFAULT 12 hl_engine_abi\n",
@@ -90,5 +90,13 @@ fn a_same_architecture_shared_object_with_the_wrong_contract_is_rejected() {
     assert!(require_readelf_contract(runner, library, "", expected).is_err());
     assert!(require_readelf_contract(runner, library, exports, "hl_engine_abi\n").is_err());
     assert!(require_readelf_contract(runner, "SONAME [libm.so.6]", exports, expected).is_err());
-    assert!(require_readelf_contract("NEEDED [libm.so.6]", library, exports, expected).is_err());
+    assert!(
+        require_readelf_contract(
+            "(NEEDED) Shared library: [libhl_native_engine.so]",
+            library,
+            exports,
+            expected,
+        )
+        .is_err()
+    );
 }

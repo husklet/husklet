@@ -571,6 +571,7 @@ dependencies = [
  "clap",
  "hl-engine",
  "hl-log",
+ "hl-native",
  "serde_json",
  "sha2",
 ]

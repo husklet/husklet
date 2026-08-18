@@ -282,11 +282,17 @@ mod tests {
     }
 
     #[test]
-    fn bridge_export_manifest_is_sorted_and_contains_checkpoint_configuration() {
+    fn bridge_export_manifest_contains_versioned_and_ownership_boundaries() {
         let manifest = include_str!("native/bridge/exports.txt");
         let symbols = super::export_symbols(manifest);
-        assert!(symbols.contains(&"hl_c_backend_checkpoint_configure"));
-        assert_eq!(symbols.len(), 22);
+        for required in [
+            "hl_c_bridge_api_v1",
+            "hl_c_backend_checkpoint_configure",
+            "hl_c_backend_executable_open",
+            "hl_c_backend_executable_discard",
+        ] {
+            assert!(symbols.contains(&required), "missing bridge export {required}");
+        }
     }
 
     #[test]

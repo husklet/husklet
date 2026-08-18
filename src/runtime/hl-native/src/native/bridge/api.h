@@ -27,6 +27,9 @@ typedef struct hl_c_bridge_api {
     int32_t (*checkpoint_adopt)(uint32_t isa, int32_t broker, int32_t trigger);
     int32_t (*checkpoint_interrupt_signal)(uint32_t isa);
     int32_t (*checkpoint_configure)(hl_c_backend *backend, int32_t broker, int32_t trigger);
+    hl_status (*executable_open)(const hl_host_services *services, const char *path,
+                                 hl_engine_executable *output);
+    void (*executable_discard)(const hl_host_services *services, hl_engine_executable *executable);
     int32_t (*create)(uint32_t isa, const char *rootfs, const char *executable_host,
                       int32_t executable_fd, const hl_c_main_image_plan *image_plan,
                       const void *interpreter_image, size_t interpreter_size,

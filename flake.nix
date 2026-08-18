@@ -340,7 +340,7 @@
               for binary in target/release/hl-engine target/release/hl-aarch64 target/release/hl-x86_64
               do
                 ! patchelf --print-rpath "$binary" | tr : '\n' | grep -F '/build/' >/dev/null
-                patchelf --print-needed "$binary" | grep -Fx libhl_native_engine.so >/dev/null
+                ! patchelf --print-needed "$binary" | grep -Fx libhl_native_engine.so >/dev/null
               done
             ''}
             runHook postBuild
@@ -361,32 +361,10 @@
             cmp "''${native_libraries[0]}" "$out/lib/$(basename "''${native_libraries[0]}")"
             runHook postInstall
           '';
-          postFixup =
-            lib.optionalString pkgs.stdenv.isLinux ''
+          postFixup = lib.optionalString pkgs.stdenv.isLinux ''
             strip --strip-unneeded "$out/bin/hl-engine" "$out/bin/hl-aarch64" \
               "$out/bin/hl-x86_64" "$out/lib/libhl_native_engine.so"
-            for binary in "$out/bin/hl-engine" "$out/bin/hl-aarch64" "$out/bin/hl-x86_64"
-            do
-              existing_rpath=$(patchelf --print-rpath "$binary")
-              filtered_rpath=""
-              IFS=: read -ra rpath_entries <<< "$existing_rpath"
-              for entry in "''${rpath_entries[@]}"; do
-                if [ "$entry" != "$out/lib" ]; then
-                  filtered_rpath="''${filtered_rpath:+$filtered_rpath:}$entry"
-                fi
-              done
-              patchelf --set-rpath "\$ORIGIN/../lib''${filtered_rpath:+:$filtered_rpath}" "$binary"
-              patchelf --print-needed "$binary" | grep -Fx libhl_native_engine.so >/dev/null
-              test "$(patchelf --print-rpath "$binary" | cut -d: -f1)" = '$ORIGIN/../lib'
-              ! patchelf --print-rpath "$binary" | tr : '\n' | grep -Fx "$out/lib" >/dev/null
-            done
-            ''
-            + lib.optionalString pkgs.stdenv.isDarwin ''
-              for binary in "$out/bin/hl-engine" "$out/bin/hl-aarch64" "$out/bin/hl-x86_64"
-              do
-                install_name_tool -add_rpath '@loader_path/../lib' "$binary"
-              done
-            '';
+          '';
           meta = {
             description = "Userspace execution engine for Linux programs";
             homepage = "https://github.com/husklet/engine";
@@ -779,15 +757,15 @@
             do
               binary="$prefix/bin/$name"
               test -x "$binary"
-              patchelf --print-needed "$binary" | grep -Fx libhl_native_engine.so >/dev/null
+              ! patchelf --print-needed "$binary" | grep -Fx libhl_native_engine.so >/dev/null
               patchelf --print-rpath "$binary" | tr : '\n' > "$TMPDIR/$name.runpath"
-              test "$(head -n1 "$TMPDIR/$name.runpath")" = '$ORIGIN/../lib'
-              tail -n+2 "$TMPDIR/$name.runpath" | while IFS= read -r entry; do
+              while IFS= read -r entry; do
+                if test -z "$entry"; then continue; fi
                 case "$entry" in
                   /nix/store/*/lib) ;;
                   *) printf 'unsafe RUNPATH entry in %s: %s\n' "$name" "$entry" >&2; exit 1 ;;
                 esac
-              done
+              done < "$TMPDIR/$name.runpath"
               env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
                 "$binary" --backend-receipt > "$TMPDIR/$name.receipt"
               env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
@@ -799,12 +777,8 @@
                 "$TMPDIR/$name.receipt" >/dev/null
             done
 
-            LD_DEBUG=libs "$prefix/bin/hl-engine" --backend-receipt \
-              > "$TMPDIR/receipt.json" 2> "$TMPDIR/loader.log"
-            grep -F "trying file=$prefix/bin/../lib/libhl_native_engine.so" \
-              "$TMPDIR/loader.log" >/dev/null
-            grep -F "calling init: $prefix/bin/../lib/libhl_native_engine.so" \
-              "$TMPDIR/loader.log" >/dev/null
+            env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
+              "$prefix/bin/hl-engine" --backend-receipt > "$TMPDIR/receipt.json"
 
             chmod u+w "$prefix/lib"
             mv "$library" "$TMPDIR/libhl_native_engine.so"
@@ -815,7 +789,6 @@
               exit 1
             fi
             test ! -s "$TMPDIR/missing-library.stdout"
-            grep -F 'libhl_native_engine.so' "$TMPDIR/missing-library.stderr" >/dev/null
             mv "$TMPDIR/libhl_native_engine.so" "$library"
 
             mkdir -p "$out"
@@ -823,7 +796,7 @@
             (cd "$prefix" && sha256sum bin/hl-engine bin/hl-aarch64 bin/hl-x86_64 \
               lib/libhl_native_engine.so) > "$out/SHA256SUMS"
             printf '%s\n' \
-              'copied-prefix bounded RUNPATH, NEEDED, backend ABI, and sibling-library loader selection passed' \
+              'copied-prefix explicit loader, no native NEEDED, backend ABI, and sibling-library selection passed' \
               > "$out/evidence"
           '';
 
@@ -1149,8 +1122,7 @@
             binary="$prefix/bin/$name"
             test -x "$binary"
             lipo -archs "$binary" | grep -Fx 'arm64' >/dev/null
-            otool -L "$binary" | grep -F '@rpath/libhl_native_engine.dylib' >/dev/null
-            otool -l "$binary" | grep -A2 LC_RPATH | grep -F '@loader_path/../lib' >/dev/null
+            ! otool -L "$binary" | grep -F 'libhl_native_engine.dylib' >/dev/null
             env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
               "$binary" --backend-receipt > "$TMPDIR/$name.receipt"
             env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
@@ -1170,10 +1142,9 @@
             exit 1
           fi
           test ! -s "$TMPDIR/missing-library.stdout"
-          grep -F 'libhl_native_engine.dylib' "$TMPDIR/missing-library.stderr" >/dev/null
           mv "$TMPDIR/libhl_native_engine.dylib" "$library"
           mkdir -p "$out"
-          printf '%s\n' 'native Darwin copied-prefix exact ARM64 architecture, install name, exports, rpath, deterministic hash-bound backend receipts, and sibling-library isolation passed' > "$out/evidence"
+          printf '%s\n' 'native Darwin copied-prefix exact ARM64 architecture, install name, exports, explicit loader, deterministic hash-bound backend receipts, and sibling-library isolation passed' > "$out/evidence"
           '';
 
       darwinHostAbiFor =

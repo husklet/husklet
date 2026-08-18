@@ -204,6 +204,9 @@ pub fn backend_receipt(arguments: &[String], forced_guest: Option<Guest>) -> Res
     // it constructs the backend named below for the requested guest ISA.
     let selected = hl_engine::runtime::Engine::from_plan(guest.isa(), plan).map_err(|_| ())?;
     drop(selected);
+    if !hl_native::artifact_smoke() {
+        return Err(());
+    }
 
     let executable = std::env::current_exe().map_err(|_| ())?;
     let mut file = std::fs::File::open(executable).map_err(|_| ())?;

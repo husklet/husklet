@@ -55,6 +55,30 @@ pub fn artifact_paths() -> Option<Vec<std::path::PathBuf>> {
     bindings::engine_library_paths()
 }
 
+/// Calls the private executable-authority boundary through the versioned bridge table.
+#[doc(hidden)]
+#[allow(unsafe_code)]
+pub unsafe fn executable_authority_open_test(
+    services: *const std::ffi::c_void,
+    path: *const std::ffi::c_char,
+    output: *mut std::ffi::c_void,
+) -> i32 {
+    let api = loader::api().expect("load native engine for executable-authority test");
+    let function = api.executable_open.expect("validated executable_open");
+    // SAFETY: this hidden ABI probe forwards the caller's C-compatible test records unchanged.
+    unsafe { function(services, path, output) }
+}
+
+/// Discards a private executable authority through the versioned bridge table.
+#[doc(hidden)]
+#[allow(unsafe_code)]
+pub unsafe fn executable_authority_discard_test(services: *const std::ffi::c_void, executable: *mut std::ffi::c_void) {
+    let api = loader::api().expect("load native engine for executable-authority test");
+    let function = api.executable_discard.expect("validated executable_discard");
+    // SAFETY: this hidden ABI probe forwards the caller's C-compatible test records unchanged.
+    unsafe { function(services, executable) };
+}
+
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 pub fn bound_vector_io_test(isa: u32, scenario: u32) -> Result<(i64, u32, u64), i32> {

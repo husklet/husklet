@@ -21,6 +21,8 @@ pub(crate) type TriggerDestroy = unsafe extern "C" fn(*mut c_void, c_int);
 pub(crate) type CheckpointAdopt = unsafe extern "C" fn(c_uint, c_int, c_int) -> c_int;
 pub(crate) type InterruptSignal = unsafe extern "C" fn(c_uint) -> c_int;
 pub(crate) type CheckpointConfigure = unsafe extern "C" fn(*mut Backend, c_int, c_int) -> c_int;
+pub(crate) type ExecutableOpen = unsafe extern "C" fn(*const c_void, *const c_char, *mut c_void) -> c_int;
+pub(crate) type ExecutableDiscard = unsafe extern "C" fn(*const c_void, *mut c_void);
 pub(crate) type Create = unsafe extern "C" fn(
     c_uint,
     *const c_char,
@@ -48,8 +50,7 @@ pub(crate) type VectorIoTest = unsafe extern "C" fn(c_uint, *mut i64, *mut c_uin
 #[cfg(feature = "native-test-hooks")]
 pub(crate) type ScenarioTest = unsafe extern "C" fn(c_uint) -> c_int;
 #[cfg(feature = "native-test-hooks")]
-pub(crate) type SignalFrameTest =
-    unsafe extern "C" fn(c_uint, c_uint, u64, i64, *mut i64, *mut i64) -> c_int;
+pub(crate) type SignalFrameTest = unsafe extern "C" fn(c_uint, c_uint, u64, i64, *mut i64, *mut i64) -> c_int;
 #[cfg(feature = "native-test-hooks")]
 pub(crate) type NoArgumentTest = unsafe extern "C" fn() -> c_int;
 
@@ -69,6 +70,8 @@ pub(crate) struct BridgeApi {
     pub(crate) checkpoint_adopt: Option<CheckpointAdopt>,
     pub(crate) checkpoint_interrupt_signal: Option<InterruptSignal>,
     pub(crate) checkpoint_configure: Option<CheckpointConfigure>,
+    pub(crate) executable_open: Option<ExecutableOpen>,
+    pub(crate) executable_discard: Option<ExecutableDiscard>,
     pub(crate) create: Option<Create>,
     pub(crate) run: Option<Run>,
     pub(crate) request: Option<Request>,
@@ -164,14 +167,23 @@ impl std::fmt::Display for LoadError {
                 write!(formatter, "resolve native bridge in {}: {detail}", path.display())
             }
             Self::AbiMismatch { expected, actual } => {
-                write!(formatter, "native bridge ABI mismatch: expected {expected}, found {actual}")
+                write!(
+                    formatter,
+                    "native bridge ABI mismatch: expected {expected}, found {actual}"
+                )
             }
             Self::TableTooSmall { minimum, actual } => {
-                write!(formatter, "native bridge table is too small: need {minimum}, found {actual}")
+                write!(
+                    formatter,
+                    "native bridge table is too small: need {minimum}, found {actual}"
+                )
             }
             Self::NullEntry(name) => write!(formatter, "native bridge table entry {name} is null"),
             Self::EngineAbi { expected, actual } => {
-                write!(formatter, "native engine ABI mismatch: expected {expected}, found {actual}")
+                write!(
+                    formatter,
+                    "native engine ABI mismatch: expected {expected}, found {actual}"
+                )
             }
         }
     }
@@ -220,12 +232,10 @@ fn load() -> Result<Loaded, LoadError> {
     if existing.is_empty() {
         return Err(LoadError::NotFound(candidates));
     }
-    let path = existing[0]
-        .canonicalize()
-        .map_err(|error| LoadError::Open {
-            path: existing[0].clone(),
-            detail: error.to_string(),
-        })?;
+    let path = existing[0].canonicalize().map_err(|error| LoadError::Open {
+        path: existing[0].clone(),
+        detail: error.to_string(),
+    })?;
     let library = DynamicLibrary::open(&path).map_err(|detail| LoadError::Open {
         path: path.clone(),
         detail,
@@ -289,12 +299,13 @@ unsafe fn read_table(address: *const BridgeHeader) -> Result<BridgeApi, LoadErro
 fn load_tests(library: &DynamicLibrary, path: &Path) -> Result<TestApi, LoadError> {
     macro_rules! symbol {
         ($name:literal, $kind:ty) => {{
-            let address = library
-                .symbol(concat!($name, "\0").as_bytes())
-                .map_err(|detail| LoadError::MissingBridge {
-                    path: path.to_owned(),
-                    detail,
-                })?;
+            let address =
+                library
+                    .symbol(concat!($name, "\0").as_bytes())
+                    .map_err(|detail| LoadError::MissingBridge {
+                        path: path.to_owned(),
+                        detail,
+                    })?;
             // SAFETY: every named test export is declared with `$kind` in the native test ABI.
             unsafe { std::mem::transmute::<*mut c_void, $kind>(address) }
         }};
@@ -311,32 +322,14 @@ fn load_tests(library: &DynamicLibrary, path: &Path) -> Result<TestApi, LoadErro
         x86_64_store_preflight: symbol!("hl_x86_64_store_preflight_test", NoArgumentTest),
         aarch64_signal_errno_frame: symbol!("hl_aarch64_signal_errno_frame_test", SignalFrameTest),
         x86_64_signal_errno_frame: symbol!("hl_x86_64_signal_errno_frame_test", SignalFrameTest),
-        aarch64_checkpoint_signal_precedence: symbol!(
-            "hl_aarch64_checkpoint_signal_precedence_test",
-            NoArgumentTest
-        ),
-        x86_64_checkpoint_signal_precedence: symbol!(
-            "hl_x86_64_checkpoint_signal_precedence_test",
-            NoArgumentTest
-        ),
-        aarch64_checkpoint_restart_register: symbol!(
-            "hl_aarch64_checkpoint_restart_register_test",
-            NoArgumentTest
-        ),
-        x86_64_checkpoint_restart_register: symbol!(
-            "hl_x86_64_checkpoint_restart_register_test",
-            NoArgumentTest
-        ),
+        aarch64_checkpoint_signal_precedence: symbol!("hl_aarch64_checkpoint_signal_precedence_test", NoArgumentTest),
+        x86_64_checkpoint_signal_precedence: symbol!("hl_x86_64_checkpoint_signal_precedence_test", NoArgumentTest),
+        aarch64_checkpoint_restart_register: symbol!("hl_aarch64_checkpoint_restart_register_test", NoArgumentTest),
+        x86_64_checkpoint_restart_register: symbol!("hl_x86_64_checkpoint_restart_register_test", NoArgumentTest),
         aarch64_checkpoint_restore_claim: symbol!("hl_aarch64_checkpoint_restore_claim_test", ScenarioTest),
         x86_64_checkpoint_restore_claim: symbol!("hl_x86_64_checkpoint_restore_claim_test", ScenarioTest),
-        aarch64_checkpoint_restore_rollback: symbol!(
-            "hl_aarch64_checkpoint_restore_rollback_test",
-            NoArgumentTest
-        ),
-        x86_64_checkpoint_restore_rollback: symbol!(
-            "hl_x86_64_checkpoint_restore_rollback_test",
-            NoArgumentTest
-        ),
+        aarch64_checkpoint_restore_rollback: symbol!("hl_aarch64_checkpoint_restore_rollback_test", NoArgumentTest),
+        x86_64_checkpoint_restore_rollback: symbol!("hl_x86_64_checkpoint_restore_rollback_test", NoArgumentTest),
         errno_from_host: symbol!(
             "hl_c_backend_errno_from_host_test",
             unsafe extern "C" fn(c_uint, c_int) -> c_int
@@ -366,7 +359,10 @@ fn load_tests(library: &DynamicLibrary, path: &Path) -> Result<TestApi, LoadErro
             unsafe extern "C" fn() -> u64
         ),
         #[cfg(all(test, unix))]
-        host_process_force: symbol!("hl_c_backend_host_process_force_test", unsafe extern "C" fn(c_int) -> c_int),
+        host_process_force: symbol!(
+            "hl_c_backend_host_process_force_test",
+            unsafe extern "C" fn(c_int) -> c_int
+        ),
         #[cfg(test)]
         activation_ready_pause: symbol!("hl_c_backend_activation_ready_pause", unsafe extern "C" fn(c_int)),
     })
@@ -390,6 +386,8 @@ fn validate(table: &BridgeApi) -> Result<(), LoadError> {
         checkpoint_adopt,
         checkpoint_interrupt_signal,
         checkpoint_configure,
+        executable_open,
+        executable_discard,
         create,
         run,
         request,
@@ -412,9 +410,7 @@ fn candidates() -> Result<Vec<PathBuf>, LoadError> {
 
 #[cfg(any(not(debug_assertions), test))]
 fn release_candidates(executable: &Path) -> Result<Vec<PathBuf>, LoadError> {
-    let directory = executable
-        .parent()
-        .ok_or_else(|| LoadError::NotFound(Vec::new()))?;
+    let directory = executable.parent().ok_or_else(|| LoadError::NotFound(Vec::new()))?;
     let name = env!("HL_NATIVE_LIBRARY_NAME");
     #[cfg(target_os = "macos")]
     return Ok(vec![
@@ -462,13 +458,21 @@ impl DynamicLibrary {
         let path = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|error| error.to_string())?;
         // SAFETY: path is NUL-terminated and flags request immediate, local binding.
         let handle = unsafe { dlopen(path.as_ptr(), RTLD_NOW | RTLD_LOCAL) };
-        if handle.is_null() { Err(dynamic_error()) } else { Ok(Self(handle)) }
+        if handle.is_null() {
+            Err(dynamic_error())
+        } else {
+            Ok(Self(handle))
+        }
     }
 
     fn symbol(&self, name: &'static [u8]) -> Result<*mut c_void, String> {
         // SAFETY: names are static NUL-terminated byte strings and the handle remains live.
         let address = unsafe { dlsym(self.0, name.as_ptr().cast()) };
-        if address.is_null() { Err(dynamic_error()) } else { Ok(address) }
+        if address.is_null() {
+            Err(dynamic_error())
+        } else {
+            Ok(address)
+        }
     }
 }
 
@@ -480,7 +484,9 @@ fn dynamic_error() -> String {
         "dynamic loader did not report an error".to_owned()
     } else {
         // SAFETY: a non-null dlerror result is a NUL-terminated string valid until the next loader call.
-        unsafe { std::ffi::CStr::from_ptr(message) }.to_string_lossy().into_owned()
+        unsafe { std::ffi::CStr::from_ptr(message) }
+            .to_string_lossy()
+            .into_owned()
     }
 }
 
