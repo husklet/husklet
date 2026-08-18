@@ -640,7 +640,8 @@ HL_API int HL_TARGET_LOCAL(fdvis_path_publication_test)(uint32_t scenario) {
         return collision_ok;
     }
     if (scenario == 4) {
-        for (unsigned index = 0; index < FDPATH_N; ++index) paths[index].key = (uint64_t)index + 1;
+        for (unsigned index = 0; index < FDPATH_N; ++index)
+            paths[index].key = (uint64_t)index + 1;
         int full = fdpath_find(UINT64_C(0x100000001), 9, 1) == NULL;
         g_fdpaths = saved_paths;
         free(paths);
@@ -656,7 +657,8 @@ HL_API int HL_TARGET_LOCAL(fdvis_path_publication_test)(uint32_t scenario) {
         return cleaned;
     }
     if (scenario == 6) {
-        for (unsigned index = 0; index < FDPATH_N; ++index) paths[index].key = (uint64_t)index + 1;
+        for (unsigned index = 0; index < FDPATH_N; ++index)
+            paths[index].key = (uint64_t)index + 1;
         int propagated = fdpath_restore_locked(fdvis_key(88, descriptor), 100, "/fork/full", 1);
         g_fdpaths = saved_paths;
         free(paths);
@@ -701,10 +703,102 @@ HL_API int HL_TARGET_LOCAL(fdvis_path_publication_test)(uint32_t scenario) {
 #endif
 static uint64_t g_fdvis_fork_parent_start;
 static uint64_t g_pipe_identity[HL_NFD];
+/*
+ * The authority-owning Rust layer maps and validates this namespace before it is
+ * admitted here.  C never manufactures a lineage: without that admission the
+ * typed identity path fails closed.  The mapping is shared across fork while
+ * the bound member is deliberately process-private (ordinary fork COW).
+ */
+static hl_ofd_namespace *g_ofd_namespace;
+static hl_ofd_member g_ofd_member;
+static int g_ofd_member_bound;
+static hl_ofd_identity g_ofd_identity[HL_NFD];
 // Guest-visible F_SETPIPE_SZ/F_GETPIPE_SZ state is also needed by early SCM_RIGHTS marshalling.
 static int g_pipesz[HL_NFD];
 static uint8_t g_fdvis_private[HL_NFD];
 static _Atomic uint64_t g_pipe_identity_next = 1;
+
+static int proc_ofd_namespace_admit(hl_ofd_namespace *space, hl_ofd_generation_binding binding,
+                                    uint64_t member_ordinal) {
+    hl_ofd_member member;
+    if (hl_ofd_namespace_admit_validated(space, binding) != 0 ||
+        hl_ofd_member_bind(&member, space, binding.lineage, member_ordinal) != 0)
+        return -ESTALE;
+    g_ofd_namespace = space;
+    g_ofd_member = member;
+    g_ofd_member_bound = 1;
+    return 0;
+}
+
+static int proc_ofd_identity_mint(hl_ofd_identity *identity) {
+    if (!g_ofd_member_bound || g_ofd_namespace == NULL || identity == NULL) return -ESTALE;
+    int status = hl_ofd_identity_mint(&g_ofd_member, identity);
+    return status == 0 ? 0 : -status;
+}
+
+static int proc_ofd_member_rebind(uint64_t member_ordinal) {
+    hl_ofd_member member;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (g_ofd_namespace != NULL) {
+        uint64_t observed = atomic_load_explicit(&g_ofd_namespace->next_member, memory_order_relaxed);
+        while (observed <= member_ordinal &&
+               !atomic_compare_exchange_weak_explicit(&g_ofd_namespace->next_member, &observed, member_ordinal + 1,
+                                                      memory_order_relaxed, memory_order_relaxed)) {}
+    }
+#endif
+    if (g_ofd_namespace == NULL ||
+        hl_ofd_member_bind(&member, g_ofd_namespace, g_ofd_namespace->lineage, member_ordinal) != 0)
+        return -ESTALE;
+    g_ofd_member = member;
+    g_ofd_member_bound = 1;
+    return 0;
+}
+
+static int proc_ofd_identity_reattach(int fd, hl_ofd_identity identity) {
+    if (fd < 0 || fd >= HL_NFD || !hl_ofd_identity_valid(identity) || !g_ofd_member_bound) return -ESTALE;
+#if !defined(HL_OFD_MUTATE_ACCEPT_COLLISION)
+    for (int candidate = 0; candidate < HL_NFD; ++candidate) {
+        if (candidate == fd || !hl_ofd_identity_valid(g_ofd_identity[candidate])) continue;
+        if (g_ofd_identity[candidate].sequence == identity.sequence &&
+            !hl_ofd_identity_equal(g_ofd_identity[candidate], identity))
+            return -ESTALE;
+    }
+#endif
+#if !defined(HL_OFD_MUTATE_SKIP_REATTACH)
+    int status = hl_ofd_identity_reattach(&g_ofd_member, identity);
+    if (status != 0) return -status;
+#endif
+    g_ofd_identity[fd] = identity;
+    return 0;
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int proc_ofd_identity_collision_fixture(void) {
+    hl_ofd_namespace space = {0};
+    const hl_ofd_lineage lineage = {UINT64_C(0x636f6c6c6973696f), UINT64_C(0x6e2d666978747572)};
+    const hl_ofd_generation_binding binding = {11, 13, 1, lineage, 3, 1};
+    hl_ofd_namespace *saved_namespace = g_ofd_namespace;
+    hl_ofd_member saved_member = g_ofd_member;
+    int saved_bound = g_ofd_member_bound;
+    hl_ofd_identity saved_three = g_ofd_identity[3];
+    hl_ofd_identity saved_four = g_ofd_identity[4];
+    hl_ofd_identity original;
+    int result = 1;
+    if (hl_ofd_namespace_init(&space, sizeof space, lineage, 1) == 0 &&
+        proc_ofd_namespace_admit(&space, binding, 1) == 0 && proc_ofd_identity_mint(&original) == 0) {
+        g_ofd_identity[3] = original;
+        hl_ofd_identity collision = original;
+        collision.member = 2;
+        result = proc_ofd_identity_reattach(4, collision) == -ESTALE ? 0 : 2;
+    }
+    g_ofd_namespace = saved_namespace;
+    g_ofd_member = saved_member;
+    g_ofd_member_bound = saved_bound;
+    g_ofd_identity[3] = saved_three;
+    g_ofd_identity[4] = saved_four;
+    return result;
+}
+#endif
 static void proc_fdvis_cleanup(void);
 static void proc_fdvis_close(int guest_fd);
 static int proc_fdvis_publish_native_fd(int guest_fd);
@@ -741,12 +835,32 @@ static uint64_t fdvis_identity(int pid, uint64_t start_ns) {
 static void fdvis_init(const hl_host_services *host) {
     void *arena = NULL;
     if (g_fdvis != NULL) return;
-    size_t bytes = sizeof(struct fdvis_slot) * FDVIS_N + sizeof(struct fdpath_slot) * FDPATH_N +
-                   sizeof(*g_fdvis_control);
+    size_t bytes =
+        sizeof(struct fdvis_slot) * FDVIS_N + sizeof(struct fdpath_slot) * FDPATH_N + sizeof(*g_fdvis_control);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    bytes += sizeof(hl_ofd_namespace);
+#endif
     if (hl_linux_shared_create(host, bytes, &arena) != HL_STATUS_OK) return;
     g_fdvis = arena;
     g_fdpaths = (void *)((unsigned char *)arena + sizeof(struct fdvis_slot) * FDVIS_N);
     g_fdvis_control = (void *)((unsigned char *)g_fdpaths + sizeof(struct fdpath_slot) * FDPATH_N);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    /* Tests exercise the production syscall path without taking ownership of
+     * authority/key logic.  Production has no synthetic provider and remains
+     * unbound until the Rust broker supplies this exact admission payload. */
+    hl_ofd_namespace *test_namespace = (void *)(g_fdvis_control + 1);
+    const hl_ofd_lineage test_lineage = {UINT64_C(0x6f66642d74657374), UINT64_C(0x2d6c696e65616765)};
+    const hl_ofd_generation_binding test_binding = {
+        .generation_high = UINT64_C(0x746573742d67656e),
+        .generation_low = UINT64_C(0x65726174696f6e31),
+        .fence = 1,
+        .lineage = test_lineage,
+        .next_member = 2,
+        .next_sequence = 1,
+    };
+    if (hl_ofd_namespace_init(test_namespace, sizeof *test_namespace, test_lineage, 1) == 0)
+        (void)proc_ofd_namespace_admit(test_namespace, test_binding, 1);
+#endif
     (void)atexit(proc_fdvis_cleanup);
     // Enumerate this process's open descriptors ONCE and publish the non-engine-private ones. Each
     // hl_host_process_fds() call is a full /proc/self/fd getdents scan whose kernel cost is O(highest open
@@ -920,11 +1034,15 @@ static void proc_fdvis_reservation_cancel(struct fdvis_reservation *reservation)
 
 static void proc_fdvis_reservation_publish(struct fdvis_reservation *reservation, int guest_fd, uint32_t kind,
                                            uint64_t device, uint64_t object) {
+    if (!reservation || !reservation->active || !g_fdvis || !g_fdvis_control) return;
     int pid = (int)getpid();
     uint64_t owner_start = fdvis_process_token(pid);
     fdvis_lock();
     struct fdvis_slot *slot = fdvis_find(fdvis_key(pid, guest_fd), owner_start, 0);
     struct fdvis_slot *reserved = &g_fdvis[reservation->slot];
+    struct fdvis_slot previous = {0};
+    int previous_existed = slot != NULL;
+    if (previous_existed) previous = *slot;
     if (slot) {
         if (reserved != slot && reserved->key == UINT64_MAX) memset(reserved, 0, sizeof *reserved);
     } else {
@@ -933,8 +1051,16 @@ static void proc_fdvis_reservation_publish(struct fdvis_reservation *reservation
     slot->device = device;
     slot->object = object;
     slot->kind = kind;
-    if (guest_fd >= 0 && guest_fd < HL_NFD) {
-        (void)proc_fdvis_publish_path_locked(pid, owner_start, guest_fd);
+    int path_status =
+        guest_fd >= 0 && guest_fd < HL_NFD ? proc_fdvis_publish_path_locked(pid, owner_start, guest_fd) : -EBADF;
+    if (path_status != 0) {
+        if (previous_existed)
+            *slot = previous;
+        else
+            memset(slot, 0, sizeof *slot);
+        fdvis_unlock();
+        reservation->active = 0;
+        return;
     }
     slot->owner_start_ns = owner_start;
     slot->generation = ++g_fdvis_control->generation;
@@ -949,7 +1075,11 @@ static int proc_fdvis_publish(int guest_fd, uint32_t kind, uint64_t device, uint
     if (guest_fd < 0 || guest_fd >= HL_NFD) return -EBADF;
     if (!g_fdvis_control) return -ENOSPC;
     fdvis_lock();
-    struct fdvis_slot *slot = fdvis_find(fdvis_key(pid, guest_fd), owner_start, 1);
+    struct fdvis_slot *slot = fdvis_find(fdvis_key(pid, guest_fd), owner_start, 0);
+    struct fdvis_slot previous = {0};
+    int previous_existed = slot != NULL;
+    if (previous_existed) previous = *slot;
+    if (!slot) slot = fdvis_find(fdvis_key(pid, guest_fd), owner_start, 1);
     if (!slot) {
         fdvis_sweep_stale_locked();
         slot = fdvis_find(fdvis_key(pid, guest_fd), owner_start, 1);
@@ -963,6 +1093,14 @@ static int proc_fdvis_publish(int guest_fd, uint32_t kind, uint64_t device, uint
     slot->object = object;
     slot->kind = kind;
     int path_status = proc_fdvis_publish_path_locked(pid, owner_start, guest_fd);
+    if (path_status != 0) {
+        if (previous_existed)
+            *slot = previous;
+        else
+            memset(slot, 0, sizeof *slot);
+        fdvis_unlock();
+        return path_status;
+    }
     slot->generation = generation;
     fdvis_unlock();
     return path_status;
@@ -991,10 +1129,13 @@ static int proc_fdvis_publish_native_fd(int guest_fd) {
 }
 
 static int proc_fdvis_publish_pipe_pair(int first, int second) {
+    hl_ofd_identity first_ofd;
+    hl_ofd_identity second_ofd;
     uint64_t sequence = atomic_fetch_add_explicit(&g_pipe_identity_next, 1, memory_order_relaxed);
     uint64_t identity = fdvis_identity((int)getpid(), fdvis_process_token((int)getpid())) ^ sequence;
     if (identity == 0) identity = sequence ? sequence : 1;
     if (first < 0 || first >= HL_NFD || second < 0 || second >= HL_NFD) return -EINVAL;
+    if (proc_ofd_identity_mint(&first_ofd) != 0 || proc_ofd_identity_mint(&second_ofd) != 0) return -ESTALE;
     if (proc_fdvis_publish(first, HL_HOST_FD_PIPE, 1, identity) != 0) return -ENOSPC;
     if (proc_fdvis_publish(second, HL_HOST_FD_PIPE, 1, identity) != 0) {
         proc_fdvis_close(first);
@@ -1002,6 +1143,8 @@ static int proc_fdvis_publish_pipe_pair(int first, int second) {
     }
     g_pipe_identity[first] = identity;
     g_pipe_identity[second] = identity;
+    g_ofd_identity[first] = first_ofd;
+    g_ofd_identity[second] = second_ofd;
     return 0;
 }
 
@@ -1333,6 +1476,11 @@ static int proc_fdvis_after_fork(struct fdvis_fork_plan *plan, int child, int in
             (void)nanosleep(&pause, NULL);
         }
         child_start = fdvis_process_token(child);
+        if (!g_ofd_member_bound || g_ofd_namespace == NULL) return -ESTALE;
+        hl_ofd_member child_member;
+        int member_status = hl_ofd_member_mint(g_ofd_namespace, &child_member);
+        if (member_status != 0) return -member_status;
+        g_ofd_member = child_member;
     }
     struct fdvis_fork_journal *journal = calloc(plan->count, sizeof *journal);
     if (plan->count != 0 && !journal) {

@@ -386,6 +386,9 @@ static int ckpt_capture_native_fd(struct ckpt_fd *records, int *count, const str
         r.kind = CKF_PIPE;
         r.flags = flags;
         r.descriptor_flags = descriptor_flags;
+        r.object_id = identity;
+        r.ofd_id = ofd_identity_ensure(fd);
+        r.ofd_identity = g_ofd_identity[fd];
         r.offset = (int64_t)identity;
         snprintf(r.path, sizeof r.path, "%d", (fd >= 0 && fd < HL_NFD) ? g_pipesz[fd] : 0);
         records[(*count)++] = r;
@@ -408,6 +411,7 @@ static int ckpt_capture_native_fd(struct ckpt_fd *records, int *count, const str
         r.kind = CKF_MEMFD;
         r.object_id = ckpt_backing_id(&status);
         r.ofd_id = ckpt_native_ofd_id(records, *count, fd, r.object_id);
+        r.ofd_identity = g_ofd_identity[fd];
         int seals = g_memfd_seal[fd];
         (void)memfd_reg_get_fd(fd, &seals);
         r.auxiliary = (uint64_t)(unsigned)seals;
@@ -426,6 +430,7 @@ static int ckpt_capture_native_fd(struct ckpt_fd *records, int *count, const str
     r.offset = lseek(fd, 0, SEEK_CUR);
     r.object_id = ckpt_backing_id(&status);
     r.ofd_id = ckpt_native_ofd_id(records, *count, fd, r.object_id);
+    r.ofd_identity = g_ofd_identity[fd];
     if (S_ISCHR(status.st_mode) && isatty(fd)) {
         r.kind = CKF_TTY;
         r.offset = 0;
@@ -919,6 +924,8 @@ static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
     m.stack_lo = g_stack_lo;
     m.stack_hi = g_stack_hi;
     m.n_fds = (uint64_t)nfd;
+    if (!g_ofd_member_bound) return -1;
+    m.ofd_member_ordinal = g_ofd_member.ordinal;
     if (ckpt_self_identity(&m) != 0) return -1;
     snprintf(m.exe_path, sizeof m.exe_path, "%s", g_exe_path ? g_exe_path : "");
     for (int s = 0; s < 65; s++) { // capture this process's guest signal dispositions (restored on thaw)

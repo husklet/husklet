@@ -1451,8 +1451,9 @@ static void ep_mem_clear(int ep);
 // Assign (or propagate) a shared OFD group id from oldfd to newfd on dup.
 static void ofd_link_dup(int newfd, int oldfd) {
     if (oldfd < 0 || oldfd >= HL_NFD || newfd < 0 || newfd >= HL_NFD || oldfd == newfd) return;
-    if (!g_ofd_id[oldfd]) g_ofd_id[oldfd] = ofd_identity_new();
+    if (!g_ofd_id[oldfd] && !ofd_identity_ensure(oldfd)) return;
     g_ofd_id[newfd] = g_ofd_id[oldfd];
+    g_ofd_identity[newfd] = g_ofd_identity[oldfd];
 }
 
 // Find an OPEN guest fd (other than `fd`) that shares fd's OFD group id, or -1 if none survives.
@@ -1561,6 +1562,7 @@ static void ep_fd_reset(int fd) {
     g_ep_events[fd] = 0;
     g_ep_udata[fd] = 0;
     g_ofd_id[fd] = 0;
+    memset(&g_ofd_identity[fd], 0, sizeof g_ofd_identity[fd]);
 }
 
 // close() hook for the inotify family (event.c cases 26/27/28). hl emulates inotify with a kqueue: the

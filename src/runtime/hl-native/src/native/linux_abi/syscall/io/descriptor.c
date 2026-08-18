@@ -1,8 +1,13 @@
 /* Included by io.c: unity-build access with bounded I/O capability handlers. */
 
-static int svc_dup(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                     uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+static int svc_dup(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                   uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 23: {
         struct fdvis_reservation fdvis;
@@ -37,9 +42,14 @@ static int svc_dup(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     return svc_done_host(c);
 }
 
-static int svc_dup3(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                     uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+static int svc_dup3(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                    uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 24: {
         struct fdvis_reservation fdvis;
@@ -120,93 +130,93 @@ static int svc_fcntl_lock(struct cpu *c, int descriptor, int command, uint64_t a
     uint64_t a0 = (uint64_t)(unsigned)descriptor;
     uint64_t a2 = address;
     do {
-            // macOS F_GETLK=7,SETLK=8,SETLKW=9
-            int mc = lcmd == 5 ? F_GETLK : lcmd == 6 ? F_SETLK : F_SETLKW;
-            uint8_t lf[32];
-            // Linux order (SYSCALL_DEFINE3(fcntl) -> fcntl_getlk/setlk): the fd is validated (EBADF) BEFORE the
-            // flock is copied in, so a bad fd wins over a bad pointer / bad l_whence. (LTP fcntl13: fcntl(-1,...).)
-            if ((int)a0 < 0 || fcntl((int)a0, F_GETFD) < 0) {
-                G_RET(c) = (uint64_t)(-EBADF);
+        // macOS F_GETLK=7,SETLK=8,SETLKW=9
+        int mc = lcmd == 5 ? F_GETLK : lcmd == 6 ? F_SETLK : F_SETLKW;
+        uint8_t lf[32];
+        // Linux order (SYSCALL_DEFINE3(fcntl) -> fcntl_getlk/setlk): the fd is validated (EBADF) BEFORE the
+        // flock is copied in, so a bad fd wins over a bad pointer / bad l_whence. (LTP fcntl13: fcntl(-1,...).)
+        if ((int)a0 < 0 || fcntl((int)a0, F_GETFD) < 0) {
+            G_RET(c) = (uint64_t)(-EBADF);
+            break;
+        }
+        // The Linux struct flock at a2 (fields up to lf+24) is read directly and written back for F_GETLK;
+        // validate the 32-byte struct before any deref so a bad pointer returns -EFAULT, not a crash. A guest
+        // PROT_NONE flock buffer (LTP fcntl13 uses one) is force-mapped host-writable by hl, but
+        // host_range_mapped rejects it via its internal gna_hit check so it still EFAULTs like Linux.
+        if (guest_copy_from(lf, a2, sizeof(lf)) != (ssize_t)sizeof(lf)) {
+            G_RET(c) = (uint64_t)(-EFAULT);
+            break;
+        }
+        // l_whence must be SEEK_SET/SEEK_CUR/SEEK_END; Linux rejects anything else with EINVAL in
+        // flock_to_posix_lock -- BEFORE the fd type is consulted, so it applies to a pipe fd too. (LTP fcntl13)
+        {
+            short whence;
+            memcpy(&whence, lf + 2, sizeof(whence));
+            if (whence != 0 && whence != 1 && whence != 2) {
+                G_RET(c) = (uint64_t)(-EINVAL);
                 break;
             }
-            // The Linux struct flock at a2 (fields up to lf+24) is read directly and written back for F_GETLK;
-            // validate the 32-byte struct before any deref so a bad pointer returns -EFAULT, not a crash. A guest
-            // PROT_NONE flock buffer (LTP fcntl13 uses one) is force-mapped host-writable by hl, but
-            // host_range_mapped rejects it via its internal gna_hit check so it still EFAULTs like Linux.
-            if (guest_copy_from(lf, a2, sizeof(lf)) != (ssize_t)sizeof(lf)) {
+        }
+        // service advisory byte-range locks on regular files from the in-engine cross-process
+        // table (no host round-trip). F_SETLKW blocks by poll-retry, interruptible by a deliverable
+        // pending signal (g_pending/tpending, honouring the per-thread block mask) -> EINTR, exactly
+        // as a real F_SETLKW returns. poslk_op returns 0 only for non-regular fds -> host path below.
+        {
+            int pout = 0, claimed;
+            for (;;) {
+                claimed = poslk_op((int)a0, lcmd, lf, &pout);
+                if (!claimed) break; // not a regular file -> fall through to the host fcntl path
+                if (lcmd == 7 && pout == -EAGAIN) {
+                    int intr = 0;
+                    for (int s = 1; s <= 64; s++)
+                        if ((process_pending_test(s) || thread_pending_test(c, s)) &&
+                            !(c->sigmask & (UINT64_C(1) << (s - 1)))) {
+                            intr = 1;
+                            break;
+                        }
+                    if (intr) {
+                        G_RET(c) = (uint64_t)(-EINTR);
+                        break;
+                    }
+                    struct timespec ts = {0, 1000000}; // 1 ms poll
+                    nanosleep(&ts, NULL);
+                    continue;
+                }
+                G_RET(c) = (uint64_t)(int64_t)pout;
+                if (lcmd == 5 && pout == 0 && guest_copy_to(a2, lf, sizeof(lf)) != (ssize_t)sizeof(lf))
+                    G_RET(c) = (uint64_t)(-EFAULT);
+                break;
+            }
+            if (claimed) break; // handled in-engine (or interrupted); done
+        }
+        struct flock fl;
+        // Linux flock: type/whence/pad/start@8/len@16/pid@24
+        memset(&fl, 0, sizeof fl);
+        short lt;
+        memcpy(&lt, lf, sizeof(lt));
+        // Linux RDLCK=0,WRLCK=1,UNLCK=2 -> macOS
+        fl.l_type = lt == 0 ? F_RDLCK : lt == 1 ? F_WRLCK : F_UNLCK;
+        memcpy(&fl.l_whence, lf + 2, sizeof(fl.l_whence));
+        memcpy(&fl.l_start, lf + 8, sizeof(fl.l_start));
+        memcpy(&fl.l_len, lf + 16, sizeof(fl.l_len));
+        memcpy(&fl.l_pid, lf + 24, sizeof(fl.l_pid));
+        int r = fcntl((int)a0, mc, &fl), e = errno;
+        // F_GETLK writes the conflicting lock back
+        if (r >= 0 && lcmd == 5) {
+            short type = fl.l_type == F_RDLCK ? 0 : fl.l_type == F_WRLCK ? 1 : 2;
+            int32_t pid = (int32_t)fl.l_pid;
+            memcpy(lf, &type, sizeof(type));
+            memcpy(lf + 2, &fl.l_whence, sizeof(fl.l_whence));
+            memcpy(lf + 8, &fl.l_start, sizeof(fl.l_start));
+            memcpy(lf + 16, &fl.l_len, sizeof(fl.l_len));
+            memcpy(lf + 24, &pid, sizeof(pid));
+            if (guest_copy_to(a2, lf, sizeof(lf)) != (ssize_t)sizeof(lf)) {
                 G_RET(c) = (uint64_t)(-EFAULT);
                 break;
             }
-            // l_whence must be SEEK_SET/SEEK_CUR/SEEK_END; Linux rejects anything else with EINVAL in
-            // flock_to_posix_lock -- BEFORE the fd type is consulted, so it applies to a pipe fd too. (LTP fcntl13)
-            {
-                short whence;
-                memcpy(&whence, lf + 2, sizeof(whence));
-                if (whence != 0 && whence != 1 && whence != 2) {
-                    G_RET(c) = (uint64_t)(-EINVAL);
-                    break;
-                }
-            }
-            // service advisory byte-range locks on regular files from the in-engine cross-process
-            // table (no host round-trip). F_SETLKW blocks by poll-retry, interruptible by a deliverable
-            // pending signal (g_pending/tpending, honouring the per-thread block mask) -> EINTR, exactly
-            // as a real F_SETLKW returns. poslk_op returns 0 only for non-regular fds -> host path below.
-            {
-                int pout = 0, claimed;
-                for (;;) {
-                    claimed = poslk_op((int)a0, lcmd, lf, &pout);
-                    if (!claimed) break; // not a regular file -> fall through to the host fcntl path
-                    if (lcmd == 7 && pout == -EAGAIN) {
-                        int intr = 0;
-                        for (int s = 1; s <= 64; s++)
-                            if ((process_pending_test(s) || thread_pending_test(c, s)) &&
-                                !(c->sigmask & (UINT64_C(1) << (s - 1)))) {
-                                intr = 1;
-                                break;
-                            }
-                        if (intr) {
-                            G_RET(c) = (uint64_t)(-EINTR);
-                            break;
-                        }
-                        struct timespec ts = {0, 1000000}; // 1 ms poll
-                        nanosleep(&ts, NULL);
-                        continue;
-                    }
-                    G_RET(c) = (uint64_t)(int64_t)pout;
-                    if (lcmd == 5 && pout == 0 && guest_copy_to(a2, lf, sizeof(lf)) != (ssize_t)sizeof(lf))
-                        G_RET(c) = (uint64_t)(-EFAULT);
-                    break;
-                }
-                if (claimed) break; // handled in-engine (or interrupted); done
-            }
-            struct flock fl;
-            // Linux flock: type/whence/pad/start@8/len@16/pid@24
-            memset(&fl, 0, sizeof fl);
-            short lt;
-            memcpy(&lt, lf, sizeof(lt));
-            // Linux RDLCK=0,WRLCK=1,UNLCK=2 -> macOS
-            fl.l_type = lt == 0 ? F_RDLCK : lt == 1 ? F_WRLCK : F_UNLCK;
-            memcpy(&fl.l_whence, lf + 2, sizeof(fl.l_whence));
-            memcpy(&fl.l_start, lf + 8, sizeof(fl.l_start));
-            memcpy(&fl.l_len, lf + 16, sizeof(fl.l_len));
-            memcpy(&fl.l_pid, lf + 24, sizeof(fl.l_pid));
-            int r = fcntl((int)a0, mc, &fl), e = errno;
-            // F_GETLK writes the conflicting lock back
-            if (r >= 0 && lcmd == 5) {
-                short type = fl.l_type == F_RDLCK ? 0 : fl.l_type == F_WRLCK ? 1 : 2;
-                int32_t pid = (int32_t)fl.l_pid;
-                memcpy(lf, &type, sizeof(type));
-                memcpy(lf + 2, &fl.l_whence, sizeof(fl.l_whence));
-                memcpy(lf + 8, &fl.l_start, sizeof(fl.l_start));
-                memcpy(lf + 16, &fl.l_len, sizeof(fl.l_len));
-                memcpy(lf + 24, &pid, sizeof(pid));
-                if (guest_copy_to(a2, lf, sizeof(lf)) != (ssize_t)sizeof(lf)) {
-                    G_RET(c) = (uint64_t)(-EFAULT);
-                    break;
-                }
-            }
-            G_RET(c) = r < 0 ? (uint64_t)(-(int64_t)e) : (uint64_t)r;
-            break;
+        }
+        G_RET(c) = r < 0 ? (uint64_t)(-(int64_t)e) : (uint64_t)r;
+        break;
     } while (0);
     return 1;
 }
@@ -217,37 +227,37 @@ static int svc_fcntl_get_flags(struct cpu *c, int descriptor, uint64_t argument,
     uint64_t a2 = argument;
     int lcmd = command;
     do {
-            int r = fcntl((int)a0, F_GETFL, 0);
-            if (r < 0) {
-                G_RET(c) = (uint64_t)(-errno);
-                break;
-            }
-            // access mode identical
-            int lf = r & 0x3;
-            if ((int)a0 >= 0 && (int)a0 < HL_NFD && g_proc_text_ro[(int)a0]) lf = 0;
-            char fgetpath_buf[4096] = {0};
-            if ((lf & 0x3) && hl_native_fd_path((int)a0, fgetpath_buf, sizeof fgetpath_buf) == 0) {
-                if (proc_text_host_path(fgetpath_buf)) lf &= ~0x3;
-            }
-            // Preserve the architecture's native F_GETFL representation (see G_O_LARGEFILE above).
-            lf |= G_O_LARGEFILE;
-            if (r & O_APPEND) lf |= 0x400;
-            if (r & O_NONBLOCK) lf |= 0x800;
-            // APPEND/NONBLOCK/ASYNC
-            if (r & O_ASYNC) lf |= 0x2000;
-#if defined(__linux__) && defined(O_DIRECT)
-            // O_DIRECT is a settable status flag on Linux; the guest fd is a real host fd whose kernel
-            // O_DIRECT bit is authoritative. Translate host O_DIRECT -> the guest-arch G_O_DIRECT so an
-            // fd opened (or F_SETFL'd) O_DIRECT round-trips instead of being silently dropped.
-            if (r & O_DIRECT) lf |= G_O_DIRECT;
-#endif
-            // eventfd: the host read end is kept permanently O_NONBLOCK internally, so report the guest's
-            // OWN blocking/non-blocking intent (g_eventfd_gnb), not the host flag. See vfs.c g_eventfd_gnb.
-            if ((int)a0 >= 0 && (int)a0 < HL_NFD && g_eventfd_peer[(int)a0]) {
-                lf = eventfd_guest_nb((int)a0) ? (lf | 0x800) : (lf & ~0x800);
-            }
-            G_RET(c) = (uint64_t)(unsigned)lf;
+        int r = fcntl((int)a0, F_GETFL, 0);
+        if (r < 0) {
+            G_RET(c) = (uint64_t)(-errno);
             break;
+        }
+        // access mode identical
+        int lf = r & 0x3;
+        if ((int)a0 >= 0 && (int)a0 < HL_NFD && g_proc_text_ro[(int)a0]) lf = 0;
+        char fgetpath_buf[4096] = {0};
+        if ((lf & 0x3) && hl_native_fd_path((int)a0, fgetpath_buf, sizeof fgetpath_buf) == 0) {
+            if (proc_text_host_path(fgetpath_buf)) lf &= ~0x3;
+        }
+        // Preserve the architecture's native F_GETFL representation (see G_O_LARGEFILE above).
+        lf |= G_O_LARGEFILE;
+        if (r & O_APPEND) lf |= 0x400;
+        if (r & O_NONBLOCK) lf |= 0x800;
+        // APPEND/NONBLOCK/ASYNC
+        if (r & O_ASYNC) lf |= 0x2000;
+#if defined(__linux__) && defined(O_DIRECT)
+        // O_DIRECT is a settable status flag on Linux; the guest fd is a real host fd whose kernel
+        // O_DIRECT bit is authoritative. Translate host O_DIRECT -> the guest-arch G_O_DIRECT so an
+        // fd opened (or F_SETFL'd) O_DIRECT round-trips instead of being silently dropped.
+        if (r & O_DIRECT) lf |= G_O_DIRECT;
+#endif
+        // eventfd: the host read end is kept permanently O_NONBLOCK internally, so report the guest's
+        // OWN blocking/non-blocking intent (g_eventfd_gnb), not the host flag. See vfs.c g_eventfd_gnb.
+        if ((int)a0 >= 0 && (int)a0 < HL_NFD && g_eventfd_peer[(int)a0]) {
+            lf = eventfd_guest_nb((int)a0) ? (lf | 0x800) : (lf & ~0x800);
+        }
+        G_RET(c) = (uint64_t)(unsigned)lf;
+        break;
     } while (0);
     return 1;
 }
@@ -258,27 +268,27 @@ static int svc_fcntl_set_flags(struct cpu *c, int descriptor, uint64_t argument,
     uint64_t a2 = argument;
     int lcmd = command;
     do {
-            int la = (int)a2, mf = 0;
-            if (la & 0x400) mf |= O_APPEND;
-            if (la & 0x800) mf |= O_NONBLOCK;
-            // APPEND/NONBLOCK/ASYNC
-            if (la & 0x2000) mf |= O_ASYNC;
+        int la = (int)a2, mf = 0;
+        if (la & 0x400) mf |= O_APPEND;
+        if (la & 0x800) mf |= O_NONBLOCK;
+        // APPEND/NONBLOCK/ASYNC
+        if (la & 0x2000) mf |= O_ASYNC;
 #if defined(__linux__) && defined(O_DIRECT)
-            // Forward an O_DIRECT status-flag change straight to the real host fd (guest-arch G_O_DIRECT ->
-            // host O_DIRECT). Previously the bit was dropped, so F_SETFL(O_DIRECT) wrongly returned success
-            // without setting it (and a filesystem that rejects O_DIRECT never produced the EINVAL Linux does).
-            if (la & G_O_DIRECT) mf |= O_DIRECT;
+        // Forward an O_DIRECT status-flag change straight to the real host fd (guest-arch G_O_DIRECT ->
+        // host O_DIRECT). Previously the bit was dropped, so F_SETFL(O_DIRECT) wrongly returned success
+        // without setting it (and a filesystem that rejects O_DIRECT never produced the EINVAL Linux does).
+        if (la & G_O_DIRECT) mf |= O_DIRECT;
 #endif
-            // eventfd: record the guest's blocking/non-blocking intent in the shadow and NEVER clear the
-            // host read end's O_NONBLOCK (the internal drains rely on it; clearing it would let a drain
-            // block). Other flag changes still apply to the host fd. See vfs.c g_eventfd_gnb.
-            if ((int)a0 >= 0 && (int)a0 < HL_NFD && g_eventfd_peer[(int)a0]) {
-                eventfd_guest_nb_set((int)a0, (la & 0x800) != 0);
-                mf |= O_NONBLOCK; // keep host O_NONBLOCK on regardless of the guest's request
-            }
-            int r = fcntl((int)a0, F_SETFL, mf);
-            G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
-            break;
+        // eventfd: record the guest's blocking/non-blocking intent in the shadow and NEVER clear the
+        // host read end's O_NONBLOCK (the internal drains rely on it; clearing it would let a drain
+        // block). Other flag changes still apply to the host fd. See vfs.c g_eventfd_gnb.
+        if ((int)a0 >= 0 && (int)a0 < HL_NFD && g_eventfd_peer[(int)a0]) {
+            eventfd_guest_nb_set((int)a0, (la & 0x800) != 0);
+            mf |= O_NONBLOCK; // keep host O_NONBLOCK on regardless of the guest's request
+        }
+        int r = fcntl((int)a0, F_SETFL, mf);
+        G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
+        break;
     } while (0);
     return 1;
 }
@@ -499,10 +509,12 @@ static int fcntl_owner_host_to_guest(int owner) {
 // the struct, so translate the payload itself at this guest-memory boundary.
 static int svc_fcntl_owner_extended(struct cpu *c, int descriptor, int command, uint64_t address) {
     if (command != 15 && command != 16) return 0;
+
     struct {
         int type;
         int pid;
     } owner;
+
     if (!address || (command == 15 && guest_copy_from(&owner, address, sizeof owner) != (ssize_t)sizeof owner) ||
         (command == 16 && guest_accessible_prefix(address, sizeof owner, HL_LOGICAL_VMA_WRITE) != sizeof owner)) {
         G_RET(c) = (uint64_t)(int64_t)-EFAULT;
@@ -540,9 +552,14 @@ static int svc_fcntl_owner_extended(struct cpu *c, int descriptor, int command, 
     return 1;
 }
 
-static int svc_fcntl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                     uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+static int svc_fcntl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                     uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 25: {
         struct fdvis_reservation fdvis;
@@ -719,9 +736,14 @@ static int svc_fcntl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     return svc_done_host(c);
 }
 
-static int svc_ioctl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                     uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+static int svc_ioctl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                     uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 29: {
         // ioctl(fd, req, arg). Almost every request (termios/winsize/job-control) is owned by svc_fs below;
@@ -750,9 +772,14 @@ static int svc_ioctl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     return svc_done_host(c);
 }
 
-static int svc_pipe2(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                     uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+static int svc_pipe2(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                     uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 59: {
         // pipe2(fds, flags). O_DIRECT requests "packet mode": each write is a distinct record that reads
@@ -797,10 +824,14 @@ static int svc_pipe2(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             fcntl(fds[0], F_SETFL, O_NONBLOCK);
             fcntl(fds[1], F_SETFL, O_NONBLOCK);
         }
-        if (proc_fdvis_publish_pipe_pair(fds[0], fds[1]) != 0) {
+        int publication = proc_fdvis_publish_pipe_pair(fds[0], fds[1]);
+        if (publication != 0) {
             close(fds[0]);
             close(fds[1]);
-            G_RET(c) = (uint64_t)(-EMFILE);
+            /* Missing/stale topology authority is not descriptor exhaustion.
+             * Keep it distinguishable so launch diagnostics name the absent
+             * admission instead of sending operators after RLIMIT_NOFILE. */
+            G_RET(c) = (uint64_t)(int64_t)(publication == -ESTALE ? -EACCES : publication);
             break;
         }
         if (guest_copy_to(a0, fds, sizeof(fds)) != (ssize_t)sizeof(fds)) {
@@ -842,9 +873,14 @@ static int svc_pipe2(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     return svc_done_host(c);
 }
 
-static int svc_fsync(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                     uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+static int svc_fsync(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                     uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 82: G_RET(c) = memf_get((int)a0) ? 0 : s3db_sync_fd((int)a0); break;
     // fdatasync -> fsync (no macOS fdatasync); same durability policy
@@ -853,9 +889,14 @@ static int svc_fsync(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     return svc_done_host(c);
 }
 
-static int svc_fdatasync(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                     uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+static int svc_fdatasync(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                         uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 83: G_RET(c) = memf_get((int)a0) ? 0 : s3db_sync_fd((int)a0); break;
     // copy_file_range(fdin,offin*,fdout,offout*,len,flags)
@@ -865,8 +906,13 @@ static int svc_fdatasync(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, u
 }
 
 static int svc_copy_file_range(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                     uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+                               uint64_t a4, uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 285: {
         int fdin = (int)a0, fdout = (int)a2;
@@ -942,8 +988,13 @@ static int svc_copy_file_range(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t
 }
 
 static int svc_sync_file_range(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                     uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+                               uint64_t a4, uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 84:
         G_RET(c) = memf_get((int)a0) ? 0 : s3db_sync_fd((int)a0);

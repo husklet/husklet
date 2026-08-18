@@ -36,21 +36,19 @@ static void ckpt_restore_reset_inherited_fds(const struct ckpt_fd *records, int 
 
 static int ckpt_restore_record_replaces_typed_fd(int kind) {
     switch (kind) {
-        case CKF_FILE:
-        case CKF_PIPE:
-        case CKF_BLOB:
-        case CKF_MEMFD:
-        case CKF_EVENTFD:
-        case CKF_TIMERFD:
-        case CKF_INOTIFY:
-        case CKF_EPOLL:
-        case CKF_SOCKETPAIR:
-        case CKF_SOCKET:
-        case CKF_SIGNALFD:
-        case CKF_DEVICE:
-            return 1;
-        default:
-            return 0;
+    case CKF_FILE:
+    case CKF_PIPE:
+    case CKF_BLOB:
+    case CKF_MEMFD:
+    case CKF_EVENTFD:
+    case CKF_TIMERFD:
+    case CKF_INOTIFY:
+    case CKF_EPOLL:
+    case CKF_SOCKETPAIR:
+    case CKF_SOCKET:
+    case CKF_SIGNALFD:
+    case CKF_DEVICE: return 1;
+    default: return 0;
     }
 }
 
@@ -372,6 +370,7 @@ static int ckpt_restore_existing_ofd(const struct ckpt_fd *records, int index, c
         memfd_reg_set_fd(record->gfd, g_memfd_seal[record->gfd]);
     }
     if (record->gfd >= 0 && record->gfd < HL_NFD) g_ofd_id[record->gfd] = record->ofd_id;
+    if (record->gfd >= 0 && record->gfd < HL_NFD) g_ofd_identity[record->gfd] = record->ofd_identity;
     return proc_fdvis_publish_native_fd(record->gfd) == 0 ? 1 : -1;
 }
 
@@ -405,6 +404,7 @@ static int ckpt_restore_tty_fd(const struct ckpt_fd *record) {
 
 static int ckpt_restore_pipe_fd(const struct ckpt_fd *record) {
     uint64_t identity = (uint64_t)record->offset;
+    if (!hl_ofd_identity_valid(record->ofd_identity) || record->ofd_id != record->ofd_identity.sequence) return -1;
     struct ckpt_restore_pipe *pipe = ckpt_restore_pipe_find(identity);
     int source = ((record->flags & O_ACCMODE) == O_WRONLY) ? (pipe ? pipe->writer : -1) : (pipe ? pipe->reader : -1);
     if (source < 0 || dup2(source, record->gfd) < 0) return -1;
@@ -414,6 +414,8 @@ static int ckpt_restore_pipe_fd(const struct ckpt_fd *record) {
     if (record->descriptor_flags & FD_CLOEXEC) fcntl(record->gfd, F_SETFD, FD_CLOEXEC);
     g_pipe_identity[record->gfd] = identity;
     g_pipesz[record->gfd] = pipe->size;
+    if (proc_ofd_identity_reattach(record->gfd, record->ofd_identity) != 0) return -1;
+    g_ofd_id[record->gfd] = record->ofd_identity.sequence;
     return proc_fdvis_publish(record->gfd, HL_HOST_FD_PIPE, 1, identity);
 }
 
@@ -731,8 +733,8 @@ static int ckpt_validate_proc_tree(const struct ckpt_manifest *man) {
     // This table is copied into the fixed-capacity guest/host pid map after fork. Refuse an image which
     // cannot fit before creating even the first child; silently truncating it would make wait/kill target
     // unrelated host identities after restore.
-    if (man->n_procs == 0 || man->n_procs > HL_LINUX_PIDMAP_CAPACITY ||
-        (uint64_t)g_nrprocs != man->n_procs || man->root_gpid != 1)
+    if (man->n_procs == 0 || man->n_procs > HL_LINUX_PIDMAP_CAPACITY || (uint64_t)g_nrprocs != man->n_procs ||
+        man->root_gpid != 1)
         return -1;
 
     int *relations = malloc((size_t)g_nrprocs * 3 * sizeof *relations);
@@ -1012,8 +1014,9 @@ static int ckpt_validate_process_image(const struct ckpt_proc *process, struct c
     char procdir[1300], path[1400];
     snprintf(procdir, sizeof procdir, "proc.%d", process->gpid);
     if (ckpt_read_meta_dir(procdir, meta) != 0 || meta->self_gpid != process->gpid ||
-        meta->ppid_gpid != process->ppid || meta->pagesz == 0 || meta->pagesz > UINT64_C(1048576) ||
-        (meta->pagesz & (meta->pagesz - 1)) != 0 || meta->n_regions > UINT64_C(1048576) || meta->n_fds > HL_NFD)
+        meta->ppid_gpid != process->ppid || meta->ofd_member_ordinal == 0 || meta->pagesz == 0 ||
+        meta->pagesz > UINT64_C(1048576) || (meta->pagesz & (meta->pagesz - 1)) != 0 ||
+        meta->n_regions > UINT64_C(1048576) || meta->n_fds > HL_NFD)
         return -1;
 
     snprintf(path, sizeof path, "%s/pages", procdir);
@@ -1199,8 +1202,8 @@ static int ckpt_restore_preflight(int policy) {
             struct ckpt_proc *session = ckpt_proc_find(process->sid);
             int group_viable = 0;
             for (int j = 0; j < g_nrprocs; ++j)
-                group_viable |= g_rprocs[j].viable && g_rprocs[j].pgid == process->pgid &&
-                                g_rprocs[j].sid == process->sid;
+                group_viable |=
+                    g_rprocs[j].viable && g_rprocs[j].pgid == process->pgid && g_rprocs[j].sid == process->sid;
             if (!group_viable) {
                 ckpt_process_stop(process, "process group is not recoverable");
                 changed = 1;

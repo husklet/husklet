@@ -3,7 +3,7 @@ use std::{fs, path::Path, process::Command};
 #[test]
 fn both_guest_isa_objects_use_the_shared_nonwrapping_ofd_namespace() {
     for isa in [1, 2] {
-        for scenario in 0..=9 {
+        for scenario in 0..=10 {
             hl_native::ofd_identity_test(isa, scenario)
                 .unwrap_or_else(|status| panic!("ISA {isa} OFD identity scenario {scenario} failed: {status}"));
         }
@@ -112,6 +112,7 @@ fn disabling_identity_components_and_exhaustion_checks_red_named_scenarios() {
         ("HL_OFD_MUTATE_DROP_LINEAGE", 0),
         ("HL_OFD_MUTATE_DROP_MEMBER", 0),
         ("HL_OFD_MUTATE_ACCEPT_STALE_LINEAGE", 3),
+        ("HL_OFD_MUTATE_SKIP_REATTACH", 2),
         ("HL_OFD_MUTATE_ALLOW_WRAP", 4),
         ("HL_OFD_MUTATE_USE_GENERATION_AS_LINEAGE", 5),
         ("HL_OFD_MUTATE_ALLOW_LIVE_RESET", 6),

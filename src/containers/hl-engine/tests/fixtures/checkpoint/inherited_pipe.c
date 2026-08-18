@@ -68,6 +68,17 @@ static struct payload payload(unsigned cycle) {
     return value;
 }
 
+static int identity_only(void) {
+    return getenv("HL_OFD_IDENTITY_ONLY") != NULL;
+}
+
+static void create_identity_pipe(void) {
+    int descriptors[2];
+    if (pipe(descriptors) != 0 || dup2(descriptors[0], 30) < 0 || dup2(descriptors[1], 31) < 0) fail("identity-pipe");
+    close(descriptors[0]);
+    close(descriptors[1]);
+}
+
 static void consume(unsigned cycle) {
     struct payload observed;
     read_exact(4, &observed, sizeof observed);
@@ -119,25 +130,27 @@ static void descriptor_state(int role, int expected_writer_cloexec) {
 
 static int child(const char *release, const char *final_release, int role) {
     close(5);
+    if (role != 2) close(7);
     if (fcntl(5, F_GETFD) != -1 || errno != EBADF) return 80 + role;
-    if (role == 0) ofd_writer(release, "before");
-    if (role == 1) ofd_observer(release, "before");
+    if (!identity_only() && role == 0) ofd_writer(release, "before");
+    if (!identity_only() && role == 1) ofd_observer(release, "before");
     dprintf(STDOUT_FILENO, "PIPE-READY %d pid=%ld\n", role, (long)getpid());
     await(release, "go");
-    descriptor_state(role, role == 0);
-    if (role == 0) ofd_writer(release, "after-first");
-    if (role == 1) ofd_observer(release, "after-first");
+    descriptor_state(role, !identity_only() && role == 0);
+    if (!identity_only() && role == 0) ofd_writer(release, "after-first");
+    if (!identity_only() && role == 1) ofd_observer(release, "after-first");
     if (role == 0) {
         consume(1);
         publish(release, "consumed-first");
         dprintf(STDOUT_FILENO, "PIPE-CONSUMED 1 pid=%ld\n", (long)getpid());
     }
+    create_identity_pipe();
     await(release, "cycle-two-ready");
     dprintf(STDOUT_FILENO, "PIPE-CYCLE-READY %d pid=%ld\n", role, (long)getpid());
     await(final_release, "go");
-    descriptor_state(role, role == 0);
-    if (role == 1) ofd_writer(final_release, "after-second");
-    if (role == 2) ofd_observer(final_release, "after-second");
+    descriptor_state(role, !identity_only() && role == 0);
+    if (!identity_only() && role == 1) ofd_writer(final_release, "after-second");
+    if (!identity_only() && role == 2) ofd_observer(final_release, "after-second");
     if (role == 1) {
         consume(2);
         publish(final_release, "consumed-second");
@@ -147,10 +160,15 @@ static int child(const char *release, const char *final_release, int role) {
         await(final_release, "writer-closed");
         unsigned char byte;
         ssize_t count;
-        do count = read(4, &byte, 1); while (count < 0 && errno == EINTR);
+        do
+            count = read(4, &byte, 1);
+        while (count < 0 && errno == EINTR);
         if (count != 0) fail("pipe-eof");
         dprintf(STDOUT_FILENO, "PIPE-EOF pid=%ld\n", (long)getpid());
     }
+    close(7);
+    close(30);
+    close(31);
     close(4);
     return 0;
 }
@@ -163,7 +181,8 @@ int main(int argc, char **argv) {
     int writer = fcntl(subject[1], F_DUPFD_CLOEXEC, 20);
     close(subject[0]);
     close(subject[1]);
-    if (reader < 0 || writer < 0 || dup2(reader, 4) < 0 || dup2(writer, 5) < 0) fail("normalize-pipe");
+    if (reader < 0 || writer < 0 || dup2(reader, 4) < 0 || dup2(reader, 7) < 0 || dup2(writer, 5) < 0)
+        fail("normalize-pipe");
     close(reader);
     close(writer);
 
@@ -175,14 +194,18 @@ int main(int argc, char **argv) {
         if (children[role] < 0) fail("fork");
         if (children[role] == 0) _exit(child(argv[1], argv[2], role));
     }
-    close(4);
     dprintf(STDOUT_FILENO, "PIPE-READY parent pid=%ld\n", (long)getpid());
     await(argv[1], "consumed-first");
+    create_identity_pipe();
     struct payload second = payload(2);
     write_exact(5, &second, sizeof second);
     publish(argv[1], "cycle-two-ready");
     await(argv[2], "consumed-second");
     close(5);
+    close(4);
+    close(7);
+    close(30);
+    close(31);
     publish(argv[2], "writer-closed");
     int result = 0;
     for (int role = 0; role < 3; ++role) {
