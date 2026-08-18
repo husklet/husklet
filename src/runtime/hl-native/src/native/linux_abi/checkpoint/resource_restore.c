@@ -720,7 +720,7 @@ static int ckpt_restore_socket_queue_load(struct ckpt_restore_socket_endpoint *e
                     .ordinal = index,
                     .identity = rights[index].ofd_id,
                 };
-                int marker = cmsg_ofd_marker(&metadata);
+                int marker = cmsg_ofd_marker(&metadata, NULL);
                 if (marker < 0) {
                     cmsg_tmpfds_close();
                     free(payload);
