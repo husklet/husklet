@@ -433,6 +433,8 @@
               cargo check --workspace --all-targets --locked --offline
               cargo clippy --workspace --all-targets --locked --offline -- -D warnings
               cargo test --workspace --all-targets --locked --offline --no-fail-fast
+              ${lib.optionalString pkgs.stdenv.isLinux ''export HL_PRODUCT_CHECKPOINT_REQUIRED=1''}
+              cargo test -p husklet --features runtime --lib --locked --offline --no-fail-fast
               cargo test --workspace --doc --locked --offline
               ${lib.optionalString pkgs.stdenv.isLinux ''
                 # AddressSanitizer covers native lifetime violations that leak

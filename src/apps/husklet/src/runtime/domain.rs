@@ -435,5 +435,7 @@ impl Domain {
     }
 }
 
+#[cfg(all(test, unix))]
+mod product_checkpoint_test;
 #[cfg(test)]
 mod test;
