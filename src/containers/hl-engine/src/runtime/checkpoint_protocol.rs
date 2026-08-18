@@ -8,7 +8,7 @@ pub(super) const PAYLOAD_MAX: usize = 4 * 1024 * 1024;
 pub(super) const REQUEST_BYTES: usize = 48;
 const REPLY_BYTES: usize = 32;
 pub(super) const STATUS_OK: i32 = 0;
-const STATUS_ERROR: i32 = -1;
+pub(super) const STATUS_ERROR: i32 = -1;
 pub(super) const STATUS_ALREADY: i32 = 1;
 
 pub(super) const OBJECT_BEGIN: u32 = 1;

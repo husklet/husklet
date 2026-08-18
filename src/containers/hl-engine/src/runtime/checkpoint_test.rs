@@ -557,6 +557,243 @@ fn failed_capture_settles_server_and_storage_transaction_without_replacing_commi
 }
 
 #[test]
+fn one_rejected_process_aborts_the_whole_capture_before_manifest_publication() {
+    let store = Arc::new(TransactionStore::default());
+    store.seed_committed("MANIFEST", b"prior");
+    store.seed_committed("proc.1/pages", b"prior-pages");
+    let server = Server::new(store.clone(), store.clone());
+    let capture = server
+        .begin_capture(19, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+
+    let group_begin = object_request(protocol::GROUP_BEGIN, 0, 19);
+    let group_commit = object_request(protocol::GROUP_COMMIT, 0, 19);
+    let group_abort = object_request(protocol::GROUP_ABORT, 0, 19);
+    let begin = object_request(protocol::OBJECT_BEGIN, 1, 19);
+    let write = object_request(protocol::OBJECT_WRITE, 1, 19);
+    let finish = object_request(protocol::OBJECT_FINISH, 1, 19);
+    let manifest = object_request(protocol::COMMIT, 0, 19);
+
+    assert_eq!(
+        server.dispatch(7, &group_begin, "proc.1", &[]).status,
+        protocol::STATUS_OK
+    );
+    assert_eq!(
+        server.dispatch(7, &begin, "proc.1/pages", &[]).status,
+        protocol::STATUS_OK
+    );
+    assert_eq!(server.dispatch(7, &write, "", b"new-pages").status, protocol::STATUS_OK);
+    assert_eq!(server.dispatch(7, &finish, "", &[]).status, protocol::STATUS_OK);
+    assert_eq!(
+        server.dispatch(7, &group_commit, "proc.1", &[]).status,
+        protocol::STATUS_OK
+    );
+
+    assert_eq!(
+        server.dispatch(8, &group_begin, "proc.2", &[]).status,
+        protocol::STATUS_OK
+    );
+    for (stream, name, finish_object) in [
+        (2, "proc.2/staged", true),
+        (3, "proc.2/open", false),
+        (4, "proc.20/staged", true),
+        (5, "proc.20/open", false),
+    ] {
+        if name.starts_with("proc.20/") && stream == 4 {
+            assert_eq!(
+                server.dispatch(9, &group_begin, "proc.20", &[]).status,
+                protocol::STATUS_OK
+            );
+        }
+        let connection = if name.starts_with("proc.20/") { 9 } else { 8 };
+        assert_eq!(
+            server
+                .dispatch(
+                    connection,
+                    &object_request(protocol::OBJECT_BEGIN, stream, 19),
+                    name,
+                    &[]
+                )
+                .status,
+            protocol::STATUS_OK
+        );
+        assert_eq!(
+            server
+                .dispatch(
+                    connection,
+                    &object_request(protocol::OBJECT_WRITE, stream, 19),
+                    "",
+                    b"partial",
+                )
+                .status,
+            protocol::STATUS_OK
+        );
+        if finish_object {
+            assert_eq!(
+                server
+                    .dispatch(
+                        connection,
+                        &object_request(protocol::OBJECT_FINISH, stream, 19),
+                        "",
+                        &[]
+                    )
+                    .status,
+                protocol::STATUS_OK
+            );
+        }
+    }
+    assert_eq!(
+        server.dispatch(8, &group_abort, "proc.2", &[]).status,
+        protocol::STATUS_ERROR,
+        "a participant refusal must reject the whole capture"
+    );
+    {
+        let state = server.state.lock().unwrap();
+        assert!(!state.staged.contains_key("proc.2"));
+        assert!(state.staged.contains_key("proc.20"));
+        assert!(!state.open.values().any(|object| object.name.starts_with("proc.2/")));
+        assert!(state.open.values().any(|object| object.name == "proc.20/open"));
+    }
+    assert_eq!(
+        server.dispatch(7, &manifest, "", b"incomplete-manifest").status,
+        protocol::STATUS_ERROR,
+        "no manifest may cross a failed participant barrier"
+    );
+    assert_eq!(
+        server
+            .wait_capture(capture, std::time::Instant::now() + Duration::from_secs(1))
+            .unwrap(),
+        Some(Err(CaptureFailure::Failed))
+    );
+
+    let (committed, staging, aborts) = store.snapshot();
+    assert_eq!(
+        committed,
+        [
+            ("MANIFEST".into(), b"prior".to_vec()),
+            ("proc.1/pages".into(), b"prior-pages".to_vec()),
+        ],
+        "a rejected process must leave the prior generation authoritative"
+    );
+    assert!(staging.is_empty());
+    assert_eq!(aborts, 1);
+    assert_eq!(
+        server.dispatch(8, &group_abort, "proc.2", &[]).status,
+        protocol::STATUS_ERROR,
+        "a late duplicate abort must remain rejected"
+    );
+    assert_eq!(store.snapshot().2, 1, "a late abort must not repeat storage cleanup");
+}
+
+#[test]
+fn admitted_group_abort_blocks_concurrent_manifest_then_forces_rollback() {
+    let store = Arc::new(TransactionStore::default());
+    let server = Arc::new(Server::new(store.clone(), store.clone()));
+    let capture = server
+        .begin_capture(20, std::time::Instant::now() + Duration::from_secs(2))
+        .unwrap();
+    assert_eq!(
+        server
+            .dispatch(1, &object_request(protocol::GROUP_BEGIN, 0, 20), "proc.2", &[])
+            .status,
+        protocol::STATUS_OK
+    );
+
+    let held_state = server.state.lock().unwrap();
+    let aborting = Arc::clone(&server);
+    let abort =
+        std::thread::spawn(move || aborting.dispatch(2, &object_request(protocol::GROUP_ABORT, 0, 20), "proc.2", &[]));
+    let admission_deadline = std::time::Instant::now() + Duration::from_secs(1);
+    while server.capture.lock().unwrap().mutations != 1 {
+        assert!(std::time::Instant::now() < admission_deadline, "abort was not admitted");
+        std::thread::yield_now();
+    }
+    let committing = Arc::clone(&server);
+    let (sent, received) = mpsc::sync_channel(1);
+    let commit = std::thread::spawn(move || {
+        sent.send(committing.dispatch(1, &object_request(protocol::COMMIT, 0, 20), "", b"incomplete"))
+            .unwrap();
+    });
+    assert!(
+        received.recv_timeout(Duration::from_millis(20)).is_err(),
+        "manifest crossed an admitted participant-abort barrier"
+    );
+    drop(held_state);
+    assert_eq!(abort.join().unwrap().status, protocol::STATUS_ERROR);
+    assert_eq!(
+        received.recv_timeout(Duration::from_secs(1)).unwrap().status,
+        protocol::STATUS_ERROR
+    );
+    commit.join().unwrap();
+    assert_eq!(
+        server
+            .wait_capture(capture, std::time::Instant::now() + Duration::from_secs(1))
+            .unwrap(),
+        Some(Err(CaptureFailure::Failed))
+    );
+    assert_eq!(store.snapshot().2, 1);
+}
+
+#[test]
+fn group_abort_is_out_of_scope_during_idle_and_recovery() {
+    let store = Arc::new(TransactionStore::default());
+    let server = Server::new(store.clone(), store);
+    assert_eq!(
+        server
+            .dispatch(1, &object_request(protocol::GROUP_ABORT, 0, 0), "proc.2", &[])
+            .status,
+        protocol::STATUS_ERROR
+    );
+    server
+        .begin_recovery(21, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    assert_eq!(
+        server
+            .dispatch(1, &object_request(protocol::GROUP_ABORT, 0, 21), "proc.2", &[])
+            .status,
+        protocol::STATUS_ERROR
+    );
+    assert_eq!(
+        server.abort_recovery(21),
+        Ok(()),
+        "invalid abort must not poison recovery"
+    );
+}
+
+#[test]
+fn rejected_process_interrupts_checkpoint_channels_and_propagates_abort_panic() {
+    let store = Arc::new(PanickingAbortStore::default());
+    let server = Arc::new(Server::new(store.clone(), store));
+    let (channel, peer) = UnixStream::pair().unwrap();
+    let serving = Arc::clone(&server);
+    let worker = std::thread::spawn(move || serving.serve(channel, 1));
+    while server.connections.load(Ordering::Acquire) == 0 {
+        std::thread::yield_now();
+    }
+    let capture = server
+        .begin_capture(22, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    assert_eq!(
+        server
+            .dispatch(2, &object_request(protocol::GROUP_BEGIN, 0, 22), "proc.2", &[])
+            .status,
+        protocol::STATUS_OK
+    );
+    assert_eq!(
+        server
+            .dispatch(2, &object_request(protocol::GROUP_ABORT, 0, 22), "proc.2", &[])
+            .status,
+        protocol::STATUS_ERROR
+    );
+    assert_eq!(
+        server.wait_capture(capture, std::time::Instant::now() + Duration::from_secs(1)),
+        Err(CaptureFailure::Poisoned)
+    );
+    drop(peer);
+    worker.join().unwrap();
+}
+
+#[test]
 fn failed_capture_waits_for_admitted_local_mutation_before_clearing_state() {
     let store = Arc::new(TransactionStore::default());
     let server = Arc::new(Server::new(store.clone(), store.clone()));

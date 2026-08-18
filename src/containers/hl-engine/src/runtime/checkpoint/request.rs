@@ -113,12 +113,31 @@ impl Server {
     }
 
     fn abort_group(&self, name: &str) -> Reply {
-        self.local_mutation(|| {
-            if let Ok(mut state) = self.state.lock() {
-                state.staged.remove(name);
-            }
-            Reply::ok()
-        })
+        // A native process emits GROUP_ABORT only after its process image has
+        // been refused.  That is a failure of the whole process-tree image,
+        // not recoverable cleanup of one member: a manifest containing every
+        // other process would be authoritative but unrestorable.
+        let Ok(Some(admission)) = self.mutation_admission() else {
+            return Reply::error();
+        };
+        {
+            let mut state = match self.state.lock() {
+                Ok(state) => state,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            state.staged.remove(name);
+            state
+                .open
+                .retain(|_, object| object.name.split_once('/').is_none_or(|(group, _)| group != name));
+        }
+        if admission.finish(Err(super::CaptureFailure::Failed)).is_err() {
+            self.interrupt_channels();
+        }
+        // The manifest may already own the irreversible publication point if
+        // it entered Publishing first. Native participants synchronously send
+        // GROUP_ABORT before exiting, and the coordinator joins them before
+        // COMMIT, so a legitimate participant refusal always wins this race.
+        Reply::error()
     }
 
     fn unclaim(&self, name: &str) -> Reply {
