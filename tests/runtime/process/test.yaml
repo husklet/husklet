@@ -7,6 +7,24 @@ build:
   compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
   flags: []
 cases:
+  - id: runtime/process/fork-pids-limit-diagnostic
+    targets: [arm64, amd64]
+    status: !oracle-excluded
+      reason: "The assertion covers a Husklet engine diagnostic record, which QEMU does not emit"
+      evidence: "The guest-visible EAGAIN contract is checked by the same bounded invocation"
+    compat: { class: compatibility }
+    build: { source: source/fork_pids_limit_diagnostic.c, output: fork-pids-limit-diagnostic, flags: [-static, -O2, -std=c11] }
+    artifact: { destination: /opt/husklet/fork-pids-limit-diagnostic }
+    environment: { HL_PIDS_MAX: "1" }
+    run: []
+    expect:
+      exit: 0
+      stdout: golden/fork_pids_limit_diagnostic.txt
+      diagnostics:
+        - record: "hl-fork-failure:"
+          count: 1
+          fields: { stage: pids-limit, result_errno: "11", host_snapshot_status: "1" }
+          nonnegative: [host_pid, host_ppid, host_threads, host_children, children_truncated, local_tasks, pids_total, pids_max, open_fds, nofile_cur, nofile_max, nofile_status, nproc_cur, nproc_max, nproc_status]
   - id: runtime/process/job-control
     status: active
     compat: { class: compatibility }
