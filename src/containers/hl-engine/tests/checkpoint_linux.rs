@@ -8,9 +8,11 @@ use hl_engine::{
     options::Options,
     runtime::Engine,
 };
+use hl_process::unix_descriptor::{self as descriptor, Identity, Lock, StandardDescriptor};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     num::NonZeroU64,
+    os::fd::AsRawFd,
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{Arc, Condvar, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard},
@@ -158,6 +160,36 @@ fn shared_state_fixture(isa: GuestIsa, directory: &Path, source_name: &str) -> P
         .status()
         .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
     assert!(status.success(), "{compiler} failed with {status}");
+    output
+}
+
+fn ambient_fd_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    let (compiler, name) = match isa {
+        GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-ambient-fd-aarch64"),
+        GuestIsa::X86_64 => ("x86_64-linux-gnu-gcc", "checkpoint-ambient-fd-x86_64"),
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/ambient_fd.c");
+    let output = directory.join(name);
+    let status = std::process::Command::new(compiler)
+        .args(["-static", "-O2", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
+    assert!(status.success(), "{compiler} failed with {status}");
+    output
+}
+
+fn ambient_fd_launcher(directory: &Path) -> PathBuf {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/ambient_fd_launcher.c");
+    let output = directory.join("checkpoint-ambient-fd-launcher");
+    let status = std::process::Command::new("cc")
+        .args(["-O2", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot compile ambient fd launcher: {error}"));
+    assert!(status.success(), "ambient fd launcher compiler failed with {status}");
     output
 }
 
@@ -934,6 +966,185 @@ fn wait_cycle_ready(path: &Path) -> bool {
 
 fn checkpoint_deadline() -> Instant {
     Instant::now() + hl_engine::composition::DEFAULT_CHECKPOINT_TIMEOUT
+}
+
+struct AmbientDescriptors {
+    records: Vec<AmbientDescriptor>,
+}
+
+struct AmbientDescriptor {
+    target: i32,
+    path: PathBuf,
+    identity: Identity,
+}
+
+impl AmbientDescriptors {
+    fn inherited(directory: &Path) -> Self {
+        let records = [3, 4, 17]
+            .into_iter()
+            .map(|target| {
+                let path = directory.join(format!("ambient-{target}.lock"));
+                AmbientDescriptor {
+                    target,
+                    path,
+                    identity: descriptor::identity(target).unwrap(),
+                }
+            })
+            .collect();
+        let guard = Self { records };
+        guard.assert_preserved("launcher inheritance");
+        guard
+    }
+
+    fn assert_preserved(&self, phase: &str) {
+        for record in &self.records {
+            assert_eq!(descriptor::identity(record.target).unwrap(), record.identity, "{phase}: fd {}", record.target);
+            // Prove the target itself owns the locking OFD, rather than accepting a leaked duplicate as
+            // evidence: releasing through target must admit an independent OFD, then target must reacquire.
+            descriptor::lock(record.target, Lock::Unlock).unwrap();
+            let probe = std::fs::OpenOptions::new().read(true).write(true).open(&record.path).unwrap();
+            descriptor::lock(probe.as_raw_fd(), Lock::ExclusiveNonblocking).unwrap();
+            descriptor::lock(probe.as_raw_fd(), Lock::Unlock).unwrap();
+            descriptor::lock(record.target, Lock::ExclusiveNonblocking).unwrap();
+            let excluded = std::fs::OpenOptions::new().read(true).write(true).open(&record.path).unwrap();
+            let error = descriptor::lock(excluded.as_raw_fd(), Lock::ExclusiveNonblocking)
+                .expect_err("lock unexpectedly released");
+            assert_eq!(error.raw_os_error(), Some(libc::EWOULDBLOCK), "{phase}: fd {}", record.target);
+        }
+    }
+}
+
+fn assert_ambient_locks_released(paths: &[PathBuf]) {
+    for path in paths {
+        let probe = std::fs::OpenOptions::new().read(true).write(true).open(path).unwrap();
+        descriptor::lock(probe.as_raw_fd(), Lock::ExclusiveNonblocking)
+            .unwrap_or_else(|error| panic!("ambient lock remains for {path:?}: {error}"));
+    }
+}
+
+fn start_with_closed_standard_descriptor(engine: &Engine, descriptor: StandardDescriptor) {
+    let closed = descriptor::close_standard(descriptor).expect("close standard descriptor");
+    let started = engine.start();
+    closed.restore().expect("restore standard descriptor after engine start");
+    started.unwrap();
+}
+
+fn ambient_fd_round_trip(isa: GuestIsa, executable: &Path, ambient: &AmbientDescriptors) {
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("output");
+    let first = Arc::new(Store::default());
+    let capture = Arc::new(
+        Engine::with_checkpoint(
+            isa,
+            daily_dev_plan(executable, directory.path(), false, true),
+            streams(true),
+            first.clone(),
+            first.clone(),
+        )
+        .unwrap(),
+    );
+    start_with_closed_standard_descriptor(&capture, StandardDescriptor::Input);
+    wait_for_running_marker(&capture, &output, "BOOT fd=3");
+    ambient.assert_preserved("initial start");
+    capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+    assert_eq!(wait_bounded(&capture, "ambient fd initial capture").guest_status, 0);
+    ambient.assert_preserved("initial capture");
+
+    std::fs::write(directory.path().join("cycle1"), []).unwrap();
+    let second = Arc::new(Store::default());
+    let recapture = Arc::new(
+        Engine::with_checkpoint(
+            isa,
+            daily_dev_plan(executable, directory.path(), true, true),
+            streams(true),
+            second.clone(),
+            first,
+        )
+        .unwrap(),
+    );
+    start_with_closed_standard_descriptor(&recapture, StandardDescriptor::Output);
+    wait_for_running_marker(&recapture, &output, "CYCLE 1 fd=3");
+    ambient.assert_preserved("first restore");
+    recapture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+    assert_eq!(wait_bounded(&recapture, "ambient fd recapture").guest_status, 0);
+    ambient.assert_preserved("recapture");
+
+    std::fs::write(directory.path().join("cycle2"), []).unwrap();
+    let restore = Arc::new(
+        Engine::with_checkpoint(
+            isa,
+            daily_dev_plan(executable, directory.path(), true, false),
+            streams(true),
+            second.clone(),
+            second,
+        )
+        .unwrap(),
+    );
+    start_with_closed_standard_descriptor(&restore, StandardDescriptor::Error);
+    wait_for_running_marker(&restore, &output, "DONE ambient-fd-ok fd=3");
+    ambient.assert_preserved("second restore");
+    std::fs::write(directory.path().join("finish"), []).unwrap();
+    assert_eq!(wait_bounded(&restore, "ambient fd final restore").guest_status, 0);
+    ambient.assert_preserved("final exit");
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "BOOT fd=3\nCYCLE 1 fd=3\nDONE ambient-fd-ok fd=3\n"
+    );
+}
+
+#[test]
+fn ambient_host_descriptors_do_not_shift_guest_fds_across_checkpoint_restore() {
+    const CHILD: &str = "HL_AMBIENT_FD_CHECKPOINT_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let fixtures = tempfile::tempdir().unwrap();
+        let ambient_directory = PathBuf::from(std::env::var_os("HL_AMBIENT_FD_DIRECTORY").expect("ambient fd directory"));
+        let ambient = AmbientDescriptors::inherited(&ambient_directory);
+        for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
+            ambient_fd_round_trip(isa, &ambient_fd_fixture(isa, fixtures.path()), &ambient);
+        }
+        return;
+    }
+    /* The gate must live in the parent test process. Its child has a distinct RwLock and cannot coordinate
+     * with sibling checkpoint tests still running here. Hold this guard through spawn and bounded wait. */
+    let _exclusive = exclusive_checkpoint_test();
+    let ambient_directory = tempfile::tempdir().unwrap();
+    let paths = [3, 4, 17]
+        .map(|descriptor| ambient_directory.path().join(format!("ambient-{descriptor}.lock")));
+    let launcher = ambient_fd_launcher(ambient_directory.path());
+    let output = tempfile::NamedTempFile::new().unwrap();
+    let error = tempfile::NamedTempFile::new().unwrap();
+    let mut child = std::process::Command::new(launcher)
+        .arg(ambient_directory.path())
+        .arg(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "ambient_host_descriptors_do_not_shift_guest_fds_across_checkpoint_restore",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .stdout(output.reopen().unwrap())
+        .stderr(error.reopen().unwrap())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            let _ = child.wait();
+            panic!("ambient fd checkpoint child timed out\n{}", std::fs::read_to_string(error.path()).unwrap());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(
+        status.success(),
+        "ambient fd checkpoint child failed with {status}\nstdout:\n{}\nstderr:\n{}",
+        std::fs::read_to_string(output.path()).unwrap(),
+        std::fs::read_to_string(error.path()).unwrap()
+    );
+    assert_ambient_locks_released(&paths);
 }
 
 fn wait_bounded(engine: &Arc<Engine>, context: &str) -> hl_engine::engine::EngineExit {

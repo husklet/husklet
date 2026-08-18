@@ -76,6 +76,34 @@ int hl_host_process_fd_private_adopt(int descriptor) {
     return -ENOSYS;
 }
 
+struct hl_host_process_fd_private_plan {
+    int unavailable;
+};
+
+int hl_host_process_fd_private_plan_prepare(int minimum, const int *descriptors, size_t descriptor_count,
+                                            hl_host_process_fd_private_plan **plan) {
+    (void)minimum;
+    (void)descriptors;
+    (void)descriptor_count;
+    if (plan != NULL) *plan = NULL;
+    return -ENOSYS;
+}
+
+int hl_host_process_fd_private_plan_descriptor(const hl_host_process_fd_private_plan *plan, int descriptor) {
+    (void)plan;
+    return descriptor;
+}
+
+int hl_host_process_fd_private_plan_child(const hl_host_process_fd_private_plan *plan) {
+    (void)plan;
+    return 0;
+}
+
+int hl_host_process_fd_private_plan_release(hl_host_process_fd_private_plan **plan) {
+    if (plan != NULL) *plan = NULL;
+    return 0;
+}
+
 void hl_host_process_fd_private_remove(int descriptor) {
     (void)descriptor;
 }

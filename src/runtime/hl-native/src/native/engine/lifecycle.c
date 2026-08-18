@@ -4,6 +4,7 @@
 #include "options.h"
 #include "executable_authority.h"
 #include "hl/syscall_trap.h"
+#include "../host/system.h"
 #if defined(__APPLE__)
 #include "../linux_abi/dns.h"
 #endif
@@ -16,6 +17,7 @@
 #include <stdint.h>
 #include <pthread.h>
 #include <errno.h>
+#include <fcntl.h>
 #if !defined(_WIN32)
 #include <sys/ioctl.h>
 #include <termios.h>
@@ -103,6 +105,7 @@ typedef struct hl_production_entry_context {
     size_t interpreter_size;
     int activation_ready_read;
     int activation_ready_write;
+    const hl_host_process_fd_private_plan *child_descriptor_plan;
 } hl_production_entry_context;
 
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -538,18 +541,30 @@ static void *hl_checkpoint_control_main(void *opaque) {
 
 static int32_t hl_production_entry(void *opaque) {
     hl_production_entry_context *context = opaque;
+    int checkpoint_control = context->checkpoint_control;
+    int activation_ready_write = context->activation_ready_write;
     unsigned char ready = 1;
 #if defined(HL_NATIVE_TEST_HOOKS)
     hl_host_activation_ready_test_wait();
 #endif
     if (setsid() < 0) return HL_STATUS_PLATFORM_FAILURE;
-    if (context->activation_ready_read >= 0) close(context->activation_ready_read);
-    if (context->activation_ready_write < 0 ||
-        write(context->activation_ready_write, &ready, sizeof(ready)) != (ssize_t)sizeof(ready))
-        return HL_STATUS_PLATFORM_FAILURE;
-    close(context->activation_ready_write);
+    if (context->activation_ready_read >= 0) {
+        int activation_read = context->activation_ready_read;
+        if (close(activation_read) != 0) {
+            int close_error = errno;
+            if (close_error != EINTR || fcntl(activation_read, F_GETFD) >= 0 || errno != EBADF)
+                return HL_STATUS_PLATFORM_FAILURE;
+        }
+    }
     hl_engine_checkpoint_fork_child(context->checkpoint_broker, context->checkpoint_trigger,
                                     context->checkpoint_control);
+    /* The production worker is an exec-like boundary even though the host primitive is fork: only typed
+     * bindings and the explicitly duplicated control channels cross. Caller/library ambient descriptors
+     * remain untouched in the parent and cannot occupy or be named through the guest descriptor table. */
+    if (hl_host_process_fd_private_plan_child(context->child_descriptor_plan) != 0)
+        return HL_STATUS_PLATFORM_FAILURE;
+    activation_ready_write = hl_host_process_fd_private_adopt(activation_ready_write);
+    if (activation_ready_write < 0) return HL_STATUS_PLATFORM_FAILURE;
     /* Keep process-directed checkpoint kicks away from helper/control threads.
      * Guest executor registration selectively unblocks the reserved signal. */
     hl_ckpt_interrupt_block();
@@ -572,14 +587,24 @@ static int32_t hl_production_entry(void *opaque) {
         (void)snprintf(broker, sizeof(broker), "%d", context->checkpoint_broker);
         (void)snprintf(trigger, sizeof(trigger), "%d", context->checkpoint_trigger);
         if (hl_ckpt_channel_adopt(broker, trigger) != 0) return HL_STATUS_PLATFORM_FAILURE;
-        if (context->checkpoint_control >= 0) {
+        if (checkpoint_control >= 0) {
+            checkpoint_control = hl_host_process_fd_private_adopt(checkpoint_control);
+            if (checkpoint_control < 0) return HL_STATUS_PLATFORM_FAILURE;
+        }
+    }
+    if (context->checkpoint_broker >= 0) {
+        if (checkpoint_control >= 0) {
             pthread_t control;
-            if (pthread_create(&control, NULL, hl_checkpoint_control_main,
-                               (void *)(intptr_t)context->checkpoint_control) != 0)
+            if (pthread_create(&control, NULL, hl_checkpoint_control_main, (void *)(intptr_t)checkpoint_control) != 0)
                 return HL_STATUS_PLATFORM_FAILURE;
             if (pthread_detach(control) != 0) return HL_STATUS_PLATFORM_FAILURE;
         }
     }
+    if (write(activation_ready_write, &ready, sizeof(ready)) != (ssize_t)sizeof(ready))
+        return HL_STATUS_PLATFORM_FAILURE;
+    /* The readiness byte is the parent's success boundary. Retain this registered engine-private writer
+     * until process exit instead of making success depend on close(2)'s ambiguous EINTR state. It is above
+     * the guest interval, excluded from checkpoint descriptor capture, and has one explicit lifetime owner. */
     int32_t result = hl_run_linux_guest(
         context->host, context->box, context->config->rootfs, executable, spec == NULL ? NULL : spec->image,
         spec == NULL ? 0 : spec->image_size, NULL, context->config->main_image_plan, context->interpreter_image,
@@ -664,6 +689,7 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     }
 #else
     int activation_ready[2] = {-1, -1};
+    hl_host_process_fd_private_plan *child_descriptor_plan = NULL;
     if (pipe(activation_ready) < 0) {
         hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);
         return HL_STATUS_RESOURCE_LIMIT;
@@ -684,6 +710,35 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     entry.interpreter_size = interpreter_size;
     entry.activation_ready_read = activation_ready[0];
     entry.activation_ready_write = activation_ready[1];
+    if (box != NULL) {
+        const int retained_descriptors[] = {activation_ready[1], checkpoint_broker, checkpoint_trigger,
+                                            checkpoint_control};
+        if (hl_host_process_fd_private_plan_prepare(STDERR_FILENO + 1, retained_descriptors,
+                                                    sizeof(retained_descriptors) / sizeof(*retained_descriptors),
+                                                    &child_descriptor_plan) != 0) {
+            close(activation_ready[0]);
+            close(activation_ready[1]);
+            hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);
+            return HL_STATUS_PLATFORM_FAILURE;
+        }
+    }
+    if (box != NULL) {
+        entry.checkpoint_broker = hl_host_process_fd_private_plan_descriptor(child_descriptor_plan, checkpoint_broker);
+        entry.checkpoint_trigger = hl_host_process_fd_private_plan_descriptor(child_descriptor_plan, checkpoint_trigger);
+        entry.checkpoint_control = hl_host_process_fd_private_plan_descriptor(child_descriptor_plan, checkpoint_control);
+        entry.activation_ready_write =
+            hl_host_process_fd_private_plan_descriptor(child_descriptor_plan, activation_ready[1]);
+        if (entry.activation_ready_write < 0 ||
+            (checkpoint_broker >= 0 && (entry.checkpoint_broker < 0 || entry.checkpoint_trigger < 0)) ||
+            (checkpoint_control >= 0 && entry.checkpoint_control < 0)) {
+            (void)hl_host_process_fd_private_plan_release(&child_descriptor_plan);
+            close(activation_ready[0]);
+            close(activation_ready[1]);
+            hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);
+            return HL_STATUS_PLATFORM_FAILURE;
+        }
+    }
+    entry.child_descriptor_plan = child_descriptor_plan;
     hl_engine_checkpoint_fork_prepare();
     if (box == NULL) {
         spawned = host->process->spawn_cloned(host->context, hl_production_entry, &entry);
@@ -696,6 +751,8 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
         }
     }
     hl_engine_checkpoint_fork_parent();
+    if (hl_host_process_fd_private_plan_release(&child_descriptor_plan) != 0 && spawned.status == HL_STATUS_OK)
+        spawned.status = HL_STATUS_PLATFORM_FAILURE;
     close(activation_ready[1]);
     if (spawned.status == HL_STATUS_OK) {
         unsigned char ready = 0;

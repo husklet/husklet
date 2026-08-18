@@ -1154,6 +1154,7 @@ version = "0.1.0"
 dependencies = [
  "hl-log",
  "hl-native",
+ "hl-process",
  "libc",
  "tempfile",
 ]

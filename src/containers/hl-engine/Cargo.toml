@@ -17,6 +17,7 @@ hl-native = { path = "../../runtime/hl-native" }
 libc = "0.2"
 
 [dev-dependencies]
+hl-process = { path = "../../packages/hl-process" }
 tempfile.workspace = true
 
 [lib]

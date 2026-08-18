@@ -79,6 +79,14 @@ int hl_host_process_fd_private_add(int descriptor);
 /* Takes ownership of descriptor on success and returns its relocated engine-private number; leaves the
  * input open and returns a negative errno on failure. */
 int hl_host_process_fd_private_adopt(int descriptor);
+typedef struct hl_host_process_fd_private_plan hl_host_process_fd_private_plan;
+/* Duplicate the explicitly retained child channels above the guest interval before fork. The child then
+ * closes the entire low native interval, giving typed guest descriptors an exec-like empty namespace. */
+int hl_host_process_fd_private_plan_prepare(int minimum, const int *descriptors, size_t descriptor_count,
+                                            hl_host_process_fd_private_plan **plan);
+int hl_host_process_fd_private_plan_descriptor(const hl_host_process_fd_private_plan *plan, int descriptor);
+int hl_host_process_fd_private_plan_child(const hl_host_process_fd_private_plan *plan);
+int hl_host_process_fd_private_plan_release(hl_host_process_fd_private_plan **plan);
 int hl_host_process_fd_private_floor(void);
 void hl_host_process_fd_private_remove(int descriptor);
 int hl_host_process_fd_private_is(int64_t pid, uint64_t start_ns, int descriptor);

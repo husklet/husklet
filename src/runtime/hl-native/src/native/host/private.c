@@ -15,7 +15,9 @@
 #include <sys/mman.h>
 #include <sys/resource.h>
 #if defined(__APPLE__)
+#include <libproc.h>
 #include <sys/sysctl.h>
+#include <sys/syscall.h>
 #endif
 #include <unistd.h>
 
@@ -292,6 +294,139 @@ int hl_host_process_fd_private_adopt(int fd) {
     }
     if (relocated != fd) close(fd);
     return relocated;
+}
+
+typedef struct hl_host_process_fd_private_relocation {
+    int source;
+    int private_descriptor;
+} hl_host_process_fd_private_relocation;
+
+struct hl_host_process_fd_private_plan {
+    int minimum;
+    int floor;
+    size_t capacity;
+    size_t scratch_size;
+    size_t count;
+    hl_host_process_fd_private_relocation relocations[];
+};
+
+static void *hl_private_plan_scratch(const hl_host_process_fd_private_plan *plan) {
+    return (void *)(plan->relocations + plan->capacity);
+}
+
+#if defined(__APPLE__)
+static int hl_private_plan_open_descriptors(void *buffer, int size) {
+    /* proc_pidinfo is a libproc wrapper and is not promised async-signal-safe. This path runs after fork in
+     * a multithreaded embedder, so enter XNU's documented proc_info syscall directly: call 2 is
+     * PROC_INFO_CALL_PIDINFO and the remaining arguments exactly match proc_pidinfo(pid, flavor, arg,...). */
+    long result = syscall(SYS_proc_info, 2, (int)getpid(), PROC_PIDLISTFDS, 0, buffer, size);
+    if (result < 0) return -1;
+    if (result > INT32_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    return (int)result;
+}
+#endif
+
+int hl_host_process_fd_private_plan_release(hl_host_process_fd_private_plan **plan) {
+    int result = 0;
+    if (plan == NULL) return -EINVAL;
+    if (*plan == NULL) return 0;
+    for (size_t index = 0; index < (*plan)->count; ++index) {
+        int descriptor = (*plan)->relocations[index].private_descriptor;
+        /* POSIX leaves descriptor state ambiguous after EINTR, so retrying could close a number another
+         * thread has already reused. Close exactly once, finish the whole batch, and report the first error. */
+        if (close(descriptor) != 0 && result == 0) result = -errno;
+    }
+    free(*plan);
+    *plan = NULL;
+    return result;
+}
+
+int hl_host_process_fd_private_plan_prepare(int minimum, const int *descriptors, size_t descriptor_count,
+                                            hl_host_process_fd_private_plan **out) {
+    hl_host_process_fd_private_plan *plan = NULL;
+    int floor;
+    int result = 0;
+    size_t scratch_size = 0;
+    if (out == NULL || minimum < 0 || (descriptor_count != 0 && descriptors == NULL)) return -EINVAL;
+    *out = NULL;
+    floor = hl_host_process_fd_private_floor();
+    if (floor < 0) return floor;
+#if defined(__APPLE__)
+    if ((size_t)floor + HL_HOST_PRIVATE_DESCRIPTOR_MINIMUM > SIZE_MAX / sizeof(struct proc_fdinfo)) return -EOVERFLOW;
+    scratch_size = ((size_t)floor + HL_HOST_PRIVATE_DESCRIPTOR_MINIMUM) * sizeof(struct proc_fdinfo);
+#endif
+    if (descriptor_count > (SIZE_MAX - sizeof(*plan)) / sizeof(*plan->relocations)) return -EOVERFLOW;
+    size_t records_size = descriptor_count * sizeof(*plan->relocations);
+    if (scratch_size > SIZE_MAX - sizeof(*plan) - records_size) return -EOVERFLOW;
+    plan = calloc(1, sizeof(*plan) + records_size + scratch_size);
+    if (plan == NULL) return -ENOMEM;
+    plan->minimum = minimum;
+    plan->floor = floor;
+    plan->capacity = descriptor_count;
+    plan->scratch_size = scratch_size;
+    for (size_t index = 0; index < descriptor_count; ++index) {
+        int descriptor = descriptors[index];
+        if (descriptor < 0) continue;
+        if (fcntl(descriptor, F_GETFD) < 0) {
+            result = -errno;
+            goto done;
+        }
+        int duplicate = fcntl(descriptor, F_DUPFD_CLOEXEC, floor);
+        if (duplicate < 0) {
+            result = -errno;
+            goto done;
+        }
+        plan->relocations[plan->count++] =
+            (hl_host_process_fd_private_relocation){descriptor, duplicate};
+    }
+    result = 0;
+    *out = plan;
+    plan = NULL;
+done:
+    (void)hl_host_process_fd_private_plan_release(&plan);
+    return result;
+}
+
+int hl_host_process_fd_private_plan_descriptor(const hl_host_process_fd_private_plan *plan, int descriptor) {
+    if (descriptor < 0 || plan == NULL) return descriptor;
+    for (size_t index = 0; index < plan->count; ++index)
+        if (plan->relocations[index].source == descriptor) return plan->relocations[index].private_descriptor;
+    if (descriptor < plan->minimum || descriptor >= plan->floor) return descriptor;
+    return -1;
+}
+
+int hl_host_process_fd_private_plan_child(const hl_host_process_fd_private_plan *plan) {
+    if (plan == NULL) return 0;
+#if defined(__linux__)
+    if (plan->minimum < plan->floor && close_range((unsigned)plan->minimum, (unsigned)(plan->floor - 1), 0) != 0)
+        return -errno;
+#else
+    int needed = hl_private_plan_open_descriptors(NULL, 0);
+    if (needed <= 0) return errno == 0 ? -EIO : -errno;
+    if ((size_t)needed > plan->scratch_size) return -EOVERFLOW;
+    int received = hl_private_plan_open_descriptors(hl_private_plan_scratch(plan), needed);
+    if (received <= 0) return errno == 0 ? -EIO : -errno;
+    if (received > needed || received % (int)sizeof(struct proc_fdinfo) != 0) return -EIO;
+    struct proc_fdinfo *entries = hl_private_plan_scratch(plan);
+    size_t count = (size_t)received / sizeof(*entries);
+    for (size_t index = 0; index < count; ++index) {
+        int descriptor = entries[index].proc_fd;
+        if (descriptor < plan->minimum || descriptor >= plan->floor) continue;
+        if (close(descriptor) != 0 && errno != EBADF) return -errno;
+    }
+#endif
+    /* An explicitly retained endpoint can occupy 0..2 when the embedder closed a standard descriptor, or
+     * can already be above the private floor. Its high duplicate is the child authority; retire the source
+     * that the interval operation intentionally did not cover. */
+    for (size_t index = 0; index < plan->count; ++index) {
+        int source = plan->relocations[index].source;
+        if (source >= plan->minimum && source < plan->floor) continue;
+        if (close(source) != 0 && errno != EBADF) return -errno;
+    }
+    return 0;
 }
 
 static void hl_private_remove_unlocked(int fd) {
