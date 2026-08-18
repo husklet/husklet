@@ -100,21 +100,33 @@ static int lineage_find(const hl_lineage_registry *registry, hl_lineage_identity
 
 static int lineage_reusable(const hl_lineage_registry *registry, hl_lineage_identity identity, uint64_t *index,
                             uint64_t *state) {
+    uint64_t remembered = UINT64_MAX;
     uint64_t start = lineage_hash(identity) & (registry->capacity - 1u);
     for (uint64_t probe = 0; probe < registry->capacity; ++probe) {
         uint64_t candidate = (start + probe) & (registry->capacity - 1u);
         uint64_t observed = atomic_load_explicit(&registry->slots[candidate].state, memory_order_acquire);
         uint64_t kind = lineage_kind(observed);
         if (kind == HL_LINEAGE_STATE_CLAIMING) return EAGAIN;
-        /* create() owns a never-before-issued identity, so it need not traverse
-         * a tombstone chain to disprove a duplicate. */
-        if (kind == HL_LINEAGE_STATE_EMPTY || kind == HL_LINEAGE_STATE_TOMBSTONE) {
+        if (kind == HL_LINEAGE_STATE_TOMBSTONE) {
+#ifdef HL_LINEAGE_MUTATE_STOP_AT_TOMBSTONE
             *index = candidate;
             *state = observed;
             return 0;
+#else
+            if (remembered == UINT64_MAX) remembered = candidate;
+            continue;
+#endif
+        }
+        if (kind == HL_LINEAGE_STATE_EMPTY) {
+            *index = remembered == UINT64_MAX ? candidate : remembered;
+            *state = atomic_load_explicit(&registry->slots[*index].state, memory_order_acquire);
+            return 0;
         }
     }
-    return ENOSPC;
+    if (remembered == UINT64_MAX) return ENOSPC;
+    *index = remembered;
+    *state = atomic_load_explicit(&registry->slots[remembered].state, memory_order_acquire);
+    return lineage_kind(*state) == HL_LINEAGE_STATE_TOMBSTONE ? 0 : EAGAIN;
 }
 
 static int lineage_publish(hl_lineage_registry *registry, hl_lineage_identity identity, hl_lineage_value value,
@@ -598,6 +610,32 @@ int hl_lineage_registry_fixture(uint32_t scenario, uint64_t capacity, uint64_t i
                                        &imported) != 0 ||
             hl_lineage_registry_create(registry, zero, &overflow) != EOVERFLOW)
             result = 35;
+    }
+    if (!result && scenario == 14) {
+        stale = sentinel;
+        if (hl_lineage_registry_reference(registry, sentinel, HL_LINEAGE_DESCRIPTOR_REFERENCE, -1) != 0 ||
+            hl_lineage_registry_reference(registry, sentinel, HL_LINEAGE_PROCESS_LEDGER_REFERENCE, -1) != 0)
+            result = 36;
+        uint64_t reclaimed = 0;
+        if (!result &&
+            (hl_lineage_registry_reclaim(registry, capacity, &reclaimed) != 0 || reclaimed != 1))
+            result = 37;
+        uint64_t claiming_slot = (stale.slot + 1u) & (capacity - 1u);
+        atomic_store_explicit(&registry->slots[claiming_slot].state,
+                              lineage_state(1, HL_LINEAGE_STATE_CLAIMING), memory_order_release);
+        uint64_t sequence = lineage_fixture_sequence(
+            registry, stale.slot, atomic_load_explicit(&registry->next_identity, memory_order_relaxed));
+        atomic_store_explicit(&registry->next_identity, sequence, memory_order_relaxed);
+        hl_lineage_token denied, replacement;
+        if (!result && (sequence == 0 || hl_lineage_registry_create(registry, zero, &denied) != EAGAIN)) result = 38;
+        atomic_store_explicit(&registry->slots[claiming_slot].state, HL_LINEAGE_STATE_EMPTY, memory_order_release);
+        sequence = lineage_fixture_sequence(
+            registry, stale.slot, atomic_load_explicit(&registry->next_identity, memory_order_relaxed));
+        atomic_store_explicit(&registry->next_identity, sequence, memory_order_relaxed);
+        if (!result &&
+            (sequence == 0 || hl_lineage_registry_create(registry, zero, &replacement) != 0 ||
+             replacement.slot != stale.slot))
+            result = 39;
     }
     if (!result && hl_lineage_registry_validate(registry) != 0) result = 19;
     free(registry);
