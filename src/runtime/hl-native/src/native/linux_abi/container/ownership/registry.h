@@ -69,6 +69,9 @@ enum {
 
 size_t hl_owner_registry_size(uint64_t capacity);
 int hl_owner_registry_init(hl_owner_registry *registry, size_t size, uint64_t capacity, uint64_t epoch);
+/* Initialize storage supplied by a fresh zero-filled shared mapping without
+ * eagerly dirtying every sparse slot page. */
+int hl_owner_registry_init_zeroed(hl_owner_registry *registry, size_t size, uint64_t capacity, uint64_t epoch);
 /* Reserve quota before an operation creates an object whose stable key does not exist yet. */
 int hl_owner_registry_reserve(hl_owner_registry *registry, hl_owner_namespace namespace, hl_owner_writer writer,
                               hl_owner_ticket *ticket);
@@ -79,6 +82,9 @@ int hl_owner_registry_cancel(hl_owner_registry *registry, hl_owner_namespace nam
                              hl_owner_ticket ticket);
 int hl_owner_registry_lookup(const hl_owner_registry *registry, hl_owner_namespace namespace, hl_owner_key key,
                              hl_owner_value *value);
+/* Read a live value while holding the exact namespace writer token. */
+int hl_owner_registry_writer_lookup(const hl_owner_registry *registry, hl_owner_namespace namespace,
+                                    hl_owner_writer writer, hl_owner_key key, hl_owner_value *value);
 int hl_owner_registry_update(hl_owner_registry *registry, hl_owner_namespace namespace, hl_owner_writer writer,
                              hl_owner_key key, uint32_t uid, uint32_t gid);
 int hl_owner_registry_link(hl_owner_registry *registry, hl_owner_namespace namespace, hl_owner_writer writer,

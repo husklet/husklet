@@ -424,6 +424,7 @@
         // applies to a typed bind volume in bare mode: every pathname operation must select its backing.
         if (unix_path_is(sa, (socklen_t)a2)) {
             char gp[200], host[1024];
+            hl_owner_key owner_key;
             unix_path_copy(sa, (socklen_t)a2, gp, sizeof gp);
             if (!unix_path_routed(gp)) goto bind_passthrough;
             if (g_rootfs)
@@ -433,8 +434,11 @@
             // bind at the FULL upper path (via unix_sock_at, which fchdir-shortens paths past sun_path[104])
             // so the socket inode lands exactly where the guest's stat/chmod/connect resolves -- a plain bind
             // would truncate the long upper path and strand the inode where nothing can find it.
-            int r = unix_owner_bind((int)a0, host);
-            if (r == 0) unix_bind_note((int)a0, gp); // record the guest path for /proc/net/unix
+            int r = unix_owner_bind((int)a0, host, &owner_key);
+            if (r == 0) {
+                if (owner_key.birth_ns != 0) unix_owner_note((int)a0, owner_key);
+                unix_bind_note((int)a0, gp); // record the guest path for /proc/net/unix
+            }
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
             break;
         }

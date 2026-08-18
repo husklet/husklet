@@ -324,8 +324,13 @@ static void svc_fs_access_54(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             char dp[4200];
             if (hl_native_fd_path(pfd, dp, sizeof dp) == 0) {
                 char hp[4400];
-                if (path_join(hp, sizeof hp, dp, fin) == 0)
-                    hl_owner_set_path(hp, dac_requested_id(a2), dac_requested_id(a3), nofollow);
+                if (path_join(hp, sizeof hp, dp, fin) == 0 &&
+                    hl_owner_set_path(hp, dac_requested_id(a2), dac_requested_id(a3), nofollow) != 0) {
+                    int error = errno;
+                    close(pfd);
+                    G_RET(c) = (uint64_t)(int64_t)(-error);
+                    break;
+                }
             }
             close(pfd);
             G_RET(c) = 0;
@@ -343,8 +348,9 @@ static void svc_fs_access_54(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             G_RET(c) = (uint64_t)(int64_t)(-errno);
             break;
         }
-        hl_owner_set_path(p, dac_requested_id(a2), dac_requested_id(a3), nofollow);
-        G_RET(c) = 0;
+        G_RET(c) = hl_owner_set_path(p, dac_requested_id(a2), dac_requested_id(a3), nofollow) == 0
+                       ? 0
+                       : (uint64_t)(int64_t)(-errno);
         break;
     }
     default: break;
@@ -368,7 +374,10 @@ static void svc_fs_access_55(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             G_RET(c) = (uint64_t)(int64_t)(-errno);
             break;
         }
-        hl_owner_set_fd((int)a0, dac_requested_id(a1), dac_requested_id(a2));
+        if (hl_owner_set_fd((int)a0, dac_requested_id(a1), dac_requested_id(a2)) != 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-errno);
+            break;
+        }
         // the guest-owner xattr just changed -> drop this path's cached stat so a later stat reports it
         if ((int)a0 >= 0 && (int)a0 < 1024 && g_fdpath[(int)a0][0]) hl_fdcache_evict_path(g_fdpath[(int)a0]);
         G_RET(c) = 0;

@@ -68,18 +68,27 @@ size_t hl_owner_registry_size(uint64_t capacity) {
     return sizeof(hl_owner_registry) + (size_t)capacity * sizeof(hl_owner_registry_slot);
 }
 
-int hl_owner_registry_init(hl_owner_registry *registry, size_t size, uint64_t capacity, uint64_t epoch) {
+static int hl_owner_registry_initialize(hl_owner_registry *registry, size_t size, uint64_t capacity, uint64_t epoch,
+                                        int storage_is_zeroed) {
     size_t required = hl_owner_registry_size(capacity);
     if (registry == NULL || required == 0 || size < required || epoch == 0) return EINVAL;
     /* Lifecycle is init-only: replacing a published shared table would invalidate forked readers. */
     if (registry->abi == HL_OWNER_REGISTRY_ABI) return EALREADY;
-    memset(registry, 0, required);
+    if (!storage_is_zeroed) memset(registry, 0, required);
     registry->size = required;
     registry->capacity = capacity;
     registry->epoch = epoch;
     atomic_store_explicit(&registry->next_sequence, 1, memory_order_relaxed);
     registry->abi = HL_OWNER_REGISTRY_ABI;
     return 0;
+}
+
+int hl_owner_registry_init(hl_owner_registry *registry, size_t size, uint64_t capacity, uint64_t epoch) {
+    return hl_owner_registry_initialize(registry, size, capacity, epoch, 0);
+}
+
+int hl_owner_registry_init_zeroed(hl_owner_registry *registry, size_t size, uint64_t capacity, uint64_t epoch) {
+    return hl_owner_registry_initialize(registry, size, capacity, epoch, 1);
 }
 
 static int hl_owner_find(const hl_owner_registry *registry, hl_owner_key key, uint64_t *index_out, uint64_t *state_out,
@@ -238,6 +247,24 @@ int hl_owner_registry_lookup(const hl_owner_registry *registry, hl_owner_namespa
         return HL_OWNER_FOUND;
     }
     return -EAGAIN;
+}
+
+int hl_owner_registry_writer_lookup(const hl_owner_registry *registry, hl_owner_namespace namespace,
+                                    hl_owner_writer writer, hl_owner_key key, hl_owner_value *value) {
+    uint64_t index = 0, state = 0;
+    if (!hl_owner_initialized(registry) || value == NULL || !hl_owner_key_valid(key)) return EINVAL;
+    if (!hl_owner_writer_valid(namespace, writer)) return EPERM;
+    if (!hl_owner_find(registry, key, &index, &state, NULL) ||
+        hl_owner_state_kind(state) != HL_OWNER_STATE_LIVE)
+        return ENOENT;
+    const hl_owner_registry_slot *slot = &registry->slots[index];
+    uint64_t owner = atomic_load_explicit(&slot->owner, memory_order_relaxed);
+    uint64_t references = atomic_load_explicit(&slot->references, memory_order_relaxed);
+    value->uid = (uint32_t)(owner >> 32);
+    value->gid = (uint32_t)owner;
+    value->links = (uint32_t)(references >> 32);
+    value->descriptors = (uint32_t)references;
+    return 0;
 }
 
 static int hl_owner_live_slot(hl_owner_registry *registry, hl_owner_key key, hl_owner_registry_slot **output) {

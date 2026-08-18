@@ -35,6 +35,8 @@
 
 struct namespace_transaction_state {
     _Atomic uint64_t sequence;
+    _Atomic uint64_t owner;
+    _Atomic uint64_t next_owner;
     _Atomic uint32_t poisoned;
 };
 
@@ -42,6 +44,8 @@ static struct namespace_transaction_state *g_namespace_transaction;
 static int g_namespace_transaction_fd = -1;
 static atomic_flag g_namespace_transaction_local = ATOMIC_FLAG_INIT;
 static _Thread_local uint32_t g_namespace_transaction_depth;
+static _Thread_local uint64_t g_namespace_transaction_writer_generation;
+static _Thread_local uint64_t g_namespace_transaction_writer_identity;
 static _Thread_local int g_namespace_transaction_cancel_state;
 static _Thread_local int g_namespace_transaction_cancel_restore_pending;
 
@@ -156,6 +160,8 @@ static int namespace_transaction_init(const hl_host_services *host) {
     g_namespace_transaction_fd = descriptor;
     g_namespace_transaction = arena;
     atomic_store_explicit(&g_namespace_transaction->sequence, 0, memory_order_relaxed);
+    atomic_store_explicit(&g_namespace_transaction->owner, 0, memory_order_relaxed);
+    atomic_store_explicit(&g_namespace_transaction->next_owner, 0, memory_order_relaxed);
     atomic_store_explicit(&g_namespace_transaction->poisoned, 0, memory_order_relaxed);
     return 0;
 #endif
@@ -198,7 +204,19 @@ static int namespace_transaction_begin(void) {
         namespace_transaction_cancel_restore(g_namespace_transaction_cancel_state);
         return errno = EOVERFLOW, -1;
     }
+    uint64_t owner_sequence = atomic_fetch_add_explicit(&g_namespace_transaction->next_owner, 1, memory_order_relaxed);
+    if (owner_sequence >= UINT32_MAX) {
+        atomic_store_explicit(&g_namespace_transaction->poisoned, 1, memory_order_release);
+        if (namespace_transaction_record_lock(NAMESPACE_UNLOCK) != 0) abort();
+        atomic_flag_clear_explicit(&g_namespace_transaction_local, memory_order_release);
+        namespace_transaction_cancel_restore(g_namespace_transaction_cancel_state);
+        return errno = EOVERFLOW, -1;
+    }
+    uint64_t identity = ((uint64_t)(uint32_t)getpid() << 32) | (owner_sequence + 1u);
+    atomic_store_explicit(&g_namespace_transaction->owner, identity, memory_order_relaxed);
     atomic_store_explicit(&g_namespace_transaction->sequence, sequence + 1u, memory_order_release);
+    g_namespace_transaction_writer_generation = sequence + 1u;
+    g_namespace_transaction_writer_identity = identity;
     g_namespace_transaction_depth = 1;
     return 0;
 }
@@ -208,7 +226,10 @@ static void namespace_transaction_end(void) {
     if (--g_namespace_transaction_depth != 0) return;
     uint64_t sequence = atomic_load_explicit(&g_namespace_transaction->sequence, memory_order_relaxed);
     if ((sequence & 1u) == 0 || sequence == UINT64_MAX) abort();
+    atomic_store_explicit(&g_namespace_transaction->owner, 0, memory_order_relaxed);
     atomic_store_explicit(&g_namespace_transaction->sequence, sequence + 1u, memory_order_release);
+    g_namespace_transaction_writer_generation = 0;
+    g_namespace_transaction_writer_identity = 0;
     if (namespace_transaction_record_lock(NAMESPACE_UNLOCK) != 0) {
         atomic_store_explicit(&g_namespace_transaction->poisoned, 1, memory_order_release);
         abort();
@@ -288,6 +309,8 @@ static int namespace_transaction_read_barrier(void) {
 static void namespace_transaction_fork_child(void) {
     int inherited_writer = g_namespace_transaction_depth != 0;
     g_namespace_transaction_depth = 0;
+    g_namespace_transaction_writer_generation = 0;
+    g_namespace_transaction_writer_identity = 0;
     /* This hook runs in the restricted post-fork child window. It must remain
      * allocation-free and async-signal-safe: pthread cancellation restoration
      * is deliberately deferred until the runtime reaches its safe child
@@ -302,13 +325,51 @@ static void namespace_transaction_fork_child_complete(void) {
     g_namespace_transaction_cancel_restore_pending = 0;
 }
 
+static int namespace_transaction_writer(struct namespace_transaction_writer *writer) {
+    if (writer == NULL) return errno = EINVAL, -1;
+    if (g_namespace_transaction_cancel_restore_pending) return errno = EBUSY, -1;
+    if (g_namespace_transaction == NULL || g_namespace_transaction_depth == 0 ||
+        g_namespace_transaction_writer_generation == 0 || g_namespace_transaction_writer_identity == 0)
+        return errno = EPERM, -1;
+    uint64_t generation = atomic_load_explicit(&g_namespace_transaction->sequence, memory_order_acquire);
+    uint64_t owner = atomic_load_explicit(&g_namespace_transaction->owner, memory_order_acquire);
+    if (generation != g_namespace_transaction_writer_generation || owner != g_namespace_transaction_writer_identity ||
+        (generation & 1u) == 0 || atomic_load_explicit(&g_namespace_transaction->poisoned, memory_order_acquire))
+        return errno = EOWNERDEAD, -1;
+    *writer = (struct namespace_transaction_writer){&g_namespace_transaction->sequence,
+                                                     &g_namespace_transaction->owner, generation, owner};
+    return 0;
+}
+
+static int namespace_transaction_namespace(_Atomic uint64_t **generation, _Atomic uint64_t **owner) {
+    if (generation == NULL || owner == NULL) return errno = EINVAL, -1;
+    if (g_namespace_transaction == NULL) return errno = EIO, -1;
+    *generation = &g_namespace_transaction->sequence;
+    *owner = &g_namespace_transaction->owner;
+    return 0;
+}
+
+static void namespace_transaction_poison(void) {
+    if (g_namespace_transaction == NULL || g_namespace_transaction_depth == 0) abort();
+    atomic_store_explicit(&g_namespace_transaction->poisoned, 1, memory_order_release);
+}
+
 #if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
 /* Deterministic primitive tests. Integration exports this narrow hook from the
  * native test ABI; production has no test surface. */
 static int namespace_transaction_test_reset(void) {
     atomic_store_explicit(&g_namespace_transaction->sequence, 0, memory_order_relaxed);
+    atomic_store_explicit(&g_namespace_transaction->owner, 0, memory_order_relaxed);
+    atomic_store_explicit(&g_namespace_transaction->next_owner, 0, memory_order_relaxed);
     atomic_store_explicit(&g_namespace_transaction->poisoned, 0, memory_order_release);
     return 0;
+}
+
+static void *namespace_transaction_test_unowned_thread(void *argument) {
+    struct namespace_transaction_writer writer;
+    int *result = argument;
+    *result = namespace_transaction_writer(&writer) < 0 ? errno : 0;
+    return NULL;
 }
 
 HL_API int HL_TARGET_LOCAL(namespace_transaction_test)(uint32_t scenario) {
@@ -397,6 +458,52 @@ HL_API int HL_TARGET_LOCAL(namespace_transaction_test)(uint32_t scenario) {
         int status = 0;
         if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) return 49;
         return 0;
+    }
+    if (scenario == 4) {
+        struct namespace_transaction_writer first, nested, second;
+        if (namespace_transaction_begin() != 0 || namespace_transaction_writer(&first) != 0) return 50;
+        if (first.writer_generation == 0 || first.writer_identity == 0) return 51;
+        if (namespace_transaction_begin() != 0 || namespace_transaction_writer(&nested) != 0) return 52;
+        if (nested.writer_generation != first.writer_generation || nested.writer_identity != first.writer_identity)
+            return 53;
+        namespace_transaction_end();
+        if (namespace_transaction_writer(&nested) != 0 || nested.writer_identity != first.writer_identity) return 54;
+        int thread_result = 0;
+        pthread_t thread;
+        if (pthread_create(&thread, NULL, namespace_transaction_test_unowned_thread, &thread_result) != 0 ||
+            pthread_join(thread, NULL) != 0 || thread_result != EPERM)
+            return 55;
+        namespace_transaction_end();
+        if (namespace_transaction_writer(&nested) == 0 || errno != EPERM ||
+            atomic_load_explicit(&g_namespace_transaction->owner, memory_order_acquire) != 0)
+            return 56;
+        if (namespace_transaction_begin() != 0 || namespace_transaction_writer(&second) != 0) return 57;
+        if (second.writer_generation == first.writer_generation || second.writer_identity == first.writer_identity)
+            return 58;
+        namespace_transaction_end();
+        int values[2];
+        if (pipe(values) != 0) return 59;
+        pid_t child = fork();
+        if (child < 0) return 60;
+        if (child == 0) {
+            namespace_transaction_fork_child();
+            namespace_transaction_fork_child_complete();
+            struct namespace_transaction_writer child_writer;
+            close(values[0]);
+            if (namespace_transaction_writer(&child_writer) == 0 || errno != EPERM ||
+                namespace_transaction_begin() != 0 || namespace_transaction_writer(&child_writer) != 0)
+                _exit(61);
+            uint64_t child_identity = child_writer.writer_identity;
+            namespace_transaction_end();
+            if (write(values[1], &child_identity, sizeof child_identity) != (ssize_t)sizeof child_identity) _exit(62);
+            _exit(0);
+        }
+        close(values[1]);
+        uint64_t child_identity = 0;
+        if (read(values[0], &child_identity, sizeof child_identity) != (ssize_t)sizeof child_identity) return 63;
+        int status = 0;
+        if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) return 64;
+        return child_identity != 0 && child_identity != second.writer_identity ? 0 : 65;
     }
     return 99;
 }

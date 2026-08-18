@@ -335,8 +335,7 @@ static int bound_route_sync(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1
             break;
         }
         path[status.value] = 0;
-        hl_owner_set_path(path, dac_requested_id(a1), dac_requested_id(a2), 0);
-        result = 0;
+        result = hl_owner_set_path(path, dac_requested_id(a1), dac_requested_id(a2), 0) == 0 ? 0 : -errno;
         break;
     }
     default: return 0;

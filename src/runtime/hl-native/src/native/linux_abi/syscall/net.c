@@ -110,11 +110,25 @@ static int unix_owner_same(const char *path, const struct stat *expected, uint64
            hl_owner_birth(path, -1, 1, &current) == expected_birth;
 }
 
-static int unix_owner_bind(int descriptor, const char *host) {
+static int unix_owner_same_object(const char *path, const struct stat *expected) {
+    struct stat current;
+    return path != NULL && expected != NULL && fstatat(AT_FDCWD, path, &current, AT_SYMLINK_NOFOLLOW) == 0 &&
+           S_ISSOCK(current.st_mode) && current.st_dev == expected->st_dev && current.st_ino == expected->st_ino;
+}
+
+static int unix_owner_rollback(const char *path, const struct stat *expected, uint64_t expected_birth) {
+    int same = expected_birth == 0 ? unix_owner_same_object(path, expected)
+                                   : unix_owner_same(path, expected, expected_birth);
+    return same && unlink(path) == 0 ? 0 : -1;
+}
+
+static int unix_owner_bind(int descriptor, const char *host, hl_owner_key *key) {
     hl_socket_owner_publication publication;
     struct stat status;
     uint64_t birth;
     int error;
+    if (key != NULL) memset(key, 0, sizeof *key);
+    if (g_socket_owner_registry == NULL) return unix_sock_at(descriptor, host, 0);
     error = hl_socket_owner_prepare(&publication);
     if (error != 0) {
         errno = error;
@@ -122,29 +136,38 @@ static int unix_owner_bind(int descriptor, const char *host) {
     }
     if (unix_sock_at(descriptor, host, 0) != 0) {
         error = errno;
-        hl_socket_owner_cancel(&publication);
+        if (hl_socket_owner_finish(&publication, 0) != 0) error = EOWNERDEAD;
         errno = error;
         return -1;
     }
     errno = 0;
     if (fstatat(AT_FDCWD, host, &status, AT_SYMLINK_NOFOLLOW) != 0 || !S_ISSOCK(status.st_mode)) {
         error = errno != 0 ? errno : EIO;
-        hl_socket_owner_cancel(&publication);
+        /* The kernel bind succeeded, but pathname identity cannot be proven.
+         * Never unlink an unproven object; poison the namespace so no reader
+         * can mistake host ownership for authoritative guest metadata. */
+        if (hl_socket_owner_finish(&publication, 1) != 0) error = EOWNERDEAD;
         errno = error;
         return -1;
     }
     birth = hl_owner_birth(host, -1, 1, &status);
     if (birth == 0) {
-        hl_socket_owner_cancel(&publication);
+        int rollback = unix_owner_rollback(host, &status, 0);
+        if (hl_socket_owner_finish(&publication, rollback != 0) != 0) {
+            errno = EOWNERDEAD;
+            return -1;
+        }
         errno = EOPNOTSUPP;
         return -1;
     }
-    error = hl_socket_owner_publish(&publication, &status, birth, (uint32_t)newfile_uid(), (uint32_t)newfile_gid());
+    error = hl_socket_owner_publish(&publication, &status, birth, (uint32_t)newfile_uid(), (uint32_t)newfile_gid(), 1);
     if (error != 0) {
-        if (unix_owner_same(host, &status, birth)) (void)unlink(host);
+        int rollback = unix_owner_rollback(host, &status, birth);
+        if (hl_socket_owner_finish(&publication, rollback != 0) != 0) error = EOWNERDEAD;
         errno = error;
         return -1;
     }
+    if (key != NULL) *key = hl_socket_owner_key(&status, birth);
     return 0;
 }
 
