@@ -137,6 +137,10 @@ fn daily_dev_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     output
 }
 
+fn connected_unix_stream_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    shared_state_fixture(isa, directory, "connected_unix_stream")
+}
+
 fn shared_state_fixture(isa: GuestIsa, directory: &Path, source_name: &str) -> PathBuf {
     let compiler = match isa {
         GuestIsa::Aarch64 => "aarch64-linux-gnu-gcc",
@@ -949,6 +953,45 @@ fn wait_for(path: &Path, marker: &str) {
     );
 }
 
+fn wait_for_connected_restore(engine: &Arc<Engine>, isa: GuestIsa, ready: &Path, fallback: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if fallback.exists() {
+            let cleanup = force_and_reap_bounded(engine);
+            panic!(
+                "{isa:?} restore re-entered the fixture instead of preserving fd 10: {}; cleanup={cleanup}",
+                std::fs::read_to_string(fallback).unwrap_or_default(),
+            );
+        }
+        if std::fs::read_to_string(ready)
+            .unwrap_or_default()
+            .contains("DONE fd=10 connected=1")
+        {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let cleanup = force_and_reap_bounded(engine);
+    panic!(
+        "{isa:?} restored fd 10 did not carry AFTER across its original connected stream; ready={} fallback={} cleanup={cleanup}",
+        std::fs::read_to_string(ready).unwrap_or_default(),
+        std::fs::read_to_string(fallback).unwrap_or_default()
+    );
+}
+
+fn force_and_reap_bounded(engine: &Arc<Engine>) -> String {
+    let stop = engine.stop(StopRequest::Force);
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let waiting = engine.clone();
+    std::thread::spawn(move || {
+        let _ = sender.send(waiting.wait());
+    });
+    match receiver.recv_timeout(Duration::from_secs(2)) {
+        Ok(wait) => format!("stop={stop:?} wait={wait:?}"),
+        Err(error) => format!("stop={stop:?} reap_timeout={error}"),
+    }
+}
+
 fn wait_cycle_ready(path: &Path) -> bool {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
@@ -966,6 +1009,35 @@ fn wait_cycle_ready(path: &Path) -> bool {
 
 fn checkpoint_deadline() -> Instant {
     Instant::now() + hl_engine::composition::DEFAULT_CHECKPOINT_TIMEOUT
+}
+
+fn connected_unix_stream_plan(
+    executable: &Path,
+    ready: &Path,
+    finish: &Path,
+    guard: &Path,
+    fallback: &Path,
+    restore: bool,
+) -> RuntimePlan {
+    let mut options = Options::default();
+    options
+        .set(if restore { "HL_RESTORE" } else { "HL_CHECKPOINT" }, "1", true)
+        .unwrap();
+    RuntimePlan {
+        rootfs: None,
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: [
+            executable.as_os_str().as_encoded_bytes().to_vec(),
+            ready.as_os_str().as_encoded_bytes().to_vec(),
+            finish.as_os_str().as_encoded_bytes().to_vec(),
+            guard.as_os_str().as_encoded_bytes().to_vec(),
+            fallback.as_os_str().as_encoded_bytes().to_vec(),
+        ]
+        .into(),
+        environment: Vec::new(),
+        result_path: None,
+        options,
+    }
 }
 
 struct AmbientDescriptors {
@@ -1775,6 +1847,56 @@ fn daily_development_workload_survives_two_checkpoint_cycles_on_both_isas() {
     let _exclusive = exclusive_checkpoint_test();
     for (isa, executable, fixture_compile) in executables {
         daily_dev_round_trip(isa, &executable, fixture_compile);
+    }
+}
+
+#[test]
+fn accepted_connected_unix_stream_survives_checkpoint_on_both_isas() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64]
+        .map(|isa| (isa, connected_unix_stream_fixture(isa, fixtures.path())));
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+
+    for (isa, executable) in executables {
+        let temporary = tempfile::tempdir().unwrap();
+        let ready = temporary.path().join("ready");
+        let finish = temporary.path().join("finish");
+        let guard = temporary.path().join("fresh-start.guard");
+        let fallback = temporary.path().join("fresh-start.fallback");
+        let store = Arc::new(Store::default());
+        let capture = Arc::new(
+            Engine::with_checkpoint(
+                isa,
+                connected_unix_stream_plan(&executable, &ready, &finish, &guard, &fallback, false),
+                streams(false),
+                store.clone(),
+                store.clone(),
+            )
+            .unwrap(),
+        );
+        capture.start().unwrap();
+        wait_for(&ready, "READY fd=10 connected=1");
+        capture
+            .capture_checkpoint_until(checkpoint_deadline())
+            .unwrap_or_else(|error| panic!("{isa:?} rejected accepted connected AF_UNIX fd 10: {error:?}"));
+        assert_eq!(wait_bounded(&capture, "connected Unix stream capture").guest_status, 0);
+
+        let restore = Arc::new(
+            Engine::with_checkpoint(
+                isa,
+                connected_unix_stream_plan(&executable, &ready, &finish, &guard, &fallback, true),
+                streams(false),
+                store.clone(),
+                store,
+            )
+            .unwrap(),
+        );
+        restore.start().unwrap();
+        std::fs::write(&finish, []).unwrap();
+        wait_for_connected_restore(&restore, isa, &ready, &fallback);
+        assert_eq!(wait_bounded(&restore, "connected Unix stream restore").guest_status, 0);
     }
 }
 
