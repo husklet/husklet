@@ -4,6 +4,30 @@ use std::io;
 
 pub(super) use ffi::CommandSession;
 
+#[cfg(test)]
+pub(super) fn signal_for_test(process: u32, signal: libc::c_int) -> io::Result<()> {
+    let process = libc::pid_t::try_from(process)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "process identity exceeds pid_t"))?;
+    ffi::signal(process, signal)
+}
+
+#[cfg(test)]
+pub(super) fn signal_group_for_test(process: u32, signal: libc::c_int) -> io::Result<()> {
+    let process = libc::pid_t::try_from(process)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "process identity exceeds pid_t"))?;
+    ffi::signal_group(process, signal)
+}
+
+#[cfg(test)]
+pub(super) fn process_exists_for_test(process: u32) -> io::Result<bool> {
+    match signal_for_test(process, 0) {
+        Ok(()) => Ok(true),
+        Err(error) if error.raw_os_error() == Some(libc::ESRCH) => Ok(false),
+        Err(error) if error.raw_os_error() == Some(libc::EPERM) => Ok(true),
+        Err(error) => Err(error),
+    }
+}
+
 pub(super) struct Peer {
     process: libc::pid_t,
 }

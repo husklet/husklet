@@ -66,10 +66,10 @@ impl Drop for DomainChild {
         }
         // Kill every descendant observed while the leader still named its ownership tree.
         for pid in self.known.iter().copied().filter(|pid| *pid != self.child.id()) {
-            let _ = unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+            let _ = crate::runtime::process::signal_for_test(pid, libc::SIGKILL);
         }
         // The helper owns a private process group; this catches children created after the last tree sample.
-        let _ = unsafe { libc::kill(-(self.child.id() as libc::pid_t), libc::SIGKILL) };
+        let _ = crate::runtime::process::signal_group_for_test(self.child.id(), libc::SIGKILL);
         if leader_running {
             let _ = self.child.kill();
             let _ = self.child.wait();
@@ -414,7 +414,7 @@ fn wait_processes_gone(processes: &BTreeSet<u32>, timeout: Duration) -> TestResu
         let remaining = processes
             .iter()
             .copied()
-            .filter(|pid| unsafe { libc::kill(*pid as libc::pid_t, 0) } == 0)
+            .filter(|pid| crate::runtime::process::process_exists_for_test(*pid).unwrap_or(true))
             .collect::<Vec<_>>();
         if remaining.is_empty() {
             return Ok(());
