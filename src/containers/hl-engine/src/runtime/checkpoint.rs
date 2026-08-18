@@ -15,8 +15,8 @@ use std::{
     },
 };
 
-mod broker;
 pub mod authority;
+mod broker;
 #[path = "checkpoint_protocol.rs"]
 mod protocol;
 mod publication;
@@ -24,6 +24,7 @@ mod request;
 #[cfg(test)]
 #[path = "checkpoint_test.rs"]
 mod test;
+mod topology;
 mod transaction;
 use protocol::{
     CLAIM, COMMIT, DIGEST, GROUP_ABORT, GROUP_BEGIN, GROUP_COMMIT, GROUP_COUNT, GROUP_PRESENT, OBJECT_ABORT,

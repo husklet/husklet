@@ -215,6 +215,21 @@ pub(super) struct AuthenticatedGeneration {
     uuid: [u8; 16],
 }
 
+impl AuthenticatedGeneration {
+    pub(super) fn topology_generation(
+        &self,
+    ) -> Result<super::topology::CheckpointGeneration, super::topology::AdmissionError> {
+        super::topology::CheckpointGeneration::authenticated(self.uuid)
+    }
+
+    pub(super) fn topology_lineage(
+        &self,
+        lineage: [u8; 16],
+    ) -> Result<super::topology::LineageId, super::topology::AdmissionError> {
+        super::topology::LineageId::authenticated(lineage)
+    }
+}
+
 pub(super) struct GcEvidence {
     prepared: PrepareId,
     authenticated: PrepareId,
