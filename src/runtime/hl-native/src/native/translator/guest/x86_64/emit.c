@@ -6,25 +6,6 @@
 // (the same-ISA-independent half: these emit HOST code, copied from jit.c +
 //  a few width-typed loads/stores the x86 front-end needs.)
 
-// Host FEAT_LRCPC (LDAPR) presence, gating the x86-TSO acquire-load fast path (e_load/e_ldapr/offset
-// forms): present -> single LDAPR (fewer barriers, the win); absent -> the byte-identical original
-// LDR + DMB ISHLD sequence (correct, no speedup). LDAPR is an ARMv8.3 instruction and UNDEFs (SIGILL) on a
-// pre-8.3 host, so it must never be emitted unless the host advertises it. Set once, before any translation
-// runs, by a constructor. It is enabled ONLY on a Linux host: the LDAPR unaligned-crossing alignment-fault
-// fixup (ldapr_align_fixup) is wired solely into the Linux SIGBUS run path (jit86_lazyguard), so on any
-// other host the fast path stays OFF (== baseline behavior, no unhandled BUS_ADRALN).
-// The probe is AArch64-only: AT_HWCAP is a PER-ARCHITECTURE bit vector, and bit 15 of the same word on
-// x86-64 is CPUID.1:EDX CMOV -- set everywhere, so probing it would pin the LDAPR path ON forever.
-int g_host_lrcpc = 0;
-#if defined(__linux__) && defined(HL_HOST_CPU_AARCH64)
-#include <sys/auxv.h>
-#ifndef HWCAP_LRCPC
-#define HWCAP_LRCPC (1u << 15) // AArch64 AT_HWCAP bit 15
-#endif
-__attribute__((constructor)) static void hl_detect_host_lrcpc(void) {
-    g_host_lrcpc = (getauxval(AT_HWCAP) & HWCAP_LRCPC) ? 1 : 0;
-}
-#endif
 void emit32(uint32_t in) {
     *(uint32_t *)g_cp = in;
     g_cp += 4;
@@ -135,33 +116,16 @@ static void e_dmb_ishld(void) {
     emit32(0xD50339BFu);
 }
 
-// forward decls: the LDAPR offset-load forms below materialize the EA with add/sub-immediate
+// Forward declarations used by address lowering below.
 void e_addi(int rd, int rn, unsigned imm12, int sf);
 void e_subi(int rd, int rn, unsigned imm12, int sf);
 static void e_addi_sh(int rd, int rn, unsigned imm12, int sf, int sh);
 
-// x86-TSO acquire load via LDAPR (Load-AcquirePC, FEAT_LRCPC): ONE instruction that supplies the
-// LoadLoad+LoadStore ordering x86-TSO requires on every guest load -- replacing the LDR + DMB ISHLD
-// pair (the DMB ISHLD dominates load-heavy x86 cost). RCpc acquire == the exact edges DMB ISHLD gave.
-// LDAPR is [Xn] base-only (no immediate offset) and has no 128-bit vector form.
-//
-// ALIGNMENT: on FEAT_LSE2 hosts (Apple M-series) an unaligned LDAPR is legal UNLESS it crosses a
-// 16-byte granule, where the CPU raises SIGBUS/BUS_ADRALN. x86 permits every unaligned normal load, so
-// such a fault is ALWAYS our synthetic one (a guest load emitted as LDR never alignment-faults on Normal
-// memory). The SIGBUS/BUS_ADRALN fixup (ldapr_align_fixup, linux_abi/x86.c) emulates the rare crossing
-// load (plain unaligned read + DMB ISHLD acquire) and steps past the LDAPR -- see the safety argument there.
-static void e_ldapr(int w, int rt, int rn) { // ldapr{b,h,,} rt,[rn]
-    uint32_t b = w == 1 ? 0x38BFC000u : w == 2 ? 0x78BFC000u : w == 4 ? 0xB8BFC000u : 0xF8BFC000u;
-    emit32(b | (rn << 5) | rt);
-}
-
 // Guest width-typed load at [rn, #0]. w = 1/2/4/8 bytes. (zero-extends on load)
 void e_load(int w, int rt, int rn) {
-    if (g_host_lrcpc) {
-        e_ldapr(w, rt, rn);
-        return;
-    }
-    // Fallback (no FEAT_LRCPC): the original LDR + DMB ISHLD -- byte-identical to pre-LDAPR behavior.
+    // x86 scalar loads may be unaligned. AArch64 LDAPR alignment-faults and turns common packed-data
+    // accesses into synchronous SIGBUS emulation, so use the naturally unaligned LDR plus the acquire
+    // barrier required by the x86 memory model on every host.
     uint32_t b = w == 1 ? 0x39400000u : w == 2 ? 0x79400000u : w == 4 ? 0xB9400000u : 0xF9400000u;
     emit32(b | (rn << 5) | rt);
     e_dmb_ishld();
@@ -180,29 +144,10 @@ void e_ldrs(int w, int rt, int rn) {                                        // s
 
 // Address-mode-folded load/store: fold a [base+disp] memory operand into ONE ldr/str.
 // Scaled unsigned-offset form (disp a multiple of w, disp/w in [0,4095]):
-// Offset load forms: LDAPR is base-only, so materialize the effective address into the EA scratch (x17)
-// with add/sub-immediate, then LDAPR [x17]. add+ldapr is the same instruction count as ldr+dmb but drops
-// the barrier. x17 is the designated EA scratch (guest GPRs occupy x0..x15; rn is a guest reg here), so
-// clobbering it between the add and the load is safe. The SIGBUS fixup reads the base reg (x17) from the
-// fault context, so a crossing unaligned offset load is caught exactly as the base form is.
-static void e_load_uoff(int w, int rt, int rn, unsigned disp) { // x17 = rn+disp; ldapr rt,[x17]
-    if (!g_host_lrcpc) { // Fallback: original folded ldr{b,h,,} rt,[rn,#disp] + DMB ISHLD (byte-identical).
-        uint32_t b = w == 1 ? 0x39400000u : w == 2 ? 0x79400000u : w == 4 ? 0xB9400000u : 0xF9400000u;
-        emit32(b | (((disp / (unsigned)w) & 0xFFF) << 10) | (rn << 5) | rt);
-        e_dmb_ishld();
-        return;
-    }
-    if (disp == 0) {
-        e_ldapr(w, rt, rn);
-        return;
-    }
-    if (disp < 0x1000u) {
-        e_addi(17, rn, disp, 1);
-    } else { // disp <= 4095*8 = 0x7FF8: split into <<12 hi + lo (both fit imm12)
-        e_addi_sh(17, rn, disp >> 12, 1, 1);
-        if (disp & 0xFFFu) e_addi(17, 17, disp & 0xFFFu, 1);
-    }
-    e_ldapr(w, rt, 17);
+static void e_load_uoff(int w, int rt, int rn, unsigned disp) {
+    uint32_t b = w == 1 ? 0x39400000u : w == 2 ? 0x79400000u : w == 4 ? 0xB9400000u : 0xF9400000u;
+    emit32(b | (((disp / (unsigned)w) & 0xFFF) << 10) | (rn << 5) | rt);
+    e_dmb_ishld();
 }
 
 void e_store_uoff(int w, int rt, int rn, unsigned disp) { // str{b,h,,} rt,[rn,#disp]
@@ -212,22 +157,10 @@ void e_store_uoff(int w, int rt, int rn, unsigned disp) { // str{b,h,,} rt,[rn,#
 }
 
 // Unscaled signed-offset form (simm9 in [-256,255]) -- covers small negative disps:
-static void e_ldur(int w, int rt, int rn, int simm9) { // x17 = rn+simm9; ldapr rt,[x17]
-    if (!g_host_lrcpc) { // Fallback: original ldur{b,h,,} rt,[rn,#simm9] + DMB ISHLD (byte-identical).
-        uint32_t b = w == 1 ? 0x38400000u : w == 2 ? 0x78400000u : w == 4 ? 0xB8400000u : 0xF8400000u;
-        emit32(b | (((uint32_t)simm9 & 0x1FF) << 12) | (rn << 5) | rt);
-        e_dmb_ishld();
-        return;
-    }
-    if (simm9 == 0) {
-        e_ldapr(w, rt, rn);
-        return;
-    }
-    if (simm9 > 0)
-        e_addi(17, rn, (unsigned)simm9, 1);
-    else
-        e_subi(17, rn, (unsigned)(-simm9), 1); // simm9 >= -256 -> fits imm12
-    e_ldapr(w, rt, 17);
+static void e_ldur(int w, int rt, int rn, int simm9) {
+    uint32_t b = w == 1 ? 0x38400000u : w == 2 ? 0x78400000u : w == 4 ? 0xB8400000u : 0xF8400000u;
+    emit32(b | (((uint32_t)simm9 & 0x1FF) << 12) | (rn << 5) | rt);
+    e_dmb_ishld();
 }
 
 void e_stur(int w, int rt, int rn, int simm9) { // stur{b,h,,} rt,[rn,#simm9]
