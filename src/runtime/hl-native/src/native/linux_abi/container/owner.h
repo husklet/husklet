@@ -203,7 +203,7 @@ static int hl_socket_owner_publish(hl_socket_owner_publication *publication, con
                                    uint64_t birth_ns, uint32_t uid, uint32_t gid, uint32_t descriptors) {
     int error;
     if (publication == NULL || !publication->active) return EINVAL;
-    if (status == NULL || birth_ns == 0 || descriptors == 0) {
+    if (status == NULL || birth_ns == 0) {
         (void)hl_socket_owner_finish(publication, 1);
         return EINVAL;
     }
@@ -235,17 +235,6 @@ static int hl_socket_owner_finish(hl_socket_owner_publication *publication, int 
     hl_socket_owner_writer_end(publication->writer);
     publication->active = 0;
     publication->ticket_active = 0;
-    return error;
-}
-
-static int hl_socket_owner_reference(hl_owner_key key, int64_t delta, int descriptor) {
-    hl_owner_writer writer;
-    hl_owner_namespace namespace;
-    int error = hl_socket_owner_writer_context(&writer, &namespace);
-    if (error != 0) return error;
-    error = descriptor ? hl_owner_registry_descriptor(g_socket_owner_registry, namespace, writer, key, delta)
-                       : hl_owner_registry_link(g_socket_owner_registry, namespace, writer, key, delta);
-    hl_socket_owner_writer_end(writer);
     return error;
 }
 

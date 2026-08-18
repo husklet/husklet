@@ -160,7 +160,7 @@ static int unix_owner_bind(int descriptor, const char *host, hl_owner_key *key) 
         errno = EOPNOTSUPP;
         return -1;
     }
-    error = hl_socket_owner_publish(&publication, &status, birth, (uint32_t)newfile_uid(), (uint32_t)newfile_gid(), 1);
+    error = hl_socket_owner_publish(&publication, &status, birth, (uint32_t)newfile_uid(), (uint32_t)newfile_gid(), 0);
     if (error != 0) {
         int rollback = unix_owner_rollback(host, &status, birth);
         if (hl_socket_owner_finish(&publication, rollback != 0) != 0) error = EOWNERDEAD;
@@ -168,7 +168,6 @@ static int unix_owner_bind(int descriptor, const char *host, hl_owner_key *key) 
         return -1;
     }
     hl_owner_key published_key = hl_socket_owner_key(&status, birth);
-    unix_owner_note(descriptor, published_key);
     if (hl_socket_owner_finish(&publication, 0) != 0) return errno = EOWNERDEAD, -1;
     if (key != NULL) *key = published_key;
     return 0;

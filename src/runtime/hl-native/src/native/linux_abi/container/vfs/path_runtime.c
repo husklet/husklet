@@ -309,8 +309,6 @@ static uint8_t g_devtty[HL_NFD];
 // tools). Recorded on a successful AF_UNIX bind (net.c); a pathname keeps its guest path, an abstract name
 // is stored as "@name". Empty slot = not a bound unix socket. Process-local (one net-namespace per engine).
 static char g_unix_bind[HL_NFD][108];
-static hl_owner_key g_unix_owner_key[HL_NFD];
-static uint8_t g_unix_owner_key_valid[HL_NFD];
 /* Long Linux pathname binds use /proc/<pid>/fd/<anchor>/<leaf> so recvfrom preserves an absolute,
  * reverse-mappable sender. Keep the parent directory open for the lifetime of the bound socket. */
 static int g_unix_path_anchor[HL_NFD];
@@ -319,19 +317,8 @@ static void unix_bind_note(int fd, const char *guestname) {
     if (fd >= 0 && fd < HL_NFD && guestname) snprintf(g_unix_bind[fd], sizeof g_unix_bind[fd], "%s", guestname);
 }
 
-static void unix_owner_note(int fd, hl_owner_key key) {
-    if (fd < 0 || fd >= HL_NFD) return;
-    g_unix_owner_key[fd] = key;
-    g_unix_owner_key_valid[fd] = 1;
-}
-
 static void unix_bind_clear(int fd) {
     if (fd >= 0 && fd < HL_NFD) {
-        if (g_unix_owner_key_valid[fd]) {
-            (void)hl_socket_owner_reference(g_unix_owner_key[fd], -1, 1);
-            g_unix_owner_key_valid[fd] = 0;
-            memset(&g_unix_owner_key[fd], 0, sizeof g_unix_owner_key[fd]);
-        }
         g_unix_bind[fd][0] = 0;
         if (g_unix_path_anchor[fd] > 0) {
             hl_host_process_fd_private_remove(g_unix_path_anchor[fd] - 1);
