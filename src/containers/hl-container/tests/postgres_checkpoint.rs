@@ -18,6 +18,7 @@ const PHASE: Duration = Duration::from_secs(90);
 const PROBE: Duration = Duration::from_secs(30);
 const CLEANUP: Duration = Duration::from_secs(30);
 const ADVISORY_LOCK: i64 = 7_331_904_221;
+const POSTGRES_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const POSTGRES_AMD64_DIGEST: &str = "sha256:075f7ba66bc9b3ce7d6b8b635208ff61cd7cf1a67d71ec530eec5d7ae0cbe571";
 const POSTGRES_ARM64_DIGEST: &str = "sha256:738d1359df5aa0b6d50a9071e989c49fdd39152a2a805c6ff131bf5e2243e0b3";
 
@@ -179,7 +180,12 @@ impl Fixture {
             .env("PGDATA", "/var/lib/postgresql/data")
             .env("POSTGRES_INITDB_ARGS", "--auth=trust")
             .env("POSTGRES_PASSWORD", "acceptance-only");
-        let process = process.env("HL_ACCEPTANCE_RUN", &run_id);
+        let process = process
+            .env("HL_ACCEPTANCE_RUN", &run_id)
+            .env("PATH", POSTGRES_PATH)
+            .env("LANG", "en_US.utf8")
+            .env("PG_MAJOR", "16")
+            .env("PG_VERSION", &self.postgres_version);
         let spec = ContainerSpec::from_directory(&self.rootfs, process)
             .name(CONTAINER)
             .guest(self.guest)
@@ -280,7 +286,7 @@ impl Fixture {
             self.containers.executions().wait(&exec),
         )
         .await?;
-        self.exec("rm -f /var/lib/postgresql/data/.acceptance-started && su-exec postgres pg_ctl -D /var/lib/postgresql/data -m fast -w stop")
+        self.exec("rm -f /var/lib/postgresql/data/.acceptance-started && /usr/local/bin/su-exec postgres /usr/local/bin/pg_ctl -D /var/lib/postgresql/data -m fast -w stop")
             .await?;
         bounded("wait for clean PostgreSQL stop", PROBE, self.containers.wait(CONTAINER)).await?;
         bounded("cold PostgreSQL restart", PHASE, self.containers.start(CONTAINER)).await?;
@@ -724,7 +730,7 @@ impl Fixture {
 
     async fn query(&self, sql: &str) -> Result<String, Error> {
         self.exec(&format!(
-            "psql -X -qAt -v ON_ERROR_STOP=1 -U postgres -c {}",
+            "/usr/local/bin/psql -X -qAt -v ON_ERROR_STOP=1 -U postgres -c {}",
             shell_quote(sql)
         ))
         .await
@@ -733,15 +739,18 @@ impl Fixture {
     async fn exec(&self, command: &str) -> Result<String, Error> {
         let executions = self.containers.executions();
         let execution = executions
-            .create(CONTAINER, ExecSpec::new(Process::new("/bin/sh").args(["-c", command])))
+            .create(
+                CONTAINER,
+                ExecSpec::new(Process::new("/bin/sh").env("PATH", POSTGRES_PATH).args(["-c", command])),
+            )
             .await?;
         let mut session = executions.start(&execution.id).await?;
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         while let Some(entry) = bounded("PostgreSQL command output", PROBE, session.next()).await? {
             match entry.stream {
-                Stream::Stdout => stdout.extend(entry.bytes),
-                Stream::Stderr => stderr.extend(entry.bytes),
+                Stream::Stdout => append_output(&mut stdout, &entry.bytes)?,
+                Stream::Stderr => append_output(&mut stderr, &entry.bytes)?,
             }
         }
         let state = executions.inspect(&execution.id).await?;
@@ -763,19 +772,74 @@ impl Fixture {
     }
 
     async fn wait_ready(&self) -> Result<(), Error> {
-        bounded("PostgreSQL readiness", PROBE, async {
-            loop {
-                if self
-                    .query("SELECT CASE WHEN pg_is_in_recovery() THEN 0 ELSE 1 END")
-                    .await
-                    .is_ok_and(|value| value.trim() == "1")
-                {
-                    return Ok::<(), Error>(());
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
+        let started = Instant::now();
+        let mut attempt = 0_u64;
+        let mut distinct = Vec::<(String, u64)>::new();
+        let mut diagnostics = "diagnostics not yet captured".to_owned();
+        let mut next_diagnostic = Duration::ZERO;
+        loop {
+            attempt += 1;
+            let remaining = PROBE.saturating_sub(started.elapsed());
+            let probe = tokio::time::timeout(
+                remaining.min(Duration::from_secs(1)),
+                self.query("SELECT CASE WHEN pg_is_in_recovery() THEN 0 ELSE 1 END"),
+            )
+            .await;
+            let last = match probe {
+                Ok(Ok(value)) if value.trim() == "1" => return Ok(()),
+                Ok(Ok(value)) => format!("unexpected readiness value {value:?}"),
+                Ok(Err(error)) => bounded_text(error.to_string().as_bytes()),
+                Err(_) => "readiness query exceeded one second".to_owned(),
+            };
+            let elapsed = started.elapsed();
+            let newly_distinct = if let Some((_, count)) = distinct.iter_mut().find(|(error, _)| error == &last) {
+                *count += 1;
+                false
+            } else if distinct.len() < 8 {
+                distinct.push((last.clone(), 1));
+                true
+            } else {
+                false
+            };
+            if newly_distinct || attempt % 50 == 0 {
+                eprintln!(
+                    "postgres-readiness attempt={attempt} elapsed_ms={} error={last:?}",
+                    elapsed.as_millis()
+                );
             }
-        })
-        .await
+            if elapsed >= next_diagnostic && PROBE.saturating_sub(elapsed) >= Duration::from_secs(1) {
+                diagnostics = tokio::time::timeout(Duration::from_secs(1), self.readiness_diagnostics())
+                    .await
+                    .unwrap_or_else(|_| "readiness diagnostics exceeded one second".to_owned());
+                next_diagnostic = elapsed + Duration::from_secs(5);
+            }
+            if elapsed >= PROBE {
+                let representatives = distinct
+                    .iter()
+                    .map(|(error, count)| format!("{count}x {error}"))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                return Err(format!(
+                    "PostgreSQL readiness exceeded {PROBE:?} after {attempt} attempts; last={last:?}; distinct=[{representatives}]; {diagnostics}"
+                )
+                .into());
+            }
+            tokio::time::sleep(PROBE.saturating_sub(started.elapsed()).min(Duration::from_millis(100))).await;
+        }
+    }
+
+    async fn readiness_diagnostics(&self) -> String {
+        let container = tokio::time::timeout(Duration::from_millis(250), self.containers.inspect(CONTAINER)).await;
+        let logs = tokio::time::timeout(Duration::from_millis(250), self.containers.logs(CONTAINER)).await;
+        let process = tokio::time::timeout(Duration::from_millis(250), self.exec("id; printf 'tmp='; ls -ld /tmp; printf 'socket-dir='; ls -ld /var/run/postgresql 2>&1 || true; printf 'pgdata='; ls -ld /var/lib/postgresql/data 2>&1 || true; printf 'socket='; ls -l /var/run/postgresql/.s.PGSQL.5432 2>&1 || true; printf 'postmaster-pid='; cat /var/lib/postgresql/data/postmaster.pid 2>&1 || true; printf 'processes='; ps -ef 2>&1 || true")).await;
+        let (stdout, stderr) = match logs {
+            Ok(Ok(logs)) => (bounded_text(&logs.stdout), bounded_text(&logs.stderr)),
+            Ok(Err(error)) => (String::new(), format!("logs unavailable: {error}")),
+            Err(_) => (String::new(), "logs timed out after 250ms".to_owned()),
+        };
+        format!(
+            "container={container:?}; pid1_stdout={stdout:?}; pid1_stderr={stderr:?}; permissions_and_processes={process:?}"
+        )
     }
 
     async fn cleanup(&self) -> Result<(), Error> {
@@ -915,6 +979,28 @@ fn hex_digest(bytes: &[u8]) -> String {
         write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
     }
     encoded
+}
+
+fn bounded_text(bytes: &[u8]) -> String {
+    const LIMIT: usize = 16 * 1024;
+    if bytes.len() <= LIMIT {
+        return String::from_utf8_lossy(bytes).into_owned();
+    }
+    let half = LIMIT / 2;
+    let mut text = String::from_utf8_lossy(&bytes[..half]).into_owned();
+    text.push_str(&format!("\n[{} bytes omitted]\n", bytes.len() - LIMIT));
+    text.push_str(&String::from_utf8_lossy(&bytes[bytes.len() - half..]));
+    text
+}
+
+fn append_output(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), Error> {
+    const LIMIT: usize = 1024 * 1024;
+    require(
+        output.len().saturating_add(bytes.len()) <= LIMIT,
+        "diagnostic command output exceeded 1 MiB",
+    )?;
+    output.extend_from_slice(bytes);
+    Ok(())
 }
 
 fn verify_elf_machine(path: &Path, architecture: &str) -> Result<(), Error> {
