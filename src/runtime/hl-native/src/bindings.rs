@@ -367,6 +367,30 @@ test_no_argument!(
 );
 
 #[cfg(feature = "native-test-hooks")]
+unsafe fn hl_aarch64_unix_identity_test(
+    operation: c_uint,
+    fd: c_int,
+    object: c_ulonglong,
+    local: *mut c_ulonglong,
+    peer: *mut c_ulonglong,
+    hidden: *mut c_uint,
+) -> c_int {
+    unsafe { (test_api().aarch64_unix_identity)(operation, fd, object, local, peer, hidden) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_x86_64_unix_identity_test(
+    operation: c_uint,
+    fd: c_int,
+    object: c_ulonglong,
+    local: *mut c_ulonglong,
+    peer: *mut c_ulonglong,
+    hidden: *mut c_uint,
+) -> c_int {
+    unsafe { (test_api().x86_64_unix_identity)(operation, fd, object, local, peer, hidden) }
+}
+
+#[cfg(feature = "native-test-hooks")]
 unsafe fn hl_aarch64_checkpoint_restore_claim_test(scenario: c_uint) -> c_int {
     unsafe { (test_api().aarch64_checkpoint_restore_claim)(scenario) }
 }
@@ -555,6 +579,39 @@ pub(crate) fn checkpoint_restore_rollback_test(isa: u32) -> Result<(), i32> {
         }
     };
     if status == 0 { Ok(()) } else { Err(status) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn unix_identity_test(isa: u32, operation: u32, fd: i32, object: u64) -> Result<(u64, u64, u32), i32> {
+    let mut local = 0;
+    let mut peer = 0;
+    let mut hidden = 0;
+    let status = unsafe {
+        match isa {
+            1 => hl_aarch64_unix_identity_test(
+                operation,
+                fd,
+                object,
+                &raw mut local,
+                &raw mut peer,
+                &raw mut hidden,
+            ),
+            2 => hl_x86_64_unix_identity_test(
+                operation,
+                fd,
+                object,
+                &raw mut local,
+                &raw mut peer,
+                &raw mut hidden,
+            ),
+            _ => return Err(-libc::EINVAL),
+        }
+    };
+    if status == 0 || (operation == 1 && status == 1) {
+        Ok((local, peer, hidden))
+    } else {
+        Err(status)
+    }
 }
 
 pub(super) fn engine_metadata_is_valid() -> bool {

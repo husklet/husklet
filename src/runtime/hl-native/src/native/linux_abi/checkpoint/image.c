@@ -102,6 +102,13 @@ static int ckpt_capture_early_emulated_fd(struct ckpt_fd *records, int *count, i
     r.gfd = fd;
     const char *early_emulated = ckpt_guest_kernel_fd(fd);
     if (early_emulated && strcmp(early_emulated, "socket") == 0 && fd >= 0 && fd < HL_NFD && g_sock_object[fd] != 0) {
+        if (g_sock_identity_local_hidden[fd] && g_sock_peer_object[fd] == 0) {
+            /* A refused AF_UNIX connect leaves the real descriptor privately bound so it can be retried.  It
+             * has no reciprocal endpoint, and restoring that hidden bind as a guest-visible socket would
+             * fabricate topology. */
+            errno = ENOTCONN;
+            return -1;
+        }
         if (g_sock_peer_object[fd] == 0) {
             r.kind = CKF_SOCKET;
             r.flags = fcntl(fd, F_GETFL);

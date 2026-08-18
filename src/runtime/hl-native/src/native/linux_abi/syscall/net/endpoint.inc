@@ -74,6 +74,8 @@
                 g_icmp_ip[r] = 0;
                 g_sock_object[r] = sock_object_new();
                 g_sock_peer_object[r] = 0;
+                g_sock_identity_local_hidden[r] = 0;
+                g_sock_identity_peer_hidden[r] = 0;
             }
         }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
@@ -582,12 +584,23 @@
                 if (lfd >= 0 && lfd < HL_NFD) g_sock_fam[r] = g_sock_fam[lfd]; // inherit listener's family
                 g_sock_object[r] = sock_object_new();
                 g_sock_peer_object[r] = 0;
+                g_sock_identity_local_hidden[r] = 0;
+                g_sock_identity_peer_hidden[r] = 0;
             }
-            if ((pl || pbr) && sock_internal_accept_identify(r) < 0) {
+            int internal_peer = 0;
+            if ((pl || pbr || (lfd >= 0 && lfd < HL_NFD && g_sock_fam[lfd] == AF_UNIX)) &&
+                (internal_peer = sock_internal_accept_identify(r)) < 0) {
                 int error = errno;
                 close(r);
                 G_RET(c) = (uint64_t)(int64_t)(-error);
                 break;
+            }
+            if (r < HL_NFD && lfd >= 0 && lfd < HL_NFD && g_sock_fam[lfd] == AF_UNIX && g_unix_bind[lfd][0])
+                unix_bind_note(r, g_unix_bind[lfd]);
+            if (internal_peer > 0 && want_peer) {
+                memset(&hss, 0, sizeof hss);
+                ((struct sockaddr_un *)&hss)->sun_family = AF_UNIX;
+                hsl = (socklen_t)sizeof(sa_family_t);
             }
             if (nr == 242) { hl_linux_socket_apply_type_flags(r, (int)a3); }
             if (want_peer) {
@@ -880,6 +893,10 @@
                 G_RET(c) = (uint64_t)(-errno);
                 break;
             }
+            if (sock_internal_connect_prepare((int)a0) != 0) {
+                G_RET(c) = (uint64_t)(-errno);
+                break;
+            }
             int r = connect((int)a0, (struct sockaddr *)&un, sizeof un);
             int ce = errno;
             // An abstract name is not a filesystem object: a missing backing socket means no bound listener,
@@ -897,6 +914,8 @@
                 memcpy(an + 1, sa + 3, (size_t)L);
                 an[L + 1] = 0;
                 unix_peer_note((int)a0, an); // guest-visible peer name for getpeername
+            } else {
+                sock_internal_connect_failed((int)a0);
             }
             break;
         }
@@ -909,6 +928,10 @@
             const char *hp = atpath(-100, gp, host, sizeof host, 0); // guest path -> topmost layer's host path
             // dial via unix_sock_at (matches the bind side): fchdir-shortens paths past sun_path[104] so a
             // long upper socket path is reached exactly, not truncated to some other (nonexistent) inode.
+            if (sock_internal_connect_prepare((int)a0) != 0) {
+                G_RET(c) = (uint64_t)(-errno);
+                break;
+            }
             int r;
             do {
                 r = unix_sock_at((int)a0, hp, 1);
@@ -918,6 +941,9 @@
                 g_sock_conn[(int)a0] = r == 0;
                 g_sock_connecting[(int)a0] = r < 0;
                 g_sock_native_peer[(int)a0] = (uint8_t)jail_is_projected_socket(gp);
+                unix_peer_note((int)a0, gp);
+            } else {
+                sock_internal_connect_failed((int)a0);
             }
             break;
         }
@@ -989,7 +1015,7 @@
             a2 = (uint64_t)(uintptr_t)&address_copyout.length;
         }
         // Abstract-namespace local name: echo the guest name, not the engine's HL_NETNS-keyed backing fs path.
-        if (fd >= 0 && fd < HL_NFD && g_unix_bind[fd][0] == '@' && a1) {
+        if (fd >= 0 && fd < HL_NFD && g_unix_bind[fd][0] && a1) {
             socklen_t gl = 0;
             int ll = unix_name_fill(g_unix_bind[fd], (uint8_t *)a1, a2 ? *(socklen_t *)a2 : 0, &gl);
             if (ll >= 0) {
@@ -997,6 +1023,18 @@
                 G_RET(c) = 0;
                 break;
             }
+        }
+        if (fd >= 0 && fd < HL_NFD && g_sock_identity_local_hidden[fd] && !g_unix_bind[fd][0] && a1) {
+            if (a1 && a2) {
+                socklen_t capacity = *(socklen_t *)a2;
+                struct sockaddr_un unnamed = {.sun_family = AF_UNIX};
+                if (capacity != 0)
+                    memcpy((void *)a1, &unnamed,
+                           capacity < (socklen_t)sizeof(sa_family_t) ? (size_t)capacity : sizeof(sa_family_t));
+                *(socklen_t *)a2 = (socklen_t)sizeof(sa_family_t);
+            }
+            G_RET(c) = 0;
+            break;
         }
         if (fd >= 0 && fd < HL_NFD && g_udp_local_port[fd]) {
             if (g_udp_local_v6[fd])
@@ -1071,7 +1109,7 @@
             a2 = (uint64_t)(uintptr_t)&address_copyout.length;
         }
         // Abstract-namespace peer name: echo the guest name recorded on connect, not the backing fs path.
-        if (fd >= 0 && fd < HL_NFD && g_unix_peer[fd][0] == '@' && a1) {
+        if (fd >= 0 && fd < HL_NFD && g_unix_peer[fd][0] && a1) {
             socklen_t gl = 0;
             int ll = unix_name_fill(g_unix_peer[fd], (uint8_t *)a1, a2 ? *(socklen_t *)a2 : 0, &gl);
             if (ll >= 0) {
@@ -1079,6 +1117,18 @@
                 G_RET(c) = 0;
                 break;
             }
+        }
+        if (fd >= 0 && fd < HL_NFD && g_sock_identity_peer_hidden[fd] && a1) {
+            if (a1 && a2) {
+                socklen_t capacity = *(socklen_t *)a2;
+                struct sockaddr_un unnamed = {.sun_family = AF_UNIX};
+                if (capacity != 0)
+                    memcpy((void *)a1, &unnamed,
+                           capacity < (socklen_t)sizeof(sa_family_t) ? (size_t)capacity : sizeof(sa_family_t));
+                *(socklen_t *)a2 = (socklen_t)sizeof(sa_family_t);
+            }
+            G_RET(c) = 0;
+            break;
         }
         if (fd >= 0 && fd < HL_NFD && g_udp_peer_port[fd]) {
             if (g_udp_peer_v6[fd])

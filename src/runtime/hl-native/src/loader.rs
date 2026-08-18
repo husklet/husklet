@@ -53,6 +53,9 @@ pub(crate) type ScenarioTest = unsafe extern "C" fn(c_uint) -> c_int;
 pub(crate) type SignalFrameTest = unsafe extern "C" fn(c_uint, c_uint, u64, i64, *mut i64, *mut i64) -> c_int;
 #[cfg(feature = "native-test-hooks")]
 pub(crate) type NoArgumentTest = unsafe extern "C" fn() -> c_int;
+#[cfg(feature = "native-test-hooks")]
+pub(crate) type UnixIdentityTest =
+    unsafe extern "C" fn(c_uint, c_int, u64, *mut u64, *mut u64, *mut c_uint) -> c_int;
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -107,6 +110,8 @@ pub(crate) struct TestApi {
     pub(crate) x86_64_checkpoint_restore_claim: ScenarioTest,
     pub(crate) aarch64_checkpoint_restore_rollback: NoArgumentTest,
     pub(crate) x86_64_checkpoint_restore_rollback: NoArgumentTest,
+    pub(crate) aarch64_unix_identity: UnixIdentityTest,
+    pub(crate) x86_64_unix_identity: UnixIdentityTest,
     pub(crate) errno_from_host: unsafe extern "C" fn(c_uint, c_int) -> c_int,
     pub(crate) identity_registry: unsafe extern "C" fn(c_uint, c_uint) -> c_int,
     #[cfg(test)]
@@ -330,6 +335,8 @@ fn load_tests(library: &DynamicLibrary, path: &Path) -> Result<TestApi, LoadErro
         x86_64_checkpoint_restore_claim: symbol!("hl_x86_64_checkpoint_restore_claim_test", ScenarioTest),
         aarch64_checkpoint_restore_rollback: symbol!("hl_aarch64_checkpoint_restore_rollback_test", NoArgumentTest),
         x86_64_checkpoint_restore_rollback: symbol!("hl_x86_64_checkpoint_restore_rollback_test", NoArgumentTest),
+        aarch64_unix_identity: symbol!("hl_aarch64_unix_identity_test", UnixIdentityTest),
+        x86_64_unix_identity: symbol!("hl_x86_64_unix_identity_test", UnixIdentityTest),
         errno_from_host: symbol!(
             "hl_c_backend_errno_from_host_test",
             unsafe extern "C" fn(c_uint, c_int) -> c_int

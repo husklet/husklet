@@ -159,6 +159,14 @@ pub fn checkpoint_restore_rollback_test(isa: u32) -> Result<(), i32> {
     bindings::checkpoint_restore_rollback_test(isa)
 }
 
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn unix_identity_test(isa: u32, operation: u32, fd: i32, object: u64) -> Result<(u64, u64, u32), i32> {
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    bindings::unix_identity_test(isa, operation, fd, object)
+}
+
 #[cfg(test)]
 mod platform;
 
