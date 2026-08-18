@@ -47,6 +47,13 @@ pub const fn artifact_export_manifest() -> &'static str {
     }
 }
 
+/// Returns the target-native filename of the private engine artifact selected by Cargo.
+#[doc(hidden)]
+#[must_use]
+pub const fn artifact_filename() -> &'static str {
+    env!("HL_NATIVE_LIBRARY_NAME")
+}
+
 /// Resolves the shared objects that supplied the linked engine lifecycle symbols.
 #[cfg(unix)]
 #[doc(hidden)]
@@ -157,7 +164,7 @@ mod platform;
 
 #[cfg(test)]
 mod tests {
-    use super::bindings;
+    use super::{artifact_filename, bindings};
 
     const LIBRARY_NAME: &str = env!("HL_NATIVE_LIBRARY_NAME");
     const LIBRARY_PATH: &str = env!("HL_NATIVE_LIBRARY_PATH");
@@ -173,6 +180,6 @@ mod tests {
             "Cargo-owned native library is missing: {}",
             library.display()
         );
-        assert_eq!(library.file_name().and_then(|name| name.to_str()), Some(LIBRARY_NAME));
+        assert_eq!(library.file_name().and_then(|name| name.to_str()), Some(artifact_filename()));
     }
 }

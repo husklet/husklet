@@ -10,7 +10,7 @@ fn downstream_executable_starts_without_loader_environment() {
     let loaded = loaded.canonicalize().expect("canonical native engine path");
     assert_eq!(
         loaded.file_name().and_then(|name| name.to_str()),
-        Some("libhl_native_engine.so")
+        Some(hl_native::artifact_filename())
     );
     assert!(
         paths
