@@ -123,6 +123,23 @@ fn sleep_tree_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     output
 }
 
+fn rejected_member_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    let (compiler, name) = match isa {
+        GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-rejected-member-aarch64"),
+        GuestIsa::X86_64 => ("x86_64-linux-gnu-gcc", "checkpoint-rejected-member-x86_64"),
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/rejected_member.c");
+    let output = directory.join(name);
+    let status = std::process::Command::new(compiler)
+        .args(["-static", "-O2", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
+    assert!(status.success(), "{compiler} failed with {status}");
+    output
+}
+
 fn daily_dev_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     let (compiler, name) = match isa {
         GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-daily-dev-aarch64"),
@@ -579,6 +596,158 @@ impl TerminalPort for TestTerminal {
 
 #[derive(Default)]
 struct Store(Mutex<BTreeMap<String, Vec<u8>>>);
+
+#[derive(Default)]
+struct AtomicStore(Mutex<AtomicStoreState>);
+
+#[derive(Default)]
+struct AtomicStoreState {
+    committed: BTreeMap<String, Vec<u8>>,
+    staging: BTreeMap<String, Vec<u8>>,
+    owner: Option<NonZeroU64>,
+    next: u64,
+}
+
+impl AtomicStore {
+    fn from_committed(committed: BTreeMap<String, Vec<u8>>) -> Self {
+        Self(Mutex::new(AtomicStoreState {
+            committed,
+            ..AtomicStoreState::default()
+        }))
+    }
+
+    fn snapshot(&self) -> BTreeMap<String, Vec<u8>> {
+        self.0.lock().unwrap().committed.clone()
+    }
+
+    fn validate(state: &AtomicStoreState, owner: NonZeroU64, deadline: Instant) -> Result<(), CompositionError> {
+        if state.owner == Some(owner) && Instant::now() < deadline {
+            Ok(())
+        } else {
+            Err(CompositionError::RuntimeConstruction)
+        }
+    }
+}
+
+fn write_checkpoint_snapshot(path: &Path, image: &BTreeMap<String, Vec<u8>>) {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(image.len() as u64).to_ne_bytes());
+    for (name, value) in image {
+        bytes.extend_from_slice(&(name.len() as u64).to_ne_bytes());
+        bytes.extend_from_slice(&(value.len() as u64).to_ne_bytes());
+        bytes.extend_from_slice(name.as_bytes());
+        bytes.extend_from_slice(value);
+    }
+    std::fs::write(path, bytes).unwrap();
+}
+
+fn read_checkpoint_snapshot(path: &Path) -> BTreeMap<String, Vec<u8>> {
+    fn word(bytes: &[u8], offset: &mut usize) -> usize {
+        let value = u64::from_ne_bytes(bytes[*offset..*offset + 8].try_into().unwrap());
+        *offset += 8;
+        value as usize
+    }
+    let bytes = std::fs::read(path).unwrap();
+    let mut offset = 0;
+    let count = word(&bytes, &mut offset);
+    let mut image = BTreeMap::new();
+    for _ in 0..count {
+        let name_size = word(&bytes, &mut offset);
+        let value_size = word(&bytes, &mut offset);
+        let name = std::str::from_utf8(&bytes[offset..offset + name_size]).unwrap().to_owned();
+        offset += name_size;
+        let value = bytes[offset..offset + value_size].to_vec();
+        offset += value_size;
+        image.insert(name, value);
+    }
+    assert_eq!(offset, bytes.len());
+    image
+}
+
+impl CheckpointSink for AtomicStore {
+    fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+
+    fn begin_until(&self, deadline: Instant) -> Result<NonZeroU64, CompositionError> {
+        let mut state = self.0.lock().unwrap();
+        if state.owner.is_some() || Instant::now() >= deadline {
+            return Err(CompositionError::TransactionBusy);
+        }
+        state.next = state.next.wrapping_add(1).max(1);
+        let owner = NonZeroU64::new(state.next).unwrap();
+        state.staging.clear();
+        state.owner = Some(owner);
+        Ok(owner)
+    }
+
+    fn put_until(
+        &self,
+        owner: NonZeroU64,
+        name: &str,
+        bytes: &[u8],
+        deadline: Instant,
+    ) -> Result<(), CompositionError> {
+        let mut state = self.0.lock().unwrap();
+        Self::validate(&state, owner, deadline)?;
+        state.staging.insert(name.into(), bytes.into());
+        Ok(())
+    }
+
+    fn abort_until(&self, owner: NonZeroU64, deadline: Instant) -> Result<(), CompositionError> {
+        let mut state = self.0.lock().unwrap();
+        Self::validate(&state, owner, deadline)?;
+        state.staging.clear();
+        state.owner = None;
+        Ok(())
+    }
+
+    fn commit_until(
+        &self,
+        owner: NonZeroU64,
+        manifest: &[u8],
+        deadline: Instant,
+    ) -> Result<(), CompositionError> {
+        let mut state = self.0.lock().unwrap();
+        Self::validate(&state, owner, deadline)?;
+        state.staging.insert("MANIFEST".into(), manifest.into());
+        state.committed = std::mem::take(&mut state.staging);
+        state.owner = None;
+        Ok(())
+    }
+}
+
+impl CheckpointSource for AtomicStore {
+    fn read(&self, _: usize) -> Result<Vec<u8>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+
+    fn get(&self, name: &str) -> Result<Vec<u8>, CompositionError> {
+        self.0
+            .lock()
+            .unwrap()
+            .committed
+            .get(name)
+            .cloned()
+            .ok_or(CompositionError::RuntimeConstruction)
+    }
+
+    fn list(&self) -> Result<Vec<String>, CompositionError> {
+        Ok(self.0.lock().unwrap().committed.keys().cloned().collect())
+    }
+
+    fn get_until(&self, name: &str, deadline: Instant) -> Result<Vec<u8>, CompositionError> {
+        (Instant::now() < deadline)
+            .then(|| self.get(name))
+            .ok_or(CompositionError::DeadlineExceeded)?
+    }
+
+    fn list_until(&self, deadline: Instant) -> Result<Vec<String>, CompositionError> {
+        (Instant::now() < deadline)
+            .then(|| self.list())
+            .ok_or(CompositionError::DeadlineExceeded)?
+    }
+}
 
 #[derive(Default)]
 struct TestTerminalPort {
@@ -1298,6 +1467,31 @@ fn wait_bounded(engine: &Arc<Engine>, context: &str) -> hl_engine::engine::Engin
     }
 }
 
+fn wait_result_bounded(
+    engine: &Arc<Engine>,
+    context: &str,
+) -> Result<hl_engine::engine::EngineExit, hl_engine::engine::EngineError> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let waiting = engine.clone();
+    std::thread::spawn(move || {
+        let _ = sender.send(waiting.wait());
+    });
+    match receiver.recv_timeout(Duration::from_secs(10)) {
+        Ok(result) => result,
+        Err(initial) => {
+            let stop = engine.stop(StopRequest::Force);
+            match receiver.recv_timeout(Duration::from_secs(5)) {
+                Ok(result) => {
+                    panic!("{context} exceeded 10 seconds ({initial}); forced stop={stop:?}, bounded reap={result:?}")
+                }
+                Err(reap) => panic!(
+                    "{context} exceeded 10 seconds ({initial}); forced stop={stop:?}, and did not reap within 5 seconds: {reap}"
+                ),
+            }
+        }
+    }
+}
+
 fn wait_for_running_marker(engine: &Arc<Engine>, path: &Path, marker: &str) {
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     let waiting = engine.clone();
@@ -1664,6 +1858,190 @@ fn capture_after_plain_engine(isa: GuestIsa, plain_executable: &Path, checkpoint
     capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
     assert_eq!(capture.wait().unwrap().guest_status, 0);
     assert!(store.0.lock().unwrap().contains_key("MANIFEST"));
+}
+
+#[test]
+fn one_rejected_process_prevents_manifest_publication_on_both_isas() {
+    const CHILD: &str = "HL_CHECKPOINT_REJECTED_MEMBER_ISA";
+    const RESTORE_SNAPSHOT: &str = "HL_CHECKPOINT_RESTORE_SNAPSHOT";
+    if let Some(snapshot) = std::env::var_os(RESTORE_SNAPSHOT) {
+        let isa = match std::env::var(CHILD).as_deref() {
+            Ok("aarch64") => GuestIsa::Aarch64,
+            Ok("x86_64") => GuestIsa::X86_64,
+            other => panic!("invalid {CHILD}={other:?}"),
+        };
+        let executable = PathBuf::from(std::env::var_os("HL_CHECKPOINT_RESTORE_EXECUTABLE").unwrap());
+        let release = PathBuf::from(std::env::var_os("HL_CHECKPOINT_RESTORE_RELEASE").unwrap());
+        let final_release = PathBuf::from(std::env::var_os("HL_CHECKPOINT_RESTORE_FINAL_RELEASE").unwrap());
+        let output = PathBuf::from(format!("{}.output", release.display()));
+        let store = Arc::new(AtomicStore::from_committed(read_checkpoint_snapshot(Path::new(&snapshot))));
+        let restore = Arc::new(
+            Engine::with_checkpoint(
+                isa,
+                plan(&executable, &release, &final_release, &["HL_RESTORE"]),
+                StandardStreams::default(),
+                store.clone(),
+                store,
+            )
+            .unwrap(),
+        );
+        restore.start().unwrap();
+        std::fs::write(&release, []).unwrap();
+        for marker in ["CYCLE-READY 1", "CYCLE-READY 2", "CYCLE-READY 3"] {
+            wait_for(&output, marker);
+        }
+        std::fs::write(&final_release, []).unwrap();
+        assert_eq!(wait_result_bounded(&restore, "preserved generation A restore").unwrap().guest_status, 0);
+        return;
+    }
+    let Some(selected) = std::env::var_os(CHILD) else {
+        for isa in ["aarch64", "x86_64"] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "one_rejected_process_prevents_manifest_publication_on_both_isas",
+                    "--nocapture",
+                ])
+                .env(CHILD, isa)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{isa} rejected-member child failed with {}\nstdout:\n{}\nstderr:\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        return;
+    };
+    let isa = match selected.to_str() {
+        Some("aarch64") => GuestIsa::Aarch64,
+        Some("x86_64") => GuestIsa::X86_64,
+        other => panic!("invalid {CHILD}={other:?}"),
+    };
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let valid_executable = fixture(isa, fixtures.path());
+    let rejected_executable = rejected_member_fixture(isa, fixtures.path());
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+
+    {
+        let temporary = tempfile::tempdir().unwrap();
+        let release = temporary.path().join("release");
+        let final_release = temporary.path().join("final-release");
+        let output = temporary.path().join("release.output");
+        let store = Arc::new(AtomicStore::default());
+        let accepted = Arc::new(
+            Engine::with_checkpoint(
+                isa,
+                plan(&valid_executable, &release, &final_release, &["HL_CHECKPOINT"]),
+                StandardStreams::default(),
+                store.clone(),
+                store.clone(),
+            )
+            .unwrap(),
+        );
+        accepted.start().unwrap();
+        wait_ready(&output);
+        accepted.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+        assert_eq!(wait_result_bounded(&accepted, "accepted generation A").unwrap().guest_status, 0);
+        let generation_a = store.snapshot();
+        assert!(generation_a.contains_key("MANIFEST"));
+
+        std::fs::write(&output, []).unwrap();
+        let capture = Arc::new(
+            Engine::with_checkpoint(
+                isa,
+                plan(&rejected_executable, &release, &final_release, &["HL_CHECKPOINT"]),
+                StandardStreams::default(),
+                store.clone(),
+                store.clone(),
+            )
+            .unwrap(),
+        );
+        capture.start().unwrap();
+        wait_ready(&output);
+        let mut ready = std::fs::read_to_string(&output)
+            .unwrap()
+            .lines()
+            .filter(|line| line.starts_with("READY "))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        ready.sort();
+        assert_eq!(ready, ["READY 1", "READY 2", "READY 3"]);
+        let transcript = std::fs::read_to_string(&output).unwrap();
+        assert_eq!(transcript.lines().filter(|line| *line == "SECCOMP-ARMED 3").count(), 1);
+        let mut capable = transcript
+            .lines()
+            .filter(|line| line.starts_with("CAPTURE-CAPABLE "))
+            .collect::<Vec<_>>();
+        capable.sort();
+        assert_eq!(capable, ["CAPTURE-CAPABLE 1", "CAPTURE-CAPABLE 2"]);
+        let live_deadline = Instant::now() + Duration::from_secs(5);
+        let live = loop {
+            let live = processes_holding_file(&output);
+            if live.len() == 3 {
+                break live;
+            }
+            assert!(
+                Instant::now() < live_deadline,
+                "{isa:?} expected exactly three live members: {live:?}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert!(
+            capture.capture_checkpoint_until(checkpoint_deadline()).is_err(),
+            "{isa:?} accepted a process tree containing a rejected member"
+        );
+        let _ = wait_result_bounded(&capture, "rejected-member checkpoint process tree");
+        let reap_deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let remaining = live
+                .iter()
+                .filter(|expected| {
+                    process_identity(expected.pid).is_some_and(|(actual, _)| actual.start_time == expected.start_time)
+                })
+                .collect::<Vec<_>>();
+            if remaining.is_empty() {
+                break;
+            }
+            assert!(
+                Instant::now() < reap_deadline,
+                "{isa:?} leaked rejected checkpoint members: {remaining:?}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            store.snapshot(),
+            generation_a,
+            "{isa:?} changed generation A while rejecting generation B"
+        );
+
+        let snapshot = temporary.path().join("generation-a.bin");
+        write_checkpoint_snapshot(&snapshot, &generation_a);
+        let restored = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "one_rejected_process_prevents_manifest_publication_on_both_isas",
+                "--nocapture",
+            ])
+            .env(CHILD, match isa { GuestIsa::Aarch64 => "aarch64", GuestIsa::X86_64 => "x86_64" })
+            .env(RESTORE_SNAPSHOT, &snapshot)
+            .env("HL_CHECKPOINT_RESTORE_EXECUTABLE", &valid_executable)
+            .env("HL_CHECKPOINT_RESTORE_RELEASE", &release)
+            .env("HL_CHECKPOINT_RESTORE_FINAL_RELEASE", &final_release)
+            .output()
+            .unwrap();
+        assert!(
+            restored.status.success(),
+            "{isa:?} could not restore preserved generation A in a clean process: {}\nstdout:\n{}\nstderr:\n{}",
+            restored.status,
+            String::from_utf8_lossy(&restored.stdout),
+            String::from_utf8_lossy(&restored.stderr)
+        );
+    }
 }
 
 fn checkpoint_round_trip(

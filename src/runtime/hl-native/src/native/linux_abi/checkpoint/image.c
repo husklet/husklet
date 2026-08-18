@@ -726,6 +726,7 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir) {
     ckpt_interrupt_threads(c);
     if (stw_checkpoint_wait(request) != 0) {
         fprintf(stderr, "[ckpt] refuse: stop-the-world barrier did not converge\n");
+        ckpt_sink_group_abort(ckpt_sink_current(), procdir);
         stw_checkpoint_end();
         atomic_store_explicit(&g_ckpt_barrier_active, 0, memory_order_release);
         return -1;
@@ -733,6 +734,7 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir) {
     int count = stw_checkpoint_cpus(live, THREAD_REG_MAX);
     if (count < 1 || count > THREAD_REG_MAX) {
         fprintf(stderr, "[ckpt] refuse: invalid registered CPU count %d\n", count);
+        ckpt_sink_group_abort(ckpt_sink_current(), procdir);
         stw_checkpoint_end();
         atomic_store_explicit(&g_ckpt_barrier_active, 0, memory_order_release);
         return -1;
@@ -746,12 +748,14 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir) {
         if (live[i]->seccomp_mode != 0 || live[i]->seccomp_filters != NULL) {
             fprintf(stderr, "[ckpt] refuse: CPU %d has unserialized seccomp state (mode=%d filters=%p)\n", i,
                     live[i]->seccomp_mode, (void *)live[i]->seccomp_filters);
+            ckpt_sink_group_abort(ckpt_sink_current(), procdir);
             stw_checkpoint_end();
             atomic_store_explicit(&g_ckpt_barrier_active, 0, memory_order_release);
             return -1;
         }
     struct cpu *images = malloc((size_t)count * sizeof *images);
     if (!images) {
+        ckpt_sink_group_abort(ckpt_sink_current(), procdir);
         stw_checkpoint_end();
         atomic_store_explicit(&g_ckpt_barrier_active, 0, memory_order_release);
         return -1;
@@ -761,6 +765,7 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir) {
     g_ckpt_cpu_images = images;
     g_ckpt_cpu_count = count;
     int result = ckpt_dump_self_locked(c, procdir);
+    if (result != 0) ckpt_sink_group_abort(ckpt_sink_current(), procdir);
     g_ckpt_cpu_images = NULL;
     g_ckpt_cpu_count = 0;
     free(images);
@@ -877,7 +882,6 @@ done:
     free(fdrecs);
     if (!ok) {
         fprintf(stderr, "[ckpt] %s: ABORT -- see the refusal above; nothing from this process is published\n", group);
-        ckpt_sink_group_abort(sink, group);
         return -1;
     }
     fprintf(stderr, "[ckpt] %s: commit\n", group);
