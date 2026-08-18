@@ -96,6 +96,10 @@ unsafe extern "C" {
     #[cfg(all(test, feature = "native-test-hooks"))]
     fn hl_x86_64_fdvis_path_publication_test(scenario: c_uint) -> c_int;
     #[cfg(feature = "native-test-hooks")]
+    fn hl_aarch64_namespace_transaction_test(scenario: c_uint) -> c_int;
+    #[cfg(feature = "native-test-hooks")]
+    fn hl_x86_64_namespace_transaction_test(scenario: c_uint) -> c_int;
+    #[cfg(feature = "native-test-hooks")]
     fn hl_x86_64_store_preflight_test() -> c_int;
     #[cfg(feature = "native-test-hooks")]
     fn hl_aarch64_signal_errno_frame_test(
@@ -242,6 +246,19 @@ pub(crate) fn identity_registry_test(scenario: u32, iterations: u32) -> Result<(
     // SAFETY: the feature-gated native hook owns its private shared registry and child processes. Inputs are
     // scalar scenario controls, and the hook returns only after every child has been reaped.
     let status = unsafe { hl_c_backend_identity_registry_test(scenario, iterations) };
+    if status == 0 { Ok(()) } else { Err(status) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn namespace_transaction_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    let hook = match isa {
+        1 => hl_aarch64_namespace_transaction_test,
+        2 => hl_x86_64_namespace_transaction_test,
+        _ => return Err(-22),
+    };
+    // SAFETY: each feature-gated hook owns its shared transaction fixture and
+    // reaps every child before returning a scalar status.
+    let status = unsafe { hook(scenario) };
     if status == 0 { Ok(()) } else { Err(status) }
 }
 

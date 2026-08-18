@@ -74,6 +74,14 @@ pub fn identity_registry_test(scenario: u32, iterations: u32) -> Result<(), i32>
 
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
+pub fn namespace_transaction_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    bindings::namespace_transaction_test(isa, scenario)
+}
+
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
 #[must_use]
 pub fn x86_store_preflight_test() -> bool {
     bindings::x86_store_preflight_test()
