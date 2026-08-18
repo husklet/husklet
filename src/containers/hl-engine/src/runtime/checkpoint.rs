@@ -16,6 +16,7 @@ use std::{
 };
 
 mod broker;
+pub mod authority;
 #[path = "checkpoint_protocol.rs"]
 mod protocol;
 mod publication;

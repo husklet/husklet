@@ -12,6 +12,8 @@ workspace = true
 [dependencies]
 hl-log = { path = "../../packages/hl-log" }
 hl-native = { path = "../../runtime/hl-native" }
+ring.workspace = true
+zeroize.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

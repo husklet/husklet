@@ -1157,7 +1157,9 @@ dependencies = [
  "hl-native",
  "hl-process",
  "libc",
+ "ring",
  "tempfile",
+ "zeroize",
 ]
 
 [[package]]

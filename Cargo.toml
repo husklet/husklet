@@ -59,6 +59,8 @@ tokio = "1"
 tokio-util = "0.7"
 tower = "0.5"
 uuid = "1"
+zeroize = "1"
+ring = "0.17"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
