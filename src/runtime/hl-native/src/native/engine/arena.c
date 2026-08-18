@@ -5,8 +5,8 @@
 #include <string.h>
 
 #if defined(_WIN32)
-#include <bcrypt.h>
 #include <windows.h>
+#include <bcrypt.h>
 #ifndef MEM_RESERVE_PLACEHOLDER
 #define MEM_RESERVE_PLACEHOLDER 0x00040000
 #endif
@@ -249,12 +249,14 @@ static int arena_claim(uint64_t base, uint64_t limit) {
 }
 
 static void arena_release(uint64_t base, uint64_t limit) {
-    uint64_t length = limit - base;
 #if defined(_WIN32)
+    (void)limit;
     (void)VirtualFree((void *)(uintptr_t)base, 0, MEM_RELEASE);
 #elif defined(__APPLE__)
+    uint64_t length = limit - base;
     (void)mach_vm_deallocate(mach_task_self(), (mach_vm_address_t)base, (mach_vm_size_t)length);
 #else
+    uint64_t length = limit - base;
     (void)munmap((void *)(uintptr_t)base, (size_t)length);
 #endif
 }
@@ -303,6 +305,7 @@ static int arena_placeholder_restore(uint64_t address, uint64_t length) {
     if (atomic_exchange_explicit(&arena_test_restore_failure, 0, memory_order_relaxed) != 0) return (errno = EIO, -1);
 #endif
 #if defined(_WIN32)
+    (void)length;
     return VirtualFree((void *)(uintptr_t)address, 0, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER) ? 0 : (errno = EIO, -1);
 #elif defined(__APPLE__)
     mach_vm_address_t mapped = (mach_vm_address_t)address;

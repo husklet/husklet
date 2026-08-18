@@ -37,6 +37,7 @@
 #endif
 
 #include <fcntl.h>
+#include <errno.h>
 #include <limits.h>
 #include <stddef.h>
 #include <time.h>
@@ -68,6 +69,13 @@
  * no name in <fcntl.h> here. */
 #ifndef O_ACCMODE
 #define O_ACCMODE 0003
+#endif
+
+/* The UCRT and mingw errno namespaces omit ESTALE. Ownership registries use
+ * it to distinguish an expired capability from a malformed one, and their
+ * contract is shared with the Linux guest ABI, where ESTALE is 116. */
+#ifndef ESTALE
+#define ESTALE 116
 #endif
 
 /* clock_gettime and its clock ids. C11's <time.h> in the UCRT has

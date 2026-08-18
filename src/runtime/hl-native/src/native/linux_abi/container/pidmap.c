@@ -13,16 +13,20 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined(_WIN32)
 #include <sys/mman.h>
 #include <sys/wait.h>
+#endif
 #include <unistd.h>
 
+#if !defined(_WIN32)
 #if defined(__APPLE__) && !defined(MAP_ANON)
 #error "Darwin native sources require _DARWIN_C_SOURCE before system headers"
 #endif
 
 #ifndef MAP_ANONYMOUS
 #define MAP_ANONYMOUS MAP_ANON
+#endif
 #endif
 
 enum {
@@ -68,7 +72,7 @@ struct hl_linux_identity_registry_storage {
 static pthread_mutex_t g_pidmap_thread_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_once_t g_pidmap_atfork_once = PTHREAD_ONCE_INIT;
 
-#if defined(HL_NATIVE_TEST_HOOKS)
+#if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
 static int g_pidmap_test_crash_phase;
 
 static void pidmap_test_crash(int phase) {
@@ -130,14 +134,29 @@ static int registry_file(void) {
 }
 
 static hl_linux_identity_registry_storage *registry_storage(void) {
+#if defined(_WIN32)
+    // Windows has no forked guest process tree and checkpoint requests fail closed.
+    // The registry is consequently process-local, but retains the same zeroed layout.
+    void *memory = calloc(1, sizeof(hl_linux_identity_registry_storage));
+#else
     void *memory = mmap(NULL, sizeof(hl_linux_identity_registry_storage), PROT_READ | PROT_WRITE,
                         MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (memory == MAP_FAILED) return NULL;
     memset(memory, 0, sizeof(hl_linux_identity_registry_storage));
+#endif
+    if (memory == NULL) return NULL;
     hl_linux_identity_registry_storage *storage = memory;
     for (uint32_t kind = 0; kind < PIDMAP_KINDS; ++kind)
         atomic_init(&storage->map[kind].next_guest, 1);
     return storage;
+}
+
+static void registry_storage_release(hl_linux_identity_registry_storage *storage) {
+#if defined(_WIN32)
+    free(storage);
+#else
+    (void)munmap(storage, sizeof *storage);
+#endif
 }
 
 static int registry_lock(hl_linux_identity_registry *registry) {
@@ -196,6 +215,11 @@ static int registry_recover_semantic_locked(hl_linux_identity_registry *owner) {
     hl_linux_identity_registry_storage *registry = owner->storage;
     unsigned semantic = atomic_load_explicit(&registry->semantic, memory_order_acquire);
     if (semantic == PIDMAP_SEMANTIC_NONE) return 0;
+#if defined(_WIN32)
+    atomic_store_explicit(&registry->poisoned, 1, memory_order_release);
+    errno = ENOTSUP;
+    return -1;
+#else
     int32_t host_process = registry->semantic_host_process;
     int32_t guest_group = registry->semantic_guest_group;
     int32_t host_group = registry->semantic_host_group;
@@ -233,6 +257,7 @@ static int registry_recover_semantic_locked(hl_linux_identity_registry *owner) {
     }
     atomic_store_explicit(&registry->semantic, PIDMAP_SEMANTIC_NONE, memory_order_release);
     return 0;
+#endif
 }
 
 static int registry_recover_locked(hl_linux_identity_registry *owner) {
@@ -354,7 +379,7 @@ int hl_linux_identity_registry_prepare(hl_linux_identity_registry *registry, hl_
     int descriptor = registry_file();
     if (descriptor < 0) {
         int saved = errno;
-        (void)munmap(storage, sizeof *storage);
+        registry_storage_release(storage);
         errno = saved;
         return -1;
     }
@@ -396,6 +421,7 @@ int hl_linux_identity_registry_add(const hl_linux_pidmap_update *updates, size_t
     return registry_apply(updates, count);
 }
 
+#if !defined(_WIN32)
 static int registry_semantic_begin(hl_linux_identity_registry *owner, unsigned semantic, int32_t guest_process,
                                    int32_t host_process, int32_t guest_group, int32_t host_group) {
     if (registry_lock(owner) != 0) return -1;
@@ -423,6 +449,7 @@ static int registry_semantic_begin(hl_linux_identity_registry *owner, unsigned s
     pidmap_test_crash(8);
     return 0;
 }
+#endif
 
 int hl_linux_identity_registry_setsid(hl_linux_pidmap *pid, hl_linux_pidmap *pgid, hl_linux_pidmap *sid, int32_t guest,
                                       int32_t *host_sid) {
@@ -431,6 +458,10 @@ int hl_linux_identity_registry_setsid(hl_linux_pidmap *pid, hl_linux_pidmap *pgi
         errno = EINVAL;
         return -1;
     }
+#if defined(_WIN32)
+    errno = ENOTSUP;
+    return -1;
+#else
     hl_linux_identity_registry *owner = pid->registry;
     int32_t host = (int32_t)getpid();
     if (registry_semantic_begin(owner, PIDMAP_SEMANTIC_SETSID, guest, host, guest, host) != 0) return -1;
@@ -452,6 +483,7 @@ int hl_linux_identity_registry_setsid(hl_linux_pidmap *pid, hl_linux_pidmap *pgi
     }
     *host_sid = (int32_t)result;
     return 0;
+#endif
 }
 
 int hl_linux_identity_registry_setpgid(hl_linux_pidmap *pid, hl_linux_pidmap *pgid, int32_t guest_process,
@@ -461,6 +493,10 @@ int hl_linux_identity_registry_setpgid(hl_linux_pidmap *pid, hl_linux_pidmap *pg
         errno = EINVAL;
         return -1;
     }
+#if defined(_WIN32)
+    errno = ENOTSUP;
+    return -1;
+#else
     int32_t concrete_process = host_process == 0 ? (int32_t)getpid() : host_process;
     int32_t concrete_group = host_group == 0 ? concrete_process : host_group;
     hl_linux_identity_registry *owner = pid->registry;
@@ -483,8 +519,10 @@ int hl_linux_identity_registry_setpgid(hl_linux_pidmap *pid, hl_linux_pidmap *pg
         return -1;
     }
     return 0;
+#endif
 }
 
+#if !defined(_WIN32)
 static int registry_host_identity_referenced(const hl_linux_pidmap *pid, unsigned bank, int32_t removed_host,
                                              int32_t typed_host, int session) {
     for (uint32_t index = 0; index < HL_LINUX_PIDMAP_CAPACITY; ++index) {
@@ -495,6 +533,7 @@ static int registry_host_identity_referenced(const hl_linux_pidmap *pid, unsigne
     }
     return 0;
 }
+#endif
 
 int hl_linux_identity_registry_reap(hl_linux_pidmap *pid, hl_linux_pidmap *pgid, hl_linux_pidmap *sid,
                                     int32_t host_process) {
@@ -503,6 +542,10 @@ int hl_linux_identity_registry_reap(hl_linux_pidmap *pid, hl_linux_pidmap *pgid,
         errno = EINVAL;
         return -1;
     }
+#if defined(_WIN32)
+    errno = ENOTSUP;
+    return -1;
+#else
     hl_linux_identity_registry *owner = pid->registry;
     if (registry_lock(owner) != 0) return -1;
     if (registry_recover_locked(owner) != 0) {
@@ -541,6 +584,7 @@ int hl_linux_identity_registry_reap(hl_linux_pidmap *pid, hl_linux_pidmap *pgid,
     if (result != 0) atomic_store_explicit(&owner->storage->poisoned, 1, memory_order_release);
     registry_unlock(owner);
     return result;
+#endif
 }
 
 uint64_t hl_linux_identity_registry_commit_word(const hl_linux_identity_registry *registry) {
@@ -732,7 +776,7 @@ uint32_t hl_linux_pidmap_count(const hl_linux_pidmap *map) {
     return count > UINT32_MAX ? UINT32_MAX : (uint32_t)count;
 }
 
-#if defined(HL_NATIVE_TEST_HOOKS)
+#if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
 static int pidmap_test_prepare(hl_linux_identity_registry *registry, hl_linux_pidmap maps[PIDMAP_KINDS]) {
     memset(registry, 0, sizeof *registry);
     registry->lock_fd = -1;
@@ -949,6 +993,13 @@ HL_API int hl_c_backend_identity_registry_test(uint32_t scenario, uint32_t itera
     if (scenario == 10) return pidmap_test_multiple_new();
     if (scenario == 11) return pidmap_test_same_host_registration(iterations);
     errno = EINVAL;
+    return -1;
+}
+#elif defined(HL_NATIVE_TEST_HOOKS)
+HL_API int hl_c_backend_identity_registry_test(uint32_t scenario, uint32_t iterations) {
+    (void)scenario;
+    (void)iterations;
+    errno = ENOTSUP;
     return -1;
 }
 #endif
