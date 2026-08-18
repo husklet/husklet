@@ -12,7 +12,8 @@ workspace = true
 [dependencies]
 hl-log = { path = "../../packages/hl-log" }
 hl-native = { path = "../../runtime/hl-native" }
-ring.workspace = true
+hmac.workspace = true
+sha2.workspace = true
 zeroize.workspace = true
 
 [target.'cfg(unix)'.dependencies]
