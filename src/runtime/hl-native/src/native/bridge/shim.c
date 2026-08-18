@@ -10,6 +10,7 @@
 #include "main_plan.h"
 #include "host.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stdbool.h>
 #include <stdatomic.h>
@@ -140,35 +141,58 @@ extern uint32_t HL_BRIDGE_CKPT(trigger_bump)(void *);
 extern void HL_BRIDGE_CKPT(trigger_destroy)(void *, hl_activation_descriptor);
 
 HL_API int32_t hl_c_backend_checkpoint_broker_pair(int32_t *parent, int32_t *child) {
+#if !defined(_WIN32)
     hl_activation_descriptor parent_descriptor = HL_ACTIVATION_DESCRIPTOR_NONE;
     hl_activation_descriptor child_descriptor = HL_ACTIVATION_DESCRIPTOR_NONE;
+#endif
+    if (parent != NULL) *parent = -1;
+    if (child != NULL) *child = -1;
     if (parent == NULL || child == NULL) return HL_STATUS_INVALID_ARGUMENT;
-    *parent = -1;
-    *child = -1;
+#if defined(_WIN32)
+    return HL_STATUS_NOT_SUPPORTED;
+#else
     if (HL_BRIDGE_CKPT(broker_pair)(&parent_descriptor, &child_descriptor) != 0 || parent_descriptor > INT32_MAX ||
         child_descriptor > INT32_MAX)
         return HL_STATUS_PLATFORM_FAILURE;
     *parent = (int32_t)parent_descriptor;
     *child = (int32_t)child_descriptor;
     return HL_STATUS_OK;
+#endif
 }
 
 HL_API int32_t hl_c_backend_checkpoint_broker_accept(int32_t broker, int32_t timeout_ms, uint64_t *host_pid) {
+#if !defined(_WIN32)
     hl_activation_descriptor channel;
-    if (broker < 0 || timeout_ms < 0) return -1;
+#endif
+    if (host_pid != NULL) *host_pid = 0;
+    if (broker < 0 || timeout_ms < 0 || host_pid == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+#if defined(_WIN32)
+    errno = ENOTSUP;
+    return -1;
+#else
     channel = HL_BRIDGE_CKPT(broker_accept)((hl_activation_descriptor)broker, timeout_ms, host_pid);
     return channel == HL_ACTIVATION_DESCRIPTOR_NONE || channel > INT32_MAX ? -1 : (int32_t)channel;
+#endif
 }
 
 HL_API int32_t hl_c_backend_checkpoint_trigger_create(int32_t *descriptor, void **mapping) {
+#if !defined(_WIN32)
     hl_activation_descriptor native_descriptor = HL_ACTIVATION_DESCRIPTOR_NONE;
+#endif
+    if (descriptor != NULL) *descriptor = -1;
+    if (mapping != NULL) *mapping = NULL;
     if (descriptor == NULL || mapping == NULL) return HL_STATUS_INVALID_ARGUMENT;
-    *descriptor = -1;
-    *mapping = NULL;
+#if defined(_WIN32)
+    return HL_STATUS_NOT_SUPPORTED;
+#else
     if (HL_BRIDGE_CKPT(trigger_create)(&native_descriptor, mapping) != 0 || native_descriptor > INT32_MAX)
         return HL_STATUS_PLATFORM_FAILURE;
     *descriptor = (int32_t)native_descriptor;
     return HL_STATUS_OK;
+#endif
 }
 
 HL_API uint32_t hl_c_backend_checkpoint_trigger_bump(void *mapping) {
@@ -189,7 +213,7 @@ HL_API int32_t hl_c_backend_checkpoint_adopt(uint32_t isa, int32_t broker, int32
     /* The Windows checkpoint channel is deliberately unavailable until its
      * named-pipe and DuplicateHandle transport exists.  Keep the ABI present,
      * but do not pretend POSIX descriptor adoption succeeded. */
-    return HL_STATUS_PLATFORM_FAILURE;
+    return HL_STATUS_NOT_SUPPORTED;
 #else
     char broker_text[32];
     char trigger_text[32];
@@ -221,7 +245,14 @@ HL_API int32_t hl_c_backend_checkpoint_adopt(uint32_t isa, int32_t broker, int32
 extern int HL_BRIDGE_CKPT(interrupt_signal)(void);
 
 HL_API int32_t hl_c_backend_checkpoint_interrupt_signal(uint32_t isa) {
-#if defined(HL_BUILD_TARGET_X86_64_ONLY)
+#if defined(_WIN32)
+    if (isa != 1 && isa != 2) {
+        errno = EINVAL;
+        return -1;
+    }
+    errno = ENOTSUP;
+    return -1;
+#elif defined(HL_BUILD_TARGET_X86_64_ONLY)
     return isa == 2 ? HL_BRIDGE_CKPT(interrupt_signal)() : -1;
 #else
     return isa == 1 || isa == 2 ? HL_BRIDGE_CKPT(interrupt_signal)() : -1;

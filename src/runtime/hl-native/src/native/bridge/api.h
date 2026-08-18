@@ -15,7 +15,10 @@ HL_EXTERN_C_BEGIN
 
 HL_API int32_t hl_c_backend_leak_check_nonvacuity(void);
 /* Checkpoint transport descriptors are owned by the caller. Adoption borrows
- * and duplicates both inputs before moving the duplicates into private space. */
+ * and duplicates both inputs before moving the duplicates into private space.
+ * Hosts without checkpoint transport return HL_STATUS_NOT_SUPPORTED from the
+ * status-valued operations after clearing every output. Descriptor-valued
+ * operations return -1, clear their outputs, and set errno to ENOTSUP. */
 HL_API int32_t hl_c_backend_checkpoint_broker_pair(int32_t *parent, int32_t *child);
 HL_API int32_t hl_c_backend_checkpoint_broker_accept(int32_t broker, int32_t timeout_ms,
                                                      uint64_t *host_pid);

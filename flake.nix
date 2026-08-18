@@ -1029,6 +1029,31 @@
               | awk '$2 == "T" && $3 ~ /^hl_/ { print $3 }' \
               | sort -u > actual-engine-exports
             diff -u expected-engine-exports actual-engine-exports
+            ${lib.escapeShellArg compiler} -std=c11 -Wall -Wextra -Werror \
+              -DHL_SHARED \
+              -Isrc/runtime/hl-native/src/native \
+              -Isrc/runtime/hl-native/src/native/include \
+              -Isrc/runtime/hl-native/src/native/bridge \
+              src/runtime/hl-native/tests/bridge-abi/windows.c "$import" \
+              -o checkpoint-bridge-contract.exe
+            ${windows.stdenv.cc.targetPrefix}objdump -f checkpoint-bridge-contract.exe \
+              | grep -F 'file format pei-x86-64' >/dev/null
+            ${windows.stdenv.cc.targetPrefix}objdump -p checkpoint-bridge-contract.exe \
+              | grep -F 'DLL Name: hl_native_engine.dll' >/dev/null
+            for symbol in \
+              hl_c_backend_checkpoint_adopt \
+              hl_c_backend_checkpoint_broker_accept \
+              hl_c_backend_checkpoint_broker_pair \
+              hl_c_backend_checkpoint_configure \
+              hl_c_backend_checkpoint_interrupt_signal \
+              hl_c_backend_checkpoint_trigger_bump \
+              hl_c_backend_checkpoint_trigger_create \
+              hl_c_backend_checkpoint_trigger_destroy; do
+              ${windows.stdenv.cc.targetPrefix}objdump -p checkpoint-bridge-contract.exe \
+                | grep -F "$symbol" >/dev/null
+            done
+            cargo test --locked --offline --target ${target} -p hl-native \
+              --test identity_registry --no-run
             ${lib.escapeShellArg compiler} -std=c11 -DHL_SHARED -DHL_BUILDING_ENGINE \
               -Isrc/runtime/hl-native/src/native -Isrc/runtime/hl-native/src/native/include \
               -c src/runtime/hl-native/src/native/bridge/host.c -o host-bridge.obj
