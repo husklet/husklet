@@ -209,7 +209,8 @@ impl RecordAssertion {
     }
 
     fn violation(&self, stderr: &[u8]) -> Option<String> {
-        let records = String::from_utf8_lossy(stderr)
+        let stderr = String::from_utf8_lossy(stderr);
+        let records = stderr
             .lines()
             .filter_map(|line| {
                 let fields = line.trim_start().strip_prefix(&self.record)?;
