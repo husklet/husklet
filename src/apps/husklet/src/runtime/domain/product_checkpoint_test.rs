@@ -80,12 +80,19 @@ impl Drop for DomainChild {
 
 impl Fixture {
     async fn create() -> TestResult<Self> {
-        let temporary = tempfile::tempdir()?;
+        let temporary = context("create product checkpoint temporary directory", tempfile::tempdir())?;
         let prepared = async {
             let home = temporary.path().join("home");
             let storage = temporary.path().join("workspace");
             let rootfs = temporary.path().join("rootfs");
-            std::fs::create_dir_all(&home)?;
+            context(
+                format!("create fixture home {}", home.display()),
+                std::fs::create_dir_all(&home),
+            )?;
+            context(
+                format!("create workspace storage {}", storage.display()),
+                std::fs::create_dir_all(&storage),
+            )?;
             unpack_alpine(&rootfs)?;
 
             let guest = match std::env::var("HL_SCENARIO_TARGET") {
@@ -93,7 +100,7 @@ impl Fixture {
                 Ok(value) if value == "arm64" => Guest::Aarch64,
                 Err(std::env::VarError::NotPresent) => Guest::Aarch64,
                 Ok(value) => return Err(format!("unsupported HL_SCENARIO_TARGET {value:?}").into()),
-                Err(error) => return Err(error.into()),
+                Err(error) => return Err(format!("read HL_SCENARIO_TARGET: {error}").into()),
             };
             let arch = match guest {
                 Guest::Aarch64 => hl_ws::Arch::Arm64,
@@ -107,19 +114,33 @@ impl Fixture {
             workspace.storage = Some(storage.clone());
             workspace.docker_sock = false;
             let store_path = home.join(".hl/workspaces.conf");
-            let mut store = crate::config::WorkspaceStore::load(&store_path)?;
-            store.upsert(workspace.clone())?;
+            let mut store = context(
+                format!("open workspace store {}", store_path.display()),
+                crate::config::WorkspaceStore::load(&store_path),
+            )?;
+            context(
+                format!("publish workspace configuration {}", store_path.display()),
+                store.upsert(workspace.clone()),
+            )?;
 
-            let checkpoints = std::sync::Arc::new(
-                crate::runtime::checkpoint::WorkspaceCheckpoints::open(&storage).map_err(io::Error::other)?,
-            );
-            let containers = hl_container::Containers::builder(Config::new(storage.join("containers")))
-                .checkpoints(checkpoints)
-                .build()
-                .await?;
+            let checkpoints = std::sync::Arc::new(context(
+                format!("open workspace checkpoint storage {}", storage.display()),
+                crate::runtime::checkpoint::WorkspaceCheckpoints::open(&storage),
+            )?);
+            let container_storage = storage.join("containers");
+            let containers = context(
+                format!("open container repository {}", container_storage.display()),
+                hl_container::Containers::builder(Config::new(container_storage.clone()))
+                    .checkpoints(checkpoints)
+                    .build()
+                    .await,
+            )?;
             let configuration = Configuration::new(&workspace);
-            let signature = configuration.signature()?;
-            let configuration_signature = configuration.configuration_signature()?;
+            let signature = context("derive workspace signature", configuration.signature())?;
+            let configuration_signature = context(
+                "derive workspace configuration signature",
+                configuration.configuration_signature(),
+            )?;
             let runtime_signature = configuration.runtime_signature();
             let spec = ContainerSpec::from_directory(&rootfs, Process::new("/bin/sh").args(["-c", SCRIPT]))
                 .name(CONTAINER)
@@ -130,9 +151,12 @@ impl Fixture {
                     network_isolated: true,
                     seccomp_baseline: hl_container::SeccompBaseline::Container,
                 });
-            containers
-                .create(configuration.container(spec, signature, configuration_signature, runtime_signature))
-                .await?;
+            context(
+                "seed workspace primary container",
+                containers
+                    .create(configuration.container(spec, signature, configuration_signature, runtime_signature))
+                    .await,
+            )?;
             drop(containers);
 
             let domain = Domain::new(&workspace);
@@ -339,9 +363,31 @@ async fn run_cycles(fixture: &mut Fixture) -> TestResult {
 
 fn unpack_alpine(destination: &Path) -> TestResult {
     let archive = std::env::var_os("HL_ALPINE_ARCHIVE").ok_or("pinned Alpine archive is unavailable")?;
-    std::fs::create_dir(destination)?;
-    tar::Archive::new(flate2::read::GzDecoder::new(std::fs::File::open(archive)?)).unpack(destination)?;
+    context(
+        format!("create Alpine rootfs {}", destination.display()),
+        std::fs::create_dir(destination),
+    )?;
+    let archive_path = PathBuf::from(archive);
+    let source = context(
+        format!("open pinned Alpine archive {}", archive_path.display()),
+        std::fs::File::open(&archive_path),
+    )?;
+    context(
+        format!(
+            "unpack pinned Alpine archive {} into {}",
+            archive_path.display(),
+            destination.display()
+        ),
+        tar::Archive::new(flate2::read::GzDecoder::new(source)).unpack(destination),
+    )?;
     Ok(())
+}
+
+fn context<T, E>(operation: impl std::fmt::Display, result: Result<T, E>) -> TestResult<T>
+where
+    E: std::fmt::Display,
+{
+    result.map_err(|error| format!("{operation}: {error}").into())
 }
 
 fn read_guest_identities(path: &Path) -> TestResult<Vec<u32>> {
