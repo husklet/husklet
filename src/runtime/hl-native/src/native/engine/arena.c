@@ -5,51 +5,153 @@
 #include <string.h>
 
 #if defined(_WIN32)
+#include <bcrypt.h>
 #include <windows.h>
 #ifndef MEM_RESERVE_PLACEHOLDER
 #define MEM_RESERVE_PLACEHOLDER 0x00040000
 #endif
 #else
 #include <pthread.h>
+#include <stdlib.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/random.h>
+#endif
 #if defined(__APPLE__)
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 #endif
 #endif
 
-static uint64_t arena_owner(void) {
+#if ATOMIC_INT_LOCK_FREE != 2
+#error "arena lifecycle and fork recovery require lock-free 32-bit atomics"
+#endif
+#if (defined(_WIN32) && ATOMIC_LLONG_LOCK_FREE != 2) || (!defined(_WIN32) && ATOMIC_LONG_LOCK_FREE != 2)
+#error "arena identity and fork recovery require lock-free 64-bit atomics"
+#endif
+
+static _Atomic uint64_t arena_authority_sequence = 1;
+static _Atomic uint64_t arena_fork_sequence = 1;
+static _Atomic uint64_t arena_nonce_process;
+static _Atomic uint64_t arena_nonce_initializer_process;
+static _Atomic uint64_t arena_process_nonce;
+
+static void arena_lock(hl_arena_authority *authority);
+static void arena_unlock(hl_arena_authority *authority);
+
+static uint64_t arena_process_id(void) {
 #if defined(_WIN32)
-    return ((uint64_t)GetCurrentProcessId() << 32) | (uint64_t)GetCurrentThreadId();
+    return (uint64_t)GetCurrentProcessId();
 #else
-    pthread_t thread = pthread_self();
-    uint64_t bits = 0;
-    size_t copied = sizeof(thread) < sizeof(bits) ? sizeof(thread) : sizeof(bits);
-    memcpy(&bits, &thread, copied);
-    uint32_t fingerprint = (uint32_t)(bits ^ (bits >> 32));
-    if (fingerprint == 0) fingerprint = 1;
-    return ((uint64_t)(uint32_t)getpid() << 32) | fingerprint;
+    return (uint64_t)(uint32_t)getpid();
 #endif
 }
 
-static void arena_lock(hl_arena_authority *authority) {
-    const uint64_t self = arena_owner();
-    for (;;) {
-        uint64_t current = atomic_load_explicit(&authority->owner, memory_order_acquire);
-        if (current != 0 && (uint32_t)(current >> 32) != (uint32_t)(self >> 32)) {
-            (void)atomic_compare_exchange_weak_explicit(&authority->owner, &current, 0, memory_order_acq_rel,
-                                                        memory_order_acquire);
+static int arena_random_u64(uint64_t *value) {
+#if defined(_WIN32)
+    return BCryptGenRandom(NULL, (PUCHAR)value, (ULONG)sizeof(*value), BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0 ? 0 : -1;
+#elif defined(__APPLE__)
+    arc4random_buf(value, sizeof(*value));
+    return 0;
+#else
+    size_t offset = 0;
+    while (offset < sizeof(*value)) {
+        ssize_t count = getrandom((unsigned char *)value + offset, sizeof(*value) - offset, 0);
+        if (count > 0) {
+            offset += (size_t)count;
             continue;
         }
-        uint64_t empty = 0;
-        if (atomic_compare_exchange_weak_explicit(&authority->owner, &empty, self, memory_order_acq_rel,
-                                                  memory_order_acquire))
-            return;
+        if (count < 0 && errno == EINTR) continue;
+        return -1;
+    }
+    return 0;
+#endif
+}
+
+static int arena_identity(uint64_t *nonce, uint64_t *identity) {
+    const uint64_t process = arena_process_id();
+    for (;;) {
+        uint64_t owner = atomic_load_explicit(&arena_nonce_process, memory_order_acquire);
+        if (owner == process) break;
+        if (owner == UINT64_MAX) {
+            if (atomic_load_explicit(&arena_nonce_initializer_process, memory_order_acquire) != process) {
+                uint64_t initializing = UINT64_MAX;
+                (void)atomic_compare_exchange_strong_explicit(&arena_nonce_process, &initializing, 0,
+                                                              memory_order_acq_rel, memory_order_acquire);
+            }
+            continue;
+        }
+        atomic_store_explicit(&arena_nonce_initializer_process, process, memory_order_release);
+        if (atomic_compare_exchange_weak_explicit(&arena_nonce_process, &owner, UINT64_MAX, memory_order_acq_rel,
+                                                  memory_order_acquire)) {
+            uint64_t generated = 0;
+            do {
+                if (arena_random_u64(&generated) != 0) {
+                    atomic_store_explicit(&arena_nonce_initializer_process, 0, memory_order_relaxed);
+                    atomic_store_explicit(&arena_nonce_process, 0, memory_order_release);
+                    return (errno = EIO, -1);
+                }
+            } while (generated == 0);
+            atomic_store_explicit(&arena_process_nonce, generated, memory_order_relaxed);
+            atomic_store_explicit(&arena_authority_sequence, 1, memory_order_relaxed);
+            atomic_store_explicit(&arena_fork_sequence, 1, memory_order_relaxed);
+            atomic_store_explicit(&arena_nonce_initializer_process, 0, memory_order_relaxed);
+            atomic_store_explicit(&arena_nonce_process, process, memory_order_release);
+            break;
+        }
+    }
+    *nonce = atomic_load_explicit(&arena_process_nonce, memory_order_acquire);
+    uint64_t current = atomic_load_explicit(&arena_authority_sequence, memory_order_relaxed);
+    for (;;) {
+        if (current == UINT64_MAX) return (errno = EOVERFLOW, -1);
+        if (atomic_compare_exchange_weak_explicit(&arena_authority_sequence, &current, current + 1,
+                                                  memory_order_relaxed, memory_order_relaxed)) {
+            *identity = current;
+            return 0;
+        }
     }
 }
 
-static uint64_t arena_host_granule(void) {
+static int arena_sequence_take(_Atomic uint64_t *sequence, uint64_t *value) {
+    uint64_t current = atomic_load_explicit(sequence, memory_order_relaxed);
+    for (;;) {
+        if (current == UINT64_MAX) return (errno = EOVERFLOW, -1);
+        if (atomic_compare_exchange_weak_explicit(sequence, &current, current + 1, memory_order_relaxed,
+                                                  memory_order_relaxed)) {
+            *value = current;
+            return 0;
+        }
+    }
+}
+
+static uint64_t arena_nonce_derive(uint64_t nonce, uint64_t sequence) {
+    uint64_t value = nonce ^ sequence ^ UINT64_C(0x9e3779b97f4a7c15);
+    value = (value ^ (value >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+    value = (value ^ (value >> 27)) * UINT64_C(0x94d049bb133111eb);
+    value ^= value >> 31;
+    return value == 0 ? UINT64_MAX : value;
+}
+
+static int arena_ready_lock(hl_arena_authority *authority) {
+    if (atomic_load_explicit(&authority->lifecycle, memory_order_acquire) != HL_ARENA_READY)
+        return (errno = EINVAL, -1);
+    arena_lock(authority);
+    if (atomic_load_explicit(&authority->lifecycle, memory_order_acquire) != HL_ARENA_READY) {
+        arena_unlock(authority);
+        return (errno = EINVAL, -1);
+    }
+    return 0;
+}
+
+static void arena_lock(hl_arena_authority *authority) {
+    uint32_t unlocked = 0;
+    while (!atomic_compare_exchange_weak_explicit(&authority->lock, &unlocked, 1, memory_order_acq_rel,
+                                                  memory_order_relaxed))
+        unlocked = 0;
+}
+
+uint64_t hl_arena_host_granule(void) {
 #if defined(_WIN32)
     SYSTEM_INFO information;
     GetSystemInfo(&information);
@@ -64,8 +166,28 @@ static uint64_t arena_host_granule(void) {
 }
 
 static void arena_unlock(hl_arena_authority *authority) {
-    atomic_store_explicit(&authority->owner, 0, memory_order_release);
+    atomic_store_explicit(&authority->lock, 0, memory_order_release);
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+void hl_arena_test_lock(hl_arena_authority *authority) {
+    arena_lock(authority);
+}
+
+void hl_arena_test_unlock(hl_arena_authority *authority) {
+    arena_unlock(authority);
+}
+
+void hl_arena_test_identity_sequence(uint64_t next) {
+    atomic_store_explicit(&arena_authority_sequence, next, memory_order_relaxed);
+}
+
+void hl_arena_test_generation(hl_arena_authority *authority, uint64_t generation) {
+    arena_lock(authority);
+    authority->manifest.generation = generation;
+    arena_unlock(authority);
+}
+#endif
 
 static int arena_claim(uint64_t base, uint64_t limit) {
     uint64_t length = limit - base;
@@ -129,8 +251,10 @@ static int aligned_range(uint64_t base, uint64_t limit, uint64_t granule) {
 }
 
 int hl_arena_manifest_valid(const hl_arena_manifest *manifest) {
+    uint64_t host_granule = hl_arena_host_granule();
     return manifest != NULL && manifest->magic == HL_ARENA_MANIFEST_MAGIC &&
-           manifest->version == HL_ARENA_MANIFEST_VERSION && manifest->size == sizeof(*manifest) &&
+           manifest->version == HL_ARENA_MANIFEST_VERSION && manifest->size == sizeof(*manifest) && host_granule != 0 &&
+           manifest->granule >= host_granule && manifest->granule % host_granule == 0 &&
            aligned_range(manifest->normal_base, manifest->normal_limit, manifest->granule) &&
            aligned_range(manifest->low32_base, manifest->low32_limit, manifest->granule) &&
            manifest->normal_cursor >= manifest->normal_base && manifest->normal_cursor <= manifest->normal_limit &&
@@ -138,11 +262,14 @@ int hl_arena_manifest_valid(const hl_arena_manifest *manifest) {
            manifest->normal_cursor % manifest->granule == 0 && manifest->low32_cursor % manifest->granule == 0 &&
            (manifest->normal_limit <= manifest->low32_base || manifest->low32_limit <= manifest->normal_base) &&
            manifest->low32_limit <= UINT64_C(0x100000000) && manifest->generation != 0 &&
-           manifest->next_identity != 0 && manifest->reservation_count <= HL_ARENA_MAX_RESERVATIONS;
+           manifest->authority_nonce != 0 && manifest->authority_identity != 0 && manifest->next_identity != 0 &&
+           manifest->reservation_count <= HL_ARENA_MAX_RESERVATIONS && manifest->reserved == 0;
 }
 
 int hl_arena_authority_init(hl_arena_authority *authority, const hl_arena_config *config) {
-    uint64_t host_granule = arena_host_granule();
+    uint64_t host_granule = hl_arena_host_granule();
+    uint64_t nonce;
+    uint64_t identity;
     if (authority == NULL || config == NULL || host_granule == 0 || config->granule < host_granule ||
         config->granule % host_granule != 0 ||
         !aligned_range(config->normal_base, config->normal_limit, config->granule) ||
@@ -152,11 +279,32 @@ int hl_arena_authority_init(hl_arena_authority *authority, const hl_arena_config
         errno = EINVAL;
         return -1;
     }
-    memset(authority, 0, sizeof(*authority));
-    atomic_init(&authority->owner, 0);
-    if (arena_claim(config->normal_base, config->normal_limit) != 0) return -1;
+    uint32_t empty = HL_ARENA_EMPTY;
+    if (!atomic_compare_exchange_strong_explicit(&authority->lifecycle, &empty, HL_ARENA_INITIALIZING,
+                                                 memory_order_acq_rel, memory_order_acquire))
+        return (errno = EALREADY, -1);
+    memset(&authority->manifest, 0, sizeof(authority->manifest));
+    memset(authority->reservations, 0, sizeof(authority->reservations));
+    authority->reservation_count = 0;
+    authority->active_transaction = 0;
+    atomic_store_explicit(&authority->fork_phase, 0, memory_order_relaxed);
+    authority->fork_process = 0;
+    if (arena_claim(config->normal_base, config->normal_limit) != 0) {
+        atomic_store_explicit(&authority->lifecycle, HL_ARENA_EMPTY, memory_order_release);
+        return -1;
+    }
     if (arena_claim(config->low32_base, config->low32_limit) != 0) {
         arena_release(config->normal_base, config->normal_limit);
+        atomic_store_explicit(&authority->lifecycle, HL_ARENA_EMPTY, memory_order_release);
+        return -1;
+    }
+    if (arena_identity(&nonce, &identity) != 0) {
+        int identity_error = errno;
+        /* These unpublished claims can still be released safely. */
+        arena_release(config->low32_base, config->low32_limit);
+        arena_release(config->normal_base, config->normal_limit);
+        atomic_store_explicit(&authority->lifecycle, HL_ARENA_EMPTY, memory_order_release);
+        errno = identity_error;
         return -1;
     }
     authority->manifest = (hl_arena_manifest){HL_ARENA_MANIFEST_MAGIC,
@@ -170,6 +318,8 @@ int hl_arena_authority_init(hl_arena_authority *authority, const hl_arena_config
                                               config->low32_limit,
                                               config->low32_base,
                                               1,
+                                              nonce,
+                                              identity,
                                               1,
                                               0,
                                               0};
@@ -177,38 +327,129 @@ int hl_arena_authority_init(hl_arena_authority *authority, const hl_arena_config
     authority->claimed_normal_limit = config->normal_limit;
     authority->claimed_low32_base = config->low32_base;
     authority->claimed_low32_limit = config->low32_limit;
-    authority->initialized = 1;
+    atomic_store_explicit(&authority->lifecycle, HL_ARENA_READY, memory_order_release);
     return 0;
 }
 
-void hl_arena_authority_destroy(hl_arena_authority *authority) {
-    uint64_t normal_base, normal_limit, low32_base, low32_limit;
-    if (authority == NULL) return;
-    arena_lock(authority);
-    if (!authority->initialized) {
+int hl_arena_authority_destroy(hl_arena_authority *authority) {
+    if (authority == NULL) return (errno = EINVAL, -1);
+    if (arena_ready_lock(authority) != 0) return -1;
+    if (authority->active_transaction) {
         arena_unlock(authority);
-        return;
+        return (errno = EBUSY, -1);
     }
-    normal_base = authority->claimed_normal_base;
-    normal_limit = authority->claimed_normal_limit;
-    low32_base = authority->claimed_low32_base;
-    low32_limit = authority->claimed_low32_limit;
-    authority->initialized = 0;
+    atomic_store_explicit(&authority->lifecycle, HL_ARENA_RETIRED, memory_order_release);
     authority->reservation_count = 0;
     authority->active_transaction = 0;
     memset(&authority->manifest, 0, sizeof(authority->manifest));
     memset(authority->reservations, 0, sizeof(authority->reservations));
     arena_unlock(authority);
-    arena_release(low32_base, low32_limit);
-    arena_release(normal_base, normal_limit);
+    return 0;
+}
+
+int hl_arena_authority_fork_prepare(hl_arena_authority *authority) {
+    uint32_t idle = 0;
+    if (authority == NULL) return (errno = EINVAL, -1);
+    if (!atomic_compare_exchange_strong_explicit(&authority->fork_phase, &idle, 1, memory_order_acq_rel,
+                                                 memory_order_acquire))
+        return (errno = EALREADY, -1);
+    if (arena_ready_lock(authority) != 0) {
+        atomic_store_explicit(&authority->fork_phase, 0, memory_order_release);
+        return -1;
+    }
+    authority->fork_process = arena_process_id();
+    atomic_store_explicit(&authority->fork_phase, 2, memory_order_release);
+    return 0;
+}
+
+int hl_arena_authority_fork_parent(hl_arena_authority *authority) {
+    if (authority == NULL || atomic_load_explicit(&authority->fork_phase, memory_order_acquire) != 2 ||
+        authority->fork_process != arena_process_id())
+        return (errno = EINVAL, -1);
+    authority->fork_process = 0;
+    atomic_store_explicit(&authority->fork_phase, 0, memory_order_release);
+    arena_unlock(authority);
+    return 0;
+}
+
+int hl_arena_authority_fork_child(hl_arena_authority *authority) {
+    int result = 0;
+    if (authority == NULL) return (errno = EINVAL, -1);
+    /* fork_prepare left this lock held by the calling thread. The child owns
+     * the copied lock and journal, so recovery is allocation-free and observes
+     * a state that was quiescent at fork. */
+    if (atomic_load_explicit(&authority->fork_phase, memory_order_acquire) != 2 ||
+        authority->fork_process == arena_process_id())
+        return (errno = EINVAL, -1);
+    if (atomic_load_explicit(&authority->lifecycle, memory_order_acquire) != HL_ARENA_READY) {
+        authority->fork_process = 0;
+        atomic_store_explicit(&authority->fork_phase, 0, memory_order_release);
+        arena_unlock(authority);
+        return (errno = EINVAL, -1);
+    }
+    if (authority->active_transaction) {
+        authority->manifest.normal_cursor = authority->transaction_normal_cursor;
+        authority->manifest.low32_cursor = authority->transaction_low32_cursor;
+        memset(&authority->reservations[authority->transaction_reservation_count], 0,
+               (authority->reservation_count - authority->transaction_reservation_count) *
+                   sizeof(hl_arena_reservation));
+        authority->reservation_count = authority->transaction_reservation_count;
+        authority->manifest.reservation_count = authority->reservation_count;
+        authority->active_transaction = 0;
+        if (authority->manifest.generation == UINT64_MAX) {
+            result = -1;
+            errno = EOVERFLOW;
+        } else {
+            authority->manifest.generation++;
+        }
+    }
+    authority->fork_process = 0;
+    atomic_store_explicit(&authority->fork_phase, 0, memory_order_release);
+    arena_unlock(authority);
+    return result;
+}
+
+int hl_arena_fork_context_prepare(hl_arena_fork_context *context) {
+    uint64_t sequence;
+    uint64_t nonce;
+    if (context == NULL) return (errno = EINVAL, -1);
+    memset(context, 0, sizeof(*context));
+    if (atomic_load_explicit(&arena_nonce_process, memory_order_acquire) != arena_process_id())
+        return (errno = EINVAL, -1);
+    nonce = atomic_load_explicit(&arena_process_nonce, memory_order_acquire);
+    if (nonce == 0 || arena_sequence_take(&arena_fork_sequence, &sequence) != 0) return -1;
+    context->parent_process = arena_process_id();
+    context->child_nonce = arena_nonce_derive(nonce, sequence);
+    context->active = 1;
+    return 0;
+}
+
+int hl_arena_fork_context_parent(hl_arena_fork_context *context) {
+    if (context == NULL || !context->active || context->parent_process != arena_process_id())
+        return (errno = EINVAL, -1);
+    context->active = 0;
+    return 0;
+}
+
+int hl_arena_after_fork_child(hl_arena_fork_context *context) {
+    uint64_t process = arena_process_id();
+    if (context == NULL || !context->active || context->parent_process == process || context->child_nonce == 0)
+        return (errno = EINVAL, -1);
+    atomic_store_explicit(&arena_process_nonce, context->child_nonce, memory_order_relaxed);
+    atomic_store_explicit(&arena_authority_sequence, 1, memory_order_relaxed);
+    atomic_store_explicit(&arena_fork_sequence, 1, memory_order_relaxed);
+    atomic_store_explicit(&arena_nonce_initializer_process, 0, memory_order_relaxed);
+    atomic_store_explicit(&arena_nonce_process, process, memory_order_release);
+    context->active = 0;
+    return 0;
 }
 
 int hl_arena_manifest_get(hl_arena_authority *authority, hl_arena_manifest *manifest) {
     if (authority == NULL || manifest == NULL) return (errno = EINVAL, -1);
-    arena_lock(authority);
-    if (!authority->initialized) {
+    if (arena_ready_lock(authority) != 0) return -1;
+    if (authority->active_transaction) {
         arena_unlock(authority);
-        return (errno = EINVAL, -1);
+        return (errno = EBUSY, -1);
     }
     *manifest = authority->manifest;
     arena_unlock(authority);
@@ -237,7 +478,9 @@ int hl_arena_persisted_state_valid(const hl_arena_persisted_state *state) {
         uint64_t limit =
             reservation->zone == HL_ARENA_LOW32 ? state->manifest.low32_limit : state->manifest.normal_limit;
         if ((reservation->zone != HL_ARENA_NORMAL && reservation->zone != HL_ARENA_LOW32) ||
-            reservation->state != HL_ARENA_RESERVATION_OWNED || reservation->identity == 0 ||
+            reservation->state != HL_ARENA_RESERVATION_OWNED ||
+            reservation->authority_nonce != state->manifest.authority_nonce ||
+            reservation->authority_identity != state->manifest.authority_identity || reservation->identity == 0 ||
             reservation->identity >= state->manifest.next_identity || reservation->length == 0 ||
             reservation->address < base || reservation->address % state->manifest.granule != 0 ||
             reservation->length % state->manifest.granule != 0 || reservation->address > limit ||
@@ -258,13 +501,18 @@ int hl_arena_persisted_state_valid(const hl_arena_persisted_state *state) {
             normal_cursor += reservation->length;
         }
     }
+    for (uint32_t index = state->manifest.reservation_count; index < HL_ARENA_MAX_RESERVATIONS; ++index) {
+        const unsigned char *bytes = (const unsigned char *)&state->reservations[index];
+        for (size_t offset = 0; offset < sizeof(state->reservations[index]); ++offset)
+            if (bytes[offset] != 0) return 0;
+    }
     return normal_cursor == state->manifest.normal_cursor && low32_cursor == state->manifest.low32_cursor;
 }
 
 int hl_arena_persisted_state_get(hl_arena_authority *authority, hl_arena_persisted_state *state) {
     if (authority == NULL || state == NULL) return (errno = EINVAL, -1);
-    arena_lock(authority);
-    if (!authority->initialized || authority->active_transaction) {
+    if (arena_ready_lock(authority) != 0) return -1;
+    if (authority->active_transaction) {
         arena_unlock(authority);
         return (errno = EBUSY, -1);
     }
@@ -279,9 +527,8 @@ int hl_arena_persisted_state_get(hl_arena_authority *authority, hl_arena_persist
 int hl_arena_transaction_begin(hl_arena_authority *authority, hl_arena_transaction *transaction) {
     if (authority == NULL || transaction == NULL) return (errno = EINVAL, -1);
     memset(transaction, 0, sizeof(*transaction));
-    arena_lock(authority);
-    if (!authority->initialized || !hl_arena_manifest_valid(&authority->manifest) ||
-        authority->active_transaction != 0) {
+    if (arena_ready_lock(authority) != 0) return -1;
+    if (!hl_arena_manifest_valid(&authority->manifest) || authority->active_transaction != 0) {
         arena_unlock(authority);
         return (errno = EBUSY, -1);
     }
@@ -289,11 +536,13 @@ int hl_arena_transaction_begin(hl_arena_authority *authority, hl_arena_transacti
         arena_unlock(authority);
         return (errno = EOVERFLOW, -1);
     }
-    authority->active_transaction = 1;
     authority->transaction_normal_cursor = authority->manifest.normal_cursor;
     authority->transaction_low32_cursor = authority->manifest.low32_cursor;
     authority->transaction_reservation_count = authority->reservation_count;
     authority->manifest.generation++;
+    /* Publish the active flag last. A fork child that observes it is then
+     * guaranteed to observe a complete rollback journal. */
+    authority->active_transaction = 1;
     transaction->authority = authority;
     transaction->generation = authority->manifest.generation;
     transaction->active = 1;
@@ -311,12 +560,18 @@ int hl_arena_transaction_reserve(hl_arena_transaction *transaction, hl_arena_zon
         (zone != HL_ARENA_NORMAL && zone != HL_ARENA_LOW32))
         return (errno = EINVAL, -1);
     authority = transaction->authority;
-    arena_lock(authority);
-    if (!authority->active_transaction || transaction->generation != authority->manifest.generation || length == 0 ||
-        length > UINT64_MAX - (authority->manifest.granule - 1) ||
-        authority->reservation_count == HL_ARENA_MAX_RESERVATIONS) {
+    if (arena_ready_lock(authority) != 0) return -1;
+    if (!authority->active_transaction || transaction->generation != authority->manifest.generation || length == 0) {
         arena_unlock(authority);
         return (errno = EINVAL, -1);
+    }
+    if (length > UINT64_MAX - (authority->manifest.granule - 1)) {
+        arena_unlock(authority);
+        return (errno = EOVERFLOW, -1);
+    }
+    if (authority->reservation_count == HL_ARENA_MAX_RESERVATIONS) {
+        arena_unlock(authority);
+        return (errno = ENOSPC, -1);
     }
     rounded = (length + authority->manifest.granule - 1) & ~(authority->manifest.granule - 1);
     cursor = zone == HL_ARENA_LOW32 ? &authority->manifest.low32_cursor : &authority->manifest.normal_cursor;
@@ -329,7 +584,12 @@ int hl_arena_transaction_reserve(hl_arena_transaction *transaction, hl_arena_zon
         arena_unlock(authority);
         return (errno = EOVERFLOW, -1);
     }
-    *reservation = (hl_arena_reservation){authority->manifest.next_identity++, *cursor, rounded, (uint32_t)zone,
+    *reservation = (hl_arena_reservation){authority->manifest.authority_nonce,
+                                          authority->manifest.authority_identity,
+                                          authority->manifest.next_identity++,
+                                          *cursor,
+                                          rounded,
+                                          (uint32_t)zone,
                                           HL_ARENA_RESERVATION_OWNED};
     authority->reservations[authority->reservation_count++] = *reservation;
     authority->manifest.reservation_count = authority->reservation_count;
@@ -340,7 +600,7 @@ int hl_arena_transaction_reserve(hl_arena_transaction *transaction, hl_arena_zon
 
 int hl_arena_transaction_commit(hl_arena_transaction *transaction) {
     if (transaction == NULL || !transaction->active) return (errno = EINVAL, -1);
-    arena_lock(transaction->authority);
+    if (arena_ready_lock(transaction->authority) != 0) return -1;
     if (!transaction->authority->active_transaction ||
         transaction->generation != transaction->authority->manifest.generation) {
         arena_unlock(transaction->authority);
@@ -356,7 +616,10 @@ void hl_arena_transaction_rollback(hl_arena_transaction *transaction) {
     hl_arena_authority *authority;
     if (transaction == NULL || !transaction->active) return;
     authority = transaction->authority;
-    arena_lock(authority);
+    if (arena_ready_lock(authority) != 0) {
+        transaction->active = 0;
+        return;
+    }
     if (authority->active_transaction && transaction->generation == authority->manifest.generation) {
         authority->manifest.normal_cursor = authority->transaction_normal_cursor;
         authority->manifest.low32_cursor = authority->transaction_low32_cursor;
@@ -374,10 +637,18 @@ void hl_arena_transaction_rollback(hl_arena_transaction *transaction) {
 int hl_arena_reservation_owned(hl_arena_authority *authority, const hl_arena_reservation *reservation) {
     int owned = 0;
     if (authority == NULL || reservation == NULL || reservation->identity == 0) return 0;
-    arena_lock(authority);
+    if (arena_ready_lock(authority) != 0) return 0;
+    if (authority->active_transaction) {
+        arena_unlock(authority);
+        return 0;
+    }
     for (uint32_t index = 0; index < authority->reservation_count; ++index) {
         const hl_arena_reservation *candidate = &authority->reservations[index];
-        if (candidate->identity == reservation->identity && candidate->address == reservation->address &&
+        if (candidate->authority_nonce == reservation->authority_nonce &&
+            candidate->authority_nonce == authority->manifest.authority_nonce &&
+            candidate->authority_identity == reservation->authority_identity &&
+            candidate->authority_identity == authority->manifest.authority_identity &&
+            candidate->identity == reservation->identity && candidate->address == reservation->address &&
             candidate->length == reservation->length && candidate->zone == reservation->zone &&
             candidate->state == HL_ARENA_RESERVATION_OWNED) {
             owned = 1;
