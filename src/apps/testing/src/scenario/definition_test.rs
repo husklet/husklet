@@ -90,6 +90,63 @@ fn ubuntu24_apt_fixture_preserves_dual_isa_failure_and_timing_evidence() {
 }
 
 #[test]
+fn ubuntu24_native_diagnostic_fixture_is_pinned_bounded_and_not_self_faking() {
+    let mut root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    while !root.join("tests/scenarios/netinstall/test.yaml").is_file() {
+        root = root.parent().expect("workspace root contains netinstall scenario");
+    }
+    let directory = root.join("tests/scenarios/netinstall");
+    let scenario = Scenario::load(&directory, &directory.join("test.yaml")).unwrap();
+    let case = scenario
+        .cases
+        .iter()
+        .find(|case| case.id == "netinstall/ubuntu24-native-diagnostics-apt-install-htop")
+        .expect("native diagnostic Ubuntu 24 apt fixture");
+    assert_eq!(
+        case.image,
+        "ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea"
+    );
+    assert!(case.execution.emits_diagnostics());
+    assert_eq!(
+        case.targets.iter().map(|target| target.name()).collect::<Vec<_>>(),
+        ["arm64", "amd64"]
+    );
+    assert_eq!(
+        case.fork_diagnostics
+            .expect("structured fork diagnostics")
+            .maximum_records,
+        4096
+    );
+    let [Step::Shell(script)] = &case.actions[..] else {
+        panic!("native apt diagnostic fixture must remain one shell transaction");
+    };
+    for witness in [
+        "tail -c 65536",
+        "for inrelease in /var/lib/apt/lists/*InRelease",
+        "gpgv --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg",
+        "HTOP_LDD_FAILED status=127 reason=missing-command",
+        "reason=missing-dependency",
+        "APT_NATIVE_DIAGNOSTIC_TIMING update_ms=",
+    ] {
+        assert!(script.contains(witness), "fixture lost {witness:?}");
+    }
+    assert!(
+        ["hl-fork-failure:", "hl-native:", "hl-c:", "[prof]"]
+            .into_iter()
+            .all(|marker| !script.contains(marker)),
+        "guest script must not counterfeit backend-owned diagnostics"
+    );
+}
+
+#[test]
+fn fork_diagnostic_expectation_requires_native_diagnostics() {
+    let document = "cases:\n  - id: sample/fake\n    image: alpine\n    execution: { native: true, diagnostics: false }\n    actions: [{ shell: { script: true } }]\n    expect: { stdout_contains: golden/contains.txt, fork_diagnostics: { maximum_records: 4 } }\n";
+    assert!(load(document).is_err());
+    let zero = "cases:\n  - id: sample/zero\n    image: alpine\n    execution: { native: true, diagnostics: true }\n    actions: [{ shell: { script: true } }]\n    expect: { stdout_contains: golden/contains.txt, fork_diagnostics: { maximum_records: 0 } }\n";
+    assert!(load(zero).is_err());
+}
+
+#[test]
 fn legacy_run_is_a_single_typed_argv_action() {
     let scenario = load(
         r"cases:

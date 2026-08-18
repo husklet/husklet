@@ -16,7 +16,7 @@ const CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
 const DIAGNOSTIC_LIMIT: usize = 4096;
 
 pub enum CaseResult {
-    Passed,
+    Passed(String),
     Failed(String),
     ExpectedFailure(String),
     UnexpectedPass,
@@ -78,7 +78,7 @@ impl Provider {
 impl CaseResult {
     pub(super) fn evidence(&self) -> (&'static str, String) {
         match self {
-            Self::Passed => ("pass", String::new()),
+            Self::Passed(evidence) => ("pass", evidence.clone()),
             Self::Failed(error) => ("fail", diagnostic(error)),
             Self::ExpectedFailure(error) => ("xfail", diagnostic(error)),
             Self::UnexpectedPass => ("xpass", "unexpected pass".to_owned()),
@@ -87,11 +87,11 @@ impl CaseResult {
     }
 }
 
-fn classify(outcome: Result<(), Error>, expected_failure: bool) -> CaseResult {
+fn classify(outcome: Result<String, Error>, expected_failure: bool) -> CaseResult {
     match (outcome, expected_failure) {
-        (Ok(()), false) => CaseResult::Passed,
+        (Ok(evidence), false) => CaseResult::Passed(evidence),
         (Err(error), true) => CaseResult::ExpectedFailure(error.to_string()),
-        (Ok(()), true) => CaseResult::UnexpectedPass,
+        (Ok(_), true) => CaseResult::UnexpectedPass,
         (Err(error), false) => CaseResult::Failed(error.to_string()),
     }
 }
@@ -102,7 +102,7 @@ async fn execute_case(
     case: &Sample,
     target: Target,
     sample: u16,
-) -> (Result<(), Error>, PhaseTiming) {
+) -> (Result<String, Error>, PhaseTiming) {
     let setup = Instant::now();
     let mut timing = PhaseTiming::default();
     let result = execute_case_inner(provider, scenario, case, target, sample, &mut timing).await;
@@ -119,7 +119,7 @@ async fn execute_case_inner(
     target: Target,
     sample: u16,
     timing: &mut PhaseTiming,
-) -> Result<(), Error> {
+) -> Result<String, Error> {
     validate_supported(case)?;
     let setup = Instant::now();
     let image = tokio::time::timeout(IMAGE_TIMEOUT, TestImage::materialize(&case.image, &target.platform()))
@@ -178,7 +178,7 @@ async fn execute_image(
     image: &std::path::Path,
     runtime: &RuntimeConfig,
     timing: &mut PhaseTiming,
-) -> Result<(), Error> {
+) -> Result<String, Error> {
     let name = format!(
         "testing-{}-{}-{}-{sample}",
         scenario.name,
