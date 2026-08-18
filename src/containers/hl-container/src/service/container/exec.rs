@@ -61,6 +61,9 @@ impl Service {
         size: Option<crate::Size>,
         claim_attachment: bool,
     ) -> Result<crate::Session> {
+        #[cfg(test)]
+        self.exec_start_attempts
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
         let _guard = self.operations.lock().await;
         self.start_exec_locked(id, size, claim_attachment).await
     }
@@ -175,11 +178,30 @@ impl Service {
             .lock()
             .await
             .insert(exec.id.clone(), Arc::clone(&process));
+        let (output_complete, output_completion) = tokio::sync::watch::channel(false);
+        self.exec_output_complete
+            .lock()
+            .await
+            .insert(exec.id.clone(), output_completion);
         self.failures.lock().await.remove(&journal);
         let service = Arc::clone(self);
         let exec_id = exec.id;
+        let owner_service = Arc::clone(&service);
+        let owner_journal = journal.clone();
+        let owner = tokio::spawn(async move { owner_service.own(process, owner_journal, io, output_complete).await });
+        let output_owner = Arc::new(super::OutputOwner {
+            abort: owner.abort_handle(),
+        });
+        self.output_owners
+            .lock()
+            .await
+            .insert(journal.clone(), Arc::clone(&output_owner));
         tokio::spawn(async move {
-            let result = Arc::clone(&service).own(process, journal).await;
+            let result = owner
+                .await
+                .map_err(|error| Error::Runtime(format!("process output owner failed: {error}")))
+                .and_then(std::convert::identity);
+            service.retire_output_owner(&journal, &output_owner).await;
             service.finish_exec(exec_id, process_id, started_at_ms, result).await;
         });
         Ok(session)
@@ -404,6 +426,7 @@ impl Service {
             self.failures.lock().await.insert(JournalId::exec(id.clone()), error);
         }
         self.exec_live.lock().await.remove(&id);
+        self.exec_output_complete.lock().await.remove(&id);
         if let Some(waiters) = self.exec_waiters.lock().await.get(&id) {
             waiters.notify_waiters();
         }
@@ -414,6 +437,10 @@ impl Service {
 
     pub(crate) async fn checkpoint_execs(self: &Arc<Self>, timeout: std::time::Duration) -> Result<()> {
         let _guard = self.operations.lock().await;
+        self.checkpoint_execs_locked(timeout).await
+    }
+
+    pub(super) async fn checkpoint_execs_locked(self: &Arc<Self>, timeout: std::time::Duration) -> Result<()> {
         let ids = self.checkpointable_execs().await?;
         let mut captured = Vec::new();
         for id in ids {
@@ -426,7 +453,13 @@ impl Service {
                     .get(&id)
                     .cloned()
                     .ok_or_else(|| Error::Runtime(format!("running exec {id} has no runtime process")))?;
-                process.checkpoint(timeout).await?;
+                let output_complete = self
+                    .exec_output_complete
+                    .lock()
+                    .await
+                    .get(&id)
+                    .cloned()
+                    .ok_or_else(|| Error::Runtime(format!("running exec {id} has no output owner")))?;
                 let journal = JournalId::exec(id.clone());
                 let io = self
                     .io
@@ -435,8 +468,7 @@ impl Service {
                     .get(&journal)
                     .cloned()
                     .ok_or_else(|| Error::Runtime(format!("running exec {id} has no live I/O")))?;
-                let delivered = io.delivered_cursor();
-                exec.attachment_cursor = Some(exec.attachment_cursor.unwrap_or(0).max(delivered));
+                process.checkpoint(timeout).await?;
                 let checkpoint = crate::Checkpoint {
                     namespace: format!("exec-{id}"),
                     created_at_ms: now_ms(),
@@ -444,15 +476,28 @@ impl Service {
                 exec.state = ExecState::Created;
                 exec.checkpoint = Some(checkpoint);
                 self.execs.replace(&exec).await?;
+                let output = self.await_output_completion(&journal, output_complete, timeout).await;
+                let delivered = io.delivered_cursor();
+                exec.attachment_cursor = Some(exec.attachment_cursor.unwrap_or(0).max(delivered));
+                self.execs.replace(&exec).await?;
                 self.exec_live.lock().await.remove(&id);
+                self.exec_output_complete.lock().await.remove(&id);
                 if let Some(waiters) = self.exec_waiters.lock().await.get(&id) {
                     waiters.notify_waiters();
                 }
-                Ok(io)
+                output.map(|()| io)
             };
             let io = match result.await {
                 Ok(io) => io,
                 Err(mut failure) => {
+                    if self
+                        .inspect_exec(&id)
+                        .await
+                        .is_ok_and(|exec| exec.checkpoint.is_some() && matches!(exec.state, ExecState::Created))
+                        && let Some(io) = self.io.lock().await.get(&JournalId::exec(id.clone())).cloned()
+                    {
+                        captured.push((id.clone(), io));
+                    }
                     for (captured_id, _) in captured {
                         if let Err(rollback) = self.start_exec_locked(&captured_id, None, false).await {
                             failure = Error::Runtime(format!(
@@ -577,6 +622,7 @@ impl Service {
             }
         }
         self.io.lock().await.remove(&journal);
+        self.exec_output_complete.lock().await.remove(id);
         self.failures.lock().await.remove(&journal);
         self.exec_waiters.lock().await.remove(id);
         self.execs.remove(id).await

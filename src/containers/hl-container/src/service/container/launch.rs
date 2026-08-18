@@ -16,6 +16,10 @@ impl Service {
 
     pub(crate) async fn start(self: &Arc<Self>, reference: &str) -> Result<()> {
         let _guard = self.operations.lock().await;
+        self.start_locked(reference).await
+    }
+
+    pub(super) async fn start_locked(self: &Arc<Self>, reference: &str) -> Result<()> {
         let container = self.resolve(reference).await?;
         if container.state.is_active() {
             return Err(Error::AlreadyRunning(container.id));
@@ -117,11 +121,13 @@ impl Service {
         }
         self.emit(crate::LifecycleAction::Start, &container);
         let (health, health_rx) = tokio::sync::watch::channel(false);
+        let (output_complete, output_completion) = tokio::sync::watch::channel(false);
         self.live.lock().await.insert(
             container.id.clone(),
             Run {
                 process: Arc::clone(&process),
                 health,
+                output_complete: output_completion,
             },
         );
         self.waiters
@@ -143,10 +149,24 @@ impl Service {
                 .run(),
             );
         }
+        let id = container.id;
+        let journal = JournalId::container(id.clone());
+        let owner_service = Arc::clone(&service);
+        let owner_journal = journal.clone();
+        let owner = tokio::spawn(async move { owner_service.own(process, owner_journal, io, output_complete).await });
+        let output_owner = Arc::new(super::OutputOwner {
+            abort: owner.abort_handle(),
+        });
+        self.output_owners
+            .lock()
+            .await
+            .insert(journal.clone(), Arc::clone(&output_owner));
         tokio::spawn(async move {
-            let id = container.id;
-            let journal = JournalId::container(id.clone());
-            let result = Arc::clone(&service).own(process, journal).await;
+            let result = owner
+                .await
+                .map_err(|error| Error::Runtime(format!("process output owner failed: {error}")))
+                .and_then(std::convert::identity);
+            service.retire_output_owner(&journal, &output_owner).await;
             service.finish(id, generation, result).await;
         });
         Ok(())

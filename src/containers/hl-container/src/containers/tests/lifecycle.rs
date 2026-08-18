@@ -368,6 +368,145 @@ async fn checkpoint_restore_replaces_stdin_authority_before_the_new_process_star
 }
 
 #[tokio::test]
+async fn container_restore_waits_for_old_output_generation_before_opening_the_new_one() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("container-output-generation")).await.unwrap();
+    let mut old = containers.attach("container-output-generation").await.unwrap();
+    let (old_waiting, release_old) = runtime.delay_next_log(b"container-old-initial\n", b"container-old-late\n");
+    containers.start("container-output-generation").await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), old_waiting)
+        .await
+        .expect("old container log owner did not enter wait")
+        .unwrap();
+
+    let exits = runtime.checkpoint_exits.load(Ordering::SeqCst);
+    let checkpoint_containers = containers.clone();
+    let checkpoint = tokio::spawn(async move {
+        checkpoint_containers
+            .checkpoint("container-output-generation", Duration::from_secs(1))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while runtime.checkpoint_exits.load(Ordering::SeqCst) == exits {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("container checkpoint never requested process exit");
+    assert!(
+        !checkpoint.is_finished(),
+        "checkpoint escaped before the old output owner drained"
+    );
+    release_old.send(()).unwrap();
+    checkpoint.await.unwrap().unwrap();
+
+    let old_entries = [old.next().await.unwrap().unwrap(), old.next().await.unwrap().unwrap()];
+    assert_eq!(old_entries[0].bytes, b"container-old-initial\n");
+    assert_eq!(old_entries[1].bytes, b"container-old-late\n");
+    assert!(old.next().await.unwrap().is_none());
+
+    let mut restored = containers.attach("container-output-generation").await.unwrap();
+    assert!(restored.history().await.unwrap().is_empty());
+    containers.start("container-output-generation").await.unwrap();
+    let new_entries = [
+        restored.next().await.unwrap().unwrap(),
+        restored.next().await.unwrap().unwrap(),
+    ];
+    assert_eq!(new_entries[0].bytes, b"fake-out\n");
+    assert_eq!(new_entries[1].bytes, b"fake-err\n");
+    assert!(
+        new_entries
+            .iter()
+            .all(|entry| !entry.bytes.starts_with(b"container-old-"))
+    );
+    containers.remove_force("container-output-generation").await.unwrap();
+}
+
+#[tokio::test]
+async fn checkpoint_all_rolls_back_a_captured_container_when_its_output_owner_panics() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    runtime.panic_wait.store(true, Ordering::SeqCst);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("capture-output-panic")).await.unwrap();
+    containers.start("capture-output-panic").await.unwrap();
+    let launches = runtime.programs.lock().unwrap().len();
+
+    let error = containers.checkpoint_all(Duration::from_secs(1)).await.unwrap_err();
+    assert!(error.to_string().contains("output owner exited"));
+    let restored = containers.inspect("capture-output-panic").await.unwrap();
+    assert!(matches!(restored.state, ContainerState::Running { .. }));
+    assert!(restored.checkpoint.is_none());
+    assert_eq!(runtime.programs.lock().unwrap().len(), launches + 1);
+}
+
+#[tokio::test]
+async fn checkpoint_all_aborts_a_wedged_output_owner_before_rollback() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(10);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("wedged-output-owner")).await.unwrap();
+    let (waiting, release) = runtime.delay_next_log(b"before-timeout\n", b"after-timeout\n");
+    containers.start("wedged-output-owner").await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), waiting)
+        .await
+        .expect("output owner did not reach the injected wedge")
+        .unwrap();
+    let launches = runtime.programs.lock().unwrap().len();
+
+    let error = containers.checkpoint_all(Duration::from_millis(10)).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("timed out waiting for process output ownership")
+    );
+    let restored = containers.inspect("wedged-output-owner").await.unwrap();
+    assert!(matches!(restored.state, ContainerState::Running { .. }));
+    assert!(restored.checkpoint.is_none());
+    assert_eq!(runtime.programs.lock().unwrap().len(), launches + 1);
+    assert!(
+        release.send(()).is_err(),
+        "timed-out output owner was still alive after rollback"
+    );
+}
+
+#[tokio::test]
+async fn checkpoint_all_rolls_back_a_later_capture_after_an_earlier_failure() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("a-checkpoint-rejected")).await.unwrap();
+    containers.create(spec("b-output-owner-panics")).await.unwrap();
+    let order = containers.service.checkpoint_order().await.unwrap();
+    assert_eq!(order.len(), 2);
+    let rejected_process = runtime.next.load(Ordering::SeqCst);
+    containers.start(order[0].as_str()).await.unwrap();
+    runtime.panic_wait.store(true, Ordering::SeqCst);
+    containers.start(order[1].as_str()).await.unwrap();
+    runtime.panic_wait.store(false, Ordering::SeqCst);
+    runtime.fail_checkpoint.store(rejected_process, Ordering::SeqCst);
+    let launches = runtime.programs.lock().unwrap().len();
+
+    let error = containers.checkpoint_all(Duration::from_secs(1)).await.unwrap_err();
+    assert!(
+        error.to_string().contains("injected checkpoint failure"),
+        "unexpected primary checkpoint error: {error}"
+    );
+    for name in ["a-checkpoint-rejected", "b-output-owner-panics"] {
+        let container = containers.inspect(name).await.unwrap();
+        assert!(matches!(container.state, ContainerState::Running { .. }), "{name}");
+        assert!(container.checkpoint.is_none(), "{name}");
+    }
+    assert_eq!(runtime.programs.lock().unwrap().len(), launches + 1);
+}
+
+#[tokio::test]
 async fn discarded_checkpoint_preserves_container_and_forces_a_fresh_start() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_secs(1);
@@ -486,6 +625,61 @@ async fn checkpoint_all_captures_running_and_paused_containers_for_later_restore
         );
     }
     assert_eq!(*runtime.suspensions.lock().unwrap(), vec![true, false]);
+}
+
+#[tokio::test]
+async fn checkpoint_all_holds_one_operation_guard_from_exec_preflight_through_capture() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("atomic-checkpoint-parent")).await.unwrap();
+    containers.start("atomic-checkpoint-parent").await.unwrap();
+    let exec = containers
+        .executions()
+        .create("atomic-checkpoint-parent", ExecSpec::new(Process::new("/bin/sh")))
+        .await
+        .unwrap();
+    let launches = runtime.programs.lock().unwrap().len();
+    let attempts = containers.service.exec_start_attempts();
+    let (preflight, release) = containers.service.gate_checkpoint_all().await;
+
+    let checkpoint_containers = containers.clone();
+    let checkpoint = tokio::spawn(async move { checkpoint_containers.checkpoint_all(Duration::from_secs(1)).await });
+    tokio::time::timeout(Duration::from_secs(1), preflight)
+        .await
+        .expect("checkpoint_all did not reach the post-preflight barrier")
+        .unwrap();
+
+    let start_containers = containers.clone();
+    let start_id = exec.id.clone();
+    let start = tokio::spawn(async move { start_containers.executions().start(&start_id).await });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while containers.service.exec_start_attempts() == attempts {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("concurrent exec start did not reach the operation guard");
+    assert!(
+        !start.is_finished(),
+        "exec start crossed checkpoint_all's operation boundary"
+    );
+    assert_eq!(runtime.programs.lock().unwrap().len(), launches);
+
+    release.send(()).unwrap();
+    checkpoint.await.unwrap().unwrap();
+    let error = start
+        .await
+        .unwrap()
+        .err()
+        .expect("concurrent exec start unexpectedly crossed the checkpoint boundary");
+    assert!(matches!(error, Error::InvalidState { .. }));
+    assert!(matches!(
+        containers.inspect("atomic-checkpoint-parent").await.unwrap().state,
+        ContainerState::Exited { .. }
+    ));
+    assert_eq!(runtime.programs.lock().unwrap().len(), launches);
 }
 
 #[tokio::test]
@@ -622,6 +816,129 @@ async fn successful_exec_restore_replaces_stdin_authority() {
     let inputs = runtime.inputs.lock().unwrap();
     assert!(inputs.iter().any(|(_, bytes)| bytes == b"restored-exec-generation\n"));
     assert!(!inputs.iter().any(|(_, bytes)| bytes == b"stale-exec-generation\n"));
+}
+
+#[tokio::test]
+async fn exhausted_exec_io_generation_fails_before_launch() {
+    let runtime = Arc::new(FakeRuntime::new(ExitStatus::Code(0)));
+    let containers = service(Arc::clone(&runtime)).await;
+    containers
+        .create(spec("exec-generation-exhausted-parent"))
+        .await
+        .unwrap();
+    containers.start("exec-generation-exhausted-parent").await.unwrap();
+    let exec = containers
+        .executions()
+        .create(
+            "exec-generation-exhausted-parent",
+            ExecSpec::new(Process::new("/bin/sh")),
+        )
+        .await
+        .unwrap();
+    let launches = runtime.programs.lock().unwrap().len();
+    containers.service.exhaust_io_generations();
+
+    let error = containers
+        .executions()
+        .start(&exec.id)
+        .await
+        .err()
+        .expect("exhausted generation unexpectedly launched an exec");
+    assert!(error.to_string().contains("I/O generation space is exhausted"));
+    assert_eq!(runtime.programs.lock().unwrap().len(), launches);
+}
+
+#[tokio::test]
+async fn exec_restore_fences_late_old_output_and_replays_it_only_as_durable_history() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(10);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("exec-output-parent")).await.unwrap();
+    containers.start("exec-output-parent").await.unwrap();
+    let exec = containers
+        .executions()
+        .create("exec-output-parent", ExecSpec::new(Process::new("/bin/sh")))
+        .await
+        .unwrap();
+    let (old_waiting, release_old) = runtime.delay_next_log(b"exec-old-initial\n", b"exec-old-late\n");
+    let mut old = containers.executions().start(&exec.id).await.unwrap();
+    let old_input = old.input();
+    tokio::time::timeout(Duration::from_secs(1), old_waiting)
+        .await
+        .expect("old exec log owner did not enter wait")
+        .unwrap();
+
+    let exits = runtime.checkpoint_exits.load(Ordering::SeqCst);
+    let checkpoint_containers = containers.clone();
+    let checkpoint = tokio::spawn(async move {
+        checkpoint_containers
+            .executions()
+            .checkpoint_all(Duration::from_secs(1))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while runtime.checkpoint_exits.load(Ordering::SeqCst) == exits {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("exec checkpoint never requested process exit");
+    assert!(
+        !checkpoint.is_finished(),
+        "exec checkpoint escaped before the old output owner drained"
+    );
+    release_old.send(()).unwrap();
+    checkpoint.await.unwrap().unwrap();
+
+    let old_entries = [old.next().await.unwrap().unwrap(), old.next().await.unwrap().unwrap()];
+    assert_eq!(old_entries[0].bytes, b"exec-old-initial\n");
+    assert_eq!(old_entries[1].bytes, b"exec-old-late\n");
+    assert!(old_input.write(b"stale\n".to_vec()).await.is_err());
+
+    let mut restored = containers.executions().start(&exec.id).await.unwrap();
+    let history = restored.history().await.unwrap();
+    assert_eq!(
+        history.iter().map(|entry| entry.bytes.as_slice()).collect::<Vec<_>>(),
+        [b"exec-old-initial\n".as_slice(), b"exec-old-late\n".as_slice()],
+        "unacknowledged old output must replay as history, never masquerade as live replacement output"
+    );
+    let new_entries = [
+        restored.next().await.unwrap().unwrap(),
+        restored.next().await.unwrap().unwrap(),
+    ];
+    assert_eq!(new_entries[0].bytes, b"fake-out\n");
+    assert_eq!(new_entries[1].bytes, b"fake-err\n");
+    assert!(new_entries.iter().all(|entry| !entry.bytes.starts_with(b"exec-old-")));
+}
+
+#[tokio::test]
+async fn exec_checkpoint_rolls_back_a_capture_when_its_output_owner_panics() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("exec-capture-output-parent")).await.unwrap();
+    containers.start("exec-capture-output-parent").await.unwrap();
+    let exec = containers
+        .executions()
+        .create("exec-capture-output-parent", ExecSpec::new(Process::new("/bin/sh")))
+        .await
+        .unwrap();
+    runtime.panic_wait.store(true, Ordering::SeqCst);
+    containers.executions().start(&exec.id).await.unwrap();
+    let launches = runtime.programs.lock().unwrap().len();
+
+    let error = containers
+        .executions()
+        .checkpoint_all(Duration::from_secs(1))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("output owner exited"));
+    let restored = containers.executions().inspect(&exec.id).await.unwrap();
+    assert!(matches!(restored.state, ExecState::Running { .. }));
+    assert!(restored.checkpoint.is_none());
+    assert_eq!(runtime.programs.lock().unwrap().len(), launches + 1);
 }
 
 #[tokio::test]

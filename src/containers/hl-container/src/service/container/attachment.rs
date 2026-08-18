@@ -1,5 +1,27 @@
 use super::{Arc, Container, ContainerState, Error, ExitStatus, Io, JournalId, Result, Running, Service};
 
+fn remove_exact_io(
+    values: &mut std::collections::HashMap<JournalId, Arc<Io>>,
+    id: &JournalId,
+    generation: &Arc<Io>,
+) -> Option<Arc<Io>> {
+    values
+        .get(id)
+        .is_some_and(|current| Arc::ptr_eq(current, generation))
+        .then(|| values.remove(id).expect("matched I/O generation"))
+}
+
+fn remove_exact_owner(
+    values: &mut std::collections::HashMap<JournalId, Arc<super::OutputOwner>>,
+    id: &JournalId,
+    owner: &Arc<super::OutputOwner>,
+) -> Option<Arc<super::OutputOwner>> {
+    values
+        .get(id)
+        .is_some_and(|current| Arc::ptr_eq(current, owner))
+        .then(|| values.remove(id).expect("matched output owner"))
+}
+
 impl Service {
     pub(crate) async fn logs(&self, reference: &str) -> Result<crate::Logs> {
         let container = self.resolve(reference).await?;
@@ -42,23 +64,31 @@ impl Service {
         Ok(crate::Session::new(Arc::clone(self), io, journal, 0, live_at))
     }
 
-    pub(super) async fn own(self: Arc<Self>, process: Arc<dyn Running>, journal: JournalId) -> Result<ExitStatus> {
+    pub(super) async fn own(
+        self: Arc<Self>,
+        process: Arc<dyn Running>,
+        journal: JournalId,
+        io: Arc<Io>,
+        complete: tokio::sync::watch::Sender<bool>,
+    ) -> Result<ExitStatus> {
         let logs = process.take_logs();
         let (finished, receiver) = tokio::sync::watch::channel(false);
-        let service = Arc::clone(&self);
-        let draining = tokio::spawn(async move {
-            service.drain(&journal, logs, receiver).await;
-        });
-        let result = process.wait().await;
-        tokio::task::yield_now().await;
-        let _ = finished.send(true);
-        let _ = draining.await;
+        let waiting = async {
+            let result = process.wait().await;
+            tokio::task::yield_now().await;
+            let _ = finished.send(true);
+            result
+        };
+        let (result, ()) = tokio::join!(waiting, self.drain(&journal, &io, logs, receiver));
+        io.finish().await;
+        let _ = complete.send(true);
         result
     }
 
     async fn drain(
         &self,
         id: &JournalId,
+        io: &Io,
         logs: Option<crate::service::LogReceiver>,
         mut finished: tokio::sync::watch::Receiver<bool>,
     ) {
@@ -69,7 +99,7 @@ impl Service {
                 changed = finished.changed() => {
                     let _ = changed;
                     while let Ok(chunk) = logs.try_recv() {
-                        if !self.append(id, chunk).await {
+                        if !self.append(id, io, chunk).await {
                             return;
                         }
                     }
@@ -78,16 +108,16 @@ impl Service {
                 chunk = logs.recv() => chunk,
             };
             let Some(chunk) = chunk else { return };
-            if !self.append(id, chunk).await {
+            if !self.append(id, io, chunk).await {
                 return;
             }
         }
     }
 
-    async fn append(&self, id: &JournalId, chunk: crate::LogChunk) -> bool {
+    async fn append(&self, id: &JournalId, io: &Io, chunk: crate::LogChunk) -> bool {
         match self.logs.append(id, chunk.stream, &chunk.bytes).await {
             Ok(entry) => {
-                self.publish_output(id, entry).await;
+                io.publish(entry);
                 true
             }
             Err(error) => {
@@ -119,6 +149,38 @@ impl Service {
 
     pub(crate) async fn history(&self, id: &JournalId, cursor: u64, limit: usize) -> Result<Vec<crate::Entry>> {
         self.logs.after(id, cursor, limit).await
+    }
+
+    pub(super) async fn await_output_completion(
+        &self,
+        id: &JournalId,
+        mut completion: tokio::sync::watch::Receiver<bool>,
+        timeout: std::time::Duration,
+    ) -> Result<()> {
+        if *completion.borrow() {
+            return Ok(());
+        }
+        if tokio::time::timeout(timeout, completion.changed()).await.is_err() {
+            if let Some(owner) = self.output_owners.lock().await.remove(id) {
+                owner.abort.abort();
+            }
+            let _ = completion.changed().await;
+            return Err(Error::Runtime(
+                "timed out waiting for process output ownership to close".into(),
+            ));
+        }
+        if completion.has_changed().is_err() && !*completion.borrow() {
+            return Err(Error::Runtime(
+                "process output owner exited without closing its generation".into(),
+            ));
+        }
+        if *completion.borrow() {
+            Ok(())
+        } else {
+            Err(Error::Runtime(
+                "process output owner signalled completion without closing its generation".into(),
+            ))
+        }
     }
 
     pub(super) async fn attach_io(&self, container: &Container, start_cursor: u64) -> Result<Arc<Io>> {
@@ -153,10 +215,7 @@ impl Service {
     pub(super) async fn retire_io_generation(&self, id: &JournalId, generation: &Arc<Io>) {
         let removed = {
             let mut values = self.io.lock().await;
-            values
-                .get(id)
-                .is_some_and(|current| Arc::ptr_eq(current, generation))
-                .then(|| values.remove(id).expect("matched I/O generation"))
+            remove_exact_io(&mut values, id, generation)
         };
         if let Some(io) = removed {
             io.finish().await;
@@ -165,13 +224,47 @@ impl Service {
         }
     }
 
-    async fn publish_output(&self, id: &JournalId, entry: crate::Entry) {
-        // Removal/replacement takes the same map lock before finishing an I/O generation. Keep
-        // it through this synchronous publication so finish cannot freeze its terminal cursor
-        // between durable append and live publication.
-        let values = self.io.lock().await;
-        if let Some(io) = values.get(id) {
-            io.publish(entry);
-        }
+    pub(super) async fn retire_output_owner(&self, id: &JournalId, owner: &Arc<super::OutputOwner>) {
+        let mut owners = self.output_owners.lock().await;
+        remove_exact_owner(&mut owners, id, owner);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Arc, Io, JournalId, remove_exact_io, remove_exact_owner};
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn stale_cleanup_cannot_remove_or_finish_replacement_in_the_same_slot() {
+        let id = JournalId::container(crate::ContainerId::new());
+        let stale = Arc::new(Io::new(true, 1, 0));
+        let replacement = Arc::new(Io::new(true, 2, 0));
+        let mut values = HashMap::from([(id.clone(), Arc::clone(&replacement))]);
+
+        assert!(remove_exact_io(&mut values, &id, &stale).is_none());
+        stale.finish().await;
+        assert!(Arc::ptr_eq(values.get(&id).unwrap(), &replacement));
+        assert!(!replacement.is_done());
+        assert!(replacement.take_input().await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn stale_output_owner_cleanup_cannot_remove_replacement() {
+        let id = JournalId::container(crate::ContainerId::new());
+        let stale_task = tokio::spawn(std::future::pending::<()>());
+        let replacement_task = tokio::spawn(std::future::pending::<()>());
+        let stale = Arc::new(super::super::OutputOwner {
+            abort: stale_task.abort_handle(),
+        });
+        let replacement = Arc::new(super::super::OutputOwner {
+            abort: replacement_task.abort_handle(),
+        });
+        let mut values = HashMap::from([(id.clone(), Arc::clone(&replacement))]);
+
+        assert!(remove_exact_owner(&mut values, &id, &stale).is_none());
+        assert!(Arc::ptr_eq(values.get(&id).unwrap(), &replacement));
+        stale_task.abort();
+        replacement_task.abort();
     }
 }

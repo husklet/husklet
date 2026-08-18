@@ -175,70 +175,7 @@ impl Containers {
     /// # Errors
     /// Returns the first resume, checkpoint, lifecycle, or persistence failure.
     pub async fn checkpoint_all(&self, timeout: std::time::Duration) -> Result<()> {
-        self.service.checkpointable_execs().await?;
-        let mut failure = None;
-        let mut captured = Vec::new();
-        let mut resumed = Vec::new();
-        let active = self.list().await?;
-        for container in active {
-            if matches!(container.state, crate::ContainerState::Restarting { .. }) {
-                if let Err(error) = self.signal(container.id.as_str(), Signal::TERMINATE).await
-                    && failure.is_none()
-                {
-                    failure = Some(error);
-                }
-                continue;
-            }
-            if matches!(
-                container.state,
-                crate::ContainerState::Created | crate::ContainerState::Exited { .. }
-            ) {
-                continue;
-            }
-            let result = match container.state {
-                crate::ContainerState::Running { .. } => self.checkpoint(container.id.as_str(), timeout).await,
-                crate::ContainerState::Paused { .. } => match self.unpause(container.id.as_str()).await {
-                    Ok(()) => {
-                        resumed.push(container.id.clone());
-                        self.checkpoint(container.id.as_str(), timeout).await
-                    }
-                    Err(error) => Err(error),
-                },
-                crate::ContainerState::Created
-                | crate::ContainerState::Exited { .. }
-                | crate::ContainerState::Restarting { .. } => unreachable!("inactive states were handled above"),
-            };
-            let error = match result {
-                Ok(_) => {
-                    captured.push(container.id);
-                    None
-                }
-                Err(crate::Error::NotFound(_)) => None,
-                Err(error) => Some(error),
-            };
-            if failure.is_none() {
-                failure = error;
-            }
-        }
-        if failure.is_none()
-            && let Err(error) = self.service.checkpoint_execs(timeout).await
-        {
-            failure = Some(error);
-        }
-        let Some(mut failure) = failure else {
-            return Ok(());
-        };
-        for id in captured {
-            if let Err(rollback) = self.start(id.as_str()).await {
-                failure = crate::Error::Runtime(format!("{failure}; checkpoint rollback failed for {id}: {rollback}"));
-            }
-        }
-        for id in resumed {
-            if let Err(rollback) = self.pause(id.as_str()).await {
-                failure = crate::Error::Runtime(format!("{failure}; pause rollback failed for {id}: {rollback}"));
-            }
-        }
-        Err(failure)
+        self.service.checkpoint_all(timeout).await
     }
 
     /// Verifies that every active attached execution has a checkpoint transport before shutdown starts.

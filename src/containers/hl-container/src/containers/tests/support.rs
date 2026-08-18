@@ -63,6 +63,20 @@ pub(super) type RecordedInputs = Arc<std::sync::Mutex<Vec<(u64, Vec<u8>)>>>;
 
 type CheckpointLaunch = Option<bool>;
 
+struct DelayedLog {
+    initial: Vec<u8>,
+    late: Vec<u8>,
+    ready: tokio::sync::oneshot::Sender<()>,
+    release: tokio::sync::oneshot::Receiver<()>,
+}
+
+struct DelayedProcessLog {
+    late: Vec<u8>,
+    ready: tokio::sync::oneshot::Sender<()>,
+    release: tokio::sync::oneshot::Receiver<()>,
+    sender: crate::service::LogSender,
+}
+
 pub(super) struct FakeRuntime {
     pub(super) next: AtomicU64,
     pub(super) fail: AtomicBool,
@@ -72,6 +86,7 @@ pub(super) struct FakeRuntime {
     pub(super) blocking_wait: AtomicBool,
     pub(super) panic_wait: AtomicBool,
     pub(super) fail_checkpoint: Arc<AtomicU64>,
+    pub(super) checkpoint_exits: Arc<AtomicU64>,
     pub(super) hold_logs: AtomicBool,
     pub(super) checkpointable: AtomicBool,
     pub(super) delay: Duration,
@@ -93,6 +108,7 @@ pub(super) struct FakeRuntime {
     pub(super) domain_reads: Arc<AtomicU64>,
     pub(super) resizes: Arc<std::sync::Mutex<Vec<crate::Size>>>,
     pub(super) health: std::sync::Mutex<Option<(Duration, std::collections::VecDeque<ExitStatus>)>>,
+    delayed_logs: std::sync::Mutex<std::collections::VecDeque<DelayedLog>>,
 }
 
 impl FakeRuntime {
@@ -106,6 +122,7 @@ impl FakeRuntime {
             blocking_wait: AtomicBool::new(false),
             panic_wait: AtomicBool::new(false),
             fail_checkpoint: Arc::new(AtomicU64::new(0)),
+            checkpoint_exits: Arc::new(AtomicU64::new(0)),
             hold_logs: AtomicBool::new(false),
             checkpointable: AtomicBool::new(true),
             delay: Duration::from_millis(10),
@@ -127,7 +144,24 @@ impl FakeRuntime {
             domain_reads: Arc::new(AtomicU64::new(0)),
             resizes: Arc::new(std::sync::Mutex::new(Vec::new())),
             health: std::sync::Mutex::new(None),
+            delayed_logs: std::sync::Mutex::new(std::collections::VecDeque::new()),
         }
+    }
+
+    pub(super) fn delay_next_log(
+        &self,
+        initial: impl Into<Vec<u8>>,
+        late: impl Into<Vec<u8>>,
+    ) -> (tokio::sync::oneshot::Receiver<()>, tokio::sync::oneshot::Sender<()>) {
+        let (ready, ready_rx) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = tokio::sync::oneshot::channel();
+        self.delayed_logs.lock().unwrap().push_back(DelayedLog {
+            initial: initial.into(),
+            late: late.into(),
+            ready,
+            release: release_rx,
+        });
+        (ready_rx, release)
     }
 }
 
@@ -147,6 +181,9 @@ struct FakeProcess {
     _log_owner: Option<crate::service::LogSender>,
     checkpoint_armed: bool,
     checkpoint_failure: Arc<AtomicU64>,
+    checkpoint_exit: tokio::sync::watch::Sender<bool>,
+    checkpoint_exits: Arc<AtomicU64>,
+    delayed_log: std::sync::Mutex<Option<DelayedProcessLog>>,
     domain: hl_engine::Domain,
     domain_reads: Arc<AtomicU64>,
 }
@@ -165,13 +202,37 @@ impl Running for FakeProcess {
     }
     async fn wait(self: Arc<Self>) -> Result<ExitStatus> {
         self.waits.fetch_add(1, Ordering::SeqCst);
+        let delayed = self.delayed_log.lock().unwrap().take();
+        if let Some(delayed) = delayed {
+            let _ = delayed.ready.send(());
+            delayed
+                .release
+                .await
+                .map_err(|_| Error::Runtime("delayed log release was dropped".into()))?;
+            delayed
+                .sender
+                .send(crate::LogChunk {
+                    stream: crate::Stream::Stdout,
+                    bytes: delayed.late,
+                })
+                .await
+                .map_err(|_| Error::Runtime("delayed log receiver closed".into()))?;
+        }
         if self.blocking_wait {
             let delay = self.delay;
             tokio::task::spawn_blocking(move || std::thread::sleep(delay))
                 .await
                 .unwrap();
         } else {
-            tokio::time::sleep(self.delay).await;
+            let mut checkpoint_exit = self.checkpoint_exit.subscribe();
+            if !*checkpoint_exit.borrow() {
+                tokio::select! {
+                    () = tokio::time::sleep(self.delay) => {}
+                    changed = checkpoint_exit.changed() => {
+                        assert!(changed.is_ok() && *checkpoint_exit.borrow(), "checkpoint exit channel closed");
+                    }
+                }
+            }
         }
         assert!(!self.panic_wait, "injected wait panic");
         if self.fail_wait {
@@ -199,6 +260,8 @@ impl Running for FakeProcess {
             return Err(Error::Runtime("injected checkpoint failure".into()));
         }
         if self.checkpoint_armed {
+            self.checkpoint_exit.send_replace(true);
+            self.checkpoint_exits.fetch_add(1, Ordering::SeqCst);
             Ok(())
         } else {
             Err(Error::Runtime("process was not armed for checkpoint".into()))
@@ -254,18 +317,35 @@ impl Runtime for FakeRuntime {
             return Err(Error::Runtime(error));
         }
         let (sender, receiver) = crate::service::log_channel();
-        sender
-            .try_send(crate::LogChunk {
-                stream: crate::Stream::Stdout,
-                bytes: b"fake-out\n".to_vec(),
+        let delayed = self.delayed_logs.lock().unwrap().pop_front();
+        let delayed_log = if let Some(delayed) = delayed {
+            sender
+                .try_send(crate::LogChunk {
+                    stream: crate::Stream::Stdout,
+                    bytes: delayed.initial,
+                })
+                .unwrap();
+            Some(DelayedProcessLog {
+                late: delayed.late,
+                ready: delayed.ready,
+                release: delayed.release,
+                sender: sender.clone(),
             })
-            .unwrap();
-        sender
-            .try_send(crate::LogChunk {
-                stream: crate::Stream::Stderr,
-                bytes: b"fake-err\n".to_vec(),
-            })
-            .unwrap();
+        } else {
+            sender
+                .try_send(crate::LogChunk {
+                    stream: crate::Stream::Stdout,
+                    bytes: b"fake-out\n".to_vec(),
+                })
+                .unwrap();
+            sender
+                .try_send(crate::LogChunk {
+                    stream: crate::Stream::Stderr,
+                    bytes: b"fake-err\n".to_vec(),
+                })
+                .unwrap();
+            None
+        };
         let log_owner = self.hold_logs.load(Ordering::SeqCst).then_some(sender);
         let (delay, result) = if is_health {
             let mut health = self.health.lock().unwrap();
@@ -282,6 +362,7 @@ impl Runtime for FakeRuntime {
             )
         };
         let id = self.next.fetch_add(1, Ordering::SeqCst);
+        let (checkpoint_exit, _) = tokio::sync::watch::channel(false);
         if let Some(mut input) = launch.input {
             let received = Arc::clone(&self.inputs);
             tokio::spawn(async move {
@@ -306,6 +387,9 @@ impl Runtime for FakeRuntime {
             _log_owner: log_owner,
             checkpoint_armed: launch.checkpoint.is_some() && self.checkpointable.load(Ordering::SeqCst),
             checkpoint_failure: Arc::clone(&self.fail_checkpoint),
+            checkpoint_exit,
+            checkpoint_exits: Arc::clone(&self.checkpoint_exits),
+            delayed_log: std::sync::Mutex::new(delayed_log),
             domain,
             domain_reads: Arc::clone(&self.domain_reads),
         }))

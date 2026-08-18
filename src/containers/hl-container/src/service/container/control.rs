@@ -172,6 +172,10 @@ impl Service {
 
     pub(crate) async fn pause(self: &Arc<Self>, reference: &str) -> Result<()> {
         let _guard = self.operations.lock().await;
+        self.pause_locked(reference).await
+    }
+
+    pub(super) async fn pause_locked(self: &Arc<Self>, reference: &str) -> Result<()> {
         let mut container = self.resolve(reference).await?;
         let ContainerState::Running {
             process_id,
@@ -203,6 +207,10 @@ impl Service {
 
     pub(crate) async fn unpause(self: &Arc<Self>, reference: &str) -> Result<()> {
         let _guard = self.operations.lock().await;
+        self.unpause_locked(reference).await
+    }
+
+    pub(super) async fn unpause_locked(self: &Arc<Self>, reference: &str) -> Result<()> {
         let mut container = self.resolve(reference).await?;
         let ContainerState::Paused {
             process_id,
@@ -247,6 +255,14 @@ impl Service {
 
     pub(crate) async fn checkpoint(self: &Arc<Self>, reference: &str, timeout: Duration) -> Result<crate::Checkpoint> {
         let _guard = self.operations.lock().await;
+        self.checkpoint_locked(reference, timeout).await
+    }
+
+    pub(super) async fn checkpoint_locked(
+        self: &Arc<Self>,
+        reference: &str,
+        timeout: Duration,
+    ) -> Result<crate::Checkpoint> {
         let mut container = self.resolve(reference).await?;
         if !matches!(container.state, ContainerState::Running { .. }) {
             return Err(Error::InvalidState {
@@ -255,7 +271,13 @@ impl Service {
                 expected: "running",
             });
         }
-        let process = self.live(&container).await?;
+        let (process, output_complete) = {
+            let live = self.live.lock().await;
+            let run = live
+                .get(&container.id)
+                .ok_or_else(|| Error::Corrupt(format!("active container {} has no owned process", container.id)))?;
+            (Arc::clone(&run.process), run.output_complete.clone())
+        };
         process.checkpoint(timeout).await?;
         let checkpoint = crate::Checkpoint {
             namespace: container.id.to_string(),
@@ -268,6 +290,9 @@ impl Service {
         };
         container.checkpoint = Some(checkpoint.clone());
         self.containers.replace(&container).await?;
+        let output = self
+            .await_output_completion(&JournalId::container(container.id.clone()), output_complete, timeout)
+            .await;
         if let Some(run) = self.live.lock().await.remove(&container.id) {
             let _ = run.health.send(true);
         }
@@ -277,7 +302,94 @@ impl Service {
         if let Some(notify) = self.waiters.lock().await.get(&container.id) {
             notify.notify_waiters();
         }
-        Ok(checkpoint)
+        output.map(|()| checkpoint)
+    }
+
+    pub(crate) async fn checkpoint_all(self: &Arc<Self>, timeout: Duration) -> Result<()> {
+        let _guard = self.operations.lock().await;
+        self.checkpointable_execs().await?;
+        #[cfg(test)]
+        self.wait_checkpoint_all_gate().await;
+        let mut failure = None;
+        let mut captured = Vec::new();
+        let mut resumed = Vec::new();
+        for container in self.containers.list().await? {
+            let container_id = container.id.clone();
+            let result = match container.state {
+                ContainerState::Restarting { .. } => self.cancel_restart_locked(container).await.map(|()| None),
+                ContainerState::Created | ContainerState::Exited { .. } => Ok(None),
+                ContainerState::Running { .. } => self
+                    .checkpoint_locked(container.id.as_str(), timeout)
+                    .await
+                    .map(|_| Some(container.id)),
+                ContainerState::Paused { .. } => match self.unpause_locked(container.id.as_str()).await {
+                    Ok(()) => {
+                        resumed.push(container.id.clone());
+                        self.checkpoint_locked(container.id.as_str(), timeout)
+                            .await
+                            .map(|_| Some(container.id))
+                    }
+                    Err(error) => Err(error),
+                },
+            };
+            match result {
+                Ok(Some(id)) => captured.push(id),
+                Ok(None) | Err(Error::NotFound(_)) => {}
+                Err(error) => {
+                    if let Ok(container) = self.resolve(container_id.as_str()).await
+                        && container.checkpoint.is_some()
+                        && matches!(container.state, ContainerState::Exited { .. })
+                    {
+                        captured.push(container.id);
+                    }
+                    if failure.is_none() {
+                        failure = Some(error);
+                    }
+                }
+            }
+        }
+        if failure.is_none()
+            && let Err(error) = self.checkpoint_execs_locked(timeout).await
+        {
+            failure = Some(error);
+        }
+        let Some(mut failure) = failure else {
+            return Ok(());
+        };
+        for id in captured {
+            if let Err(rollback) = self.start_locked(id.as_str()).await {
+                failure = Error::Runtime(format!("{failure}; checkpoint rollback failed for {id}: {rollback}"));
+            }
+        }
+        for id in resumed {
+            if let Err(rollback) = self.pause_locked(id.as_str()).await {
+                failure = Error::Runtime(format!("{failure}; pause rollback failed for {id}: {rollback}"));
+            }
+        }
+        Err(failure)
+    }
+
+    async fn cancel_restart_locked(&self, mut container: crate::Container) -> Result<()> {
+        let ContainerState::Restarting {
+            result, finished_at_ms, ..
+        } = container.state
+        else {
+            return Err(Error::InvalidState {
+                id: container.id,
+                actual: container.state,
+                expected: "restarting",
+            });
+        };
+        container.restart.manual();
+        container.state = ContainerState::Exited { result, finished_at_ms };
+        self.containers.replace(&container).await?;
+        if let Some(cancel) = self.restarts.lock().await.remove(&container.id) {
+            let _ = cancel.send(true);
+        }
+        if let Some(notify) = self.waiters.lock().await.get(&container.id) {
+            notify.notify_waiters();
+        }
+        Ok(())
     }
 
     pub(crate) async fn stop(self: &Arc<Self>, reference: &str, timeout: Duration) -> Result<ExitStatus> {
