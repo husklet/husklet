@@ -2,7 +2,10 @@
 
 use hl_engine::{
     activation::GuestIsa,
-    composition::{CheckpointSink, CheckpointSource, CompositionError, StandardStreams, Terminal, TerminalPort},
+    composition::{
+        CheckpointSink, CheckpointSource, CompositionError, StandardStream, StandardStreamPort, StandardStreams,
+        Terminal, TerminalPort,
+    },
     engine::{EngineError, StopRequest},
     launcher::plan::RuntimePlan,
     options::Options,
@@ -376,6 +379,23 @@ fn nested_pipeline_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     output
 }
 
+fn inherited_pipe_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    let (compiler, name) = match isa {
+        GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-inherited-pipe-aarch64"),
+        GuestIsa::X86_64 => ("x86_64-linux-gnu-gcc", "checkpoint-inherited-pipe-x86_64"),
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/inherited_pipe.c");
+    let output = directory.join(name);
+    let status = std::process::Command::new(compiler)
+        .args(["-static", "-O2", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
+    assert!(status.success(), "{compiler} failed with {status}");
+    output
+}
+
 fn reaped_group_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     let (compiler, name) = match isa {
         GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-reaped-group-aarch64"),
@@ -438,6 +458,50 @@ struct TerminalState {
 struct TestTerminal {
     state: Mutex<TerminalState>,
     changed: Condvar,
+}
+
+#[derive(Default)]
+struct CapturedOutput {
+    bytes: Mutex<Vec<u8>>,
+    changed: Condvar,
+}
+
+impl CapturedOutput {
+    fn wait(&self, marker: &str) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut bytes = self.bytes.lock().unwrap();
+        while !bytes.windows(marker.len()).any(|window| window == marker.as_bytes()) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "standard output did not contain {marker:?}:\n{}",
+                String::from_utf8_lossy(&bytes)
+            );
+            let (next, timeout) = self.changed.wait_timeout(bytes, remaining).unwrap();
+            bytes = next;
+            assert!(
+                !timeout.timed_out(),
+                "standard output did not contain {marker:?}:\n{}",
+                String::from_utf8_lossy(&bytes)
+            );
+        }
+    }
+
+    fn text(&self) -> String {
+        String::from_utf8_lossy(&self.bytes.lock().unwrap()).into_owned()
+    }
+}
+
+impl StandardStreamPort for CapturedOutput {
+    fn write(&self, _: StandardStream, input: &[u8]) -> std::io::Result<usize> {
+        self.bytes.lock().unwrap().extend_from_slice(input);
+        self.changed.notify_all();
+        Ok(input.len())
+    }
+
+    fn close(&self) {
+        self.changed.notify_all();
+    }
 }
 
 impl TestTerminal {
@@ -1714,6 +1778,155 @@ fn checkpoint_round_trip(
     assert!(output.contains("RESTORED 2"));
     assert!(output.contains("RESTORED 3"));
     assert!(output.contains("TREE-RESTORED"));
+}
+
+fn process_groups(store: &Store) -> BTreeSet<String> {
+    store
+        .0
+        .lock()
+        .unwrap()
+        .keys()
+        .filter_map(|name| name.strip_suffix("/meta"))
+        .filter(|name| name.starts_with("proc."))
+        .map(str::to_owned)
+        .collect()
+}
+
+fn ready_process_groups(output: &CapturedOutput) -> BTreeSet<String> {
+    output
+        .text()
+        .lines()
+        .filter(|line| line.starts_with("PIPE-READY "))
+        .map(|line| {
+            if line.starts_with("PIPE-READY parent ") {
+                "proc.1".to_owned()
+            } else {
+                let (_, pid) = line.rsplit_once("pid=").expect("ready pid field");
+                format!("proc.{}", pid.parse::<u32>().expect("numeric guest pid"))
+            }
+        })
+        .collect()
+}
+
+fn wait_bounded_with_output(
+    engine: &Arc<Engine>,
+    context: &str,
+    output: &CapturedOutput,
+) -> hl_engine::engine::EngineExit {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let waiting = engine.clone();
+    std::thread::spawn(move || {
+        let _ = sender.send(waiting.wait());
+    });
+    match receiver.recv_timeout(Duration::from_secs(10)) {
+        Ok(result) => result.unwrap_or_else(|error| panic!("{context} failed: {error:?}\n{}", output.text())),
+        Err(error) => {
+            let _ = engine.stop(StopRequest::Force);
+            panic!("{context} did not exit within 10 seconds: {error}\n{}", output.text());
+        }
+    }
+}
+
+fn inherited_pipe_round_trip(isa: GuestIsa, executable: &Path) {
+    let temporary = tempfile::tempdir().unwrap();
+    let release = temporary.path().join("release");
+    let final_release = temporary.path().join("final-release");
+    let output = Arc::new(CapturedOutput::default());
+    let first_store = Arc::new(Store::default());
+
+    let capture = Arc::new(
+        Engine::with_checkpoint(
+            isa,
+            plan(executable, &release, &final_release, &["HL_CHECKPOINT"]),
+            StandardStreams::default().with_output(output.clone()),
+            first_store.clone(),
+            first_store.clone(),
+        )
+        .unwrap(),
+    );
+    capture.start().unwrap();
+    for marker in ["PIPE-READY 0", "PIPE-READY 1", "PIPE-READY 2", "PIPE-READY parent"] {
+        output.wait(marker);
+    }
+    let expected_groups = ready_process_groups(&output);
+    assert_eq!(expected_groups.len(), 4, "{isa:?}: {}", output.text());
+    capture
+        .capture_checkpoint_until(checkpoint_deadline())
+        .unwrap_or_else(|error| {
+            panic!(
+                "{isa:?} first inherited-pipe capture failed: {error:?}\n{}",
+                output.text()
+            )
+        });
+    assert_eq!(
+        wait_bounded_with_output(&capture, "first inherited-pipe capture", &output).guest_status,
+        0,
+        "{isa:?}: {}",
+        output.text()
+    );
+    let first_groups = process_groups(&first_store);
+    assert_eq!(first_groups, expected_groups, "{isa:?}: {}", output.text());
+
+    std::fs::write(temporary.path().join("release.go"), []).unwrap();
+    let second_store = Arc::new(Store::default());
+    let recapture = Arc::new(
+        Engine::with_checkpoint(
+            isa,
+            plan(executable, &release, &final_release, &["HL_RESTORE", "HL_CHECKPOINT"]),
+            StandardStreams::default().with_output(output.clone()),
+            second_store.clone(),
+            first_store,
+        )
+        .unwrap(),
+    );
+    recapture.start().unwrap();
+    for role in 0..3 {
+        output.wait(&format!("PIPE-CYCLE-READY {role}"));
+    }
+    recapture
+        .capture_checkpoint_until(checkpoint_deadline())
+        .unwrap_or_else(|error| panic!("{isa:?} inherited-pipe recapture failed: {error:?}\n{}", output.text()));
+    assert_eq!(
+        wait_bounded_with_output(&recapture, "second inherited-pipe capture", &output).guest_status,
+        0,
+        "{isa:?}: {}",
+        output.text()
+    );
+    let second_groups = process_groups(&second_store);
+    assert_eq!(second_groups, first_groups, "{isa:?} process identity set changed");
+
+    std::fs::write(temporary.path().join("final-release.go"), []).unwrap();
+    let restore = Arc::new(
+        Engine::with_checkpoint(
+            isa,
+            plan(executable, &release, &final_release, &["HL_RESTORE"]),
+            StandardStreams::default().with_output(output.clone()),
+            second_store.clone(),
+            second_store,
+        )
+        .unwrap(),
+    );
+    restore.start().unwrap();
+    let restored = wait_bounded_with_output(&restore, "final inherited-pipe restore", &output);
+    let captured = output.text();
+    assert_eq!(restored.guest_status, 0, "{isa:?}: {captured}");
+    assert!(captured.contains("PIPE-CONSUMED 1"), "{isa:?}: {captured}");
+    assert!(captured.contains("PIPE-CONSUMED 2"), "{isa:?}: {captured}");
+    assert!(captured.contains("PIPE-EOF"), "{isa:?}: {captured}");
+    assert!(captured.contains("PIPE-TREE-RESTORED"), "{isa:?}: {captured}");
+}
+
+#[test]
+fn inherited_pipe_ofd_survives_two_checkpoint_cycles_on_both_isas() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executables =
+        [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, inherited_pipe_fixture(isa, fixtures.path())));
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+    for (isa, executable) in executables {
+        inherited_pipe_round_trip(isa, &executable);
+    }
 }
 
 #[test]
