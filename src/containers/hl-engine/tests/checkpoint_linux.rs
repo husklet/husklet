@@ -2425,20 +2425,25 @@ fn terminal_waiting_for_sleep_survives_capture_restore_and_recapture_on_both_isa
     }
 }
 
-#[test]
-fn daily_development_workload_survives_two_checkpoint_cycles_on_both_isas() {
+fn daily_development_workload_survives_two_checkpoint_cycles(isa: GuestIsa) {
     let compiling = fixture_compilation();
     let fixtures = tempfile::tempdir().unwrap();
-    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| {
-        let started = Instant::now();
-        let executable = daily_dev_fixture(isa, fixtures.path());
-        (isa, executable, started.elapsed())
-    });
+    let started = Instant::now();
+    let executable = daily_dev_fixture(isa, fixtures.path());
+    let fixture_compile = started.elapsed();
     drop(compiling);
     let _exclusive = exclusive_checkpoint_test();
-    for (isa, executable, fixture_compile) in executables {
-        daily_dev_round_trip(isa, &executable, fixture_compile);
-    }
+    daily_dev_round_trip(isa, &executable, fixture_compile);
+}
+
+#[test]
+fn aarch64_daily_development_workload_survives_two_checkpoint_cycles() {
+    daily_development_workload_survives_two_checkpoint_cycles(GuestIsa::Aarch64);
+}
+
+#[test]
+fn amd64_daily_development_workload_survives_two_checkpoint_cycles() {
+    daily_development_workload_survives_two_checkpoint_cycles(GuestIsa::X86_64);
 }
 
 #[test]
