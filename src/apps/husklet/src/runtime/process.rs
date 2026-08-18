@@ -20,12 +20,9 @@ pub(super) fn signal_group_for_test(process: u32, signal: libc::c_int) -> io::Re
 
 #[cfg(test)]
 pub(super) fn process_exists_for_test(process: u32) -> io::Result<bool> {
-    match signal_for_test(process, 0) {
-        Ok(()) => Ok(true),
-        Err(error) if error.raw_os_error() == Some(libc::ESRCH) => Ok(false),
-        Err(error) if error.raw_os_error() == Some(libc::EPERM) => Ok(true),
-        Err(error) => Err(error),
-    }
+    let process = libc::pid_t::try_from(process)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "process identity exceeds pid_t"))?;
+    ffi::exists(process)
 }
 
 pub(super) struct Peer {
@@ -198,6 +195,22 @@ mod ffi {
         })
     }
 
+    #[cfg(test)]
+    pub(super) fn exists(process: libc::pid_t) -> io::Result<bool> {
+        validate(process)?;
+        // SAFETY: signal zero performs existence and permission checking only. The integer process
+        // identity carries no Rust alias, the kernel retains nothing, and the call cannot unwind.
+        if unsafe { libc::kill(process, 0) } == 0 {
+            return Ok(true);
+        }
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::ESRCH) => Ok(false),
+            Some(libc::EPERM) => Ok(true),
+            _ => Err(error),
+        }
+    }
+
     pub(super) fn signal_process_with(
         process: libc::pid_t,
         signal: libc::c_int,
@@ -294,7 +307,7 @@ mod ffi {
 
 #[cfg(test)]
 mod tests {
-    use super::{ffi, Peer};
+    use super::{Peer, ffi, process_exists_for_test};
     use std::io;
 
     #[test]
@@ -308,6 +321,15 @@ mod tests {
 
         assert_eq!(Peer::new(&client).unwrap().process, std::process::id() as i32);
         drop(accepted);
+    }
+
+    #[test]
+    fn liveness_distinguishes_a_reaped_process_from_an_idempotent_signal() {
+        assert!(process_exists_for_test(std::process::id()).unwrap());
+        let mut child = std::process::Command::new("/bin/true").spawn().unwrap();
+        let identity = child.id();
+        child.wait().unwrap();
+        assert!(!process_exists_for_test(identity).unwrap());
     }
 
     #[test]
@@ -350,7 +372,7 @@ mod tests {
 
 #[cfg(test)]
 mod wait_cleanup_test {
-    use super::{ffi, CommandSession as _, Peer};
+    use super::{CommandSession as _, Peer, ffi};
     use std::io::{BufRead as _, Write as _};
 
     const HELPER: &str = "runtime::process::wait_cleanup_test::socket_owner_helper";
