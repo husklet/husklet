@@ -1730,7 +1730,10 @@ impl<'a> RestoreGateEngine<'a> {
             }
             if self.waiter.as_ref().is_some_and(std::thread::JoinHandle::is_finished) {
                 let result = self.join_waiter();
-                panic!("{context}: guest exited before {marker}: {result:?}\n{output}");
+                panic!(
+                    "{context}: guest exited before {marker}: {result:?}; survivors={}\n{output}",
+                    self.survivors()
+                );
             }
             if Instant::now() >= deadline {
                 panic!("{context}: guest did not publish {marker}; cleanup={}\n{output}", self.cleanup());
