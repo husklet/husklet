@@ -15,6 +15,7 @@ fn os_owned_arenas_are_transactional_and_collision_safe() {
 
 #include <errno.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -70,6 +71,18 @@ static int release_sentinel(unsigned char *address, uint64_t length) {
 #else
     return munmap(address, (size_t)length);
 #endif
+}
+
+static int write_faults(unsigned char *address) {
+    pid_t child = fork();
+    if (child < 0) return 0;
+    if (child == 0) {
+        *address = 0x7b;
+        _exit(0);
+    }
+    int status = 0;
+    return waitpid(child, &status, 0) == child && WIFSIGNALED(status) &&
+           (WTERMSIG(status) == SIGSEGV || WTERMSIG(status) == SIGBUS);
 }
 
 typedef struct contender {
@@ -158,18 +171,49 @@ int main(void) {
     forged = first;
     forged.identity++;
     if (hl_arena_reservation_owned(&authority, &forged)) return 10;
+    if (hl_arena_transaction_materialize_anonymous(
+            &transaction, &first, HL_ARENA_PROTECTION_READ | HL_ARENA_PROTECTION_WRITE) != 0) return 71;
+    unsigned char *materialized = (unsigned char *)(uintptr_t)first.address;
+    memset(materialized, 0x3c, (size_t)first.length);
+    if (hl_arena_transaction_materialize_anonymous(
+            &transaction, &first, HL_ARENA_PROTECTION_READ | HL_ARENA_PROTECTION_WRITE) != -1 ||
+        errno != EALREADY || materialized[0] != 0x3c) return 72;
+    if (hl_arena_transaction_materialize_anonymous(
+            &transaction, &forged, HL_ARENA_PROTECTION_READ | HL_ARENA_PROTECTION_WRITE) != -1 ||
+        errno != EACCES || materialized[0] != 0x3c) return 73;
+    sentinel = claim_sentinel(NORMAL_LIMIT, granule);
+    if (sentinel == NULL) return 74;
+    memset(sentinel, 0xa7, (size_t)granule);
+    forged = first;
+    forged.address = NORMAL_LIMIT;
+    if (hl_arena_transaction_materialize_anonymous(
+            &transaction, &forged, HL_ARENA_PROTECTION_READ | HL_ARENA_PROTECTION_WRITE) != -1 ||
+        errno != EACCES || sentinel[0] != 0xa7 || sentinel[granule - 1] != 0xa7) return 75;
+    if (release_sentinel(sentinel, granule) != 0) return 76;
+    if (hl_arena_authority_fork_prepare(&authority) != -1 || errno != EBUSY) return 77;
 
     state.authority = &authority;
     if (pthread_create(&thread, NULL, contend, &state) != 0 || pthread_join(thread, NULL) != 0) return 11;
     if (state.result != -1 || state.error != EBUSY) return 12;
 
-    hl_arena_transaction_rollback(&transaction);
+    if (hl_arena_transaction_rollback(&transaction) != 0 || !write_faults(materialized)) return 78;
     if (hl_arena_manifest_get(&authority, &after) != 0 || after.normal_cursor != before.normal_cursor ||
         after.low32_cursor != before.low32_cursor || hl_arena_reservation_owned(&authority, &first)) return 13;
 
     if (hl_arena_transaction_begin(&authority, &transaction) != 0 ||
         hl_arena_transaction_reserve(&transaction, HL_ARENA_NORMAL, granule, &first) != 0 ||
-        hl_arena_transaction_commit(&transaction) != 0 || !hl_arena_reservation_owned(&authority, &first)) return 14;
+        hl_arena_transaction_materialize_anonymous(
+            &transaction, &first, HL_ARENA_PROTECTION_READ | HL_ARENA_PROTECTION_WRITE) != 0)
+        return 14;
+    materialized = (unsigned char *)(uintptr_t)first.address;
+    materialized[0] = 0xd4;
+    if (hl_arena_transaction_commit(&transaction) != 0 || !hl_arena_reservation_owned(&authority, &first) ||
+        materialized[0] != 0xd4) return 79;
+    if (hl_arena_transaction_begin(&authority, &transaction) != 0) return 80;
+    if (hl_arena_transaction_materialize_anonymous(
+            &transaction, &first, HL_ARENA_PROTECTION_READ | HL_ARENA_PROTECTION_WRITE) != -1 ||
+        errno != EALREADY || hl_arena_transaction_rollback(&transaction) != 0 || materialized[0] != 0xd4)
+        return 81;
     hl_arena_persisted_state persisted;
     if (hl_arena_persisted_state_get(&authority, &persisted) != 0 ||
         !hl_arena_persisted_state_valid(&persisted)) return 15;

@@ -10,6 +10,12 @@
 #ifndef MEM_RESERVE_PLACEHOLDER
 #define MEM_RESERVE_PLACEHOLDER 0x00040000
 #endif
+#ifndef MEM_REPLACE_PLACEHOLDER
+#define MEM_REPLACE_PLACEHOLDER 0x00004000
+#endif
+#ifndef MEM_PRESERVE_PLACEHOLDER
+#define MEM_PRESERVE_PLACEHOLDER 0x00000002
+#endif
 #else
 #include <pthread.h>
 #include <stdlib.h>
@@ -39,6 +45,7 @@ static _Atomic uint64_t arena_process_nonce;
 
 static void arena_lock(hl_arena_authority *authority);
 static void arena_unlock(hl_arena_authority *authority);
+static int arena_placeholder_restore(uint64_t address, uint64_t length);
 
 static uint64_t arena_process_id(void) {
 #if defined(_WIN32)
@@ -245,6 +252,61 @@ static void arena_release(uint64_t base, uint64_t limit) {
 #endif
 }
 
+static int arena_materialize_anonymous(uint64_t address, uint64_t length, uint32_t protection) {
+#if defined(_WIN32)
+    typedef PVOID(WINAPI * virtual_alloc2_fn)(HANDLE, PVOID, SIZE_T, ULONG, ULONG, PVOID, ULONG);
+    HMODULE kernel = GetModuleHandleW(L"kernelbase.dll");
+    virtual_alloc2_fn virtual_alloc2 =
+        kernel != NULL ? (virtual_alloc2_fn)(uintptr_t)GetProcAddress(kernel, "VirtualAlloc2") : NULL;
+    DWORD native_protection;
+    if (virtual_alloc2 == NULL) return (errno = ENOTSUP, -1);
+    if (!VirtualFree((void *)(uintptr_t)address, (SIZE_T)length, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER))
+        return (errno = EIO, -1);
+    if ((protection & HL_ARENA_PROTECTION_EXECUTE) != 0)
+        native_protection = (protection & HL_ARENA_PROTECTION_WRITE) != 0 ? PAGE_EXECUTE_READWRITE : PAGE_EXECUTE_READ;
+    else
+        native_protection = (protection & HL_ARENA_PROTECTION_WRITE) != 0 ? PAGE_READWRITE : PAGE_READONLY;
+    void *mapped = virtual_alloc2(GetCurrentProcess(), (void *)(uintptr_t)address, (SIZE_T)length,
+                                  MEM_RESERVE | MEM_COMMIT | MEM_REPLACE_PLACEHOLDER, native_protection, NULL, 0);
+    if (mapped == (void *)(uintptr_t)address) return 0;
+    return (errno = EIO, -1);
+#elif defined(__APPLE__)
+    vm_prot_t native_protection = VM_PROT_NONE;
+    if ((protection & HL_ARENA_PROTECTION_READ) != 0) native_protection |= VM_PROT_READ;
+    if ((protection & HL_ARENA_PROTECTION_WRITE) != 0) native_protection |= VM_PROT_WRITE;
+    if ((protection & HL_ARENA_PROTECTION_EXECUTE) != 0) native_protection |= VM_PROT_EXECUTE;
+    mach_vm_address_t mapped = (mach_vm_address_t)address;
+    kern_return_t status =
+        mach_vm_map(mach_task_self(), &mapped, (mach_vm_size_t)length, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
+                    MEMORY_OBJECT_NULL, 0, FALSE, native_protection, native_protection, VM_INHERIT_COPY);
+    return status == KERN_SUCCESS && mapped == (mach_vm_address_t)address ? 0 : (errno = EIO, -1);
+#else
+    int native_protection = 0;
+    if ((protection & HL_ARENA_PROTECTION_READ) != 0) native_protection |= PROT_READ;
+    if ((protection & HL_ARENA_PROTECTION_WRITE) != 0) native_protection |= PROT_WRITE;
+    if ((protection & HL_ARENA_PROTECTION_EXECUTE) != 0) native_protection |= PROT_EXEC;
+    void *mapped = mmap((void *)(uintptr_t)address, (size_t)length, native_protection,
+                        MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    return mapped == (void *)(uintptr_t)address ? 0 : -1;
+#endif
+}
+
+static int arena_placeholder_restore(uint64_t address, uint64_t length) {
+#if defined(_WIN32)
+    return VirtualFree((void *)(uintptr_t)address, 0, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER) ? 0 : (errno = EIO, -1);
+#elif defined(__APPLE__)
+    mach_vm_address_t mapped = (mach_vm_address_t)address;
+    kern_return_t status =
+        mach_vm_map(mach_task_self(), &mapped, (mach_vm_size_t)length, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
+                    MEMORY_OBJECT_NULL, 0, FALSE, VM_PROT_NONE, VM_PROT_NONE, VM_INHERIT_NONE);
+    return status == KERN_SUCCESS && mapped == (mach_vm_address_t)address ? 0 : (errno = EIO, -1);
+#else
+    void *mapped =
+        mmap((void *)(uintptr_t)address, (size_t)length, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    return mapped == (void *)(uintptr_t)address ? 0 : -1;
+#endif
+}
+
 static int aligned_range(uint64_t base, uint64_t limit, uint64_t granule) {
     return granule != 0 && (granule & (granule - 1)) == 0 && base < limit && base % granule == 0 &&
            limit % granule == 0;
@@ -287,6 +349,9 @@ int hl_arena_authority_init(hl_arena_authority *authority, const hl_arena_config
     memset(authority->reservations, 0, sizeof(authority->reservations));
     authority->reservation_count = 0;
     authority->active_transaction = 0;
+    authority->materialization_count = 0;
+    authority->transaction_materialization_count = 0;
+    memset(authority->materialized_identities, 0, sizeof(authority->materialized_identities));
     atomic_store_explicit(&authority->fork_phase, 0, memory_order_relaxed);
     authority->fork_process = 0;
     if (arena_claim(config->normal_base, config->normal_limit) != 0) {
@@ -341,8 +406,11 @@ int hl_arena_authority_destroy(hl_arena_authority *authority) {
     atomic_store_explicit(&authority->lifecycle, HL_ARENA_RETIRED, memory_order_release);
     authority->reservation_count = 0;
     authority->active_transaction = 0;
+    authority->materialization_count = 0;
+    authority->transaction_materialization_count = 0;
     memset(&authority->manifest, 0, sizeof(authority->manifest));
     memset(authority->reservations, 0, sizeof(authority->reservations));
+    memset(authority->materialized_identities, 0, sizeof(authority->materialized_identities));
     arena_unlock(authority);
     return 0;
 }
@@ -356,6 +424,12 @@ int hl_arena_authority_fork_prepare(hl_arena_authority *authority) {
     if (arena_ready_lock(authority) != 0) {
         atomic_store_explicit(&authority->fork_phase, 0, memory_order_release);
         return -1;
+    }
+    if (authority->active_transaction &&
+        authority->materialization_count != authority->transaction_materialization_count) {
+        arena_unlock(authority);
+        atomic_store_explicit(&authority->fork_phase, 0, memory_order_release);
+        return (errno = EBUSY, -1);
     }
     authority->fork_process = arena_process_id();
     atomic_store_explicit(&authority->fork_phase, 2, memory_order_release);
@@ -539,6 +613,7 @@ int hl_arena_transaction_begin(hl_arena_authority *authority, hl_arena_transacti
     authority->transaction_normal_cursor = authority->manifest.normal_cursor;
     authority->transaction_low32_cursor = authority->manifest.low32_cursor;
     authority->transaction_reservation_count = authority->reservation_count;
+    authority->transaction_materialization_count = authority->materialization_count;
     authority->manifest.generation++;
     /* Publish the active flag last. A fork child that observes it is then
      * guaranteed to observe a complete rollback journal. */
@@ -598,6 +673,56 @@ int hl_arena_transaction_reserve(hl_arena_transaction *transaction, hl_arena_zon
     return 0;
 }
 
+int hl_arena_transaction_materialize_anonymous(hl_arena_transaction *transaction,
+                                               const hl_arena_reservation *reservation, uint32_t protection) {
+    hl_arena_authority *authority;
+    int found = 0;
+    const uint32_t allowed = HL_ARENA_PROTECTION_READ | HL_ARENA_PROTECTION_WRITE | HL_ARENA_PROTECTION_EXECUTE;
+    if (transaction == NULL || reservation == NULL || !transaction->active || (protection & ~allowed) != 0 ||
+        (protection & HL_ARENA_PROTECTION_READ) == 0)
+        return (errno = EINVAL, -1);
+    authority = transaction->authority;
+    if (arena_ready_lock(authority) != 0) return -1;
+    if (!authority->active_transaction || transaction->generation != authority->manifest.generation) {
+        arena_unlock(authority);
+        return (errno = EINVAL, -1);
+    }
+    for (uint32_t index = 0; index < authority->reservation_count; ++index) {
+        const hl_arena_reservation *candidate = &authority->reservations[index];
+        if (candidate->authority_nonce == reservation->authority_nonce &&
+            candidate->authority_identity == reservation->authority_identity &&
+            candidate->identity == reservation->identity && candidate->address == reservation->address &&
+            candidate->length == reservation->length && candidate->zone == reservation->zone &&
+            candidate->state == HL_ARENA_RESERVATION_OWNED) {
+            found = 1;
+            break;
+        }
+    }
+    if (!found) {
+        arena_unlock(authority);
+        return (errno = EACCES, -1);
+    }
+    for (uint32_t index = 0; index < authority->materialization_count; ++index) {
+        if (authority->materialized_identities[index] == reservation->identity) {
+            arena_unlock(authority);
+            return (errno = EALREADY, -1);
+        }
+    }
+    if (authority->materialization_count == HL_ARENA_MAX_RESERVATIONS) {
+        arena_unlock(authority);
+        return (errno = ENOSPC, -1);
+    }
+    /* The authority lock spans validation and the platform replacement. No
+     * caller can obtain an ownership answer and race a separate MAP_FIXED. */
+    if (arena_materialize_anonymous(reservation->address, reservation->length, protection) != 0) {
+        arena_unlock(authority);
+        return -1;
+    }
+    authority->materialized_identities[authority->materialization_count++] = reservation->identity;
+    arena_unlock(authority);
+    return 0;
+}
+
 int hl_arena_transaction_commit(hl_arena_transaction *transaction) {
     if (transaction == NULL || !transaction->active) return (errno = EINVAL, -1);
     if (arena_ready_lock(transaction->authority) != 0) return -1;
@@ -612,26 +737,43 @@ int hl_arena_transaction_commit(hl_arena_transaction *transaction) {
     return 0;
 }
 
-void hl_arena_transaction_rollback(hl_arena_transaction *transaction) {
+int hl_arena_transaction_rollback(hl_arena_transaction *transaction) {
     hl_arena_authority *authority;
-    if (transaction == NULL || !transaction->active) return;
+    int rollback_error = 0;
+    if (transaction == NULL || !transaction->active) return (errno = EINVAL, -1);
     authority = transaction->authority;
     if (arena_ready_lock(authority) != 0) {
         transaction->active = 0;
-        return;
+        return -1;
     }
-    if (authority->active_transaction && transaction->generation == authority->manifest.generation) {
-        authority->manifest.normal_cursor = authority->transaction_normal_cursor;
-        authority->manifest.low32_cursor = authority->transaction_low32_cursor;
-        memset(&authority->reservations[authority->transaction_reservation_count], 0,
-               (authority->reservation_count - authority->transaction_reservation_count) *
-                   sizeof(hl_arena_reservation));
-        authority->reservation_count = authority->transaction_reservation_count;
-        authority->manifest.reservation_count = authority->reservation_count;
-        authority->active_transaction = 0;
+    if (!authority->active_transaction || transaction->generation != authority->manifest.generation) {
+        arena_unlock(authority);
+        return (errno = EINVAL, -1);
     }
+    for (uint32_t index = authority->materialization_count; index > authority->transaction_materialization_count;
+         --index) {
+        const uint64_t identity = authority->materialized_identities[index - 1];
+        for (uint32_t reservation_index = 0; reservation_index < authority->reservation_count; ++reservation_index) {
+            const hl_arena_reservation *reservation = &authority->reservations[reservation_index];
+            if (reservation->identity == identity &&
+                arena_placeholder_restore(reservation->address, reservation->length) != 0 && rollback_error == 0)
+                rollback_error = errno != 0 ? errno : EIO;
+        }
+        authority->materialized_identities[index - 1] = 0;
+    }
+    authority->materialization_count = authority->transaction_materialization_count;
+    authority->manifest.normal_cursor = authority->transaction_normal_cursor;
+    authority->manifest.low32_cursor = authority->transaction_low32_cursor;
+    memset(&authority->reservations[authority->transaction_reservation_count], 0,
+           (authority->reservation_count - authority->transaction_reservation_count) * sizeof(hl_arena_reservation));
+    authority->reservation_count = authority->transaction_reservation_count;
+    authority->manifest.reservation_count = authority->reservation_count;
+    authority->active_transaction = 0;
     transaction->active = 0;
+    if (rollback_error != 0) atomic_store_explicit(&authority->lifecycle, HL_ARENA_RETIRED, memory_order_release);
     arena_unlock(authority);
+    if (rollback_error != 0) return (errno = rollback_error, -1);
+    return 0;
 }
 
 int hl_arena_reservation_owned(hl_arena_authority *authority, const hl_arena_reservation *reservation) {

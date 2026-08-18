@@ -27,6 +27,12 @@ typedef enum hl_arena_reservation_state {
     HL_ARENA_RESERVATION_RELEASED = 2,
 } hl_arena_reservation_state;
 
+typedef enum hl_arena_protection {
+    HL_ARENA_PROTECTION_READ = 1u << 0,
+    HL_ARENA_PROTECTION_WRITE = 1u << 1,
+    HL_ARENA_PROTECTION_EXECUTE = 1u << 2,
+} hl_arena_protection;
+
 typedef struct hl_arena_manifest {
     uint64_t magic;
     uint32_t version;
@@ -75,6 +81,9 @@ typedef struct hl_arena_authority {
     uint64_t transaction_normal_cursor;
     uint64_t transaction_low32_cursor;
     uint32_t transaction_reservation_count;
+    uint32_t materialization_count;
+    uint32_t transaction_materialization_count;
+    uint64_t materialized_identities[HL_ARENA_MAX_RESERVATIONS];
     _Atomic uint32_t fork_phase;
     uint64_t fork_process;
     _Atomic uint32_t lifecycle;
@@ -121,8 +130,10 @@ int hl_arena_persisted_state_valid(const hl_arena_persisted_state *state);
 int hl_arena_transaction_begin(hl_arena_authority *authority, hl_arena_transaction *transaction);
 int hl_arena_transaction_reserve(hl_arena_transaction *transaction, hl_arena_zone zone, uint64_t length,
                                  hl_arena_reservation *reservation);
+int hl_arena_transaction_materialize_anonymous(hl_arena_transaction *transaction,
+                                               const hl_arena_reservation *reservation, uint32_t protection);
 int hl_arena_transaction_commit(hl_arena_transaction *transaction);
-void hl_arena_transaction_rollback(hl_arena_transaction *transaction);
+int hl_arena_transaction_rollback(hl_arena_transaction *transaction);
 int hl_arena_reservation_owned(hl_arena_authority *authority, const hl_arena_reservation *reservation);
 
 #if defined(HL_NATIVE_TEST_HOOKS)
