@@ -377,15 +377,20 @@ typedef struct bound_fork_state {
     struct fdvis_fork_plan fdvis_plan;
     int fdvis_prepared;
     int seq_prepared;
+    const char *diagnostic_stage;
 } bound_fork_state;
+
+#include "process/fork_diagnostic.c"
 
 static int bound_fork_prepare(bound_fork_state *state) {
     hl_status status;
     memset(state, 0, sizeof(*state));
     if (g_linux_box == NULL) {
+        state->diagnostic_stage = "private-prepare";
         int private_status = hl_host_process_fd_private_fork_prepare();
         if (private_status != 0) return private_status;
         state->private_prepared = 1;
+        state->diagnostic_stage = "fdvis-prepare";
         int fdvis_status = proc_fdvis_fork_prepare(&state->fdvis_plan);
         if (fdvis_status != 0) {
             (void)hl_host_process_fd_private_fork_complete(0);
@@ -395,6 +400,7 @@ static int bound_fork_prepare(bound_fork_state *state) {
         state->fdvis_prepared = 1;
         seq_ref_fork_prepare();
         state->seq_prepared = 1;
+        state->diagnostic_stage = "prepared";
         return 0;
     }
     state->watch_plan.capacity = bound_mapping_watch_capacity();
@@ -404,7 +410,9 @@ static int bound_fork_prepare(bound_fork_state *state) {
     state->watch_plan.records = state->watch_plan.capacity == 0
                                     ? NULL
                                     : malloc((size_t)state->watch_plan.capacity * sizeof(*state->watch_plan.records));
+    state->diagnostic_stage = "watch-allocation";
     if (state->watch_plan.capacity != 0 && state->watch_plan.records == NULL) { return -ENOMEM; }
+    state->diagnostic_stage = "watch-prepare";
     if (bound_mapping_fork_prepare(&state->watch_plan) != 0) {
         free(state->watch_plan.records);
         state->watch_plan.records = NULL;
@@ -418,6 +426,7 @@ static int bound_fork_prepare(bound_fork_state *state) {
     // iterate only [0,count); the unused tail is never read, so no zero-fill is required. malloc avoids the
     // per-fork memset of the capacity-sized (ofd_capacity) records block that calloc would perform.
     state->plan.records = malloc((size_t)state->plan.capacity * sizeof(*state->plan.records));
+    state->diagnostic_stage = "ofd-allocation";
     if (state->plan.records == NULL) {
         (void)bound_mapping_fork_complete(&state->watch_plan, 0);
         state->watch_prepared = 0;
@@ -425,6 +434,7 @@ static int bound_fork_prepare(bound_fork_state *state) {
         state->watch_plan.records = NULL;
         return -ENOMEM;
     }
+    state->diagnostic_stage = "ofd-prepare";
     status = hl_linux_abi_fork_prepare(g_linux_box, &state->plan);
     if (status != HL_STATUS_OK) {
         (void)bound_mapping_fork_complete(&state->watch_plan, 0);
@@ -436,6 +446,7 @@ static int bound_fork_prepare(bound_fork_state *state) {
         return status == HL_STATUS_BUSY ? -EAGAIN : status == HL_STATUS_OUT_OF_MEMORY ? -ENOMEM : -EIO;
     }
     {
+        state->diagnostic_stage = "private-prepare";
         int private_status = hl_host_process_fd_private_fork_prepare();
         if (private_status != 0) {
             (void)hl_linux_abi_fork_parent(g_linux_box, &state->plan);
@@ -450,6 +461,7 @@ static int bound_fork_prepare(bound_fork_state *state) {
     }
     state->private_prepared = 1;
     {
+        state->diagnostic_stage = "fdvis-prepare";
         int fdvis_status = proc_fdvis_fork_prepare(&state->fdvis_plan);
         if (fdvis_status != 0) {
             (void)hl_host_process_fd_private_fork_complete(0);
@@ -467,6 +479,7 @@ static int bound_fork_prepare(bound_fork_state *state) {
     state->fdvis_prepared = 1;
     seq_ref_fork_prepare();
     state->seq_prepared = 1;
+    state->diagnostic_stage = "prepared";
     return 0;
 }
 
@@ -474,6 +487,7 @@ static int bound_fork_complete(bound_fork_state *state, int child, int child_pid
     hl_status status;
     int fdvis_status = 0;
     if (state->seq_prepared && child_pid < 0) seq_ref_fork_cancel();
+    state->seq_prepared = 0;
     if (state->fdvis_prepared) {
         if (child_pid > 0)
             fdvis_status = proc_fdvis_after_fork(&state->fdvis_plan, child_pid, child);
@@ -481,19 +495,26 @@ static int bound_fork_complete(bound_fork_state *state, int child, int child_pid
             proc_fdvis_fork_cancel(&state->fdvis_plan);
         free(state->fdvis_plan.entries);
         state->fdvis_plan.entries = NULL;
+        state->fdvis_prepared = 0;
     }
     int private_status = state->private_prepared ? hl_host_process_fd_private_fork_complete(child) : 0;
-    if (g_linux_box == NULL) return private_status;
+    state->private_prepared = 0;
+    if (g_linux_box == NULL) {
+        state->diagnostic_stage = private_status == 0 ? "completed" : "complete-failed";
+        return private_status;
+    }
     status = child ? hl_linux_abi_fork_child(g_linux_box, &state->plan)
                    : hl_linux_abi_fork_parent(g_linux_box, &state->plan);
     if (state->watch_prepared && bound_mapping_fork_complete(&state->watch_plan, child) != 0 && status == HL_STATUS_OK)
         status = HL_STATUS_PLATFORM_FAILURE;
+    state->watch_prepared = 0;
     if (private_status != 0 && status == HL_STATUS_OK) status = HL_STATUS_OUT_OF_MEMORY;
     if (fdvis_status != 0 && status == HL_STATUS_OK) status = HL_STATUS_OUT_OF_MEMORY;
     free(state->plan.records);
     state->plan.records = NULL;
     free(state->watch_plan.records);
     state->watch_plan.records = NULL;
+    state->diagnostic_stage = status == HL_STATUS_OK ? "completed" : "complete-failed";
     return status == HL_STATUS_OK ? 0 : -EIO;
 }
 

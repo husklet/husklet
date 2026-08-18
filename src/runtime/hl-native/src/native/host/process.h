@@ -1,6 +1,8 @@
 #ifndef HL_HOST_PROCESS_H
 #define HL_HOST_PROCESS_H
 
+#include "system.h"
+
 #include <sys/types.h>
 #include <unistd.h>
 

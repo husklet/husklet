@@ -67,11 +67,27 @@ typedef struct hl_host_process_peer {
     int64_t identity;
 } hl_host_process_peer;
 
+typedef struct hl_host_process_resource_snapshot {
+    uint64_t nofile_current;
+    uint64_t nofile_maximum;
+    uint64_t nproc_current;
+    uint64_t nproc_maximum;
+    int32_t nofile_status;
+    int32_t nproc_status;
+    int32_t open_descriptors;
+    int32_t threads;
+    int32_t caller_children;
+    int32_t children_truncated;
+} hl_host_process_resource_snapshot;
+
 /* Snapshot host-wide values and up to core_capacity per-core counters. */
 int hl_host_system_read(hl_host_system_info *info, hl_host_cpu_ticks *cores, size_t core_capacity);
 
 /* Snapshot one live native process. Returns zero when the pid is absent or inaccessible. */
 int hl_host_process_read(int64_t pid, hl_host_process_info *info);
+
+/* Capture real host limits and topology below guest ABI emulation. */
+int hl_host_process_resource_read(hl_host_process_resource_snapshot *snapshot);
 
 /* Enumerate descriptor numbers. kind may remain OTHER until fd_read; count includes truncated entries. */
 int hl_host_process_fds(int64_t pid, hl_host_process_fd *entries, size_t capacity, size_t *count);

@@ -12,6 +12,7 @@
 #include <string.h>
 #include <signal.h>
 #include <sys/proc_info.h>
+#include <sys/resource.h>
 #include <sys/sysctl.h>
 #include <time.h>
 #include <unistd.h>
@@ -113,6 +114,37 @@ int hl_host_process_read(int64_t pid, hl_host_process_info *info) {
         info->user_time_ns = task.pti_total_user;
         info->system_time_ns = task.pti_total_system;
         if (task.pti_threadnum > 0) info->threads = (uint32_t)task.pti_threadnum;
+    }
+    return 1;
+}
+
+int hl_host_process_resource_read(hl_host_process_resource_snapshot *snapshot) {
+    struct rlimit nofile;
+    struct rlimit nproc;
+    pid_t children[1024];
+    hl_host_process_info process;
+    if (snapshot == NULL) return 0;
+    memset(snapshot, 0, sizeof *snapshot);
+    snapshot->open_descriptors = -1;
+    snapshot->threads = -1;
+    snapshot->caller_children = -1;
+    snapshot->nofile_status = getrlimit(RLIMIT_NOFILE, &nofile);
+    if (snapshot->nofile_status == 0) {
+        snapshot->nofile_current = nofile.rlim_cur;
+        snapshot->nofile_maximum = nofile.rlim_max;
+    }
+    snapshot->nproc_status = getrlimit(RLIMIT_NPROC, &nproc);
+    if (snapshot->nproc_status == 0) {
+        snapshot->nproc_current = nproc.rlim_cur;
+        snapshot->nproc_maximum = nproc.rlim_max;
+    }
+    if (hl_host_process_read(getpid(), &process)) snapshot->threads = (int32_t)process.threads;
+    int descriptor_bytes = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, NULL, 0);
+    if (descriptor_bytes > 0) snapshot->open_descriptors = descriptor_bytes / (int)sizeof(struct proc_fdinfo);
+    int child_count = proc_listchildpids(getpid(), children, (int)sizeof children);
+    if (child_count >= 0) {
+        snapshot->caller_children = child_count;
+        snapshot->children_truncated = child_count >= (int)(sizeof children / sizeof children[0]);
     }
     return 1;
 }

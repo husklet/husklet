@@ -121,6 +121,17 @@ int hl_host_process_read(int64_t pid, hl_host_process_info *info) {
     return 0;
 }
 
+int hl_host_process_resource_read(hl_host_process_resource_snapshot *snapshot) {
+    if (snapshot == NULL) return 0;
+    memset(snapshot, 0, sizeof *snapshot);
+    snapshot->nofile_status = -1;
+    snapshot->nproc_status = -1;
+    snapshot->open_descriptors = -1;
+    snapshot->threads = -1;
+    snapshot->caller_children = -1;
+    return 1;
+}
+
 /* REFUSAL. Reports zero descriptors AND fails, so a caller cannot read the
  * empty enumeration as "this process has nothing open". */
 int hl_host_process_fds(int64_t pid, hl_host_process_fd *entries, size_t capacity, size_t *count) {
