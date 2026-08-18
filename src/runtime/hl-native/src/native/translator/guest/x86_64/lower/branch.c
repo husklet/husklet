@@ -24,7 +24,7 @@ static int lower_conditional_branch(struct insn *instruction, uint64_t *guest_pc
     int condition = parity ? emit_parity_condition(low) : x86cc_to_arm(low);
     uint64_t taken = next + (uint64_t)instruction->imm;
     uint32_t *cursor = hl_x86_emit_cursor();
-    if (!parity && taken == region->start && !region->tier_disabled() &&
+    if (!parity && taken == region->start && !region->tier_disabled &&
         !hl_x86_trace_loop_hazard((uint64_t)region->body, (uint64_t)cursor)) {
         int slot = region->tier_two ? 0 : region->tier_slot(region->start);
         if (region->tier_two || slot >= 0) {

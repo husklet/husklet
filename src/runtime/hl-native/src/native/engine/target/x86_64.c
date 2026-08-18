@@ -443,8 +443,8 @@ static const hl_x86_address_emitter address_emitter = {
     address_patch_cbnz};
 
 static hl_x86_address_state address_state(void) {
-    return (hl_x86_address_state){NULL,   &address_emitter, g_nonpie_lo, g_nonpie_hi,           g_nonpie_bias,
-                                  OFF_FS, OFF_GS,           !noeaopt(),  jit_guest_bus_active()};
+    return (hl_x86_address_state){NULL,   &address_emitter, g_nonpie_lo, g_nonpie_hi,          g_nonpie_bias,
+                                  OFF_FS, OFF_GS,           1,            jit_guest_bus_active()};
 }
 
 void emit_ea_core(struct insn *insn, uint64_t next, int bias) {
@@ -912,7 +912,7 @@ static void build_signal_frame(struct cpu *c, int sig, int synchronous) {
         .sigreturn_pc = sig == 32 && (g_sigact[sig].flags & UINT64_C(0x04000000)) && g_sigact[sig].restorer
                             ? g_sigact[sig].restorer
                             : SIGRETURN_PC,
-        .trace = g_trace,
+        .trace = 0,
     };
     hl_x86_signal_build(c, sig, &state);
 }
@@ -1237,13 +1237,10 @@ static int engine_global_init(void) {
             return 1;
         }
     }
-    g_trace = 0;
-    g_systrace = 0;
     g_prof = hl_option_get("HL_C_DIAGNOSTICS") != NULL;
     g_profile_output_owner = 1;
-    g_dispatch_diagnostics = g_prof || g_trace || g_nochain;
+    g_dispatch_diagnostics = g_prof;
     g_fwdskip = 8;
-    g_notier2x = 0;
     extern void jit86_lazyguard(int, siginfo_t *, void *);
 #if defined(_WIN32)
     // One process-wide vectored exception handler in place of two sigactions. It is not a preference: a
@@ -1397,7 +1394,7 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
                                     "[prof] dispatcher round-trips=%llu  IBTC fills=%llu  (IBTC %s)\n",
                                     (unsigned long long)g_dispatch_profile.crossings,
                                     (unsigned long long)g_dispatch_profile.translations, (unsigned long long)g_disp_n,
-                                    (unsigned long long)g_ibtc_fill, g_noibtc ? "OFF" : "ON");
+                                    (unsigned long long)g_ibtc_fill, "ON");
         if (profile_size > 0) {
             size_t bounded = (size_t)profile_size < sizeof profile ? (size_t)profile_size : sizeof profile - 1u;
             (void)hl_linux_write(g_linux_box, STDERR_FILENO, profile, bounded);

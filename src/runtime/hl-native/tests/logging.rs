@@ -5,8 +5,8 @@ fn x86_dispatch_bookkeeping_is_diagnostic_only() {
     let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
     let target = fs::read_to_string(native.join("engine/target/x86_64.c")).expect("read x86 target");
     assert!(
-        target.contains("g_dispatch_diagnostics = g_prof || g_trace || g_nochain;"),
-        "x86 target does not bind every diagnostic mode to dispatcher bookkeeping"
+        target.contains("g_dispatch_diagnostics = g_prof;"),
+        "x86 target does not bind profiling to dispatcher bookkeeping"
     );
     for relative in [
         "translator/guest/x86_64/dispatch.h",
@@ -29,6 +29,41 @@ fn x86_dispatch_bookkeeping_is_diagnostic_only() {
                 position > gate,
                 "{relative} performs {write} before its diagnostic gate"
             );
+        }
+    }
+}
+
+#[test]
+fn x86_runtime_has_no_unreachable_debug_kill_switches() {
+    let native = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/native");
+    for relative in [
+        "engine/target/x86_64.c",
+        "linux_abi/x86.c",
+        "linux_abi/syscall/dispatch.c",
+        "translator/guest/x86_64/dispatch.h",
+        "translator/guest/x86_64/emit.c",
+        "translator/guest/x86_64/glue.c",
+        "translator/guest/x86_64/glue.h",
+        "translator/guest/x86_64/lower/branch.c",
+        "translator/guest/x86_64/lower/branch.h",
+        "translator/guest/x86_64/lower/sse.c",
+        "translator/guest/x86_64/translate.c",
+    ] {
+        let source = fs::read_to_string(native.join(relative)).expect("read x86 runtime source");
+        for legacy in [
+            "g_noibtc",
+            "g_itrace",
+            "g_nochain",
+            "g_tracecap",
+            "g_diag",
+            "g_systrace",
+            "g_notier2x",
+            "ibtc1way",
+            "nosseopt",
+            "noeaopt",
+            "notier2x",
+        ] {
+            assert!(!source.contains(legacy), "{relative} retains dormant selector {legacy}");
         }
     }
 }

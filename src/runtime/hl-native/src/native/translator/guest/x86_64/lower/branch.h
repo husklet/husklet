@@ -14,7 +14,7 @@ typedef struct {
     int *conditional_stitches;
     int stitch_allowed;
     int tier_two;
-    int (*tier_disabled)(void);
+    int tier_disabled;
     int (*tier_slot)(uint64_t);
     void *(*body_mapped)(uint64_t);
 } hl_x86_branch_region;

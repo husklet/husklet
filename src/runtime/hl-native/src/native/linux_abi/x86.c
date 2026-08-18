@@ -291,10 +291,6 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
     out->phdr = etype == 2 ? basepage + phoff : (uint64_t)base + phoff;
     out->phent = phentsize;
     out->phnum = phnum;
-    extern int g_diag;
-    if (g_trace || g_diag)
-        fprintf(stderr, "[LOADED] %s base=%llx span=%llx end=%llx entry=%llx\n", path, (unsigned long long)base,
-                (unsigned long long)span, (unsigned long long)((uint64_t)base + span), (unsigned long long)out->entry);
     hl_linux_image_release(&image);
 }
 
@@ -486,10 +482,6 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
         memcpy(g_auxv_data + g_auxv_len + 8, &aux[i][1], 8);
         g_auxv_len += 16;
     }
-    extern int g_diag;
-    if (g_diag)
-        fprintf(stderr, "[stack] base=%p top=%p guard_end=%p sp=%p plat=%llx rnd=%llx\n", (void *)stk, (void *)top,
-                (void *)(stk + SZ + GUARD), (void *)sp, (unsigned long long)plat, (unsigned long long)rnd);
     return (uint64_t)sp;
 }
 

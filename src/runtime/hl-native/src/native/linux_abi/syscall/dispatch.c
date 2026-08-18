@@ -723,11 +723,6 @@ static void service(struct cpu *c) {
     // (one predicted-not-taken load) until a guest installs a filter. Runs on the RAW guest register state,
     // before x86 legacy-syscall normalization, so the filter sees the number/args the guest actually issued.
     if (__builtin_expect(seccomp_gate(c) != 0, 0)) {
-#if HL_ENABLE_LOGGING
-        if (g_systrace)
-            fprintf(stderr, "[ret pid=%d] %llu -> %lld (seccomp)\n", (int)getpid(), (unsigned long long)_rnr,
-                    (long long)(int64_t)G_RET(c));
-#endif
         __atomic_store_n(&c->in_service, 0, __ATOMIC_SEQ_CST);
         g_in_service = 0;
         return;
@@ -784,11 +779,6 @@ static void service(struct cpu *c) {
         // sarestart). aarch64 needs no rewind: leaving pc on the SVC is exactly what skipping the +4 does.
 #endif
     }
-#if HL_ENABLE_LOGGING
-    if (g_systrace)
-        fprintf(stderr, "[ret pid=%d] %llu -> %lld\n", (int)getpid(), (unsigned long long)_rnr,
-                (long long)(int64_t)G_RET(c));
-#endif
     __atomic_store_n(&c->in_service, 0, __ATOMIC_SEQ_CST);
     g_in_service = 0;
 }
@@ -824,12 +814,6 @@ static void service_local(struct cpu *c) {
     uint64_t nr = G_NR(c), a0 = G_A0(c), a1 = G_A1(c), a2 = G_A2(c), a3 = G_A3(c), a4 = G_A4(c), a5 = G_A5(c);
     HL_LOGF(&g_jit_log, HL_LOG_TAG_SYSCALL, "nr=%llu a0=%#llx a1=%#llx a2=%#llx", (unsigned long long)nr,
             (unsigned long long)a0, (unsigned long long)a1, (unsigned long long)a2);
-#if HL_ENABLE_LOGGING
-    if (g_trace || g_systrace)
-        fprintf(stderr, "[sys pid=%d] %llu (%llx,%llx,%llx,%llx,%llx,%llx)\n", (int)getpid(), (unsigned long long)nr,
-                (unsigned long long)a0, (unsigned long long)a1, (unsigned long long)a2, (unsigned long long)a3,
-                (unsigned long long)a4, (unsigned long long)a5);
-#endif
     // --- non-PIE ET_EXEC pointer-arg redirect (g2h) --------------------------------------------------
     // The table lives in nonpie_args.h -- ONE list, shared with the sentry trust boundary, which applies it
     // restricted to what it forwards. Runs BEFORE the resolution-bump switch below, which itself
@@ -942,11 +926,6 @@ static void service_local(struct cpu *c) {
     // corrupting the guest's stream and stalling the build on pipe backpressure. It is a debug aid, so gate it
     // behind the same syscall-tracing flags as the [sys] trace above -- silent by default. The ENOSYS
     // return below is the real, correct behaviour and stays unconditional.
-#if HL_ENABLE_LOGGING
-    if (g_trace || g_systrace)
-        fprintf(stderr, "[jit] unhandled syscall %llu (a0=%llx a1=%llx) at pc=%llx\n", (unsigned long long)nr,
-                (unsigned long long)a0, (unsigned long long)a1, (unsigned long long)G_PC(c));
-#endif
     G_RET(c) = (uint64_t)(-ENOSYS);
     // Boundary errno translation: every case sets G_RET(c) to a host(macOS) errno on error
     // (-errno, saved e, helper returns, or a macOS E* constant). Map to the Linux errno the guest

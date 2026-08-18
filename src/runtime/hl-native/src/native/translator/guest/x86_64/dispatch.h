@@ -47,8 +47,7 @@ static uint64_t g_prevpc, g_curpc;
 // shared loop also checks it at the bottom -- the two are the same block boundary, so the top check here
 // preserves the required delivery position; maybe_deliver_signal is guarded and idempotent under g_pending,
 // so the extra bottom check is a no-op once delivered). Then the fault-diagnosis block: prev/cur pc, the
-// trace cap runaway guard. A plain brace block (not do/while(0)) is required so the trace-cap `break`
-// reaches the shared dispatcher while-loop rather than only the macro body.
+// diagnostic counters.
 #define G_DISPATCH_DEBUG(c)                                                                                            \
     {                                                                                                                  \
         if (signal_deliverable_for_cpu(c)) { maybe_deliver_signal(c); /* deliverable signal -> handler */ }            \
@@ -56,12 +55,6 @@ static uint64_t g_prevpc, g_curpc;
             g_prevpc = g_curpc;                                                                                        \
             g_curpc = (c)->rip;                                                                                        \
             g_disp_n++;                                                                                                \
-        }                                                                                                              \
-        if (g_trace && g_tracecap && g_disp_n > g_tracecap) { /* bound trace output for runaway guests */              \
-            fprintf(stderr, "[hl] trace cap %llu blocks reached -> stop\n", (unsigned long long)g_tracecap);           \
-            (c)->exited = 1;                                                                                           \
-            (c)->exit_code = 99;                                                                                       \
-            break;                                                                                                     \
         }                                                                                                              \
     }
 
@@ -84,26 +77,11 @@ static uint64_t g_prevpc, g_curpc;
 // g_rwx_guest is set (smc_protect returns immediately).
 #define G_AFTER_TRANSLATE(c) smc_protect(nonpie_fold((c)->rip))
 
-// Per-block JT trace dump. x86 register/flag layout (flags derived from cpu->nzcv; stored C = NOT x86 CF).
-#define G_TRACE_DUMP(c)                                                                                                \
-    if (g_trace) {                                                                                                     \
-        unsigned nz = (unsigned)(c)->nzcv;                                                                             \
-        int CF = !((nz >> 29) & 1), ZF = (nz >> 30) & 1, SF = (nz >> 31) & 1, OF = (nz >> 28) & 1;                     \
-        fprintf(stderr,                                                                                                \
-                "[blk] rip=%llx rax=%llx rbx=%llx rcx=%llx rdx=%llx rsi=%llx rdi=%llx rbp=%llx r8=%llx r9=%llx "       \
-                "r10=%llx r11=%llx r12=%llx r13=%llx r14=%llx r15=%llx fl=C%dZ%dS%dO%d\n",                             \
-                (unsigned long long)(c)->rip, (unsigned long long)(c)->r[RAX], (unsigned long long)(c)->r[3],          \
-                (unsigned long long)(c)->r[RCX], (unsigned long long)(c)->r[RDX], (unsigned long long)(c)->r[RSI],     \
-                (unsigned long long)(c)->r[RDI], (unsigned long long)(c)->r[RBP], (unsigned long long)(c)->r[8],       \
-                (unsigned long long)(c)->r[9], (unsigned long long)(c)->r[10], (unsigned long long)(c)->r[11],         \
-                (unsigned long long)(c)->r[12], (unsigned long long)(c)->r[13], (unsigned long long)(c)->r[14],        \
-                (unsigned long long)(c)->r[15], CF, ZF, SF, OF);                                                       \
-    }
+#define G_TRACE_DUMP(c) ((void)0)
 
 // IBTC miss fill. x86 keys off c->ic_miss (0/1), stores the plain body (no body-8 stub; x16-x21 are
 // free scratch, no stash/restore), and is skipped under threads (the indirect probe reads g_ibtc/g_xibtc
-// unlocked -> a torn fill would dispatch the wrong body). IBTC1WAY=1 restores the old 1-way shared-g_ibtc
-// fill; otherwise use the 2-way set-associative g_xibtc insert.
+// unlocked -> a torn fill would dispatch the wrong body). Use the two-way set-associative g_xibtc insert.
 #define G_IBTC_FILL(c)                                                                                                 \
     if ((c)->ic_miss) {                                                                                                \
         if (!g_threaded) {                                                                                             \
@@ -115,19 +93,13 @@ static uint64_t g_prevpc, g_curpc;
                  * g_rw2rx==0, i.e. NODUALMAP/single-MAP_JIT fallback -> byte-identical to the prior path). Mirrors    \
                  * the aarch64 IBTC fill's J_RX(bd) in guest/aarch64/dispatch.h. */                                    \
                 body = J_RX(body);                                                                                     \
-                if (ibtc1way()) { /* IBTC1WAY=1: exact prior 1-way shared-g_ibtc fill */                               \
-                    uint32_t h = (uint32_t)(((c)->rip >> 2) & (IBTC_N - 1));                                           \
-                    g_ibtc[h].target = (c)->rip;                                                                       \
-                    g_ibtc[h].body = body;                                                                             \
-                } else { /* opt2: 2-way insert -> reuse the way already holding this target, else a free */            \
-                    uint32_t s = (uint32_t)(((c)->rip >> 2) & (XIBTC_SETS - 1));                                       \
-                    int w0 = s * 2, w1 = s * 2 + 1;                                                                    \
-                    int w = (!g_xibtc[w0].target || g_xibtc[w0].target == (c)->rip)   ? w0                             \
-                            : (!g_xibtc[w1].target || g_xibtc[w1].target == (c)->rip) ? w1                             \
-                                                                                      : w0; /* way, else evict way0 */ \
-                    g_xibtc[w].target = (c)->rip;                                                                      \
-                    g_xibtc[w].body = body;                                                                            \
-                }                                                                                                      \
+                uint32_t s = (uint32_t)(((c)->rip >> 2) & (XIBTC_SETS - 1));                                           \
+                int w0 = s * 2, w1 = s * 2 + 1;                                                                        \
+                int w = (!g_xibtc[w0].target || g_xibtc[w0].target == (c)->rip)   ? w0                                 \
+                        : (!g_xibtc[w1].target || g_xibtc[w1].target == (c)->rip) ? w1                                 \
+                                                                                  : w0;                                \
+                g_xibtc[w].target = (c)->rip;                                                                          \
+                g_xibtc[w].body = body;                                                                                \
                 g_ibtc_fill++;                                                                                         \
             }                                                                                                          \
         }                                                                                                              \
@@ -188,17 +160,6 @@ static uint64_t g_prevpc, g_curpc;
     G_DISPATCH_SOFTSPAN(c)                                                                                             \
     if ((c)->reason == 99) {                                                                                           \
         fprintf(stderr, "[hl] aborting at rip marker %llx (unimplemented opcode)\n", (unsigned long long)(c)->rip);    \
-        if (g_trace) {                                                                                                 \
-            for (int rr = 0; rr < 16; rr++) { /* dump heap-pointer regs (meta etc.) */                                 \
-                uint64_t v = (c)->r[rr];                                                                               \
-                if (v > 0x100000000ull && v < 0x200000000ull && (v & 7) == 0) {                                        \
-                    fprintf(stderr, "  r%d=%llx:", rr, (unsigned long long)v);                                         \
-                    for (int i = 0; i < 5; i++)                                                                        \
-                        fprintf(stderr, " %016llx", (unsigned long long)((uint64_t *)v)[i]);                           \
-                    fprintf(stderr, "\n");                                                                             \
-                }                                                                                                      \
-            }                                                                                                          \
-        }                                                                                                              \
         (c)->exited = 1;                                                                                               \
         (c)->exit_code = 70;                                                                                           \
         break;                                                                                                         \

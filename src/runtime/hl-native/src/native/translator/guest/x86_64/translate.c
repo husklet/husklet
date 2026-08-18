@@ -417,7 +417,7 @@ static int lower_vector_family(struct insn *instruction, uint64_t guest_pc, uint
             return TX_BREAK;
         }
         if (hl_x86_legacy_flags_pending()) flags_materialize();
-        if (!nosseopt() && hl_x86_lower_avx_inline(instruction, next)) return TX_NEXT;
+        if (hl_x86_lower_avx_inline(instruction, next)) return TX_NEXT;
         emit_exit_const(guest_pc, R_AVX);
         return TX_BREAK;
     }
@@ -429,13 +429,12 @@ static int lower_vector_family(struct insn *instruction, uint64_t guest_pc, uint
         mark_vdirty();
         return TX_NEXT;
     }
-    const hl_x86_sse4x_state sse4x_state = {.optimize = !nosseopt()};
+    const hl_x86_sse4x_state sse4x_state = {.optimize = 1};
     if (hl_x86_lower_sse4x(instruction, next, &sse4x_state) == TX_NEXT) return TX_NEXT;
 
     // PCMPISTRI equal-each byte is the SSE4.2 strcmp hot loop. Other forms use
     // the correctness-first C softmulator below.
-    if (instruction->map3 == 3 && instruction->op == 0x63 && !nosseopt() &&
-        (instruction->imm & 0x0D) == 0x08) {
+    if (instruction->map3 == 3 && instruction->op == 0x63 && (instruction->imm & 0x0D) == 0x08) {
         int right = 16;
         if (instruction->is_mem)
             g_ldr_q_ea(16, instruction, next);
@@ -1239,7 +1238,7 @@ static void *translate_block(uint64_t gpc) {
        an executable view backed by an emulated host-page snapshot. */
     uint64_t source_page = gpc & ~UINT64_C(0xfff);
     filemap_refresh_emulated(source_page, source_page + UINT64_C(0x1000));
-    hl_x86_crypto_state crypto_state = {.optimize = !nosseopt()};
+    hl_x86_crypto_state crypto_state = {.optimize = 1};
     hl_x86_trace_state trace_state = {
         .pending_flags = hl_x86_integer_pending_flags(),
         .tier_counters = g_t2cnt,
@@ -1291,15 +1290,9 @@ static void *translate_block(uint64_t gpc) {
 #define STITCH_MAX_COND 3
 #endif
 #define STITCH_OK                                                                                                      \
-    (stitch && !g_nochain && !g_trace && !g_itrace && trace_blk < HL_X86_TRACE_MAX_BLOCKS - 1 &&                       \
+    (stitch && trace_blk < HL_X86_TRACE_MAX_BLOCKS - 1 &&                                                               \
      ncond < STITCH_MAX_COND && (size_t)((uint8_t *)g_cp - (uint8_t *)host) < HL_X86_TRACE_MAX_BYTES)
     for (;;) {
-        if (g_itrace && gpc != start) {
-            if (hl_x86_legacy_flags_pending()) flags_materialize(); // materialize before boundary
-            hl_x86_x87_drop();                     // x87: spill the shadow top before the boundary
-            emit_chain_exit(gpc);
-            break;
-        } // 1 insn/block: per-instruction register dump
         struct insn I;
         g_emit_gpc = gpc; // IRQSLIM: tag chain emission with the current branch's rip
         if (hl_x86_decode(gpc, &I) < 0) {
@@ -1321,11 +1314,6 @@ static void *translate_block(uint64_t gpc) {
             continue;
         }
         if (vector_result == TX_BREAK) break;
-        if (g_trace)
-            fprintf(stderr, "[dec] %llx %s%02x len=%d mod%d rm%d reg%d mem%d base%d idx%d disp=%lld imm=%lld\n",
-                    (unsigned long long)gpc, I.two ? "0F " : "", op, I.len, I.mod, I.rm_reg, I.reg, I.is_mem,
-                    I.m_hasbase ? I.m_base : -1, I.m_hasindex ? I.m_index : -1, (long long)I.disp, (long long)I.imm);
-
         hl_x86_integer_prepare_flags(&I, gpc, next, &trace_state);
 
         // x87 static-top tracking ends at any non-x87 instruction: spill the shadow top to
@@ -1335,13 +1323,13 @@ static void *translate_block(uint64_t gpc) {
 
         if (!I.two) {
             hl_x86_branch_region branch_region = {start, body, seen, &nseen, &trace_blk, &ncond, STITCH_OK,
-                                                  g_tier2_build, notier2x, t2_slot, map_body};
+                                                  g_tier2_build, 0, t2_slot, map_body};
             int one_byte_result = lower_one_byte_family(&I, &gpc, next, &trace_state, &crypto_state, &branch_region);
             if (one_byte_result == TX_NEXT) continue;
             if (one_byte_result == TX_BREAK) break;
         } else {
             hl_x86_branch_region branch_region = {start, body, seen, &nseen, &trace_blk, &ncond, STITCH_OK,
-                                                  g_tier2_build, notier2x, t2_slot, map_body};
+                                                  g_tier2_build, 0, t2_slot, map_body};
             int two_byte_result = lower_two_byte_family(&I, &gpc, next, &trace_state, &crypto_state, &branch_region);
             if (two_byte_result == TX_NEXT) continue;
             if (two_byte_result == TX_BREAK) break;
@@ -1379,7 +1367,7 @@ static void *translate_block(uint64_t gpc) {
 // between block runs, so guest state is fully spilled. Reuses the shared jit/cache.c substrate
 // (g_tier2_build/g_last_body/g_prof_t2/map_idx/patch_links_to/g_ibtc).
 static void tier2_promote(uint64_t gpc) {
-    if (g_threaded || notier2x()) return;
+    if (g_threaded) return;
     int mi = map_idx(gpc);
     if (mi < 0) return;
     if (!jit_wprot(0)) return;

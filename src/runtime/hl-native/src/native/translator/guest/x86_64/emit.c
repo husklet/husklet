@@ -1601,10 +1601,10 @@ static void emit_fast_syscall(uint64_t next) {
 // past the fixed 2-insn poll header -- every in-cache cycle still polls via its backward or
 // indirect edge (see the g_fwdskip invariant note in engine/cache.c).
 void emit_chain_exit(uint64_t target) {
-    if (g_trace || g_nochain || g_threaded) {
+    if (g_threaded) {
         emit_exit_const(target, R_BRANCH);
         return;
-    } // debug: no chaining -> exact rip per block
+    }
     void *body = map_body(target);
     uint32_t *slot = (uint32_t *)g_cp;
     int fwd = g_fwdskip && target > g_emit_gpc;
@@ -1623,47 +1623,25 @@ void emit_chain_exit(uint64_t target) {
 // Scratch x16/x17/x19/x20/x21 are not guest registers here, and `sub` (not `subs`)
 // keeps nzcv live, so the cached body is entered exactly like a chained block.
 void emit_ibranch(void) {
-    if (g_trace || g_nochain || g_noibtc) { // debug: always dispatch (exact rip)
-        e_str(16, 28, OFF_RIP);
-        emit_spill();
-        e_movconst(16, R_BRANCH);
-        e_str(16, 28, OFF_RSN);
-        emit_host_ptr(16, (uint64_t)block_return, PRELOC_BLOCKRET);
-        e_br(16);
-        return;
-    }
-    // opt2: probe the IBTC. 2-way set-associative (default) vs the old direct-mapped 1-way (IBTC1WAY=1).
-    // The two variants differ only in the probe; the MISS tail below is shared and patched per final way.
+    // Probe the two-way set-associative IBTC; the miss tail is patched after both ways.
     uint32_t *p_miss;                                     // cbnz x20 -> Lmiss patch site (last way)
     emit32(0xD3423800u | (16 << 5) | 17);                 // ubfx x17, x16, #2, #13  ((tgt>>2)&0x1FFF)
-    if (ibtc1way()) {                                     // IBTC1WAY=1: exact prior 1-way probe (shared g_ibtc)
-        emit_host_ptr(19, (uint64_t)g_ibtc, PRELOC_IBTC); // x19 = &g_ibtc  (3-insn materialize)
-        emit32(0x8B000000u | (17 << 16) | (4 << 10) | (19 << 5) | 19); // add x19, x19, x17, lsl #4   (16B slot)
-        e_ldr(20, 19, 0);                                              // x20 = slot.target
-        emit32(0xCB000000u | (16 << 16) | (20 << 5) | 20);             // sub x20, x20, x16  (NOT subs: keep nzcv)
-        p_miss = (uint32_t *)g_cp;
-        emit32(0); // cbnz x20, Lmiss
-        e_ldr(21, 19, 8);
-        e_br(21);                // HIT: x21 = slot.body -> jump (regs live)
-    } else {                     // opt2 default: 2-way probe, base from cpu->ibtc_base
-        e_ldr(19, 28, OFF_IBTC); // x19 = cpu->ibtc_base  (1 insn, replaces movz/movk x3)
-        emit32(0x8B000000u | (17 << 16) | (5 << 10) | (19 << 5) | 19); // add x19, x19, x17, lsl #5   (32B set)
-        e_ldr(20, 19, 0);                                              // x20 = way0.target
-        emit32(0xCB000000u | (16 << 16) | (20 << 5) | 20);             // sub x20, x20, x16  (NOT subs: keep nzcv)
-        uint32_t *p_w1 = (uint32_t *)g_cp;
-        emit32(0); // cbnz x20, Lway1
-        e_ldr(21, 19, 8);
-        e_br(21); // HIT way0: x21 = way0.body -> jump (regs live)
-        uint32_t *Lway1 = (uint32_t *)g_cp;
-        e_ldr(20, 19, 16);                                 // x20 = way1.target
-        emit32(0xCB000000u | (16 << 16) | (20 << 5) | 20); // sub x20, x20, x16
-        p_miss = (uint32_t *)g_cp;
-        emit32(0); // cbnz x20, Lmiss
-        e_ldr(21, 19, 24);
-        e_br(21); // HIT way1: x21 = way1.body -> jump (regs live)
-        *p_w1 =
-            0xB5000000u | (((uint32_t)(((uint8_t *)Lway1 - (uint8_t *)p_w1) / 4) & 0x7FFFF) << 5) | 20; // cbnz->Lway1
-    }
+    e_ldr(19, 28, OFF_IBTC);
+    emit32(0x8B000000u | (17 << 16) | (5 << 10) | (19 << 5) | 19);
+    e_ldr(20, 19, 0);
+    emit32(0xCB000000u | (16 << 16) | (20 << 5) | 20);
+    uint32_t *p_w1 = (uint32_t *)g_cp;
+    emit32(0);
+    e_ldr(21, 19, 8);
+    e_br(21);
+    uint32_t *Lway1 = (uint32_t *)g_cp;
+    e_ldr(20, 19, 16);
+    emit32(0xCB000000u | (16 << 16) | (20 << 5) | 20);
+    p_miss = (uint32_t *)g_cp;
+    emit32(0);
+    e_ldr(21, 19, 24);
+    e_br(21);
+    *p_w1 = 0xB5000000u | (((uint32_t)(((uint8_t *)Lway1 - (uint8_t *)p_w1) / 4) & 0x7FFFF) << 5) | 20;
     uint32_t *miss = (uint32_t *)g_cp;
     e_str(16, 28, OFF_RIP);
     emit_spill(); // MISS: slow path
