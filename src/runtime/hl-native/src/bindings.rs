@@ -259,15 +259,18 @@ pub(super) unsafe fn hl_c_backend_destroy(backend: *mut Backend) {
 }
 
 #[cfg(feature = "native-test-hooks")]
+fn test_api() -> &'static crate::loader::TestApi {
+    crate::loader::tests().unwrap_or_else(|error| panic!("native test bridge unavailable: {error}"))
+}
+
+#[cfg(feature = "native-test-hooks")]
 unsafe fn hl_aarch64_bound_vector_io_test(
     scenario: c_uint,
     result: *mut i64,
     calls: *mut c_uint,
     bytes: *mut c_ulonglong,
 ) -> c_int {
-    crate::loader::tests().map_or(3, |api| unsafe {
-        (api.aarch64_bound_vector_io)(scenario, result, calls, bytes)
-    })
+    unsafe { (test_api().aarch64_bound_vector_io)(scenario, result, calls, bytes) }
 }
 
 #[cfg(feature = "native-test-hooks")]
@@ -277,34 +280,32 @@ unsafe fn hl_x86_64_bound_vector_io_test(
     calls: *mut c_uint,
     bytes: *mut c_ulonglong,
 ) -> c_int {
-    crate::loader::tests().map_or(3, |api| unsafe {
-        (api.x86_64_bound_vector_io)(scenario, result, calls, bytes)
-    })
+    unsafe { (test_api().x86_64_bound_vector_io)(scenario, result, calls, bytes) }
 }
 
 #[cfg(all(test, feature = "native-test-hooks"))]
 unsafe fn hl_aarch64_fdvis_path_publication_test(scenario: c_uint) -> c_int {
-    crate::loader::tests().map_or(0, |api| unsafe { (api.aarch64_fdvis_path_publication)(scenario) })
+    unsafe { (test_api().aarch64_fdvis_path_publication)(scenario) }
 }
 
 #[cfg(all(test, feature = "native-test-hooks"))]
 unsafe fn hl_x86_64_fdvis_path_publication_test(scenario: c_uint) -> c_int {
-    crate::loader::tests().map_or(0, |api| unsafe { (api.x86_64_fdvis_path_publication)(scenario) })
+    unsafe { (test_api().x86_64_fdvis_path_publication)(scenario) }
 }
 
 #[cfg(feature = "native-test-hooks")]
 unsafe fn hl_aarch64_namespace_transaction_test(scenario: c_uint) -> c_int {
-    crate::loader::tests().map_or(3, |api| unsafe { (api.aarch64_namespace_transaction)(scenario) })
+    unsafe { (test_api().aarch64_namespace_transaction)(scenario) }
 }
 
 #[cfg(feature = "native-test-hooks")]
 unsafe fn hl_x86_64_namespace_transaction_test(scenario: c_uint) -> c_int {
-    crate::loader::tests().map_or(3, |api| unsafe { (api.x86_64_namespace_transaction)(scenario) })
+    unsafe { (test_api().x86_64_namespace_transaction)(scenario) }
 }
 
 #[cfg(feature = "native-test-hooks")]
 unsafe fn hl_x86_64_store_preflight_test() -> c_int {
-    crate::loader::tests().map_or(3, |api| unsafe { (api.x86_64_store_preflight)() })
+    unsafe { (test_api().x86_64_store_preflight)() }
 }
 
 #[cfg(feature = "native-test-hooks")]
@@ -316,9 +317,7 @@ unsafe fn hl_aarch64_signal_errno_frame_test(
     observed: *mut i64,
     completed: *mut i64,
 ) -> c_int {
-    crate::loader::tests().map_or(3, |api| unsafe {
-        (api.aarch64_signal_errno_frame)(domain, redirect, nr, raw, observed, completed)
-    })
+    unsafe { (test_api().aarch64_signal_errno_frame)(domain, redirect, nr, raw, observed, completed) }
 }
 
 #[cfg(feature = "native-test-hooks")]
@@ -330,16 +329,14 @@ unsafe fn hl_x86_64_signal_errno_frame_test(
     observed: *mut i64,
     completed: *mut i64,
 ) -> c_int {
-    crate::loader::tests().map_or(3, |api| unsafe {
-        (api.x86_64_signal_errno_frame)(domain, redirect, nr, raw, observed, completed)
-    })
+    unsafe { (test_api().x86_64_signal_errno_frame)(domain, redirect, nr, raw, observed, completed) }
 }
 
 macro_rules! test_no_argument {
     ($name:ident, $field:ident) => {
         #[cfg(feature = "native-test-hooks")]
         unsafe fn $name() -> c_int {
-            crate::loader::tests().map_or(3, |api| unsafe { (api.$field)() })
+            unsafe { (test_api().$field)() }
         }
     };
 }
@@ -371,86 +368,72 @@ test_no_argument!(
 
 #[cfg(feature = "native-test-hooks")]
 unsafe fn hl_aarch64_checkpoint_restore_claim_test(scenario: c_uint) -> c_int {
-    crate::loader::tests().map_or(3, |api| unsafe { (api.aarch64_checkpoint_restore_claim)(scenario) })
+    unsafe { (test_api().aarch64_checkpoint_restore_claim)(scenario) }
 }
 
 #[cfg(feature = "native-test-hooks")]
 unsafe fn hl_x86_64_checkpoint_restore_claim_test(scenario: c_uint) -> c_int {
-    crate::loader::tests().map_or(3, |api| unsafe { (api.x86_64_checkpoint_restore_claim)(scenario) })
+    unsafe { (test_api().x86_64_checkpoint_restore_claim)(scenario) }
 }
 
 #[cfg(feature = "native-test-hooks")]
 unsafe fn hl_c_backend_errno_from_host_test(domain: c_uint, host_errno: c_int) -> c_int {
-    crate::loader::tests().map_or(3, |api| unsafe { (api.errno_from_host)(domain, host_errno) })
+    unsafe { (test_api().errno_from_host)(domain, host_errno) }
 }
 
 #[cfg(feature = "native-test-hooks")]
 unsafe fn hl_c_backend_identity_registry_test(scenario: c_uint, iterations: c_uint) -> c_int {
-    crate::loader::tests().map_or(3, |api| unsafe { (api.identity_registry)(scenario, iterations) })
+    unsafe { (test_api().identity_registry)(scenario, iterations) }
 }
 
 #[cfg(all(test, feature = "native-test-hooks"))]
 pub(super) unsafe fn hl_c_backend_checkpoint_test_arm() -> c_uint {
-    crate::loader::tests().map_or(0, |api| unsafe { (api.checkpoint_test_arm)() })
+    unsafe { (test_api().checkpoint_test_arm)() }
 }
 
 #[cfg(all(test, feature = "native-test-hooks"))]
 pub(super) unsafe fn hl_c_backend_checkpoint_test_phase() -> c_uint {
-    crate::loader::tests().map_or(0, |api| unsafe { (api.checkpoint_test_phase)() })
+    unsafe { (test_api().checkpoint_test_phase)() }
 }
 
 #[cfg(all(test, feature = "native-test-hooks"))]
 pub(super) unsafe fn hl_c_backend_checkpoint_test_release() {
-    if let Ok(api) = crate::loader::tests() {
-        unsafe { (api.checkpoint_test_release)() };
-    }
+    unsafe { (test_api().checkpoint_test_release)() };
 }
 
 #[cfg(all(test, feature = "native-test-hooks"))]
 pub(super) unsafe fn hl_c_backend_checkpoint_test_reset() {
-    if let Ok(api) = crate::loader::tests() {
-        unsafe { (api.checkpoint_test_reset)() };
-    }
+    unsafe { (test_api().checkpoint_test_reset)() };
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(super) unsafe fn hl_c_backend_checkpoint_test_prune_foreign_descriptors() -> c_uint {
-    crate::loader::tests().map_or(0, |api| unsafe {
-        (api.checkpoint_test_prune_foreign_descriptors)()
-    })
+    unsafe { (test_api().checkpoint_test_prune_foreign_descriptors)() }
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(super) unsafe fn hl_c_backend_checkpoint_test_fail_registry_allocation() {
-    if let Ok(api) = crate::loader::tests() {
-        unsafe { (api.checkpoint_test_fail_registry_allocation)() };
-    }
+    unsafe { (test_api().checkpoint_test_fail_registry_allocation)() };
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(super) unsafe fn hl_c_backend_checkpoint_test_fail_private_adopt(position: c_uint) {
-    if let Ok(api) = crate::loader::tests() {
-        unsafe { (api.checkpoint_test_fail_private_adopt)(position) };
-    }
+    unsafe { (test_api().checkpoint_test_fail_private_adopt)(position) };
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(super) unsafe fn hl_c_backend_checkpoint_test_private_descriptor_count() -> u64 {
-    crate::loader::tests().map_or(0, |api| unsafe {
-        (api.checkpoint_test_private_descriptor_count)()
-    })
+    unsafe { (test_api().checkpoint_test_private_descriptor_count)() }
 }
 
 #[cfg(all(test, feature = "native-test-hooks", unix))]
 pub(super) unsafe fn hl_c_backend_host_process_force_test(pid: c_int) -> c_int {
-    crate::loader::tests().map_or(3, |api| unsafe { (api.host_process_force)(pid) })
+    unsafe { (test_api().host_process_force)(pid) }
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(super) unsafe fn hl_c_backend_activation_ready_pause(paused: c_int) {
-    if let Ok(api) = crate::loader::tests() {
-        unsafe { (api.activation_ready_pause)(paused) };
-    }
+    unsafe { (test_api().activation_ready_pause)(paused) };
 }
 
 #[cfg(feature = "native-test-hooks")]

@@ -6,8 +6,8 @@ fn downstream_executable_starts_without_loader_environment() {
     const CHILD: &str = "HL_NATIVE_DEVELOPMENT_LOADER_CHILD";
     assert!(hl_native::artifact_smoke(), "native engine ABI probe failed");
     if std::env::var_os(CHILD).is_some() {
-        // Reaching the test body proves that the operating-system loader found
-        // the native engine before Rust process initialization began.
+        // The explicit Rust loader crossed the real C ABI after every ambient
+        // loader search variable had been removed from this fresh process.
         return;
     }
 

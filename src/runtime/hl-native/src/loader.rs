@@ -76,6 +76,13 @@ pub(crate) struct BridgeApi {
     pub(crate) destroy: Option<Destroy>,
 }
 
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct BridgeHeader {
+    abi: u32,
+    size: u32,
+}
+
 #[cfg(feature = "native-test-hooks")]
 pub(crate) struct TestApi {
     pub(crate) aarch64_bound_vector_io: VectorIoTest,
@@ -232,24 +239,11 @@ fn load() -> Result<Loaded, LoadError> {
             path: path.clone(),
             detail,
         })?;
-    type Getter = unsafe extern "C" fn() -> *const BridgeApi;
+    type Getter = unsafe extern "C" fn() -> *const BridgeHeader;
     // SAFETY: the symbol name is the versioned getter whose C declaration has this exact signature.
     let getter: Getter = unsafe { std::mem::transmute(getter_address) };
-    // SAFETY: the loaded library remains owned by `Loaded` for process lifetime.
-    let table = unsafe { getter().as_ref() }.ok_or(LoadError::NullEntry("bridge table"))?;
-    if table.abi != BRIDGE_ABI {
-        return Err(LoadError::AbiMismatch {
-            expected: BRIDGE_ABI,
-            actual: table.abi,
-        });
-    }
-    if usize::try_from(table.size).unwrap_or(0) < size_of::<BridgeApi>() {
-        return Err(LoadError::TableTooSmall {
-            minimum: size_of::<BridgeApi>(),
-            actual: table.size,
-        });
-    }
-    validate(table)?;
+    // SAFETY: the versioned getter promises either null or a readable stable bridge header.
+    let table = unsafe { read_table(getter()) }?;
     // SAFETY: validation proved the metadata entry is non-null.
     let actual = unsafe { table.engine_abi.expect("validated engine_abi")() };
     if actual != ENGINE_ABI {
@@ -262,11 +256,36 @@ fn load() -> Result<Loaded, LoadError> {
     let tests = load_tests(&library, &path)?;
     Ok(Loaded {
         _library: library,
-        api: *table,
+        api: table,
         path,
         #[cfg(feature = "native-test-hooks")]
         tests,
     })
+}
+
+unsafe fn read_table(address: *const BridgeHeader) -> Result<BridgeApi, LoadError> {
+    if address.is_null() {
+        return Err(LoadError::NullEntry("bridge table"));
+    }
+    // SAFETY: the getter contract guarantees the fixed header is readable before size is consulted.
+    let header = unsafe { address.read() };
+    if header.abi != BRIDGE_ABI {
+        return Err(LoadError::AbiMismatch {
+            expected: BRIDGE_ABI,
+            actual: header.abi,
+        });
+    }
+    if usize::try_from(header.size).unwrap_or(0) < size_of::<BridgeApi>() {
+        return Err(LoadError::TableTooSmall {
+            minimum: size_of::<BridgeApi>(),
+            actual: header.size,
+        });
+    }
+    // SAFETY: the validated size proves every byte of the v1 table is readable. Copying avoids
+    // creating a typed reference into foreign storage before all pointer entries are validated.
+    let table = unsafe { address.cast::<BridgeApi>().read() };
+    validate(&table)?;
+    Ok(table)
 }
 
 #[cfg(feature = "native-test-hooks")]
@@ -394,6 +413,10 @@ fn candidates() -> Result<Vec<PathBuf>, LoadError> {
 #[cfg(not(debug_assertions))]
 fn candidates() -> Result<Vec<PathBuf>, LoadError> {
     let executable = std::env::current_exe().map_err(LoadError::CurrentExecutable)?;
+    release_candidates(&executable)
+}
+
+fn release_candidates(executable: &Path) -> Result<Vec<PathBuf>, LoadError> {
     let directory = executable
         .parent()
         .ok_or_else(|| LoadError::NotFound(Vec::new()))?;
@@ -416,6 +439,26 @@ struct DynamicLibrary(*mut c_void);
 unsafe impl Send for DynamicLibrary {}
 // SAFETY: the platform loaders permit concurrent calls through resolved immutable function pointers.
 unsafe impl Sync for DynamicLibrary {}
+
+#[cfg(unix)]
+impl Drop for DynamicLibrary {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            // SAFETY: this handle was returned by dlopen and is dropped at most once.
+            unsafe { dlclose(self.0) };
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for DynamicLibrary {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            // SAFETY: this handle was returned by LoadLibraryExW and is dropped at most once.
+            unsafe { FreeLibrary(self.0) };
+        }
+    }
+}
 
 #[cfg(unix)]
 impl DynamicLibrary {
@@ -456,6 +499,7 @@ unsafe extern "C" {
     fn dlopen(path: *const c_char, flags: c_int) -> *mut c_void;
     fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
     fn dlerror() -> *const c_char;
+    fn dlclose(handle: *mut c_void) -> c_int;
 }
 
 #[cfg(windows)]
@@ -501,4 +545,66 @@ unsafe extern "system" {
     fn LoadLibraryExW(path: *const u16, file: *mut c_void, flags: u32) -> *mut c_void;
     fn GetProcAddress(module: *mut c_void, name: *const c_char) -> *mut c_void;
     fn GetLastError() -> u32;
+    fn FreeLibrary(module: *mut c_void) -> i32;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bridge_header_is_rejected_before_truncated_table_is_read() {
+        let header = BridgeHeader {
+            abi: BRIDGE_ABI,
+            size: u32::try_from(size_of::<BridgeHeader>()).unwrap(),
+        };
+        // SAFETY: the header is readable, and its declared size deliberately forbids a full-table read.
+        assert!(matches!(
+            unsafe { read_table(&raw const header) },
+            Err(LoadError::TableTooSmall { .. })
+        ));
+    }
+
+    #[test]
+    fn bridge_header_rejects_null_and_wrong_abi() {
+        // SAFETY: null is an explicitly supported rejection input.
+        assert!(matches!(
+            unsafe { read_table(std::ptr::null()) },
+            Err(LoadError::NullEntry("bridge table"))
+        ));
+        let header = BridgeHeader {
+            abi: BRIDGE_ABI + 1,
+            size: u32::try_from(size_of::<BridgeApi>()).unwrap(),
+        };
+        // SAFETY: ABI rejection reads only the live fixed header.
+        assert!(matches!(
+            unsafe { read_table(&raw const header) },
+            Err(LoadError::AbiMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn release_locations_are_executable_relative_and_ignore_ambient_search() {
+        let executable = Path::new("/opt/husklet/bin/husklet");
+        let paths = release_candidates(executable).unwrap();
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            paths,
+            [
+                PathBuf::from("/opt/husklet/bin/../Frameworks/libhl_native_engine.dylib"),
+                PathBuf::from("/opt/husklet/bin/../lib/libhl_native_engine.dylib"),
+                PathBuf::from("/opt/husklet/bin/libhl_native_engine.dylib"),
+            ]
+        );
+        #[cfg(target_os = "windows")]
+        assert_eq!(paths, [PathBuf::from("/opt/husklet/bin/hl_native_engine.dll")]);
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        assert_eq!(
+            paths,
+            [
+                PathBuf::from("/opt/husklet/bin/../lib/libhl_native_engine.so"),
+                PathBuf::from("/opt/husklet/bin/libhl_native_engine.so"),
+            ]
+        );
+    }
 }
