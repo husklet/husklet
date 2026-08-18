@@ -379,15 +379,6 @@ int main(void) {
         !hl_arena_persisted_state_valid(&persisted)) return 50;
     if (hl_arena_authority_destroy(&second) != 0) return 48;
 
-    hl_arena_test_identity_sequence(UINT64_MAX - 1);
-    if (hl_arena_authority_init(&third, &config3) != 0 || hl_arena_reservation_owned(&third, &first)) return 56;
-    if (hl_arena_authority_init(&exhausted, &config4) != -1 || errno != EOVERFLOW) return 57;
-    if (hl_arena_authority_init(&exhausted, &config4) != -1 || errno != EOVERFLOW) return 58;
-    sentinel = claim_sentinel(NORMAL4_BASE, NORMAL4_LIMIT - NORMAL4_BASE);
-    normal = claim_sentinel(LOW4_BASE, LOW4_LIMIT - LOW4_BASE);
-    if (sentinel == NULL || normal == NULL) return 59;
-    if (release_sentinel(sentinel, NORMAL4_LIMIT - NORMAL4_BASE) != 0 ||
-        release_sentinel(normal, LOW4_LIMIT - LOW4_BASE) != 0) return 60;
     if (hl_arena_authority_init(&failed, &config5) != 0 ||
         hl_arena_transaction_begin(&failed, &transaction) != 0 ||
         hl_arena_transaction_reserve(&transaction, HL_ARENA_NORMAL, granule, &first) != 0 ||
@@ -399,6 +390,15 @@ int main(void) {
         hl_arena_manifest_get(&failed, &after) != -1 || errno != EINVAL ||
         hl_arena_authority_destroy(&failed) != -1 || errno != EINVAL)
         return 90;
+    hl_arena_test_identity_sequence(UINT64_MAX - 1);
+    if (hl_arena_authority_init(&third, &config3) != 0 || hl_arena_reservation_owned(&third, &first)) return 56;
+    if (hl_arena_authority_init(&exhausted, &config4) != -1 || errno != EOVERFLOW) return 57;
+    if (hl_arena_authority_init(&exhausted, &config4) != -1 || errno != EOVERFLOW) return 58;
+    sentinel = claim_sentinel(NORMAL4_BASE, NORMAL4_LIMIT - NORMAL4_BASE);
+    normal = claim_sentinel(LOW4_BASE, LOW4_LIMIT - LOW4_BASE);
+    if (sentinel == NULL || normal == NULL) return 59;
+    if (release_sentinel(sentinel, NORMAL4_LIMIT - NORMAL4_BASE) != 0 ||
+        release_sentinel(normal, LOW4_LIMIT - LOW4_BASE) != 0) return 60;
     return hl_arena_authority_destroy(&third) == 0 ? 0 : 61;
 }
 "#,
