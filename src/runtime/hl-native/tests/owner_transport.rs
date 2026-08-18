@@ -28,6 +28,32 @@ static hl_socket_owner_image_header header(hl_socket_owner_image_record *records
 }
 
 int main(void) {
+    _Static_assert(HL_SOCKET_OWNER_OFD_ACK_OFFSET == 16, "legacy ACK moved");
+    _Static_assert(HL_SOCKET_OWNER_OFD_EXTENSION_OFFSET > HL_SOCKET_OWNER_OFD_ACK_OFFSET, "ACK overlaps extension");
+    hl_socket_owner_transport extension = {
+        .magic = HL_SOCKET_OWNER_TRANSPORT_MAGIC,
+        .version = HL_SOCKET_OWNER_TRANSPORT_VERSION,
+        .size = sizeof extension,
+        .key = {1, 2, 3},
+    };
+    if (!hl_socket_owner_transport_valid(&extension)) return 10;
+    /* Old sender/new receiver: a 16-byte marker has no extension to validate.
+     * New sender/old receiver: its byte-16 ACK cannot alter the extension at 24. */
+    uint8_t marker[HL_SOCKET_OWNER_OFD_EXTENSION_OFFSET + sizeof extension] = {0};
+    memcpy(marker + HL_SOCKET_OWNER_OFD_EXTENSION_OFFSET, &extension, sizeof extension);
+    marker[HL_SOCKET_OWNER_OFD_ACK_OFFSET] = 1;
+    if (!hl_socket_owner_transport_valid(
+            (const hl_socket_owner_transport *)(marker + HL_SOCKET_OWNER_OFD_EXTENSION_OFFSET))) return 11;
+    hl_owner_key decoded = {0};
+    if (hl_socket_owner_transport_decode(marker, HL_SOCKET_OWNER_OFD_ACK_OFFSET, &decoded) != 0 ||
+        hl_socket_owner_transport_decode(marker, sizeof marker - 1, &decoded) != 0 ||
+        hl_socket_owner_transport_decode(marker, sizeof marker, &decoded) != 1 ||
+        memcmp(&decoded, &extension.key, sizeof decoded) != 0) return 13;
+    uint64_t checked;
+    if (hl_socket_owner_image_checksum_checked(NULL, 1, &checked) != EINVAL ||
+        hl_socket_owner_image_checksum_checked((const hl_socket_owner_image_record *)&extension, SIZE_MAX, &checked) !=
+            EOVERFLOW ||
+        hl_socket_owner_image_checksum_checked(NULL, 0, NULL) != EINVAL) return 12;
     hl_socket_owner_image_record records[2] = {
         {.object_id = 10, .key = {1, 2, 3}, .uid = 4, .gid = 5, .links = 1, .descriptors = 3},
         {.object_id = 11, .key = {1, 6, 7}, .uid = 8, .gid = 9, .links = 1, .descriptors = 1},

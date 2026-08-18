@@ -83,10 +83,8 @@ struct hl_cmsg_ofd_meta {
     uint32_t magic;
     uint32_t ordinal;
     uint64_t identity;
-    /* Version zero is deliberately valid and means no virtual socket owner.
-     * The fd-lifecycle layer fills this before descriptor accounting is wired. */
-    hl_socket_owner_transport owner;
 };
+_Static_assert(sizeof(struct hl_cmsg_ofd_meta) == HL_SOCKET_OWNER_OFD_ACK_OFFSET, "immutable OFD marker prefix");
 
 struct hl_cmsg_memfd_meta {
     uint32_t magic;
@@ -281,7 +279,7 @@ static int cmsg_timerfd_marker(const struct hl_cmsg_timerfd_meta *m) {
 #define cmsg_inflight_is_retained(fd) (0)
 #else
 #define SCM_INFLIGHT_MAX 256
-#define SCM_INFLIGHT_ACK_OFFSET ((off_t)sizeof(struct hl_cmsg_ofd_meta))
+#define SCM_INFLIGHT_ACK_OFFSET ((off_t)HL_SOCKET_OWNER_OFD_ACK_OFFSET)
 
 struct scm_inflight_hold {
     int retained; // engine-private duplicate of the passed descriptor
@@ -352,13 +350,15 @@ static int cmsg_inflight_is_retained(int fd) {
 }
 #endif
 
-static int cmsg_ofd_marker(const struct hl_cmsg_ofd_meta *m) {
+static int cmsg_ofd_marker(const struct hl_cmsg_ofd_meta *m, const hl_socket_owner_transport *owner) {
     if (g_cmsg_ntmpfds >= (int)(sizeof g_cmsg_tmpfds / sizeof g_cmsg_tmpfds[0])) return -1;
     char name[] = "/tmp/.hl-ofdXXXXXX";
     int fd = mkstemp(name);
     if (fd < 0) return -1;
     unlink(name);
-    if (write(fd, m, sizeof *m) != (ssize_t)sizeof *m) {
+    if (write(fd, m, sizeof *m) != (ssize_t)sizeof *m ||
+        (owner != NULL &&
+         pwrite(fd, owner, sizeof *owner, HL_SOCKET_OWNER_OFD_EXTENSION_OFFSET) != (ssize_t)sizeof *owner)) {
         close(fd);
         return -1;
     }
@@ -383,6 +383,14 @@ static int cmsg_import_ofd_trailer(int *fds, int nfds) {
         if (metadata.ordinal >= (uint32_t)(visible - 1) || !metadata.identity) break;
         int fd = fds[metadata.ordinal];
         if (fd >= 0 && fd < HL_NFD) g_ofd_id[fd] = metadata.identity;
+        hl_socket_owner_transport owner;
+        if (pread(marker, &owner, sizeof owner, HL_SOCKET_OWNER_OFD_EXTENSION_OFFSET) == (ssize_t)sizeof owner &&
+            owner.magic == HL_SOCKET_OWNER_TRANSPORT_MAGIC && owner.version == HL_SOCKET_OWNER_TRANSPORT_VERSION &&
+            owner.size == sizeof owner && owner.key.birth_ns != 0 && (owner.key.device != 0 || owner.key.object != 0)) {
+            /* hl_socket_owner_attach(fd, owner.key) is wired once the fd-owner
+             * lifecycle table is merged. The successful send already owns the
+             * descriptor reference, so import must not increment it. */
+        }
         cmsg_inflight_ack(marker); // the fd is installed in this process now: the sender may drop its hold
         close(marker);
         visible--;
@@ -997,7 +1005,7 @@ static int cmsg_export_ofd(struct cmsg_export *export, const int *fds, int count
             .ordinal = (uint32_t)index,
             .identity = g_ofd_id[fds[index]],
         };
-        int marker = cmsg_ofd_marker(&metadata);
+        int marker = cmsg_ofd_marker(&metadata, NULL);
         if (marker < 0) return EMSGSIZE;
         export->descriptors[export->count++] = marker;
         cmsg_inflight_hold(fds[index], marker);
