@@ -1,0 +1,226 @@
+#include "ofd_identity.h"
+
+#include <errno.h>
+#include <limits.h>
+#include <string.h>
+
+#if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
+#include <sys/mman.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
+static int ofd_lineage_valid(hl_ofd_lineage lineage) {
+    return lineage.high != 0 || lineage.low != 0;
+}
+
+static int ofd_lineage_equal(hl_ofd_lineage first, hl_ofd_lineage second) {
+    return first.high == second.high && first.low == second.low;
+}
+
+int hl_ofd_identity_valid(hl_ofd_identity identity) {
+    return ofd_lineage_valid(identity.lineage) && identity.member != 0 && identity.sequence != 0;
+}
+
+int hl_ofd_identity_equal(hl_ofd_identity first, hl_ofd_identity second) {
+    return first.lineage.high == second.lineage.high && first.lineage.low == second.lineage.low &&
+           first.member == second.member && first.sequence == second.sequence;
+}
+
+static int ofd_namespace_valid(const hl_ofd_namespace *space) {
+    return space != NULL && space->abi == HL_OFD_NAMESPACE_ABI && space->size == sizeof *space &&
+           ofd_lineage_valid(space->lineage) &&
+           atomic_load_explicit(&space->next_sequence, memory_order_relaxed) != 0;
+}
+
+int hl_ofd_namespace_init(hl_ofd_namespace *space, size_t size, hl_ofd_lineage lineage,
+                          int storage_is_zeroed) {
+    if (space == NULL || size != sizeof *space || !ofd_lineage_valid(lineage)) return EINVAL;
+    if (!storage_is_zeroed) {
+        if (!ofd_namespace_valid(space) || !ofd_lineage_equal(space->lineage, lineage)) return ESTALE;
+        return 0;
+    }
+    memset(space, 0, sizeof *space);
+    space->abi = HL_OFD_NAMESPACE_ABI;
+    space->size = sizeof *space;
+    space->lineage = lineage;
+    atomic_init(&space->next_sequence, 1);
+    return 0;
+}
+
+int hl_ofd_member_bind(hl_ofd_member *member, hl_ofd_namespace *space, hl_ofd_lineage lineage,
+                       uint64_t ordinal) {
+    if (member == NULL || ordinal == 0 || !ofd_namespace_valid(space) ||
+        !ofd_lineage_equal(space->lineage, lineage))
+        return EINVAL;
+    *member = (hl_ofd_member){space, lineage, ordinal};
+    return 0;
+}
+
+int hl_ofd_namespace_resume(hl_ofd_namespace *space, hl_ofd_generation_binding binding) {
+    if (!ofd_namespace_valid(space) || (binding.generation_high == 0 && binding.generation_low == 0) ||
+        binding.next_member == 0 || binding.next_sequence == 0 ||
+        !ofd_lineage_equal(space->lineage, binding.lineage))
+        return ESTALE;
+#if defined(HL_OFD_MUTATE_USE_GENERATION_AS_LINEAGE)
+    space->lineage = (hl_ofd_lineage){binding.generation_high, binding.generation_low};
+#endif
+    uint64_t observed = atomic_load_explicit(&space->next_sequence, memory_order_relaxed);
+    while (observed < binding.next_sequence &&
+           !atomic_compare_exchange_weak_explicit(&space->next_sequence, &observed, binding.next_sequence,
+                                                  memory_order_relaxed, memory_order_relaxed)) {}
+    return observed == 0 ? EOVERFLOW : 0;
+}
+
+static int ofd_member_valid(const hl_ofd_member *member) {
+    return member != NULL && member->ordinal != 0 && ofd_namespace_valid(member->space) &&
+           ofd_lineage_equal(member->lineage, member->space->lineage);
+}
+
+int hl_ofd_identity_mint(hl_ofd_member *member, hl_ofd_identity *identity) {
+    if (!ofd_member_valid(member) || identity == NULL) return EINVAL;
+    uint64_t sequence = atomic_load_explicit(&member->space->next_sequence, memory_order_relaxed);
+    for (;;) {
+#if defined(HL_OFD_MUTATE_ALLOW_WRAP)
+        uint64_t next = sequence + 1u;
+        if (next == 0) next = 1;
+#else
+        if (sequence == UINT64_MAX) return EOVERFLOW;
+        uint64_t next = sequence + 1u;
+#endif
+        if (sequence == 0) return EOVERFLOW;
+        if (atomic_compare_exchange_weak_explicit(&member->space->next_sequence, &sequence, next,
+                                                  memory_order_relaxed, memory_order_relaxed))
+            break;
+    }
+    *identity = (hl_ofd_identity){
+#if defined(HL_OFD_MUTATE_DROP_LINEAGE)
+        .lineage = {0, 0},
+#else
+        .lineage = member->lineage,
+#endif
+#if defined(HL_OFD_MUTATE_DROP_MEMBER)
+        .member = 0,
+#else
+        .member = member->ordinal,
+#endif
+        .sequence = sequence,
+    };
+    return 0;
+}
+
+int hl_ofd_identity_reattach(hl_ofd_member *member, hl_ofd_identity identity) {
+    if (!ofd_member_valid(member) || !hl_ofd_identity_valid(identity) ||
+#if !defined(HL_OFD_MUTATE_ACCEPT_STALE_LINEAGE)
+        !ofd_lineage_equal(member->lineage, identity.lineage) ||
+#endif
+        identity.sequence == UINT64_MAX)
+        return ESTALE;
+    uint64_t required = identity.sequence + 1u;
+    uint64_t observed = atomic_load_explicit(&member->space->next_sequence, memory_order_relaxed);
+    while (observed < required &&
+           !atomic_compare_exchange_weak_explicit(&member->space->next_sequence, &observed, required,
+                                                  memory_order_relaxed, memory_order_relaxed)) {}
+    return observed == 0 ? EOVERFLOW : 0;
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int ofd_fixture_core(uint32_t scenario, hl_ofd_namespace *space) {
+    const hl_ofd_lineage lineage = {UINT64_C(0x0123456789abcdef), UINT64_C(0xfedcba9876543210)};
+    hl_ofd_member first;
+    if (hl_ofd_namespace_init(space, sizeof *space, lineage, 1) != 0 ||
+        hl_ofd_member_bind(&first, space, lineage, 7) != 0)
+        return 10;
+    if (scenario == 0) {
+        hl_ofd_identity a, b;
+        if (hl_ofd_identity_mint(&first, &a) != 0 || hl_ofd_identity_mint(&first, &b) != 0) return 11;
+        return !hl_ofd_identity_valid(a) || !hl_ofd_identity_valid(b) || hl_ofd_identity_equal(a, b) ||
+                       a.member != 7 || !ofd_lineage_equal(a.lineage, lineage)
+                   ? 12
+                   : 0;
+    }
+    if (scenario == 1) {
+#if defined(_WIN32)
+        return 0;
+#else
+        int transfer[2];
+        if (pipe(transfer) != 0) return 13;
+        pid_t child = fork();
+        if (child == 0) {
+            close(transfer[0]);
+            hl_ofd_member child_member;
+            hl_ofd_identity identity = {0};
+            int result = hl_ofd_member_bind(&child_member, space, lineage, 8) != 0 ||
+                         hl_ofd_identity_mint(&child_member, &identity) != 0 ||
+                         write(transfer[1], &identity, sizeof identity) != (ssize_t)sizeof identity;
+            _exit(result ? 1 : 0);
+        }
+        close(transfer[1]);
+        hl_ofd_identity parent, from_child;
+        int status = 0;
+        int failed = child < 0 || hl_ofd_identity_mint(&first, &parent) != 0 ||
+                     read(transfer[0], &from_child, sizeof from_child) != (ssize_t)sizeof from_child ||
+                     waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0 ||
+                     !hl_ofd_identity_valid(from_child) || from_child.member != 8 ||
+                     hl_ofd_identity_equal(parent, from_child) || parent.sequence == from_child.sequence;
+        close(transfer[0]);
+        return failed ? 14 : 0;
+#endif
+    }
+    if (scenario == 2) {
+        hl_ofd_identity restored = {lineage, 91, UINT64_C(0x100000000)};
+        hl_ofd_identity next;
+        return hl_ofd_identity_reattach(&first, restored) != 0 || hl_ofd_identity_mint(&first, &next) != 0 ||
+                       next.sequence <= restored.sequence
+                   ? 15
+                   : 0;
+    }
+    if (scenario == 3) {
+        hl_ofd_identity stale = {0};
+        stale.lineage.high = lineage.high ^ 1u;
+        stale.lineage.low = lineage.low;
+        stale.member = 7;
+        stale.sequence = 4;
+        return hl_ofd_identity_reattach(&first, stale) == ESTALE ? 0 : 16;
+    }
+    if (scenario == 4) {
+        atomic_store_explicit(&space->next_sequence, UINT64_MAX, memory_order_relaxed);
+        hl_ofd_identity identity;
+        return hl_ofd_identity_mint(&first, &identity) == EOVERFLOW &&
+                       atomic_load_explicit(&space->next_sequence, memory_order_relaxed) == UINT64_MAX
+                   ? 0
+                   : 17;
+    }
+    if (scenario == 5) {
+        hl_ofd_identity before, after;
+        hl_ofd_generation_binding first_generation = {
+            .generation_high = 101, .generation_low = 103, .lineage = lineage, .next_member = 8, .next_sequence = 1};
+        hl_ofd_generation_binding second_generation = {
+            .generation_high = 107, .generation_low = 109, .lineage = lineage, .next_member = 8, .next_sequence = 2};
+        if (hl_ofd_namespace_resume(space, first_generation) != 0 || hl_ofd_identity_mint(&first, &before) != 0 ||
+            hl_ofd_namespace_init(space, sizeof *space, lineage, 0) != 0 ||
+            hl_ofd_namespace_resume(space, second_generation) != 0 ||
+            hl_ofd_member_bind(&first, space, lineage, 7) != 0 ||
+            hl_ofd_identity_reattach(&first, before) != 0 || hl_ofd_identity_mint(&first, &after) != 0)
+            return 18;
+        return !hl_ofd_identity_equal(before, before) || after.sequence <= before.sequence ||
+                       !ofd_lineage_equal(after.lineage, before.lineage)
+                   ? 19
+                   : 0;
+    }
+    return 20;
+}
+
+int hl_ofd_identity_fixture(uint32_t scenario) {
+#if defined(_WIN32)
+    hl_ofd_namespace space;
+    return ofd_fixture_core(scenario, &space);
+#else
+    hl_ofd_namespace *space = mmap(NULL, sizeof *space, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (space == MAP_FAILED) return 21;
+    int result = ofd_fixture_core(scenario, space);
+    munmap(space, sizeof *space);
+    return result;
+#endif
+}
+#endif

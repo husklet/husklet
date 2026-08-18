@@ -784,6 +784,10 @@ static void service(struct cpu *c) {
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
+HL_API int HL_TARGET_LOCAL(ofd_identity_test)(uint32_t scenario) {
+    return hl_ofd_identity_fixture(scenario);
+}
+
 HL_API int HL_TARGET_LOCAL(checkpoint_restart_register_test)(void) {
     struct cpu cpu = {0};
     const uint64_t argument = UINT64_C(0x123456789abcdef0);
