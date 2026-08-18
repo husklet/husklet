@@ -38,6 +38,7 @@ mod tests {
             exit: 0,
             stdout_contains: Vec::new(),
             stdout_exact: None,
+            stdout_regex: None,
             output_empty: false,
         }
     }

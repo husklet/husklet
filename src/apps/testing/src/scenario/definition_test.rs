@@ -8,10 +8,85 @@ fn load(document: &str) -> Result<Scenario, Box<dyn std::error::Error>> {
     fs::create_dir_all(directory.join("golden"))?;
     fs::write(directory.join("golden/contains.txt"), "marker")?;
     fs::write(directory.join("golden/exact.txt"), "exact\n")?;
+    fs::write(directory.join("golden/regex.txt"), r"\Aelapsed=[0-9]+\nmarker\n\z")?;
     fs::write(directory.join("payload.txt"), "payload")?;
     let definition = directory.join("test.yaml");
     fs::write(&definition, document)?;
     Scenario::load(&directory, &definition)
+}
+
+#[test]
+fn regular_expression_output_is_bounded_valid_and_exclusive() {
+    let valid = load(
+        "cases:\n  - id: sample/regex\n    image: alpine\n    actions: [{ shell: { script: true } }]\n    expect: { stdout_regex: golden/regex.txt }\n",
+    )
+    .unwrap();
+    assert!(valid.cases[0].stdout_regex.is_some());
+    assert!(
+        load("cases:\n  - id: sample/conflict\n    image: alpine\n    actions: [{ shell: { script: true } }]\n    expect: { stdout_exact: golden/exact.txt, stdout_regex: golden/regex.txt }\n").is_err()
+    );
+
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("invalid");
+    fs::create_dir_all(directory.join("golden")).unwrap();
+    fs::write(directory.join("golden/invalid.txt"), "(").unwrap();
+    fs::write(
+        directory.join("test.yaml"),
+        "cases:\n  - id: sample/invalid\n    image: alpine\n    actions: [{ shell: { script: true } }]\n    expect: { stdout_regex: golden/invalid.txt }\n",
+    )
+    .unwrap();
+    assert!(Scenario::load(&directory, &directory.join("test.yaml")).is_err());
+    fs::write(directory.join("golden/invalid.txt"), "x".repeat(super::MAX_TEXT + 1)).unwrap();
+    assert!(Scenario::load(&directory, &directory.join("test.yaml")).is_err());
+}
+
+#[test]
+fn ubuntu24_apt_fixture_preserves_dual_isa_failure_and_timing_evidence() {
+    let mut root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    while !root.join("tests/scenarios/netinstall/test.yaml").is_file() {
+        root = root.parent().expect("workspace root contains netinstall scenario");
+    }
+    let directory = root.join("tests/scenarios/netinstall");
+    let scenario = Scenario::load(&directory, &directory.join("test.yaml")).unwrap();
+    let case = scenario
+        .cases
+        .iter()
+        .find(|case| case.id == "netinstall/ubuntu24-apt-install-htop")
+        .expect("Ubuntu 24 apt fixture");
+    assert_eq!(
+        case.targets.iter().map(|target| target.name()).collect::<Vec<_>>(),
+        ["arm64", "amd64"]
+    );
+    assert_eq!(case.timeout, 240);
+    assert!(case.stdout_contains.is_empty());
+    assert!(case.stdout_exact.is_none());
+    assert_eq!(
+        case.stdout_regex
+            .as_deref()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str()),
+        Some("ubuntu24-htop.regex")
+    );
+    let expression = fs::read_to_string(case.stdout_regex.as_ref().unwrap()).unwrap();
+    let expression = regex::bytes::Regex::new(expression.trim_end_matches(['\r', '\n'])).unwrap();
+    let valid = b"APT_STAGE_TIMING update_seconds=12 install_seconds=7\nHTOP_INSTALLED_AND_RUNNABLE\n";
+    assert!(expression.is_match(valid));
+    assert!(!expression.is_match(&[b"hidden error\n".as_slice(), valid].concat()));
+    assert!(!expression.is_match(&[valid.as_slice(), b"hidden error\n"].concat()));
+    let [Step::Shell(script)] = &case.actions[..] else {
+        panic!("Ubuntu 24 apt fixture must remain one shell transaction");
+    };
+    for witness in [
+        "cat \"$log\" >&2",
+        "reject_dirty_log UPDATE",
+        "reject_dirty_log INSTALL",
+        "HTOP_LDD_FAILED status=127 reason=missing-command",
+        "HTOP_LDD_FAILED status=1 reason=missing-dependency",
+        "HTOP_LDD_FAILED status=%s",
+        "APT_STAGE_TIMING update_seconds=",
+    ] {
+        assert!(script.contains(witness), "fixture lost {witness:?}");
+    }
 }
 
 #[test]

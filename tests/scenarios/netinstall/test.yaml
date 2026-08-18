@@ -61,23 +61,70 @@ cases:
       - shell:
           script: |
             set -eu
+            export LC_ALL=C
             export DEBIAN_FRONTEND=noninteractive
+            fail_stage() {
+                stage=$1
+                status=$2
+                log=$3
+                printf 'APT_%s_FAILED status=%s\n' "$stage" "$status" >&2
+                cat "$log" >&2
+                exit "$status"
+            }
+            reject_dirty_log() {
+                stage=$1
+                log=$2
+                if grep -Eq '^(Err:|W:|E:)|NO_PUBKEY|BADSIG|EXPKEYSIG' "$log"; then
+                    fail_stage "$stage" 1 "$log"
+                fi
+            }
             rm -rf /var/lib/apt/lists/*
-            apt-get update >/tmp/apt-update.log 2>&1
-            inrelease=$(find /var/lib/apt/lists -type f -name '*InRelease' -print -quit)
-            test -n "$inrelease"
-            gpgv --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg "$inrelease" \
-                >/tmp/apt-signature.log 2>&1
-            apt-get install -y --no-install-recommends htop >/tmp/apt-install.log 2>&1
+            update_started=$(date +%s)
+            if apt-get update >/tmp/apt-update.log 2>&1; then
+                update_finished=$(date +%s)
+            else
+                fail_stage UPDATE "$?" /tmp/apt-update.log
+            fi
+            reject_dirty_log UPDATE /tmp/apt-update.log
+            set -- /var/lib/apt/lists/*InRelease
+            test -f "$1" || fail_stage SIGNATURE 1 /tmp/apt-update.log
+            for inrelease do
+                if gpgv --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg "$inrelease" \
+                    >/tmp/apt-signature.log 2>&1; then
+                    :
+                else
+                    fail_stage SIGNATURE "$?" /tmp/apt-signature.log
+                fi
+            done
+            install_started=$(date +%s)
+            if apt-get install -y --no-install-recommends htop >/tmp/apt-install.log 2>&1; then
+                install_finished=$(date +%s)
+            else
+                fail_stage INSTALL "$?" /tmp/apt-install.log
+            fi
+            reject_dirty_log INSTALL /tmp/apt-install.log
             command -v htop >/dev/null
             dpkg -s htop | grep -q '^Status: install ok installed'
             apt-cache policy htop | grep -q 'Installed: [0-9]'
             htop --version | grep -Eq '^htop [0-9]'
-            if command -v ldd >/dev/null; then
-                ! ldd "$(command -v htop)" | grep -q 'not found'
+            if ! command -v ldd >/dev/null; then
+                echo 'HTOP_LDD_FAILED status=127 reason=missing-command' >&2
+                exit 127
             fi
+            if ldd_output=$(ldd "$(command -v htop)" 2>&1); then
+                if printf '%s\n' "$ldd_output" | grep -q 'not found'; then
+                    printf 'HTOP_LDD_FAILED status=1 reason=missing-dependency\n%s\n' "$ldd_output" >&2
+                    exit 1
+                fi
+            else
+                status=$?
+                printf 'HTOP_LDD_FAILED status=%s\n%s\n' "$status" "$ldd_output" >&2
+                exit "$status"
+            fi
+            printf 'APT_STAGE_TIMING update_seconds=%s install_seconds=%s\n' \
+                "$((update_finished - update_started))" "$((install_finished - install_started))"
             echo HTOP_INSTALLED_AND_RUNNABLE
-    expect: { stdout_contains: golden/htop.txt }
+    expect: { stdout_regex: golden/ubuntu24-htop.regex }
 
   - id: netinstall/ubuntu-apt-update-clean
     image: ubuntu:22.04

@@ -108,6 +108,19 @@ pub(super) fn verify(case: &Sample, status: ExitStatus, stdout: &[u8], stderr: &
             .into());
         }
     }
+    if let Some(path) = &case.stdout_regex {
+        let expression = fs::read_to_string(path)?;
+        let pattern = regex::bytes::Regex::new(expression.trim_end_matches(['\r', '\n']))
+            .map_err(|error| format!("invalid output expression {}: {error}", path.display()))?;
+        if !pattern.is_match(&output) {
+            return Err(format!(
+                "combined output does not match {}; {}",
+                path.display(),
+                output_summary(stdout, stderr)
+            )
+            .into());
+        }
+    }
     if case.output_empty && !output.is_empty() {
         return Err(format!("combined output is not empty; {}", output_summary(stdout, stderr)).into());
     }

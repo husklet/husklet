@@ -2678,6 +2678,7 @@ dependencies = [
  "hl-native",
  "hl-process",
  "reflink-copy",
+ "regex",
  "ring",
  "rustix",
  "serde",

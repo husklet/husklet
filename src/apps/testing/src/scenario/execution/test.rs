@@ -54,9 +54,52 @@ fn verification_combines_stdout_and_stderr() {
         exit: 0,
         stdout_contains: vec![marker],
         stdout_exact: None,
+        stdout_regex: None,
         output_empty: false,
     };
     assert!(verify(&case, ExitStatus::Code(0), b"stdout", b"from-stderr").is_ok());
+}
+
+#[test]
+fn regular_expression_output_rejects_prefixes_suffixes_and_malformed_timings() {
+    let directory = tempfile::tempdir().unwrap();
+    let expression = directory.path().join("output.regex");
+    std::fs::write(
+        &expression,
+        r"\AAPT_STAGE_TIMING update_seconds=[0-9]+ install_seconds=[0-9]+\nHTOP_INSTALLED_AND_RUNNABLE\n\z",
+    )
+    .unwrap();
+    let case = Sample {
+        id: "example/regex".into(),
+        image: "fixture".into(),
+        execution: Execution::default(),
+        class: Class::Quick,
+        targets: vec![Target::Arm64],
+        expected_failures: Vec::new(),
+        resources: Vec::new(),
+        environment: BTreeMap::new(),
+        working_directory: "/".into(),
+        actions: vec![Step::Shell("true".into())],
+        fixtures: Vec::new(),
+        readiness: None,
+        timeout: 1,
+        warmups: 0,
+        repetitions: 1,
+        exit: 0,
+        stdout_contains: Vec::new(),
+        stdout_exact: None,
+        stdout_regex: Some(expression),
+        output_empty: false,
+    };
+    let valid = b"APT_STAGE_TIMING update_seconds=4 install_seconds=2\nHTOP_INSTALLED_AND_RUNNABLE\n";
+    assert!(verify(&case, ExitStatus::Code(0), valid, b"").is_ok());
+    for invalid in [
+        b"warning\nAPT_STAGE_TIMING update_seconds=4 install_seconds=2\nHTOP_INSTALLED_AND_RUNNABLE\n".as_slice(),
+        b"APT_STAGE_TIMING update_seconds=many install_seconds=2\nHTOP_INSTALLED_AND_RUNNABLE\n".as_slice(),
+        b"APT_STAGE_TIMING update_seconds=4 install_seconds=2\nHTOP_INSTALLED_AND_RUNNABLE\ntrailing\n".as_slice(),
+    ] {
+        assert!(verify(&case, ExitStatus::Code(0), invalid, b"").is_err());
+    }
 }
 
 #[test]
@@ -80,6 +123,7 @@ fn empty_output_assertion_rejects_either_stream() {
         exit: 0,
         stdout_contains: Vec::new(),
         stdout_exact: None,
+        stdout_regex: None,
         output_empty: true,
     };
     assert!(verify(&case, ExitStatus::Code(0), b"", b"").is_ok());

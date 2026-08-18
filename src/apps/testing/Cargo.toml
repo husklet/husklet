@@ -21,6 +21,7 @@ hl-native = { path = "../../runtime/hl-native", features = ["native-test-hooks"]
 hl-process = { path = "../../packages/hl-process" }
 hl-engine = { path = "../../containers/hl-engine" }
 reflink-copy.workspace = true
+regex.workspace = true
 ring = "0.17.14"
 sha2.workspace = true
 serde = { workspace = true, features = ["derive"] }

@@ -424,6 +424,7 @@ async fn fingerprint(work: &[Work], warm_provider: bool) -> Result<String, Error
         inputs.extend(case.fixtures.iter().map(|fixture| fixture.source.clone()));
         inputs.extend(case.stdout_contains.iter().cloned());
         inputs.extend(case.stdout_exact.iter().cloned());
+        inputs.extend(case.stdout_regex.iter().cloned());
     }
     inputs.sort();
     inputs.dedup();
