@@ -1,3 +1,8 @@
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#endif
+
 static int ckpt_read_manifest(struct ckpt_manifest *man) {
     if (ckpt_source_load("MANIFEST", man, sizeof *man) != 0) {
         fprintf(stderr, "[restore] the store has no MANIFEST (not a complete checkpoint)\n");
@@ -210,8 +215,35 @@ static void ckpt_report_overlap(uint64_t lo, uint64_t hi) {
 
 static void *ckpt_map_exact_nonreplacing(uint64_t address, size_t length, int protection, int flags, int fd,
                                          off_t offset) {
+#if defined(__APPLE__)
+    /* Darwin has no MAP_FIXED_NOREPLACE. Claim the destination in one Mach operation first:
+     * VM_FLAGS_FIXED without VM_FLAGS_OVERWRITE fails if any byte is occupied. The reservation
+     * remains continuously present until MAP_FIXED atomically replaces our own pages, so this is
+     * not the unsafe inspect-then-map sequence that would let another mapping enter the range. */
+    mach_vm_address_t reserved = (mach_vm_address_t)address;
+    kern_return_t status = mach_vm_allocate(mach_task_self(), &reserved, (mach_vm_size_t)length, VM_FLAGS_FIXED);
+    if (status != KERN_SUCCESS) {
+        if (status == KERN_NO_SPACE || status == KERN_MEMORY_PRESENT)
+            errno = EEXIST;
+        else if (status == KERN_INVALID_ADDRESS || status == KERN_INVALID_ARGUMENT)
+            errno = EINVAL;
+        else if (status == KERN_RESOURCE_SHORTAGE)
+            errno = ENOMEM;
+        else
+            errno = EIO;
+        return MAP_FAILED;
+    }
+    void *mapping = mmap((void *)(uintptr_t)address, length, protection, flags | MAP_FIXED, fd, offset);
+    if (mapping == MAP_FAILED) {
+        int map_errno = errno;
+        (void)mach_vm_deallocate(mach_task_self(), reserved, (mach_vm_size_t)length);
+        errno = map_errno;
+    }
+    return mapping;
+#else
     int claim_flags = (flags & ~MAP_FIXED) | MAP_FIXED_NOREPLACE;
     return mmap((void *)(uintptr_t)address, length, protection, claim_flags, fd, offset);
+#endif
 }
 
 typedef void *(*ckpt_exact_mapper)(uint64_t, size_t, int, int, int, off_t);
@@ -237,8 +269,8 @@ static int ckpt_unmap_exact(void *address, size_t length) {
 
 static int ckpt_claim_exact(uint64_t address, size_t length, int protection, int flags, int fd, off_t offset,
                             void **claimed) {
-    return ckpt_claim_exact_with(ckpt_map_exact_nonreplacing, ckpt_unmap_exact, address, length, protection, flags,
-                                 fd, offset, claimed);
+    return ckpt_claim_exact_with(ckpt_map_exact_nonreplacing, ckpt_unmap_exact, address, length, protection, flags, fd,
+                                 offset, claimed);
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -280,6 +312,21 @@ HL_API int hl_checkpoint_restore_claim_test(uint32_t scenario) {
         g_ckpt_claim_test.map_errno = EEXIST;
     } else if (scenario == 1) {
         g_ckpt_claim_test.mapping = (void *)(uintptr_t)(requested + UINT64_C(0x10000));
+    } else if (scenario == 2) {
+        unsigned char *sentinel = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (sentinel == MAP_FAILED) return 20;
+        memset(sentinel, 0xa5, 4096);
+        int result = ckpt_claim_exact((uint64_t)(uintptr_t)sentinel, 4096, PROT_READ | PROT_WRITE,
+                                      MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0, &claimed);
+        int claim_errno = errno;
+        for (size_t index = 0; index < 4096; ++index) {
+            if (sentinel[index] != 0xa5) {
+                (void)munmap(sentinel, 4096);
+                return 21;
+            }
+        }
+        (void)munmap(sentinel, 4096);
+        return result != 0 && claimed == MAP_FAILED && claim_errno == EEXIST ? 0 : 22;
     } else {
         return 10;
     }

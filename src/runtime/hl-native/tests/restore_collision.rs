@@ -1,9 +1,12 @@
-use std::{fs, path::Path, process::Command};
+use std::{fs, path::Path};
+
+#[cfg(target_os = "linux")]
+use std::process::Command;
 
 #[test]
 fn actual_restore_claim_helper_fails_closed_on_both_isas() {
     for isa in [1, 2] {
-        for scenario in [0, 1] {
+        for scenario in [0, 1, 2] {
             hl_native::checkpoint_restore_claim_test(isa, scenario)
                 .unwrap_or_else(|status| panic!("ISA {isa} restore claim scenario {scenario} failed at {status}"));
         }
@@ -23,6 +26,9 @@ fn restore_collision_fails_closed_on_every_host() {
     let native = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/native");
     let restore = fs::read_to_string(native.join("linux_abi/checkpoint/memory_restore.c"))
         .expect("read direct memory restore implementation");
+    assert!(restore.contains("mach_vm_allocate(mach_task_self(), &reserved"));
+    assert!(restore.contains("VM_FLAGS_FIXED"));
+    assert!(!restore.contains("VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE"));
     assert!(restore.contains("(flags & ~MAP_FIXED) | MAP_FIXED_NOREPLACE"));
     assert!(!restore.contains("map_flags | MAP_FIXED_NOREPLACE"));
     assert!(!restore.contains("#ifdef MAP_FIXED_NOREPLACE"));
