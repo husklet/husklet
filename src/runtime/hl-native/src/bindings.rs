@@ -335,7 +335,7 @@ unsafe fn hl_x86_64_signal_errno_frame_test(
 macro_rules! test_no_argument {
     ($name:ident, $field:ident) => {
         #[cfg(feature = "native-test-hooks")]
-        unsafe fn $name() -> c_int {
+        unsafe extern "C" fn $name() -> c_int {
             unsafe { (test_api().$field)() }
         }
     };
@@ -387,41 +387,21 @@ unsafe fn hl_c_backend_identity_registry_test(scenario: c_uint, iterations: c_ui
 }
 
 #[cfg(all(test, feature = "native-test-hooks"))]
-pub(super) unsafe fn hl_c_backend_checkpoint_test_arm() -> c_uint {
-    unsafe { (test_api().checkpoint_test_arm)() }
-}
-
-#[cfg(all(test, feature = "native-test-hooks"))]
-pub(super) unsafe fn hl_c_backend_checkpoint_test_phase() -> c_uint {
-    unsafe { (test_api().checkpoint_test_phase)() }
-}
-
-#[cfg(all(test, feature = "native-test-hooks"))]
-pub(super) unsafe fn hl_c_backend_checkpoint_test_release() {
-    unsafe { (test_api().checkpoint_test_release)() };
-}
-
-#[cfg(all(test, feature = "native-test-hooks"))]
-pub(super) unsafe fn hl_c_backend_checkpoint_test_reset() {
-    unsafe { (test_api().checkpoint_test_reset)() };
-}
-
-#[cfg(feature = "native-test-hooks")]
 pub(super) unsafe fn hl_c_backend_checkpoint_test_prune_foreign_descriptors() -> c_uint {
     unsafe { (test_api().checkpoint_test_prune_foreign_descriptors)() }
 }
 
-#[cfg(feature = "native-test-hooks")]
+#[cfg(all(test, feature = "native-test-hooks"))]
 pub(super) unsafe fn hl_c_backend_checkpoint_test_fail_registry_allocation() {
     unsafe { (test_api().checkpoint_test_fail_registry_allocation)() };
 }
 
-#[cfg(feature = "native-test-hooks")]
+#[cfg(all(test, feature = "native-test-hooks"))]
 pub(super) unsafe fn hl_c_backend_checkpoint_test_fail_private_adopt(position: c_uint) {
     unsafe { (test_api().checkpoint_test_fail_private_adopt)(position) };
 }
 
-#[cfg(feature = "native-test-hooks")]
+#[cfg(all(test, feature = "native-test-hooks"))]
 pub(super) unsafe fn hl_c_backend_checkpoint_test_private_descriptor_count() -> u64 {
     unsafe { (test_api().checkpoint_test_private_descriptor_count)() }
 }
@@ -431,7 +411,7 @@ pub(super) unsafe fn hl_c_backend_host_process_force_test(pid: c_int) -> c_int {
     unsafe { (test_api().host_process_force)(pid) }
 }
 
-#[cfg(feature = "native-test-hooks")]
+#[cfg(all(test, feature = "native-test-hooks"))]
 pub(super) unsafe fn hl_c_backend_activation_ready_pause(paused: c_int) {
     unsafe { (test_api().activation_ready_pause)(paused) };
 }

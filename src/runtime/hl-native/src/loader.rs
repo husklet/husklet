@@ -107,19 +107,16 @@ pub(crate) struct TestApi {
     pub(crate) errno_from_host: unsafe extern "C" fn(c_uint, c_int) -> c_int,
     pub(crate) identity_registry: unsafe extern "C" fn(c_uint, c_uint) -> c_int,
     #[cfg(test)]
-    pub(crate) checkpoint_test_arm: unsafe extern "C" fn() -> c_uint,
-    #[cfg(test)]
-    pub(crate) checkpoint_test_phase: unsafe extern "C" fn() -> c_uint,
-    #[cfg(test)]
-    pub(crate) checkpoint_test_release: unsafe extern "C" fn(),
-    #[cfg(test)]
-    pub(crate) checkpoint_test_reset: unsafe extern "C" fn(),
     pub(crate) checkpoint_test_prune_foreign_descriptors: unsafe extern "C" fn() -> c_uint,
+    #[cfg(test)]
     pub(crate) checkpoint_test_fail_registry_allocation: unsafe extern "C" fn(),
+    #[cfg(test)]
     pub(crate) checkpoint_test_fail_private_adopt: unsafe extern "C" fn(c_uint),
+    #[cfg(test)]
     pub(crate) checkpoint_test_private_descriptor_count: unsafe extern "C" fn() -> u64,
     #[cfg(all(test, unix))]
     pub(crate) host_process_force: unsafe extern "C" fn(c_int) -> c_int,
+    #[cfg(test)]
     pub(crate) activation_ready_pause: unsafe extern "C" fn(c_int),
 }
 
@@ -349,31 +346,28 @@ fn load_tests(library: &DynamicLibrary, path: &Path) -> Result<TestApi, LoadErro
             unsafe extern "C" fn(c_uint, c_uint) -> c_int
         ),
         #[cfg(test)]
-        checkpoint_test_arm: symbol!("hl_c_backend_checkpoint_test_arm", unsafe extern "C" fn() -> c_uint),
-        #[cfg(test)]
-        checkpoint_test_phase: symbol!("hl_c_backend_checkpoint_test_phase", unsafe extern "C" fn() -> c_uint),
-        #[cfg(test)]
-        checkpoint_test_release: symbol!("hl_c_backend_checkpoint_test_release", unsafe extern "C" fn()),
-        #[cfg(test)]
-        checkpoint_test_reset: symbol!("hl_c_backend_checkpoint_test_reset", unsafe extern "C" fn()),
         checkpoint_test_prune_foreign_descriptors: symbol!(
             "hl_c_backend_checkpoint_test_prune_foreign_descriptors",
             unsafe extern "C" fn() -> c_uint
         ),
+        #[cfg(test)]
         checkpoint_test_fail_registry_allocation: symbol!(
             "hl_c_backend_checkpoint_test_fail_registry_allocation",
             unsafe extern "C" fn()
         ),
+        #[cfg(test)]
         checkpoint_test_fail_private_adopt: symbol!(
             "hl_c_backend_checkpoint_test_fail_private_adopt",
             unsafe extern "C" fn(c_uint)
         ),
+        #[cfg(test)]
         checkpoint_test_private_descriptor_count: symbol!(
             "hl_c_backend_checkpoint_test_private_descriptor_count",
             unsafe extern "C" fn() -> u64
         ),
         #[cfg(all(test, unix))]
         host_process_force: symbol!("hl_c_backend_host_process_force_test", unsafe extern "C" fn(c_int) -> c_int),
+        #[cfg(test)]
         activation_ready_pause: symbol!("hl_c_backend_activation_ready_pause", unsafe extern "C" fn(c_int)),
     })
 }
@@ -416,6 +410,7 @@ fn candidates() -> Result<Vec<PathBuf>, LoadError> {
     release_candidates(&executable)
 }
 
+#[cfg(any(not(debug_assertions), test))]
 fn release_candidates(executable: &Path) -> Result<Vec<PathBuf>, LoadError> {
     let directory = executable
         .parent()
