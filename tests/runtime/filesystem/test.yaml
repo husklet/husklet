@@ -766,3 +766,11 @@ cases:
     artifact: { destination: /opt/husklet/filesystem-futimens-null-path }
     run: []
     expect: { exit: 0, stdout: golden/futimens_path.out }
+  - id: runtime/filesystem/create-root-errno
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/create_root_errno.c, output: create-root-errno, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /var/run/postgresql/filesystem-create-root-errno }
+    environment: { HL_UID: "0", HL_GID: "0" }
+    run: []
+    expect: { exit: 0, stdout: golden/create_root_errno.out }
