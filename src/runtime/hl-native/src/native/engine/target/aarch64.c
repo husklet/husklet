@@ -879,6 +879,9 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     hl_gmap_bind_host(host);
     futex_table_init(host);
     seq_ref_arena_init(host);
+#if !defined(_WIN32)
+    if (namespace_transaction_init(host) != 0) return 1;
+#endif
     eventfd_count_init(host);
     fdvis_init(host);
     ts_init(host);

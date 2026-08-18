@@ -137,8 +137,8 @@ static int exec_image_adopt(int descriptor, const char *path, exec_image *image)
         exec_image_release(image);
         return -EACCES;
     }
-    stat_virt_ids(&image->status, NULL, descriptor, &image->dac.uid, &image->dac.gid);
-    image->dac.mode = (uint32_t)stat_virt_mode(&image->status, NULL, descriptor);
+    stat_virt_ids_raw(&image->status, NULL, descriptor, &image->dac.uid, &image->dac.gid);
+    image->dac.mode = (uint32_t)stat_virt_mode_raw(&image->status, NULL, descriptor);
     uint32_t groups[HL_NGROUPS_MAX];
     hl_dac_credentials credentials = dac_credentials_current(groups);
     if (hl_dac_authorize_access(&image->dac, &credentials, HL_DAC_EXECUTE) != 0) {
@@ -244,10 +244,11 @@ static void exec_authority_seed_initial(const hl_host_services *host, hl_host_ha
     hl_host_result borrowed = attachments->borrow_file(host->context, executable);
     if (borrowed.status != HL_STATUS_OK) return;
     int descriptor = (int)borrowed.value;
-    if (fstat(descriptor, &g_authorized_executable_status) == 0) {
-        stat_virt_ids(&g_authorized_executable_status, NULL, descriptor, &g_authorized_executable_dac.uid,
-                      &g_authorized_executable_dac.gid);
-        g_authorized_executable_dac.mode = (uint32_t)stat_virt_mode(&g_authorized_executable_status, NULL, descriptor);
+    if (fstat(descriptor, &g_authorized_executable_status) == 0 && S_ISREG(g_authorized_executable_status.st_mode)) {
+        stat_virt_ids_raw(&g_authorized_executable_status, NULL, descriptor, &g_authorized_executable_dac.uid,
+                          &g_authorized_executable_dac.gid);
+        g_authorized_executable_dac.mode =
+            (uint32_t)stat_virt_mode_raw(&g_authorized_executable_status, NULL, descriptor);
         g_authorized_executable_metadata_ready = 1;
         if (exec_image_capabilities(descriptor, &g_authorized_executable_file_capabilities) != 0)
             g_authorized_executable_metadata_ready = 0;

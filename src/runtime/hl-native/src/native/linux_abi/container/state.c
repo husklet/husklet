@@ -414,6 +414,7 @@ static int cgid(void) {
 
 #include "../host_fs.h"
 #include "owner.h"
+#include "vfs/namespace_transaction.h"
 #include "dac_policy.h"
 #include "credentials.h"
 #define HL_MODE_XATTR "user.hl.mode"
@@ -519,13 +520,14 @@ static int mode_transaction_path(int directory, const char *path, const char *xa
     return -1;
 }
 
-static mode_t stat_virt_mode(const struct stat *status, const char *hostpath, int fd) {
+static mode_t stat_virt_mode_raw(const struct stat *status, const char *hostpath, int fd) {
     if (S_ISLNK(status->st_mode)) return (status->st_mode & S_IFMT) | 0777;
     mode_t mode;
     return mode_xattr_get(hostpath, fd, &mode) ? (status->st_mode & S_IFMT) | mode : status->st_mode;
 }
 
-static void stat_virt_ids(const struct stat *s, const char *hostpath, int fd, uint32_t *out_uid, uint32_t *out_gid) {
+static void stat_virt_ids_raw(const struct stat *s, const char *hostpath, int fd, uint32_t *out_uid,
+                              uint32_t *out_gid) {
     /* A rootfs is unpacked by the unprivileged host process, so host ownership is only a storage
      * implementation detail.  OCI entries without explicit owner metadata are guest-root owned;
      * runtime-created entries are stamped below with their current fsuid/fsgid. */
@@ -538,6 +540,41 @@ static void stat_virt_ids(const struct stat *s, const char *hostpath, int fd, ui
     }
     *out_uid = uid;
     *out_gid = gid;
+}
+
+/* A pathname Unix socket is visible to the host kernel before its guest owner
+ * record is committed.  Keep the normal file path free of transaction
+ * atomics; sockets take one coherent optimistic snapshot and retry if a
+ * publication crossed it. */
+static int stat_virt_snapshot(const struct stat *status, const char *hostpath, int fd, mode_t *out_mode,
+                              uint32_t *out_uid, uint32_t *out_gid) {
+    if (status == NULL || out_mode == NULL || out_uid == NULL || out_gid == NULL) return -EINVAL;
+    if (!S_ISSOCK(status->st_mode)) {
+        stat_virt_ids_raw(status, hostpath, fd, out_uid, out_gid);
+        *out_mode = stat_virt_mode_raw(status, hostpath, fd);
+        return 0;
+    }
+#if defined(_WIN32)
+    stat_virt_ids_raw(status, hostpath, fd, out_uid, out_gid);
+    *out_mode = stat_virt_mode_raw(status, hostpath, fd);
+    return 0;
+#else
+    for (unsigned attempt = 0; attempt < 64; ++attempt) {
+        struct namespace_transaction_read read;
+        if (namespace_transaction_read_begin(&read) != 0) return -errno;
+        uint32_t uid, gid;
+        mode_t mode = stat_virt_mode_raw(status, hostpath, fd);
+        stat_virt_ids_raw(status, hostpath, fd, &uid, &gid);
+        if (namespace_transaction_read_validate(&read) == 0) {
+            *out_mode = mode;
+            *out_uid = uid;
+            *out_gid = gid;
+            return 0;
+        }
+        if (errno != EAGAIN) return -errno;
+    }
+    return -EBUSY;
+#endif
 }
 
 // ---- runtime credential overlay (USER ns) -- defined here (BEFORE fs.c AND proc.c in the unity TU) --
@@ -789,22 +826,45 @@ static int64_t dac_requested_id(uint64_t raw) {
 static int dac_snapshot_path(const char *path, int nofollow, hl_dac_snapshot *snapshot) {
     struct stat status;
     uint32_t uid, gid;
+    mode_t mode;
     if ((nofollow ? lstat(path, &status) : stat(path, &status)) != 0) return -errno;
-    stat_virt_ids(&status, path, -1, &uid, &gid);
-    snapshot->uid = uid;
-    snapshot->gid = gid;
-    snapshot->mode = (uint32_t)stat_virt_mode(&status, path, -1);
+    if (!S_ISSOCK(status.st_mode)) {
+        stat_virt_ids_raw(&status, path, -1, &uid, &gid);
+        snapshot->uid = uid;
+        snapshot->gid = gid;
+        snapshot->mode = (uint32_t)stat_virt_mode_raw(&status, path, -1);
+        return 0;
+    }
+#if defined(_WIN32)
+    stat_virt_ids_raw(&status, path, -1, &snapshot->uid, &snapshot->gid);
+    snapshot->mode = (uint32_t)stat_virt_mode_raw(&status, path, -1);
     return 0;
+#else
+    for (unsigned attempt = 0; attempt < 64; ++attempt) {
+        struct namespace_transaction_read read;
+        if (namespace_transaction_read_begin(&read) != 0) return -errno;
+        if ((nofollow ? lstat(path, &status) : stat(path, &status)) != 0) return -errno;
+        stat_virt_ids_raw(&status, path, -1, &uid, &gid);
+        mode = stat_virt_mode_raw(&status, path, -1);
+        if (!S_ISSOCK(status.st_mode) || namespace_transaction_read_validate(&read) == 0) {
+            snapshot->uid = uid;
+            snapshot->gid = gid;
+            snapshot->mode = (uint32_t)mode;
+            return 0;
+        }
+        if (errno != EAGAIN) return -errno;
+    }
+    return -EBUSY;
+#endif
 }
 
 static int dac_snapshot_fd(int descriptor, hl_dac_snapshot *snapshot) {
     struct stat status;
-    uint32_t uid, gid;
     if (fstat(descriptor, &status) != 0) return -errno;
-    stat_virt_ids(&status, NULL, descriptor, &uid, &gid);
-    snapshot->uid = uid;
-    snapshot->gid = gid;
-    snapshot->mode = (uint32_t)stat_virt_mode(&status, NULL, descriptor);
+    mode_t mode;
+    int result = stat_virt_snapshot(&status, NULL, descriptor, &mode, &snapshot->uid, &snapshot->gid);
+    if (result != 0) return result;
+    snapshot->mode = (uint32_t)mode;
     return 0;
 }
 
@@ -849,8 +909,9 @@ static void newfile_stamp_fd(int fd) {
                 slash[1] = '\0';
             else
                 *slash = '\0';
-            if (stat(path, &parent) == 0 && (stat_virt_mode(&parent, path, -1) & S_ISGID) != 0) {
-                stat_virt_ids(&parent, path, -1, &parent_uid, &parent_gid);
+            if (stat(path, &parent) == 0 && S_ISDIR(parent.st_mode) &&
+                (stat_virt_mode_raw(&parent, path, -1) & S_ISGID) != 0) {
+                stat_virt_ids_raw(&parent, path, -1, &parent_uid, &parent_gid);
                 g = (int)parent_gid;
             }
         }

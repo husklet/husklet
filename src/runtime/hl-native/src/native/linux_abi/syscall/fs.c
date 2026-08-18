@@ -11,9 +11,10 @@
 #endif
 
 static int guest_fill_linux_stat(uint64_t destination, const struct stat *status, const char *host_path,
-                                 int descriptor) {
+                                 int descriptor, int nofollow) {
     uint8_t encoded[GUEST_LINUX_STAT_BYTES];
-    fill_linux_stat(encoded, status, host_path, descriptor);
+    int result = fill_linux_stat(encoded, status, host_path, descriptor, nofollow);
+    if (result != 0) return result;
     return guest_copy_to(destination, encoded, sizeof encoded) == sizeof encoded ? 0 : -EFAULT;
 }
 
@@ -277,11 +278,21 @@ static int dac_access_at(int directory, const char *raw, int nofollow, int mode,
     int status = hl_vfs_cursor_resolve_metadata_search_at(directory, raw, nofollow, dac_authorize_cursor_search,
                                                           &credentials, &entry);
     uint32_t mount_flags = status == 0 ? entry.mount_flags : 0;
+    int socket_exists = status == 0 && S_ISSOCK(entry.status.st_mode);
     if (status == 0 && mode != F_OK) status = dac_snapshot_cursor_entry(&entry, &snapshot);
     hl_vfs_cursor_entry_release(&entry);
-    if (status == -ENOSYS) status = dac_snapshot_at(directory, raw, nofollow, &snapshot);
+    if (status == -ENOSYS) {
+        status = dac_snapshot_at(directory, raw, nofollow, &snapshot);
+        socket_exists = status == 0 && S_ISSOCK(snapshot.mode);
+    }
     if (status != 0) return status;
-    if (mode == F_OK) return 0;
+    if (mode == F_OK) {
+#if defined(_WIN32)
+        return 0;
+#else
+        return !socket_exists || namespace_transaction_read_barrier() == 0 ? 0 : -errno;
+#endif
+    }
     unsigned requested = 0;
     if (mode & R_OK) requested |= HL_DAC_READ;
     if (mode & W_OK) requested |= HL_DAC_WRITE;

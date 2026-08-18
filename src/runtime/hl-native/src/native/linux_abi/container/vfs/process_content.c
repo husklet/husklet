@@ -1463,7 +1463,7 @@ static int proc_open(const char *requested_path) {
 
 // Linux-layout stat for a synthesized /proc or /sys file (so stat()/access() see it -- find, du,
 // container runtimes that stat /etc/mtab -> /proc/mounts, JVM that stats cgroup files, etc.).
-static void fill_linux_stat(uint8_t *d, const struct stat *s, const char *hostpath, int fd);
+static int fill_linux_stat(uint8_t *d, const struct stat *s, const char *hostpath, int fd, int nofollow);
 
 // The pseudo /dev nodes the rootfs lacks but open() (fs.c) backs with a real host device. Returns the
 // host path open() would use, else NULL. stat()/access() consult this so the nodes report as EXISTING
