@@ -1597,16 +1597,17 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
         )
         .unwrap(),
     );
+    let mut capture = RestoreGateEngine::new(capture, executable);
     let initial_ready = Instant::now();
-    capture.start().unwrap();
-    wait_for(&output_path, "READY leader=");
-    wait_for(&directory.path().join("state"), "5");
+    capture.start("initial capture launch");
+    capture.wait_marker(&output_path, "READY leader=", "initial guest ready");
+    capture.wait_marker(&directory.path().join("state"), "5", "initial progress");
     timings.observe("initial_guest_ready", initial_ready);
     let capture_request = Instant::now();
-    capture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+    capture.checkpoint("initial capture");
     timings.observe("capture_request_return", capture_request);
     let capture_wait = Instant::now();
-    assert_eq!(wait_bounded(&capture, "initial daily-dev capture").guest_status, 0);
+    assert_eq!(capture.wait("initial daily-dev capture").guest_status, 0);
     wait_for_exact_process_reap(executable);
     timings.observe("capture_wait_reap", capture_wait);
 
@@ -1623,14 +1624,15 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
         )
         .unwrap(),
     );
-    recapture.start().unwrap();
-    wait_for_running_marker(&recapture, &output_path, "CYCLE 1 progress=");
+    let mut recapture = RestoreGateEngine::new(recapture, executable);
+    recapture.start("first restore launch");
+    recapture.wait_marker(&output_path, "CYCLE 1 progress=", "first restore ready");
     timings.observe("restore1_start_ready", restore1_ready);
     let recapture_request = Instant::now();
-    recapture.capture_checkpoint_until(checkpoint_deadline()).unwrap();
+    recapture.checkpoint("recapture after first restore");
     timings.observe("recapture_request_return", recapture_request);
     let recapture_wait = Instant::now();
-    assert_eq!(wait_bounded(&recapture, "daily-dev recapture").guest_status, 0);
+    assert_eq!(recapture.wait("daily-dev recapture").guest_status, 0);
     wait_for_exact_process_reap(executable);
     timings.observe("recapture_wait_reap", recapture_wait);
 
@@ -1646,12 +1648,13 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
         )
         .unwrap(),
     );
-    restore.start().unwrap();
-    wait_for_running_marker(&restore, &output_path, "CYCLE 2 progress=");
+    let mut restore = RestoreGateEngine::new(restore, executable);
+    restore.start("second restore launch");
+    restore.wait_marker(&output_path, "CYCLE 2 progress=", "second restore ready");
     timings.observe("restore2_start_ready", restore2_ready);
     let final_shutdown = Instant::now();
     std::fs::write(directory.path().join("stop"), []).unwrap();
-    assert_eq!(wait_bounded(&restore, "final daily-dev restore").guest_status, 0);
+    assert_eq!(restore.wait("final daily-dev restore").guest_status, 0);
     wait_for_exact_process_reap(executable);
     timings.observe("final_shutdown_reap", final_shutdown);
 
@@ -1693,6 +1696,99 @@ fn daily_dev_round_trip(isa: GuestIsa, executable: &Path, fixture_compile: Durat
         progress[1]
     );
     timings.finish();
+}
+
+struct RestoreGateEngine<'a> {
+    engine: Arc<Engine>,
+    executable: &'a Path,
+    waiter: Option<std::thread::JoinHandle<Result<hl_engine::engine::EngineExit, EngineError>>>,
+}
+
+impl<'a> RestoreGateEngine<'a> {
+    fn new(engine: Arc<Engine>, executable: &'a Path) -> Self {
+        Self {
+            engine,
+            executable,
+            waiter: None,
+        }
+    }
+
+    fn start(&mut self, context: &str) {
+        self.engine
+            .start()
+            .unwrap_or_else(|error| panic!("{context}: {error:?}; cleanup={}", self.cleanup()));
+        let engine = self.engine.clone();
+        self.waiter = Some(std::thread::spawn(move || engine.wait()));
+    }
+
+    fn wait_marker(&mut self, path: &Path, marker: &str, context: &str) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let output = std::fs::read_to_string(path).unwrap_or_default();
+            if output.contains(marker) {
+                return;
+            }
+            if self.waiter.as_ref().is_some_and(std::thread::JoinHandle::is_finished) {
+                let result = self.join_waiter();
+                panic!("{context}: guest exited before {marker}: {result:?}\n{output}");
+            }
+            if Instant::now() >= deadline {
+                panic!("{context}: guest did not publish {marker}; cleanup={}\n{output}", self.cleanup());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn checkpoint(&mut self, context: &str) {
+        if let Err(error) = self.engine.capture_checkpoint_until(checkpoint_deadline()) {
+            panic!("{context}: {error:?}; cleanup={}", self.cleanup());
+        }
+    }
+
+    fn wait(&mut self, context: &str) -> hl_engine::engine::EngineExit {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !self.waiter.as_ref().is_some_and(std::thread::JoinHandle::is_finished) {
+            if Instant::now() >= deadline {
+                panic!("{context}: wait timed out; cleanup={}", self.cleanup());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        self.join_waiter()
+            .unwrap_or_else(|error| panic!("{context}: {error:?}; survivors={}", self.survivors()))
+    }
+
+    fn join_waiter(&mut self) -> Result<hl_engine::engine::EngineExit, EngineError> {
+        self.waiter
+            .take()
+            .expect("started gate engine owns a waiter")
+            .join()
+            .unwrap_or(Err(EngineError::LaunchFailed))
+    }
+
+    fn cleanup(&mut self) -> String {
+        let stop = self.engine.stop(StopRequest::Force);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while self.waiter.as_ref().is_some_and(|waiter| !waiter.is_finished()) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let wait = self.waiter.as_ref().is_some_and(std::thread::JoinHandle::is_finished).then(|| self.join_waiter());
+        format!("stop={stop:?} wait={wait:?} survivors={}", self.survivors())
+    }
+
+    fn survivors(&self) -> String {
+        format!("{:?}", process_ids_for_executable(self.executable))
+    }
+}
+
+impl Drop for RestoreGateEngine<'_> {
+    fn drop(&mut self) {
+        if self.waiter.is_some() {
+            let cleanup = self.cleanup();
+            if self.waiter.is_some() || !process_ids_for_executable(self.executable).is_empty() {
+                eprintln!("amd64 checkpoint gate cleanup incomplete: {cleanup}");
+            }
+        }
+    }
 }
 
 fn shared_state_round_trip(isa: GuestIsa, executable: &Path, expected: &str) {
