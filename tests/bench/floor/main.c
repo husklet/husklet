@@ -11,6 +11,10 @@
 //   child K     K raw getpid syscalls, then _exit. Subtracting `spawn N 0` from
 //               `spawn N K` leaves N*K crossings and nothing else, so the
 //               per-crossing cost is a slope.
+//   image N P   fork + execve(P) + wait4, N times, where P is a DYNAMICALLY linked
+//               image. The exec path walks /proc/self/fd once per image, and a
+//               dynamic guest carries a second image -- its PT_INTERP loader --
+//               so a change to that walk shows here and barely shows in `spawn`.
 //   spin S      Pure guest arithmetic. No fork, no execve, no syscall inside the
 //               timed region. This is the control phase for any change to the
 //               host-side exec path: such a change cannot reach it.
@@ -114,6 +118,34 @@ static int spawn(const char *self, unsigned long long count, const char *syscall
     return 0;
 }
 
+// The victim is named rather than re-executed from /proc/self/exe: this phase exists to
+// exec an image the driver itself is not, namely a dynamically linked one. Its argument is
+// inert for the images used here (`true` is a busybox applet and an argument /bin/true
+// ignores), so the child's own work stays at zero and the phase measures exec alone.
+static int image(unsigned long long count, const char *victim) {
+    char *const arguments[] = {(char *)victim, (char *)"true", NULL};
+    char *const environment[] = {NULL};
+    unsigned long long completed = 0;
+    long long start = micros();
+    for (unsigned long long index = 0; index < count; index++) {
+        pid_t child_pid = fork();
+        if (child_pid == 0) {
+            execve(victim, arguments, environment);
+            _exit(errno & 0x7f);
+        }
+        if (child_pid < 0) {
+            return 72;
+        }
+        int status = 0;
+        if (waitpid(child_pid, &status, 0) != child_pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            return 73;
+        }
+        completed++;
+    }
+    phase("image", micros() - start, completed);
+    return 0;
+}
+
 static int child(unsigned long long syscalls) {
     for (unsigned long long index = 0; index < syscalls; index++) {
         syscall(SYS_getpid);
@@ -135,7 +167,7 @@ static int spin(unsigned long long iterations) {
 
 int main(int count, char **arguments) {
     if (count < 3) {
-        put("usage: floor spawn <count> <syscalls> | floor child <syscalls> | floor spin <iterations>\n");
+        put("usage: floor spawn <count> <syscalls> | floor image <count> <path> | floor child <syscalls> | floor spin <iterations>\n");
         return 64;
     }
     const char *mode = arguments[1];
@@ -144,6 +176,12 @@ int main(int count, char **arguments) {
             return 64;
         }
         return spawn(arguments[0], parse(arguments[2]), arguments[3]);
+    }
+    if (mode[0] == 'i') {
+        if (count < 4) {
+            return 64;
+        }
+        return image(parse(arguments[2]), arguments[3]);
     }
     if (mode[0] == 'c') {
         return child(parse(arguments[2]));

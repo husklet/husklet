@@ -30,6 +30,12 @@ use std::{
 /// Arms are ordered base-first; the schedule rotates and reverses them per round.
 const ARMS: [Arm; 3] = [Arm::Native, Arm::Engine, Arm::EngineNull];
 
+/// A candidate run answers a different question -- one engine build against another -- so the
+/// bare-host baseline is not one of its arms. Both arms are engines, and the null arm's job of
+/// bounding the resolution is done instead by the control phase and by the two arms differing
+/// only in the `.so` beside an identical worker.
+const CANDIDATE_ARMS: [Arm; 2] = [Arm::Engine, Arm::EngineCandidate];
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum Arm {
     /// The bare host kernel running the identical static guest image. The baseline.
@@ -40,6 +46,9 @@ pub(super) enum Arm {
     /// `Engine` is the measured floor of what this harness can resolve: an effect
     /// smaller than the null arm's spread is not evidence.
     EngineNull,
+    /// A second engine build, given as `--engine-candidate`. Present only in a candidate run,
+    /// where it replaces both `Native` and `EngineNull`.
+    EngineCandidate,
 }
 
 impl Arm {
@@ -48,6 +57,7 @@ impl Arm {
             Self::Native => "native",
             Self::Engine => "engine",
             Self::EngineNull => "engine-null",
+            Self::EngineCandidate => "engine-candidate",
         }
     }
 }
@@ -62,6 +72,16 @@ pub(crate) struct Options {
     /// identity that gets hashed.
     #[arg(long)]
     engine: PathBuf,
+    /// A second engine worker to measure `--engine` against. Given it, the run compares the two
+    /// engine builds directly and drops the native and null arms; its sibling
+    /// `libhl_native_engine.so` is hashed beside the first, because the workers are identical.
+    #[arg(long)]
+    engine_candidate: Option<PathBuf>,
+    /// A dynamically linked victim, already inside the rootfs, named by its guest-visible path.
+    /// It adds an `image` phase: a dynamic guest carries a program interpreter as a second exec
+    /// image, which the static driver does not, so the exec path does strictly more work for it.
+    #[arg(long)]
+    dynamic_victim: Option<String>,
     /// Static guest driver built from `tests/bench/floor/main.c`.
     #[arg(long)]
     guest: PathBuf,
@@ -131,12 +151,27 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
     fs::create_dir_all(options.rootfs.join("bin"))?;
     fs::copy(&options.guest, &staged)?;
 
-    let identity = format!(
+    let mut identity = format!(
         "engine-library={}\nengine-worker={}\nguest={}\n",
         artifact_identity(&library)?,
         artifact_identity(&options.engine)?,
         artifact_identity(&staged)?
     );
+    if let Some(candidate) = &options.engine_candidate {
+        let candidate_library = engine_library(candidate)?;
+        identity.push_str(&format!(
+            "candidate-library={}\ncandidate-worker={}\n",
+            artifact_identity(&candidate_library)?,
+            artifact_identity(candidate)?
+        ));
+        if artifact_identity(&candidate_library)? == artifact_identity(&library)? {
+            return Err(
+                "the two arms carry the same libhl_native_engine.so: there is nothing to compare"
+                    .to_owned()
+                    .into(),
+            );
+        }
+    }
 
     let held = Measurement::acquire(options.quiet_seconds, options.lock_timeout, options.max_load);
     let lock = match &held {
@@ -147,7 +182,7 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
 
     let mut samples = Samples(BTreeMap::new());
     for round in 0..options.rounds {
-        for arm in schedule(round) {
+        for arm in schedule(round, &arms(&options)) {
             for (phase, arguments) in phases(&options) {
                 let micros = measure(arm, &options, &arguments)?;
                 samples.record(arm, phase, micros);
@@ -166,10 +201,22 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
 /// Rotate the arm order by the round, and reverse it on odd rounds. A fixed order
 /// survives pinning, minima and per-arm verification, and still inflates whichever arm
 /// runs last by about 4% on this box.
-fn schedule(round: u64) -> Vec<Arm> {
-    let count = ARMS.len() as u64;
+fn arms(options: &Options) -> Vec<Arm> {
+    if options.engine_candidate.is_some() {
+        CANDIDATE_ARMS.to_vec()
+    } else {
+        ARMS.to_vec()
+    }
+}
+
+fn schedule(round: u64, arms: &[Arm]) -> Vec<Arm> {
+    let count = arms.len() as u64;
+    // Rotate on every second round, reverse on the odd ones. Rotating every round instead
+    // cancels against the reversal at two arms -- `[base, cand]` rotated once and reversed is
+    // `[base, cand]` again -- so a two-arm candidate run would have held a fixed order while
+    // looking balanced, which is exactly the failure this schedule exists to prevent.
     let mut order: Vec<Arm> = (0..count)
-        .map(|index| ARMS[usize::try_from((index + round) % count).expect("arm index fits")])
+        .map(|index| arms[usize::try_from((index + round / 2) % count).expect("arm index fits")])
         .collect();
     if !round.is_multiple_of(2) {
         order.reverse();
@@ -179,7 +226,7 @@ fn schedule(round: u64) -> Vec<Arm> {
 
 /// Every phase this harness knows how to run. All of them are reported, always.
 fn phases(options: &Options) -> Vec<(&'static str, Vec<String>)> {
-    vec![
+    let mut rows = vec![
         // Fixed per-process cost: fork + execve + wait of a static guest whose child
         // issues no syscalls at all beyond its own exit.
         ("proc", vec!["spawn".into(), options.execs.to_string(), "0".into()]),
@@ -192,7 +239,12 @@ fn phases(options: &Options) -> Vec<(&'static str, Vec<String>)> {
         // Control: pure guest arithmetic, no fork, no execve, no syscall in the timed
         // region. Nothing in the host-side exec path can reach it.
         ("spin", vec!["spin".into(), options.spin.to_string()]),
-    ]
+    ];
+    if let Some(victim) = &options.dynamic_victim {
+        // Kept last so the static phases stay comparable with a run that did not ask for it.
+        rows.push(("image", vec!["image".into(), options.execs.to_string(), victim.clone()]));
+    }
+    rows
 }
 
 fn measure(arm: Arm, options: &Options, arguments: &[String]) -> Result<u64, Error> {
@@ -202,8 +254,16 @@ fn measure(arm: Arm, options: &Options, arguments: &[String]) -> Result<u64, Err
             command.args(arguments);
             command
         }
-        Arm::Engine | Arm::EngineNull => {
-            let mut command = Command::new(&options.engine);
+        Arm::Engine | Arm::EngineNull | Arm::EngineCandidate => {
+            let worker = if arm == Arm::EngineCandidate {
+                options
+                    .engine_candidate
+                    .as_ref()
+                    .ok_or_else(|| Error::from("the candidate arm was scheduled without --engine-candidate"))?
+            } else {
+                &options.engine
+            };
+            let mut command = Command::new(worker);
             command
                 .arg("--rootfs")
                 .arg(&options.rootfs)
@@ -289,11 +349,11 @@ fn report(options: &Options, samples: &Samples, identity: &str, lock: &str, load
         options.rounds, options.execs, options.syscalls, options.spin
     ));
     text.push_str("| phase | arm | total us | derived |\n|---|---|---|---|\n");
-    for arm in ARMS {
+    for arm in arms(options) {
         for (phase, _) in phases(options) {
             let micros = samples.get(arm, phase)?;
             let derived = match phase {
-                "proc" => format!("{:.3} ms/exec", micros as f64 / execs / 1000.0),
+                "proc" | "image" => format!("{:.3} ms/exec", micros as f64 / execs / 1000.0),
                 "proc-loaded" => format!(
                     "{:.1} ns/crossing",
                     (micros as f64 - samples.get(arm, "proc")? as f64) * 1000.0 / crossings
@@ -304,25 +364,33 @@ fn report(options: &Options, samples: &Samples, identity: &str, lock: &str, load
         }
     }
     text.push('\n');
-    let ratio = |arm: Arm, phase: &'static str| -> Result<f64, Error> {
-        Ok(samples.get(arm, phase)? as f64 / samples.get(Arm::Native, phase)? as f64)
+    // Every phase is reported against the run's own reference arm, never a subset: a table that
+    // lists the phases that moved and omits the ones that did not is not evidence.
+    let against = |arm: Arm, reference: Arm| -> Result<String, Error> {
+        let mut row = String::new();
+        for (phase, _) in phases(options) {
+            let ratio = samples.get(arm, phase)? as f64 / samples.get(reference, phase)? as f64;
+            row.push_str(&format!("  {phase} {ratio:.3}"));
+        }
+        Ok(row)
     };
-    text.push_str(&format!(
-        "engine/native  proc {:.2}x  proc-loaded {:.2}x  spin(control) {:.3}x\n",
-        ratio(Arm::Engine, "proc")?,
-        ratio(Arm::Engine, "proc-loaded")?,
-        ratio(Arm::Engine, "spin")?
-    ));
-    let null = |phase: &'static str| -> Result<f64, Error> {
-        Ok(samples.get(Arm::EngineNull, phase)? as f64 / samples.get(Arm::Engine, phase)? as f64)
-    };
-    text.push_str(&format!(
-        "null arm (engine vs engine, same .so)  proc {:.3}  proc-loaded {:.3}  spin {:.3}\n",
-        null("proc")?,
-        null("proc-loaded")?,
-        null("spin")?
-    ));
-    text.push_str("The null arm is the resolution floor: an effect inside its spread is not evidence.\n");
+    if options.engine_candidate.is_some() {
+        text.push_str(&format!(
+            "candidate/base (two engine builds, identical worker){}\n",
+            against(Arm::EngineCandidate, Arm::Engine)?
+        ));
+        text.push_str(
+            "`spin` is the control: the exec path cannot reach it, so a candidate effect it also \
+             shows is the harness, not the change.\n",
+        );
+    } else {
+        text.push_str(&format!("engine/native{}\n", against(Arm::Engine, Arm::Native)?));
+        text.push_str(&format!(
+            "null arm (engine vs engine, same .so){}\n",
+            against(Arm::EngineNull, Arm::Engine)?
+        ));
+        text.push_str("The null arm is the resolution floor: an effect inside its spread is not evidence.\n");
+    }
     Ok(text)
 }
 
@@ -344,7 +412,7 @@ mod tests {
         // runs last collects a uniform inflation that no other precaution detects.
         let mut positions = std::collections::BTreeMap::new();
         for round in 0..6 {
-            for (position, arm) in schedule(round).into_iter().enumerate() {
+            for (position, arm) in schedule(round, &super::ARMS).into_iter().enumerate() {
                 positions.entry(arm).or_insert_with(Vec::new).push(position);
             }
         }
@@ -359,7 +427,23 @@ mod tests {
                 );
             }
         }
-        assert_ne!(schedule(0), schedule(1), "round order never reversed");
+        assert_ne!(
+            schedule(0, &super::ARMS),
+            schedule(1, &super::ARMS),
+            "round order never reversed"
+        );
+    }
+
+    #[test]
+    fn a_candidate_run_still_balances_its_two_engine_arms() {
+        for round in 0..4 {
+            assert_eq!(schedule(round, &super::CANDIDATE_ARMS).len(), 2);
+        }
+        assert_ne!(
+            schedule(0, &super::CANDIDATE_ARMS),
+            schedule(1, &super::CANDIDATE_ARMS),
+            "candidate arm order never reversed"
+        );
     }
 
     #[test]
