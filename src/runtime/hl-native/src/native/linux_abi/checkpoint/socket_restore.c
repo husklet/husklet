@@ -1010,7 +1010,8 @@ static void ckpt_restore_proc_run(int gpid); // fwd
 // resumes. Records the checkpoint-gpid -> live-hostpid mapping so this process's guest pids resolve.
 static void ckpt_fork_children(int gpid, struct cpu *parent) {
     for (int i = 0; i < g_nrprocs; i++) {
-        if (!g_rprocs[i].viable || g_rprocs[i].ppid != gpid || g_rprocs[i].gpid == gpid) continue;
+        if (!g_rprocs[i].viable || ckpt_restore_parent_gpid(&g_rprocs[i]) != gpid || g_rprocs[i].gpid == gpid)
+            continue;
         int cg = g_rprocs[i].gpid;
         int source = cpu_tid(parent);
         if (!hl_target_task_event(parent, HL_TASK_EVENT_PREPARE_FORK, 0, (uint64_t)source, 0)) {

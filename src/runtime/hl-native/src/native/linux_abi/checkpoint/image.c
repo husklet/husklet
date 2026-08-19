@@ -854,11 +854,33 @@ static int ckpt_dump_pages(struct ckpt_sink *sink, struct ckpt_sink_stream *f, s
 // This process's guest identity (pid / parent / group / session), mapped from host ids to guest space (the
 // container init's real host pid/group/session all read back as 1). getppid()==g_init_hostpid means "child
 // of init"; a host pgid/sid equal to g_init_hostpid is the container's own group/session (guest 1).
-static int ckpt_self_identity(struct ckpt_meta *m) {
+//
+// `gpid` is read back from the group this image is being filed under, not recomputed: container_pid() is
+// 1 for EVERY launch top (target/{aarch64,x86_64}.c set g_init_hostpid = getpid() per launch and
+// container/state.c folds it to 1), so a container exec session recorded self_gpid = 1 while its group was
+// named proc.<host pid>, and ckpt_validate_proc_tree rejected the whole image before the first fork.
+//
+// That same fold makes every g_init_hostpid comparison below fire on an exec session's OWN identity, which
+// is why they are gated on `domain_root`: an exec top's pgid and sid are its own, not the container init's.
+static int ckpt_self_identity(struct ckpt_meta *m, int gpid) {
     hl_host_process_info process;
-    int self = container_pid();
-    m->self_gpid = self;
-    if (self == 1) {
+    if (gpid <= 0) return -1;
+    // A launch top that is not the container init is a container exec session: hl-container forks it out of
+    // its own daemon, so its host parent is outside the container and it has no guest parent at all.
+    int domain_root = gpid != 1 && container_pid() == 1;
+    m->self_gpid = gpid;
+    m->domain_root_gpid = domain_root ? 1 : 0;
+    if (domain_root) {
+        // No parent, and its OWN process group and session. Measured on Docker 29.1.3: an exec session's
+        // top process reads pid=7 ppid=0 pgrp=7 sid=7 in the container's pid namespace. Its host group and
+        // session belong to the hl-container daemon OUTSIDE the container, so translating them would both
+        // leak a host identity into the image and name a session leader no member of the image restores.
+        m->ppid_gpid = 0;
+        m->pgid_gpid = gpid;
+        m->sid_gpid = gpid;
+        return 0;
+    }
+    if (gpid == 1) {
         m->ppid_gpid = 0;
     } else {
         int pp = getppid();
@@ -1074,7 +1096,7 @@ static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
     m.stack_lo = g_stack_lo;
     m.stack_hi = g_stack_hi;
     m.n_fds = (uint64_t)nfd;
-    if (ckpt_self_identity(&m) != 0) goto done; // common cleanup: frees fdrecs and reports the abort
+    if (ckpt_self_identity(&m, ckpt_group_gpid(group)) != 0) goto done; // common cleanup: frees fdrecs and reports the abort
     snprintf(m.exe_path, sizeof m.exe_path, "%s", g_exe_path ? g_exe_path : "");
     for (int s = 0; s < 65; s++) { // capture this process's guest signal dispositions (restored on thaw)
         m.sig_handler[s] = g_sigact[s].handler;
