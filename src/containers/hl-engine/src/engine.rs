@@ -116,7 +116,25 @@ pub enum EngineError {
     StopFailed,
     NativeStopFailed(i32),
     Synchronization,
+    /// The launch selected a sandbox policy the checkpoint engine cannot capture under.
+    ///
+    /// `HL_UNTRUSTED` moves every host-authority object (open files, sockets, pipes) into the
+    /// sentry process, so the worker's own descriptor table no longer describes the guest and the
+    /// capture path refuses. Unlike the transient refusals a checkpoint preflight retries, this
+    /// one is a property of the launch and cannot become supported while the guest is running.
+    CheckpointUnsupportedUnderSandbox,
     Unsupported,
+}
+
+impl EngineError {
+    /// Whether re-asking would ever produce a different answer.
+    ///
+    /// A checkpoint preflight polls until its deadline, which turns a permanent refusal into a
+    /// full-timeout stall reported as an opaque preflight failure. A permanent refusal must be
+    /// surfaced on the first observation instead.
+    pub fn is_permanent_refusal(self) -> bool {
+        matches!(self, Self::CheckpointUnsupportedUnderSandbox | Self::Unsupported)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

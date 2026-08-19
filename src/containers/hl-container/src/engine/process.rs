@@ -151,6 +151,11 @@ impl Running for Process {
                         .capture_checkpoint_until(deadline.into_std())
                         .map_err(|error| Error::Runtime(format!("engine checkpoint: {error:?}")));
                 }
+                // A permanent refusal (an unsupported sandbox policy) never becomes supported by
+                // waiting; polling it to the deadline would report a 30s stall instead of a cause.
+                Err(error) if error.is_permanent_refusal() => {
+                    return Err(Error::Runtime(format!("engine checkpoint unsupported: {error:?}")));
+                }
                 Err(_) if tokio::time::Instant::now() < deadline => {
                     tokio::time::sleep(std::time::Duration::from_millis(1)).await;
                 }

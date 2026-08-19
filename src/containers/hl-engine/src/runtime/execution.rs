@@ -274,6 +274,9 @@ impl GuestMachine for ProductionMachine {
     }
 
     fn checkpoint_supported(&self) -> Result<(), EngineError> {
+        if let Some(refusal) = checkpoint_sandbox_refusal(&self.plan.options) {
+            return Err(refusal);
+        }
         #[cfg(unix)]
         if self.checkpoint.is_some() {
             return Ok(());
@@ -288,6 +291,9 @@ impl GuestMachine for ProductionMachine {
     fn capture_checkpoint_until(&self, deadline: std::time::Instant) -> Result<(), EngineError> {
         #[cfg(not(unix))]
         let _ = deadline;
+        if let Some(refusal) = checkpoint_sandbox_refusal(&self.plan.options) {
+            return Err(refusal);
+        }
         #[cfg(unix)]
         if let Some(checkpoint) = &self.checkpoint {
             let engine = self.current()?;
@@ -295,6 +301,22 @@ impl GuestMachine for ProductionMachine {
         }
         Err(EngineError::Unsupported)
     }
+}
+
+/// Classify a launch that the checkpoint engine cannot capture under.
+///
+/// `HL_UNTRUSTED` forks the sentry and routes every host-authority syscall through it, so the
+/// worker process that would dump itself does not own the descriptors, sockets or pipes the guest
+/// sees; `ckpt_dump_self_locked` refuses on that gate. Capturing under the sentry requires the
+/// sentry to participate in capture and restore -- exporting its descriptor table, open-file
+/// descriptions and connection state across the control ring -- which is not implemented.
+///
+/// Reporting it here rather than as a bare native failure keeps the refusal on the launch-policy
+/// boundary that owns the option, and makes it permanent so a preflight does not poll for it.
+fn checkpoint_sandbox_refusal(options: &crate::options::Options) -> Option<EngineError> {
+    options
+        .get_bytes("HL_UNTRUSTED")
+        .map(|_| EngineError::CheckpointUnsupportedUnderSandbox)
 }
 
 fn native_run_failure(status: i32) -> EngineError {
@@ -567,7 +589,11 @@ impl CheckpointPhaseLedger {
         // SAFETY: the test harness owns this inherited append-only descriptor for
         // the subprocess lifetime; the bounded record is borrowed for one write.
         let written = unsafe { libc::write(descriptor, record.as_ptr().cast(), record.len()) };
-        assert_eq!(written, isize::try_from(record.len()).unwrap(), "checkpoint phase ledger write");
+        assert_eq!(
+            written,
+            isize::try_from(record.len()).unwrap(),
+            "checkpoint phase ledger write"
+        );
     }
 }
 
@@ -866,5 +892,29 @@ mod tests {
             .begin_recovery(27, std::time::Instant::now() + std::time::Duration::from_secs(1))
             .expect("dropping an unwaited poisoned admission must release its recovery transaction");
         server.abort_recovery(retry).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod sandbox_refusal_tests {
+    use super::*;
+
+    /// `Sandbox::SentryOnly` is the container default, so this is the ordinary launch. A checkpoint
+    /// of it must refuse with a cause the product can show, not with a bare native failure, and the
+    /// refusal must be permanent so the checkpoint preflight reports it instead of polling for 30s.
+    #[test]
+    fn a_sentry_launch_is_refused_permanently_with_its_own_cause() {
+        let mut options = crate::options::Options::default();
+        options.set("HL_UNTRUSTED", "1", true).unwrap();
+        assert_eq!(
+            checkpoint_sandbox_refusal(&options),
+            Some(EngineError::CheckpointUnsupportedUnderSandbox)
+        );
+        assert!(EngineError::CheckpointUnsupportedUnderSandbox.is_permanent_refusal());
+    }
+
+    #[test]
+    fn a_launch_without_the_sentry_is_not_refused_by_policy() {
+        assert_eq!(checkpoint_sandbox_refusal(&crate::options::Options::default()), None);
     }
 }

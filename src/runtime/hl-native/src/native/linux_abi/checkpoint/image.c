@@ -879,8 +879,15 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir) {
 }
 
 static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
+    // HL_UNTRUSTED routes every host-authority object through the sentry process, so this worker's
+    // descriptor table does not describe the guest: ckpt_scan_fds would capture sentry-relative
+    // handles that no restore can rebuild. Capturing under the sentry requires the sentry to export
+    // its descriptor table, open-file descriptions and connection state across the control ring,
+    // which is not implemented. hl-engine classifies this launch as
+    // EngineError::CheckpointUnsupportedUnderSandbox before dispatch, so reaching here means the
+    // gate was bypassed; refuse with a named cause rather than a bare failure.
     if (g_untrusted) {
-        fprintf(stderr, "[ckpt] refuse: sentry/untrusted split is P3\n");
+        fprintf(stderr, "[ckpt] refuse: checkpoint unsupported under the sentry sandbox policy (HL_UNTRUSTED)\n");
         return -1;
     }
     struct ckpt_sink *sink = ckpt_sink_current();
