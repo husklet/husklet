@@ -138,6 +138,17 @@ impl ProductionMachine {
             .map(|(name, value)| Ok((CString::new(name)?, CString::new(value)?)))
             .collect::<Result<Vec<_>, std::ffi::NulError>>()
             .map_err(|_| EngineError::LaunchFailed)?;
+        // Name the coordinator on the launch boundary. Only a machine holding a CheckpointControl can be
+        // sent REQUEST_CHECKPOINT, so this is exactly "the embedder will ask THIS engine to capture"; a
+        // domain member carries a channel and no Server. The engine's election reads it instead of asking
+        // whether it is the top of a launch, which every exec session also is.
+        #[cfg(unix)]
+        if self.checkpoint.is_some() {
+            options.push((
+                CString::new("HL_CHECKPOINT_COORDINATOR").expect("literal"),
+                CString::new("1").expect("literal"),
+            ));
+        }
         options.push((
             CString::new("HL_GUEST_ENV").expect("literal"),
             CString::new(self.encode_environment()).map_err(|_| EngineError::LaunchFailed)?,

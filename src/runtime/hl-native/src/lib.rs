@@ -160,6 +160,18 @@ pub fn checkpoint_restore_claim_test(isa: u32, scenario: u32) -> Result<(), i32>
     bindings::checkpoint_restore_claim_test(isa, scenario)
 }
 
+/// Exercise coordinator election: with one trigger word and one broker serving a whole process domain,
+/// exactly one process may coordinate and every other must commit a group of its own under the name the
+/// coordinator waits for.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn checkpoint_election_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    // The hook mutates process-wide checkpoint identity state and the HL_CHECKPOINT_COORDINATOR option.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    bindings::checkpoint_election_test(isa, scenario)
+}
+
 /// Exercise capture membership: whether the coordinator's peer filter admits a container `exec` session --
 /// a SIBLING of guest pid 1 -- and refuses a live process of the same executable that belongs to another
 /// container's process domain or to none.
