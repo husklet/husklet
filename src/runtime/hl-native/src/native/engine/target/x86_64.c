@@ -160,7 +160,6 @@ uint64_t hl_x86_guest_pointer(uint64_t address);
 #include "../../linux_abi/fdcache.h"
 #include "../../linux_abi/container/vfs/gmap.h"
 #include "../../linux_abi/container/owner.h"
-#include "../../linux_abi/container/ownership/ofd_identity.h"
 static uint64_t g_nonpie_lo, g_nonpie_hi, g_nonpie_bias;
 #include "../../translator/guest/x86_64/avx.h"
 static int jit86_avx_memory_read(uint64_t guest, void *destination, size_t length);

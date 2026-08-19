@@ -215,7 +215,6 @@ static int hl_target_credentials_publish(struct cpu *c) {
 #include "../../linux_abi/fdcache.h"
 #include "../../linux_abi/container/vfs/gmap.h"
 #include "../../linux_abi/container/owner.h"
-#include "../../linux_abi/container/ownership/ofd_identity.h"
 
 // code cache + block map + chaining
 #include "../../translator/cache.c"
