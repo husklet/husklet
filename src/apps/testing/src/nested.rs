@@ -43,8 +43,6 @@ struct Chain {
 struct Layer {
     artifact: Artifact,
     guest_isa: GuestIsa,
-    #[serde(default)]
-    options: EngineOptions,
 }
 
 #[derive(Deserialize)]
@@ -126,33 +124,6 @@ impl GuestIsa {
         match self {
             Self::Arm64 => "aarch64",
             Self::Amd64 => "x86_64",
-        }
-    }
-}
-
-#[derive(Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct EngineOptions {
-    #[serde(default)]
-    native_execution: bool,
-    #[serde(default)]
-    native_diagnostics: bool,
-}
-
-impl EngineOptions {
-    fn validate(&self) -> Result<(), Error> {
-        if self.native_diagnostics && !self.native_execution {
-            return Err("native diagnostics require native execution".into());
-        }
-        Ok(())
-    }
-
-    fn append(&self, arguments: &mut Vec<String>) {
-        if self.native_execution {
-            arguments.extend(["--engine-option".into(), "HL_NATIVE_EXECUTION=1".into()]);
-        }
-        if self.native_diagnostics {
-            arguments.extend(["--engine-option".into(), "HL_NATIVE_DIAGNOSTICS=1".into()]);
         }
     }
 }
@@ -320,7 +291,6 @@ impl Workspace {
             chain.expect.stdout.safe_relative()?;
             for layer in &chain.layers {
                 self.validate_artifact(&layer.artifact)?;
-                layer.options.validate()?;
             }
         }
         Ok(document)
@@ -433,7 +403,6 @@ impl Workspace {
             arguments.push(self.root.join(&layer.artifact.path).display().to_string());
             arguments.push("--report-exit".into());
             arguments.extend(["--guest-isa".into(), layer.guest_isa.engine_name().into()]);
-            layer.options.append(&mut arguments);
         }
         arguments.push(self.root.join(&chain.guest.path).display().to_string());
         arguments.extend(chain.arguments.iter().cloned());
@@ -477,20 +446,14 @@ impl Workspace {
             Duration::from_secs(chain.timeout_seconds),
             chain.capture_limit_bytes,
         ) {
-            Ok(captured)
-                if captured.status == Some(chain.expect.exit)
-                    && captured.stdout == expected
-                    && (!chain.layers.iter().any(|layer| layer.options.native_execution)
-                        || String::from_utf8_lossy(&captured.stderr).contains("hl-native-detail:")) =>
-            {
+            Ok(captured) if captured.status == Some(chain.expect.exit) && captured.stdout == expected => {
                 Outcome::Passed
             }
             Ok(captured) => Outcome::Failed(format!(
-                "exit={status:?} expected={}; stdout={} bytes expected={} bytes; native diagnostics required={}; stderr={}",
+                "exit={status:?} expected={}; stdout={} bytes expected={} bytes; stderr={}",
                 chain.expect.exit,
                 captured.stdout.len(),
                 expected.len(),
-                chain.layers.iter().any(|layer| layer.options.native_execution),
                 String::from_utf8_lossy(&captured.stderr).trim(),
                 status = captured.status,
             )),
@@ -518,14 +481,13 @@ mod tests {
     }
 
     #[test]
-    fn typed_options_are_attached_to_the_layer_they_configure() {
+    fn layer_isa_selection_is_attached_to_the_layer_it_configures() {
         let chain: Chain = serde_yaml::from_str(
             r"
 id: arm-amd
 layers:
   - artifact: { path: outer }
     guest_isa: arm64
-    options: { native_execution: true, native_diagnostics: true }
   - artifact: { path: inner }
     guest_isa: amd64
 guest: { path: hello }
@@ -538,21 +500,18 @@ expect: { exit: 42, stdout: hello.txt }
         }
         .command(&chain);
         assert_eq!(
-            &arguments[..8],
+            arguments,
             [
                 "/tree/outer",
                 "--report-exit",
                 "--guest-isa",
                 "aarch64",
-                "--engine-option",
-                "HL_NATIVE_EXECUTION=1",
-                "--engine-option",
-                "HL_NATIVE_DIAGNOSTICS=1"
+                "/tree/inner",
+                "--report-exit",
+                "--guest-isa",
+                "x86_64",
+                "/tree/hello"
             ]
-        );
-        assert_eq!(
-            &arguments[8..],
-            ["/tree/inner", "--report-exit", "--guest-isa", "x86_64", "/tree/hello"]
         );
     }
 

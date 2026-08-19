@@ -91,36 +91,6 @@ const DEFINITIONS: &[Definition] = &[
     launch!("HL_NET_ISOLATE", "disable guest external networking", Flag),
     launch!("HL_NET_HOST", "use the host network stack directly", Flag),
     launch!(
-        "HL_NATIVE_ADMISSION_CACHE",
-        "reuse the previous native admission across consecutive inline services",
-        Flag
-    ),
-    launch!(
-        "HL_NATIVE_DIRECT_STICKY",
-        "use sticky run-mode flip scoring before a bounded direct hold",
-        Flag
-    ),
-    launch!(
-        "HL_NATIVE_DIRECT_STICKY_LIMIT",
-        "run-mode flip budget the sticky hold is taken at",
-        Text
-    ),
-    launch!(
-        "HL_NATIVE_DIRECT_HOLD_RUNS",
-        "base-budget resolver-run equivalents a bounded direct hold must serve",
-        Integer
-    ),
-    launch!(
-        "HL_NATIVE_DIRECT_STICKY_PERMANENT",
-        "never return direct authority to a process that alternated run mode",
-        Flag
-    ),
-    launch!(
-        "HL_NATIVE_SPLIT_MODE_EXECUTORS",
-        "use separate lazy aarch64 native executors for resolver and direct modes",
-        Flag
-    ),
-    launch!(
         "HL_A64_DIRTY_OVERFLOW_CONTINUE",
         "compatibility request to continue aarch64 native execution after dirty-journal saturation",
         Flag
@@ -146,11 +116,6 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     launch!(
-        "HL_NATIVE_DIAGNOSTICS",
-        "report native execution counters at launch exit",
-        Flag
-    ),
-    launch!(
         "HL_C_DIAGNOSTICS",
         "report retained C translation and dispatch phase counters at launch exit",
         Flag
@@ -168,11 +133,6 @@ const DEFINITIONS: &[Definition] = &[
     internal!(
         "HL_C_NO_RUNTIME_IDENTITY",
         "disable Rust-owned retained-C task identity for same-binary measurement",
-        Flag
-    ),
-    launch!(
-        "HL_NATIVE_EXECUTION",
-        "enable the bounded native execution adapter",
         Flag
     ),
     launch!("HL_PCACHE", "enable persistent translated-code caching", Flag),
@@ -343,17 +303,26 @@ mod tests {
     }
 
     #[test]
-    fn split_mode_executors_is_an_explicit_launch_option() {
-        let definition = DEFINITIONS
-            .iter()
-            .find(|definition| definition.name == "HL_NATIVE_SPLIT_MODE_EXECUTORS")
-            .unwrap();
-        assert_eq!(definition.shape, Shape::Flag);
-
-        let mut options = Options::default();
-        assert_eq!(options.get(definition.name), None);
-        options.set(definition.name, "1", true).unwrap();
-        assert_eq!(options.get(definition.name), Some("1"));
+    fn retired_native_executor_options_are_not_registered() {
+        // The Rust native executor these named was deleted; the C engine's authoritative registry
+        // (src/runtime/hl-native/src/native/engine/options.c) never defined them, so accepting them
+        // would promise a launch effect no layer implements.
+        for name in [
+            "HL_NATIVE_EXECUTION",
+            "HL_NATIVE_DIAGNOSTICS",
+            "HL_NATIVE_ADMISSION_CACHE",
+            "HL_NATIVE_DIRECT_STICKY",
+            "HL_NATIVE_DIRECT_STICKY_LIMIT",
+            "HL_NATIVE_DIRECT_HOLD_RUNS",
+            "HL_NATIVE_DIRECT_STICKY_PERMANENT",
+            "HL_NATIVE_SPLIT_MODE_EXECUTORS",
+        ] {
+            assert!(
+                !DEFINITIONS.iter().any(|definition| definition.name == name),
+                "{name} is registered but nothing consumes it"
+            );
+            assert!(Options::default().set(name, "1", true).is_err(), "{name} was accepted");
+        }
     }
 
     #[test]

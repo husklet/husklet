@@ -28,9 +28,6 @@ chains:
             binary: hl-engine
             rustflags: [-Ctarget-feature=+crt-static]
         guest_isa: arm64
-        options:
-          native_execution: true
-          native_diagnostics: true
     guest:
       path: target/testing/runtime/abi-core/arm64/hello
     timeout_seconds: 120
