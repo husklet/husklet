@@ -3,6 +3,7 @@
 mod calibration;
 mod definition;
 mod evidence;
+mod floor;
 mod ledger;
 mod options;
 mod schedule;
@@ -32,6 +33,7 @@ pub(crate) struct HashOptions {
 }
 
 pub(crate) use calibration::Options as CalibrationOptions;
+pub(crate) use floor::Options as FloorOptions;
 pub(crate) use stage::Options as StageOptions;
 
 pub(crate) fn hash(options: HashOptions) -> Result<(), Error> {
@@ -41,6 +43,10 @@ pub(crate) fn hash(options: HashOptions) -> Result<(), Error> {
 
 pub(crate) fn stage(options: StageOptions) -> Result<(), Error> {
     stage::run(options)
+}
+
+pub(crate) fn floor(options: FloorOptions) -> Result<(), Error> {
+    floor::run(options)
 }
 
 pub(crate) fn calibrate(options: CalibrationOptions) -> Result<(), Error> {
