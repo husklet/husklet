@@ -241,6 +241,11 @@ static int svc_fcntl_get_flags(struct cpu *c, int descriptor, uint64_t argument,
             // fd opened (or F_SETFL'd) O_DIRECT round-trips instead of being silently dropped.
             if (r & O_DIRECT) lf |= G_O_DIRECT;
 #endif
+            // Synchronised-I/O status flags round-trip from the real host fd, mirroring O_DIRECT
+            // above; without this an fd opened O_DSYNC read back as a plain fd, so a guest could not
+            // even verify the barrier it asked for. F_SETFL deliberately does NOT forward them: Linux
+            // cannot change O_DSYNC/O_SYNC through F_SETFL either (fcntl(2), BUGS). See guest_sync.h.
+            lf |= hl_host_sync_guest_flags(r);
             // eventfd: the host read end is kept permanently O_NONBLOCK internally, so report the guest's
             // OWN blocking/non-blocking intent (g_eventfd_gnb), not the host flag. See vfs.c g_eventfd_gnb.
             if ((int)a0 >= 0 && (int)a0 < HL_NFD && g_eventfd_peer[(int)a0]) {

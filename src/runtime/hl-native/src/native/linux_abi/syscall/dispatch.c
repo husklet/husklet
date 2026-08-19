@@ -22,6 +22,7 @@ int g_rwx_guest;
 #include "../host_dirent.h" // <dirent.h>, or the Linux dirent shape where the host structure has no d_type
 #include <stdlib.h>
 #include "../host_proc.h" // times(2): CPU accounting (struct tms is layout-compatible with Linux)
+#include "../guest_sync.h"
 #include "../host_fs.h"   // host struct statfs -> translated to the Linux statfs layout
 #include <time.h>         // sysinfo(2) uptime = now - host boot time
 #include "../errno.h"
