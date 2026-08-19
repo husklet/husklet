@@ -65,9 +65,26 @@ fn the_bytes_a_drain_removes_are_the_bytes_restore_puts_back_in_order() {
     }
 }
 
+/// THE PRODUCT PROPERTY. A checkpoint refused for a reason that consumes nothing must leave the container
+/// running unharmed. The descriptor set is walked in ascending guest-fd order, so this drives a drainable
+/// pipe holding a payload BELOW a descriptor the scan refuses outright, and asserts what the guest and the
+/// coordinator observe afterwards: every buffered byte still in the pipe, and a disposition that resumes
+/// rather than the terminal `cannot resume: its capture was destructive and was not published`.
+///
+/// Refusals of exactly this shape -- an unsupported socket, a sandbox policy, a missing SysV section -- are
+/// ordinary. Before the admission and consumption passes were separated, every one of them killed the whole
+/// process tree over a policy decision that had destroyed nothing.
+#[test]
+fn a_refusal_that_consumes_nothing_leaves_every_member_resumable() {
+    for isa in [1, 2] {
+        hl_native::checkpoint_pipe_capture_test(isa, 5)
+            .unwrap_or_else(|status| panic!("ISA {isa} refused-capture survival failed at {status}"));
+    }
+}
+
 #[test]
 fn checkpoint_pipe_capture_hook_rejects_unknown_scenarios() {
     for isa in [1, 2] {
-        assert_eq!(hl_native::checkpoint_pipe_capture_test(isa, 5), Err(99));
+        assert_eq!(hl_native::checkpoint_pipe_capture_test(isa, 6), Err(99));
     }
 }

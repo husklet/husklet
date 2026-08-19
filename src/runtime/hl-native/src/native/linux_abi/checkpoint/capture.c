@@ -517,6 +517,46 @@ static uint64_t g_ckpt_release_state = HL_CKPT_RELEASE_RESUME;
 // guest-visible). Until then this flag is what keeps a post-drain abort honest.
 static int g_ckpt_capture_destructive;
 
+// ADMISSION BEFORE CONSUMPTION.
+//
+// ckpt_scan_fds walks the descriptor table in ascending guest-fd order, and every capture arm is both an
+// admission decision and, for a shared kernel object, the consumer of that object. Interleaving the two
+// meant a pipe at fd 3 was DRAINED -- setting g_ckpt_capture_destructive -- before a guaranteed refusal at
+// fd 10 was ever evaluated, so a purely non-destructive policy refusal became terminal for every member of
+// the tree ("cannot resume: its capture was destructive and was not published"). The product property the
+// freeze exists to provide -- an abort before the destructive flag leaves the container running unharmed --
+// was unreachable, because the flag was always set first.
+//
+// So the scan runs twice. This flag is set for the first pass, in which every arm evaluates every gate that
+// can refuse and then stops short of the two things it must not do yet:
+//   - CONSUME: no pipe, signalfd or socket receive queue is read;
+//   - CLAIM or PUBLISH: no image object is claimed or written.
+// The claim election deliberately stays in pass 2. A claim is a first-writer election on an image-wide name,
+// and a claim won in pass 1 by a member that pass 1 then refuses would strand the name for every other
+// holder -- the loser arms return 0 on the assumption that the winner drains, so the object would be
+// published empty or not at all. Election must therefore happen no earlier than the point the capture is
+// committed to running, which is pass 2.
+//
+// Cross-member ordering: pass 1 needs no new barrier. ckpt_dump_self_locked runs entirely inside this
+// member's freeze, and a member whose pass 1 refuses returns -1 from ckpt_dump_self_locked and then PARKS
+// (image.c) exactly as a succeeding member does, holding its freeze until the coordinator's decision. The
+// coordinator's group accounting therefore observes the refusal before it publishes a manifest, and a
+// sibling that has already reached pass 2 is draining under the same freeze. What the split removes is the
+// case the barrier could never have fixed: a member destroying its OWN state for a capture its OWN later
+// gate was always going to refuse.
+static int g_ckpt_admission_only;
+
+// Run a descriptor walk twice: once to prove it admissible with no consumption, and -- only if every gate
+// passed -- once for real. A refusal in the first pass returns before anything has been consumed, claimed
+// or published, which is what makes an abort at that point leave the container unharmed.
+static int ckpt_admit_then_consume(int (*walk)(void *), void *context) {
+    g_ckpt_admission_only = 1;
+    int admitted = walk(context);
+    g_ckpt_admission_only = 0;
+    if (admitted != 0) return -1; // the refusing arm has already reported its own cause
+    return walk(context);
+}
+
 static int ckpt_dump_self(struct cpu *c, const char *group, int park);
 static void ckpt_coordinate_and_exit(struct cpu *c);
 
@@ -685,9 +725,14 @@ static int ckpt_capture_pipe_reason(int fd, uint64_t identity, const char **reas
     if (!cause) cause = &unused_cause;
     *reason = NULL;
     *cause = 0;
+    // Admission pass: everything this pipe can be refused for -- drainability, a valid identity, a readable
+    // capacity -- is decided by the caller before it gets here, and none of it needs a byte to leave the
+    // kernel. Take neither the claim nor the drain until the whole descriptor set has been admitted.
+    if (g_ckpt_admission_only) return 0;
     struct ckpt_sink *sink = ckpt_sink_current();
     char name[128];
     snprintf(name, sizeof name, "pipe.%016llx", (unsigned long long)identity);
+    errno = 0;
     int claimed = ckpt_sink_claim(sink, name);
     if (claimed > 0) {
         // A co-holder of THIS pipe won the election and is draining, or has already drained, the shared
@@ -701,8 +746,15 @@ static int ckpt_capture_pipe_reason(int fd, uint64_t identity, const char **reas
         return 0;
     }
     if (claimed < 0) {
-        *reason = "sink refused the image-wide claim";
+        // A negative claim is TWO different failures and they were reported as one. The sink may have
+        // answered and declined the name (a decision -- errno is whatever an unrelated earlier call left
+        // behind, commonly EPIPE from an interrupt_channels teardown, which printed as "(Broken pipe)" and
+        // read like a defect in the pipe being captured). Or the channel itself failed, in which case errno
+        // is the transport's and worth printing. errno is cleared immediately before the call, so a
+        // still-zero errno means the sink decided rather than the transport broke.
         *cause = errno;
+        *reason = *cause == 0 ? "the sink declined the image-wide claim for this pipe identity"
+                              : "the transport carrying the image-wide claim failed";
         return -1;
     }
     g_ckpt_capture_destructive = 1; // winning the claim makes this process the one that CONSUMES the pipe
@@ -783,6 +835,9 @@ static int ckpt_pipe_capacity(int fd) {
 }
 
 static int ckpt_capture_signalfd(int fd, uint64_t identity) {
+    // Draining a signalfd removes the queued siginfo records from the task, so it belongs to pass 2. The
+    // arm's refusals (slot bounds, a minted identity, the descriptor flags) are all decided by the caller.
+    if (g_ckpt_admission_only) return 0;
     struct ckpt_sink *sink = ckpt_sink_current();
     char name[128];
     snprintf(name, sizeof name, "signalfd.%016llx", (unsigned long long)identity);
@@ -817,6 +872,9 @@ static int ckpt_capture_signalfd(int fd, uint64_t identity) {
 }
 
 static int ckpt_capture_socket_queue(int fd, uint64_t identity, uint32_t type) {
+    // recvmsg(MSG_DONTWAIT) below empties the receive queue, and MSG_PEEK is not an alternative: it installs
+    // a fresh descriptor for every in-flight SCM_RIGHTS. Pass 2 only.
+    if (g_ckpt_admission_only) return 0;
     struct ckpt_sink *sink = ckpt_sink_current();
     char name[128];
     snprintf(name, sizeof name, "socket.%016llx", (unsigned long long)identity);
@@ -930,32 +988,46 @@ static int ckpt_socket_option_int(int fd, int option, int *value) {
 
 static int ckpt_recovery_permissive_requested(void);
 
+// Every way an unpaired socket can be refused, evaluated without claiming a name, publishing a byte, or
+// touching the socket's queues. Pass 1 calls it alone; pass 2 calls it inside the claim so the same
+// decision is re-derived rather than inherited across the two passes.
+static int ckpt_socket_state_admit(int fd, int require_quiescent, int degraded_connection) {
+    if (!require_quiescent || degraded_connection) return 0;
+    if (fd >= 0 && fd < HL_NFD && (g_sock_conn[fd] || g_sock_connecting[fd])) {
+        fprintf(stderr, "[ckpt] refuse: connected/in-progress socket fd %d requires connection-state transfer\n", fd);
+        return -1;
+    }
+    struct sockaddr_storage peer;
+    socklen_t peer_size = sizeof peer;
+    if (getpeername(fd, (struct sockaddr *)&peer, &peer_size) == 0) {
+        fprintf(stderr, "[ckpt] refuse: connected socket fd %d requires connection-state transfer\n", fd);
+        return -1;
+    }
+    struct pollfd readiness = {fd, POLLIN, 0};
+    if (poll(&readiness, 1, 0) < 0 || (readiness.revents & (POLLIN | POLLERR | POLLHUP)) != 0) {
+        fprintf(stderr, "[ckpt] refuse: socket fd %d has pending input/accept/error state\n", fd);
+        return -1;
+    }
+    return 0;
+}
+
+static int ckpt_socket_state_degraded(int fd, int require_quiescent) {
+    return require_quiescent && fd >= 0 && fd < HL_NFD && (g_sock_conn[fd] || g_sock_connecting[fd]) &&
+           ckpt_recovery_permissive_requested(); // capture stays strict unless asked
+}
+
 static int ckpt_capture_socket_state(int fd, uint64_t identity, int require_quiescent) {
+    int degraded_connection = ckpt_socket_state_degraded(fd, require_quiescent);
+    // Admission pass: prove the quiescence gates, take no claim. This arm publishes rather than consumes,
+    // but the claim it takes is an image-wide election that must not be won by a capture pass 1 may still
+    // refuse -- a claimed-then-abandoned name is invisible to every other holder of the same object.
+    if (g_ckpt_admission_only) return ckpt_socket_state_admit(fd, require_quiescent, degraded_connection);
     struct ckpt_sink *sink = ckpt_sink_current();
     char name[128];
     snprintf(name, sizeof name, "socket-state.%016llx", (unsigned long long)identity);
     int claimed = ckpt_sink_claim(sink, name);
     if (claimed != 0) return claimed > 0 ? 0 : -1;
-    struct sockaddr_storage peer;
-    socklen_t peer_size = sizeof peer;
-    int degraded_connection = require_quiescent && fd >= 0 && fd < HL_NFD &&
-                              (g_sock_conn[fd] || g_sock_connecting[fd]) &&
-                              ckpt_recovery_permissive_requested(); // capture stays strict unless asked
-    if (require_quiescent && !degraded_connection && fd >= 0 && fd < HL_NFD &&
-        (g_sock_conn[fd] || g_sock_connecting[fd])) {
-        fprintf(stderr, "[ckpt] refuse: connected/in-progress socket fd %d requires connection-state transfer\n", fd);
-        ckpt_sink_unclaim(sink, name);
-        return -1;
-    }
-    if (require_quiescent && !degraded_connection && getpeername(fd, (struct sockaddr *)&peer, &peer_size) == 0) {
-        fprintf(stderr, "[ckpt] refuse: connected socket fd %d requires connection-state transfer\n", fd);
-        ckpt_sink_unclaim(sink, name);
-        return -1;
-    }
-    struct pollfd readiness = {fd, POLLIN, 0};
-    if (require_quiescent && !degraded_connection &&
-        (poll(&readiness, 1, 0) < 0 || (readiness.revents & (POLLIN | POLLERR | POLLHUP)) != 0)) {
-        fprintf(stderr, "[ckpt] refuse: socket fd %d has pending input/accept/error state\n", fd);
+    if (ckpt_socket_state_admit(fd, require_quiescent, degraded_connection) != 0) {
         ckpt_sink_unclaim(sink, name);
         return -1;
     }
@@ -1036,6 +1108,13 @@ static int ckpt_capture_file_blob(int fd, char *record_path, size_t record_capac
     char destination[1280], temporary[1320];
     struct stat status;
     if (fstat(fd, &status) != 0 || !S_ISREG(status.st_mode) || status.st_size < 0) return -1;
+    // The blob read is non-destructive (pread, no offset change), but it publishes an object under a
+    // pid-and-sequence-unique name, so running it in both passes would emit the file twice. The refusal it
+    // owns -- "this deleted descriptor cannot be persisted" -- is the fstat above, which pass 1 does keep.
+    if (g_ckpt_admission_only) {
+        record_path[0] = '\0';
+        return 0;
+    }
     uint64_t sequence = atomic_fetch_add_explicit(&blob_sequence, 1, memory_order_relaxed) + 1;
     if (snprintf(record_path, record_capacity, "file.%d.%d.%llu", (int)getpid(), fd, (unsigned long long)sequence) >=
         (int)record_capacity)
@@ -1838,6 +1917,31 @@ static int ckpt_pipe_test_buffered(int fd) {
     return ioctl(fd, FIONREAD, &pending) == 0 ? pending : -1;
 }
 
+// A two-descriptor walk in ascending guest-fd order, driven through the SAME production driver
+// ckpt_scan_fds uses: a drainable pipe first, then a descriptor that is refused. The refusal is the real
+// one -- ckpt_capture_native_fd rejects a socket outright -- and it consumes nothing.
+struct ckpt_pipe_test_scan {
+    int pipe_fd;
+    uint64_t identity;
+    int refused_fd;
+};
+
+static int ckpt_pipe_test_scan_pass(void *context) {
+    struct ckpt_pipe_test_scan *walk = context;
+    if (ckpt_capture_pipe_reason(walk->pipe_fd, walk->identity, NULL, NULL) != 0) return -1;
+    hl_host_process_fd detail;
+    char path[512];
+    size_t path_size = 0;
+    if (!hl_host_process_fd_read(getpid(), walk->refused_fd, &detail, path, sizeof(path) - 1, &path_size)) return -1;
+    if (detail.kind == HL_HOST_FD_SOCKET) return -1; // the same arm ckpt_capture_native_fd takes
+    return 0;
+}
+
+static int ckpt_pipe_test_refused_scan(int pipe_fd, uint64_t identity, int refused_fd) {
+    struct ckpt_pipe_test_scan walk = {pipe_fd, identity, refused_fd};
+    return ckpt_admit_then_consume(ckpt_pipe_test_scan_pass, &walk);
+}
+
 HL_API int HL_TARGET_LOCAL(checkpoint_pipe_capture_test)(uint32_t scenario) {
     struct ckpt_sink *saved_sink = ckpt_sink_current();
     int saved_destructive = g_ckpt_capture_destructive;
@@ -1968,6 +2072,41 @@ HL_API int HL_TARGET_LOCAL(checkpoint_pipe_capture_test)(uint32_t scenario) {
         ckpt_source_install(saved_source ? saved_source->ops : NULL);
         if (restored[0] >= 0) close(restored[0]);
         if (restored[1] >= 0) close(restored[1]);
+    } else if (scenario == 5) {
+        // THE PRODUCT PROPERTY: a checkpoint refused for a non-destructive reason leaves the container
+        // running unharmed.
+        //
+        // The descriptor set is walked in ASCENDING guest-fd order, so this fixture puts a drainable pipe
+        // holding a known payload BELOW a descriptor the scan is guaranteed to refuse (a socket, which
+        // ckpt_capture_native_fd refuses outright). Under the old single-pass ordering the pipe was drained
+        // on the way to a refusal that consumed nothing, g_ckpt_capture_destructive latched, and every
+        // member of the tree -- winner and losers alike -- took the terminal `cannot resume` arm.
+        //
+        // The assertions are the property, not the mechanism: after the refusal the pipe still holds every
+        // byte the guest had buffered, and the disposition ckpt_coordinate_and_exit reads
+        // (g_ckpt_capture_destructive) still says "resume". Nothing here names a pass or an ordering.
+        if (pipe(pair) != 0) return 80;
+        int refused_socket = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (refused_socket < 0) {
+            close(pair[0]);
+            close(pair[1]);
+            return 81;
+        }
+        verdict = 0;
+        if (ckpt_pipe_test_fill(pair[1]) != 0) verdict = 82;
+        // Ascending order is the whole point: the pipe must be admitted before the socket is reached.
+        if (verdict == 0 && !(pair[0] < refused_socket)) verdict = 83;
+        if (ckpt_pipe_test_open_shared() != 0) verdict = 84;
+        ckpt_sink_install(&g_ckpt_pipe_test_ops);
+        g_ckpt_capture_destructive = 0;
+        if (verdict == 0 &&
+            ckpt_pipe_test_refused_scan(pair[0], (uint64_t)0x11, refused_socket) == 0)
+            verdict = 85; // the scan must refuse; a fixture whose refusal stopped firing proves nothing
+        if (verdict == 0 && ckpt_pipe_test_buffered(pair[0]) != (int)CKPT_PIPE_TEST_PAYLOAD)
+            verdict = 86; // the guest's buffered bytes were consumed for a capture that was refused
+        if (verdict == 0 && g_ckpt_capture_destructive != 0)
+            verdict = 87; // the refusal is terminal for this member: the container does not survive it
+        close(refused_socket);
     } else {
         return 99;
     }
