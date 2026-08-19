@@ -351,8 +351,14 @@ fn capture_gate_distinguishes_private_connects_and_socketpairs_on_both_isas() {
     }
 }
 
+/// `shutdown(2)` changes the open socket description, so every dup and every fork alias observes it, and
+/// Linux exposes it through no `getsockopt`. The shared socket-state arena is therefore the only source
+/// for it, and checkpoint capture reads the arena rather than the descriptor.
+///
+/// Capture used to REFUSE either direction here, because the image had nowhere to put the mask and one
+/// refused descriptor fails the whole image. It carries the mask now, so admission is the assertion.
 #[test]
-fn shutdown_state_is_shared_by_aliases_and_fails_closed_on_both_isas() {
+fn shutdown_state_is_shared_by_aliases_and_is_admissible_on_both_isas() {
     for isa in [1, 2] {
         for (operation, expected) in [
             (SHUTDOWN_READ, READ_CLOSED),
@@ -370,21 +376,16 @@ fn shutdown_state_is_shared_by_aliases_and_fails_closed_on_both_isas() {
             identity(isa, operation, endpoint.as_raw_fd(), 0);
             assert_eq!(identity(isa, SNAPSHOT, endpoint.as_raw_fd(), 0).2, expected);
             assert_eq!(identity(isa, SNAPSHOT, alias.as_raw_fd(), 0).2, expected);
-            assert_eq!(
-                hl_native::unix_identity_test(isa, CHECKPOINT_ADMIT, alias.as_raw_fd(), 0),
-                Err(libc::ENOTSUP)
-            );
+            assert!(hl_native::unix_identity_test(isa, CHECKPOINT_ADMIT, alias.as_raw_fd(), 0).is_ok());
             if operation == SHUTDOWN_WRITE {
-                let payload = b"queue-survives-refusal";
+                // The endpoint stopped writing; its peer did not, so bytes still arrive and the guest can
+                // still read them. Admitting must not consume them: the queue belongs to pass 2.
+                let payload = b"queue-survives-admission";
                 assert_eq!(
                     unsafe { libc::send(peer.as_raw_fd(), payload.as_ptr().cast(), payload.len(), 0) },
                     payload.len() as isize
                 );
-                assert_eq!(
-                    hl_native::unix_identity_capture_test(isa, endpoint.as_raw_fd()),
-                    Err(libc::ENOTSUP)
-                );
-                let mut received = [0_u8; 23];
+                let mut received = [0_u8; 24];
                 assert_eq!(
                     unsafe { libc::recv(endpoint.as_raw_fd(), received.as_mut_ptr().cast(), received.len(), 0) },
                     payload.len() as isize

@@ -416,7 +416,8 @@ static uint8_t g_sock_identity_local_hidden[HL_NFD];
 static uint8_t g_sock_identity_peer_hidden[HL_NFD];
 /* shutdown(2) changes the open socket description and therefore every dup and fork alias. Linux does not
  * expose this state through getsockopt, so the shared socket-state arena retains it at the syscall boundary.
- * Checkpoint capture rejects either direction until the journal can replay half-close ordering safely. */
+ * Checkpoint capture carries the mask in each endpoint's socket-state record and restore replays it with
+ * shutdown(2) after the queues are refilled. */
 /* Ordinary pathname/abstract AF_UNIX connections carry a reciprocal topology that spans processes, so
  * capturing one endpoint is meaningful only if the other endpoint is captured in the same generation.
  * The whole-process freeze that makes that provable is now authoritative (every member parks inside its
@@ -810,11 +811,6 @@ static int sock_internal_checkpoint_admit(int fd) {
     if (g_sock_connecting[fd]) {
         fprintf(stderr, "[ckpt] admit-arm: fd %d connecting\n", fd);
         errno = EBUSY;
-        return -1;
-    }
-    if (sock_state_shutdown(fd) != 0) {
-        fprintf(stderr, "[ckpt] admit-arm: fd %d shutdown mask=%u\n", fd, sock_state_shutdown(fd));
-        errno = ENOTSUP;
         return -1;
     }
     return 0;

@@ -104,20 +104,30 @@ static int ckpt_prepare_restore_sockets(void) {
                     (unsigned long long)g_restore_socket_endpoints[index].identity);
             return -1;
         }
+    /* Half-close last, because shutdown() is irreversible and both directions would defeat the steps above:
+     * SHUT_RD makes the queue this endpoint was just refilled with unreadable, and SHUT_WR would refuse the
+     * peer's refill, which is written through THIS end.  Applying it here reproduces the state measured on
+     * the host: an endpoint whose peer holds SHUT_WR reads 0 for ever while both ends stay open, and the
+     * far end goes on receiving. */
     for (int index = 0; index < g_nrestore_socket_endpoints; ++index) {
         struct ckpt_restore_socket_endpoint *endpoint = &g_restore_socket_endpoints[index];
-        if (!endpoint->peer_closed) continue;
+        if (!endpoint->state_loaded || endpoint->fd < 0) continue;
+        int direction = ckpt_socket_shutdown_direction(endpoint->state.shutdown_mask);
+        if (direction >= 0 && shutdown(endpoint->fd, direction) != 0 && errno != ENOTCONN) return -1;
+    }
+    /* A peer no restored process holds can never be read or written again, so leaving it open would keep a
+     * connection that is gone from ever reporting end of stream.  This is the only remaining "peer closed"
+     * judgement, and it is a fact about the image rather than an inference from recv(). */
+    for (int index = 0; index < g_nrestore_socket_endpoints; ++index) {
+        struct ckpt_restore_socket_endpoint *endpoint = &g_restore_socket_endpoints[index];
+        if (!endpoint->guest_present) continue;
         struct ckpt_restore_socket_endpoint *peer = ckpt_restore_socket_find(endpoint->peer_identity);
         if (peer == NULL) return -1;
-        if (peer->guest_present) {
-            endpoint->peer_closed = 0;
-            continue;
-        }
-        if (peer->fd >= 0) {
-            hl_host_process_fd_private_remove(peer->fd);
-            close(peer->fd);
-            peer->fd = -1;
-        }
+        endpoint->peer_closed = !peer->guest_present;
+        if (peer->guest_present || peer->fd < 0) continue;
+        hl_host_process_fd_private_remove(peer->fd);
+        close(peer->fd);
+        peer->fd = -1;
     }
     return 0;
 }

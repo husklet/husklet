@@ -207,6 +207,19 @@ pub fn checkpoint_pipe_capture_test(isa: u32, scenario: u32) -> Result<(), i32> 
     bindings::checkpoint_pipe_capture_test(isa, scenario)
 }
 
+/// Exercise socket half-close across the checkpoint: that capture records the direction each endpoint
+/// closed, that a drain reading end-of-stream from a peer that is still open does not record it as closed,
+/// that a half-closed endpoint is admissible, and that the replay reproduces the kernel state measured on
+/// the bare host.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn checkpoint_socket_halfclose_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    // The hook installs a process-wide checkpoint sink and writes the shared socket-identity arena.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    bindings::checkpoint_socket_halfclose_test(isa, scenario)
+}
+
 /// Exercise the checkpoint admission gate for SysV IPC and file-lock state.
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
