@@ -47,7 +47,6 @@ static _Thread_local uint32_t g_namespace_transaction_depth;
 static _Thread_local uint64_t g_namespace_transaction_writer_generation;
 static _Thread_local uint64_t g_namespace_transaction_writer_identity;
 static _Thread_local int g_namespace_transaction_cancel_state;
-static _Thread_local int g_namespace_transaction_cancel_restore_pending;
 
 enum namespace_transaction_lock { NAMESPACE_UNLOCK, NAMESPACE_READ_LOCK, NAMESPACE_WRITE_LOCK };
 
@@ -124,6 +123,14 @@ static void namespace_transaction_cancel_restore(int prior) {
 #endif
 }
 
+#if !defined(_WIN32)
+static pthread_once_t g_namespace_transaction_atfork_once = PTHREAD_ONCE_INIT;
+
+static void namespace_transaction_register_atfork(void) {
+    (void)pthread_atfork(NULL, NULL, namespace_transaction_fork_child);
+}
+#endif
+
 static int namespace_transaction_init(const hl_host_services *host) {
     if (g_namespace_transaction != NULL) return 0;
 #if defined(_WIN32)
@@ -135,6 +142,8 @@ static int namespace_transaction_init(const hl_host_services *host) {
     void *arena = NULL;
     int descriptor = -1;
     char path[] = "/tmp/.hl-namespace-XXXXXX";
+    if (pthread_once(&g_namespace_transaction_atfork_once, namespace_transaction_register_atfork) != 0)
+        return errno = EIO, -1;
     descriptor = mkstemp(path);
     if (descriptor < 0) return -1;
     (void)unlink(path);
@@ -168,7 +177,6 @@ static int namespace_transaction_init(const hl_host_services *host) {
 }
 
 static int namespace_transaction_begin(void) {
-    if (g_namespace_transaction_cancel_restore_pending) return errno = EBUSY, -1;
     if (g_namespace_transaction_depth != 0) {
         ++g_namespace_transaction_depth;
         return 0;
@@ -271,7 +279,6 @@ static int namespace_transaction_read_slow(struct namespace_transaction_read *re
 
 static int namespace_transaction_read_begin(struct namespace_transaction_read *read) {
     if (read == NULL) return errno = EINVAL, -1;
-    if (g_namespace_transaction_cancel_restore_pending) return errno = EBUSY, -1;
     if (g_namespace_transaction == NULL) return errno = EIO, -1;
 #if !defined(_WIN32)
     if (g_namespace_transaction_fd < 0) return errno = EIO, -1;
@@ -307,28 +314,32 @@ static int namespace_transaction_read_barrier(void) {
     return errno = EBUSY, -1;
 }
 
+/* Registered as the pthread_atfork child handler, so it runs in every child of
+ * a host fork() before any other code in that child. Only the forking thread
+ * survives, and it may have been mid-transaction: the child inherits that
+ * thread's depth, its writer identity, and its disabled cancellation state,
+ * while the POSIX record lock the transaction held is not inherited at all.
+ * Reset the inherited transaction and hand cancellation back to whatever the
+ * thread had before it entered.
+ *
+ * Restoring here rather than deferring it is what makes the child sound. No
+ * single re-entry point exists that every child passes through -- guest
+ * fork/vfork/clone, host spawn, and checkpoint restore all fork -- so a
+ * deferred restore would be a restore that never happens. pthread_setcancelstate
+ * writes this thread's own descriptor: it allocates nothing, takes no lock,
+ * logs nothing, and cannot unwind while the cancellation type stays deferred,
+ * which is the only type this file ever uses. */
 static void namespace_transaction_fork_child(void) {
     int inherited_writer = g_namespace_transaction_depth != 0;
     g_namespace_transaction_depth = 0;
     g_namespace_transaction_writer_generation = 0;
     g_namespace_transaction_writer_identity = 0;
-    /* This hook runs in the restricted post-fork child window. It must remain
-     * allocation-free and async-signal-safe: pthread cancellation restoration
-     * is deliberately deferred until the runtime reaches its safe child
-     * re-entry point. */
-    g_namespace_transaction_cancel_restore_pending = inherited_writer;
     atomic_flag_clear_explicit(&g_namespace_transaction_local, memory_order_release);
-}
-
-static void namespace_transaction_fork_child_complete(void) {
-    if (!g_namespace_transaction_cancel_restore_pending) return;
-    namespace_transaction_cancel_restore(g_namespace_transaction_cancel_state);
-    g_namespace_transaction_cancel_restore_pending = 0;
+    if (inherited_writer) namespace_transaction_cancel_restore(g_namespace_transaction_cancel_state);
 }
 
 static int namespace_transaction_writer(struct namespace_transaction_writer *writer) {
     if (writer == NULL) return errno = EINVAL, -1;
-    if (g_namespace_transaction_cancel_restore_pending) return errno = EBUSY, -1;
     if (g_namespace_transaction == NULL || g_namespace_transaction_depth == 0 ||
         g_namespace_transaction_writer_generation == 0 || g_namespace_transaction_writer_identity == 0)
         return errno = EPERM, -1;
@@ -373,6 +384,47 @@ static void *namespace_transaction_test_unowned_thread(void *argument) {
     return NULL;
 }
 
+struct namespace_transaction_test_fork_arguments {
+    int ready[2];
+    int proceed[2];
+    int result;
+};
+
+/* Holds the writer, forks, and lets the parent side release the transaction only
+ * after the child has reported on the state it inherited. */
+static void *namespace_transaction_test_fork_thread(void *argument) {
+    struct namespace_transaction_test_fork_arguments *arguments = argument;
+    if (namespace_transaction_begin() != 0) return arguments->result = 70, NULL;
+    pid_t child = fork();
+    if (child < 0) {
+        namespace_transaction_end();
+        return arguments->result = 71, NULL;
+    }
+    if (child == 0) {
+        struct namespace_transaction_writer inherited;
+        int restored = -1;
+        if (pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &restored) != 0) _exit(72);
+        if (restored != PTHREAD_CANCEL_ENABLE) _exit(73);
+        if (pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL) != 0) _exit(74);
+        if (namespace_transaction_writer(&inherited) == 0 || errno != EPERM) _exit(75);
+        if (write(arguments->ready[1], "x", 1) != 1) _exit(76);
+        char byte;
+        if (read(arguments->proceed[0], &byte, 1) != 1) _exit(77);
+        if (namespace_transaction_begin() != 0) _exit(78);
+        if (namespace_transaction_writer(&inherited) != 0) _exit(85);
+        namespace_transaction_end();
+        _exit(0);
+    }
+    char byte;
+    if (read(arguments->ready[0], &byte, 1) != 1) return arguments->result = 79, NULL;
+    namespace_transaction_end();
+    if (write(arguments->proceed[1], "x", 1) != 1) return arguments->result = 80, NULL;
+    int status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status)) return arguments->result = 81, NULL;
+    arguments->result = WEXITSTATUS(status) == 0 ? 0 : WEXITSTATUS(status);
+    return NULL;
+}
+
 HL_API int HL_TARGET_LOCAL(namespace_transaction_test)(uint32_t scenario) {
     struct namespace_transaction_read snapshot;
     if (g_namespace_transaction == NULL) {
@@ -391,8 +443,6 @@ HL_API int HL_TARGET_LOCAL(namespace_transaction_test)(uint32_t scenario) {
         pid_t child = fork();
         if (child < 0) return 20;
         if (child == 0) {
-            namespace_transaction_fork_child();
-            namespace_transaction_fork_child_complete();
             if (namespace_transaction_begin() != 0) _exit(21);
             _exit(0);
         }
@@ -407,8 +457,6 @@ HL_API int HL_TARGET_LOCAL(namespace_transaction_test)(uint32_t scenario) {
         pid_t child = fork();
         if (child < 0) return 31;
         if (child == 0) {
-            namespace_transaction_fork_child();
-            namespace_transaction_fork_child_complete();
             close(entered[0]);
             close(release[1]);
             if (namespace_transaction_begin() != 0 || write(entered[1], "x", 1) != 1) _exit(32);
@@ -438,27 +486,41 @@ HL_API int HL_TARGET_LOCAL(namespace_transaction_test)(uint32_t scenario) {
             return 42;
         }
         if (child == 0) {
-            namespace_transaction_fork_child();
+            struct namespace_transaction_writer inherited;
+            int restored = -1;
             close(ready[0]);
             close(proceed[1]);
-            if (namespace_transaction_begin() == 0 || errno != EBUSY) _exit(43);
-            if (write(ready[1], "x", 1) != 1) _exit(44);
+            /* The child of a fork taken while this thread held the writer. The
+             * atfork child handler must already have run: cancellation is back
+             * to the enabled state the thread had before begin(), and the
+             * inherited depth and writer identity are gone. */
+            if (pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &restored) != 0) _exit(43);
+            if (restored != PTHREAD_CANCEL_ENABLE) _exit(44);
+            if (pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL) != 0) _exit(45);
+            if (namespace_transaction_writer(&inherited) == 0 || errno != EPERM) _exit(46);
+            if (write(ready[1], "x", 1) != 1) _exit(47);
             char byte;
-            if (read(proceed[0], &byte, 1) != 1) _exit(45);
-            namespace_transaction_fork_child_complete();
-            if (namespace_transaction_begin() != 0) _exit(46);
+            if (read(proceed[0], &byte, 1) != 1) _exit(48);
+            /* A begin() that only incremented an inherited depth would return 0
+             * without ever publishing a generation or taking the record lock. */
+            if (namespace_transaction_begin() != 0) _exit(49);
+            if (namespace_transaction_writer(&inherited) != 0) _exit(50);
             namespace_transaction_end();
             _exit(0);
         }
         close(ready[1]);
         close(proceed[0]);
         char byte;
-        if (read(ready[0], &byte, 1) != 1) return 47;
+        if (read(ready[0], &byte, 1) != 1) {
+            int failed = 0;
+            (void)waitpid(child, &failed, 0);
+            return WIFEXITED(failed) ? WEXITSTATUS(failed) : 66;
+        }
         namespace_transaction_end();
-        if (write(proceed[1], "x", 1) != 1) return 48;
+        if (write(proceed[1], "x", 1) != 1) return 67;
         int status = 0;
-        if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) return 49;
-        return 0;
+        if (waitpid(child, &status, 0) != child || !WIFEXITED(status)) return 68;
+        return WEXITSTATUS(status);
     }
     if (scenario == 4) {
         struct namespace_transaction_writer first, nested, second;
@@ -487,8 +549,6 @@ HL_API int HL_TARGET_LOCAL(namespace_transaction_test)(uint32_t scenario) {
         pid_t child = fork();
         if (child < 0) return 60;
         if (child == 0) {
-            namespace_transaction_fork_child();
-            namespace_transaction_fork_child_complete();
             struct namespace_transaction_writer child_writer;
             close(values[0]);
             if (namespace_transaction_writer(&child_writer) == 0 || errno != EPERM ||
@@ -505,6 +565,18 @@ HL_API int HL_TARGET_LOCAL(namespace_transaction_test)(uint32_t scenario) {
         int status = 0;
         if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) return 64;
         return child_identity != 0 && child_identity != second.writer_identity ? 0 : 65;
+    }
+    if (scenario == 5) {
+        struct namespace_transaction_test_fork_arguments arguments = {{-1, -1}, {-1, -1}, 0};
+        pthread_t thread;
+        if (pipe(arguments.ready) != 0 || pipe(arguments.proceed) != 0) return 82;
+        if (pthread_create(&thread, NULL, namespace_transaction_test_fork_thread, &arguments) != 0) return 83;
+        if (pthread_join(thread, NULL) != 0) return 84;
+        close(arguments.ready[0]);
+        close(arguments.ready[1]);
+        close(arguments.proceed[0]);
+        close(arguments.proceed[1]);
+        return arguments.result;
     }
     return 99;
 }
