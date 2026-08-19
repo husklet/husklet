@@ -223,8 +223,7 @@ static const ckpt_sink_vtable g_ckpt_sink_stream_ops = {
 // inherited from activation, which is the only honest outcome: there is nowhere to put the bytes.
 static struct ckpt_sink *ckpt_sink_bind_stream(void) {
     if (hl_ckpt_channel_broker() < 0) return NULL;
-    g_ckpt_sink.ops = &g_ckpt_sink_stream_ops;
-    return &g_ckpt_sink;
+    return ckpt_sink_install(&g_ckpt_sink_stream_ops);
 }
 
 #endif

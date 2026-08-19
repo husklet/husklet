@@ -1,3 +1,37 @@
+// Write the bytes capture drained out of this pipe back into the freshly created one. This is the second
+// half of the closed round trip ckpt_capture_pipe_reason depends on: it consumes exactly the object that
+// the winner of the image-wide "pipe.<identity>" election published, in the order it was published, and it
+// runs before any guest process is reforked. It is a named function rather than an inline loop so that the
+// two halves of the round trip can be driven against each other by a fixture.
+//
+// A missing object is not an error: it means no holder of this pipe could read it -- every holder was a
+// write end -- so there were no bytes any guest could ever have observed, and an empty pipe is the faithful
+// restoration.
+static int ckpt_refill_restore_pipe(int writer, uint64_t identity) {
+    char data_path[1300];
+    snprintf(data_path, sizeof data_path, "pipe.%016llx", (unsigned long long)identity);
+    FILE *data = ckpt_source_fopen(data_path);
+    if (!data) return 0;
+    unsigned char buffer[65536];
+    size_t count;
+    while ((count = fread(buffer, 1, sizeof buffer, data)) != 0) {
+        size_t offset = 0;
+        while (offset < count) {
+            ssize_t written = write(writer, buffer + offset, count - offset);
+            if (written > 0) {
+                offset += (size_t)written;
+                continue;
+            }
+            if (written < 0 && errno == EINTR) continue;
+            ckpt_source_fclose(data);
+            return -1;
+        }
+    }
+    int failed = ferror(data) != 0;
+    ckpt_source_fclose(data);
+    return failed ? -1 : 0;
+}
+
 static int ckpt_prepare_restore_pipes(void) {
     g_nrestore_pipes = 0;
     for (int process = 0; process < g_nrprocs; process++) {
@@ -43,7 +77,6 @@ static int ckpt_prepare_restore_pipes(void) {
             return -1;
     }
     for (int i = 0; i < g_nrestore_pipes; i++) {
-        char data_path[1300];
         int pair[2];
         if (pipe(pair) != 0) return -1;
 #ifdef F_SETPIPE_SZ
@@ -66,29 +99,7 @@ static int ckpt_prepare_restore_pipes(void) {
         g_restore_pipes[i].writer = writer;
         int flags = fcntl(writer, F_GETFL);
         if (flags < 0 || fcntl(writer, F_SETFL, flags | O_NONBLOCK) != 0) return -1;
-        snprintf(data_path, sizeof data_path, "pipe.%016llx", (unsigned long long)g_restore_pipes[i].identity);
-        FILE *data = ckpt_source_fopen(data_path);
-        if (!data) continue;
-        unsigned char buffer[65536];
-        size_t count;
-        while ((count = fread(buffer, 1, sizeof buffer, data)) != 0) {
-            size_t offset = 0;
-            while (offset < count) {
-                ssize_t written = write(writer, buffer + offset, count - offset);
-                if (written > 0) {
-                    offset += (size_t)written;
-                    continue;
-                }
-                if (written < 0 && errno == EINTR) continue;
-                ckpt_source_fclose(data);
-                return -1;
-            }
-        }
-        if (ferror(data)) {
-            ckpt_source_fclose(data);
-            return -1;
-        }
-        ckpt_source_fclose(data);
+        if (ckpt_refill_restore_pipe(writer, g_restore_pipes[i].identity) != 0) return -1;
     }
     return 0;
 }

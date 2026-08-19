@@ -398,7 +398,7 @@ static int ckpt_capture_native_fd(struct ckpt_fd *records, int *count, const str
         }
         const char *reason = NULL;
         int cause = 0;
-        if ((flags & O_ACCMODE) != O_WRONLY && ckpt_capture_pipe_reason(fd, identity, &reason, &cause) != 0) {
+        if (ckpt_pipe_end_drains(flags) && ckpt_capture_pipe_reason(fd, identity, &reason, &cause) != 0) {
             fprintf(stderr, "[ckpt] refuse: cannot capture pipe fd %d identity %llu: %s (%s)\n", fd,
                     (unsigned long long)identity, reason ? reason : "unknown", strerror(cause));
             return -1;
