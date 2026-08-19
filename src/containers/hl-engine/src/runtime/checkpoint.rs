@@ -55,6 +55,9 @@ pub(crate) enum CaptureFailure {
     Failed,
     Poisoned,
     Busy,
+    /// The generation the byte store offered for recovery is not finalized, so
+    /// native restore must not read it.
+    Unfinalized,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -225,6 +228,28 @@ impl Server {
         }
     }
 
+    /// Refuses recovery unless the byte store's offered generation is finalized.
+    ///
+    /// The checkpoint byte store is adversarial: it can offer a staged
+    /// generation, a truncated one, or a directory an attacker assembled. Native
+    /// restore reads whatever recovery admits, so the finalized-versus-prepared
+    /// decision has to be taken here, before the recovery generation is
+    /// activated and before any object is served.
+    fn finalized_record(&self, deadline: std::time::Instant) -> Result<(), CaptureFailure> {
+        let names = self
+            .source
+            .list_until(deadline)
+            .map_err(|_| CaptureFailure::Unfinalized)?;
+        if authority::RecordState::of_generation(&names).admits_recovery() {
+            return Ok(());
+        }
+        hl_log::hl_error!(
+            hl_log::tag::CHECKPOINT,
+            "checkpoint recovery refused: generation is prepared, not finalized"
+        );
+        Err(CaptureFailure::Unfinalized)
+    }
+
     #[cfg(test)]
     pub(crate) fn begin_recovery(&self, generation: u32, deadline: std::time::Instant) -> Result<u64, CaptureFailure> {
         self.begin_recovery_after_admission(deadline, || generation)
@@ -238,6 +263,7 @@ impl Server {
         if std::time::Instant::now() >= deadline {
             return Err(CaptureFailure::Deadline);
         }
+        self.finalized_record(deadline)?;
         let mut capture = self.capture_lock()?;
         if !matches!(capture.phase, CapturePhase::Idle) {
             return Err(match capture.phase {

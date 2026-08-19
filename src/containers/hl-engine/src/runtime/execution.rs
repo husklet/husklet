@@ -443,6 +443,7 @@ impl CheckpointControl {
         match failure {
             super::checkpoint::CaptureFailure::Busy => EngineError::Busy,
             super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
+            super::checkpoint::CaptureFailure::Unfinalized => EngineError::CheckpointGenerationUnfinalized,
             super::checkpoint::CaptureFailure::Failed | super::checkpoint::CaptureFailure::Poisoned => {
                 EngineError::LaunchFailed
             }
@@ -756,8 +757,22 @@ mod tests {
         }
 
         fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
-            Err(CompositionError::RuntimeConstruction)
+            // Recovery refuses a generation carrying no manifest, so a store that
+            // admits recovery must present a finalized one.
+            Ok(vec![String::from("MANIFEST")])
         }
+    }
+
+    /// A staged generation never becomes finalized while this launch is waiting,
+    /// so the checkpoint preflight must surface the refusal instead of polling
+    /// until its deadline.
+    #[test]
+    fn an_unfinalized_generation_is_a_permanent_recovery_refusal() {
+        assert_eq!(
+            CheckpointControl::capture_failure(super::super::checkpoint::CaptureFailure::Unfinalized),
+            EngineError::CheckpointGenerationUnfinalized
+        );
+        assert!(EngineError::CheckpointGenerationUnfinalized.is_permanent_refusal());
     }
 
     #[test]

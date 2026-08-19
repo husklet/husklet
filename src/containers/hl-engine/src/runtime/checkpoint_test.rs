@@ -214,6 +214,79 @@ fn restore_digest_remains_available_without_a_capture_scope() {
     assert_eq!(server.dispatch(1, &request, "", &[]).status, protocol::STATUS_OK);
 }
 
+/// Byte store that offers whichever object names it is told to, so recovery can
+/// be asked to admit a generation that the storage transaction never committed.
+struct OfferedGeneration(Vec<String>);
+
+impl CheckpointSink for OfferedGeneration {
+    fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+    fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
+        Ok(test_transaction())
+    }
+    fn put_until(&self, _: NonZeroU64, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        Ok(())
+    }
+    fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
+        Ok(())
+    }
+    fn commit_until(&self, _: NonZeroU64, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        Ok(())
+    }
+}
+
+impl CheckpointSource for OfferedGeneration {
+    fn read(&self, _: usize) -> Result<Vec<u8>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+    fn get_until(&self, _: &str, _: std::time::Instant) -> Result<Vec<u8>, CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+    fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
+        Ok(self.0.clone())
+    }
+}
+
+/// The byte store is adversarial and its committed-generation pointer is data,
+/// not authority. A staged generation carries its objects but no manifest, so
+/// recovery must refuse it before native restore can read a single one of them.
+#[test]
+fn recovery_refuses_a_prepared_generation_and_admits_a_finalized_one() {
+    let staged = Arc::new(OfferedGeneration(vec![
+        String::from("proc.1/pages"),
+        String::from("proc.1/state"),
+    ]));
+    let server = Server::new(staged.clone(), staged);
+    assert_eq!(
+        server.begin_recovery(7, std::time::Instant::now() + Duration::from_secs(1)),
+        Err(CaptureFailure::Unfinalized)
+    );
+
+    let finalized = Arc::new(OfferedGeneration(vec![
+        String::from("MANIFEST"),
+        String::from("proc.1/pages"),
+        String::from("proc.1/state"),
+    ]));
+    let server = Server::new(finalized.clone(), finalized);
+    assert_eq!(
+        server.begin_recovery(7, std::time::Instant::now() + Duration::from_secs(1)),
+        Ok(7)
+    );
+}
+
+/// A generation with nothing in it proves nothing about having been committed,
+/// and a store that cannot answer proves less still. Both fail closed.
+#[test]
+fn recovery_refuses_an_empty_generation() {
+    let empty = Arc::new(OfferedGeneration(Vec::new()));
+    let server = Server::new(empty.clone(), empty);
+    assert_eq!(
+        server.begin_recovery(7, std::time::Instant::now() + Duration::from_secs(1)),
+        Err(CaptureFailure::Unfinalized)
+    );
+}
+
 #[derive(Default)]
 struct RecoveryStore(Mutex<Vec<(String, Vec<u8>)>>);
 
@@ -258,7 +331,9 @@ impl CheckpointSource for RecoveryStore {
         if std::time::Instant::now() >= deadline {
             return Err(CompositionError::DeadlineExceeded);
         }
-        Ok(Vec::new())
+        // A store that offers a generation for recovery must present it as
+        // finalized: recovery refuses a generation carrying no manifest.
+        Ok(vec![String::from("MANIFEST")])
     }
 
     fn get_until(&self, _: &str, _: std::time::Instant) -> Result<Vec<u8>, CompositionError> {
@@ -316,7 +391,7 @@ impl CheckpointSource for FailingRecoveryStore {
         Err(CompositionError::RuntimeConstruction)
     }
     fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
-        Ok(Vec::new())
+        Ok(vec![String::from("MANIFEST")])
     }
     fn get_until(&self, _: &str, _: std::time::Instant) -> Result<Vec<u8>, CompositionError> {
         Err(CompositionError::RuntimeConstruction)
@@ -448,7 +523,7 @@ impl CheckpointSource for TransactionStore {
     }
 
     fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
-        Err(CompositionError::RuntimeConstruction)
+        Ok(vec![String::from("MANIFEST")])
     }
 }
 
@@ -490,7 +565,7 @@ impl CheckpointSource for PanickingAbortStore {
     }
 
     fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
-        Err(CompositionError::RuntimeConstruction)
+        Ok(vec![String::from("MANIFEST")])
     }
 }
 
@@ -562,7 +637,7 @@ impl CheckpointSource for BlockingAbortStore {
     }
 
     fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
-        Err(CompositionError::RuntimeConstruction)
+        Ok(vec![String::from("MANIFEST")])
     }
 }
 
@@ -1418,7 +1493,7 @@ impl CheckpointSource for Store {
         Err(CompositionError::RuntimeConstruction)
     }
     fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
-        Err(CompositionError::RuntimeConstruction)
+        Ok(vec![String::from("MANIFEST")])
     }
 }
 
@@ -1723,7 +1798,7 @@ impl CheckpointSource for MutationPublicationRace {
         Err(CompositionError::RuntimeConstruction)
     }
     fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
-        Err(CompositionError::RuntimeConstruction)
+        Ok(vec![String::from("MANIFEST")])
     }
 }
 

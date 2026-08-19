@@ -133,11 +133,39 @@ impl CheckpointAuthorityHandle {
     }
 }
 
+/// Object name written by the storage transaction's irrevocable commit step.
+/// Its presence in a generation is the only local evidence that the generation
+/// was finalized rather than merely staged.
+pub(super) const MANIFEST_OBJECT: &str = "MANIFEST";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RecordState {
     Prepared,
     Finalized,
     Consumed,
+}
+
+impl RecordState {
+    /// Classifies a checkpoint generation from the object names the byte store
+    /// exposes. The store is adversarial and its committed-generation pointer is
+    /// data, not authority: a staged generation whose transaction never reached
+    /// `commit` carries objects but no manifest, and so is `Prepared`. An empty
+    /// generation is `Prepared` for the same reason -- nothing proves it was
+    /// finalized.
+    pub(super) fn of_generation<S: AsRef<str>>(names: &[S]) -> Self {
+        if names.iter().any(|name| name.as_ref() == MANIFEST_OBJECT) {
+            Self::Finalized
+        } else {
+            Self::Prepared
+        }
+    }
+
+    /// Recovery may read a generation only after it is finalized. A `Prepared`
+    /// record was never committed and a `Consumed` one has already been spent by
+    /// a one-shot recovery, so neither may be handed to native restore.
+    pub(super) fn admits_recovery(self) -> bool {
+        matches!(self, Self::Finalized)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
