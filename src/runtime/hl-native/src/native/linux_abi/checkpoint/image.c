@@ -859,11 +859,15 @@ static int ckpt_register_ready(struct cpu **live, int count) {
     uint32_t encoded_count = (uint32_t)count;
     memcpy(payload, &encoded_count, sizeof encoded_count);
     for (int i = 0; i < count; i++) {
-        if (live[i] == NULL || live[i]->tid <= 0) {
+        /* A zero tid is the process leader, not a missing thread: the engine reads it as
+           container_pid() everywhere else (thread/futex_mapping.c, checkpoint/capture.c), and a
+           single-threaded guest process has exactly this one executor. */
+        int tid = live[i] != NULL ? (live[i]->tid != 0 ? live[i]->tid : container_pid()) : 0;
+        if (tid <= 0) {
             free(payload);
             return -1;
         }
-        uint32_t executor = (uint32_t)live[i]->tid;
+        uint32_t executor = (uint32_t)tid;
         memcpy(payload + 8 + (size_t)i * sizeof executor, &executor, sizeof executor);
     }
     hl_ckpt_reply reply;
