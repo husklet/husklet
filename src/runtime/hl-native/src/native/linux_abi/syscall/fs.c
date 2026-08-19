@@ -892,7 +892,8 @@ static void fd_reset_emul(int fd) {
         g_sock_peer_object[fd] = 0;
         g_sock_identity_local_hidden[fd] = 0;
         g_sock_identity_peer_hidden[fd] = 0;
-        g_sock_identity_checkpoint_pending[fd] = 0;
+        g_sock_identity_reciprocity_required[fd] = 0;
+        g_sock_state_unretained[fd] = 0;
         sock_identity_ticket_release(fd); // an unclaimed identity ticket dies with its publisher
         sock_state_drop(fd);
         g_sock_peer_pid[fd] = 0;
