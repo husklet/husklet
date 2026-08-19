@@ -434,8 +434,20 @@ impl Service {
         if let Some(error) = failure {
             self.failures.lock().await.insert(JournalId::exec(id.clone()), error);
         }
-        self.exec_live.lock().await.remove(&id);
-        self.exec_output_complete.lock().await.remove(&id);
+        // Retire only THIS process's bookkeeping. A released domain member's entries are already
+        // retired by the capture that sealed it, and the restore that follows runs under the same
+        // `operations` lock this function waits on -- so an unconditional removal here would delete
+        // the RESTORED member's live entry and leave a running session with no runtime process.
+        let owned = self
+            .exec_live
+            .lock()
+            .await
+            .get(&id)
+            .is_some_and(|process| process.id() == owner);
+        if owned {
+            self.exec_live.lock().await.remove(&id);
+            self.exec_output_complete.lock().await.remove(&id);
+        }
         if let Some(waiters) = self.exec_waiters.lock().await.get(&id) {
             waiters.notify_waiters();
         }
