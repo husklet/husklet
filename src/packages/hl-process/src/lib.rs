@@ -17,9 +17,9 @@ const ENVIRONMENT_BYTE_LIMIT: usize = 64 * 1024 * 1024;
 mod drain;
 mod platform;
 #[cfg(unix)]
-pub mod unix_descriptor;
-#[cfg(unix)]
 mod unix;
+#[cfg(unix)]
+pub mod unix_descriptor;
 #[cfg(windows)]
 mod windows;
 

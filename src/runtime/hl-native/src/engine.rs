@@ -666,7 +666,10 @@ mod tests {
         }
 
         assert_eq!(observed, 1, "child never reached setsid");
-        assert_eq!(session, child, "the peer was not its own session leader, so it proves nothing");
+        assert_eq!(
+            session, child,
+            "the peer was not its own session leader, so it proves nothing"
+        );
         assert_eq!(enumerated, 1, "a session-leading peer was not enumerated");
     }
 

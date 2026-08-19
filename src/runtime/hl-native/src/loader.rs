@@ -87,11 +87,14 @@ pub(crate) struct BridgeApi {
 }
 
 #[derive(Clone, Copy)]
-#[repr(C)]
+// The header shares its address with the `BridgeApi` function-pointer table, whose alignment is 8.
+#[repr(C, align(8))]
 struct BridgeHeader {
     abi: u32,
     size: u32,
 }
+
+type BridgeGetter = unsafe extern "C" fn() -> *const BridgeHeader;
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) struct TestApi {
@@ -271,9 +274,8 @@ fn load() -> Result<Loaded, LoadError> {
             path: path.clone(),
             detail,
         })?;
-    type Getter = unsafe extern "C" fn() -> *const BridgeHeader;
     // SAFETY: the symbol name is the versioned getter whose C declaration has this exact signature.
-    let getter: Getter = unsafe { std::mem::transmute(getter_address) };
+    let getter: BridgeGetter = unsafe { std::mem::transmute(getter_address) };
     // SAFETY: the versioned getter promises either null or a readable stable bridge header.
     let table = unsafe { read_table(getter()) }?;
     // SAFETY: validation proved the metadata entry is non-null.
@@ -459,6 +461,8 @@ fn validate(table: &BridgeApi) -> Result<(), LoadError> {
 }
 
 #[cfg(debug_assertions)]
+// The release arm of this pair genuinely fails; both cfg arms share one signature.
+#[allow(clippy::unnecessary_wraps)]
 fn candidates() -> Result<Vec<PathBuf>, LoadError> {
     Ok(vec![PathBuf::from(env!("HL_NATIVE_LIBRARY_PATH"))])
 }
