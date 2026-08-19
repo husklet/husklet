@@ -1,4 +1,8 @@
 // hl/linux_abi/container -- network namespace implementation assembled from cohesive capability fragments.
+#if !defined(_WIN32)
+#include <sys/file.h> // flock: serializes first-time sizing of the shared identity-ticket table
+#endif
+
 #include "netns/unix_compat.c"
 #include "netns/ancillary.c"
 #include "netns/loopback.c"

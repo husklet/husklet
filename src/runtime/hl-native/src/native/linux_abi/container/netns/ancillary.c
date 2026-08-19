@@ -33,7 +33,11 @@ static uint16_t g_sock_state_ref[HL_NFD];
 
 struct sock_identity_ticket {
     volatile uint32_t state;
-    volatile uint32_t reserved;
+    /* Host pid of the publisher.  A ticket table now outlives the process that wrote into it (it is a
+     * file in the engine's namespace directory, not fork-inherited memory), so a worker killed between
+     * publish and release would strand its slot forever.  Reclaiming a PUBLISHED slot whose publisher is
+     * gone bounds that, and cannot resurrect identity: the nonce is retired with the slot. */
+    volatile uint32_t publisher;
     volatile uint64_t nonce_high;
     volatile uint64_t nonce_low;
     volatile uint64_t client_object;
