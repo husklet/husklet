@@ -26,7 +26,6 @@ typedef struct hl_ofd_namespace {
     uint64_t abi;
     uint64_t size;
     hl_ofd_lineage lineage;
-    _Atomic uint64_t next_member;
     _Atomic uint64_t next_sequence;
 } hl_ofd_namespace;
 
@@ -51,7 +50,6 @@ int hl_ofd_namespace_init(hl_ofd_namespace *space, size_t size, hl_ofd_lineage l
                           int storage_is_zeroed);
 int hl_ofd_member_bind(hl_ofd_member *member, hl_ofd_namespace *space, hl_ofd_lineage lineage,
                        uint64_t ordinal);
-int hl_ofd_member_mint(hl_ofd_namespace *space, hl_ofd_member *member);
 int hl_ofd_namespace_resume(hl_ofd_namespace *space, hl_ofd_generation_binding binding);
 int hl_ofd_identity_mint(hl_ofd_member *member, hl_ofd_identity *identity);
 int hl_ofd_identity_reattach(hl_ofd_member *member, hl_ofd_identity identity);
