@@ -358,7 +358,9 @@ static int ckpt_capture_native_fd(struct ckpt_fd *records, int *count, const str
                 copied = 1;
                 break;
             }
-        if (!copied) {
+        // kevent() with a zero timeout CONSUMES the timer's pending expirations, so the admission pass must
+        // not run it; the record it would fill is discarded anyway.
+        if (!copied && !g_ckpt_admission_only) {
             struct kevent event;
             struct timespec zero = {0, 0};
             int ready = kevent(fd, NULL, 0, &event, 1, &zero);
@@ -398,15 +400,21 @@ static int ckpt_capture_native_fd(struct ckpt_fd *records, int *count, const str
         }
         const char *reason = NULL;
         int cause = 0;
-        if (ckpt_pipe_end_drains(flags) && ckpt_capture_pipe_reason(fd, identity, &reason, &cause) != 0) {
-            fprintf(stderr, "[ckpt] refuse: cannot capture pipe fd %d identity %llu: %s (%s)\n", fd,
-                    (unsigned long long)identity, reason ? reason : "unknown", strerror(cause));
-            return -1;
-        }
+        // The capacity gate is a refusal and reads nothing, so it is decided BEFORE the drain. It used to
+        // sit after it, which meant a pipe with no readable capacity was emptied and then refused.
         int capacity = ckpt_pipe_capacity(fd);
         if (capacity <= 0) {
             fprintf(stderr, "[ckpt] refuse: pipe fd %d identity %llu has no readable capacity\n", fd,
                     (unsigned long long)identity);
+            return -1;
+        }
+        if (ckpt_pipe_end_drains(flags) && ckpt_capture_pipe_reason(fd, identity, &reason, &cause) != 0) {
+            if (cause != 0)
+                fprintf(stderr, "[ckpt] refuse: cannot capture pipe fd %d identity %llu: %s (%s)\n", fd,
+                        (unsigned long long)identity, reason ? reason : "unknown", strerror(cause));
+            else
+                fprintf(stderr, "[ckpt] refuse: cannot capture pipe fd %d identity %llu: %s\n", fd,
+                        (unsigned long long)identity, reason ? reason : "unknown");
             return -1;
         }
         r.kind = CKF_PIPE;
@@ -489,7 +497,7 @@ static int ckpt_capture_native_fd(struct ckpt_fd *records, int *count, const str
     return CKPT_FD_CAPTURED;
 }
 
-static int ckpt_scan_fds(struct ckpt_fd *recs, int cap, int *out_n) {
+static int ckpt_scan_fds_walk(struct ckpt_fd *recs, int cap, int *out_n) {
     static struct fdvis_view views[HL_NFD];
     int n = 0;
     size_t visible = proc_fdvis_list((int)getpid(), NULL, 0);
@@ -523,6 +531,30 @@ static int ckpt_scan_fds(struct ckpt_fd *recs, int cap, int *out_n) {
     }
     *out_n = n;
     return 0;
+}
+
+// Two passes over the descriptor set: prove, then consume. See g_ckpt_admission_only in capture.c for why
+// the split exists and why the claim election stays in the second pass. The first pass's records are
+// discarded -- they exist only so the arms run their gates against a real record -- and the second pass is
+// the one whose output becomes the image.
+struct ckpt_scan_request {
+    struct ckpt_fd *records;
+    int capacity;
+    int count;
+};
+
+static int ckpt_scan_fds_pass(void *context) {
+    struct ckpt_scan_request *request = context;
+    memset(request->records, 0, (size_t)request->capacity * sizeof *request->records);
+    request->count = 0;
+    return ckpt_scan_fds_walk(request->records, request->capacity, &request->count);
+}
+
+static int ckpt_scan_fds(struct ckpt_fd *recs, int cap, int *out_n) {
+    struct ckpt_scan_request request = {recs, cap, 0};
+    int result = ckpt_admit_then_consume(ckpt_scan_fds_pass, &request);
+    *out_n = request.count;
+    return result;
 }
 
 static uint32_t ckpt_inotify_fflags(uint32_t flags) {
