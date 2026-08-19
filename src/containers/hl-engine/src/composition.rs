@@ -222,10 +222,24 @@ impl StandardStreams {
     }
 }
 
+/// The native checkpoint broker and trigger word shared by one process domain.
+///
+/// A container launch mints exactly one broker socket and one trigger memfd. Every
+/// exec session started into the same domain joins that pair instead of minting its
+/// own, so the coordinator's generation bump is observed at the safepoint gates of
+/// every sealed member and every member commits into the same store.
+#[cfg(unix)]
+#[derive(Clone)]
+pub struct CheckpointChannel(pub(crate) Arc<hl_native::CheckpointTransport>);
+
 #[derive(Clone)]
 pub struct RuntimeServices {
     pub checkpoint_sink: Option<Arc<dyn CheckpointSink>>,
     pub checkpoint_source: Option<Arc<dyn CheckpointSource>>,
+    /// Set on a session that joins an existing domain freeze. Mutually exclusive
+    /// with `checkpoint_sink`/`checkpoint_source`: a member has no image of its own.
+    #[cfg(unix)]
+    pub checkpoint_channel: Option<CheckpointChannel>,
     pub streams: StandardStreams,
 }
 
@@ -242,6 +256,11 @@ pub trait GuestMachine: Send + Sync {
     fn stop(&self, request: StopRequest) -> Result<(), EngineError>;
     fn checkpoint_supported(&self) -> Result<(), EngineError> {
         Err(EngineError::Unsupported)
+    }
+    /// The domain freeze channel this machine owns, if it is the coordinator.
+    #[cfg(unix)]
+    fn checkpoint_channel(&self) -> Option<CheckpointChannel> {
+        None
     }
     fn capture_checkpoint(&self) -> Result<(), EngineError> {
         Err(EngineError::Unsupported)
@@ -316,6 +335,11 @@ impl<M: GuestMachine> MachineLauncher<M> {
         self.machine.checkpoint_supported()
     }
 
+    #[cfg(unix)]
+    fn checkpoint_channel(&self) -> Option<CheckpointChannel> {
+        self.machine.checkpoint_channel()
+    }
+
     fn capture_checkpoint(&self) -> Result<(), EngineError> {
         self.machine.capture_checkpoint()
     }
@@ -380,6 +404,13 @@ impl<M: GuestMachine + 'static, W: Workspace> EngineBackend<M, W> {
         self.engine.launcher().capture_checkpoint()
     }
 
+    /// The domain freeze channel every session in this domain must join.
+    #[cfg(unix)]
+    #[must_use]
+    pub fn checkpoint_channel(&self) -> Option<CheckpointChannel> {
+        self.engine.launcher().checkpoint_channel()
+    }
+
     /// Captures the running process tree before an absolute monotonic deadline.
     ///
     /// # Errors
@@ -399,10 +430,18 @@ impl<M: GuestMachine + 'static, W: Workspace> EngineBackend<M, W> {
         if services.streams.terminal().is_some() && services.streams.output().is_some() {
             return Err(CompositionError::RuntimeConstruction);
         }
-        if plan.options.get("HL_CHECKPOINT").is_some() && services.checkpoint_sink.is_none() {
+        #[cfg(unix)]
+        let joined = services.checkpoint_channel.is_some();
+        #[cfg(not(unix))]
+        let joined = false;
+        #[cfg(unix)]
+        if joined && (services.checkpoint_sink.is_some() || services.checkpoint_source.is_some()) {
+            return Err(CompositionError::RuntimeConstruction);
+        }
+        if plan.options.get("HL_CHECKPOINT").is_some() && services.checkpoint_sink.is_none() && !joined {
             return Err(CompositionError::MissingCheckpointSink);
         }
-        if plan.options.get("HL_RESTORE").is_some() && services.checkpoint_source.is_none() {
+        if plan.options.get("HL_RESTORE").is_some() && services.checkpoint_source.is_none() && !joined {
             return Err(CompositionError::MissingCheckpointSource);
         }
         Ok(())

@@ -30,6 +30,11 @@ pub(crate) struct ProductionMachine {
     output: Option<NativeOutputBridge>,
     #[cfg(unix)]
     checkpoint: Option<CheckpointControl>,
+    /// Set instead of `checkpoint` when this machine joins a domain freeze it does
+    /// not coordinate. A member has no `Server`, so it has no channel to publish an
+    /// image of its own on; its guest processes commit into the coordinator's store.
+    #[cfg(unix)]
+    member: Option<crate::composition::CheckpointChannel>,
     engine: Mutex<Option<Arc<hl_native::Engine>>>,
 }
 
@@ -57,6 +62,8 @@ impl RuntimeFactory for ProductionFactory {
         } else {
             None
         };
+        #[cfg(unix)]
+        let member = request.services.checkpoint_channel.clone();
         #[cfg(unix)]
         let checkpoint = match (
             request.services.checkpoint_sink.clone(),
@@ -90,6 +97,8 @@ impl RuntimeFactory for ProductionFactory {
             output,
             #[cfg(unix)]
             checkpoint,
+            #[cfg(unix)]
+            member,
             engine: Mutex::new(None),
         })
     }
@@ -173,9 +182,14 @@ impl ProductionMachine {
         #[cfg(unix)]
         let mut engine = engine;
         #[cfg(unix)]
-        if let Some(checkpoint) = &self.checkpoint {
+        if let Some(transport) = self
+            .checkpoint
+            .as_ref()
+            .map(|checkpoint| checkpoint.transport.as_ref())
+            .or_else(|| self.member.as_ref().map(|channel| channel.0.as_ref()))
+        {
             engine
-                .configure_checkpoint(&checkpoint.transport)
+                .configure_checkpoint(transport)
                 .map_err(|_| EngineError::LaunchFailed)?;
         }
         Ok(engine)
@@ -277,6 +291,13 @@ impl GuestMachine for ProductionMachine {
             .map_err(EngineError::NativeStopFailed)
     }
 
+    #[cfg(unix)]
+    fn checkpoint_channel(&self) -> Option<crate::composition::CheckpointChannel> {
+        self.checkpoint
+            .as_ref()
+            .map(|checkpoint| crate::composition::CheckpointChannel(Arc::clone(&checkpoint.transport)))
+    }
+
     fn checkpoint_supported(&self) -> Result<(), EngineError> {
         if let Some(refusal) = checkpoint_sandbox_refusal(&self.plan.options) {
             return Err(refusal);
@@ -330,7 +351,7 @@ fn native_run_failure(status: i32) -> EngineError {
 #[cfg(unix)]
 struct CheckpointControl {
     server: Arc<Server>,
-    transport: hl_native::CheckpointTransport,
+    transport: Arc<hl_native::CheckpointTransport>,
     acceptor: Option<std::thread::JoinHandle<()>>,
     phases: CheckpointPhaseLedger,
 }
@@ -352,7 +373,7 @@ impl CheckpointControl {
         let acceptor = Server::start(&server, broker);
         Ok(Self {
             server,
-            transport,
+            transport: Arc::new(transport),
             acceptor: Some(acceptor),
             phases: CheckpointPhaseLedger::new(phase_ledger, phase_clock_failure, isa),
         })

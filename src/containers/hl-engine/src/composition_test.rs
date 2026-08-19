@@ -210,6 +210,8 @@ impl Fixture {
             RuntimeServices {
                 checkpoint_sink: Some(checkpoints.clone()),
                 checkpoint_source: Some(checkpoints.clone()),
+                #[cfg(unix)]
+                checkpoint_channel: None,
                 streams: StandardStreams::default(),
             },
             checkpoints,
@@ -226,6 +228,8 @@ fn validates_required_checkpoint() {
     let services = RuntimeServices {
         checkpoint_sink: None,
         checkpoint_source: None,
+        #[cfg(unix)]
+        checkpoint_channel: None,
         streams: StandardStreams::default(),
     };
     let result = EngineBackend::construct(GuestIsa::Aarch64, plan, services, &factory, WorkspacePort);

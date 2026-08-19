@@ -99,22 +99,6 @@ impl Executions {
         self.service.remove_exec(id).await
     }
 
-    /// Verifies that every running execution has an armed checkpoint transport.
-    ///
-    /// # Errors
-    /// Returns the first runtime or persistence failure.
-    pub async fn require_checkpointable(&self) -> Result<()> {
-        self.service.checkpointable_execs().await.map(|_| ())
-    }
-
-    /// Checkpoints every running execution without checkpointing its container's initial process.
-    ///
-    /// # Errors
-    /// Returns the first capture, runtime, or persistence failure.
-    pub async fn checkpoint_all(&self, timeout: std::time::Duration) -> Result<()> {
-        self.service.checkpoint_execs(timeout).await
-    }
-
     /// Restarts every execution whose durable checkpoint is ready to restore.
     ///
     /// Independent failures are returned together so startup can restore every viable execution

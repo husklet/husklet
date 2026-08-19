@@ -4,7 +4,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     sync::{Arc, Condvar, Mutex as StdMutex},
     time::Duration,
 };
@@ -17,8 +17,30 @@ mod spec;
 use process::Process;
 use spec::Spec;
 
+/// Every domain freeze channel this runtime currently coordinates, keyed by the
+/// process domain identity the guest processes are launched into.
+type DomainChannels = StdMutex<HashMap<[u64; 2], hl_engine::composition::CheckpointChannel>>;
+
 #[derive(Default)]
-pub(crate) struct Engine;
+pub(crate) struct Engine {
+    domains: Arc<DomainChannels>,
+}
+
+/// Keeps a coordinator's freeze channel published for its domain's exec sessions
+/// and withdraws it when the coordinator process is released, so a session started
+/// after the coordinator is gone cannot join a dead broker.
+pub(super) struct DomainChannelEntry {
+    domains: Arc<DomainChannels>,
+    identity: [u64; 2],
+}
+
+impl Drop for DomainChannelEntry {
+    fn drop(&mut self) {
+        if let Ok(mut domains) = self.domains.lock() {
+            domains.remove(&self.identity);
+        }
+    }
+}
 
 struct CheckpointTransport {
     image: Arc<dyn crate::CheckpointImage>,
@@ -404,23 +426,56 @@ impl Runtime for Engine {
             None => hl_engine::composition::StandardStreams::default()
                 .with_output(Arc::new(OutputChannel::new(config.input.take(), sender))),
         };
-        let checkpoint = config
-            .checkpoint
-            .map(|checkpoint| Arc::new(CheckpointTransport::new(checkpoint.image)));
+        let identity = spec.domain.identity();
+        let role = config.checkpoint.take();
+        // A member joins the coordinator's broker and trigger. Resolving the channel
+        // before construction keeps the refusal on the launch boundary: a session that
+        // cannot reach its domain's freeze must not start armed on a channel of its own.
+        let member = match &role {
+            Some(crate::service::CheckpointRole::DomainMember) => Some(
+                self.domains
+                    .lock()
+                    .map_err(|_| Error::Runtime("checkpoint domain registry is poisoned".into()))?
+                    .get(&identity)
+                    .cloned()
+                    .ok_or_else(|| {
+                        Error::Runtime("process domain has no checkpoint coordinator to join".into())
+                    })?,
+            ),
+            _ => None,
+        };
+        let checkpoint = match role {
+            Some(crate::service::CheckpointRole::Coordinator(checkpoint)) => {
+                Some(Arc::new(CheckpointTransport::new(checkpoint.image)))
+            }
+            Some(crate::service::CheckpointRole::DomainMember) | None => None,
+        };
         let checkpointable = checkpoint.is_some();
         let engine = Arc::new(
-            match checkpoint {
-                Some(transport) => hl_engine::runtime::Engine::with_checkpoint(
+            match (checkpoint, member) {
+                (Some(transport), _) => hl_engine::runtime::Engine::with_checkpoint(
                     spec.isa,
                     spec.plan,
                     streams,
                     transport.clone(),
                     transport,
                 ),
-                None => hl_engine::runtime::Engine::with_streams(spec.isa, spec.plan, streams),
+                (None, Some(channel)) => {
+                    hl_engine::runtime::Engine::with_checkpoint_channel(spec.isa, spec.plan, streams, channel)
+                }
+                (None, None) => hl_engine::runtime::Engine::with_streams(spec.isa, spec.plan, streams),
             }
             .map_err(|error| Error::Runtime(format!("engine construction: {error:?}")))?,
         );
+        let domain_channel = engine.checkpoint_channel().map(|channel| {
+            if let Ok(mut domains) = self.domains.lock() {
+                domains.insert(identity, channel);
+            }
+            DomainChannelEntry {
+                domains: Arc::clone(&self.domains),
+                identity,
+            }
+        });
         engine
             .start()
             .map_err(|error| Error::Runtime(format!("engine start: {error:?}")))?;
@@ -431,6 +486,7 @@ impl Runtime for Engine {
             logs: StdMutex::new(Some(receiver)),
             domain: spec.domain,
             checkpointable,
+            domain_channel,
         }))
     }
 }
@@ -632,10 +688,12 @@ mod tests {
     fn checkpoint_transport_arms_capture_and_requested_restore() {
         for restore in [false, true] {
             let mut launch = launch();
-            launch.checkpoint = Some(crate::service::CheckpointConfig {
-                image: Arc::new(Image::default()),
-                restore,
-            });
+            launch.checkpoint = Some(crate::service::CheckpointRole::Coordinator(
+                crate::service::CheckpointConfig {
+                    image: Arc::new(Image::default()),
+                    restore,
+                },
+            ));
             let spec = Spec::try_from(&launch).unwrap();
             assert_eq!(spec.plan.options.get("HL_CHECKPOINT"), Some("1"));
             assert_eq!(spec.plan.options.get("HL_RESTORE"), restore.then_some("1"));

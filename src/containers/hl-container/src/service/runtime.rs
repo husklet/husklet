@@ -54,7 +54,7 @@ pub(crate) struct ProcessConfig {
     pub(crate) owners: Vec<(PathBuf, u32, u32)>,
     pub(crate) filesystem_generation: PathBuf,
     pub(crate) translation_cache: Option<PathBuf>,
-    pub(crate) checkpoint: Option<CheckpointConfig>,
+    pub(crate) checkpoint: Option<CheckpointRole>,
     pub(crate) guest: Guest,
     pub(crate) execution: crate::Execution,
     pub(crate) process: Process,
@@ -73,6 +73,18 @@ pub(crate) struct ProcessConfig {
     pub(crate) domain: Option<hl_engine::Domain>,
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) domain_owner: bool,
+}
+
+/// How a launch participates in its process domain's checkpoint.
+///
+/// A domain has exactly one coordinator, which owns the image, the broker socket
+/// and the trigger word. Every other session in the domain is a member: it joins
+/// that broker and trigger and holds no image, so it is captured as part of the
+/// coordinator's freeze and can never be the subject of a capture of its own.
+#[derive(Debug)]
+pub(crate) enum CheckpointRole {
+    Coordinator(CheckpointConfig),
+    DomainMember,
 }
 
 #[derive(Clone)]

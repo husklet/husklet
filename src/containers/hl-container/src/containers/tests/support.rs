@@ -89,6 +89,8 @@ pub(super) struct FakeRuntime {
     pub(super) checkpoint_exits: Arc<AtomicU64>,
     pub(super) hold_logs: AtomicBool,
     pub(super) checkpointable: AtomicBool,
+    /// One entry per launch: `Some(true)` coordinator, `Some(false)` domain member.
+    pub(super) checkpoint_roles: Arc<std::sync::Mutex<Vec<Option<bool>>>>,
     pub(super) delay: Duration,
     pub(super) restore_delay: Option<Duration>,
     pub(super) result: ExitStatus,
@@ -125,6 +127,7 @@ impl FakeRuntime {
             checkpoint_exits: Arc::new(AtomicU64::new(0)),
             hold_logs: AtomicBool::new(false),
             checkpointable: AtomicBool::new(true),
+            checkpoint_roles: Arc::new(std::sync::Mutex::new(Vec::new())),
             delay: Duration::from_millis(10),
             restore_delay: None,
             result,
@@ -280,7 +283,10 @@ impl Running for FakeProcess {
 impl Runtime for FakeRuntime {
     async fn start(&self, launch: ProcessConfig) -> Result<Arc<dyn Running>> {
         assert!(launch.rootfs.is_absolute());
-        let restoring = launch.checkpoint.as_ref().is_some_and(|checkpoint| checkpoint.restore);
+        let restoring = matches!(
+            launch.checkpoint,
+            Some(crate::service::CheckpointRole::Coordinator(ref checkpoint)) if checkpoint.restore
+        );
         let domain = launch.domain.unwrap_or(
             hl_engine::Domain::new().map_err(|error| Error::Runtime(format!("domain allocation failed: {error}")))?,
         );
@@ -294,7 +300,10 @@ impl Runtime for FakeRuntime {
         self.checkpoints
             .lock()
             .unwrap()
-            .push(launch.checkpoint.as_ref().map(|checkpoint| checkpoint.restore));
+            .push(match launch.checkpoint {
+                Some(crate::service::CheckpointRole::Coordinator(ref checkpoint)) => Some(checkpoint.restore),
+                Some(crate::service::CheckpointRole::DomainMember) | None => None,
+            });
         self.domains.lock().unwrap().push((domain, launch.domain_owner));
         self.mounts.lock().unwrap().push(
             launch
@@ -371,6 +380,12 @@ impl Runtime for FakeRuntime {
                 }
             });
         }
+        self.checkpoint_roles
+            .lock()
+            .unwrap()
+            .push(launch.checkpoint.as_ref().map(|role| {
+                matches!(role, crate::service::CheckpointRole::Coordinator(_))
+            }));
         Ok(Arc::new(FakeProcess {
             id,
             delay,
@@ -385,7 +400,8 @@ impl Runtime for FakeRuntime {
             resizes: Arc::clone(&self.resizes),
             logs: std::sync::Mutex::new(Some(receiver)),
             _log_owner: log_owner,
-            checkpoint_armed: launch.checkpoint.is_some() && self.checkpointable.load(Ordering::SeqCst),
+            checkpoint_armed: matches!(launch.checkpoint, Some(crate::service::CheckpointRole::Coordinator(_)))
+                && self.checkpointable.load(Ordering::SeqCst),
             checkpoint_failure: Arc::clone(&self.fail_checkpoint),
             checkpoint_exit,
             checkpoint_exits: Arc::clone(&self.checkpoint_exits),

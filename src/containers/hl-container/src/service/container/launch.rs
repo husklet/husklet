@@ -62,13 +62,13 @@ impl Service {
             .checkpoint
             .as_ref()
             .map_or_else(|| container.id.to_string(), |checkpoint| checkpoint.namespace.clone());
-        let checkpoint = Some(CheckpointConfig {
+        let checkpoint = Some(crate::service::CheckpointRole::Coordinator(CheckpointConfig {
             image: self
                 .checkpoints
                 .open(&checkpoint_namespace)
                 .map_err(|error| Error::Runtime(error.to_string()))?,
             restore: container.checkpoint.is_some(),
-        });
+        }));
         let process = self
             .runtime
             .start(ProcessConfig {
