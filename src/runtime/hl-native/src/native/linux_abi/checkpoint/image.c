@@ -916,6 +916,10 @@ static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
         fprintf(stderr, "[ckpt] refuse: checkpoint unsupported under the sentry sandbox policy (HL_UNTRUSTED)\n");
         return -1;
     }
+    // SysV IPC and fcntl/flock state live outside the descriptor table, so the fd
+    // scan below cannot see them and would publish an image that silently omits
+    // them. Admit the process only when both domains are empty.
+    if (ckpt_admit_ipc_and_lock_state() != 0) return -1;
     struct ckpt_sink *sink = ckpt_sink_current();
     struct ckpt_fd *fdrecs = calloc(HL_NFD, sizeof *fdrecs);
     int nfd = 0;

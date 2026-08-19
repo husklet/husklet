@@ -473,6 +473,16 @@ unsafe fn hl_x86_64_checkpoint_restore_claim_test(scenario: c_uint) -> c_int {
 }
 
 #[cfg(feature = "native-test-hooks")]
+unsafe fn hl_aarch64_checkpoint_ipc_admission_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().aarch64_checkpoint_ipc_admission)(scenario) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_x86_64_checkpoint_ipc_admission_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().x86_64_checkpoint_ipc_admission)(scenario) }
+}
+
+#[cfg(feature = "native-test-hooks")]
 unsafe fn hl_c_backend_errno_from_host_test(domain: c_uint, host_errno: c_int) -> c_int {
     unsafe { (test_api().errno_from_host)(domain, host_errno) }
 }
@@ -635,6 +645,21 @@ pub(crate) fn checkpoint_restore_claim_test(isa: u32, scenario: u32) -> Result<(
         match isa {
             1 => hl_aarch64_checkpoint_restore_claim_test(scenario),
             2 => hl_x86_64_checkpoint_restore_claim_test(scenario),
+            _ => return Err(-22),
+        }
+    };
+    if status == 0 { Ok(()) } else { Err(status) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn checkpoint_ipc_admission_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    // SAFETY: the feature-gated hook installs one object into the registry it is
+    // exercising, evaluates the gate, and restores the previous contents before
+    // returning a scalar status; it allocates nothing the caller owns.
+    let status = unsafe {
+        match isa {
+            1 => hl_aarch64_checkpoint_ipc_admission_test(scenario),
+            2 => hl_x86_64_checkpoint_ipc_admission_test(scenario),
             _ => return Err(-22),
         }
     };

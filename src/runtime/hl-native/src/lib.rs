@@ -153,6 +153,16 @@ pub fn checkpoint_restore_claim_test(isa: u32, scenario: u32) -> Result<(), i32>
     bindings::checkpoint_restore_claim_test(isa, scenario)
 }
 
+/// Exercise the checkpoint admission gate for SysV IPC and file-lock state.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn checkpoint_ipc_admission_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    // The hook mutates the process-wide SysV registry and record-lock table.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    bindings::checkpoint_ipc_admission_test(isa, scenario)
+}
+
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 pub fn checkpoint_restore_rollback_test(isa: u32) -> Result<(), i32> {
