@@ -69,9 +69,12 @@ impl PrimaryLifecycle for Containers {
     }
 
     async fn restored_primary_failure(&self) -> io::Result<Option<String>> {
+        // `NotRunning` answers immediately for a container that has ALREADY exited, which
+        // `NextExit` does not: at an unchanged generation it waits for the exit after this one and
+        // would time out over the fastest restore failures, the very ones this watches for.
         let exit = tokio::time::timeout(
             RESTORE_SETTLE,
-            self.wait_for(CONTAINER, hl_container::WaitCondition::NextExit),
+            self.wait_for(CONTAINER, hl_container::WaitCondition::NotRunning),
         )
         .await;
         match exit {

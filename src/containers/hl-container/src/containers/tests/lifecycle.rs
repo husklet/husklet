@@ -1165,3 +1165,32 @@ async fn committed_capture_leaves_no_sealed_domain_member_still_running() {
         .await
         .expect("sealed domain member was still running after its capture committed");
 }
+
+/// A restore that dies while rebuilding guest memory has already exited by the time anything asks,
+/// and the caller that must notice it is asking with a deadline. `NotRunning` answers such a
+/// container immediately; `NextExit` waits for the exit AFTER this one at an unchanged generation,
+/// so a caller that reached for it would time out over exactly the failures it exists to catch.
+#[tokio::test(start_paused = true)]
+async fn an_already_exited_container_answers_not_running_immediately_and_next_exit_never() {
+    let runtime = Arc::new(FakeRuntime::new(ExitStatus::Code(1)));
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("workspace")).await.unwrap();
+    containers.start("workspace").await.unwrap();
+    containers.wait("workspace").await.unwrap();
+
+    assert_eq!(
+        containers
+            .wait_for("workspace", WaitCondition::NotRunning)
+            .await
+            .unwrap(),
+        Some(ExitStatus::Code(1))
+    );
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            containers.wait_for("workspace", WaitCondition::NextExit),
+        )
+        .await
+        .is_err()
+    );
+}
