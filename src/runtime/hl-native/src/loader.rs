@@ -141,6 +141,8 @@ pub(crate) struct TestApi {
     pub(crate) checkpoint_test_private_descriptor_count: unsafe extern "C" fn() -> u64,
     #[cfg(all(test, unix))]
     pub(crate) host_process_force: unsafe extern "C" fn(c_int) -> c_int,
+    #[cfg(all(test, unix))]
+    pub(crate) host_process_peer_enumerated: unsafe extern "C" fn(c_int) -> c_int,
     #[cfg(test)]
     pub(crate) activation_ready_pause: unsafe extern "C" fn(c_int),
 }
@@ -409,6 +411,11 @@ fn load_tests(library: &DynamicLibrary, path: &Path) -> Result<TestApi, LoadErro
         #[cfg(all(test, unix))]
         host_process_force: symbol!(
             "hl_c_backend_host_process_force_test",
+            unsafe extern "C" fn(c_int) -> c_int
+        ),
+        #[cfg(all(test, unix))]
+        host_process_peer_enumerated: symbol!(
+            "hl_c_backend_host_process_peer_enumerated_test",
             unsafe extern "C" fn(c_int) -> c_int
         ),
         #[cfg(test)]

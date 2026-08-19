@@ -287,11 +287,12 @@ int hl_host_process_peers(hl_host_process_peer *entries, size_t capacity, size_t
     struct kinfo_proc *processes;
     int mib[3] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL};
     pid_t self = getpid();
-    pid_t session = getsid(0);
     size_t bytes = 0;
     size_t total = 0;
-    if (count == NULL || (capacity != 0 && entries == NULL) || proc_pidpath(self, self_path, sizeof self_path) <= 0 ||
-        session < 0)
+    /* No session filter: the engine emulates the guest's setsid(2) with the host's, so a guest session
+       leader has its own host session and the filter would exclude it. The caller narrows the set to its
+       own descendants, which is tighter. Kept identical to the Linux arm deliberately. */
+    if (count == NULL || (capacity != 0 && entries == NULL) || proc_pidpath(self, self_path, sizeof self_path) <= 0)
         return 0;
     if (sysctl(mib, 3, NULL, &bytes, NULL, 0) != 0 || bytes == 0) return 0;
     bytes += 16 * sizeof *processes;
@@ -304,7 +305,7 @@ int hl_host_process_peers(hl_host_process_peer *entries, size_t capacity, size_t
     for (size_t index = 0; index < bytes / sizeof *processes; ++index) {
         char path[PROC_PIDPATHINFO_MAXSIZE];
         pid_t pid = processes[index].kp_proc.p_pid;
-        if (pid <= 0 || pid == self || getsid(pid) != session || proc_pidpath(pid, path, sizeof path) <= 0 ||
+        if (pid <= 0 || pid == self || proc_pidpath(pid, path, sizeof path) <= 0 ||
             strcmp(path, self_path) != 0)
             continue;
         if (total < capacity) entries[total].identity = pid;
@@ -314,6 +315,23 @@ int hl_host_process_peers(hl_host_process_peer *entries, size_t capacity, size_t
     *count = total;
     return 1;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+#include "hl/base.h"
+/* 1 when `pid` is enumerated as a live engine peer of this process, 0 when it is not.
+   Exists because peer enumeration is only ever exercised by a coordinator against a REAL forked
+   process tree: an in-memory fake cannot express "this peer became a session leader", which is the
+   condition that silently emptied the result for every setsid-using guest. */
+HL_API int32_t hl_c_backend_host_process_peer_enumerated_test(int32_t pid) {
+    hl_host_process_peer peers[512];
+    size_t count = 0;
+    if (!hl_host_process_peers(peers, sizeof peers / sizeof *peers, &count)) return -1;
+    if (count > sizeof peers / sizeof *peers) count = sizeof peers / sizeof *peers;
+    for (size_t index = 0; index < count; ++index)
+        if (peers[index].identity == (int64_t)pid) return 1;
+    return 0;
+}
+#endif
 
 int hl_host_process_interrupt(hl_host_process_peer peer) {
     return peer.identity > 0 && peer.identity <= INT32_MAX && kill((pid_t)peer.identity, SIGINFO) == 0;

@@ -527,6 +527,11 @@ pub(super) unsafe fn hl_c_backend_host_process_force_test(pid: c_int) -> c_int {
     unsafe { (test_api().host_process_force)(pid) }
 }
 
+#[cfg(all(test, feature = "native-test-hooks", unix))]
+pub(super) unsafe fn hl_c_backend_host_process_peer_enumerated_test(pid: c_int) -> c_int {
+    unsafe { (test_api().host_process_peer_enumerated)(pid) }
+}
+
 #[cfg(all(test, feature = "native-test-hooks"))]
 pub(super) unsafe fn hl_c_backend_activation_ready_pause(paused: c_int) {
     unsafe { (test_api().activation_ready_pause)(paused) };

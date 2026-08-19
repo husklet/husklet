@@ -340,16 +340,29 @@ int hl_host_process_fds_collect(int64_t pid, hl_host_process_fd **entries, size_
     return 1;
 }
 
+/* Every live engine process on this host, identified by running the same engine executable.
+ *
+ * MEMBERSHIP IS NOT A SESSION. This used to also require `info.session == self_info.session`, and that
+ * filter silently emptied the result on the workloads it mattered most for: the engine emulates the
+ * guest's setsid(2) with the host's, so a guest process that becomes a session leader IS one on the
+ * host, and its host session id is its own pid. Measured on a live PostgreSQL cluster -- twelve peers,
+ * every one reporting `session == its own pid` against a coordinator in its own session, so the
+ * coordinator found ZERO peers, interrupted nobody, waited for nobody and published a manifest naming
+ * one process while eight others were still assembling their groups. Those eight then arrived at the
+ * broker after the capture had left `Active` and were correctly refused as non-members.
+ *
+ * The caller narrows this set to its own descendants (`ckpt_is_descendant`), which is both tighter than
+ * a session and immune to the guest re-parenting or re-sessioning itself.
+ */
 int hl_host_process_peers(hl_host_process_peer *entries, size_t capacity, size_t *count) {
     char self_path[PATH_MAX + 1];
     char path[PATH_MAX + 1];
     char link[64];
     DIR *directory;
     struct dirent *item;
-    hl_host_process_info self_info;
     ssize_t self_length;
     size_t total = 0;
-    if (count == NULL || (capacity != 0 && entries == NULL) || !hl_host_process_read(getpid(), &self_info)) return 0;
+    if (count == NULL || (capacity != 0 && entries == NULL)) return 0;
     self_length = readlink("/proc/self/exe", self_path, PATH_MAX);
     if (self_length <= 0) return 0;
     self_path[self_length] = '\0';
@@ -359,12 +372,10 @@ int hl_host_process_peers(hl_host_process_peer *entries, size_t capacity, size_t
     while (item != NULL) {
         char *end = NULL;
         long long value;
-        hl_host_process_info info;
         ssize_t length;
         errno = 0;
         value = strtoll(item->d_name, &end, 10);
-        if (errno == 0 && end != item->d_name && *end == '\0' && value > 0 && value != getpid() &&
-            hl_host_process_read(value, &info) && info.session == self_info.session) {
+        if (errno == 0 && end != item->d_name && *end == '\0' && value > 0 && value != getpid()) {
             snprintf(link, sizeof link, "/proc/%lld/exe", value);
             length = readlink(link, path, PATH_MAX);
             if (length == self_length && memcmp(path, self_path, (size_t)self_length) == 0) {
@@ -378,6 +389,23 @@ int hl_host_process_peers(hl_host_process_peer *entries, size_t capacity, size_t
     *count = total;
     return 1;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+#include "hl/base.h"
+/* 1 when `pid` is enumerated as a live engine peer of this process, 0 when it is not.
+   Exists because peer enumeration is only ever exercised by a coordinator against a REAL forked
+   process tree: an in-memory fake cannot express "this peer became a session leader", which is the
+   condition that silently emptied the result for every setsid-using guest. */
+HL_API int32_t hl_c_backend_host_process_peer_enumerated_test(int32_t pid) {
+    hl_host_process_peer peers[512];
+    size_t count = 0;
+    if (!hl_host_process_peers(peers, sizeof peers / sizeof *peers, &count)) return -1;
+    if (count > sizeof peers / sizeof *peers) count = sizeof peers / sizeof *peers;
+    for (size_t index = 0; index < count; ++index)
+        if (peers[index].identity == (int64_t)pid) return 1;
+    return 0;
+}
+#endif
 
 int hl_host_process_interrupt(hl_host_process_peer peer) {
     /* SIGRTMIN+7 is the engine's own THREAD_INT_SIG (native_compat.h aliases it as SIGINFO; see

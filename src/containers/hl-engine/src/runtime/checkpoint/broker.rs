@@ -275,23 +275,47 @@ impl Server {
         encoded_name: &[u8],
         payload: &[u8],
     ) -> Result<u64, ()> {
-        if !encoded_name.is_empty() || payload.len() < 8 {
-            return Err(());
+        match self.register_ready_reason(connection, request, encoded_name, payload) {
+            Ok(member) => Ok(member),
+            Err(reason) => {
+                hl_log::hl_error!(
+                    hl_log::tag::CHECKPOINT,
+                    "checkpoint REGISTER_READY refused for process {}: {reason} (generation {})",
+                    connection.id,
+                    request.generation
+                );
+                Err(())
+            }
         }
-        let count = usize::try_from(u32::from_ne_bytes(payload[0..4].try_into().map_err(|_| ())?)).map_err(|_| ())?;
+    }
+
+    fn register_ready_reason(
+        &self,
+        connection: &mut Connection<'_>,
+        request: &Request,
+        encoded_name: &[u8],
+        payload: &[u8],
+    ) -> Result<u64, &'static str> {
+        if !encoded_name.is_empty() || payload.len() < 8 {
+            return Err("malformed registration frame");
+        }
+        let count = usize::try_from(u32::from_ne_bytes(
+            payload[0..4].try_into().map_err(|_| "short inventory count")?,
+        ))
+        .map_err(|_| "inventory count out of range")?;
         if payload[4..8] != [0; 4] || count == 0 || count > EXECUTOR_INVENTORY_MAX || payload.len() != 8 + count * 4 {
-            return Err(());
+            return Err("inventory count does not describe the payload");
         }
         let mut executors = BTreeSet::new();
         for bytes in payload[8..].chunks_exact(4) {
-            let executor = u32::from_ne_bytes(bytes.try_into().map_err(|_| ())?);
+            let executor = u32::from_ne_bytes(bytes.try_into().map_err(|_| "short executor")?);
             if !executors.insert(ExecutorId(u64::from(executor))) {
-                return Err(());
+                return Err("duplicate executor in the inventory");
             }
         }
         // Only the broker's authenticated capability may name a member; a
         // channel with no proven process identity is not a participant.
-        let peer = connection.peer.as_ref().ok_or(())?;
+        let peer = connection.peer.as_ref().ok_or("channel has no authenticated peer")?;
         let identity = ProcessIdentity {
             pid: peer.host_pid,
             birth: peer.host_birth,
@@ -299,11 +323,16 @@ impl Server {
         };
         let generation = u64::from(request.generation);
         if self.membership_scope() != Some(generation) {
-            return Err(());
+            return Err("no capture is sealing membership at this generation");
         }
-        let mut participants = self.participants.lock().map_err(|_| ())?;
-        let ledger = participants.as_mut().ok_or(())?;
-        let member = ledger.register(generation, identity, &executors).map_err(|_| ())?;
+        let mut participants = self.participants.lock().map_err(|_| "participant ledger is poisoned")?;
+        let ledger = participants.as_mut().ok_or("no participant ledger")?;
+        let member = ledger
+            .register(generation, identity, &executors)
+            .map_err(|error| match error {
+                super::participants::Error::Duplicate => "this process identity is already a member",
+                super::participants::Error::Conflict => "registration conflicts with the sealed capture",
+            })?;
         connection.registered = Some(generation);
         Ok(member.0)
     }
