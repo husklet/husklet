@@ -1046,7 +1046,8 @@ int hl_ckpt_interrupt_executors(void);
 // Called at the top of the dispatcher loop (a clean safepoint: all guest arch state is spilled into `c`).
 // Referenced by engine/dispatch.c via the G_CKPT_POLL seam (aarch64-only). Cheap: a NULL test + one shared
 // memory load on the hot path. When the trigger generation advances, the container INIT coordinates the
-// whole tree; a peer dumps only itself. Never returns once it fires (all processes _exit after snapshotting).
+// whole tree; a peer dumps only itself and then PARKS inside its own freeze until the coordinator releases
+// it, so it returns here only when the capture was abandoned without consuming anything.
 static void ckpt_poll(struct cpu *c) {
     if (!g_ckpt_trigger) return;
     uint32_t g = __atomic_load_n(g_ckpt_trigger, __ATOMIC_ACQUIRE);
@@ -1089,8 +1090,7 @@ static void ckpt_poll(struct cpu *c) {
         _exit(70);
     }
     // Nothing was consumed and nothing was published: the container is unharmed and the guest runs on.
-    atomic_store_explicit(&g_ckpt_fanout_gen, g, memory_order_release);
-    return;
+    // g_ckpt_seen_gen already names this generation, so returning to the dispatcher does not re-enter here.
 }
 
 // Export the exact host control signal selected by this unity translation unit. Embedders must not
