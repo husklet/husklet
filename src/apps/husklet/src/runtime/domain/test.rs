@@ -438,7 +438,7 @@ fn restore_summary_is_consumed_once_and_names_each_failure() {
         .unwrap();
 
     let text = summary.read().unwrap().unwrap();
-    assert!(text.contains("workspace restored with 2 failure(s)"));
+    assert!(text.contains("2 programs could not be resumed as live processes"));
     assert!(text.contains("terminal pane-1: restored process cannot be attached"));
     assert!(text.contains("container database: checkpoint object is incomplete"));
     summary.clear().unwrap();
@@ -569,4 +569,51 @@ fn docker_warning_survives_relaunch_until_the_ui_acknowledges_it() {
     assert!(delivered.contains(&warning));
     assert_eq!(daemon.checkpoint_warning().unwrap(), None);
     assert_eq!(Domain::take_restore_summary(&workspace).unwrap(), None);
+}
+
+#[test]
+fn restore_notice_marks_every_line_as_husklet_output_and_keeps_the_typed_reason() {
+    let root = tempfile::tempdir().unwrap();
+    let mut workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);
+    workspace.storage = Some(root.path().to_owned());
+    let summary = RestoreSummary::new(&workspace);
+
+    summary
+        .publish(&[
+            "execution 7f3a: exec 7f3a cannot be reattached after a whole-image restore: \
+             the restored member is a forked child of the container's engine process"
+                .into(),
+        ])
+        .unwrap();
+    let text = summary.read().unwrap().unwrap();
+
+    // Every line is attributed to Husklet, so it can never read as something the guest printed.
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        assert!(
+            line.starts_with(crate::runtime::domain::RESTORE_NOTICE_PREFIX),
+            "unmarked notice line: {line:?}"
+        );
+    }
+    // The typed refusal's own reason survives verbatim.
+    assert!(text.contains("cannot be reattached after a whole-image restore"));
+    assert!(text.contains("forked child of the container's engine process"));
+    // Preserved scrollback is explained rather than presented as a failure report.
+    assert!(text.contains("preserved history"));
+    assert!(text.contains("could not be resumed as a live process"));
+    assert!(!text.contains("failure(s)"), "alarming wording survived: {text}");
+}
+
+#[test]
+fn restore_notice_counts_more_than_one_unresumable_process() {
+    let root = tempfile::tempdir().unwrap();
+    let mut workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);
+    workspace.storage = Some(root.path().to_owned());
+    let summary = RestoreSummary::new(&workspace);
+
+    summary
+        .publish(&["execution a: gone".into(), "execution b: gone".into()])
+        .unwrap();
+    let text = summary.read().unwrap().unwrap();
+
+    assert!(text.contains("2 programs could not be resumed"), "{text}");
 }
