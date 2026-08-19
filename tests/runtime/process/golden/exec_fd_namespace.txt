@@ -1,0 +1,4 @@
+parent visible=3 low=1
+top=1
+child visible=4 top=1 alive=1
+exit=0
