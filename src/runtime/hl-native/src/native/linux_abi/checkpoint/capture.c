@@ -1235,15 +1235,16 @@ static void ckpt_poll(struct cpu *c) {
     // rather than an inference from group membership. Only the coordinator's release ends the freeze.
     int rc = ckpt_dump_self(c, pd, 1);
     uint64_t released = g_ckpt_release_state;
-    fprintf(stderr, "[ckpt] proc %d %s (%s)\n", container_pid(), rc == 0 ? "OK" : "FAILED",
+    // Report the GROUP, not container_pid(): an exec session's top process is guest pid 1 by g_init_hostpid
+    // and three of them printing "proc 1" reads as three coordinators when it is one group name each.
+    fprintf(stderr, "[ckpt] %s %s (%s)\n", pd, rc == 0 ? "OK" : "FAILED",
             released == HL_CKPT_RELEASE_EXIT ? "released: image published" : "released: capture abandoned");
     if (rc == 0 && released == HL_CKPT_RELEASE_EXIT) _exit(0);
     if (released == HL_CKPT_RELEASE_EXIT || g_ckpt_capture_destructive) {
         // Either the image owns this process and its own dump failed, or the capture was abandoned after
         // this process had already consumed a shared pipe or socket queue. Neither leaves a guest that can
         // be resumed honestly; see the abort contract on g_ckpt_capture_destructive.
-        fprintf(stderr, "[ckpt] proc %d cannot resume: its capture was destructive and was not published\n",
-                container_pid());
+        fprintf(stderr, "[ckpt] %s cannot resume: its capture was destructive and was not published\n", pd);
         _exit(70);
     }
     // Nothing was consumed and nothing was published: the container is unharmed and the guest runs on.
