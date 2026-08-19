@@ -123,6 +123,15 @@ pub enum EngineError {
     /// capture path refuses. Unlike the transient refusals a checkpoint preflight retries, this
     /// one is a property of the launch and cannot become supported while the guest is running.
     CheckpointUnsupportedUnderSandbox,
+    /// Recovery refused the generation the checkpoint store offered because it is
+    /// staged, not finalized.
+    ///
+    /// The byte store is adversarial and its committed-generation pointer is data
+    /// rather than authority, so a generation whose transaction never committed --
+    /// or one an attacker assembled -- must never reach native restore. Like the
+    /// sandbox refusal this is a property of the stored image, not a transient
+    /// state, so a preflight must not poll on it.
+    CheckpointGenerationUnfinalized,
     Unsupported,
 }
 
@@ -133,7 +142,10 @@ impl EngineError {
     /// full-timeout stall reported as an opaque preflight failure. A permanent refusal must be
     /// surfaced on the first observation instead.
     pub fn is_permanent_refusal(self) -> bool {
-        matches!(self, Self::CheckpointUnsupportedUnderSandbox | Self::Unsupported)
+        matches!(
+            self,
+            Self::CheckpointUnsupportedUnderSandbox | Self::CheckpointGenerationUnfinalized | Self::Unsupported
+        )
     }
 }
 
