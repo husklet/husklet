@@ -10,6 +10,68 @@ static int ckpt_restore_prior_ofd(const struct ckpt_fd *records, int index, uint
     return -1;
 }
 
+struct ckpt_restore_ofd_index {
+    hl_ofd_identity identity;
+    int record;
+};
+
+static int ckpt_restore_ofd_index_compare(const void *left, const void *right) {
+    const struct ckpt_restore_ofd_index *first = left;
+    const struct ckpt_restore_ofd_index *second = right;
+    if (first->identity.lineage.high < second->identity.lineage.high) return -1;
+    if (first->identity.lineage.high > second->identity.lineage.high) return 1;
+    if (first->identity.lineage.low < second->identity.lineage.low) return -1;
+    if (first->identity.lineage.low > second->identity.lineage.low) return 1;
+    if (first->identity.sequence < second->identity.sequence) return -1;
+    if (first->identity.sequence > second->identity.sequence) return 1;
+    if (first->identity.member < second->identity.member) return -1;
+    if (first->identity.member > second->identity.member) return 1;
+    return first->record < second->record ? -1 : first->record > second->record;
+}
+
+static int ckpt_restore_ofd_index_prior(const struct ckpt_restore_ofd_index *entries, size_t count,
+                                        hl_ofd_identity identity, int current) {
+    size_t low = 0, high = count;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2;
+        const hl_ofd_identity candidate = entries[middle].identity;
+        if (candidate.lineage.high < identity.lineage.high ||
+            (candidate.lineage.high == identity.lineage.high && candidate.lineage.low < identity.lineage.low) ||
+            (candidate.lineage.high == identity.lineage.high && candidate.lineage.low == identity.lineage.low &&
+             candidate.sequence < identity.sequence) ||
+            (candidate.lineage.high == identity.lineage.high && candidate.lineage.low == identity.lineage.low &&
+             candidate.sequence == identity.sequence && candidate.member < identity.member))
+            low = middle + 1;
+        else
+            high = middle;
+    }
+    if (low >= count || !hl_ofd_identity_equal(entries[low].identity, identity) || entries[low].record >= current)
+        return -1;
+    return entries[low].record;
+}
+
+static int ckpt_record_has_typed_ofd(const struct ckpt_fd *record) {
+    switch (record->kind) {
+    case CKF_FILE:
+    case CKF_PIPE:
+    case CKF_BLOB:
+    case CKF_MEMFD:
+    case CKF_SIGNALFD:
+    case CKF_DEVICE: return 1;
+    default: return 0;
+    }
+}
+
+static int ckpt_restore_attach_typed_ofd(const struct ckpt_fd *record) {
+    if (!ckpt_record_has_typed_ofd(record)) return 0;
+    if (record->gfd < 0 || record->gfd >= HL_NFD || !hl_ofd_identity_valid(record->ofd_identity) ||
+        record->ofd_id != record->ofd_identity.sequence ||
+        proc_ofd_identity_reattach(record->gfd, record->ofd_identity) != 0)
+        return -1;
+    g_ofd_id[record->gfd] = record->ofd_identity.sequence;
+    return 0;
+}
+
 static void ckpt_restore_reset_inherited_fds(const struct ckpt_fd *records, int count) {
     static unsigned char desired_pipe[HL_NFD];
     for (int fd = 0; fd < HL_NFD; fd++) {
@@ -358,10 +420,15 @@ static int ckpt_restore_inotify_fd(const char *procdir, const struct ckpt_fd *re
                                 : ckpt_restore_native_inotify(record, source);
 }
 
-static int ckpt_restore_existing_ofd(const struct ckpt_fd *records, int index, const struct ckpt_fd *record) {
+static int ckpt_restore_existing_ofd(const struct ckpt_fd *records, int index, const struct ckpt_fd *record,
+                                     const struct ckpt_restore_ofd_index *ofds, size_t ofd_count) {
     if (record->ofd_id == 0 || record->kind == CKF_PIPE || record->kind == CKF_TTY) return 0;
-    int source = ckpt_restore_prior_ofd(records, index, record->ofd_id);
+    int typed = ckpt_record_has_typed_ofd(record);
+    int prior = typed ? ckpt_restore_ofd_index_prior(ofds, ofd_count, record->ofd_identity, index) : -1;
+    int source = typed ? (prior >= 0 ? records[prior].gfd : -1)
+                       : ckpt_restore_prior_ofd(records, index, record->ofd_id);
     if (source < 0) return 0;
+    if (source >= HL_NFD || !hl_ofd_identity_equal(records[index].ofd_identity, g_ofd_identity[source])) return -1;
     if (dup2(source, record->gfd) < 0) return -1;
     fcntl(record->gfd, F_SETFD, (record->descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0);
     if (record->kind == CKF_MEMFD && record->gfd >= 0 && record->gfd < HL_NFD) {
@@ -369,8 +436,6 @@ static int ckpt_restore_existing_ofd(const struct ckpt_fd *records, int index, c
         g_memfd_seal[record->gfd] = (int)record->auxiliary;
         memfd_reg_set_fd(record->gfd, g_memfd_seal[record->gfd]);
     }
-    if (record->gfd >= 0 && record->gfd < HL_NFD) g_ofd_id[record->gfd] = record->ofd_id;
-    if (record->gfd >= 0 && record->gfd < HL_NFD) g_ofd_identity[record->gfd] = record->ofd_identity;
     return proc_fdvis_publish_native_fd(record->gfd) == 0 ? 1 : -1;
 }
 
@@ -403,7 +468,7 @@ static int ckpt_restore_tty_fd(const struct ckpt_fd *record) {
 }
 
 static int ckpt_restore_pipe_fd(const struct ckpt_fd *record) {
-    uint64_t identity = (uint64_t)record->offset;
+    uint64_t identity = record->object_id;
     if (!hl_ofd_identity_valid(record->ofd_identity) || record->ofd_id != record->ofd_identity.sequence) return -1;
     struct ckpt_restore_pipe *pipe = ckpt_restore_pipe_find(identity);
     int source = ((record->flags & O_ACCMODE) == O_WRONLY) ? (pipe ? pipe->writer : -1) : (pipe ? pipe->reader : -1);
@@ -414,8 +479,6 @@ static int ckpt_restore_pipe_fd(const struct ckpt_fd *record) {
     if (record->descriptor_flags & FD_CLOEXEC) fcntl(record->gfd, F_SETFD, FD_CLOEXEC);
     g_pipe_identity[record->gfd] = identity;
     g_pipesz[record->gfd] = pipe->size;
-    if (proc_ofd_identity_reattach(record->gfd, record->ofd_identity) != 0) return -1;
-    g_ofd_id[record->gfd] = record->ofd_identity.sequence;
     return proc_fdvis_publish(record->gfd, HL_HOST_FD_PIPE, 1, identity);
 }
 
@@ -472,27 +535,46 @@ static int ckpt_restore_device_fd(const struct ckpt_fd *record) {
     return proc_fdvis_publish_native_fd(record->gfd);
 }
 
-static int ckpt_restore_fd_record(const char *procdir, const struct ckpt_fd *records, int count, int index) {
+static int ckpt_restore_fd_record(const char *procdir, const struct ckpt_fd *records, int count, int index,
+                                  const struct ckpt_restore_ofd_index *ofds, size_t ofd_count) {
     const struct ckpt_fd *record = &records[index];
     if (ckpt_restore_retire_typed_fd(record) != 0) return -1;
     if (record->kind == CKF_EPOLL) return 0;
-    if (record->kind == CKF_SOCKETPAIR) return ckpt_restore_socketpair_fd(records, count, record);
-    if (record->kind == CKF_SOCKET) return ckpt_restore_bound_socket_fd(records, index, record);
-    if (record->kind == CKF_SIGNALFD) return ckpt_restore_signalfd_fd(records, index, record);
-    if (record->kind == CKF_EVENTFD) return ckpt_restore_eventfd_fd(record);
-    if (record->kind == CKF_TIMERFD) return ckpt_restore_timerfd_fd(records, index, record);
-    if (record->kind == CKF_INOTIFY) return ckpt_restore_inotify_fd(procdir, records, index, record);
-    int restored = ckpt_restore_existing_ofd(records, index, record);
-    if (restored != 0) return restored < 0 ? -1 : 0;
+    int result;
+    if (record->kind == CKF_SOCKETPAIR)
+        result = ckpt_restore_socketpair_fd(records, count, record);
+    else if (record->kind == CKF_SOCKET)
+        result = ckpt_restore_bound_socket_fd(records, index, record);
+    else if (record->kind == CKF_SIGNALFD)
+        result = ckpt_restore_signalfd_fd(records, index, record);
+    else if (record->kind == CKF_EVENTFD)
+        result = ckpt_restore_eventfd_fd(record);
+    else if (record->kind == CKF_TIMERFD)
+        result = ckpt_restore_timerfd_fd(records, index, record);
+    else if (record->kind == CKF_INOTIFY)
+        result = ckpt_restore_inotify_fd(procdir, records, index, record);
+    else
+        result = 1;
+    if (result != 1) return result != 0 ? -1 : ckpt_restore_attach_typed_ofd(record);
+    int restored = ckpt_restore_existing_ofd(records, index, record, ofds, ofd_count);
+    if (restored != 0) return restored < 0 ? -1 : ckpt_restore_attach_typed_ofd(record);
     restored = ckpt_restore_saved_ofd(record);
-    if (restored != 0) return restored < 0 ? -1 : 0;
-    if (record->kind == CKF_TTY) return ckpt_restore_tty_fd(record);
-    if (record->kind == CKF_PIPE) return ckpt_restore_pipe_fd(record);
-    if (record->kind == CKF_BLOB) return ckpt_restore_file_blob(procdir, record);
-    if (record->kind == CKF_MEMFD) return ckpt_restore_memfd_fd(procdir, record);
-    if (record->kind == CKF_FILE) return ckpt_restore_file_fd(record);
-    if (record->kind == CKF_DEVICE) return ckpt_restore_device_fd(record);
-    return 0;
+    if (restored != 0) return restored < 0 ? -1 : ckpt_restore_attach_typed_ofd(record);
+    if (record->kind == CKF_TTY)
+        result = ckpt_restore_tty_fd(record);
+    else if (record->kind == CKF_PIPE)
+        result = ckpt_restore_pipe_fd(record);
+    else if (record->kind == CKF_BLOB)
+        result = ckpt_restore_file_blob(procdir, record);
+    else if (record->kind == CKF_MEMFD)
+        result = ckpt_restore_memfd_fd(procdir, record);
+    else if (record->kind == CKF_FILE)
+        result = ckpt_restore_file_fd(record);
+    else if (record->kind == CKF_DEVICE)
+        result = ckpt_restore_device_fd(record);
+    else
+        result = 0;
+    return result != 0 ? -1 : ckpt_restore_attach_typed_ofd(record);
 }
 
 static int ckpt_restore_epoll_fd(const struct ckpt_fd *records, int index) {
@@ -558,17 +640,30 @@ static int ckpt_restore_fds_dir(const char *procdir) {
     }
     ckpt_source_fclose(f);
     ckpt_fd_terminate_all(records, (size_t)count);
+    struct ckpt_restore_ofd_index *ofds = calloc(record_count ? record_count : 1, sizeof *ofds);
+    if (ofds == NULL) {
+        free(records);
+        return -1;
+    }
+    size_t ofd_count = 0;
+    for (int index = 0; index < count; ++index)
+        if (ckpt_record_has_typed_ofd(&records[index]))
+            ofds[ofd_count++] = (struct ckpt_restore_ofd_index){records[index].ofd_identity, index};
+    if (ofd_count > 1) qsort(ofds, ofd_count, sizeof *ofds, ckpt_restore_ofd_index_compare);
     ckpt_restore_reset_inherited_fds(records, count);
     for (int index = 0; index < count; ++index)
-        if (ckpt_restore_fd_record(procdir, records, count, index) != 0) {
+        if (ckpt_restore_fd_record(procdir, records, count, index, ofds, ofd_count) != 0) {
+            free(ofds);
             free(records);
             return -1;
         }
     if (ckpt_restore_epoll_fds(procdir, records, count) != 0) {
+        free(ofds);
         free(records);
         return -1;
     }
     int restored = ckpt_restore_inotify_sidecar(procdir);
+    free(ofds);
     free(records);
     return restored;
 }
@@ -1150,7 +1245,194 @@ static int ckpt_preflight_socket_queue(const struct ckpt_fd *socket_record, stru
     return 0;
 }
 
+struct ckpt_preflight_ofd {
+    hl_ofd_identity identity;
+    struct ckpt_proc *process;
+    int32_t kind;
+    int32_t flags;
+    int64_t offset;
+    uint64_t object_id;
+    uint64_t auxiliary;
+};
+
+struct ckpt_preflight_pipe {
+    uint64_t object_id;
+    uint64_t capacity;
+    struct ckpt_proc *process;
+};
+
+static int ckpt_preflight_ofd_compare(const void *left, const void *right) {
+    const struct ckpt_preflight_ofd *first = left;
+    const struct ckpt_preflight_ofd *second = right;
+    if (first->identity.sequence < second->identity.sequence) return -1;
+    if (first->identity.sequence > second->identity.sequence) return 1;
+    return 0;
+}
+
+static int ckpt_preflight_ofd_state_compatible(const struct ckpt_preflight_ofd *first,
+                                               const struct ckpt_preflight_ofd *second) {
+    return first->kind == second->kind && first->flags == second->flags && first->offset == second->offset &&
+           first->object_id == second->object_id && first->auxiliary == second->auxiliary;
+}
+
+static int ckpt_preflight_ofd_index_valid(const struct ckpt_preflight_ofd *entries, size_t count) {
+    for (size_t index = 1; index < count; ++index) {
+        if (!hl_ofd_identity_lineage_compatible(entries[0].identity, entries[index].identity) ||
+            !hl_ofd_identity_alias_compatible(entries[index - 1].identity, entries[index].identity))
+            return -1;
+        if (hl_ofd_identity_equal(entries[index - 1].identity, entries[index].identity) &&
+            !ckpt_preflight_ofd_state_compatible(&entries[index - 1], &entries[index]))
+            return -1;
+    }
+    return 0;
+}
+
+static int ckpt_preflight_ofd_append(struct ckpt_preflight_ofd **entries, size_t *count, size_t *capacity,
+                                     struct ckpt_proc *process, const struct ckpt_fd *record) {
+    if (!ckpt_record_has_typed_ofd(record)) return 0;
+    if (!hl_ofd_identity_record_valid(record->ofd_identity, record->ofd_id)) return -1;
+    if (*count == *capacity) {
+        size_t next = *capacity ? *capacity * 2 : 64;
+        if (next < *capacity || next > SIZE_MAX / sizeof **entries) return -1;
+        void *grown = realloc(*entries, next * sizeof **entries);
+        if (grown == NULL) return -1;
+        *entries = grown;
+        *capacity = next;
+    }
+    (*entries)[(*count)++] = (struct ckpt_preflight_ofd){record->ofd_identity, process, record->kind, record->flags,
+                                                        record->offset, record->object_id, record->auxiliary};
+    return 0;
+}
+
+static int ckpt_preflight_pipe_compare(const void *left, const void *right) {
+    const struct ckpt_preflight_pipe *first = left;
+    const struct ckpt_preflight_pipe *second = right;
+    if (first->object_id < second->object_id) return -1;
+    if (first->object_id > second->object_id) return 1;
+    return 0;
+}
+
+static int ckpt_preflight_pipe_append(struct ckpt_preflight_pipe **entries, size_t *count, size_t *capacity,
+                                      struct ckpt_proc *process, const struct ckpt_fd *record) {
+    if (record->kind != CKF_PIPE) return 0;
+    int role = record->flags & O_ACCMODE;
+    if (!record->object_id || (role != O_RDONLY && role != O_WRONLY) || record->offset != 0 ||
+        record->auxiliary > INT_MAX || record->path[0] != 0)
+        return -1;
+    if (*count == *capacity) {
+        size_t next = *capacity ? *capacity * 2 : 64;
+        if (next < *capacity || next > SIZE_MAX / sizeof **entries) return -1;
+        void *grown = realloc(*entries, next * sizeof **entries);
+        if (grown == NULL) return -1;
+        *entries = grown;
+        *capacity = next;
+    }
+    (*entries)[(*count)++] = (struct ckpt_preflight_pipe){record->object_id, record->auxiliary, process};
+    return 0;
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+HL_API int HL_TARGET_LOCAL(checkpoint_pipe_schema_test)(uint32_t scenario) {
+    struct ckpt_proc process = {0};
+    struct ckpt_fd record = {.gfd = 3,
+                             .kind = CKF_PIPE,
+                             .flags = O_RDONLY,
+                             .descriptor_flags = FD_CLOEXEC,
+                             .object_id = 17,
+                             .ofd_id = 23,
+                             .ofd_identity = {{31, 37}, 41, 23},
+                             .auxiliary = 65536};
+    struct ckpt_preflight_pipe *pipes = NULL;
+    size_t pipe_count = 0, pipe_capacity = 0;
+    if (scenario == 1) record.flags = O_RDWR;
+    if (scenario == 2) record.offset = 1;
+    if (scenario == 3) record.path[0] = 'x';
+    if (scenario == 5) record.object_id = 0;
+    if (scenario == 6) record.auxiliary = (uint64_t)INT_MAX + 1;
+    if (scenario == 11) {
+        int descriptors[2];
+        unsigned char sent = 0x5a, received = 0;
+        if (pipe(descriptors) != 0 || write(descriptors[1], &sent, 1) != 1) return 18;
+        int before = fcntl(descriptors[0], F_GETFL);
+        errno = 0;
+        int refused = ckpt_capture_pipe(descriptors[0], 17);
+        int saved_errno = errno;
+        int after = fcntl(descriptors[0], F_GETFL);
+        ssize_t read_count = read(descriptors[0], &received, 1);
+        close(descriptors[0]);
+        close(descriptors[1]);
+        return refused == -1 && saved_errno == ENOTSUP && before >= 0 && after == before && read_count == 1 &&
+                       received == sent
+                   ? 0
+                   : 19;
+    }
+    int status = ckpt_preflight_pipe_append(&pipes, &pipe_count, &pipe_capacity, &process, &record);
+    if ((scenario >= 1 && scenario <= 3) || scenario == 5 || scenario == 6) {
+        free(pipes);
+        return status == -1 ? 0 : 10 + (int)scenario;
+    }
+    if (status != 0 || pipe_count != 1) {
+        free(pipes);
+        return 14;
+    }
+    if (scenario == 0) {
+        record.flags = O_WRONLY;
+        record.ofd_id = 24;
+        record.ofd_identity.sequence = 24;
+        int valid_pair = ckpt_preflight_pipe_append(&pipes, &pipe_count, &pipe_capacity, &process, &record) == 0 &&
+                         pipe_count == 2 && pipes[0].object_id == pipes[1].object_id &&
+                         pipes[0].capacity == pipes[1].capacity;
+        free(pipes);
+        return valid_pair ? 0 : 15;
+    }
+    if (scenario == 4) {
+        record.flags = O_WRONLY;
+        record.auxiliary = 32768;
+        if (ckpt_preflight_pipe_append(&pipes, &pipe_count, &pipe_capacity, &process, &record) != 0) {
+            free(pipes);
+            return 15;
+        }
+        qsort(pipes, pipe_count, sizeof *pipes, ckpt_preflight_pipe_compare);
+        int conflict = pipes[0].object_id == pipes[1].object_id && pipes[0].capacity != pipes[1].capacity;
+        free(pipes);
+        return conflict ? 0 : 16;
+    }
+    if (scenario >= 7 && scenario <= 9) {
+        struct ckpt_preflight_ofd *ofds = NULL;
+        size_t ofd_count = 0, ofd_capacity = 0;
+        if (ckpt_preflight_ofd_append(&ofds, &ofd_count, &ofd_capacity, &process, &record) != 0 ||
+            ckpt_preflight_ofd_append(&ofds, &ofd_count, &ofd_capacity, &process, &record) != 0) {
+            free(ofds);
+            return 20;
+        }
+        if (scenario == 8) ofds[1].flags |= O_NONBLOCK;
+        if (scenario == 9) ofds[1].identity.lineage.low++;
+        qsort(ofds, ofd_count, sizeof *ofds, ckpt_preflight_ofd_compare);
+        int valid = ckpt_preflight_ofd_index_valid(ofds, ofd_count);
+        free(ofds);
+        free(pipes);
+        return (scenario == 7 ? valid == 0 : valid == -1) ? 0 : 21;
+    }
+    if (scenario == 10) {
+        struct ckpt_fd records[3] = {{.gfd = 7, .ofd_id = record.ofd_id},
+                                     {.gfd = 8, .ofd_id = record.ofd_id, .ofd_identity = record.ofd_identity},
+                                     record};
+        struct ckpt_restore_ofd_index index[] = {{record.ofd_identity, 1}, {record.ofd_identity, 2}};
+        int prior = ckpt_restore_ofd_index_prior(index, 2, record.ofd_identity, 2);
+        int bare = ckpt_restore_prior_ofd(records, 2, record.ofd_id);
+        free(pipes);
+        return prior == 1 && bare == 7 ? 0 : 22;
+    }
+    free(pipes);
+    return 17;
+}
+#endif
+
 static int ckpt_restore_preflight(int policy) {
+    struct ckpt_preflight_ofd *ofds = NULL;
+    size_t ofd_count = 0, ofd_capacity = 0;
+    struct ckpt_preflight_pipe *pipes = NULL;
+    size_t pipe_count = 0, pipe_capacity = 0;
     for (int i = 0; i < g_nrprocs; ++i) {
         struct ckpt_proc *process = &g_rprocs[i];
         struct ckpt_meta meta;
@@ -1167,6 +1449,14 @@ static int ckpt_restore_preflight(int policy) {
         }
         struct ckpt_fd record;
         while (process->viable && ckpt_rd_fd(file, &record) == 0) {
+            if (ckpt_preflight_ofd_append(&ofds, &ofd_count, &ofd_capacity, process, &record) != 0) {
+                ckpt_process_stop(process, "descriptor OFD identity is invalid");
+                break;
+            }
+            if (ckpt_preflight_pipe_append(&pipes, &pipe_count, &pipe_capacity, process, &record) != 0) {
+                ckpt_process_stop(process, "pipe descriptor schema is invalid");
+                break;
+            }
             if (record.kind == CKF_FILE || record.kind == CKF_DEVICE) {
                 if (ckpt_external_unavailable(&record)) {
                     char reason[192];
@@ -1191,6 +1481,36 @@ static int ckpt_restore_preflight(int policy) {
         if (!feof(file) && process->viable) ckpt_process_stop(process, "descriptor image is corrupt");
         ckpt_source_fclose(file);
     }
+    if (ofd_count > 1) qsort(ofds, ofd_count, sizeof *ofds, ckpt_preflight_ofd_compare);
+    if (ckpt_preflight_ofd_index_valid(ofds, ofd_count) != 0)
+        for (size_t index = 1; index < ofd_count; ++index) {
+            if (!hl_ofd_identity_lineage_compatible(ofds[0].identity, ofds[index].identity)) {
+                ckpt_process_stop(ofds[0].process, "descriptor OFD lineage conflicts with another identity");
+                ckpt_process_stop(ofds[index].process, "descriptor OFD lineage conflicts with another identity");
+                continue;
+            }
+            if (ofds[index - 1].identity.sequence != ofds[index].identity.sequence ||
+                (hl_ofd_identity_equal(ofds[index - 1].identity, ofds[index].identity) &&
+                 ckpt_preflight_ofd_state_compatible(&ofds[index - 1], &ofds[index])))
+                continue;
+            if (hl_ofd_identity_equal(ofds[index - 1].identity, ofds[index].identity)) {
+                ckpt_process_stop(ofds[index - 1].process, "descriptor OFD alias state conflicts with another record");
+                ckpt_process_stop(ofds[index].process, "descriptor OFD alias state conflicts with another record");
+                continue;
+            }
+            ckpt_process_stop(ofds[index - 1].process, "descriptor OFD sequence collides with another identity");
+            ckpt_process_stop(ofds[index].process, "descriptor OFD sequence collides with another identity");
+        }
+    if (pipe_count > 1) qsort(pipes, pipe_count, sizeof *pipes, ckpt_preflight_pipe_compare);
+    for (size_t index = 1; index < pipe_count; ++index) {
+        if (pipes[index - 1].object_id != pipes[index].object_id ||
+            pipes[index - 1].capacity == pipes[index].capacity)
+            continue;
+        ckpt_process_stop(pipes[index - 1].process, "pipe object capacity conflicts with another endpoint");
+        ckpt_process_stop(pipes[index].process, "pipe object capacity conflicts with another endpoint");
+    }
+    free(ofds);
+    free(pipes);
     // A permissive recovery may remove members of a group or session. A process group remains reconstructible
     // while any same-session member survives (restore elects a replacement host leader), but a session cannot
     // exist without its saved leader. Apply this after resource preflight and before any restore-side fork.

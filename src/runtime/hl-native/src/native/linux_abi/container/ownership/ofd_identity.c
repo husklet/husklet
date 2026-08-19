@@ -27,6 +27,36 @@ int hl_ofd_identity_equal(hl_ofd_identity first, hl_ofd_identity second) {
            first.member == second.member && first.sequence == second.sequence;
 }
 
+int hl_ofd_identity_record_valid(hl_ofd_identity identity, uint64_t numeric_id) {
+#if defined(HL_OFD_MUTATE_SKIP_PREFLIGHT_IDENTITY)
+    (void)identity;
+    (void)numeric_id;
+    return 1;
+#else
+    return hl_ofd_identity_valid(identity) && numeric_id == identity.sequence;
+#endif
+}
+
+int hl_ofd_identity_alias_compatible(hl_ofd_identity first, hl_ofd_identity second) {
+#if defined(HL_OFD_MUTATE_ACCEPT_COLLISION)
+    (void)first;
+    (void)second;
+    return 1;
+#else
+    return first.sequence != second.sequence || hl_ofd_identity_equal(first, second);
+#endif
+}
+
+int hl_ofd_identity_lineage_compatible(hl_ofd_identity first, hl_ofd_identity second) {
+#if defined(HL_OFD_MUTATE_ACCEPT_STALE_LINEAGE)
+    (void)first;
+    (void)second;
+    return 1;
+#else
+    return ofd_lineage_equal(first.lineage, second.lineage);
+#endif
+}
+
 static int ofd_namespace_valid(const hl_ofd_namespace *space) {
     return space != NULL && atomic_load_explicit(&space->state, memory_order_acquire) == HL_OFD_NAMESPACE_ACTIVE &&
            space->abi == HL_OFD_NAMESPACE_ABI && space->size == sizeof *space && ofd_lineage_valid(space->lineage) &&
@@ -111,12 +141,23 @@ int hl_ofd_namespace_admit_validated(hl_ofd_namespace *space, hl_ofd_generation_
     space->lineage = (hl_ofd_lineage){binding.generation_high, binding.generation_low};
 #endif
     uint64_t observed_member = atomic_load_explicit(&space->next_member, memory_order_relaxed);
+    uint64_t observed = atomic_load_explicit(&space->next_sequence, memory_order_relaxed);
+    if (
+#if !defined(HL_OFD_MUTATE_ACCEPT_MEMBER_ROLLBACK)
+        binding.next_member < observed_member ||
+#endif
+#if !defined(HL_OFD_MUTATE_ACCEPT_SEQUENCE_ROLLBACK)
+        binding.next_sequence < observed ||
+#endif
+        observed_member == 0 || observed == 0) {
+        atomic_store_explicit(&space->state, HL_OFD_NAMESPACE_ACTIVE, memory_order_release);
+        return ESTALE;
+    }
 #if !defined(HL_OFD_MUTATE_SKIP_MEMBER_HIGH_WATER)
     while (observed_member < binding.next_member &&
            !atomic_compare_exchange_weak_explicit(&space->next_member, &observed_member, binding.next_member,
                                                   memory_order_relaxed, memory_order_relaxed)) {}
 #endif
-    uint64_t observed = atomic_load_explicit(&space->next_sequence, memory_order_relaxed);
     while (observed < binding.next_sequence &&
            !atomic_compare_exchange_weak_explicit(&space->next_sequence, &observed, binding.next_sequence,
                                                   memory_order_relaxed, memory_order_relaxed)) {}
@@ -170,9 +211,7 @@ int hl_ofd_identity_mint(hl_ofd_member *member, hl_ofd_identity *identity) {
 
 int hl_ofd_identity_reattach(hl_ofd_member *member, hl_ofd_identity identity) {
     if (!ofd_member_valid(member) || !hl_ofd_identity_valid(identity) ||
-#if !defined(HL_OFD_MUTATE_ACCEPT_STALE_LINEAGE)
-        !ofd_lineage_equal(member->lineage, identity.lineage) ||
-#endif
+        !hl_ofd_identity_lineage_compatible((hl_ofd_identity){member->lineage, member->ordinal, 1}, identity) ||
         identity.sequence == UINT64_MAX)
         return ESTALE;
     uint64_t observed = atomic_load_explicit(&member->space->next_sequence, memory_order_relaxed);
@@ -311,6 +350,24 @@ static int ofd_fixture_core(uint32_t scenario, hl_ofd_namespace *space) {
         if (hl_ofd_namespace_admit_validated(space, advanced) != 0) return 25;
         hl_ofd_member member;
         return hl_ofd_member_mint(space, &member) == 0 && member.ordinal == 41 ? 0 : 26;
+    }
+    if (scenario == 10) {
+        hl_ofd_identity first_identity = {lineage, 7, 43};
+        hl_ofd_identity collision = {lineage, 8, 43};
+        return hl_ofd_identity_alias_compatible(first_identity, collision) ? 28 : 0;
+    }
+    if (scenario == 11 || scenario == 12) {
+        hl_ofd_identity identity;
+        if (scenario == 12 && hl_ofd_identity_mint(&first, &identity) != 0) return 28;
+        hl_ofd_generation_binding advanced = initial_generation;
+        advanced.fence = 2;
+        advanced.next_member = scenario == 11 ? 7 : 8;
+        advanced.next_sequence = 1;
+        return hl_ofd_namespace_admit_validated(space, advanced) == ESTALE ? 0 : 29;
+    }
+    if (scenario == 13) {
+        hl_ofd_identity invalid = {{0, 0}, 0, 0};
+        return hl_ofd_identity_record_valid(invalid, 7) ? 30 : 0;
     }
     return 27;
 }

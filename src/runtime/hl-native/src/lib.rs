@@ -163,6 +163,12 @@ pub fn checkpoint_restore_claim_test(isa: u32, scenario: u32) -> Result<(), i32>
 
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
+pub fn checkpoint_pipe_schema_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    bindings::checkpoint_pipe_schema_test(isa, scenario)
+}
+
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
 pub fn checkpoint_restore_rollback_test(isa: u32) -> Result<(), i32> {
     bindings::checkpoint_restore_rollback_test(isa)
 }

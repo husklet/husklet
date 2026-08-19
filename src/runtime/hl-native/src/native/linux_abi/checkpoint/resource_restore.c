@@ -9,7 +9,7 @@ static int ckpt_prepare_restore_pipes(void) {
         struct ckpt_fd record;
         while (ckpt_rd_fd(file, &record) == 0) {
             if (record.kind != CKF_PIPE) continue;
-            uint64_t identity = (uint64_t)record.offset;
+            uint64_t identity = record.object_id;
             struct ckpt_restore_pipe *pipe = ckpt_restore_pipe_find(identity);
             if (!pipe) {
                 if (ckpt_vector_reserve((void **)&g_restore_pipes, &g_restore_pipes_capacity, sizeof *g_restore_pipes,
@@ -20,12 +20,11 @@ static int ckpt_prepare_restore_pipes(void) {
                 pipe = &g_restore_pipes[g_nrestore_pipes++];
                 *pipe = (struct ckpt_restore_pipe){.identity = identity, .reader = -1, .writer = -1};
             }
-            size_t parsed;
-            if (ckpt_decimal_capacity(record.path, 65536, INT_MAX, &parsed) != 0) {
+            if (record.auxiliary > INT_MAX) {
                 ckpt_source_fclose(file);
                 return -1;
             }
-            int size = (int)parsed;
+            int size = (int)record.auxiliary;
             if (size > pipe->size) pipe->size = size;
         }
         if (!feof(file)) {

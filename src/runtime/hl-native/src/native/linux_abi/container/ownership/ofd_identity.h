@@ -72,6 +72,9 @@ int hl_ofd_identity_mint(hl_ofd_member *member, hl_ofd_identity *identity);
 int hl_ofd_identity_reattach(hl_ofd_member *member, hl_ofd_identity identity);
 int hl_ofd_identity_equal(hl_ofd_identity first, hl_ofd_identity second);
 int hl_ofd_identity_valid(hl_ofd_identity identity);
+int hl_ofd_identity_record_valid(hl_ofd_identity identity, uint64_t numeric_id);
+int hl_ofd_identity_alias_compatible(hl_ofd_identity first, hl_ofd_identity second);
+int hl_ofd_identity_lineage_compatible(hl_ofd_identity first, hl_ofd_identity second);
 
 #if defined(HL_NATIVE_TEST_HOOKS)
 int hl_ofd_identity_fixture(uint32_t scenario);

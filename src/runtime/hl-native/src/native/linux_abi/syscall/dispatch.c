@@ -786,7 +786,6 @@ static void service(struct cpu *c) {
 
 #if defined(HL_NATIVE_TEST_HOOKS)
 HL_API int HL_TARGET_LOCAL(ofd_identity_test)(uint32_t scenario) {
-    if (scenario == 10) return proc_ofd_identity_collision_fixture();
     return hl_ofd_identity_fixture(scenario);
 }
 

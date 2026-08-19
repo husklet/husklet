@@ -378,7 +378,7 @@ static int ckpt_capture_native_fd(struct ckpt_fd *records, int *count, const str
                     (unsigned long long)g_pipe_identity[fd]);
             return -1;
         }
-        if ((flags & O_ACCMODE) != O_WRONLY && ckpt_capture_pipe(fd, identity) != 0) {
+        if (ckpt_capture_pipe(fd, identity) != 0) {
             fprintf(stderr, "[ckpt] refuse: cannot capture pipe fd %d identity %llu\n", fd,
                     (unsigned long long)identity);
             return -1;
@@ -389,8 +389,14 @@ static int ckpt_capture_native_fd(struct ckpt_fd *records, int *count, const str
         r.object_id = identity;
         r.ofd_id = ofd_identity_ensure(fd);
         r.ofd_identity = g_ofd_identity[fd];
-        r.offset = (int64_t)identity;
-        snprintf(r.path, sizeof r.path, "%d", (fd >= 0 && fd < HL_NFD) ? g_pipesz[fd] : 0);
+        int capacity = (fd >= 0 && fd < HL_NFD) ? g_pipesz[fd] : 0;
+#ifdef F_GETPIPE_SZ
+        capacity = fcntl(fd, F_GETPIPE_SZ);
+#endif
+        if (capacity <= 0) return -1;
+        r.offset = 0;
+        r.auxiliary = (uint64_t)(unsigned)capacity;
+        r.path[0] = 0;
         records[(*count)++] = r;
         return CKPT_FD_CAPTURED;
     }

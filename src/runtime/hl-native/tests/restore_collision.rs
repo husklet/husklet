@@ -14,6 +14,16 @@ fn actual_restore_claim_helper_fails_closed_on_both_isas() {
 }
 
 #[test]
+fn pipe_schema_and_preflight_fail_closed_on_both_isas() {
+    for isa in [1, 2] {
+        for scenario in 0..=11 {
+            hl_native::checkpoint_pipe_schema_test(isa, scenario)
+                .unwrap_or_else(|status| panic!("ISA {isa} pipe schema scenario {scenario} failed at {status}"));
+        }
+    }
+}
+
+#[test]
 fn actual_restore_rollback_unwinds_every_published_class_on_both_isas() {
     for isa in [1, 2] {
         hl_native::checkpoint_restore_rollback_test(isa)
@@ -56,7 +66,7 @@ fn fixed_noreplace_collision_preserves_sentinel_bytes() {
     let executable = scratch.path().join("restore_collision");
     fs::write(
         &source,
-        r#"
+        r"
 #define _GNU_SOURCE
 #include <errno.h>
 #include <stdint.h>
@@ -76,7 +86,7 @@ int main(void) {
         if (sentinel[index] != 0xa5) return 3;
     return munmap(sentinel, length) == 0 ? 0 : 4;
 }
-"#,
+",
     )
     .expect("write restore collision probe");
     let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
