@@ -2,7 +2,6 @@ use super::{
     Arc, Error, Exec, ExecId, ExecSpec, ExecState, ExitStatus, Io, JournalId, ProcessConfig, Result, Service, Signal,
     now_ms,
 };
-use crate::service::CheckpointConfig;
 
 impl Service {
     pub(crate) async fn create_exec(&self, reference: &str, mut spec: ExecSpec) -> Result<Exec> {
@@ -104,13 +103,11 @@ impl Service {
         mounts.extend(self.identity.open(&container)?);
         let filesystem_generation = self.identity.generation(&container)?.path().to_owned();
         let domain = Some(self.process_domain(&container.id).await?);
-        let checkpoint = CheckpointConfig {
-            image: self
-                .checkpoints
-                .open(&format!("exec-{}", exec.id))
-                .map_err(Error::Checkpoint)?,
-            restore: exec.checkpoint.is_some(),
-        };
+        // An exec session holds the far ends of the container's sockets and pipes, so
+        // it is a member of the container's freeze rather than the subject of a
+        // capture of its own. It therefore opens no image: there is no `exec-<id>`
+        // namespace for a second, invisible generation to be committed into.
+        let checkpoint = crate::service::CheckpointRole::DomainMember;
         let (cursor, live_at) = if let Some(cursor) = exec.attachment_cursor {
             (cursor, self.logs.cursor(&journal).await?)
         } else {
@@ -435,125 +432,11 @@ impl Service {
         }
     }
 
-    pub(crate) async fn checkpoint_execs(self: &Arc<Self>, timeout: std::time::Duration) -> Result<()> {
-        let _guard = self.operations.lock().await;
-        self.checkpoint_execs_locked(timeout).await
-    }
-
-    pub(super) async fn checkpoint_execs_locked(self: &Arc<Self>, timeout: std::time::Duration) -> Result<()> {
-        let ids = self.checkpointable_execs().await?;
-        let mut captured = Vec::new();
-        for id in ids {
-            let result = async {
-                let mut exec = self.inspect_exec(&id).await?;
-                let process = self
-                    .exec_live
-                    .lock()
-                    .await
-                    .get(&id)
-                    .cloned()
-                    .ok_or_else(|| Error::Runtime(format!("running exec {id} has no runtime process")))?;
-                let output_complete = self
-                    .exec_output_complete
-                    .lock()
-                    .await
-                    .get(&id)
-                    .cloned()
-                    .ok_or_else(|| Error::Runtime(format!("running exec {id} has no output owner")))?;
-                let journal = JournalId::exec(id.clone());
-                let io = self
-                    .io
-                    .lock()
-                    .await
-                    .get(&journal)
-                    .cloned()
-                    .ok_or_else(|| Error::Runtime(format!("running exec {id} has no live I/O")))?;
-                process.checkpoint(timeout).await?;
-                let checkpoint = crate::Checkpoint {
-                    namespace: format!("exec-{id}"),
-                    created_at_ms: now_ms(),
-                };
-                exec.state = ExecState::Created;
-                exec.checkpoint = Some(checkpoint);
-                self.execs.replace(&exec).await?;
-                let output = self.await_output_completion(&journal, output_complete, timeout).await;
-                let delivered = io.delivered_cursor();
-                exec.attachment_cursor = Some(exec.attachment_cursor.unwrap_or(0).max(delivered));
-                self.execs.replace(&exec).await?;
-                self.exec_live.lock().await.remove(&id);
-                self.exec_output_complete.lock().await.remove(&id);
-                if let Some(waiters) = self.exec_waiters.lock().await.get(&id) {
-                    waiters.notify_waiters();
-                }
-                output.map(|()| io)
-            };
-            let io = match result.await {
-                Ok(io) => io,
-                Err(mut failure) => {
-                    if self
-                        .inspect_exec(&id)
-                        .await
-                        .is_ok_and(|exec| exec.checkpoint.is_some() && matches!(exec.state, ExecState::Created))
-                        && let Some(io) = self.io.lock().await.get(&JournalId::exec(id.clone())).cloned()
-                    {
-                        captured.push((id.clone(), io));
-                    }
-                    for (captured_id, _) in captured {
-                        if let Err(rollback) = self.start_exec_locked(&captured_id, None, false).await {
-                            failure = Error::Runtime(format!(
-                                "{failure}; checkpoint rollback failed for terminal {captured_id}: {rollback}"
-                            ));
-                        }
-                    }
-                    return Err(failure);
-                }
-            };
-            captured.push((id, io));
-        }
-        let finished = {
-            let mut ios = self.io.lock().await;
-            captured
-                .into_iter()
-                .filter_map(|(id, captured)| {
-                    let journal = JournalId::exec(id);
-                    ios.get(&journal)
-                        .is_some_and(|current| Arc::ptr_eq(current, &captured))
-                        .then(|| ios.remove(&journal).expect("matched I/O generation"))
-                })
-                .collect::<Vec<_>>()
-        };
-        for io in finished {
-            io.finish().await;
-        }
-        Ok(())
-    }
-
-    pub(crate) async fn checkpointable_execs(&self) -> Result<Vec<crate::ExecId>> {
-        let ids = self
-            .execs
-            .list()
-            .await?
-            .into_iter()
-            .filter(|exec| exec.state.is_active())
-            .map(|exec| exec.id)
-            .collect::<Vec<_>>();
-        for id in &ids {
-            let process = self
-                .exec_live
-                .lock()
-                .await
-                .get(id)
-                .cloned()
-                .ok_or_else(|| Error::Runtime(format!("running exec {id} has no runtime process")))?;
-            if !process.checkpointable() {
-                return Err(Error::Runtime(format!(
-                    "running terminal {id} is not checkpointable by its runtime"
-                )));
-            }
-        }
-        Ok(ids)
-    }
-
+    // Exec sessions are members of their container's freeze, not subjects of a
+    // capture of their own: they hold the far ends of the container's sockets and
+    // pipes, and a separate capture would stop one endpoint of a live connection
+    // while the other still ran. There is deliberately no per-exec capture entry
+    // point here, so no second checkpoint channel can be opened for a session.
     pub(crate) async fn resize_exec(&self, id: &ExecId, size: crate::Size) -> Result<()> {
         let _guard = self.operations.lock().await;
         let mut exec = self.inspect_exec(id).await?;

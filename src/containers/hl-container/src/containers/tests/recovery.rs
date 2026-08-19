@@ -239,37 +239,6 @@ async fn daemon_loss_restarts_always_policy() {
 }
 
 #[tokio::test]
-async fn startup_preserves_an_exec_that_has_a_committed_checkpoint() {
-    let repository = Arc::new(Memory::default());
-    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
-    runtime.delay = Duration::from_secs(1);
-    let containers = test_containers(Arc::clone(&repository), Arc::new(runtime))
-        .await
-        .unwrap();
-    containers.create(spec("workspace")).await.unwrap();
-    containers.start("workspace").await.unwrap();
-    let exec = containers
-        .executions()
-        .create("workspace", ExecSpec::new(Process::new("/bin/sleep")))
-        .await
-        .unwrap();
-    let _session = containers.executions().start(&exec.id).await.unwrap();
-    containers.checkpoint_all(Duration::from_secs(1)).await.unwrap();
-    drop(containers);
-
-    let reopened = test_containers(repository, Arc::new(FakeRuntime::new(ExitStatus::Code(0))))
-        .await
-        .unwrap();
-    reopened.start("workspace").await.unwrap();
-    let failures = reopened.executions().restore_checkpoints().await.unwrap();
-    let recovered = reopened.executions().inspect(&exec.id).await.unwrap();
-
-    assert!(failures.is_empty());
-    assert!(matches!(recovered.state, ExecState::Running { .. }));
-    assert!(recovered.checkpoint.is_none());
-}
-
-#[tokio::test]
 async fn startup_resumes_durable_restart_backoff() {
     let repository = Arc::new(Memory::default());
     let id = crate::ContainerId::new();

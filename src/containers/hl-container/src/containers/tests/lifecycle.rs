@@ -683,142 +683,6 @@ async fn checkpoint_all_holds_one_operation_guard_from_exec_preflight_through_ca
 }
 
 #[tokio::test]
-async fn execution_checkpoint_restores_without_capturing_the_container_init() {
-    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
-    runtime.delay = Duration::from_secs(1);
-    let runtime = Arc::new(runtime);
-    let containers = service(Arc::clone(&runtime)).await;
-    containers.create(spec("workspace")).await.unwrap();
-    containers.start("workspace").await.unwrap();
-    let exec = containers
-        .executions()
-        .create(
-            "workspace",
-            ExecSpec::new(Process::new("/bin/sh").console(Console::default().terminal(Size::new(24, 80).unwrap()))),
-        )
-        .await
-        .unwrap();
-    let mut session = containers.executions().start(&exec.id).await.unwrap();
-    let delivered = session.next().await.unwrap().unwrap();
-    assert_eq!(delivered.bytes, b"fake-out\n");
-    session.acknowledge(delivered.sequence);
-    let wait_id = exec.id.clone();
-    let wait_containers = containers.clone();
-    let mut wait = tokio::spawn(async move { wait_containers.executions().wait(&wait_id).await });
-
-    containers
-        .executions()
-        .checkpoint_all(Duration::from_secs(1))
-        .await
-        .unwrap();
-    assert!(matches!(
-        containers.inspect("workspace").await.unwrap().state,
-        ContainerState::Running { .. }
-    ));
-    let checkpointed = containers.executions().inspect(&exec.id).await.unwrap();
-    assert_eq!(checkpointed.state, ExecState::Created);
-    assert_eq!(
-        checkpointed
-            .checkpoint
-            .as_ref()
-            .map(|checkpoint| checkpoint.namespace.as_str()),
-        Some(format!("exec-{}", exec.id).as_str())
-    );
-    assert!(
-        tokio::time::timeout(Duration::from_millis(25), &mut wait)
-            .await
-            .is_err(),
-        "checkpointed execution wait returned before restore"
-    );
-
-    containers.shutdown(Duration::from_secs(1)).await.unwrap();
-    containers.start("workspace").await.unwrap();
-    let mut restored = containers.executions().start(&exec.id).await.unwrap();
-    let mut resumed_output = restored.history().await.unwrap();
-    while resumed_output.len() < 3 {
-        resumed_output.push(
-            tokio::time::timeout(Duration::from_millis(250), restored.next())
-                .await
-                .unwrap()
-                .unwrap()
-                .unwrap(),
-        );
-    }
-    assert_eq!(
-        resumed_output
-            .iter()
-            .map(|entry| entry.bytes.as_slice())
-            .collect::<Vec<_>>(),
-        [
-            b"fake-err\n".as_slice(),
-            b"fake-out\n".as_slice(),
-            b"fake-err\n".as_slice()
-        ],
-        "delivered pre-checkpoint output is skipped while queued output and post-restore output are replayed"
-    );
-    for entry in &resumed_output {
-        restored.acknowledge(entry.sequence);
-    }
-    drop(restored);
-    let mut attached = containers.executions().attach(&exec.id, None).await.unwrap();
-    assert!(attached.history().await.unwrap().is_empty());
-    drop(attached);
-    assert!(matches!(
-        containers.executions().inspect(&exec.id).await.unwrap().state,
-        ExecState::Running { .. }
-    ));
-    assert_eq!(
-        runtime.checkpoints.lock().unwrap().as_slice(),
-        [Some(false), Some(false), Some(false), Some(true)]
-    );
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), wait)
-            .await
-            .expect("restored execution wait timed out")
-            .unwrap()
-            .unwrap(),
-        ExitStatus::Code(0)
-    );
-}
-
-#[tokio::test]
-async fn successful_exec_restore_replaces_stdin_authority() {
-    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
-    runtime.delay = Duration::from_secs(1);
-    let runtime = Arc::new(runtime);
-    let containers = service(Arc::clone(&runtime)).await;
-    containers.create(spec("exec-generation-parent")).await.unwrap();
-    containers.start("exec-generation-parent").await.unwrap();
-    let exec = containers
-        .executions()
-        .create(
-            "exec-generation-parent",
-            ExecSpec::new(Process::new("/bin/sh")).streams(Streams {
-                stdin: true,
-                stdout: true,
-                stderr: true,
-            }),
-        )
-        .await
-        .unwrap();
-    let stale = containers.executions().start(&exec.id).await.unwrap();
-
-    containers
-        .executions()
-        .checkpoint_all(Duration::from_secs(1))
-        .await
-        .unwrap();
-    assert!(stale.write(b"stale-exec-generation\n".to_vec()).await.is_err());
-
-    let restored = containers.executions().start(&exec.id).await.unwrap();
-    restored.write(b"restored-exec-generation\n".to_vec()).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(25)).await;
-    let inputs = runtime.inputs.lock().unwrap();
-    assert!(inputs.iter().any(|(_, bytes)| bytes == b"restored-exec-generation\n"));
-    assert!(!inputs.iter().any(|(_, bytes)| bytes == b"stale-exec-generation\n"));
-}
-
-#[tokio::test]
 async fn exhausted_exec_io_generation_fails_before_launch() {
     let runtime = Arc::new(FakeRuntime::new(ExitStatus::Code(0)));
     let containers = service(Arc::clone(&runtime)).await;
@@ -846,130 +710,6 @@ async fn exhausted_exec_io_generation_fails_before_launch() {
         .expect("exhausted generation unexpectedly launched an exec");
     assert!(error.to_string().contains("I/O generation space is exhausted"));
     assert_eq!(runtime.programs.lock().unwrap().len(), launches);
-}
-
-#[tokio::test]
-async fn exec_restore_fences_late_old_output_and_replays_it_only_as_durable_history() {
-    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
-    runtime.delay = Duration::from_secs(10);
-    let runtime = Arc::new(runtime);
-    let containers = service(Arc::clone(&runtime)).await;
-    containers.create(spec("exec-output-parent")).await.unwrap();
-    containers.start("exec-output-parent").await.unwrap();
-    let exec = containers
-        .executions()
-        .create("exec-output-parent", ExecSpec::new(Process::new("/bin/sh")))
-        .await
-        .unwrap();
-    let (old_waiting, release_old) = runtime.delay_next_log(b"exec-old-initial\n", b"exec-old-late\n");
-    let mut old = containers.executions().start(&exec.id).await.unwrap();
-    let old_input = old.input();
-    tokio::time::timeout(Duration::from_secs(1), old_waiting)
-        .await
-        .expect("old exec log owner did not enter wait")
-        .unwrap();
-
-    let exits = runtime.checkpoint_exits.load(Ordering::SeqCst);
-    let checkpoint_containers = containers.clone();
-    let checkpoint = tokio::spawn(async move {
-        checkpoint_containers
-            .executions()
-            .checkpoint_all(Duration::from_secs(1))
-            .await
-    });
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while runtime.checkpoint_exits.load(Ordering::SeqCst) == exits {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("exec checkpoint never requested process exit");
-    assert!(
-        !checkpoint.is_finished(),
-        "exec checkpoint escaped before the old output owner drained"
-    );
-    release_old.send(()).unwrap();
-    checkpoint.await.unwrap().unwrap();
-
-    let old_entries = [old.next().await.unwrap().unwrap(), old.next().await.unwrap().unwrap()];
-    assert_eq!(old_entries[0].bytes, b"exec-old-initial\n");
-    assert_eq!(old_entries[1].bytes, b"exec-old-late\n");
-    assert!(old_input.write(b"stale\n".to_vec()).await.is_err());
-
-    let mut restored = containers.executions().start(&exec.id).await.unwrap();
-    let history = restored.history().await.unwrap();
-    assert_eq!(
-        history.iter().map(|entry| entry.bytes.as_slice()).collect::<Vec<_>>(),
-        [b"exec-old-initial\n".as_slice(), b"exec-old-late\n".as_slice()],
-        "unacknowledged old output must replay as history, never masquerade as live replacement output"
-    );
-    let new_entries = [
-        restored.next().await.unwrap().unwrap(),
-        restored.next().await.unwrap().unwrap(),
-    ];
-    assert_eq!(new_entries[0].bytes, b"fake-out\n");
-    assert_eq!(new_entries[1].bytes, b"fake-err\n");
-    assert!(new_entries.iter().all(|entry| !entry.bytes.starts_with(b"exec-old-")));
-}
-
-#[tokio::test]
-async fn exec_checkpoint_rolls_back_a_capture_when_its_output_owner_panics() {
-    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
-    runtime.delay = Duration::from_secs(1);
-    let runtime = Arc::new(runtime);
-    let containers = service(Arc::clone(&runtime)).await;
-    containers.create(spec("exec-capture-output-parent")).await.unwrap();
-    containers.start("exec-capture-output-parent").await.unwrap();
-    let exec = containers
-        .executions()
-        .create("exec-capture-output-parent", ExecSpec::new(Process::new("/bin/sh")))
-        .await
-        .unwrap();
-    runtime.panic_wait.store(true, Ordering::SeqCst);
-    containers.executions().start(&exec.id).await.unwrap();
-    let launches = runtime.programs.lock().unwrap().len();
-
-    let error = containers
-        .executions()
-        .checkpoint_all(Duration::from_secs(1))
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("output owner exited"));
-    let restored = containers.executions().inspect(&exec.id).await.unwrap();
-    assert!(matches!(restored.state, ExecState::Running { .. }));
-    assert!(restored.checkpoint.is_none());
-    assert_eq!(runtime.programs.lock().unwrap().len(), launches + 1);
-}
-
-#[tokio::test]
-async fn checkpoint_rejection_preserves_every_running_process() {
-    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
-    runtime.delay = Duration::from_secs(1);
-    runtime.checkpointable.store(false, Ordering::SeqCst);
-    let runtime = Arc::new(runtime);
-    let containers = service(Arc::clone(&runtime)).await;
-    containers.create(spec("workspace")).await.unwrap();
-    containers.start("workspace").await.unwrap();
-    let exec = containers
-        .executions()
-        .create(
-            "workspace",
-            ExecSpec::new(Process::new("/bin/sh").console(Console::default().terminal(Size::new(24, 80).unwrap()))),
-        )
-        .await
-        .unwrap();
-    let _session = containers.executions().start(&exec.id).await.unwrap();
-
-    let error = containers.checkpoint_all(Duration::from_secs(1)).await.unwrap_err();
-
-    assert!(error.to_string().contains("not checkpointable"));
-    let container = containers.inspect("workspace").await.unwrap();
-    assert!(matches!(container.state, ContainerState::Running { .. }));
-    assert_eq!(container.checkpoint, None);
-    let execution = containers.executions().inspect(&exec.id).await.unwrap();
-    assert!(matches!(execution.state, ExecState::Running { .. }));
-    assert_eq!(execution.checkpoint, None);
-    assert!(runtime.suspensions.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -1030,112 +770,6 @@ async fn checkpoint_all_restores_earlier_captures_after_a_later_failure() {
     assert_eq!(
         runtime.checkpoints.lock().unwrap().as_slice(),
         [Some(false), Some(false), Some(true)]
-    );
-}
-
-#[tokio::test]
-async fn checkpoint_execs_restores_an_earlier_terminal_after_a_later_failure() {
-    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
-    runtime.delay = Duration::from_millis(200);
-    runtime.restore_delay = Some(Duration::from_secs(2));
-    let runtime = Arc::new(runtime);
-    let containers = service(Arc::clone(&runtime)).await;
-    containers.create(spec("workspace")).await.unwrap();
-    containers.start("workspace").await.unwrap();
-    let first = containers
-        .executions()
-        .create(
-            "workspace",
-            ExecSpec::new(Process::new("/bin/sh").console(Console::default().terminal(Size::new(24, 80).unwrap())))
-                .streams(Streams {
-                    stdin: true,
-                    stdout: true,
-                    stderr: true,
-                }),
-        )
-        .await
-        .unwrap();
-    let first_session = containers.executions().start(&first.id).await.unwrap();
-    let second = containers
-        .executions()
-        .create(
-            "workspace",
-            ExecSpec::new(Process::new("/bin/sh").console(Console::default().terminal(Size::new(24, 80).unwrap())))
-                .streams(Streams {
-                    stdin: true,
-                    stdout: true,
-                    stderr: true,
-                }),
-        )
-        .await
-        .unwrap();
-    let second_session = containers.executions().start(&second.id).await.unwrap();
-
-    // Stored executions are visited by id. Runtime process ids are allocated in launch order:
-    // workspace=40, first=41, second=42. Fail the later stored terminal so the earlier one is
-    // destructively captured before the injected refusal.
-    let failing_runtime_id = if first.id.to_string() < second.id.to_string() {
-        42
-    } else {
-        41
-    };
-    runtime.fail_checkpoint.store(failing_runtime_id, Ordering::SeqCst);
-
-    let error = containers
-        .executions()
-        .checkpoint_all(Duration::from_secs(1))
-        .await
-        .unwrap_err();
-
-    assert!(error.to_string().contains("injected checkpoint failure"));
-    for execution in [&first, &second] {
-        let restored = containers.executions().inspect(&execution.id).await.unwrap();
-        assert!(matches!(restored.state, ExecState::Running { .. }));
-        assert_eq!(restored.checkpoint, None);
-    }
-    let surviving_session = if first.id.to_string() < second.id.to_string() {
-        &first_session
-    } else {
-        &second_session
-    };
-    assert!(
-        surviving_session
-            .write(b"stale-after-rollback\n".to_vec())
-            .await
-            .is_err(),
-        "the captured generation retained authority over its rollback replacement"
-    );
-    let surviving = if first.id.to_string() < second.id.to_string() {
-        &first.id
-    } else {
-        &second.id
-    };
-    let replacement = containers.executions().attach(surviving, None).await.unwrap();
-    replacement.write(b"after rollback\n".to_vec()).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert!(
-        runtime
-            .inputs
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(process, bytes)| *process >= 43 && bytes == b"after rollback\n"),
-        "the replacement session did not reach the restored process"
-    );
-    assert!(
-        !runtime
-            .inputs
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(_, bytes)| bytes == b"stale-after-rollback\n")
-    );
-    assert!(
-        matches!(
-            containers.executions().inspect(surviving).await.unwrap().state,
-            ExecState::Running { process_id, .. } if process_id >= 43
-        ),
-        "the captured process's stale completion clobbered its restored replacement"
     );
 }
 
@@ -1459,4 +1093,32 @@ async fn force_removal_of_a_guest_that_ignores_the_stop_signal_is_bounded() {
         "{error:?}"
     );
     assert!(runtime.signals.lock().unwrap().contains(&Signal::KILL));
+}
+
+/// An exec session holds the far ends of its container's sockets and pipes, so it
+/// must be sealed into the container's freeze rather than armed on a checkpoint
+/// channel of its own. Two channels means two trigger words: the coordinator's
+/// generation bump never reaches the session's safepoint gates, and anything the
+/// session did dump would commit into a store the container's sink cannot read.
+#[tokio::test]
+async fn an_exec_session_joins_its_container_freeze_rather_than_its_own_channel() {
+    let runtime = Arc::new(FakeRuntime::new(ExitStatus::Code(0)));
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("workspace")).await.unwrap();
+    containers.start("workspace").await.unwrap();
+    let exec = containers
+        .executions()
+        .create(
+            "workspace",
+            ExecSpec::new(Process::new("/bin/sh").console(Console::default().terminal(Size::new(24, 80).unwrap()))),
+        )
+        .await
+        .unwrap();
+    let _session = containers.executions().start(&exec.id).await.unwrap();
+
+    assert_eq!(
+        runtime.checkpoint_roles.lock().unwrap().as_slice(),
+        [Some(true), Some(false)],
+        "the container launch coordinates the freeze and its exec session joins it"
+    );
 }

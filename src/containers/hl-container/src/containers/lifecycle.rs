@@ -178,14 +178,6 @@ impl Containers {
         self.service.checkpoint_all(timeout).await
     }
 
-    /// Verifies that every active attached execution has a checkpoint transport before shutdown starts.
-    ///
-    /// # Errors
-    /// Returns a runtime error naming the first active process that cannot be checkpointed.
-    pub async fn require_checkpointable(&self) -> Result<()> {
-        self.service.checkpointable_execs().await.map(|_| ())
-    }
-
     /// Removes a created or exited container. Running containers are rejected.
     ///
     /// # Errors

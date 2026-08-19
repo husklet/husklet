@@ -307,7 +307,6 @@ impl Service {
 
     pub(crate) async fn checkpoint_all(self: &Arc<Self>, timeout: Duration) -> Result<()> {
         let _guard = self.operations.lock().await;
-        self.checkpointable_execs().await?;
         #[cfg(test)]
         self.wait_checkpoint_all_gate().await;
         let mut failure = None;
@@ -347,11 +346,6 @@ impl Service {
                     }
                 }
             }
-        }
-        if failure.is_none()
-            && let Err(error) = self.checkpoint_execs_locked(timeout).await
-        {
-            failure = Some(error);
         }
         let Some(mut failure) = failure else {
             return Ok(());

@@ -57,8 +57,6 @@ impl Runtime {
         containers: &Containers,
         docker: Option<&crate::runtime::resources::Daemon>,
     ) -> io::Result<()> {
-        let executions = containers.executions();
-        executions.require_checkpointable().await.map_err(io::Error::other)?;
         let docker_preparation = if let Some(daemon) = docker {
             let preparation = daemon.prepare_checkpoint()?;
             if let Some(warning) = preparation.warning() {

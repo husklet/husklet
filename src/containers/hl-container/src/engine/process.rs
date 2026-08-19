@@ -27,6 +27,8 @@ pub(super) struct Process {
     pub(super) logs: Mutex<Option<crate::service::LogReceiver>>,
     pub(super) domain: hl_engine::Domain,
     pub(super) checkpointable: bool,
+    /// Publishes this process's freeze channel to its domain for as long as it runs.
+    pub(super) domain_channel: Option<super::DomainChannelEntry>,
 }
 
 impl Process {
@@ -248,6 +250,7 @@ mod tests {
             logs: Mutex::new(None),
             domain: hl_engine::Domain::new().unwrap(),
             checkpointable: false,
+            domain_channel: None,
         })
     }
 

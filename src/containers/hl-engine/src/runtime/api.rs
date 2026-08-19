@@ -131,6 +131,8 @@ impl Builder {
         let services = RuntimeServices {
             checkpoint_sink: None,
             checkpoint_source: None,
+            #[cfg(unix)]
+            checkpoint_channel: None,
             streams: crate::composition::StandardStreams::default(),
         };
         let Ok(backend) = EngineBackend::construct(self.isa, plan, services, &factory, workspace.clone()) else {
@@ -175,6 +177,8 @@ impl Engine {
         let services = RuntimeServices {
             checkpoint_sink: None,
             checkpoint_source: None,
+            #[cfg(unix)]
+            checkpoint_channel: None,
             streams,
         };
         Self::construct(isa, plan, services)
@@ -191,6 +195,33 @@ impl Engine {
         let services = RuntimeServices {
             checkpoint_sink: Some(sink),
             checkpoint_source: Some(source),
+            #[cfg(unix)]
+            checkpoint_channel: None,
+            streams,
+        };
+        Self::construct(isa, plan, services)
+    }
+
+    /// Constructs a runtime that joins an existing process domain's freeze.
+    ///
+    /// The session shares the coordinator's broker socket and trigger word, so the
+    /// coordinator's generation bump reaches its safepoint gates and its guest
+    /// processes commit into the coordinator's store. It owns no checkpoint image
+    /// and cannot be captured on its own.
+    ///
+    /// # Errors
+    /// Returns the composition refusal that prevented construction.
+    #[cfg(unix)]
+    pub fn with_checkpoint_channel(
+        isa: GuestIsa,
+        plan: RuntimePlan,
+        streams: crate::composition::StandardStreams,
+        channel: crate::composition::CheckpointChannel,
+    ) -> Result<Self, EngineError> {
+        let services = RuntimeServices {
+            checkpoint_sink: None,
+            checkpoint_source: None,
+            checkpoint_channel: Some(channel),
             streams,
         };
         Self::construct(isa, plan, services)
@@ -237,6 +268,12 @@ impl Engine {
     }
     pub fn capture_checkpoint(&self) -> Result<(), EngineError> {
         self.backend.capture_checkpoint()
+    }
+    /// The freeze channel every session in this engine's process domain must join.
+    #[cfg(unix)]
+    #[must_use]
+    pub fn checkpoint_channel(&self) -> Option<crate::composition::CheckpointChannel> {
+        self.backend.checkpoint_channel()
     }
     /// Captures the running process tree before the caller's monotonic deadline.
     ///
