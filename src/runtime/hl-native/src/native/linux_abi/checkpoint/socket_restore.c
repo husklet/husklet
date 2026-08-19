@@ -1094,6 +1094,9 @@ static void ckpt_restore_proc_run(int gpid) {
 
     ckpt_restore_commit_stage(CKPT_RESTORE_DESCRIPTORS);
     if (ckpt_restore_fds_dir(pd) != 0) ckpt_restore_commit_failed();
+    // After the memory restore, so MAP_FIXED re-attachment overwrites the restored anonymous
+    // pages with the shared segment at exactly the address the guest captured.
+    if (ckpt_restore_sysv_state(pd) != 0) ckpt_restore_commit_failed();
     ckpt_restore_commit_stage(CKPT_RESTORE_SIGNALS);
     if (ckpt_restore_signal_state(pd) != 0) ckpt_restore_commit_failed();
     ckpt_restore_commit_stage(CKPT_RESTORE_IDENTITY);
@@ -1204,6 +1207,12 @@ static int ckpt_restore_tree_body(const char *rootfs, const struct ckpt_phase_le
     if (exe[0]) g_exe_path = exe;
     if (ckpt_restore_fds_dir(ipd) != 0) {
         fprintf(stderr, "[restore] init descriptor restore failed\n");
+        return 70;
+    }
+    // Before ckpt_fork_children: the init creates the SysV namespace object under the NEW
+    // namespace hash and every restored descendant inherits that mapping.
+    if (ckpt_restore_sysv_state(ipd) != 0) {
+        fprintf(stderr, "[restore] init SysV IPC restore failed\n");
         return 70;
     }
     struct cpu c, *images = NULL;
