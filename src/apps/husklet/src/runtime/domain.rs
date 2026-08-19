@@ -19,7 +19,10 @@ use configuration::Configuration;
 use identity::RuntimeIdentity;
 use lifecycle::{Disposition, Lease, Shutdown};
 use publication::{ConfigurationIdentity as PublishedConfiguration, Protocol as PublishedProtocol, Publication};
-use restore::RestoreSummary;
+use restore::{Notice as RestoreNotice, RestoreSummary};
+
+/// Prefix marking a line of the reopen notice as Husklet's own words rather than guest output.
+pub use restore::NOTICE_PREFIX as RESTORE_NOTICE_PREFIX;
 use runtime::Runtime;
 
 const CONTAINER: &str = "workspace";
@@ -278,7 +281,7 @@ impl Domain {
         if workspace.docker_sock {
             crate::runtime::resources::Daemon::new(workspace).clear_checkpoint_warning()?;
         }
-        Ok(Some(summary))
+        Ok(Some(RestoreNotice::for_terminal(&summary)))
     }
 
     fn publish_restore_summary(workspace: &WorkspaceConfig, failures: &mut Vec<String>) -> io::Result<()> {

@@ -385,7 +385,12 @@ impl PaneWorkingDirectory {
 }
 
 impl HistorySnapshot {
-    const TRANSIENT_MESSAGES: [&'static str; 5] = [
+    /// Lines that describe one session's startup rather than the work done in it. Persisting them
+    /// would replay a past restore as though it had just happened, so they are dropped from the
+    /// scrollback that is written to disk. The reopen notice is one of them: it is shown once, for
+    /// the restore it describes.
+    const TRANSIENT_MESSAGES: [&'static str; 6] = [
+        hl::runtime::domain::RESTORE_NOTICE_PREFIX,
         "workspace session ended immediately (",
         "failed to start shell: ",
         "hl-engine fault: ",
@@ -478,6 +483,23 @@ mod history_snapshot_tests {
         assert_eq!(
             HistorySnapshot::persistent(history),
             "prior output\nlive output\nprompt"
+        );
+    }
+
+    #[test]
+    fn the_reopen_notice_is_shown_once_and_never_persisted_as_scrollback() {
+        let notice = hl::runtime::domain::RESTORE_NOTICE_PREFIX;
+        let history = format!(
+            "guest output\n\
+             {notice}Session restored. The output above is preserved history from your last session.\n\
+             {notice}1 program could not be resumed as a live process:\n\
+             {notice}  \u{2022} execution 7f3a: exec 7f3a cannot be reattached after a whole-image restore\n\
+             later guest output\n"
+        );
+
+        assert_eq!(
+            HistorySnapshot::persistent(&history),
+            "guest output\nlater guest output"
         );
     }
 
