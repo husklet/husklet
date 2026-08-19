@@ -333,6 +333,10 @@ static uint64_t g_sock_peer_object[HL_NFD];
  * detail out of the guest's getsockname/getpeername results. */
 static uint8_t g_sock_identity_local_hidden[HL_NFD];
 static uint8_t g_sock_identity_peer_hidden[HL_NFD];
+/* Ordinary pathname/abstract AF_UNIX connections need a whole-process freeze before their reciprocal
+ * topology can be captured. Keep them distinct from guest-created socketpairs and the private AF_UNIX
+ * transports behind guest INET sockets; until that freeze is authoritative, capture must fail closed. */
+static uint8_t g_sock_identity_checkpoint_pending[HL_NFD];
 static _Atomic uint32_t g_sock_object_next = 1;
 
 static uint64_t sock_object_new(void) {
@@ -351,10 +355,93 @@ static void sock_pair_identity_assign(int first, int second) {
     g_sock_peer_object[second] = first_object;
 }
 
-/* Private loopback/bridge streams are AF_UNIX transports hidden behind guest INET sockets. Encode their
- * reciprocal object identities in the client's AF_UNIX bind name, so accept can recover them with
- * getpeername() without placing engine-private bytes in the guest stream. */
-static int sock_internal_connect_prepare(int fd) {
+static int sock_internal_alias_matches(int fd, int candidate, uint64_t ofd) {
+    return candidate == fd || (ofd != 0 && g_ofd_id[candidate] == ofd);
+}
+
+/* Encode reciprocal object identities in an engine-private client AF_UNIX bind name, so accept can recover
+ * them with getpeername() without placing engine-private bytes in the guest stream. */
+static void sock_internal_alias_relation(int fd, uint64_t peer, int local_hidden, int checkpoint_pending) {
+    if (fd < 0 || fd >= HL_NFD || !g_sock_object[fd]) return;
+    uint64_t ofd = g_ofd_id[fd];
+    int first = ofd ? 0 : fd, end = ofd ? HL_NFD : fd + 1;
+    for (int alias = first; alias < end; alias++) {
+        if (!sock_internal_alias_matches(fd, alias, ofd)) continue;
+        g_sock_peer_object[alias] = peer;
+        if (local_hidden) g_sock_identity_local_hidden[alias] = 1;
+        if (checkpoint_pending) g_sock_identity_checkpoint_pending[alias] = 1;
+    }
+}
+
+static void sock_internal_async_error_store(int fd, int error) {
+    if (fd < 0 || fd >= HL_NFD || !g_sock_object[fd]) return;
+    uint64_t ofd = g_ofd_id[fd];
+    int first = ofd ? 0 : fd, end = ofd ? HL_NFD : fd + 1;
+    for (int alias = first; alias < end; alias++)
+        if (sock_internal_alias_matches(fd, alias, ofd)) g_so_error[alias] = error;
+}
+
+static int sock_internal_async_error_take(int fd) {
+    if (fd < 0 || fd >= HL_NFD) return 0;
+    int error = g_so_error[fd];
+    uint64_t ofd = g_ofd_id[fd];
+    if (!ofd) {
+        g_so_error[fd] = 0;
+        return error;
+    }
+    for (int alias = 0; alias < HL_NFD; alias++)
+        if (sock_internal_alias_matches(fd, alias, ofd)) g_so_error[alias] = 0;
+    return error;
+}
+
+static void sock_internal_unix_peer_note(int fd, const char *name, int native_peer) {
+    if (fd < 0 || fd >= HL_NFD || !g_sock_object[fd]) return;
+    uint64_t ofd = g_ofd_id[fd];
+    int first = ofd ? 0 : fd, end = ofd ? HL_NFD : fd + 1;
+    for (int alias = first; alias < end; alias++) {
+        if (!sock_internal_alias_matches(fd, alias, ofd)) continue;
+        unix_peer_note(alias, name);
+        g_sock_native_peer[alias] = (uint8_t)native_peer;
+    }
+}
+
+static void sock_internal_connect_observed(int fd, int error) {
+    if (fd < 0 || fd >= HL_NFD || !g_sock_object[fd]) return;
+    uint64_t ofd = g_ofd_id[fd];
+    int first = ofd ? 0 : fd, end = ofd ? HL_NFD : fd + 1;
+    for (int alias = first; alias < end; alias++) {
+        if (!sock_internal_alias_matches(fd, alias, ofd)) continue;
+        if (error == EINPROGRESS) {
+            g_sock_conn[alias] = 0;
+            g_sock_connecting[alias] = 1;
+        } else if (error == 0) {
+            g_sock_conn[alias] = 1;
+            g_sock_connecting[alias] = 0;
+        } else {
+            g_sock_conn[alias] = 0;
+            g_sock_connecting[alias] = 0;
+            if (g_sock_identity_local_hidden[alias]) g_sock_peer_object[alias] = 0;
+        }
+    }
+}
+
+static int sock_internal_checkpoint_admit(int fd) {
+    if (fd < 0 || fd >= HL_NFD) {
+        errno = EBADF;
+        return -1;
+    }
+    if (g_sock_identity_checkpoint_pending[fd]) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    if (g_sock_connecting[fd]) {
+        errno = EBUSY;
+        return -1;
+    }
+    return 0;
+}
+
+static int sock_internal_connect_prepare(int fd, int checkpoint_pending) {
     if (fd < 0 || fd >= HL_NFD || !g_sock_object[fd]) {
         errno = EINVAL;
         return -1;
@@ -367,12 +454,13 @@ static int sock_internal_connect_prepare(int fd) {
     if (local.sun_family == AF_UNIX && local_length > (socklen_t)path_offset && named) {
         uint64_t client = 0, server = 0;
         local.sun_path[sizeof local.sun_path - 1] = '\0';
-        if (hl_socket_identity_parse(local.sun_path, &client, &server) == 0 && client == g_sock_object[fd]) {
-            g_sock_peer_object[fd] = server;
-            g_sock_identity_local_hidden[fd] = 1;
+        if (g_sock_identity_local_hidden[fd] &&
+            hl_socket_identity_parse(local.sun_path, &client, &server) == 0 && client == g_sock_object[fd]) {
+            sock_internal_alias_relation(fd, server, 1, checkpoint_pending);
         }
         /* A guest-bound client must keep its address and still be allowed to connect.  It cannot carry the
          * private identity name, so leave peer identity absent and let checkpoint admission reject it. */
+        if (checkpoint_pending) sock_internal_alias_relation(fd, g_sock_peer_object[fd], 0, 1);
         return 0;
     }
     // A failed AF_UNIX connect poisons its socket and the retry path replaces it with lo_swap(). Re-bind
@@ -388,20 +476,20 @@ static int sock_internal_connect_prepare(int fd) {
     unlink(path);
     if (bind(fd, (struct sockaddr *)&address, sizeof address) != 0) return -1;
     unlink(path);
-    g_sock_peer_object[fd] = peer;
-    g_sock_identity_local_hidden[fd] = 1;
+    sock_internal_alias_relation(fd, peer, 1, checkpoint_pending);
     return 0;
 }
 
 static void sock_internal_connect_failed(int fd) {
-    if (fd < 0 || fd >= HL_NFD || !g_sock_identity_local_hidden[fd]) return;
+    if (fd < 0 || fd >= HL_NFD) return;
     /* A reserved peer becomes authoritative only when connect succeeds (or remains in progress).  The
      * private local bind cannot be undone without replacing the descriptor, but clearing the relation makes
      * checkpoint capture fail closed instead of inventing a connected peer after a refused dial. */
-    g_sock_peer_object[fd] = 0;
+    sock_internal_connect_observed(fd, ECONNREFUSED);
 }
 
-static int sock_internal_accept_identify(int fd) {
+static int sock_internal_accept_identify(int fd, int checkpoint_pending) {
+    if (fd >= 0 && fd < HL_NFD && checkpoint_pending) g_sock_identity_checkpoint_pending[fd] = 1;
     struct sockaddr_un peer = {0};
     socklen_t length = sizeof peer;
     if (getpeername(fd, (struct sockaddr *)&peer, &length) != 0) return -1;
@@ -417,42 +505,62 @@ static int sock_internal_accept_identify(int fd) {
     g_sock_object[fd] = server;
     g_sock_peer_object[fd] = client;
     g_sock_identity_peer_hidden[fd] = 1;
+    g_sock_identity_checkpoint_pending[fd] = (uint8_t)checkpoint_pending;
     return 1;
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
+static void sock_internal_identity_test_initialize(int fd, uint64_t object, uint64_t ofd) {
+    g_sock_object[fd] = object;
+    g_sock_peer_object[fd] = 0;
+    g_sock_identity_local_hidden[fd] = 0;
+    g_sock_identity_peer_hidden[fd] = 0;
+    g_sock_identity_checkpoint_pending[fd] = 0;
+    g_sock_connecting[fd] = 0;
+    g_sock_conn[fd] = 0;
+    g_so_error[fd] = 0;
+    g_ofd_id[fd] = ofd;
+    g_sock_fam[fd] = object ? AF_UNIX : 0;
+    g_sock_stream[fd] = object != 0;
+}
+
 HL_API int HL_TARGET_LOCAL(unix_identity_test)(uint32_t operation, int fd, uint64_t object, uint64_t *local,
                                                uint64_t *peer, uint32_t *hidden) {
     if (fd < 0 || fd >= HL_NFD || local == NULL || peer == NULL || hidden == NULL) return EINVAL;
     int status = 0;
     switch (operation) {
     case 0:
-        g_sock_object[fd] = object;
-        g_sock_peer_object[fd] = 0;
-        g_sock_identity_local_hidden[fd] = 0;
-        g_sock_identity_peer_hidden[fd] = 0;
-        status = sock_internal_connect_prepare(fd);
+        sock_internal_identity_test_initialize(fd, object, g_ofd_id[fd]);
+        status = sock_internal_connect_prepare(fd, 1);
         break;
     case 1:
-        g_sock_object[fd] = object;
-        g_sock_peer_object[fd] = 0;
-        g_sock_identity_local_hidden[fd] = 0;
-        g_sock_identity_peer_hidden[fd] = 0;
-        status = sock_internal_accept_identify(fd);
+        sock_internal_identity_test_initialize(fd, object, g_ofd_id[fd]);
+        status = sock_internal_accept_identify(fd, 1);
         break;
     case 2: sock_internal_connect_failed(fd); break;
-    case 3:
-        g_sock_object[fd] = 0;
-        g_sock_peer_object[fd] = 0;
-        g_sock_identity_local_hidden[fd] = 0;
-        g_sock_identity_peer_hidden[fd] = 0;
+    case 3: sock_internal_identity_test_initialize(fd, 0, 0); break;
+    case 4:
+        sock_internal_identity_test_initialize(fd, object, 0);
+        status = sock_internal_connect_prepare(fd, 0);
+        break;
+    case 5: sock_internal_connect_observed(fd, EINPROGRESS); break;
+    case 6: sock_internal_connect_observed(fd, ECONNREFUSED); break;
+    case 7: sock_internal_connect_observed(fd, 0); break;
+    case 8: status = sock_internal_checkpoint_admit(fd); break;
+    case 9: sock_internal_identity_test_initialize(fd, object, object); break;
+    case 10: break;
+    case 11:
+        sock_internal_identity_test_initialize(fd, object, 0);
+        g_sock_peer_object[fd] = object + 1;
         break;
     default: return EINVAL;
     }
     if (status < 0) return errno != 0 ? errno : EIO;
     *local = g_sock_object[fd];
     *peer = g_sock_peer_object[fd];
-    *hidden = (uint32_t)g_sock_identity_local_hidden[fd] | ((uint32_t)g_sock_identity_peer_hidden[fd] << 1);
+    *hidden = (uint32_t)g_sock_identity_local_hidden[fd] | ((uint32_t)g_sock_identity_peer_hidden[fd] << 1) |
+              ((uint32_t)g_sock_identity_checkpoint_pending[fd] << 2) |
+              ((uint32_t)g_sock_connecting[fd] << 3) | ((uint32_t)g_sock_conn[fd] << 4);
     return status;
 }
 #endif
@@ -719,6 +827,16 @@ static void fill_inet6_lo(uint8_t *sa, socklen_t *l, uint16_t port) {
     if (l) *l = 28;
 }
 
+/* Linux sockaddr_un begins with a two-byte family on every supported guest ISA.  Do not copy the host's
+ * sockaddr_un prefix here: Darwin begins it with one-byte sun_len followed by one-byte sun_family. */
+static void fill_unix_unnamed(uint8_t *sa, socklen_t *length) {
+    if (!length) return;
+    socklen_t capacity = *length;
+    const uint8_t family[2] = {(uint8_t)(AF_UNIX & 0xff), (uint8_t)((AF_UNIX >> 8) & 0xff)};
+    if (sa && capacity != 0) memcpy(sa, family, capacity < 2 ? (size_t)capacity : 2u);
+    *length = 2;
+}
+
 // ---- NET bridge (2A "virtual switch"): per-USER-NETWORK rendezvous for container<->container traffic.
 // Generalizes the loopback redirect from "127/8 -> per-container dir" to "this user network's subnet ->
 // SHARED per-network dir". A guest TCP socket whose peer is ANOTHER container's IP on the same user
@@ -777,6 +895,7 @@ static void fd_carry_sock(int dst, int src) {
     g_sock_peer_object[dst] = g_sock_peer_object[src];
     g_sock_identity_local_hidden[dst] = g_sock_identity_local_hidden[src];
     g_sock_identity_peer_hidden[dst] = g_sock_identity_peer_hidden[src];
+    g_sock_identity_checkpoint_pending[dst] = g_sock_identity_checkpoint_pending[src];
     g_sock_peer_pid[dst] = g_sock_peer_pid[src]; // ... and the same synthetic peer node identity
     g_sock_passcred[dst] = g_sock_passcred[src];
     g_sock_conn[dst] = g_sock_conn[src];

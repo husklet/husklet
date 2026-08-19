@@ -1,1 +1,1 @@
-inprogress=1 poll=1 pollout=1 soerr=OK got=ok
+inprogress=1 poll=1 pollout=1 soerr=OK local-inet=1 peer-inet=1 got=ok

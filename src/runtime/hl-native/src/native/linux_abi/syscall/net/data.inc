@@ -405,11 +405,12 @@
         // A deferred asynchronous connect error (stashed for a non-blocking dial to a closed private-loopback
         // port) is delivered exactly once through SO_ERROR, mirroring a real TCP stack.
         if (lvl == 1 && opt == 4 && gfd >= 0 && gfd < HL_NFD && g_so_error[gfd]) {
+            int deferred_error = sock_internal_async_error_take(gfd);
             if (a3 && a4 && *(socklen_t *)a4 >= 4) {
-                *(int *)a3 = hl_linux_errno_from_host(g_so_error[gfd]);
+                *(int *)a3 = hl_linux_errno_from_host(deferred_error);
                 *(socklen_t *)a4 = 4;
             }
-            g_so_error[gfd] = 0;
+            sock_internal_connect_observed(gfd, deferred_error);
             G_RET(c) = 0;
             break;
         }
@@ -656,7 +657,11 @@
                 break;
             }
         }
+        int socket_error_query = lvl == SOL_SOCKET && opt == SO_ERROR;
         int r = getsockopt((int)a0, lvl, opt, (void *)a3, (socklen_t *)a4);
+        if (r == 0 && socket_error_query && gfd >= 0 && gfd < HL_NFD && g_sock_connecting[gfd] && a3 && a4 &&
+            *(socklen_t *)a4 >= (socklen_t)sizeof(int))
+            sock_internal_connect_observed(gfd, *(int *)a3);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
         break;
     }

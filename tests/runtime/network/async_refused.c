@@ -23,6 +23,7 @@ int main(void) {
     close(probe);
 
     int cs = socket(AF_INET, SOCK_STREAM, 0);
+    int alias = dup(cs);
     fcntl(cs, F_SETFL, fcntl(cs, F_GETFL) | O_NONBLOCK);
     errno = 0;
     int cr = connect(cs, (struct sockaddr *)&a, sizeof a);
@@ -32,8 +33,12 @@ int main(void) {
     int pr = poll(&pf, 1, 2000);
     int soerr = -1;
     socklen_t sl = sizeof soerr;
-    getsockopt(cs, SOL_SOCKET, SO_ERROR, &soerr, &sl);
-    printf("started=%d poll=%d soerr=%s\n", started, pr > 0, err_name(soerr));
+    getsockopt(alias, SOL_SOCKET, SO_ERROR, &soerr, &sl);
+    int consumed = -1;
+    sl = sizeof consumed;
+    getsockopt(cs, SOL_SOCKET, SO_ERROR, &consumed, &sl);
+    printf("started=%d poll=%d soerr=%s consumed=%s\n", started, pr > 0, err_name(soerr), err_name(consumed));
+    close(alias);
     close(cs);
     return 0;
 }

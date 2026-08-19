@@ -102,6 +102,7 @@ static int ckpt_capture_early_emulated_fd(struct ckpt_fd *records, int *count, i
     r.gfd = fd;
     const char *early_emulated = ckpt_guest_kernel_fd(fd);
     if (early_emulated && strcmp(early_emulated, "socket") == 0 && fd >= 0 && fd < HL_NFD && g_sock_object[fd] != 0) {
+        if (sock_internal_checkpoint_admit(fd) != 0) return -1;
         if (g_sock_identity_local_hidden[fd] && g_sock_peer_object[fd] == 0) {
             /* A refused AF_UNIX connect leaves the real descriptor privately bound so it can be retried.  It
              * has no reciprocal endpoint, and restoring that hidden bind as a guest-visible socket would
@@ -159,6 +160,16 @@ static int ckpt_capture_early_emulated_fd(struct ckpt_fd *records, int *count, i
     }
     return CKPT_FD_CAPTURE_NEXT;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+HL_API int HL_TARGET_LOCAL(unix_identity_capture_test)(int fd) {
+    struct ckpt_fd records[2];
+    int count = 0;
+    errno = 0;
+    int status = ckpt_capture_early_emulated_fd(records, &count, fd);
+    return status < 0 ? (errno != 0 ? errno : EIO) : 0;
+}
+#endif
 
 static int ckpt_capture_typed_fd(struct ckpt_fd *records, int *count, int fd) {
     hl_linux_fd_snapshot snapshot;

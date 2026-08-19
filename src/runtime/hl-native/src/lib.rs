@@ -167,6 +167,14 @@ pub fn unix_identity_test(isa: u32, operation: u32, fd: i32, object: u64) -> Res
     bindings::unix_identity_test(isa, operation, fd, object)
 }
 
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn unix_identity_capture_test(isa: u32, fd: i32) -> Result<(), i32> {
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    bindings::unix_identity_capture_test(isa, fd)
+}
+
 #[cfg(test)]
 mod platform;
 

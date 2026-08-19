@@ -580,6 +580,13 @@ cases:
     artifact: { destination: /opt/husklet/network-unix_abstractname }
     run: []
     expect: { exit: 0, stdout: golden/unix_abstractname.out }
+  - id: runtime/network/unix-dup-connect
+    status: active
+    compat: { class: compatibility }
+    build: { source: unix_dup_connect.c, inputs: [socket_util.h], output: unix_dup_connect, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-unix_dup_connect }
+    run: []
+    expect: { exit: 0, stdout: golden/unix_dup_connect.out }
   - id: runtime/network/netlink-edges
     status: active
     compat: { class: compatibility }

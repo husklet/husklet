@@ -76,6 +76,7 @@
                 g_sock_peer_object[r] = 0;
                 g_sock_identity_local_hidden[r] = 0;
                 g_sock_identity_peer_hidden[r] = 0;
+                g_sock_identity_checkpoint_pending[r] = 0;
             }
         }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
@@ -586,10 +587,12 @@
                 g_sock_peer_object[r] = 0;
                 g_sock_identity_local_hidden[r] = 0;
                 g_sock_identity_peer_hidden[r] = 0;
+                g_sock_identity_checkpoint_pending[r] = 0;
             }
             int internal_peer = 0;
-            if ((pl || pbr || (lfd >= 0 && lfd < HL_NFD && g_sock_fam[lfd] == AF_UNIX)) &&
-                (internal_peer = sock_internal_accept_identify(r)) < 0) {
+            int ordinary_unix = lfd >= 0 && lfd < HL_NFD && g_sock_fam[lfd] == AF_UNIX;
+            if ((pl || pbr || ordinary_unix) &&
+                (internal_peer = sock_internal_accept_identify(r, ordinary_unix)) < 0) {
                 int error = errno;
                 close(r);
                 G_RET(c) = (uint64_t)(int64_t)(-error);
@@ -726,13 +729,13 @@
                 G_RET(c) = (uint64_t)(-errno);
                 break;
             }
-            if (sock_internal_connect_prepare((int)a0) != 0) {
+            if (sock_internal_connect_prepare((int)a0, 0) != 0) {
                 G_RET(c) = (uint64_t)(-errno);
                 break;
             }
             int r = connect((int)a0, (struct sockaddr *)&un, sizeof un);
             if (r == 0 || errno == EINPROGRESS) {
-                g_sock_connecting[(int)a0] = r < 0;
+                sock_internal_connect_observed((int)a0, r < 0 ? EINPROGRESS : 0);
                 g_lo_port[(int)a0] = p ? p : 1;
                 g_lo_v6[(int)a0] = (uint8_t)c_lo6;
             } else if ((errno == ENOENT || errno == ECONNREFUSED) && br_on()) {
@@ -747,12 +750,12 @@
                 if (br_path(0, g_netif[0].ip, p, bp, sizeof bp) != 0 || unix_addr_set(&bu, bp) < 0 ||
                     lo_swap((int)a0) < 0) {
                     r = -1;
-                } else if (sock_internal_connect_prepare((int)a0) != 0) {
+                } else if (sock_internal_connect_prepare((int)a0, 0) != 0) {
                     r = -1;
                 } else {
                     r = connect((int)a0, (struct sockaddr *)&bu, sizeof bu);
                     if (r == 0 || errno == EINPROGRESS) {
-                        g_sock_connecting[(int)a0] = r < 0;
+                        sock_internal_connect_observed((int)a0, r < 0 ? EINPROGRESS : 0);
                         g_br_port[(int)a0] = p ? p : 1;
                         g_br_ip[(int)a0] = g_netif[0].ip;
                         g_br_interface[(int)a0] = 1;
@@ -769,15 +772,16 @@
                 // INET peer to deliver that, so stash the error and report EINPROGRESS -- poll then wakes on
                 // the failed AF_UNIX socket and getsockopt(SO_ERROR) hands the ECONNREFUSED back once.
                 if (le == ECONNREFUSED && (int)a0 >= 0 && (int)a0 < HL_NFD && (fcntl((int)a0, F_GETFL) & O_NONBLOCK)) {
-                    g_so_error[(int)a0] = ECONNREFUSED;
+                    sock_internal_async_error_store((int)a0, ECONNREFUSED);
+                    sock_internal_connect_observed((int)a0, EINPROGRESS);
                     G_RET(c) = (uint64_t)(-EINPROGRESS);
                 } else {
+                    sock_internal_connect_observed((int)a0, le);
                     G_RET(c) = (uint64_t)(-le);
                 }
             } else {
                 G_RET(c) = 0;
-                if ((int)a0 >= 0 && (int)a0 < HL_NFD)
-                    g_sock_conn[(int)a0] = 1, g_sock_connecting[(int)a0] = 0; // sticky-connected
+                sock_internal_connect_observed((int)a0, 0);
             }
             break;
         }
@@ -852,7 +856,7 @@
                     r = -1;
                     break;
                 }
-                if (sock_internal_connect_prepare((int)a0) != 0) {
+                if (sock_internal_connect_prepare((int)a0, 0) != 0) {
                     r = -1;
                     break;
                 }
@@ -873,14 +877,13 @@
                 nanosleep(&ts, NULL);
             }
             if (r == 0 || errno == EINPROGRESS) {
-                g_sock_connecting[(int)a0] = r < 0;
+                sock_internal_connect_observed((int)a0, r < 0 ? EINPROGRESS : 0);
                 g_br_port[(int)a0] = p ? p : 1;
                 g_br_ip[(int)a0] = dip; // peer ip for getpeername
                 g_br_interface[(int)a0] = (uint8_t)(connect_interface + 1);
             }
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
-            if (r == 0 && (int)a0 >= 0 && (int)a0 < HL_NFD)
-                g_sock_conn[(int)a0] = 1, g_sock_connecting[(int)a0] = 0; // sticky-connected
+            if (r == 0) sock_internal_connect_observed((int)a0, 0);
             break;
         }
         // abstract AF_UNIX (sun_path[0]==0): dial the same HL_NETNS-keyed fs socket bind used. Must run
@@ -893,7 +896,7 @@
                 G_RET(c) = (uint64_t)(-errno);
                 break;
             }
-            if (sock_internal_connect_prepare((int)a0) != 0) {
+            if (sock_internal_connect_prepare((int)a0, 1) != 0) {
                 G_RET(c) = (uint64_t)(-errno);
                 break;
             }
@@ -904,8 +907,7 @@
             if (r < 0 && ce == ENOENT) ce = ECONNREFUSED;
             G_RET(c) = (r < 0 && ce != EINPROGRESS) ? (uint64_t)(-ce) : 0;
             if ((r == 0 || ce == EINPROGRESS) && (int)a0 >= 0 && (int)a0 < HL_NFD) {
-                g_sock_conn[(int)a0] = 1; // sticky-connected
-                g_sock_connecting[(int)a0] = r < 0;
+                sock_internal_connect_observed((int)a0, r < 0 ? EINPROGRESS : 0);
                 char an[108];
                 int L = (int)a2 - 3; // sun_path[0]==0, name follows; addrlen = 2 (family) + 1 (nul) + name
                 if (L < 0) L = 0;
@@ -913,7 +915,7 @@
                 an[0] = '@';
                 memcpy(an + 1, sa + 3, (size_t)L);
                 an[L + 1] = 0;
-                unix_peer_note((int)a0, an); // guest-visible peer name for getpeername
+                sock_internal_unix_peer_note((int)a0, an, 0); // guest-visible peer name for getpeername
             } else {
                 sock_internal_connect_failed((int)a0);
             }
@@ -928,7 +930,7 @@
             const char *hp = atpath(-100, gp, host, sizeof host, 0); // guest path -> topmost layer's host path
             // dial via unix_sock_at (matches the bind side): fchdir-shortens paths past sun_path[104] so a
             // long upper socket path is reached exactly, not truncated to some other (nonexistent) inode.
-            if (sock_internal_connect_prepare((int)a0) != 0) {
+            if (sock_internal_connect_prepare((int)a0, 1) != 0) {
                 G_RET(c) = (uint64_t)(-errno);
                 break;
             }
@@ -938,10 +940,8 @@
             } while (r < 0 && SVC_EINTR_RESTART(c));
             G_RET(c) = (r < 0 && errno != EINPROGRESS) ? (uint64_t)(-errno) : 0;
             if ((r == 0 || errno == EINPROGRESS) && (int)a0 >= 0 && (int)a0 < HL_NFD) {
-                g_sock_conn[(int)a0] = r == 0;
-                g_sock_connecting[(int)a0] = r < 0;
-                g_sock_native_peer[(int)a0] = (uint8_t)jail_is_projected_socket(gp);
-                unix_peer_note((int)a0, gp);
+                sock_internal_connect_observed((int)a0, r < 0 ? EINPROGRESS : 0);
+                sock_internal_unix_peer_note((int)a0, gp, jail_is_projected_socket(gp));
             } else {
                 sock_internal_connect_failed((int)a0);
             }
@@ -1024,18 +1024,6 @@
                 break;
             }
         }
-        if (fd >= 0 && fd < HL_NFD && g_sock_identity_local_hidden[fd] && !g_unix_bind[fd][0] && a1) {
-            if (a1 && a2) {
-                socklen_t capacity = *(socklen_t *)a2;
-                struct sockaddr_un unnamed = {.sun_family = AF_UNIX};
-                if (capacity != 0)
-                    memcpy((void *)a1, &unnamed,
-                           capacity < (socklen_t)sizeof(sa_family_t) ? (size_t)capacity : sizeof(sa_family_t));
-                *(socklen_t *)a2 = (socklen_t)sizeof(sa_family_t);
-            }
-            G_RET(c) = 0;
-            break;
-        }
         if (fd >= 0 && fd < HL_NFD && g_udp_local_port[fd]) {
             if (g_udp_local_v6[fd])
                 fill_inet6_lo((uint8_t *)a1, (socklen_t *)a2, g_udp_local_port[fd]);
@@ -1066,6 +1054,11 @@
         }
         if (fd >= 0 && fd < HL_NFD && g_br_port[fd]) {
             fill_inet_br((uint8_t *)a1, (socklen_t *)a2, g_br_ip[fd], g_br_port[fd]);
+            G_RET(c) = 0;
+            break;
+        }
+        if (fd >= 0 && fd < HL_NFD && g_sock_identity_local_hidden[fd] && !g_unix_bind[fd][0] && a1) {
+            fill_unix_unnamed((uint8_t *)a1, (socklen_t *)a2);
             G_RET(c) = 0;
             break;
         }
@@ -1118,18 +1111,6 @@
                 break;
             }
         }
-        if (fd >= 0 && fd < HL_NFD && g_sock_identity_peer_hidden[fd] && a1) {
-            if (a1 && a2) {
-                socklen_t capacity = *(socklen_t *)a2;
-                struct sockaddr_un unnamed = {.sun_family = AF_UNIX};
-                if (capacity != 0)
-                    memcpy((void *)a1, &unnamed,
-                           capacity < (socklen_t)sizeof(sa_family_t) ? (size_t)capacity : sizeof(sa_family_t));
-                *(socklen_t *)a2 = (socklen_t)sizeof(sa_family_t);
-            }
-            G_RET(c) = 0;
-            break;
-        }
         if (fd >= 0 && fd < HL_NFD && g_udp_peer_port[fd]) {
             if (g_udp_peer_v6[fd])
                 fill_inet6_lo((uint8_t *)a1, (socklen_t *)a2, g_udp_peer_port[fd]);
@@ -1155,6 +1136,11 @@
         }
         if (fd >= 0 && fd < HL_NFD && g_br_port[fd] && !g_sock_host_backed[fd]) {
             fill_inet_br((uint8_t *)a1, (socklen_t *)a2, g_br_ip[fd], g_br_port[fd]);
+            G_RET(c) = 0;
+            break;
+        }
+        if (fd >= 0 && fd < HL_NFD && g_sock_identity_peer_hidden[fd] && a1) {
+            fill_unix_unnamed((uint8_t *)a1, (socklen_t *)a2);
             G_RET(c) = 0;
             break;
         }
