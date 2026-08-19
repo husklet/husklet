@@ -557,3 +557,59 @@ async fn execution_wait_reports_runtime_failure_instead_of_fabricating_an_exit_s
 
     assert!(matches!(error, Error::Runtime(message) if message == "runtime failed: injected wait failure"));
 }
+
+#[tokio::test]
+async fn restoring_a_sealed_member_refuses_by_name_instead_of_relaunching_its_command() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("member-restore-parent")).await.unwrap();
+    containers.start("member-restore-parent").await.unwrap();
+    let exec = containers
+        .executions()
+        .create("member-restore-parent", ExecSpec::new(Process::new("/bin/psql")))
+        .await
+        .unwrap();
+    let session = containers.executions().start(&exec.id).await.unwrap();
+    drop(session);
+    containers
+        .checkpoint("member-restore-parent", Duration::from_secs(5))
+        .await
+        .unwrap();
+    let sealed = containers.executions().inspect(&exec.id).await.unwrap();
+    assert_eq!(sealed.state, ExecState::Created);
+    assert!(sealed.checkpoint.is_some(), "capture did not seal the member");
+    let launches_before = runtime.programs.lock().unwrap().len();
+    let starts_before = containers.service.exec_start_attempts();
+
+    let failures = containers.executions().restore_checkpoints().await.unwrap();
+
+    assert_eq!(failures.len(), 1, "expected exactly one refused member: {failures:?}");
+    assert_eq!(failures[0].0, exec.id);
+    assert!(
+        matches!(&failures[0].1, Error::ExecNotReattachable { id, .. } if id == &exec.id),
+        "restore did not refuse by name: {:?}",
+        failures[0].1
+    );
+    assert_eq!(
+        runtime.programs.lock().unwrap().len(),
+        launches_before,
+        "restore relaunched the member's command"
+    );
+    assert_eq!(
+        containers.service.exec_start_attempts(),
+        starts_before,
+        "restore reached start_exec"
+    );
+    assert!(
+        containers
+            .executions()
+            .inspect(&exec.id)
+            .await
+            .unwrap()
+            .checkpoint
+            .is_some(),
+        "a refused restore consumed the member's token"
+    );
+}

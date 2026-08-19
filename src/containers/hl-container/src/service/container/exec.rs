@@ -331,6 +331,43 @@ impl Service {
         }
     }
 
+    /// Reattaches one restored domain member instead of relaunching its command.
+    ///
+    /// Restore is whole-image: `ckpt_restore_tree_body` forks every captured group out of the
+    /// single `containers.start(...)` launch that owns the container's image. A revived exec
+    /// session is therefore a forked child of the *container's* engine process, and hl-container
+    /// holds nothing that names it:
+    ///
+    /// * the [`Running`](crate::service::Running) boundary yields exactly one handle per
+    ///   `Runtime::start`, and the restore performs one such call for all groups, so no
+    ///   per-member handle exists to install in `exec_live`;
+    /// * membership is sealed on the capture-scoped `REGISTER_READY` channel, which carries a
+    ///   host process identity and an executor inventory and no exec identity at all -- and it is
+    ///   admitted only while a capture is `Active`, so a restored tree registers nothing;
+    /// * a member's launch-time stdio is not recoverable either. `checkpoint/image.c` records
+    ///   guest fds 0..2 as `CKF_TTY` precisely so a restored engine rebinds them to *its own*
+    ///   stdin/stdout/stderr bridge -- which, after a whole-image restore, is the container's
+    ///   single bridge. There is no per-member descriptor for an `Io` to own, so the entry
+    ///   [`Self::attach_exec`] requires cannot be rebuilt from the restored member.
+    ///
+    /// Relaunching through [`Self::start_exec`] would run the session's original command again:
+    /// a second, fresh process presented as the restored one. This refuses instead, by name.
+    pub(crate) async fn reattach_exec(self: &Arc<Self>, id: &ExecId) -> Result<()> {
+        let _guard = self.operations.lock().await;
+        let exec = self.inspect_exec(id).await?;
+        if !matches!(exec.state, ExecState::Created) || exec.checkpoint.is_none() {
+            return Err(Error::InvalidExecState {
+                id: exec.id,
+                actual: exec.state,
+                expected: "a sealed domain member awaiting restore",
+            });
+        }
+        Err(Error::ExecNotReattachable {
+            id: exec.id,
+            reason: MEMBER_HANDLE_GAP,
+        })
+    }
+
     pub(crate) async fn attach_exec(
         self: &Arc<Self>,
         id: &ExecId,
@@ -569,6 +606,12 @@ impl Service {
         .map_err(|_| Error::Runtime("timed out waiting for quarantined exec cleanup".into()))
     }
 }
+
+/// Why a sealed member cannot be revived as a live exec session yet. Named once so the refusal
+/// reads identically wherever it surfaces.
+const MEMBER_HANDLE_GAP: &str = "the restored member is a forked child of the container's engine \
+process; the runtime boundary exposes no handle for it and its launch-time stdio was rebound to \
+the container's own bridge, so there is no live I/O to attach";
 
 #[cfg(test)]
 fn unpublished_reap_timeout() -> std::time::Duration {
