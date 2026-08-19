@@ -62,7 +62,7 @@
 
 #define CKPT_MAGIC UINT64_C(0x373054504b434c48)          // "HLCKPT07" (LE) -- per-process meta
 #define CKPT_MANIFEST_MAGIC UINT64_C(0x3730304e414d4c48) // "HLMAN007" (LE) -- workspace manifest
-#define CKPT_VERSION 7 // v7 persists typed OFD identities and each process's namespace member
+#define CKPT_VERSION 8 // v8 normalizes pipe object, typed OFD, endpoint role, and capacity fields
 #define CKPT_ARCH_X86_64 1
 #define CKPT_ARCH_AARCH64 2
 #define CKPT_CPU_MAGIC UINT64_C(0x31305550434c4848) // "HHLCPU01" (LE)

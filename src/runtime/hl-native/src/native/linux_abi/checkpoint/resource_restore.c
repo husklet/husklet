@@ -104,7 +104,9 @@ static int ckpt_restore_right_epoll(const struct ckpt_fd *record) {
         close(placeholder);
         return -1;
     }
-    g_restore_rights[g_nrestore_rights++] = (struct ckpt_restore_right){record->ofd_id, record->object_id, fd, 1};
+    g_restore_rights[g_nrestore_rights++] = (struct ckpt_restore_right){
+        .ofd_id = record->ofd_id, .object_id = record->object_id, .fd = fd, .owned = 1,
+        .kind = record->kind, .ofd_identity = record->ofd_identity};
     return fd;
 }
 
@@ -139,7 +141,9 @@ static int ckpt_restore_right_inotify(const struct ckpt_fd *record) {
         close(shadow);
         return -1;
     }
-    g_restore_rights[g_nrestore_rights++] = (struct ckpt_restore_right){record->ofd_id, record->object_id, shadow, 2};
+    g_restore_rights[g_nrestore_rights++] = (struct ckpt_restore_right){
+        .ofd_id = record->ofd_id, .object_id = record->object_id, .fd = shadow, .owned = 2,
+        .kind = record->kind, .ofd_identity = record->ofd_identity};
     return shadow;
 }
 
@@ -208,21 +212,22 @@ static int ckpt_restore_right_signalfd(const struct ckpt_fd *record) {
     } else if (object->mask != record->auxiliary) {
         return -1;
     }
-    g_restore_rights[g_nrestore_rights++] =
-        (struct ckpt_restore_right){record->ofd_id, record->object_id, object->reader, 0};
+    g_restore_rights[g_nrestore_rights++] = (struct ckpt_restore_right){
+        .ofd_id = record->ofd_id, .object_id = record->object_id, .fd = object->reader,
+        .kind = record->kind, .ofd_identity = record->ofd_identity};
     return object->reader;
 }
 
 static int ckpt_restore_right_pipe(const struct ckpt_fd *record) {
-    uint64_t identity = (uint64_t)record->offset;
+    uint64_t identity = record->object_id;
     struct ckpt_restore_pipe *pipe_object = ckpt_restore_pipe_find(identity);
     if (pipe_object == NULL) {
         if (!identity || ckpt_vector_reserve((void **)&g_restore_pipes, &g_restore_pipes_capacity,
                                              sizeof *g_restore_pipes, g_nrestore_pipes + 1) != 0)
             return -1;
         pipe_object = &g_restore_pipes[g_nrestore_pipes++];
-        *pipe_object =
-            (struct ckpt_restore_pipe){.identity = identity, .reader = -1, .writer = -1, .size = atoi(record->path)};
+        *pipe_object = (struct ckpt_restore_pipe){
+            .identity = identity, .reader = -1, .writer = -1, .size = (int)record->auxiliary};
         int pair[2];
         if (pipe(pair) != 0) return -1;
         if (fcntl(pair[0], F_SETFD, FD_CLOEXEC) != 0 || fcntl(pair[1], F_SETFD, FD_CLOEXEC) != 0) {
@@ -279,7 +284,9 @@ static int ckpt_restore_right_pipe(const struct ckpt_fd *record) {
     }
     int fd = ((record->flags & O_ACCMODE) == O_WRONLY) ? pipe_object->writer : pipe_object->reader;
     if (fd < 0) return -1;
-    g_restore_rights[g_nrestore_rights++] = (struct ckpt_restore_right){record->ofd_id, record->object_id, fd, 0};
+    g_restore_rights[g_nrestore_rights++] = (struct ckpt_restore_right){
+        .ofd_id = record->ofd_id, .object_id = record->object_id, .fd = fd,
+        .kind = record->kind, .ofd_identity = record->ofd_identity};
     return fd;
 }
 
@@ -332,8 +339,9 @@ static int ckpt_restore_right_eventfd(const struct ckpt_fd *record) {
                eventfd->guest_nonblock != ((record->flags & O_NONBLOCK) != 0)) {
         return -1;
     }
-    g_restore_rights[g_nrestore_rights++] =
-        (struct ckpt_restore_right){record->ofd_id, record->object_id, eventfd->reader, 0};
+    g_restore_rights[g_nrestore_rights++] = (struct ckpt_restore_right){
+        .ofd_id = record->ofd_id, .object_id = record->object_id, .fd = eventfd->reader,
+        .kind = record->kind, .ofd_identity = record->ofd_identity};
     return eventfd->reader;
 }
 
@@ -411,13 +419,14 @@ static int ckpt_restore_right_timerfd(const struct ckpt_fd *record) {
             if (kevent(timerfd->fd, &event, 1, NULL, 0, NULL) < 0) return -1;
         }
     }
-    g_restore_rights[g_nrestore_rights++] =
-        (struct ckpt_restore_right){record->ofd_id, record->object_id, timerfd->fd, 0};
+    g_restore_rights[g_nrestore_rights++] = (struct ckpt_restore_right){
+        .ofd_id = record->ofd_id, .object_id = record->object_id, .fd = timerfd->fd,
+        .kind = record->kind, .ofd_identity = record->ofd_identity};
     return timerfd->fd;
 }
 
 static int ckpt_restore_right_prepare(const struct ckpt_fd *record) {
-    struct ckpt_restore_right *existing = ckpt_restore_right_find(record->ofd_id);
+    struct ckpt_restore_right *existing = ckpt_restore_right_find(record);
     if (existing != NULL) return existing->object_id == record->object_id ? existing->fd : -1;
     if (!record->ofd_id ||
         (record->kind != CKF_FILE && record->kind != CKF_DEVICE && record->kind != CKF_BLOB &&
@@ -471,7 +480,9 @@ static int ckpt_restore_right_prepare(const struct ckpt_fd *record) {
         g_memfd_seal[adopted] = (int)record->auxiliary;
         memfd_reg_set_fd(adopted, g_memfd_seal[adopted]);
     }
-    g_restore_rights[g_nrestore_rights++] = (struct ckpt_restore_right){record->ofd_id, record->object_id, adopted, 1};
+    g_restore_rights[g_nrestore_rights++] = (struct ckpt_restore_right){
+        .ofd_id = record->ofd_id, .object_id = record->object_id, .fd = adopted, .owned = 1,
+        .kind = record->kind, .ofd_identity = record->ofd_identity};
     return adopted;
 }
 
@@ -549,7 +560,7 @@ static int ckpt_restore_socket_right_markers(const struct ckpt_fd *rights, const
             combo[combo_count++] = marker;
         }
         if (rights[index].kind == CKF_PIPE) {
-            uint64_t identity = (uint64_t)rights[index].offset;
+            uint64_t identity = rights[index].object_id;
             if (!identity || combo_count + 1 > 253 * 4) {
                 free(payload);
                 ckpt_source_fclose(file);
@@ -559,7 +570,7 @@ static int ckpt_restore_socket_right_markers(const struct ckpt_fd *rights, const
                 .magic = UINT32_C(0x484c5049),
                 .ordinal = index,
                 .identity = identity,
-                .size = atoi(rights[index].path),
+                .size = (int)rights[index].auxiliary,
             };
             int marker = cmsg_pipe_marker(&metadata);
             if (marker < 0) {
