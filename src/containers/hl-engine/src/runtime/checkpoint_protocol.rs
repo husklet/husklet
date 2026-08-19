@@ -30,6 +30,7 @@ pub(super) const SOURCE_LIST: u32 = 16;
 pub(super) const SOURCE_SIZE: u32 = 17;
 pub(super) const SOURCE_READ: u32 = 18;
 pub(super) const RECOVERY_COMPLETE: u32 = 19;
+pub(super) const REGISTER_READY: u32 = 20;
 
 #[derive(Debug)]
 pub(super) struct Request {

@@ -2051,3 +2051,116 @@ fn capture_completion_wait_expires_at_the_deadline_instead_of_re_interrupting_fo
         .expect("completion wait must return at its deadline");
     assert_eq!(outcome, Err(CaptureFailure::Deadline));
 }
+
+fn checkpoint_request(op: u32, generation: u32, payload: &[u8]) -> Vec<u8> {
+    let mut request = vec![0_u8; protocol::REQUEST_BYTES];
+    request[0..4].copy_from_slice(&protocol::MAGIC_REQUEST.to_ne_bytes());
+    request[4..8].copy_from_slice(&protocol::ABI.to_ne_bytes());
+    request[8..12].copy_from_slice(&op.to_ne_bytes());
+    request[32..40].copy_from_slice(&(payload.len() as u64).to_ne_bytes());
+    request[44..48].copy_from_slice(&generation.to_ne_bytes());
+    request.extend_from_slice(payload);
+    request
+}
+
+fn register_ready_payload(executors: &[u32]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(8 + executors.len() * 4);
+    payload.extend_from_slice(&(executors.len() as u32).to_ne_bytes());
+    payload.extend_from_slice(&0_u32.to_ne_bytes());
+    for executor in executors {
+        payload.extend_from_slice(&executor.to_ne_bytes());
+    }
+    payload
+}
+
+/// Reads one reply and returns its `(status, value)`.
+fn read_reply(channel: &mut UnixStream) -> (i32, u64) {
+    let mut reply = [0_u8; 32];
+    std::io::Read::read_exact(channel, &mut reply).expect("checkpoint reply");
+    (
+        i32::from_ne_bytes(reply[8..12].try_into().unwrap()),
+        u64::from_ne_bytes(reply[16..24].try_into().unwrap()),
+    )
+}
+
+/// An authenticated engine process becomes a member of the running capture
+/// exactly once; the repeat is a duplicate, not a second member.
+///
+/// The peer is this test process itself: the broker authenticates whoever
+/// connects, so a real capability is available without forking a peer out of a
+/// multi-threaded test binary, which deadlocks the child against a lock another
+/// thread held at fork time.
+#[test]
+fn register_ready_admits_one_authenticated_process_exactly_once() {
+    static SERIAL: Mutex<()> = Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (broker, transport) = hl_native::CheckpointTransport::create().expect("checkpoint transport");
+    let mut member = transport.connect_for_test().expect("checkpoint channel");
+    let (channel, authority) = broker
+        .accept(Duration::from_secs(10))
+        .expect("authenticated production accept");
+    assert_eq!(authority.host_pid, u64::from(std::process::id()));
+    let server = Arc::new(Server::new(Arc::new(Store), Arc::new(Store)));
+    let worker = Arc::clone(&server);
+    std::thread::spawn(move || worker.serve_authenticated_for_test(channel, authority));
+    while server.connections.load(Ordering::Acquire) == 0 {
+        std::thread::yield_now();
+    }
+    server
+        .begin_capture(7, std::time::Instant::now() + Duration::from_secs(30))
+        .expect("capture admission");
+
+    let registration = checkpoint_request(protocol::REGISTER_READY, 7, &register_ready_payload(&[101, 102]));
+    member.write_all(&registration).expect("member registration");
+    let (status, id) = read_reply(&mut member);
+    assert_eq!(status, 0, "authenticated member was refused");
+    assert_ne!(id, 0, "member registration returned no member ID");
+
+    member.write_all(&registration).expect("duplicate registration");
+    assert_eq!(read_reply(&mut member).0, -1, "one process registered twice");
+    server.stop();
+}
+
+/// Membership is proven, never assumed: a channel carrying no authenticated
+/// process capability is not a member and cannot become one, and a channel that
+/// publishes without registering fails the capture by name instead of leaving it
+/// to expire at its deadline.
+#[test]
+fn an_unregistered_channel_cannot_publish_and_fails_the_capture_by_name() {
+    let server = Arc::new(Server::new(Arc::new(Store), Arc::new(Store)));
+    let (mut claimant, claimant_channel) = UnixStream::pair().expect("claimant channel");
+    let (mut publisher, publisher_channel) = UnixStream::pair().expect("publisher channel");
+    for (channel, id) in [(claimant_channel, 11_u64), (publisher_channel, 12)] {
+        let worker = Arc::clone(&server);
+        std::thread::spawn(move || worker.serve(channel, id));
+    }
+    while server.connections.load(Ordering::Acquire) != 2 {
+        std::thread::yield_now();
+    }
+    let capture = server
+        .begin_capture(7, std::time::Instant::now() + Duration::from_secs(30))
+        .expect("capture admission");
+
+    claimant
+        .write_all(&checkpoint_request(
+            protocol::REGISTER_READY,
+            7,
+            &register_ready_payload(&[101]),
+        ))
+        .expect("unauthenticated registration");
+    assert_eq!(
+        read_reply(&mut claimant).0,
+        -1,
+        "a channel with no process capability registered as a member"
+    );
+
+    publisher
+        .write_all(&checkpoint_request(protocol::GROUP_BEGIN, 7, &[]))
+        .expect("unregistered publication");
+    assert_eq!(
+        server.wait_capture(capture, std::time::Instant::now() + Duration::from_secs(10)),
+        Ok(Some(Err(CaptureFailure::Failed))),
+        "an unregistered publisher must fail the capture, not exhaust its deadline"
+    );
+    server.stop();
+}

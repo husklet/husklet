@@ -1,5 +1,10 @@
-use super::{CaptureFailure, CapturePhase, REQUEST_BYTES, Request, Server};
+use super::{
+    CLAIM, COMMIT, CaptureFailure, CapturePhase, GROUP_BEGIN, GROUP_COMMIT, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL,
+    OBJECT_WRITE, OBJECT_WRITE_AT, REGISTER_READY, REQUEST_BYTES, Reply, Request, Server,
+    participants::{ExecutorId, ProcessIdentity},
+};
 use std::{
+    collections::BTreeSet,
     io::Read,
     os::{fd::AsRawFd, unix::net::UnixStream},
     sync::{Arc, atomic::Ordering},
@@ -100,11 +105,12 @@ impl Server {
     ) {
         let channel = Arc::new(channel);
         let descriptor = channel.as_raw_fd();
-        let _connection = Connection {
+        let mut connection = Connection {
             server: self,
             descriptor,
             id,
-            _peer: peer,
+            peer,
+            registered: None,
             _accepted: accepted,
         };
         let Ok(mut channels) = self.channels.lock() else {
@@ -124,7 +130,7 @@ impl Server {
         }
         loop {
             let mut header = [0_u8; REQUEST_BYTES];
-            if read_authenticated(&mut channel, _connection._peer.as_ref(), &mut header).is_err() {
+            if read_authenticated(&mut channel, connection.peer.as_ref(), &mut header).is_err() {
                 return;
             }
             let Some(request) = Request::decode(&header) else {
@@ -132,7 +138,7 @@ impl Server {
                 return;
             };
             let mut encoded_name = vec![0; request.name_size];
-            if read_authenticated(&mut channel, _connection._peer.as_ref(), &mut encoded_name).is_err() {
+            if read_authenticated(&mut channel, connection.peer.as_ref(), &mut encoded_name).is_err() {
                 return;
             }
             let name = match encoded_name.split_last() {
@@ -146,15 +152,38 @@ impl Server {
             let mut payload = Vec::new();
             if request.carries_payload() {
                 payload.resize(request.length as usize, 0);
-                if read_authenticated(&mut channel, _connection._peer.as_ref(), &mut payload).is_err() {
+                if read_authenticated(&mut channel, connection.peer.as_ref(), &mut payload).is_err() {
                     return;
                 }
             }
-            if _connection
-                ._peer
+            if connection
+                .peer
                 .as_ref()
                 .is_some_and(|authority| !matches!(authority.is_live(), Ok(true)))
             {
+                return;
+            }
+            if request.op == REGISTER_READY {
+                let member = self.register_ready(&mut connection, &request, &encoded_name, &payload);
+                let reply = member.map_or_else(|()| Reply::error(), Reply::value);
+                let _ = reply.write(&mut channel);
+                if member.is_err() {
+                    return;
+                }
+                continue;
+            }
+            if let Some(active) = self.membership_scope()
+                && publishes_capture_bytes(request.op)
+                && connection.registered != Some(active)
+            {
+                // Naming the exact process is the whole point: an unregistered
+                // publisher is otherwise indistinguishable from a stalled one,
+                // and the capture would end at its deadline instead.
+                self.fail(format!(
+                    "checkpoint capture {active}: process {} published op {} without REGISTER_READY",
+                    connection.id, request.op
+                ));
+                let _ = Reply::error().write(&mut channel);
                 return;
             }
             let reply = self.dispatch(id, &request, &name, &payload);
@@ -164,6 +193,81 @@ impl Server {
         }
     }
 }
+
+/// Operations that publish or complete capture state. A process that has not
+/// proven exact membership may still rendezvous (`GROUP_PRESENT`/`GROUP_COUNT`)
+/// and may still abort, because the coordinator does both before its own dump.
+fn publishes_capture_bytes(op: u32) -> bool {
+    matches!(
+        op,
+        OBJECT_BEGIN
+            | OBJECT_WRITE
+            | OBJECT_WRITE_AT
+            | OBJECT_TELL
+            | OBJECT_FINISH
+            | GROUP_BEGIN
+            | GROUP_COMMIT
+            | CLAIM
+            | COMMIT
+    )
+}
+
+impl Server {
+    /// The generation whose membership is currently sealed by a ledger.
+    fn membership_scope(&self) -> Option<u64> {
+        let capture = self.capture_lock().ok()?;
+        match capture.phase {
+            CapturePhase::Active { id, .. } => Some(id),
+            _ => None,
+        }
+    }
+
+    /// Installs this connection's process as an exact member of the running
+    /// capture. The payload is the process's complete executor inventory,
+    /// collected while every one of its threads is stopped.
+    fn register_ready(
+        &self,
+        connection: &mut Connection<'_>,
+        request: &Request,
+        encoded_name: &[u8],
+        payload: &[u8],
+    ) -> Result<u64, ()> {
+        if !encoded_name.is_empty() || payload.len() < 8 {
+            return Err(());
+        }
+        let count = usize::try_from(u32::from_ne_bytes(payload[0..4].try_into().map_err(|_| ())?)).map_err(|_| ())?;
+        if payload[4..8] != [0; 4] || count == 0 || count > EXECUTOR_INVENTORY_MAX || payload.len() != 8 + count * 4 {
+            return Err(());
+        }
+        let mut executors = BTreeSet::new();
+        for bytes in payload[8..].chunks_exact(4) {
+            let executor = u32::from_ne_bytes(bytes.try_into().map_err(|_| ())?);
+            if !executors.insert(ExecutorId(u64::from(executor))) {
+                return Err(());
+            }
+        }
+        // Only the broker's authenticated capability may name a member; a
+        // channel with no proven process identity is not a participant.
+        let peer = connection.peer.as_ref().ok_or(())?;
+        let identity = ProcessIdentity {
+            pid: peer.host_pid,
+            birth: peer.host_birth,
+            generation: peer.host_generation,
+        };
+        let generation = u64::from(request.generation);
+        if self.membership_scope() != Some(generation) {
+            return Err(());
+        }
+        let mut participants = self.participants.lock().map_err(|_| ())?;
+        let ledger = participants.as_mut().ok_or(())?;
+        let member = ledger.register(generation, identity, &executors).map_err(|_| ())?;
+        connection.registered = Some(generation);
+        Ok(member.0)
+    }
+}
+
+/// Bounds the guest-derived inventory before it is allocated against.
+const EXECUTOR_INVENTORY_MAX: usize = 4096;
 
 fn read_authenticated(
     channel: &mut &UnixStream,
@@ -180,7 +284,9 @@ struct Connection<'a> {
     server: &'a Server,
     descriptor: i32,
     id: u64,
-    _peer: Option<hl_native::AuthenticatedCheckpointPeer>,
+    peer: Option<hl_native::AuthenticatedCheckpointPeer>,
+    /// The capture generation this connection proved membership of, if any.
+    registered: Option<u64>,
     _accepted: AcceptedChannel,
 }
 

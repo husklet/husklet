@@ -65,7 +65,12 @@ typedef enum hl_ckpt_stream_op {
     HL_CKPT_OP_SOURCE_LIST = 16, /* name = prefix -> payload = NUL-terminated names, value = count */
     HL_CKPT_OP_SOURCE_SIZE = 17, /* name -> value = size, status 1 when absent */
     HL_CKPT_OP_SOURCE_READ = 18, /* name, offset, length -> payload (short read at end of object) */
-    HL_CKPT_OP_RECOVERY_COMPLETE = 19 /* restore is complete; release its publication authority */
+    HL_CKPT_OP_RECOVERY_COMPLETE = 19, /* restore is complete; release its publication authority */
+    /* Exact capture membership. Sent by a process whose threads are all stopped and whose
+       thread registry is held; payload is [u32 count][u32 zero][u32 executor]*count, and
+       reply.value is the server-assigned member ID. No image bytes may be published by a
+       process that has not been acknowledged for the running capture generation. */
+    HL_CKPT_OP_REGISTER_READY = 20
 } hl_ckpt_stream_op;
 
 /* Announces one engine process on the broker. Carries exactly one descriptor: that process's channel. */

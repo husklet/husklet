@@ -849,6 +849,33 @@ static int g_ckpt_cpu_count;
 
 static int ckpt_dump_self_locked(struct cpu *c, const char *group);
 
+// Announce this process and its complete executor inventory to the broker while every one of its
+// threads is stopped and the registry lock is held. The broker holds the only exact member set for
+// the capture; until it acknowledges this process, nothing this process publishes is admissible.
+static int ckpt_register_ready(struct cpu **live, int count) {
+    size_t payload_size = 8 + (size_t)count * sizeof(uint32_t);
+    unsigned char *payload = calloc(1, payload_size);
+    if (payload == NULL) return -1;
+    uint32_t encoded_count = (uint32_t)count;
+    memcpy(payload, &encoded_count, sizeof encoded_count);
+    for (int i = 0; i < count; i++) {
+        /* A zero tid is the process leader, not a missing thread: the engine reads it as
+           container_pid() everywhere else (thread/futex_mapping.c, checkpoint/capture.c), and a
+           single-threaded guest process has exactly this one executor. */
+        int tid = live[i] != NULL ? (live[i]->tid != 0 ? live[i]->tid : container_pid()) : 0;
+        if (tid <= 0) {
+            free(payload);
+            return -1;
+        }
+        uint32_t executor = (uint32_t)tid;
+        memcpy(payload + 8 + (size_t)i * sizeof executor, &executor, sizeof executor);
+    }
+    hl_ckpt_reply reply;
+    int status = ckpt_stream_call(HL_CKPT_OP_REGISTER_READY, NULL, 0, 0, 0, payload, payload_size, &reply, NULL, 0);
+    free(payload);
+    return status == HL_CKPT_STATUS_OK && reply.value != 0 ? 0 : -1;
+}
+
 static int ckpt_dump_self(struct cpu *c, const char *procdir) {
     struct cpu *live[THREAD_REG_MAX];
     atomic_store_explicit(&g_ckpt_barrier_active, 1, memory_order_release);
@@ -864,6 +891,15 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir) {
     int count = stw_checkpoint_cpus(live, THREAD_REG_MAX);
     if (count < 1 || count > THREAD_REG_MAX) {
         fprintf(stderr, "[ckpt] refuse: invalid registered CPU count %d\n", count);
+        ckpt_sink_group_abort(ckpt_sink_current(), procdir);
+        stw_checkpoint_end();
+        atomic_store_explicit(&g_ckpt_barrier_active, 0, memory_order_release);
+        return -1;
+    }
+    /* Every listed executor is stopped and the registry lock is still held, so this inventory is
+       exactly the process's thread set at the instant the broker records it. */
+    if (ckpt_register_ready(live, count) != 0) {
+        fprintf(stderr, "[ckpt] refuse: participant REGISTER_READY was not acknowledged\n");
         ckpt_sink_group_abort(ckpt_sink_current(), procdir);
         stw_checkpoint_end();
         atomic_store_explicit(&g_ckpt_barrier_active, 0, memory_order_release);
