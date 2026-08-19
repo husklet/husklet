@@ -233,6 +233,10 @@ impl CheckpointTransport {
     }
     /// Creates a broker and trigger pair owned entirely by this package.
     pub fn create() -> std::io::Result<(CheckpointBroker, Self)> {
+        // The bridge stubs report an unloaded engine with the same status a genuine
+        // platform failure uses, so resolve the library first and keep its reason.
+        crate::loader::api()
+            .map_err(|error| std::io::Error::other(format!("native engine library unavailable: {error}")))?;
         let mut parent = -1;
         let mut child = -1;
         // SAFETY: both output locations are writable; success transfers two descriptors.
