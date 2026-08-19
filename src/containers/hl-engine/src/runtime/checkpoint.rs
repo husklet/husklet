@@ -133,6 +133,8 @@ pub(crate) struct Server {
     connections: AtomicUsize,
     #[cfg(test)]
     dispatches: AtomicUsize,
+    #[cfg(test)]
+    accepts: AtomicUsize,
 }
 
 impl Server {
@@ -157,6 +159,26 @@ impl Server {
             connections: AtomicUsize::new(0),
             #[cfg(test)]
             dispatches: AtomicUsize::new(0),
+            #[cfg(test)]
+            accepts: AtomicUsize::new(0),
+        }
+    }
+
+    /// Blocks until at least `count` checkpoint channels have ever been accepted.
+    ///
+    /// Tests must not poll `connections`, which is a level and returns to zero as
+    /// soon as a channel closes: a worker that opens and closes its channel inside
+    /// one scheduling slice leaves a level poll spinning forever. `accepts` only
+    /// ever increases, so the edge cannot be missed, and the wait is bounded.
+    #[cfg(test)]
+    pub(crate) fn await_accepts(&self, count: usize) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while self.accepts.load(Ordering::Acquire) < count {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "checkpoint channel was never accepted"
+            );
+            std::thread::yield_now();
         }
     }
 

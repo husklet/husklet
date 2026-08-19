@@ -70,16 +70,14 @@ fn production_broker_revokes_relayed_channel_when_authenticated_child_exits() {
         worker.serve_authenticated_for_test(channel, authority);
         let _ = done.send(());
     });
-    while server.connections.load(Ordering::Acquire) == 0 {
-        std::thread::yield_now();
-    }
+    server.await_accepts(1);
     let mut request = [0_u8; protocol::REQUEST_BYTES];
     request[0..4].copy_from_slice(&protocol::MAGIC_REQUEST.to_ne_bytes());
     request[4..8].copy_from_slice(&protocol::ABI.to_ne_bytes());
     request[8..12].copy_from_slice(&protocol::GROUP_PRESENT.to_ne_bytes());
-    survivor
-        .write_all(&request)
-        .expect("survivor writes a valid checkpoint request");
+    // The revoked worker may close the channel before this write lands, so EPIPE is a
+    // legitimate outcome of the very revocation under test.
+    let _ = survivor.write_all(&request);
     completed
         .recv_timeout(Duration::from_secs(1))
         .expect("revoked connection must terminate");
@@ -965,9 +963,7 @@ fn rejected_process_interrupts_checkpoint_channels_and_propagates_abort_panic() 
     let (channel, peer) = UnixStream::pair().unwrap();
     let serving = Arc::clone(&server);
     let worker = std::thread::spawn(move || serving.serve(channel, 1));
-    while server.connections.load(Ordering::Acquire) == 0 {
-        std::thread::yield_now();
-    }
+    server.await_accepts(1);
     let capture = server
         .begin_capture(22, std::time::Instant::now() + Duration::from_secs(1))
         .unwrap();
@@ -1507,7 +1503,12 @@ fn stop_interrupts_silent_checkpoint_peer() {
         worker.serve(channel, 1);
         let _ = done.send(());
     });
+    let registration_deadline = std::time::Instant::now() + Duration::from_secs(10);
     while server.channels.lock().unwrap().is_empty() {
+        assert!(
+            std::time::Instant::now() < registration_deadline,
+            "silent checkpoint peer was never registered"
+        );
         std::thread::yield_now();
     }
     server.stop();
@@ -1520,9 +1521,7 @@ fn last_checkpoint_channel_exit_fails_an_active_capture_immediately() {
     let (channel, peer) = UnixStream::pair().unwrap();
     let worker = Arc::clone(&server);
     let serving = std::thread::spawn(move || worker.serve(channel, 1));
-    while server.connections.load(Ordering::Acquire) == 0 {
-        std::thread::yield_now();
-    }
+    server.await_accepts(1);
     let capture = server
         .begin_capture(1, std::time::Instant::now() + Duration::from_secs(5))
         .unwrap();
@@ -1549,9 +1548,7 @@ fn last_checkpoint_channel_exit_aborts_recovery_immediately() {
     let (channel, peer) = UnixStream::pair().unwrap();
     let worker = Arc::clone(&server);
     let serving = std::thread::spawn(move || worker.serve(channel, 1));
-    while server.connections.load(Ordering::Acquire) == 0 {
-        std::thread::yield_now();
-    }
+    server.await_accepts(1);
 
     drop(peer);
 
