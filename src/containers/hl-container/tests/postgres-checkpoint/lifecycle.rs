@@ -316,6 +316,10 @@ impl Fixture {
         before_generation: u64,
     ) -> Result<(hl_container::Session, hl_container::Session), Error> {
         bounded("restore PostgreSQL primary", PHASE, self.containers.start(CONTAINER)).await?;
+        // start() returns once the restore launch is dispatched, not once the tree has resumed. Without
+        // this wait every later probe races the restore driver and reports "connection refused" while the
+        // driver is still working -- which hid the driver's own refusal for the whole of this blocker.
+        self.wait_ready().await?;
         let failures = bounded(
             "restore PostgreSQL clients",
             PHASE,

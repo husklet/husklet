@@ -140,12 +140,17 @@ static int ckpt_prepare_restore_socket_states(void) {
         if (!g_rprocs[process].viable) continue;
         snprintf(records_path, sizeof records_path, "proc.%d/fds", g_rprocs[process].gpid);
         FILE *records = ckpt_source_fopen(records_path);
-        if (!records) return -1;
+        if (!records) {
+            fprintf(stderr, "[restore] refuse: standalone sockets -- cannot open %s\n", records_path);
+            return -1;
+        }
         struct ckpt_fd record;
         while (ckpt_rd_fd(records, &record) == 0) {
             if (record.kind != CKF_SOCKET || ckpt_restore_socket_state_find(record.object_id) != NULL) continue;
             if (!record.object_id || ckpt_vector_reserve((void **)&g_restore_sockets, &g_restore_sockets_capacity,
                                                          sizeof *g_restore_sockets, g_nrestore_sockets + 1) != 0) {
+                fprintf(stderr, "[restore] refuse: standalone socket in %s has no object identity or exceeds capacity\n",
+                        records_path);
                 ckpt_source_fclose(records);
                 return -1;
             }
@@ -155,10 +160,17 @@ static int ckpt_prepare_restore_socket_states(void) {
             snprintf(state_path, sizeof state_path, "%s", record.path);
             if (ckpt_source_load(state_path, &socket_state->state, sizeof socket_state->state) != 0 ||
                 socket_state->state.magic != CKPT_SOCKET_STATE_MAGIC ||
-                socket_state->state.local_size > sizeof socket_state->state.local)
+                socket_state->state.local_size > sizeof socket_state->state.local) {
+                fprintf(stderr,
+                        "[restore] refuse: standalone socket %016llx state %s unreadable (magic %08x, local_size %u)\n",
+                        (unsigned long long)socket_state->identity, state_path, (unsigned)socket_state->state.magic,
+                        (unsigned)socket_state->state.local_size);
+                ckpt_source_fclose(records);
                 return -1;
+            }
         }
         if (!feof(records)) {
+            fprintf(stderr, "[restore] refuse: standalone sockets -- %s ended mid-record\n", records_path);
             ckpt_source_fclose(records);
             return -1;
         }
@@ -167,29 +179,45 @@ static int ckpt_prepare_restore_socket_states(void) {
     for (int index = 0; index < g_nrestore_sockets; ++index) {
         struct ckpt_restore_socket *saved = &g_restore_sockets[index];
         struct ckpt_socket_state *state = &saved->state;
+        // The loopback/bridge switch rendezvous name is an ENGINE-PRIVATE HOST path (g_netns/p<port>), not a
+        // guest pathname. bind() in endpoint.inc binds it literally; routing it through the guest overlay the
+        // way an ordinary guest AF_UNIX name is routed strands the inode inside the rootfs upper where nothing
+        // resolves it (observed as ENOENT on a restored PostgreSQL 0.0.0.0:5432 listener).
+        int virtual_netns_name = 0;
         if (state->host_family == AF_UNIX &&
             (state->udp_local_port != 0 || state->lo_port != 0 || state->br_port != 0)) {
             char virtual_path[200];
             if (state->udp_local_port != 0) {
                 if (state->udp_local_interface != 0) {
                     if (br_path((int)state->udp_local_interface - 1, state->udp_local_ip,
-                                (uint16_t)state->udp_local_port, virtual_path, sizeof virtual_path) != 0)
+                                (uint16_t)state->udp_local_port, virtual_path, sizeof virtual_path) != 0) {
+                        fprintf(stderr, "[restore] refuse: socket %016llx bridge UDP path unresolvable\n",
+                                (unsigned long long)saved->identity);
                         return -1;
+                    }
                 } else {
                     lo_path((uint16_t)state->udp_local_port, virtual_path, sizeof virtual_path);
                 }
             } else if (state->br_port != 0) {
                 if (br_path((int)state->br_interface - 1, state->br_ip, (uint16_t)state->br_port, virtual_path,
-                            sizeof virtual_path) != 0)
+                            sizeof virtual_path) != 0) {
+                    fprintf(stderr, "[restore] refuse: socket %016llx bridge path unresolvable\n",
+                            (unsigned long long)saved->identity);
                     return -1;
+                }
             } else {
                 lo_tcp_path((uint16_t)state->lo_port, state->lo_v6only, virtual_path, sizeof virtual_path);
             }
             struct sockaddr_un address;
-            if (unix_addr_set(&address, virtual_path) != 0) return -1;
+            if (unix_addr_set(&address, virtual_path) != 0) {
+                fprintf(stderr, "[restore] refuse: socket %016llx virtual address %s does not fit sun_path\n",
+                        (unsigned long long)saved->identity, virtual_path);
+                return -1;
+            }
             memset(&state->local, 0, sizeof state->local);
             memcpy(&state->local, &address, sizeof address);
             state->local_size = sizeof address;
+            virtual_netns_name = 1;
         }
         int fd = socket((int)state->host_family, (int)state->type, (int)state->protocol);
         if (fd < 0) {
@@ -200,12 +228,24 @@ static int ckpt_prepare_restore_socket_states(void) {
         }
         (void)hl_native_set_no_sigpipe(fd);
         if (ckpt_restore_socket_options(fd, state) != 0) {
+            fprintf(stderr, "[restore] refuse: socket %016llx option replay failed: %s\n",
+                    (unsigned long long)saved->identity, strerror(errno));
             close(fd);
             return -1;
         }
         if (ckpt_socket_state_is_bound(state)) {
             if (state->host_family == AF_UNIX) {
                 struct sockaddr_un *address = (void *)&state->local;
+                if (virtual_netns_name) {
+                    unlink(address->sun_path);
+                    if (unix_sock_at(fd, address->sun_path, 0) != 0) {
+                        fprintf(stderr, "[restore] refuse: socket %016llx bind to switch path %s failed: %s\n",
+                                (unsigned long long)saved->identity, address->sun_path, strerror(errno));
+                        close(fd);
+                        return -1;
+                    }
+                    goto socket_bound;
+                }
                 if (address->sun_path[0] == '/' && unix_path_routed(address->sun_path)) {
                     char host[1024];
                     if (g_rootfs)
@@ -214,6 +254,8 @@ static int ckpt_prepare_restore_socket_states(void) {
                         xlate(address->sun_path, host, sizeof host);
                     unlink(host);
                     if (unix_sock_at(fd, host, 0) != 0) {
+                        fprintf(stderr, "[restore] refuse: socket %016llx bind to routed path %s failed: %s\n",
+                                (unsigned long long)saved->identity, address->sun_path, strerror(errno));
                         close(fd);
                         return -1;
                     }
@@ -237,6 +279,8 @@ static int ckpt_prepare_restore_socket_states(void) {
         }
         saved->fd = hl_host_process_fd_private_adopt(fd);
         if (saved->fd < 0) {
+            fprintf(stderr, "[restore] refuse: socket %016llx could not be adopted as a private descriptor\n",
+                    (unsigned long long)saved->identity);
             close(fd);
             return -1;
         }
@@ -1142,7 +1186,10 @@ static int ckpt_restore_tree_body(const char *rootfs, const struct ckpt_phase_le
         fprintf(stderr, "[restore] restore requested without a broker descriptor\n");
         return 2;
     }
-    if (ckpt_read_manifest(&man) != 0) return 2;
+    if (ckpt_read_manifest(&man) != 0) {
+        fprintf(stderr, "[restore] refuse: the store holds no readable manifest\n");
+        return 2;
+    }
     if (ckpt_scan_procs() != 0) {
         fprintf(stderr, "[restore] the store holds no process images\n");
         return 2;
@@ -1152,7 +1199,10 @@ static int ckpt_restore_tree_body(const char *rootfs, const struct ckpt_phase_le
         return 2;
     }
     int recovery_policy = ckpt_recovery_policy();
-    if (ckpt_restore_preflight(recovery_policy) != 0) return 2;
+    if (ckpt_restore_preflight(recovery_policy) != 0) {
+        fprintf(stderr, "[restore] refuse: restore preflight rejected the image (policy %d)\n", recovery_policy);
+        return 2;
+    }
     ckpt_phase_finish(phases, "restore_validation", phase, 0);
     phase = ckpt_phase_begin(phases);
     if (ckpt_prepare_restore_pipes() != 0) {
@@ -1178,7 +1228,10 @@ static int ckpt_restore_tree_body(const char *rootfs, const struct ckpt_phase_le
 
     const char *ipd = "proc.1";
     struct ckpt_meta im;
-    if (ckpt_read_meta_dir(ipd, &im) != 0) return 2;
+    if (ckpt_read_meta_dir(ipd, &im) != 0) {
+        fprintf(stderr, "[restore] refuse: cannot read %s/meta\n", ipd);
+        return 2;
+    }
     if (ckpt_restore_mem_dir(ipd, &im) != 0) {
         fprintf(stderr, "[restore] init memory restore failed\n");
         return 2;
@@ -1191,9 +1244,15 @@ static int ckpt_restore_tree_body(const char *rootfs, const struct ckpt_phase_le
     g_self_gppid = 0;
     // container_init establishes the rootfs and its default cwd; replay the captured process context after it
     // so neither the rootfs chdir nor HL_CWD can overwrite the checkpointed directory.
-    if (ckpt_restore_filesystem_state(ipd) != 0) return 2;
+    if (ckpt_restore_filesystem_state(ipd) != 0) {
+        fprintf(stderr, "[restore] refuse: init filesystem-state restore failed\n");
+        return 2;
+    }
     int irc = engine_global_init();
-    if (irc) return irc;
+    if (irc) {
+        fprintf(stderr, "[restore] refuse: engine global init failed (%d)\n", irc);
+        return irc;
+    }
     if (ckpt_prepare_restore_socket_states() != 0) {
         fprintf(stderr, "[restore] cannot rebuild checkpoint standalone sockets\n");
         return 2;
