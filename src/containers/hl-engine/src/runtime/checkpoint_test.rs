@@ -1950,3 +1950,32 @@ fn capture_lock_poison_wakes_a_waiter_with_deterministic_error() {
 
     assert_eq!(waiting.join().unwrap(), Err(CaptureFailure::Poisoned));
 }
+
+#[test]
+fn capture_completion_wait_expires_at_the_deadline_instead_of_re_interrupting_forever() {
+    let store = Arc::new(RecoveryStore::default());
+    let server = Arc::new(Server::new(store.clone(), store));
+    // The server's own capture deadline is far away; only the completion loop's deadline can end
+    // this wait, which is exactly the guarantee a stalled guest dump depends on.
+    let capture = server
+        .begin_capture(41, std::time::Instant::now() + Duration::from_secs(3600))
+        .unwrap();
+    let (sent, received) = mpsc::channel();
+    let waiter = server.clone();
+    std::thread::spawn(move || {
+        let interrupts = AtomicUsize::new(0);
+        let outcome = super::super::execution::await_capture_completion(
+            &waiter,
+            capture,
+            std::time::Instant::now() + Duration::from_millis(250),
+            || {
+                interrupts.fetch_add(1, Ordering::Relaxed);
+            },
+        );
+        let _ = sent.send(outcome);
+    });
+    let outcome = received
+        .recv_timeout(Duration::from_secs(10))
+        .expect("completion wait must return at its deadline");
+    assert_eq!(outcome, Err(CaptureFailure::Deadline));
+}

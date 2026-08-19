@@ -274,6 +274,9 @@ impl GuestMachine for ProductionMachine {
     }
 
     fn checkpoint_supported(&self) -> Result<(), EngineError> {
+        if let Some(refusal) = checkpoint_sandbox_refusal(&self.plan.options) {
+            return Err(refusal);
+        }
         #[cfg(unix)]
         if self.checkpoint.is_some() {
             return Ok(());
@@ -288,6 +291,9 @@ impl GuestMachine for ProductionMachine {
     fn capture_checkpoint_until(&self, deadline: std::time::Instant) -> Result<(), EngineError> {
         #[cfg(not(unix))]
         let _ = deadline;
+        if let Some(refusal) = checkpoint_sandbox_refusal(&self.plan.options) {
+            return Err(refusal);
+        }
         #[cfg(unix)]
         if let Some(checkpoint) = &self.checkpoint {
             let engine = self.current()?;
@@ -295,6 +301,22 @@ impl GuestMachine for ProductionMachine {
         }
         Err(EngineError::Unsupported)
     }
+}
+
+/// Classify a launch that the checkpoint engine cannot capture under.
+///
+/// `HL_UNTRUSTED` forks the sentry and routes every host-authority syscall through it, so the
+/// worker process that would dump itself does not own the descriptors, sockets or pipes the guest
+/// sees; `ckpt_dump_self_locked` refuses on that gate. Capturing under the sentry requires the
+/// sentry to participate in capture and restore -- exporting its descriptor table, open-file
+/// descriptions and connection state across the control ring -- which is not implemented.
+///
+/// Reporting it here rather than as a bare native failure keeps the refusal on the launch-policy
+/// boundary that owns the option, and makes it permanent so a preflight does not poll for it.
+fn checkpoint_sandbox_refusal(options: &crate::options::Options) -> Option<EngineError> {
+    options
+        .get_bytes("HL_UNTRUSTED")
+        .map(|_| EngineError::CheckpointUnsupportedUnderSandbox)
 }
 
 fn native_run_failure(status: i32) -> EngineError {
@@ -339,7 +361,7 @@ impl CheckpointControl {
         isa: crate::activation::GuestIsa,
         deadline: std::time::Instant,
     ) -> Result<(), EngineError> {
-        use std::time::{Duration, Instant};
+        use std::time::Instant;
 
         if Instant::now() >= deadline {
             self.phases.terminal(0, 1);
@@ -378,23 +400,22 @@ impl CheckpointControl {
         }
         self.phases.finish(capture, "request_dispatch", dispatch);
         let completion = self.phases.begin();
-        let mut next_interrupt = Instant::now() + Duration::from_millis(100);
-        loop {
-            let result = match self.server.wait_capture(capture, next_interrupt) {
-                Ok(result) => result,
-                Err(_) => {
-                    self.phases.terminal(capture, 1);
-                    return Err(EngineError::LaunchFailed);
-                }
-            };
-            if let Some(result) = result {
+        let result = await_capture_completion(&self.server, capture, deadline, || {
+            let _ = engine.request(REQUEST_CHECKPOINT, signal);
+        });
+        match result {
+            Ok(result) => {
                 self.phases.finish(capture, "completion_wait", completion);
                 self.phases.terminal(capture, u32::from(result.is_err()));
-                return result.map_err(|failure| Self::capture_failure_with_exit(engine, failure));
+                result.map_err(|failure| Self::capture_failure_with_exit(engine, failure))
             }
-            if Instant::now() >= next_interrupt {
-                let _ = engine.request(REQUEST_CHECKPOINT, signal);
-                next_interrupt = Instant::now() + Duration::from_millis(100);
+            Err(failure) => {
+                self.phases.terminal(capture, 1);
+                Err(match failure {
+                    // The guest never reached its dump safepoint inside the checkpoint deadline.
+                    super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
+                    _ => EngineError::LaunchFailed,
+                })
             }
         }
     }
@@ -443,6 +464,42 @@ impl CheckpointControl {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         Self::capture_failure(failure)
+    }
+}
+
+/// Wait for a dispatched capture to reach a terminal result, re-issuing the guest checkpoint
+/// interrupt every 100ms until it does.
+///
+/// The wait is bounded by `deadline` here and not only by the deadline the server recorded with
+/// the capture: `Server::wait_capture` returns `Ok(None)` from phases that carry no deadline of
+/// their own (an in-flight abort settlement), so a loop that trusted the server to expire the
+/// capture would re-interrupt a stalled guest forever. Exceeding the deadline aborts the capture
+/// and reports `CaptureFailure::Deadline`, naming the completion wait as the stalled phase.
+#[cfg(unix)]
+pub(super) fn await_capture_completion(
+    server: &Server,
+    capture: u64,
+    deadline: std::time::Instant,
+    mut reinterrupt: impl FnMut(),
+) -> Result<Result<(), super::checkpoint::CaptureFailure>, super::checkpoint::CaptureFailure> {
+    use std::time::{Duration, Instant};
+
+    let mut next_interrupt = Instant::now() + Duration::from_millis(100);
+    loop {
+        match server.wait_capture(capture, next_interrupt.min(deadline)) {
+            Ok(Some(result)) => return Ok(result),
+            Ok(None) => {}
+            Err(failure) => return Err(failure),
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            let _ = server.abort_capture(capture);
+            return Err(super::checkpoint::CaptureFailure::Deadline);
+        }
+        if now >= next_interrupt {
+            reinterrupt();
+            next_interrupt = now + Duration::from_millis(100);
+        }
     }
 }
 
@@ -535,7 +592,11 @@ impl CheckpointPhaseLedger {
         // SAFETY: the test harness owns this inherited append-only descriptor for
         // the subprocess lifetime; the bounded record is borrowed for one write.
         let written = unsafe { libc::write(descriptor, record.as_ptr().cast(), record.len()) };
-        assert_eq!(written, isize::try_from(record.len()).unwrap(), "checkpoint phase ledger write");
+        assert_eq!(
+            written,
+            isize::try_from(record.len()).unwrap(),
+            "checkpoint phase ledger write"
+        );
     }
 }
 
@@ -834,5 +895,29 @@ mod tests {
             .begin_recovery(27, std::time::Instant::now() + std::time::Duration::from_secs(1))
             .expect("dropping an unwaited poisoned admission must release its recovery transaction");
         server.abort_recovery(retry).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod sandbox_refusal_tests {
+    use super::*;
+
+    /// `Sandbox::SentryOnly` is the container default, so this is the ordinary launch. A checkpoint
+    /// of it must refuse with a cause the product can show, not with a bare native failure, and the
+    /// refusal must be permanent so the checkpoint preflight reports it instead of polling for 30s.
+    #[test]
+    fn a_sentry_launch_is_refused_permanently_with_its_own_cause() {
+        let mut options = crate::options::Options::default();
+        options.set("HL_UNTRUSTED", "1", true).unwrap();
+        assert_eq!(
+            checkpoint_sandbox_refusal(&options),
+            Some(EngineError::CheckpointUnsupportedUnderSandbox)
+        );
+        assert!(EngineError::CheckpointUnsupportedUnderSandbox.is_permanent_refusal());
+    }
+
+    #[test]
+    fn a_launch_without_the_sentry_is_not_refused_by_policy() {
+        assert_eq!(checkpoint_sandbox_refusal(&crate::options::Options::default()), None);
     }
 }
