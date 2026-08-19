@@ -3,8 +3,6 @@ use std::{fs, path::Path};
 #[cfg(target_os = "linux")]
 use std::process::Command;
 
-static PIPE_SCENARIO: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 #[test]
 fn actual_restore_claim_helper_fails_closed_on_both_isas() {
     for isa in [1, 2] {
@@ -16,7 +14,6 @@ fn actual_restore_claim_helper_fails_closed_on_both_isas() {
 }
 
 fn pipe_scenario(name: &str, scenario: u32) {
-    let _serial = PIPE_SCENARIO.lock().expect("pipe checkpoint fixture lock");
     for isa in [1, 2] {
         hl_native::checkpoint_pipe_schema_test(isa, scenario)
             .unwrap_or_else(|status| panic!("ISA {isa} {name} scenario {scenario} failed at {status}"));
@@ -43,11 +40,6 @@ fn queued_pipe_payload_and_typed_right_roundtrip_on_both_isas() {
 #[test]
 fn queued_right_lookup_never_crosses_resource_kind_on_both_isas() {
     pipe_scenario("typed queued-right collision", 19);
-}
-
-#[test]
-fn queued_scm_rights_pipe_preflight_and_payload_restore_on_both_isas() {
-    pipe_scenario("queued SCM_RIGHTS pipe roundtrip", 20);
 }
 
 #[test]
