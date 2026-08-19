@@ -19,6 +19,9 @@ const INITIALIZE_PAIR_END: u32 = 11;
 const SHUTDOWN_READ: u32 = 12;
 const SHUTDOWN_WRITE: u32 = 13;
 const SHUTDOWN_BOTH: u32 = 14;
+const CONNECTED: u32 = 7;
+const PREPARE_MINTED: u32 = 15;
+const IDENTIFY_MINTED: u32 = 16;
 
 const LOCAL_HIDDEN: u32 = 1;
 const PEER_HIDDEN: u32 = 2;
@@ -90,16 +93,22 @@ fn reciprocal_connection(isa: u32, address: &libc::sockaddr_un, length: libc::so
     let client_object = 0x1000_0000_0000_0000_u64 | u64::from(isa);
     let (local, reserved_peer, hidden) = identity(isa, PREPARE, client.as_raw_fd(), client_object);
     assert_eq!(local, client_object);
-    assert_ne!(reserved_peer, 0);
-    assert_ne!(reserved_peer, client_object);
+    // The connector reserves only its OWN half; the peer id belongs to whichever process accepts.
+    assert_eq!(reserved_peer, 0);
     assert_eq!(hidden, LOCAL_HIDDEN | CHECKPOINT_PENDING);
     assert_eq!(connect(client.as_raw_fd(), address, length), 0);
 
     let server = accept(listener.as_raw_fd());
-    let (server_object, server_peer, server_hidden) = identity(isa, IDENTIFY, server.as_raw_fd(), 7);
-    assert_eq!(server_object, reserved_peer);
+    let server_allocated = 0x2200_0000_0000_0000_u64 | u64::from(isa);
+    let (server_object, server_peer, server_hidden) = identity(isa, IDENTIFY, server.as_raw_fd(), server_allocated);
+    assert_eq!(server_object, server_allocated, "the acceptor kept its own object id");
     assert_eq!(server_peer, client_object);
     assert_eq!(server_hidden, PEER_HIDDEN | CHECKPOINT_PENDING);
+    let (_, collected, _) = identity(isa, CONNECTED, client.as_raw_fd(), 0);
+    assert_eq!(
+        collected, server_allocated,
+        "the connector collected the acceptor-minted peer id"
+    );
 
     let byte = [0x5a_u8];
     assert_eq!(
@@ -147,7 +156,7 @@ fn refused_connect_withdraws_the_unaccepted_peer_on_both_isas() {
         let client = socket();
         let object = 0x2000_0000_0000_0000_u64 | u64::from(isa);
         let (_, peer, hidden) = identity(isa, PREPARE, client.as_raw_fd(), object);
-        assert_ne!(peer, 0);
+        assert_eq!(peer, 0);
         assert_eq!(hidden, LOCAL_HIDDEN | CHECKPOINT_PENDING);
         assert_eq!(connect(client.as_raw_fd(), &address, length), -1);
         let (local, peer, hidden) = identity(isa, FAILED, client.as_raw_fd(), 0);
@@ -228,7 +237,7 @@ fn dup_before_connect_shares_identity_and_capture_refusal_on_both_isas() {
         let original = identity(isa, PREPARE, client.as_raw_fd(), object);
         let duplicate = identity(isa, SNAPSHOT, alias.as_raw_fd(), 0);
         assert_eq!(duplicate, original);
-        assert_ne!(original.1, 0);
+        assert_eq!(original.1, 0);
         assert_eq!(original.2, LOCAL_HIDDEN | CHECKPOINT_PENDING);
         assert_eq!(
             hl_native::unix_identity_test(isa, CHECKPOINT_ADMIT, client.as_raw_fd(), 0),
@@ -283,7 +292,7 @@ fn capture_gate_distinguishes_private_connects_and_socketpairs_on_both_isas() {
         let private = socket();
         let private_object = 0x6000_0000_0000_0000_u64 | u64::from(isa);
         let (_, peer, flags) = identity(isa, PRIVATE_PREPARE, private.as_raw_fd(), private_object);
-        assert_ne!(peer, 0);
+        assert_eq!(peer, 0);
         assert_eq!(flags, LOCAL_HIDDEN);
         assert!(hl_native::unix_identity_test(isa, CHECKPOINT_ADMIT, private.as_raw_fd(), 0).is_ok());
         identity(isa, IN_PROGRESS, private.as_raw_fd(), 0);
@@ -443,7 +452,7 @@ fn cross_process_identity_connector() {
     let client = socket();
     let (local, reserved_peer, hidden) = identity(isa, PREPARE, client.as_raw_fd(), CROSS_PROCESS_CLIENT_OBJECT);
     assert_eq!(local, CROSS_PROCESS_CLIENT_OBJECT);
-    assert_ne!(reserved_peer, 0);
+    assert_eq!(reserved_peer, 0);
     assert_eq!(hidden, LOCAL_HIDDEN | CHECKPOINT_PENDING);
     assert_eq!(
         connect(client.as_raw_fd(), &listener_address, listener_length),
@@ -451,9 +460,8 @@ fn cross_process_identity_connector() {
         "connect: {}",
         std::io::Error::last_os_error()
     );
-    // Hold the connection open until the acceptor has identified it, then report the reserved peer so
-    // the parent can assert the acceptor adopted exactly the object the connector reserved for it.
-    println!("reserved-peer={reserved_peer:016x}");
+    // Hold the connection open until the acceptor has identified it. The acceptor mints the peer half and
+    // writes it back into the ticket; reading one byte proves it has, so collect and report it then.
     let mut acknowledgement = [0_u8];
     unsafe {
         libc::read(
@@ -462,6 +470,8 @@ fn cross_process_identity_connector() {
             acknowledgement.len(),
         )
     };
+    let (_, collected, _) = identity(isa, CONNECTED, client.as_raw_fd(), 0);
+    println!("collected-peer={collected:016x}");
 }
 
 #[test]
@@ -494,9 +504,9 @@ fn an_honest_cross_process_connection_carries_reciprocal_identity_on_both_isas()
             peer, CROSS_PROCESS_CLIENT_OBJECT,
             "ISA {isa} accepted socket has no cross-process peer identity"
         );
-        assert_ne!(
+        assert_eq!(
             local, allocated,
-            "ISA {isa} kept its provisional object instead of the reserved one"
+            "ISA {isa} adopted a connector-minted object instead of keeping its own"
         );
         assert_eq!(
             hidden,
@@ -517,12 +527,126 @@ fn an_honest_cross_process_connection_carries_reciprocal_identity_on_both_isas()
         );
         let reported = String::from_utf8_lossy(&output.stdout)
             .lines()
-            .find_map(|line| line.strip_prefix("reserved-peer=").map(str::to_owned))
-            .expect("connector reported its reserved peer");
+            .find_map(|line| line.strip_prefix("collected-peer=").map(str::to_owned))
+            .expect("connector reported its collected peer");
         assert_eq!(
             format!("{local:016x}"),
             reported,
-            "ISA {isa} acceptor adopted an object the connector never reserved"
+            "ISA {isa} connector did not collect the acceptor-minted peer id"
+        );
+
+        identity(isa, RESET, accepted.as_raw_fd(), 0);
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// An endpoint's object id is `(owner pid << 32) | sequence`, so the pair on a connection names its two
+/// owners -- but only if each half was minted by the process that owns that half. It was not: the
+/// connector minted BOTH ids and published them together, and the acceptor adopted the pair wholesale, so
+/// an accepted postgres backend socket reported `object=00351d4400000002 peer=00351d4400000001` -- the
+/// same high 32 bits, the connector's pid, twice. A checkpoint reciprocity join then has no computable
+/// second owner: the accepting process is simply absent from its own connection's identity.
+///
+/// Both ends mint through the production allocator here (PREPARE_MINTED/IDENTIFY_MINTED) rather than
+/// taking a test-chosen object, because the property under test is which process the id encodes.
+const OWNER_PID_SOCKET: &str = "HL_UNIX_IDENTITY_OWNER_PID_SOCKET";
+
+#[test]
+#[ignore = "re-executed as the connector by an_accepted_socket_encodes_its_own_owners_pid"]
+fn owner_pid_identity_connector() {
+    let path = std::env::var(OWNER_PID_SOCKET).expect("connector needs a listener path");
+    let isa: u32 = std::env::var(CROSS_PROCESS_ISA)
+        .expect("connector needs an ISA")
+        .parse()
+        .unwrap();
+    let (listener_address, listener_length) = address(path.as_bytes(), false);
+    let client = socket();
+    let (local, peer, _) = identity(isa, PREPARE_MINTED, client.as_raw_fd(), 0);
+    assert_eq!(peer, 0, "the connector must not mint the acceptor's half");
+    println!("connector-pid={}", std::process::id());
+    println!("client-object={local:016x}");
+    assert_eq!(
+        connect(client.as_raw_fd(), &listener_address, listener_length),
+        0,
+        "connect: {}",
+        std::io::Error::last_os_error()
+    );
+    let mut acknowledgement = [0_u8];
+    unsafe {
+        libc::read(
+            client.as_raw_fd(),
+            acknowledgement.as_mut_ptr().cast(),
+            acknowledgement.len(),
+        )
+    };
+    let (_, collected, _) = identity(isa, CONNECTED, client.as_raw_fd(), 0);
+    println!("collected-peer={collected:016x}");
+}
+
+#[test]
+fn an_accepted_socket_encodes_its_own_owners_pid_on_both_isas() {
+    for isa in [1, 2] {
+        let path = format!("/tmp/.hl-owner-{}-{isa}", std::process::id());
+        let _ = std::fs::remove_file(&path);
+        let (listener_address, listener_length) = address(path.as_bytes(), false);
+        let listener = socket();
+        bind(listener.as_raw_fd(), &listener_address, listener_length);
+        assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 4) }, 0);
+
+        let connector = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "owner_pid_identity_connector", "--ignored", "--nocapture"])
+            .env(OWNER_PID_SOCKET, &path)
+            .env(CROSS_PROCESS_ISA, isa.to_string())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn the connector process");
+
+        let accepted = accept(listener.as_raw_fd());
+        let (local, peer, hidden) = identity(isa, IDENTIFY_MINTED, accepted.as_raw_fd(), 0);
+        assert_eq!(
+            hidden,
+            PEER_HIDDEN | CHECKPOINT_PENDING,
+            "ISA {isa} identity is not reciprocal"
+        );
+        assert_eq!(
+            u32::try_from(local >> 32).unwrap(),
+            std::process::id(),
+            "ISA {isa} accepted socket's own object id does not encode the ACCEPTOR's pid"
+        );
+        assert_ne!(
+            local >> 32,
+            peer >> 32,
+            "ISA {isa} both endpoint ids encode the same owner ({local:016x}/{peer:016x})"
+        );
+
+        let byte = [0x5a_u8];
+        assert_eq!(
+            unsafe { libc::write(accepted.as_raw_fd(), byte.as_ptr().cast(), byte.len()) },
+            1
+        );
+        let output = connector.wait_with_output().expect("connector exit");
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(output.status.success(), "connector failed: {stdout}");
+        let reported = |key: &str| {
+            stdout
+                .lines()
+                .find_map(|line| line.strip_prefix(key).map(str::to_owned))
+                .unwrap_or_else(|| panic!("connector did not report {key}: {stdout}"))
+        };
+        assert_eq!(
+            format!("{peer:016x}"),
+            reported("client-object="),
+            "ISA {isa} accepted socket's peer id is not the connector's own object"
+        );
+        assert_eq!(
+            u32::try_from(peer >> 32).unwrap().to_string(),
+            reported("connector-pid="),
+            "ISA {isa} peer id does not encode the CONNECTOR's pid"
+        );
+        assert_eq!(
+            format!("{local:016x}"),
+            reported("collected-peer="),
+            "ISA {isa} connector did not collect the acceptor-minted peer id"
         );
 
         identity(isa, RESET, accepted.as_raw_fd(), 0);

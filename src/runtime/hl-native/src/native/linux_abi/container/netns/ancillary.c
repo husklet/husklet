@@ -30,6 +30,10 @@ static uint16_t g_sock_state_ref[HL_NFD];
 #define SOCK_IDENTITY_TICKET_FREE 0u
 #define SOCK_IDENTITY_TICKET_PUBLISHED 1u
 #define SOCK_IDENTITY_TICKET_CLAIMED 2u
+/* The acceptor has claimed the nonce and written its OWN minted object id back into the slot; the slot
+ * now belongs to the publisher, which collects that id and frees it.  A RESOLVED slot is not claimable,
+ * so the nonce is still one-shot -- the second phase transfers a value, it does not resolve a name. */
+#define SOCK_IDENTITY_TICKET_RESOLVED 3u
 
 struct sock_identity_ticket {
     volatile uint32_t state;
@@ -40,6 +44,10 @@ struct sock_identity_ticket {
     volatile uint32_t publisher;
     volatile uint64_t nonce_high;
     volatile uint64_t nonce_low;
+    /* Each endpoint object is minted by the process that OWNS that endpoint, so its high 32 bits encode
+     * that process's pid: the connector writes client_object at publish, the acceptor writes
+     * server_object at claim.  A checkpoint reciprocity join needs both owners, and a pair minted
+     * entirely by the connector names only one. */
     volatile uint64_t client_object;
     volatile uint64_t server_object;
 };

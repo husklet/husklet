@@ -421,8 +421,12 @@ static uint8_t g_sock_identity_peer_hidden[HL_NFD];
  * topology can be captured. Keep them distinct from guest-created socketpairs and the private AF_UNIX
  * transports behind guest INET sockets; until that freeze is authoritative, capture must fail closed. */
 static uint8_t g_sock_identity_checkpoint_pending[HL_NFD];
-/* fd -> (identity ticket slot + 1); 0 = this descriptor published no ticket. */
+/* fd -> (identity ticket slot + 1); 0 = this descriptor published no ticket.  The nonce is retained
+ * beside the index because the slot is recycled: a fork inherits this map, so two processes can hold the
+ * same index for the same fd, and whichever loses the retirement race must not go on to retire or collect
+ * whatever ticket next occupies that slot.  Matching the nonce makes both operations idempotent. */
 static uint16_t g_sock_identity_ticket[HL_NFD];
+static uint64_t g_sock_identity_ticket_nonce[HL_NFD][2];
 static _Atomic uint32_t g_sock_object_next = 1;
 
 /* ---- Engine-private connection-identity namespace.
@@ -518,11 +522,17 @@ static void sock_identity_ticket_arena_attach(void) {
 static void sock_identity_ticket_release(int fd) {
     if (fd < 0 || fd >= HL_NFD) return;
     uint16_t slot = g_sock_identity_ticket[fd];
+    uint64_t high = g_sock_identity_ticket_nonce[fd][0], low = g_sock_identity_ticket_nonce[fd][1];
     g_sock_identity_ticket[fd] = 0;
+    g_sock_identity_ticket_nonce[fd][0] = g_sock_identity_ticket_nonce[fd][1] = 0;
     if (!slot || g_sock_identity_tickets == NULL) return;
     struct sock_identity_ticket *ticket = &g_sock_identity_tickets[slot - 1];
-    /* Only the publisher retires an unclaimed ticket; a claimed one was already freed by the acceptor. */
+    if (ticket->nonce_high != high || ticket->nonce_low != low) return; // recycled: not ours any more
+    /* Only the publisher retires its own ticket, whether the acceptor never claimed it (PUBLISHED) or
+     * claimed it and wrote its object back (RESOLVED) and the publisher is giving up on collecting. */
     if (__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_PUBLISHED,
+                                     SOCK_IDENTITY_TICKET_CLAIMED) ||
+        __sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_RESOLVED,
                                      SOCK_IDENTITY_TICKET_CLAIMED)) {
         ticket->nonce_high = ticket->nonce_low = 0;
         ticket->client_object = ticket->server_object = 0;
@@ -531,7 +541,7 @@ static void sock_identity_ticket_release(int fd) {
     }
 }
 
-/* A PUBLISHED ticket whose publisher no longer exists can never be claimed -- its nonce died with the
+/* A PUBLISHED or RESOLVED ticket whose publisher no longer exists can never be claimed or collected -- its nonce died with the
  * name that carried it -- so the slot is recoverable.  Retiring it through the same CAS the claimer uses
  * keeps the one-shot property: whoever wins the transition owns the slot, and the loser sees FREE. */
 static void sock_identity_ticket_reclaim_abandoned(struct sock_identity_ticket *ticket) {
@@ -539,6 +549,8 @@ static void sock_identity_ticket_reclaim_abandoned(struct sock_identity_ticket *
     if (!publisher || (int)publisher == (int)getpid()) return;
     if (kill((pid_t)publisher, 0) == 0 || errno != ESRCH) return;
     if (!__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_PUBLISHED,
+                                      SOCK_IDENTITY_TICKET_CLAIMED) &&
+        !__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_RESOLVED,
                                       SOCK_IDENTITY_TICKET_CLAIMED))
         return;
     ticket->nonce_high = ticket->nonce_low = 0;
@@ -547,9 +559,12 @@ static void sock_identity_ticket_reclaim_abandoned(struct sock_identity_ticket *
     __atomic_store_n(&ticket->state, SOCK_IDENTITY_TICKET_FREE, __ATOMIC_RELEASE);
 }
 
-static int sock_identity_ticket_publish(int fd, uint64_t client, uint64_t server, uint64_t *high, uint64_t *low) {
+/* Phase one: the connector deposits ONLY its own object id.  The peer half of the pair is left empty for
+ * the acceptor to mint, because an id minted here would encode this process's pid on a descriptor owned by
+ * another process, and a reciprocity join over such a pair names one owner twice. */
+static int sock_identity_ticket_publish(int fd, uint64_t client, uint64_t *high, uint64_t *low) {
     sock_identity_ticket_arena_attach();
-    if (fd < 0 || fd >= HL_NFD || g_sock_identity_tickets == NULL || !client || !server || client == server) {
+    if (fd < 0 || fd >= HL_NFD || g_sock_identity_tickets == NULL || !client) {
         errno = EINVAL;
         return -1;
     }
@@ -568,10 +583,12 @@ static int sock_identity_ticket_publish(int fd, uint64_t client, uint64_t server
             ticket->nonce_high = *high;
             ticket->nonce_low = *low;
             ticket->client_object = client;
-            ticket->server_object = server;
+            ticket->server_object = 0;
             ticket->publisher = (uint32_t)getpid();
             __atomic_store_n(&ticket->state, SOCK_IDENTITY_TICKET_PUBLISHED, __ATOMIC_RELEASE);
             g_sock_identity_ticket[fd] = (uint16_t)(index + 1);
+            g_sock_identity_ticket_nonce[fd][0] = *high;
+            g_sock_identity_ticket_nonce[fd][1] = *low;
             return 0;
         }
     }
@@ -579,9 +596,13 @@ static int sock_identity_ticket_publish(int fd, uint64_t client, uint64_t server
     return -1;
 }
 
-/* One shot: a nonce resolves to identity exactly once, then the slot is retired.  A replayed name -- from
- * a guest that observed one, or from a stale inode -- resolves to nothing. */
-static int sock_identity_ticket_claim(uint64_t high, uint64_t low, uint64_t *client, uint64_t *server) {
+/* Phase two, one shot: a nonce resolves to identity exactly once.  The claimer takes the connector's
+ * object and deposits its OWN, so the slot ends up holding the reciprocal pair with each half minted by
+ * the process that owns that endpoint.  A replayed name -- from a guest that observed one, or from a stale
+ * inode -- still resolves to nothing: only the PUBLISHED->CLAIMED transition resolves a nonce, and it
+ * happens exactly once.  The value deposited is never guest-supplied; it is this process's freshly minted
+ * object id, so the write-back transfers an engine-minted fact and cannot inject a chosen one. */
+static int sock_identity_ticket_claim(uint64_t high, uint64_t low, uint64_t *client, uint64_t server) {
     sock_identity_ticket_arena_attach();
     if (g_sock_identity_tickets == NULL || (!high && !low) || !client || !server) return -1;
     for (uint32_t index = 0; index < SOCK_IDENTITY_TICKET_N; index++) {
@@ -593,14 +614,48 @@ static int sock_identity_ticket_claim(uint64_t high, uint64_t low, uint64_t *cli
                                           SOCK_IDENTITY_TICKET_CLAIMED))
             continue;
         *client = ticket->client_object;
-        *server = ticket->server_object;
-        ticket->nonce_high = ticket->nonce_low = 0;
-        ticket->client_object = ticket->server_object = 0;
-        ticket->publisher = 0;
-        __atomic_store_n(&ticket->state, SOCK_IDENTITY_TICKET_FREE, __ATOMIC_RELEASE);
-        return (*client && *server && *client != *server) ? 0 : -1;
+        if (!*client || *client == server) {
+            /* Nothing to reciprocate: retire the slot rather than leave a resolution nobody can use. */
+            ticket->nonce_high = ticket->nonce_low = 0;
+            ticket->client_object = ticket->server_object = 0;
+            ticket->publisher = 0;
+            __atomic_store_n(&ticket->state, SOCK_IDENTITY_TICKET_FREE, __ATOMIC_RELEASE);
+            return -1;
+        }
+        /* The nonce stays until collection so the publisher can recognise ITS slot after recycling, and
+         * it is no longer resolvable: only PUBLISHED -> CLAIMED resolves a name, and that has happened. */
+        ticket->server_object = server;
+        __atomic_store_n(&ticket->state, SOCK_IDENTITY_TICKET_RESOLVED, __ATOMIC_RELEASE);
+        return 0;
     }
     return -1;
+}
+
+/* The publisher collects the acceptor-minted half of its own slot.  It reads only the slot it published
+ * (g_sock_identity_ticket[fd]), so no other process can steer this descriptor's peer identity, and the
+ * slot is retired through the same CAS the claimer uses -- collection is one-shot too. */
+static int sock_identity_ticket_collect(int fd, uint64_t *server) {
+    if (fd < 0 || fd >= HL_NFD || server == NULL) return -1;
+    uint16_t slot = g_sock_identity_ticket[fd];
+    if (!slot || g_sock_identity_tickets == NULL) return -1;
+    struct sock_identity_ticket *ticket = &g_sock_identity_tickets[slot - 1];
+    if (ticket->nonce_high != g_sock_identity_ticket_nonce[fd][0] ||
+        ticket->nonce_low != g_sock_identity_ticket_nonce[fd][1])
+        return -1; // recycled into another connection's ticket: nothing here is ours
+    if (__atomic_load_n(&ticket->state, __ATOMIC_ACQUIRE) != SOCK_IDENTITY_TICKET_RESOLVED) return -1;
+    uint64_t resolved = ticket->server_object;
+    if (!__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_RESOLVED,
+                                      SOCK_IDENTITY_TICKET_CLAIMED))
+        return -1;
+    ticket->nonce_high = ticket->nonce_low = 0;
+    ticket->client_object = ticket->server_object = 0;
+    ticket->publisher = 0;
+    __atomic_store_n(&ticket->state, SOCK_IDENTITY_TICKET_FREE, __ATOMIC_RELEASE);
+    g_sock_identity_ticket[fd] = 0;
+    g_sock_identity_ticket_nonce[fd][0] = g_sock_identity_ticket_nonce[fd][1] = 0;
+    if (!resolved) return -1;
+    *server = resolved;
+    return 0;
 }
 
 static uint64_t sock_object_new(void) {
@@ -677,8 +732,19 @@ static void sock_internal_unix_peer_note(int fd, const char *name, int native_pe
     }
 }
 
+/* Adopt the acceptor-minted peer id as soon as it is available.  Cheap and idempotent: without a RESOLVED
+ * slot of our own it does nothing.  Called where the answer is needed (checkpoint admission) and where it
+ * is most likely to have arrived (a completed connect). */
+static void sock_internal_identity_collect(int fd) {
+    uint64_t server = 0;
+    if (fd < 0 || fd >= HL_NFD || !g_sock_identity_local_hidden[fd] || !g_sock_object[fd]) return;
+    if (sock_identity_ticket_collect(fd, &server) != 0) return;
+    sock_internal_alias_relation(fd, server, 0, 0);
+}
+
 static void sock_internal_connect_observed(int fd, int error) {
     if (fd < 0 || fd >= HL_NFD || !g_sock_object[fd]) return;
+    int collect = 0;
     uint64_t ofd = g_ofd_id[fd];
     int first = ofd ? 0 : fd, end = ofd ? HL_NFD : fd + 1;
     for (int alias = first; alias < end; alias++) {
@@ -689,6 +755,7 @@ static void sock_internal_connect_observed(int fd, int error) {
         } else if (error == 0) {
             g_sock_conn[alias] = 1;
             g_sock_connecting[alias] = 0;
+            collect = 1;
         } else {
             g_sock_conn[alias] = 0;
             g_sock_connecting[alias] = 0;
@@ -696,6 +763,7 @@ static void sock_internal_connect_observed(int fd, int error) {
             sock_identity_ticket_release(alias); // a refused dial retires its ticket; nothing can claim it
         }
     }
+    if (collect) sock_internal_identity_collect(fd);
 }
 
 static void sock_internal_shutdown_observed(int fd, int direction) {
@@ -714,6 +782,7 @@ static int sock_internal_checkpoint_admit(int fd) {
         errno = EBADF;
         return -1;
     }
+    sock_internal_identity_collect(fd); // a reciprocity join needs the acceptor-minted half of the pair
     if (g_sock_identity_checkpoint_pending[fd]) {
         fprintf(stderr, "[ckpt] admit-arm: fd %d identity_checkpoint_pending\n", fd);
         errno = ENOTSUP;
@@ -746,7 +815,7 @@ static int sock_internal_connect_prepare(int fd, int checkpoint_pending) {
         local.sun_path[sizeof local.sun_path - 1] = '\0';
         /* Already bound to the private name from an earlier prepare: re-assert the relation from our OWN
          * retained peer object.  Nothing is recovered from the bound name -- it is a nonce, not a fact. */
-        if (g_sock_identity_local_hidden[fd] && g_sock_identity_ticket[fd] && g_sock_peer_object[fd]) {
+        if (g_sock_identity_local_hidden[fd] && (g_sock_identity_ticket[fd] || g_sock_peer_object[fd])) {
             sock_internal_alias_relation(fd, g_sock_peer_object[fd], 1, checkpoint_pending);
         }
         /* A guest-bound client must keep its address and still be allowed to connect.  It cannot carry the
@@ -755,15 +824,14 @@ static int sock_internal_connect_prepare(int fd, int checkpoint_pending) {
         return 0;
     }
     // A failed AF_UNIX connect poisons its socket and the retry path replaces it with lo_swap(). Re-bind
-    // every replacement, while retaining the same logical peer object across attempts.
-    uint64_t peer = g_sock_peer_object[fd] ? g_sock_peer_object[fd] : sock_object_new();
+    // every replacement; the peer half stays empty until an acceptor mints and returns it.
     const char *directory = sock_identity_directory();
     uint64_t nonce_high = 0, nonce_low = 0;
     if (directory == NULL) {
         errno = EPERM; // no engine-private namespace -> no identity, rather than an unsafe one
         return -1;
     }
-    if (sock_identity_ticket_publish(fd, g_sock_object[fd], peer, &nonce_high, &nonce_low) != 0) return -1;
+    if (sock_identity_ticket_publish(fd, g_sock_object[fd], &nonce_high, &nonce_low) != 0) return -1;
     char path[HL_SOCKET_IDENTITY_PATH_SIZE];
     if (hl_socket_identity_format(path, sizeof path, directory, nonce_high, nonce_low) != 0) {
         sock_identity_ticket_release(fd);
@@ -779,7 +847,7 @@ static int sock_internal_connect_prepare(int fd, int checkpoint_pending) {
         return -1;
     }
     unlink(path);
-    sock_internal_alias_relation(fd, peer, 1, checkpoint_pending);
+    sock_internal_alias_relation(fd, g_sock_peer_object[fd], 1, checkpoint_pending);
     return 0;
 }
 
@@ -804,10 +872,14 @@ static int sock_internal_accept_identify(int fd, int checkpoint_pending) {
         return 0; // not one of ours: leave the accepted socket's freshly allocated identity alone
     /* The name got us a nonce and nothing more.  Identity exists only if that nonce is still an
      * outstanding ticket in the engine-private table, and claiming it consumes it.  A forged or replayed
-     * name therefore yields no identity at all -- it can never yield a CHOSEN one. */
-    uint64_t client = 0, server = 0;
-    if (sock_identity_ticket_claim(nonce_high, nonce_low, &client, &server) != 0) return 0;
-    g_sock_object[fd] = server;
+     * name therefore yields no identity at all -- it can never yield a CHOSEN one.
+     *
+     * The accepted descriptor KEEPS the object accept() minted for it in THIS process, so its id encodes
+     * this process's pid, and that id is what the claim deposits for the connector to collect.  Adopting a
+     * connector-minted server id instead made both halves of the pair encode the connector's pid, leaving
+     * a checkpoint reciprocity join with no computable second owner. */
+    uint64_t client = 0, server = g_sock_object[fd];
+    if (!server || sock_identity_ticket_claim(nonce_high, nonce_low, &client, server) != 0) return 0;
     g_sock_peer_object[fd] = client;
     g_sock_identity_peer_hidden[fd] = 1;
     g_sock_identity_checkpoint_pending[fd] = (uint8_t)checkpoint_pending;
@@ -882,6 +954,16 @@ HL_API int HL_TARGET_LOCAL(unix_identity_test)(uint32_t operation, int fd, uint6
     case 11:
         sock_internal_identity_test_initialize(fd, object, 0);
         g_sock_peer_object[fd] = object + 1;
+        break;
+    /* 15/16 mint through the production allocator instead of taking a test-chosen object, so a test can
+     * observe which PROCESS an endpoint id encodes -- the property a reciprocity join depends on. */
+    case 15:
+        sock_internal_identity_test_initialize(fd, sock_object_new(), 0);
+        status = sock_internal_connect_prepare(fd, 1);
+        break;
+    case 16:
+        sock_internal_identity_test_initialize(fd, sock_object_new(), 0);
+        status = sock_internal_accept_identify(fd, 1);
         break;
     case 12: status = sock_internal_shutdown(fd, SHUT_RD); break;
     case 13: status = sock_internal_shutdown(fd, SHUT_WR); break;
