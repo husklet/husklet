@@ -459,6 +459,33 @@ fn successful_restore_removes_an_obsolete_failure_summary() {
 }
 
 #[tokio::test]
+async fn kill_cleanup_attempts_process_reap_after_every_earlier_failure() {
+    let calls = std::sync::Mutex::new(Vec::new());
+    let outcome = Domain::stop_kill_with(
+        || {
+            calls.lock().unwrap().push("docker");
+            Err(io::Error::other("daemon stuck"))
+        },
+        || {
+            calls.lock().unwrap().push("attachments");
+            Err(io::Error::other("launcher unavailable"))
+        },
+        async {
+            calls.lock().unwrap().push("processes");
+            Err(io::Error::other("guest reap timed out"))
+        },
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+
+    assert_eq!(*calls.lock().unwrap(), ["docker", "attachments", "processes"]);
+    assert!(outcome.contains("Docker service cleanup: daemon stuck"));
+    assert!(outcome.contains("terminal attachment cleanup: launcher unavailable"));
+    assert!(outcome.contains("workspace process cleanup: guest reap timed out"));
+}
+
+#[tokio::test]
 async fn auxiliary_restore_failure_does_not_abort_later_restore_or_domain_serving() {
     use std::cell::RefCell;
     use std::rc::Rc;

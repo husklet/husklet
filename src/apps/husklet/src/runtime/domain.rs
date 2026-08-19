@@ -335,6 +335,53 @@ impl Domain {
         }
     }
 
+    fn cleanup_outcome(steps: impl IntoIterator<Item = (&'static str, io::Result<()>)>) -> io::Result<()> {
+        let failures = steps
+            .into_iter()
+            .filter_map(|(step, result)| result.err().map(|error| format!("{step}: {error}")))
+            .collect::<Vec<_>>();
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(io::Error::other(failures.join("; ")))
+        }
+    }
+
+    async fn stop_kill(
+        containers: &hl_container::Containers,
+        workspace: &WorkspaceConfig,
+        docker: Option<&crate::runtime::resources::Daemon>,
+    ) -> io::Result<()> {
+        Self::stop_kill_with(
+            || docker.map_or(Ok(()), |daemon| daemon.close(crate::runtime::resources::Close::Kill)),
+            || crate::runtime::execution::PaneExecution::clear_all(workspace),
+            async {
+                containers
+                    .shutdown(std::time::Duration::from_secs(5))
+                    .await
+                    .map_err(io::Error::other)
+            },
+        )
+        .await
+    }
+
+    async fn stop_kill_with(
+        docker: impl FnOnce() -> io::Result<()>,
+        attachments: impl FnOnce() -> io::Result<()>,
+        processes: impl std::future::Future<Output = io::Result<()>>,
+    ) -> io::Result<()> {
+        // These owners are independent. In particular, failure to clear a pane attachment must
+        // never suppress the container shutdown that terminally reaps the guest process tree.
+        let docker = docker();
+        let attachments = attachments();
+        let processes = processes.await;
+        Self::cleanup_outcome([
+            ("Docker service cleanup", docker),
+            ("terminal attachment cleanup", attachments),
+            ("workspace process cleanup", processes),
+        ])
+    }
+
     pub async fn serve(workspace: &WorkspaceConfig) -> io::Result<()> {
         let owner = Self::new(workspace);
         tokio::fs::create_dir_all(&owner.directory).await?;
@@ -381,14 +428,7 @@ impl Domain {
                         .then(|| crate::runtime::resources::Daemon::new(&stopped_workspace));
                     let stopped = match disposition {
                         Disposition::Kill => {
-                            let docker = docker
-                                .map_or(Ok(()), |daemon| daemon.close(crate::runtime::resources::Close::Kill));
-                            let workspace =
-                                match crate::runtime::execution::PaneExecution::clear_all(&stopped_workspace) {
-                                    Ok(()) => stopping.shutdown(std::time::Duration::from_secs(5)).await,
-                                    Err(error) => Err(hl_container::Error::Runtime(error.to_string())),
-                                };
-                            docker.and_then(|()| workspace.map_err(io::Error::other))
+                            Self::stop_kill(&stopping, &stopped_workspace, docker.as_ref()).await
                         }
                         Disposition::Checkpoint => {
                             let Some(stopped) = Self::stop_checkpoint(&stopping, docker.as_ref(), &close_result).await
