@@ -96,6 +96,13 @@ pub fn bound_vector_io_test(isa: u32, scenario: u32) -> Result<(i64, u32, u64), 
     bindings::bound_vector_io_test(isa, scenario)
 }
 
+/// Drives the private-fd fork-lock scenario in the C engine.
+#[cfg(all(unix, feature = "native-test-hooks"))]
+#[doc(hidden)]
+pub fn private_fork_lock_test(scenario: u32) -> Result<(), i32> {
+    bindings::private_fork_lock_test(scenario)
+}
+
 #[cfg(any(feature = "native-test-hooks", windows))]
 #[doc(hidden)]
 pub fn identity_registry_test(scenario: u32, iterations: u32) -> Result<(), i32> {

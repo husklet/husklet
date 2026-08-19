@@ -37,6 +37,10 @@ name = "errno_namespace"
 required-features = ["native-test-hooks"]
 
 [[test]]
+name = "private_fd_fork_lock"
+required-features = ["native-test-hooks"]
+
+[[test]]
 name = "identity_registry"
 
 [[test]]
