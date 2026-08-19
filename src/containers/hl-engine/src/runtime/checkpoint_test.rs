@@ -2241,13 +2241,21 @@ fn park_read(descriptor: i32, bytes: &mut [u8]) -> Option<()> {
     Some(())
 }
 
+/// Closes the parent's copy of a descriptor the members own from here on.
+fn park_close(descriptor: i32) {
+    // SAFETY: the parent has no further use for this inherited end.
+    unsafe { libc::close(descriptor) };
+}
+
 fn park_emit(events: i32, tag: u8) {
     let byte = [tag];
     // SAFETY: a one-byte write to an inherited pipe end this process owns.
     unsafe { libc::write(events, byte.as_ptr().cast(), 1) };
 }
 
-/// Blocks until a byte with `tag` arrives, and fails the test rather than hanging forever.
+/// Waits for a byte with `tag`, and fails the test rather than hanging forever: the event pipe is
+/// non-blocking, so a member that dies -- which is exactly what the non-vacuity mutation makes every
+/// member do -- is reported as a dead member instead of stalling the suite.
 fn park_await(events: i32, tag: u8, what: &str) {
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
     loop {
@@ -2255,7 +2263,11 @@ fn park_await(events: i32, tag: u8, what: &str) {
         assert!(std::time::Instant::now() < deadline, "timed out waiting for {what}");
         // SAFETY: byte is writable and the descriptor is owned here.
         let count = unsafe { libc::read(events, byte.as_mut_ptr().cast(), 1) };
-        assert!(count == 1, "member channel closed while waiting for {what}");
+        if count < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock {
+            std::thread::sleep(Duration::from_millis(2));
+            continue;
+        }
+        assert!(count == 1, "member exited without reaching {what}");
         if byte[0] == tag {
             return;
         }
@@ -2372,6 +2384,18 @@ fn two_members_stay_stopped_and_alive_across_one_shared_object_capture_and_then_
         }
         *member = child;
     }
+
+    // The members own every write end from here on, so a member that dies closes its event pipe and the
+    // parent observes a dead member rather than blocking on a descriptor it is holding open itself.
+    for member in &events {
+        park_close(member[1]);
+        // SAFETY: reading a member's events must never block the coordinator.
+        unsafe { libc::fcntl(member[0], libc::F_SETFL, libc::O_NONBLOCK) };
+    }
+    park_close(start[0]);
+    park_close(gate[0]);
+    park_close(shared[0]);
+    park_close(shared[1]);
 
     let server = Arc::new(Server::new(Arc::new(Store), Arc::new(Store)));
     let id = server
