@@ -268,6 +268,16 @@ static int ckpt_sysv_image_build(void **out_image, size_t *out_size) {
 // from the restored init, so it inherits the init's g_shmat table and sysv_after_fork() has
 // already counted those attachments in nattch; both are undone here before the child installs
 // its own captured set, which carries the authoritative nattch in the control tables.
+//
+// MUST RUN BEFORE ckpt_restore_mem_dir, alongside the other releases of COW-inherited parent
+// state (bound_mapping_reset / hl_gmap_reset). The addresses in g_shmat describe the RESTORED
+// INIT's address space, not this process's: a member whose own image records no attachment --
+// every container exec session, e.g. the psql client holding the far end of a postgres backend
+// socket -- still inherits the init's two SysV ranges, and munmapping them AFTER the memory
+// restore deletes whatever that member's own captured image legitimately mapped at those VAs.
+// Observed on the postgres acceptance fixture: four members reported inherited_attach=2 with
+// image_attach=0, and the restored cluster then lost a backend ("exited with exit code 0" /
+// SIGSEGV) followed by a full postmaster crash-recovery cycle.
 static void ckpt_sysv_detach_inherited(void) {
     pthread_mutex_lock(&g_ipc_local_m);
     for (int i = 0; i < HL_SHMAT_MAX; i++) {
@@ -358,6 +368,9 @@ static int ckpt_sysv_image_apply(const void *image_bytes, size_t size) {
         return -1;
     }
 
+    // The inherited attachments were already released before the memory restore
+    // (ckpt_sysv_detach_inherited at the COW-inheritance reset); this is idempotent for the init,
+    // which inherits none, and must never run after the memory image has been laid down.
     ckpt_sysv_detach_inherited();
     struct hl_ipc_ctrl *control = hl_ipc_ctrl(); // creates it under the NEW namespace hash when absent
     if (control == NULL) {

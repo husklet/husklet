@@ -1126,6 +1126,11 @@ static void ckpt_restore_proc_run(int gpid) {
     /* The forked restorer inherited a COW copy of the parent's typed VMA ledger and
      * host mapping ownership. Release those handles before forgetting the generic
      * map registry, otherwise every restored child leaks its parent's mappings. */
+    /* Includes the SysV attachments inherited from the restored init: their addresses name the
+     * INIT's address space, so releasing them after ckpt_restore_mem_dir would munmap this
+     * member's own restored guest memory. ckpt_restore_sysv_state re-attaches this member's own
+     * captured set afterwards. */
+    ckpt_sysv_detach_inherited();
     bound_mapping_reset();
     hl_logical_vma_global_reset_quiescent();
     hl_gmap_reset();
