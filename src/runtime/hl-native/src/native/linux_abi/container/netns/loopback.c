@@ -183,8 +183,7 @@ static uint8_t g_sock_seqpacket[HL_NFD];
 // recycled only after both endpoint reference counts reach zero.
 static void seq_ref_arena_init(const hl_host_services *host) {
     void *arena = NULL;
-    if (g_seq_refs != NULL && g_udp_refs != NULL && g_sock_states != NULL && g_sock_identity_tickets != NULL)
-        return;
+    if (g_seq_refs != NULL && g_udp_refs != NULL && g_sock_states != NULL) return;
     if (g_seq_refs == NULL && hl_linux_shared_create(host, sizeof(struct seq_ref) * SEQ_REF_N, &arena) == HL_STATUS_OK)
         g_seq_refs = (struct seq_ref *)arena;
     arena = NULL;
@@ -194,13 +193,6 @@ static void seq_ref_arena_init(const hl_host_services *host) {
     if (g_sock_states == NULL &&
         hl_linux_shared_create(host, sizeof(struct sock_state) * SOCK_STATE_N, &arena) == HL_STATUS_OK)
         g_sock_states = (struct sock_state *)arena;
-    arena = NULL;
-    /* Identity tickets must be reachable from every guest descendant: the connector may live in one
-     * process and the acceptor in another (postmaster/backend), and both were forked from here. */
-    if (g_sock_identity_tickets == NULL &&
-        hl_linux_shared_create(host, sizeof(struct sock_identity_ticket) * SOCK_IDENTITY_TICKET_N, &arena) ==
-            HL_STATUS_OK)
-        g_sock_identity_tickets = (struct sock_identity_ticket *)arena;
 }
 
 static int udp_ref_create(int fd, const char *path) {
@@ -470,6 +462,59 @@ static const char *sock_identity_directory(void) {
  * is what replaces "parse the filename and adopt what it says".
  */
 
+/* ---- Where the ticket table lives, and why it is not an inherited arena.
+ *
+ * The connector and the acceptor are routinely SIBLING engine workers, not fork relatives: a container
+ * exec (psql against a running postmaster) is forked from the hl-container daemon, runs its own
+ * hl_run_linux_guest, and inherits no arena from the container's pid1 worker -- only typed bindings and
+ * the explicitly duplicated control channels cross that boundary.  A MAP_SHARED memfd created at the ISA
+ * seam is therefore private to one worker's fork lineage, and every cross-worker claim missed: an
+ * instrumented postgres run showed three distinct publisher tables against an acceptor table holding zero
+ * published tickets.  Guest AF_UNIX identity is exactly the state that must span that boundary.
+ *
+ * What DOES span it is the namespace key.  HL_NETNS already rendezvouses independent workers of the same
+ * container (abstract sockets, IPC identity, procfs agreement), and sock_identity_directory() is the
+ * engine-owned, mode-0700, euid-owned, symlink-checked directory derived from it.  The table is a file in
+ * that directory, mapped MAP_SHARED, so every worker of one container maps the same pages and workers of
+ * different containers cannot see each other's.  This widens no trust boundary: it reuses the directory
+ * whose ownership the identity design already validates and whose prefix guest binds are already refused.
+ * Sizing is serialized on the file with flock, so a worker that reaches the table before the creator has
+ * published its size waits rather than mapping a short object. */
+static void sock_identity_ticket_arena_attach(void) {
+    if (g_sock_identity_tickets != NULL) return;
+    const char *directory = sock_identity_directory();
+    if (directory == NULL) return;
+    char path[HL_SOCKET_IDENTITY_PATH_SIZE];
+    int length = snprintf(path, sizeof path, "%s/tickets", directory);
+    if (length <= 0 || (size_t)length >= sizeof path) return;
+    size_t bytes = sizeof(struct sock_identity_ticket) * SOCK_IDENTITY_TICKET_N;
+    int descriptor = open(path, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (descriptor < 0) return;
+    struct stat info;
+    /* The directory is ours and 0700, but validate the object itself on the same terms rather than
+     * inheriting the directory's verdict: a regular file, our euid, 0600, one link. */
+    if (fstat(descriptor, &info) != 0 || !S_ISREG(info.st_mode) || info.st_uid != geteuid() ||
+        (info.st_mode & 07777) != 0600 || info.st_nlink != 1) {
+        close(descriptor);
+        return;
+    }
+    if (flock(descriptor, LOCK_EX) != 0) {
+        close(descriptor);
+        return;
+    }
+    if ((fstat(descriptor, &info) != 0 || (size_t)info.st_size != bytes) &&
+        ftruncate(descriptor, (off_t)bytes) != 0) {
+        (void)flock(descriptor, LOCK_UN);
+        close(descriptor);
+        return;
+    }
+    void *mapped = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, descriptor, 0);
+    (void)flock(descriptor, LOCK_UN);
+    close(descriptor);
+    if (mapped == MAP_FAILED) return;
+    g_sock_identity_tickets = (struct sock_identity_ticket *)mapped;
+}
+
 static void sock_identity_ticket_release(int fd) {
     if (fd < 0 || fd >= HL_NFD) return;
     uint16_t slot = g_sock_identity_ticket[fd];
@@ -481,11 +526,29 @@ static void sock_identity_ticket_release(int fd) {
                                      SOCK_IDENTITY_TICKET_CLAIMED)) {
         ticket->nonce_high = ticket->nonce_low = 0;
         ticket->client_object = ticket->server_object = 0;
+        ticket->publisher = 0;
         __atomic_store_n(&ticket->state, SOCK_IDENTITY_TICKET_FREE, __ATOMIC_RELEASE);
     }
 }
 
+/* A PUBLISHED ticket whose publisher no longer exists can never be claimed -- its nonce died with the
+ * name that carried it -- so the slot is recoverable.  Retiring it through the same CAS the claimer uses
+ * keeps the one-shot property: whoever wins the transition owns the slot, and the loser sees FREE. */
+static void sock_identity_ticket_reclaim_abandoned(struct sock_identity_ticket *ticket) {
+    uint32_t publisher = ticket->publisher;
+    if (!publisher || (int)publisher == (int)getpid()) return;
+    if (kill((pid_t)publisher, 0) == 0 || errno != ESRCH) return;
+    if (!__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_PUBLISHED,
+                                      SOCK_IDENTITY_TICKET_CLAIMED))
+        return;
+    ticket->nonce_high = ticket->nonce_low = 0;
+    ticket->client_object = ticket->server_object = 0;
+    ticket->publisher = 0;
+    __atomic_store_n(&ticket->state, SOCK_IDENTITY_TICKET_FREE, __ATOMIC_RELEASE);
+}
+
 static int sock_identity_ticket_publish(int fd, uint64_t client, uint64_t server, uint64_t *high, uint64_t *low) {
+    sock_identity_ticket_arena_attach();
     if (fd < 0 || fd >= HL_NFD || g_sock_identity_tickets == NULL || !client || !server || client == server) {
         errno = EINVAL;
         return -1;
@@ -495,18 +558,22 @@ static int sock_identity_ticket_publish(int fd, uint64_t client, uint64_t server
         return -1;
     }
     sock_identity_ticket_release(fd); // a re-prepared descriptor must not strand its previous ticket
-    for (uint32_t index = 0; index < SOCK_IDENTITY_TICKET_N; index++) {
-        struct sock_identity_ticket *ticket = &g_sock_identity_tickets[index];
-        if (!__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_FREE,
-                                          SOCK_IDENTITY_TICKET_CLAIMED))
-            continue;
-        ticket->nonce_high = *high;
-        ticket->nonce_low = *low;
-        ticket->client_object = client;
-        ticket->server_object = server;
-        __atomic_store_n(&ticket->state, SOCK_IDENTITY_TICKET_PUBLISHED, __ATOMIC_RELEASE);
-        g_sock_identity_ticket[fd] = (uint16_t)(index + 1);
-        return 0;
+    for (uint32_t pass = 0; pass < 2u; pass++) {
+        for (uint32_t index = 0; index < SOCK_IDENTITY_TICKET_N; index++) {
+            struct sock_identity_ticket *ticket = &g_sock_identity_tickets[index];
+            if (pass == 1u) sock_identity_ticket_reclaim_abandoned(ticket);
+            if (!__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_FREE,
+                                              SOCK_IDENTITY_TICKET_CLAIMED))
+                continue;
+            ticket->nonce_high = *high;
+            ticket->nonce_low = *low;
+            ticket->client_object = client;
+            ticket->server_object = server;
+            ticket->publisher = (uint32_t)getpid();
+            __atomic_store_n(&ticket->state, SOCK_IDENTITY_TICKET_PUBLISHED, __ATOMIC_RELEASE);
+            g_sock_identity_ticket[fd] = (uint16_t)(index + 1);
+            return 0;
+        }
     }
     errno = ENFILE;
     return -1;
@@ -515,6 +582,7 @@ static int sock_identity_ticket_publish(int fd, uint64_t client, uint64_t server
 /* One shot: a nonce resolves to identity exactly once, then the slot is retired.  A replayed name -- from
  * a guest that observed one, or from a stale inode -- resolves to nothing. */
 static int sock_identity_ticket_claim(uint64_t high, uint64_t low, uint64_t *client, uint64_t *server) {
+    sock_identity_ticket_arena_attach();
     if (g_sock_identity_tickets == NULL || (!high && !low) || !client || !server) return -1;
     for (uint32_t index = 0; index < SOCK_IDENTITY_TICKET_N; index++) {
         struct sock_identity_ticket *ticket = &g_sock_identity_tickets[index];
@@ -528,6 +596,7 @@ static int sock_identity_ticket_claim(uint64_t high, uint64_t low, uint64_t *cli
         *server = ticket->server_object;
         ticket->nonce_high = ticket->nonce_low = 0;
         ticket->client_object = ticket->server_object = 0;
+        ticket->publisher = 0;
         __atomic_store_n(&ticket->state, SOCK_IDENTITY_TICKET_FREE, __ATOMIC_RELEASE);
         return (*client && *server && *client != *server) ? 0 : -1;
     }
@@ -752,11 +821,7 @@ static void sock_internal_identity_test_initialize(int fd, uint64_t object, uint
                            MAP_ANON | MAP_SHARED, -1, 0);
         if (arena != MAP_FAILED) g_sock_states = (struct sock_state *)arena;
     }
-    if (g_sock_identity_tickets == NULL) {
-        void *arena = mmap(NULL, sizeof(struct sock_identity_ticket) * SOCK_IDENTITY_TICKET_N,
-                           PROT_READ | PROT_WRITE, MAP_ANON | MAP_SHARED, -1, 0);
-        if (arena != MAP_FAILED) g_sock_identity_tickets = (struct sock_identity_ticket *)arena;
-    }
+    sock_identity_ticket_arena_attach();
     g_sock_object[fd] = object;
     g_sock_peer_object[fd] = 0;
     g_sock_identity_local_hidden[fd] = 0;

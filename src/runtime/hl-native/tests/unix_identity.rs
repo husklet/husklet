@@ -391,10 +391,19 @@ fn a_forged_identity_name_is_never_adopted_on_both_isas() {
             let allocated = 0x7000_0000_0000_0000_u64 | u64::from(isa);
             let (local, peer, hidden) = identity(isa, IDENTIFY, accepted.as_raw_fd(), allocated);
             assert_eq!(local, allocated, "ISA {isa} adopted a forged object id from {forged}");
-            assert_ne!(local, forged_server, "ISA {isa} adopted the forged server id from {forged}");
+            assert_ne!(
+                local, forged_server,
+                "ISA {isa} adopted the forged server id from {forged}"
+            );
             assert_eq!(peer, 0, "ISA {isa} adopted a forged peer id from {forged}");
-            assert_ne!(peer, forged_client, "ISA {isa} adopted the forged client id from {forged}");
-            assert_eq!(hidden, CHECKPOINT_PENDING, "ISA {isa} marked a forged peer identity hidden");
+            assert_ne!(
+                peer, forged_client,
+                "ISA {isa} adopted the forged client id from {forged}"
+            );
+            assert_eq!(
+                hidden, CHECKPOINT_PENDING,
+                "ISA {isa} marked a forged peer identity hidden"
+            );
             assert_eq!(
                 hl_native::unix_identity_test(isa, CHECKPOINT_ADMIT, accepted.as_raw_fd(), 0),
                 Err(libc::ENOTSUP),
@@ -405,5 +414,118 @@ fn a_forged_identity_name_is_never_adopted_on_both_isas() {
             let _ = std::fs::remove_file(forged);
             let _ = std::fs::remove_file(&listener_path);
         }
+    }
+}
+
+/// The connector and the acceptor of an ordinary pathname AF_UNIX connection are routinely UNRELATED
+/// host processes -- a container exec (`psql`) is forked from the hl-container daemon, not from the
+/// worker running the listener (`postgres`), and inherits none of its memory. Identity has to survive
+/// that, and for a while it did not: the ticket table was a MAP_SHARED memfd created once per worker at
+/// the ISA seam, so each process published into a private table and every cross-process claim missed.
+/// Every accepted postgres backend socket then carried peer=0, which no reciprocity join can ever match.
+///
+/// The existing suite could not see it: `reciprocal_connection` runs both ends in one process, where a
+/// private table is still the same table. So this test re-executes the test binary as the connector and
+/// keeps only the acceptor here. The child shares nothing but the namespace key.
+const CROSS_PROCESS_SOCKET: &str = "HL_UNIX_IDENTITY_CROSS_PROCESS_SOCKET";
+const CROSS_PROCESS_ISA: &str = "HL_UNIX_IDENTITY_CROSS_PROCESS_ISA";
+const CROSS_PROCESS_CLIENT_OBJECT: u64 = 0x5a5a_0000_0000_0011;
+
+#[test]
+#[ignore = "re-executed as the connector by an_honest_cross_process_connection_carries_reciprocal_identity"]
+fn cross_process_identity_connector() {
+    let path = std::env::var(CROSS_PROCESS_SOCKET).expect("connector needs a listener path");
+    let isa: u32 = std::env::var(CROSS_PROCESS_ISA)
+        .expect("connector needs an ISA")
+        .parse()
+        .unwrap();
+    let (listener_address, listener_length) = address(path.as_bytes(), false);
+    let client = socket();
+    let (local, reserved_peer, hidden) = identity(isa, PREPARE, client.as_raw_fd(), CROSS_PROCESS_CLIENT_OBJECT);
+    assert_eq!(local, CROSS_PROCESS_CLIENT_OBJECT);
+    assert_ne!(reserved_peer, 0);
+    assert_eq!(hidden, LOCAL_HIDDEN | CHECKPOINT_PENDING);
+    assert_eq!(
+        connect(client.as_raw_fd(), &listener_address, listener_length),
+        0,
+        "connect: {}",
+        std::io::Error::last_os_error()
+    );
+    // Hold the connection open until the acceptor has identified it, then report the reserved peer so
+    // the parent can assert the acceptor adopted exactly the object the connector reserved for it.
+    println!("reserved-peer={reserved_peer:016x}");
+    let mut acknowledgement = [0_u8];
+    unsafe {
+        libc::read(
+            client.as_raw_fd(),
+            acknowledgement.as_mut_ptr().cast(),
+            acknowledgement.len(),
+        )
+    };
+}
+
+#[test]
+fn an_honest_cross_process_connection_carries_reciprocal_identity_on_both_isas() {
+    for isa in [1, 2] {
+        let path = format!("/tmp/.hl-xproc-{}-{isa}", std::process::id());
+        let _ = std::fs::remove_file(&path);
+        let (listener_address, listener_length) = address(path.as_bytes(), false);
+        let listener = socket();
+        bind(listener.as_raw_fd(), &listener_address, listener_length);
+        assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 4) }, 0);
+
+        let connector = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "cross_process_identity_connector",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(CROSS_PROCESS_SOCKET, &path)
+            .env(CROSS_PROCESS_ISA, isa.to_string())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn the connector process");
+
+        let accepted = accept(listener.as_raw_fd());
+        let allocated = 0x7a00_0000_0000_0000_u64 | u64::from(isa);
+        let (local, peer, hidden) = identity(isa, IDENTIFY, accepted.as_raw_fd(), allocated);
+        assert_eq!(
+            peer, CROSS_PROCESS_CLIENT_OBJECT,
+            "ISA {isa} accepted socket has no cross-process peer identity"
+        );
+        assert_ne!(
+            local, allocated,
+            "ISA {isa} kept its provisional object instead of the reserved one"
+        );
+        assert_eq!(
+            hidden,
+            PEER_HIDDEN | CHECKPOINT_PENDING,
+            "ISA {isa} peer identity is not hidden"
+        );
+
+        let byte = [0x5a_u8];
+        assert_eq!(
+            unsafe { libc::write(accepted.as_raw_fd(), byte.as_ptr().cast(), byte.len()) },
+            1
+        );
+        let output = connector.wait_with_output().expect("connector exit");
+        assert!(
+            output.status.success(),
+            "connector failed: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let reported = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find_map(|line| line.strip_prefix("reserved-peer=").map(str::to_owned))
+            .expect("connector reported its reserved peer");
+        assert_eq!(
+            format!("{local:016x}"),
+            reported,
+            "ISA {isa} acceptor adopted an object the connector never reserved"
+        );
+
+        identity(isa, RESET, accepted.as_raw_fd(), 0);
+        let _ = std::fs::remove_file(&path);
     }
 }
