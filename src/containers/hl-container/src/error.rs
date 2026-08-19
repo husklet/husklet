@@ -43,9 +43,7 @@ pub enum Error {
         actual: ContainerState,
         expected: &'static str,
     },
-    #[error(
-        "exec {id} cannot be reattached after a whole-image restore: {reason}"
-    )]
+    #[error("exec {id} cannot be reattached after a whole-image restore: {reason}")]
     ExecNotReattachable { id: ExecId, reason: &'static str },
     #[error("exec {id} is {actual:?}, expected {expected}")]
     InvalidExecState {
