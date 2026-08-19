@@ -290,10 +290,11 @@ impl Service {
         };
         container.checkpoint = Some(checkpoint.clone());
         self.containers.replace(&container).await?;
-        self.arm_domain_members(&container.id, &checkpoint).await?;
+        let members = self.arm_domain_members(&container.id, &checkpoint).await?;
         let output = self
             .await_output_completion(&JournalId::container(container.id.clone()), output_complete, timeout)
-            .await;
+            .await
+            .and(self.await_domain_member_stop(members, timeout).await);
         if let Some(run) = self.live.lock().await.remove(&container.id) {
             let _ = run.health.send(true);
         }
@@ -316,7 +317,12 @@ impl Service {
     /// This runs under `self.operations`, which [`Self::finish_exec`] also takes before writing a
     /// terminal state, so the token is armed before a released member's `_exit(0)` can be
     /// observed. That ordering is what keeps a clean release distinguishable from a crash.
-    async fn arm_domain_members(&self, container: &crate::ContainerId, checkpoint: &crate::Checkpoint) -> Result<()> {
+    async fn arm_domain_members(
+        &self,
+        container: &crate::ContainerId,
+        checkpoint: &crate::Checkpoint,
+    ) -> Result<Vec<crate::ExecId>> {
+        let mut sealed = Vec::new();
         for mut exec in self.execs.list().await? {
             if &exec.container != container || !exec.state.is_active() {
                 continue;
@@ -324,6 +330,41 @@ impl Service {
             exec.state = crate::ExecState::Created;
             exec.checkpoint = Some(checkpoint.clone());
             self.execs.replace(&exec).await?;
+            sealed.push(exec.id);
+        }
+        Ok(sealed)
+    }
+
+    /// Waits for every sealed domain member's runtime process to be reaped, and retires its
+    /// runtime bookkeeping.
+    ///
+    /// A committed capture releases every member to exit and is the container's stop, so the
+    /// caller's next act is a restore into the SAME network namespace, SysV control block and
+    /// filesystem generation. Declaring the container `Exited` while a member of the previous
+    /// generation is still executing would let those two trees overlap: the restored processes
+    /// would find the original container's live IPC control block instead of publishing their
+    /// own, and the restored tree would run beside a partially-released one. The container's own
+    /// worker is already covered by [`Self::await_output_completion`] -- an output owner only
+    /// signals completion after `Running::wait` has returned -- and a member is covered by the
+    /// identical signal on its own journal.
+    ///
+    /// `finish_exec` takes `self.operations`, which this function's caller holds, so the member's
+    /// terminal bookkeeping cannot run until the capture returns. Retiring `exec_live` here is
+    /// therefore not a duplicate: without it a restore admitted under the same lock would be
+    /// quarantined behind an entry describing a process that no longer exists.
+    ///
+    /// A member that does not stop inside `timeout` fails the capture, which rolls it back. It is
+    /// never reported as captured while it is still running.
+    async fn await_domain_member_stop(&self, members: Vec<crate::ExecId>, timeout: Duration) -> Result<()> {
+        for member in members {
+            let journal = JournalId::exec(member.clone());
+            let completion = self.exec_output_complete.lock().await.get(&member).cloned();
+            let Some(completion) = completion else {
+                continue; // never started, or already reaped and retired
+            };
+            self.await_output_completion(&journal, completion, timeout).await?;
+            self.exec_live.lock().await.remove(&member);
+            self.exec_output_complete.lock().await.remove(&member);
         }
         Ok(())
     }

@@ -1122,3 +1122,46 @@ async fn an_exec_session_joins_its_container_freeze_rather_than_its_own_channel(
         "the container launch coordinates the freeze and its exec session joins it"
     );
 }
+
+#[tokio::test]
+async fn committed_capture_leaves_no_sealed_domain_member_still_running() {
+    // A capture that commits IS the container's stop: `checkpoint_locked` records
+    // `Exited { Code(0) }` and the very next thing a caller does is `start()`, which restores
+    // into the same network namespace, the same SysV control block and the same filesystem
+    // generation. That is only sound if the whole PROCESS DOMAIN has already been reaped --
+    // the container's own worker and every exec session sealed into its freeze. The container's
+    // worker is covered (its output owner only signals completion after `wait()` returns);
+    // the sealed members were not, so the restore could run beside the previous generation's
+    // still-live tree.
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_millis(500);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("domain-member-handoff")).await.unwrap();
+    containers.start("domain-member-handoff").await.unwrap();
+    let member = containers
+        .executions()
+        .create("domain-member-handoff", ExecSpec::new(Process::new("fake")))
+        .await
+        .unwrap();
+    let _session = containers.executions().start(&member.id).await.unwrap();
+
+    containers.checkpoint_all(Duration::from_secs(5)).await.unwrap();
+
+    let captured = containers.inspect("domain-member-handoff").await.unwrap();
+    assert!(
+        matches!(captured.state, ContainerState::Exited { .. }),
+        "a committed capture must leave the container stopped: {:?}",
+        captured.state
+    );
+    assert!(captured.checkpoint.is_some());
+    let sealed = containers.executions().inspect(&member.id).await.unwrap();
+    assert!(sealed.checkpoint.is_some(), "domain member was not sealed by the capture");
+    // `remove` refuses while the member is still registered as a live runtime process, so it
+    // reports exactly the property under test without a test-only accessor.
+    containers
+        .executions()
+        .remove(&member.id)
+        .await
+        .expect("sealed domain member was still running after its capture committed");
+}
