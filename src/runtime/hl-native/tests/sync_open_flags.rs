@@ -1,8 +1,8 @@
-//! The synchronised-I/O open flags are a durability contract: a guest that opens O_DSYNC must get a
+//! The synchronised-I/O open flags are a durability contract: a guest that opens `O_DSYNC` must get a
 //! host descriptor that actually carries the barrier, and must be able to read it back through
-//! F_GETFL. Dropping either direction lets the engine acknowledge a barrier it never issued --
-//! PostgreSQL's default `wal_sync_method` on Linux is `open_datasync`, which opens the WAL O_DSYNC
-//! and then never calls fdatasync on it, so every committed transaction rides on this translation.
+//! `F_GETFL`. Dropping either direction lets the engine acknowledge a barrier it never issued --
+//! `PostgreSQL`'s default `wal_sync_method` on Linux is `open_datasync`, which opens the WAL `O_DSYNC`
+//! and then never calls `fdatasync` on it, so every committed transaction rides on this translation.
 
 use std::{fs, path::PathBuf, process::Command};
 
