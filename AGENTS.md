@@ -453,6 +453,21 @@ directory, so a shell that has wandered into a worktree gets structure from
 somewhere else. Worktrees carry their own `.codegraph/`; if yours does not, run
 `codegraph init -i` there rather than trusting the parent's index.
 
+The same applies to **which commit**, and it has cost two lanes a detour on the
+same day. A lane that cuts a worktree, works for an hour, and then compares its
+lint or test findings against `main` is comparing against a tree that has moved —
+one lane concluded a `loader.rs` line "does not exist upstream" when `main` had
+advanced fifteen commits underneath it. Diff findings against **your parent
+commit**, not against `main`.
+
+`cargo clippy ... -- -D warnings` makes this sharper, because it denies lints the
+crate's configured set only warns about, so it surfaces pre-existing findings as
+though they were yours. That does not make it the wrong command — it is
+`flake.nix:412`, the repository's own verification gate, and without the flag
+clippy exits 0 no matter what is wrong because `workspace.lints` sets everything
+to `warn`. But attribute its output against your parent before claiming or
+disclaiming a finding.
+
 ## The x86 arm of the scheduler lags the arm64 arm
 
 `native_aarch64` and `native_x86` are maintained in parallel by hand and the x86
