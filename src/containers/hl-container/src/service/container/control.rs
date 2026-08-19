@@ -290,6 +290,7 @@ impl Service {
         };
         container.checkpoint = Some(checkpoint.clone());
         self.containers.replace(&container).await?;
+        self.arm_domain_members(&container.id, &checkpoint).await?;
         let output = self
             .await_output_completion(&JournalId::container(container.id.clone()), output_complete, timeout)
             .await;
@@ -303,6 +304,28 @@ impl Service {
             notify.notify_waiters();
         }
         output.map(|()| checkpoint)
+    }
+
+    /// Records the container's committed capture against every sealed domain member.
+    ///
+    /// An exec session is a member of the container's freeze and opens no image of its own, so
+    /// its captured state lives inside the container's image and its token names that same
+    /// namespace. The token is the durable record that the member was sealed, not a second
+    /// artifact: there is exactly one image for the whole process domain.
+    ///
+    /// This runs under `self.operations`, which [`Self::finish_exec`] also takes before writing a
+    /// terminal state, so the token is armed before a released member's `_exit(0)` can be
+    /// observed. That ordering is what keeps a clean release distinguishable from a crash.
+    async fn arm_domain_members(&self, container: &crate::ContainerId, checkpoint: &crate::Checkpoint) -> Result<()> {
+        for mut exec in self.execs.list().await? {
+            if &exec.container != container || !exec.state.is_active() {
+                continue;
+            }
+            exec.state = crate::ExecState::Created;
+            exec.checkpoint = Some(checkpoint.clone());
+            self.execs.replace(&exec).await?;
+        }
+        Ok(())
     }
 
     pub(crate) async fn checkpoint_all(self: &Arc<Self>, timeout: Duration) -> Result<()> {

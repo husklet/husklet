@@ -390,10 +390,22 @@ impl Service {
                 Some(error.to_string()),
             ),
         };
-        if let Ok(mut exec) = self.inspect_exec(&id).await {
-            if exec.checkpoint.is_some() {
-                return;
-            }
+        let armed = matches!(self.inspect_exec(&id).await, Ok(exec) if exec.checkpoint.is_some());
+        if armed {
+            // The engine's `wait()` reports a released member as a failure because its worker was
+            // stopped by the coordinator rather than reaped normally. Recording that would make a
+            // clean release indistinguishable from a crash, and would make `wait_exec` return a
+            // runtime error for a member that is waiting to be restored.
+            failure = None;
+        }
+        // A sealed domain member is released by the coordinator's committed capture and exits
+        // cleanly afterwards. `checkpoint_locked` armed its token under the same `operations`
+        // lock this function holds, so the token is already present here and the member keeps
+        // the `Created` + armed-token shape a restore reads. Its own runtime bookkeeping must
+        // still be retired below: a stale `exec_live` entry would quarantine the restore.
+        if let Ok(mut exec) = self.inspect_exec(&id).await
+            && !armed
+        {
             let process_id = match exec.state {
                 ExecState::Running {
                     process_id,

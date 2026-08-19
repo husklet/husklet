@@ -254,6 +254,11 @@ impl Fixture {
             .await?
             .checkpoint
             .ok_or("lock waiter checkpoint token missing")?;
+        // One image per process domain. An exec session joins the container's freeze and opens no
+        // image of its own, so every member's token names the container's namespace: that single
+        // image is where its state was actually captured. Four distinct namespaces would mean four
+        // images and four independently-committed generations, which is the shape that produced
+        // captures no restore could validate. Assert the shared namespace positively.
         let current_namespaces = [
             &container_token.namespace,
             &client_token.namespace,
@@ -263,8 +268,10 @@ impl Fixture {
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
         require(
-            current_namespaces.len() == 4,
-            format!("cycle {cycle}: checkpoint namespaces were not pairwise unique"),
+            current_namespaces.len() == 1 && current_namespaces.contains(&container_token.namespace),
+            format!(
+                "cycle {cycle}: domain member tokens did not name the container image: {current_namespaces:?}"
+            ),
         )?;
         require(
             captured.generation == before_generation,
@@ -293,15 +300,7 @@ impl Fixture {
             format!("cycle {cycle}: checkpoint exceeded {PHASE:?}"),
         )?;
         drop(session);
-        let checkpoint_hash = checkpoint_artifact_hash(
-            &self.state,
-            [
-                &container_token.namespace,
-                &client_token.namespace,
-                &sleeper_token.namespace,
-                &waiter_token.namespace,
-            ],
-        )?;
+        let checkpoint_hash = checkpoint_artifact_hash(&self.state, [&container_token.namespace])?;
         eprintln!(
             "postgres-checkpoint cycle={cycle} close_ms={} state_sha256={checkpoint_hash}",
             close_started.elapsed().as_millis()
