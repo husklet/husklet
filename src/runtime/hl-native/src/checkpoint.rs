@@ -221,6 +221,82 @@ impl CheckpointTransport {
         Ok(unsafe { UnixStream::from_raw_fd(descriptor) })
     }
 
+    /// Announces one checkpoint channel on the broker using nothing but raw
+    /// syscalls, for use inside a `fork()` child of a multi-threaded process.
+    ///
+    /// `connect_for_test` cannot be called there. It reaches
+    /// `hl_host_process_fd_private_add`, which takes a process-wide
+    /// `pthread_mutex_t`; `fork()` copies that mutex in whatever state another
+    /// thread left it, so a child that arrives while a sibling held it blocks in
+    /// `pthread_mutex_lock` forever against a thread that does not exist in the
+    /// child. That wedged three lanes for hours before it was named.
+    ///
+    /// This path allocates nothing, takes no lock, and runs no destructor: a
+    /// `socketpair`, one `sendmsg` carrying the peer end, and a `close`. The
+    /// returned descriptor is the caller's to close; on failure it returns -1
+    /// with `errno` set.
+    ///
+    /// The 16-byte announcement is `hl_ckpt_hello` from
+    /// `include/hl/checkpoint_stream.h`. The duplication is deliberate and
+    /// self-checking rather than silent: a broker that stops accepting this
+    /// exact magic and ABI rejects the connection, and every caller asserts on
+    /// the accept that follows.
+    ///
+    /// # Safety
+    ///
+    /// The caller must be a `fork()` child that has not yet run Rust code which
+    /// could have inherited a held lock, and must own the returned descriptor.
+    #[cfg(feature = "native-test-hooks")]
+    #[doc(hidden)]
+    #[must_use]
+    pub unsafe fn connect_in_forked_child_for_test(&self) -> i32 {
+        const MAGIC_HELLO: u32 = 0x484b_4348;
+        const STREAM_ABI: u32 = 2;
+        let mut hello = [0_u8; 16];
+        hello[0..4].copy_from_slice(&MAGIC_HELLO.to_ne_bytes());
+        hello[4..8].copy_from_slice(&STREAM_ABI.to_ne_bytes());
+        let mut pair = [-1_i32; 2];
+        // SAFETY: pair names writable storage for two new descriptors.
+        if unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, pair.as_mut_ptr()) } != 0 {
+            return -1;
+        }
+        // SAFETY: getpid takes no argument and cannot fail.
+        let pid = u64::try_from(unsafe { libc::getpid() }).unwrap_or(0);
+        hello[8..16].copy_from_slice(&pid.to_ne_bytes());
+        let mut vector = libc::iovec {
+            iov_base: hello.as_mut_ptr().cast(),
+            iov_len: hello.len(),
+        };
+        let mut control = [0_u8; 64];
+        // SAFETY: message addresses live stack storage and carries one correctly sized SCM_RIGHTS record.
+        let sent = unsafe {
+            let mut message: libc::msghdr = std::mem::zeroed();
+            message.msg_iov = &raw mut vector;
+            message.msg_iovlen = 1;
+            message.msg_control = control.as_mut_ptr().cast();
+            message.msg_controllen = control.len() as _;
+            let header = libc::CMSG_FIRSTHDR(&raw const message);
+            (*header).cmsg_level = libc::SOL_SOCKET;
+            (*header).cmsg_type = libc::SCM_RIGHTS;
+            (*header).cmsg_len = libc::CMSG_LEN(size_of::<i32>() as _) as _;
+            std::ptr::copy_nonoverlapping(
+                (&raw const pair[1]).cast::<u8>(),
+                libc::CMSG_DATA(header),
+                size_of::<i32>(),
+            );
+            message.msg_controllen = libc::CMSG_SPACE(size_of::<i32>() as _) as _;
+            libc::sendmsg(self.broker_child.as_raw_fd(), &raw const message, 0)
+        };
+        // SAFETY: the broker owns its copy of the peer end once the message is queued.
+        unsafe { libc::close(pair[1]) };
+        if sent != hello.len() as isize {
+            // SAFETY: this end is uniquely owned here and is never returned.
+            unsafe { libc::close(pair[0]) };
+            return -1;
+        }
+        pair[0]
+    }
+
     pub(crate) fn configure(&self, backend: *mut crate::bindings::Backend) -> i32 {
         // SAFETY: backend is owned by the Engine caller and both descriptors remain live.
         unsafe {

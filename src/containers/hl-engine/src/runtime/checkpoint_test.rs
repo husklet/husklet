@@ -31,12 +31,20 @@ fn production_broker_revokes_relayed_channel_when_authenticated_child_exits() {
     let child = unsafe { libc::fork() };
     assert!(child >= 0, "fork checkpoint peer");
     if child == 0 {
+        // SAFETY: the child is single-threaded and this is its first action.
+        unsafe { bound_this_fork_child() };
         // SAFETY: child owns its inherited ends and terminates with _exit.
         unsafe {
             libc::close(release[1]);
         }
-        let channel = transport.connect_for_test().expect("child checkpoint channel");
-        send_descriptor(&relay_child, channel.as_raw_fd());
+        // SAFETY: this is a fork child of a multi-threaded binary, so the channel must be
+        // announced without taking any lock the fork may have copied in a held state.
+        let channel = unsafe { transport.connect_in_forked_child_for_test() };
+        // SAFETY: no Rust destructors are run after fork.
+        if channel < 0 {
+            unsafe { libc::_exit(90) }
+        }
+        send_descriptor(&relay_child, channel);
         let mut byte = 0_u8;
         // SAFETY: release[0] is live and byte is writable.
         let read = unsafe { libc::read(release[0], (&raw mut byte).cast(), 1) };
@@ -85,6 +93,31 @@ fn production_broker_revokes_relayed_channel_when_authenticated_child_exits() {
     assert_eq!(server.dispatch_count(), 0, "revoked peer request reached dispatch");
 }
 
+/// Seconds a fork child of this module may live before the kernel ends it.
+const FORK_CHILD_SECONDS: u32 = 30;
+
+/// Makes a fork child of this module incapable of outliving the test.
+///
+/// Wedged checkpoint peers were orphaned to init and sat for tens of minutes
+/// holding a whole lane's box time, indistinguishable from a slow build.
+/// `PR_SET_PDEATHSIG` ends the child the moment the test process dies, and the
+/// alarm ends it unconditionally: the default `SIGALRM` disposition terminates,
+/// so the parent's `waitpid` observes a signalled child and the assertion names
+/// the test instead of hanging.
+///
+/// # Safety
+///
+/// Call only as the first action of a `fork()` child, which is single-threaded.
+unsafe fn bound_this_fork_child() {
+    #[cfg(target_os = "linux")]
+    // SAFETY: prctl with PR_SET_PDEATHSIG touches no Rust storage and cannot unwind.
+    unsafe {
+        libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL)
+    };
+    // SAFETY: alarm takes no pointer, touches no Rust storage, and cannot unwind.
+    unsafe { libc::alarm(FORK_CHILD_SECONDS) };
+}
+
 fn send_descriptor(channel: &UnixStream, descriptor: i32) {
     let mut byte = 0_u8;
     let mut vector = libc::iovec {
@@ -109,6 +142,9 @@ fn send_descriptor(channel: &UnixStream, descriptor: i32) {
     }
 }
 
+/// Longest a relayed descriptor may take to arrive before the test fails by name.
+const RELAY_DEADLINE_MS: i16 = 10_000;
+
 fn receive_descriptor(channel: &UnixStream) -> UnixStream {
     let mut byte = 0_u8;
     let mut vector = libc::iovec {
@@ -116,6 +152,16 @@ fn receive_descriptor(channel: &UnixStream) -> UnixStream {
         iov_len: 1,
     };
     let mut control = [0_u8; 64];
+    let mut ready = libc::pollfd {
+        fd: channel.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // A peer that never sends must fail this test by name. An unbounded recvmsg here is what
+    // turned a wedged fork child into an hour-long silent stall for every lane on the box.
+    // SAFETY: ready addresses one writable pollfd naming a live descriptor.
+    let waited = unsafe { libc::poll(&raw mut ready, 1, i32::from(RELAY_DEADLINE_MS)) };
+    assert_eq!(waited, 1, "relayed checkpoint descriptor never arrived");
     // SAFETY: message points to writable stack storage; a successful receive transfers one descriptor.
     unsafe {
         let mut message: libc::msghdr = mem::zeroed();
@@ -2330,9 +2376,16 @@ fn two_members_stay_stopped_and_alive_across_one_shared_object_capture_and_then_
         let child = unsafe { libc::fork() };
         assert!(child >= 0, "fork checkpoint member");
         if child == 0 {
+            // SAFETY: the child is single-threaded and this is its first action.
+            unsafe { bound_this_fork_child() };
             let events = events[index][1];
-            let channel = transport.connect_for_test().expect("member checkpoint channel");
-            let channel = channel.as_raw_fd();
+            // SAFETY: this is a fork child of a multi-threaded binary, so the channel must be
+            // announced without taking any lock the fork may have copied in a held state.
+            let channel = unsafe { transport.connect_in_forked_child_for_test() };
+            // SAFETY: no Rust destructors are run after fork.
+            if channel < 0 {
+                unsafe { libc::_exit(90) }
+            }
             let mut byte = [0_u8; 1];
             assert_eq!(park_read(start[0], &mut byte), Some(()), "capture start gate");
             // Progressing BEFORE the freeze: without this the fixture could pass on two members that
