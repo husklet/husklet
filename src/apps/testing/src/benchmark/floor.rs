@@ -165,9 +165,11 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
             artifact_identity(candidate)?
         ));
         if artifact_identity(&candidate_library)? == artifact_identity(&library)? {
-            return Err("the two arms carry the same libhl_native_engine.so: there is nothing to compare"
-                .to_owned()
-                .into());
+            return Err(
+                "the two arms carry the same libhl_native_engine.so: there is nothing to compare"
+                    .to_owned()
+                    .into(),
+            );
         }
     }
 
@@ -240,10 +242,7 @@ fn phases(options: &Options) -> Vec<(&'static str, Vec<String>)> {
     ];
     if let Some(victim) = &options.dynamic_victim {
         // Kept last so the static phases stay comparable with a run that did not ask for it.
-        rows.push((
-            "image",
-            vec!["image".into(), options.execs.to_string(), victim.clone()],
-        ));
+        rows.push(("image", vec!["image".into(), options.execs.to_string(), victim.clone()]));
     }
     rows
 }
@@ -257,9 +256,10 @@ fn measure(arm: Arm, options: &Options, arguments: &[String]) -> Result<u64, Err
         }
         Arm::Engine | Arm::EngineNull | Arm::EngineCandidate => {
             let worker = if arm == Arm::EngineCandidate {
-                options.engine_candidate.as_ref().ok_or_else(|| {
-                    Error::from("the candidate arm was scheduled without --engine-candidate")
-                })?
+                options
+                    .engine_candidate
+                    .as_ref()
+                    .ok_or_else(|| Error::from("the candidate arm was scheduled without --engine-candidate"))?
             } else {
                 &options.engine
             };
