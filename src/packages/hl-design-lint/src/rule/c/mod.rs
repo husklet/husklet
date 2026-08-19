@@ -6,6 +6,7 @@ use crate::{LintError, Result, source::Workspace};
 use tree_sitter::{Parser, Tree};
 mod allocation;
 pub mod analyzer;
+mod hook;
 mod interface;
 mod policy;
 mod result;
@@ -14,6 +15,7 @@ mod structure;
 mod suppression;
 
 pub use allocation::Allocation;
+pub use hook::TestOnlyState;
 pub use interface::Interface;
 pub use policy::{CallPolicy, Policy};
 pub use result::ResultUse;
@@ -27,11 +29,11 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
         .map_err(|error| parse_error(path, error.to_string()))?;
     let normalized = normalize_declared_macro_lines(
         source,
-        &normalize_named_registers(&normalize_va_arg_types(&normalize_offsetof_designators(
-            &normalize_computed_goto(&normalize_gnu_attributes(&normalize_atomic_specifiers(
-                &normalize_function_pointer_annotations(&normalize_complex_macro(
+        &normalize_directives_inside_parentheses(&normalize_named_registers(&normalize_va_arg_types(
+            &normalize_offsetof_designators(&normalize_computed_goto(&normalize_gnu_attributes(
+                &normalize_atomic_specifiers(&normalize_function_pointer_annotations(&normalize_complex_macro(
                     &source.replace("_Thread_local", "             "),
-                )),
+                ))),
             ))),
         ))),
     );
@@ -57,6 +59,77 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
         ));
     }
     Ok(tree)
+}
+
+/// Blanks preprocessor conditionals that interrupt an unclosed parenthesized expression.
+///
+/// A condition assembled across `#if`/`#endif` is not a sequence of statements, so the
+/// grammar cannot recover from the directive and the whole translation unit is lost.
+/// Erasing only the directive lines keeps every branch's operands, which still parse as
+/// one expression, and leaves every other line at its original offset and length.
+fn normalize_directives_inside_parentheses(source: &str) -> String {
+    let mut normalized = source.as_bytes().to_vec();
+    let mut offset = 0;
+    let mut scan = ParenthesisScan::default();
+    for line in source.split_inclusive('\n') {
+        let text = line.trim_start();
+        if text.starts_with('#') && !scan.block_comment {
+            if scan.depth > 0 {
+                let start = offset + line.len() - text.len();
+                let end = offset + line.trim_end_matches(['\r', '\n']).len();
+                normalized[start..end].fill(b' ');
+            }
+        } else {
+            scan.advance(line);
+        }
+        offset += line.len();
+    }
+    String::from_utf8(normalized).expect("normalization preserves UTF-8")
+}
+
+/// Running lexical state of the parenthesis scan.
+#[derive(Default)]
+struct ParenthesisScan {
+    depth: usize,
+    block_comment: bool,
+}
+
+impl ParenthesisScan {
+    /// Advances the scan across one line, ignoring comments, strings, and character literals.
+    fn advance(&mut self, line: &str) {
+        let mut characters = line.chars().peekable();
+        while let Some(character) = characters.next() {
+            if self.block_comment {
+                if character == '*' && characters.peek() == Some(&'/') {
+                    characters.next();
+                    self.block_comment = false;
+                }
+                continue;
+            }
+            match character {
+                '/' if characters.peek() == Some(&'/') => return,
+                '/' if characters.peek() == Some(&'*') => {
+                    characters.next();
+                    self.block_comment = true;
+                }
+                '"' | '\'' => {
+                    let quote = character;
+                    while let Some(inner) = characters.next() {
+                        match inner {
+                            '\\' => {
+                                characters.next();
+                            }
+                            _ if inner == quote => break,
+                            _ => {}
+                        }
+                    }
+                }
+                '(' => self.depth += 1,
+                ')' => self.depth = self.depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+    }
 }
 
 fn normalize_declared_macro_lines(original: &str, source: &str) -> String {
@@ -684,6 +757,18 @@ fn source_files(workspace: &Workspace) -> Result<Vec<PathBuf>> {
 mod test {
     use super::parse;
     use std::path::Path;
+
+    #[test]
+    fn condition_assembled_across_a_preprocessor_conditional_parses() {
+        let source = "int f(int a, int b) {\n    if (a != 0 ||\n#if !defined(SKIP)\n        b != 0 ||\n#endif\n        a == b)\n        return 1;\n    return 0;\n}\n";
+        assert!(parse(Path::new("conditional.c"), source).is_ok());
+    }
+
+    #[test]
+    fn an_apostrophe_inside_a_comment_does_not_capture_the_parenthesis_scan() {
+        let source = "/* the caller doesn't own (this) */\n#ifndef GUARD_H\n#define GUARD_H\nint f(void);\n#endif\n";
+        assert!(parse(Path::new("guard.h"), source).is_ok());
+    }
 
     #[test]
     fn parser_accepts_valid_c() {
