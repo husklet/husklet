@@ -601,15 +601,39 @@ static uint64_t ckpt_hash_combine(uint64_t image, const char *name, uint64_t obj
 }
 
 static int ckpt_capture_pipe(int fd, uint64_t identity) {
-    // Consuming bytes from a shared pipe is irreversible. The old per-process
-    // capture changed the shared O_NONBLOCK flag and drained until EAGAIN while
-    // sibling processes were still running. Refuse capture until the broker
-    // supplies an authenticated, lifetime-bound global freeze token proving
-    // admission is closed and every exact participant is parked.
-    (void)fd;
-    (void)identity;
-    errno = ENOTSUP;
-    return -1;
+    struct ckpt_sink *sink = ckpt_sink_current();
+    char name[128];
+    snprintf(name, sizeof name, "pipe.%016llx", (unsigned long long)identity);
+    int claimed = ckpt_sink_claim(sink, name);
+    if (claimed != 0) return claimed > 0 ? 0 : -1; // another process owns this shared object
+    struct ckpt_sink_stream *output = NULL;
+    if (ckpt_sink_begin(sink, NULL, name, CKPT_SINK_PUBLISH_ATOMIC, &output) != 0) return -1;
+    int flags = fcntl(fd, F_GETFL);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
+        ckpt_sink_abort(sink, &output);
+        return -1;
+    }
+    unsigned char buffer[65536];
+    int failed = 0;
+    for (;;) {
+        ssize_t count = read(fd, buffer, sizeof buffer);
+        if (count > 0) {
+            if (ckpt_sink_write(sink, output, buffer, (size_t)count) != 0) {
+                failed = 1;
+                break;
+            }
+            continue;
+        }
+        if (count == 0 || HL_HOST_ERRNO_WOULD_BLOCK(errno)) break;
+        if (errno == EINTR) continue;
+        failed = 1;
+        break;
+    }
+    if (failed) {
+        ckpt_sink_abort(sink, &output);
+        return -1;
+    }
+    return ckpt_sink_finish(sink, &output);
 }
 
 static int ckpt_capture_signalfd(int fd, uint64_t identity) {
@@ -1163,7 +1187,6 @@ static int ckpt_capture_right_resource(int fd, struct ckpt_fd *record) {
         record->flags = fcntl(fd, F_GETFL);
         record->object_id = identity;
         record->ofd_id = identity;
-        record->ofd_identity = g_ofd_identity[fd];
         record->auxiliary = g_sfd[slot].mask;
         snprintf(record->path, sizeof record->path, "signalfd.%016llx", (unsigned long long)identity);
         if (record->flags < 0 || ckpt_capture_signalfd(fd, identity) != 0) return -1;
@@ -1210,7 +1233,6 @@ static int ckpt_capture_right_resource(int fd, struct ckpt_fd *record) {
         record->offset = lseek(fd, 0, SEEK_CUR);
         record->object_id = ckpt_backing_id(&status);
         record->ofd_id = ofd_identity_ensure(fd);
-        record->ofd_identity = g_ofd_identity[fd];
         if (record->flags < 0 || record->offset < 0 || !record->ofd_id ||
             ckpt_capture_file_blob(fd, record->path, sizeof record->path) != 0)
             return -1;
@@ -1222,21 +1244,16 @@ static int ckpt_capture_right_resource(int fd, struct ckpt_fd *record) {
     }
     if (fd >= 0 && fd < HL_NFD && g_pipe_identity[fd] != 0) {
         int flags = fcntl(fd, F_GETFL);
-        int capacity = g_pipesz[fd];
-#ifdef F_GETPIPE_SZ
-        capacity = fcntl(fd, F_GETPIPE_SZ);
-#endif
-        if (flags < 0 || capacity <= 0) return -1;
+        if (flags < 0) return -1;
         record->kind = CKF_PIPE;
         record->flags = flags;
         record->object_id = g_pipe_identity[fd];
         record->ofd_id = ofd_identity_ensure(fd);
         record->ofd_identity = g_ofd_identity[fd];
-        record->offset = 0;
-        record->auxiliary = (uint64_t)(unsigned)capacity;
-        record->path[0] = 0;
+        record->offset = (int64_t)g_pipe_identity[fd];
+        snprintf(record->path, sizeof record->path, "%d", g_pipesz[fd]);
         if (!record->ofd_id) return -1;
-        if (ckpt_capture_pipe(fd, g_pipe_identity[fd]) != 0) return -1;
+        if ((flags & O_ACCMODE) == O_RDONLY && ckpt_capture_pipe(fd, g_pipe_identity[fd]) != 0) return -1;
         return 0;
     }
     if (fd < 0 || fstat(fd, &status) != 0 ||

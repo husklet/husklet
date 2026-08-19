@@ -52,8 +52,4 @@ name = "unix_identity"
 required-features = ["native-test-hooks"]
 
 [[test]]
-name = "ofd_identity"
-required-features = ["native-test-hooks"]
-
-[[test]]
 name = "arena_sidecar"

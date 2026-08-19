@@ -756,6 +756,14 @@ static int proc_ofd_member_rebind(uint64_t member_ordinal) {
 
 static int proc_ofd_identity_reattach(int fd, hl_ofd_identity identity) {
     if (fd < 0 || fd >= HL_NFD || !hl_ofd_identity_valid(identity) || !g_ofd_member_bound) return -ESTALE;
+#if !defined(HL_OFD_MUTATE_ACCEPT_COLLISION)
+    for (int candidate = 0; candidate < HL_NFD; ++candidate) {
+        if (candidate == fd || !hl_ofd_identity_valid(g_ofd_identity[candidate])) continue;
+        if (g_ofd_identity[candidate].sequence == identity.sequence &&
+            !hl_ofd_identity_equal(g_ofd_identity[candidate], identity))
+            return -ESTALE;
+    }
+#endif
 #if !defined(HL_OFD_MUTATE_SKIP_REATTACH)
     int status = hl_ofd_identity_reattach(&g_ofd_member, identity);
     if (status != 0) return -status;
@@ -764,6 +772,33 @@ static int proc_ofd_identity_reattach(int fd, hl_ofd_identity identity) {
     return 0;
 }
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+static int proc_ofd_identity_collision_fixture(void) {
+    hl_ofd_namespace space = {0};
+    const hl_ofd_lineage lineage = {UINT64_C(0x636f6c6c6973696f), UINT64_C(0x6e2d666978747572)};
+    const hl_ofd_generation_binding binding = {11, 13, 1, lineage, 3, 1};
+    hl_ofd_namespace *saved_namespace = g_ofd_namespace;
+    hl_ofd_member saved_member = g_ofd_member;
+    int saved_bound = g_ofd_member_bound;
+    hl_ofd_identity saved_three = g_ofd_identity[3];
+    hl_ofd_identity saved_four = g_ofd_identity[4];
+    hl_ofd_identity original;
+    int result = 1;
+    if (hl_ofd_namespace_init(&space, sizeof space, lineage, 1) == 0 &&
+        proc_ofd_namespace_admit(&space, binding, 1) == 0 && proc_ofd_identity_mint(&original) == 0) {
+        g_ofd_identity[3] = original;
+        hl_ofd_identity collision = original;
+        collision.member = 2;
+        result = proc_ofd_identity_reattach(4, collision) == -ESTALE ? 0 : 2;
+    }
+    g_ofd_namespace = saved_namespace;
+    g_ofd_member = saved_member;
+    g_ofd_member_bound = saved_bound;
+    g_ofd_identity[3] = saved_three;
+    g_ofd_identity[4] = saved_four;
+    return result;
+}
+#endif
 static void proc_fdvis_cleanup(void);
 static void proc_fdvis_close(int guest_fd);
 static int proc_fdvis_publish_native_fd(int guest_fd);
