@@ -690,7 +690,7 @@ pub(crate) fn unix_identity_test(isa: u32, operation: u32, fd: i32, object: u64)
             _ => return Err(-libc::EINVAL),
         }
     };
-    if status == 0 || (operation == 1 && status == 1) {
+    if status == 0 || ((operation == 1 || operation == 16) && status == 1) {
         Ok((local, peer, hidden))
     } else {
         Err(status)
