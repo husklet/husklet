@@ -2011,15 +2011,15 @@ fn read_reply(channel: &mut UnixStream) -> (i32, u64) {
     )
 }
 
-/// `count` live authenticated engine processes, one broker channel each: the
-/// broker binds one authenticated capability per process, exactly as production
-/// does. Each returned row is (the end this test drives, the accepted channel,
-/// that process's capability). Every peer stays alive until `release` is closed.
-fn authenticated_peer_processes(
-    count: usize,
-) -> (
-    Vec<(UnixStream, UnixStream, hl_native::AuthenticatedCheckpointPeer)>,
-    Vec<libc::pid_t>,
+/// One live authenticated engine process holding one broker channel, exactly as
+/// production does: the broker binds one capability per connecting process.
+/// Returns the end this test drives, the accepted channel, that process's
+/// capability, its pid, and the descriptor whose closure releases it.
+fn authenticated_peer_process() -> (
+    UnixStream,
+    UnixStream,
+    hl_native::AuthenticatedCheckpointPeer,
+    libc::pid_t,
     i32,
 ) {
     let (broker, transport) = hl_native::CheckpointTransport::create().expect("checkpoint transport");
@@ -2027,117 +2027,112 @@ fn authenticated_peer_processes(
     let mut release = [-1; 2];
     // SAFETY: release names writable storage for two new descriptors.
     assert_eq!(unsafe { libc::pipe(release.as_mut_ptr()) }, 0);
-    let mut channels = Vec::new();
-    let mut children = Vec::new();
-    for _ in 0..count {
-        // SAFETY: the child touches only inherited descriptors and terminates with _exit.
-        let child = unsafe { libc::fork() };
-        assert!(child >= 0, "fork checkpoint peer");
-        if child == 0 {
-            // SAFETY: the child owns its inherited ends only.
-            unsafe { libc::close(release[1]) };
-            let Ok(channel) = transport.connect_for_test() else {
-                // SAFETY: no Rust destructor may run after fork.
-                unsafe { libc::_exit(93) }
-            };
-            send_descriptor(&relay_child, channel.as_raw_fd());
-            let mut byte = 0_u8;
-            // SAFETY: release[0] is live and byte is writable.
-            let read = unsafe { libc::read(release[0], (&raw mut byte).cast(), 1) };
+    // SAFETY: the child touches only inherited descriptors and terminates with _exit.
+    let child = unsafe { libc::fork() };
+    assert!(child >= 0, "fork checkpoint peer");
+    if child == 0 {
+        // SAFETY: the child owns its inherited ends only.
+        unsafe { libc::close(release[1]) };
+        let Ok(channel) = transport.connect_for_test() else {
             // SAFETY: no Rust destructor may run after fork.
-            unsafe { libc::_exit(if read == 1 { 0 } else { 91 }) }
-        }
-        let Some((channel, authority)) = broker.accept(Duration::from_secs(5)) else {
-            panic!("authenticated production accept for peer {child}");
+            unsafe { libc::_exit(93) }
         };
-        assert_eq!(authority.host_pid, u64::try_from(child).unwrap());
-        let survivor = receive_descriptor(&relay_survivor);
-        channels.push((survivor, channel, authority));
-        children.push(child);
+        send_descriptor(&relay_child, channel.as_raw_fd());
+        let mut byte = 0_u8;
+        // SAFETY: release[0] is live and byte is writable.
+        let read = unsafe { libc::read(release[0], (&raw mut byte).cast(), 1) };
+        // SAFETY: no Rust destructor may run after fork.
+        unsafe { libc::_exit(if read == 1 { 0 } else { 91 }) }
     }
+    let (channel, authority) = broker
+        .accept(Duration::from_secs(10))
+        .expect("authenticated production accept");
+    assert_eq!(authority.host_pid, u64::try_from(child).unwrap());
+    let survivor = receive_descriptor(&relay_survivor);
     drop(relay_child);
     drop(transport);
     // SAFETY: the parent no longer uses the child's end.
     unsafe { libc::close(release[0]) };
-    (channels, children, release[1])
+    (survivor, channel, authority, child, release[1])
 }
 
-/// Exact generation membership: only an authenticated process registering the
-/// running capture generation becomes a member, only once, and a process that
-/// publishes without registering fails the capture by name instead of running
-/// it out to its deadline.
+/// An authenticated engine process becomes a member of the running capture
+/// exactly once; the repeat is a duplicate, not a second member.
 #[test]
-fn register_ready_seals_exact_generation_membership_before_any_publication() {
+fn register_ready_admits_one_authenticated_process_exactly_once() {
     static SERIAL: Mutex<()> = Mutex::new(());
     let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (channels, children, release) = authenticated_peer_processes(3);
+    let (mut member, channel, authority, child, release) = authenticated_peer_process();
     let server = Arc::new(Server::new(Arc::new(Store), Arc::new(Store)));
-    let mut drivers = Vec::new();
-    for (survivor, channel, authority) in channels {
-        let worker = Arc::clone(&server);
-        std::thread::spawn(move || worker.serve_authenticated_for_test(channel, authority));
-        drivers.push(survivor);
-    }
-    while server.connections.load(Ordering::Acquire) != 3 {
+    let worker = Arc::clone(&server);
+    std::thread::spawn(move || worker.serve_authenticated_for_test(channel, authority));
+    while server.connections.load(Ordering::Acquire) == 0 {
         std::thread::yield_now();
     }
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    let capture = server.begin_capture(7, deadline).expect("capture admission");
+    server
+        .begin_capture(7, std::time::Instant::now() + Duration::from_secs(30))
+        .expect("capture admission");
 
-    // A registration naming any other generation is not a member of this one.
-    let foreign = &mut drivers[0];
-    foreign
-        .write_all(&checkpoint_request(
-            protocol::REGISTER_READY,
-            9,
-            &register_ready_payload(&[101]),
-        ))
-        .expect("foreign generation registration");
-    assert_eq!(read_reply(foreign).0, -1, "another generation registered as a member");
-
-    // An authenticated process registers exactly once; the repeat is a duplicate,
-    // not a second member.
-    let member = &mut drivers[1];
-    member
-        .write_all(&checkpoint_request(
-            protocol::REGISTER_READY,
-            7,
-            &register_ready_payload(&[101, 102]),
-        ))
-        .expect("member registration");
-    let (status, id) = read_reply(member);
+    let registration = checkpoint_request(protocol::REGISTER_READY, 7, &register_ready_payload(&[101, 102]));
+    member.write_all(&registration).expect("member registration");
+    let (status, id) = read_reply(&mut member);
     assert_eq!(status, 0, "authenticated member was refused");
     assert_ne!(id, 0, "member registration returned no member ID");
-    member
+
+    member.write_all(&registration).expect("duplicate registration");
+    assert_eq!(read_reply(&mut member).0, -1, "one process registered twice");
+
+    server.stop();
+    // SAFETY: one byte releases the peer process.
+    assert_eq!(unsafe { libc::write(release, b"x".as_ptr().cast(), 1) }, 1);
+    // SAFETY: the parent owns this end.
+    unsafe { libc::close(release) };
+    let mut status = 0;
+    // SAFETY: child is a direct unreaped child and status is writable.
+    assert_eq!(unsafe { libc::waitpid(child, &raw mut status, 0) }, child);
+    assert_eq!(libc::WEXITSTATUS(status), 0);
+}
+
+/// Membership is proven, never assumed: a channel carrying no authenticated
+/// process capability is not a member and cannot become one, and a channel that
+/// publishes without registering fails the capture by name instead of leaving it
+/// to expire at its deadline.
+#[test]
+fn an_unregistered_channel_cannot_publish_and_fails_the_capture_by_name() {
+    let server = Arc::new(Server::new(Arc::new(Store), Arc::new(Store)));
+    let (mut claimant, claimant_channel) = UnixStream::pair().expect("claimant channel");
+    let (mut publisher, publisher_channel) = UnixStream::pair().expect("publisher channel");
+    for (channel, id) in [(claimant_channel, 11_u64), (publisher_channel, 12)] {
+        let worker = Arc::clone(&server);
+        std::thread::spawn(move || worker.serve(channel, id));
+    }
+    while server.connections.load(Ordering::Acquire) != 2 {
+        std::thread::yield_now();
+    }
+    let capture = server
+        .begin_capture(7, std::time::Instant::now() + Duration::from_secs(30))
+        .expect("capture admission");
+
+    claimant
         .write_all(&checkpoint_request(
             protocol::REGISTER_READY,
             7,
-            &register_ready_payload(&[101, 102]),
+            &register_ready_payload(&[101]),
         ))
-        .expect("duplicate registration");
-    assert_eq!(read_reply(member).0, -1, "one process registered twice");
+        .expect("unauthenticated registration");
+    assert_eq!(
+        read_reply(&mut claimant).0,
+        -1,
+        "a channel with no process capability registered as a member"
+    );
 
-    // A process that never registers cannot publish, and says so immediately.
-    let unregistered = &mut drivers[2];
-    unregistered
+    publisher
         .write_all(&checkpoint_request(protocol::GROUP_BEGIN, 7, &[]))
         .expect("unregistered publication");
-    let failure = server.wait_capture(capture, std::time::Instant::now() + Duration::from_secs(10));
     assert_eq!(
-        failure,
+        server.wait_capture(capture, std::time::Instant::now() + Duration::from_secs(10)),
         Ok(Some(Err(CaptureFailure::Failed))),
         "an unregistered publisher must fail the capture, not exhaust its deadline"
     );
-
     server.stop();
-    for child in children {
-        // SAFETY: one byte releases one peer process.
-        assert_eq!(unsafe { libc::write(release, b"x".as_ptr().cast(), 1) }, 1);
-        let mut status = 0;
-        // SAFETY: child is a direct unreaped child and status is writable.
-        assert_eq!(unsafe { libc::waitpid(child, &raw mut status, 0) }, child);
-        assert_eq!(libc::WEXITSTATUS(status), 0);
-    }
-    // SAFETY: the parent owns this end.
-    unsafe { libc::close(release) };
 }
