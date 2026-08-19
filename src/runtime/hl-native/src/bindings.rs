@@ -473,6 +473,16 @@ unsafe fn hl_x86_64_checkpoint_restore_claim_test(scenario: c_uint) -> c_int {
 }
 
 #[cfg(feature = "native-test-hooks")]
+unsafe fn hl_aarch64_checkpoint_membership_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().aarch64_checkpoint_membership)(scenario) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_x86_64_checkpoint_membership_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().x86_64_checkpoint_membership)(scenario) }
+}
+
+#[cfg(feature = "native-test-hooks")]
 unsafe fn hl_aarch64_checkpoint_pipe_capture_test(scenario: c_uint) -> c_int {
     unsafe { (test_api().aarch64_checkpoint_pipe_capture)(scenario) }
 }
@@ -673,6 +683,21 @@ pub(crate) fn checkpoint_restore_claim_test(isa: u32, scenario: u32) -> Result<(
         match isa {
             1 => hl_aarch64_checkpoint_restore_claim_test(scenario),
             2 => hl_x86_64_checkpoint_restore_claim_test(scenario),
+            _ => return Err(-22),
+        }
+    };
+    if status == 0 { Ok(()) } else { Err(status) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn checkpoint_membership_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    // SAFETY: the feature-gated hook forks its own orphan, owns every descriptor it opens, mutates only
+    // the process-wide HL_PROCESS_DOMAIN option it also sets, kills the orphan it created, and returns a
+    // scalar status. It borrows no caller memory.
+    let status = unsafe {
+        match isa {
+            1 => hl_aarch64_checkpoint_membership_test(scenario),
+            2 => hl_x86_64_checkpoint_membership_test(scenario),
             _ => return Err(-22),
         }
     };

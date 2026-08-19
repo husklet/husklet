@@ -52,6 +52,10 @@ name = "restore_collision"
 required-features = ["native-test-hooks"]
 
 [[test]]
+name = "checkpoint_membership"
+required-features = ["native-test-hooks"]
+
+[[test]]
 name = "checkpoint_pipe_capture"
 required-features = ["native-test-hooks"]
 

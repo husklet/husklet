@@ -160,6 +160,18 @@ pub fn checkpoint_restore_claim_test(isa: u32, scenario: u32) -> Result<(), i32>
     bindings::checkpoint_restore_claim_test(isa, scenario)
 }
 
+/// Exercise capture membership: whether the coordinator's peer filter admits a container `exec` session --
+/// a SIBLING of guest pid 1 -- and refuses a live process of the same executable that belongs to another
+/// container's process domain or to none.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn checkpoint_membership_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    // The hook forks and mutates the process-wide HL_PROCESS_DOMAIN option.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    bindings::checkpoint_membership_test(isa, scenario)
+}
+
 /// Exercise pipe capture: the image-wide election among the holders of one inherited pipe, the byte
 /// fidelity of the drain, and the abort contract every holder falls under once it has run.
 #[cfg(feature = "native-test-hooks")]
