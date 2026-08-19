@@ -319,7 +319,10 @@ impl CheckpointControl {
         phase_clock_failure: bool,
     ) -> Result<Self, CompositionError> {
         let (broker, transport) =
-            hl_native::CheckpointTransport::create().map_err(|_| CompositionError::RuntimeConstruction)?;
+            hl_native::CheckpointTransport::create().map_err(|error| {
+                hl_log::hl_error!(hl_log::tag::EXEC, "checkpoint transport creation failed: error={error}");
+                CompositionError::RuntimeConstruction
+            })?;
         let server = Arc::new(Server::new(sink, source));
         let acceptor = Server::start(&server, broker);
         Ok(Self {
