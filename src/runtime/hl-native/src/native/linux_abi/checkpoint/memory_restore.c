@@ -184,6 +184,71 @@ static int ckpt_restore_backing_seed(const char *procdir, uint64_t object_id, ui
     return fd;
 }
 
+// Materialise an ANONYMOUS MAP_SHARED region's object for the restored generation.
+//
+// It cannot use ckpt_restore_backing_seed's fallback (an mkstemp file, recorded in this process's
+// g_restore_backings): that table is per process, and a member is forked BEFORE its parent restores
+// its own memory (ckpt_restore_proc_run calls ckpt_fork_children ahead of ckpt_restore_mem_dir), so
+// the descriptor cannot be relied on to reach the other sharers. Each member would create its own
+// file and get a private copy -- the same defect, moved.
+//
+// So the object is republished by NAME under the CURRENT namespace, exactly as SysV segments are
+// (ipc_lock_state.c): whichever member arrives first creates it, every other member opens the same
+// name, and all of them map it MAP_SHARED at their captured address. Fork order stops mattering.
+// The creator arms the unlink, so the name lives exactly as long as the restored container's first
+// member -- and shm_unlink only removes the NAME, never a live mapping.
+#define CKPT_ANON_SHARED_UNLINK_MAX 64
+static char g_anon_shared_unlink[CKPT_ANON_SHARED_UNLINK_MAX][48];
+static int g_nanon_shared_unlink;
+
+static void ckpt_anon_shared_unlink_all(void) {
+    for (int index = 0; index < g_nanon_shared_unlink; index++) shm_unlink(g_anon_shared_unlink[index]);
+    g_nanon_shared_unlink = 0;
+}
+
+static int ckpt_restore_anon_shared_seed(uint64_t object_id, uint64_t minimum_size) {
+    for (int i = 0; i < g_nrestore_backings; i++)
+        if (g_restore_backings[i].object_id == object_id) {
+            struct stat status;
+            if (minimum_size > (uint64_t)INT64_MAX || fstat(g_restore_backings[i].fd, &status) != 0 ||
+                ((uint64_t)status.st_size < minimum_size &&
+                 ftruncate(g_restore_backings[i].fd, (off_t)minimum_size) != 0))
+                return -1;
+            return g_restore_backings[i].fd;
+        }
+    if (minimum_size > (uint64_t)INT64_MAX) return -1;
+    if (ckpt_vector_reserve((void **)&g_restore_backings, &g_restore_backings_capacity, sizeof *g_restore_backings,
+                            g_nrestore_backings + 1) != 0)
+        return -1;
+    char name[48];
+    snprintf(name, sizeof name, "/hl%08xa%016llx", ipc_ns(), (unsigned long long)object_id);
+    int created = 0;
+    int fd = shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0600);
+    if (fd >= 0)
+        created = 1;
+    else if (errno == EEXIST)
+        fd = shm_open(name, O_RDWR, 0600);
+    if (fd < 0) return -1;
+    struct stat status;
+    if (fstat(fd, &status) != 0 ||
+        ((uint64_t)status.st_size < minimum_size && ftruncate(fd, (off_t)minimum_size) != 0)) {
+        close(fd);
+        if (created) shm_unlink(name);
+        return -1;
+    }
+    if (created && g_nanon_shared_unlink < CKPT_ANON_SHARED_UNLINK_MAX) {
+        if (g_nanon_shared_unlink == 0) (void)atexit(ckpt_anon_shared_unlink_all);
+        snprintf(g_anon_shared_unlink[g_nanon_shared_unlink++], sizeof g_anon_shared_unlink[0], "%s", name);
+    }
+    int private_fd = hl_host_process_fd_private_adopt(fd);
+    if (private_fd < 0) {
+        close(fd);
+        return -1;
+    }
+    g_restore_backings[g_nrestore_backings++] = (struct ckpt_restore_backing){object_id, private_fd, 1};
+    return private_fd;
+}
+
 static int ckpt_restore_backing_find(uint64_t object_id) {
     for (int i = 0; i < g_nrestore_backings; i++)
         if (g_restore_backings[i].object_id == object_id) return g_restore_backings[i].fd;
@@ -485,7 +550,9 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
                 if (reg.backing_offset < prefix) goto fail;
                 uint64_t adjusted_offset = reg.backing_offset - prefix;
                 if (adjusted_offset > UINT64_MAX - map_len) goto fail;
-                map_fd = ckpt_restore_backing_seed(procdir, reg.backing_object, adjusted_offset + map_len);
+                map_fd = reg.backing_anon_shared
+                             ? ckpt_restore_anon_shared_seed(reg.backing_object, adjusted_offset + map_len)
+                             : ckpt_restore_backing_seed(procdir, reg.backing_object, adjusted_offset + map_len);
                 if (map_fd < 0) {
                     fprintf(stderr, "[restore] cannot prepare backing object %llx\n",
                             (unsigned long long)reg.backing_object);
@@ -548,6 +615,11 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
     for (uint64_t i = 0; i < m->n_regions; i++) {
         struct ckpt_region *reg = &topology[i];
         if (reg->backing_object == 0) continue;
+        // An anonymous shared region is not a FILE mapping to the guest: it has no path, no guest
+        // descriptor, and /proc/<pid>/maps must keep reporting it anonymous. Its seed was already
+        // bound above, and its shared-futex keys stay VA-keyed, which is still correct because the
+        // region is re-mapped at exactly its captured address.
+        if (reg->backing_anon_shared) continue;
         if (reg->backing_offset > UINT64_MAX - reg->glen) {
             errno = EOVERFLOW;
             goto fail;
@@ -1023,3 +1095,118 @@ fail:
     ckpt_source_fclose(file);
     return -1;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+// ANONYMOUS MAP_SHARED round trip -- the two mechanisms that keep such a region shared across a
+// checkpoint, exercised without a guest.
+//
+// Scenario 0 (identity): the kernel's shmem inode names the object. Two shared anonymous mappings
+// made back to back must get DIFFERENT ids, a sub-range of one must get the SAME id with the right
+// offset, and a PRIVATE anonymous mapping must get NO id at all -- the discriminator that keeps
+// every private region on its existing per-process restore.
+//
+// Scenario 1 (one object, two processes): a parent and a forked child independently derive the id
+// for the region they share, then each takes the RESTORE-side seed for that id and maps it. The
+// child writes; the parent must read the child's bytes back through its own mapping. Before the
+// fix the same sequence produced two unrelated private copies, which is exactly what nine
+// PostgreSQL members got.
+static int ckpt_anon_shared_roundtrip_test(uint32_t scenario) {
+    const size_t length = 8192;
+    if (scenario == 0) {
+        void *first = mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+        void *second = mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+        void *private_region = mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (first == MAP_FAILED || second == MAP_FAILED || private_region == MAP_FAILED) return 10;
+        ckpt_anon_shared_scan();
+        uint64_t first_id = 0, second_id = 0, private_id = 0, tail_id = 0;
+        uint64_t first_offset = 0, second_offset = 0, private_offset = 0, tail_offset = 0;
+        int verdict = 0;
+        if (g_anon_shared_truncated) verdict = 11;
+        else if (!ckpt_anon_shared_object((uint64_t)(uintptr_t)first, length, &first_id, &first_offset) ||
+                 first_id == 0 || first_offset != 0)
+            verdict = 12;
+        else if (!ckpt_anon_shared_object((uint64_t)(uintptr_t)second, length, &second_id, &second_offset) ||
+                 second_id == 0)
+            verdict = 13;
+        else if (first_id == second_id) verdict = 14; // two objects must not share one identity
+        else if (!ckpt_anon_shared_object((uint64_t)(uintptr_t)first + 4096, 4096, &tail_id, &tail_offset) ||
+                 tail_id != first_id || tail_offset != 4096)
+            verdict = 15; // a sub-range of one object is the SAME object at an offset
+        else if (ckpt_anon_shared_object((uint64_t)(uintptr_t)private_region, length, &private_id, &private_offset) ||
+                 private_id != 0)
+            verdict = 16; // MAP_PRIVATE anonymous keeps its per-process restore
+        munmap(first, length);
+        munmap(second, length);
+        munmap(private_region, length);
+        return verdict;
+    }
+    if (scenario != 1) return 99;
+    unsigned char *shared = mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (shared == MAP_FAILED) return 20;
+    memset(shared, 0, length);
+    memcpy(shared, "PARENT", 6);
+    int channel[2];
+    if (pipe(channel) != 0) {
+        munmap(shared, length);
+        return 21;
+    }
+    pid_t child = fork();
+    if (child == 0) {
+        // Async-signal-safe only: no allocation, no locking, no stdio. _exit, never return.
+        close(channel[0]);
+        uint64_t identity = 0, offset = 0;
+        ckpt_anon_shared_scan();
+        if (!ckpt_anon_shared_object((uint64_t)(uintptr_t)shared, length, &identity, &offset) || offset != 0)
+            identity = 0;
+        int seed = identity != 0 ? ckpt_restore_anon_shared_seed(identity, length) : -1;
+        unsigned char *restored =
+            seed >= 0 ? mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED, seed, 0) : MAP_FAILED;
+        if (restored != MAP_FAILED) memcpy(restored + 4096, "CHILD", 5);
+        if (restored == MAP_FAILED) identity = 0;
+        ssize_t ignored = write(channel[1], &identity, sizeof identity);
+        (void)ignored;
+        close(channel[1]);
+        _exit(0);
+    }
+    close(channel[1]);
+    int verdict = 0;
+    uint64_t child_identity = 0;
+    if (child < 0) verdict = 22;
+    else {
+        size_t read_bytes = 0;
+        while (read_bytes < sizeof child_identity) {
+            ssize_t got = read(channel[0], (unsigned char *)&child_identity + read_bytes, sizeof child_identity - read_bytes);
+            if (got <= 0) break;
+            read_bytes += (size_t)got;
+        }
+        if (read_bytes != sizeof child_identity || child_identity == 0) verdict = 23;
+    }
+    close(channel[0]);
+    int status = 0;
+    if (child > 0) waitpid(child, &status, 0);
+    uint64_t identity = 0, offset = 0;
+    ckpt_anon_shared_scan();
+    if (verdict == 0 && (!ckpt_anon_shared_object((uint64_t)(uintptr_t)shared, length, &identity, &offset) ||
+                         identity == 0 || offset != 0))
+        verdict = 24;
+    // The two processes must have named the SAME object without any engine-side coordination.
+    if (verdict == 0 && identity != child_identity) verdict = 25;
+    unsigned char *restored = MAP_FAILED;
+    if (verdict == 0) {
+        int seed = ckpt_restore_anon_shared_seed(identity, length);
+        restored = seed >= 0 ? mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED, seed, 0) : MAP_FAILED;
+        if (restored == MAP_FAILED) verdict = 26;
+    }
+    // The child's write, made through ITS OWN mapping of the restored object, is visible here.
+    if (verdict == 0 && memcmp(restored + 4096, "CHILD", 5) != 0) verdict = 27;
+    if (restored != MAP_FAILED) munmap(restored, length);
+    ckpt_restore_backings_close();
+    ckpt_anon_shared_unlink_all();
+    munmap(shared, length);
+    return verdict;
+}
+
+HL_API int HL_TARGET_LOCAL(checkpoint_anon_shared_test)(uint32_t scenario) {
+    return ckpt_anon_shared_roundtrip_test(scenario);
+}
+#endif

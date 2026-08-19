@@ -766,6 +766,16 @@ static int ckpt_write_region_at(struct ckpt_sink *sink, struct ckpt_sink_stream 
 // Sparse-dump every tracked guest mapping (image/interp/heap/stack/anon/file mmap). Non-zero HOST pages only.
 static int ckpt_dump_pages(struct ckpt_sink *sink, struct ckpt_sink_stream *f, size_t pagesz, uint64_t *out_n) {
     uint64_t nreg = 0;
+    // One host mapping-table read for the whole dump; every region's anonymous-shared lookup is
+    // answered from it. A truncated or unreadable scan cannot distinguish a shared anonymous region
+    // from a private one, and guessing "private" is exactly the silent per-process copy this exists
+    // to stop -- refuse instead.
+    ckpt_anon_shared_scan();
+    if (g_anon_shared_truncated) {
+        fprintf(stderr, "[ckpt] refuse: cannot enumerate this process's shared anonymous mappings; a memory "
+                        "region's shared identity would be unrepresentable\n");
+        return -1;
+    }
     size_t mapping_count = hl_gmap_count();
     for (size_t i = 0; i < mapping_count; i++) {
         hl_gmap_entry mapping;
@@ -794,6 +804,33 @@ static int ckpt_dump_pages(struct ckpt_sink *sink, struct ckpt_sink_stream *f, s
             break;
         }
         pthread_mutex_unlock(&g_filemap_lock);
+        // No g_filemap record and not a logical VMA: this is either an ordinary private anonymous
+        // region or an ANONYMOUS MAP_SHARED one, and only the kernel can tell them apart (map.c
+        // never registered either). See ckpt_anon_shared_object.
+        int anon_shared_publisher = 0;
+        if (reg.backing_object == 0) {
+            uint64_t anon_object = 0, anon_offset = 0;
+            if (ckpt_anon_shared_object(addr, glen ? glen : len, &anon_object, &anon_offset)) {
+                reg.backing_object = anon_object;
+                reg.backing_offset = anon_offset;
+                reg.backing_shared = 1;
+                reg.backing_emulated = 0;
+                reg.backing_anon_shared = 1;
+                // ONE publisher for the bytes, elected exactly as the pipe and socket queues are.
+                // Nine members holding one 256 MiB PostgreSQL pool would otherwise write 2.3 GiB of
+                // identical pages into the image; the losers record the region's topology and no
+                // pages, and restore attaches them to the object the winner filled.
+                char claim[128];
+                snprintf(claim, sizeof claim, "anonshared.%016llx", (unsigned long long)anon_object);
+                int claimed = ckpt_sink_claim(sink, claim);
+                if (claimed < 0) {
+                    fprintf(stderr, "[ckpt] refuse: cannot elect a publisher for anonymous shared region %llx+%llx\n",
+                            (unsigned long long)addr, (unsigned long long)(glen ? glen : len));
+                    return -1;
+                }
+                anon_shared_publisher = claimed;
+            }
+        }
         hl_logical_vma_descriptor logical;
         int is_logical = hl_logical_vma_global_describe(addr, &logical);
         if (is_logical < 0) return -1;
@@ -841,7 +878,8 @@ static int ckpt_dump_pages(struct ckpt_sink *sink, struct ckpt_sink_stream *f, s
         int64_t header_offset = ckpt_sink_tell(sink, f);
         if (header_offset < 0) return -1;
         if (ckpt_write_region(sink, f, &reg) != 0) return -1;
-        if (ckpt_dump_region_bytes(sink, f, pagesz, &reg) != 0) return -1;
+        if ((!reg.backing_anon_shared || anon_shared_publisher) && ckpt_dump_region_bytes(sink, f, pagesz, &reg) != 0)
+            return -1;
         // Patch the region header in place now that npages is known (the streaming equivalent of the
         // old seek-back-and-rewrite).
         if (ckpt_write_region_at(sink, f, (uint64_t)header_offset, &reg) != 0) return -1;

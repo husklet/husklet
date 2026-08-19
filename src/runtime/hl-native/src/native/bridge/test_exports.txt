@@ -1,4 +1,5 @@
 hl_aarch64_bound_vector_io_test
+hl_aarch64_checkpoint_anon_shared_test
 hl_aarch64_checkpoint_election_test
 hl_aarch64_checkpoint_identity_test
 hl_aarch64_checkpoint_ipc_admission_test
@@ -57,6 +58,7 @@ hl_c_bridge_api_v1
 hl_engine_abi
 hl_engine_version
 hl_x86_64_bound_vector_io_test
+hl_x86_64_checkpoint_anon_shared_test
 hl_x86_64_checkpoint_election_test
 hl_x86_64_checkpoint_identity_test
 hl_x86_64_checkpoint_ipc_admission_test

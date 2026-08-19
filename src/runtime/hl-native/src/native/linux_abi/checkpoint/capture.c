@@ -1414,6 +1414,99 @@ static uint64_t ckpt_backing_values(uint64_t device, uint64_t object) {
     return ckpt_backing_id(&status);
 }
 
+// IDENTITY FOR AN ANONYMOUS MAP_SHARED REGION.
+//
+// mmap(MAP_SHARED|MAP_ANONYMOUS) is the one shared object with no descriptor anywhere: map.c
+// registers a mapping in g_filemap only when it is NOT anonymous, and backing_object is only ever
+// set from g_filemap, so such a region reached the image with backing_object == 0 and
+// memory_restore.c mapped it MAP_ANON|MAP_PRIVATE -- a PER-PROCESS PRIVATE COPY of memory the
+// guest believes is shared. PostgreSQL 16 with shared_memory_type=mmap puts its whole shared
+// buffer pool, ProcArray, lock tables and PMChildFlags there; a live cluster dumped nine members
+// each carrying its own 256 MiB copy of the same VA.
+//
+// WHAT NAMES THE OBJECT. Linux backs a shared anonymous mapping with an unnamed shmem inode, and
+// reports its (dev, ino) in /proc/self/maps for every process that maps it -- measured identical
+// in parent and child across fork, and distinct between two mappings of the same size made back to
+// back in one process. That inode IS the object: it is minted by the kernel, unique for the
+// object's whole lifetime, agreed on by every sharer without any engine-side coordination, and it
+// survives mremap. It feeds the SAME ckpt_backing_id hash the file-backed path uses, so one id
+// space covers both.
+//
+// WHY A VA JOIN WOULD NOT DO. A shared anonymous object can only be shared by fork inheritance, so
+// its sharers do tend to hold it at a common VA -- but the converse fails: two members that are
+// not fork-related (a container exec session, or a child that unmapped the inherited region and
+// mmap'd a fresh shared object) can hold DIFFERENT objects at the SAME VA, and joining on the VA
+// would fuse them into one. The VA is kept as a restore-side fidelity check (the region is
+// re-mapped at exactly its captured address or the restore refuses), never as the identity.
+//
+// PRIVATE anonymous regions are untouched: /proc/self/maps has no entry for them at all -- a
+// private mapping is not an object, it is this process's pages -- so the lookup below misses and
+// they keep the existing MAP_ANON|MAP_PRIVATE per-process restore, fork-inherited ones included.
+#define CKPT_ANON_SHARED_MAX 256
+struct ckpt_anon_shared_row {
+    uint64_t lo, hi, offset, object_id;
+};
+static struct ckpt_anon_shared_row g_anon_shared[CKPT_ANON_SHARED_MAX];
+static int g_nanon_shared;
+static int g_anon_shared_truncated;
+
+// Read the host mapping table ONCE per dump. Doing it per region would be O(regions x mappings)
+// inside the stop-the-world freeze, which the ~5s whole-tree budget cannot absorb on a guest with
+// thousands of mappings. Shared anonymous mappings are a handful even in a large cluster.
+static void ckpt_anon_shared_scan(void) {
+    g_nanon_shared = 0;
+    g_anon_shared_truncated = 0;
+    FILE *maps = fopen("/proc/self/maps", "r");
+    if (maps == NULL) {
+        // No mapping table means no way to tell a shared anonymous region from a private one, and
+        // the silent answer is the defect. Mark the scan truncated so capture refuses.
+        g_anon_shared_truncated = 1;
+        return;
+    }
+    char line[512];
+    while (fgets(line, sizeof line, maps) != NULL) {
+        unsigned long long lo = 0, hi = 0, file_offset = 0, inode = 0;
+        unsigned major = 0, minor = 0;
+        char permissions[8];
+        int consumed = 0;
+        if (sscanf(line, "%llx-%llx %7s %llx %x:%x %llu %n", &lo, &hi, permissions, &file_offset, &major, &minor,
+                   &inode, &consumed) != 7)
+            continue;
+        // 's' is the kernel's own MAP_SHARED marker; 'p' is private. This is the discriminator, and
+        // it is read from the mapping the kernel actually made, not from remembered mmap flags.
+        if (permissions[3] != 's') continue;
+        // A shared anonymous mapping is the shmem-backed row with no real pathname (the kernel
+        // labels it "/dev/zero (deleted)"). A named file mapping is already carried by g_filemap
+        // and must not be re-identified here.
+        const char *path = line + consumed;
+        while (*path == ' ') path++;
+        if (*path != '\0' && *path != '\n' && strncmp(path, "/dev/zero", 9) != 0) continue;
+        if (inode == 0 || hi <= lo) continue;
+        if (g_nanon_shared >= CKPT_ANON_SHARED_MAX) {
+            g_anon_shared_truncated = 1;
+            break;
+        }
+        g_anon_shared[g_nanon_shared++] = (struct ckpt_anon_shared_row){
+            (uint64_t)lo, (uint64_t)hi, (uint64_t)file_offset,
+            ckpt_backing_values(((uint64_t)major << 8) | minor, (uint64_t)inode)};
+    }
+    fclose(maps);
+}
+
+static int ckpt_anon_shared_object(uint64_t address, uint64_t length, uint64_t *object_id, uint64_t *offset) {
+    *object_id = 0;
+    *offset = 0;
+    if (length == 0 || address > UINT64_MAX - length) return 0;
+    for (int index = 0; index < g_nanon_shared; index++) {
+        const struct ckpt_anon_shared_row *row = &g_anon_shared[index];
+        if (address < row->lo || address + length > row->hi) continue;
+        *object_id = row->object_id;
+        *offset = row->offset + (address - row->lo);
+        return 1;
+    }
+    return 0;
+}
+
 // Determine whether two seekable native descriptors share one open file description. Checkpoint capture
 // owns a frozen guest, so temporarily moving the candidate offset is race-free; every offset is restored
 // before return. A shared OFD necessarily had equal offsets before the probe.

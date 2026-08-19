@@ -160,6 +160,14 @@ pub fn checkpoint_restore_claim_test(isa: u32, scenario: u32) -> Result<(), i32>
     bindings::checkpoint_restore_claim_test(isa, scenario)
 }
 
+/// Exercise anonymous `MAP_SHARED` capture identity and restore-side republication: scenario 0 checks the
+/// identity and the shared-vs-private discriminator, scenario 1 proves one object serves two processes.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn checkpoint_anon_shared_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    bindings::checkpoint_anon_shared_test(isa, scenario)
+}
+
 /// Exercise coordinator election: with one trigger word and one broker serving a whole process domain,
 /// exactly one process may coordinate and every other must commit a group of its own under the name the
 /// coordinator waits for.
