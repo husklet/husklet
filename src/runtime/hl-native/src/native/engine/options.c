@@ -31,6 +31,8 @@ enum { HL_OPTION_STORE_LIMIT = 64 * 1024 * 1024 };
 
 static const hl_option_definition hl_option_definitions[] = {
     HL_LAUNCH_OPTION("HL_CHECKPOINT", "arm checkpoint capture over the store channel", HL_OPTION_FLAG),
+    HL_INTERNAL_OPTION("HL_CHECKPOINT_COORDINATOR",
+                       "this launch owns the domain freeze: exactly one engine per checkpoint broker", HL_OPTION_FLAG),
     HL_INTERNAL_OPTION("HL_CHECKPOINT_PHASE_LEDGER", "emit checkpoint phase timing records for performance gates",
                        HL_OPTION_FLAG),
     HL_INTERNAL_OPTION("HL_DIAGNOSTIC_PORT", "private engine diagnostic writer descriptor", HL_OPTION_INTEGER),

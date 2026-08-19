@@ -1173,6 +1173,38 @@ int hl_ckpt_interrupt_executors(void);
 // memory load on the hot path. When the trigger generation advances, the container INIT coordinates the
 // whole tree; a peer dumps only itself and then PARKS inside its own freeze until the coordinator releases
 // it, so it returns here only when the capture was abandoned without consuming anything.
+static int ckpt_peer_gpid(int64_t host_pid);
+
+// WHO COORDINATES. Exactly one process in a domain freeze may run ckpt_coordinate_and_exit, because there
+// is exactly one broker and exactly one manifest. `container_pid() == 1` is NOT that predicate: every ENGINE
+// LAUNCH's top process sets g_init_hostpid to its own pid (target/{aarch64,x86_64}.c), so a container exec
+// session's top process reports guest pid 1 exactly as the container init does. Once one trigger word and
+// one broker served the whole process domain, all four launch tops elected themselves, and a coordinator
+// does not commit a proc.N group of its own -- so the manifest was refused for four missing members that
+// were each busy coordinating.
+//
+// The authority is the EMBEDDER'S REQUEST, not the shape of the process tree. Only the machine holding a
+// CheckpointControl can be sent REQUEST_CHECKPOINT (runtime/execution.rs: a member launch carries a channel
+// and no Server, and capture_checkpoint_until refuses with Unsupported), and that machine -- and only it --
+// projects HL_CHECKPOINT_COORDINATOR onto its launch. Reading the option rather than the request byte keeps
+// the answer established BEFORE the guest starts: the trigger word is bumped before the control byte is
+// written, so a process that decided its role when the request arrived could observe the generation first
+// and take the wrong path.
+static int ckpt_process_coordinates(void) {
+    return container_pid() == 1 && hl_option_get("HL_CHECKPOINT_COORDINATOR") != NULL;
+}
+
+// The group a non-coordinating member commits, named with the SAME function the coordinator names it with
+// (ckpt_peer_gpid over this process's host pid), so the rendezvous cannot disagree by construction.
+// container_pid() is wrong here for the same reason it is wrong for election: an exec session's top process
+// would commit proc.1 and collide with the coordinator's own group while the coordinator waited forever for
+// proc.<its host pid>.
+static void ckpt_self_group(char *out, size_t size) {
+    int gpid = ckpt_peer_gpid(getpid());
+    if (gpid <= 0) gpid = container_pid();
+    snprintf(out, size, "proc.%d", gpid);
+}
+
 static void ckpt_poll(struct cpu *c) {
     if (!g_ckpt_trigger) return;
     uint32_t g = __atomic_load_n(g_ckpt_trigger, __ATOMIC_ACQUIRE);
@@ -1192,26 +1224,27 @@ static void ckpt_poll(struct cpu *c) {
         return;
     }
     atomic_store_explicit(&g_ckpt_seen_gen, g, memory_order_release);
-    if (container_pid() == 1) {
+    if (ckpt_process_coordinates()) {
         ckpt_coordinate_and_exit(c); // never returns (dumps the tree + _exit)
     }
     char pd[64];
-    snprintf(pd, sizeof pd, "proc.%d", container_pid());
+    ckpt_self_group(pd, sizeof pd);
     // PARK, do not exit. ckpt_dump_self holds this process's whole freeze across the coordinator's decision,
     // so every member is simultaneously stopped AND ALIVE for the entire capture -- which is the only state
     // in which "both owners of this shared object were frozen when it was captured" is a provable fact
     // rather than an inference from group membership. Only the coordinator's release ends the freeze.
     int rc = ckpt_dump_self(c, pd, 1);
     uint64_t released = g_ckpt_release_state;
-    fprintf(stderr, "[ckpt] proc %d %s (%s)\n", container_pid(), rc == 0 ? "OK" : "FAILED",
+    // Report the GROUP, not container_pid(): an exec session's top process is guest pid 1 by g_init_hostpid
+    // and three of them printing "proc 1" reads as three coordinators when it is one group name each.
+    fprintf(stderr, "[ckpt] %s %s (%s)\n", pd, rc == 0 ? "OK" : "FAILED",
             released == HL_CKPT_RELEASE_EXIT ? "released: image published" : "released: capture abandoned");
     if (rc == 0 && released == HL_CKPT_RELEASE_EXIT) _exit(0);
     if (released == HL_CKPT_RELEASE_EXIT || g_ckpt_capture_destructive) {
         // Either the image owns this process and its own dump failed, or the capture was abandoned after
         // this process had already consumed a shared pipe or socket queue. Neither leaves a guest that can
         // be resumed honestly; see the abort contract on g_ckpt_capture_destructive.
-        fprintf(stderr, "[ckpt] proc %d cannot resume: its capture was destructive and was not published\n",
-                container_pid());
+        fprintf(stderr, "[ckpt] %s cannot resume: its capture was destructive and was not published\n", pd);
         _exit(70);
     }
     // Nothing was consumed and nothing was published: the container is unharmed and the guest runs on.
@@ -1702,6 +1735,62 @@ static int ckpt_membership_orphan(int *reported) {
     if (got != (ssize_t)sizeof orphan || orphan <= 0) return -1;
     *reported = orphan;
     return 0;
+}
+
+// ------------------------------------------------------- coordinator election: behavioral fixture
+//
+// Drives the REAL ckpt_process_coordinates and ckpt_self_group in the three shapes one container's
+// process domain actually contains once every launch shares a trigger word and a broker. There is one
+// broker and one manifest, so exactly one process may coordinate; every other member must commit a group
+// of its OWN, under the name the coordinator waits for.
+//
+// The scenarios differ only in what the production code is allowed to read: g_init_hostpid (which EVERY
+// engine launch's top process sets to its own pid, so it does not distinguish a container init from an
+// exec session's top) and HL_CHECKPOINT_COORDINATOR (which only the launch the embedder can send
+// REQUEST_CHECKPOINT to carries). Scenario 1 is the postgres failure verbatim: an exec session's top
+// process, guest pid 1 by g_init_hostpid, elected itself and therefore committed nothing.
+HL_API int HL_TARGET_LOCAL(checkpoint_election_test)(uint32_t scenario) {
+    if (scenario > 2) return -22;
+    int saved_init = g_init_hostpid;
+    int saved_cache = g_hostpid_cache;
+    int saved_gpid = g_self_gpid;
+    const char *saved_option = hl_option_get("HL_CHECKPOINT_COORDINATOR");
+    int had_option = saved_option != NULL;
+    int verdict = -1;
+    char group[64];
+    char expected[64];
+
+    g_self_gpid = 0;
+    g_hostpid_cache = 0;
+    // Scenarios 0 and 1 are both a LAUNCH TOP: guest pid 1 by the only rule the engine has. Scenario 2 is
+    // an ordinary guest process of the coordinating launch.
+    g_init_hostpid = scenario == 2 ? 0 : getpid();
+    if (scenario == 1)
+        (void)hl_option_unset("HL_CHECKPOINT_COORDINATOR");
+    else
+        (void)hl_option_set("HL_CHECKPOINT_COORDINATOR", "1", 1);
+
+    int coordinates = ckpt_process_coordinates();
+    if (coordinates != (scenario == 0)) goto done;
+    if (scenario != 0) {
+        // A member names its group with the coordinator's own naming function applied to its host pid.
+        // Committing proc.1 here would collide with the coordinator's group and leave the group the
+        // coordinator waits for permanently absent.
+        ckpt_self_group(group, sizeof group);
+        snprintf(expected, sizeof expected, "proc.%d", ckpt_peer_gpid(getpid()));
+        if (strcmp(group, expected) != 0) goto done;
+        if (strcmp(group, "proc.1") == 0) goto done;
+    }
+    verdict = 0;
+done:
+    if (had_option)
+        (void)hl_option_set("HL_CHECKPOINT_COORDINATOR", "1", 1);
+    else
+        (void)hl_option_unset("HL_CHECKPOINT_COORDINATOR");
+    g_init_hostpid = saved_init;
+    g_hostpid_cache = saved_cache;
+    g_self_gpid = saved_gpid;
+    return verdict;
 }
 
 HL_API int HL_TARGET_LOCAL(checkpoint_membership_test)(uint32_t scenario) {

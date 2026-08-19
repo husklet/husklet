@@ -483,6 +483,16 @@ unsafe fn hl_x86_64_checkpoint_membership_test(scenario: c_uint) -> c_int {
 }
 
 #[cfg(feature = "native-test-hooks")]
+unsafe fn hl_aarch64_checkpoint_election_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().aarch64_checkpoint_election)(scenario) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_x86_64_checkpoint_election_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().x86_64_checkpoint_election)(scenario) }
+}
+
+#[cfg(feature = "native-test-hooks")]
 unsafe fn hl_aarch64_checkpoint_pipe_capture_test(scenario: c_uint) -> c_int {
     unsafe { (test_api().aarch64_checkpoint_pipe_capture)(scenario) }
 }
@@ -683,6 +693,20 @@ pub(crate) fn checkpoint_restore_claim_test(isa: u32, scenario: u32) -> Result<(
         match isa {
             1 => hl_aarch64_checkpoint_restore_claim_test(scenario),
             2 => hl_x86_64_checkpoint_restore_claim_test(scenario),
+            _ => return Err(-22),
+        }
+    };
+    if status == 0 { Ok(()) } else { Err(status) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn checkpoint_election_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    // SAFETY: the feature-gated hook mutates only process-wide checkpoint identity state it saves and
+    // restores, forks nothing, opens no descriptor, borrows no caller memory, and returns a scalar status.
+    let status = unsafe {
+        match isa {
+            1 => hl_aarch64_checkpoint_election_test(scenario),
+            2 => hl_x86_64_checkpoint_election_test(scenario),
             _ => return Err(-22),
         }
     };
