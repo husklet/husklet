@@ -913,7 +913,9 @@ mod tests {
         let poison = Arc::clone(&server);
         let _ = std::thread::spawn(move || poison.poison_coordination()).join();
 
-        assert_eq!(admission.wait(), Err(EngineError::LaunchFailed));
+        // A poisoned capture ledger is not a launch failure. Naming it as one is what put
+        // "LaunchFailed" in front of a desktop user whose workspace had launched fine.
+        assert_eq!(admission.wait(), Err(EngineError::CapturePoisoned));
         drop(admission);
         let retry = server
             .begin_recovery(25, std::time::Instant::now() + std::time::Duration::from_secs(1))

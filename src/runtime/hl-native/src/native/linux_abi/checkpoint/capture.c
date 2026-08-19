@@ -1461,38 +1461,33 @@ static int g_anon_shared_truncated;
 // THE MAPPING TABLE IS PER HOST OS, AND macOS HAS NO /proc. Reading /proc/self/maps unconditionally
 // made this scan report "unenumerable" on every Darwin host, so every macOS checkpoint refused --
 // which is a whole-platform outage, not a conservative refusal. Darwin's mapping table is the Mach
-// VM map, walked with mach_vm_region_recurse. `object_id` names the vm_object and is the exact
-// counterpart of Linux's shmem inode: minted by the kernel, identical in every task that maps the
-// object, and distinct between two objects. `share_mode` is the sharing discriminator, but it is
-// weaker than Linux's 's' character in a way the block below records rather than papers over.
-// Both hosts read the kernel's own record; neither guesses "private".
+// VM map, walked with mach_vm_region_recurse, and it carries both halves of the same answer: the
+// entry's VM_INHERIT_SHARE marker is the kernel's own record of MAP_SHARED, and `object_id` names
+// the vm_object exactly as the shmem inode names the object on Linux. Both hosts therefore read the
+// kernel's own record, and neither guesses "private".
 #if defined(__APPLE__)
-// MEASURED ON macOS 26.3.1 (arm64), and every filter below exists because of one of these readings:
+// MEASURED ON macOS 26.3.1 (arm64). Every field this reads was chosen against a reading, and the
+// two obvious candidates were both rejected by one:
 //
-//  - `object_id` is the Darwin counterpart of the shmem inode: mmap(MAP_SHARED|MAP_ANON) read
-//    obj=3705039015 in the parent and the SAME 3705039015 in a forked child, while a second such
-//    mapping made back to back read 3976147844. That is the identity, and it is what this records.
-//  - `share_mode` reports how the object is ACTUALLY shared right now, not the mmap flag. The same
-//    MAP_SHARED region read SM_PRIVATE(2) before the fork and SM_SHARED(4) after it; a MAP_PRIVATE
-//    anonymous region read SM_COW(1) after the fork. So the shared modes select exactly the regions
-//    a sibling engine process also maps -- which is the whole population this exists to keep
-//    coherent -- and a MAP_SHARED region with only one mapper restores private, which no observer
-//    can distinguish. THE RESIDUAL GAP: a region mapped MAP_SHARED by one process at capture time
-//    and shared by a fork only after restore loses its sharing. Linux's 's' flag does not have that
-//    gap; Darwin exposes no MAP_SHARED bit to close it with.
+//  - THE DISCRIMINATOR IS `inheritance`, not `share_mode`. XNU records MAP_SHARED as
+//    VM_INHERIT_SHARE on the map entry and MAP_PRIVATE as VM_INHERIT_COPY, so it is the exact
+//    counterpart of Linux's 's' permission character and is true of the mapping the kernel actually
+//    made. `share_mode` describes how the object is shared AT THIS INSTANT: the same MAP_SHARED
+//    region read SM_PRIVATE(2) before a fork and SM_SHARED(4) after it, so keying on it would have
+//    silently restored a not-yet-shared MAP_SHARED region as a private copy -- the very defect this
+//    table exists to stop. Measured: MAP_SHARED|MAP_ANON read inh=0 (VM_INHERIT_SHARE) both before
+//    and after the fork; MAP_PRIVATE|MAP_ANON read inh=1 (VM_INHERIT_COPY) both times.
+//  - THE IDENTITY IS `object_id`, the Darwin counterpart of Linux's shmem inode. Measured identical
+//    in parent and child across fork (3705039015 both sides) and distinct between two shared
+//    mappings made back to back (3705039015 against 3976147844).
 //  - `proc_regionfilename` is NOT usable as the file/anonymous discriminator: it answered
 //    "/usr/lib/dyld" for a freshly mmap'd anonymous shared region. `external_pager` is the honest
 //    vnode-backed marker, and named file mappings are carried by g_filemap regardless.
-//  - PROT_NONE rows are malloc's guard regions (user_tag 1) and read SM_TRUESHARED with no pager.
-//    They are not objects any guest reads, and excluding them keeps this table small.
+//  - PROT_NONE rows are malloc's guard regions (user_tag 1). They are not objects any guest reads,
+//    and excluding them keeps this table inside its bound.
 //
-// A stray host row that survives every filter (dyld's own region does) is inert: the table is only
-// ever consulted with a guest mapping's address and requires full containment, exactly as the
-// Linux table is.
-static int ckpt_anon_shared_mode(unsigned char share_mode) {
-    return share_mode == SM_SHARED || share_mode == SM_TRUESHARED || share_mode == SM_SHARED_ALIASED;
-}
-
+// A stray host row that survives every filter is inert: the table is only ever consulted with a
+// guest mapping's address and requires full containment, exactly as the Linux table is.
 static void ckpt_anon_shared_scan(void) {
     g_nanon_shared = 0;
     g_anon_shared_truncated = 0;
@@ -1517,7 +1512,7 @@ static void ckpt_anon_shared_scan(void) {
             return;
         }
         if (size == 0) break;
-        if (ckpt_anon_shared_mode((unsigned char)info.share_mode) && info.external_pager == 0 && info.protection != 0 &&
+        if (info.inheritance == VM_INHERIT_SHARE && info.external_pager == 0 && info.protection != 0 &&
             info.object_id != 0) {
             if (g_nanon_shared >= CKPT_ANON_SHARED_MAX) {
                 g_anon_shared_truncated = 1;
