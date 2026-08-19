@@ -937,14 +937,16 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
     g_stack_lo = (uint64_t)stk;
     g_stack_hi = (uint64_t)(stk + SZ);
     uint8_t *top = stk + SZ;
-    uint64_t argp[HL_MAXARGV], envp_[256]; // argv can be large post-exec (ARG_MAX); env stays small
+    // argv and envp are bounded identically (HL_MAXARGV/HL_MAXENVP); every producer fails closed with
+    // -E2BIG at that bound, so neither vector can arrive longer than these arrays.
+    uint64_t argp[HL_MAXARGV], envp_[HL_MAXENVP];
     set_guest_cmdline(argc, argv);         // capture the full argv for /proc/self/cmdline (bare-mode fallback)
     int envc = 0;
     // Resolve the env string list WITHOUT placing it yet (the placement order below is what matters). The
     // container's env arrives as HL_GUEST_ENV="K=V\nK=V\n…" (set by the launcher) -- forward EXACTLY these to
     // the guest FIRST so they override the defaults, NOT the daemon/host environment. Then the built-in
     // defaults fill ONLY the keys the container didn't set.
-    const char *estr[256];
+    const char *estr[HL_MAXENVP];
     const char *ge = hl_process_guest_environment_get();
     char *gecopy = NULL;
     // execve() escape-encodes records (HL_GUEST_ENV_ESC=1) so a value's own newline isn't mistaken for a
@@ -959,7 +961,7 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
     if (ge) {
         gecopy = strdup(ge);
         char *save = NULL;
-        for (char *ln = strtok_r(gecopy, "\n", &save); ln && envc < 250; ln = strtok_r(NULL, "\n", &save)) {
+        for (char *ln = strtok_r(gecopy, "\n", &save); ln && envc < HL_MAXENVP - 6; ln = strtok_r(NULL, "\n", &save)) {
             if (env_escaped) {
                 char *r = ln, *w = ln; // unescape in place (only ever shrinks)
                 while (*r) {
@@ -979,7 +981,7 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
         }
     }
     int guest_envc = envc; // [0..guest_envc) came from the container; the rest are defaults
-    for (int i = 0; !env_exact && g_guest_env[i] && envc < 255; i++) {
+    for (int i = 0; !env_exact && g_guest_env[i] && envc < HL_MAXENVP - 1; i++) {
         // Skip a default whose KEY the container already set: a duplicate "PATH=" would otherwise appear
         // in envp, and shells (bash) honor the LAST occurrence -> the default would shadow the image PATH
         // (this is what made `gosu` unresolvable in the postgres entrypoint). Match on the "KEY=" prefix.

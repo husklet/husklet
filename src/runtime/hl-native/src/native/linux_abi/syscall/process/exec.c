@@ -338,11 +338,18 @@ static int exec_resolve_shebang_images(char **argv, int argc, int capacity, exec
 
 static int exec_collect_argv(uint64_t argv_address, char **argv, int *argc) {
     size_t argument_bytes = 0;
-    char *probe = malloc(HL_EXEC_ARGUMENT_BYTES + 1u);
+    char *probe = malloc(HL_EXEC_ARGUMENT_STRING_BYTES + 1u);
     if (!probe) return -ENOMEM;
     *argc = 0;
     int error = 0;
-    while (argv_address && *argc < HL_MAXARGV - 1) {
+    while (argv_address) {
+        // Fail closed at the vector bound. Stopping here silently would hand the new program a TRUNCATED
+        // argv -- a different command with a different last argument -- which is strictly worse than a
+        // failed exec. Linux answers -E2BIG once its byte budgets are exhausted; so do we.
+        if (*argc >= HL_MAXARGV - 1) {
+            error = -E2BIG;
+            break;
+        }
         uint64_t guest_argument = 0;
         if (guest_copy_from(&guest_argument, argv_address + (uint64_t)*argc * sizeof guest_argument,
                             sizeof guest_argument) != sizeof guest_argument) {
@@ -350,13 +357,16 @@ static int exec_collect_argv(uint64_t argv_address, char **argv, int *argc) {
             break;
         }
         if (!guest_argument) break;
-        size_t remaining = HL_EXEC_ARGUMENT_BYTES - argument_bytes;
-        int length = guest_copy_string(probe, remaining + 1, guest_argument);
+        // Per-string MAX_ARG_STRLEN and whole-vector ARG_MAX are separate limits; take the tighter of the
+        // two as this string's copy bound so either overrun surfaces as -E2BIG below.
+        size_t remaining = HL_EXEC_ARGUMENT_TOTAL_BYTES - argument_bytes;
+        size_t string_limit = remaining < HL_EXEC_ARGUMENT_STRING_BYTES ? remaining : HL_EXEC_ARGUMENT_STRING_BYTES;
+        int length = guest_copy_string(probe, string_limit + 1, guest_argument);
         if (length == -EFAULT) {
             error = -EFAULT;
             break;
         }
-        if (length < 0 || (size_t)length + 1 > remaining) {
+        if (length < 0 || (size_t)length + 1 > string_limit) {
             error = -E2BIG;
             break;
         }

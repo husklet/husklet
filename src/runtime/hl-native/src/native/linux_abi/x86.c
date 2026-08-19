@@ -351,7 +351,9 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
     extern uint64_t g_stack_lo, g_stack_hi; // publish for /proc/self/maps [stack] synthesis (vfs.c)
     g_stack_lo = (uint64_t)stk;
     g_stack_hi = (uint64_t)(stk + SZ + GUARD);
-    uint64_t argp[HL_MAXARGV], envp_[256]; // argv can be large post-exec (ARG_MAX); env stays small
+    // argv and envp are bounded identically (HL_MAXARGV/HL_MAXENVP); every producer fails closed with
+    // -E2BIG at that bound, so neither vector can arrive longer than these arrays.
+    uint64_t argp[HL_MAXARGV], envp_[HL_MAXENVP];
     set_guest_cmdline(argc, argv);         // capture the full argv for /proc/self/cmdline (bare-mode fallback)
     int envc = 0;
     for (int i = 0; i < argc; i++) {
@@ -364,7 +366,7 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
     // execve by exec_forward_env). Forward EXACTLY those FIRST so they override the built-in defaults; the
     // defaults then fill ONLY the keys the container didn't set (match on the "KEY=" prefix). Mirrors the
     // shared aarch64 build_stack (linux_abi/elf.c) -- without this, x86 guests ignored the container env.
-    const char *estr[256];
+    const char *estr[HL_MAXENVP];
     const char *ge = hl_process_guest_environment_get();
     char *gecopy = NULL;
     // execve() escape-encodes records (HL_GUEST_ENV_ESC=1) so a value's own newline isn't mistaken for a
@@ -376,7 +378,7 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
     if (ge) {
         gecopy = strdup(ge);
         char *save = NULL;
-        for (char *ln = strtok_r(gecopy, "\n", &save); ln && envc < 250; ln = strtok_r(NULL, "\n", &save)) {
+        for (char *ln = strtok_r(gecopy, "\n", &save); ln && envc < HL_MAXENVP - 6; ln = strtok_r(NULL, "\n", &save)) {
             if (env_escaped) {
                 char *r = ln, *w = ln; // unescape in place (only ever shrinks)
                 while (*r) {
@@ -396,7 +398,7 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
         }
     }
     int guest_envc = envc;
-    for (int i = 0; !env_exact && g_guest_env[i] && envc < 255; i++) {
+    for (int i = 0; !env_exact && g_guest_env[i] && envc < HL_MAXENVP - 1; i++) {
         const char *eq = strchr(g_guest_env[i], '=');
         size_t klen = eq ? (size_t)(eq - g_guest_env[i]) + 1 : 0;
         int dup = 0;

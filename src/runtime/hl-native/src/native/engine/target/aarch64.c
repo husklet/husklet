@@ -874,6 +874,15 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     exec_authority_seed_initial(host, executable, executable_authority);
     g_engine_result_status = HL_STATUS_OK;
     if (argument_count > (uint32_t)INT_MAX) return 2;
+    // The launch argv is copied into build_stack's fixed pointer vector. Nothing between here and there
+    // bounded it, so a launch with more than HL_MAXARGV entries wrote past `argp[]` -- observed as
+    // "*** stack smashing detected ***" at exactly 2049 entries under the previous 2048 bound, where the
+    // host kernel runs the same command without complaint. Reject the launch instead of corrupting the
+    // loader's frame.
+    if (argument_count > (uint32_t)(HL_MAXARGV - 1)) {
+        fprintf(stderr, "hl-engine: guest argument vector exceeds %d entries\n", HL_MAXARGV - 1);
+        return 2;
+    }
     argc = (int)argument_count;
     hl_target_services_inject(&g_target_services, host);
     hl_gmap_bind_host(host);
@@ -937,16 +946,16 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     // up to SHEBANG_MAX nested levels), rewriting argv to [finalInterp, ..., scriptpath, args...] and
     // loading the FINAL interpreter. A missing/non-shebang ELF falls straight through unchanged below.
     char sb_store[SHEBANG_MAX * 2][256];
-    char *sb_argv[256];
+    char *sb_argv[HL_MAXARGV];
     int sb_argc = 0;
     sb_argv[sb_argc++] = (char *)prog; // `prog` is find_in_path-resolved; the chain keeps it as scriptpath
-    for (int i = 1; i < argc && sb_argc < 255; i++)
+    for (int i = 1; i < argc && sb_argc < HL_MAXARGV - 1; i++)
         sb_argv[sb_argc++] = (char *)argv[i];
     sb_argv[sb_argc] = NULL;
     const char *sb_finalhost;
     char sb_fhb[4200];
     int sb_new =
-        resolve_shebang_chain(sb_argv, sb_argc, 256, prog_host, sb_store, sb_fhb, sizeof sb_fhb, &sb_finalhost);
+        resolve_shebang_chain(sb_argv, sb_argc, HL_MAXARGV, prog_host, sb_store, sb_fhb, sizeof sb_fhb, &sb_finalhost);
     if (sb_new < 0) {
         fprintf(stderr, "hl-engine: too many nested #! interpreters (ELOOP): %s\n", prog);
         return hl_vfs_cursor_state_finish(40); // ELOOP
