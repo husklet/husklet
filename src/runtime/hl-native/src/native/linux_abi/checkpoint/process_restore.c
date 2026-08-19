@@ -1351,16 +1351,17 @@ static int ckpt_preflight_pipe_append(struct ckpt_preflight_pipe **entries, size
 #if defined(HL_NATIVE_TEST_HOOKS)
 static const unsigned char *g_ckpt_pipe_test_image;
 static size_t g_ckpt_pipe_test_image_size;
+static const char *g_ckpt_pipe_test_name = "pipe-test";
 
 static int64_t ckpt_pipe_test_source_size(struct ckpt_source *source, const char *name) {
     (void)source;
-    return strcmp(name, "pipe-test") == 0 ? (int64_t)g_ckpt_pipe_test_image_size : -1;
+    return strcmp(name, g_ckpt_pipe_test_name) == 0 ? (int64_t)g_ckpt_pipe_test_image_size : -1;
 }
 
 static int64_t ckpt_pipe_test_source_read(struct ckpt_source *source, const char *name, uint64_t offset, void *out,
                                           size_t size) {
     (void)source;
-    if (strcmp(name, "pipe-test") != 0 || offset > g_ckpt_pipe_test_image_size ||
+    if (strcmp(name, g_ckpt_pipe_test_name) != 0 || offset > g_ckpt_pipe_test_image_size ||
         size > g_ckpt_pipe_test_image_size - (size_t)offset)
         return -1;
     memcpy(out, g_ckpt_pipe_test_image + offset, size);
@@ -1391,6 +1392,25 @@ HL_API int HL_TARGET_LOCAL(checkpoint_pipe_schema_test)(uint32_t scenario) {
     if (scenario == 6) record.auxiliary = (uint64_t)INT_MAX + 1;
     if (scenario == 12) record.auxiliary = 0;
     if (scenario == 13) return CKPT_VERSION == 8 ? 0 : 23;
+    if (scenario == 17) {
+        struct ckpt_meta meta = {.magic = CKPT_MAGIC,
+                                 .version = CKPT_VERSION,
+                                 .arch = G_CKPT_ARCH,
+                                 .cpu_sz = sizeof(struct cpu),
+                                 .n_threads = 1};
+        meta.engine_identity = pcache_translator_identity();
+        g_ckpt_pipe_test_name = "proc.1/meta";
+        g_ckpt_pipe_test_image = (const unsigned char *)&meta;
+        g_ckpt_pipe_test_image_size = sizeof meta;
+        g_ckpt_source.ops = &g_ckpt_pipe_test_source_ops;
+        struct ckpt_meta decoded;
+        int accepted_v8 = ckpt_read_meta_dir("proc.1", &decoded) == 0;
+        meta.version = 7;
+        int rejected_v7 = ckpt_read_meta_dir("proc.1", &decoded) == -1;
+        g_ckpt_source.ops = NULL;
+        g_ckpt_pipe_test_name = "pipe-test";
+        return accepted_v8 && rejected_v7 ? 0 : 26;
+    }
     if (scenario == 14 || scenario == 15) {
         struct {
             struct ckpt_socket_queue_header header;
@@ -1434,6 +1454,58 @@ HL_API int HL_TARGET_LOCAL(checkpoint_pipe_schema_test)(uint32_t scenario) {
         g_nrestore_pipes = g_restore_pipes_capacity = 0;
         g_nrestore_rights = g_restore_rights_capacity = 0;
         return valid ? 0 : 25;
+    }
+    if (scenario == 18) {
+        static const unsigned char queued[] = {0x63, 0x68, 0x65, 0x63, 0x6b, 0x70, 0x6f, 0x69, 0x6e, 0x74};
+        g_ckpt_pipe_test_name = "pipe.0000000000000011";
+        g_ckpt_pipe_test_image = queued;
+        g_ckpt_pipe_test_image_size = sizeof queued;
+        g_ckpt_source.ops = &g_ckpt_pipe_test_source_ops;
+        int restored = ckpt_restore_right_prepare(&record);
+        struct ckpt_restore_right *right = ckpt_restore_right_find(&record);
+        unsigned char received[sizeof queued];
+        ssize_t count = restored >= 0 ? read(restored, received, sizeof received) : -1;
+        int failure = restored < 0       ? 271
+                      : right == NULL    ? 272
+                      : right->fd != restored ? 273
+                      : count != (ssize_t)sizeof queued ? 274
+                      : memcmp(received, queued, sizeof queued) != 0 ? 275
+                                                                    : 0;
+        g_ckpt_source.ops = NULL;
+        g_ckpt_pipe_test_name = "pipe-test";
+        for (int index = 0; index < g_nrestore_pipes; ++index) {
+            if (g_restore_pipes[index].reader >= 0)
+                hl_host_process_fd_private_remove(g_restore_pipes[index].reader);
+            if (g_restore_pipes[index].writer >= 0)
+                hl_host_process_fd_private_remove(g_restore_pipes[index].writer);
+        }
+        free(g_restore_pipes);
+        free(g_restore_rights);
+        g_restore_pipes = NULL;
+        g_restore_rights = NULL;
+        g_nrestore_pipes = g_restore_pipes_capacity = 0;
+        g_nrestore_rights = g_restore_rights_capacity = 0;
+        return failure;
+    }
+    if (scenario == 19) {
+        struct ckpt_restore_right rights[2] = {
+            {.ofd_id = record.ofd_id,
+             .object_id = record.object_id,
+             .fd = 71,
+             .kind = CKF_FILE,
+             .ofd_identity = record.ofd_identity},
+            {.ofd_id = record.ofd_id,
+             .object_id = record.object_id,
+             .fd = 72,
+             .kind = CKF_PIPE,
+             .ofd_identity = record.ofd_identity},
+        };
+        g_restore_rights = rights;
+        g_nrestore_rights = 2;
+        struct ckpt_restore_right *found = ckpt_restore_right_find(&record);
+        g_restore_rights = NULL;
+        g_nrestore_rights = 0;
+        return found == &rights[1] ? 0 : 28;
     }
     if (scenario == 11) {
         int descriptors[2];

@@ -13,14 +13,33 @@ fn actual_restore_claim_helper_fails_closed_on_both_isas() {
     }
 }
 
+fn pipe_scenario(name: &str, scenario: u32) {
+    for isa in [1, 2] {
+        hl_native::checkpoint_pipe_schema_test(isa, scenario)
+            .unwrap_or_else(|status| panic!("ISA {isa} {name} scenario {scenario} failed at {status}"));
+    }
+}
+
 #[test]
 fn pipe_schema_and_preflight_fail_closed_on_both_isas() {
-    for isa in [1, 2] {
-        for scenario in 0..=16 {
-            hl_native::checkpoint_pipe_schema_test(isa, scenario)
-                .unwrap_or_else(|status| panic!("ISA {isa} pipe schema scenario {scenario} failed at {status}"));
-        }
+    for scenario in 0..=16 {
+        pipe_scenario("pipe schema", scenario);
     }
+}
+
+#[test]
+fn checkpoint_image_v8_is_accepted_and_v7_is_rejected_on_both_isas() {
+    pipe_scenario("checkpoint ABI boundary", 17);
+}
+
+#[test]
+fn queued_pipe_payload_and_typed_right_roundtrip_on_both_isas() {
+    pipe_scenario("queued pipe payload roundtrip", 18);
+}
+
+#[test]
+fn queued_right_lookup_never_crosses_resource_kind_on_both_isas() {
+    pipe_scenario("typed queued-right collision", 19);
 }
 
 #[test]
