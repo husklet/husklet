@@ -99,6 +99,10 @@ pub enum EngineError {
     NotStarted,
     Destroyed,
     LaunchFailed,
+    /// Engine composition refused the launch. The originating
+    /// [`CompositionError`](crate::composition::CompositionError) is retained so
+    /// callers and logs keep the cause instead of a bare launch failure.
+    CompositionFailed(crate::composition::CompositionError),
     /// Native construction refused the configured engine with this stable `hl_status` value.
     NativeCreateFailed(i32),
     /// The private native library could not be loaded or did not satisfy the bridge contract.

@@ -203,17 +203,24 @@ impl Engine {
         })?;
         let factory = ProductionFactory;
         let backend = EngineBackend::construct(isa, plan, services, &factory, workspace.clone()).map_err(|error| {
-            if error == CompositionError::UnsupportedTerminal {
-                EngineError::Unsupported
-            } else {
-                EngineError::LaunchFailed
-            }
+            hl_log::hl_error!(hl_log::tag::EXEC, "engine composition failed: error={error:?}");
+            Self::launch_error(error)
         })?;
         Ok(Self {
             backend,
             workspace,
             terminal,
         })
+    }
+
+    /// Maps a composition refusal onto the public engine error, retaining the
+    /// originating cause for every case the boundary does not translate.
+    fn launch_error(error: CompositionError) -> EngineError {
+        if error == CompositionError::UnsupportedTerminal {
+            EngineError::Unsupported
+        } else {
+            EngineError::CompositionFailed(error)
+        }
     }
 
     pub fn start(&self) -> Result<(), EngineError> {
@@ -271,6 +278,33 @@ mod tests {
         assert_eq!(
             Builder::initial_working_directory(false).unwrap(),
             std::env::current_dir().unwrap()
+        );
+    }
+}
+
+#[cfg(test)]
+mod launch_error_tests {
+    use super::{CompositionError, Engine, EngineError};
+
+    #[test]
+    fn non_terminal_composition_failures_keep_their_cause() {
+        for error in [
+            CompositionError::MissingCheckpointSink,
+            CompositionError::MissingCheckpointSource,
+            CompositionError::RuntimeConstruction,
+            CompositionError::TransactionBusy,
+            CompositionError::DeadlineExceeded,
+            CompositionError::PublishedNotDurable,
+        ] {
+            assert_eq!(Engine::launch_error(error), EngineError::CompositionFailed(error));
+        }
+    }
+
+    #[test]
+    fn unsupported_terminal_stays_unsupported() {
+        assert_eq!(
+            Engine::launch_error(CompositionError::UnsupportedTerminal),
+            EngineError::Unsupported
         );
     }
 }
