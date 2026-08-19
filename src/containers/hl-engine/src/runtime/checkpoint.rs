@@ -17,6 +17,7 @@ use std::{
 
 pub mod authority;
 mod broker;
+mod participants;
 #[path = "checkpoint_protocol.rs"]
 mod protocol;
 mod publication;
@@ -25,10 +26,11 @@ mod request;
 #[path = "checkpoint_test.rs"]
 mod test;
 mod transaction;
+use participants::ParticipantLedger;
 use protocol::{
     CLAIM, COMMIT, DIGEST, GROUP_ABORT, GROUP_BEGIN, GROUP_COMMIT, GROUP_COUNT, GROUP_PRESENT, OBJECT_ABORT,
     OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, PAYLOAD_MAX, RECOVERY_COMPLETE,
-    REQUEST_BYTES, Reply, Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, STATUS_ALREADY, UNCLAIM,
+    REGISTER_READY, REQUEST_BYTES, Reply, Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, STATUS_ALREADY, UNCLAIM,
 };
 
 const HASH_BASIS: u64 = 14_695_981_039_346_656_037;
@@ -125,6 +127,7 @@ pub(crate) struct Server {
     capture_changed: Condvar,
     channels: Mutex<HashMap<i32, Arc<UnixStream>>>,
     recovery_connections: Mutex<HashMap<u64, u64>>,
+    participants: Mutex<Option<ParticipantLedger>>,
     committed: AtomicBool,
     running: AtomicBool,
     connections: AtomicUsize,
@@ -149,6 +152,7 @@ impl Server {
             capture_changed: Condvar::new(),
             channels: Mutex::new(HashMap::new()),
             recovery_connections: Mutex::new(HashMap::new()),
+            participants: Mutex::new(None),
             committed: AtomicBool::new(false),
             running: AtomicBool::new(true),
             connections: AtomicUsize::new(0),
@@ -192,6 +196,10 @@ impl Server {
             return Err(CaptureFailure::Poisoned);
         }
         self.committed.store(false, Ordering::Release);
+        // Each capture seals its own membership: a ledger from an earlier capture
+        // must never admit a process into this one.
+        *self.participants.lock().map_err(|_| CaptureFailure::Poisoned)? =
+            Some(ParticipantLedger::new(id).map_err(|_| CaptureFailure::Poisoned)?);
         capture.phase = CapturePhase::Active { id, deadline };
         capture.mutations = 0;
         capture.recovery_report_published = false;

@@ -1979,3 +1979,165 @@ fn capture_completion_wait_expires_at_the_deadline_instead_of_re_interrupting_fo
         .expect("completion wait must return at its deadline");
     assert_eq!(outcome, Err(CaptureFailure::Deadline));
 }
+
+fn checkpoint_request(op: u32, generation: u32, payload: &[u8]) -> Vec<u8> {
+    let mut request = vec![0_u8; protocol::REQUEST_BYTES];
+    request[0..4].copy_from_slice(&protocol::MAGIC_REQUEST.to_ne_bytes());
+    request[4..8].copy_from_slice(&protocol::ABI.to_ne_bytes());
+    request[8..12].copy_from_slice(&op.to_ne_bytes());
+    request[32..40].copy_from_slice(&(payload.len() as u64).to_ne_bytes());
+    request[44..48].copy_from_slice(&generation.to_ne_bytes());
+    request.extend_from_slice(payload);
+    request
+}
+
+fn register_ready_payload(executors: &[u32]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(8 + executors.len() * 4);
+    payload.extend_from_slice(&(executors.len() as u32).to_ne_bytes());
+    payload.extend_from_slice(&0_u32.to_ne_bytes());
+    for executor in executors {
+        payload.extend_from_slice(&executor.to_ne_bytes());
+    }
+    payload
+}
+
+/// Reads one reply and returns its `(status, value)`.
+fn read_reply(channel: &mut UnixStream) -> (i32, u64) {
+    let mut reply = [0_u8; 32];
+    std::io::Read::read_exact(channel, &mut reply).expect("checkpoint reply");
+    (
+        i32::from_ne_bytes(reply[8..12].try_into().unwrap()),
+        u64::from_ne_bytes(reply[16..24].try_into().unwrap()),
+    )
+}
+
+/// `count` live authenticated engine processes, one broker channel each: the
+/// broker binds one authenticated capability per process, exactly as production
+/// does. Each returned row is (the end this test drives, the accepted channel,
+/// that process's capability). Every peer stays alive until `release` is closed.
+fn authenticated_peer_processes(
+    count: usize,
+) -> (
+    Vec<(UnixStream, UnixStream, hl_native::AuthenticatedCheckpointPeer)>,
+    Vec<libc::pid_t>,
+    i32,
+) {
+    let (broker, transport) = hl_native::CheckpointTransport::create().expect("checkpoint transport");
+    let (relay_child, relay_survivor) = UnixStream::pair().expect("descriptor relay");
+    let mut release = [-1; 2];
+    // SAFETY: release names writable storage for two new descriptors.
+    assert_eq!(unsafe { libc::pipe(release.as_mut_ptr()) }, 0);
+    let mut channels = Vec::new();
+    let mut children = Vec::new();
+    for _ in 0..count {
+        // SAFETY: the child touches only inherited descriptors and terminates with _exit.
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0, "fork checkpoint peer");
+        if child == 0 {
+            // SAFETY: the child owns its inherited ends only.
+            unsafe { libc::close(release[1]) };
+            let Ok(channel) = transport.connect_for_test() else {
+                // SAFETY: no Rust destructor may run after fork.
+                unsafe { libc::_exit(93) }
+            };
+            send_descriptor(&relay_child, channel.as_raw_fd());
+            let mut byte = 0_u8;
+            // SAFETY: release[0] is live and byte is writable.
+            let read = unsafe { libc::read(release[0], (&raw mut byte).cast(), 1) };
+            // SAFETY: no Rust destructor may run after fork.
+            unsafe { libc::_exit(if read == 1 { 0 } else { 91 }) }
+        }
+        let Some((channel, authority)) = broker.accept(Duration::from_secs(5)) else {
+            panic!("authenticated production accept for peer {child}");
+        };
+        assert_eq!(authority.host_pid, u64::try_from(child).unwrap());
+        let survivor = receive_descriptor(&relay_survivor);
+        channels.push((survivor, channel, authority));
+        children.push(child);
+    }
+    drop(relay_child);
+    drop(transport);
+    // SAFETY: the parent no longer uses the child's end.
+    unsafe { libc::close(release[0]) };
+    (channels, children, release[1])
+}
+
+/// Exact generation membership: only an authenticated process registering the
+/// running capture generation becomes a member, only once, and a process that
+/// publishes without registering fails the capture by name instead of running
+/// it out to its deadline.
+#[test]
+fn register_ready_seals_exact_generation_membership_before_any_publication() {
+    static SERIAL: Mutex<()> = Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (channels, children, release) = authenticated_peer_processes(3);
+    let server = Arc::new(Server::new(Arc::new(Store), Arc::new(Store)));
+    let mut drivers = Vec::new();
+    for (survivor, channel, authority) in channels {
+        let worker = Arc::clone(&server);
+        std::thread::spawn(move || worker.serve_authenticated_for_test(channel, authority));
+        drivers.push(survivor);
+    }
+    while server.connections.load(Ordering::Acquire) != 3 {
+        std::thread::yield_now();
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let capture = server.begin_capture(7, deadline).expect("capture admission");
+
+    // A registration naming any other generation is not a member of this one.
+    let foreign = &mut drivers[0];
+    foreign
+        .write_all(&checkpoint_request(
+            protocol::REGISTER_READY,
+            9,
+            &register_ready_payload(&[101]),
+        ))
+        .expect("foreign generation registration");
+    assert_eq!(read_reply(foreign).0, -1, "another generation registered as a member");
+
+    // An authenticated process registers exactly once; the repeat is a duplicate,
+    // not a second member.
+    let member = &mut drivers[1];
+    member
+        .write_all(&checkpoint_request(
+            protocol::REGISTER_READY,
+            7,
+            &register_ready_payload(&[101, 102]),
+        ))
+        .expect("member registration");
+    let (status, id) = read_reply(member);
+    assert_eq!(status, 0, "authenticated member was refused");
+    assert_ne!(id, 0, "member registration returned no member ID");
+    member
+        .write_all(&checkpoint_request(
+            protocol::REGISTER_READY,
+            7,
+            &register_ready_payload(&[101, 102]),
+        ))
+        .expect("duplicate registration");
+    assert_eq!(read_reply(member).0, -1, "one process registered twice");
+
+    // A process that never registers cannot publish, and says so immediately.
+    let unregistered = &mut drivers[2];
+    unregistered
+        .write_all(&checkpoint_request(protocol::GROUP_BEGIN, 7, &[]))
+        .expect("unregistered publication");
+    let failure = server.wait_capture(capture, std::time::Instant::now() + Duration::from_secs(10));
+    assert_eq!(
+        failure,
+        Ok(Some(Err(CaptureFailure::Failed))),
+        "an unregistered publisher must fail the capture, not exhaust its deadline"
+    );
+
+    server.stop();
+    for child in children {
+        // SAFETY: one byte releases one peer process.
+        assert_eq!(unsafe { libc::write(release, b"x".as_ptr().cast(), 1) }, 1);
+        let mut status = 0;
+        // SAFETY: child is a direct unreaped child and status is writable.
+        assert_eq!(unsafe { libc::waitpid(child, &raw mut status, 0) }, child);
+        assert_eq!(libc::WEXITSTATUS(status), 0);
+    }
+    // SAFETY: the parent owns this end.
+    unsafe { libc::close(release) };
+}
