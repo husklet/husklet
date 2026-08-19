@@ -97,6 +97,20 @@ testing --lib` answers `no library targets found in package testing`, silently
 in a workspace-wide run. Every assertion in `testing`'s benchmark and syscall
 audit gates was invisible to the command this file told everyone to run.
 
+`--all-targets` does not run a required-features test either
+
+`cargo test -p hl-native --all-targets` reports green while running **zero** of the
+tests in a target declared `required-features = ["native-test-hooks"]`. Cargo skips
+such a target silently, exactly as it does for the application binaries below.
+`tests/namespace_transaction.rs` is one of these, and a lane discovered mid-run that
+the gate command this file recommends was not exercising any of it.
+
+That matters twice over: the same feature flag is what makes a symbol's only writer
+test-only, which is the defect `c-test-only-state` exists to catch. So the build
+configuration that hides the writer is also the one whose tests do not run by
+default. Add `--features native-test-hooks` as a second invocation when you touch
+anything behind that flag, and say which of the two you ran.
+
 ### `--all-targets` does not reach the application
 
 `src/apps/husklet` declares `[[bin]] husklet` with `required-features = ["gui"]`, and its
