@@ -21,6 +21,7 @@ mod participants;
 #[path = "checkpoint_protocol.rs"]
 mod protocol;
 mod publication;
+mod reciprocity;
 mod request;
 #[cfg(test)]
 #[path = "checkpoint_test.rs"]
@@ -50,6 +51,9 @@ struct State {
     groups: HashSet<String>,
     claims: HashSet<String>,
     digest: BTreeMap<String, (u64, u64)>,
+    /// The `proc.<gpid>/fds` inventories of the running capture, retained for
+    /// the reciprocal socket-topology join `publish_manifest` performs.
+    topology: reciprocity::SocketTopology,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

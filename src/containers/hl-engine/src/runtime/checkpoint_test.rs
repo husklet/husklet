@@ -2621,3 +2621,119 @@ fn source_reads_are_refused_while_a_capture_is_active() {
         "an empty capture must not report the previous image's digest"
     );
 }
+
+/// Builds one `struct ckpt_fd` (`linux_abi/checkpoint/capture.c:172-179`) for a
+/// `CKF_SOCKETPAIR` endpoint, exactly as `image.c:139-147` writes it.
+fn socketpair_record(guest_descriptor: i32, object: u64, peer: u64) -> Vec<u8> {
+    let mut bytes = vec![0_u8; 560];
+    bytes[0..4].copy_from_slice(&guest_descriptor.to_ne_bytes());
+    bytes[4..8].copy_from_slice(&10_i32.to_ne_bytes());
+    bytes[16..24].copy_from_slice(&1_i64.to_ne_bytes());
+    bytes[24..32].copy_from_slice(&object.to_ne_bytes());
+    bytes[40..48].copy_from_slice(&peer.to_ne_bytes());
+    bytes
+}
+
+fn capture_with_socket_inventories(
+    store: &Arc<TransactionStore>,
+    generation: u32,
+    inventories: &[(&str, Vec<u8>)],
+) -> Result<(), CaptureFailure> {
+    let server = Server::new(store.clone(), store.clone());
+    let capture = server
+        .begin_capture(generation, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    let group_begin = object_request(protocol::GROUP_BEGIN, 0, generation);
+    let group_commit = object_request(protocol::GROUP_COMMIT, 0, generation);
+    let begin = object_request(protocol::OBJECT_BEGIN, 1, generation);
+    let write = object_request(protocol::OBJECT_WRITE, 1, generation);
+    let finish = object_request(protocol::OBJECT_FINISH, 1, generation);
+    for (index, (group, records)) in inventories.iter().enumerate() {
+        let publisher = 7 + index as u64;
+        assert_eq!(
+            server.dispatch(publisher, &group_begin, group, &[]).status,
+            protocol::STATUS_OK
+        );
+        assert_eq!(
+            server.dispatch(publisher, &begin, &format!("{group}/fds"), &[]).status,
+            protocol::STATUS_OK
+        );
+        assert_eq!(
+            server.dispatch(publisher, &write, "", records).status,
+            protocol::STATUS_OK
+        );
+        assert_eq!(server.dispatch(publisher, &finish, "", &[]).status, protocol::STATUS_OK);
+        assert_eq!(
+            server.dispatch(publisher, &group_commit, group, &[]).status,
+            protocol::STATUS_OK
+        );
+    }
+    let result = server.publish_manifest(b"manifest");
+    let _ = server.wait_capture(capture, std::time::Instant::now() + Duration::from_secs(1));
+    result
+}
+
+#[test]
+fn a_reciprocal_socket_topology_publishes_its_generation() {
+    let store = Arc::new(TransactionStore::default());
+    store.seed_committed("MANIFEST", b"prior");
+    assert_eq!(
+        capture_with_socket_inventories(
+            &store,
+            41,
+            &[
+                (
+                    "proc.1",
+                    socketpair_record(10, 0x003c_a832_0000_0002, 0x003c_ac81_0000_0001)
+                ),
+                (
+                    "proc.2",
+                    socketpair_record(7, 0x003c_ac81_0000_0001, 0x003c_a832_0000_0002)
+                ),
+            ],
+        ),
+        Ok(())
+    );
+    assert!(
+        store
+            .snapshot()
+            .0
+            .iter()
+            .any(|(name, _)| name == "proc.1/fds" && store.snapshot().0.iter().any(|(other, _)| other == "proc.2/fds"))
+    );
+}
+
+#[test]
+fn a_socket_endpoint_no_member_reciprocates_leaves_no_generation() {
+    let store = Arc::new(TransactionStore::default());
+    store.seed_committed("MANIFEST", b"prior");
+    assert_eq!(
+        capture_with_socket_inventories(
+            &store,
+            42,
+            &[(
+                "proc.1",
+                socketpair_record(10, 0x003c_a832_0000_0002, 0x003c_ac81_0000_0001)
+            )],
+        ),
+        Err(CaptureFailure::Failed)
+    );
+    assert_eq!(store.snapshot().0, [("MANIFEST".into(), b"prior".to_vec())]);
+}
+
+#[test]
+fn one_socket_object_owned_by_two_members_leaves_no_generation() {
+    let store = Arc::new(TransactionStore::default());
+    store.seed_committed("MANIFEST", b"prior");
+    let mut first = socketpair_record(10, 0x11, 0x22);
+    first.extend(socketpair_record(11, 0x22, 0x11));
+    assert_eq!(
+        capture_with_socket_inventories(
+            &store,
+            43,
+            &[("proc.1", first), ("proc.2", socketpair_record(4, 0x11, 0x22))],
+        ),
+        Err(CaptureFailure::Failed)
+    );
+    assert_eq!(store.snapshot().0, [("MANIFEST".into(), b"prior".to_vec())]);
+}

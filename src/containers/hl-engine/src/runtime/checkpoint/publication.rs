@@ -77,6 +77,11 @@ impl Server {
                 .state
                 .lock()
                 .map_err(|_| crate::composition::CompositionError::RuntimeConstruction)?;
+            // Retained here rather than read back later: `CheckpointSink` has no
+            // read method, and `SOURCE_READ` resolves the previous generation.
+            // This is the only point at which the broker holds an inventory's
+            // bytes.
+            state.topology.observe(&object.name, &object.bytes);
             state.digest.insert(
                 object.name.clone(),
                 (
@@ -140,6 +145,25 @@ impl Server {
             }
         };
 
+        if let Err(violation) = self.joined_socket_topology() {
+            // Named, and named before a generation exists: the alternative is an
+            // image that restores a connected pair whose far end was never
+            // frozen, which reads as healthy and is not.
+            hl_log::hl_error!(
+                hl_log::tag::CHECKPOINT,
+                "checkpoint capture {id}: socket topology is not reciprocal -- {violation}"
+            );
+            let mut capture = self.capture_lock()?;
+            capture.phase = CapturePhase::Finished {
+                id,
+                result: Err(CaptureFailure::Failed),
+            };
+            self.capture_changed.notify_all();
+            drop(capture);
+            self.interrupt_channels();
+            return Err(CaptureFailure::Failed);
+        }
+
         let transaction = self.transaction_token()?;
         let result = match self.sink.commit_until(transaction, manifest, deadline) {
             Ok(()) => Ok(()),
@@ -170,6 +194,20 @@ impl Server {
         }
         self.capture_changed.notify_all();
         result
+    }
+
+    /// Discharges the reciprocal-topology obligation over every descriptor
+    /// inventory this capture published. See `reciprocity.rs` for what it does
+    /// and does not prove.
+    fn joined_socket_topology(&self) -> Result<usize, super::reciprocity::Violation> {
+        // Read through a poisoned lock deliberately: the join is read-only, and
+        // skipping the obligation because another thread panicked would be the
+        // one failure mode this proof exists to remove.
+        let state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        state.topology.join()
     }
 
     pub(super) fn source_get(&self, name: &str) -> Result<Vec<u8>, ()> {
