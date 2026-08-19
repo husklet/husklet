@@ -45,7 +45,11 @@ const DEFINITIONS: &[Definition] = &[
         "emit checkpoint phase timing records for performance gates",
         Flag
     ),
-    internal!("HL_DIAGNOSTIC_PORT", "private engine diagnostic writer descriptor", Integer),
+    internal!(
+        "HL_DIAGNOSTIC_PORT",
+        "private engine diagnostic writer descriptor",
+        Integer
+    ),
     internal!(
         "HL_CHECKPOINT_PHASE_CLOCK_FAIL",
         "inject an unavailable checkpoint phase clock",

@@ -72,7 +72,11 @@ impl RuntimeFactory for ProductionFactory {
                     .get_bytes("HL_CHECKPOINT_PHASE_LEDGER")
                     .and_then(|_| request.plan.options.get("HL_DIAGNOSTIC_PORT"))
                     .and_then(|value| value.parse().ok()),
-                request.plan.options.get_bytes("HL_CHECKPOINT_PHASE_CLOCK_FAIL").is_some(),
+                request
+                    .plan
+                    .options
+                    .get_bytes("HL_CHECKPOINT_PHASE_CLOCK_FAIL")
+                    .is_some(),
             )?),
             (None, None) => None,
             _ => return Err(CompositionError::RuntimeConstruction),
@@ -340,11 +344,10 @@ impl CheckpointControl {
         phase_ledger: Option<i32>,
         phase_clock_failure: bool,
     ) -> Result<Self, CompositionError> {
-        let (broker, transport) =
-            hl_native::CheckpointTransport::create().map_err(|error| {
-                hl_log::hl_error!(hl_log::tag::EXEC, "checkpoint transport creation failed: error={error}");
-                CompositionError::RuntimeConstruction
-            })?;
+        let (broker, transport) = hl_native::CheckpointTransport::create().map_err(|error| {
+            hl_log::hl_error!(hl_log::tag::EXEC, "checkpoint transport creation failed: error={error}");
+            CompositionError::RuntimeConstruction
+        })?;
         let server = Arc::new(Server::new(sink, source));
         let acceptor = Server::start(&server, broker);
         Ok(Self {

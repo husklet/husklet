@@ -88,7 +88,10 @@ fn x86_emulation_has_no_unreachable_exit_profiler() {
     for relative in ["avx.c", "avx.h", "avx_internal.h", "sse.c"] {
         let source = fs::read_to_string(native.join(relative)).expect("read x86 emulation source");
         for legacy in ["g_xs_on", "g_xs_rip", "xs_note", "hl_x86_avx_dump", "exitstat"] {
-            assert!(!source.contains(legacy), "{relative} retains unreachable profiler {legacy}");
+            assert!(
+                !source.contains(legacy),
+                "{relative} retains unreachable profiler {legacy}"
+            );
         }
     }
 }

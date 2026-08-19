@@ -1,4 +1,4 @@
-use super::{classify, combine, diagnostic, execute_phases, verify, Capture, CaseResult, PhaseTiming};
+use super::{Capture, CaseResult, PhaseTiming, classify, combine, diagnostic, execute_phases, verify};
 use crate::scenario::definition::ForkDiagnostics;
 use crate::{
     scenario::definition::{Class, Sample, Step},
@@ -150,13 +150,15 @@ fn fork_diagnostics_accept_zero_or_structured_records_and_reject_counterfeits() 
     );
     assert!(verify(&case, ExitStatus::Code(0), b"prefix\nOK\n", observed.as_bytes()).is_err());
     assert!(verify(&case, ExitStatus::Code(0), b"OK\nsuffix\n", observed.as_bytes()).is_err());
-    assert!(verify(
-        &case,
-        ExitStatus::Code(0),
-        b"OK\n",
-        format!("{NATIVE}{}", VALID.repeat(3)).as_bytes()
-    )
-    .is_err());
+    assert!(
+        verify(
+            &case,
+            ExitStatus::Code(0),
+            b"OK\n",
+            format!("{NATIVE}{}", VALID.repeat(3)).as_bytes()
+        )
+        .is_err()
+    );
 
     let mutations = [
         VALID.replace("stage=host-fork", "stage=imaginary"),

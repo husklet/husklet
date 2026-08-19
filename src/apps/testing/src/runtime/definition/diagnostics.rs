@@ -214,11 +214,7 @@ impl RecordAssertion {
             .lines()
             .filter_map(|line| {
                 let fields = line.trim_start().strip_prefix(&self.record)?;
-                fields
-                    .chars()
-                    .next()
-                    .is_some_and(char::is_whitespace)
-                    .then_some(fields)
+                fields.chars().next().is_some_and(char::is_whitespace).then_some(fields)
             })
             .collect::<Vec<_>>();
         if records.len() != self.count {

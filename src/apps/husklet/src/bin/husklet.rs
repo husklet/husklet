@@ -22,8 +22,8 @@ use sha2::Digest as _;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
-use vte4::TerminalExtManual;
 use vte4::prelude::*;
+use vte4::TerminalExtManual;
 
 use hl::config::{TerminalPreferences, VpnConfig, WorkspaceConfig, WorkspaceStore};
 use hl_ws::{Arch, Mount};
@@ -37,13 +37,13 @@ pub mod screens;
 
 use components::dialog::RemoveWorkspace;
 use components::layout::Field;
-use components::theme::{ACCENT, css};
+use components::theme::{css, ACCENT};
 use components::workspace::Form;
 use gtk_adapter::{ColorPicker, FontPicker};
 use host::process::{ProcessGroup, Processes};
 use host::pty::PtyProcess;
 use host::{
-    command::{Hl, application_path},
+    command::{application_path, Hl},
     home::Home,
 };
 use screens::workspace::overview::Overview;

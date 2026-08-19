@@ -307,7 +307,7 @@ mod ffi {
 
 #[cfg(test)]
 mod tests {
-    use super::{Peer, ffi, process_exists_for_test};
+    use super::{ffi, process_exists_for_test, Peer};
     use std::io;
 
     #[test]
@@ -372,7 +372,7 @@ mod tests {
 
 #[cfg(test)]
 mod wait_cleanup_test {
-    use super::{CommandSession as _, Peer, ffi};
+    use super::{ffi, CommandSession as _, Peer};
     use std::io::{BufRead as _, Write as _};
 
     const HELPER: &str = "runtime::process::wait_cleanup_test::socket_owner_helper";

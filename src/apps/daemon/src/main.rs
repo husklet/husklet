@@ -7,9 +7,9 @@ use clap::{CommandFactory, Parser};
 use fs2::FileExt as _;
 use hl_container::{Config, Containers};
 use hl_daemon::{Daemon, ProcessSample, ProcessSampler, Release};
-use hl_images::remote::{Auth, Registry};
 use hl_images::Images;
 use hl_images::Platform;
+use hl_images::remote::{Auth, Registry};
 
 mod host;
 
@@ -276,8 +276,8 @@ impl Arguments {
 
 #[cfg(test)]
 mod tests {
-    use super::{cpu_seconds, default_platform, Arguments, Logging};
-    use clap::{error::ErrorKind, Parser};
+    use super::{Arguments, Logging, cpu_seconds, default_platform};
+    use clap::{Parser, error::ErrorKind};
     use hl_images::Platform;
     use std::path::PathBuf;
 

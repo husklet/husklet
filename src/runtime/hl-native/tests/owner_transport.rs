@@ -94,5 +94,9 @@ int main(void) {
         String::from_utf8_lossy(&compile.stderr)
     );
     let run = Command::new(&executable).output().expect("run owner transport probe");
-    assert!(run.status.success(), "owner transport probe failed with {:?}", run.status.code());
+    assert!(
+        run.status.success(),
+        "owner transport probe failed with {:?}",
+        run.status.code()
+    );
 }
