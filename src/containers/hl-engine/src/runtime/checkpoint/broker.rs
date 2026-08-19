@@ -1,6 +1,7 @@
 use super::{
     CLAIM, COMMIT, CaptureFailure, CapturePhase, GROUP_BEGIN, GROUP_COMMIT, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL,
-    OBJECT_WRITE, OBJECT_WRITE_AT, REGISTER_READY, REQUEST_BYTES, Reply, Request, Server,
+    OBJECT_WRITE, OBJECT_WRITE_AT, REGISTER_READY, RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT,
+    REQUEST_BYTES, Reply, Request, Server,
     participants::{ExecutorId, ProcessIdentity},
 };
 use std::{
@@ -163,6 +164,18 @@ impl Server {
             {
                 return;
             }
+            if request.op == RELEASE_WAIT {
+                // Answered ahead of the membership and scope checks, and without
+                // taking a mutation ticket: the sender is a member that is already
+                // stopped with its whole thread registry held, and a park that
+                // counted as a capture mutation would hold `publish_manifest`
+                // behind the very processes it is waiting to release.
+                let reply = Reply::value(self.release_disposition(request.generation));
+                if reply.write(&mut channel).is_err() {
+                    return;
+                }
+                continue;
+            }
             if request.op == REGISTER_READY {
                 let member = self.register_ready(&mut connection, &request, &encoded_name, &payload);
                 let reply = member.map_or_else(|()| Reply::error(), Reply::value);
@@ -213,6 +226,36 @@ fn publishes_capture_bytes(op: u32) -> bool {
 }
 
 impl Server {
+    /// What a member parked inside its own freeze must do next.
+    ///
+    /// Release is tied to broker-observed capture state, never to a timer in the
+    /// member: a coordinator that dies drops its channels and the parked member
+    /// reads the transport failure as `RESUME`, so no crash can leave the tree
+    /// frozen. `HOLD` is returned only while this member's own capture is still
+    /// running and still inside its deadline.
+    pub(super) fn release_disposition(&self, generation: u32) -> u64 {
+        let Ok(capture) = self.capture_lock() else {
+            return RELEASE_RESUME;
+        };
+        let generation = u64::from(generation);
+        match capture.phase {
+            CapturePhase::Active { id, deadline } if id == generation => {
+                if std::time::Instant::now() < deadline {
+                    RELEASE_HOLD
+                } else {
+                    RELEASE_RESUME
+                }
+            }
+            CapturePhase::Publishing { id } if id == generation => RELEASE_HOLD,
+            CapturePhase::Finished {
+                id,
+                result: Ok(()),
+            } if id == generation => RELEASE_EXIT,
+            CapturePhase::Complete if self.committed.load(Ordering::Acquire) => RELEASE_EXIT,
+            _ => RELEASE_RESUME,
+        }
+    }
+
     /// The generation whose membership is currently sealed by a ledger.
     fn membership_scope(&self) -> Option<u64> {
         let capture = self.capture_lock().ok()?;

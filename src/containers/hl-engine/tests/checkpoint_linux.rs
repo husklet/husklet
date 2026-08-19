@@ -360,9 +360,6 @@ fn daily_dev_plan(executable: &Path, directory: &Path, restore: bool, capture: b
     if phase_probe || exact_probe {
         options.set("HL_CHECKPOINT_PHASE_LEDGER", "1", true).unwrap();
     }
-    if exact_probe {
-        options.set("HL_CKPT_TEST_EXACT_TOPOLOGY", "1", true).unwrap();
-    }
     if std::env::args_os().any(|argument| argument == "checkpoint_phase_ledger_clock_failure_probe_child") {
         options.set("HL_CHECKPOINT_PHASE_CLOCK_FAIL", "1", true).unwrap();
     }

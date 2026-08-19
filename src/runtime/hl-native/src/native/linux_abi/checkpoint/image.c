@@ -876,7 +876,51 @@ static int ckpt_register_ready(struct cpu **live, int count) {
     return status == HL_CKPT_STATUS_OK && reply.value != 0 ? 0 : -1;
 }
 
-static int ckpt_dump_self(struct cpu *c, const char *procdir) {
+// A member that has finished its own group holds its whole-process freeze -- every thread stopped in
+// stw_park_handler, the thread registry lock still held -- until the coordinator says what to do with it.
+// This is what makes the capture SOUND: without it a peer _exit()s as soon as it is done, so by the time
+// another member captures the far end of a shared pipe or socket its owner is already dead, and "both
+// owners were stopped and alive at capture" is unprovable.
+//
+// WHAT THIS LOOP MAY DO is constrained exactly as a fork-critical callback is (AGENTS.md): no allocation,
+// no logging, no lock acquisition, no destructor walk. Every peer thread of this process is stopped inside
+// a signal handler, so any lock this thread takes here can be one a stopped peer already holds. The loop
+// touches a stack `hl_ckpt_reply` and one request/response round trip on this process's private channel,
+// which allocates nothing and takes no lock once the channel is bound.
+//
+// WHY IT CANNOT DEADLOCK: every lock held across the park (g_quiesce_lock, g_stw_reg_lock,
+// g_dispatch_gate, g_ckpt_barrier_active) is a per-process static. The coordinator is a different host
+// process and cannot acquire any of them, and it never enters a parked member or asks it for work -- a
+// shared object is captured by whichever member wins ckpt_sink_claim, and every other holder returns 0
+// immediately. The identical lock set is already held for the whole of ckpt_dump_self_locked today; the
+// park extends the hold and adds no edge.
+//
+// CRASH SAFETY has two independent legs, because a member holding g_stw_reg_lock forever is unrecoverable:
+//   - the broker owns release. A dead or exited coordinator drops the capture, and a dead BROKER breaks
+//     this channel, which reads as RESUME. Release is tied to a descriptor, not to anyone's liveness poll.
+//   - a deadline. A broker that is alive but wedged cannot hold the tree: CKPT_PARK_DEADLINE_US bounds
+//     the park at the same ~5s as the whole-tree budget in ckpt_coordinate_and_exit, and expiry RESUMEs.
+#define CKPT_PARK_POLL_US 2000
+#define CKPT_PARK_DEADLINE_US (5 * 1000 * 1000)
+
+static uint64_t ckpt_park_release_state(void) {
+    hl_ckpt_reply reply;
+    if (ckpt_stream_call(HL_CKPT_OP_RELEASE_WAIT, NULL, 0, 0, 0, NULL, 0, &reply, NULL, 0) != HL_CKPT_STATUS_OK)
+        return HL_CKPT_RELEASE_RESUME;
+    return reply.value;
+}
+
+static uint64_t ckpt_park_until_released(void) {
+    for (unsigned long long waited = 0; waited < (unsigned long long)CKPT_PARK_DEADLINE_US;
+         waited += CKPT_PARK_POLL_US) {
+        uint64_t state = ckpt_park_release_state();
+        if (state != HL_CKPT_RELEASE_HOLD) return state;
+        usleep(CKPT_PARK_POLL_US);
+    }
+    return HL_CKPT_RELEASE_RESUME;
+}
+
+static int ckpt_dump_self(struct cpu *c, const char *procdir, int park) {
     struct cpu *live[THREAD_REG_MAX];
     atomic_store_explicit(&g_ckpt_barrier_active, 1, memory_order_release);
     uint64_t request = stw_checkpoint_arm();
@@ -932,6 +976,11 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir) {
     g_ckpt_cpu_count = count;
     int result = ckpt_dump_self_locked(c, procdir);
     if (result != 0) ckpt_sink_group_abort(ckpt_sink_current(), procdir);
+    /* Park BEFORE anything of the freeze is unwound, and park whether or not our own dump succeeded: a
+       refused member that ran away would leave the coordinator unable to tell "refused" from "still
+       working", and would break the freeze for every member still capturing a shared object it owns half
+       of. Nothing between here and the release may allocate, log, or take a lock. */
+    if (park) g_ckpt_release_state = ckpt_park_until_released();
     g_ckpt_cpu_images = NULL;
     g_ckpt_cpu_count = 0;
     free(images);
@@ -1182,29 +1231,24 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
 
     // Dump ourselves (the init) last.
     phase = ckpt_phase_begin(&phases);
-    if (ckpt_dump_self(c, "proc.1") != 0) {
+    if (ckpt_dump_self(c, "proc.1", 0) != 0) {
         fprintf(stderr, "[ckpt] init dump FAILED -- checkpoint incomplete\n");
         ckpt_phase_exit(&phases, 70);
     }
     ckpt_phase_finish(&phases, "serialization", phase, 0);
 
     // Publish the MANIFEST last: its presence == a complete, restorable checkpoint.
-    int nproc = 0;
-    // A descendant can observe the shared generation and publish its image even if the host peer snapshot
-    // raced its registration. Do not commit while that independently frozen process is still assembling its
-    // group. A fixed quiescence window also covers the registration gap where neither the peer snapshot nor
-    // the store contains the child yet.
+    // EXACT, not a lower bound. This used to sit behind a fixed two-second quiescence window whose only job
+    // was to hope that a descendant which raced the peer snapshot had finished assembling its group by the
+    // time we counted; the count was then compared with `<` because the window could not actually prove
+    // anything. Both are gone. Membership is sealed on the broker side by REGISTER_READY, and no member
+    // leaves its freeze until the manifest commits, so the set cannot grow or shrink between the rendezvous
+    // and the count. A mismatch in EITHER direction is now a real defect and refuses the manifest.
     phase = ckpt_phase_begin(&phases);
-    int exact_topology_test = hl_option_get("HL_CKPT_TEST_EXACT_TOPOLOGY") != NULL;
-    int settlement_iterations = exact_topology_test ? 1 : 200;
-    for (int settle = 0; settle < settlement_iterations; settle++) {
-        int complete = ckpt_sink_group_count(sink, "proc.");
-        if (complete >= 0) nproc = complete;
-        if (!exact_topology_test) usleep(10000);
-    }
-    ckpt_phase_finish(&phases, "settlement", phase, exact_topology_test ? 0 : UINT64_C(200) * UINT64_C(10000));
-    if (nproc < nfoll + 1) {
-        fprintf(stderr, "[ckpt] process-count mismatch: expected at least %d, captured %d; refusing manifest\n",
+    int nproc = ckpt_sink_group_count(sink, "proc.");
+    ckpt_phase_finish(&phases, "settlement", phase, 0);
+    if (nproc != nfoll + 1) {
+        fprintf(stderr, "[ckpt] process-count mismatch: expected exactly %d, captured %d; refusing manifest\n",
                 nfoll + 1, nproc);
         ckpt_phase_exit(&phases, 70);
     }
