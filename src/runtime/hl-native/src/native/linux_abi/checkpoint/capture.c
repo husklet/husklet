@@ -623,6 +623,22 @@ static uint64_t ckpt_hash_combine(uint64_t image, const char *name, uint64_t obj
     return ckpt_hash_bytes(image, &object, sizeof object);
 }
 
+// A pipe end is drainable only if it can be read. The bytes buffered in a pipe are reachable through a read
+// end and nowhere else, so a write-only holder must never take the image-wide claim: it would win the
+// election it cannot satisfy, publish an empty object, and leave the buffered bytes in the kernel to be
+// lost at restore. The reverted fail-closed change (935dae440) dropped this test at both call sites, which
+// was safe only because the function behind it refused every pipe unconditionally; with a real drain behind
+// it the test is load-bearing, so it is deliberately NOT re-landed.
+//
+// The test is "not write-only" rather than "read-only". A pipe end opened O_RDWR -- a FIFO opened
+// read-write, or a descriptor the guest reopened through /proc/self/fd -- is readable and must drain. The
+// two capture paths disagreed on exactly this: image.c tested `!= O_WRONLY` and the queued-rights path in
+// ckpt_capture_right_resource tested `== O_RDONLY`, so an O_RDWR end reached through SCM_RIGHTS published
+// no object at all and its pipe came back EMPTY, silently, on a checkpoint that reported success.
+static int ckpt_pipe_end_drains(int flags) {
+    return (flags & O_ACCMODE) != O_WRONLY;
+}
+
 // Capture the bytes in flight in a shared anonymous pipe.
 //
 // The only way to observe a pipe's buffered bytes is to read them, which removes them. That is safe here
@@ -633,12 +649,32 @@ static uint64_t ckpt_hash_combine(uint64_t image, const char *name, uint64_t obj
 // must fail the whole checkpoint rather than publish a short object -- which is why every error path below
 // aborts the stream and returns -1 instead of finishing what it has.
 //
+// WHAT MAKES THE ROUND TRIP CLOSED, AND WHAT DOES NOT.  "Closed" is a claim about every process that can
+// touch this pipe, not just this one, and it is only true under the freeze that ckpt_dump_self establishes:
+// a member holds g_ckpt_barrier_active, its whole thread stop-the-world and g_stw_reg_lock from before its
+// dump until the coordinator releases it (image.c, HL_CKPT_OP_RELEASE_WAIT), so no released member can run
+// guest code -- and therefore cannot write into this pipe -- for the rest of the capture. Before that
+// change a member _exit()ed as soon as its own dump finished and its siblings ran on, so a sibling could
+// write into the pipe after the drain and those bytes were lost from an image that reported success. That
+// is the defect 935dae440 diagnosed correctly.
+//
+// The residual obligation, stated rather than assumed: the freeze closes the window AFTER a member reaches
+// its safepoint, not before. Members reach ckpt_dump_self independently, so a member that has not yet
+// converged its stop-the-world can still write into a pipe another member has already drained. Closing that
+// needs the drain held behind a broker-side "every sealed member has passed REGISTER_READY" barrier -- F4 in
+// the recovery plan, broker work, and not expressible from C on this tree. Every byte written in that window
+// is lost, exactly as it was before; what the park removes is the far larger window that used to run from a
+// member's own dump to the end of the whole tree's capture.
+//
 // Two properties the drain must not damage in the live process, since a checkpoint is not required to be
 // the process's last act:
 //   - O_NONBLOCK lives on the open file description, so it is shared with every process that inherited this
 //     pipe end through fork. Setting it for the drain and leaving it set would turn a blocking guest read()
 //     into a spurious EAGAIN afterwards. The original file status flags are restored on every exit path.
 //   - the identity is claimed image-wide, so exactly one participant drains a pipe several processes hold.
+//     Every OTHER holder returns 0 immediately and publishes its own record; the records agree by
+//     construction, because everything in them is derived from the identity and from the shared open file
+//     description, not from who won.
 //
 // `reason` receives a short static description of the first failing step; the caller reports it, because a
 // bare "cannot capture pipe" hides whether the sink, the descriptor, or the read failed.
@@ -653,7 +689,17 @@ static int ckpt_capture_pipe_reason(int fd, uint64_t identity, const char **reas
     char name[128];
     snprintf(name, sizeof name, "pipe.%016llx", (unsigned long long)identity);
     int claimed = ckpt_sink_claim(sink, name);
-    if (claimed > 0) return 0; // another process already captured this shared object
+    if (claimed > 0) {
+        // A co-holder of THIS pipe won the election and is draining, or has already drained, the shared
+        // kernel buffer. The bytes leave the pipe for every holder at once, so this process's guest view is
+        // damaged exactly as much as the winner's and falls under the SAME abort contract. Marking only the
+        // winner let a loser resume out of its park onto a silently emptied pipe whenever the capture was
+        // abandoned after the drain -- and an inherited pipe is held by many processes at once, which is the
+        // postmaster/backend shape this whole path exists for: one identity, six holders, one winner and
+        // five processes that would have gone back to running.
+        g_ckpt_capture_destructive = 1;
+        return 0;
+    }
     if (claimed < 0) {
         *reason = "sink refused the image-wide claim";
         *cause = errno;
@@ -1372,7 +1418,7 @@ static int ckpt_capture_right_resource(int fd, struct ckpt_fd *record) {
         if (capacity <= 0) return -1;
         snprintf(record->path, sizeof record->path, "%d", capacity);
         if (!record->ofd_id) return -1;
-        if ((flags & O_ACCMODE) == O_RDONLY && ckpt_capture_pipe(fd, g_pipe_identity[fd]) != 0) return -1;
+        if (ckpt_pipe_end_drains(flags) && ckpt_capture_pipe(fd, g_pipe_identity[fd]) != 0) return -1;
         return 0;
     }
     if (fd < 0 || fstat(fd, &status) != 0 ||
@@ -1554,3 +1600,284 @@ static int ckpt_path_is_ctty(const char *path) {
 // Snapshot every path-backed / tty guest fd into `recs`; REFUSE (return -1) on any GUEST-owned pathless
 // kernel-object fd (P3). MUST run BEFORE any checkpoint output file is opened, so the writer's own fds are
 // never mistaken for guest fds.
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+// ------------------------------------------------------- pipe capture under the freeze: behavioral fixture
+//
+// Drives the REAL ckpt_capture_pipe_reason against a REAL kernel pipe through a sink that implements only
+// the two operations the pipe path uses -- the image-wide claim and a byte stream -- so the election, the
+// drain and the abort contract are exercised rather than modelled. The claim table and the drained bytes
+// live in one MAP_SHARED page, which is what lets scenario 0 fork and still arbitrate a single election
+// across processes that inherited the same pipe end, the postmaster/backend shape.
+
+// The refill half of the round trip is defined later in the unity translation unit (resource_restore.c),
+// where restore lives. The fixture drives capture and refill against each other, so it needs both.
+static int ckpt_refill_restore_pipe(int writer, uint64_t identity);
+
+#define CKPT_PIPE_TEST_PAYLOAD 24000u
+
+struct ckpt_pipe_test_shared {
+    _Atomic int claim;
+    _Atomic int winners;
+    _Atomic int losers;
+    _Atomic unsigned length;
+    unsigned char bytes[CKPT_PIPE_TEST_PAYLOAD];
+};
+
+static struct ckpt_pipe_test_shared *g_ckpt_pipe_test_shared;
+
+static int ckpt_pipe_test_begin(struct ckpt_sink *sink, const char *group, const char *name, uint32_t flags,
+                                struct ckpt_sink_stream **out) {
+    (void)group;
+    (void)name;
+    (void)flags;
+    // No allocation: scenario 0 runs this inside a fork of a threaded test process, where malloc's lock
+    // may have been held by another thread at the instant of the fork.
+    static struct ckpt_sink_stream stream;
+    memset(&stream, 0, sizeof stream);
+    stream.sink = sink;
+    *out = &stream;
+    return 0;
+}
+
+static int ckpt_pipe_test_write(struct ckpt_sink_stream *stream, const void *data, size_t size) {
+    (void)stream;
+    struct ckpt_pipe_test_shared *shared = g_ckpt_pipe_test_shared;
+    unsigned at = atomic_load(&shared->length);
+    if (size > sizeof shared->bytes - at) return -1;
+    memcpy(shared->bytes + at, data, size);
+    atomic_store(&shared->length, at + (unsigned)size);
+    return 0;
+}
+
+static int ckpt_pipe_test_finish(struct ckpt_sink_stream *stream) {
+    (void)stream;
+    atomic_fetch_add(&g_ckpt_pipe_test_shared->winners, 1);
+    return 0;
+}
+
+static void ckpt_pipe_test_abort(struct ckpt_sink_stream *stream) { (void)stream; }
+
+static int ckpt_pipe_test_claim(struct ckpt_sink *sink, const char *name) {
+    (void)sink;
+    (void)name;
+    int free_slot = 0;
+    if (atomic_compare_exchange_strong(&g_ckpt_pipe_test_shared->claim, &free_slot, 1)) return 0;
+    atomic_fetch_add(&g_ckpt_pipe_test_shared->losers, 1);
+    return 1;
+}
+
+static void ckpt_pipe_test_unclaim(struct ckpt_sink *sink, const char *name) {
+    (void)sink;
+    (void)name;
+    atomic_store(&g_ckpt_pipe_test_shared->claim, 0);
+}
+
+static const ckpt_sink_vtable g_ckpt_pipe_test_ops = {
+    .begin = ckpt_pipe_test_begin,
+    .write = ckpt_pipe_test_write,
+    .finish = ckpt_pipe_test_finish,
+    .abort = ckpt_pipe_test_abort,
+    .claim = ckpt_pipe_test_claim,
+    .unclaim = ckpt_pipe_test_unclaim,
+};
+
+// The same shared page read back as an image source, so the restore refill consumes exactly the object the
+// capture drain published rather than a hand-built copy of it.
+static int64_t ckpt_pipe_test_source_size(struct ckpt_source *source, const char *name) {
+    (void)source;
+    (void)name;
+    return (int64_t)atomic_load(&g_ckpt_pipe_test_shared->length);
+}
+
+static int64_t ckpt_pipe_test_source_read(struct ckpt_source *source, const char *name, uint64_t offset, void *out,
+                                          size_t size) {
+    (void)source;
+    (void)name;
+    unsigned length = atomic_load(&g_ckpt_pipe_test_shared->length);
+    if (offset > length || size > length - offset) return -1;
+    memcpy(out, g_ckpt_pipe_test_shared->bytes + offset, size);
+    return (int64_t)size;
+}
+
+static const ckpt_source_vtable g_ckpt_pipe_test_source_ops = {
+    .size = ckpt_pipe_test_source_size,
+    .read = ckpt_pipe_test_source_read,
+};
+
+static int ckpt_pipe_test_open_shared(void) {
+    void *page = mmap(NULL, sizeof(struct ckpt_pipe_test_shared), PROT_READ | PROT_WRITE,
+                      MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (page == MAP_FAILED) return -1;
+    memset(page, 0, sizeof(struct ckpt_pipe_test_shared));
+    g_ckpt_pipe_test_shared = page;
+    return 0;
+}
+
+static void ckpt_pipe_test_close_shared(void) {
+    if (g_ckpt_pipe_test_shared) munmap(g_ckpt_pipe_test_shared, sizeof(struct ckpt_pipe_test_shared));
+    g_ckpt_pipe_test_shared = NULL;
+}
+
+// The bytes must come back in order, so make every byte a function of its position.
+static unsigned char ckpt_pipe_test_byte(unsigned index) { return (unsigned char)(index * 7u + 3u); }
+
+static int ckpt_pipe_test_fill(int writer) {
+    for (unsigned at = 0; at < CKPT_PIPE_TEST_PAYLOAD;) {
+        unsigned char block[4096];
+        unsigned size = CKPT_PIPE_TEST_PAYLOAD - at < sizeof block ? CKPT_PIPE_TEST_PAYLOAD - at : sizeof block;
+        for (unsigned index = 0; index < size; ++index) block[index] = ckpt_pipe_test_byte(at + index);
+        ssize_t written = write(writer, block, size);
+        if (written <= 0) return -1;
+        at += (unsigned)written;
+    }
+    return 0;
+}
+
+static int ckpt_pipe_test_buffered(int fd) {
+    int pending = -1;
+    return ioctl(fd, FIONREAD, &pending) == 0 ? pending : -1;
+}
+
+HL_API int HL_TARGET_LOCAL(checkpoint_pipe_capture_test)(uint32_t scenario) {
+    struct ckpt_sink *saved_sink = ckpt_sink_current();
+    int saved_destructive = g_ckpt_capture_destructive;
+    int verdict = 99;
+    int pair[2] = {-1, -1};
+
+    if (scenario == 0) {
+        // An inherited pipe held by three processes: exactly one drains, and the bytes it publishes are the
+        // bytes that were written, in order.
+        if (ckpt_pipe_test_open_shared() != 0) return 10;
+        if (pipe(pair) != 0) {
+            ckpt_pipe_test_close_shared();
+            return 11;
+        }
+        verdict = 0;
+        if (ckpt_pipe_test_fill(pair[1]) != 0) verdict = 12;
+        ckpt_sink_install(&g_ckpt_pipe_test_ops);
+        pid_t children[2] = {-1, -1};
+        for (int index = 0; verdict == 0 && index < 2; ++index) {
+            children[index] = fork();
+            if (children[index] == 0) {
+                g_ckpt_capture_destructive = 0;
+                int rc = ckpt_capture_pipe_reason(pair[0], 0x11, NULL, NULL);
+                _exit(rc == 0 ? (g_ckpt_capture_destructive ? 0 : 1) : 2);
+            }
+            if (children[index] < 0) verdict = 13;
+        }
+        g_ckpt_capture_destructive = 0;
+        if (verdict == 0 && ckpt_capture_pipe_reason(pair[0], 0x11, NULL, NULL) != 0) verdict = 14;
+        if (verdict == 0 && !g_ckpt_capture_destructive) verdict = 15;
+        for (int index = 0; index < 2; ++index) {
+            if (children[index] <= 0) continue;
+            int status = 0;
+            if (waitpid(children[index], &status, 0) != children[index]) verdict = verdict ? verdict : 16;
+            if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) verdict = verdict ? verdict : 17;
+        }
+        struct ckpt_pipe_test_shared *shared = g_ckpt_pipe_test_shared;
+        if (verdict == 0 && atomic_load(&shared->winners) != 1) verdict = 18;
+        if (verdict == 0 && atomic_load(&shared->losers) != 2) verdict = 19;
+        if (verdict == 0 && atomic_load(&shared->length) != CKPT_PIPE_TEST_PAYLOAD) verdict = 20;
+        for (unsigned index = 0; verdict == 0 && index < CKPT_PIPE_TEST_PAYLOAD; ++index)
+            if (shared->bytes[index] != ckpt_pipe_test_byte(index)) verdict = 21;
+        if (verdict == 0 && ckpt_pipe_test_buffered(pair[0]) != 0) verdict = 22;
+    } else if (scenario == 1) {
+        // The abort contract: the drain empties the pipe for EVERY holder, so every holder -- the winner and
+        // each co-holder that returned 0 without reading a byte -- must be marked destructive. A holder left
+        // unmarked resumes out of its park onto a pipe whose bytes are gone.
+        if (ckpt_pipe_test_open_shared() != 0) return 30;
+        if (pipe(pair) != 0) {
+            ckpt_pipe_test_close_shared();
+            return 31;
+        }
+        verdict = 0;
+        if (ckpt_pipe_test_fill(pair[1]) != 0) verdict = 32;
+        ckpt_sink_install(&g_ckpt_pipe_test_ops);
+        // Three descriptors on ONE open file description, exactly what fork hands each holder.
+        int holders[3] = {pair[0], -1, -1};
+        for (int index = 1; verdict == 0 && index < 3; ++index) {
+            holders[index] = dup(pair[0]);
+            if (holders[index] < 0) verdict = 33;
+        }
+        for (int index = 0; verdict == 0 && index < 3; ++index) {
+            g_ckpt_capture_destructive = 0;
+            if (ckpt_capture_pipe_reason(holders[index], 0x11, NULL, NULL) != 0) verdict = 34;
+            if (verdict == 0 && !g_ckpt_capture_destructive) verdict = 35 + index;
+        }
+        if (verdict == 0 && ckpt_pipe_test_buffered(pair[0]) != 0) verdict = 38;
+        if (verdict == 0 && atomic_load(&g_ckpt_pipe_test_shared->winners) != 1) verdict = 39;
+        for (int index = 1; index < 3; ++index)
+            if (holders[index] >= 0) close(holders[index]);
+    } else if (scenario == 2) {
+        // A write-only end is not drainable and must never take the claim: winning an election it cannot
+        // satisfy would publish an empty object and strand the buffered bytes in the kernel.
+        if (ckpt_pipe_test_open_shared() != 0) return 50;
+        if (pipe(pair) != 0) {
+            ckpt_pipe_test_close_shared();
+            return 51;
+        }
+        verdict = 0;
+        if (ckpt_pipe_test_fill(pair[1]) != 0) verdict = 52;
+        int reader_flags = fcntl(pair[0], F_GETFL);
+        int writer_flags = fcntl(pair[1], F_GETFL);
+        if (verdict == 0 && (reader_flags < 0 || writer_flags < 0)) verdict = 53;
+        if (verdict == 0 && !ckpt_pipe_end_drains(reader_flags)) verdict = 54;
+        if (verdict == 0 && ckpt_pipe_end_drains(writer_flags)) verdict = 55;
+        if (verdict == 0 && ckpt_pipe_test_buffered(pair[0]) != (int)CKPT_PIPE_TEST_PAYLOAD) verdict = 56;
+        if (verdict == 0 && atomic_load(&g_ckpt_pipe_test_shared->claim) != 0) verdict = 57;
+    } else if (scenario == 3) {
+        // Both capture paths ask the same question. The queued-rights path used to ask "== O_RDONLY", which
+        // dropped an O_RDWR end on the floor: no object published, and the pipe restored empty.
+        verdict = 0;
+        if (!ckpt_pipe_end_drains(O_RDONLY)) verdict = 60;
+        if (verdict == 0 && !ckpt_pipe_end_drains(O_RDWR)) verdict = 61;
+        if (verdict == 0 && ckpt_pipe_end_drains(O_WRONLY)) verdict = 62;
+        return verdict;
+    } else if (scenario == 4) {
+        // The whole closed round trip, capture half against restore half. Drain a pipe holding a known
+        // payload, then hand the published object to the production refill and read the bytes back out of a
+        // freshly created pipe: same bytes, same order, nothing left over.
+        if (ckpt_pipe_test_open_shared() != 0) return 70;
+        if (pipe(pair) != 0) {
+            ckpt_pipe_test_close_shared();
+            return 71;
+        }
+        verdict = 0;
+        if (ckpt_pipe_test_fill(pair[1]) != 0) verdict = 72;
+        ckpt_sink_install(&g_ckpt_pipe_test_ops);
+        g_ckpt_capture_destructive = 0;
+        if (verdict == 0 && ckpt_capture_pipe_reason(pair[0], 0x11, NULL, NULL) != 0) verdict = 73;
+        if (verdict == 0 && ckpt_pipe_test_buffered(pair[0]) != 0) verdict = 74;
+        int restored[2] = {-1, -1};
+        struct ckpt_source *saved_source = ckpt_source_current();
+        ckpt_source_install(&g_ckpt_pipe_test_source_ops);
+        if (verdict == 0 && pipe(restored) != 0) verdict = 75;
+        if (verdict == 0 && ckpt_refill_restore_pipe(restored[1], 0x11) != 0) verdict = 76;
+        if (verdict == 0 && ckpt_pipe_test_buffered(restored[0]) != (int)CKPT_PIPE_TEST_PAYLOAD) verdict = 77;
+        for (unsigned at = 0; verdict == 0 && at < CKPT_PIPE_TEST_PAYLOAD;) {
+            unsigned char block[4096];
+            ssize_t count = read(restored[0], block, sizeof block);
+            if (count <= 0) {
+                verdict = 78;
+                break;
+            }
+            for (ssize_t index = 0; index < count; ++index)
+                if (block[index] != ckpt_pipe_test_byte(at + (unsigned)index)) verdict = 79;
+            at += (unsigned)count;
+        }
+        ckpt_source_install(saved_source ? saved_source->ops : NULL);
+        if (restored[0] >= 0) close(restored[0]);
+        if (restored[1] >= 0) close(restored[1]);
+    } else {
+        return 99;
+    }
+
+    if (pair[0] >= 0) close(pair[0]);
+    if (pair[1] >= 0) close(pair[1]);
+    ckpt_sink_install(saved_sink ? saved_sink->ops : NULL);
+    g_ckpt_capture_destructive = saved_destructive;
+    ckpt_pipe_test_close_shared();
+    return verdict;
+}
+#endif

@@ -42,6 +42,13 @@ static struct ckpt_source *ckpt_source_current(void) {
     return g_ckpt_source.ops ? &g_ckpt_source : NULL;
 }
 
+// Point the process-wide image source at an implementation, or at nothing. As with the sink, the global is
+// private to this header and every install goes through here.
+static struct ckpt_source *ckpt_source_install(const ckpt_source_vtable *ops) {
+    g_ckpt_source.ops = ops;
+    return ckpt_source_current();
+}
+
 static int64_t ckpt_source_stream_size(struct ckpt_source *source, const char *name) {
     hl_ckpt_reply reply;
     (void)source;
@@ -101,8 +108,7 @@ static const ckpt_source_vtable g_ckpt_source_stream_ops = {
 // Fails (NULL) when no broker descriptor was inherited from activation: there is nowhere to read from.
 static struct ckpt_source *ckpt_source_bind(void) {
     if (hl_ckpt_channel_broker() < 0) return NULL;
-    g_ckpt_source.ops = &g_ckpt_source_stream_ops;
-    return &g_ckpt_source;
+    return ckpt_source_install(&g_ckpt_source_stream_ops);
 }
 
 static int64_t ckpt_source_object_size(const char *name) {

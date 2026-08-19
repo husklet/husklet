@@ -153,6 +153,17 @@ pub fn checkpoint_restore_claim_test(isa: u32, scenario: u32) -> Result<(), i32>
     bindings::checkpoint_restore_claim_test(isa, scenario)
 }
 
+/// Exercise pipe capture: the image-wide election among the holders of one inherited pipe, the byte
+/// fidelity of the drain, and the abort contract every holder falls under once it has run.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn checkpoint_pipe_capture_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    // The hook installs a process-wide checkpoint sink and forks.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    bindings::checkpoint_pipe_capture_test(isa, scenario)
+}
+
 /// Exercise the checkpoint admission gate for SysV IPC and file-lock state.
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
