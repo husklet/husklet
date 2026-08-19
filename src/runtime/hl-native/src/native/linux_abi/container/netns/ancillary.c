@@ -3,6 +3,7 @@
 #include "../ownership/transport.h"
 
 #define SEQ_REF_N 4096
+#define SOCK_STATE_N 4096
 
 struct seq_ref {
     volatile uint32_t used;
@@ -12,6 +13,18 @@ struct seq_ref {
 static struct seq_ref *g_seq_refs;
 static uint16_t g_seq_ref[HL_NFD];
 static uint8_t g_seq_end[HL_NFD];
+
+/* Mutable open-socket-description state must survive a trusted guest fork. The
+ * descriptor-to-slot map is process-local and inherited by fork; each slot is
+ * allocated from shared memory so a shutdown observed by one descendant is
+ * visible to every process that inherited or duplicated that description. */
+struct sock_state {
+    volatile uint32_t used;
+    volatile uint32_t refs;
+    volatile uint32_t shutdown;
+};
+static struct sock_state *g_sock_states;
+static uint16_t g_sock_state_ref[HL_NFD];
 
 // ---- SCM ancillary data: Linux<->macOS cmsg framing translation (SOL_SOCKET/SCM_RIGHTS fd passing).
 // hl uses host fds directly as guest fds, so the fd integers in an SCM_RIGHTS payload need no remap --

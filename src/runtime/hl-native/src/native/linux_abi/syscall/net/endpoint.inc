@@ -73,10 +73,10 @@
                 g_icmp_sock[r] = 0;
                 g_icmp_ip[r] = 0;
                 g_sock_object[r] = sock_object_new();
+                sock_internal_shutdown_fresh(r);
                 g_sock_peer_object[r] = 0;
                 g_sock_identity_local_hidden[r] = 0;
                 g_sock_identity_peer_hidden[r] = 0;
-                g_sock_identity_checkpoint_pending[r] = 0;
             }
         }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
@@ -584,10 +584,10 @@
                 g_sock_connecting[r] = 0;
                 if (lfd >= 0 && lfd < HL_NFD) g_sock_fam[r] = g_sock_fam[lfd]; // inherit listener's family
                 g_sock_object[r] = sock_object_new();
+                sock_internal_shutdown_fresh(r);
                 g_sock_peer_object[r] = 0;
                 g_sock_identity_local_hidden[r] = 0;
                 g_sock_identity_peer_hidden[r] = 0;
-                g_sock_identity_checkpoint_pending[r] = 0;
             }
             int internal_peer = 0;
             int ordinary_unix = lfd >= 0 && lfd < HL_NFD && g_sock_fam[lfd] == AF_UNIX;

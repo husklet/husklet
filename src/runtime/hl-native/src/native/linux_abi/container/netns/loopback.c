@@ -183,12 +183,16 @@ static uint8_t g_sock_seqpacket[HL_NFD];
 // recycled only after both endpoint reference counts reach zero.
 static void seq_ref_arena_init(const hl_host_services *host) {
     void *arena = NULL;
-    if (g_seq_refs != NULL && g_udp_refs != NULL) return;
+    if (g_seq_refs != NULL && g_udp_refs != NULL && g_sock_states != NULL) return;
     if (g_seq_refs == NULL && hl_linux_shared_create(host, sizeof(struct seq_ref) * SEQ_REF_N, &arena) == HL_STATUS_OK)
         g_seq_refs = (struct seq_ref *)arena;
     arena = NULL;
     if (g_udp_refs == NULL && hl_linux_shared_create(host, sizeof(struct udp_ref) * UDP_REF_N, &arena) == HL_STATUS_OK)
         g_udp_refs = (struct udp_ref *)arena;
+    arena = NULL;
+    if (g_sock_states == NULL &&
+        hl_linux_shared_create(host, sizeof(struct sock_state) * SOCK_STATE_N, &arena) == HL_STATUS_OK)
+        g_sock_states = (struct sock_state *)arena;
 }
 
 static int udp_ref_create(int fd, const char *path) {
@@ -243,16 +247,91 @@ static void udp_ref_drop(int fd) {
     }
 }
 
+enum {
+    SOCK_SHUTDOWN_READ = 1u,
+    SOCK_SHUTDOWN_WRITE = 2u,
+};
+
+static int sock_state_create(int fd) {
+    if (fd < 0 || fd >= HL_NFD || g_sock_states == NULL) return -1;
+    for (uint32_t i = 0; i < SOCK_STATE_N; i++) {
+        if (!__sync_bool_compare_and_swap(&g_sock_states[i].used, 0, 1)) continue;
+        __atomic_store_n(&g_sock_states[i].shutdown, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&g_sock_states[i].refs, 1, __ATOMIC_RELEASE);
+        g_sock_state_ref[fd] = (uint16_t)(i + 1);
+        return 0;
+    }
+    errno = ENFILE;
+    return -1;
+}
+
+static void sock_state_drop(int fd);
+
+static void sock_state_dup(int dst, int src) {
+    if (g_sock_states == NULL || src < 0 || src >= HL_NFD || dst < 0 || dst >= HL_NFD ||
+        g_sock_state_ref[src] == 0)
+        return;
+    if (dst == src) return;
+    sock_state_drop(dst);
+    uint32_t slot = g_sock_state_ref[src] - 1;
+    __atomic_add_fetch(&g_sock_states[slot].refs, 1, __ATOMIC_ACQ_REL);
+    g_sock_state_ref[dst] = g_sock_state_ref[src];
+}
+
+static void sock_state_drop(int fd) {
+    if (g_sock_states == NULL || fd < 0 || fd >= HL_NFD || g_sock_state_ref[fd] == 0) return;
+    uint32_t slot = g_sock_state_ref[fd] - 1;
+    g_sock_state_ref[fd] = 0;
+    if (__atomic_sub_fetch(&g_sock_states[slot].refs, 1, __ATOMIC_ACQ_REL) == 0) {
+        __atomic_store_n(&g_sock_states[slot].shutdown, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&g_sock_states[slot].used, 0, __ATOMIC_RELEASE);
+    }
+}
+
+static void sock_state_shutdown_observed(int fd, int direction) {
+    if (g_sock_states == NULL || fd < 0 || fd >= HL_NFD || g_sock_state_ref[fd] == 0) return;
+    uint32_t bits = 0;
+    if (direction == SHUT_RD || direction == SHUT_RDWR) bits |= SOCK_SHUTDOWN_READ;
+    if (direction == SHUT_WR || direction == SHUT_RDWR) bits |= SOCK_SHUTDOWN_WRITE;
+    if (bits != 0)
+        __atomic_or_fetch(&g_sock_states[g_sock_state_ref[fd] - 1].shutdown, bits, __ATOMIC_ACQ_REL);
+}
+
+static uint32_t sock_state_shutdown(int fd) {
+    if (g_sock_states == NULL || fd < 0 || fd >= HL_NFD || g_sock_state_ref[fd] == 0) return 0;
+    return __atomic_load_n(&g_sock_states[g_sock_state_ref[fd] - 1].shutdown, __ATOMIC_ACQUIRE);
+}
+
+static void sock_state_fork_prepare(void) {
+    if (g_sock_states == NULL) return;
+    for (int fd = 0; fd < HL_NFD; fd++)
+        if (g_sock_state_ref[fd] != 0)
+            __atomic_add_fetch(&g_sock_states[g_sock_state_ref[fd] - 1].refs, 1, __ATOMIC_ACQ_REL);
+}
+
+static void sock_state_fork_cancel(void) {
+    if (g_sock_states == NULL) return;
+    for (int fd = 0; fd < HL_NFD; fd++) {
+        if (g_sock_state_ref[fd] == 0) continue;
+        uint32_t slot = g_sock_state_ref[fd] - 1;
+        if (__atomic_sub_fetch(&g_sock_states[slot].refs, 1, __ATOMIC_ACQ_REL) == 0) {
+            __atomic_store_n(&g_sock_states[slot].shutdown, 0, __ATOMIC_RELAXED);
+            __atomic_store_n(&g_sock_states[slot].used, 0, __ATOMIC_RELEASE);
+        }
+    }
+}
+
 // exit_group(2) tears the whole process down with a raw _exit() that never runs fd_reset_emul, so any
 // rendezvous inode still owned by an un-closed descriptor (e.g. a fork()ed client child that inherits the
 // server's listening fd and _exit()s without closing it) would keep its refcount pinned above zero and
 // orphan the AF_UNIX inode on the fs. Drop this process's remaining udp/bridge refs at exit so the LAST
 // reference across the whole process tree unlinks the inode -- mirroring the kernel freeing an INET port
 // when its last owning process dies. Per-fd and idempotent: fds already closed carry no ref.
-static void udp_ref_process_exit(void) {
-    if (!g_udp_refs) return;
-    for (int fd = 0; fd < HL_NFD; fd++)
+static void socket_ref_process_exit(void) {
+    for (int fd = 0; fd < HL_NFD; fd++) {
         if (g_udp_ref[fd]) udp_ref_drop(fd);
+        if (g_sock_state_ref[fd]) sock_state_drop(fd);
+    }
 }
 
 static int seq_ref_pair(int first, int second) {
@@ -297,27 +376,29 @@ static void seq_ref_drop(int fd) {
 // Reserve the references the child will inherit before fork. A failed fork rolls them back; a successful
 // fork consumes the reservation, requiring no allocation or lock in the post-fork child.
 static void seq_ref_fork_prepare(void) {
-    if (g_seq_refs == NULL) return;
-    for (int fd = 0; fd < HL_NFD; fd++) {
-        if (!g_seq_ref[fd]) continue;
-        uint32_t slot = g_seq_ref[fd] - 1;
-        __atomic_add_fetch(&g_seq_refs[slot].refs[g_seq_end[fd]], 1, __ATOMIC_ACQ_REL);
-    }
+    if (g_seq_refs != NULL)
+        for (int fd = 0; fd < HL_NFD; fd++) {
+            if (!g_seq_ref[fd]) continue;
+            uint32_t slot = g_seq_ref[fd] - 1;
+            __atomic_add_fetch(&g_seq_refs[slot].refs[g_seq_end[fd]], 1, __ATOMIC_ACQ_REL);
+        }
     if (g_udp_refs)
         for (int fd = 0; fd < HL_NFD; fd++)
             if (g_udp_ref[fd]) __atomic_add_fetch(&g_udp_refs[g_udp_ref[fd] - 1].refs, 1, __ATOMIC_ACQ_REL);
+    sock_state_fork_prepare();
 }
 
 static void seq_ref_fork_cancel(void) {
-    if (!g_seq_refs) return;
-    for (int fd = 0; fd < HL_NFD; fd++) {
-        if (!g_seq_ref[fd]) continue;
-        uint32_t slot = g_seq_ref[fd] - 1;
-        __atomic_sub_fetch(&g_seq_refs[slot].refs[g_seq_end[fd]], 1, __ATOMIC_ACQ_REL);
-    }
+    if (g_seq_refs)
+        for (int fd = 0; fd < HL_NFD; fd++) {
+            if (!g_seq_ref[fd]) continue;
+            uint32_t slot = g_seq_ref[fd] - 1;
+            __atomic_sub_fetch(&g_seq_refs[slot].refs[g_seq_end[fd]], 1, __ATOMIC_ACQ_REL);
+        }
     if (g_udp_refs)
         for (int fd = 0; fd < HL_NFD; fd++)
             if (g_udp_ref[fd]) __atomic_sub_fetch(&g_udp_refs[g_udp_ref[fd] - 1].refs, 1, __ATOMIC_ACQ_REL);
+    sock_state_fork_cancel();
 }
 
 // fd -> (its socketpair/O_DIRECT-pipe PARTNER fd + 1); 0 = no known partner. Recorded for both ends at
@@ -333,6 +414,9 @@ static uint64_t g_sock_peer_object[HL_NFD];
  * detail out of the guest's getsockname/getpeername results. */
 static uint8_t g_sock_identity_local_hidden[HL_NFD];
 static uint8_t g_sock_identity_peer_hidden[HL_NFD];
+/* shutdown(2) changes the open socket description and therefore every dup and fork alias. Linux does not
+ * expose this state through getsockopt, so the shared socket-state arena retains it at the syscall boundary.
+ * Checkpoint capture rejects either direction until the journal can replay half-close ordering safely. */
 /* Ordinary pathname/abstract AF_UNIX connections need a whole-process freeze before their reciprocal
  * topology can be captured. Keep them distinct from guest-created socketpairs and the private AF_UNIX
  * transports behind guest INET sockets; until that freeze is authoritative, capture must fail closed. */
@@ -345,8 +429,16 @@ static uint64_t sock_object_new(void) {
     return ((uint64_t)(uint32_t)getpid() << 32) | sequence;
 }
 
+static void sock_internal_shutdown_fresh(int fd) {
+    if (fd < 0 || fd >= HL_NFD) return;
+    sock_state_drop(fd);
+    g_sock_identity_checkpoint_pending[fd] = (uint8_t)(sock_state_create(fd) != 0);
+}
+
 static void sock_pair_identity_assign(int first, int second) {
     if (first < 0 || first >= HL_NFD || second < 0 || second >= HL_NFD) return;
+    sock_internal_shutdown_fresh(first);
+    sock_internal_shutdown_fresh(second);
     uint64_t first_object = sock_object_new();
     uint64_t second_object = sock_object_new();
     g_sock_object[first] = first_object;
@@ -425,6 +517,17 @@ static void sock_internal_connect_observed(int fd, int error) {
     }
 }
 
+static void sock_internal_shutdown_observed(int fd, int direction) {
+    if (fd < 0 || fd >= HL_NFD || !g_sock_object[fd]) return;
+    sock_state_shutdown_observed(fd, direction);
+}
+
+static int sock_internal_shutdown(int fd, int direction) {
+    if (shutdown(fd, direction) != 0) return -1;
+    sock_internal_shutdown_observed(fd, direction);
+    return 0;
+}
+
 static int sock_internal_checkpoint_admit(int fd) {
     if (fd < 0 || fd >= HL_NFD) {
         errno = EBADF;
@@ -436,6 +539,10 @@ static int sock_internal_checkpoint_admit(int fd) {
     }
     if (g_sock_connecting[fd]) {
         errno = EBUSY;
+        return -1;
+    }
+    if (sock_state_shutdown(fd) != 0) {
+        errno = ENOTSUP;
         return -1;
     }
     return 0;
@@ -511,6 +618,11 @@ static int sock_internal_accept_identify(int fd, int checkpoint_pending) {
 
 #if defined(HL_NATIVE_TEST_HOOKS)
 static void sock_internal_identity_test_initialize(int fd, uint64_t object, uint64_t ofd) {
+    if (g_sock_states == NULL) {
+        void *arena = mmap(NULL, sizeof(struct sock_state) * SOCK_STATE_N, PROT_READ | PROT_WRITE,
+                           MAP_ANON | MAP_SHARED, -1, 0);
+        if (arena != MAP_FAILED) g_sock_states = (struct sock_state *)arena;
+    }
     g_sock_object[fd] = object;
     g_sock_peer_object[fd] = 0;
     g_sock_identity_local_hidden[fd] = 0;
@@ -519,7 +631,25 @@ static void sock_internal_identity_test_initialize(int fd, uint64_t object, uint
     g_sock_connecting[fd] = 0;
     g_sock_conn[fd] = 0;
     g_so_error[fd] = 0;
+    sock_state_drop(fd);
+    if (object == 0) {
+        g_ofd_id[fd] = 0;
+        g_sock_fam[fd] = 0;
+        g_sock_stream[fd] = 0;
+        return;
+    }
+    int source = -1;
+    if (ofd != 0)
+        for (int candidate = 0; candidate < HL_NFD; candidate++)
+            if (candidate != fd && g_ofd_id[candidate] == ofd && g_sock_state_ref[candidate] != 0) {
+                source = candidate;
+                break;
+            }
     g_ofd_id[fd] = ofd;
+    if (source >= 0)
+        sock_state_dup(fd, source);
+    else if (sock_state_create(fd) != 0)
+        g_sock_identity_checkpoint_pending[fd] = 1;
     g_sock_fam[fd] = object ? AF_UNIX : 0;
     g_sock_stream[fd] = object != 0;
 }
@@ -553,14 +683,20 @@ HL_API int HL_TARGET_LOCAL(unix_identity_test)(uint32_t operation, int fd, uint6
         sock_internal_identity_test_initialize(fd, object, 0);
         g_sock_peer_object[fd] = object + 1;
         break;
+    case 12: status = sock_internal_shutdown(fd, SHUT_RD); break;
+    case 13: status = sock_internal_shutdown(fd, SHUT_WR); break;
+    case 14: status = sock_internal_shutdown(fd, SHUT_RDWR); break;
     default: return EINVAL;
     }
     if (status < 0) return errno != 0 ? errno : EIO;
     *local = g_sock_object[fd];
     *peer = g_sock_peer_object[fd];
+    uint32_t shutdown_state = sock_state_shutdown(fd);
     *hidden = (uint32_t)g_sock_identity_local_hidden[fd] | ((uint32_t)g_sock_identity_peer_hidden[fd] << 1) |
-              ((uint32_t)g_sock_identity_checkpoint_pending[fd] << 2) |
-              ((uint32_t)g_sock_connecting[fd] << 3) | ((uint32_t)g_sock_conn[fd] << 4);
+              ((uint32_t)g_sock_identity_checkpoint_pending[fd] << 2) | ((uint32_t)g_sock_connecting[fd] << 3) |
+              ((uint32_t)g_sock_conn[fd] << 4) |
+              ((shutdown_state & SOCK_SHUTDOWN_READ) != 0 ? UINT32_C(1) << 5 : 0) |
+              ((shutdown_state & SOCK_SHUTDOWN_WRITE) != 0 ? UINT32_C(1) << 6 : 0);
     return status;
 }
 #endif
@@ -613,6 +749,10 @@ static void cmsg_note_recv_sock_fd(int fd) {
     if (getsockname(fd, (struct sockaddr *)&ss, &sl) != 0 || ss.ss_family != AF_UNIX) return;
 
     g_sock_fam[fd] = AF_UNIX;
+    sock_state_drop(fd);
+    /* SCM_RIGHTS currently carries OFD identity but not the authenticated socket endpoint graph.  Refuse
+     * checkpointing this descriptor until that graph proves its peer and cross-process shutdown state. */
+    g_sock_identity_checkpoint_pending[fd] = 1;
     g_sock_stream[fd] = (ty == SOCK_STREAM);
     g_sock_dgram[fd] = (ty == SOCK_DGRAM);
     if (!g_sock_peer_pid[fd]) g_sock_peer_pid[fd] = sock_alloc_synth_peer();
@@ -896,6 +1036,7 @@ static void fd_carry_sock(int dst, int src) {
     g_sock_identity_local_hidden[dst] = g_sock_identity_local_hidden[src];
     g_sock_identity_peer_hidden[dst] = g_sock_identity_peer_hidden[src];
     g_sock_identity_checkpoint_pending[dst] = g_sock_identity_checkpoint_pending[src];
+    sock_state_dup(dst, src);
     g_sock_peer_pid[dst] = g_sock_peer_pid[src]; // ... and the same synthetic peer node identity
     g_sock_passcred[dst] = g_sock_passcred[src];
     g_sock_conn[dst] = g_sock_conn[src];

@@ -164,6 +164,10 @@ fn connected_unix_stream_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     shared_state_fixture(isa, directory, "connected_unix_stream")
 }
 
+fn socket_half_close_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    shared_state_fixture(isa, directory, "socket_half_close")
+}
+
 fn shared_state_fixture(isa: GuestIsa, directory: &Path, source_name: &str) -> PathBuf {
     let compiler = match isa {
         GuestIsa::Aarch64 => "aarch64-linux-gnu-gcc",
@@ -1319,6 +1323,24 @@ fn connected_unix_stream_plan(
             finish.as_os_str().as_encoded_bytes().to_vec(),
             guard.as_os_str().as_encoded_bytes().to_vec(),
             fallback.as_os_str().as_encoded_bytes().to_vec(),
+        ]
+        .into(),
+        environment: Vec::new(),
+        result_path: None,
+        options,
+    }
+}
+
+fn socket_half_close_plan(executable: &Path, ready: &Path, mode: &str) -> RuntimePlan {
+    let mut options = Options::default();
+    options.set("HL_CHECKPOINT", "1", true).unwrap();
+    RuntimePlan {
+        rootfs: None,
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: [
+            executable.as_os_str().as_encoded_bytes().to_vec(),
+            ready.as_os_str().as_encoded_bytes().to_vec(),
+            mode.as_bytes().to_vec(),
         ]
         .into(),
         environment: Vec::new(),
@@ -3287,6 +3309,75 @@ fn checkpoint_phase_ledger_separates_the_fixed_wait_from_real_work() {
             );
         }
     }
+}
+
+#[test]
+fn socket_half_close_refuses_checkpoint_after_guest_dup_and_fork_on_both_isas() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64]
+        .map(|isa| (isa, socket_half_close_fixture(isa, fixtures.path())));
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+    let mut accepted = Vec::new();
+
+    for (isa, executable) in executables {
+        let clean_directory = tempfile::tempdir().unwrap();
+        let clean_ready = clean_directory.path().join("ready");
+        let clean_store = Arc::new(Store::default());
+        let clean = Arc::new(
+            Engine::with_checkpoint(
+                isa,
+                socket_half_close_plan(&executable, &clean_ready, "clean"),
+                streams(false),
+                clean_store.clone(),
+                clean_store.clone(),
+            )
+            .unwrap(),
+        );
+        clean.start().unwrap();
+        wait_for(&clean_ready, "READY clean");
+        clean
+            .capture_checkpoint_until(checkpoint_deadline())
+            .unwrap_or_else(|error| panic!("{isa:?} rejected the clean socketpair control: {error:?}"));
+        assert_eq!(wait_bounded(&clean, "clean socketpair capture").guest_status, 0);
+        assert!(clean_store.0.lock().unwrap().contains_key("MANIFEST"));
+
+        for mode in ["dup", "fork"] {
+            let directory = tempfile::tempdir().unwrap();
+            let ready = directory.path().join("ready");
+            let store = Arc::new(Store::default());
+            let capture = Arc::new(
+                Engine::with_checkpoint(
+                    isa,
+                    socket_half_close_plan(&executable, &ready, mode),
+                    streams(false),
+                    store.clone(),
+                    store.clone(),
+                )
+                .unwrap(),
+            );
+            capture.start().unwrap();
+            wait_for(&ready, &format!("READY {mode}"));
+            let rejected = capture.capture_checkpoint_until(checkpoint_deadline()).is_err();
+            let _ = wait_result_bounded(&capture, "half-closed socket checkpoint refusal");
+            let snapshot = store.0.lock().unwrap();
+            if rejected {
+                assert!(
+                    !snapshot.contains_key("MANIFEST"),
+                    "{isa:?}/{mode} committed a rejected generation"
+                );
+                assert!(
+                    snapshot.keys().all(|name| !name.starts_with("socket.")),
+                    "{isa:?}/{mode} published a socket queue before admission refusal: {:?}",
+                    snapshot.keys().collect::<Vec<_>>()
+                );
+            } else {
+                accepted.push(format!("{isa:?}/{mode}"));
+            }
+        }
+    }
+    assert!(accepted.is_empty(), "accepted half-closed guest socket paths: {accepted:?}");
 }
 
 #[test]

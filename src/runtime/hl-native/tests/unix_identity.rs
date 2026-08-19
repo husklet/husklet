@@ -16,16 +16,33 @@ const CHECKPOINT_ADMIT: u32 = 8;
 const INITIALIZE_ALIAS: u32 = 9;
 const SNAPSHOT: u32 = 10;
 const INITIALIZE_PAIR_END: u32 = 11;
+const SHUTDOWN_READ: u32 = 12;
+const SHUTDOWN_WRITE: u32 = 13;
+const SHUTDOWN_BOTH: u32 = 14;
 
 const LOCAL_HIDDEN: u32 = 1;
 const PEER_HIDDEN: u32 = 2;
 const CHECKPOINT_PENDING: u32 = 4;
 const CONNECTING: u32 = 8;
+const READ_CLOSED: u32 = 32;
+const WRITE_CLOSED: u32 = 64;
 
 fn socket() -> OwnedFd {
     let descriptor = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
     assert!(descriptor >= 0, "socket: {}", std::io::Error::last_os_error());
     unsafe { OwnedFd::from_raw_fd(descriptor) }
+}
+
+fn socket_pair() -> (OwnedFd, OwnedFd) {
+    let mut descriptors = [-1; 2];
+    let status = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, descriptors.as_mut_ptr()) };
+    assert_eq!(status, 0, "socketpair: {}", std::io::Error::last_os_error());
+    unsafe {
+        (
+            OwnedFd::from_raw_fd(descriptors[0]),
+            OwnedFd::from_raw_fd(descriptors[1]),
+        )
+    }
 }
 
 fn address(name: &[u8], abstract_name: bool) -> (libc::sockaddr_un, libc::socklen_t) {
@@ -283,5 +300,52 @@ fn capture_gate_distinguishes_private_connects_and_socketpairs_on_both_isas() {
         assert_eq!(flags, 0);
         assert!(hl_native::unix_identity_test(isa, CHECKPOINT_ADMIT, pair_end.as_raw_fd(), 0).is_ok());
         identity(isa, RESET, pair_end.as_raw_fd(), 0);
+    }
+}
+
+#[test]
+fn shutdown_state_is_shared_by_aliases_and_fails_closed_on_both_isas() {
+    for isa in [1, 2] {
+        for (operation, expected) in [
+            (SHUTDOWN_READ, READ_CLOSED),
+            (SHUTDOWN_WRITE, WRITE_CLOSED),
+            (SHUTDOWN_BOTH, READ_CLOSED | WRITE_CLOSED),
+        ] {
+            let (endpoint, peer) = socket_pair();
+            let alias = unsafe { libc::fcntl(endpoint.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+            assert!(alias >= 0, "dup: {}", std::io::Error::last_os_error());
+            let alias = unsafe { OwnedFd::from_raw_fd(alias) };
+            let object = 0x7100_0000_0000_0000_u64 | u64::from(isa) | (u64::from(operation) << 8);
+            identity(isa, INITIALIZE_ALIAS, endpoint.as_raw_fd(), object);
+            identity(isa, INITIALIZE_ALIAS, alias.as_raw_fd(), object);
+
+            identity(isa, operation, endpoint.as_raw_fd(), 0);
+            assert_eq!(identity(isa, SNAPSHOT, endpoint.as_raw_fd(), 0).2, expected);
+            assert_eq!(identity(isa, SNAPSHOT, alias.as_raw_fd(), 0).2, expected);
+            assert_eq!(
+                hl_native::unix_identity_test(isa, CHECKPOINT_ADMIT, alias.as_raw_fd(), 0),
+                Err(libc::ENOTSUP)
+            );
+            if operation == SHUTDOWN_WRITE {
+                let payload = b"queue-survives-refusal";
+                assert_eq!(
+                    unsafe { libc::send(peer.as_raw_fd(), payload.as_ptr().cast(), payload.len(), 0) },
+                    payload.len() as isize
+                );
+                assert_eq!(
+                    hl_native::unix_identity_capture_test(isa, endpoint.as_raw_fd()),
+                    Err(libc::ENOTSUP)
+                );
+                let mut received = [0_u8; 23];
+                assert_eq!(
+                    unsafe { libc::recv(endpoint.as_raw_fd(), received.as_mut_ptr().cast(), received.len(), 0) },
+                    payload.len() as isize
+                );
+                assert_eq!(&received[..payload.len()], payload);
+            }
+
+            identity(isa, RESET, endpoint.as_raw_fd(), 0);
+            identity(isa, RESET, alias.as_raw_fd(), 0);
+        }
     }
 }

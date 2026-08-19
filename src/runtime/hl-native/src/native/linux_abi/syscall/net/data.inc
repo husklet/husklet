@@ -666,7 +666,7 @@
         break;
     }
     case 210:
-        G_RET(c) = shutdown((int)a0, (int)a1) < 0 ? (uint64_t)(-errno) : 0;
+        G_RET(c) = sock_internal_shutdown((int)a0, (int)a1) < 0 ? (uint64_t)(-errno) : 0;
         // shutdown(fd, how) -- SHUT_RD/WR/RDWR match
         break;
     case 211:

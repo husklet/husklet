@@ -893,6 +893,7 @@ static void fd_reset_emul(int fd) {
         g_sock_identity_local_hidden[fd] = 0;
         g_sock_identity_peer_hidden[fd] = 0;
         g_sock_identity_checkpoint_pending[fd] = 0;
+        sock_state_drop(fd);
         g_sock_peer_pid[fd] = 0;
         g_sock_passcred[fd] = 0;
         g_br_port[fd] = 0;

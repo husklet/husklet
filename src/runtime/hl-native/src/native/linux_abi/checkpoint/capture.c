@@ -1344,6 +1344,7 @@ static void ckpt_release_captured_right(int fd) {
     g_sock_seqpacket[fd] = 0;
     g_sock_object[fd] = 0;
     g_sock_peer_object[fd] = 0;
+    sock_state_drop(fd);
     g_ofd_id[fd] = 0;
 }
 

@@ -102,6 +102,12 @@ static int ckpt_restore_socketpair_fd(const struct ckpt_fd *records, int count, 
         fcntl(fd, F_SETFD, (record->descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0)
         return -1;
     const struct ckpt_socket_state *state = &endpoint->state;
+    int source = ckpt_restore_prior_ofd(records, (int)(record - records), record->ofd_id);
+    sock_state_drop(fd);
+    if (source >= 0 && g_sock_state_ref[source] != 0)
+        sock_state_dup(fd, source);
+    else
+        sock_internal_shutdown_fresh(fd);
     g_sock_object[fd] = record->object_id;
     g_sock_peer_object[fd] = record->auxiliary;
     g_sock_fam[fd] = endpoint->state_loaded ? (uint16_t)state->guest_family : AF_UNIX;
@@ -124,6 +130,12 @@ static int ckpt_restore_bound_socket_fd(const struct ckpt_fd *records, int index
         fcntl(fd, F_SETFD, (record->descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0)
         return -1;
     const struct ckpt_socket_state *state = &saved->state;
+    int source = ckpt_restore_prior_ofd(records, index, record->ofd_id);
+    sock_state_drop(fd);
+    if (source >= 0 && g_sock_state_ref[source] != 0)
+        sock_state_dup(fd, source);
+    else
+        sock_internal_shutdown_fresh(fd);
     g_sock_object[fd] = record->object_id;
     g_sock_peer_object[fd] = 0;
     g_sock_fam[fd] = (uint16_t)state->guest_family;
@@ -140,9 +152,9 @@ static int ckpt_restore_bound_socket_fd(const struct ckpt_fd *records, int index
     g_udp_local_interface[fd] = state->udp_local_interface;
     g_udp_peer_interface[fd] = state->udp_peer_interface;
     if (state->udp_local_port != 0 && state->host_family == AF_UNIX) {
-        int source = ckpt_restore_prior_kind(records, index, CKF_SOCKET, record->object_id);
-        if (source >= 0) {
-            udp_ref_dup(fd, source);
+        int prior = ckpt_restore_prior_kind(records, index, CKF_SOCKET, record->object_id);
+        if (prior >= 0) {
+            udp_ref_dup(fd, prior);
         } else {
             const struct sockaddr_un *address = (const void *)&state->local;
             if (udp_ref_create(fd, address->sun_path) != 0) return -1;

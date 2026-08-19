@@ -199,7 +199,7 @@ static int svc_proc_51(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
 
 static void process_last_thread_exit(int status) {
     launch_reg_terminate_peers();
-    udp_ref_process_exit();
+    socket_ref_process_exit();
     acct_proc_leave();
     proc_reg_unlink();
     proc_fdvis_cleanup();
