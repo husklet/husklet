@@ -41,6 +41,9 @@ typedef struct hl_c_bridge_api {
     int32_t (*request)(hl_c_backend *backend, uint32_t request, int32_t signal);
     int32_t (*exit)(hl_c_backend *backend, hl_engine_exit *result);
     void (*destroy)(hl_c_backend *backend);
+    int32_t (*checkpoint_broker_accept_authenticated)(int32_t broker, int32_t timeout_ms,
+                                                       uint64_t *host_pid, uint64_t *host_birth,
+                                                       uint64_t *host_generation, int32_t *process_handle);
 } hl_c_bridge_api;
 
 HL_EXTERN_C_BEGIN
@@ -56,6 +59,20 @@ HL_API int32_t hl_c_backend_leak_check_nonvacuity(void);
 HL_API int32_t hl_c_backend_checkpoint_broker_pair(int32_t *parent, int32_t *child);
 HL_API int32_t hl_c_backend_checkpoint_broker_accept(int32_t broker, int32_t timeout_ms,
                                                      uint64_t *host_pid);
+HL_API int32_t hl_c_backend_checkpoint_broker_accept_authenticated(int32_t broker, int32_t timeout_ms,
+                                                                   uint64_t *host_pid, uint64_t *host_birth,
+                                                                   uint64_t *host_generation,
+                                                                   int32_t *process_handle);
+HL_API int32_t hl_c_backend_checkpoint_peer_authenticate_test(int32_t descriptor, uint64_t claimed_pid,
+                                                             uint64_t *host_pid, uint64_t *host_birth);
+HL_API int32_t hl_c_backend_checkpoint_channel_connect_test(int32_t broker_child);
+HL_API int32_t hl_c_backend_checkpoint_process_identity_open_test(int32_t pid, uint64_t expected_birth,
+                                                                 uint64_t expected_generation,
+                                                                 uint64_t *actual_birth,
+                                                                 uint64_t *actual_generation);
+HL_API int32_t hl_c_backend_checkpoint_peer_identity_open_test(int32_t descriptor, uint64_t claimed_pid,
+                                                              uint64_t *actual_pid, uint64_t *actual_birth,
+                                                              uint64_t *actual_generation);
 HL_API int32_t hl_c_backend_checkpoint_trigger_create(int32_t *descriptor, void **mapping);
 HL_API uint32_t hl_c_backend_checkpoint_trigger_bump(void *mapping);
 HL_API void hl_c_backend_checkpoint_trigger_destroy(void *mapping, int32_t descriptor);

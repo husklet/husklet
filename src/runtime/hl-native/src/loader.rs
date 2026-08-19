@@ -15,6 +15,8 @@ pub(crate) type EngineVersion = unsafe extern "C" fn() -> *const c_char;
 pub(crate) type LeakCheck = unsafe extern "C" fn() -> c_int;
 pub(crate) type BrokerPair = unsafe extern "C" fn(*mut c_int, *mut c_int) -> c_int;
 pub(crate) type BrokerAccept = unsafe extern "C" fn(c_int, c_int, *mut u64) -> c_int;
+pub(crate) type AuthenticatedBrokerAccept =
+    unsafe extern "C" fn(c_int, c_int, *mut u64, *mut u64, *mut u64, *mut c_int) -> c_int;
 pub(crate) type TriggerCreate = unsafe extern "C" fn(*mut c_int, *mut *mut c_void) -> c_int;
 pub(crate) type TriggerBump = unsafe extern "C" fn(*mut c_void) -> c_uint;
 pub(crate) type TriggerDestroy = unsafe extern "C" fn(*mut c_void, c_int);
@@ -54,8 +56,7 @@ pub(crate) type SignalFrameTest = unsafe extern "C" fn(c_uint, c_uint, u64, i64,
 #[cfg(feature = "native-test-hooks")]
 pub(crate) type NoArgumentTest = unsafe extern "C" fn() -> c_int;
 #[cfg(feature = "native-test-hooks")]
-pub(crate) type UnixIdentityTest =
-    unsafe extern "C" fn(c_uint, c_int, u64, *mut u64, *mut u64, *mut c_uint) -> c_int;
+pub(crate) type UnixIdentityTest = unsafe extern "C" fn(c_uint, c_int, u64, *mut u64, *mut u64, *mut c_uint) -> c_int;
 #[cfg(feature = "native-test-hooks")]
 pub(crate) type UnixIdentityCaptureTest = unsafe extern "C" fn(c_int) -> c_int;
 
@@ -82,6 +83,7 @@ pub(crate) struct BridgeApi {
     pub(crate) request: Option<Request>,
     pub(crate) exit: Option<Exit>,
     pub(crate) destroy: Option<Destroy>,
+    pub(crate) checkpoint_broker_accept_authenticated: Option<AuthenticatedBrokerAccept>,
 }
 
 #[derive(Clone, Copy)]
@@ -118,6 +120,13 @@ pub(crate) struct TestApi {
     pub(crate) x86_64_unix_identity_capture: UnixIdentityCaptureTest,
     pub(crate) errno_from_host: unsafe extern "C" fn(c_uint, c_int) -> c_int,
     pub(crate) identity_registry: unsafe extern "C" fn(c_uint, c_uint) -> c_int,
+    #[allow(dead_code)]
+    pub(crate) checkpoint_peer_authenticate: unsafe extern "C" fn(c_int, u64, *mut u64, *mut u64) -> c_int,
+    pub(crate) checkpoint_channel_connect: unsafe extern "C" fn(c_int) -> c_int,
+    #[cfg(target_os = "macos")]
+    pub(crate) checkpoint_process_identity_open: unsafe extern "C" fn(c_int, u64, u64, *mut u64, *mut u64) -> c_int,
+    #[cfg(target_os = "macos")]
+    pub(crate) checkpoint_peer_identity_open: unsafe extern "C" fn(c_int, u64, *mut u64, *mut u64, *mut u64) -> c_int,
     #[cfg(test)]
     pub(crate) checkpoint_test_prune_foreign_descriptors: unsafe extern "C" fn() -> c_uint,
     #[cfg(test)]
@@ -351,6 +360,24 @@ fn load_tests(library: &DynamicLibrary, path: &Path) -> Result<TestApi, LoadErro
             "hl_c_backend_identity_registry_test",
             unsafe extern "C" fn(c_uint, c_uint) -> c_int
         ),
+        checkpoint_peer_authenticate: symbol!(
+            "hl_c_backend_checkpoint_peer_authenticate_test",
+            unsafe extern "C" fn(c_int, u64, *mut u64, *mut u64) -> c_int
+        ),
+        checkpoint_channel_connect: symbol!(
+            "hl_c_backend_checkpoint_channel_connect_test",
+            unsafe extern "C" fn(c_int) -> c_int
+        ),
+        #[cfg(target_os = "macos")]
+        checkpoint_process_identity_open: symbol!(
+            "hl_c_backend_checkpoint_process_identity_open_test",
+            unsafe extern "C" fn(c_int, u64, u64, *mut u64, *mut u64) -> c_int
+        ),
+        #[cfg(target_os = "macos")]
+        checkpoint_peer_identity_open: symbol!(
+            "hl_c_backend_checkpoint_peer_identity_open_test",
+            unsafe extern "C" fn(c_int, u64, *mut u64, *mut u64, *mut u64) -> c_int
+        ),
         #[cfg(test)]
         checkpoint_test_prune_foreign_descriptors: symbol!(
             "hl_c_backend_checkpoint_test_prune_foreign_descriptors",
@@ -406,6 +433,7 @@ fn validate(table: &BridgeApi) -> Result<(), LoadError> {
         request,
         exit,
         destroy,
+        checkpoint_broker_accept_authenticated,
     );
     Ok(())
 }

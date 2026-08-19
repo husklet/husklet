@@ -15,22 +15,181 @@ use crate::{bindings, engine::STATUS_OK};
 /// Receiving end of the native engine's checkpoint channel broker.
 pub struct CheckpointBroker(OwnedFd);
 
+#[derive(Debug)]
+pub struct AuthenticatedCheckpointPeer {
+    pub host_pid: u64,
+    pub host_birth: u64,
+    pub host_generation: u64,
+    pub(crate) process_handle: OwnedFd,
+}
+
+impl AuthenticatedCheckpointPeer {
+    /// Reads one complete checkpoint frame segment while treating peer exit or
+    /// exec as terminal authority revocation.
+    #[doc(hidden)]
+    pub fn read_exact(&self, channel: &UnixStream, mut output: &mut [u8]) -> std::io::Result<()> {
+        while !output.is_empty() {
+            let mut waiting = [
+                libc::pollfd {
+                    fd: self.process_handle.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: channel.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+            ];
+            // SAFETY: waiting is a writable two-element poll array and both descriptors remain borrowed.
+            let ready = unsafe { libc::poll(waiting.as_mut_ptr(), 2, -1) };
+            if ready < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(error);
+            }
+            if waiting[0].revents != 0 {
+                return Err(std::io::ErrorKind::ConnectionAborted.into());
+            }
+            if waiting[1].revents == 0 {
+                continue;
+            }
+            // SAFETY: output is writable for its length; this object is the sole channel reader.
+            let count = unsafe { libc::read(channel.as_raw_fd(), output.as_mut_ptr().cast(), output.len()) };
+            if count < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(error);
+            }
+            if count == 0 {
+                return Err(std::io::ErrorKind::UnexpectedEof.into());
+            }
+            output = &mut output[usize::try_from(count).expect("positive read count fits usize")..];
+        }
+        Ok(())
+    }
+
+    /// Returns false once this exact process incarnation exited or exec'd.
+    #[doc(hidden)]
+    pub fn is_live(&self) -> std::io::Result<bool> {
+        let mut waiting = libc::pollfd {
+            fd: self.process_handle.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        loop {
+            // SAFETY: waiting is one writable poll record and the capability remains borrowed.
+            let ready = unsafe { libc::poll(&raw mut waiting, 1, 0) };
+            if ready >= 0 {
+                return Ok(ready == 0 && waiting.revents == 0);
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
+    }
+}
+
 impl CheckpointBroker {
     /// Waits for one guest process to connect to the checkpoint broker.
     #[must_use]
-    pub fn accept(&self, timeout: Duration) -> Option<(UnixStream, u64)> {
+    pub fn accept(&self, timeout: Duration) -> Option<(UnixStream, AuthenticatedCheckpointPeer)> {
         let timeout_ms = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
         let mut host_pid = 0;
+        let mut host_birth = 0;
+        let mut host_generation = 0;
+        let mut process_handle = -1;
         // SAFETY: the broker descriptor remains owned by self through the call;
         // a nonnegative result transfers one stream descriptor to Rust.
         let channel = unsafe {
-            bindings::hl_c_backend_checkpoint_broker_accept(self.0.as_raw_fd(), timeout_ms, &raw mut host_pid)
+            bindings::hl_c_backend_checkpoint_broker_accept_authenticated(
+                self.0.as_raw_fd(),
+                timeout_ms,
+                &raw mut host_pid,
+                &raw mut host_birth,
+                &raw mut host_generation,
+                &raw mut process_handle,
+            )
         };
-        (channel >= 0).then(|| {
+        if channel < 0 || process_handle < 0 {
+            for descriptor in [channel, process_handle] {
+                if descriptor >= 0 {
+                    // SAFETY: an inconsistent successful return still transfers this descriptor.
+                    drop(unsafe { OwnedFd::from_raw_fd(descriptor) });
+                }
+            }
+            return None;
+        }
+        Some({
             // SAFETY: C returned a uniquely owned descriptor.
-            (unsafe { UnixStream::from_raw_fd(channel) }, host_pid)
+            (
+                unsafe { UnixStream::from_raw_fd(channel) },
+                AuthenticatedCheckpointPeer {
+                    host_pid,
+                    host_birth,
+                    host_generation,
+                    // SAFETY: authenticated accept uniquely transfers this live process capability.
+                    process_handle: unsafe { OwnedFd::from_raw_fd(process_handle) },
+                },
+            )
         })
     }
+}
+
+#[cfg(all(test, feature = "native-test-hooks"))]
+mod peer_tests {
+    use super::*;
+    use std::os::fd::AsRawFd;
+
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn checkpoint_peer_identity_comes_from_kernel_and_has_birth() {
+        let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (local, _peer) = UnixStream::pair().unwrap();
+        let claimed = u64::from(std::process::id());
+        let mut pid = u64::MAX;
+        let mut birth = 0;
+        // SAFETY: the descriptor remains live and both output pointers address initialized writable values.
+        let status = unsafe {
+            bindings::hl_c_backend_checkpoint_peer_authenticate_test(
+                local.as_raw_fd(),
+                claimed,
+                &raw mut pid,
+                &raw mut birth,
+            )
+        };
+        assert_eq!(status, 0);
+        assert_eq!(pid, claimed);
+        assert_ne!(birth, 0);
+    }
+
+    #[test]
+    fn checkpoint_peer_rejects_forged_hello_pid() {
+        let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (local, _peer) = UnixStream::pair().unwrap();
+        let claimed = u64::from(std::process::id()).checked_add(1).unwrap();
+        let mut pid = u64::MAX;
+        let mut birth = u64::MAX;
+        // SAFETY: the descriptor remains live and both output pointers address initialized writable values.
+        let status = unsafe {
+            bindings::hl_c_backend_checkpoint_peer_authenticate_test(
+                local.as_raw_fd(),
+                claimed,
+                &raw mut pid,
+                &raw mut birth,
+            )
+        };
+        assert_ne!(status, 0);
+        assert_eq!(pid, 0);
+        assert_eq!(birth, 0);
+    }
+
 }
 
 /// Broker child and shared generation trigger installed into a native engine.
@@ -48,6 +207,20 @@ unsafe impl Send for CheckpointTransport {}
 unsafe impl Sync for CheckpointTransport {}
 
 impl CheckpointTransport {
+    /// Opens a real checkpoint channel through this transport's broker child.
+    #[cfg(feature = "native-test-hooks")]
+    #[doc(hidden)]
+    pub fn connect_for_test(&self) -> std::io::Result<UnixStream> {
+        // SAFETY: the test hook borrows the live broker-child descriptor and transfers one channel.
+        let descriptor =
+            unsafe { bindings::hl_c_backend_checkpoint_channel_connect_test(self.broker_child.as_raw_fd()) };
+        if descriptor < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: the native helper transfers unique ownership on success.
+        Ok(unsafe { UnixStream::from_raw_fd(descriptor) })
+    }
+
     pub(crate) fn configure(&self, backend: *mut crate::bindings::Backend) -> i32 {
         // SAFETY: backend is owned by the Engine caller and both descriptors remain live.
         unsafe {

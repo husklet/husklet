@@ -7,18 +7,25 @@
 #include "hl/linux_abi.h"
 #include "hl/syscall_trap.h"
 #include "../host/system.h"
+#include "../host/process.h"
 #include "main_plan.h"
 #include "host.h"
 
-#include <errno.h>
 #include <fcntl.h>
+#include <errno.h>
+#include <poll.h>
 #include <stdbool.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#if defined(__linux__)
+#include <sys/socket.h>
+#include <sys/syscall.h>
+#endif
 #include <unistd.h>
 
 #if defined(_WIN32)
@@ -136,63 +143,168 @@ HL_API int32_t hl_c_backend_errno_from_host_test(uint32_t domain, int32_t host_e
 
 extern int HL_BRIDGE_CKPT(broker_pair)(hl_activation_descriptor *, hl_activation_descriptor *);
 extern hl_activation_descriptor HL_BRIDGE_CKPT(broker_accept)(hl_activation_descriptor, int, uint64_t *);
+extern int HL_BRIDGE_CKPT(channel_authenticate_peer)(int, uint64_t, uint64_t *);
+#if defined(HL_NATIVE_TEST_HOOKS)
+extern void HL_BRIDGE_CKPT(channel_publish)(int);
+extern int HL_BRIDGE_CKPT(channel_acquire)(void);
+#endif
 extern int HL_BRIDGE_CKPT(trigger_create)(hl_activation_descriptor *, void **);
 extern uint32_t HL_BRIDGE_CKPT(trigger_bump)(void *);
 extern void HL_BRIDGE_CKPT(trigger_destroy)(void *, hl_activation_descriptor);
 
 HL_API int32_t hl_c_backend_checkpoint_broker_pair(int32_t *parent, int32_t *child) {
-#if !defined(_WIN32)
     hl_activation_descriptor parent_descriptor = HL_ACTIVATION_DESCRIPTOR_NONE;
     hl_activation_descriptor child_descriptor = HL_ACTIVATION_DESCRIPTOR_NONE;
-#endif
-    if (parent != NULL) *parent = -1;
-    if (child != NULL) *child = -1;
     if (parent == NULL || child == NULL) return HL_STATUS_INVALID_ARGUMENT;
-#if defined(_WIN32)
-    return HL_STATUS_NOT_SUPPORTED;
-#else
+    *parent = -1;
+    *child = -1;
     if (HL_BRIDGE_CKPT(broker_pair)(&parent_descriptor, &child_descriptor) != 0 || parent_descriptor > INT32_MAX ||
         child_descriptor > INT32_MAX)
         return HL_STATUS_PLATFORM_FAILURE;
     *parent = (int32_t)parent_descriptor;
     *child = (int32_t)child_descriptor;
     return HL_STATUS_OK;
-#endif
 }
 
 HL_API int32_t hl_c_backend_checkpoint_broker_accept(int32_t broker, int32_t timeout_ms, uint64_t *host_pid) {
-#if !defined(_WIN32)
     hl_activation_descriptor channel;
+    if (broker < 0 || timeout_ms < 0) return -1;
+    channel = HL_BRIDGE_CKPT(broker_accept)((hl_activation_descriptor)broker, timeout_ms, host_pid);
+    return channel == HL_ACTIVATION_DESCRIPTOR_NONE || channel > INT32_MAX ? -1 : (int32_t)channel;
+}
+
+HL_API int32_t hl_c_backend_checkpoint_broker_accept_authenticated(int32_t broker, int32_t timeout_ms,
+                                                                   uint64_t *host_pid, uint64_t *host_birth,
+                                                                   uint64_t *host_generation,
+                                                                   int32_t *process_handle) {
+    hl_activation_descriptor channel;
+#if defined(__linux__)
+    hl_host_process_info process;
 #endif
     if (host_pid != NULL) *host_pid = 0;
-    if (broker < 0 || timeout_ms < 0 || host_pid == NULL) {
+    if (host_birth != NULL) *host_birth = 0;
+    if (host_generation != NULL) *host_generation = 0;
+    if (process_handle != NULL) *process_handle = -1;
+    if (broker < 0 || timeout_ms < 0 || host_pid == NULL || host_birth == NULL || host_generation == NULL ||
+        process_handle == NULL)
+        return -1;
+    channel = HL_BRIDGE_CKPT(broker_accept)((hl_activation_descriptor)broker, timeout_ms, host_pid);
+#if defined(__linux__)
+    if (channel != HL_ACTIVATION_DESCRIPTOR_NONE && channel <= INT32_MAX) {
+        socklen_t handle_size = (socklen_t)sizeof *process_handle;
+#ifndef SO_PEERPIDFD
+#define SO_PEERPIDFD 77
+#endif
+        if (getsockopt((int)channel, SOL_SOCKET, SO_PEERPIDFD, process_handle, &handle_size) != 0 ||
+            handle_size != (socklen_t)sizeof *process_handle || *process_handle < 0)
+            *process_handle = -1;
+    }
+    if (channel == HL_ACTIVATION_DESCRIPTOR_NONE || channel > INT32_MAX || *process_handle < 0 ||
+        *host_pid > INT64_MAX || syscall(SYS_pidfd_send_signal, *process_handle, 0, NULL, 0) != 0 ||
+        !hl_host_process_read((int64_t)*host_pid, &process) || process.start_time_ns == 0 ||
+        syscall(SYS_pidfd_send_signal, *process_handle, 0, NULL, 0) != 0) {
+        if (channel != HL_ACTIVATION_DESCRIPTOR_NONE && channel <= INT32_MAX) (void)close((int)channel);
+        if (*process_handle >= 0) (void)close(*process_handle);
+        *process_handle = -1;
+        *host_pid = 0;
+        return -1;
+    }
+#elif defined(__APPLE__)
+    if (channel == HL_ACTIVATION_DESCRIPTOR_NONE || channel > INT32_MAX || *host_pid > INT64_MAX) {
+        if (channel != HL_ACTIVATION_DESCRIPTOR_NONE && channel <= INT32_MAX) (void)close((int)channel);
+        *host_pid = 0;
+        return -1;
+    }
+    *process_handle = hl_host_process_peer_identity_open((int)channel, *host_pid, host_pid, host_birth,
+                                                         host_generation);
+    if (*process_handle < 0) {
+        (void)close((int)channel);
+        *host_pid = 0;
+        return -1;
+    }
+#else
+    if (channel != HL_ACTIVATION_DESCRIPTOR_NONE && channel <= INT32_MAX) (void)close((int)channel);
+    *host_pid = 0;
+    return -1;
+#endif
+#if defined(__linux__)
+    *host_birth = process.start_time_ns;
+#endif
+    return (int32_t)channel;
+}
+
+HL_API int32_t hl_c_backend_checkpoint_peer_authenticate_test(int32_t descriptor, uint64_t claimed_pid,
+                                                             uint64_t *host_pid, uint64_t *host_birth) {
+    hl_host_process_info process;
+    if (host_pid != NULL) *host_pid = 0;
+    if (host_birth != NULL) *host_birth = 0;
+    if (descriptor < 0 || host_pid == NULL || host_birth == NULL ||
+        HL_BRIDGE_CKPT(channel_authenticate_peer)(descriptor, claimed_pid, host_pid) != 0 || *host_pid > INT64_MAX ||
+        !hl_host_process_read((int64_t)*host_pid, &process) || process.start_time_ns == 0) {
+        if (host_pid != NULL) *host_pid = 0;
+        return -1;
+    }
+    *host_birth = process.start_time_ns;
+    return 0;
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
+HL_API int32_t hl_c_backend_checkpoint_channel_connect_test(int32_t broker_child) {
+    if (broker_child < 0) {
         errno = EINVAL;
         return -1;
     }
-#if defined(_WIN32)
+    HL_BRIDGE_CKPT(channel_publish)(broker_child);
+    return HL_BRIDGE_CKPT(channel_acquire)();
+}
+#else
+HL_API int32_t hl_c_backend_checkpoint_channel_connect_test(int32_t broker_child) {
+    (void)broker_child;
     errno = ENOTSUP;
     return -1;
+}
+#endif
+HL_API int32_t hl_c_backend_checkpoint_process_identity_open_test(int32_t pid, uint64_t expected_birth,
+                                                                 uint64_t expected_generation,
+                                                                 uint64_t *actual_birth,
+                                                                 uint64_t *actual_generation) {
+#if defined(__APPLE__)
+    return hl_host_process_identity_open((pid_t)pid, expected_birth, expected_generation, actual_birth,
+                                         actual_generation);
 #else
-    channel = HL_BRIDGE_CKPT(broker_accept)((hl_activation_descriptor)broker, timeout_ms, host_pid);
-    return channel == HL_ACTIVATION_DESCRIPTOR_NONE || channel > INT32_MAX ? -1 : (int32_t)channel;
+    (void)pid;
+    (void)expected_birth;
+    (void)expected_generation;
+    if (actual_birth != NULL) *actual_birth = 0;
+    if (actual_generation != NULL) *actual_generation = 0;
+    return -1;
+#endif
+}
+
+HL_API int32_t hl_c_backend_checkpoint_peer_identity_open_test(int32_t descriptor, uint64_t claimed_pid,
+                                                              uint64_t *actual_pid, uint64_t *actual_birth,
+                                                              uint64_t *actual_generation) {
+#if defined(__APPLE__)
+    return hl_host_process_peer_identity_open(descriptor, claimed_pid, actual_pid, actual_birth, actual_generation);
+#else
+    (void)descriptor;
+    (void)claimed_pid;
+    if (actual_pid != NULL) *actual_pid = 0;
+    if (actual_birth != NULL) *actual_birth = 0;
+    if (actual_generation != NULL) *actual_generation = 0;
+    return -1;
 #endif
 }
 
 HL_API int32_t hl_c_backend_checkpoint_trigger_create(int32_t *descriptor, void **mapping) {
-#if !defined(_WIN32)
     hl_activation_descriptor native_descriptor = HL_ACTIVATION_DESCRIPTOR_NONE;
-#endif
-    if (descriptor != NULL) *descriptor = -1;
-    if (mapping != NULL) *mapping = NULL;
     if (descriptor == NULL || mapping == NULL) return HL_STATUS_INVALID_ARGUMENT;
-#if defined(_WIN32)
-    return HL_STATUS_NOT_SUPPORTED;
-#else
+    *descriptor = -1;
+    *mapping = NULL;
     if (HL_BRIDGE_CKPT(trigger_create)(&native_descriptor, mapping) != 0 || native_descriptor > INT32_MAX)
         return HL_STATUS_PLATFORM_FAILURE;
     *descriptor = (int32_t)native_descriptor;
     return HL_STATUS_OK;
-#endif
 }
 
 HL_API uint32_t hl_c_backend_checkpoint_trigger_bump(void *mapping) {
@@ -213,7 +325,7 @@ HL_API int32_t hl_c_backend_checkpoint_adopt(uint32_t isa, int32_t broker, int32
     /* The Windows checkpoint channel is deliberately unavailable until its
      * named-pipe and DuplicateHandle transport exists.  Keep the ABI present,
      * but do not pretend POSIX descriptor adoption succeeded. */
-    return HL_STATUS_NOT_SUPPORTED;
+    return HL_STATUS_PLATFORM_FAILURE;
 #else
     char broker_text[32];
     char trigger_text[32];
@@ -245,14 +357,7 @@ HL_API int32_t hl_c_backend_checkpoint_adopt(uint32_t isa, int32_t broker, int32
 extern int HL_BRIDGE_CKPT(interrupt_signal)(void);
 
 HL_API int32_t hl_c_backend_checkpoint_interrupt_signal(uint32_t isa) {
-#if defined(_WIN32)
-    if (isa != 1 && isa != 2) {
-        errno = EINVAL;
-        return -1;
-    }
-    errno = ENOTSUP;
-    return -1;
-#elif defined(HL_BUILD_TARGET_X86_64_ONLY)
+#if defined(HL_BUILD_TARGET_X86_64_ONLY)
     return isa == 2 ? HL_BRIDGE_CKPT(interrupt_signal)() : -1;
 #else
     return isa == 1 || isa == 2 ? HL_BRIDGE_CKPT(interrupt_signal)() : -1;

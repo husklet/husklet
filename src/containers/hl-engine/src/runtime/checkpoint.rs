@@ -15,8 +15,8 @@ use std::{
     },
 };
 
-mod broker;
 pub mod authority;
+mod broker;
 #[path = "checkpoint_protocol.rs"]
 mod protocol;
 mod publication;
@@ -128,6 +128,8 @@ pub(crate) struct Server {
     committed: AtomicBool,
     running: AtomicBool,
     connections: AtomicUsize,
+    #[cfg(test)]
+    dispatches: AtomicUsize,
 }
 
 impl Server {
@@ -150,7 +152,14 @@ impl Server {
             committed: AtomicBool::new(false),
             running: AtomicBool::new(true),
             connections: AtomicUsize::new(0),
+            #[cfg(test)]
+            dispatches: AtomicUsize::new(0),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn dispatch_count(&self) -> usize {
+        self.dispatches.load(Ordering::Acquire)
     }
 
     #[cfg(test)]

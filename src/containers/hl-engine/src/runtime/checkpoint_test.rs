@@ -1,5 +1,12 @@
+#![allow(unsafe_code)]
+
 use super::{CaptureFailure, Server, protocol};
 use crate::composition::{CheckpointSink, CheckpointSource, CompositionError};
+use std::{
+    io::Write,
+    mem,
+    os::fd::{AsRawFd, FromRawFd},
+};
 use std::{
     num::NonZeroU64,
     os::unix::net::UnixStream,
@@ -10,6 +17,122 @@ use std::{
     },
     time::Duration,
 };
+
+#[test]
+fn production_broker_revokes_relayed_channel_when_authenticated_child_exits() {
+    static SERIAL: Mutex<()> = Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (broker, transport) = hl_native::CheckpointTransport::create().expect("checkpoint transport");
+    let (relay_child, relay_survivor) = UnixStream::pair().expect("descriptor relay");
+    let mut release = [-1; 2];
+    // SAFETY: release names writable storage for two new descriptors.
+    assert_eq!(unsafe { libc::pipe(release.as_mut_ptr()) }, 0);
+    // SAFETY: no Rust synchronization state is touched in the child; it only uses inherited descriptors then exits.
+    let child = unsafe { libc::fork() };
+    assert!(child >= 0, "fork checkpoint peer");
+    if child == 0 {
+        // SAFETY: child owns its inherited ends and terminates with _exit.
+        unsafe {
+            libc::close(release[1]);
+        }
+        let channel = transport.connect_for_test().expect("child checkpoint channel");
+        send_descriptor(&relay_child, channel.as_raw_fd());
+        let mut byte = 0_u8;
+        // SAFETY: release[0] is live and byte is writable.
+        let read = unsafe { libc::read(release[0], (&raw mut byte).cast(), 1) };
+        // SAFETY: no Rust destructors are run after fork.
+        unsafe { libc::_exit(if read == 1 { 0 } else { 91 }) }
+    }
+    drop(relay_child);
+    drop(transport);
+    // SAFETY: parent no longer uses the child's release end.
+    unsafe { libc::close(release[0]) };
+    let (channel, authority) = broker
+        .accept(Duration::from_secs(2))
+        .expect("authenticated production accept");
+    assert_eq!(authority.host_pid, u64::try_from(child).unwrap());
+    assert_ne!(authority.host_birth, 0);
+    let mut survivor = receive_descriptor(&relay_survivor);
+    // SAFETY: one byte releases the child and the descriptor is uniquely owned here.
+    assert_eq!(unsafe { libc::write(release[1], b"x".as_ptr().cast(), 1) }, 1);
+    // SAFETY: parent owns this release descriptor.
+    unsafe { libc::close(release[1]) };
+    let mut status = 0;
+    // SAFETY: child is a direct unreaped child and status is writable.
+    assert_eq!(unsafe { libc::waitpid(child, &raw mut status, 0) }, child);
+    assert!(libc::WIFEXITED(status));
+    assert_eq!(libc::WEXITSTATUS(status), 0);
+
+    let server = Arc::new(Server::new(Arc::new(Store), Arc::new(Store)));
+    let worker = Arc::clone(&server);
+    let (done, completed) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        worker.serve_authenticated_for_test(channel, authority);
+        let _ = done.send(());
+    });
+    while server.connections.load(Ordering::Acquire) == 0 {
+        std::thread::yield_now();
+    }
+    let mut request = [0_u8; protocol::REQUEST_BYTES];
+    request[0..4].copy_from_slice(&protocol::MAGIC_REQUEST.to_ne_bytes());
+    request[4..8].copy_from_slice(&protocol::ABI.to_ne_bytes());
+    request[8..12].copy_from_slice(&protocol::GROUP_PRESENT.to_ne_bytes());
+    survivor
+        .write_all(&request)
+        .expect("survivor writes a valid checkpoint request");
+    completed
+        .recv_timeout(Duration::from_secs(1))
+        .expect("revoked connection must terminate");
+    assert_eq!(server.connections.load(Ordering::Acquire), 0);
+    assert_eq!(server.dispatch_count(), 0, "revoked peer request reached dispatch");
+}
+
+fn send_descriptor(channel: &UnixStream, descriptor: i32) {
+    let mut byte = 0_u8;
+    let mut vector = libc::iovec {
+        iov_base: (&raw mut byte).cast(),
+        iov_len: 1,
+    };
+    let mut control = [0_u8; 64];
+    // SAFETY: message points to live stack storage and contains one correctly sized SCM_RIGHTS record.
+    unsafe {
+        let mut message: libc::msghdr = mem::zeroed();
+        message.msg_iov = &raw mut vector;
+        message.msg_iovlen = 1;
+        message.msg_control = control.as_mut_ptr().cast();
+        message.msg_controllen = control.len() as _;
+        let header = libc::CMSG_FIRSTHDR(&message);
+        (*header).cmsg_level = libc::SOL_SOCKET;
+        (*header).cmsg_type = libc::SCM_RIGHTS;
+        (*header).cmsg_len = libc::CMSG_LEN(mem::size_of::<i32>() as _) as _;
+        *libc::CMSG_DATA(header).cast::<i32>() = descriptor;
+        message.msg_controllen = libc::CMSG_SPACE(mem::size_of::<i32>() as _) as _;
+        assert_eq!(libc::sendmsg(channel.as_raw_fd(), &message, 0), 1);
+    }
+}
+
+fn receive_descriptor(channel: &UnixStream) -> UnixStream {
+    let mut byte = 0_u8;
+    let mut vector = libc::iovec {
+        iov_base: (&raw mut byte).cast(),
+        iov_len: 1,
+    };
+    let mut control = [0_u8; 64];
+    // SAFETY: message points to writable stack storage; a successful receive transfers one descriptor.
+    unsafe {
+        let mut message: libc::msghdr = mem::zeroed();
+        message.msg_iov = &raw mut vector;
+        message.msg_iovlen = 1;
+        message.msg_control = control.as_mut_ptr().cast();
+        message.msg_controllen = control.len() as _;
+        assert_eq!(libc::recvmsg(channel.as_raw_fd(), &raw mut message, 0), 1);
+        let header = libc::CMSG_FIRSTHDR(&message);
+        assert!(!header.is_null());
+        assert_eq!((*header).cmsg_level, libc::SOL_SOCKET);
+        assert_eq!((*header).cmsg_type, libc::SCM_RIGHTS);
+        UnixStream::from_raw_fd(*libc::CMSG_DATA(header).cast::<i32>())
+    }
+}
 
 fn test_transaction() -> NonZeroU64 {
     NonZeroU64::MIN

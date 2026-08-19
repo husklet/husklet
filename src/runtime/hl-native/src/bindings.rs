@@ -106,6 +106,7 @@ pub(super) unsafe fn hl_c_backend_checkpoint_broker_pair(parent: *mut c_int, chi
 }
 
 #[cfg(unix)]
+#[allow(dead_code)]
 pub(super) unsafe fn hl_c_backend_checkpoint_broker_accept(
     broker: c_int,
     timeout_ms: c_int,
@@ -115,6 +116,30 @@ pub(super) unsafe fn hl_c_backend_checkpoint_broker_accept(
         .ok()
         .and_then(|api| api.checkpoint_broker_accept)
         .map_or(3, |function| unsafe { function(broker, timeout_ms, host_pid) })
+}
+
+#[cfg(unix)]
+pub(super) unsafe fn hl_c_backend_checkpoint_broker_accept_authenticated(
+    broker: c_int,
+    timeout_ms: c_int,
+    host_pid: *mut u64,
+    host_birth: *mut u64,
+    host_generation: *mut u64,
+    process_handle: *mut c_int,
+) -> c_int {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.checkpoint_broker_accept_authenticated)
+        .map_or(3, |function| unsafe {
+            function(
+                broker,
+                timeout_ms,
+                host_pid,
+                host_birth,
+                host_generation,
+                process_handle,
+            )
+        })
 }
 
 #[cfg(unix)]
@@ -138,10 +163,7 @@ pub(super) unsafe fn hl_c_backend_checkpoint_trigger_bump(mapping: *mut c_void) 
 
 #[cfg(unix)]
 pub(super) unsafe fn hl_c_backend_checkpoint_trigger_destroy(mapping: *mut c_void, descriptor: c_int) {
-    if let Some(function) = crate::loader::api()
-        .ok()
-        .and_then(|api| api.checkpoint_trigger_destroy)
-    {
+    if let Some(function) = crate::loader::api().ok().and_then(|api| api.checkpoint_trigger_destroy) {
         unsafe { function(mapping, descriptor) };
     }
 }
@@ -163,11 +185,7 @@ pub(super) unsafe fn hl_c_backend_checkpoint_interrupt_signal(isa: c_uint) -> c_
 }
 
 #[cfg(unix)]
-pub(super) unsafe fn hl_c_backend_checkpoint_configure(
-    backend: *mut Backend,
-    broker: c_int,
-    trigger: c_int,
-) -> c_int {
+pub(super) unsafe fn hl_c_backend_checkpoint_configure(backend: *mut Backend, broker: c_int, trigger: c_int) -> c_int {
     crate::loader::api()
         .ok()
         .and_then(|api| api.checkpoint_configure)
@@ -227,11 +245,7 @@ pub(super) unsafe fn hl_c_backend_create(
     }
 }
 
-pub(super) unsafe fn hl_c_backend_run(
-    backend: *mut Backend,
-    argc: c_int,
-    argv: *const *const c_char,
-) -> c_int {
+pub(super) unsafe fn hl_c_backend_run(backend: *mut Backend, argc: c_int, argv: *const *const c_char) -> c_int {
     crate::loader::api()
         .ok()
         .and_then(|api| api.run)
@@ -261,6 +275,54 @@ pub(super) unsafe fn hl_c_backend_destroy(backend: *mut Backend) {
 #[cfg(feature = "native-test-hooks")]
 fn test_api() -> &'static crate::loader::TestApi {
     crate::loader::tests().unwrap_or_else(|error| panic!("native test bridge unavailable: {error}"))
+}
+
+#[cfg(feature = "native-test-hooks")]
+#[allow(dead_code)]
+pub(super) unsafe fn hl_c_backend_checkpoint_peer_authenticate_test(
+    descriptor: c_int,
+    claimed_pid: u64,
+    host_pid: *mut u64,
+    host_birth: *mut u64,
+) -> c_int {
+    unsafe { (test_api().checkpoint_peer_authenticate)(descriptor, claimed_pid, host_pid, host_birth) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(super) unsafe fn hl_c_backend_checkpoint_channel_connect_test(broker_child: c_int) -> c_int {
+    unsafe { (test_api().checkpoint_channel_connect)(broker_child) }
+}
+
+#[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
+pub(super) unsafe fn hl_c_backend_checkpoint_process_identity_open_test(
+    pid: c_int,
+    expected_birth: u64,
+    expected_generation: u64,
+    actual_birth: *mut u64,
+    actual_generation: *mut u64,
+) -> c_int {
+    unsafe {
+        (test_api().checkpoint_process_identity_open)(
+            pid,
+            expected_birth,
+            expected_generation,
+            actual_birth,
+            actual_generation,
+        )
+    }
+}
+
+#[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
+pub(super) unsafe fn hl_c_backend_checkpoint_peer_identity_open_test(
+    descriptor: c_int,
+    claimed_pid: u64,
+    actual_pid: *mut u64,
+    actual_birth: *mut u64,
+    actual_generation: *mut u64,
+) -> c_int {
+    unsafe {
+        (test_api().checkpoint_peer_identity_open)(descriptor, claimed_pid, actual_pid, actual_birth, actual_generation)
+    }
 }
 
 #[cfg(feature = "native-test-hooks")]
@@ -598,22 +660,8 @@ pub(crate) fn unix_identity_test(isa: u32, operation: u32, fd: i32, object: u64)
     let mut hidden = 0;
     let status = unsafe {
         match isa {
-            1 => hl_aarch64_unix_identity_test(
-                operation,
-                fd,
-                object,
-                &raw mut local,
-                &raw mut peer,
-                &raw mut hidden,
-            ),
-            2 => hl_x86_64_unix_identity_test(
-                operation,
-                fd,
-                object,
-                &raw mut local,
-                &raw mut peer,
-                &raw mut hidden,
-            ),
+            1 => hl_aarch64_unix_identity_test(operation, fd, object, &raw mut local, &raw mut peer, &raw mut hidden),
+            2 => hl_x86_64_unix_identity_test(operation, fd, object, &raw mut local, &raw mut peer, &raw mut hidden),
             _ => return Err(-libc::EINVAL),
         }
     };

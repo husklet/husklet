@@ -37,6 +37,13 @@ int hl_ckpt_channel_acquire(void) {
     return -1;
 }
 
+int hl_ckpt_channel_authenticate_peer(int descriptor, uint64_t claimed_pid, uint64_t *authenticated_pid) {
+    (void)descriptor;
+    (void)claimed_pid;
+    if (authenticated_pid != NULL) *authenticated_pid = 0;
+    return -1;
+}
+
 int hl_ckpt_channel_call(hl_ckpt_request *request, const char *name, const void *payload, hl_ckpt_reply *reply,
                          void *out, size_t capacity) {
     (void)request;
@@ -101,6 +108,9 @@ void hl_ckpt_trigger_destroy(void *mapping, hl_activation_descriptor descriptor)
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#if defined(__APPLE__)
+#include <sys/un.h>
+#endif
 #include <unistd.h>
 
 #include "../host/fork_wire.h"
@@ -111,6 +121,10 @@ static int checkpoint_broker = -1;
 static int checkpoint_trigger = -1;
 static int checkpoint_channel = -1;
 static long checkpoint_channel_owner; /* getpid() that created `checkpoint_channel` */
+#if defined(HL_NATIVE_TEST_HOOKS)
+static uint64_t checkpoint_test_claimed_pid;
+void hl_ckpt_channel_test_claimed_pid(uint64_t claimed_pid) { checkpoint_test_claimed_pid = claimed_pid; }
+#endif
 
 void hl_ckpt_channel_publish(int broker) {
     checkpoint_broker = broker;
@@ -213,6 +227,9 @@ int hl_ckpt_channel_acquire(void) {
     hello.magic = HL_CKPT_STREAM_MAGIC_HELLO;
     hello.abi = HL_CKPT_STREAM_ABI;
     hello.host_pid = (uint64_t)getpid();
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (checkpoint_test_claimed_pid != 0) hello.host_pid = checkpoint_test_claimed_pid;
+#endif
     if (hl_fork_wire_send_descriptors(checkpoint_broker, &hello, sizeof hello, &pair[1], 1) != 0) {
         (void)close(pair[0]);
         (void)close(pair[1]);
@@ -269,6 +286,39 @@ static int checkpoint_reserve_descriptor(int descriptor) {
     return moved;
 }
 
+/* The hello PID is framing only.  The stream endpoint is created by the
+ * announcing process after fork, so its kernel-owned peer credential is the
+ * authority.  Refuse platforms without an exact peer-PID query instead of
+ * silently falling back to attacker-controlled bytes. */
+int hl_ckpt_channel_authenticate_peer(int descriptor, uint64_t claimed_pid, uint64_t *out) {
+    uint64_t authenticated = 0;
+    if (out == NULL) return -1;
+    *out = 0;
+#if defined(__linux__)
+    struct ucred credentials;
+    socklen_t size = (socklen_t)sizeof credentials;
+    memset(&credentials, 0, sizeof credentials);
+    if (getsockopt(descriptor, SOL_SOCKET, SO_PEERCRED, &credentials, &size) != 0 ||
+        size != (socklen_t)sizeof credentials || credentials.pid <= 0)
+        return -1;
+    authenticated = (uint64_t)credentials.pid;
+#elif defined(__APPLE__)
+    pid_t pid = 0;
+    socklen_t size = (socklen_t)sizeof pid;
+    if (getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERPID, &pid, &size) != 0 ||
+        size != (socklen_t)sizeof pid || pid <= 0)
+        return -1;
+    authenticated = (uint64_t)pid;
+#else
+    (void)descriptor;
+    (void)out;
+    return -1;
+#endif
+    if (authenticated != claimed_pid) return -1;
+    *out = authenticated;
+    return 0;
+}
+
 int hl_ckpt_broker_pair(hl_activation_descriptor *out_parent, hl_activation_descriptor *out_child) {
     int pair[2];
     if (out_parent == NULL || out_child == NULL) return -1;
@@ -314,6 +364,7 @@ hl_activation_descriptor hl_ckpt_broker_accept(hl_activation_descriptor broker, 
     int count = 0;
     int ready;
     int channel;
+    uint64_t authenticated_pid = 0;
     if (broker == HL_ACTIVATION_DESCRIPTOR_NONE || broker > (hl_activation_descriptor)INT32_MAX)
         return HL_ACTIVATION_DESCRIPTOR_NONE;
     waiting = (struct pollfd){.fd = (int)broker, .events = POLLIN};
@@ -333,11 +384,15 @@ hl_activation_descriptor hl_ckpt_broker_accept(hl_activation_descriptor broker, 
     }
     channel = checkpoint_reserve_descriptor(descriptors[0]);
     if (channel < 0) return HL_ACTIVATION_DESCRIPTOR_NONE;
+    if (hl_ckpt_channel_authenticate_peer(channel, hello.host_pid, &authenticated_pid) != 0) {
+        (void)close(channel);
+        return HL_ACTIVATION_DESCRIPTOR_NONE;
+    }
     if (hl_engine_checkpoint_descriptors_register(channel, -1) != 0) {
         (void)close(channel);
         return HL_ACTIVATION_DESCRIPTOR_NONE;
     }
-    if (out_host_pid != NULL) *out_host_pid = hello.host_pid;
+    if (out_host_pid != NULL) *out_host_pid = authenticated_pid;
     return (hl_activation_descriptor)channel;
 }
 

@@ -7,6 +7,8 @@ use super::{
 
 impl Server {
     pub(super) fn dispatch(&self, id: u64, request: &Request, name: &str, payload: &[u8]) -> Reply {
+        #[cfg(test)]
+        self.dispatches.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         if !self.request_in_scope(id, request, name) {
             hl_log::hl_debug!(
                 hl_log::tag::CHECKPOINT,

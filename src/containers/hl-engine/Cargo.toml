@@ -20,6 +20,7 @@ zeroize.workspace = true
 libc = "0.2"
 
 [dev-dependencies]
+hl-native = { path = "../../runtime/hl-native", features = ["native-test-hooks"] }
 hl-process = { path = "../../packages/hl-process" }
 tempfile.workspace = true
 

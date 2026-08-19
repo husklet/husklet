@@ -29,6 +29,10 @@ int hl_ckpt_channel_adopt(const char *broker, const char *trigger);
  * child never shares a channel (and therefore never interleaves a request) with its parent.
  * Returns -1 when no broker was published or the connect failed. */
 int hl_ckpt_channel_acquire(void);
+int hl_ckpt_channel_authenticate_peer(int descriptor, uint64_t claimed_pid, uint64_t *authenticated_pid);
+#if defined(HL_NATIVE_TEST_HOOKS)
+void hl_ckpt_channel_test_claimed_pid(uint64_t claimed_pid);
+#endif
 
 /* One round trip. `name` (or NULL) is sent NUL-terminated; `payload` is `request->length` bytes. Reply
  * payload is copied into `out` (up to `capacity`); a longer reply is a protocol error. Returns 0 when a

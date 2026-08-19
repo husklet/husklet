@@ -18,7 +18,7 @@ const NATIVE_COMPILE_CHECK: EnvFlag = EnvFlag::new("HL_NATIVE_COMPILE_CHECK");
 const C_SANITIZER: EnvKey<NativeSanitizer> = EnvKey::new("HL_C_SANITIZER", NativeSanitizer::parse);
 const RUST_BRIDGE_EXPORTS: &str = include_str!("native/bridge/exports.txt");
 const TEST_HOOK_EXPORTS: &str = include_str!("native/bridge/test_exports.txt");
-const DARWIN_LIBRARIES: &[&str] = &["m", "pthread"];
+const DARWIN_LIBRARIES: &[&str] = &["bsm", "m", "pthread"];
 const ELF_LIBRARIES: &[&str] = &["atomic", "dl", "m", "pthread"];
 
 fn main() {

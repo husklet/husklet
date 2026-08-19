@@ -17,7 +17,7 @@ mod provider;
 mod artifact;
 
 #[cfg(unix)]
-pub use checkpoint::{CheckpointBroker, CheckpointTransport};
+pub use checkpoint::{AuthenticatedCheckpointPeer, CheckpointBroker, CheckpointTransport};
 pub use engine::{Engine, EngineConfig, Error, Exit};
 pub use loader::{LoadError, LoadKind};
 #[cfg(unix)]
@@ -175,6 +175,79 @@ pub fn unix_identity_capture_test(isa: u32, fd: i32) -> Result<(), i32> {
     bindings::unix_identity_capture_test(isa, fd)
 }
 
+#[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
+#[doc(hidden)]
+#[allow(unsafe_code)]
+pub fn checkpoint_process_identity_open_test(
+    pid: i32,
+    expected_birth: u64,
+    expected_generation: u64,
+) -> std::io::Result<(std::os::fd::OwnedFd, u64, u64)> {
+    use std::os::fd::FromRawFd;
+    let mut birth = 0;
+    let mut generation = 0;
+    let descriptor = unsafe {
+        bindings::hl_c_backend_checkpoint_process_identity_open_test(
+            pid,
+            expected_birth,
+            expected_generation,
+            &raw mut birth,
+            &raw mut generation,
+        )
+    };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok((
+        unsafe { std::os::fd::OwnedFd::from_raw_fd(descriptor) },
+        birth,
+        generation,
+    ))
+}
+
+#[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
+#[doc(hidden)]
+#[allow(unsafe_code)]
+pub fn checkpoint_peer_identity_open_test(
+    descriptor: std::os::fd::RawFd,
+    claimed_pid: u64,
+) -> std::io::Result<(std::os::fd::OwnedFd, u64, u64, u64)> {
+    use std::os::fd::FromRawFd;
+    let mut pid = 0;
+    let mut birth = 0;
+    let mut generation = 0;
+    let capability = unsafe {
+        bindings::hl_c_backend_checkpoint_peer_identity_open_test(
+            descriptor,
+            claimed_pid,
+            &raw mut pid,
+            &raw mut birth,
+            &raw mut generation,
+        )
+    };
+    if capability < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok((
+        unsafe { std::os::fd::OwnedFd::from_raw_fd(capability) },
+        pid,
+        birth,
+        generation,
+    ))
+}
+
+#[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
+#[doc(hidden)]
+pub fn checkpoint_process_authority_test(pid: i32) -> std::io::Result<AuthenticatedCheckpointPeer> {
+    let (process_handle, host_birth, host_generation) = checkpoint_process_identity_open_test(pid, 0, 0)?;
+    Ok(AuthenticatedCheckpointPeer {
+        host_pid: u64::try_from(pid).map_err(|_| std::io::ErrorKind::InvalidInput)?,
+        host_birth,
+        host_generation,
+        process_handle,
+    })
+}
+
 #[cfg(test)]
 mod platform;
 
@@ -196,6 +269,9 @@ mod tests {
             "Cargo-owned native library is missing: {}",
             library.display()
         );
-        assert_eq!(library.file_name().and_then(|name| name.to_str()), Some(artifact_filename()));
+        assert_eq!(
+            library.file_name().and_then(|name| name.to_str()),
+            Some(artifact_filename())
+        );
     }
 }
