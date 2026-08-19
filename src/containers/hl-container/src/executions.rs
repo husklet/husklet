@@ -99,9 +99,14 @@ impl Executions {
         self.service.remove_exec(id).await
     }
 
-    /// Restarts every execution whose durable checkpoint is ready to restore.
+    /// Reattaches every execution whose durable checkpoint is ready to restore.
     ///
-    /// Independent failures are returned together so startup can restore every viable execution
+    /// A sealed member's process is revived by the container's own whole-image restore, so this
+    /// never starts a process: relaunching the session's command would produce a second, fresh
+    /// process alongside the restored one and report it as recovered. Where no handle for the
+    /// restored member exists the record is reported as a failure, by name.
+    ///
+    /// Independent failures are returned together so startup can reattach every viable execution
     /// and report the complete degraded state instead of abandoning later records.
     ///
     /// # Errors
@@ -112,7 +117,7 @@ impl Executions {
             if execution.checkpoint.is_none() || !matches!(execution.state, ExecState::Created) {
                 continue;
             }
-            if let Err(error) = self.service.start_exec(&execution.id, None, false).await {
+            if let Err(error) = self.service.reattach_exec(&execution.id).await {
                 failures.push((execution.id, error));
             }
         }
