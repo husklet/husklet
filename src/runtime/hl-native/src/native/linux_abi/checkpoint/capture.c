@@ -59,6 +59,10 @@
 #include "../sink_stream.h" // the writer emits every image byte through the sink
 #include "../ckpt_source.h" // restore reads the image back through the symmetric source interface
 #include "../logical_vma.h"
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#endif
 
 #define CKPT_MAGIC UINT64_C(0x373054504b434c48)          // "HLCKPT07" (LE) -- per-process meta
 #define CKPT_MANIFEST_MAGIC UINT64_C(0x3730304e414d4c48) // "HLMAN007" (LE) -- workspace manifest
@@ -1453,6 +1457,84 @@ static int g_anon_shared_truncated;
 // Read the host mapping table ONCE per dump. Doing it per region would be O(regions x mappings)
 // inside the stop-the-world freeze, which the ~5s whole-tree budget cannot absorb on a guest with
 // thousands of mappings. Shared anonymous mappings are a handful even in a large cluster.
+//
+// THE MAPPING TABLE IS PER HOST OS, AND macOS HAS NO /proc. Reading /proc/self/maps unconditionally
+// made this scan report "unenumerable" on every Darwin host, so every macOS checkpoint refused --
+// which is a whole-platform outage, not a conservative refusal. Darwin's mapping table is the Mach
+// VM map, walked with mach_vm_region_recurse. `object_id` names the vm_object and is the exact
+// counterpart of Linux's shmem inode: minted by the kernel, identical in every task that maps the
+// object, and distinct between two objects. `share_mode` is the sharing discriminator, but it is
+// weaker than Linux's 's' character in a way the block below records rather than papers over.
+// Both hosts read the kernel's own record; neither guesses "private".
+#if defined(__APPLE__)
+// MEASURED ON macOS 26.3.1 (arm64), and every filter below exists because of one of these readings:
+//
+//  - `object_id` is the Darwin counterpart of the shmem inode: mmap(MAP_SHARED|MAP_ANON) read
+//    obj=3705039015 in the parent and the SAME 3705039015 in a forked child, while a second such
+//    mapping made back to back read 3976147844. That is the identity, and it is what this records.
+//  - `share_mode` reports how the object is ACTUALLY shared right now, not the mmap flag. The same
+//    MAP_SHARED region read SM_PRIVATE(2) before the fork and SM_SHARED(4) after it; a MAP_PRIVATE
+//    anonymous region read SM_COW(1) after the fork. So the shared modes select exactly the regions
+//    a sibling engine process also maps -- which is the whole population this exists to keep
+//    coherent -- and a MAP_SHARED region with only one mapper restores private, which no observer
+//    can distinguish. THE RESIDUAL GAP: a region mapped MAP_SHARED by one process at capture time
+//    and shared by a fork only after restore loses its sharing. Linux's 's' flag does not have that
+//    gap; Darwin exposes no MAP_SHARED bit to close it with.
+//  - `proc_regionfilename` is NOT usable as the file/anonymous discriminator: it answered
+//    "/usr/lib/dyld" for a freshly mmap'd anonymous shared region. `external_pager` is the honest
+//    vnode-backed marker, and named file mappings are carried by g_filemap regardless.
+//  - PROT_NONE rows are malloc's guard regions (user_tag 1) and read SM_TRUESHARED with no pager.
+//    They are not objects any guest reads, and excluding them keeps this table small.
+//
+// A stray host row that survives every filter (dyld's own region does) is inert: the table is only
+// ever consulted with a guest mapping's address and requires full containment, exactly as the
+// Linux table is.
+static int ckpt_anon_shared_mode(unsigned char share_mode) {
+    return share_mode == SM_SHARED || share_mode == SM_TRUESHARED || share_mode == SM_SHARED_ALIASED;
+}
+
+static void ckpt_anon_shared_scan(void) {
+    g_nanon_shared = 0;
+    g_anon_shared_truncated = 0;
+    mach_vm_address_t address = 0;
+    for (;;) {
+        mach_vm_size_t size = 0;
+        vm_region_submap_info_data_64_t info;
+        mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
+        // The depth is an IN/OUT parameter and must be re-armed for every query. Carrying it across
+        // iterations -- or advancing it on is_submap without advancing the address -- walks the map
+        // forever, which inside the stop-the-world freeze is a hang rather than a refusal. A fixed
+        // depth makes the call resolve submaps itself and never return one.
+        natural_t depth = 1;
+        memset(&info, 0, sizeof info);
+        kern_return_t status = mach_vm_region_recurse(mach_task_self(), &address, &size, &depth,
+                                                     (vm_region_recurse_info_t)&info, &count);
+        // KERN_INVALID_ADDRESS terminates the walk: no region at or above this address. Any other
+        // failure means the table was not fully read, which is the truncation this refuses on.
+        if (status == KERN_INVALID_ADDRESS) break;
+        if (status != KERN_SUCCESS) {
+            g_anon_shared_truncated = 1;
+            return;
+        }
+        if (size == 0) break;
+        if (ckpt_anon_shared_mode((unsigned char)info.share_mode) && info.external_pager == 0 && info.protection != 0 &&
+            info.object_id != 0) {
+            if (g_nanon_shared >= CKPT_ANON_SHARED_MAX) {
+                g_anon_shared_truncated = 1;
+                return;
+            }
+            // Darwin has no device number for a vm_object. A synthetic one keeps the Mach object id
+            // space disjoint from the (st_dev, st_ino) space the file-backed path hashes, so the two
+            // families can never collide inside one id.
+            g_anon_shared[g_nanon_shared++] = (struct ckpt_anon_shared_row){
+                (uint64_t)address, (uint64_t)address + (uint64_t)size, (uint64_t)info.offset,
+                ckpt_backing_values(UINT64_C(0xffffffffffffffff), (uint64_t)info.object_id)};
+        }
+        if ((uint64_t)address > UINT64_MAX - (uint64_t)size) break;
+        address += size;
+    }
+}
+#else
 static void ckpt_anon_shared_scan(void) {
     g_nanon_shared = 0;
     g_anon_shared_truncated = 0;
@@ -1492,6 +1574,7 @@ static void ckpt_anon_shared_scan(void) {
     }
     fclose(maps);
 }
+#endif
 
 static int ckpt_anon_shared_object(uint64_t address, uint64_t length, uint64_t *object_id, uint64_t *offset) {
     *object_id = 0;

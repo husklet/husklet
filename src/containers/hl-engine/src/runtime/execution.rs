@@ -449,11 +449,7 @@ impl CheckpointControl {
             }
             Err(failure) => {
                 self.phases.terminal(capture, 1);
-                Err(match failure {
-                    // The guest never reached its dump safepoint inside the checkpoint deadline.
-                    super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
-                    _ => EngineError::LaunchFailed,
-                })
+                Err(Self::capture_failure(failure))
             }
         }
     }
@@ -482,9 +478,8 @@ impl CheckpointControl {
             super::checkpoint::CaptureFailure::Busy => EngineError::Busy,
             super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
             super::checkpoint::CaptureFailure::Unfinalized => EngineError::CheckpointGenerationUnfinalized,
-            super::checkpoint::CaptureFailure::Failed | super::checkpoint::CaptureFailure::Poisoned => {
-                EngineError::LaunchFailed
-            }
+            super::checkpoint::CaptureFailure::Failed => EngineError::CaptureFailed,
+            super::checkpoint::CaptureFailure::Poisoned => EngineError::CapturePoisoned,
         }
     }
 
