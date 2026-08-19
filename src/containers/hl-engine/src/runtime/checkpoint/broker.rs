@@ -202,6 +202,8 @@ pub(super) struct AcceptedChannel {
 impl AcceptedChannel {
     pub(super) fn new(server: Arc<Server>) -> Self {
         server.connections.fetch_add(1, Ordering::AcqRel);
+        #[cfg(test)]
+        server.accepts.fetch_add(1, Ordering::AcqRel);
         Self { server }
     }
 }
