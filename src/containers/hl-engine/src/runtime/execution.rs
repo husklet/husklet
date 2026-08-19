@@ -336,7 +336,7 @@ impl CheckpointControl {
         isa: crate::activation::GuestIsa,
         deadline: std::time::Instant,
     ) -> Result<(), EngineError> {
-        use std::time::{Duration, Instant};
+        use std::time::Instant;
 
         if Instant::now() >= deadline {
             self.phases.terminal(0, 1);
@@ -375,23 +375,22 @@ impl CheckpointControl {
         }
         self.phases.finish(capture, "request_dispatch", dispatch);
         let completion = self.phases.begin();
-        let mut next_interrupt = Instant::now() + Duration::from_millis(100);
-        loop {
-            let result = match self.server.wait_capture(capture, next_interrupt) {
-                Ok(result) => result,
-                Err(_) => {
-                    self.phases.terminal(capture, 1);
-                    return Err(EngineError::LaunchFailed);
-                }
-            };
-            if let Some(result) = result {
+        let result = await_capture_completion(&self.server, capture, deadline, || {
+            let _ = engine.request(REQUEST_CHECKPOINT, signal);
+        });
+        match result {
+            Ok(result) => {
                 self.phases.finish(capture, "completion_wait", completion);
                 self.phases.terminal(capture, u32::from(result.is_err()));
-                return result.map_err(|failure| Self::capture_failure_with_exit(engine, failure));
+                result.map_err(|failure| Self::capture_failure_with_exit(engine, failure))
             }
-            if Instant::now() >= next_interrupt {
-                let _ = engine.request(REQUEST_CHECKPOINT, signal);
-                next_interrupt = Instant::now() + Duration::from_millis(100);
+            Err(failure) => {
+                self.phases.terminal(capture, 1);
+                Err(match failure {
+                    // The guest never reached its dump safepoint inside the checkpoint deadline.
+                    super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
+                    _ => EngineError::LaunchFailed,
+                })
             }
         }
     }
@@ -440,6 +439,42 @@ impl CheckpointControl {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         Self::capture_failure(failure)
+    }
+}
+
+/// Wait for a dispatched capture to reach a terminal result, re-issuing the guest checkpoint
+/// interrupt every 100ms until it does.
+///
+/// The wait is bounded by `deadline` here and not only by the deadline the server recorded with
+/// the capture: `Server::wait_capture` returns `Ok(None)` from phases that carry no deadline of
+/// their own (an in-flight abort settlement), so a loop that trusted the server to expire the
+/// capture would re-interrupt a stalled guest forever. Exceeding the deadline aborts the capture
+/// and reports `CaptureFailure::Deadline`, naming the completion wait as the stalled phase.
+#[cfg(unix)]
+pub(super) fn await_capture_completion(
+    server: &Server,
+    capture: u64,
+    deadline: std::time::Instant,
+    mut reinterrupt: impl FnMut(),
+) -> Result<Result<(), super::checkpoint::CaptureFailure>, super::checkpoint::CaptureFailure> {
+    use std::time::{Duration, Instant};
+
+    let mut next_interrupt = Instant::now() + Duration::from_millis(100);
+    loop {
+        match server.wait_capture(capture, next_interrupt.min(deadline)) {
+            Ok(Some(result)) => return Ok(result),
+            Ok(None) => {}
+            Err(failure) => return Err(failure),
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            let _ = server.abort_capture(capture);
+            return Err(super::checkpoint::CaptureFailure::Deadline);
+        }
+        if now >= next_interrupt {
+            reinterrupt();
+            next_interrupt = now + Duration::from_millis(100);
+        }
     }
 }
 

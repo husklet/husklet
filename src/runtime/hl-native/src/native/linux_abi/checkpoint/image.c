@@ -919,7 +919,7 @@ static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
     m.stack_lo = g_stack_lo;
     m.stack_hi = g_stack_hi;
     m.n_fds = (uint64_t)nfd;
-    if (ckpt_self_identity(&m) != 0) return -1;
+    if (ckpt_self_identity(&m) != 0) goto done; // common cleanup: frees fdrecs and reports the abort
     snprintf(m.exe_path, sizeof m.exe_path, "%s", g_exe_path ? g_exe_path : "");
     for (int s = 0; s < 65; s++) { // capture this process's guest signal dispositions (restored on thaw)
         m.sig_handler[s] = g_sigact[s].handler;
