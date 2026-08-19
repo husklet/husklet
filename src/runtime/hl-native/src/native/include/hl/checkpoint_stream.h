@@ -70,8 +70,22 @@ typedef enum hl_ckpt_stream_op {
        thread registry is held; payload is [u32 count][u32 zero][u32 executor]*count, and
        reply.value is the server-assigned member ID. No image bytes may be published by a
        process that has not been acknowledged for the running capture generation. */
-    HL_CKPT_OP_REGISTER_READY = 20
+    HL_CKPT_OP_REGISTER_READY = 20,
+    /* Park release. Sent repeatedly by a member that has finished its own group and is holding its
+       whole-process freeze (every thread stopped, thread registry held). The reply names what the
+       member must do next, and is the ONLY thing that ends a park:
+         HL_CKPT_RELEASE_HOLD   the capture is still running -- stay stopped and alive
+         HL_CKPT_RELEASE_EXIT   the manifest committed -- the image owns this process now
+         HL_CKPT_RELEASE_RESUME the capture will not be published -- unfreeze and run again
+       Read-only and never a mutation, so a parked member cannot hold the manifest publication
+       behind it. A transport failure (the broker died) is read as RESUME by the member: release is
+       tied to the broker's descriptor, so a dead coordinator cannot leave the tree frozen. */
+    HL_CKPT_OP_RELEASE_WAIT = 21
 } hl_ckpt_stream_op;
+
+#define HL_CKPT_RELEASE_HOLD UINT64_C(0)
+#define HL_CKPT_RELEASE_EXIT UINT64_C(1)
+#define HL_CKPT_RELEASE_RESUME UINT64_C(2)
 
 /* Announces one engine process on the broker. Carries exactly one descriptor: that process's channel. */
 typedef struct hl_ckpt_hello {

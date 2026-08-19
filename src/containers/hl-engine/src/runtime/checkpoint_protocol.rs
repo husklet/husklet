@@ -31,6 +31,13 @@ pub(super) const SOURCE_SIZE: u32 = 17;
 pub(super) const SOURCE_READ: u32 = 18;
 pub(super) const RECOVERY_COMPLETE: u32 = 19;
 pub(super) const REGISTER_READY: u32 = 20;
+pub(super) const RELEASE_WAIT: u32 = 21;
+
+/// What a parked member must do next. `RELEASE_WAIT` answers with exactly one of
+/// these, and it is the only thing that ends a park.
+pub(super) const RELEASE_HOLD: u64 = 0;
+pub(super) const RELEASE_EXIT: u64 = 1;
+pub(super) const RELEASE_RESUME: u64 = 2;
 
 #[derive(Debug)]
 pub(super) struct Request {

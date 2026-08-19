@@ -51,11 +51,6 @@ const DEFINITIONS: &[Definition] = &[
         "inject an unavailable checkpoint phase clock",
         Flag
     ),
-    internal!(
-        "HL_CKPT_TEST_EXACT_TOPOLOGY",
-        "test a fixture-owned exact participant set without the legacy settlement delay",
-        Flag
-    ),
     internal!("HL_CHECKPOINT_PHASE_ISA", "checkpoint phase ledger guest ISA", Text),
     internal!(
         "HL_CHECKPOINT_PHASE_GENERATION",

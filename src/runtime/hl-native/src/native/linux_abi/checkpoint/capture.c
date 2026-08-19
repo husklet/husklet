@@ -492,7 +492,32 @@ struct ckpt_socket_state {
 // g_ckpt_trigger / g_ckpt_seen_gen live in container/state.c (early include) so signal.c's blocking-syscall
 // restart decision (ckpt_pending) can consult them too.
 
-static int ckpt_dump_self(struct cpu *c, const char *group);
+// The disposition the coordinator released this process with (HL_CKPT_RELEASE_*), or RESUME when it never
+// parked. Written by ckpt_dump_self at the end of its park; read by ckpt_poll to decide exit-versus-resume.
+static uint64_t g_ckpt_release_state = HL_CKPT_RELEASE_RESUME;
+
+// Set the moment this process wins an image-wide claim on a SHARED kernel object (a pipe, a socket queue),
+// because winning the claim is the point at which it becomes the one that DRAINS that object. The drain is
+// destructive -- recvmsg(MSG_DONTWAIT) consumes, and MSG_PEEK is not an alternative: it installs a fresh
+// descriptor in this process for every in-flight SCM_RIGHTS, so peeking a queue leaks a descriptor per peek.
+//
+// ABORT CONTRACT, stated rather than retrofitted:
+//   * an abort BEFORE this flag is set leaves the container running unharmed -- nothing was consumed, and
+//     every member simply resumes out of its park;
+//   * an abort AFTER it is set is TERMINAL for this member. Its queues have been consumed and there is no
+//     roll-back phase yet, so resuming would hand the guest a silently emptied pipe or socket. It exits
+//     instead of pretending the container is intact.
+// The non-destructive route is closed, not unexplored (MSG_PEEK, above); the route that reopens "unharmed"
+// after a drain is roll-back UNDER the freeze -- re-injecting each drained message by writing the PEER's
+// end, performed by the member holding that end, which is still parked and still cooperative, and arbitrated
+// by the same claim protocol in reverse. It is orderable only because of the park: with every member frozen,
+// nothing can read or write the object between the drain and the write-back. Two known bounds when it is
+// built: the refill must be done by the far-end owner, and SCM_CREDENTIALS on re-injected messages would be
+// recomputed to the re-injector's identity (SCM_RIGHTS is safe -- those descriptors are in flight, not yet
+// guest-visible). Until then this flag is what keeps a post-drain abort honest.
+static int g_ckpt_capture_destructive;
+
+static int ckpt_dump_self(struct cpu *c, const char *group, int park);
 static void ckpt_coordinate_and_exit(struct cpu *c);
 
 /* Linux renders an unlinked descriptor as "<path> (deleted)".  A concurrent
@@ -634,6 +659,7 @@ static int ckpt_capture_pipe_reason(int fd, uint64_t identity, const char **reas
         *cause = errno;
         return -1;
     }
+    g_ckpt_capture_destructive = 1; // winning the claim makes this process the one that CONSUMES the pipe
     struct ckpt_sink_stream *output = NULL;
     if (ckpt_sink_begin(sink, NULL, name, CKPT_SINK_PUBLISH_ATOMIC, &output) != 0) {
         *reason = "sink refused to open the pipe object";
@@ -750,6 +776,7 @@ static int ckpt_capture_socket_queue(int fd, uint64_t identity, uint32_t type) {
     snprintf(name, sizeof name, "socket.%016llx", (unsigned long long)identity);
     int claimed = ckpt_sink_claim(sink, name);
     if (claimed != 0) return claimed > 0 ? 0 : -1;
+    g_ckpt_capture_destructive = 1; // this process drains the receive queue; the bytes leave the kernel
     struct ckpt_sink_stream *output = NULL;
     if (ckpt_sink_begin(sink, NULL, name, CKPT_SINK_PUBLISH_ATOMIC, &output) != 0) return -1;
     struct ckpt_socket_queue_header header = {CKPT_SOCKET_QUEUE_MAGIC, type, 0};
@@ -1044,9 +1071,26 @@ static void ckpt_poll(struct cpu *c) {
     }
     char pd[64];
     snprintf(pd, sizeof pd, "proc.%d", container_pid());
-    int rc = ckpt_dump_self(c, pd);
-    fprintf(stderr, "[ckpt] proc %d %s\n", container_pid(), rc == 0 ? "OK" : "FAILED");
-    _exit(rc == 0 ? 0 : 70);
+    // PARK, do not exit. ckpt_dump_self holds this process's whole freeze across the coordinator's decision,
+    // so every member is simultaneously stopped AND ALIVE for the entire capture -- which is the only state
+    // in which "both owners of this shared object were frozen when it was captured" is a provable fact
+    // rather than an inference from group membership. Only the coordinator's release ends the freeze.
+    int rc = ckpt_dump_self(c, pd, 1);
+    uint64_t released = g_ckpt_release_state;
+    fprintf(stderr, "[ckpt] proc %d %s (%s)\n", container_pid(), rc == 0 ? "OK" : "FAILED",
+            released == HL_CKPT_RELEASE_EXIT ? "released: image published" : "released: capture abandoned");
+    if (rc == 0 && released == HL_CKPT_RELEASE_EXIT) _exit(0);
+    if (released == HL_CKPT_RELEASE_EXIT || g_ckpt_capture_destructive) {
+        // Either the image owns this process and its own dump failed, or the capture was abandoned after
+        // this process had already consumed a shared pipe or socket queue. Neither leaves a guest that can
+        // be resumed honestly; see the abort contract on g_ckpt_capture_destructive.
+        fprintf(stderr, "[ckpt] proc %d cannot resume: its capture was destructive and was not published\n",
+                container_pid());
+        _exit(70);
+    }
+    // Nothing was consumed and nothing was published: the container is unharmed and the guest runs on.
+    atomic_store_explicit(&g_ckpt_fanout_gen, g, memory_order_release);
+    return;
 }
 
 // Export the exact host control signal selected by this unity translation unit. Embedders must not

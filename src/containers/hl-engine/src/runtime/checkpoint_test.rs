@@ -2164,3 +2164,303 @@ fn an_unregistered_channel_cannot_publish_and_fails_the_capture_by_name() {
     );
     server.stop();
 }
+
+// =============================== park and release (plan step 4) ===============================
+//
+// The property under test is the one the whole freeze rests on and the one today's `_exit` peer arm
+// cannot provide: TWO members simultaneously STOPPED AND ALIVE across ONE shared-object capture, and
+// then both RESUMED. "Stopped" is proved by the member being inside its park loop and nowhere else;
+// "alive" is proved by its park heartbeat still arriving AFTER the other member has finished draining
+// the shared object; "resumed" is proved by each member leaving the park and running again.
+//
+// The members are real forked processes on real authenticated channels against the real Server, because
+// the property is about two host processes existing at the same instant. A mock cannot state it.
+
+const PARK_EVENT_PROGRESSING: u8 = b'P';
+const PARK_EVENT_REGISTERED: u8 = b'R';
+const PARK_EVENT_HEARTBEAT: u8 = b'H';
+const PARK_EVENT_DRAINED: u8 = b'D';
+const PARK_EVENT_RESUMED: u8 = b'S';
+const PARK_EVENT_EXIT_DISPOSITION: u8 = b'X';
+const PARK_SHARED_OBJECT_BYTES: usize = 16;
+
+fn park_pipe() -> [i32; 2] {
+    let mut ends = [-1; 2];
+    // SAFETY: ends names writable storage for two new descriptors.
+    assert_eq!(unsafe { libc::pipe(ends.as_mut_ptr()) }, 0);
+    ends
+}
+
+/// One request/response round trip written by hand, exactly as the engine's C client frames it.
+/// Fork-safe: no allocation, no Rust synchronization, only the inherited descriptor.
+fn park_call(channel: i32, op: u32, name: &[u8], payload: &[u8], generation: u32) -> Option<(i32, u64)> {
+    let mut request = [0_u8; protocol::REQUEST_BYTES];
+    request[0..4].copy_from_slice(&protocol::MAGIC_REQUEST.to_ne_bytes());
+    request[4..8].copy_from_slice(&protocol::ABI.to_ne_bytes());
+    request[8..12].copy_from_slice(&op.to_ne_bytes());
+    request[32..40].copy_from_slice(&(payload.len() as u64).to_ne_bytes());
+    request[40..44].copy_from_slice(&(name.len() as u32).to_ne_bytes());
+    request[44..48].copy_from_slice(&generation.to_ne_bytes());
+    park_write(channel, &request)?;
+    if !name.is_empty() {
+        park_write(channel, name)?;
+    }
+    if !payload.is_empty() {
+        park_write(channel, payload)?;
+    }
+    let mut reply = [0_u8; 32];
+    park_read(channel, &mut reply)?;
+    let status = i32::from_ne_bytes(reply[8..12].try_into().ok()?);
+    let value = u64::from_ne_bytes(reply[16..24].try_into().ok()?);
+    Some((status, value))
+}
+
+fn park_write(descriptor: i32, bytes: &[u8]) -> Option<()> {
+    let mut written = 0;
+    while written < bytes.len() {
+        // SAFETY: the slice is live for the call and the descriptor is owned by this process.
+        let count = unsafe { libc::write(descriptor, bytes[written..].as_ptr().cast(), bytes.len() - written) };
+        if count <= 0 {
+            return None;
+        }
+        written += count as usize;
+    }
+    Some(())
+}
+
+fn park_read(descriptor: i32, bytes: &mut [u8]) -> Option<()> {
+    let mut read = 0;
+    while read < bytes.len() {
+        // SAFETY: the slice is live and writable for the call.
+        let count = unsafe { libc::read(descriptor, bytes[read..].as_mut_ptr().cast(), bytes.len() - read) };
+        if count <= 0 {
+            return None;
+        }
+        read += count as usize;
+    }
+    Some(())
+}
+
+fn park_emit(events: i32, tag: u8) {
+    let byte = [tag];
+    // SAFETY: a one-byte write to an inherited pipe end this process owns.
+    unsafe { libc::write(events, byte.as_ptr().cast(), 1) };
+}
+
+/// Blocks until a byte with `tag` arrives, and fails the test rather than hanging forever.
+fn park_await(events: i32, tag: u8, what: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let mut byte = [0_u8; 1];
+        assert!(std::time::Instant::now() < deadline, "timed out waiting for {what}");
+        // SAFETY: byte is writable and the descriptor is owned here.
+        let count = unsafe { libc::read(events, byte.as_mut_ptr().cast(), 1) };
+        assert!(count == 1, "member channel closed while waiting for {what}");
+        if byte[0] == tag {
+            return;
+        }
+        assert_ne!(
+            byte[0], PARK_EVENT_EXIT_DISPOSITION,
+            "member was released to EXIT, not {what}"
+        );
+    }
+}
+
+/// The park loop, written exactly as the engine's C park is: poll `RELEASE_WAIT`, do nothing else, and
+/// treat a transport failure as RESUME so a dead broker can never leave this process frozen.
+fn park_member(channel: i32, events: i32, generation: u32) -> u64 {
+    loop {
+        let state = match park_call(channel, protocol::RELEASE_WAIT, &[], &[], generation) {
+            Some((protocol::STATUS_OK, value)) => value,
+            _ => protocol::RELEASE_RESUME,
+        };
+        if state != protocol::RELEASE_HOLD {
+            return state;
+        }
+        park_emit(events, PARK_EVENT_HEARTBEAT);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+fn park_register_ready(channel: i32, generation: u32, executor: u32) -> bool {
+    let mut payload = [0_u8; 12];
+    payload[0..4].copy_from_slice(&1_u32.to_ne_bytes());
+    payload[8..12].copy_from_slice(&executor.to_ne_bytes());
+    matches!(
+        park_call(channel, protocol::REGISTER_READY, &[], &payload, generation),
+        Some((protocol::STATUS_OK, member)) if member != 0
+    )
+}
+
+#[test]
+fn two_members_stay_stopped_and_alive_across_one_shared_object_capture_and_then_resume() {
+    static SERIAL: Mutex<()> = Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    const GENERATION: u32 = 7;
+
+    let (broker, transport) = hl_native::CheckpointTransport::create().expect("checkpoint transport");
+    // The shared object both members hold: one end each, bytes in flight, captured destructively by
+    // whichever member wins the image-wide claim.
+    let shared = park_pipe();
+    let events = [park_pipe(), park_pipe()];
+    let start = park_pipe();
+    let gate = park_pipe();
+    assert_eq!(
+        park_write(shared[1], &[0xab; PARK_SHARED_OBJECT_BYTES]),
+        Some(()),
+        "seed the shared object"
+    );
+
+    let mut members = [0; 2];
+    for (index, member) in members.iter_mut().enumerate() {
+        // SAFETY: the child touches only inherited descriptors and terminates with _exit, so no Rust
+        // destructor, lock, or allocator state crosses the fork.
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0, "fork checkpoint member");
+        if child == 0 {
+            let events = events[index][1];
+            let channel = transport.connect_for_test().expect("member checkpoint channel");
+            let channel = channel.as_raw_fd();
+            let mut byte = [0_u8; 1];
+            assert_eq!(park_read(start[0], &mut byte), Some(()), "capture start gate");
+            // Progressing BEFORE the freeze: without this the fixture could pass on two members that
+            // were never running in the first place.
+            park_emit(events, PARK_EVENT_PROGRESSING);
+            let registered = park_register_ready(channel, GENERATION, 100 + index as u32);
+            // SAFETY: no Rust destructors are run after fork.
+            if !registered {
+                unsafe { libc::_exit(81) }
+            }
+            park_emit(events, PARK_EVENT_REGISTERED);
+            if index == 1 {
+                // The second member owns the shared-object capture. It waits to be let in so the first
+                // member is provably already parked when the drain happens.
+                let mut byte = [0_u8; 1];
+                assert_eq!(park_read(gate[0], &mut byte), Some(()), "shared-object gate");
+                let claimed = park_call(channel, protocol::CLAIM, b"pipe.shared\0", &[], GENERATION);
+                // SAFETY: no Rust destructors are run after fork.
+                if claimed != Some((protocol::STATUS_OK, 0)) {
+                    unsafe { libc::_exit(82) }
+                }
+                // FIRST-CLAIM: every other holder of this object is told it is already taken and returns
+                // without touching the fd. That is what keeps the coordinator out of a parked member.
+                let repeat = park_call(channel, protocol::CLAIM, b"pipe.shared\0", &[], GENERATION);
+                // SAFETY: no Rust destructors are run after fork.
+                if repeat != Some((protocol::STATUS_ALREADY, 0)) {
+                    unsafe { libc::_exit(83) }
+                }
+                let mut drained = [0_u8; PARK_SHARED_OBJECT_BYTES];
+                let complete =
+                    park_read(shared[0], &mut drained) == Some(()) && drained.iter().all(|byte| *byte == 0xab);
+                // SAFETY: no Rust destructors are run after fork.
+                if !complete {
+                    unsafe { libc::_exit(84) }
+                }
+                park_emit(events, PARK_EVENT_DRAINED);
+            }
+            let state = park_member(channel, events, GENERATION);
+            park_emit(
+                events,
+                if state == protocol::RELEASE_EXIT {
+                    PARK_EVENT_EXIT_DISPOSITION
+                } else {
+                    PARK_EVENT_RESUMED
+                },
+            );
+            // SAFETY: no Rust destructors are run after fork.
+            unsafe { libc::_exit(0) }
+        }
+        *member = child;
+    }
+
+    let server = Arc::new(Server::new(Arc::new(Store), Arc::new(Store)));
+    let id = server
+        .begin_capture(GENERATION, std::time::Instant::now() + Duration::from_secs(60))
+        .expect("capture generation");
+    for _ in 0..members.len() {
+        let (channel, authority) = broker
+            .accept(Duration::from_secs(20))
+            .expect("authenticated member accept");
+        let worker = Arc::clone(&server);
+        std::thread::spawn(move || worker.serve_authenticated_for_test(channel, authority));
+    }
+    server.await_accepts(members.len());
+    assert_eq!(park_write(start[1], b"gg"), Some(()), "release both members");
+
+    for member in &events {
+        park_await(member[0], PARK_EVENT_PROGRESSING, "pre-freeze progress");
+        park_await(member[0], PARK_EVENT_REGISTERED, "REGISTER_READY");
+    }
+    // Member 0 is now inside its park, and nowhere else: the only thing it emits from here on is the
+    // park heartbeat.
+    park_await(events[0][0], PARK_EVENT_HEARTBEAT, "first member to park");
+    assert_eq!(park_write(gate[1], b"g"), Some(()), "admit the shared-object capture");
+    park_await(events[1][0], PARK_EVENT_DRAINED, "shared object captured");
+
+    // THE PROPERTY. The shared object has been captured destructively by member 1, and member 0 -- the
+    // holder of the other end -- is still stopped inside its park AND still alive: it answers with a
+    // heartbeat emitted after the drain, and the kernel still has it. Under today's `_exit` peer arm
+    // member 0 would already be a corpse here and neither assertion could hold.
+    park_await(
+        events[0][0],
+        PARK_EVENT_HEARTBEAT,
+        "first member alive after the capture",
+    );
+    park_await(
+        events[1][0],
+        PARK_EVENT_HEARTBEAT,
+        "second member parked after the capture",
+    );
+    for member in members {
+        // SAFETY: signal 0 only probes for the process; it delivers nothing.
+        assert_eq!(
+            unsafe { libc::kill(member, 0) },
+            0,
+            "member {member} died inside the freeze"
+        );
+    }
+
+    // ABORT BEFORE RELEASE. Nothing was published, so every member is told to resume and the container
+    // survives. (Member 1 drained a shared object, so the engine's own abort contract makes ITS resume
+    // terminal; that decision belongs to the member, and the protocol's answer here is RESUME.)
+    server.abort_capture(id).expect("abort the capture");
+    for member in &events {
+        park_await(member[0], PARK_EVENT_RESUMED, "member resumed out of its park");
+    }
+    for member in members {
+        let mut status = 0;
+        // SAFETY: member is a direct unreaped child and status is writable.
+        assert_eq!(unsafe { libc::waitpid(member, &raw mut status, 0) }, member);
+        assert!(libc::WIFEXITED(status), "member {member} did not exit cleanly");
+        assert_eq!(libc::WEXITSTATUS(status), 0, "member {member} park protocol failed");
+    }
+    drop(transport);
+    server.stop();
+}
+
+#[test]
+fn a_parked_member_is_released_to_exit_only_once_the_manifest_has_committed() {
+    let store = Arc::new(TransactionStore::default());
+    let server = Arc::new(Server::new(store.clone(), store));
+    server
+        .begin_capture(9, std::time::Instant::now() + Duration::from_secs(60))
+        .expect("capture generation");
+    // Running capture: HOLD, and only for this member's own generation.
+    assert_eq!(server.release_disposition(9), protocol::RELEASE_HOLD);
+    assert_eq!(server.release_disposition(8), protocol::RELEASE_RESUME);
+    server.publish_manifest(&[0_u8; 8]).expect("publish the manifest");
+    assert_eq!(server.release_disposition(9), protocol::RELEASE_EXIT);
+    assert!(server.committed(), "EXIT was answered without a committed image");
+
+    // A capture that is abandoned releases every member to RESUME instead, which is the whole
+    // "an abort before release leaves the container running" half of the contract.
+    let store = Arc::new(TransactionStore::default());
+    let server = Arc::new(Server::new(store.clone(), store));
+    let id = server
+        .begin_capture(9, std::time::Instant::now() + Duration::from_secs(60))
+        .expect("capture generation");
+    assert_eq!(server.release_disposition(9), protocol::RELEASE_HOLD);
+    server.abort_capture(id).expect("abort the capture");
+    assert_eq!(server.release_disposition(9), protocol::RELEASE_RESUME);
+    assert!(!server.committed());
+}
