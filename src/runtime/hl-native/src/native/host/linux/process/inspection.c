@@ -283,6 +283,63 @@ int hl_host_process_fds(int64_t pid, hl_host_process_fd *entries, size_t capacit
     return 1;
 }
 
+int hl_host_process_fds_collect(int64_t pid, hl_host_process_fd **entries, size_t *count) {
+    char path[64];
+    DIR *directory;
+    struct dirent *item;
+    hl_host_process_info process;
+    hl_host_process_fd *listing = NULL;
+    size_t capacity = 0;
+    size_t total = 0;
+    if (entries == NULL || count == NULL || pid <= 0) return 0;
+    *entries = NULL;
+    *count = 0;
+    if (!hl_host_process_read(pid, &process)) return 0;
+    snprintf(path, sizeof path, "/proc/%lld/fd", (long long)pid);
+    directory = opendir(path);
+    if (directory == NULL) return 0;
+    item = readdir(directory);
+    while (item != NULL) {
+        char *end = NULL;
+        long descriptor;
+        errno = 0;
+        descriptor = strtol(item->d_name, &end, 10);
+        if (errno == 0 && end != item->d_name && *end == '\0' && descriptor >= 0 && descriptor <= INT32_MAX) {
+            if (total == capacity) {
+                size_t grown = capacity == 0 ? 64 : capacity * 2;
+                hl_host_process_fd *resized;
+                if (grown <= capacity || grown > SIZE_MAX / sizeof *listing) {
+                    free(listing);
+                    closedir(directory);
+                    return 0;
+                }
+                resized = realloc(listing, grown * sizeof *listing);
+                if (resized == NULL) {
+                    free(listing);
+                    closedir(directory);
+                    return 0;
+                }
+                listing = resized;
+                capacity = grown;
+            }
+            listing[total].descriptor = (int32_t)descriptor;
+            listing[total].kind = HL_HOST_FD_OTHER;
+            listing[total].flags = hl_host_process_fd_private_is(pid, process.start_time_ns, (int)descriptor)
+                                       ? HL_HOST_PROCESS_FD_ENGINE_PRIVATE
+                                       : 0;
+            listing[total].reserved = 0;
+            listing[total].stable_device = 0;
+            listing[total].stable_object = 0;
+            total++;
+        }
+        item = readdir(directory);
+    }
+    closedir(directory);
+    *entries = listing;
+    *count = total;
+    return 1;
+}
+
 int hl_host_process_peers(hl_host_process_peer *entries, size_t capacity, size_t *count) {
     char self_path[PATH_MAX + 1];
     char path[PATH_MAX + 1];

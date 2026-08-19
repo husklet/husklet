@@ -49,13 +49,12 @@ static int exec_image_is_write_open_scan(const struct stat *image, int limit) {
 // is the same live-table snapshot used by the CLOEXEC sweep below rather than a claim of atomic host exec exclusion.
 static int exec_image_is_write_open(const struct stat *image) {
     if (hl_linux_writable_identity_open(g_linux_box, (uint64_t)image->st_dev, (uint64_t)image->st_ino)) return 1;
-    size_t need = 0;
-    if (!hl_host_process_fds(getpid(), NULL, 0, &need)) return exec_image_is_write_open_scan(image, getdtablesize());
-    size_t capacity = need <= SIZE_MAX - 32 ? need + 32 : need;
-    hl_host_process_fd *fds = capacity != 0 ? malloc(capacity * sizeof *fds) : NULL;
-    if (!fds) return exec_image_is_write_open_scan(image, getdtablesize());
+    hl_host_process_fd *fds = NULL;
     size_t count = 0;
-    if (!hl_host_process_fds(getpid(), fds, capacity, &count) || count > capacity) {
+    // One enumeration, not a sizing pass plus a listing pass: on Linux each pass is a full kernel walk of
+    // the fd TABLE (65536+ slots once the engine-private band is anchored), so the second pass cost as much
+    // as the first and bought only a length this call already gets back.
+    if (!hl_host_process_fds_collect(getpid(), &fds, &count)) {
         free(fds);
         return exec_image_is_write_open_scan(image, getdtablesize());
     }

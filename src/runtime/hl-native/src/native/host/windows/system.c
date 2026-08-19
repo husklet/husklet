@@ -142,6 +142,14 @@ int hl_host_process_fds(int64_t pid, hl_host_process_fd *entries, size_t capacit
     return 0;
 }
 
+/* REFUSAL, for the same reason hl_host_process_fds refuses: no descriptor enumeration on this host. */
+int hl_host_process_fds_collect(int64_t pid, hl_host_process_fd **entries, size_t *count) {
+    (void)pid;
+    if (entries != NULL) *entries = NULL;
+    if (count != NULL) *count = 0;
+    return 0;
+}
+
 int hl_host_process_fd_read(int64_t pid, int32_t descriptor, hl_host_process_fd *entry, char *path,
                             size_t path_capacity, size_t *path_size) {
     (void)pid;

@@ -91,6 +91,15 @@ int hl_host_process_resource_read(hl_host_process_resource_snapshot *snapshot);
 
 /* Enumerate descriptor numbers. kind may remain OTHER until fd_read; count includes truncated entries. */
 int hl_host_process_fds(int64_t pid, hl_host_process_fd *entries, size_t capacity, size_t *count);
+/* Collect every descriptor in ONE enumeration pass, allocating the listing for the caller (free() it).
+ * The size-then-list pair that callers used to write costs TWO passes, and on Linux one pass over
+ * /proc/<pid>/fd is O(fd-TABLE SIZE) in the kernel -- 1.14 ms on a table the engine-private descriptor
+ * band has expanded to 65536 slots, whatever the handful of descriptors actually open. Sizing separately
+ * therefore doubled the most expensive call in execve. Growing the buffer inside the pass also removes
+ * the truncation race the two-call form had to fall back on: no descriptor can be opened between a
+ * sizing call and a listing call that no longer exist. Returns zero when enumeration is unavailable, in
+ * which case the caller must keep its bounded linear-scan fallback. */
+int hl_host_process_fds_collect(int64_t pid, hl_host_process_fd **entries, size_t *count);
 int hl_host_process_fd_private_add(int descriptor);
 /* Takes ownership of descriptor on success and returns its relocated engine-private number; leaves the
  * input open and returns a negative errno on failure. */

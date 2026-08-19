@@ -217,31 +217,17 @@ static void exec_close_cloexec(void) {
     // scanning. Host process inspection returns just the live descriptors (a couple dozen), so the sweep becomes
     // O(open fds). The real close-on-exec semantics are unchanged: every open non-engine CLOEXEC fd is
     // still closed. Fall back to a bounded linear scan only if host enumeration is unavailable.
-    size_t need = 0;
     exec_close_bound_cloexec_all();
-    if (!hl_host_process_fds(getpid(), NULL, 0, &need)) {
-        exec_close_cloexec_scan(getdtablesize());
-        return;
-    }
-    // Over-allocate a little: fds can be opened between the sizing call and the listing call.
-    size_t cap = need <= SIZE_MAX - 32 ? need + 32 : need;
-    hl_host_process_fd *fds = cap != 0 ? malloc(cap * sizeof *fds) : NULL;
-    if (!fds) {
-        exec_close_cloexec_scan(getdtablesize());
-        return;
-    }
+    // ONE enumeration pass. The old size-then-list pair walked /proc/self/fd twice, and each walk is
+    // O(fd-TABLE SIZE) inside the kernel -- ~1.1ms per pass once the engine-private descriptor band has
+    // expanded this process's table to 65536+ slots, whatever the ~30 descriptors actually open. The
+    // collecting form also retires the truncation hazard the old comment describes: the buffer grows
+    // inside the single pass, so there is no window between a sizing call and a listing call in which a
+    // descriptor can appear and have its tail silently dropped. Enumeration failure still falls back to
+    // the exhaustive bounded scan, which cannot miss.
+    hl_host_process_fd *fds = NULL;
     size_t got = 0;
-    if (!hl_host_process_fds(getpid(), fds, cap, &got)) {
-        free(fds);
-        exec_close_cloexec_scan(getdtablesize());
-        return;
-    }
-    // Truncated listing: more fds were open than the sized buffer could hold (they can be opened between
-    // the sizing call and this one, which is why cap was over-allocated in the first place). Clamping
-    // `got` here silently dropped the tail, leaving those CLOEXEC descriptors OPEN across the exec -- the
-    // exact leak this sweep exists to prevent, and one that only shows up when the process is busy enough
-    // to win that race. Fall back to the exhaustive scan, which cannot miss.
-    if (got > cap) {
+    if (!hl_host_process_fds_collect(getpid(), &fds, &got)) {
         free(fds);
         exec_close_cloexec_scan(getdtablesize());
         return;

@@ -200,6 +200,31 @@ int hl_host_process_fds(int64_t pid, hl_host_process_fd *entries, size_t capacit
     return 1;
 }
 
+/* Darwin's PROC_PIDLISTFDS sizing call is not the pathological one Linux's /proc readdir is, so this
+ * keeps the size-then-list shape and over-allocates against the same open-in-between race the two-call
+ * form always had. Callers see the single-pass contract either way. */
+int hl_host_process_fds_collect(int64_t pid, hl_host_process_fd **entries, size_t *count) {
+    hl_host_process_fd *listing;
+    size_t need = 0;
+    size_t capacity;
+    size_t got = 0;
+    if (entries == NULL || count == NULL) return 0;
+    *entries = NULL;
+    *count = 0;
+    if (!hl_host_process_fds(pid, NULL, 0, &need)) return 0;
+    capacity = need <= SIZE_MAX - 32 ? need + 32 : need;
+    if (capacity > SIZE_MAX / sizeof *listing) return 0;
+    listing = capacity != 0 ? malloc(capacity * sizeof *listing) : NULL;
+    if (capacity != 0 && listing == NULL) return 0;
+    if (!hl_host_process_fds(pid, listing, capacity, &got) || got > capacity) {
+        free(listing);
+        return 0;
+    }
+    *entries = listing;
+    *count = got;
+    return 1;
+}
+
 int hl_host_process_fd_read(int64_t pid, int32_t descriptor, hl_host_process_fd *entry, char *path,
                             size_t path_capacity, size_t *path_size) {
     struct vnode_fdinfowithpath info;

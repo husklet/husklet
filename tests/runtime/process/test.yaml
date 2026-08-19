@@ -803,6 +803,15 @@ cases:
     run: []
     timeout: 120
     expect: { exit: 0, stdout: golden/exec_cloexec.txt }
+  - id: runtime/process/exec-fd-namespace
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/exec_fd_namespace.c, output: exec-fd-namespace, flags: ["-static", "-O2", "-std=gnu11"] }
+    artifact: { destination: /opt/husklet/exec-fd-namespace }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/exec_fd_namespace.txt }
   - id: runtime/process/capget-version
     targets: [arm64, amd64]
     status: active
