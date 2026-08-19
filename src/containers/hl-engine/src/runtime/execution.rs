@@ -245,9 +245,12 @@ impl GuestMachine for ProductionMachine {
         #[cfg(unix)]
         let recovery = if self.plan.options.get_bytes("HL_RESTORE").is_some() {
             let checkpoint = self.checkpoint.as_ref().ok_or(EngineError::LaunchFailed)?;
+            // A refused recovery admission must name itself: the restore driver downstream is the only
+            // other place that reports, and it never runs when admission refuses.
             Some(
                 checkpoint
-                    .begin_recovery(std::time::Instant::now() + crate::composition::DEFAULT_CHECKPOINT_TIMEOUT)?,
+                    .begin_recovery(std::time::Instant::now() + crate::composition::DEFAULT_CHECKPOINT_TIMEOUT)
+                    .inspect_err(|error| eprintln!("[restore] refuse: recovery admission rejected: {error:?}"))?,
             )
         } else {
             None
