@@ -714,6 +714,7 @@ mod tests {
                 server: Arc::clone(&server),
                 id: first,
                 state: std::sync::atomic::AtomicU8::new(RECOVERY_OPEN),
+                phases: CheckpointPhaseLedger::new(None, false, crate::activation::GuestIsa::Aarch64),
             };
         }
         let second = server
@@ -738,6 +739,7 @@ mod tests {
             server: Arc::clone(&server),
             id,
             state: std::sync::atomic::AtomicU8::new(RECOVERY_OPEN),
+            phases: CheckpointPhaseLedger::new(None, false, crate::activation::GuestIsa::Aarch64),
         };
         let started = std::time::Instant::now();
         assert_eq!(
@@ -764,6 +766,7 @@ mod tests {
             server: Arc::clone(&server),
             id,
             state: std::sync::atomic::AtomicU8::new(RECOVERY_OPEN),
+            phases: CheckpointPhaseLedger::new(None, false, crate::activation::GuestIsa::Aarch64),
         };
         admission.abort().unwrap();
         let _ = admission.wait();
@@ -793,6 +796,7 @@ mod tests {
             server: Arc::clone(&server),
             id,
             state: std::sync::atomic::AtomicU8::new(RECOVERY_OPEN),
+            phases: CheckpointPhaseLedger::new(None, false, crate::activation::GuestIsa::Aarch64),
         };
         let poison = Arc::clone(&server);
         let _ = std::thread::spawn(move || poison.poison_coordination()).join();
@@ -817,6 +821,7 @@ mod tests {
             server: Arc::clone(&server),
             id,
             state: std::sync::atomic::AtomicU8::new(RECOVERY_OPEN),
+            phases: CheckpointPhaseLedger::new(None, false, crate::activation::GuestIsa::Aarch64),
         };
         let poison = Arc::clone(&server);
         let _ = std::thread::spawn(move || poison.poison_coordination()).join();
