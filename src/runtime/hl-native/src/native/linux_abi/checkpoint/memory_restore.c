@@ -652,26 +652,14 @@ struct ckpt_restore_right {
     uint64_t object_id;
     int fd;
     uint8_t owned;
-    int kind;
-    hl_ofd_identity ofd_identity;
 };
 static struct ckpt_restore_right *g_restore_rights;
 static int g_nrestore_rights;
 static int g_restore_rights_capacity;
 
-static int ckpt_restore_right_typed_kind(int kind) {
-    return kind == CKF_FILE || kind == CKF_PIPE || kind == CKF_BLOB || kind == CKF_MEMFD || kind == CKF_SIGNALFD ||
-           kind == CKF_DEVICE;
-}
-
-static struct ckpt_restore_right *ckpt_restore_right_find(const struct ckpt_fd *record) {
-    int typed = ckpt_restore_right_typed_kind(record->kind);
-    for (int index = 0; index < g_nrestore_rights; ++index) {
-        struct ckpt_restore_right *right = &g_restore_rights[index];
-        if (right->kind != record->kind) continue;
-        if (typed ? hl_ofd_identity_equal(right->ofd_identity, record->ofd_identity) : right->ofd_id == record->ofd_id)
-            return right;
-    }
+static struct ckpt_restore_right *ckpt_restore_right_find(uint64_t ofd_id) {
+    for (int index = 0; index < g_nrestore_rights; ++index)
+        if (g_restore_rights[index].ofd_id == ofd_id) return &g_restore_rights[index];
     return NULL;
 }
 

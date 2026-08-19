@@ -16,7 +16,7 @@ fn actual_restore_claim_helper_fails_closed_on_both_isas() {
 #[test]
 fn pipe_schema_and_preflight_fail_closed_on_both_isas() {
     for isa in [1, 2] {
-        for scenario in 0..=16 {
+        for scenario in 0..=11 {
             hl_native::checkpoint_pipe_schema_test(isa, scenario)
                 .unwrap_or_else(|status| panic!("ISA {isa} pipe schema scenario {scenario} failed at {status}"));
         }

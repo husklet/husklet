@@ -1,5 +1,3 @@
-static int ckpt_restore_right_prepare(const struct ckpt_fd *record);
-
 static int ckpt_restore_prior_kind(const struct ckpt_fd *records, int index, int kind, uint64_t object_id) {
     for (int prior = 0; prior < index; ++prior)
         if (records[prior].kind == kind && records[prior].object_id == object_id) return records[prior].gfd;
@@ -444,7 +442,7 @@ static int ckpt_restore_existing_ofd(const struct ckpt_fd *records, int index, c
 static int ckpt_restore_saved_ofd(const struct ckpt_fd *record) {
     if ((record->kind != CKF_FILE && record->kind != CKF_BLOB && record->kind != CKF_MEMFD) || record->ofd_id == 0)
         return 0;
-    struct ckpt_restore_right *right = ckpt_restore_right_find(record);
+    struct ckpt_restore_right *right = ckpt_restore_right_find(record->ofd_id);
     if (right == NULL) return 0;
     if (right->object_id != record->object_id || dup2(right->fd, record->gfd) < 0 ||
         fcntl(record->gfd, F_SETFD, (record->descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0)
@@ -1202,17 +1200,7 @@ static int ckpt_external_unavailable(const struct ckpt_fd *record) {
     return 0;
 }
 
-struct ckpt_preflight_ofd;
-struct ckpt_preflight_pipe;
-static int ckpt_preflight_ofd_append(struct ckpt_preflight_ofd **entries, size_t *count, size_t *capacity,
-                                     struct ckpt_proc *process, const struct ckpt_fd *record);
-static int ckpt_preflight_pipe_append(struct ckpt_preflight_pipe **entries, size_t *count, size_t *capacity,
-                                      struct ckpt_proc *process, const struct ckpt_fd *record);
-
-static int ckpt_preflight_socket_queue(const struct ckpt_fd *socket_record, struct ckpt_fd *unavailable,
-                                       struct ckpt_proc *process, struct ckpt_preflight_ofd **ofds,
-                                       size_t *ofd_count, size_t *ofd_capacity, struct ckpt_preflight_pipe **pipes,
-                                       size_t *pipe_count, size_t *pipe_capacity) {
+static int ckpt_preflight_socket_queue(const struct ckpt_fd *socket_record, struct ckpt_fd *unavailable) {
     char path[1400];
     snprintf(path, sizeof path, "%s", socket_record->path);
     FILE *file = ckpt_source_fopen(path);
@@ -1243,11 +1231,6 @@ static int ckpt_preflight_socket_queue(const struct ckpt_fd *socket_record, stru
         for (uint32_t index = 0; index < frame.rights_count; ++index) {
             struct ckpt_fd right;
             if (ckpt_rd_fd(file, &right) != 0) {
-                ckpt_source_fclose(file);
-                return -1;
-            }
-            if (ckpt_preflight_ofd_append(ofds, ofd_count, ofd_capacity, process, &right) != 0 ||
-                ckpt_preflight_pipe_append(pipes, pipe_count, pipe_capacity, process, &right) != 0) {
                 ckpt_source_fclose(file);
                 return -1;
             }
@@ -1334,7 +1317,7 @@ static int ckpt_preflight_pipe_append(struct ckpt_preflight_pipe **entries, size
     if (record->kind != CKF_PIPE) return 0;
     int role = record->flags & O_ACCMODE;
     if (!record->object_id || (role != O_RDONLY && role != O_WRONLY) || record->offset != 0 ||
-        record->auxiliary == 0 || record->auxiliary > INT_MAX || record->path[0] != 0)
+        record->auxiliary > INT_MAX || record->path[0] != 0)
         return -1;
     if (*count == *capacity) {
         size_t next = *capacity ? *capacity * 2 : 64;
@@ -1349,29 +1332,6 @@ static int ckpt_preflight_pipe_append(struct ckpt_preflight_pipe **entries, size
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
-static const unsigned char *g_ckpt_pipe_test_image;
-static size_t g_ckpt_pipe_test_image_size;
-
-static int64_t ckpt_pipe_test_source_size(struct ckpt_source *source, const char *name) {
-    (void)source;
-    return strcmp(name, "pipe-test") == 0 ? (int64_t)g_ckpt_pipe_test_image_size : -1;
-}
-
-static int64_t ckpt_pipe_test_source_read(struct ckpt_source *source, const char *name, uint64_t offset, void *out,
-                                          size_t size) {
-    (void)source;
-    if (strcmp(name, "pipe-test") != 0 || offset > g_ckpt_pipe_test_image_size ||
-        size > g_ckpt_pipe_test_image_size - (size_t)offset)
-        return -1;
-    memcpy(out, g_ckpt_pipe_test_image + offset, size);
-    return (int64_t)size;
-}
-
-static const ckpt_source_vtable g_ckpt_pipe_test_source_ops = {
-    .size = ckpt_pipe_test_source_size,
-    .read = ckpt_pipe_test_source_read,
-};
-
 HL_API int HL_TARGET_LOCAL(checkpoint_pipe_schema_test)(uint32_t scenario) {
     struct ckpt_proc process = {0};
     struct ckpt_fd record = {.gfd = 3,
@@ -1389,52 +1349,6 @@ HL_API int HL_TARGET_LOCAL(checkpoint_pipe_schema_test)(uint32_t scenario) {
     if (scenario == 3) record.path[0] = 'x';
     if (scenario == 5) record.object_id = 0;
     if (scenario == 6) record.auxiliary = (uint64_t)INT_MAX + 1;
-    if (scenario == 12) record.auxiliary = 0;
-    if (scenario == 13) return CKPT_VERSION == 8 ? 0 : 23;
-    if (scenario == 14 || scenario == 15) {
-        struct {
-            struct ckpt_socket_queue_header header;
-            struct ckpt_socket_queue_frame frame;
-            struct ckpt_fd right;
-        } image = {{CKPT_SOCKET_QUEUE_MAGIC, SOCK_STREAM, 0}, {0, 1}, record};
-        if (scenario == 15) image.right.auxiliary = 0;
-        g_ckpt_pipe_test_image = (const unsigned char *)&image;
-        g_ckpt_pipe_test_image_size = sizeof image;
-        g_ckpt_source.ops = &g_ckpt_pipe_test_source_ops;
-        struct ckpt_fd socket_record = {0}, unavailable = {0};
-        snprintf(socket_record.path, sizeof socket_record.path, "pipe-test");
-        struct ckpt_preflight_ofd *ofds = NULL;
-        struct ckpt_preflight_pipe *queued_pipes = NULL;
-        size_t ofd_count = 0, ofd_capacity = 0, queued_count = 0, queued_capacity = 0;
-        int checked = ckpt_preflight_socket_queue(&socket_record, &unavailable, &process, &ofds, &ofd_count,
-                                                  &ofd_capacity, &queued_pipes, &queued_count, &queued_capacity);
-        g_ckpt_source.ops = NULL;
-        free(ofds);
-        free(queued_pipes);
-        return (scenario == 14 ? checked == 0 && ofd_count == 1 && queued_count == 1 : checked == -1) ? 0 : 24;
-    }
-    if (scenario == 16) {
-        int restored = ckpt_restore_right_prepare(&record);
-        int valid = restored >= 0 && g_nrestore_pipes == 1 && g_restore_pipes[0].identity == record.object_id &&
-                    g_restore_pipes[0].size == (int)record.auxiliary;
-        for (int index = 0; index < g_nrestore_pipes; ++index) {
-            if (g_restore_pipes[index].reader >= 0) {
-                hl_host_process_fd_private_remove(g_restore_pipes[index].reader);
-                close(g_restore_pipes[index].reader);
-            }
-            if (g_restore_pipes[index].writer >= 0) {
-                hl_host_process_fd_private_remove(g_restore_pipes[index].writer);
-                close(g_restore_pipes[index].writer);
-            }
-        }
-        free(g_restore_pipes);
-        free(g_restore_rights);
-        g_restore_pipes = NULL;
-        g_restore_rights = NULL;
-        g_nrestore_pipes = g_restore_pipes_capacity = 0;
-        g_nrestore_rights = g_restore_rights_capacity = 0;
-        return valid ? 0 : 25;
-    }
     if (scenario == 11) {
         int descriptors[2];
         unsigned char sent = 0x5a, received = 0;
@@ -1453,7 +1367,7 @@ HL_API int HL_TARGET_LOCAL(checkpoint_pipe_schema_test)(uint32_t scenario) {
                    : 19;
     }
     int status = ckpt_preflight_pipe_append(&pipes, &pipe_count, &pipe_capacity, &process, &record);
-    if ((scenario >= 1 && scenario <= 3) || scenario == 5 || scenario == 6 || scenario == 12) {
+    if ((scenario >= 1 && scenario <= 3) || scenario == 5 || scenario == 6) {
         free(pipes);
         return status == -1 ? 0 : 10 + (int)scenario;
     }
@@ -1553,8 +1467,7 @@ static int ckpt_restore_preflight(int policy) {
             }
             if (process->viable && record.kind == CKF_SOCKETPAIR) {
                 struct ckpt_fd unavailable;
-                int queue = ckpt_preflight_socket_queue(&record, &unavailable, process, &ofds, &ofd_count,
-                                                        &ofd_capacity, &pipes, &pipe_count, &pipe_capacity);
+                int queue = ckpt_preflight_socket_queue(&record, &unavailable);
                 if (queue < 0)
                     ckpt_process_stop(process, "socket queue image is corrupt");
                 else if (queue > 0) {
