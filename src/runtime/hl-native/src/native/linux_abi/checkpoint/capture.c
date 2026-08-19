@@ -477,7 +477,13 @@ struct ckpt_socket_state {
     int32_t pending_error;
     uint8_t shadow_reuse_port;
     uint8_t tcp_local_v6;
-    uint8_t reserved_socket_state[2];
+    /* SOCK_SHUTDOWN_READ|SOCK_SHUTDOWN_WRITE for THIS endpoint, taken from the shared socket-state arena.
+     * Linux does not expose half-close through getsockopt, so the arena is the only source, and recv()==0
+     * cannot supply it: measured on this host, an AF_UNIX STREAM survivor reads 0 identically for a peer
+     * that closed and for a peer that merely shutdown(SHUT_WR) and is still open, and reads 0 for its OWN
+     * SHUT_RD as well.  Each endpoint therefore records the direction IT closed and restore replays it. */
+    uint8_t shutdown_mask;
+    uint8_t reserved_socket_state[1];
     uint32_t tcp_local_address;
     uint8_t tcp_local_address_v6[16];
     int32_t tcp_option_value[TCP_SHADOW_N];
@@ -487,6 +493,17 @@ struct ckpt_socket_state {
     struct linger linger;
     struct sockaddr_storage local;
 };
+
+/* The recorded mask -> the single shutdown(2) direction that reproduces it, or -1 for an endpoint that
+ * closed neither direction.  SHUT_RDWR is one call rather than two so a restored endpoint never sits
+ * momentarily half-closed while the other half is still being applied. */
+static int ckpt_socket_shutdown_direction(uint8_t mask) {
+    unsigned read_closed = (mask & SOCK_SHUTDOWN_READ) != 0, write_closed = (mask & SOCK_SHUTDOWN_WRITE) != 0;
+    if (read_closed && write_closed) return SHUT_RDWR;
+    if (read_closed) return SHUT_RD;
+    if (write_closed) return SHUT_WR;
+    return -1;
+}
 
 // ---- control channel (armed only when HL_CHECKPOINT / HL_RESTORE is set) ----
 // The checkpoint request is conveyed by a SHARED-MEMORY generation counter, NOT a signal: a MAP_SHARED
@@ -920,7 +937,11 @@ static int ckpt_capture_socket_queue(int fd, uint64_t identity, uint32_t type) {
             goto fail;
         }
         if (received == 0 && type == SOCK_STREAM) {
-            header.peer_closed = 1;
+            /* End of the readable stream, and nothing more: NOT a statement that the peer closed.  On Linux
+             * this same 0 is returned when the peer did shutdown(SHUT_WR) and is still open, and when this
+             * end did shutdown(SHUT_RD) itself.  Whether the far end still exists is decided on restore by
+             * whether any restored process holds it, and the half-close directions are carried explicitly
+             * in each endpoint's own socket-state record. */
             break;
         }
         struct ckpt_fd rights[253];
@@ -1069,6 +1090,7 @@ static int ckpt_capture_socket_state(int fd, uint64_t identity, int require_quie
     }
     state.protocol = state.type == SOCK_STREAM ? IPPROTO_TCP : state.type == SOCK_DGRAM ? IPPROTO_UDP : 0;
     if (state.host_family == AF_UNIX) state.protocol = 0;
+    state.shutdown_mask = (uint8_t)sock_state_shutdown(fd);
     state.listening = g_tcp_listen[fd] != 0;
     state.backlog = g_sock_backlog[fd];
     state.lo_port = g_lo_port[fd];
@@ -2226,6 +2248,189 @@ HL_API int HL_TARGET_LOCAL(checkpoint_pipe_capture_test)(uint32_t scenario) {
     ckpt_sink_install(saved_sink ? saved_sink->ops : NULL);
     g_ckpt_capture_destructive = saved_destructive;
     ckpt_pipe_test_close_shared();
+    return verdict;
+}
+
+// -------------------------------------------------- half-close capture and replay: behavioral fixture
+//
+// Measured on this host before any of it was written (AF_UNIX STREAM and SEQPACKET alike): a survivor's
+// recv() returns 0 for a peer that CLOSED and for a peer that merely shutdown(SHUT_WR) and is still open,
+// and returns 0 for the survivor's OWN shutdown(SHUT_RD).  One value, three states.  The only thing that
+// tells them apart from the survivor's side is send(): EPIPE when the peer is gone, success when the peer
+// merely stopped writing -- and a capture cannot send a probe byte into a guest's stream to find out.
+//
+// So capture records the direction each endpoint closed, from the arena that already tracks it, and
+// restore replays it with shutdown(2).  These fixtures drive the production capture and the production
+// mask->direction replay against real kernel sockets.
+
+#define CKPT_HALFCLOSE_TEST_CAPACITY 8192u
+
+static unsigned char g_ckpt_halfclose_test_bytes[CKPT_HALFCLOSE_TEST_CAPACITY];
+static size_t g_ckpt_halfclose_test_length;
+
+static int ckpt_halfclose_test_begin(struct ckpt_sink *sink, const char *group, const char *name, uint32_t flags,
+                                     struct ckpt_sink_stream **out) {
+    (void)group;
+    (void)name;
+    (void)flags;
+    static struct ckpt_sink_stream stream;
+    memset(&stream, 0, sizeof stream);
+    stream.sink = sink;
+    g_ckpt_halfclose_test_length = 0;
+    *out = &stream;
+    return 0;
+}
+
+static int ckpt_halfclose_test_write(struct ckpt_sink_stream *stream, const void *data, size_t size) {
+    (void)stream;
+    if (size > sizeof g_ckpt_halfclose_test_bytes - g_ckpt_halfclose_test_length) return -1;
+    memcpy(g_ckpt_halfclose_test_bytes + g_ckpt_halfclose_test_length, data, size);
+    g_ckpt_halfclose_test_length += size;
+    return 0;
+}
+
+static int ckpt_halfclose_test_write_at(struct ckpt_sink_stream *stream, uint64_t offset, const void *data,
+                                        size_t size) {
+    (void)stream;
+    if (offset > g_ckpt_halfclose_test_length || size > g_ckpt_halfclose_test_length - offset) return -1;
+    memcpy(g_ckpt_halfclose_test_bytes + offset, data, size);
+    return 0;
+}
+
+static int ckpt_halfclose_test_finish(struct ckpt_sink_stream *stream) {
+    (void)stream;
+    return 0;
+}
+
+static void ckpt_halfclose_test_abort(struct ckpt_sink_stream *stream) { (void)stream; }
+
+static int ckpt_halfclose_test_claim(struct ckpt_sink *sink, const char *name) {
+    (void)sink;
+    (void)name;
+    return 0;
+}
+
+static void ckpt_halfclose_test_unclaim(struct ckpt_sink *sink, const char *name) {
+    (void)sink;
+    (void)name;
+}
+
+static const ckpt_sink_vtable g_ckpt_halfclose_test_ops = {
+    .begin = ckpt_halfclose_test_begin,
+    .write = ckpt_halfclose_test_write,
+    .write_at = ckpt_halfclose_test_write_at,
+    .finish = ckpt_halfclose_test_finish,
+    .abort = ckpt_halfclose_test_abort,
+    .claim = ckpt_halfclose_test_claim,
+    .unclaim = ckpt_halfclose_test_unclaim,
+};
+
+// Give the pair the identity and retained arena state an accepted guest connection would carry, so the
+// production admission and capture arms see a socket they recognise rather than a bare host fd.
+static void ckpt_halfclose_test_identify(int endpoint, int peer, uint64_t object) {
+    // Attaches the shared socket-state arena as well as clearing the slots: without it every endpoint is
+    // unretained, which is a REFUSAL arm of its own and would let this fixture pass for the wrong reason.
+    sock_internal_identity_test_initialize(endpoint, object, 0);
+    sock_internal_identity_test_initialize(peer, object + 1, 0);
+    g_sock_object[endpoint] = object;
+    g_sock_peer_object[endpoint] = object + 1;
+    g_sock_object[peer] = object + 1;
+    g_sock_peer_object[peer] = object;
+    g_sock_fam[endpoint] = g_sock_fam[peer] = AF_UNIX;
+    g_sock_stream[endpoint] = g_sock_stream[peer] = 1;
+    g_sock_conn[endpoint] = g_sock_conn[peer] = 1;
+}
+
+static void ckpt_halfclose_test_forget(int endpoint, int peer) {
+    sock_state_drop(endpoint);
+    sock_state_drop(peer);
+    g_sock_object[endpoint] = g_sock_peer_object[endpoint] = 0;
+    g_sock_object[peer] = g_sock_peer_object[peer] = 0;
+    g_sock_fam[endpoint] = g_sock_fam[peer] = 0;
+    g_sock_stream[endpoint] = g_sock_stream[peer] = 0;
+    g_sock_conn[endpoint] = g_sock_conn[peer] = 0;
+}
+
+HL_API int HL_TARGET_LOCAL(checkpoint_socket_halfclose_test)(uint32_t scenario) {
+    struct ckpt_sink *saved_sink = ckpt_sink_current();
+    int saved_destructive = g_ckpt_capture_destructive;
+    int verdict = 99;
+    int pair[2] = {-1, -1};
+    if (scenario > 3) return 99;
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) return 10;
+    ckpt_halfclose_test_identify(pair[0], pair[1], UINT64_C(0x00c10cd000000001));
+    ckpt_sink_install(&g_ckpt_halfclose_test_ops);
+
+    if (scenario == 0) {
+        // Capture records the direction THIS endpoint closed. The value is unreachable from getsockopt, so
+        // a record that does not carry it cannot be replayed by anything downstream.
+        verdict = 0;
+        if (shutdown(pair[0], SHUT_WR) != 0) verdict = 11;
+        sock_state_shutdown_observed(pair[0], SHUT_WR);
+        if (verdict == 0 && ckpt_capture_socket_state(pair[0], UINT64_C(0x00c10cd000000001), 0) != 0) verdict = 12;
+        struct ckpt_socket_state recorded;
+        if (verdict == 0 && g_ckpt_halfclose_test_length < sizeof recorded) verdict = 13;
+        if (verdict == 0) {
+            memcpy(&recorded, g_ckpt_halfclose_test_bytes, sizeof recorded);
+            if (recorded.magic != CKPT_SOCKET_STATE_MAGIC) verdict = 14;
+            else if (recorded.shutdown_mask != SOCK_SHUTDOWN_WRITE) verdict = 15;
+        }
+        // The peer closed nothing and must record nothing: a mask that is merely "the pair is half-closed"
+        // cannot say which end may still write.
+        if (verdict == 0 && ckpt_capture_socket_state(pair[1], UINT64_C(0x00c10cd000000002), 0) != 0) verdict = 16;
+        if (verdict == 0) {
+            memcpy(&recorded, g_ckpt_halfclose_test_bytes, sizeof recorded);
+            if (recorded.shutdown_mask != 0) verdict = 17;
+        }
+    } else if (scenario == 1) {
+        // The drain reads 0 from a peer that is STILL OPEN, and must not record that as a closed peer. This
+        // is the misinference: on restore a peer recorded closed has its descriptor destroyed, so a live
+        // half-closed client would come back with no far end at all.
+        verdict = 0;
+        if (shutdown(pair[1], SHUT_WR) != 0) verdict = 21;
+        sock_state_shutdown_observed(pair[1], SHUT_WR);
+        if (verdict == 0 && ckpt_capture_socket_queue(pair[0], UINT64_C(0x00c10cd000000001), SOCK_STREAM) != 0)
+            verdict = 22;
+        struct ckpt_socket_queue_header header;
+        if (verdict == 0 && g_ckpt_halfclose_test_length < sizeof header) verdict = 23;
+        if (verdict == 0) {
+            memcpy(&header, g_ckpt_halfclose_test_bytes, sizeof header);
+            if (header.magic != CKPT_SOCKET_QUEUE_MAGIC) verdict = 24;
+            else if (header.peer_closed != 0) verdict = 25;
+        }
+    } else if (scenario == 2) {
+        // A half-closed endpoint is admissible now that the mask is representable. It used to be refused
+        // outright, which failed the whole image for a state every long-lived client reaches.
+        verdict = 0;
+        if (shutdown(pair[0], SHUT_RD) != 0) verdict = 31;
+        sock_state_shutdown_observed(pair[0], SHUT_RD);
+        if (verdict == 0 && sock_state_shutdown(pair[0]) != SOCK_SHUTDOWN_READ) verdict = 32;
+        if (verdict == 0 && sock_internal_checkpoint_admit(pair[0]) != 0) verdict = 33;
+        if (verdict == 0 && sock_internal_checkpoint_admit(pair[1]) != 0) verdict = 34;
+    } else {
+        // The replay reproduces the measured kernel state, driven through the production mask->direction
+        // map rather than a hand-written shutdown(): the survivor reads end of stream, BOTH ends stay open,
+        // and the survivor can still send to a peer that only stopped writing.
+        verdict = 0;
+        int direction = ckpt_socket_shutdown_direction(SOCK_SHUTDOWN_WRITE);
+        if (direction != SHUT_WR) verdict = 41;
+        if (verdict == 0 && shutdown(pair[1], direction) != 0) verdict = 42;
+        char received[8];
+        if (verdict == 0 && recv(pair[0], received, sizeof received, MSG_DONTWAIT) != 0) verdict = 43;
+        if (verdict == 0 && send(pair[0], "z", 1, MSG_NOSIGNAL | MSG_DONTWAIT) != 1) verdict = 44;
+        if (verdict == 0 && recv(pair[1], received, sizeof received, MSG_DONTWAIT) != 1) verdict = 45;
+        if (verdict == 0 && send(pair[1], "z", 1, MSG_NOSIGNAL | MSG_DONTWAIT) != -1) verdict = 46;
+        if (verdict == 0 && ckpt_socket_shutdown_direction(0) != -1) verdict = 47;
+        if (verdict == 0 && ckpt_socket_shutdown_direction(SOCK_SHUTDOWN_READ) != SHUT_RD) verdict = 48;
+        if (verdict == 0 && ckpt_socket_shutdown_direction(SOCK_SHUTDOWN_READ | SOCK_SHUTDOWN_WRITE) != SHUT_RDWR)
+            verdict = 49;
+    }
+
+    ckpt_halfclose_test_forget(pair[0], pair[1]);
+    close(pair[0]);
+    close(pair[1]);
+    ckpt_sink_install(saved_sink ? saved_sink->ops : NULL);
+    g_ckpt_capture_destructive = saved_destructive;
     return verdict;
 }
 #endif

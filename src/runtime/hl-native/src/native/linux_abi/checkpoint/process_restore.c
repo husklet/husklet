@@ -115,7 +115,15 @@ static int ckpt_restore_socketpair_fd(const struct ckpt_fd *records, int count, 
     g_sock_dgram[fd] = record->offset == SOCK_DGRAM || record->offset == SOCK_SEQPACKET;
     g_sock_seqpacket[fd] = record->offset == SOCK_SEQPACKET;
     g_sock_conn[fd] = 1;
-    if (endpoint->state_loaded) ckpt_restore_socket_state(fd, state);
+    if (endpoint->state_loaded) {
+        ckpt_restore_socket_state(fd, state);
+        /* The host half-close was applied to the shared description once, in ckpt_prepare_restore_sockets.
+         * The engine's own mask is per-arena-slot and this descriptor's slot is fresh, so it has to be
+         * re-observed here or the guest's next shutdown()/checkpoint would read a socket that has no
+         * closed direction while the kernel says otherwise. */
+        int direction = ckpt_socket_shutdown_direction(state->shutdown_mask);
+        if (direction >= 0) sock_state_shutdown_observed(fd, direction);
+    }
     int peer = ckpt_restore_prior_kind(records, count, CKF_SOCKETPAIR, record->auxiliary);
     if (peer >= 0) g_sock_pair_peer[fd] = peer + 1;
     return proc_fdvis_publish_native_fd(fd);
