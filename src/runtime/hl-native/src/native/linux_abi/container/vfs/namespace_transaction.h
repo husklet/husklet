@@ -29,7 +29,6 @@ static int namespace_transaction_read_begin(struct namespace_transaction_read *r
 static int namespace_transaction_read_validate(const struct namespace_transaction_read *read);
 static int namespace_transaction_read_barrier(void);
 static void namespace_transaction_fork_child(void);
-static void namespace_transaction_fork_child_complete(void);
 static int namespace_transaction_namespace(_Atomic uint64_t **generation, _Atomic uint64_t **owner);
 static int namespace_transaction_writer(struct namespace_transaction_writer *writer);
 static void namespace_transaction_poison(void);
