@@ -349,3 +349,61 @@ fn shutdown_state_is_shared_by_aliases_and_fails_closed_on_both_isas() {
         }
     }
 }
+
+/// A guest that pre-creates a name in the engine's connection-identity namespace and connects with it
+/// must NOT have its chosen object ids adopted. The name is a random one-shot ticket nonce, resolved out
+/// of an engine-private table; a forged or replayed one resolves to nothing, so the accepted socket keeps
+/// the identity the engine allocated for it and stays peerless (and therefore capture-refused).
+///
+/// The predecessor encoded `(client, server)` object ids directly into a world-writable
+/// `/tmp/.hl-ci-<client>-<server>` name and adopted whatever `getpeername()` parsed back out, which let a
+/// guest choose the identity that checkpoint restore topology is about to key on.
+#[test]
+fn a_forged_identity_name_is_never_adopted_on_both_isas() {
+    let forged_client = 0x0bad_0000_0000_0001_u64;
+    let forged_server = 0x0bad_0000_0000_0002_u64;
+    let namespaces = [
+        // the engine's own directory, populated by a guest that can name it
+        format!("/tmp/.hl-ci-default/{forged_client:016x}{forged_server:016x}"),
+        // the retired literal encoding, in case anything still honours it
+        format!("/tmp/.hl-ci-{forged_client:016x}-{forged_server:016x}"),
+    ];
+
+    for isa in [1, 2] {
+        for (index, forged) in namespaces.iter().enumerate() {
+            let directory = std::path::Path::new(forged).parent().expect("forged name has a parent");
+            std::fs::create_dir_all(directory).expect("forged namespace directory");
+
+            let listener_path = format!("/tmp/.hl-forge-listen-{isa}-{index}-{}", std::process::id());
+            let _ = std::fs::remove_file(&listener_path);
+            let (listener_address, listener_length) = address(listener_path.as_bytes(), false);
+            let listener = socket();
+            bind(listener.as_raw_fd(), &listener_address, listener_length);
+            assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 4) }, 0);
+
+            let _ = std::fs::remove_file(forged);
+            let (forged_address, forged_length) = address(forged.as_bytes(), false);
+            let attacker = socket();
+            bind(attacker.as_raw_fd(), &forged_address, forged_length);
+            assert_eq!(connect(attacker.as_raw_fd(), &listener_address, listener_length), 0);
+
+            let accepted = accept(listener.as_raw_fd());
+            let allocated = 0x7000_0000_0000_0000_u64 | u64::from(isa);
+            let (local, peer, hidden) = identity(isa, IDENTIFY, accepted.as_raw_fd(), allocated);
+            assert_eq!(local, allocated, "ISA {isa} adopted a forged object id from {forged}");
+            assert_ne!(local, forged_server, "ISA {isa} adopted the forged server id from {forged}");
+            assert_eq!(peer, 0, "ISA {isa} adopted a forged peer id from {forged}");
+            assert_ne!(peer, forged_client, "ISA {isa} adopted the forged client id from {forged}");
+            assert_eq!(hidden, CHECKPOINT_PENDING, "ISA {isa} marked a forged peer identity hidden");
+            assert_eq!(
+                hl_native::unix_identity_test(isa, CHECKPOINT_ADMIT, accepted.as_raw_fd(), 0),
+                Err(libc::ENOTSUP),
+                "ISA {isa} admitted a forged-identity socket to capture"
+            );
+
+            identity(isa, RESET, accepted.as_raw_fd(), 0);
+            let _ = std::fs::remove_file(forged);
+            let _ = std::fs::remove_file(&listener_path);
+        }
+    }
+}

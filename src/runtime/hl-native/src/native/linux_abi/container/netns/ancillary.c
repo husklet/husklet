@@ -26,6 +26,21 @@ struct sock_state {
 static struct sock_state *g_sock_states;
 static uint16_t g_sock_state_ref[HL_NFD];
 
+#define SOCK_IDENTITY_TICKET_N 4096
+#define SOCK_IDENTITY_TICKET_FREE 0u
+#define SOCK_IDENTITY_TICKET_PUBLISHED 1u
+#define SOCK_IDENTITY_TICKET_CLAIMED 2u
+
+struct sock_identity_ticket {
+    volatile uint32_t state;
+    volatile uint32_t reserved;
+    volatile uint64_t nonce_high;
+    volatile uint64_t nonce_low;
+    volatile uint64_t client_object;
+    volatile uint64_t server_object;
+};
+static struct sock_identity_ticket *g_sock_identity_tickets;
+
 // ---- SCM ancillary data: Linux<->macOS cmsg framing translation (SOL_SOCKET/SCM_RIGHTS fd passing).
 // hl uses host fds directly as guest fds, so the fd integers in an SCM_RIGHTS payload need no remap --
 // only the cmsg framing differs: Linux hdr=16B (8B len @0, int level @8, int type @12), 8-byte align,

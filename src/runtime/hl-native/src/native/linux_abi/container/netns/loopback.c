@@ -183,7 +183,8 @@ static uint8_t g_sock_seqpacket[HL_NFD];
 // recycled only after both endpoint reference counts reach zero.
 static void seq_ref_arena_init(const hl_host_services *host) {
     void *arena = NULL;
-    if (g_seq_refs != NULL && g_udp_refs != NULL && g_sock_states != NULL) return;
+    if (g_seq_refs != NULL && g_udp_refs != NULL && g_sock_states != NULL && g_sock_identity_tickets != NULL)
+        return;
     if (g_seq_refs == NULL && hl_linux_shared_create(host, sizeof(struct seq_ref) * SEQ_REF_N, &arena) == HL_STATUS_OK)
         g_seq_refs = (struct seq_ref *)arena;
     arena = NULL;
@@ -193,6 +194,13 @@ static void seq_ref_arena_init(const hl_host_services *host) {
     if (g_sock_states == NULL &&
         hl_linux_shared_create(host, sizeof(struct sock_state) * SOCK_STATE_N, &arena) == HL_STATUS_OK)
         g_sock_states = (struct sock_state *)arena;
+    arena = NULL;
+    /* Identity tickets must be reachable from every guest descendant: the connector may live in one
+     * process and the acceptor in another (postmaster/backend), and both were forked from here. */
+    if (g_sock_identity_tickets == NULL &&
+        hl_linux_shared_create(host, sizeof(struct sock_identity_ticket) * SOCK_IDENTITY_TICKET_N, &arena) ==
+            HL_STATUS_OK)
+        g_sock_identity_tickets = (struct sock_identity_ticket *)arena;
 }
 
 static int udp_ref_create(int fd, const char *path) {
@@ -421,7 +429,110 @@ static uint8_t g_sock_identity_peer_hidden[HL_NFD];
  * topology can be captured. Keep them distinct from guest-created socketpairs and the private AF_UNIX
  * transports behind guest INET sockets; until that freeze is authoritative, capture must fail closed. */
 static uint8_t g_sock_identity_checkpoint_pending[HL_NFD];
+/* fd -> (identity ticket slot + 1); 0 = this descriptor published no ticket. */
+static uint16_t g_sock_identity_ticket[HL_NFD];
 static _Atomic uint32_t g_sock_object_next = 1;
+
+/* ---- Engine-private connection-identity namespace.
+ *
+ * The directory is created mode 0700 and re-validated before use: a pre-created symlink, a directory
+ * owned by another uid, or a loosened mode all fail closed rather than silently hosting identity.  It is
+ * NOT a guest-translatable path -- guest AF_UNIX pathname binds resolve through the overlay (or a bind
+ * volume) and the bare-mode passthrough refuses this prefix outright (hl_socket_identity_path_reserved).
+ */
+static char g_sock_identity_dir[64];
+static int8_t g_sock_identity_dir_state; // 0 unresolved, 1 usable, -1 refused
+
+static const char *sock_identity_directory(void) {
+    if (g_sock_identity_dir_state) return g_sock_identity_dir_state > 0 ? g_sock_identity_dir : NULL;
+    g_sock_identity_dir_state = -1;
+    const char *namespace_key = hl_option_get("HL_NETNS"); // same key as abs_init/ipc_ns_key
+    char candidate[64];
+    int length = snprintf(candidate, sizeof candidate, HL_SOCKET_IDENTITY_PREFIX "%.40s",
+                          (namespace_key && namespace_key[0]) ? namespace_key : "default");
+    if (length <= 0 || (size_t)length >= sizeof candidate) return NULL;
+    if (hl_compat_mkdir(candidate, 0700) != 0 && errno != EEXIST) return NULL;
+    struct stat info;
+    if (lstat(candidate, &info) != 0 || !S_ISDIR(info.st_mode) || (info.st_mode & 07777) != 0700 ||
+        info.st_uid != geteuid())
+        return NULL;
+    memcpy(g_sock_identity_dir, candidate, (size_t)length + 1u);
+    g_sock_identity_dir_state = 1;
+    return g_sock_identity_dir;
+}
+
+/* ---- Identity tickets.
+ *
+ * A connector reserves a ticket holding the reciprocal object ids, publishes only its random nonce in the
+ * bind name, and the acceptor CLAIMS that nonce out of this table -- once.  The table lives in the same
+ * shared arena family as sock_state, so it is visible to every process that inherited the engine, and to
+ * nothing else: a guest cannot address it, cannot enumerate it, and cannot guess a 128-bit nonce.  This
+ * is what replaces "parse the filename and adopt what it says".
+ */
+
+static void sock_identity_ticket_release(int fd) {
+    if (fd < 0 || fd >= HL_NFD) return;
+    uint16_t slot = g_sock_identity_ticket[fd];
+    g_sock_identity_ticket[fd] = 0;
+    if (!slot || g_sock_identity_tickets == NULL) return;
+    struct sock_identity_ticket *ticket = &g_sock_identity_tickets[slot - 1];
+    /* Only the publisher retires an unclaimed ticket; a claimed one was already freed by the acceptor. */
+    if (__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_PUBLISHED,
+                                     SOCK_IDENTITY_TICKET_CLAIMED)) {
+        ticket->nonce_high = ticket->nonce_low = 0;
+        ticket->client_object = ticket->server_object = 0;
+        __atomic_store_n(&ticket->state, SOCK_IDENTITY_TICKET_FREE, __ATOMIC_RELEASE);
+    }
+}
+
+static int sock_identity_ticket_publish(int fd, uint64_t client, uint64_t server, uint64_t *high, uint64_t *low) {
+    if (fd < 0 || fd >= HL_NFD || g_sock_identity_tickets == NULL || !client || !server || client == server) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (hl_socket_identity_nonce_new(high, low) != 0) {
+        errno = EIO;
+        return -1;
+    }
+    sock_identity_ticket_release(fd); // a re-prepared descriptor must not strand its previous ticket
+    for (uint32_t index = 0; index < SOCK_IDENTITY_TICKET_N; index++) {
+        struct sock_identity_ticket *ticket = &g_sock_identity_tickets[index];
+        if (!__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_FREE,
+                                          SOCK_IDENTITY_TICKET_CLAIMED))
+            continue;
+        ticket->nonce_high = *high;
+        ticket->nonce_low = *low;
+        ticket->client_object = client;
+        ticket->server_object = server;
+        __atomic_store_n(&ticket->state, SOCK_IDENTITY_TICKET_PUBLISHED, __ATOMIC_RELEASE);
+        g_sock_identity_ticket[fd] = (uint16_t)(index + 1);
+        return 0;
+    }
+    errno = ENFILE;
+    return -1;
+}
+
+/* One shot: a nonce resolves to identity exactly once, then the slot is retired.  A replayed name -- from
+ * a guest that observed one, or from a stale inode -- resolves to nothing. */
+static int sock_identity_ticket_claim(uint64_t high, uint64_t low, uint64_t *client, uint64_t *server) {
+    if (g_sock_identity_tickets == NULL || (!high && !low) || !client || !server) return -1;
+    for (uint32_t index = 0; index < SOCK_IDENTITY_TICKET_N; index++) {
+        struct sock_identity_ticket *ticket = &g_sock_identity_tickets[index];
+        if (__atomic_load_n(&ticket->state, __ATOMIC_ACQUIRE) != SOCK_IDENTITY_TICKET_PUBLISHED ||
+            ticket->nonce_high != high || ticket->nonce_low != low)
+            continue;
+        if (!__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_PUBLISHED,
+                                          SOCK_IDENTITY_TICKET_CLAIMED))
+            continue;
+        *client = ticket->client_object;
+        *server = ticket->server_object;
+        ticket->nonce_high = ticket->nonce_low = 0;
+        ticket->client_object = ticket->server_object = 0;
+        __atomic_store_n(&ticket->state, SOCK_IDENTITY_TICKET_FREE, __ATOMIC_RELEASE);
+        return (*client && *server && *client != *server) ? 0 : -1;
+    }
+    return -1;
+}
 
 static uint64_t sock_object_new(void) {
     uint32_t sequence = atomic_fetch_add_explicit(&g_sock_object_next, 1u, memory_order_relaxed);
@@ -513,6 +624,7 @@ static void sock_internal_connect_observed(int fd, int error) {
             g_sock_conn[alias] = 0;
             g_sock_connecting[alias] = 0;
             if (g_sock_identity_local_hidden[alias]) g_sock_peer_object[alias] = 0;
+            sock_identity_ticket_release(alias); // a refused dial retires its ticket; nothing can claim it
         }
     }
 }
@@ -562,11 +674,11 @@ static int sock_internal_connect_prepare(int fd, int checkpoint_pending) {
     size_t path_offset = offsetof(struct sockaddr_un, sun_path);
     int named = local.sun_path[0] != '\0' || local_length > (socklen_t)(path_offset + 1u);
     if (local.sun_family == AF_UNIX && local_length > (socklen_t)path_offset && named) {
-        uint64_t client = 0, server = 0;
         local.sun_path[sizeof local.sun_path - 1] = '\0';
-        if (g_sock_identity_local_hidden[fd] &&
-            hl_socket_identity_parse(local.sun_path, &client, &server) == 0 && client == g_sock_object[fd]) {
-            sock_internal_alias_relation(fd, server, 1, checkpoint_pending);
+        /* Already bound to the private name from an earlier prepare: re-assert the relation from our OWN
+         * retained peer object.  Nothing is recovered from the bound name -- it is a nonce, not a fact. */
+        if (g_sock_identity_local_hidden[fd] && g_sock_identity_ticket[fd] && g_sock_peer_object[fd]) {
+            sock_internal_alias_relation(fd, g_sock_peer_object[fd], 1, checkpoint_pending);
         }
         /* A guest-bound client must keep its address and still be allowed to connect.  It cannot carry the
          * private identity name, so leave peer identity absent and let checkpoint admission reject it. */
@@ -576,15 +688,27 @@ static int sock_internal_connect_prepare(int fd, int checkpoint_pending) {
     // A failed AF_UNIX connect poisons its socket and the retry path replaces it with lo_swap(). Re-bind
     // every replacement, while retaining the same logical peer object across attempts.
     uint64_t peer = g_sock_peer_object[fd] ? g_sock_peer_object[fd] : sock_object_new();
+    const char *directory = sock_identity_directory();
+    uint64_t nonce_high = 0, nonce_low = 0;
+    if (directory == NULL) {
+        errno = EPERM; // no engine-private namespace -> no identity, rather than an unsafe one
+        return -1;
+    }
+    if (sock_identity_ticket_publish(fd, g_sock_object[fd], peer, &nonce_high, &nonce_low) != 0) return -1;
     char path[HL_SOCKET_IDENTITY_PATH_SIZE];
-    if (hl_socket_identity_format(path, sizeof path, g_sock_object[fd], peer) != 0) {
+    if (hl_socket_identity_format(path, sizeof path, directory, nonce_high, nonce_low) != 0) {
+        sock_identity_ticket_release(fd);
         errno = EINVAL;
         return -1;
     }
     struct sockaddr_un address;
-    if (unix_addr_set(&address, path) < 0) return -1;
-    unlink(path);
-    if (bind(fd, (struct sockaddr *)&address, sizeof address) != 0) return -1;
+    int bound = unix_addr_set(&address, path) < 0 ? -1 : (unlink(path), bind(fd, (struct sockaddr *)&address, sizeof address));
+    if (bound != 0) {
+        int saved = errno;
+        sock_identity_ticket_release(fd);
+        errno = saved;
+        return -1;
+    }
     unlink(path);
     sock_internal_alias_relation(fd, peer, 1, checkpoint_pending);
     return 0;
@@ -604,14 +728,16 @@ static int sock_internal_accept_identify(int fd, int checkpoint_pending) {
     socklen_t length = sizeof peer;
     if (getpeername(fd, (struct sockaddr *)&peer, &length) != 0) return -1;
     peer.sun_path[sizeof peer.sun_path - 1] = '\0';
-    if (peer.sun_family != AF_UNIX ||
-        strncmp(peer.sun_path, HL_SOCKET_IDENTITY_PREFIX, sizeof(HL_SOCKET_IDENTITY_PREFIX) - 1) != 0)
-        return 0;
+    const char *directory = sock_identity_directory();
+    uint64_t nonce_high = 0, nonce_low = 0;
+    if (peer.sun_family != AF_UNIX || directory == NULL ||
+        hl_socket_identity_nonce_parse(peer.sun_path, directory, &nonce_high, &nonce_low) != 0)
+        return 0; // not one of ours: leave the accepted socket's freshly allocated identity alone
+    /* The name got us a nonce and nothing more.  Identity exists only if that nonce is still an
+     * outstanding ticket in the engine-private table, and claiming it consumes it.  A forged or replayed
+     * name therefore yields no identity at all -- it can never yield a CHOSEN one. */
     uint64_t client = 0, server = 0;
-    if (hl_socket_identity_parse(peer.sun_path, &client, &server) != 0) {
-        errno = EPROTO;
-        return -1;
-    }
+    if (sock_identity_ticket_claim(nonce_high, nonce_low, &client, &server) != 0) return 0;
     g_sock_object[fd] = server;
     g_sock_peer_object[fd] = client;
     g_sock_identity_peer_hidden[fd] = 1;
@@ -626,11 +752,17 @@ static void sock_internal_identity_test_initialize(int fd, uint64_t object, uint
                            MAP_ANON | MAP_SHARED, -1, 0);
         if (arena != MAP_FAILED) g_sock_states = (struct sock_state *)arena;
     }
+    if (g_sock_identity_tickets == NULL) {
+        void *arena = mmap(NULL, sizeof(struct sock_identity_ticket) * SOCK_IDENTITY_TICKET_N,
+                           PROT_READ | PROT_WRITE, MAP_ANON | MAP_SHARED, -1, 0);
+        if (arena != MAP_FAILED) g_sock_identity_tickets = (struct sock_identity_ticket *)arena;
+    }
     g_sock_object[fd] = object;
     g_sock_peer_object[fd] = 0;
     g_sock_identity_local_hidden[fd] = 0;
     g_sock_identity_peer_hidden[fd] = 0;
     g_sock_identity_checkpoint_pending[fd] = 0;
+    sock_identity_ticket_release(fd);
     g_sock_connecting[fd] = 0;
     g_sock_conn[fd] = 0;
     g_so_error[fd] = 0;
