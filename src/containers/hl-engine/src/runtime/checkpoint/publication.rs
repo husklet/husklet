@@ -221,7 +221,16 @@ impl Server {
                         || self.recovery_object_request(connection, request, name))
             }
             CapturePhase::Complete | CapturePhase::Aborting { .. } | CapturePhase::RecoveryFinished { .. } => false,
-            CapturePhase::Active { id, .. } | CapturePhase::Publishing { id } => u64::from(request.generation) == id,
+            // `SOURCE_*` resolve `self.source`, the committed generation a restore
+            // reads. During a capture that is the PREVIOUS image, not the group
+            // being written, and `CheckpointSink` exposes no read path, so there is
+            // no store that could answer correctly. Serving them here would return a
+            // plausible reply from the wrong image. `RECOVERY_COMPLETE` belongs to
+            // the recovery scope alone.
+            CapturePhase::Active { id, .. } | CapturePhase::Publishing { id } => {
+                u64::from(request.generation) == id
+                    && !matches!(request.op, SOURCE_LIST | SOURCE_SIZE | SOURCE_READ | RECOVERY_COMPLETE)
+            }
             CapturePhase::Finished { id, .. } => u64::from(request.generation) == id && request.op == COMMIT,
             CapturePhase::Poisoned => false,
         }

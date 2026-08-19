@@ -2164,3 +2164,83 @@ fn an_unregistered_channel_cannot_publish_and_fails_the_capture_by_name() {
     );
     server.stop();
 }
+
+/// Byte store whose source side always answers with the bytes of a previously
+/// published image, so a read served from the restore source during a capture
+/// is visible as a wrong-store answer rather than as an absence.
+#[derive(Default)]
+struct PublishedImage;
+
+const PUBLISHED_BYTES: &[u8] = b"previously-published-image";
+
+impl CheckpointSink for PublishedImage {
+    fn replace(&self, _: &[u8]) -> Result<(), CompositionError> {
+        Err(CompositionError::RuntimeConstruction)
+    }
+    fn begin_until(&self, _: std::time::Instant) -> Result<NonZeroU64, CompositionError> {
+        Ok(test_transaction())
+    }
+    fn put_until(&self, _: NonZeroU64, _: &str, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        Ok(())
+    }
+    fn abort_until(&self, _: NonZeroU64, _: std::time::Instant) -> Result<(), CompositionError> {
+        Ok(())
+    }
+    fn commit_until(&self, _: NonZeroU64, _: &[u8], _: std::time::Instant) -> Result<(), CompositionError> {
+        Ok(())
+    }
+}
+
+impl CheckpointSource for PublishedImage {
+    fn read(&self, _: usize) -> Result<Vec<u8>, CompositionError> {
+        Ok(PUBLISHED_BYTES.to_vec())
+    }
+    fn get(&self, _: &str) -> Result<Vec<u8>, CompositionError> {
+        Ok(PUBLISHED_BYTES.to_vec())
+    }
+    fn get_until(&self, _: &str, _: std::time::Instant) -> Result<Vec<u8>, CompositionError> {
+        Ok(PUBLISHED_BYTES.to_vec())
+    }
+    fn list(&self) -> Result<Vec<String>, CompositionError> {
+        Ok(vec![String::from("proc.1")])
+    }
+    fn list_until(&self, _: std::time::Instant) -> Result<Vec<String>, CompositionError> {
+        Ok(vec![String::from("proc.1")])
+    }
+}
+
+/// `SOURCE_*` resolve the restore source, which during a capture is the previous
+/// generation and not the group the capture is writing. The sink has no read
+/// path at all, so there is nothing correct to serve: the scope must refuse.
+#[test]
+fn source_reads_are_refused_while_a_capture_is_active() {
+    let store = Arc::new(PublishedImage);
+    let server = Server::new(store.clone(), store);
+    let idle = object_request(protocol::SOURCE_READ, 0, 0);
+    let idle_reply = server.dispatch(1, &idle, "proc.1", &[]);
+    assert_eq!(
+        idle_reply.status,
+        protocol::STATUS_OK,
+        "restore reads stay available outside a capture"
+    );
+
+    server
+        .begin_capture(4, std::time::Instant::now() + Duration::from_secs(5))
+        .expect("capture scope");
+    for op in [protocol::SOURCE_READ, protocol::SOURCE_SIZE, protocol::SOURCE_LIST] {
+        let request = object_request(op, 0, 4);
+        let reply = server.dispatch(1, &request, "proc.1", &[]);
+        assert_ne!(
+            reply.status,
+            protocol::STATUS_OK,
+            "op {op} was served from the restore source during an active capture"
+        );
+    }
+
+    let digest = object_request(protocol::DIGEST, 0, 4);
+    assert_ne!(
+        server.dispatch(1, &digest, "", &[]).status,
+        protocol::STATUS_OK,
+        "an empty capture must not report the previous image's digest"
+    );
+}

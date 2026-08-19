@@ -166,12 +166,20 @@ impl Server {
     }
 
     fn digest(&self) -> Reply {
+        // A capture asks for the digest of what it has published; a restore asks
+        // for the digest of the committed image. Falling back to the stored image
+        // inside a capture scope would answer the first question with the second
+        // image whenever the capture has published nothing yet.
+        let capturing = matches!(
+            self.capture_lock().map(|capture| capture.phase),
+            Ok(CapturePhase::Active { .. } | CapturePhase::Publishing { .. })
+        );
         let digest = self
             .state
             .lock()
             .ok()
             .and_then(|state| (!state.digest.is_empty()).then(|| Self::image_hash(&state.digest)))
-            .or_else(|| self.stored_digest().ok());
+            .or_else(|| (!capturing).then(|| self.stored_digest().ok()).flatten());
         let Some((hash, files, bytes)) = digest else {
             self.fail("checkpoint digest could not be computed".into());
             return Reply::error();
