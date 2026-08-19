@@ -1474,10 +1474,14 @@ HL_API int HL_TARGET_LOCAL(checkpoint_pipe_schema_test)(uint32_t scenario) {
         g_ckpt_source.ops = NULL;
         g_ckpt_pipe_test_name = "pipe-test";
         for (int index = 0; index < g_nrestore_pipes; ++index) {
-            if (g_restore_pipes[index].reader >= 0)
+            if (g_restore_pipes[index].reader >= 0) {
                 hl_host_process_fd_private_remove(g_restore_pipes[index].reader);
-            if (g_restore_pipes[index].writer >= 0)
+                close(g_restore_pipes[index].reader);
+            }
+            if (g_restore_pipes[index].writer >= 0) {
                 hl_host_process_fd_private_remove(g_restore_pipes[index].writer);
+                close(g_restore_pipes[index].writer);
+            }
         }
         free(g_restore_pipes);
         free(g_restore_rights);
@@ -1506,6 +1510,53 @@ HL_API int HL_TARGET_LOCAL(checkpoint_pipe_schema_test)(uint32_t scenario) {
         g_restore_rights = NULL;
         g_nrestore_rights = 0;
         return found == &rights[1] ? 0 : 28;
+    }
+    if (scenario == 20) {
+        struct {
+            struct ckpt_socket_queue_header header;
+            struct ckpt_socket_queue_frame frame;
+            struct ckpt_fd right;
+        } image = {{CKPT_SOCKET_QUEUE_MAGIC, SOCK_STREAM, 0}, {0, 1}, record};
+        g_ckpt_pipe_test_image = (const unsigned char *)&image;
+        g_ckpt_pipe_test_image_size = sizeof image;
+        g_ckpt_source.ops = &g_ckpt_pipe_test_source_ops;
+        struct ckpt_fd socket_record = {0}, unavailable = {0};
+        snprintf(socket_record.path, sizeof socket_record.path, "pipe-test");
+        struct ckpt_preflight_ofd *ofds = NULL;
+        struct ckpt_preflight_pipe *queued_pipes = NULL;
+        size_t ofd_count = 0, ofd_capacity = 0, queued_count = 0, queued_capacity = 0;
+        int checked = ckpt_preflight_socket_queue(&socket_record, &unavailable, &process, &ofds, &ofd_count,
+                                                  &ofd_capacity, &queued_pipes, &queued_count, &queued_capacity);
+        free(ofds);
+        free(queued_pipes);
+
+        static const unsigned char payload[] = {0x53, 0x43, 0x4d, 0x5f, 0x52, 0x49, 0x47, 0x48, 0x54, 0x53};
+        g_ckpt_pipe_test_name = "pipe.0000000000000011";
+        g_ckpt_pipe_test_image = payload;
+        g_ckpt_pipe_test_image_size = sizeof payload;
+        int restored = checked == 0 && ofd_count == 1 && queued_count == 1 ? ckpt_restore_right_prepare(&record) : -1;
+        unsigned char received[sizeof payload];
+        ssize_t count = restored >= 0 ? read(restored, received, sizeof received) : -1;
+        int valid = count == (ssize_t)sizeof payload && memcmp(received, payload, sizeof payload) == 0;
+        g_ckpt_source.ops = NULL;
+        g_ckpt_pipe_test_name = "pipe-test";
+        for (int index = 0; index < g_nrestore_pipes; ++index) {
+            if (g_restore_pipes[index].reader >= 0) {
+                hl_host_process_fd_private_remove(g_restore_pipes[index].reader);
+                close(g_restore_pipes[index].reader);
+            }
+            if (g_restore_pipes[index].writer >= 0) {
+                hl_host_process_fd_private_remove(g_restore_pipes[index].writer);
+                close(g_restore_pipes[index].writer);
+            }
+        }
+        free(g_restore_pipes);
+        free(g_restore_rights);
+        g_restore_pipes = NULL;
+        g_restore_rights = NULL;
+        g_nrestore_pipes = g_restore_pipes_capacity = 0;
+        g_nrestore_rights = g_restore_rights_capacity = 0;
+        return valid ? 0 : 29;
     }
     if (scenario == 11) {
         int descriptors[2];
