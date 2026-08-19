@@ -1,12 +1,12 @@
 #![cfg(feature = "native-test-hooks")]
 
 //! A checkpoint must never publish an image that silently omits state the format
-//! does not carry. SysV IPC objects and fcntl/flock record locks live outside the
+//! does not carry. `SysV` IPC objects and `fcntl`/`flock` record locks live outside the
 //! guest descriptor table, so the descriptor scan cannot see them; without an
-//! explicit gate a live PostgreSQL cluster (which holds both) checkpointed and
+//! explicit gate a live `PostgreSQL` cluster (which holds both) checkpointed and
 //! restored without its shared memory or its data-directory interlock.
 //!
-//! SysV is now captured rather than refused, so scenarios 1-3 drive a real
+//! `SysV` is now captured rather than refused, so scenarios 1-3 drive a real
 //! capture/restore round trip through a fresh namespace hash; the lock domain is
 //! still uncaptured and scenarios 4-5 still assert its refusal.
 
@@ -19,7 +19,7 @@ fn checkpoint_admits_a_process_holding_neither_sysv_nor_lock_state() {
     }
 }
 
-/// A shared-memory segment, a semaphore set with its SEM_UNDO list, and a message queue
+/// A shared-memory segment, a semaphore set with its `SEM_UNDO` list, and a message queue
 /// survive a capture/restore round trip into a different IPC namespace -- and the segment
 /// comes back at its original attach address with its original bytes.
 #[test]

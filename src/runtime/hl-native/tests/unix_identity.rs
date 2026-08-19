@@ -465,10 +465,10 @@ fn a_forged_identity_name_is_never_adopted_on_both_isas() {
     }
 }
 
-/// The connector and the acceptor of an ordinary pathname AF_UNIX connection are routinely UNRELATED
+/// The connector and the acceptor of an ordinary pathname `AF_UNIX` connection are routinely UNRELATED
 /// host processes -- a container exec (`psql`) is forked from the hl-container daemon, not from the
 /// worker running the listener (`postgres`), and inherits none of its memory. Identity has to survive
-/// that, and for a while it did not: the ticket table was a MAP_SHARED memfd created once per worker at
+/// that, and for a while it did not: the ticket table was a `MAP_SHARED` memfd created once per worker at
 /// the ISA seam, so each process published into a private table and every cross-process claim missed.
 /// Every accepted postgres backend socket then carried peer=0, which no reciprocity join can ever match.
 ///
@@ -586,7 +586,7 @@ fn an_honest_cross_process_connection_carries_reciprocal_identity_on_both_isas()
 /// same high 32 bits, the connector's pid, twice. A checkpoint reciprocity join then has no computable
 /// second owner: the accepting process is simply absent from its own connection's identity.
 ///
-/// Both ends mint through the production allocator here (PREPARE_MINTED/IDENTIFY_MINTED) rather than
+/// Both ends mint through the production allocator here (`PREPARE_MINTED/IDENTIFY_MINTED`) rather than
 /// taking a test-chosen object, because the property under test is which process the id encodes.
 const OWNER_PID_SOCKET: &str = "HL_UNIX_IDENTITY_OWNER_PID_SOCKET";
 

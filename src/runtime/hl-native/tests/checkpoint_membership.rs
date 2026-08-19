@@ -6,7 +6,7 @@
 //! both ends of every connected pair were stopped. That assertion is only true if membership names every
 //! process of the container. It did not: the filter was descendancy of guest pid 1, and hl-container forks
 //! an `exec` session out of its own daemon, so an exec session is a SIBLING of pid 1. Measured on a live
-//! PostgreSQL cluster, three of eleven engine processes -- every `psql` client -- reported `descendant=0`
+//! `PostgreSQL` cluster, three of eleven engine processes -- every `psql` client -- reported `descendant=0`
 //! while holding the far end of a socket owned by a process that WAS captured.
 //!
 //! The replacement must not be a widening. The filter before descendancy was "same session", and it found

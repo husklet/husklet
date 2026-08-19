@@ -56,7 +56,7 @@ fn fixed_noreplace_collision_preserves_sentinel_bytes() {
     let executable = scratch.path().join("restore_collision");
     fs::write(
         &source,
-        r#"
+        r"
 #define _GNU_SOURCE
 #include <errno.h>
 #include <stdint.h>
@@ -76,7 +76,7 @@ int main(void) {
         if (sentinel[index] != 0xa5) return 3;
     return munmap(sentinel, length) == 0 ? 0 : 4;
 }
-"#,
+",
     )
     .expect("write restore collision probe");
     let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))

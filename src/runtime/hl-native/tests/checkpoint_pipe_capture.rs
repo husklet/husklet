@@ -44,7 +44,7 @@ fn a_write_only_pipe_end_neither_claims_nor_drains() {
 }
 
 /// Both capture paths ask one question. The queued-rights path used to ask `== O_RDONLY` while the image
-/// path asked `!= O_WRONLY`, so an O_RDWR end reached through SCM_RIGHTS published no object at all and its
+/// path asked `!= O_WRONLY`, so an `O_RDWR` end reached through `SCM_RIGHTS` published no object at all and its
 /// pipe was restored empty on a checkpoint that reported success.
 #[test]
 fn pipe_drain_eligibility_is_not_write_only_rather_than_read_only() {
@@ -71,7 +71,7 @@ fn the_bytes_a_drain_removes_are_the_bytes_restore_puts_back_in_order() {
 /// coordinator observe afterwards: every buffered byte still in the pipe, and a disposition that resumes
 /// rather than the terminal `cannot resume: its capture was destructive and was not published`.
 ///
-/// Refusals of exactly this shape -- an unsupported socket, a sandbox policy, a missing SysV section -- are
+/// Refusals of exactly this shape -- an unsupported socket, a sandbox policy, a missing `SysV` section -- are
 /// ordinary. Before the admission and consumption passes were separated, every one of them killed the whole
 /// process tree over a policy decision that had destroyed nothing.
 #[test]

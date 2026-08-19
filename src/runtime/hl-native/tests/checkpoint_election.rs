@@ -9,7 +9,7 @@
 //!
 //! The election used to read `container_pid() == 1`, which is not that property: every ENGINE LAUNCH's
 //! top process sets `g_init_hostpid` to its own pid, so a container exec session's top process reports
-//! guest pid 1 exactly as the container init does. Measured on a live PostgreSQL cluster with three exec
+//! guest pid 1 exactly as the container init does. Measured on a live `PostgreSQL` cluster with three exec
 //! sessions: four processes each printed `coordinator pid=... found 11 peer(s)`, none of the four
 //! committed its own group, and the manifest was refused -- correctly -- as incomplete.
 //!

@@ -610,7 +610,7 @@ mod tests {
     ///
     /// This is the POSITIVE half of checkpoint membership, and it is the half no in-memory broker test
     /// can state: the engine emulates the guest's `setsid(2)` with the host's, so a guest that leads a
-    /// session -- every PostgreSQL backend, every shell job -- has its own host session id. While peer
+    /// session -- every `PostgreSQL` backend, every shell job -- has its own host session id. While peer
     /// enumeration also required a matching session, a live cluster produced ZERO peers, the coordinator
     /// published a one-process manifest, and the eight real members that arrived afterwards were refused
     /// at `REGISTER_READY` because the capture they belonged to had already finished. The negative
