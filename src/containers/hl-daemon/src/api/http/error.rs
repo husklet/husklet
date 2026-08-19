@@ -86,6 +86,9 @@ impl ApiError {
                 StatusCode::BAD_REQUEST
             }
             ContainerError::ReadOnly(_) => StatusCode::FORBIDDEN,
+            // A named capability gap, not a client mistake and not a runtime fault: the restored
+            // member exists, and nothing here can hand the caller a handle to it yet.
+            ContainerError::ExecNotReattachable { .. } => StatusCode::NOT_IMPLEMENTED,
             ContainerError::Io(ref error) if error.kind() == std::io::ErrorKind::NotFound => StatusCode::NOT_FOUND,
             ContainerError::Runtime(_)
             | ContainerError::StopTimeout { .. }
