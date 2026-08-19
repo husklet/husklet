@@ -2011,58 +2011,23 @@ fn read_reply(channel: &mut UnixStream) -> (i32, u64) {
     )
 }
 
-/// One live authenticated engine process holding one broker channel, exactly as
-/// production does: the broker binds one capability per connecting process.
-/// Returns the end this test drives, the accepted channel, that process's
-/// capability, its pid, and the descriptor whose closure releases it.
-fn authenticated_peer_process() -> (
-    UnixStream,
-    UnixStream,
-    hl_native::AuthenticatedCheckpointPeer,
-    libc::pid_t,
-    i32,
-) {
-    let (broker, transport) = hl_native::CheckpointTransport::create().expect("checkpoint transport");
-    let (relay_child, relay_survivor) = UnixStream::pair().expect("descriptor relay");
-    let mut release = [-1; 2];
-    // SAFETY: release names writable storage for two new descriptors.
-    assert_eq!(unsafe { libc::pipe(release.as_mut_ptr()) }, 0);
-    // SAFETY: the child touches only inherited descriptors and terminates with _exit.
-    let child = unsafe { libc::fork() };
-    assert!(child >= 0, "fork checkpoint peer");
-    if child == 0 {
-        // SAFETY: the child owns its inherited ends only.
-        unsafe { libc::close(release[1]) };
-        let Ok(channel) = transport.connect_for_test() else {
-            // SAFETY: no Rust destructor may run after fork.
-            unsafe { libc::_exit(93) }
-        };
-        send_descriptor(&relay_child, channel.as_raw_fd());
-        let mut byte = 0_u8;
-        // SAFETY: release[0] is live and byte is writable.
-        let read = unsafe { libc::read(release[0], (&raw mut byte).cast(), 1) };
-        // SAFETY: no Rust destructor may run after fork.
-        unsafe { libc::_exit(if read == 1 { 0 } else { 91 }) }
-    }
-    let (channel, authority) = broker
-        .accept(Duration::from_secs(10))
-        .expect("authenticated production accept");
-    assert_eq!(authority.host_pid, u64::try_from(child).unwrap());
-    let survivor = receive_descriptor(&relay_survivor);
-    drop(relay_child);
-    drop(transport);
-    // SAFETY: the parent no longer uses the child's end.
-    unsafe { libc::close(release[0]) };
-    (survivor, channel, authority, child, release[1])
-}
-
 /// An authenticated engine process becomes a member of the running capture
 /// exactly once; the repeat is a duplicate, not a second member.
+///
+/// The peer is this test process itself: the broker authenticates whoever
+/// connects, so a real capability is available without forking a peer out of a
+/// multi-threaded test binary, which deadlocks the child against a lock another
+/// thread held at fork time.
 #[test]
 fn register_ready_admits_one_authenticated_process_exactly_once() {
     static SERIAL: Mutex<()> = Mutex::new(());
     let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (mut member, channel, authority, child, release) = authenticated_peer_process();
+    let (broker, transport) = hl_native::CheckpointTransport::create().expect("checkpoint transport");
+    let mut member = transport.connect_for_test().expect("checkpoint channel");
+    let (channel, authority) = broker
+        .accept(Duration::from_secs(10))
+        .expect("authenticated production accept");
+    assert_eq!(authority.host_pid, u64::from(std::process::id()));
     let server = Arc::new(Server::new(Arc::new(Store), Arc::new(Store)));
     let worker = Arc::clone(&server);
     std::thread::spawn(move || worker.serve_authenticated_for_test(channel, authority));
@@ -2081,16 +2046,7 @@ fn register_ready_admits_one_authenticated_process_exactly_once() {
 
     member.write_all(&registration).expect("duplicate registration");
     assert_eq!(read_reply(&mut member).0, -1, "one process registered twice");
-
     server.stop();
-    // SAFETY: one byte releases the peer process.
-    assert_eq!(unsafe { libc::write(release, b"x".as_ptr().cast(), 1) }, 1);
-    // SAFETY: the parent owns this end.
-    unsafe { libc::close(release) };
-    let mut status = 0;
-    // SAFETY: child is a direct unreaped child and status is writable.
-    assert_eq!(unsafe { libc::waitpid(child, &raw mut status, 0) }, child);
-    assert_eq!(libc::WEXITSTATUS(status), 0);
 }
 
 /// Membership is proven, never assumed: a channel carrying no authenticated
