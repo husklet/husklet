@@ -47,8 +47,18 @@ static int exec_image_is_write_open_scan(const struct stat *image, int limit) {
 // all retain the same text-busy identity. This check intentionally precedes thread_exec_owner_handoff; a failed exec
 // must not retire sibling guest threads. Guest descriptor operations have no process-wide table lock today, so this
 // is the same live-table snapshot used by the CLOEXEC sweep below rather than a claim of atomic host exec exclusion.
-static int exec_image_is_write_open(const struct stat *image) {
+// Both images in one enumeration. Each /proc/self/fd walk is a kernel scan of the whole fd TABLE, not of the
+// open descriptors: the engine-private band is anchored at the guest ceiling (HL_LINUX_FD_LIMIT = 65536), so
+// the table this process carries is >= 65536 slots for its whole life and one walk measures ~1.1 ms on this
+// host against ~1.3 us before the band is adopted. The two checks below are adjacent with no intervening
+// operation, so serving them from a single snapshot is exactly the snapshot either one would have taken and
+// changes no window: this call remains, as the comment above says, a live-table snapshot rather than a claim
+// of atomic host exec exclusion.
+static int exec_images_are_write_open(const struct stat *image, const struct stat *second) {
     if (hl_linux_writable_identity_open(g_linux_box, (uint64_t)image->st_dev, (uint64_t)image->st_ino)) return 1;
+    if (second != NULL &&
+        hl_linux_writable_identity_open(g_linux_box, (uint64_t)second->st_dev, (uint64_t)second->st_ino))
+        return 1;
     hl_host_process_fd *fds = NULL;
     size_t count = 0;
     // One enumeration, not a sizing pass plus a listing pass: on Linux each pass is a full kernel walk of
@@ -56,11 +66,13 @@ static int exec_image_is_write_open(const struct stat *image) {
     // as the first and bought only a length this call already gets back.
     if (!hl_host_process_fds_collect(getpid(), &fds, &count)) {
         free(fds);
-        return exec_image_is_write_open_scan(image, getdtablesize());
+        return exec_image_is_write_open_scan(image, getdtablesize()) ||
+               (second != NULL && exec_image_is_write_open_scan(second, getdtablesize()));
     }
     int busy = 0;
     for (size_t index = 0; index < count && !busy; index++) {
-        busy = exec_writable_fd_matches(fds[index].descriptor, image);
+        busy = exec_writable_fd_matches(fds[index].descriptor, image) ||
+               (second != NULL && exec_writable_fd_matches(fds[index].descriptor, second));
     }
     free(fds);
     return busy;
@@ -144,10 +156,12 @@ static int exec_image_adopt(int descriptor, const char *path, exec_image *image)
         exec_image_release(image);
         return -EACCES;
     }
-    if (exec_image_is_write_open(&image->status)) {
-        exec_image_release(image);
-        return -ETXTBSY;
-    }
+    /* No ETXTBSY probe here. exec_prepare_request re-checks the resolved main image and the program
+     * interpreter immediately before committing, and that late check is the authoritative one: it runs after
+     * exec_collect_argv / exec_prepare_script / exec_prepare_interpreter, so it observes the descriptor table
+     * a sibling guest thread may have mutated in the meantime, which a probe taken here cannot. Probing at
+     * adopt time as well cost a second full /proc/self/fd walk per image -- and a third and fourth on any
+     * dynamically linked or #! guest -- for an answer the late check re-derives. */
     if (hl_linux_image_read_fd(descriptor, &image->bytes) != 0) {
         exec_image_release(image);
         return -EACCES;
@@ -496,8 +510,8 @@ static int exec_prepare_request(uint64_t path_address, uint64_t argv_address, ui
     error = exec_prepare_script(path_address, prepared);
     if (error == 0) error = exec_prepare_interpreter(prepared);
     if (error == 0 &&
-        (exec_image_is_write_open(&prepared->main_image.status) ||
-         (prepared->has_program_interpreter && exec_image_is_write_open(&prepared->program_interpreter.status))))
+        exec_images_are_write_open(&prepared->main_image.status,
+                                   prepared->has_program_interpreter ? &prepared->program_interpreter.status : NULL))
         error = -ETXTBSY;
     if (error != 0) {
         exec_prepared_discard(prepared);
