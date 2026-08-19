@@ -1272,6 +1272,11 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         if (lf & 0x800) mf |= O_NONBLOCK;
         if (lf & G_O_DIRECTORY) mf |= O_DIRECTORY;
         if (lf & 0x80000) mf |= O_CLOEXEC;
+        // Synchronised-I/O opens are a durability contract, not a hint, and both bits were dropped
+        // here: a 500x4KiB O_DSYNC loop cost 1.7 ms under the engine against 700 ms for the same loop
+        // run natively on the same btrfs file -- exactly the cost of the SAME loop with no barrier at
+        // all (1.6 ms). The engine was acknowledging a barrier it never issued. See guest_sync.h.
+        mf |= hl_guest_sync_open_flags(lf);
         // when a runtime-dropped process (gosu postgres) O_CREATs a file, the new inode must be
         // owned by its current fsuid/fsgid, not the cuid/cgid default. Only meaningful when O_CREAT is
         // set AND a cred drop makes the stamp differ from the default; the pre-existence probe (so we
