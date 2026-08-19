@@ -417,10 +417,18 @@ static uint8_t g_sock_identity_peer_hidden[HL_NFD];
 /* shutdown(2) changes the open socket description and therefore every dup and fork alias. Linux does not
  * expose this state through getsockopt, so the shared socket-state arena retains it at the syscall boundary.
  * Checkpoint capture rejects either direction until the journal can replay half-close ordering safely. */
-/* Ordinary pathname/abstract AF_UNIX connections need a whole-process freeze before their reciprocal
- * topology can be captured. Keep them distinct from guest-created socketpairs and the private AF_UNIX
- * transports behind guest INET sockets; until that freeze is authoritative, capture must fail closed. */
-static uint8_t g_sock_identity_checkpoint_pending[HL_NFD];
+/* Ordinary pathname/abstract AF_UNIX connections carry a reciprocal topology that spans processes, so
+ * capturing one endpoint is meaningful only if the other endpoint is captured in the same generation.
+ * The whole-process freeze that makes that provable is now authoritative (every member parks inside its
+ * own stop-the-world until the broker releases it), and the proof itself is discharged over the sealed
+ * tree by the broker's reciprocity join at publish_manifest -- before any generation exists. What this
+ * flag now demands of the descriptor is the local half of that obligation: an endpoint whose reciprocal
+ * peer is not named here can never be joined by anything downstream, so it still fails closed. */
+static uint8_t g_sock_identity_reciprocity_required[HL_NFD];
+/* fd -> 1 if this socket has no slot in the shared socket-state arena, so its half-close mask and its
+ * cross-alias state are simply unknown. Distinct from the reciprocity obligation above: a complete pair
+ * identity says nothing about state we never retained, and capture must fail closed on it either way. */
+static uint8_t g_sock_state_unretained[HL_NFD];
 /* fd -> (identity ticket slot + 1); 0 = this descriptor published no ticket.  The nonce is retained
  * beside the index because the slot is recycled: a fork inherits this map, so two processes can hold the
  * same index for the same fd, and whichever loses the retirement race must not go on to retire or collect
@@ -667,7 +675,7 @@ static uint64_t sock_object_new(void) {
 static void sock_internal_shutdown_fresh(int fd) {
     if (fd < 0 || fd >= HL_NFD) return;
     sock_state_drop(fd);
-    g_sock_identity_checkpoint_pending[fd] = (uint8_t)(sock_state_create(fd) != 0);
+    g_sock_state_unretained[fd] = (uint8_t)(sock_state_create(fd) != 0);
 }
 
 static void sock_pair_identity_assign(int first, int second) {
@@ -696,7 +704,7 @@ static void sock_internal_alias_relation(int fd, uint64_t peer, int local_hidden
         if (!sock_internal_alias_matches(fd, alias, ofd)) continue;
         g_sock_peer_object[alias] = peer;
         if (local_hidden) g_sock_identity_local_hidden[alias] = 1;
-        if (checkpoint_pending) g_sock_identity_checkpoint_pending[alias] = 1;
+        if (checkpoint_pending) g_sock_identity_reciprocity_required[alias] = 1;
     }
 }
 
@@ -783,8 +791,19 @@ static int sock_internal_checkpoint_admit(int fd) {
         return -1;
     }
     sock_internal_identity_collect(fd); // a reciprocity join needs the acceptor-minted half of the pair
-    if (g_sock_identity_checkpoint_pending[fd]) {
-        fprintf(stderr, "[ckpt] admit-arm: fd %d identity_checkpoint_pending\n", fd);
+    if (g_sock_state_unretained[fd]) {
+        fprintf(stderr, "[ckpt] admit-arm: fd %d socket_state_unretained\n", fd);
+        errno = ENOTSUP; // no retained socket state: the half-close mask and alias set are unknown
+        return -1;
+    }
+    /* The reciprocal half of an ordinary AF_UNIX connection is proved by the broker over every sealed
+     * member's inventory (checkpoint/reciprocity.rs), not here: this process can see only its own end.
+     * What it can prove locally is that the pair is nameable at all -- an endpoint that names no peer, or
+     * names itself, carries no obligation the join could ever discharge and would be published as a
+     * connection with no far end. */
+    if (g_sock_identity_reciprocity_required[fd] &&
+        (g_sock_peer_object[fd] == 0 || g_sock_peer_object[fd] == g_sock_object[fd])) {
+        fprintf(stderr, "[ckpt] admit-arm: fd %d reciprocal_peer_unnamed\n", fd);
         errno = ENOTSUP;
         return -1;
     }
@@ -860,7 +879,7 @@ static void sock_internal_connect_failed(int fd) {
 }
 
 static int sock_internal_accept_identify(int fd, int checkpoint_pending) {
-    if (fd >= 0 && fd < HL_NFD && checkpoint_pending) g_sock_identity_checkpoint_pending[fd] = 1;
+    if (fd >= 0 && fd < HL_NFD && checkpoint_pending) g_sock_identity_reciprocity_required[fd] = 1;
     struct sockaddr_un peer = {0};
     socklen_t length = sizeof peer;
     if (getpeername(fd, (struct sockaddr *)&peer, &length) != 0) return -1;
@@ -882,7 +901,7 @@ static int sock_internal_accept_identify(int fd, int checkpoint_pending) {
     if (!server || sock_identity_ticket_claim(nonce_high, nonce_low, &client, server) != 0) return 0;
     g_sock_peer_object[fd] = client;
     g_sock_identity_peer_hidden[fd] = 1;
-    g_sock_identity_checkpoint_pending[fd] = (uint8_t)checkpoint_pending;
+    g_sock_identity_reciprocity_required[fd] = (uint8_t)checkpoint_pending;
     return 1;
 }
 
@@ -898,7 +917,8 @@ static void sock_internal_identity_test_initialize(int fd, uint64_t object, uint
     g_sock_peer_object[fd] = 0;
     g_sock_identity_local_hidden[fd] = 0;
     g_sock_identity_peer_hidden[fd] = 0;
-    g_sock_identity_checkpoint_pending[fd] = 0;
+    g_sock_identity_reciprocity_required[fd] = 0;
+    g_sock_state_unretained[fd] = 0;
     sock_identity_ticket_release(fd);
     g_sock_connecting[fd] = 0;
     g_sock_conn[fd] = 0;
@@ -921,7 +941,7 @@ static void sock_internal_identity_test_initialize(int fd, uint64_t object, uint
     if (source >= 0)
         sock_state_dup(fd, source);
     else if (sock_state_create(fd) != 0)
-        g_sock_identity_checkpoint_pending[fd] = 1;
+        g_sock_state_unretained[fd] = 1;
     g_sock_fam[fd] = object ? AF_UNIX : 0;
     g_sock_stream[fd] = object != 0;
 }
@@ -975,10 +995,11 @@ HL_API int HL_TARGET_LOCAL(unix_identity_test)(uint32_t operation, int fd, uint6
     *peer = g_sock_peer_object[fd];
     uint32_t shutdown_state = sock_state_shutdown(fd);
     *hidden = (uint32_t)g_sock_identity_local_hidden[fd] | ((uint32_t)g_sock_identity_peer_hidden[fd] << 1) |
-              ((uint32_t)g_sock_identity_checkpoint_pending[fd] << 2) | ((uint32_t)g_sock_connecting[fd] << 3) |
+              ((uint32_t)g_sock_identity_reciprocity_required[fd] << 2) | ((uint32_t)g_sock_connecting[fd] << 3) |
               ((uint32_t)g_sock_conn[fd] << 4) |
               ((shutdown_state & SOCK_SHUTDOWN_READ) != 0 ? UINT32_C(1) << 5 : 0) |
-              ((shutdown_state & SOCK_SHUTDOWN_WRITE) != 0 ? UINT32_C(1) << 6 : 0);
+              ((shutdown_state & SOCK_SHUTDOWN_WRITE) != 0 ? UINT32_C(1) << 6 : 0) |
+              ((uint32_t)g_sock_state_unretained[fd] << 7);
     return status;
 }
 #endif
@@ -1034,7 +1055,7 @@ static void cmsg_note_recv_sock_fd(int fd) {
     sock_state_drop(fd);
     /* SCM_RIGHTS currently carries OFD identity but not the authenticated socket endpoint graph.  Refuse
      * checkpointing this descriptor until that graph proves its peer and cross-process shutdown state. */
-    g_sock_identity_checkpoint_pending[fd] = 1;
+    g_sock_identity_reciprocity_required[fd] = 1;
     g_sock_stream[fd] = (ty == SOCK_STREAM);
     g_sock_dgram[fd] = (ty == SOCK_DGRAM);
     if (!g_sock_peer_pid[fd]) g_sock_peer_pid[fd] = sock_alloc_synth_peer();
@@ -1317,7 +1338,8 @@ static void fd_carry_sock(int dst, int src) {
     g_sock_peer_object[dst] = g_sock_peer_object[src];
     g_sock_identity_local_hidden[dst] = g_sock_identity_local_hidden[src];
     g_sock_identity_peer_hidden[dst] = g_sock_identity_peer_hidden[src];
-    g_sock_identity_checkpoint_pending[dst] = g_sock_identity_checkpoint_pending[src];
+    g_sock_identity_reciprocity_required[dst] = g_sock_identity_reciprocity_required[src];
+    g_sock_state_unretained[dst] = g_sock_state_unretained[src];
     sock_state_dup(dst, src);
     g_sock_peer_pid[dst] = g_sock_peer_pid[src]; // ... and the same synthetic peer node identity
     g_sock_passcred[dst] = g_sock_passcred[src];

@@ -25,7 +25,7 @@ const IDENTIFY_MINTED: u32 = 16;
 
 const LOCAL_HIDDEN: u32 = 1;
 const PEER_HIDDEN: u32 = 2;
-const CHECKPOINT_PENDING: u32 = 4;
+const RECIPROCITY_REQUIRED: u32 = 4;
 const CONNECTING: u32 = 8;
 const READ_CLOSED: u32 = 32;
 const WRITE_CLOSED: u32 = 64;
@@ -95,7 +95,7 @@ fn reciprocal_connection(isa: u32, address: &libc::sockaddr_un, length: libc::so
     assert_eq!(local, client_object);
     // The connector reserves only its OWN half; the peer id belongs to whichever process accepts.
     assert_eq!(reserved_peer, 0);
-    assert_eq!(hidden, LOCAL_HIDDEN | CHECKPOINT_PENDING);
+    assert_eq!(hidden, LOCAL_HIDDEN | RECIPROCITY_REQUIRED);
     assert_eq!(connect(client.as_raw_fd(), address, length), 0);
 
     let server = accept(listener.as_raw_fd());
@@ -103,7 +103,7 @@ fn reciprocal_connection(isa: u32, address: &libc::sockaddr_un, length: libc::so
     let (server_object, server_peer, server_hidden) = identity(isa, IDENTIFY, server.as_raw_fd(), server_allocated);
     assert_eq!(server_object, server_allocated, "the acceptor kept its own object id");
     assert_eq!(server_peer, client_object);
-    assert_eq!(server_hidden, PEER_HIDDEN | CHECKPOINT_PENDING);
+    assert_eq!(server_hidden, PEER_HIDDEN | RECIPROCITY_REQUIRED);
     let (_, collected, _) = identity(isa, CONNECTED, client.as_raw_fd(), 0);
     assert_eq!(
         collected, server_allocated,
@@ -122,8 +122,47 @@ fn reciprocal_connection(isa: u32, address: &libc::sockaddr_un, length: libc::so
     );
     assert_eq!(received, byte);
 
+    // Both halves of an honest, complete pair are admissible to capture. The cross-process half of the
+    // obligation -- that the peer object is owned by another sealed member of the same freeze -- is
+    // discharged by the broker's reciprocity join over the committed inventories, not here.
+    for (name, descriptor) in [("connector", client.as_raw_fd()), ("acceptor", server.as_raw_fd())] {
+        assert!(
+            hl_native::unix_identity_test(isa, CHECKPOINT_ADMIT, descriptor, 0).is_ok(),
+            "ISA {isa} refused the {name} end of a complete reciprocal pair"
+        );
+    }
+
     identity(isa, RESET, client.as_raw_fd(), 0);
     identity(isa, RESET, server.as_raw_fd(), 0);
+}
+
+/// A connector that has published its half and has not yet collected the acceptor's names no reciprocal
+/// peer at all, so no downstream join could ever discharge its obligation. It must fail closed here.
+#[test]
+fn an_unreciprocated_pathname_connector_is_refused_capture_on_both_isas() {
+    for isa in [1, 2] {
+        let path = format!("/tmp/.hl-unreciprocated-{isa}-{}", std::process::id());
+        let _ = std::fs::remove_file(&path);
+        let (listener_address, listener_length) = address(path.as_bytes(), false);
+        let listener = socket();
+        bind(listener.as_raw_fd(), &listener_address, listener_length);
+        assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 4) }, 0);
+
+        let client = socket();
+        let object = 0x3300_0000_0000_0000_u64 | u64::from(isa);
+        let (_, peer, flags) = identity(isa, PREPARE, client.as_raw_fd(), object);
+        assert_eq!(peer, 0, "the connector reserves only its own half");
+        assert_eq!(flags, LOCAL_HIDDEN | RECIPROCITY_REQUIRED);
+        assert_eq!(connect(client.as_raw_fd(), &listener_address, listener_length), 0);
+        assert_eq!(
+            hl_native::unix_identity_test(isa, CHECKPOINT_ADMIT, client.as_raw_fd(), 0),
+            Err(libc::ENOTSUP),
+            "ISA {isa} admitted a connection whose reciprocal peer is unnamed"
+        );
+
+        identity(isa, RESET, client.as_raw_fd(), 0);
+        let _ = std::fs::remove_file(&path);
+    }
 }
 
 #[test]
@@ -157,12 +196,12 @@ fn refused_connect_withdraws_the_unaccepted_peer_on_both_isas() {
         let object = 0x2000_0000_0000_0000_u64 | u64::from(isa);
         let (_, peer, hidden) = identity(isa, PREPARE, client.as_raw_fd(), object);
         assert_eq!(peer, 0);
-        assert_eq!(hidden, LOCAL_HIDDEN | CHECKPOINT_PENDING);
+        assert_eq!(hidden, LOCAL_HIDDEN | RECIPROCITY_REQUIRED);
         assert_eq!(connect(client.as_raw_fd(), &address, length), -1);
         let (local, peer, hidden) = identity(isa, FAILED, client.as_raw_fd(), 0);
         assert_eq!(local, object);
         assert_eq!(peer, 0);
-        assert_eq!(hidden, LOCAL_HIDDEN | CHECKPOINT_PENDING);
+        assert_eq!(hidden, LOCAL_HIDDEN | RECIPROCITY_REQUIRED);
         identity(isa, RESET, client.as_raw_fd(), 0);
     }
 }
@@ -184,13 +223,13 @@ fn guest_bound_client_keeps_its_name_and_fails_closed_without_a_false_peer() {
         let object = 0x3000_0000_0000_0000_u64 | u64::from(isa);
         assert_eq!(
             identity(isa, PREPARE, client.as_raw_fd(), object),
-            (object, 0, CHECKPOINT_PENDING)
+            (object, 0, RECIPROCITY_REQUIRED)
         );
         assert_eq!(connect(client.as_raw_fd(), &listener_address, listener_length), 0);
         let server = accept(listener.as_raw_fd());
         assert_eq!(
             identity(isa, IDENTIFY, server.as_raw_fd(), 9),
-            (9, 0, CHECKPOINT_PENDING)
+            (9, 0, RECIPROCITY_REQUIRED)
         );
 
         let mut observed = unsafe { std::mem::zeroed::<libc::sockaddr_un>() };
@@ -238,7 +277,7 @@ fn dup_before_connect_shares_identity_and_capture_refusal_on_both_isas() {
         let duplicate = identity(isa, SNAPSHOT, alias.as_raw_fd(), 0);
         assert_eq!(duplicate, original);
         assert_eq!(original.1, 0);
-        assert_eq!(original.2, LOCAL_HIDDEN | CHECKPOINT_PENDING);
+        assert_eq!(original.2, LOCAL_HIDDEN | RECIPROCITY_REQUIRED);
         assert_eq!(
             hl_native::unix_identity_test(isa, CHECKPOINT_ADMIT, client.as_raw_fd(), 0),
             Err(libc::ENOTSUP)
@@ -270,7 +309,7 @@ fn async_failure_withdraws_every_alias_transactionally_on_both_isas() {
         identity(isa, PREPARE, client.as_raw_fd(), object);
 
         identity(isa, IN_PROGRESS, alias.as_raw_fd(), 0);
-        let expected = LOCAL_HIDDEN | CHECKPOINT_PENDING | CONNECTING;
+        let expected = LOCAL_HIDDEN | RECIPROCITY_REQUIRED | CONNECTING;
         assert_eq!(identity(isa, SNAPSHOT, client.as_raw_fd(), 0).2, expected);
         assert_eq!(identity(isa, SNAPSHOT, alias.as_raw_fd(), 0).2, expected);
         identity(isa, ASYNC_FAILED, alias.as_raw_fd(), 0);
@@ -278,7 +317,7 @@ fn async_failure_withdraws_every_alias_transactionally_on_both_isas() {
             let (local, peer, flags) = identity(isa, SNAPSHOT, descriptor, 0);
             assert_eq!(local, object);
             assert_eq!(peer, 0);
-            assert_eq!(flags, LOCAL_HIDDEN | CHECKPOINT_PENDING);
+            assert_eq!(flags, LOCAL_HIDDEN | RECIPROCITY_REQUIRED);
         }
 
         identity(isa, RESET, client.as_raw_fd(), 0);
@@ -410,7 +449,7 @@ fn a_forged_identity_name_is_never_adopted_on_both_isas() {
                 "ISA {isa} adopted the forged client id from {forged}"
             );
             assert_eq!(
-                hidden, CHECKPOINT_PENDING,
+                hidden, RECIPROCITY_REQUIRED,
                 "ISA {isa} marked a forged peer identity hidden"
             );
             assert_eq!(
@@ -453,7 +492,7 @@ fn cross_process_identity_connector() {
     let (local, reserved_peer, hidden) = identity(isa, PREPARE, client.as_raw_fd(), CROSS_PROCESS_CLIENT_OBJECT);
     assert_eq!(local, CROSS_PROCESS_CLIENT_OBJECT);
     assert_eq!(reserved_peer, 0);
-    assert_eq!(hidden, LOCAL_HIDDEN | CHECKPOINT_PENDING);
+    assert_eq!(hidden, LOCAL_HIDDEN | RECIPROCITY_REQUIRED);
     assert_eq!(
         connect(client.as_raw_fd(), &listener_address, listener_length),
         0,
@@ -510,7 +549,7 @@ fn an_honest_cross_process_connection_carries_reciprocal_identity_on_both_isas()
         );
         assert_eq!(
             hidden,
-            PEER_HIDDEN | CHECKPOINT_PENDING,
+            PEER_HIDDEN | RECIPROCITY_REQUIRED,
             "ISA {isa} peer identity is not hidden"
         );
 
@@ -605,7 +644,7 @@ fn an_accepted_socket_encodes_its_own_owners_pid_on_both_isas() {
         let (local, peer, hidden) = identity(isa, IDENTIFY_MINTED, accepted.as_raw_fd(), 0);
         assert_eq!(
             hidden,
-            PEER_HIDDEN | CHECKPOINT_PENDING,
+            PEER_HIDDEN | RECIPROCITY_REQUIRED,
             "ISA {isa} identity is not reciprocal"
         );
         assert_eq!(
