@@ -1100,10 +1100,20 @@ fail:
 // ANONYMOUS MAP_SHARED round trip -- the two mechanisms that keep such a region shared across a
 // checkpoint, exercised without a guest.
 //
-// Scenario 0 (identity): the kernel's shmem inode names the object. Two shared anonymous mappings
-// made back to back must get DIFFERENT ids, a sub-range of one must get the SAME id with the right
-// offset, and a PRIVATE anonymous mapping must get NO id at all -- the discriminator that keeps
-// every private region on its existing per-process restore.
+// Scenario 0 (identity): the kernel names the object -- a shmem inode on Linux, a vm_object id on
+// Darwin. A shared anonymous mapping must get an id, a sub-range of it must get the SAME id with
+// the right offset, and a PRIVATE anonymous mapping must get NO id at all -- the discriminator that
+// keeps every private region on its existing per-process restore.
+//
+// TWO HOST FACTS THIS ENCODES, both measured on macOS 26.3.1 (arm64) and neither true of Linux:
+//
+//  - An untouched region has no object yet. mmap(MAP_SHARED|MAP_ANON) with no page faulted reads
+//    share_mode SM_EMPTY and object_id 0, so it has no identity to record -- correctly, since it
+//    has no pages for anyone to share. The mappings are therefore written before they are named.
+//  - Adjacent shared anonymous mappings COALESCE into one vm_object. Two 8 KiB mappings made back
+//    to back landed in one entry with one object_id, the second at offset 0x4000. That is not a
+//    collision: they really are one object, and the identity+offset pair restores both losslessly.
+//    Linux mints a separate shmem inode per mmap, so only Linux can assert two distinct ids.
 //
 // Scenario 1 (one object, two processes): a parent and a forked child independently derive the id
 // for the region they share, then each takes the RESTORE-side seed for that id and maps it. The
@@ -1117,20 +1127,34 @@ static int ckpt_anon_shared_roundtrip_test(uint32_t scenario) {
         void *second = mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
         void *private_region = mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (first == MAP_FAILED || second == MAP_FAILED || private_region == MAP_FAILED) return 10;
+        // Fault every page in before naming the objects: on Darwin an untouched region has no
+        // vm_object and therefore no identity. Harmless on Linux, where the inode exists at mmap.
+        memset(first, 0x11, length);
+        memset(second, 0x22, length);
+        memset(private_region, 0x33, length);
         ckpt_anon_shared_scan();
         uint64_t first_id = 0, second_id = 0, private_id = 0, tail_id = 0;
         uint64_t first_offset = 0, second_offset = 0, private_offset = 0, tail_offset = 0;
         int verdict = 0;
         if (g_anon_shared_truncated) verdict = 11;
+        // The offset is asserted RELATIVE to the region's own offset, never as zero. Linux mints one
+        // shmem inode per mmap so the region always starts its object, but Darwin coalesces adjacent
+        // shared anonymous mappings into one vm_object and a region can start partway into it --
+        // measured at offset 0x4000. What must hold on both hosts is that the offset tracks the
+        // address, which the sub-range check below is what actually proves.
         else if (!ckpt_anon_shared_object((uint64_t)(uintptr_t)first, length, &first_id, &first_offset) ||
-                 first_id == 0 || first_offset != 0)
+                 first_id == 0)
             verdict = 12;
         else if (!ckpt_anon_shared_object((uint64_t)(uintptr_t)second, length, &second_id, &second_offset) ||
                  second_id == 0)
             verdict = 13;
+#if !defined(__APPLE__)
+        // Linux mints one shmem inode per mmap, so two mappings are two objects. Darwin coalesces
+        // adjacent shared anonymous mappings into one, which the offsets below already carry.
         else if (first_id == second_id) verdict = 14; // two objects must not share one identity
+#endif
         else if (!ckpt_anon_shared_object((uint64_t)(uintptr_t)first + 4096, 4096, &tail_id, &tail_offset) ||
-                 tail_id != first_id || tail_offset != 4096)
+                 tail_id != first_id || tail_offset != first_offset + 4096)
             verdict = 15; // a sub-range of one object is the SAME object at an offset
         else if (ckpt_anon_shared_object((uint64_t)(uintptr_t)private_region, length, &private_id, &private_offset) ||
                  private_id != 0)

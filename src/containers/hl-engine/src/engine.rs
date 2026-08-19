@@ -132,6 +132,16 @@ pub enum EngineError {
     /// sandbox refusal this is a property of the stored image, not a transient
     /// state, so a preflight must not poll on it.
     CheckpointGenerationUnfinalized,
+    /// A checkpoint capture that started but did not complete.
+    ///
+    /// This is not a launch failure and must never be reported as one: the guest launched, ran, and
+    /// was still running when the capture was refused or abandoned. A macOS build reported every
+    /// refused capture as `LaunchFailed`, which reached the desktop as a bare launch-failure
+    /// dialog on a workspace the user had just been typing into.
+    CaptureFailed,
+    /// The capture ledger was left poisoned by a panicking participant, so no capture can be
+    /// admitted until the engine is rebuilt.
+    CapturePoisoned,
     Unsupported,
 }
 
