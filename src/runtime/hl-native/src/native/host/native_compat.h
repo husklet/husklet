@@ -354,9 +354,30 @@ static inline int hl_native_kevent_wait(int descriptor, struct kevent *events, i
     }
 }
 
+/* BSD kqueue reports a per-change failure by placing an EV_ERROR event -- the change's ident/filter with
+   the errno in `data` -- into the eventlist and CONTINUING with the rest of the changelist; it fails the
+   whole call only when the eventlist has no room left for the echo.  The engine's deferred changelist
+   depends on exactly that: `ep_flush` routinely submits an EV_ADD/EV_DELETE for a descriptor whose
+   registration a peer (or a checkpoint restore) has already retired, and `epoll_append_kevents` is written
+   to skip the resulting echoes.  Failing the syscall instead turns one stale change into a guest-visible
+   `epoll_wait` errno -- observed as PostgreSQL's `epoll_wait() failed: No such file or directory` on every
+   backend forked after a restore, because a restored watch leaves `g_ep_wr[fd]` armed while the descriptor
+   carries no registration on the instance the guest next modifies. */
+static inline int hl_native_kevent_echo(const struct kevent *change, struct kevent *events, int event_count,
+                                        int *echoed, int error) {
+    if (events == NULL || *echoed >= event_count) {
+        errno = error;
+        return -1;
+    }
+    events[*echoed] = (struct kevent){change->ident, change->filter, EV_ERROR, 0, (intptr_t)error, change->udata};
+    ++*echoed;
+    return 0;
+}
+
 static inline int kevent(int descriptor, const struct kevent *changes, int change_count, struct kevent *events,
                          int event_count, const struct timespec *timeout) {
     int index;
+    int echoed = 0;
     if (change_count < 0 || event_count < 0 || (change_count != 0 && changes == NULL) ||
         (event_count != 0 && events == NULL)) {
         errno = EINVAL;
@@ -376,33 +397,34 @@ static inline int kevent(int descriptor, const struct kevent *changes, int chang
         struct epoll_event event = {0};
         int operation;
         int target;
-        if (change->filter == EVFILT_VNODE) {
-            pthread_mutex_unlock(&hl_native_klock);
-            errno = ENOTSUP;
-            return -1;
-        }
-        if (change->filter != EVFILT_READ && change->filter != EVFILT_WRITE && change->filter != EVFILT_USER &&
-            change->filter != EVFILT_TIMER) {
-            pthread_mutex_unlock(&hl_native_klock);
-            errno = ENOTSUP;
-            return -1;
+        if (change->filter == EVFILT_VNODE || (change->filter != EVFILT_READ && change->filter != EVFILT_WRITE &&
+                                               change->filter != EVFILT_USER && change->filter != EVFILT_TIMER)) {
+            if (hl_native_kevent_echo(change, events, event_count, &echoed, ENOTSUP) != 0) {
+                pthread_mutex_unlock(&hl_native_klock);
+                return -1;
+            }
+            continue;
         }
         target = change->filter == EVFILT_USER ? -1 : change->filter == EVFILT_TIMER ? -2 : (int)change->ident;
         entry = hl_native_kfind(queue, target);
         if (change->filter == EVFILT_USER && (change->fflags & NOTE_TRIGGER) != 0) {
             uint64_t one = 1;
             if (entry == NULL || write(entry->wake, &one, sizeof(one)) != (ssize_t)sizeof(one)) {
-                pthread_mutex_unlock(&hl_native_klock);
-                errno = entry == NULL ? ENOENT : errno;
-                return -1;
+                int error = entry == NULL ? ENOENT : errno;
+                if (hl_native_kevent_echo(change, events, event_count, &echoed, error) != 0) {
+                    pthread_mutex_unlock(&hl_native_klock);
+                    return -1;
+                }
             }
             continue;
         }
         if ((change->flags & EV_DELETE) != 0) {
             if (entry == NULL) {
-                pthread_mutex_unlock(&hl_native_klock);
-                errno = ENOENT;
-                return -1;
+                if (hl_native_kevent_echo(change, events, event_count, &echoed, ENOENT) != 0) {
+                    pthread_mutex_unlock(&hl_native_klock);
+                    return -1;
+                }
+                continue;
             }
             if (change->filter == EVFILT_READ)
                 entry->read = 0;
@@ -414,9 +436,11 @@ static inline int kevent(int descriptor, const struct kevent *changes, int chang
             if (entry == NULL) {
                 entry = calloc(1, sizeof(*entry));
                 if (entry == NULL) {
-                    pthread_mutex_unlock(&hl_native_klock);
-                    errno = ENOMEM;
-                    return -1;
+                    if (hl_native_kevent_echo(change, events, event_count, &echoed, ENOMEM) != 0) {
+                        pthread_mutex_unlock(&hl_native_klock);
+                        return -1;
+                    }
+                    continue;
                 }
                 entry->queue = queue;
                 entry->token = hl_native_ktoken_next++;
@@ -450,25 +474,33 @@ static inline int kevent(int descriptor, const struct kevent *changes, int chang
                     entry->wake = wake;
                 }
                 if (entry->wake < 0) {
-                    pthread_mutex_unlock(&hl_native_klock);
-                    return -1;
+                    if (hl_native_kevent_echo(change, events, event_count, &echoed, errno) != 0) {
+                        pthread_mutex_unlock(&hl_native_klock);
+                        return -1;
+                    }
+                    continue;
                 }
                 entry->read = 1;
                 if (change->filter == EVFILT_TIMER) {
                     struct itimerspec setting = {0};
                     int64_t nanoseconds = change->data;
                     if ((change->fflags & NOTE_NSECONDS) == 0 || nanoseconds < 0) {
-                        pthread_mutex_unlock(&hl_native_klock);
-                        errno = ENOTSUP;
-                        return -1;
+                        if (hl_native_kevent_echo(change, events, event_count, &echoed, ENOTSUP) != 0) {
+                            pthread_mutex_unlock(&hl_native_klock);
+                            return -1;
+                        }
+                        continue;
                     }
                     if (nanoseconds == 0) nanoseconds = 1;
                     setting.it_value.tv_sec = (time_t)(nanoseconds / INT64_C(1000000000));
                     setting.it_value.tv_nsec = (long)(nanoseconds % INT64_C(1000000000));
                     if ((change->flags & EV_ONESHOT) == 0) setting.it_interval = setting.it_value;
                     if (timerfd_settime(entry->wake, 0, &setting, NULL) != 0) {
-                        pthread_mutex_unlock(&hl_native_klock);
-                        return -1;
+                        if (hl_native_kevent_echo(change, events, event_count, &echoed, errno) != 0) {
+                            pthread_mutex_unlock(&hl_native_klock);
+                            return -1;
+                        }
+                        continue;
                     }
                 }
             }
@@ -492,8 +524,11 @@ static inline int kevent(int descriptor, const struct kevent *changes, int chang
         }
         if (control != 0 && operation == EPOLL_CTL_ADD && errno == EEXIST) control = 0;
         if (control != 0 && !(operation == EPOLL_CTL_DEL && errno == ENOENT)) {
-            pthread_mutex_unlock(&hl_native_klock);
-            return -1;
+            if (hl_native_kevent_echo(change, events, event_count, &echoed, errno) != 0) {
+                pthread_mutex_unlock(&hl_native_klock);
+                return -1;
+            }
+            continue;
         }
         if (operation == EPOLL_CTL_DEL && entry->filter == EVFILT_TIMER && entry->wake >= 0) {
             hl_host_process_fd_private_remove(entry->wake);
@@ -502,6 +537,8 @@ static inline int kevent(int descriptor, const struct kevent *changes, int chang
         }
     }
     pthread_mutex_unlock(&hl_native_klock);
+    // BSD returns the changelist echoes at once rather than blocking behind them; the caller re-waits.
+    if (echoed > 0) return echoed;
     if (event_count == 0) return 0;
     return hl_native_kevent_wait(descriptor, events, event_count, timeout);
 }
