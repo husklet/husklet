@@ -597,22 +597,45 @@ on its branch or worktree; never manufacture a cosmetic commit merely to meet th
 deadline.
 
 Compatibility workers receive engine launch options only through the typed
-`HL_COMPAT_ENGINE_OPTIONS` setting (for example
-`HL_COMPAT_ENGINE_OPTIONS='HL_NATIVE_EXECUTION=1;HL_NATIVE_DIAGNOSTICS=1'`).
-Setting an engine option such as `HL_NATIVE_EXECUTION` directly in the inventory
-supervisor's ambient environment does not configure the guest engine and must
-never be cited as native-mode evidence. Before a long run, prove the selected
-mode with one fast row and require the corresponding native diagnostics.
+`HL_COMPAT_ENGINE_OPTIONS` setting. Setting an engine option directly in the
+inventory supervisor's ambient environment does not configure the guest engine and
+must never be cited as evidence of a selected mode.
 
-The same trap applies to a **direct** `hl-x86_64` / `hl-aarch64` invocation, and
-there it is worse because nothing looks wrong. The engine takes options only via
-`--engine-option HL_NATIVE_EXECUTION=1`; the ambient variable does nothing, the
-run completes, and it prints a perfectly plausible `PHASE … us=… ok=…` with
-native entirely off. A lane produced an interpreter number wearing a native label
-this way and caught it only by checking `probes` in the diagnostics.
+### There is no native/interpreter switch, and the counters that proved it are gone
 
-So: pass engine options as `--engine-option`, and confirm the mode from a counter
-(`probes`, `entries`) rather than from the command you believe you ran.
+This subsection used to instruct lanes to request native execution with
+`HL_NATIVE_EXECUTION=1` and to confirm it from `probes`/`entries` on the
+`hl-native-entry:` line. **Every part of that is now stale, and following it wastes
+a lane.** Re-derived on 2026-08-18:
+
+- `HL_NATIVE_EXECUTION` had no consumer anywhere in the repository — C or Rust. The
+  authoritative engine registry is
+  `src/runtime/hl-native/src/native/engine/options.c`, and it never defined any
+  `HL_NATIVE_*` option. The eight dead entries have been removed from
+  `src/containers/hl-engine/src/options.rs`; `retired_native_executor_options_are_not_registered`
+  pins their absence.
+- `hl-native-entry:`, `probes` and `entries` have **no producer** in the tree. Only
+  testing-side parsers mention them. A lane that waits for those counters is waiting
+  for output nothing emits, and may conclude its own build is broken.
+- There is no interpreter in the production engine. `translator/` and
+  `engine/target/{aarch64,x86_64}.c` are the execution path; the native-vs-interpreter
+  split belonged to the deleted Rust executor, which the "Historical" subsection below
+  already marks as gone. Container workloads were never interpreter numbers.
+- The engine workers accept **no `--engine-option` flag at all**. `LaunchArguments`
+  (`src/apps/engine/src/lib.rs:55-68`) has only `--guest-isa`, `--report-exit`,
+  `--rootfs`, the executable and its arguments, and both construction sites use
+  `Options::default()`. Measured: `./target/release/hl-aarch64 --engine-option
+  HL_C_DIAGNOSTICS=1 /bin/ls /` exits **2 with no output**, while the same command
+  without the flag runs the engine. So an unknown option does not get silently
+  ignored — it kills the run before the guest starts.
+
+The durable lesson survives its example: **confirm a mode from a counter, not from the
+command you believe you ran** — but first confirm the counter still has a producer.
+The instruction above outlived the mechanism it described by long enough to mislead
+several lanes.
+
+Retained-C diagnostics remain real and are requested with `HL_C_DIAGNOSTICS`, which is
+the one launch effect `Execution::Native` still carries.
 
 A commit may be called stable or buildable only after verification from that exact
 committed tree. A passing build in a dirty shared worktree is not evidence for
