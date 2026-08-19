@@ -916,9 +916,10 @@ static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
         fprintf(stderr, "[ckpt] refuse: checkpoint unsupported under the sentry sandbox policy (HL_UNTRUSTED)\n");
         return -1;
     }
-    // SysV IPC and fcntl/flock state live outside the descriptor table, so the fd
-    // scan below cannot see them and would publish an image that silently omits
-    // them. Admit the process only when both domains are empty.
+    // fcntl/flock state lives outside the descriptor table, so the fd scan below
+    // cannot see it and would publish an image that silently omits it. SysV IPC has
+    // the same shape but is now captured (ckpt_sysv_capture, below); the lock domain
+    // is not, so the process is admitted only when it holds no lock.
     if (ckpt_admit_ipc_and_lock_state() != 0) return -1;
     struct ckpt_sink *sink = ckpt_sink_current();
     struct ckpt_fd *fdrecs = calloc(HL_NFD, sizeof *fdrecs);
@@ -985,6 +986,10 @@ static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
     for (int i = 0; i < nfd; i++)
         if (ckpt_sink_write(sink, ff, &fdrecs[i], sizeof fdrecs[i]) != 0) goto done;
     if (ckpt_sink_finish(sink, &ff) != 0) goto done;
+
+    // SysV IPC is container-scoped and reachable from no descriptor, so it is captured here
+    // rather than by the fd scan above. A failure to read the registry refuses the dump.
+    if (ckpt_sysv_capture(sink, group) != 0) goto done;
 
     for (int i = 0; i < nfd; i++) {
         if (fdrecs[i].kind != CKF_INOTIFY || fdrecs[i].path[0] == 0) continue;
