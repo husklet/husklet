@@ -708,9 +708,7 @@ fn read_checkpoint_snapshot(path: &Path) -> BTreeMap<String, Vec<u8>> {
     for _ in 0..count {
         let name_size = word(&bytes, &mut offset);
         let value_size = word(&bytes, &mut offset);
-        let name = std::str::from_utf8(&bytes[offset..offset + name_size])
-            .unwrap()
-            .to_owned();
+        let name = std::str::from_utf8(&bytes[offset..offset + name_size]).unwrap().to_owned();
         offset += name_size;
         let value = bytes[offset..offset + value_size].to_vec();
         offset += value_size;
@@ -758,7 +756,12 @@ impl CheckpointSink for AtomicStore {
         Ok(())
     }
 
-    fn commit_until(&self, owner: NonZeroU64, manifest: &[u8], deadline: Instant) -> Result<(), CompositionError> {
+    fn commit_until(
+        &self,
+        owner: NonZeroU64,
+        manifest: &[u8],
+        deadline: Instant,
+    ) -> Result<(), CompositionError> {
         let mut state = self.0.lock().unwrap();
         Self::validate(&state, owner, deadline)?;
         state.staging.insert("MANIFEST".into(), manifest.into());
@@ -1354,36 +1357,18 @@ impl AmbientDescriptors {
 
     fn assert_preserved(&self, phase: &str) {
         for record in &self.records {
-            assert_eq!(
-                descriptor::identity(record.target).unwrap(),
-                record.identity,
-                "{phase}: fd {}",
-                record.target
-            );
+            assert_eq!(descriptor::identity(record.target).unwrap(), record.identity, "{phase}: fd {}", record.target);
             // Prove the target itself owns the locking OFD, rather than accepting a leaked duplicate as
             // evidence: releasing through target must admit an independent OFD, then target must reacquire.
             descriptor::lock(record.target, Lock::Unlock).unwrap();
-            let probe = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(&record.path)
-                .unwrap();
+            let probe = std::fs::OpenOptions::new().read(true).write(true).open(&record.path).unwrap();
             descriptor::lock(probe.as_raw_fd(), Lock::ExclusiveNonblocking).unwrap();
             descriptor::lock(probe.as_raw_fd(), Lock::Unlock).unwrap();
             descriptor::lock(record.target, Lock::ExclusiveNonblocking).unwrap();
-            let excluded = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(&record.path)
-                .unwrap();
+            let excluded = std::fs::OpenOptions::new().read(true).write(true).open(&record.path).unwrap();
             let error = descriptor::lock(excluded.as_raw_fd(), Lock::ExclusiveNonblocking)
                 .expect_err("lock unexpectedly released");
-            assert_eq!(
-                error.raw_os_error(),
-                Some(libc::EWOULDBLOCK),
-                "{phase}: fd {}",
-                record.target
-            );
+            assert_eq!(error.raw_os_error(), Some(libc::EWOULDBLOCK), "{phase}: fd {}", record.target);
         }
     }
 }
@@ -1399,9 +1384,7 @@ fn assert_ambient_locks_released(paths: &[PathBuf]) {
 fn start_with_closed_standard_descriptor(engine: &Engine, descriptor: StandardDescriptor) {
     let closed = descriptor::close_standard(descriptor).expect("close standard descriptor");
     let started = engine.start();
-    closed
-        .restore()
-        .expect("restore standard descriptor after engine start");
+    closed.restore().expect("restore standard descriptor after engine start");
     started.unwrap();
 }
 
@@ -1473,8 +1456,7 @@ fn ambient_host_descriptors_do_not_shift_guest_fds_across_checkpoint_restore() {
     const CHILD: &str = "HL_AMBIENT_FD_CHECKPOINT_CHILD";
     if std::env::var_os(CHILD).is_some() {
         let fixtures = tempfile::tempdir().unwrap();
-        let ambient_directory =
-            PathBuf::from(std::env::var_os("HL_AMBIENT_FD_DIRECTORY").expect("ambient fd directory"));
+        let ambient_directory = PathBuf::from(std::env::var_os("HL_AMBIENT_FD_DIRECTORY").expect("ambient fd directory"));
         let ambient = AmbientDescriptors::inherited(&ambient_directory);
         for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
             ambient_fd_round_trip(isa, &ambient_fd_fixture(isa, fixtures.path()), &ambient);
@@ -1485,7 +1467,8 @@ fn ambient_host_descriptors_do_not_shift_guest_fds_across_checkpoint_restore() {
      * with sibling checkpoint tests still running here. Hold this guard through spawn and bounded wait. */
     let _exclusive = exclusive_checkpoint_test();
     let ambient_directory = tempfile::tempdir().unwrap();
-    let paths = [3, 4, 17].map(|descriptor| ambient_directory.path().join(format!("ambient-{descriptor}.lock")));
+    let paths = [3, 4, 17]
+        .map(|descriptor| ambient_directory.path().join(format!("ambient-{descriptor}.lock")));
     let launcher = ambient_fd_launcher(ambient_directory.path());
     let output = tempfile::NamedTempFile::new().unwrap();
     let error = tempfile::NamedTempFile::new().unwrap();
@@ -1510,10 +1493,7 @@ fn ambient_host_descriptors_do_not_shift_guest_fds_across_checkpoint_restore() {
         if Instant::now() >= deadline {
             child.kill().unwrap();
             let _ = child.wait();
-            panic!(
-                "ambient fd checkpoint child timed out\n{}",
-                std::fs::read_to_string(error.path()).unwrap()
-            );
+            panic!("ambient fd checkpoint child timed out\n{}", std::fs::read_to_string(error.path()).unwrap());
         }
         std::thread::sleep(Duration::from_millis(20));
     };
@@ -2330,9 +2310,7 @@ fn one_rejected_process_prevents_manifest_publication_on_both_isas() {
         let release = PathBuf::from(std::env::var_os("HL_CHECKPOINT_RESTORE_RELEASE").unwrap());
         let final_release = PathBuf::from(std::env::var_os("HL_CHECKPOINT_RESTORE_FINAL_RELEASE").unwrap());
         let output = PathBuf::from(format!("{}.output", release.display()));
-        let store = Arc::new(AtomicStore::from_committed(read_checkpoint_snapshot(Path::new(
-            &snapshot,
-        ))));
+        let store = Arc::new(AtomicStore::from_committed(read_checkpoint_snapshot(Path::new(&snapshot))));
         let restore = Arc::new(
             Engine::with_checkpoint(
                 isa,
@@ -2349,12 +2327,7 @@ fn one_rejected_process_prevents_manifest_publication_on_both_isas() {
             wait_for(&output, marker);
         }
         std::fs::write(&final_release, []).unwrap();
-        assert_eq!(
-            wait_result_bounded(&restore, "preserved generation A restore")
-                .unwrap()
-                .guest_status,
-            0
-        );
+        assert_eq!(wait_result_bounded(&restore, "preserved generation A restore").unwrap().guest_status, 0);
         return;
     }
     let Some(selected) = std::env::var_os(CHILD) else {
@@ -2409,12 +2382,7 @@ fn one_rejected_process_prevents_manifest_publication_on_both_isas() {
         accepted.start().unwrap();
         wait_ready(&output);
         accepted.capture_checkpoint_until(checkpoint_deadline()).unwrap();
-        assert_eq!(
-            wait_result_bounded(&accepted, "accepted generation A")
-                .unwrap()
-                .guest_status,
-            0
-        );
+        assert_eq!(wait_result_bounded(&accepted, "accepted generation A").unwrap().guest_status, 0);
         let generation_a = store.snapshot();
         assert!(generation_a.contains_key("MANIFEST"));
 
@@ -2495,13 +2463,7 @@ fn one_rejected_process_prevents_manifest_publication_on_both_isas() {
                 "one_rejected_process_prevents_manifest_publication_on_both_isas",
                 "--nocapture",
             ])
-            .env(
-                CHILD,
-                match isa {
-                    GuestIsa::Aarch64 => "aarch64",
-                    GuestIsa::X86_64 => "x86_64",
-                },
-            )
+            .env(CHILD, match isa { GuestIsa::Aarch64 => "aarch64", GuestIsa::X86_64 => "x86_64" })
             .env(RESTORE_SNAPSHOT, &snapshot)
             .env("HL_CHECKPOINT_RESTORE_EXECUTABLE", &valid_executable)
             .env("HL_CHECKPOINT_RESTORE_RELEASE", &release)
@@ -2644,107 +2606,6 @@ fn process_groups(store: &Store) -> BTreeSet<String> {
         .collect()
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct PersistedOfdIdentity {
-    lineage: [u8; 16],
-    creator_member: u64,
-    sequence: u64,
-}
-
-fn persisted_ofd_identities(store: &Store) -> BTreeMap<(String, i32), PersistedOfdIdentity> {
-    const RECORD_BYTES: usize = 592;
-    const IDENTITY_OFFSET: usize = 40;
-    let image = store.0.lock().unwrap();
-    let mut identities = BTreeMap::new();
-    for (name, bytes) in image.iter().filter(|(name, _)| name.ends_with("/fds")) {
-        let group = name.strip_suffix("/fds").unwrap().to_owned();
-        assert_eq!(bytes.len() % RECORD_BYTES, 0, "malformed descriptor image {name}");
-        for record in bytes.chunks_exact(RECORD_BYTES) {
-            let descriptor = i32::from_ne_bytes(record[0..4].try_into().unwrap());
-            let identity = &record[IDENTITY_OFFSET..IDENTITY_OFFSET + 32];
-            let persisted = PersistedOfdIdentity {
-                lineage: identity[0..16].try_into().unwrap(),
-                creator_member: u64::from_ne_bytes(identity[16..24].try_into().unwrap()),
-                sequence: u64::from_ne_bytes(identity[24..32].try_into().unwrap()),
-            };
-            if persisted.lineage != [0; 16] {
-                identities.insert((group.clone(), descriptor), persisted);
-            }
-        }
-    }
-    identities
-}
-
-fn pipe_ready_groups(output: &CapturedOutput) -> BTreeMap<String, String> {
-    output
-        .text()
-        .lines()
-        .filter_map(|line| {
-            let rest = line.strip_prefix("PIPE-READY ")?;
-            let (role, pid) = rest.rsplit_once(" pid=")?;
-            Some((role.to_owned(), format!("proc.{}", pid.parse::<u32>().unwrap())))
-        })
-        .collect()
-}
-
-fn assert_ofd_identity_contract(first: &Store, second: &Store, output: &CapturedOutput) {
-    let first = persisted_ofd_identities(first);
-    let second = persisted_ofd_identities(second);
-    let groups = pipe_ready_groups(output);
-    let parent = &groups["parent"];
-    let observer = &groups["2"];
-    let first_id = |group: &str, descriptor| first[&(group.to_owned(), descriptor)];
-    let second_id = |group: &str, descriptor| second[&(group.to_owned(), descriptor)];
-
-    assert_ne!(
-        first_id(parent, 4),
-        first_id(parent, 5),
-        "pipe endpoints share an OFD identity"
-    );
-    assert_eq!(
-        first_id(observer, 4),
-        first_id(observer, 7),
-        "dup did not preserve OFD identity"
-    );
-    assert_eq!(
-        first_id(parent, 4),
-        first_id(observer, 4),
-        "fork did not preserve inherited OFD identity"
-    );
-
-    for ((group, descriptor), identity) in &first {
-        if *descriptor <= 7 {
-            assert_eq!(
-                second.get(&(group.clone(), *descriptor)),
-                Some(identity),
-                "OFD identity changed after restore"
-            );
-        }
-    }
-
-    let prior_high_water = first.values().map(|identity| identity.sequence).max().unwrap();
-    let mut creators = BTreeSet::new();
-    for group in groups.values() {
-        let read = second_id(group, 30);
-        let write = second_id(group, 31);
-        assert_ne!(read, write, "new pipe endpoints share an OFD identity in {group}");
-        assert!(
-            read.sequence > prior_high_water && write.sequence > prior_high_water,
-            "new OFD sequence did not advance"
-        );
-        assert_eq!(
-            read.creator_member, write.creator_member,
-            "one process minted from two members"
-        );
-        creators.insert(read.creator_member);
-    }
-    assert_eq!(
-        creators.len(),
-        groups.len(),
-        "forked processes did not receive distinct OFD members"
-    );
-}
-
 fn ready_process_groups(output: &CapturedOutput) -> BTreeSet<String> {
     output
         .text()
@@ -2780,21 +2641,17 @@ fn wait_bounded_with_output(
     }
 }
 
-fn inherited_pipe_round_trip(isa: GuestIsa, executable: &Path, restore_final_image: bool) {
+fn inherited_pipe_round_trip(isa: GuestIsa, executable: &Path) {
     let temporary = tempfile::tempdir().unwrap();
     let release = temporary.path().join("release");
     let final_release = temporary.path().join("final-release");
     let output = Arc::new(CapturedOutput::default());
     let first_store = Arc::new(Store::default());
-    let mut first_plan = plan(executable, &release, &final_release, &["HL_CHECKPOINT"]);
-    if !restore_final_image {
-        first_plan.environment.push(b"HL_OFD_IDENTITY_ONLY=1".to_vec());
-    }
 
     let capture = Arc::new(
         Engine::with_checkpoint(
             isa,
-            first_plan,
+            plan(executable, &release, &final_release, &["HL_CHECKPOINT"]),
             StandardStreams::default().with_output(output.clone()),
             first_store.clone(),
             first_store.clone(),
@@ -2826,17 +2683,13 @@ fn inherited_pipe_round_trip(isa: GuestIsa, executable: &Path, restore_final_ima
 
     std::fs::write(temporary.path().join("release.go"), []).unwrap();
     let second_store = Arc::new(Store::default());
-    let mut second_plan = plan(executable, &release, &final_release, &["HL_RESTORE", "HL_CHECKPOINT"]);
-    if !restore_final_image {
-        second_plan.environment.push(b"HL_OFD_IDENTITY_ONLY=1".to_vec());
-    }
     let recapture = Arc::new(
         Engine::with_checkpoint(
             isa,
-            second_plan,
+            plan(executable, &release, &final_release, &["HL_RESTORE", "HL_CHECKPOINT"]),
             StandardStreams::default().with_output(output.clone()),
             second_store.clone(),
-            first_store.clone(),
+            first_store,
         )
         .unwrap(),
     );
@@ -2855,11 +2708,6 @@ fn inherited_pipe_round_trip(isa: GuestIsa, executable: &Path, restore_final_ima
     );
     let second_groups = process_groups(&second_store);
     assert_eq!(second_groups, first_groups, "{isa:?} process identity set changed");
-    assert_ofd_identity_contract(&first_store, &second_store, &output);
-
-    if !restore_final_image {
-        return;
-    }
 
     std::fs::write(temporary.path().join("final-release.go"), []).unwrap();
     let restore = Arc::new(
@@ -2891,20 +2739,7 @@ fn inherited_pipe_ofd_survives_two_checkpoint_cycles_on_both_isas() {
     drop(compiling);
     let _exclusive = exclusive_checkpoint_test();
     for (isa, executable) in executables {
-        inherited_pipe_round_trip(isa, &executable, true);
-    }
-}
-
-#[test]
-fn inherited_pipe_ofd_identity_is_stable_across_two_captures_on_both_isas() {
-    let compiling = fixture_compilation();
-    let fixtures = tempfile::tempdir().unwrap();
-    let executables =
-        [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, inherited_pipe_fixture(isa, fixtures.path())));
-    drop(compiling);
-    let _exclusive = exclusive_checkpoint_test();
-    for (isa, executable) in executables {
-        inherited_pipe_round_trip(isa, &executable, false);
+        inherited_pipe_round_trip(isa, &executable);
     }
 }
 
@@ -3458,8 +3293,8 @@ fn checkpoint_phase_ledger_separates_the_fixed_wait_from_real_work() {
 fn accepted_connected_unix_stream_survives_checkpoint_on_both_isas() {
     let compiling = fixture_compilation();
     let fixtures = tempfile::tempdir().unwrap();
-    let executables =
-        [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, connected_unix_stream_fixture(isa, fixtures.path())));
+    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64]
+        .map(|isa| (isa, connected_unix_stream_fixture(isa, fixtures.path())));
     drop(compiling);
     let _exclusive = exclusive_checkpoint_test();
 

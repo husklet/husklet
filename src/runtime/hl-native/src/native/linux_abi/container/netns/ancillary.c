@@ -28,24 +28,17 @@ static uint8_t g_seq_end[HL_NFD];
 /* Stable open-file-description identity.  This lives before ancillary translation because SCM_RIGHTS
  * import/export must carry it; dup/close helpers later in the unified syscall translation unit share it. */
 static uint64_t g_ofd_id[HL_NFD];
+static _Atomic uint32_t g_ofd_next = 1;
 
 static uint64_t ofd_identity_new(void) {
-    hl_ofd_identity identity;
-    if (proc_ofd_identity_mint(&identity) != 0) return 0;
-    /* Legacy in-memory tables still index by one scalar.  Sequence is globally
-     * unique inside a lineage, so it is a safe projection; checkpoints persist
-     * the complete typed value and never reconstruct lineage/member from it. */
-    return identity.sequence;
+    uint32_t sequence = atomic_fetch_add_explicit(&g_ofd_next, 1u, memory_order_relaxed);
+    if (sequence == 0) sequence = atomic_fetch_add_explicit(&g_ofd_next, 1u, memory_order_relaxed);
+    return UINT64_C(0x4000000000000000) | ((uint64_t)(uint32_t)getpid() << 32) | sequence;
 }
 
 static uint64_t ofd_identity_ensure(int fd) {
     if (fd < 0 || fd >= HL_NFD) return 0;
-    if (!hl_ofd_identity_valid(g_ofd_identity[fd])) {
-        hl_ofd_identity identity;
-        if (proc_ofd_identity_mint(&identity) != 0) return 0;
-        g_ofd_identity[fd] = identity;
-    }
-    g_ofd_id[fd] = g_ofd_identity[fd].sequence;
+    if (!g_ofd_id[fd]) g_ofd_id[fd] = ofd_identity_new();
     return g_ofd_id[fd];
 }
 
@@ -91,7 +84,6 @@ struct hl_cmsg_ofd_meta {
     uint32_t ordinal;
     uint64_t identity;
 };
-
 _Static_assert(sizeof(struct hl_cmsg_ofd_meta) == HL_SOCKET_OWNER_OFD_ACK_OFFSET, "immutable OFD marker prefix");
 
 struct hl_cmsg_memfd_meta {

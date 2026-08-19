@@ -92,9 +92,8 @@ static void ptrace_service_traced(struct cpu *c); // service() hot-path hook whe
 static int ptrace_wait(struct cpu *c, pid_t wpid, int opts, struct rusage *ru, int *status, pid_t *out);
 static long ptrace_pvm(struct cpu *c, int is_write, pid_t rpid, const struct iovec *liov, unsigned long ln,
                        const struct iovec *riov, unsigned long rn);
-static int ptrace_any_tracee_of_self(void); // does the caller trace anyone? (wait4 routing)
-static int ptrace_wait_active(void);        // is ptrace in use in this session? (wait4 routing gate)
-
+static int ptrace_any_tracee_of_self(void);      // does the caller trace anyone? (wait4 routing)
+static int ptrace_wait_active(void);             // is ptrace in use in this session? (wait4 routing gate)
 // A control-channel interrupt is otherwise indistinguishable from a spurious host EINTR to the
 // syscall retry helpers.  Consult the shared link directly so pause/read/poll return to the ptrace
 // dispatcher instead of transparently re-blocking before it can publish the requested stop.
@@ -786,7 +785,6 @@ static void service(struct cpu *c) {
 
 #if defined(HL_NATIVE_TEST_HOOKS)
 HL_API int HL_TARGET_LOCAL(ofd_identity_test)(uint32_t scenario) {
-    if (scenario == 10) return proc_ofd_identity_collision_fixture();
     return hl_ofd_identity_fixture(scenario);
 }
 

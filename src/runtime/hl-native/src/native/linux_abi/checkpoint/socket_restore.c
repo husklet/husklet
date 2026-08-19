@@ -1056,7 +1056,6 @@ static void ckpt_restore_proc_run(int gpid) {
     // adopt our restored identity BEFORE any pid-reporting syscall or /proc publish
     g_self_gpid = m.self_gpid;
     g_self_gppid = m.ppid_gpid;
-    if (proc_ofd_member_rebind(m.ofd_member_ordinal) != 0) ckpt_restore_commit_failed();
 
     // The cpu image is read from the store, not from guest RAM, so it is available before the memory restore
     // -- which fork_child_hooks needs, and which now has to run FIRST. See below.
@@ -1191,7 +1190,6 @@ static int ckpt_restore_tree_body(const char *rootfs, const struct ckpt_phase_le
     if (ckpt_restore_filesystem_state(ipd) != 0) return 2;
     int irc = engine_global_init();
     if (irc) return irc;
-    if (proc_ofd_member_rebind(im.ofd_member_ordinal) != 0) return 70;
     if (ckpt_prepare_restore_socket_states() != 0) {
         fprintf(stderr, "[restore] cannot rebuild checkpoint standalone sockets\n");
         return 2;

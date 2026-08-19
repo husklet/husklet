@@ -62,7 +62,7 @@
 
 #define CKPT_MAGIC UINT64_C(0x373054504b434c48)          // "HLCKPT07" (LE) -- per-process meta
 #define CKPT_MANIFEST_MAGIC UINT64_C(0x3730304e414d4c48) // "HLMAN007" (LE) -- workspace manifest
-#define CKPT_VERSION 7 // v7 persists typed OFD identities and each process's namespace member
+#define CKPT_VERSION 6                                   // v6 serializes interrupted-syscall continuation state
 #define CKPT_ARCH_X86_64 1
 #define CKPT_ARCH_AARCH64 2
 #define CKPT_CPU_MAGIC UINT64_C(0x31305550434c4848) // "HHLCPU01" (LE)
@@ -149,7 +149,6 @@ struct ckpt_meta {
     hl_identity_digest engine_identity;
     uint64_t cpu_sz, pagesz;
     uint64_t n_regions, n_threads, n_fds;
-    uint64_t ofd_member_ordinal;
     uint64_t brk_lo, brk_cur, brk_hi;
     uint64_t nonpie_lo, nonpie_hi, nonpie_bias;
     uint64_t stack_lo, stack_hi;
@@ -175,7 +174,6 @@ struct ckpt_fd {
     int64_t offset;
     uint64_t object_id;
     uint64_t ofd_id;
-    hl_ofd_identity ofd_identity;
     uint64_t auxiliary;
     char path[512];
 };
@@ -1249,7 +1247,6 @@ static int ckpt_capture_right_resource(int fd, struct ckpt_fd *record) {
         record->flags = flags;
         record->object_id = g_pipe_identity[fd];
         record->ofd_id = ofd_identity_ensure(fd);
-        record->ofd_identity = g_ofd_identity[fd];
         record->offset = (int64_t)g_pipe_identity[fd];
         snprintf(record->path, sizeof record->path, "%d", g_pipesz[fd]);
         if (!record->ofd_id) return -1;
@@ -1264,7 +1261,6 @@ static int ckpt_capture_right_resource(int fd, struct ckpt_fd *record) {
     record->flags = fcntl(fd, F_GETFL);
     record->object_id = ckpt_backing_id(&status);
     record->ofd_id = ofd_identity_ensure(fd);
-    record->ofd_identity = g_ofd_identity[fd];
     if (record->flags < 0 || !record->ofd_id || path_size >= sizeof path) return -1;
     path[path_size] = '\0';
     if (S_ISCHR(status.st_mode) || S_ISBLK(status.st_mode)) {
@@ -1349,7 +1345,6 @@ static void ckpt_release_captured_right(int fd) {
     g_sock_object[fd] = 0;
     g_sock_peer_object[fd] = 0;
     g_ofd_id[fd] = 0;
-    memset(&g_ofd_identity[fd], 0, sizeof g_ofd_identity[fd]);
 }
 
 static uint64_t ckpt_epoll_identity(int fd) {
