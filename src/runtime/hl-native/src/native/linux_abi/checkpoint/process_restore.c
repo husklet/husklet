@@ -695,6 +695,7 @@ static void ckpt_restore_hold_tty_signals(void) {
 // The process table read from the checkpoint (one entry per proc.<gpid>/meta), used to rebuild the tree.
 struct ckpt_proc {
     int gpid, ppid, pgid, sid;
+    int domain_root; // the container process domain this member joins when it has no guest parent (see ckpt_meta)
     uint64_t version;
     int viable;
     char reason[192];
@@ -725,12 +726,20 @@ static int ckpt_scan_procs(void) {
         g_rprocs[g_nrprocs].ppid = m.ppid_gpid;
         g_rprocs[g_nrprocs].pgid = m.pgid_gpid;
         g_rprocs[g_nrprocs].sid = m.sid_gpid;
+        g_rprocs[g_nrprocs].domain_root = m.domain_root_gpid;
         g_rprocs[g_nrprocs].version = m.version;
         g_rprocs[g_nrprocs].viable = 1;
         g_rprocs[g_nrprocs].reason[0] = 0;
         g_nrprocs++;
     }
     return g_nrprocs > 0 ? 0 : -1;
+}
+
+// The member whose restore re-forks this one. A parentless domain member is still forked by the domain's
+// init -- restore has exactly one driver and no other process exists to fork it -- but that is a HOST fork
+// edge only: the guest ppid it adopts stays the recorded 0 (socket_restore.c sets g_self_gppid from meta).
+static int ckpt_restore_parent_gpid(const struct ckpt_proc *process) {
+    return process->ppid > 0 ? process->ppid : process->domain_root;
 }
 
 static int ckpt_proc_index(int gpid) {
@@ -761,17 +770,23 @@ static int ckpt_validate_proc_tree(const struct ckpt_manifest *man) {
             if (g_rprocs[j].gpid == process->gpid) goto invalid;
 
         if (process->gpid == man->root_gpid) {
-            if (process->ppid != 0) goto invalid;
+            if (process->ppid != 0 || process->domain_root != 0) goto invalid;
             roots++;
         } else if (process->ppid <= 0) {
-            goto invalid;
+            // A member with no guest parent is admissible only when it POSITIVELY declares the container
+            // process domain it belongs to, and only that of this image's own init. A container exec session
+            // is the case: hl-container forks it out of its own daemon, so it is a sibling of guest pid 1 and
+            // Docker reports it PPID 0. Everything the tree model asserts still holds -- exactly one root,
+            // every member reachable from it, no cycles -- because the domain edge is walked as the parent
+            // link below. An image that simply omits the parent (domain_root == 0) is still refused.
+            if (process->ppid != 0 || process->domain_root != man->root_gpid) goto invalid;
         }
     }
     if (roots != 1) goto invalid;
 
     for (int i = 0; i < g_nrprocs; ++i) {
         const struct ckpt_proc *process = &g_rprocs[i];
-        parents[i] = process->ppid == 0 ? -1 : ckpt_proc_index(process->ppid);
+        parents[i] = ckpt_restore_parent_gpid(process) == 0 ? -1 : ckpt_proc_index(ckpt_restore_parent_gpid(process));
         groups[i] = -1;
         for (int j = 0; j < g_nrprocs; ++j) {
             if (g_rprocs[j].pgid != process->pgid) continue;
@@ -873,7 +888,7 @@ static void ckpt_process_stop(struct ckpt_proc *process, const char *reason) {
         changed = 0;
         for (int i = 0; i < g_nrprocs; ++i) {
             struct ckpt_proc *child = &g_rprocs[i];
-            struct ckpt_proc *parent = ckpt_proc_find(child->ppid);
+            struct ckpt_proc *parent = ckpt_proc_find(ckpt_restore_parent_gpid(child));
             if (child->viable && parent && !parent->viable) {
                 child->viable = 0;
                 snprintf(child->reason, sizeof child->reason, "ancestor %d was stopped", parent->gpid);
@@ -1243,3 +1258,110 @@ static int ckpt_restore_preflight(int policy) {
     }
     return 0;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+// ------------------------------------------------------- captured identity: behavioral fixture
+//
+// Drives the REAL ckpt_self_identity (the only writer of a member's meta identity) and the REAL
+// ckpt_validate_proc_tree (the only reader that decides whether an image is restorable) over the exact
+// two-member shape a container with one exec session captures: the container init, filed as proc.1, and an
+// exec session's top process, filed as proc.<its own gpid> by ckpt_self_group.
+//
+// Both are LAUNCH TOPS -- target/{aarch64,x86_64}.c set g_init_hostpid to getpid() per launch -- so the
+// fixture sets g_init_hostpid exactly as a launch does and lets the production code decide the rest. That
+// is the whole defect: container_pid() answered 1 for both, so every exec session recorded self_gpid = 1
+// with ppid_gpid = 0 while its group was named proc.<host pid>, and the validator refused the image with
+// "process tree does not match manifest" before the first fork. Verified on a live PostgreSQL capture:
+// `checkpoint OK: 12 process(es)` and three psql members each carrying self=1 ppid=0 pgid=1 sid=1.
+//
+// Scenario 1 is the refusal side, and it is what keeps the validator honest: an image whose parentless
+// member declares NO domain is still refused. The fix is an identity a member positively declares, not a
+// validator that stopped checking.
+static int ckpt_identity_scenario(uint32_t scenario) {
+    int saved_init = g_init_hostpid;
+    int saved_cache = g_hostpid_cache;
+    int saved_gpid = g_self_gpid;
+    struct ckpt_proc *saved_procs = g_rprocs;
+    int saved_nrprocs = g_nrprocs;
+    int saved_capacity = g_rprocs_capacity;
+    struct ckpt_proc table[2];
+    struct ckpt_meta init_meta, exec_meta;
+    char group[64];
+    int verdict = -1;
+
+    g_self_gpid = 0;
+    g_hostpid_cache = 0;
+    g_init_hostpid = getpid(); // a launch top: this process is guest pid 1 by the only rule the engine has
+    memset(&init_meta, 0, sizeof init_meta);
+    memset(&exec_meta, 0, sizeof exec_meta);
+
+    // The group name is the identity the coordinator and the member already agreed on, so the meta is
+    // derived from it rather than from a second spelling of the same question.
+    ckpt_self_group(group, sizeof group);
+    int exec_gpid = ckpt_group_gpid(group);
+    if (exec_gpid <= 1) goto done; // an exec session must not be filed as proc.1
+    if (ckpt_self_identity(&exec_meta, exec_gpid) != 0) goto done;
+    if (ckpt_self_identity(&init_meta, 1) != 0) goto done;
+
+    // What the exec top must record: its group's gpid, no parent, and the domain it belongs to.
+    if (exec_meta.self_gpid != exec_gpid || exec_meta.ppid_gpid != 0 || exec_meta.domain_root_gpid != 1) goto done;
+    // Its own group and session, not the container init's: the g_init_hostpid fold that maps the init's
+    // host group/session onto guest 1 fires on an exec session's OWN identity.
+    if (exec_meta.pgid_gpid != exec_gpid || exec_meta.sid_gpid != exec_gpid) goto done;
+    if (init_meta.self_gpid != 1 || init_meta.ppid_gpid != 0 || init_meta.domain_root_gpid != 0) goto done;
+
+    // ckpt_scan_procs takes each member's gpid from the DIRECTORY NAME and everything else from the meta.
+    memset(table, 0, sizeof table);
+    const struct ckpt_meta *metas[2] = {&init_meta, &exec_meta};
+    const int gpids[2] = {1, exec_gpid};
+    for (int i = 0; i < 2; ++i) {
+        table[i].gpid = gpids[i];
+        table[i].ppid = metas[i]->ppid_gpid;
+        table[i].pgid = metas[i]->pgid_gpid;
+        table[i].sid = metas[i]->sid_gpid;
+        table[i].domain_root = metas[i]->domain_root_gpid;
+        table[i].version = CKPT_VERSION;
+        table[i].viable = 1;
+    }
+    if (scenario == 1) table[1].domain_root = 0; // the pre-fix image: parentless and claiming no domain
+
+    struct ckpt_manifest manifest;
+    memset(&manifest, 0, sizeof manifest);
+    manifest.version = CKPT_VERSION;
+    manifest.n_procs = 2;
+    manifest.root_gpid = 1;
+    manifest.fg_pgid_gpid = 1;
+
+    g_rprocs = table;
+    g_nrprocs = 2;
+    g_rprocs_capacity = 2;
+    int validated = ckpt_validate_proc_tree(&manifest);
+    g_rprocs = saved_procs;
+    g_nrprocs = saved_nrprocs;
+    g_rprocs_capacity = saved_capacity;
+    if (validated != (scenario == 0 ? 0 : -1)) goto done;
+    verdict = 0;
+done:
+    g_init_hostpid = saved_init;
+    g_hostpid_cache = saved_cache;
+    g_self_gpid = saved_gpid;
+    return verdict;
+}
+
+// A container init is the leader of its own host session and process group -- that is what makes the
+// g_init_hostpid fold map its group and session onto guest 1 -- and a test binary's process is not. Run the
+// scenario in a forked child that has called setsid(), which is the launch shape rather than an imitation
+// of it, and report through the exit status.
+HL_API int HL_TARGET_LOCAL(checkpoint_identity_test)(uint32_t scenario) {
+    if (scenario > 1) return -22;
+    pid_t child = fork();
+    if (child < 0) return -1;
+    if (child == 0) {
+        if (setsid() < 0) _exit(2);
+        _exit(ckpt_identity_scenario(scenario) == 0 ? 0 : 1);
+    }
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
+}
+#endif

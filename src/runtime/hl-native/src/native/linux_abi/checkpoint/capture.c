@@ -62,7 +62,7 @@
 
 #define CKPT_MAGIC UINT64_C(0x373054504b434c48)          // "HLCKPT07" (LE) -- per-process meta
 #define CKPT_MANIFEST_MAGIC UINT64_C(0x3730304e414d4c48) // "HLMAN007" (LE) -- workspace manifest
-#define CKPT_VERSION 6                                   // v6 serializes interrupted-syscall continuation state
+#define CKPT_VERSION 7                                   // v7 records a member's container process domain edge
 #define CKPT_ARCH_X86_64 1
 #define CKPT_ARCH_AARCH64 2
 #define CKPT_CPU_MAGIC UINT64_C(0x31305550434c4848) // "HHLCPU01" (LE)
@@ -154,6 +154,14 @@ struct ckpt_meta {
     uint64_t stack_lo, stack_hi;
     int32_t self_gpid, ppid_gpid; // guest identity: this process's pid + its parent's (0 for init's parent)
     int32_t pgid_gpid, sid_gpid;  // guest process group + session (1 == the container init's group/session)
+    // The container process domain this member belongs to when it has NO parent inside the container's pid
+    // namespace, named by that domain's init gpid (1); 0 for a member that has an ordinary guest parent.
+    // A container exec session is forked by the hl-container daemon, not by the container init, so it is
+    // parentless in guest terms exactly as Docker reports it -- measured on Docker 29.1.3, an exec top reads
+    // PPID 0 in the container's pid namespace, and hl's own getppid (syscall/process/identity.c:345) answers
+    // 0 for it too. Recording a fabricated ppid of 1 instead would enrol it in the container init's child
+    // set and change what it observes; this field carries the membership WITHOUT claiming a parent edge.
+    int32_t domain_root_gpid;
     char exe_path[512];
     // Guest signal-disposition table (g_sigact[65]), captured per process. It is ENGINE C state -- not in
     // the guest RAM dump and not in struct cpu -- so a restored process would otherwise start all-SIG_DFL
@@ -1199,10 +1207,23 @@ static int ckpt_process_coordinates(void) {
 // container_pid() is wrong here for the same reason it is wrong for election: an exec session's top process
 // would commit proc.1 and collide with the coordinator's own group while the coordinator waited forever for
 // proc.<its host pid>.
-static void ckpt_self_group(char *out, size_t size) {
+static int ckpt_self_gpid(void) {
     int gpid = ckpt_peer_gpid(getpid());
-    if (gpid <= 0) gpid = container_pid();
-    snprintf(out, size, "proc.%d", gpid);
+    return gpid > 0 ? gpid : container_pid();
+}
+
+static void ckpt_self_group(char *out, size_t size) {
+    snprintf(out, size, "proc.%d", ckpt_self_gpid());
+}
+
+// The guest pid a member's image is filed under, read back from the group name the coordinator and the
+// member agreed on. THE GROUP NAME IS THE AUTHORITY: it is the only identity both sides of the rendezvous
+// have already committed to, so deriving the meta's self_gpid from anything else -- container_pid(),
+// a second call to ckpt_peer_gpid -- reintroduces the disagreement that named three exec sessions proc.1.
+// The container init is the one member whose group the COORDINATOR names ("proc.1") rather than
+// ckpt_self_group, and parsing covers it for free.
+static int ckpt_group_gpid(const char *group) {
+    return strncmp(group, "proc.", 5) == 0 ? atoi(group + 5) : -1;
 }
 
 static void ckpt_poll(struct cpu *c) {

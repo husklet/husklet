@@ -60,6 +60,10 @@ name = "checkpoint_election"
 required-features = ["native-test-hooks"]
 
 [[test]]
+name = "checkpoint_identity"
+required-features = ["native-test-hooks"]
+
+[[test]]
 name = "checkpoint_pipe_capture"
 required-features = ["native-test-hooks"]
 

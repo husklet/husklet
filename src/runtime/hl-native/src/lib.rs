@@ -165,6 +165,18 @@ pub fn checkpoint_restore_claim_test(isa: u32, scenario: u32) -> Result<(), i32>
 /// coordinator waits for.
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
+pub fn checkpoint_identity_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    // The hook mutates process-wide checkpoint identity state and the restore process table.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    bindings::checkpoint_identity_test(isa, scenario)
+}
+
+/// Exercise the identity a captured member records against the tree model that decides whether the image
+/// can be restored: a container exec session's top process must record the gpid its group is named with,
+/// and the container process domain it belongs to in place of a parent edge it does not have.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
 pub fn checkpoint_election_test(isa: u32, scenario: u32) -> Result<(), i32> {
     // The hook mutates process-wide checkpoint identity state and the HL_CHECKPOINT_COORDINATOR option.
     static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
