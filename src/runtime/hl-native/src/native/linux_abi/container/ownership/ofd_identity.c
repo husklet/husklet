@@ -92,21 +92,13 @@ int hl_ofd_member_mint(hl_ofd_namespace *space, hl_ofd_member *member) {
 }
 
 int hl_ofd_namespace_admit_validated(hl_ofd_namespace *space, hl_ofd_generation_binding binding) {
-    if (space == NULL || (binding.generation_high == 0 && binding.generation_low == 0) || binding.fence == 0 ||
-        binding.next_member == 0 || binding.next_sequence == 0 || !ofd_lineage_valid(binding.lineage))
-        return ESTALE;
-    uint64_t active = HL_OFD_NAMESPACE_ACTIVE;
-    if (!atomic_compare_exchange_strong_explicit(&space->state, &active, HL_OFD_NAMESPACE_UPDATING,
-                                                 memory_order_acq_rel, memory_order_acquire))
-        return EBUSY;
-    if (space->abi != HL_OFD_NAMESPACE_ABI || space->size != sizeof *space ||
+    if (!ofd_namespace_valid(space) || (binding.generation_high == 0 && binding.generation_low == 0) ||
+        binding.fence == 0 ||
 #if !defined(HL_OFD_MUTATE_ACCEPT_REPLAY)
         binding.fence <= space->generation_fence ||
 #endif
-        !ofd_lineage_equal(space->lineage, binding.lineage)) {
-        atomic_store_explicit(&space->state, HL_OFD_NAMESPACE_ACTIVE, memory_order_release);
+        binding.next_member == 0 || binding.next_sequence == 0 || !ofd_lineage_equal(space->lineage, binding.lineage))
         return ESTALE;
-    }
 #if defined(HL_OFD_MUTATE_USE_GENERATION_AS_LINEAGE)
     space->lineage = (hl_ofd_lineage){binding.generation_high, binding.generation_low};
 #endif
@@ -120,14 +112,10 @@ int hl_ofd_namespace_admit_validated(hl_ofd_namespace *space, hl_ofd_generation_
     while (observed < binding.next_sequence &&
            !atomic_compare_exchange_weak_explicit(&space->next_sequence, &observed, binding.next_sequence,
                                                   memory_order_relaxed, memory_order_relaxed)) {}
-    if (observed == 0 || observed_member == 0) {
-        atomic_store_explicit(&space->state, HL_OFD_NAMESPACE_ACTIVE, memory_order_release);
-        return EOVERFLOW;
-    }
+    if (observed == 0 || observed_member == 0) return EOVERFLOW;
     space->generation_high = binding.generation_high;
     space->generation_low = binding.generation_low;
     space->generation_fence = binding.fence;
-    atomic_store_explicit(&space->state, HL_OFD_NAMESPACE_ACTIVE, memory_order_release);
     return 0;
 }
 
