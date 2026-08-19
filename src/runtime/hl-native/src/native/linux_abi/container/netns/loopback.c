@@ -534,14 +534,17 @@ static int sock_internal_checkpoint_admit(int fd) {
         return -1;
     }
     if (g_sock_identity_checkpoint_pending[fd]) {
+        fprintf(stderr, "[ckpt] admit-arm: fd %d identity_checkpoint_pending\n", fd);
         errno = ENOTSUP;
         return -1;
     }
     if (g_sock_connecting[fd]) {
+        fprintf(stderr, "[ckpt] admit-arm: fd %d connecting\n", fd);
         errno = EBUSY;
         return -1;
     }
     if (sock_state_shutdown(fd) != 0) {
+        fprintf(stderr, "[ckpt] admit-arm: fd %d shutdown mask=%u\n", fd, sock_state_shutdown(fd));
         errno = ENOTSUP;
         return -1;
     }
