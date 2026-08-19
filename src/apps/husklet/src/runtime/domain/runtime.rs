@@ -13,9 +13,26 @@ use super::{Configuration, CONFIGURATION_SIGNATURE, CONTAINER, RUNTIME_SIGNATURE
 /// Composes the container capabilities that back one workspace execution domain.
 pub(super) struct Runtime;
 
+/// The window a restoring start is watched for the immediate death that means the saved memory
+/// image could not be rebuilt.
+///
+/// A restore that cannot claim a guest address fails inside the restored init before a single guest
+/// instruction runs: the observed failure killed the container 55 ms after the start returned. A
+/// container still alive at the end of this window is treated as restored; if it dies later, the
+/// pane path's own not-running recovery still applies. The cost is paid only by a start that
+/// actually restores a checkpoint.
+const RESTORE_SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
+
 trait PrimaryLifecycle {
     async fn start_primary(&self) -> Result<(), PrimaryStartError>;
     async fn discard_primary_checkpoint(&self) -> Result<(), String>;
+    /// Reports why a restoring start did not produce a live container, or `None` when it did.
+    ///
+    /// `start_primary` returns as soon as the engine process is launched, so a restore that fails
+    /// while rebuilding guest memory reports success and leaves the container `Exited`. Without
+    /// this the execution domain publishes its socket in front of a dead container and every
+    /// terminal that follows conflicts with it.
+    async fn restored_primary_failure(&self) -> io::Result<Option<String>>;
 }
 
 enum PrimaryStartError {
@@ -49,6 +66,20 @@ impl PrimaryLifecycle for Containers {
             .await
             .map(|_| ())
             .map_err(|error| error.to_string())
+    }
+
+    async fn restored_primary_failure(&self) -> io::Result<Option<String>> {
+        let exit = tokio::time::timeout(
+            RESTORE_SETTLE,
+            self.wait_for(CONTAINER, hl_container::WaitCondition::NextExit),
+        )
+        .await;
+        match exit {
+            Err(_still_running) => Ok(None),
+            Ok(Ok(Some(status))) => Ok(Some(format!("the restored container exited immediately ({status:?})"))),
+            Ok(Ok(None)) => Ok(Some("the restored container disappeared".to_owned())),
+            Ok(Err(error)) => Err(io::Error::other(error)),
+        }
     }
 }
 
@@ -240,7 +271,11 @@ impl Runtime {
     /// marker is removed; inability to update that durable marker remains a repository-wide error.
     async fn start_primary(lifecycle: &impl PrimaryLifecycle, checkpointed: bool) -> io::Result<Vec<String>> {
         let first = match lifecycle.start_primary().await {
-            Ok(()) => return Ok(Vec::new()),
+            Ok(()) if !checkpointed => return Ok(Vec::new()),
+            Ok(()) => match lifecycle.restored_primary_failure().await? {
+                None => return Ok(Vec::new()),
+                Some(reason) => reason,
+            },
             Err(PrimaryStartError::Process(error)) => error,
             Err(PrimaryStartError::Repository(error)) => return Err(error),
         };

@@ -49,6 +49,7 @@
 #define hl_ckpt_interrupt_executors HL_TARGET_LOCAL(ckpt_interrupt_executors)
 #define ckpt_request_generation HL_TARGET_LOCAL(ckpt_request_generation)
 #define hl_checkpoint_restore_claim_test HL_TARGET_LOCAL(checkpoint_restore_claim_test)
+#define hl_checkpoint_restore_slice_test HL_TARGET_LOCAL(checkpoint_restore_slice_test)
 
 #define hl_linux_bus_active HL_TARGET_LOCAL(linux_bus_active)
 #define hl_linux_bus_fault HL_TARGET_LOCAL(linux_bus_fault)

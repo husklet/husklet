@@ -13,6 +13,19 @@ fn actual_restore_claim_helper_fails_closed_on_both_isas() {
     }
 }
 
+/// A rounded host claim must step over the host page a neighbouring guest region of the same image
+/// already claimed, instead of colliding with this restore's own mapping. Reproduces the real
+/// Apple Silicon addresses; on a 4 KiB host the two regions never share a page at all.
+#[test]
+fn a_rounded_claim_shares_a_host_page_with_its_neighbour_on_both_isas() {
+    for isa in [1, 2] {
+        for scenario in [0, 1, 2, 3] {
+            hl_native::checkpoint_restore_slice_test(isa, scenario)
+                .unwrap_or_else(|status| panic!("ISA {isa} restore slice scenario {scenario} failed at {status}"));
+        }
+    }
+}
+
 #[test]
 fn actual_restore_rollback_unwinds_every_published_class_on_both_isas() {
     for isa in [1, 2] {

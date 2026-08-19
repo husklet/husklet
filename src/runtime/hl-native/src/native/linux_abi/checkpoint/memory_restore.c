@@ -338,6 +338,36 @@ static int ckpt_claim_exact(uint64_t address, size_t length, int protection, int
                                  offset, claimed);
 }
 
+// Resolve the next host sub-range of a region's rounded claim window.
+//
+// The host granularity can exceed the guest page size -- 16 KiB against the guest's 4 KiB on Apple
+// Silicon -- so rounding a region out to whole host pages reaches into the host page a NEIGHBOURING
+// guest region of this same image already claimed. That page is this restore's own, already present
+// and writable, and re-claiming it would both collide (EEXIST) and, if it succeeded, zero the
+// neighbour's already-copied bytes.
+//
+// Answers, for `cursor`: CKPT_SLICE_CLAIM with [cursor, *chunk_e) to claim, CKPT_SLICE_HELD with
+// *chunk_e to resume past a page this restore already claimed, or CKPT_SLICE_REFUSE when the page is
+// held by a claim this region may not share. Sharing a host page is only representable while both
+// sides are anonymous guest RAM: one page cannot simultaneously be a view of a backing object at one
+// offset and something else, so that case fails closed exactly as an occupied foreign page does.
+#define CKPT_SLICE_CLAIM 0
+#define CKPT_SLICE_HELD 1
+#define CKPT_SLICE_REFUSE (-1)
+static int ckpt_claim_slice(uint64_t cursor, uint64_t map_e, const uint64_t *mapped_a, const uint64_t *mapped_e,
+                            const uint64_t *mapped_anon, size_t nmapped, int shareable, uint64_t *chunk_e) {
+    uint64_t limit = map_e;
+    for (size_t j = 0; j < nmapped; j++) {
+        if (mapped_a[j] <= cursor && cursor < mapped_e[j]) {
+            *chunk_e = mapped_e[j] < map_e ? mapped_e[j] : map_e;
+            return shareable && mapped_anon[j] != 0 ? CKPT_SLICE_HELD : CKPT_SLICE_REFUSE;
+        }
+        if (mapped_a[j] > cursor && mapped_a[j] < limit) limit = mapped_a[j];
+    }
+    *chunk_e = limit;
+    return CKPT_SLICE_CLAIM;
+}
+
 #if defined(HL_NATIVE_TEST_HOOKS)
 struct ckpt_claim_test_state {
     void *mapping;
@@ -401,6 +431,48 @@ HL_API int hl_checkpoint_restore_claim_test(uint32_t scenario) {
     if (claimed != MAP_FAILED || errno != EEXIST) return 2;
     if (g_ckpt_claim_test.unmaps != (scenario == 1 ? 1u : 0u)) return 3;
     return 0;
+}
+
+// The addresses are the ones a real Apple Silicon restore failed on: a 4 KiB-granular guest image whose
+// region 50010ee2000+c000 rounds DOWN onto the host page that 50010edd000+5000 rounds UP into. On a
+// 4 KiB host these never touch, which is why the defect was macOS-only.
+HL_API int HL_TARGET_LOCAL(checkpoint_restore_slice_test)(uint32_t scenario) {
+    const uint64_t held_a[1] = {UINT64_C(0x50010ee0000)};
+    const uint64_t held_e[1] = {UINT64_C(0x50010ef0000)};
+    uint64_t held_anon[1] = {1};
+    const uint64_t map_a = UINT64_C(0x50010edc000);
+    const uint64_t map_e = UINT64_C(0x50010ee4000);
+    uint64_t chunk_e = 0;
+    if (scenario == 0) {
+        // Anonymous guest RAM sharing a host page with an anonymous neighbour: claim the free head,
+        // then step over the page this restore already owns instead of colliding with itself.
+        if (ckpt_claim_slice(map_a, map_e, held_a, held_e, held_anon, 1, 1, &chunk_e) != CKPT_SLICE_CLAIM) return 1;
+        if (chunk_e != held_a[0]) return 2;
+        if (ckpt_claim_slice(chunk_e, map_e, held_a, held_e, held_anon, 1, 1, &chunk_e) != CKPT_SLICE_HELD) return 3;
+        if (chunk_e != map_e) return 4;
+        return 0;
+    }
+    if (scenario == 1) {
+        // A file-backed region may not share a host page: one page cannot be a view of a backing
+        // object at one offset and anonymous RAM at the same time.
+        if (ckpt_claim_slice(held_a[0], map_e, held_a, held_e, held_anon, 1, 0, &chunk_e) != CKPT_SLICE_REFUSE)
+            return 5;
+        return 0;
+    }
+    if (scenario == 2) {
+        // Nor may an anonymous region share the host page of a file-backed claim.
+        held_anon[0] = 0;
+        if (ckpt_claim_slice(held_a[0], map_e, held_a, held_e, held_anon, 1, 1, &chunk_e) != CKPT_SLICE_REFUSE)
+            return 6;
+        return 0;
+    }
+    if (scenario == 3) {
+        // An empty claim table claims the whole window in one slice, exactly as before.
+        if (ckpt_claim_slice(map_a, map_e, held_a, held_e, held_anon, 0, 1, &chunk_e) != CKPT_SLICE_CLAIM) return 7;
+        if (chunk_e != map_e) return 8;
+        return 0;
+    }
+    return 10;
 }
 #endif
 
@@ -472,6 +544,7 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
     struct ckpt_region *topology = NULL;
     uint64_t *mapped_a;
     uint64_t *mapped_e;
+    uint64_t *mapped_anon;
     size_t nmapped = 0;
     size_t processed = 0;
     size_t registered = 0;
@@ -488,12 +561,12 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
         ckpt_source_fclose(f);
         return -1;
     }
-    if (m->n_regions > SIZE_MAX / (2u * sizeof(*mapped))) {
+    if (m->n_regions > SIZE_MAX / (3u * sizeof(*mapped))) {
         ckpt_source_fclose(f);
         return -1;
     }
     if (m->n_regions != 0) {
-        mapped = calloc((size_t)m->n_regions * 2u, sizeof(*mapped));
+        mapped = calloc((size_t)m->n_regions * 3u, sizeof(*mapped));
         topology = calloc((size_t)m->n_regions, sizeof(*topology));
         if (mapped == NULL || topology == NULL) {
             ckpt_source_fclose(f);
@@ -504,6 +577,7 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
     }
     mapped_a = mapped;
     mapped_e = mapped != NULL ? mapped + (size_t)m->n_regions : NULL;
+    mapped_anon = mapped != NULL ? mapped + 2u * (size_t)m->n_regions : NULL;
     for (uint64_t i = 0; i < m->n_regions; i++) {
         struct ckpt_region reg;
         if (ckpt_read_region(f, &reg) != 0) { goto fail; }
@@ -567,19 +641,35 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
             // exact Mach reservation without VM_FLAGS_OVERWRITE, and Windows uses placeholders. Never retry
             // with MAP_FIXED here: the guest's pointers are unrelocatable, but overwriting an unowned host
             // mapping corrupts the process that is supposed to report the restore failure.
-            void *r = MAP_FAILED;
-            if (ckpt_claim_exact(map_a, map_len, PROT_READ | PROT_WRITE, map_flags, map_fd, map_offset, &r) != 0) {
-                int claim_errno = errno;
-                fprintf(stderr, "[restore] cannot claim guest region %llx+%llx without replacing a live host mapping\n",
-                        (unsigned long long)a, (unsigned long long)reg.len);
-                ckpt_report_overlap(map_a, map_e);
-                errno = claim_errno;
-                fprintf(stderr, "[restore] exact guest-address claim failed: %s\n", strerror(errno));
-                errno = claim_errno;
-                goto fail;
+            uint64_t cursor = map_a;
+            while (cursor < map_e) {
+                uint64_t chunk_e = map_e;
+                int slice =
+                    ckpt_claim_slice(cursor, map_e, mapped_a, mapped_e, mapped_anon, nmapped, map_fd < 0, &chunk_e);
+                if (slice == CKPT_SLICE_HELD) {
+                    cursor = chunk_e;
+                    continue;
+                }
+                void *r = MAP_FAILED;
+                if (slice == CKPT_SLICE_REFUSE) errno = EEXIST;
+                if (slice == CKPT_SLICE_REFUSE ||
+                    ckpt_claim_exact(cursor, (size_t)(chunk_e - cursor), PROT_READ | PROT_WRITE, map_flags, map_fd,
+                                     map_offset + (off_t)(cursor - map_a), &r) != 0) {
+                    int claim_errno = errno;
+                    fprintf(stderr,
+                            "[restore] cannot claim guest region %llx+%llx without replacing a live host mapping\n",
+                            (unsigned long long)a, (unsigned long long)reg.len);
+                    ckpt_report_overlap(map_a, map_e);
+                    errno = claim_errno;
+                    fprintf(stderr, "[restore] exact guest-address claim failed: %s\n", strerror(errno));
+                    errno = claim_errno;
+                    goto fail;
+                }
+                cursor = chunk_e;
             }
             mapped_a[nmapped] = map_a;
             mapped_e[nmapped] = map_e;
+            mapped_anon[nmapped] = map_fd < 0 ? 1u : 0u;
             nmapped++;
         }
         for (uint64_t p = 0; p < reg.npages; p++) {
