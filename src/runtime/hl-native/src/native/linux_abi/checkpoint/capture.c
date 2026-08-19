@@ -1553,6 +1553,105 @@ static int ckpt_is_descendant(int64_t candidate, int64_t root) {
     return 0;
 }
 
+// Is this live engine process a member of the capture the coordinator at `root` is taking?
+//
+// MEMBERSHIP IS THE CONTAINER, NOT THE PROCESS TREE. `ckpt_is_descendant` is immune to a guest
+// re-parenting or re-sessioning itself, which is what made it the right answer to the session defect --
+// but it is strictly too tight for a container. hl-container forks an `exec` session out of its own
+// daemon, so an exec session is a SIBLING of guest pid 1 and no descendancy walk can reach it. Measured
+// on a live PostgreSQL cluster: three of eleven engine processes -- every `psql` client -- reported
+// `descendant=0` while holding the far end of a connected socket owned by a process that WAS captured.
+// They were alive, frozen by nothing, and outside the freeze, so the capture could only publish an image
+// whose socket topology named an endpoint nobody stopped.
+//
+// The container's process domain answers it authoritatively: it is assigned from OUTSIDE the container
+// (hl-container gives the container's own HL_PROCESS_DOMAIN to each of its exec sessions), so unlike a
+// session it is not guest-mutable, and unlike "runs our executable" it names ONE container rather than
+// every engine process on the host.
+//
+// The two are a UNION, not a switch. Descendancy of the container init remains a sufficient condition on
+// its own: a host descendant of guest pid 1 IS a guest process of this container, and it is the only rule
+// a bare engine launch -- which has no container domain to belong to -- can use at all. Deciding solely on
+// the domain would drop a genuine descendant in the window before it publishes its birth record, and a
+// member dropped from the set is never interrupted, never commits, and is therefore missing from the very
+// freeze whose exactness the manifest asserts.
+static int ckpt_capture_member(int64_t candidate, int64_t root) {
+    if (candidate <= 0 || candidate > INT32_MAX) return 0;
+    return hl_linux_container_process_domain_member((int32_t)candidate) || ckpt_is_descendant(candidate, root);
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+// ------------------------------------------------------- capture membership: behavioral fixture
+//
+// Drives the REAL ckpt_capture_member against a REAL live host process in the exact shape a container
+// exec session has: a SIBLING, not a descendant, of the process taking the capture. hl-container forks
+// an exec session out of its own daemon, so no in-memory fake and no same-tree fork can express the
+// case -- the fixture must produce an orphaned grandchild and then join it to a domain through the same
+// production birth-record publisher the engine's own startup uses.
+//
+// Scenario 0 is the positive half: the sibling IS a member, and the descendancy rule the coordinator
+// used to apply says it is not. Scenarios 1 and 2 are the half that stops the fix from being a widening:
+// a live process running THIS SAME EXECUTABLE is refused when it belongs to another container's domain,
+// and refused again when it has published no membership at all.
+static int ckpt_membership_orphan(int *reported) {
+    int ready[2];
+    if (pipe(ready) != 0) return -1;
+    pid_t middle = fork();
+    if (middle < 0) {
+        (void)close(ready[0]);
+        (void)close(ready[1]);
+        return -1;
+    }
+    if (middle == 0) { // async-signal-safe only: forked out of a multi-threaded caller
+        pid_t orphan = fork();
+        if (orphan == 0) {
+            (void)setsid(); // a guest session leader, the shape that once emptied peer enumeration
+            struct timespec span = {30, 0};
+            (void)nanosleep(&span, NULL);
+            _exit(0);
+        }
+        int value = (int)orphan;
+        (void)write(ready[1], &value, sizeof value);
+        _exit(0);
+    }
+    (void)close(ready[1]);
+    int orphan = -1;
+    ssize_t got = read(ready[0], &orphan, sizeof orphan);
+    (void)close(ready[0]);
+    int status = 0;
+    (void)waitpid(middle, &status, 0); // the middle process is gone: the orphan is now OUR SIBLING
+    if (got != (ssize_t)sizeof orphan || orphan <= 0) return -1;
+    *reported = orphan;
+    return 0;
+}
+
+HL_API int HL_TARGET_LOCAL(checkpoint_membership_test)(uint32_t scenario) {
+    char self_key[33], other_key[33], directory[80];
+    int orphan = -1, verdict = -1;
+    if (scenario > 2) return -22;
+    // The registry publisher writes through the bound host file services, which a bare hook process has
+    // not created. Binding them is what an engine launch does at startup, so the fixture publishes through
+    // exactly the production path rather than opening the record itself.
+    if (g_jit_services.file == NULL && hl_target_services_bind(&g_target_services) != 0) return -1;
+    snprintf(self_key, sizeof self_key, "%08x%08x%08x%08x", (unsigned)getpid(), 0x5eec7edu, 0u, 1u);
+    snprintf(other_key, sizeof other_key, "%08x%08x%08x%08x", (unsigned)getpid(), 0x5eec7edu, 0u, 2u);
+    if (ckpt_membership_orphan(&orphan) != 0) return -1;
+    hl_option_set("HL_PROCESS_DOMAIN", self_key, 1);
+    if (ckpt_is_descendant(orphan, getpid())) goto done; // the fixture is not the exec-session shape
+    if (scenario != 2) { // join the orphan to this container's domain, or to a second container's
+        hl_option_set("HL_PROCESS_DOMAIN", scenario == 0 ? self_key : other_key, 1);
+        if (!proc_reg_domain_key(directory, sizeof directory)) goto done;
+        hl_compat_mkdir(directory, 0777);
+        proc_reg_birth_publish(directory, orphan, NULL, 0);
+        hl_option_set("HL_PROCESS_DOMAIN", self_key, 1);
+    }
+    verdict = ckpt_capture_member(orphan, getpid()) == (scenario == 0) ? 0 : -1;
+done:
+    (void)kill((pid_t)orphan, SIGKILL);
+    return verdict;
+}
+#endif
+
 // ================================ CHECKPOINT (per process) ================================
 
 // A duplicate of the container terminal attachment, or -1. The duplicate makes the caller's close operation

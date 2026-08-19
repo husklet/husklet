@@ -1183,10 +1183,10 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
         peer_capacity = observed;
     }
     int nfoll = (int)observed;
-    int descendants = 0;
+    int members = 0;
     for (int i = 0; i < nfoll; i++)
-        if (ckpt_is_descendant(foll[i].identity, getpid())) foll[descendants++] = foll[i];
-    nfoll = descendants;
+        if (ckpt_capture_member(foll[i].identity, getpid())) foll[members++] = foll[i];
+    nfoll = members;
     fprintf(stderr, "[ckpt] coordinator pid=%d found %d peer(s)\n", getpid(), nfoll);
 
     // Freeze + dump every peer: the shared trigger generation is already advanced (the requester bumped it),
