@@ -598,17 +598,55 @@ static uint64_t ckpt_hash_combine(uint64_t image, const char *name, uint64_t obj
     return ckpt_hash_bytes(image, &object, sizeof object);
 }
 
-static int ckpt_capture_pipe(int fd, uint64_t identity) {
+// Capture the bytes in flight in a shared anonymous pipe.
+//
+// The only way to observe a pipe's buffered bytes is to read them, which removes them. That is safe here
+// because it is one half of a closed round trip: every byte read lands in the image object
+// "pipe.<identity>", and ckpt_prepare_restore_pipes() writes exactly those bytes back into the freshly
+// created pipe (after restoring its capacity with F_SETPIPE_SZ) before any guest process is reforked. The
+// capture therefore never loses data on a checkpoint that completes, and a capture that cannot complete
+// must fail the whole checkpoint rather than publish a short object -- which is why every error path below
+// aborts the stream and returns -1 instead of finishing what it has.
+//
+// Two properties the drain must not damage in the live process, since a checkpoint is not required to be
+// the process's last act:
+//   - O_NONBLOCK lives on the open file description, so it is shared with every process that inherited this
+//     pipe end through fork. Setting it for the drain and leaving it set would turn a blocking guest read()
+//     into a spurious EAGAIN afterwards. The original file status flags are restored on every exit path.
+//   - the identity is claimed image-wide, so exactly one participant drains a pipe several processes hold.
+//
+// `reason` receives a short static description of the first failing step; the caller reports it, because a
+// bare "cannot capture pipe" hides whether the sink, the descriptor, or the read failed.
+static int ckpt_capture_pipe_reason(int fd, uint64_t identity, const char **reason, int *cause) {
+    const char *unused_reason = NULL;
+    int unused_cause = 0;
+    if (!reason) reason = &unused_reason;
+    if (!cause) cause = &unused_cause;
+    *reason = NULL;
+    *cause = 0;
     struct ckpt_sink *sink = ckpt_sink_current();
     char name[128];
     snprintf(name, sizeof name, "pipe.%016llx", (unsigned long long)identity);
     int claimed = ckpt_sink_claim(sink, name);
-    if (claimed != 0) return claimed > 0 ? 0 : -1; // another process owns this shared object
+    if (claimed > 0) return 0; // another process already captured this shared object
+    if (claimed < 0) {
+        *reason = "sink refused the image-wide claim";
+        *cause = errno;
+        return -1;
+    }
     struct ckpt_sink_stream *output = NULL;
-    if (ckpt_sink_begin(sink, NULL, name, CKPT_SINK_PUBLISH_ATOMIC, &output) != 0) return -1;
+    if (ckpt_sink_begin(sink, NULL, name, CKPT_SINK_PUBLISH_ATOMIC, &output) != 0) {
+        *reason = "sink refused to open the pipe object";
+        *cause = errno;
+        ckpt_sink_unclaim(sink, name);
+        return -1;
+    }
     int flags = fcntl(fd, F_GETFL);
     if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
+        *reason = "cannot make the pipe end non-blocking for the drain";
+        *cause = errno;
         ckpt_sink_abort(sink, &output);
+        ckpt_sink_unclaim(sink, name);
         return -1;
     }
     unsigned char buffer[65536];
@@ -617,6 +655,10 @@ static int ckpt_capture_pipe(int fd, uint64_t identity) {
         ssize_t count = read(fd, buffer, sizeof buffer);
         if (count > 0) {
             if (ckpt_sink_write(sink, output, buffer, (size_t)count) != 0) {
+                // The bytes are already out of the pipe and the object is being discarded, so the image can
+                // no longer describe this pipe: fail the checkpoint rather than restore a truncated one.
+                *reason = "sink rejected buffered pipe bytes";
+                *cause = errno;
                 failed = 1;
                 break;
             }
@@ -624,14 +666,48 @@ static int ckpt_capture_pipe(int fd, uint64_t identity) {
         }
         if (count == 0 || HL_HOST_ERRNO_WOULD_BLOCK(errno)) break;
         if (errno == EINTR) continue;
+        *reason = "read of the buffered pipe bytes failed";
+        *cause = errno;
         failed = 1;
         break;
     }
+    // Restore the shared open file description exactly as the guest left it, before deciding the outcome.
+    int restored = fcntl(fd, F_SETFL, flags);
     if (failed) {
         ckpt_sink_abort(sink, &output);
+        ckpt_sink_unclaim(sink, name);
         return -1;
     }
-    return ckpt_sink_finish(sink, &output);
+    if (restored != 0) {
+        *reason = "cannot restore the pipe end's file status flags after the drain";
+        *cause = errno;
+        ckpt_sink_abort(sink, &output);
+        ckpt_sink_unclaim(sink, name);
+        return -1;
+    }
+    if (ckpt_sink_finish(sink, &output) != 0) {
+        *reason = "sink refused to publish the pipe object";
+        *cause = errno;
+        ckpt_sink_unclaim(sink, name);
+        return -1;
+    }
+    return 0;
+}
+
+static int ckpt_capture_pipe(int fd, uint64_t identity) {
+    return ckpt_capture_pipe_reason(fd, identity, NULL, NULL);
+}
+
+// The restore side recreates the pipe with F_SETPIPE_SZ and refills it, and refuses any capacity it cannot
+// parse, so the capacity written into the record must be the live kernel capacity of this pipe rather than
+// the engine's cached g_pipesz, which is 0 for a pipe the engine never resized.
+static int ckpt_pipe_capacity(int fd) {
+    int cached = (fd >= 0 && fd < HL_NFD) ? g_pipesz[fd] : 0;
+#ifdef F_GETPIPE_SZ
+    int live = fcntl(fd, F_GETPIPE_SZ);
+    if (live > 0) return live;
+#endif
+    return cached;
 }
 
 static int ckpt_capture_signalfd(int fd, uint64_t identity) {
@@ -1248,7 +1324,9 @@ static int ckpt_capture_right_resource(int fd, struct ckpt_fd *record) {
         record->object_id = g_pipe_identity[fd];
         record->ofd_id = ofd_identity_ensure(fd);
         record->offset = (int64_t)g_pipe_identity[fd];
-        snprintf(record->path, sizeof record->path, "%d", g_pipesz[fd]);
+        int capacity = ckpt_pipe_capacity(fd);
+        if (capacity <= 0) return -1;
+        snprintf(record->path, sizeof record->path, "%d", capacity);
         if (!record->ofd_id) return -1;
         if ((flags & O_ACCMODE) == O_RDONLY && ckpt_capture_pipe(fd, g_pipe_identity[fd]) != 0) return -1;
         return 0;
