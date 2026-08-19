@@ -606,6 +606,70 @@ mod tests {
         );
     }
 
+    /// A coordinator must find a peer that has made itself a session leader.
+    ///
+    /// This is the POSITIVE half of checkpoint membership, and it is the half no in-memory broker test
+    /// can state: the engine emulates the guest's `setsid(2)` with the host's, so a guest that leads a
+    /// session -- every PostgreSQL backend, every shell job -- has its own host session id. While peer
+    /// enumeration also required a matching session, a live cluster produced ZERO peers, the coordinator
+    /// published a one-process manifest, and the eight real members that arrived afterwards were refused
+    /// at `REGISTER_READY` because the capture they belonged to had already finished. The negative
+    /// ("an unregistered publisher is refused") was tested; this direction was not.
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux"))]
+    #[test]
+    fn a_peer_that_leads_its_own_session_is_still_enumerated_as_a_peer() {
+        let mut ready = [-1; 2];
+        let mut release = [-1; 2];
+        // SAFETY: both arrays name writable storage for two new descriptors each.
+        assert_eq!(unsafe { libc::pipe(ready.as_mut_ptr()) }, 0);
+        // SAFETY: as above.
+        assert_eq!(unsafe { libc::pipe(release.as_mut_ptr()) }, 0);
+
+        // SAFETY: the child touches only async-signal-safe calls on inherited descriptors -- no
+        // allocation, no lock, no Rust destructor walk -- because it is forked out of a multi-threaded
+        // test binary and any other work can deadlock against a lock held at fork time.
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0, "fork failed");
+        if child == 0 {
+            // SAFETY: child side; every descriptor below is inherited and owned here.
+            unsafe {
+                libc::setsid();
+                let byte = [1_u8];
+                libc::write(ready[1], byte.as_ptr().cast(), 1);
+                let mut block = [0_u8; 1];
+                libc::read(release[0], block.as_mut_ptr().cast(), 1);
+                libc::_exit(0);
+            }
+        }
+        // SAFETY: the parent has no further use for these ends.
+        unsafe {
+            libc::close(ready[1]);
+            libc::close(release[0]);
+        }
+        let mut byte = [0_u8; 1];
+        // SAFETY: byte is writable and the descriptor is owned here.
+        let observed = unsafe { libc::read(ready[0], byte.as_mut_ptr().cast(), 1) };
+
+        // SAFETY: `child` is an exact live PID owned by this test.
+        let session = unsafe { libc::getsid(child) };
+        // SAFETY: the hook reads only this process's own /proc view.
+        let enumerated = unsafe { crate::bindings::hl_c_backend_host_process_peer_enumerated_test(child) };
+
+        // SAFETY: releasing and reaping the exact child forked above.
+        unsafe {
+            let byte = [1_u8];
+            libc::write(release[1], byte.as_ptr().cast(), 1);
+            let mut status = 0;
+            libc::waitpid(child, &raw mut status, 0);
+            libc::close(ready[0]);
+            libc::close(release[1]);
+        }
+
+        assert_eq!(observed, 1, "child never reached setsid");
+        assert_eq!(session, child, "the peer was not its own session leader, so it proves nothing");
+        assert_eq!(enumerated, 1, "a session-leading peer was not enumerated");
+    }
+
     #[cfg(feature = "native-test-hooks")]
     #[test]
     fn host_force_stop_kills_exact_activation_group_and_preserves_unrelated_process() {
