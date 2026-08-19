@@ -304,6 +304,26 @@ unsafe fn hl_x86_64_namespace_transaction_test(scenario: c_uint) -> c_int {
 }
 
 #[cfg(feature = "native-test-hooks")]
+unsafe fn hl_aarch64_ofd_identity_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().aarch64_ofd_identity)(scenario) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_x86_64_ofd_identity_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().x86_64_ofd_identity)(scenario) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_aarch64_checkpoint_pipe_schema_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().aarch64_checkpoint_pipe_schema)(scenario) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_x86_64_checkpoint_pipe_schema_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().x86_64_checkpoint_pipe_schema)(scenario) }
+}
+
+#[cfg(feature = "native-test-hooks")]
 unsafe fn hl_x86_64_store_preflight_test() -> c_int {
     unsafe { (test_api().x86_64_store_preflight)() }
 }
@@ -484,6 +504,28 @@ pub(crate) fn namespace_transaction_test(isa: u32, scenario: u32) -> Result<(), 
     };
     // SAFETY: each feature-gated hook owns its shared transaction fixture and
     // reaps every child before returning a scalar status.
+    let status = unsafe { hook(scenario) };
+    if status == 0 { Ok(()) } else { Err(status) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn ofd_identity_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    let hook = match isa {
+        1 => hl_aarch64_ofd_identity_test,
+        2 => hl_x86_64_ofd_identity_test,
+        _ => return Err(-22),
+    };
+    let status = unsafe { hook(scenario) };
+    if status == 0 { Ok(()) } else { Err(status) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn checkpoint_pipe_schema_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    let hook = match isa {
+        1 => hl_aarch64_checkpoint_pipe_schema_test,
+        2 => hl_x86_64_checkpoint_pipe_schema_test,
+        _ => return Err(-22),
+    };
     let status = unsafe { hook(scenario) };
     if status == 0 { Ok(()) } else { Err(status) }
 }
