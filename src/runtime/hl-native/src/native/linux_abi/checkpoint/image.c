@@ -102,8 +102,19 @@ static int ckpt_capture_early_emulated_fd(struct ckpt_fd *records, int *count, i
     r.gfd = fd;
     const char *early_emulated = ckpt_guest_kernel_fd(fd);
     if (early_emulated && strcmp(early_emulated, "socket") == 0 && fd >= 0 && fd < HL_NFD && g_sock_object[fd] != 0) {
-        if (sock_internal_checkpoint_admit(fd) != 0) return -1;
+        if (sock_internal_checkpoint_admit(fd) != 0) {
+            fprintf(stderr,
+                    "[ckpt] refuse: socket fd %d inadmissible errno=%d family=%d object=%016llx peer=%016llx "
+                    "hidden=%u/%u conn=%u connecting=%u\n",
+                    fd, errno, (int)g_sock_fam[fd], (unsigned long long)g_sock_object[fd],
+                    (unsigned long long)g_sock_peer_object[fd], (unsigned)g_sock_identity_local_hidden[fd],
+                    (unsigned)g_sock_identity_peer_hidden[fd], (unsigned)g_sock_conn[fd],
+                    (unsigned)g_sock_connecting[fd]);
+            return -1;
+        }
         if (g_sock_identity_local_hidden[fd] && g_sock_peer_object[fd] == 0) {
+            fprintf(stderr, "[ckpt] refuse: socket fd %d has a hidden local identity and no peer (family=%d)\n", fd,
+                    (int)g_sock_fam[fd]);
             /* A refused AF_UNIX connect leaves the real descriptor privately bound so it can be retried.  It
              * has no reciprocal endpoint, and restoring that hidden bind as a guest-visible socket would
              * fabricate topology. */
@@ -117,7 +128,11 @@ static int ckpt_capture_early_emulated_fd(struct ckpt_fd *records, int *count, i
             r.object_id = g_sock_object[fd];
             r.ofd_id = r.object_id;
             snprintf(r.path, sizeof r.path, "socket-state.%016llx", (unsigned long long)r.object_id);
-            if (r.flags < 0 || r.descriptor_flags < 0 || ckpt_capture_socket_state(fd, r.object_id, 1) != 0) return -1;
+            if (r.flags < 0 || r.descriptor_flags < 0 || ckpt_capture_socket_state(fd, r.object_id, 1) != 0) {
+                fprintf(stderr, "[ckpt] refuse: unpaired socket fd %d state capture failed (family=%d conn=%u)\n", fd,
+                        (int)g_sock_fam[fd], (unsigned)g_sock_conn[fd]);
+                return -1;
+            }
             records[(*count)++] = r;
             return CKPT_FD_CAPTURED;
         }
@@ -132,8 +147,11 @@ static int ckpt_capture_early_emulated_fd(struct ckpt_fd *records, int *count, i
         snprintf(r.path, sizeof r.path, "socket.%016llx", (unsigned long long)r.object_id);
         if (r.flags < 0 || r.descriptor_flags < 0 || r.auxiliary == 0 ||
             ckpt_capture_socket_state(fd, r.object_id, 0) != 0 ||
-            ckpt_capture_socket_queue(fd, r.object_id, (uint32_t)type) != 0)
+            ckpt_capture_socket_queue(fd, r.object_id, (uint32_t)type) != 0) {
+            fprintf(stderr, "[ckpt] refuse: paired socket fd %d capture failed (family=%d type=%d peer=%016llx)\n", fd,
+                    (int)g_sock_fam[fd], type, (unsigned long long)r.auxiliary);
             return -1;
+        }
         records[(*count)++] = r;
         return CKPT_FD_CAPTURED;
     }
