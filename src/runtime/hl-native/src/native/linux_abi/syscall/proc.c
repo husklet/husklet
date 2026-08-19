@@ -305,6 +305,13 @@ static void vfork_import_guest_memory(pid_t child) {
 
 static void fork_child_hooks(struct cpu *c) {
     g_profile_output_owner = 0;
+    /* fork keeps the owner socket but removes its watcher thread. Re-arm it
+     * before restored or newly cloned guest code can escape owner revocation. */
+    if (hl_engine_checkpoint_lifetime_after_fork() != 0) {
+        c->exit_code = 70;
+        c->exited = 1;
+        return;
+    }
 #ifdef G_SOFT_STATE_RESET
     G_SOFT_STATE_RESET(c);
 #endif

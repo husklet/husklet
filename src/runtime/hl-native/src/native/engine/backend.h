@@ -44,5 +44,7 @@ void hl_engine_checkpoint_fork_prepare(void);
 void hl_engine_checkpoint_fork_parent(void);
 void hl_engine_checkpoint_fork_child(int broker, int trigger, int control);
 int hl_engine_checkpoint_descriptors_register(int first, int second);
+/* Re-arms the engine-owner lifetime capability after fork removed every peer thread. */
+int hl_engine_checkpoint_lifetime_after_fork(void);
 
 #endif

@@ -27,6 +27,7 @@
 #define hl_engine_child_result_after_fork HL_TARGET_LOCAL(engine_child_result_after_fork)
 #define hl_engine_child_result_publish HL_TARGET_LOCAL(engine_child_result_publish)
 #define hl_engine_child_result_publish_signal HL_TARGET_LOCAL(engine_child_result_publish_signal)
+#define hl_engine_checkpoint_lifetime_after_fork HL_TARGET_LOCAL(engine_checkpoint_lifetime_after_fork)
 
 /* Each embedded translator carries checkpoint channel state consumed by its
  * Linux-ABI unity unit. Keep adoption and execution in the same ISA namespace. */

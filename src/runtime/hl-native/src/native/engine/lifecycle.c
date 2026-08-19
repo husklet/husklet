@@ -20,6 +20,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #if !defined(_WIN32)
+#include <poll.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #endif
@@ -541,6 +542,39 @@ static void *hl_checkpoint_control_main(void *opaque) {
     return NULL;
 }
 
+/* Every checkpointable guest process inherits this endpoint. Closing the
+ * engine-owner endpoint revokes the whole restored generation without a PID
+ * scan, including members whose process groups were reconstructed. */
+#if !defined(_WIN32)
+static int hl_checkpoint_lifetime_descriptor = -1;
+
+static void *hl_checkpoint_lifetime_main(void *opaque) {
+    int descriptor = (int)(intptr_t)opaque;
+    struct pollfd owner = {.fd = descriptor, .events = POLLHUP | POLLERR};
+    for (;;) {
+        int ready;
+        do {
+            ready = poll(&owner, 1, -1);
+        } while (ready < 0 && errno == EINTR);
+        if (ready < 0 || (owner.revents & (POLLHUP | POLLERR | POLLNVAL)) != 0) {
+            (void)kill(getpid(), SIGKILL);
+            _exit(128 + SIGKILL);
+        }
+    }
+}
+
+int hl_engine_checkpoint_lifetime_after_fork(void) {
+    pthread_t lifetime;
+    if (hl_checkpoint_lifetime_descriptor < 0) return 0;
+    if (pthread_create(&lifetime, NULL, hl_checkpoint_lifetime_main,
+                       (void *)(intptr_t)hl_checkpoint_lifetime_descriptor) != 0)
+        return -1;
+    return pthread_detach(lifetime);
+}
+#else
+int hl_engine_checkpoint_lifetime_after_fork(void) { return 0; }
+#endif
+
 static int32_t hl_production_entry(void *opaque) {
     hl_production_entry_context *context = opaque;
     int checkpoint_control = context->checkpoint_control;
@@ -600,6 +634,10 @@ static int32_t hl_production_entry(void *opaque) {
     }
     if (context->checkpoint_broker >= 0) {
         if (checkpoint_control >= 0) {
+#if !defined(_WIN32)
+            hl_checkpoint_lifetime_descriptor = checkpoint_control;
+#endif
+            if (hl_engine_checkpoint_lifetime_after_fork() != 0) return HL_STATUS_PLATFORM_FAILURE;
             pthread_t control;
             if (pthread_create(&control, NULL, hl_checkpoint_control_main, (void *)(intptr_t)checkpoint_control) != 0)
                 return HL_STATUS_PLATFORM_FAILURE;

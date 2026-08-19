@@ -386,6 +386,15 @@ static hl_status hl_engine_checkpoint_control_ready(hl_engine *engine) {
 #endif
 }
 
+static void hl_engine_checkpoint_arena_stop(hl_engine *engine) {
+#if defined(_WIN32)
+    (void)engine;
+#else
+    if (engine->checkpoint_control_parent >= 0)
+        (void)shutdown(engine->checkpoint_control_parent, SHUT_RDWR);
+#endif
+}
+
 uint32_t hl_engine_abi(void) {
     return HL_ENGINE_ABI;
 }
@@ -1254,6 +1263,7 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
             (void)engine->host.process->terminate(engine->host.context, process, HL_HOST_PROCESS_TERMINATE_FORCE);
     }
     waited = engine->host.process->wait(engine->host.context, process, HL_HOST_DEADLINE_INFINITE);
+    hl_engine_checkpoint_arena_stop(engine);
     hl_engine_lock(engine);
     engine->process = HL_HOST_HANDLE_INVALID;
     hl_engine_unlock(engine);
@@ -1363,6 +1373,7 @@ hl_status hl_engine_request(hl_engine *engine, uint32_t request, const void *dat
     process = engine->process;
     hl_engine_unlock(engine);
     if (process == HL_HOST_HANDLE_INVALID) return HL_STATUS_OK;
+    if (reason == HL_HOST_PROCESS_TERMINATE_FORCE) hl_engine_checkpoint_arena_stop(engine);
     status = (hl_status)engine->host.process->terminate(engine->host.context, process, reason).status;
     if (status == HL_STATUS_INVALID_ARGUMENT) {
         hl_engine_lock(engine);
@@ -1382,6 +1393,7 @@ void hl_engine_destroy(hl_engine *engine) {
         engine->pending_termination = HL_HOST_PROCESS_TERMINATE_FORCE;
         process = engine->process;
         hl_engine_unlock(engine);
+        hl_engine_checkpoint_arena_stop(engine);
         if (process != HL_HOST_HANDLE_INVALID)
             (void)engine->host.process->terminate(engine->host.context, process, HL_HOST_PROCESS_TERMINATE_FORCE);
         for (;;) {
