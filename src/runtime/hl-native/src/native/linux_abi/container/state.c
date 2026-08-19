@@ -44,11 +44,19 @@ static hl_limit_table g_limits;
 
 // current anon charge (bytes)
 static _Atomic uint64_t g_mem_charged = 0;
-// Max argv/envp entries the exec-forward + stack-build path carries. Linux caps only at ARG_MAX (bytes);
-// a former fixed 256 silently truncated large generated argv lists (a different command ran). 2048 covers
-// realistic exec argv/env while keeping the stack arrays bounded.
+// Max argv/envp entries the exec-forward + stack-build path carries. Linux caps argv/envp only by BYTES
+// (MAX_ARG_STRLEN = 128 KiB per single string, ARG_MAX = RLIMIT_STACK/4 = 2 MiB in total) and reports
+// -E2BIG when either is exceeded; it never truncates and never reorders. Two earlier caps did truncate:
+// a fixed 256, then 2048 -- a `mv` with 5000 paths silently ran with a DIFFERENT last argument, so the
+// target of the move became an ordinary file ("Not a directory"). The array bound below is what keeps the
+// stack-resident pointer vectors bounded (AGENTS.md: guest-provided counts are bounded before allocation);
+// every consumer must now FAIL CLOSED with -E2BIG at this bound rather than proceed with a short vector.
 #ifndef HL_MAXARGV
-#define HL_MAXARGV 2048
+#define HL_MAXARGV 8192
+#endif
+// Same bound for the environment vector: build_stack lays out argv and envp from equally-sized arrays.
+#ifndef HL_MAXENVP
+#define HL_MAXENVP HL_MAXARGV
 #endif
 // live task count (init = 1)
 static _Atomic int g_pids_cur = 1;

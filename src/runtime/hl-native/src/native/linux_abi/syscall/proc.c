@@ -18,7 +18,14 @@
 #define HL_EXEC_ELF_MACHINE 0xB7u // EM_AARCH64
 #endif
 
-enum { HL_EXEC_ARGUMENT_BYTES = 128 * 1024 };
+// Linux bounds execve arguments twice, and the two bounds are different quantities:
+//   MAX_ARG_STRLEN -- 32 pages == 128 KiB, the limit on ONE argument string;
+//   ARG_MAX        -- RLIMIT_STACK/4 == 2 MiB at the default 8 MiB stack, the limit on ALL of them.
+// Exceeding either is -E2BIG. A single 128 KiB budget shared across the whole vector (what this used to
+// be) rejects an ordinary large argv -- 2839 paths of ~46 bytes already exhausts it -- long before the
+// kernel would. Measured on the host: 50,000 x 21-byte arguments exec fine, 100,000 give E2BIG.
+enum { HL_EXEC_ARGUMENT_STRING_BYTES = 128 * 1024 };
+enum { HL_EXEC_ARGUMENT_TOTAL_BYTES = 2 * 1024 * 1024 };
 
 /* Diagnostic counters remain enabled in a fork child because they participate
  * in translation-cache identity.  Only the process that began the execution

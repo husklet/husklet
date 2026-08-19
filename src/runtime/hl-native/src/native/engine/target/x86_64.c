@@ -1419,6 +1419,15 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     g_authorized_executable_size = executable_size;
     exec_authority_seed_initial(host, executable, executable_authority);
     if (argument_count > (uint32_t)INT_MAX) return 2;
+    // The launch argv is copied into build_stack's fixed pointer vector. Nothing between here and there
+    // bounded it, so a launch with more than HL_MAXARGV entries wrote past `argp[]` -- observed as
+    // "*** stack smashing detected ***" at exactly 2049 entries under the previous 2048 bound, where the
+    // host kernel runs the same command without complaint. Reject the launch instead of corrupting the
+    // loader's frame.
+    if (argument_count > (uint32_t)(HL_MAXARGV - 1)) {
+        fprintf(stderr, "hl-engine: guest argument vector exceeds %d entries\n", HL_MAXARGV - 1);
+        return 2;
+    }
     argc = (int)argument_count;
     hl_target_services_inject(&g_target_services, host);
     hl_gmap_bind_host(host);
@@ -1462,18 +1471,18 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     // non-shebang ELF entry falls straight through unchanged (argc/argv untouched -> byte-identical).
     static char sb_gb[1024], sb_pb[4200], sb_fhb[4200];
     static char sb_store[SHEBANG_MAX * 2][256];
-    static char *sb_argv[256];
+    static char *sb_argv[HL_MAXARGV];
     const char *sb_prog = find_in_path(argv[0], sb_gb, sizeof sb_gb); // bare "sh" -> "/bin/sh" via PATH
     set_guest_comm(sb_prog); // Linux comm = basename of the exec NAME (stays the script's for a shebang entry)
     const char *sb_prog_host = xresolve_overlay(sb_prog, sb_pb, sizeof sb_pb);
     int sb_argc = 0;
     sb_argv[sb_argc++] = (char *)sb_prog;
-    for (int i = 1; i < argc && sb_argc < 255; i++)
+    for (int i = 1; i < argc && sb_argc < HL_MAXARGV - 1; i++)
         sb_argv[sb_argc++] = (char *)argv[i];
     sb_argv[sb_argc] = NULL;
     const char *sb_finalhost;
     int sb_new =
-        resolve_shebang_chain(sb_argv, sb_argc, 256, sb_prog_host, sb_store, sb_fhb, sizeof sb_fhb, &sb_finalhost);
+        resolve_shebang_chain(sb_argv, sb_argc, HL_MAXARGV, sb_prog_host, sb_store, sb_fhb, sizeof sb_fhb, &sb_finalhost);
     if (sb_new < 0) {
         fprintf(stderr, "hl-engine: too many nested #! interpreters (ELOOP): %s\n", argv[0]);
         return hl_vfs_cursor_state_finish(40); // ELOOP
