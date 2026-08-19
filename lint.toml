@@ -89,3 +89,6 @@ operations = ["gets", "vsprintf"]
 
 [c_allocation]
 functions = ["calloc", "malloc", "realloc"]
+
+[c_test_only_state]
+macros = ["HL_LINEAGE_TEST_HOOKS", "HL_NATIVE_TEST_HOOKS"]

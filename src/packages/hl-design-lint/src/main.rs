@@ -78,7 +78,8 @@ impl Arguments {
                     .register(hl_design_lint::CSafety::new(policy.c_safety.clone()))
                     .register(hl_design_lint::CAllocation::new(policy.c_allocation.clone()))
                     .register(hl_design_lint::CStructure)
-                    .register(hl_design_lint::CPolicy::new()),
+                    .register(hl_design_lint::CPolicy::new())
+                    .register(hl_design_lint::CTestOnlyState::new(policy.c_test_only_state.clone())),
             )
         } else {
             Linter::standard_with_policy(policy)
