@@ -428,6 +428,13 @@
         if (unix_path_is(sa, (socklen_t)a2)) {
             char gp[200], host[1024];
             unix_path_copy(sa, (socklen_t)a2, gp, sizeof gp);
+            // The engine-private connection-identity namespace is not a guest address. In bare mode an
+            // unrouted pathname bind reaches the LITERAL host path, so without this a guest could plant a
+            // name inside it; refuse before either backing is selected.
+            if (hl_socket_identity_path_reserved(gp)) {
+                G_RET(c) = (uint64_t)(int64_t)(-EPERM);
+                break;
+            }
             if (!unix_path_routed(gp)) goto bind_passthrough;
             if (g_rootfs)
                 overlay_copyup(gp, host, sizeof host); // guest path -> upper host path (+ materialize parent dirs)
