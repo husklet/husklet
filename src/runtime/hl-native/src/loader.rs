@@ -124,6 +124,7 @@ pub(crate) struct TestApi {
     pub(crate) x86_64_unix_identity_capture: UnixIdentityCaptureTest,
     pub(crate) errno_from_host: unsafe extern "C" fn(c_uint, c_int) -> c_int,
     pub(crate) identity_registry: unsafe extern "C" fn(c_uint, c_uint) -> c_int,
+    pub(crate) private_fork_lock: unsafe extern "C" fn(c_uint) -> c_int,
     #[allow(dead_code)]
     pub(crate) checkpoint_peer_authenticate: unsafe extern "C" fn(c_int, u64, *mut u64, *mut u64) -> c_int,
     pub(crate) checkpoint_channel_connect: unsafe extern "C" fn(c_int) -> c_int,
@@ -369,6 +370,10 @@ fn load_tests(library: &DynamicLibrary, path: &Path) -> Result<TestApi, LoadErro
         identity_registry: symbol!(
             "hl_c_backend_identity_registry_test",
             unsafe extern "C" fn(c_uint, c_uint) -> c_int
+        ),
+        private_fork_lock: symbol!(
+            "hl_c_backend_private_fork_lock_test",
+            unsafe extern "C" fn(c_uint) -> c_int
         ),
         checkpoint_peer_authenticate: symbol!(
             "hl_c_backend_checkpoint_peer_authenticate_test",

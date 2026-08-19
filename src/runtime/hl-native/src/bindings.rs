@@ -502,6 +502,11 @@ unsafe fn hl_c_backend_identity_registry_test(scenario: c_uint, iterations: c_ui
     unsafe { (test_api().identity_registry)(scenario, iterations) }
 }
 
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_c_backend_private_fork_lock_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().private_fork_lock)(scenario) }
+}
+
 #[cfg(all(test, feature = "native-test-hooks"))]
 pub(super) unsafe fn hl_c_backend_checkpoint_test_prune_foreign_descriptors() -> c_uint {
     unsafe { (test_api().checkpoint_test_prune_foreign_descriptors)() }
@@ -559,6 +564,14 @@ pub(crate) fn identity_registry_test(scenario: u32, iterations: u32) -> Result<(
     // SAFETY: the feature-gated native hook owns its private shared registry and child processes. Inputs are
     // scalar scenario controls, and the hook returns only after every child has been reaped.
     let status = unsafe { hl_c_backend_identity_registry_test(scenario, iterations) };
+    if status == 0 { Ok(()) } else { Err(status) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn private_fork_lock_test(scenario: u32) -> Result<(), i32> {
+    // SAFETY: the feature-gated native hook owns its own descriptor, thread, and child process, and
+    // returns only after the child has been reaped and the holder thread joined.
+    let status = unsafe { hl_c_backend_private_fork_lock_test(scenario) };
     if status == 0 { Ok(()) } else { Err(status) }
 }
 

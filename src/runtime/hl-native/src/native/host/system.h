@@ -120,6 +120,11 @@ size_t hl_host_process_fd_private_count_current(void);
 int hl_host_process_fd_private_fork_prepare(void);
 int hl_host_process_fd_private_fork_complete(int child);
 void hl_host_process_fd_private_cleanup(void);
+#if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
+/* Forks while a sibling thread holds the private-fd fork lock and drives the child down the
+   locking path, bounded so an inherited-locked mutex reports instead of hanging. */
+int hl_c_backend_private_fork_lock_test(uint32_t scenario);
+#endif
 
 /* Query one open descriptor and, for files, copy its native absolute path without a trailing NUL. */
 int hl_host_process_fd_read(int64_t pid, int32_t descriptor, hl_host_process_fd *entry, char *path,

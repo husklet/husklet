@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <time.h>
 #include <sys/resource.h>
 #if defined(__APPLE__)
 #include <libproc.h>
@@ -43,6 +44,52 @@ static _Thread_local uint64_t hl_private_start;
 static uint64_t *hl_private_fork_cells;
 static size_t hl_private_fork_count;
 static pthread_mutex_t hl_private_fork_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_once_t hl_private_fork_atfork_once = PTHREAD_ONCE_INIT;
+/* Identity of the thread that armed the managed fork protocol by taking the lock in
+   hl_host_process_fd_private_fork_prepare().  Read only by the fork child handler. */
+static _Atomic int hl_private_fork_armed;
+static _Atomic(pthread_t) hl_private_fork_owner;
+
+static void hl_private_fork_disarm(void) {
+    atomic_store_explicit(&hl_private_fork_armed, 0, memory_order_relaxed);
+}
+
+/* pthread_atfork child handler.  fork() from a multi-threaded process copies
+   hl_private_fork_lock in whatever state a sibling thread left it, and the child --
+   which has only the calling thread -- then blocks on it forever.  This runs in the
+   child before fork() returns, so it must not allocate, free, log, panic, or acquire
+   a lock: every statement below is a plain store.
+
+   The managed fork path (fork_prepare -> fork() -> fork_complete) deliberately hands
+   the child a HELD lock and a heap snapshot that fork_complete() replays and unlocks,
+   so that case must be left exactly as it is.  It is identified by the arming thread
+   being the thread that called fork(); only that thread survives into the child.  Any
+   other fork is unmanaged and gets the lock and the snapshot reset.
+
+   The shared record table itself is NOT reset here.  It is a MAP_SHARED anonymous
+   mapping, so the child sees the parent's live rows rather than a copy, and clearing
+   it would destroy the parent's state.  It does not need resetting: rows are keyed by
+   (pid, start_ns), the child's pid differs, so the child simply owns no rows and
+   repopulates by claiming its own. */
+static void hl_private_fork_child(void) {
+    if (atomic_load_explicit(&hl_private_fork_armed, memory_order_relaxed) &&
+        pthread_equal(atomic_load_explicit(&hl_private_fork_owner, memory_order_relaxed), pthread_self()))
+        return;
+    /* The parent may have been mid-snapshot inside fork_prepare().  Drop the inherited
+       pointer without free(): free() takes the allocator lock and is not fork-safe here.
+       Leaking one bounded buffer in the child is preferable to replaying a partial
+       parent snapshot into the child's rows, which would be silent. */
+    hl_private_fork_cells = NULL;
+    hl_private_fork_count = 0;
+    hl_private_pid = 0;
+    hl_private_start = 0;
+    hl_private_fork_disarm();
+    hl_private_fork_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+}
+
+static void hl_private_register_atfork(void) {
+    (void)pthread_atfork(NULL, NULL, hl_private_fork_child);
+}
 
 static uint64_t hl_private_process_start(int64_t pid) {
     hl_host_process_info info;
@@ -146,6 +193,7 @@ static void hl_private_cleanup(void) {
 
 void hl_host_private_init(void) {
     size_t records_size = sizeof(*hl_private) * HL_PRIVATE_PROCESSES;
+    (void)pthread_once(&hl_private_fork_atfork_once, hl_private_register_atfork);
     if (hl_private != NULL) return;
     void *memory =
         mmap(NULL, records_size + sizeof(*hl_private_epoch), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
@@ -511,6 +559,8 @@ int hl_host_process_fd_private_fork_prepare(void) {
     int64_t pid = (int64_t)getpid();
     uint64_t start = hl_private_process_start(pid);
     if (pthread_mutex_lock(&hl_private_fork_lock) != 0) return -EDEADLK;
+    atomic_store_explicit(&hl_private_fork_owner, pthread_self(), memory_order_relaxed);
+    atomic_store_explicit(&hl_private_fork_armed, 1, memory_order_relaxed);
     free(hl_private_fork_cells);
     hl_private_fork_cells = NULL;
     hl_private_fork_count = 0;
@@ -539,6 +589,7 @@ int hl_host_process_fd_private_fork_prepare(void) {
                     free(hl_private_fork_cells);
                     hl_private_fork_cells = NULL;
                     hl_private_fork_count = 0;
+                    hl_private_fork_disarm();
                     (void)pthread_mutex_unlock(&hl_private_fork_lock);
                     return -ENOMEM;
                 }
@@ -554,6 +605,7 @@ int hl_host_process_fd_private_fork_prepare(void) {
             free(hl_private_fork_cells);
             hl_private_fork_cells = NULL;
             hl_private_fork_count = 0;
+            hl_private_fork_disarm();
             (void)pthread_mutex_unlock(&hl_private_fork_lock);
             return -EAGAIN;
         }
@@ -582,6 +634,7 @@ int hl_host_process_fd_private_fork_complete(int child) {
     free(hl_private_fork_cells);
     hl_private_fork_cells = NULL;
     hl_private_fork_count = 0;
+    hl_private_fork_disarm();
     (void)pthread_mutex_unlock(&hl_private_fork_lock);
     return result;
 }
@@ -589,3 +642,88 @@ int hl_host_process_fd_private_fork_complete(int child) {
 void hl_host_process_fd_private_cleanup(void) {
     hl_private_cleanup();
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+#include <signal.h>
+#include <sys/wait.h>
+#if defined(__linux__)
+#include <sys/prctl.h>
+#endif
+
+#define HL_PRIVATE_FORK_HOLD_NS 1500000000L
+#define HL_PRIVATE_FORK_SETTLE_NS 200000000L
+#define HL_PRIVATE_FORK_WAIT_MS 10000
+
+static void hl_private_sleep(long nanoseconds) {
+    struct timespec delay = {nanoseconds / 1000000000L, nanoseconds % 1000000000L};
+    while (nanosleep(&delay, &delay) != 0 && errno == EINTR) continue;
+}
+
+/* Holds the fork lock for a window wide enough that a fork() started after it can only
+   observe the lock held -- the same shape as the real hold across the /proc stat read. */
+static void *hl_private_fork_lock_holder(void *argument) {
+    (void)argument;
+    if (pthread_mutex_lock(&hl_private_fork_lock) != 0) return NULL;
+    hl_private_sleep(HL_PRIVATE_FORK_HOLD_NS);
+    (void)pthread_mutex_unlock(&hl_private_fork_lock);
+    return NULL;
+}
+
+/* Scenario 1: fork() while a sibling thread holds hl_private_fork_lock, and have the child
+   take the locking path. Without the pthread_atfork child handler the child inherits a
+   locked mutex whose owner does not exist in the child and blocks forever; the wait below
+   is bounded so that regression is reported rather than wedging the caller. */
+HL_API int hl_c_backend_private_fork_lock_test(uint32_t scenario) {
+    if (scenario != 1) {
+        errno = EINVAL;
+        return -EINVAL;
+    }
+    hl_host_private_init();
+    int descriptor = dup(STDERR_FILENO);
+    if (descriptor < 0) return -errno;
+    pthread_t holder;
+    if (pthread_create(&holder, NULL, hl_private_fork_lock_holder, NULL) != 0) {
+        close(descriptor);
+        return -EAGAIN;
+    }
+    hl_private_sleep(HL_PRIVATE_FORK_SETTLE_NS);
+    pid_t child = fork();
+    if (child == 0) {
+#if defined(__linux__)
+        (void)prctl(PR_SET_PDEATHSIG, SIGKILL);
+#endif
+        /* A wedged child must not orphan: one survived its lane by 17 minutes. */
+        (void)alarm(30);
+        _exit(hl_host_process_fd_private_add(descriptor) == 0 ? 0 : 3);
+    }
+    int result;
+    if (child < 0) {
+        result = -errno;
+    } else {
+        int status = 0;
+        int reaped = 0;
+        for (int elapsed = 0; elapsed < HL_PRIVATE_FORK_WAIT_MS; elapsed += 20) {
+            pid_t seen = waitpid(child, &status, WNOHANG);
+            if (seen == child) {
+                reaped = 1;
+                break;
+            }
+            if (seen < 0 && errno != EINTR) break;
+            hl_private_sleep(20000000L);
+        }
+        if (!reaped) {
+            (void)kill(child, SIGKILL);
+            (void)waitpid(child, &status, 0);
+            result = -ETIMEDOUT;
+        } else if (!WIFEXITED(status)) {
+            result = -EINTR;
+        } else {
+            result = WEXITSTATUS(status) == 0 ? 0 : -EIO;
+        }
+    }
+    (void)pthread_join(holder, NULL);
+    hl_host_process_fd_private_remove(descriptor);
+    close(descriptor);
+    return result;
+}
+#endif
