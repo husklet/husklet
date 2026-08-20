@@ -4,7 +4,7 @@
 //! A host protection change is a range operation on every supported host, so a run of adjacent
 //! pages carrying the same `PT_LOAD` flags is one call. Emitting it page by page cost a
 //! statically linked x86-64 guest ~181 `mprotect(2)` calls per `fork+exec` -- 36.6% of the 494
-//! host syscalls the engine spends per guest spawn, measured with `strace -f -c` on x86_64 Linux.
+//! host syscalls the engine spends per guest spawn, measured with `strace -f -c` on `x86_64` Linux.
 //!
 //! This gate is a call *count*, because the count is the defect: the resulting protections were
 //! always correct, and a test that only checked them would pass on the page-at-a-time form. The
