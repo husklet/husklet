@@ -151,16 +151,24 @@ impl Service {
         self.logs.after(id, cursor, limit).await
     }
 
+    /// Waits for one journal's output owner to close its generation, no later than `deadline`.
+    ///
+    /// The bound is an absolute instant rather than a per-journal budget on purpose. A capture
+    /// waits on the container and then on every sealed domain member, and a per-journal duration
+    /// makes the total scale with the member count: three wedged members at 30s each run 90s, past
+    /// the window the caller that reports the failure is itself willing to wait. One deadline
+    /// shared by every wait in a capture keeps the capture's own budget the thing that gives up
+    /// first, so the failure it raises is the attributed one.
     pub(super) async fn await_output_completion(
         &self,
         id: &JournalId,
         mut completion: tokio::sync::watch::Receiver<bool>,
-        timeout: std::time::Duration,
+        deadline: tokio::time::Instant,
     ) -> Result<()> {
         if *completion.borrow() {
             return Ok(());
         }
-        if tokio::time::timeout(timeout, completion.changed()).await.is_err() {
+        if tokio::time::timeout_at(deadline, completion.changed()).await.is_err() {
             if let Some(owner) = self.output_owners.lock().await.remove(id) {
                 owner.abort.abort();
             }

@@ -291,10 +291,13 @@ impl Service {
         container.checkpoint = Some(checkpoint.clone());
         self.containers.replace(&container).await?;
         let members = self.arm_domain_members(&container.id, &checkpoint).await?;
+        // One deadline governs the container's wait and every member's, so a capture cannot spend
+        // `timeout` per journal and outlive the budget its caller reports against.
+        let deadline = tokio::time::Instant::now() + timeout;
         let output = self
-            .await_output_completion(&JournalId::container(container.id.clone()), output_complete, timeout)
+            .await_output_completion(&JournalId::container(container.id.clone()), output_complete, deadline)
             .await
-            .and(self.await_domain_member_stop(members, timeout).await);
+            .and(self.await_domain_member_stop(members, deadline).await);
         if let Some(run) = self.live.lock().await.remove(&container.id) {
             let _ = run.health.send(true);
         }
@@ -355,18 +358,49 @@ impl Service {
     ///
     /// A member that does not stop inside `timeout` fails the capture, which rolls it back. It is
     /// never reported as captured while it is still running.
-    async fn await_domain_member_stop(&self, members: Vec<crate::ExecId>, timeout: Duration) -> Result<()> {
+    /// Members are waited on concurrently under one shared deadline. Sequential per-member waits
+    /// at a full budget each made the capture's total wait scale with the member count, so a
+    /// workspace with three wedged panes ran three times its own timeout and the GUI's fixed
+    /// close budget expired first -- surfacing a bare handover timeout instead of the attributed
+    /// journal below. Every member is still waited on and reported; only the arithmetic changed.
+    async fn await_domain_member_stop(
+        self: &Arc<Self>,
+        members: Vec<crate::ExecId>,
+        deadline: tokio::time::Instant,
+    ) -> Result<()> {
+        let mut waits = Vec::new();
         for member in members {
-            let journal = JournalId::exec(member.clone());
             let completion = self.exec_output_complete.lock().await.get(&member).cloned();
             let Some(completion) = completion else {
                 continue; // never started, or already reaped and retired
             };
-            self.await_output_completion(&journal, completion, timeout).await?;
-            self.exec_live.lock().await.remove(&member);
-            self.exec_output_complete.lock().await.remove(&member);
+            let service = Arc::clone(self);
+            waits.push(tokio::spawn(async move {
+                let journal = JournalId::exec(member.clone());
+                let result = service.await_output_completion(&journal, completion, deadline).await;
+                (member, result)
+            }));
         }
-        Ok(())
+        let mut failure = None;
+        for wait in waits {
+            let outcome = match wait.await {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    failure.get_or_insert(Error::Runtime(format!("domain member stop wait failed: {error}")));
+                    continue;
+                }
+            };
+            match outcome {
+                (member, Ok(())) => {
+                    self.exec_live.lock().await.remove(&member);
+                    self.exec_output_complete.lock().await.remove(&member);
+                }
+                (_, Err(error)) => {
+                    failure.get_or_insert(error);
+                }
+            }
+        }
+        failure.map_or(Ok(()), Err)
     }
 
     pub(crate) async fn checkpoint_all(self: &Arc<Self>, timeout: Duration) -> Result<()> {
