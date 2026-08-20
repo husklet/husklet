@@ -61,7 +61,11 @@ mod linux_host {
         // must truncate, which a single `movz` of 16 bits could not express.
         put_u32(&mut bytes, ENTRY_OFFSET, 0xd280_0000 | (status & 0xffff) << 5);
         put_u32(&mut bytes, ENTRY_OFFSET + 4, 0xf2a0_0000 | (status >> 16) << 5);
-        put_u32(&mut bytes, ENTRY_OFFSET + 8, 0xd280_0008 | u32::from(syscall_number) << 5);
+        put_u32(
+            &mut bytes,
+            ENTRY_OFFSET + 8,
+            0xd280_0008 | u32::from(syscall_number) << 5,
+        );
         put_u32(&mut bytes, ENTRY_OFFSET + 12, 0xd400_0001);
         bytes
     }
@@ -201,8 +205,7 @@ mod linux_host {
     #[test]
     fn an_x86_64_guest_exit_group_status_is_reported_as_the_kernel_truncates_it() {
         for (status, expected) in exit_group_status_rows() {
-            let path = std::env::temp_dir()
-                .join(format!("hl-exit-group-x86-{status}-{}", std::process::id()));
+            let path = std::env::temp_dir().join(format!("hl-exit-group-x86-{status}-{}", std::process::id()));
             fs::write(&path, static_x86_64(231, status)).unwrap();
             let output = Command::new(env!("CARGO_BIN_EXE_hl-x86_64"))
                 .arg(&path)
@@ -222,8 +225,7 @@ mod linux_host {
     #[test]
     fn an_aarch64_guest_exit_group_status_is_reported_as_the_kernel_truncates_it() {
         for (status, expected) in exit_group_status_rows() {
-            let path = std::env::temp_dir()
-                .join(format!("hl-exit-group-a64-{status}-{}", std::process::id()));
+            let path = std::env::temp_dir().join(format!("hl-exit-group-a64-{status}-{}", std::process::id()));
             fs::write(&path, static_aarch64(94, status)).unwrap();
             let output = Command::new(env!("CARGO_BIN_EXE_hl-aarch64"))
                 .arg(&path)
@@ -275,8 +277,16 @@ mod linux_host {
     #[test]
     fn the_same_guests_reach_their_exit_when_the_adopted_descriptor_accepts_the_write() {
         for (binary, image, name) in [
-            (env!("CARGO_BIN_EXE_hl-x86_64"), static_x86_64_write_then_exit(7), "hl-sigpipe-ok-x86"),
-            (env!("CARGO_BIN_EXE_hl-aarch64"), static_aarch64_write_then_exit(7), "hl-sigpipe-ok-a64"),
+            (
+                env!("CARGO_BIN_EXE_hl-x86_64"),
+                static_x86_64_write_then_exit(7),
+                "hl-sigpipe-ok-x86",
+            ),
+            (
+                env!("CARGO_BIN_EXE_hl-aarch64"),
+                static_aarch64_write_then_exit(7),
+                "hl-sigpipe-ok-a64",
+            ),
         ] {
             let path = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
             fs::write(&path, image).unwrap();
