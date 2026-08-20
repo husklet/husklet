@@ -1113,25 +1113,50 @@ mod rootfs_ownership_tests {
         }
     }
 
-    /// `/` is owned by host root on every host this runs on and the engine is not root, so it is the
-    /// portable stand-in for a rootfs unpacked under `sudo` -- and it needs no privilege to set up.
+    /// `/` is owned by host root on every host this runs on, so for an engine that is not root it is
+    /// the portable stand-in for a rootfs unpacked under `sudo` -- and it needs no privilege to set
+    /// up. It says nothing when the suite itself runs as root, which is the case the test below
+    /// covers separately.
     fn host_root_owned() -> &'static str {
         "/"
     }
 
+    /// `refuse_unownable_root` has two acceptance branches and one refusal, and which of them a run
+    /// exercises is decided by the identity the suite happens to have. The root arm used to be a
+    /// bare `return;`, so on a host that runs the suite as uid 0 -- as this repository's Linux box
+    /// does -- the case asserted nothing and reported `ok`, and `engine_uid == 0` had no coverage on
+    /// any host. Assert the branch this identity actually reaches instead of leaving the run empty.
+    ///
+    /// `/` cannot express the root arm, because root owns it and the `rootfs_uid == engine_uid` arm
+    /// would answer first. The fixture therefore hands a directory to another uid, so only
+    /// `engine_uid == 0` can account for the acceptance.
     #[test]
-    fn a_writable_root_owned_by_another_host_user_refuses_the_launch() {
+    fn a_writable_root_owned_by_another_host_user_refuses_a_launch_that_is_not_root() {
+        use std::os::unix::fs::MetadataExt as _;
         // SAFETY: `geteuid` takes no arguments and cannot fail.
         let engine_uid = unsafe { libc::geteuid() };
-        if engine_uid == 0 {
+        if engine_uid != 0 {
+            assert_eq!(
+                refuse_unownable_root(&plan(Some(host_root_owned()), &[])),
+                Err(EngineError::RootfsNotOwnedByEngine {
+                    rootfs_uid: 0,
+                    engine_uid,
+                })
+            );
             return;
         }
+        const FOREIGN_UID: u32 = 65_534;
+        let directory = tempfile::tempdir().unwrap();
+        std::os::unix::fs::chown(directory.path(), Some(FOREIGN_UID), None).unwrap();
         assert_eq!(
-            refuse_unownable_root(&plan(Some(host_root_owned()), &[])),
-            Err(EngineError::RootfsNotOwnedByEngine {
-                rootfs_uid: 0,
-                engine_uid,
-            })
+            std::fs::metadata(directory.path()).unwrap().uid(),
+            FOREIGN_UID,
+            "the fixture root must belong to another uid or the acceptance proves nothing"
+        );
+        assert_eq!(
+            refuse_unownable_root(&plan(Some(directory.path().to_str().unwrap()), &[])),
+            Ok(()),
+            "host root writes through every owner, so no ownership refusal may fire for uid 0"
         );
     }
 
