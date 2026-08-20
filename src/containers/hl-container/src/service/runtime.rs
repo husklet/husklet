@@ -107,6 +107,14 @@ pub(crate) trait Running: Send + Sync {
     fn id(&self) -> u64;
     fn domain(&self) -> hl_engine::Domain;
     fn checkpointable(&self) -> bool;
+    /// The container-namespace pid of the guest process this launch is running, once the guest has
+    /// published one.
+    ///
+    /// A whole-image capture names every sealed member by exactly this number and a restore re-forks
+    /// it under the same one, so it is the only identity of a launched guest that survives the
+    /// capture. It is `None` before the guest has entered its container identity and again once the
+    /// process has been reaped, so a caller that needs it durably reads it while the guest runs.
+    fn guest_pid(&self) -> Option<std::num::NonZeroI32>;
     async fn wait(self: Arc<Self>) -> Result<ExitStatus>;
     async fn signal(&self, signal: Signal) -> Result<()>;
     async fn pause(&self) -> Result<()>;

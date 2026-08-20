@@ -149,6 +149,15 @@ pub struct Exec {
     /// with the most recent checkpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachment_cursor: Option<u64>,
+    /// The container-namespace pid this session's process was sealed under, recorded while it was
+    /// still running and before the freeze that captured it.
+    ///
+    /// A restore re-forks each captured member under exactly the guest pid its image names it by, so
+    /// this is the one identity of a sealed member that survives a whole-image capture and the only
+    /// thing a host can key a restored member on. Absent for a session that was never sealed, and for
+    /// one whose guest had not published a container identity when its container was captured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_pid: Option<std::num::NonZeroI32>,
 }
 
 impl Exec {
@@ -161,6 +170,7 @@ impl Exec {
             created_at_ms: now_ms(),
             checkpoint: None,
             attachment_cursor: None,
+            guest_pid: None,
         }
     }
 

@@ -312,6 +312,10 @@ impl GuestMachine for ProductionMachine {
             .map(|checkpoint| crate::composition::CheckpointChannel(Arc::clone(&checkpoint.transport)))
     }
 
+    fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
+        self.current().ok().and_then(|engine| engine.guest_pid())
+    }
+
     fn checkpoint_supported(&self) -> Result<(), EngineError> {
         if let Some(refusal) = checkpoint_sandbox_refusal(&self.plan.options) {
             return Err(refusal);

@@ -189,6 +189,9 @@ struct FakeProcess {
     delayed_log: std::sync::Mutex<Option<DelayedProcessLog>>,
     domain: hl_engine::Domain,
     domain_reads: Arc<AtomicU64>,
+    /// Stands in for the guest identity a real launch publishes. Derived from the launch identifier
+    /// so every fake launch has a distinct, predictable one.
+    guest_pid: Option<std::num::NonZeroI32>,
 }
 
 #[async_trait]
@@ -199,6 +202,9 @@ impl Running for FakeProcess {
     fn domain(&self) -> hl_engine::Domain {
         self.domain_reads.fetch_add(1, Ordering::SeqCst);
         self.domain
+    }
+    fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
+        self.guest_pid
     }
     fn checkpointable(&self) -> bool {
         self.checkpoint_armed
@@ -297,13 +303,10 @@ impl Runtime for FakeRuntime {
         self.isolations.lock().unwrap().push(launch.isolation);
         self.publishes.lock().unwrap().push(launch.publish);
         self.terminals.lock().unwrap().push(launch.terminal);
-        self.checkpoints
-            .lock()
-            .unwrap()
-            .push(match launch.checkpoint {
-                Some(crate::service::CheckpointRole::Coordinator(ref checkpoint)) => Some(checkpoint.restore),
-                Some(crate::service::CheckpointRole::DomainMember) | None => None,
-            });
+        self.checkpoints.lock().unwrap().push(match launch.checkpoint {
+            Some(crate::service::CheckpointRole::Coordinator(ref checkpoint)) => Some(checkpoint.restore),
+            Some(crate::service::CheckpointRole::DomainMember) | None => None,
+        });
         self.domains.lock().unwrap().push((domain, launch.domain_owner));
         self.mounts.lock().unwrap().push(
             launch
@@ -380,12 +383,12 @@ impl Runtime for FakeRuntime {
                 }
             });
         }
-        self.checkpoint_roles
-            .lock()
-            .unwrap()
-            .push(launch.checkpoint.as_ref().map(|role| {
-                matches!(role, crate::service::CheckpointRole::Coordinator(_))
-            }));
+        self.checkpoint_roles.lock().unwrap().push(
+            launch
+                .checkpoint
+                .as_ref()
+                .map(|role| matches!(role, crate::service::CheckpointRole::Coordinator(_))),
+        );
         Ok(Arc::new(FakeProcess {
             id,
             delay,
@@ -408,6 +411,7 @@ impl Runtime for FakeRuntime {
             delayed_log: std::sync::Mutex::new(delayed_log),
             domain,
             domain_reads: Arc::clone(&self.domain_reads),
+            guest_pid: i32::try_from(id).ok().and_then(std::num::NonZeroI32::new),
         }))
     }
 }

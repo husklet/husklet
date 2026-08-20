@@ -343,7 +343,11 @@ impl Service {
     ///   per-member handle exists to install in `exec_live`;
     /// * membership is sealed on the capture-scoped `REGISTER_READY` channel, which carries a
     ///   host process identity and an executor inventory and no exec identity at all -- and it is
-    ///   admitted only while a capture is `Active`, so a restored tree registers nothing;
+    ///   admitted only while a capture is `Active`, so a restored tree registers nothing. The
+    ///   member's own identity is no longer missing: [`Exec::guest_pid`](crate::Exec::guest_pid)
+    ///   records, before the freeze, the container-namespace pid the image names the member by and
+    ///   the restore re-forks it under. What is still missing is a way to *reach* that pid: the
+    ///   restored container's engine exposes no per-guest-process wait, signal, or query;
     /// * a member's launch-time stdio is not recoverable either. `checkpoint/image.c` records
     ///   guest fds 0..2 as `CKF_TTY` precisely so a restored engine rebinds them to *its own*
     ///   stdin/stdout/stderr bridge -- which, after a whole-image restore, is the container's

@@ -266,6 +266,13 @@ pub(super) unsafe fn hl_c_backend_exit(backend: *mut Backend, result: *mut Engin
         .map_or(3, |function| unsafe { function(backend, result) })
 }
 
+pub(super) unsafe fn hl_c_backend_guest_pid(backend: *const Backend) -> c_int {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.guest_pid)
+        .map_or(0, |function| unsafe { function(backend) })
+}
+
 pub(super) unsafe fn hl_c_backend_destroy(backend: *mut Backend) {
     if let Some(function) = crate::loader::api().ok().and_then(|api| api.destroy) {
         unsafe { function(backend) };

@@ -559,6 +559,44 @@ async fn execution_wait_reports_runtime_failure_instead_of_fabricating_an_exit_s
 }
 
 #[tokio::test]
+async fn sealing_a_domain_member_records_the_guest_pid_its_image_names_it_by() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("member-identity-parent")).await.unwrap();
+    containers.start("member-identity-parent").await.unwrap();
+    let exec = containers
+        .executions()
+        .create("member-identity-parent", ExecSpec::new(Process::new("/bin/psql")))
+        .await
+        .unwrap();
+    let session = containers.executions().start(&exec.id).await.unwrap();
+    drop(session);
+    let running = containers.executions().inspect(&exec.id).await.unwrap();
+    let ExecState::Running { process_id, .. } = running.state else {
+        panic!("exec did not reach a running state: {:?}", running.state);
+    };
+    assert_eq!(
+        running.guest_pid, None,
+        "an unsealed member carries no captured identity"
+    );
+
+    containers
+        .checkpoint("member-identity-parent", Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let sealed = containers.executions().inspect(&exec.id).await.unwrap();
+    assert!(sealed.checkpoint.is_some(), "capture did not seal the member");
+    assert_eq!(
+        sealed.guest_pid.map(std::num::NonZeroI32::get),
+        Some(i32::try_from(process_id).unwrap()),
+        "sealing a member did not record the guest identity its restore re-forks it under"
+    );
+}
+
+#[tokio::test]
 async fn restoring_a_sealed_member_refuses_by_name_instead_of_relaunching_its_command() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_secs(1);

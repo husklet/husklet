@@ -257,6 +257,13 @@ pub trait GuestMachine: Send + Sync {
     fn checkpoint_supported(&self) -> Result<(), EngineError> {
         Err(EngineError::Unsupported)
     }
+    /// The container-namespace pid of the guest process this machine launched, once it has one.
+    ///
+    /// It is the identity a checkpoint image names this process by, so it is what a host may hold
+    /// across a capture: a restore re-forks the member under exactly this number.
+    fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
+        None
+    }
     /// The domain freeze channel this machine owns, if it is the coordinator.
     #[cfg(unix)]
     fn checkpoint_channel(&self) -> Option<CheckpointChannel> {
@@ -335,6 +342,10 @@ impl<M: GuestMachine> MachineLauncher<M> {
         self.machine.checkpoint_supported()
     }
 
+    fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
+        self.machine.guest_pid()
+    }
+
     #[cfg(unix)]
     fn checkpoint_channel(&self) -> Option<CheckpointChannel> {
         self.machine.checkpoint_channel()
@@ -398,6 +409,12 @@ impl<M: GuestMachine + 'static, W: Workspace> EngineBackend<M, W> {
 
     pub fn checkpoint_supported(&self) -> Result<(), EngineError> {
         self.engine.launcher().checkpoint_supported()
+    }
+
+    /// The container-namespace pid of the launched guest process, once it has one.
+    #[must_use]
+    pub fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
+        self.engine.launcher().guest_pid()
     }
 
     pub fn capture_checkpoint(&self) -> Result<(), EngineError> {

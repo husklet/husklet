@@ -44,6 +44,7 @@ typedef struct hl_c_bridge_api {
     int32_t (*checkpoint_broker_accept_authenticated)(int32_t broker, int32_t timeout_ms,
                                                        uint64_t *host_pid, uint64_t *host_birth,
                                                        uint64_t *host_generation, int32_t *process_handle);
+    int32_t (*guest_pid)(const hl_c_backend *backend);
 } hl_c_bridge_api;
 
 HL_EXTERN_C_BEGIN
@@ -98,6 +99,11 @@ HL_API int32_t hl_c_backend_exit(hl_c_backend *backend, hl_engine_exit *result);
 HL_API uint32_t hl_c_backend_exit_kind(const hl_c_backend *backend);
 HL_API int32_t hl_c_backend_exit_status(const hl_c_backend *backend);
 HL_API uint64_t hl_c_backend_exit_detail(const hl_c_backend *backend);
+/* The container-namespace pid of the guest process this backend launched, or 0 before the launched
+ * process has published one and after it has been reaped. A checkpoint image names each captured
+ * member by exactly this number and a restore re-forks it under the same one, so it is the identity a
+ * host may hold across a capture. */
+HL_API int32_t hl_c_backend_guest_pid(const hl_c_backend *backend);
 HL_API uint64_t hl_c_backend_translation_count(const hl_c_backend *backend);
 HL_API void hl_c_backend_destroy(hl_c_backend *backend);
 
