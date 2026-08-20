@@ -688,10 +688,32 @@
                 pause_stops_guest_progress_until_unpause \
                 checkpoint_restore_preserves_filesystem_and_container_control \
                 checkpoint_restore_restarts_interrupted_sleep_syscalls \
-                health_probes_reach_healthy_and_unhealthy_states
+                health_probes_reach_healthy_and_unhealthy_states \
+                a_descriptor_duplicated_with_fcntl_is_visible_in_proc_self_fd
               do
                 run_ignored hl-container lifecycle_contract "$test_name"
               done
+
+              # THIS ENUMERATION IS BY NAME, SO IT DRIFTS SILENTLY. A test added to
+              # `lifecycle_contract.rs` is `#[ignore]`d -- it requires HL_ALPINE_ARCHIVE
+              # -- so it runs in no ordinary `cargo test`, and it runs here only if
+              # somebody remembers to type its name above. It exists, it passes, and it
+              # is invisible to every runner: the same shape as a gate nobody invokes.
+              # `a_descriptor_duplicated_with_fcntl_is_visible_in_proc_self_fd` reached
+              # `main` in exactly that state and was added on 2026-08-20.
+              #
+              # So the count is asserted rather than trusted. Every test in that file is
+              # `#[ignore]`d and no helper is, which makes the marker an exact census.
+              # Add a test and this fails, naming the fix, instead of quietly covering
+              # one fewer thing than it claims.
+              lifecycle_source=src/containers/hl-container/tests/lifecycle_contract.rs
+              declared="$(grep -c '#\[ignore' "$lifecycle_source")"
+              if [ "$declared" -ne 7 ]; then
+                printf '%s\n' \
+                  "lifecycle_contract.rs declares $declared ignored tests; run_alpine_gate enumerates 7 by name." \
+                  "Add the new test to the list above, then update this count. Until then it runs on no host." >&2
+                exit 1
+              fi
             }
 
             run_alpine_gate arm64 ${archives.arm64}
