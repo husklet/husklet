@@ -657,18 +657,9 @@ impl ExecJourney {
 /// Drives open -> exec -> Continue later -> reopen, N times, against a terminal-backed pane.
 #[tokio::test]
 async fn continue_later_keeps_a_terminal_backed_pane_execution_across_repeated_cycles() {
-    // Opt-in, because it currently reproduces a live product defect owned elsewhere: a pane's
-    // terminal-backed execution does not survive the capture, and the reopened workspace answers
-    // its own 404 by creating a second shell. Run it with
-    //   HL_PRODUCT_EXEC_JOURNEY=1 cargo test -p husklet --lib --features runtime -- --exact \
-    //     runtime::domain::product_checkpoint_test::continue_later_keeps_a_terminal_backed_pane_execution_across_repeated_cycles --nocapture
-    if std::env::var_os("HL_PRODUCT_EXEC_JOURNEY").is_none() {
-        eprintln!(
-            "product-checkpoint exec journey skipped: set HL_PRODUCT_EXEC_JOURNEY=1 to drive \
-             open -> exec -> Continue later -> reopen"
-        );
-        return;
-    }
+    // Unconditional. This was opt-in behind HL_PRODUCT_EXEC_JOURNEY while a pane's terminal-backed
+    // execution did not survive the capture; the transport defect that lost it is fixed and all three
+    // cycles now come back Reattached, so the journey is a gate rather than a reproduction.
     if std::env::var_os("HL_ALPINE_ARCHIVE").is_none() {
         assert!(
             std::env::var_os("HL_PRODUCT_CHECKPOINT_REQUIRED").is_none(),
