@@ -311,7 +311,13 @@ static hl_host_result hl_macos_file_close(void *context, hl_host_handle handle) 
     file->directory_shared = NULL;
     pthread_mutex_unlock(&host->lock);
     int saved_error = close(descriptor) != 0 ? errno : 0;
-    if (directory != NULL && closedir(directory) != 0 && saved_error == 0) saved_error = errno;
+    if (directory != NULL) {
+        /* The stream's descriptor is engine-private (adopted in read_directory); retire its ledger row
+         * BEFORE closedir() frees the number, or the row outlives the descriptor and a later adopt that
+         * lands on the same number inherits a stale entry. */
+        hl_host_process_fd_private_remove(dirfd(directory));
+        if (closedir(directory) != 0 && saved_error == 0) saved_error = errno;
+    }
     if (append_descriptor >= 0 && close(append_descriptor) != 0 && saved_error == 0) saved_error = errno;
     hl_macos_stream_release(stream);
     hl_macos_directory_shared_release(directory_shared);

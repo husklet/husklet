@@ -299,7 +299,10 @@ void hl_host_macos_destroy(hl_host_macos *host) {
         hl_macos_file *file_entry = &host->files[index];
         if (!file_entry->active) continue;
         close(file_entry->descriptor);
-        if (file_entry->directory != NULL) closedir(file_entry->directory);
+        if (file_entry->directory != NULL) {
+            hl_host_process_fd_private_remove(dirfd(file_entry->directory)); // adopted in read_directory
+            closedir(file_entry->directory);
+        }
         if (file_entry->append_descriptor >= 0) close(file_entry->append_descriptor);
         hl_macos_stream_release(file_entry->stream);
         hl_macos_directory_shared_release(file_entry->directory_shared);
