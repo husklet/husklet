@@ -21,6 +21,69 @@ const REQUEST_SIGNAL: u32 = 3;
 #[cfg(unix)]
 const REQUEST_CHECKPOINT: u32 = 4;
 
+/// The writable root a plan will materialize guest state into, if it has one.
+///
+/// An overlay upper layer, when the launch configures one, is where every guest write lands and the
+/// lower layers are read-only by construction -- so a root-owned lower layer is legitimate and must
+/// not be refused. Without an overlay the rootfs itself is the writable root, unless the launch
+/// asked for `HL_ROOTFS_RO`, in which case nothing is written and any owner works.
+#[cfg(unix)]
+fn writable_root(plan: &crate::launcher::plan::RuntimePlan) -> Option<&[u8]> {
+    if let Some(upper) = plan.options.get_bytes("HL_OVERLAY_UPPER") {
+        return Some(upper);
+    }
+    if plan.options.get_bytes("HL_ROOTFS_RO").is_some() {
+        return None;
+    }
+    plan.rootfs.as_deref()
+}
+
+/// Refuses a launch whose writable root belongs to a host user the engine cannot act as.
+///
+/// The engine runs as an unprivileged host uid and never acquires host privilege: guest ownership
+/// lives in its own owner overlay (`container/owner.h`, `HL_FILE_OWNERS`), which is why a guest can
+/// report `id -u` = 0 while every write to a host-root-owned tree returns `EACCES`. Granting the
+/// access is not merely refused by the engine, it is unimplementable -- `chmod(2)` refuses for a
+/// non-owner without `CAP_FOWNER` -- so the contract has to be stated at launch instead.
+///
+/// Only the root directory is examined. Walking the tree would be unbounded work at launch, and a
+/// root-owned subtree below a writable root is a legitimate shape: shared read-only layers and host
+/// bind mounts both produce it, and the guest can still do everything the host user could. A root
+/// the engine does not own is different in kind -- nothing in the workspace is writable, so the
+/// failure is total, and refusing is kinder than letting a developer find it through a failing
+/// `git checkout`.
+///
+/// A path that cannot be stat'd is not refused here: the existing launch path already owns "the
+/// rootfs is not there", and an ownership cause for a missing directory is a worse diagnostic than
+/// the one it would replace. Running as host root refuses nothing, because then every owner is
+/// writable.
+#[cfg(unix)]
+fn refuse_unownable_root(plan: &crate::launcher::plan::RuntimePlan) -> Result<(), EngineError> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+    let Some(root) = writable_root(plan) else { return Ok(()) };
+    let path = std::path::Path::new(std::ffi::OsStr::from_bytes(root));
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return Ok(());
+    };
+    // SAFETY: `geteuid` takes no arguments, reads no caller memory, and is documented never to fail.
+    let engine_uid = unsafe { libc::geteuid() };
+    let rootfs_uid = metadata.uid();
+    if engine_uid == 0 || rootfs_uid == engine_uid {
+        return Ok(());
+    }
+    hl_log::hl_error!(
+        hl_log::tag::EXEC,
+        "refusing launch: the writable root {} is owned by host uid {rootfs_uid}, but the engine runs \
+         as host uid {engine_uid} and never acquires host privilege, so no guest write can succeed \
+         however the guest reports its own id. Re-materialize the rootfs as uid {engine_uid} -- unpack \
+         it without sudo, or `chown -R {engine_uid} {}` -- or launch it read-only with HL_ROOTFS_RO.",
+        path.display(),
+        path.display()
+    );
+    Err(EngineError::RootfsNotOwnedByEngine { rootfs_uid, engine_uid })
+}
+
 pub(crate) struct ProductionMachine {
     isa: crate::activation::GuestIsa,
     plan: crate::launcher::plan::RuntimePlan,
@@ -116,7 +179,14 @@ impl ProductionMachine {
         encoded
     }
 
+    #[cfg(unix)]
+    fn refuse_unownable_root(&self) -> Result<(), EngineError> {
+        refuse_unownable_root(&self.plan)
+    }
+
     fn create(&self) -> Result<hl_native::Engine, EngineError> {
+        #[cfg(unix)]
+        self.refuse_unownable_root()?;
         let rootfs = self
             .plan
             .rootfs
@@ -1018,5 +1088,96 @@ mod sandbox_refusal_tests {
     #[test]
     fn a_launch_without_the_sentry_is_not_refused_by_policy() {
         assert_eq!(checkpoint_sandbox_refusal(&crate::options::Options::default()), None);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod rootfs_ownership_tests {
+    use super::{refuse_unownable_root, writable_root};
+    use crate::engine::EngineError;
+    use crate::launcher::plan::RuntimePlan;
+    use crate::options::Options;
+
+    fn plan(rootfs: Option<&str>, options: &[(&str, &str)]) -> RuntimePlan {
+        let mut set = Options::default();
+        for (name, value) in options {
+            set.set(name, value, true).unwrap();
+        }
+        RuntimePlan {
+            rootfs: rootfs.map(|path| path.as_bytes().to_vec()),
+            executable_host: None,
+            arguments: Vec::new(),
+            environment: Vec::new(),
+            result_path: None,
+            options: set,
+        }
+    }
+
+    /// `/` is owned by host root on every host this runs on and the engine is not root, so it is the
+    /// portable stand-in for a rootfs unpacked under `sudo` -- and it needs no privilege to set up.
+    fn host_root_owned() -> &'static str {
+        "/"
+    }
+
+    #[test]
+    fn a_writable_root_owned_by_another_host_user_refuses_the_launch() {
+        // SAFETY: `geteuid` takes no arguments and cannot fail.
+        let engine_uid = unsafe { libc::geteuid() };
+        if engine_uid == 0 {
+            return;
+        }
+        assert_eq!(
+            refuse_unownable_root(&plan(Some(host_root_owned()), &[])),
+            Err(EngineError::RootfsNotOwnedByEngine {
+                rootfs_uid: 0,
+                engine_uid,
+            })
+        );
+    }
+
+    /// The kinder-to-refuse judgement stops exactly where the workspace stops being broken. A
+    /// read-only launch writes nothing, so a root-owned tree serves it perfectly well and refusing
+    /// it would take away a shape that works.
+    #[test]
+    fn a_read_only_launch_over_the_same_root_is_still_admitted() {
+        assert_eq!(
+            writable_root(&plan(Some(host_root_owned()), &[("HL_ROOTFS_RO", "1")])),
+            None
+        );
+        assert_eq!(
+            refuse_unownable_root(&plan(Some(host_root_owned()), &[("HL_ROOTFS_RO", "1")])),
+            Ok(())
+        );
+    }
+
+    /// With an overlay the lower layers are read-only by construction and every write lands in the
+    /// upper, so the upper is the only ownership that decides whether the workspace works.
+    #[test]
+    fn an_overlay_is_judged_by_its_upper_layer_not_by_a_root_owned_lower() {
+        let directory = tempfile::tempdir().unwrap();
+        let upper = directory.path().to_str().unwrap();
+        let over_root = plan(Some(host_root_owned()), &[("HL_OVERLAY_UPPER", upper)]);
+        assert_eq!(writable_root(&over_root), Some(upper.as_bytes()));
+        assert_eq!(refuse_unownable_root(&over_root), Ok(()));
+    }
+
+    #[test]
+    fn a_root_the_engine_owns_and_a_launch_without_one_are_both_admitted() {
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(
+            refuse_unownable_root(&plan(Some(directory.path().to_str().unwrap()), &[])),
+            Ok(())
+        );
+        assert_eq!(refuse_unownable_root(&plan(None, &[])), Ok(()));
+    }
+
+    /// A rootfs that is not there is the existing launch path's error to report, and an ownership
+    /// cause for a missing directory would be a worse diagnostic than the one it replaced.
+    #[test]
+    fn a_missing_root_is_left_to_the_launch_path_that_already_owns_it() {
+        assert_eq!(
+            refuse_unownable_root(&plan(Some("/var/tmp/husklet-no-such-rootfs-6f21"), &[])),
+            Ok(())
+        );
     }
 }

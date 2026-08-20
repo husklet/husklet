@@ -13,7 +13,19 @@ typedef struct hl_option_definition {
     uint8_t shape;
 } hl_option_definition;
 
-enum hl_option_ownership { HL_OPTION_LAUNCH_INPUT = 1, HL_OPTION_INTERNAL_STATE = 2, HL_OPTION_DEBUG_ONLY = 3 };
+/* HL_OPTION_TEST_INJECTION is a distinct ownership class, not a naming convention: an injection is
+ * scoped to the one launch that asked for it, so hl_options_clone drops it instead of copying it.
+ * That is what keeps an armed failure out of every derived option set -- a nested engine built with
+ * no explicit options (hl_options_clone_current), and the guest environment an exec carries forward
+ * (hl_exec_environment_prepare) -- both of which otherwise inherit the parent's whole store. The
+ * launch that arms one hands it in through hl_options_init_records and the engine borrows that store
+ * directly, so intentional arming does not pass through a clone and is unaffected. */
+enum hl_option_ownership {
+    HL_OPTION_LAUNCH_INPUT = 1,
+    HL_OPTION_INTERNAL_STATE = 2,
+    HL_OPTION_DEBUG_ONLY = 3,
+    HL_OPTION_TEST_INJECTION = 4
+};
 
 enum hl_option_shape {
     HL_OPTION_TEXT = 1,
@@ -26,6 +38,7 @@ enum hl_option_shape {
 #define HL_LAUNCH_OPTION(name, purpose, shape) {name, purpose, HL_OPTION_LAUNCH_INPUT, shape}
 #define HL_INTERNAL_OPTION(name, purpose, shape) {name, purpose, HL_OPTION_INTERNAL_STATE, shape}
 #define HL_DEBUG_OPTION(name, purpose, shape) {name, purpose, HL_OPTION_DEBUG_ONLY, shape}
+#define HL_INJECTION_OPTION(name, purpose, shape) {name, purpose, HL_OPTION_TEST_INJECTION, shape}
 
 enum { HL_OPTION_STORE_LIMIT = 64 * 1024 * 1024 };
 
@@ -41,22 +54,24 @@ static const hl_option_definition hl_option_definitions[] = {
     HL_INTERNAL_OPTION("HL_CHECKPOINT_PHASE_ISA", "checkpoint phase ledger guest ISA", HL_OPTION_TEXT),
     HL_INTERNAL_OPTION("HL_CHECKPOINT_PHASE_GENERATION", "checkpoint restore phase ledger generation",
                        HL_OPTION_INTEGER),
-    HL_INTERNAL_OPTION("HL_CKPT_TEST_PEER_EXIT_BEFORE_JOIN",
+    HL_INJECTION_OPTION("HL_CKPT_TEST_PEER_EXIT_BEFORE_JOIN",
                        "test-only capture peer that exits at its safepoint before proving membership",
                        HL_OPTION_FLAG),
-    HL_INTERNAL_OPTION("HL_CKPT_TEST_PEER_EXIT_AFTER_JOIN",
+    HL_INJECTION_OPTION("HL_CKPT_TEST_PEER_EXIT_AFTER_JOIN",
                        "test-only capture peer that exits after proving membership and before committing",
                        HL_OPTION_FLAG),
-    HL_INTERNAL_OPTION("HL_CKPT_TEST_FAIL_AFTER_FORK", "test-only restore failure after rebuilding descendants",
+    HL_INJECTION_OPTION("HL_CKPT_TEST_FAIL_AFTER_FORK", "test-only restore failure after rebuilding descendants",
                        HL_OPTION_FLAG),
-    HL_INTERNAL_OPTION("HL_CKPT_TEST_FAIL_TRIGGER_REATTACH",
+    HL_INJECTION_OPTION("HL_CKPT_TEST_FAIL_TRIGGER_REATTACH",
                        "test-only restored checkpoint trigger reattachment failure", HL_OPTION_FLAG),
-    HL_INTERNAL_OPTION("HL_CKPT_TEST_FAIL_TTY_MASK", "test-only terminal-claim mask failure", HL_OPTION_FLAG),
-    HL_INTERNAL_OPTION("HL_CKPT_TEST_PEER_FORGOTTEN_AFTER_KICK",
+    HL_INJECTION_OPTION("HL_CKPT_TEST_FAIL_TTY_MASK", "test-only terminal-claim mask failure", HL_OPTION_FLAG),
+    HL_INJECTION_OPTION("HL_CKPT_TEST_FAIL_PIDMAP_AT",
+                        "test-only restore identity-publication failure at this guest pid", HL_OPTION_INTEGER),
+    HL_INJECTION_OPTION("HL_CKPT_TEST_PEER_FORGOTTEN_AFTER_KICK",
                        "test-only capture peer that is kicked and then dropped from the coordinator's enumeration, "
                        "so only the broker knows it is a member",
                        HL_OPTION_FLAG),
-    HL_INTERNAL_OPTION("HL_CKPT_TEST_PEER_HIDDEN_FROM_ENUMERATION",
+    HL_INJECTION_OPTION("HL_CKPT_TEST_PEER_HIDDEN_FROM_ENUMERATION",
                        "test-only capture peer withheld from the coordinator's first enumeration, exactly as a "
                        "process forked immediately after the scan is",
                        HL_OPTION_FLAG),
@@ -178,6 +193,8 @@ int hl_options_clone(hl_options *destination, const hl_options *source) {
     for (index = 0; index < source->value_count; ++index) {
         size_t size = source->value_sizes[index];
         if (size == 0) continue;
+        /* An injection belongs to the run that armed it and to nothing derived from that run. */
+        if (hl_option_definitions[index].ownership == HL_OPTION_TEST_INJECTION) continue;
         if (size > HL_OPTION_STORE_LIMIT || source->values[index] == NULL || source->values[index][size - 1] != 0 ||
             source->store_size > HL_OPTION_STORE_LIMIT || destination->store_size > HL_OPTION_STORE_LIMIT - size) {
             hl_options_destroy(destination);

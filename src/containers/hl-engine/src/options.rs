@@ -150,6 +150,11 @@ const DEFINITIONS: &[Definition] = &[
         "test-only terminal-claim mask failure",
         Flag
     ),
+    internal!(
+        "HL_CKPT_TEST_FAIL_PIDMAP_AT",
+        "test-only restore identity-publication failure at this guest pid",
+        Integer
+    ),
     launch!("HL_ROOTFS_RO", "mount the guest root filesystem read-only", Flag),
     launch!("HL_SANDBOX", "apply host confinement to the untrusted worker", Flag),
     launch!("HL_SECCOMP_BASELINE", "guest-visible launch seccomp baseline", Text),
@@ -352,6 +357,103 @@ mod tests {
             rust_only.is_empty() && c_only.is_empty(),
             "option registries drifted; a Rust-only name makes the worker refuse to start.\n             registered only in hl-engine/src/options.rs: {rust_only:?}\n             registered only in native/engine/options.c: {c_only:?}"
         );
+    }
+
+    /// The native tree, for scanning what the engine actually *reads*.
+    fn native_sources() -> Vec<String> {
+        fn walk(directory: &std::path::Path, sources: &mut Vec<String>) {
+            for entry in std::fs::read_dir(directory).expect("native directory").flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, sources);
+                } else if path.extension().is_some_and(|kind| kind == "c" || kind == "h") {
+                    sources.push(std::fs::read_to_string(&path).unwrap_or_default());
+                }
+            }
+        }
+        let native = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runtime/hl-native/src/native");
+        let mut sources = Vec::new();
+        walk(&native, &mut sources);
+        assert!(sources.len() > 50, "scanned only {} native sources", sources.len());
+        sources
+    }
+
+    /// Every injection name the engine reads, taken from the engine rather than from a list a lane
+    /// has to remember to update.
+    fn injection_names_read_by_the_engine() -> Vec<String> {
+        let mut names = Vec::new();
+        for source in native_sources() {
+            for fragment in source.split("hl_option_get(\"").skip(1) {
+                let Some((name, _)) = fragment.split_once('"') else {
+                    continue;
+                };
+                if name.starts_with("HL_CKPT_TEST_") && !names.iter().any(|held| held == name) {
+                    names.push(name.to_owned());
+                }
+            }
+        }
+        names.sort_unstable();
+        names
+    }
+
+    /// An unregistered name is not a typo, it is an injection that can never fire.
+    ///
+    /// `hl_option_get` resolves a name against the registry and answers NULL for anything it does
+    /// not define, so a read of an unregistered option is dead code that silently reports "not
+    /// armed" forever -- and a test written against it passes without ever injecting. Three
+    /// injections had already drifted the other way (registered in Rust only, so the worker refused
+    /// to start); `HL_CKPT_TEST_FAIL_PIDMAP_AT` had drifted this way, read by
+    /// `ckpt_restore_identity_hydrate` and defined nowhere.
+    #[test]
+    fn every_injection_the_engine_reads_is_registered() {
+        let read = injection_names_read_by_the_engine();
+        assert!(read.len() >= 6, "found only {read:?}");
+        let unregistered = read
+            .iter()
+            .filter(|name| !DEFINITIONS.iter().any(|definition| definition.name == name.as_str()))
+            .collect::<Vec<_>>();
+        assert!(
+            unregistered.is_empty(),
+            "read by the engine but registered nowhere, so the injection can never fire: {unregistered:?}"
+        );
+    }
+
+    /// The scoping guarantee, pinned where it is expressed.
+    ///
+    /// `HL_OPTION_TEST_INJECTION` is what makes `hl_options_clone` drop an armed injection, so an
+    /// injection cannot be inherited by a nested engine built with no explicit options, nor carried
+    /// across an exec by the guest environment update. Classifying a new injection as
+    /// `HL_INTERNAL_OPTION` would silently restore that inheritance, so the class is asserted here
+    /// against the same authoritative C source the shape cross-check reads.
+    #[test]
+    fn every_injection_is_classified_as_one_in_the_c_registry() {
+        let body = C_REGISTRY
+            .split_once("hl_option_definitions[] = {")
+            .expect("C registry table")
+            .1
+            .split_once("\n};")
+            .expect("C registry table end")
+            .0;
+        for name in injection_names_read_by_the_engine() {
+            let entry = body
+                .split("_OPTION(")
+                .find(|entry| entry.starts_with(&format!("\"{name}\"")))
+                .unwrap_or_else(|| panic!("{name} is not in the C registry"));
+            let macro_name = body
+                .split_once(&format!("_OPTION(\"{name}\""))
+                .expect("registry entry")
+                .0;
+            assert!(
+                macro_name.ends_with("HL_INJECTION"),
+                "{name} is registered as {}_OPTION, so hl_options_clone would copy it into every \
+                 derived option set instead of scoping it to the launch that armed it",
+                macro_name
+                    .rsplit(|character: char| character.is_whitespace())
+                    .next()
+                    .unwrap_or("")
+            );
+            let _ = entry;
+        }
     }
 
     #[test]
