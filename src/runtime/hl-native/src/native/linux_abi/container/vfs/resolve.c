@@ -498,6 +498,25 @@ static int jail_open_plan(int dirfd, const char *raw, uint32_t intent, uint32_t 
                         opened = g_host_services->file->open_beneath(
                             g_host_services->context, route_root, relative, strlen(relative),
                             host_access | HL_HOST_FILE_NONBLOCK, host_creation, permissions, open_policy);
+                } else if (g_host_services->file->open_relative != NULL) {
+                    /* Four-walk collapse. `open_beneath` re-runs the whole
+                     * beneath-resolution that `resolve_beneath` just performed,
+                     * so a non-creating open paid two identical per-component
+                     * walks. Open the object THIS resolution produced instead:
+                     * `resolved.final` relative to the retained `resolved.parent`
+                     * directory handle, with NOFOLLOW on the final component --
+                     * byte for byte what `hl_linux_file_open_beneath` does after
+                     * its own (now redundant) walk. Because the parent handle is
+                     * held across check and use and the leaf is opened without
+                     * following, a concurrent rename or symlink swap cannot
+                     * redirect the open away from the resolved object; the
+                     * previous shape re-resolved from the jail root and could.
+                     * Creating opens keep the two-walk path: `open_beneath`
+                     * applies its own NOFOLLOW_FINAL policy to the exclusive
+                     * attempt, and that ordering is not reproduced here. */
+                    opened = g_host_services->file->open_relative(
+                        g_host_services->context, resolved.parent, plan->path, plan->path_size,
+                        host_access | HL_HOST_FILE_NONBLOCK | HL_HOST_FILE_NOFOLLOW, host_creation, permissions);
                 } else {
                     opened = g_host_services->file->open_beneath(g_host_services->context, route_root, relative,
                                                                  strlen(relative), host_access | HL_HOST_FILE_NONBLOCK,
