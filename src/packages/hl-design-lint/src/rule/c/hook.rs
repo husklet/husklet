@@ -167,7 +167,11 @@ impl Corpus {
             if !writes.iter().all(|site| Self::site_is_test_only(site, &unreachable)) {
                 continue;
             }
-            for read in reads {
+            // A read is recorded from its conditional compilation alone, while a write is judged
+            // by reachability. Without this the two disagree: a function no production call site
+            // reaches reports a production read of state only it writes, and there is no
+            // production branch left to be wrong about.
+            for read in reads.iter().filter(|read| !Self::site_is_test_only(read, &unreachable)) {
                 findings.push(finding(name, read, writes));
             }
         }
@@ -200,6 +204,28 @@ fn finding(name: &str, read: &Site, writes: &[Site]) -> Finding {
         })
         .collect();
     finding
+}
+
+/// Resolves the file-scope name an lvalue reaches through subscripts, members, and indirection.
+///
+/// `state[index].field` and `*state` both name `state`; anything else names nothing this rule
+/// tracks, because only file-scope declarations enter `Corpus::state`.
+fn base_identifier(node: Node<'_>) -> Option<Node<'_>> {
+    let mut current = node;
+    loop {
+        match current.kind() {
+            "identifier" => return Some(current),
+            "subscript_expression" | "field_expression" => {
+                current = current
+                    .child_by_field_name("argument")
+                    .or_else(|| current.named_child(0))?;
+            }
+            "parenthesized_expression" => current = current.named_child(0)?,
+            "pointer_expression" => current = current.child_by_field_name("argument")?,
+            "cast_expression" => current = current.child_by_field_name("value")?,
+            _ => return None,
+        }
+    }
 }
 
 struct FileScan<'a> {
@@ -244,11 +270,23 @@ impl FileScan<'_> {
             }
             "update_expression" => {
                 if let Some(argument) = node.child_by_field_name("argument")
-                    && argument.kind() == "identifier"
+                    && let Some(base) = base_identifier(argument)
                 {
-                    let name = self.text(argument);
-                    let site = self.site(argument, context);
-                    self.corpus.writes.entry(name).or_default().push(site);
+                    self.record_write(base, context);
+                }
+            }
+            // Handing a callee the address of file-scope state is a write: the value the
+            // production build observes afterwards is whatever the callee stored. The engine
+            // fills `g_rprocs` exclusively through `ckpt_vector_reserve((void **)&g_rprocs, ...)`
+            // and `g_rprocs[i].field = ...`, so an assignment-only model reported every restore
+            // as unwritten and named the test-only fixture as the sole writer.
+            "pointer_expression" => {
+                if let Some(operator) = node.child_by_field_name("operator")
+                    && self.text(operator) == "&"
+                    && let Some(argument) = node.child_by_field_name("argument")
+                    && let Some(base) = base_identifier(argument)
+                {
+                    self.record_write(base, context);
                 }
             }
             "call_expression" => {
@@ -285,11 +323,15 @@ impl FileScan<'_> {
         let Some(left) = node.child_by_field_name("left") else {
             return;
         };
-        if left.kind() != "identifier" {
+        let Some(base) = base_identifier(left) else {
             return;
-        }
-        let name = self.text(left);
-        let site = self.site(left, context);
+        };
+        self.record_write(base, context);
+    }
+
+    fn record_write(&mut self, node: Node<'_>, context: &Context<'_>) {
+        let name = self.text(node);
+        let site = self.site(node, context);
         self.corpus.writes.entry(name).or_default().push(site);
     }
 
