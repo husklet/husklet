@@ -1,9 +1,20 @@
+//! Connection-identity behaviour at the `AF_UNIX` boundary.
+//!
+//! The raw calls that remain are the three the engine's contract depends on: a socket that exists but
+//! is not yet named or connected, the `sockaddr_un` that names it -- including the abstract, NUL-leading
+//! form no `std` address type can express -- and the two syscalls that apply one to a descriptor that
+//! already exists. `UnixStream::connect` and `UnixListener::bind` mint their own socket, and every test
+//! here reserves an identity ON the descriptor before it dials, so that ordering is not theirs to take.
+//! Everything downstream of the connect -- accepting, duplicating, reading, writing -- is safe `std`.
+
 #![allow(unsafe_code)]
 
 use std::ffi::OsStr;
+use std::io::{Read, Write};
 use std::mem::{offset_of, size_of};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::time::{Duration, Instant};
 
 const PREPARE: u32 = 0;
@@ -31,25 +42,24 @@ const CONNECTING: u32 = 8;
 const READ_CLOSED: u32 = 32;
 const WRITE_CLOSED: u32 = 64;
 
-fn socket() -> OwnedFd {
-    let descriptor = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
-    assert!(descriptor >= 0, "socket: {}", std::io::Error::last_os_error());
-    unsafe { OwnedFd::from_raw_fd(descriptor) }
-}
-
-fn socket_pair() -> (OwnedFd, OwnedFd) {
-    let mut descriptors = [-1; 2];
-    let status = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, descriptors.as_mut_ptr()) };
-    assert_eq!(status, 0, "socketpair: {}", std::io::Error::last_os_error());
-    unsafe {
-        (
-            OwnedFd::from_raw_fd(descriptors[0]),
-            OwnedFd::from_raw_fd(descriptors[1]),
-        )
-    }
+/// An `AF_UNIX` stream socket that exists and is not yet named, connected, or listening.
+fn socket() -> UnixStream {
+    // SAFETY: `socket(2)` reads no caller memory and returns either a descriptor this process is the sole
+    // owner of or -1, which the assertion rejects before the integer reaches `from_raw_fd`. Ownership
+    // then moves straight into `UnixStream`, which closes it exactly once; no other binding keeps a copy.
+    let descriptor = unsafe {
+        let descriptor = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
+        assert!(descriptor >= 0, "socket: {}", std::io::Error::last_os_error());
+        OwnedFd::from_raw_fd(descriptor)
+    };
+    UnixStream::from(descriptor)
 }
 
 fn address(name: &[u8], abstract_name: bool) -> (libc::sockaddr_un, libc::socklen_t) {
+    // SAFETY: `sockaddr_un` is a C aggregate of an integer family, an integer array, and -- on Darwin
+    // only -- a `sun_len` byte. It holds no pointer and no field whose zero value is invalid, so all-zero
+    // is a valid inhabitant; it is zeroed rather than written field by field because the hosts disagree
+    // about which fields exist. Nothing but the family and the name below is ever read out of it.
     let mut address = unsafe { std::mem::zeroed::<libc::sockaddr_un>() };
     address.sun_family = libc::AF_UNIX as libc::sa_family_t;
     let start = usize::from(abstract_name);
@@ -65,63 +75,56 @@ fn address(name: &[u8], abstract_name: bool) -> (libc::sockaddr_un, libc::sockle
     (address, length as libc::socklen_t)
 }
 
+/// The two syscalls that hand an existing descriptor a `sockaddr_un`. They take one argument list and
+/// carry one safety obligation between them, so they are called through one place rather than through
+/// two blocks whose rationale would be the same sentence twice.
+type AddressCall = unsafe extern "C" fn(libc::c_int, *const libc::sockaddr, libc::socklen_t) -> libc::c_int;
+
+fn apply_address(syscall: AddressCall, descriptor: i32, address: &libc::sockaddr_un, length: libc::socklen_t) -> i32 {
+    // SAFETY: `address` is borrowed for the whole call and both syscalls copy out of it rather than
+    // retaining it, so nothing outlives the borrow. `length` is the value `address()` computed for THAT
+    // struct and is never larger than it, so the kernel's copy cannot run past the object. `descriptor`
+    // is read from a `UnixStream` the caller still owns, so it names a live socket for the duration.
+    unsafe { syscall(descriptor, std::ptr::from_ref(address).cast(), length) }
+}
+
 fn bind(descriptor: i32, address: &libc::sockaddr_un, length: libc::socklen_t) {
-    let status = unsafe { libc::bind(descriptor, std::ptr::from_ref(address).cast(), length) };
+    let status = apply_address(libc::bind, descriptor, address, length);
     assert_eq!(status, 0, "bind: {}", std::io::Error::last_os_error());
 }
 
 fn connect(descriptor: i32, address: &libc::sockaddr_un, length: libc::socklen_t) -> i32 {
-    unsafe { libc::connect(descriptor, std::ptr::from_ref(address).cast(), length) }
+    apply_address(libc::connect, descriptor, address, length)
 }
 
-fn accept(listener: i32) -> OwnedFd {
-    let descriptor = unsafe { libc::accept(listener, std::ptr::null_mut(), std::ptr::null_mut()) };
-    assert!(descriptor >= 0, "accept: {}", std::io::Error::last_os_error());
-    unsafe { OwnedFd::from_raw_fd(descriptor) }
-}
-
-/// The wait for a connection from ANOTHER PROCESS is bounded, and it is bounded here rather than by
-/// polling first and then calling a blocking `accept`: a `poll` that times out and falls through into
-/// `accept` is unbounded again, which is how a previous test in this repository turned a red into an
-/// infinite gate. A connector that dies before it dials -- which is exactly what a broken identity
-/// assertion in the child looks like -- must fail this test with a message, not hang the whole
-/// `cargo test -p hl-native --all-targets` run forever.
+/// The wait for a connection from ANOTHER PROCESS is bounded, and it is bounded by making the listener
+/// non-blocking and re-trying rather than by waiting first and then calling a blocking `accept`: a wait
+/// that times out and falls through into `accept` is unbounded again, which is how a previous test in
+/// this repository turned a red into an infinite gate. A connector that dies before it dials -- which is
+/// exactly what a broken identity assertion in the child looks like -- must fail this test with a
+/// message, not hang the whole `cargo test -p hl-native --all-targets` run forever.
 const CONNECTOR_DEADLINE: Duration = Duration::from_secs(20);
 
-fn accept_within(listener: i32, deadline: Duration) -> Result<OwnedFd, String> {
-    let previous = unsafe { libc::fcntl(listener, libc::F_GETFL) };
-    assert!(previous >= 0, "F_GETFL: {}", std::io::Error::last_os_error());
-    assert_eq!(
-        unsafe { libc::fcntl(listener, libc::F_SETFL, previous | libc::O_NONBLOCK) },
-        0,
-        "F_SETFL: {}",
-        std::io::Error::last_os_error()
-    );
+fn accept_within(listener: &UnixListener, deadline: Duration) -> Result<UnixStream, String> {
+    listener
+        .set_nonblocking(true)
+        .unwrap_or_else(|error| panic!("set_nonblocking: {error}"));
     let expiry = Instant::now() + deadline;
     let outcome = loop {
-        let descriptor = unsafe { libc::accept(listener, std::ptr::null_mut(), std::ptr::null_mut()) };
-        if descriptor >= 0 {
-            break Ok(unsafe { OwnedFd::from_raw_fd(descriptor) });
+        match listener.accept() {
+            Ok((accepted, _)) => break Ok(accepted),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => break Err(format!("accept: {error}")),
         }
-        let error = std::io::Error::last_os_error();
-        let raw = error.raw_os_error();
-        if raw != Some(libc::EAGAIN) && raw != Some(libc::EWOULDBLOCK) && raw != Some(libc::EINTR) {
-            break Err(format!("accept: {error}"));
-        }
-        let remaining = expiry.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
+        if Instant::now() >= expiry {
             break Err(format!("no connection arrived within {deadline:?}"));
         }
-        let mut poll = libc::pollfd {
-            fd: listener,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        let milliseconds = i32::try_from(remaining.as_millis().max(1)).unwrap_or(i32::MAX);
-        unsafe { libc::poll(&raw mut poll, 1, milliseconds) };
+        std::thread::sleep(Duration::from_millis(5));
     };
     // The listener is handed back in the state it was found in whether or not a connection arrived.
-    unsafe { libc::fcntl(listener, libc::F_SETFL, previous) };
+    let _ = listener.set_nonblocking(false);
     outcome
 }
 
@@ -184,11 +187,7 @@ fn identity(isa: u32, operation: u32, descriptor: i32, object: u64) -> (u64, u64
         .unwrap_or_else(|status| panic!("ISA {isa} identity operation {operation} failed at {status}"))
 }
 
-fn reciprocal_connection(isa: u32, address: &libc::sockaddr_un, length: libc::socklen_t) {
-    let listener = socket();
-    bind(listener.as_raw_fd(), address, length);
-    assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 4) }, 0);
-
+fn reciprocal_connection(isa: u32, listener: &UnixListener, address: &libc::sockaddr_un, length: libc::socklen_t) {
     let client = socket();
     let client_object = 0x1000_0000_0000_0000_u64 | u64::from(isa);
     let (local, reserved_peer, hidden) = identity(isa, PREPARE, client.as_raw_fd(), client_object);
@@ -198,7 +197,7 @@ fn reciprocal_connection(isa: u32, address: &libc::sockaddr_un, length: libc::so
     assert_eq!(hidden, LOCAL_HIDDEN | RECIPROCITY_REQUIRED);
     assert_eq!(connect(client.as_raw_fd(), address, length), 0);
 
-    let server = accept(listener.as_raw_fd());
+    let (server, _) = listener.accept().expect("accept");
     let server_allocated = 0x2200_0000_0000_0000_u64 | u64::from(isa);
     let (server_object, server_peer, server_hidden) = identity(isa, IDENTIFY, server.as_raw_fd(), server_allocated);
     assert_eq!(server_object, server_allocated, "the acceptor kept its own object id");
@@ -211,15 +210,9 @@ fn reciprocal_connection(isa: u32, address: &libc::sockaddr_un, length: libc::so
     );
 
     let byte = [0x5a_u8];
-    assert_eq!(
-        unsafe { libc::write(client.as_raw_fd(), byte.as_ptr().cast(), byte.len()) },
-        1
-    );
+    assert_eq!((&client).write(&byte).expect("write"), 1);
     let mut received = [0_u8];
-    assert_eq!(
-        unsafe { libc::read(server.as_raw_fd(), received.as_mut_ptr().cast(), received.len()) },
-        1
-    );
+    assert_eq!((&server).read(&mut received).expect("read"), 1);
     assert_eq!(received, byte);
 
     // Both halves of an honest, complete pair are admissible to capture. The cross-process half of the
@@ -244,9 +237,7 @@ fn an_unreciprocated_pathname_connector_is_refused_capture_on_both_isas() {
         let path = format!("/tmp/.hl-unreciprocated-{isa}-{}", std::process::id());
         let _ = std::fs::remove_file(&path);
         let (listener_address, listener_length) = address(path.as_bytes(), false);
-        let listener = socket();
-        bind(listener.as_raw_fd(), &listener_address, listener_length);
-        assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 4) }, 0);
+        let _listener = UnixListener::bind(&path).expect("listener");
 
         let client = socket();
         let object = 0x3300_0000_0000_0000_u64 | u64::from(isa);
@@ -270,8 +261,9 @@ fn pathname_connect_and_accept_have_reciprocal_identity_on_both_isas() {
     for isa in [1, 2] {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join(format!("socket-{isa}"));
+        let listener = UnixListener::bind(&path).expect("listener");
         let (address, length) = address(OsStr::new(&path).as_bytes(), false);
-        reciprocal_connection(isa, &address, length);
+        reciprocal_connection(isa, &listener, &address, length);
         std::fs::remove_file(path).unwrap();
     }
 }
@@ -279,10 +271,14 @@ fn pathname_connect_and_accept_have_reciprocal_identity_on_both_isas() {
 #[cfg(target_os = "linux")]
 #[test]
 fn abstract_connect_and_accept_have_reciprocal_identity_on_both_isas() {
+    use std::os::linux::net::SocketAddrExt;
+
     for isa in [1, 2] {
         let name = format!("hl-identity-{}-{isa}", std::process::id());
+        let bound = std::os::unix::net::SocketAddr::from_abstract_name(&name).expect("abstract name");
+        let listener = UnixListener::bind_addr(&bound).expect("listener");
         let (address, length) = address(name.as_bytes(), true);
-        reciprocal_connection(isa, &address, length);
+        reciprocal_connection(isa, &listener, &address, length);
     }
 }
 
@@ -314,9 +310,7 @@ fn guest_bound_client_keeps_its_name_and_fails_closed_without_a_false_peer() {
         let client_path = root.path().join(format!("client-{isa}"));
         let (listener_address, listener_length) = address(OsStr::new(&listener_path).as_bytes(), false);
         let (client_address, client_length) = address(OsStr::new(&client_path).as_bytes(), false);
-        let listener = socket();
-        bind(listener.as_raw_fd(), &listener_address, listener_length);
-        assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 4) }, 0);
+        let listener = UnixListener::bind(&listener_path).expect("listener");
         let client = socket();
         bind(client.as_raw_fd(), &client_address, client_length);
 
@@ -326,31 +320,14 @@ fn guest_bound_client_keeps_its_name_and_fails_closed_without_a_false_peer() {
             (object, 0, RECIPROCITY_REQUIRED)
         );
         assert_eq!(connect(client.as_raw_fd(), &listener_address, listener_length), 0);
-        let server = accept(listener.as_raw_fd());
+        let (server, _) = listener.accept().expect("accept");
         assert_eq!(
             identity(isa, IDENTIFY, server.as_raw_fd(), 9),
             (9, 0, RECIPROCITY_REQUIRED)
         );
 
-        let mut observed = unsafe { std::mem::zeroed::<libc::sockaddr_un>() };
-        let mut observed_length = size_of::<libc::sockaddr_un>() as libc::socklen_t;
-        assert_eq!(
-            unsafe {
-                libc::getsockname(
-                    client.as_raw_fd(),
-                    std::ptr::from_mut(&mut observed).cast(),
-                    &raw mut observed_length,
-                )
-            },
-            0
-        );
-        let observed = observed
-            .sun_path
-            .iter()
-            .map(|byte| byte.to_ne_bytes()[0])
-            .take_while(|byte| *byte != 0)
-            .collect::<Vec<_>>();
-        assert_eq!(observed, OsStr::new(&client_path).as_bytes());
+        let observed = client.local_addr().expect("the client's own bound name");
+        assert_eq!(observed.as_pathname().expect("a pathname address"), client_path);
 
         identity(isa, RESET, client.as_raw_fd(), 0);
         identity(isa, RESET, server.as_raw_fd(), 0);
@@ -366,9 +343,7 @@ fn guest_bound_client_keeps_its_name_and_fails_closed_without_a_false_peer() {
 fn dup_before_connect_shares_identity_and_capture_refusal_on_both_isas() {
     for isa in [1, 2] {
         let client = socket();
-        let alias = unsafe { libc::fcntl(client.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
-        assert!(alias >= 0, "dup: {}", std::io::Error::last_os_error());
-        let alias = unsafe { OwnedFd::from_raw_fd(alias) };
+        let alias = client.try_clone().expect("dup");
         let object = 0x4000_0000_0000_0000_u64 | u64::from(isa);
         identity(isa, INITIALIZE_ALIAS, client.as_raw_fd(), object);
         identity(isa, INITIALIZE_ALIAS, alias.as_raw_fd(), object);
@@ -400,9 +375,7 @@ fn dup_before_connect_shares_identity_and_capture_refusal_on_both_isas() {
 fn async_failure_withdraws_every_alias_transactionally_on_both_isas() {
     for isa in [1, 2] {
         let client = socket();
-        let alias = unsafe { libc::fcntl(client.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
-        assert!(alias >= 0, "dup: {}", std::io::Error::last_os_error());
-        let alias = unsafe { OwnedFd::from_raw_fd(alias) };
+        let alias = client.try_clone().expect("dup");
         let object = 0x5000_0000_0000_0000_u64 | u64::from(isa);
         identity(isa, INITIALIZE_ALIAS, client.as_raw_fd(), object);
         identity(isa, INITIALIZE_ALIAS, alias.as_raw_fd(), object);
@@ -465,10 +438,8 @@ fn shutdown_state_is_shared_by_aliases_and_is_admissible_on_both_isas() {
             (SHUTDOWN_WRITE, WRITE_CLOSED),
             (SHUTDOWN_BOTH, READ_CLOSED | WRITE_CLOSED),
         ] {
-            let (endpoint, peer) = socket_pair();
-            let alias = unsafe { libc::fcntl(endpoint.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
-            assert!(alias >= 0, "dup: {}", std::io::Error::last_os_error());
-            let alias = unsafe { OwnedFd::from_raw_fd(alias) };
+            let (endpoint, peer) = UnixStream::pair().expect("socketpair");
+            let alias = endpoint.try_clone().expect("dup");
             let object = 0x7100_0000_0000_0000_u64 | u64::from(isa) | (u64::from(operation) << 8);
             identity(isa, INITIALIZE_ALIAS, endpoint.as_raw_fd(), object);
             identity(isa, INITIALIZE_ALIAS, alias.as_raw_fd(), object);
@@ -481,15 +452,9 @@ fn shutdown_state_is_shared_by_aliases_and_is_admissible_on_both_isas() {
                 // The endpoint stopped writing; its peer did not, so bytes still arrive and the guest can
                 // still read them. Admitting must not consume them: the queue belongs to pass 2.
                 let payload = b"queue-survives-admission";
-                assert_eq!(
-                    unsafe { libc::send(peer.as_raw_fd(), payload.as_ptr().cast(), payload.len(), 0) },
-                    payload.len() as isize
-                );
+                assert_eq!((&peer).write(payload).expect("send"), payload.len());
                 let mut received = [0_u8; 24];
-                assert_eq!(
-                    unsafe { libc::recv(endpoint.as_raw_fd(), received.as_mut_ptr().cast(), received.len(), 0) },
-                    payload.len() as isize
-                );
+                assert_eq!((&endpoint).read(&mut received).expect("recv"), payload.len());
                 assert_eq!(&received[..payload.len()], payload);
             }
 
@@ -526,9 +491,7 @@ fn a_forged_identity_name_is_never_adopted_on_both_isas() {
             let listener_path = format!("/tmp/.hl-forge-listen-{isa}-{index}-{}", std::process::id());
             let _ = std::fs::remove_file(&listener_path);
             let (listener_address, listener_length) = address(listener_path.as_bytes(), false);
-            let listener = socket();
-            bind(listener.as_raw_fd(), &listener_address, listener_length);
-            assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 4) }, 0);
+            let listener = UnixListener::bind(&listener_path).expect("listener");
 
             let _ = std::fs::remove_file(forged);
             let (forged_address, forged_length) = address(forged.as_bytes(), false);
@@ -536,7 +499,7 @@ fn a_forged_identity_name_is_never_adopted_on_both_isas() {
             bind(attacker.as_raw_fd(), &forged_address, forged_length);
             assert_eq!(connect(attacker.as_raw_fd(), &listener_address, listener_length), 0);
 
-            let accepted = accept(listener.as_raw_fd());
+            let (accepted, _) = listener.accept().expect("accept");
             let allocated = 0x7000_0000_0000_0000_u64 | u64::from(isa);
             let (local, peer, hidden) = identity(isa, IDENTIFY, accepted.as_raw_fd(), allocated);
             assert_eq!(local, allocated, "ISA {isa} adopted a forged object id from {forged}");
@@ -603,13 +566,7 @@ fn cross_process_identity_connector() {
     // Hold the connection open until the acceptor has identified it. The acceptor mints the peer half and
     // writes it back into the ticket; reading one byte proves it has, so collect and report it then.
     let mut acknowledgement = [0_u8];
-    unsafe {
-        libc::read(
-            client.as_raw_fd(),
-            acknowledgement.as_mut_ptr().cast(),
-            acknowledgement.len(),
-        )
-    };
+    let _ = (&client).read(&mut acknowledgement);
     let (_, collected, _) = identity(isa, CONNECTED, client.as_raw_fd(), 0);
     println!("collected-peer={collected:016x}");
 }
@@ -619,10 +576,7 @@ fn an_honest_cross_process_connection_carries_reciprocal_identity_on_both_isas()
     for isa in [1, 2] {
         let path = format!("/tmp/.hl-xproc-{}-{isa}", std::process::id());
         let _ = std::fs::remove_file(&path);
-        let (listener_address, listener_length) = address(path.as_bytes(), false);
-        let listener = socket();
-        bind(listener.as_raw_fd(), &listener_address, listener_length);
-        assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 4) }, 0);
+        let listener = UnixListener::bind(&path).expect("listener");
 
         let mut command = std::process::Command::new(std::env::current_exe().unwrap());
         command
@@ -636,7 +590,7 @@ fn an_honest_cross_process_connection_carries_reciprocal_identity_on_both_isas()
             .env(CROSS_PROCESS_ISA, isa.to_string());
         let mut connector = Connector::spawn(command);
 
-        let accepted = match accept_within(listener.as_raw_fd(), CONNECTOR_DEADLINE) {
+        let accepted = match accept_within(&listener, CONNECTOR_DEADLINE) {
             Ok(accepted) => accepted,
             Err(reason) => {
                 let (status, stdout) = connector.finish(Duration::ZERO);
@@ -647,10 +601,7 @@ fn an_honest_cross_process_connection_carries_reciprocal_identity_on_both_isas()
         let (local, peer, hidden) = identity(isa, IDENTIFY, accepted.as_raw_fd(), allocated);
 
         let byte = [0x5a_u8];
-        assert_eq!(
-            unsafe { libc::write(accepted.as_raw_fd(), byte.as_ptr().cast(), byte.len()) },
-            1
-        );
+        assert_eq!((&accepted).write(&byte).expect("write"), 1);
         // Drained and reaped BEFORE the first assertion that can panic, so the connector's own output
         // survives to explain a failure instead of being cut off by the parent's dropped pipe.
         let (status, stdout) = connector.finish(CONNECTOR_DEADLINE);
@@ -718,13 +669,7 @@ fn owner_pid_identity_connector() {
         std::io::Error::last_os_error()
     );
     let mut acknowledgement = [0_u8];
-    unsafe {
-        libc::read(
-            client.as_raw_fd(),
-            acknowledgement.as_mut_ptr().cast(),
-            acknowledgement.len(),
-        )
-    };
+    let _ = (&client).read(&mut acknowledgement);
     let (_, collected, _) = identity(isa, CONNECTED, client.as_raw_fd(), 0);
     println!("collected-peer={collected:016x}");
 }
@@ -734,10 +679,7 @@ fn an_accepted_socket_encodes_its_own_owners_pid_on_both_isas() {
     for isa in [1, 2] {
         let path = format!("/tmp/.hl-owner-{}-{isa}", std::process::id());
         let _ = std::fs::remove_file(&path);
-        let (listener_address, listener_length) = address(path.as_bytes(), false);
-        let listener = socket();
-        bind(listener.as_raw_fd(), &listener_address, listener_length);
-        assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 4) }, 0);
+        let listener = UnixListener::bind(&path).expect("listener");
 
         let mut command = std::process::Command::new(std::env::current_exe().unwrap());
         command
@@ -746,7 +688,7 @@ fn an_accepted_socket_encodes_its_own_owners_pid_on_both_isas() {
             .env(CROSS_PROCESS_ISA, isa.to_string());
         let mut connector = Connector::spawn(command);
 
-        let accepted = match accept_within(listener.as_raw_fd(), CONNECTOR_DEADLINE) {
+        let accepted = match accept_within(&listener, CONNECTOR_DEADLINE) {
             Ok(accepted) => accepted,
             Err(reason) => {
                 let (status, stdout) = connector.finish(Duration::ZERO);
@@ -756,10 +698,7 @@ fn an_accepted_socket_encodes_its_own_owners_pid_on_both_isas() {
         let (local, peer, hidden) = identity(isa, IDENTIFY_MINTED, accepted.as_raw_fd(), 0);
 
         let byte = [0x5a_u8];
-        assert_eq!(
-            unsafe { libc::write(accepted.as_raw_fd(), byte.as_ptr().cast(), byte.len()) },
-            1
-        );
+        assert_eq!((&accepted).write(&byte).expect("write"), 1);
         // Drained and reaped before the first assertion that can panic; see `Connector`.
         let (status, stdout) = connector.finish(CONNECTOR_DEADLINE);
         assert!(
