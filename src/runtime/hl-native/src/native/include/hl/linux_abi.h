@@ -67,7 +67,12 @@ enum {
     HL_LINUX_O_TRUNC = 00001000u,
     HL_LINUX_O_APPEND = 00002000u,
     HL_LINUX_O_NONBLOCK = 00004000u,
+    HL_LINUX_O_ASYNC = 00020000u,
     HL_LINUX_O_DIRECT = 00040000u,
+    /* Canonical (x86-64/asm-generic) O_LARGEFILE. AArch64 spells it 00400000 and its 64-bit ABI reports
+       it as zero through F_GETFL, so the guest-arch bit is applied at the syscall boundary. */
+    HL_LINUX_O_LARGEFILE = 00100000u,
+    HL_LINUX_O_NOATIME = 01000000u,
     HL_LINUX_O_NOFOLLOW = 00400000u,
     HL_LINUX_O_DIRECTORY = 00200000u,
     HL_LINUX_O_PATH = 010000000u,

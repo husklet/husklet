@@ -1,7 +1,37 @@
 #ifndef HL_LINUX_OBJECT_H
 #define HL_LINUX_OBJECT_H
 
+#include "hl/host_services.h"
 #include "hl/linux_abi.h"
+
+/* The status flags fcntl(F_SETFL) may change on an open file description. Linux replaces exactly these
+   and preserves the rest (fs/fcntl.c setfl), which is why the access mode, O_LARGEFILE and O_PATH
+   survive a set. */
+#define HL_LINUX_O_SETFL                                                                                               \
+    (HL_LINUX_O_APPEND | HL_LINUX_O_NONBLOCK | HL_LINUX_O_DIRECT | HL_LINUX_O_ASYNC | HL_LINUX_O_NOATIME)
+
+/* The subset of HL_LINUX_O_SETFL a host object owns. O_APPEND is deliberately absent: appending is
+   performed by the file service's own write endpoint, and a positioned write through a description
+   carrying O_APPEND ignores its offset, so arming it on the host would corrupt every pwrite. */
+#define HL_LINUX_O_SETFL_HOST (HL_LINUX_O_NONBLOCK | HL_LINUX_O_DIRECT | HL_LINUX_O_ASYNC | HL_LINUX_O_NOATIME)
+
+static inline uint32_t hl_linux_host_stream_flags(uint32_t status_flags) {
+    uint32_t flags = 0;
+    if ((status_flags & HL_LINUX_O_NONBLOCK) != 0) flags |= HL_HOST_STREAM_NONBLOCK;
+    if ((status_flags & HL_LINUX_O_DIRECT) != 0) flags |= HL_HOST_STREAM_DIRECT;
+    if ((status_flags & HL_LINUX_O_ASYNC) != 0) flags |= HL_HOST_STREAM_ASYNC;
+    if ((status_flags & HL_LINUX_O_NOATIME) != 0) flags |= HL_HOST_STREAM_NOATIME;
+    return flags;
+}
+
+static inline uint32_t hl_linux_status_flags_from_host_stream(uint32_t stream_flags) {
+    uint32_t flags = 0;
+    if ((stream_flags & HL_HOST_STREAM_NONBLOCK) != 0) flags |= HL_LINUX_O_NONBLOCK;
+    if ((stream_flags & HL_HOST_STREAM_DIRECT) != 0) flags |= HL_LINUX_O_DIRECT;
+    if ((stream_flags & HL_HOST_STREAM_ASYNC) != 0) flags |= HL_LINUX_O_ASYNC;
+    if ((stream_flags & HL_HOST_STREAM_NOATIME) != 0) flags |= HL_LINUX_O_NOATIME;
+    return flags;
+}
 
 enum {
     HL_LINUX_READY_READ = 1u << 0,
@@ -18,7 +48,11 @@ typedef struct hl_linux_object_ops {
     int64_t (*read)(void *context, void *buffer, size_t size);
     int64_t (*write)(void *context, const void *buffer, size_t size);
     int64_t (*status)(void *context, hl_linux_file_status *status);
-    int64_t (*set_status_flags)(void *context, uint32_t flags);
+    /* Apply the settable status flags and report through `effective` the subset the object is now
+       carrying. The two differ whenever the mechanism behind a flag is absent -- Linux stores
+       O_ASYNC from the fasync handler rather than from the flag word, so an object with no such
+       handler accepts the request and reports the flag clear. The caller records `effective`. */
+    int64_t (*set_status_flags)(void *context, uint32_t flags, uint32_t *effective);
     uint32_t (*readiness)(void *context, uint32_t interests);
     /* Optional borrowed host object used for event-driven readiness. Never a guest/native descriptor. */
     hl_host_result (*wait_handle)(void *context);

@@ -41,7 +41,7 @@ impl ApiError {
             hl_images::Error::ContentNotFound(_)
             | hl_images::Error::NotOwned { .. }
             | hl_images::Error::InvalidMetadata(_)
-            | hl_images::Error::Registry(_)
+            | hl_images::Error::Registry { .. }
             | hl_images::Error::UnsupportedPlatform { .. }
             | hl_images::Error::LayerFilesystem { .. }
             | hl_images::Error::Io { .. } => StatusCode::INTERNAL_SERVER_ERROR,

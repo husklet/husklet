@@ -141,7 +141,7 @@ impl Source for MemorySource {
             .blobs
             .get(&descriptor.digest().to_string())
             .cloned()
-            .ok_or_else(|| Error::Registry(format!("missing {}", descriptor.digest())))?;
+            .ok_or_else(|| Error::registry(format!("missing {}", descriptor.digest()), None))?;
         let chunks = bytes.chunks(3).map(Bytes::copy_from_slice).map(Ok).collect::<Vec<_>>();
         Ok(Box::pin(stream::iter(chunks)))
     }
