@@ -127,7 +127,18 @@ jobs:
           status="${PIPESTATUS[0]}"
           set -e
           if (( status != 0 )); then
-            diagnostic="$(tail -n 120 "$log_file" | awk '{ print substr($0, 1, 500) }')"
+            # Cargo's progress lines are the overwhelming majority of this log and they
+            # are worthless in a failure report, so a raw `tail` spends the whole
+            # annotation budget on them and GitHub truncates the actual error off the
+            # end. Measured on run 32387567630: all four legs annotated 120 lines of
+            # `Compiling <crate>` and not one line of why the scenario failed, which is
+            # the only reason those failures still have no diagnosis. Drop the progress
+            # chatter first, then tail what is left.
+            # `|| true` is load-bearing: `set -o pipefail` is on above, and `grep -v`
+            # exits 1 when it selects nothing, which would abort this branch before the
+            # annotation is ever echoed.
+            diagnostic="$(grep -vE '^ *(Compiling|Downloading|Downloaded|Checking|Finished|Fresh|Updating|Blocking) ' "$log_file" \
+              | tail -n 120 | awk '{ print substr($0, 1, 500) }' || true)"
             diagnostic="${diagnostic//'%'/'%25'}"
             diagnostic="${diagnostic//$'\r'/'%0D'}"
             diagnostic="${diagnostic//$'\n'/'%0A'}"
