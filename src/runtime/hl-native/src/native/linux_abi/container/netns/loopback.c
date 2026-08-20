@@ -448,7 +448,38 @@ static _Atomic uint32_t g_sock_object_next = 1;
 static char g_sock_identity_dir[64];
 static int8_t g_sock_identity_dir_state; // 0 unresolved, 1 usable, -1 refused
 
+/* ---- WHY THIS CAPABILITY IS REFUSED WHOLE ON WINDOWS.
+ *
+ * The four conjuncts below are one validator, and euid ownership is its root: a directory another
+ * principal owns can be mode 0700 *to that principal*, so "the mode is exactly 0700" and "there is
+ * exactly one link" and "lstat says a directory, not a symlink" all mean nothing until "and the owner
+ * is me" has held.  Windows has no euid.  The nearest construction -- compare the object's owner SID
+ * from its security descriptor against the process token's user SID, and audit the DACL for any other
+ * grantee -- is a resemblance and not this property: a DACL is an ordered ACE list with inheritance and
+ * deny/allow ordering rather than a total mode word, and the owner carries WRITE_DAC implicitly, so
+ * "grants only me" is a predicate that must be normalized rather than compared.
+ *
+ * Worse, the other three conjuncts are already VACUOUS on this host, so a Windows arm that answered only
+ * the ownership question would leave a four-part validator with one part left while still reading like
+ * four.  The UCRT's struct stat reports st_uid 0 for every object and st_nlink 1 for every file -- there
+ * is no owner channel and no link channel in the CRT at all -- and _stat()/open() follow all three
+ * reparse kinds, so the symlink pre-creation that lstat()+O_NOFOLLOW exist to catch is not caught.
+ * Reaching the real answers means GetNamedSecurityInfoW/GetTokenInformation/FILE_FLAG_OPEN_REPARSE_POINT,
+ * i.e. <windows.h> and advapi32 inside the guest-target unity TU, which linux_abi/host_fd.h rules out for
+ * exactly this class of question.
+ *
+ * So this host cannot host the engine-private identity namespace, and the honest answer is the refusal
+ * this function already had for "the namespace is not trustworthy": callers fail closed on NULL --
+ * sock_internal_connect_prepare reports EPERM to the guest, sock_internal_accept_identify claims no
+ * identity, and the ticket arena is never mapped.  The gate is structural rather than left to
+ * geteuid()'s (uid_t)-1 comparing unequal, because that would silently become a one-conjunct validator
+ * the day anyone gave geteuid() a Windows answer.
+ */
 static const char *sock_identity_directory(void) {
+#if defined(_WIN32)
+    g_sock_identity_dir_state = -1;
+    return NULL;
+#else
     if (g_sock_identity_dir_state) return g_sock_identity_dir_state > 0 ? g_sock_identity_dir : NULL;
     g_sock_identity_dir_state = -1;
     const char *namespace_key = hl_option_get("HL_NETNS"); // same key as abs_init/ipc_ns_key
@@ -464,6 +495,7 @@ static const char *sock_identity_directory(void) {
     memcpy(g_sock_identity_dir, candidate, (size_t)length + 1u);
     g_sock_identity_dir_state = 1;
     return g_sock_identity_dir;
+#endif
 }
 
 /* ---- Identity tickets.
