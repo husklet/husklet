@@ -342,8 +342,6 @@ fn current_and_generation_symlinks_fail_closed() {
 #[cfg(unix)]
 #[test]
 fn failed_publication_preserves_current_and_cleans_staging() {
-    use std::os::unix::fs::PermissionsExt as _;
-
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("checkpoints");
     let images = DirectoryImages::open(root.clone()).unwrap();
@@ -355,9 +353,23 @@ fn failed_publication_preserves_current_and_cleans_staging() {
     let failed = images.open("container").unwrap();
     failed.put("state", b"second").unwrap();
     let namespace = root.join("container");
-    std::fs::set_permissions(&namespace, std::fs::Permissions::from_mode(0o500)).unwrap();
-    assert!(failed.commit(b"manifest-two").is_err());
-    std::fs::set_permissions(&namespace, std::fs::Permissions::from_mode(0o700)).unwrap();
+    // Deny the publication with a refusal no identity can talk its way past. Withdrawing write
+    // permission from the namespace denies it for the account a developer runs the suite as, but a
+    // process holding `CAP_DAC_OVERRIDE` -- any suite run as root -- creates the replacement
+    // straight through mode 0o500 and the commit succeeds, leaving every assertion below
+    // unreachable. Occupying the publication lock's name with a directory is refused for every
+    // uid: the lock is opened `O_RDWR`, which a directory can never satisfy. The commit reaches it
+    // only after it has written the staging generation's manifest and synchronized the namespace,
+    // so `current` is left for the product to preserve rather than never approached.
+    let lock = namespace.join(".publication.lock");
+    std::fs::remove_file(&lock).unwrap();
+    std::fs::create_dir(&lock).unwrap();
+    let error = failed.commit(b"manifest-two").unwrap_err();
+    assert!(
+        error.to_string().contains("publication lock"),
+        "the commit failed somewhere other than the injected publication lock: {error}"
+    );
+    std::fs::remove_dir(&lock).unwrap();
     drop(failed);
 
     let restored = images.open("container").unwrap();

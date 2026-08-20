@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -109,7 +110,7 @@ impl Server {
             "daemon.server.listening",
             socket = %self.socket.display()
         );
-        let guard = SocketGuard::new(self.socket.clone())?;
+        let guard = SocketGuard::new(self.socket.clone(), &listener)?;
         let app = router(
             self.containers,
             self.platform,
@@ -184,17 +185,36 @@ impl Server {
     }
 }
 
+/// Owns the pathname of the socket this server bound, and removes it at shutdown only while the
+/// pathname still names that very socket.
+///
+/// `(device, inode)` on its own cannot decide that. A local filesystem reissues a freed inode
+/// number immediately -- measured on ext4, unlink and rebind at the same pathname hand back the
+/// identical number -- so the socket a successor daemon binds after this one stops listening reads
+/// as this server's own, and the guard would remove a live socket out from under it. The guard
+/// therefore keeps a descriptor on the socket it bound: an `AF_UNIX` socket holds its directory
+/// entry's inode allocated for as long as any descriptor refers to it, so no later file can be
+/// issued that number while the guard lives, and the comparison becomes exact.
+///
+/// The pathname is still read once after the bind rather than derived from the descriptor, because
+/// the socket descriptor reports its own `sockfs` inode and not the filesystem entry's. A
+/// replacement landing inside that window would be recorded as this server's own; closing it needs
+/// a bind that reports the entry it created, which Linux does not offer.
 struct SocketGuard {
     path: PathBuf,
     identity: (u64, u64),
+    /// Holds `identity` unrepeatable for this guard's lifetime; never read.
+    _bound: OwnedFd,
 }
 
 impl SocketGuard {
-    fn new(path: PathBuf) -> Result<Self> {
+    fn new(path: PathBuf, bound: impl AsFd) -> Result<Self> {
+        let bound = bound.as_fd().try_clone_to_owned()?;
         let metadata = std::fs::symlink_metadata(&path)?;
         Ok(Self {
             path,
             identity: (metadata.dev(), metadata.ino()),
+            _bound: bound,
         })
     }
 
@@ -266,20 +286,28 @@ mod tests {
 
     #[test]
     fn socket_guard_ownership() {
+        use std::os::unix::fs::MetadataExt as _;
+
         let temporary = tempfile::tempdir().unwrap();
         let owned = temporary.path().join("owned.sock");
         let listener = std::os::unix::net::UnixListener::bind(&owned).unwrap();
-        let guard = SocketGuard::new(owned.clone()).unwrap();
+        let guard = SocketGuard::new(owned.clone(), &listener).unwrap();
         drop(listener);
         drop(guard);
         assert!(!owned.exists());
 
         let replaced = temporary.path().join("replaced.sock");
         let original = std::os::unix::net::UnixListener::bind(&replaced).unwrap();
-        let guard = SocketGuard::new(replaced.clone()).unwrap();
+        let guard = SocketGuard::new(replaced.clone(), &original).unwrap();
+        let bound = std::fs::symlink_metadata(&replaced).unwrap().ino();
         drop(original);
         std::fs::remove_file(&replaced).unwrap();
         let replacement = std::os::unix::net::UnixListener::bind(&replaced).unwrap();
+        assert_ne!(
+            std::fs::symlink_metadata(&replaced).unwrap().ino(),
+            bound,
+            "the guard must hold the inode it bound allocated, or its recorded identity is reissuable"
+        );
         drop(guard);
         assert!(replaced.exists());
         drop(replacement);
