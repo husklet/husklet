@@ -1,6 +1,6 @@
 use super::{
-    Arc, Error, Exec, ExecId, ExecSpec, ExecState, ExitStatus, Io, JournalId, ProcessConfig, Result, Service, Signal,
-    now_ms,
+    Arc, Error, Exec, ExecId, ExecSpec, ExecState, ExitStatus, Io, JournalId, ProcessConfig, Result, Running, Service,
+    Signal, now_ms,
 };
 
 impl Service {
@@ -155,16 +155,13 @@ impl Service {
         let process = match process {
             Ok(process) => process,
             Err(error) => {
-                if let Some(io) = self.io.lock().await.remove(&journal) {
-                    io.finish().await;
-                }
+                self.finish_exec_io(&journal).await;
                 return Err(error);
             }
         };
-        let process_id = process.id();
         let started_at_ms = now_ms();
         exec.state = ExecState::Running {
-            process_id,
+            process_id: process.id(),
             started_at_ms,
         };
         exec.checkpoint = None;
@@ -173,164 +170,52 @@ impl Service {
                 .rollback_unpublished_exec(exec.id.clone(), process, &journal, error)
                 .await);
         }
-        self.exec_live
-            .lock()
-            .await
-            .insert(exec.id.clone(), Arc::clone(&process));
+        self.own_exec_output(exec.id, process, journal, io, started_at_ms, "process")
+            .await;
+        Ok(session)
+    }
+
+    /// Publishes a running exec's process and owns its output until the process exits.
+    ///
+    /// Both entrances to a live session end here -- one that started the command and one that
+    /// reattached a restored domain member -- and they differ only in what the failure of the
+    /// output owner is called, so `owner` names the launch rather than the code branching on it.
+    async fn own_exec_output(
+        self: &Arc<Self>,
+        id: ExecId,
+        process: Arc<dyn Running>,
+        journal: JournalId,
+        io: Arc<Io>,
+        started_at_ms: u64,
+        owner: &'static str,
+    ) {
+        let process_id = process.id();
+        self.exec_live.lock().await.insert(id.clone(), Arc::clone(&process));
         let (output_complete, output_completion) = tokio::sync::watch::channel(false);
         self.exec_output_complete
             .lock()
             .await
-            .insert(exec.id.clone(), output_completion);
+            .insert(id.clone(), output_completion);
         self.failures.lock().await.remove(&journal);
         let service = Arc::clone(self);
-        let exec_id = exec.id;
         let owner_service = Arc::clone(&service);
         let owner_journal = journal.clone();
-        let owner = tokio::spawn(async move { owner_service.own(process, owner_journal, io, output_complete).await });
+        let handle = tokio::spawn(async move { owner_service.own(process, owner_journal, io, output_complete).await });
         let output_owner = Arc::new(super::OutputOwner {
-            abort: owner.abort_handle(),
+            abort: handle.abort_handle(),
         });
         self.output_owners
             .lock()
             .await
             .insert(journal.clone(), Arc::clone(&output_owner));
         tokio::spawn(async move {
-            let result = owner
+            let result = handle
                 .await
-                .map_err(|error| Error::Runtime(format!("process output owner failed: {error}")))
+                .map_err(|error| Error::Runtime(format!("{owner} output owner failed: {error}")))
                 .and_then(std::convert::identity);
             service.retire_output_owner(&journal, &output_owner).await;
-            service.finish_exec(exec_id, process_id, started_at_ms, result).await;
+            service.finish_exec(id, process_id, started_at_ms, result).await;
         });
-        Ok(session)
-    }
-
-    async fn rollback_unpublished_exec(
-        self: &Arc<Self>,
-        id: ExecId,
-        process: Arc<dyn crate::service::Running>,
-        journal: &JournalId,
-        publication: Error,
-    ) -> Error {
-        let mut cleanup = Vec::new();
-        if let Err(error) = process.signal(Signal::KILL).await {
-            cleanup.push(format!("kill failed: {error}"));
-        }
-        let mut wait = tokio::spawn(Arc::clone(&process).wait());
-        let mut terminal_failure = None;
-        let reaped = match tokio::time::timeout(unpublished_reap_timeout(), &mut wait).await {
-            Ok(Ok(Ok(_))) => true,
-            Ok(Ok(Err(error))) => {
-                cleanup.push(format!("reap failed: {error}"));
-                terminal_failure = Some(error.to_string());
-                true
-            }
-            Ok(Err(error)) => {
-                cleanup.push(format!("reap task failed: {error}"));
-                false
-            }
-            Err(_) => {
-                cleanup.push(format!("reap timed out after {:?}", unpublished_reap_timeout()));
-                self.exec_live.lock().await.insert(id.clone(), Arc::clone(&process));
-                let service = Arc::downgrade(self);
-                let journal = journal.clone();
-                let cleanup_id = id.clone();
-                let cleanup_task = tokio::spawn(async move {
-                    let result = wait.await;
-                    let Some(service) = service.upgrade() else {
-                        return;
-                    };
-                    let _guard = service.operations.lock().await;
-                    match result {
-                        Ok(Ok(_)) => {
-                            let owned = service
-                                .exec_live
-                                .lock()
-                                .await
-                                .get(&id)
-                                .is_some_and(|candidate| Arc::ptr_eq(candidate, &process));
-                            if owned {
-                                service.exec_live.lock().await.remove(&id);
-                                let io = service.io.lock().await.remove(&journal);
-                                if let Some(io) = io {
-                                    io.finish().await;
-                                }
-                                if let Some(waiters) = service.exec_waiters.lock().await.get(&id) {
-                                    waiters.notify_waiters();
-                                }
-                            }
-                        }
-                        Ok(Err(error)) => {
-                            service.exec_live.lock().await.remove(&id);
-                            service
-                                .failures
-                                .lock()
-                                .await
-                                .insert(journal.clone(), format!("unpublished exec cleanup failed: {error}"));
-                            let io = service.io.lock().await.remove(&journal);
-                            if let Some(io) = io {
-                                io.finish().await;
-                            }
-                            if let Some(waiters) = service.exec_waiters.lock().await.get(&id) {
-                                waiters.notify_waiters();
-                            }
-                        }
-                        Err(error) => {
-                            let failure = format!("quarantined exec reap task failed: {error}");
-                            hl_log::hl_error!(hl_log::tag::CONTAINER, "{} id={}", failure, id);
-                            service.failures.lock().await.insert(journal.clone(), failure.clone());
-                            service.exec_cleanup_failures.lock().await.insert(id.clone(), failure);
-                            if let Some(waiters) = service.exec_waiters.lock().await.get(&id) {
-                                waiters.notify_waiters();
-                            }
-                            service.exec_cleanups.lock().await.remove(&id);
-                            return;
-                        }
-                    }
-                    service.exec_cleanups.lock().await.remove(&id);
-                });
-                self.exec_cleanups
-                    .lock()
-                    .await
-                    .insert(cleanup_id, cleanup_task.abort_handle());
-                return Error::Runtime(format!(
-                    "exec state publication failed: {publication}; rollback cleanup failed: {}",
-                    cleanup.join("; ")
-                ));
-            }
-        };
-        if reaped {
-            if let Some(error) = terminal_failure {
-                self.failures
-                    .lock()
-                    .await
-                    .insert(journal.clone(), format!("unpublished exec cleanup failed: {error}"));
-                if let Some(waiters) = self.exec_waiters.lock().await.get(&id) {
-                    waiters.notify_waiters();
-                }
-            }
-            let io = self.io.lock().await.remove(journal);
-            if let Some(io) = io {
-                io.finish().await;
-            }
-        } else {
-            self.exec_live.lock().await.insert(id.clone(), Arc::clone(&process));
-            let failure = format!("unpublished exec cleanup is quarantined: {}", cleanup.join("; "));
-            self.failures.lock().await.insert(journal.clone(), failure.clone());
-            self.exec_cleanup_failures.lock().await.insert(id.clone(), failure);
-            if let Some(waiters) = self.exec_waiters.lock().await.get(&id) {
-                waiters.notify_waiters();
-            }
-        }
-        if cleanup.is_empty() {
-            publication
-        } else {
-            Error::Runtime(format!(
-                "exec state publication failed: {publication}; rollback cleanup failed: {}",
-                cleanup.join("; ")
-            ))
-        }
     }
 
     /// Reattaches one restored domain member instead of relaunching its command.
@@ -365,16 +250,13 @@ impl Service {
                 expected: "a sealed domain member awaiting restore",
             });
         }
-        let Some(container) = ({
+        let launch = {
             let live = self.live.lock().await;
             live.get(&exec.container).map(|run| Arc::clone(&run.process))
-        }) else {
-            return Err(Error::ExecNotReattachable {
-                id: exec.id,
-                reason: MEMBER_HANDLE_GAP,
-            });
         };
-        let Some(guest_pid) = exec.guest_pid else {
+        // A container with no live launch and a record with no captured pid are one refusal: in
+        // both, nothing in this process names the member the session is asking to be resumed on.
+        let (Some(container), Some(guest_pid)) = (launch, exec.guest_pid) else {
             return Err(Error::ExecNotReattachable {
                 id: exec.id,
                 reason: MEMBER_HANDLE_GAP,
@@ -398,44 +280,15 @@ impl Service {
                 reason: MEMBER_STDIO_GAP,
             });
         };
-        let process_id = process.id();
         let started_at_ms = now_ms();
         exec.state = ExecState::Running {
-            process_id,
+            process_id: process.id(),
             started_at_ms,
         };
         exec.checkpoint = None;
         self.execs.replace(&exec).await?;
-        self.exec_live
-            .lock()
-            .await
-            .insert(exec.id.clone(), Arc::clone(&process));
-        let (output_complete, output_completion) = tokio::sync::watch::channel(false);
-        self.exec_output_complete
-            .lock()
-            .await
-            .insert(exec.id.clone(), output_completion);
-        self.failures.lock().await.remove(&journal);
-        let service = Arc::clone(self);
-        let exec_id = exec.id;
-        let owner_service = Arc::clone(&service);
-        let owner_journal = journal.clone();
-        let owner = tokio::spawn(async move { owner_service.own(process, owner_journal, io, output_complete).await });
-        let output_owner = Arc::new(super::OutputOwner {
-            abort: owner.abort_handle(),
-        });
-        self.output_owners
-            .lock()
-            .await
-            .insert(journal.clone(), Arc::clone(&output_owner));
-        tokio::spawn(async move {
-            let result = owner
-                .await
-                .map_err(|error| Error::Runtime(format!("restored member output owner failed: {error}")))
-                .and_then(std::convert::identity);
-            service.retire_output_owner(&journal, &output_owner).await;
-            service.finish_exec(exec_id, process_id, started_at_ms, result).await;
-        });
+        self.own_exec_output(exec.id, process, journal, io, started_at_ms, "restored member")
+            .await;
         Ok(())
     }
 
@@ -445,14 +298,7 @@ impl Service {
         size: Option<crate::Size>,
     ) -> Result<crate::Session> {
         let _guard = self.operations.lock().await;
-        let mut exec = self.inspect_exec(id).await?;
-        if !matches!(exec.state, ExecState::Running { .. }) {
-            return Err(Error::InvalidExecState {
-                id: exec.id,
-                actual: exec.state,
-                expected: "running",
-            });
-        }
+        let mut exec = self.running_exec(id).await?;
         let journal = JournalId::exec(exec.id.clone());
         let live_at = self.logs.cursor(&journal).await?;
         let io = self
@@ -465,22 +311,7 @@ impl Service {
         let cursor = exec.attachment_cursor.unwrap_or(live_at).max(io.delivered_cursor());
         let session = crate::Session::new(Arc::clone(self), io, journal, cursor, live_at).claim_attachment()?;
         if let Some(size) = size {
-            let Some(previous) = exec.spec.process.console.terminal else {
-                return Err(Error::NoTerminal(exec.id.to_string()));
-            };
-            let process = self
-                .exec_live
-                .lock()
-                .await
-                .get(&exec.id)
-                .cloned()
-                .ok_or_else(|| Error::Runtime("running exec has no runtime process".into()))?;
-            process.resize(size).await?;
-            exec.spec.process.console.terminal = Some(size);
-            if let Err(error) = self.execs.replace(&exec).await {
-                let _ = process.resize(previous).await;
-                return Err(error);
-            }
+            self.resize_running_exec(&mut exec, size).await?;
         }
         Ok(session)
     }
@@ -556,11 +387,14 @@ impl Service {
             self.exec_live.lock().await.remove(&id);
             self.exec_output_complete.lock().await.remove(&id);
         }
-        if let Some(waiters) = self.exec_waiters.lock().await.get(&id) {
+        self.notify_exec_waiters(&id).await;
+        self.finish_exec_io(&JournalId::exec(id)).await;
+    }
+
+    /// Wakes every waiter on an exec whose state or liveness has just changed.
+    pub(super) async fn notify_exec_waiters(&self, id: &ExecId) {
+        if let Some(waiters) = self.exec_waiters.lock().await.get(id) {
             waiters.notify_waiters();
-        }
-        if let Some(io) = self.io.lock().await.remove(&JournalId::exec(id)) {
-            io.finish().await;
         }
     }
 
@@ -571,35 +405,30 @@ impl Service {
     // point here, so no second checkpoint channel can be opened for a session.
     pub(crate) async fn resize_exec(&self, id: &ExecId, size: crate::Size) -> Result<()> {
         let _guard = self.operations.lock().await;
-        let mut exec = self.inspect_exec(id).await?;
-        if !matches!(exec.state, ExecState::Running { .. }) {
-            return Err(Error::InvalidExecState {
-                id: exec.id,
-                actual: exec.state,
-                expected: "running",
-            });
-        }
+        let mut exec = self.running_exec(id).await?;
+        self.resize_running_exec(&mut exec, size).await
+    }
+
+    /// Resizes a running exec's terminal and records the new size.
+    ///
+    /// The previous size is restored when the record cannot be written, so the process and the
+    /// record a later attach reads never disagree about how wide the session is.
+    async fn resize_running_exec(&self, exec: &mut Exec, size: crate::Size) -> Result<()> {
         let Some(previous) = exec.spec.process.console.terminal else {
             return Err(Error::NoTerminal(exec.id.to_string()));
         };
-        let process = self
-            .exec_live
-            .lock()
-            .await
-            .get(&exec.id)
-            .cloned()
-            .ok_or_else(|| Error::Runtime("running exec has no runtime process".into()))?;
+        let process = self.running_exec_process(&exec.id).await?;
         process.resize(size).await?;
         exec.spec.process.console.terminal = Some(size);
-        if let Err(error) = self.execs.replace(&exec).await {
+        if let Err(error) = self.execs.replace(exec).await {
             let _ = process.resize(previous).await;
             return Err(error);
         }
         Ok(())
     }
 
-    pub(crate) async fn signal_exec(&self, id: &ExecId, signal: Signal) -> Result<()> {
-        let _guard = self.operations.lock().await;
+    /// Reads an exec that must be running, naming the state it is actually in when it is not.
+    async fn running_exec(&self, id: &ExecId) -> Result<Exec> {
         let exec = self.inspect_exec(id).await?;
         if !matches!(exec.state, ExecState::Running { .. }) {
             return Err(Error::InvalidExecState {
@@ -608,14 +437,23 @@ impl Service {
                 expected: "running",
             });
         }
-        let process = self
-            .exec_live
+        Ok(exec)
+    }
+
+    /// The process a running exec's record names, which a completed reap has already retired.
+    async fn running_exec_process(&self, id: &ExecId) -> Result<Arc<dyn Running>> {
+        self.exec_live
             .lock()
             .await
-            .get(&exec.id)
+            .get(id)
             .cloned()
-            .ok_or_else(|| Error::Runtime("running exec has no runtime process".into()))?;
-        process.signal(signal).await
+            .ok_or_else(|| Error::Runtime("running exec has no runtime process".into()))
+    }
+
+    pub(crate) async fn signal_exec(&self, id: &ExecId, signal: Signal) -> Result<()> {
+        let _guard = self.operations.lock().await;
+        let exec = self.running_exec(id).await?;
+        self.running_exec_process(&exec.id).await?.signal(signal).await
     }
 
     pub(crate) async fn remove_exec(&self, id: &ExecId) -> Result<()> {
@@ -642,40 +480,6 @@ impl Service {
         self.exec_waiters.lock().await.remove(id);
         self.execs.remove(id).await
     }
-
-    pub(super) async fn new_exec_io(&self, exec: &Exec, start_cursor: u64) -> Result<Arc<Io>> {
-        let mut values = self.io.lock().await;
-        let id = JournalId::exec(exec.id.clone());
-        let generation = self.next_io_generation()?;
-        let io = Arc::new(Io::new(exec.spec.streams.stdin, generation, start_cursor));
-        let previous = values.insert(id, Arc::clone(&io));
-        drop(values);
-        if let Some(previous) = previous {
-            previous.finish().await;
-        }
-        Ok(io)
-    }
-
-    pub(crate) async fn await_exec_cleanups(&self, timeout: std::time::Duration) -> Result<()> {
-        self.exec_cleanups.lock().await.retain(|_, task| !task.is_finished());
-        if let Some((id, error)) = self.exec_cleanup_failures.lock().await.iter().next() {
-            return Err(Error::Runtime(format!("exec {id} cleanup is poisoned: {error}")));
-        }
-        if self.exec_cleanups.lock().await.is_empty() {
-            return Ok(());
-        }
-        tokio::time::timeout(timeout, async {
-            loop {
-                self.exec_cleanups.lock().await.retain(|_, task| !task.is_finished());
-                if self.exec_cleanups.lock().await.is_empty() {
-                    return;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .map_err(|_| Error::Runtime("timed out waiting for quarantined exec cleanup".into()))
-    }
 }
 
 /// Why a sealed member cannot be revived as a live exec session yet. Named once so the refusal
@@ -689,13 +493,3 @@ the container's own bridge, so there is no live I/O to attach";
 const MEMBER_STDIO_GAP: &str = "the restored member is reachable, but its launch-time stdio was \
 rebound to the container's own bridge at capture time, so it has no channel of its own for a \
 terminal to attach to";
-
-#[cfg(test)]
-fn unpublished_reap_timeout() -> std::time::Duration {
-    std::time::Duration::from_millis(25)
-}
-
-#[cfg(not(test))]
-fn unpublished_reap_timeout() -> std::time::Duration {
-    std::time::Duration::from_secs(5)
-}

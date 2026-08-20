@@ -8,6 +8,7 @@ mod health;
 mod launch;
 mod removal;
 mod restart;
+mod rollback;
 
 use super::{NetworkConfig, ProcessConfig, Running, Runtime};
 use crate::console::Io;

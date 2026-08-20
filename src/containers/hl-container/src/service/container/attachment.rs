@@ -220,6 +220,29 @@ impl Service {
         io
     }
 
+    /// Opens the I/O generation an exec session is delivered through, retiring any generation the
+    /// same journal already had.
+    pub(super) async fn new_exec_io(&self, exec: &crate::Exec, start_cursor: u64) -> Result<Arc<Io>> {
+        let mut values = self.io.lock().await;
+        let id = JournalId::exec(exec.id.clone());
+        let generation = self.next_io_generation()?;
+        let io = Arc::new(Io::new(exec.spec.streams.stdin, generation, start_cursor));
+        let previous = values.insert(id, Arc::clone(&io));
+        drop(values);
+        if let Some(previous) = previous {
+            previous.finish().await;
+        }
+        Ok(io)
+    }
+
+    /// Retires an exec's live I/O generation whatever its number, closing the far end of any
+    /// attached session. An exec journal carries one generation at a time.
+    pub(super) async fn finish_exec_io(&self, journal: &JournalId) {
+        if let Some(io) = self.io.lock().await.remove(journal) {
+            io.finish().await;
+        }
+    }
+
     pub(super) async fn retire_io_generation(&self, id: &JournalId, generation: &Arc<Io>) {
         let removed = {
             let mut values = self.io.lock().await;
