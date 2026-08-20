@@ -40,6 +40,15 @@ int hl_ckpt_channel_current_for_test(void);
  * payload is copied into `out` (up to `capacity`); a longer reply is a protocol error. Returns 0 when a
  * well-formed reply arrived -- the operation's own status is in `reply->status` -- and -1 when the transport
  * or the framing failed. */
+/* Names the step at which this process's LAST channel round trip failed, or NULL if none has.
+ *
+ * The transport reports one -1 for four unrelated events -- no broker, a channel that could not be minted,
+ * a write that found the far end gone, and a reply that never arrived -- and a caller that prints only the
+ * -1 has told the reader nothing. Three lanes have read "answered status -1" as a broker refusal, which is
+ * the one thing it is NOT: a refusal carries a status and a reply. Recording the step is diagnostic only
+ * and changes no control flow. */
+const char *hl_ckpt_channel_failure(void);
+
 int hl_ckpt_channel_call(hl_ckpt_request *request, const char *name, const void *payload, hl_ckpt_reply *reply,
                          void *out, size_t capacity);
 

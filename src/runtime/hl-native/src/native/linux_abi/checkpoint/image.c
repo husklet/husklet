@@ -1241,8 +1241,19 @@ static int ckpt_register_ready(struct cpu **live, int count) {
     int status = ckpt_stream_call(HL_CKPT_OP_REGISTER_READY, NULL, 0, 0, 0, payload, payload_size, &reply, NULL, 0);
     free(payload);
     if (status == HL_CKPT_STATUS_OK && reply.value != 0) return 0;
-    fprintf(stderr, "[ckpt] refuse: REGISTER_READY for host process %d answered status %d member %llu\n",
-            (int)getpid(), status, (unsigned long long)reply.value);
+    /* A -1 status is a TRANSPORT failure and a >=0 status is the broker's own answer. Printing only the
+       number has repeatedly been read as a broker refusal, which is the one thing a -1 is not. */
+    if (status < 0) {
+        const char *step = hl_ckpt_channel_failure();
+        fprintf(stderr,
+                "[ckpt] refuse: REGISTER_READY for host process %d never reached the broker: the channel could "
+                "not %s\n",
+                (int)getpid(), step != NULL ? step : "complete the round trip");
+    } else {
+        fprintf(stderr, "[ckpt] refuse: REGISTER_READY for host process %d was refused by the broker (status %d, "
+                        "member %llu)\n",
+                (int)getpid(), status, (unsigned long long)reply.value);
+    }
     return -1;
 }
 
@@ -1290,6 +1301,41 @@ static uint64_t ckpt_park_until_released(void) {
     return HL_CKPT_RELEASE_RESUME;
 }
 
+/* The step that ended THIS process's own dump, set by ckpt_dump_self_locked before it returns -1.
+ * It exists only so the member can name its refusal on the wire; it changes no control flow. */
+static const char *g_ckpt_member_refusal;
+
+/* Tell the broker, BY NAME, that this member cannot contribute to the running capture.
+ *
+ * WHY IT IS NEEDED AT ALL. A member whose dump is refused aborts its group and then parks, exactly as a
+ * member whose dump succeeded does -- the park is what keeps every member simultaneously stopped and alive,
+ * and a refused member that ran away would break the freeze for everyone still capturing the far end of a
+ * shared object it owns half of. But nothing told the broker anything: the coordinator's rendezvous waits
+ * for `proc.<gpid>` to be committed by a process that has already decided it never will be, burns the whole
+ * peer-quiescence budget, and then refuses with "it did not reach a checkpoint safepoint, OR its dump was
+ * refused" -- a disjunction naming neither the process's real reason nor the step that produced it, tens of
+ * seconds after the decision was taken. Reporting here converts that into an immediate, correctly-named
+ * refusal at the host.
+ *
+ * WHY IT CANNOT WEAKEN ANYTHING. This runs only on paths that have ALREADY decided the dump is refused, and
+ * CAPTURE_REFUSED can only fail a capture, never publish one. A member in any of these states is doomed to
+ * refuse the whole capture already: it either never registered -- so it can never be counted by the seal,
+ * and it parks alive rather than exiting, so the "gone and never registered" exemption cannot cover it --
+ * or it registered and then aborted its group, which the rendezvous refuses for by construction. The only
+ * thing that changes is when the host learns, and what it is told.
+ *
+ * BEST EFFORT, exactly like ckpt_stream_capture_refused itself: on the paths where the channel is what
+ * broke, this round trip fails too and the coordinator's own deadline still ends the capture. */
+static void ckpt_member_refuse(const char *group, const char *step) {
+    char reason[HL_CKPT_STREAM_NAME_MAX];
+    snprintf(reason, sizeof reason,
+             "member %s (host process %d) refused its own dump: it could not %s; every member's state must be "
+             "saved for the capture to be complete",
+             group, (int)getpid(), step);
+    fprintf(stderr, "[ckpt] refuse: %s\n", reason);
+    ckpt_stream_capture_refused(reason);
+}
+
 static int ckpt_dump_self(struct cpu *c, const char *procdir, int park) {
     struct cpu *live[THREAD_REG_MAX];
     atomic_store_explicit(&g_ckpt_barrier_active, 1, memory_order_release);
@@ -1298,6 +1344,7 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir, int park) {
     if (stw_checkpoint_wait(request) != 0) {
         fprintf(stderr, "[ckpt] refuse: stop-the-world barrier did not converge\n");
         ckpt_sink_group_abort(ckpt_sink_current(), procdir);
+        if (park) ckpt_member_refuse(procdir, "stop every one of its own threads for the capture");
         stw_checkpoint_end();
         atomic_store_explicit(&g_ckpt_barrier_active, 0, memory_order_release);
         return -1;
@@ -1306,6 +1353,7 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir, int park) {
     if (count < 1 || count > THREAD_REG_MAX) {
         fprintf(stderr, "[ckpt] refuse: invalid registered CPU count %d\n", count);
         ckpt_sink_group_abort(ckpt_sink_current(), procdir);
+        if (park) ckpt_member_refuse(procdir, "enumerate its own stopped executors");
         stw_checkpoint_end();
         atomic_store_explicit(&g_ckpt_barrier_active, 0, memory_order_release);
         return -1;
@@ -1315,6 +1363,7 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir, int park) {
     if (ckpt_register_ready(live, count) != 0) {
         fprintf(stderr, "[ckpt] refuse: participant REGISTER_READY was not acknowledged\n");
         ckpt_sink_group_abort(ckpt_sink_current(), procdir);
+        if (park) ckpt_member_refuse(procdir, "prove its membership of the capture to the broker");
         stw_checkpoint_end();
         atomic_store_explicit(&g_ckpt_barrier_active, 0, memory_order_release);
         return -1;
@@ -1350,7 +1399,10 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir, int park) {
     g_ckpt_cpu_images = images;
     g_ckpt_cpu_count = count;
     int result = ckpt_dump_self_locked(c, procdir);
-    if (result != 0) ckpt_sink_group_abort(ckpt_sink_current(), procdir);
+    if (result != 0) {
+        ckpt_sink_group_abort(ckpt_sink_current(), procdir);
+        if (park) ckpt_member_refuse(procdir, g_ckpt_member_refusal ? g_ckpt_member_refusal : "complete its dump");
+    }
     /* Park BEFORE anything of the freeze is unwound, and park whether or not our own dump succeeded: a
        refused member that ran away would leave the coordinator unable to tell "refused" from "still
        working", and would break the freeze for every member still capturing a shared object it owns half
@@ -1375,6 +1427,7 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir, int park) {
     } while (0)
 
 static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
+    g_ckpt_member_refusal = NULL; /* one dump, one reason: never report the previous attempt's step */
     // HL_UNTRUSTED routes every host-authority object through the sentry process, so this worker's
     // descriptor table does not describe the guest: ckpt_scan_fds would capture sentry-relative
     // handles that no restore can rebuild. Capturing under the sentry requires the sentry to export
@@ -1384,25 +1437,31 @@ static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
     // gate was bypassed; refuse with a named cause rather than a bare failure.
     if (g_untrusted) {
         fprintf(stderr, "[ckpt] refuse: checkpoint unsupported under the sentry sandbox policy (HL_UNTRUSTED)\n");
+        g_ckpt_member_refusal = "be captured at all under the sentry sandbox policy";
         return -1;
     }
     // fcntl/flock state lives outside the descriptor table, so the fd scan below
     // cannot see it and would publish an image that silently omits it. SysV IPC has
     // the same shape but is now captured (ckpt_sysv_capture, below); the lock domain
     // is not, so the process is admitted only when it holds no lock.
-    if (ckpt_admit_ipc_and_lock_state() != 0) return -1;
+    if (ckpt_admit_ipc_and_lock_state() != 0) {
+        g_ckpt_member_refusal = "be admitted: it holds IPC or file-lock state the image cannot carry";
+        return -1;
+    }
     struct ckpt_sink *sink = ckpt_sink_current();
     struct ckpt_fd *fdrecs = calloc(HL_NFD, sizeof *fdrecs);
     int nfd = 0;
     if (fdrecs == NULL || ckpt_scan_fds(fdrecs, HL_NFD, &nfd) != 0) {
         free(fdrecs);
-        return -1; // P3 refusal already reported
+        g_ckpt_member_refusal = "scan its own descriptor table"; // P3 refusal already reported
+        return -1;
     }
 
     // Open this process's image group. The sink stages it; nothing is visible until group_commit.
     fprintf(stderr, "[ckpt] %s: begin (pid %d)\n", group, (int)getpid());
     if (ckpt_sink_group_begin(sink, group) != 0) {
         free(fdrecs);
+        g_ckpt_member_refusal = "open its image group";
         return -1;
     }
     struct ckpt_sink_stream *fp = NULL, *ff = NULL;
@@ -1500,10 +1559,15 @@ done:
     if (!ok) {
         fprintf(stderr, "[ckpt] refuse: %s could not %s\n", group, failed_step ? failed_step : "complete its dump");
         fprintf(stderr, "[ckpt] %s: ABORT -- nothing from this process is published\n", group);
+        g_ckpt_member_refusal = failed_step ? failed_step : "complete its dump";
         return -1;
     }
     fprintf(stderr, "[ckpt] %s: commit\n", group);
-    return ckpt_sink_group_commit(sink, group);
+    if (ckpt_sink_group_commit(sink, group) != 0) {
+        g_ckpt_member_refusal = "commit its image group";
+        return -1;
+    }
+    return 0;
 }
 
 // Enumerate the container's whole process tree = every ENGINE process in the init's session. hl runs each

@@ -29,6 +29,10 @@ int hl_ckpt_channel_broker(void) {
     return -1;
 }
 
+const char *hl_ckpt_channel_failure(void) {
+    return "reach a checkpoint broker: this host has no checkpoint transport";
+}
+
 int hl_ckpt_channel_adopt(const char *broker, const char *trigger) {
     (void)broker;
     (void)trigger;
@@ -132,6 +136,40 @@ static int checkpoint_broker = -1;
 static int checkpoint_trigger = -1;
 static int checkpoint_channel = -1;
 static long checkpoint_channel_owner; /* getpid() that created `checkpoint_channel` */
+/* The step at which this process's last round trip failed, and the errno it failed with. Diagnostic
+ * only; see the header. */
+static char checkpoint_channel_failure[192];
+
+static int checkpoint_channel_failed(const char *step) {
+    int saved = errno;
+    snprintf(checkpoint_channel_failure, sizeof checkpoint_channel_failure, "%s (%s)", step, strerror(saved));
+    errno = saved;
+    return -1;
+}
+
+const char *hl_ckpt_channel_failure(void) {
+    return checkpoint_channel_failure[0] != 0 ? checkpoint_channel_failure : NULL;
+}
+
+/* Forgets a channel whose round trip failed, so the NEXT call mints a fresh one.
+ *
+ * A stream socket that failed mid-frame is not merely unlucky, it is DESYNCHRONIZED: a request whose
+ * header went out and whose payload did not leaves the broker reading this process's next request as that
+ * payload. Keeping it cached made the failure absorbing -- every later call on this process, including the
+ * one that reports WHY the capture must be refused, failed on the same dead descriptor, which is why a
+ * member that had already decided it could not contribute still let the coordinator burn its whole
+ * rendezvous budget before anyone was told.
+ *
+ * A fresh connection is not a way around any gate: the broker admits a connection to publish capture bytes
+ * only after REGISTER_READY on that connection (broker.rs `publishes_capture_bytes`), so a reconnecting
+ * process starts unregistered and can publish nothing it had not already proven. */
+static void checkpoint_channel_poison(void) {
+    if (checkpoint_channel < 0) return;
+    hl_host_process_fd_private_remove(checkpoint_channel);
+    (void)close(checkpoint_channel);
+    checkpoint_channel = -1;
+    checkpoint_channel_owner = 0;
+}
 #if defined(HL_NATIVE_TEST_HOOKS)
 static uint64_t checkpoint_test_claimed_pid;
 void hl_ckpt_channel_test_claimed_pid(uint64_t claimed_pid) { checkpoint_test_claimed_pid = claimed_pid; }
@@ -245,7 +283,7 @@ static int checkpoint_read_all(int descriptor, void *data, size_t size) {
 int hl_ckpt_channel_acquire(void) {
     hl_ckpt_hello hello;
     int pair[2];
-    if (checkpoint_broker < 0) return -1;
+    if (checkpoint_broker < 0) return checkpoint_channel_failed("find a published checkpoint broker");
     if (checkpoint_channel >= 0) {
         if (checkpoint_channel_owner == (long)getpid()) return checkpoint_channel;
         /* Inherited across fork(). Drop the parent's channel rather than sharing it: two processes issuing
@@ -253,7 +291,7 @@ int hl_ckpt_channel_acquire(void) {
         (void)close(checkpoint_channel);
         checkpoint_channel = -1;
     }
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) return -1;
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) return checkpoint_channel_failed("create its channel socket pair");
     hello.magic = HL_CKPT_STREAM_MAGIC_HELLO;
     hello.abi = HL_CKPT_STREAM_ABI;
     hello.host_pid = (uint64_t)getpid();
@@ -263,7 +301,7 @@ int hl_ckpt_channel_acquire(void) {
     if (hl_fork_wire_send_descriptors(checkpoint_broker, &hello, sizeof hello, &pair[1], 1) != 0) {
         (void)close(pair[0]);
         (void)close(pair[1]);
-        return -1;
+        return checkpoint_channel_failed("announce its channel to the broker");
     }
     (void)close(pair[1]);
     /* The channel is engine control state, not a guest socket. Move it into the private descriptor range so
@@ -273,7 +311,7 @@ int hl_ckpt_channel_acquire(void) {
         int adopted = hl_host_process_fd_private_adopt(pair[0]);
         if (adopted < 0) {
             (void)close(pair[0]);
-            return -1;
+            return checkpoint_channel_failed("move its channel into the engine-private descriptor range");
         }
         pair[0] = adopted;
     }
@@ -286,21 +324,42 @@ int hl_ckpt_channel_call(hl_ckpt_request *request, const char *name, const void 
                          void *out, size_t capacity) {
     int descriptor = hl_ckpt_channel_acquire();
     size_t name_size = name != NULL ? strlen(name) + 1 : 0;
-    if (descriptor < 0 || name_size > HL_CKPT_STREAM_NAME_MAX || request->length > HL_CKPT_STREAM_PAYLOAD_MAX)
-        return -1;
+    if (descriptor < 0) return -1; /* acquire already named the step */
+    if (name_size > HL_CKPT_STREAM_NAME_MAX || request->length > HL_CKPT_STREAM_PAYLOAD_MAX)
+        return checkpoint_channel_failed("frame a request within the protocol's size bounds");
     request->magic = HL_CKPT_STREAM_MAGIC_REQUEST;
     request->abi = HL_CKPT_STREAM_ABI;
     request->name_size = (uint32_t)name_size;
-    if (checkpoint_write_all(descriptor, request, sizeof *request) != 0) return -1;
-    if (name_size != 0 && checkpoint_write_all(descriptor, name, name_size) != 0) return -1;
+    if (checkpoint_write_all(descriptor, request, sizeof *request) != 0) {
+        checkpoint_channel_poison();
+        return checkpoint_channel_failed("send its request header: the broker closed this channel");
+    }
+    if (name_size != 0 && checkpoint_write_all(descriptor, name, name_size) != 0) {
+        checkpoint_channel_poison();
+        return checkpoint_channel_failed("send its request name: the broker closed this channel");
+    }
     /* A NULL payload with a non-zero length is a REQUESTED length (SOURCE_READ), not bytes to send. */
     if (payload != NULL && request->length != 0 &&
-        checkpoint_write_all(descriptor, payload, (size_t)request->length) != 0)
-        return -1;
-    if (checkpoint_read_all(descriptor, reply, sizeof *reply) != 0) return -1;
-    if (reply->magic != HL_CKPT_STREAM_MAGIC_REPLY || reply->abi != HL_CKPT_STREAM_ABI) return -1;
-    if (reply->length > capacity || reply->length > HL_CKPT_STREAM_PAYLOAD_MAX) return -1;
-    if (reply->length != 0 && checkpoint_read_all(descriptor, out, (size_t)reply->length) != 0) return -1;
+        checkpoint_write_all(descriptor, payload, (size_t)request->length) != 0) {
+        checkpoint_channel_poison();
+        return checkpoint_channel_failed("send its request payload: the broker closed this channel");
+    }
+    if (checkpoint_read_all(descriptor, reply, sizeof *reply) != 0) {
+        checkpoint_channel_poison();
+        return checkpoint_channel_failed("read the broker's reply: this channel ended before one arrived");
+    }
+    if (reply->magic != HL_CKPT_STREAM_MAGIC_REPLY || reply->abi != HL_CKPT_STREAM_ABI) {
+        checkpoint_channel_poison();
+        return checkpoint_channel_failed("recognize the broker's reply framing");
+    }
+    if (reply->length > capacity || reply->length > HL_CKPT_STREAM_PAYLOAD_MAX) {
+        checkpoint_channel_poison();
+        return checkpoint_channel_failed("accept the broker's reply payload length");
+    }
+    if (reply->length != 0 && checkpoint_read_all(descriptor, out, (size_t)reply->length) != 0) {
+        checkpoint_channel_poison();
+        return checkpoint_channel_failed("read the broker's reply payload");
+    }
     return 0;
 }
 
