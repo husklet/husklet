@@ -361,16 +361,22 @@ jobs:
       # plus the objdump import/ABI contracts, with a closure shared with nothing else
       # this job builds. 24.5 against a 60 minute timeout is comfortable, and this line
       # is the measurement rather than the estimate it replaces.
+      # Built one attribute at a time by `flake-checks-named.sh` so a failure SAYS
+      # WHICH ONE. `nix build .#a .#b .#c` reports a single exit status for the set,
+      # and when this step failed on eb556a32b the entire diagnosis available without
+      # repository admin was `Process completed with exit code 1` -- seven attributes,
+      # one bit, and a local sweep to find out which. Nix caches per derivation, so
+      # building them separately costs nothing.
       - name: Verify the Linux-only flake checks that are green
         run: >-
-          nix --extra-experimental-features 'nix-command flakes' build -L --no-link
-          .#checks.x86_64-linux.host-linux-aarch64
-          .#checks.x86_64-linux.host-linux-x86_64
-          .#checks.x86_64-linux.installed-product
-          .#checks.x86_64-linux.host-darwin-cross-contract
-          .#checks.x86_64-linux.scan-build-linux-aarch64
-          .#checks.x86_64-linux.scan-build-linux-x86_64
-          .#checks.x86_64-linux.host-windows-x86_64-gnu-smoke
+          .github/scripts/flake-checks-named.sh x86_64-linux
+          host-linux-aarch64
+          host-linux-x86_64
+          installed-product
+          host-darwin-cross-contract
+          scan-build-linux-aarch64
+          scan-build-linux-x86_64
+          host-windows-x86_64-gnu-smoke
 
   native-linux-arm64:
     name: Native engine / ARM64
