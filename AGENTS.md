@@ -783,6 +783,39 @@ Measured on the VM at 6fde34d36: `hl_aarch64_reserved_register_test = 0` and
 `hl_x86_64_reserved_register_test = 0`, against `4` and `4` from the x86_64
 engine `.so` built from the same tree.
 
+### Telling translated execution from interpretation, at runtime
+
+The engine takes no `--engine-option`, `HL_C_DIAGNOSTICS` is a launch option with
+no environment importer, and `hl-native-entry:` has no producer -- so none of the
+usual counters are reachable from `hl-aarch64`/`hl-x86_64` on the command line.
+The code cache is visible in `/proc` instead, and it is unambiguous. The guest
+runs in a **child** of the worker, so look there:
+
+```text
+./target/release/hl-aarch64 --rootfs "$rootfs" spin & P=$!
+sleep 4; C=$(cat /proc/$P/task/*/children | tr ' ' '\n' | grep -E '^[0-9]+$' | head -1)
+grep hl-code /proc/$C/maps
+```
+
+On the aarch64 host that prints the W^X pair -- two 64 MiB `/memfd:hl-code`
+mappings, one `rw-s` and one `r-xs`. On this x86_64 host the same engine, guest
+and command print **nothing**: there is no arena because there is no JIT. Dumping
+the arena settles it completely; 256 bytes off the head of one, disassembled with
+`objdump -D -b binary -m aarch64`, is the translated-block prologue --
+`ldr x9,[x0,#248]` / `mov sp,x9` / `msr nzcv,x9`, then `ldp q0,q1,[x0,#384]`
+through `q30,q31`, then the guest GPRs -- and no instruction in it names `x18`.
+
+### Raise `ulimit -n` before running the engine in a fresh VM
+
+A stock Ubuntu cloud image ships a 1024 soft `nofile`; this dev box runs
+1,048,576. Under 1024 the engine fails at **create**, before the guest starts,
+as `NativeCreateFailed(5)` -- `HL_STATUS_RESOURCE_LIMIT` from the `pipe()` in
+`engine/lifecycle.c:783`, which is simply out of descriptors after the fd cache
+binds 1024 of them. Nothing in the message points at a limit. `/srv/vm/aarch64`
+now persists the higher limit through `systemd` and `limits.conf`; if you build
+another aarch64 host, set it there too before concluding anything about the
+engine.
+
 ### Never take a timing here
 
 TCG is a software translator and the VM is 8 vCPU of it. Every duration measured

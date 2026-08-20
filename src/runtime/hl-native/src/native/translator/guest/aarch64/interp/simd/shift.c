@@ -1,7 +1,7 @@
 static int interp_simd_shift(struct cpu *cpu, uint32_t insn, uint32_t decode, unsigned scalar, unsigned q, unsigned u) {
     uint64_t gpc = cpu->pc;
-    int rd = (int)(insn & 31), rn = (int)((insn >> 5) & 31), rm = (int)((insn >> 16) & 31);
-    // AdvSIMD shift by immediate
+    int rd = (int)(insn & 31), rn = (int)((insn >> 5) & 31);
+    // AdvSIMD shift by immediate: bits[22:19] are immh and bits[18:16] immb, so there is no Rm here.
     if ((decode & 0x9F800400u) == 0x0F000400u) {
         unsigned immh = (insn >> 19) & 0xFu, immb = (insn >> 16) & 7u, opcode = (insn >> 11) & 0x1Fu;
         unsigned size;

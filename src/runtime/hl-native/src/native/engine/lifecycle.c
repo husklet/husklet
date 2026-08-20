@@ -563,9 +563,18 @@ static void *hl_checkpoint_control_main(void *opaque) {
     return NULL;
 }
 
+#endif /* !_WIN32 -- reopened below */
+
 /* Every checkpointable guest process inherits this endpoint. Closing the
  * engine-owner endpoint revokes the whole restored generation without a PID
- * scan, including members whose process groups were reconstructed. */
+ * scan, including members whose process groups were reconstructed.
+ *
+ * Outside the surrounding !_WIN32 block on purpose. hl_engine_checkpoint_lifetime_after_fork has a
+ * Windows arm -- the `#else` below -- and it is not decoration: linux_abi/syscall/proc.c calls it
+ * unguarded from the per-ISA unity unit, which IS compiled for Windows. Nested inside that block the
+ * Windows arm was unreachable, so the symbol had no definition on Windows at all and the mingw link
+ * failed with an undefined reference to hl_{aarch64,x86_64}_engine_checkpoint_lifetime_after_fork --
+ * behind three layers of compile errors, which is why the arm looked present for as long as it did. */
 #if !defined(_WIN32)
 static int hl_checkpoint_lifetime_descriptor = -1;
 
@@ -593,8 +602,14 @@ int hl_engine_checkpoint_lifetime_after_fork(void) {
     return pthread_detach(lifetime);
 }
 #else
+/* No fork on this host, so nothing is inherited across one and there is nothing to re-arm: the
+ * revocation endpoint is the backend's own process table (host/windows/process.c). A real answer,
+ * not a stub -- `0` here means "armed", and the caller in proc.c treats anything else as a failed
+ * fork child. */
 int hl_engine_checkpoint_lifetime_after_fork(void) { return 0; }
 #endif
+
+#if !defined(_WIN32)
 
 static int32_t hl_production_entry(void *opaque) {
     hl_production_entry_context *context = opaque;

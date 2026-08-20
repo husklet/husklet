@@ -281,6 +281,7 @@ static int smc_commit(struct cpu *c) {
     HL_LOGF(&g_jit_log, HL_LOG_TAG_JIT, "smc invalidate backend=interp mode=%s ranges=%u removed=%u retained=%u",
             (force_whole || c->smc_range_overflow) ? "whole" : "targeted", c->smc_range_count, removed,
             g_live_map_count);
+    (void)removed; // read only by the diagnostic above, which is a no-op under -DHL_ENABLE_LOGGING=0
     stw_mapping_end();
     c->smc_range_count = 0;
     c->smc_range_overflow = 0;

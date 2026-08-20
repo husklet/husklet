@@ -127,18 +127,25 @@ jobs:
           status="${PIPESTATUS[0]}"
           set -e
           if (( status != 0 )); then
-            # Cargo's progress lines are the overwhelming majority of this log and they
-            # are worthless in a failure report, so a raw `tail` spends the whole
-            # annotation budget on them and GitHub truncates the actual error off the
-            # end. Measured on run 32387567630: all four legs annotated 120 lines of
-            # `Compiling <crate>` and not one line of why the scenario failed, which is
-            # the only reason those failures still have no diagnosis. Drop the progress
-            # chatter first, then tail what is left.
-            # `|| true` is load-bearing: `set -o pipefail` is on above, and `grep -v`
-            # exits 1 when it selects nothing, which would abort this branch before the
-            # annotation is ever echoed.
-            diagnostic="$(grep -vE '^ *(Compiling|Downloading|Downloaded|Checking|Finished|Fresh|Updating|Blocking) ' "$log_file" \
-              | tail -n 120 | awk '{ print substr($0, 1, 500) }' || true)"
+            # GitHub truncates an annotation message at 4096 bytes FROM THE FRONT, so a
+            # long tail keeps the SETUP and discards the error at the end -- the exact
+            # opposite of what a failure report needs. Filtering noise alone cannot fix
+            # that, which is what the first attempt at this got wrong. Two defences,
+            # both required:
+            #   1. drop the progress chatter. Measured on run 32387567630 every one of
+            #      the 4096 bytes was cargo `Compiling <crate>`; after filtering only
+            #      those, on run 32394862530 every one was nix `copying path ... from
+            #      cache.nixos.org`. Two different toolchains, same failure mode.
+            #   2. keep only the LAST 3500 characters of what survives, so the end of
+            #      the log is what reaches the annotation rather than the beginning.
+            diagnostic="$(grep -vE "^ *(Compiling|Downloading|Downloaded|Checking|Finished|Fresh|Updating|Blocking|Compiling) |^(copying path|building|downloading|unpacking|querying) '|^warning: Git tree" "$log_file" \
+              | tail -n 60 | awk '{ print substr($0, 1, 300) }' || true)"
+            # `|| true` above is load-bearing: `set -o pipefail` is on and `grep -v`
+            # exits 1 when it selects nothing, which would abort before annotating.
+            # Guarded because bash's `${var: -N}` yields the EMPTY STRING when the
+            # string is shorter than N, not the whole string -- so an unguarded clamp
+            # deletes precisely the short, useful diagnostics. Caught by exercising it.
+            if (( ${#diagnostic} > 3500 )); then diagnostic="${diagnostic: -3500}"; fi
             diagnostic="${diagnostic//'%'/'%25'}"
             diagnostic="${diagnostic//$'\r'/'%0D'}"
             diagnostic="${diagnostic//$'\n'/'%0A'}"

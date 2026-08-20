@@ -1090,7 +1090,7 @@ static int ckpt_restore_commit_publish(void) {
  * pid that no longer exists and blocks forever -- a hang, with nothing logged, out of a capture that
  * reported success.
  *
- * The corpse is a bare fork(): it runs nothing but the termination itself, publishes no birth record, and is
+ * The corpse is bare: it runs nothing but the termination itself, publishes no birth record, and is
  * therefore not a guest process and not a member of any later capture -- it is a status in the only shape
  * the kernel has for one. Called AFTER the pid map is finalized, so the mapping it adds is live before any
  * guest instruction runs, and BEFORE thread_restore_group, so the fork is taken while this process is still
@@ -1122,7 +1122,7 @@ static int ckpt_restore_reaped_children(const char *procdir, const struct ckpt_m
             failed = 1;
             break;
         }
-        pid_t corpse = fork();
+        pid_t corpse = hl_host_process_clone_current();
         if (corpse == 0) {
             /* A recorded signal death is reproduced by dying of that signal, so the status word the parent
              * reaps is built by the same kernel that built the original one. Cores are suppressed: the

@@ -7,8 +7,9 @@
 static int interp_exec_load_store_structures(struct cpu *cpu, uint32_t insn) {
     uint64_t gpc = cpu->pc;
     int rt = (int)(insn & 31), rn = (int)((insn >> 5) & 31);
-    int rt2 = (int)((insn >> 10) & 31), rm = (int)((insn >> 16) & 31);
-    unsigned vector = (insn >> 26) & 1;
+    // Rm is the post-index offset register. Bits[15:10] are opcode/size (multi) or opcode/S/size
+    // (single) -- there is no Rt2 in either encoding -- and bit26 (V) is pinned to 1 by both masks.
+    int rm = (int)((insn >> 16) & 31);
     unsigned q = (insn >> 30) & 1;
 
     // AdvSIMD load/store multiple structures. `opcode` names both the register count and whether they
