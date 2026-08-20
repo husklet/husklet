@@ -28,7 +28,7 @@
 //! channel that no second thread can race.
 
 use std::panic::AssertUnwindSafe;
-use std::sync::mpsc::{sync_channel, SyncSender};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::OnceLock;
 
 /// A scenario to run on the toolkit thread, and where its outcome is sent back.
@@ -68,6 +68,24 @@ fn said(panic: &Box<dyn std::any::Any + Send>) -> String {
         .unwrap_or_else(|| "the scenario panicked".to_owned())
 }
 
+/// Enters GTK on the calling thread, reports whether it can draw, and then serves errands.
+///
+/// Returns once the errand sender is dropped, or immediately when the host has no display.
+fn serve_errands(queue: &Receiver<Errand>, entered: &SyncSender<bool>) {
+    // Both halves matter: `Ok` alone is what a second failed entry answers on a
+    // display-less host, and a display alone is not enough to have acquired the
+    // main context.
+    let drawable = gtk::init().is_ok() && gtk::gdk::Display::default().is_some();
+    entered.send(drawable).expect("the entry is awaited");
+    if !drawable {
+        return;
+    }
+    while let Ok((scenario, finished)) = queue.recv() {
+        let outcome = std::panic::catch_unwind(AssertUnwindSafe(scenario));
+        let _ = finished.send(outcome);
+    }
+}
+
 /// The toolkit thread's errand channel, or `None` when GTK has no display here.
 fn toolkit() -> Option<&'static SyncSender<Errand>> {
     static TOOLKIT: OnceLock<Option<SyncSender<Errand>>> = OnceLock::new();
@@ -77,20 +95,7 @@ fn toolkit() -> Option<&'static SyncSender<Errand>> {
             let (entered, entry) = sync_channel(1);
             std::thread::Builder::new()
                 .name("husklet-toolkit".to_owned())
-                .spawn(move || {
-                    // Both halves matter: `Ok` alone is what a second failed
-                    // entry answers on a display-less host, and a display alone
-                    // is not enough to have acquired the main context.
-                    let drawable = gtk::init().is_ok() && gtk::gdk::Display::default().is_some();
-                    entered.send(drawable).expect("the entry is awaited");
-                    if !drawable {
-                        return;
-                    }
-                    while let Ok((scenario, finished)) = queue.recv() {
-                        let outcome = std::panic::catch_unwind(AssertUnwindSafe(scenario));
-                        let _ = finished.send(outcome);
-                    }
-                })
+                .spawn(move || serve_errands(&queue, &entered))
                 .expect("a thread for the toolkit");
             entry
                 .recv()

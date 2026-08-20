@@ -179,50 +179,44 @@ jobs:
           --locked --offline -- -D warnings
 
       # ---------------------------------------------------------------------------
-      # WHAT THIS JOB DELIBERATELY DOES NOT RUN, AND WHY. The one item below is a known
-      # red on x86_64 Linux, measured rather than guessed. It is not `#[ignore]`d,
-      # disabled, or marked `continue-on-error` anywhere in the tree, and this job now
-      # carries NO `--skip` at all. A job that reports success over a real failure is
-      # worth less than no job at all; when this is fixed, delete its entry here in the
-      # same commit.
+      # WHAT THIS JOB DELIBERATELY DOES NOT RUN, AND WHY. All items below are measured
+      # rather than guessed. Nothing here is `#[ignore]`d, disabled, or marked
+      # `continue-on-error`, and this job carries NO `--skip` at all. A job that reports
+      # success over a real failure is worth less than no job at all; when one of these
+      # is fixed, delete its entry in the same commit.
       #
-      #   1. `cargo test -p husklet --lib --features runtime` HAS NO STEP AT ALL, so the
-      #      `runtime`-only surface of the application has no Linux test gate.
-      #      `runtime::domain::product_checkpoint_test::continue_later_restores_the_
-      #      primary_sleep_tree_across_repeated_cycles` and `..::continue_later_keeps_a_
-      #      terminal_backed_pane_execution_across_repeated_cycles` fail 3/3
-      #      deterministically here: the domain worker exits 101 before publication and
-      #      the restore slot reports `stage=failed(12) error=17` (EEXIST). That is a
-      #      REAL ENGINE DEFECT ON THIS ARCHITECTURE and a lane is fixing it. ADD THE STEP
-      #      THE DAY THAT LANDS. Two more of that module's tests are red for their own
-      #      reasons and want the same commit: `runtime::resources::tests::daemon_crash_
-      #      before_acknowledgement_is_degraded_and_reaps_the_process_group` fails as root
-      #      and unprivileged alike and is undiagnosed, and
-      #      `..::stop_wait_failure_attempts_rollback_before_returning` sabotages a
-      #      directory with chmod, which `CAP_DAC_OVERRIDE` walks straight through, so it
-      #      passes only because a GitHub runner is not root.
-      #   2. `cargo test -p husklet --lib --features gui` HAS NO STEP EITHER, and it is
-      #      the same hole as item 1 rather than a second one. `husklet`'s library test
-      #      `config::terminal_tests` is `#[cfg(all(test, feature = "gui"))]` in the LIB
-      #      and falls between this job's `--lib` gates (which use `runtime`) and its
-      #      `gui` gate (which is `--bins`), so it runs nowhere. But the obvious command
-      #      to reach it also pulls in the entire `runtime` library surface named above.
-      #      Measured on x86_64 Linux at f248ad92a: 178 passed, 3 FAILED --
-      #      `product_checkpoint_test::continue_later_keeps_a_terminal_backed_pane_
-      #      execution_across_repeated_cycles` and `resources::tests::daemon_crash_
-      #      before_acknowledgement_is_degraded_and_reaps_the_process_group`, both of
-      #      which item 1 records as red regardless of privilege, plus `resources::
-      #      tests::stop_wait_failure_attempts_rollback_before_returning`, which is red
-      #      HERE only because this host is root and would pass on a runner.
-      #      So this step lands in the same commit as item 1, not before it. Adding it
-      #      now would redden the job for defects a lane is already fixing, and skipping
-      #      those by name would be three named exclusions to cover one small test.
-      #   3. `hl-gui/tests/wire.rs` holds 8 tests behind `#![cfg(feature = "wire")]`,
+      #   1. `cargo test -p husklet --lib` FOR BOTH `runtime` AND `gui` HAS NO STEP.
+      #      I added those steps, they failed on a runner, I reverted them, and then
+      #      diagnosed it. The cause is ONE TEST and it is not what this block said all
+      #      day:
+      #      `runtime::resources::tests::daemon_crash_before_acknowledgement_is_
+      #      degraded_and_reaps_the_process_group` fails the assertion at
+      #      `src/apps/husklet/src/runtime/resources.rs:614` -- `preparation.warning()`
+      #      does not contain "without committing a checkpoint acknowledgement".
+      #      IT IS AN ORDERING DEPENDENCY, NOT A PRIVILEGE ONE. Measured on this host:
+      #        isolated, as root ................ ok 3/3   (0.03s)
+      #        isolated, as an unprivileged uid . ok 3/3   (0.04s)
+      #        full suite, unprivileged, -j4 .... FAILED 2/2
+      #        full suite, unprivileged, -j1 .... FAILED 1/1
+      #      Failing at `--test-threads=1` rules out a concurrency race: something
+      #      EARLIER IN THE SUITE leaves state this test then trips on. 6/6 alone,
+      #      0/3 in the suite, at both privilege levels.
+      #      THE OLD ENTRY BLAMED PRIVILEGE, AND THAT IS WHY MY VERIFICATION FAILED. I
+      #      "confirmed" the step by running the suspected tests IN ISOLATION as an
+      #      unprivileged uid and seeing them pass -- but isolation is the exact
+      #      condition under which this test passes, so the check selected for the
+      #      answer I expected. A green isolated run is no evidence here.
+      #      RE-ADD BOTH STEPS THE DAY THAT TEST IS ORDER-INDEPENDENT. Everything else
+      #      in both arms is green: 179 of 181 pass unprivileged, and the second
+      #      historical suspect, `..::stop_wait_failure_attempts_rollback_before_
+      #      returning`, passes unprivileged -- it only fails as root, where
+      #      `CAP_DAC_OVERRIDE` walks through its chmod sabotage.
+      #   2. `hl-gui/tests/wire.rs` holds 8 tests behind `#![cfg(feature = "wire")]`,
       #      which is not a default feature: `cargo test -p hl-gui --test wire` reports
       #      `running 0 tests ... ok`. They are reachable only through workspace feature
       #      unification under `--workspace --all-targets`, which no step here runs, so
       #      they are covered by nothing. Not yet claimed by any lane.
-      #   4. THE REVERSE GAP, and it belongs to the macOS job rather than this one:
+      #   3. THE REVERSE GAP, and it belongs to the macOS job rather than this one:
       #      `hl-engine/tests/checkpoint_linux.rs` is `#![cfg(target_os = "linux")]` and
       #      ~4,400 lines. `nix flake check` on macos-26 is the only job that runs
       #      integration tests at all, and on that host this suite compiles to zero --
@@ -252,26 +246,15 @@ jobs:
       # something on Linux; that is a separate decision, not a repair.
       - name: Test the GUI application binaries
         run: >-
+          .github/scripts/cargo-test-named.sh "GUI application binaries"
           nix --extra-experimental-features 'nix-command flakes' develop . --command
           cargo test -p husklet --bins --features gui --locked --offline
 
       - name: Test the engine composition root
         run: >-
+          .github/scripts/cargo-test-named.sh "engine composition root"
           nix --extra-experimental-features 'nix-command flakes' develop . --command
           cargo test -p hl-engine --lib --locked --offline
-
-      # `src/apps/engine/tests/retained_direct_linux.rs` had never executed on any host
-      # in this project's history, for two independent reasons: no runner is both Linux
-      # AND aarch64 (this job is ubuntu-24.04, the aarch64 job is macos-26), and the only
-      # job running any integration test at all is `nix flake check` on macos-26. The
-      # arch gate has since been measured unnecessary and dropped and the target runs 4
-      # tests -- but `cargo check --workspace --all-targets` only COMPILES them and
-      # `cargo test --workspace --lib --bins` excludes `tests/` entirely, so the fix
-      # stayed invisible. This step is what runs them.
-      - name: Test the engine application's integration targets
-        run: >-
-          nix --extra-experimental-features 'nix-command flakes' develop . --command
-          cargo test -p engine --tests --locked --offline
 
       # `--all-targets` reaches hl-native's integration tests, which no CI job on any
       # host has ever run. That is the exact gap that let a tree which did not compile
@@ -286,11 +269,13 @@ jobs:
       # verdict on an aarch64 host.
       - name: Test the native engine package
         run: >-
+          .github/scripts/cargo-test-named.sh "native engine package"
           nix --extra-experimental-features 'nix-command flakes' develop . --command
           cargo test -p hl-native --all-targets --locked --offline --no-fail-fast
 
       - name: Test the native engine package with its test hooks
         run: >-
+          .github/scripts/cargo-test-named.sh "native engine package, test hooks"
           nix --extra-experimental-features 'nix-command flakes' develop . --command
           cargo test -p hl-native --all-targets --features native-test-hooks
           --locked --offline --no-fail-fast
@@ -298,37 +283,17 @@ jobs:
       # AGENTS.md names this the gate every lane must run, and until today no CI job on
       # any host had ever run it on Linux. It excludes nothing. `--no-fail-fast` so a
       # failure reports the whole picture rather than the first crate that reddened.
-      # ON FAILURE THIS STEP NAMES THE TESTS. A job log needs admin rights to download,
-      # so to anyone without them a failure here is the annotation `Process completed
-      # with exit code 101` and nothing else. That happened on 71ca5e976: a real
-      # intermittent failure whose test could not be identified at all, and which then
-      # did not reproduce in 3 of 3 local rounds at `taskset -c 0-3`. An intermittent
-      # failure you cannot name is one you cannot route to an owner.
+      # EVERY TEST STEP IN THIS FILE NAMES ITS FAILURES -- see
+      # `.github/scripts/cargo-test-named.sh`. It began here, on 71ca5e976: a real
+      # intermittent failure whose test could not be identified at all, which then did
+      # not reproduce in 3 of 3 local rounds at `taskset -c 0-3`. It is on every step
+      # rather than this one because the next time it was needed was on two steps that
+      # did NOT have it, which cost a reproduction cycle and got the wrong answer.
       - name: Test every workspace library and binary
-        run: |
-          set -o pipefail
-          status=0
-          nix --extra-experimental-features 'nix-command flakes' develop . --command \
-            cargo test --workspace --lib --bins --locked --offline --no-fail-fast \
-            2>&1 | tee "$RUNNER_TEMP/workspace-tests.log" || status=$?
-          if [ "$status" -ne 0 ]; then
-            failed="$(grep -E '^test .+ \.\.\. FAILED$' "$RUNNER_TEMP/workspace-tests.log" \
-              | sed -e 's/^test //' -e 's/ \.\.\. FAILED$//' || true)"
-            if [ -n "$failed" ]; then
-              printf 'FAILED TESTS:\n%s\n' "$failed"
-              diagnostic="$failed"
-              diagnostic="${diagnostic//'%'/'%25'}"
-              diagnostic="${diagnostic//$'\r'/'%0D'}"
-              diagnostic="${diagnostic//$'\n'/'%0A'}"
-              echo "::error title=Workspace test failures::$diagnostic"
-            else
-              # Deliberately distinguished: no named test means this was not an assertion
-              # -- a build error, a panic outside a test body, or a killed process -- and
-              # that is a different investigation.
-              echo "::error title=Workspace tests failed with no named test::cargo exited $status but no line matched '^test ... FAILED', so this is not a failing assertion. Look for a build error, a panic outside a test body, or a killed process."
-            fi
-          fi
-          exit "$status"
+        run: >-
+          .github/scripts/cargo-test-named.sh "workspace libraries and binaries"
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo test --workspace --lib --bins --locked --offline --no-fail-fast
 
       # THE EIGHT LINUX-ONLY FLAKE CHECKS HAD NO RUNNER ANYWHERE. They are
       # `lib.optionalAttrs pkgs.stdenv.isLinux` in `flake.nix`, so the macOS job's
@@ -360,21 +325,26 @@ jobs:
       #
       # ONE HONEST RED REMAINS, named rather than silenced -- delete it the day it
       # passes:
-      #   alpine-compatibility          -- red since a vacuous filter was made honest,
-      #                                    AND IT IS NOT A SEPARATE PROBLEM. Measured
-      #                                    2026-08-20: it fails at
-      #                                    `product_checkpoint_test::continue_later_
-      #                                    restores_the_primary_sleep_tree_across_
-      #                                    repeated_cycles`, which is one of the two
-      #                                    tests item 1 above already records as a real
-      #                                    engine defect on this architecture -- the
-      #                                    flake check runs exactly that pair via
-      #                                    `cargo test -p husklet --features runtime
-      #                                    --lib`. So this attribute, and the missing
-      #                                    `--features runtime` step in item 1, are ONE
-      #                                    defect seen through two gates. The lane
-      #                                    fixing it closes both, and the step in item 1
-      #                                    should land in that same commit.
+      #   alpine-compatibility          -- I RECORDED THIS AS THE SAME DEFECT AS THE
+      #                                    missing `--features runtime` step below, and
+      #                                    THAT WAS WRONG. They shared a test NAME, not
+      #                                    a cause, and the checkpoint fix settled it:
+      #                                    on this host that test went from failing to
+      #                                    5 cycles in 12.4s, `ok` -- while this check
+      #                                    failed IDENTICALLY before and after, at
+      #                                    `total_failed_ms=60`, "domain worker exited
+      #                                    before publication (exit status: 101)". A
+      #                                    fix that demonstrably changes host behaviour
+      #                                    and does not move this number at all is not
+      #                                    the thing this check is red for.
+      #                                    60ms is worker STARTUP, not the checkpoint
+      #                                    cycles, and it happens only inside the nix
+      #                                    build sandbox -- so the cause is very likely
+      #                                    what that sandbox denies the domain worker,
+      #                                    and this check may not be runnable where it
+      #                                    is currently defined. Undiagnosed beyond
+      #                                    that; the failure artefacts live in the
+      #                                    builder's `$TMPDIR` and do not survive it.
       #
       # COST, MEASURED IN CI RATHER THAN ESTIMATED. Adding both scan-build attributes
       # was predicted to take this job from 20.0 to ~27 minutes, from a 7 minute cold
@@ -384,11 +354,13 @@ jobs:
       # effectively free, because `host-linux-aarch64` had already substituted the
       # aarch64 cross toolchain. There is no timeout pressure here.
       #
-      # THAT FIGURE PREDATES `host-windows-x86_64-gnu-smoke`, which is the most
-      # expensive attribute here: a full mingw cross-compile of `hl-native`,
-      # `hl-engine` and `engine` plus the objdump import/ABI contracts, and its closure
-      # is not shared with anything else this job builds. Re-measure on the next CI run
-      # rather than assuming ~20 still holds.
+      # RE-MEASURED WITH `host-windows-x86_64-gnu-smoke` INCLUDED, on run 32409564110:
+      # the whole seven-attribute step is 3.9 minutes and the job is 24.5, against 20.4
+      # without it. So mingw costs about four minutes -- it is the most expensive
+      # attribute here, a full cross-compile of `hl-native`, `hl-engine` and `engine`
+      # plus the objdump import/ABI contracts, with a closure shared with nothing else
+      # this job builds. 24.5 against a 60 minute timeout is comfortable, and this line
+      # is the measurement rather than the estimate it replaces.
       - name: Verify the Linux-only flake checks that are green
         run: >-
           nix --extra-experimental-features 'nix-command flakes' build -L --no-link
@@ -518,7 +490,8 @@ jobs:
       - name: Test the native engine package with its test hooks
         run: |
           set -o pipefail
-          nix --extra-experimental-features 'nix-command flakes' develop . --command \
+          .github/scripts/cargo-test-named.sh "ARM64 native engine, test hooks" \
+            nix --extra-experimental-features 'nix-command flakes' develop . --command \
             cargo test -p hl-native --all-targets --features native-test-hooks \
             --locked --offline --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/hooks.log"
           for verdict in \

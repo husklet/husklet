@@ -15,7 +15,7 @@ async fn extra_hosts_are_resolved_from_the_guest_hosts_file() {
     let task = tokio::spawn({
         let socket = socket.clone();
         async move {
-            Daemon::new(containers)
+            runnable_daemon(containers)
                 .server(&socket)
                 .serve_with_shutdown(async {
                     let _ = stopped.await;

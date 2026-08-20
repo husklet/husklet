@@ -189,23 +189,8 @@ pub fn launch(
     };
     let mut attached = None;
     if restored_running {
-        match runtime.block_on(client.executions().attach(&execution, &attach_request)) {
-            Ok(session) => attached = Some(session),
-            Err(attach_error) => match runtime.block_on(client.executions().inspect(&execution)) {
-                // The process exited between inspect and attach. Reclassify it
-                // once in this launch so the pane can recover without asking
-                // the user to reopen the workspace again.
-                Ok(inspection) => match PersistedAction::after_failed_attach(Some(inspection.running)) {
-                    PersistedAction::Restore => restoring = true,
-                    PersistedAction::Attach => return Err(LauncherError::io(attach_error)),
-                },
-                Err(hl_client::Error::Docker { status, .. }) if status.as_u16() == 404 => {
-                    debug_assert_eq!(PersistedAction::after_failed_attach(None), PersistedAction::Restore);
-                    restoring = true;
-                }
-                Err(error) => return Err(LauncherError::io(error)),
-            },
-        }
+        attached = reattach(&runtime, &client, &execution, &attach_request)?;
+        restoring = attached.is_none();
     }
     let session = if let Some(session) = attached {
         session
@@ -352,6 +337,34 @@ async fn forward_output(
     // termination as well so a broken transport cannot leave the wait task and GUI pane hanging if
     // the remote disconnect path itself failed before applying that policy.
     let _ = client.executions().signal(&execution, "KILL").await;
+}
+
+/// Reattaches to an execution the pane remembers as running.
+///
+/// `None` means the process exited between the inspect that classified it and this attach, so the
+/// pane must restore instead. Reclassifying once here lets the pane recover without asking the
+/// reader to reopen the workspace.
+fn reattach(
+    runtime: &tokio::runtime::Runtime,
+    client: &hl_client::Client,
+    execution: &str,
+    request: &ExecAttach,
+) -> io::Result<Option<hl_client::api::Session>> {
+    let attach_error = match runtime.block_on(client.executions().attach(execution, request)) {
+        Ok(session) => return Ok(Some(session)),
+        Err(error) => error,
+    };
+    match runtime.block_on(client.executions().inspect(execution)) {
+        Ok(inspection) => match PersistedAction::after_failed_attach(Some(inspection.running)) {
+            PersistedAction::Restore => Ok(None),
+            PersistedAction::Attach => Err(LauncherError::io(attach_error)),
+        },
+        Err(hl_client::Error::Docker { status, .. }) if status.as_u16() == 404 => {
+            debug_assert_eq!(PersistedAction::after_failed_attach(None), PersistedAction::Restore);
+            Ok(None)
+        }
+        Err(error) => Err(LauncherError::io(error)),
+    }
 }
 
 fn terminal_identity() -> (&'static str, &'static str) {

@@ -34,6 +34,9 @@ mod components;
 mod gtk_adapter;
 mod host;
 pub mod screens;
+mod screenshot;
+
+use screenshot::Screenshot;
 
 use components::dialog::RemoveWorkspace;
 use components::layout::Field;
@@ -525,49 +528,6 @@ impl Terminal<'_> {
         // match with these colors).
         term.set_color_highlight(Some(&hex(ACCENT)));
         term.set_color_highlight_foreground(Some(&hex("#ffffff")));
-    }
-}
-
-/// Debug self-capture: with `HL_TERM_SHOT=<png>` (and `HL_TERM_VIEW=manager|terminal|newws` to pick the
-/// surface), render this window to a PNG via GTK's own snapshot pipeline and exit — no OS screen-capture
-/// permission needed. Used to verify the UI headlessly.
-struct Screenshot;
-
-impl Screenshot {
-    fn schedule(window: &gtk::ApplicationWindow, tag: &str) {
-        let Some(path) = AppConfig::get().screenshot.clone() else {
-            return;
-        };
-        if AppConfig::get().view.as_deref().unwrap_or("manager") != tag {
-            return;
-        }
-        let ms = AppConfig::get().screenshot_ms;
-        let win = window.clone();
-        glib::timeout_add_local_once(std::time::Duration::from_millis(ms), move || {
-            Self::capture(&win, &path);
-            let application = win.application();
-            win.close();
-            if let Some(application) = application {
-                application.quit();
-            }
-        });
-    }
-
-    fn capture(window: &gtk::ApplicationWindow, path: &str) {
-        let width = window.width().max(400);
-        let height = window.height().max(300);
-        let paintable = gtk::WidgetPaintable::new(Some(window.upcast_ref::<gtk::Widget>()));
-        let snapshot = gtk::Snapshot::new();
-        paintable.snapshot(snapshot.upcast_ref::<gdk::Snapshot>(), width as f64, height as f64);
-        let (Some(node), Some(renderer)) = (snapshot.to_node(), window.renderer()) else {
-            eprintln!("[husklet] screenshot failed: no render node/renderer");
-            return;
-        };
-        let texture = renderer.render_texture(&node, None);
-        match texture.save_to_png(path) {
-            Ok(()) => eprintln!("[husklet] wrote screenshot {path} ({width}x{height})"),
-            Err(error) => eprintln!("[husklet] screenshot write failed for {path}: {error}"),
-        }
     }
 }
 

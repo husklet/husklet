@@ -17,7 +17,7 @@
 //!   `libhl_native_engine.so`; the worker executables are identical by construction, so
 //!   hashing them proves nothing.
 
-use super::{definition::artifact_identity, evidence::Measurement};
+use super::{evidence::Measurement, identity::artifact_identity};
 use crate::suite::Error;
 use clap::Args;
 use std::{
@@ -129,6 +129,15 @@ impl Samples {
             .or_insert(micros);
     }
 
+    /// Measures every phase once for one arm, keeping the minimum per phase.
+    fn measure_phases(&mut self, arm: Arm, options: &Options) -> Result<(), Error> {
+        for (phase, arguments) in phases(options) {
+            let micros = measure(arm, options, &arguments)?;
+            self.record(arm, phase, micros);
+        }
+        Ok(())
+    }
+
     fn get(&self, arm: Arm, phase: &'static str) -> Result<u64, Error> {
         self.0
             .get(&(arm, phase))
@@ -183,10 +192,7 @@ pub(crate) fn run(options: Options) -> Result<(), Error> {
     let mut samples = Samples(BTreeMap::new());
     for round in 0..options.rounds {
         for arm in schedule(round, &arms(&options)) {
-            for (phase, arguments) in phases(&options) {
-                let micros = measure(arm, &options, &arguments)?;
-                samples.record(arm, phase, micros);
-            }
+            samples.measure_phases(arm, &options)?;
         }
     }
 

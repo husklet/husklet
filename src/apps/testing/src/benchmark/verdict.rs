@@ -1,5 +1,5 @@
 use super::{
-    definition::{Campaign, ProfileKind},
+    definition::{Arm, Campaign, Profile, ProfileKind},
     evidence::Row,
     schedule::{self, CELLS, Step},
 };
@@ -52,23 +52,7 @@ impl Report {
                 ("primary", Some(&definition.primary)),
                 ("independent-null", definition.independent_null.as_ref()),
             ] {
-                let Some(profile) = profile else {
-                    lines.push(format!(
-                        "{arm}/{kind}\tUNQUALIFIED:{}",
-                        definition
-                            .null_unqualified_reason
-                            .as_deref()
-                            .unwrap_or("missing build receipt")
-                    ));
-                    continue;
-                };
-                for (name, artifact) in &profile.artifacts {
-                    lines.push(format!("{arm}/{kind}/{name}\t{}", artifact.sha256));
-                }
-                lines.push(format!(
-                    "{arm}/{kind}/build-receipt\t{}",
-                    FramedIdentity::of(&serde_json::to_vec(&profile.build)?)
-                ));
+                append_profile_identity(arm, kind, definition, profile, &mut lines)?;
             }
         }
         append_compatibility(campaign, &mut lines);
@@ -107,6 +91,34 @@ impl Verdict {
             Self::Fail => "FAIL",
         }
     }
+}
+
+/// Records one profile's artifact digests and build receipt, or why it is unqualified.
+fn append_profile_identity(
+    arm: &str,
+    kind: &str,
+    definition: &Arm,
+    profile: Option<&Profile>,
+    lines: &mut Vec<String>,
+) -> Result<(), Error> {
+    let Some(profile) = profile else {
+        lines.push(format!(
+            "{arm}/{kind}\tUNQUALIFIED:{}",
+            definition
+                .null_unqualified_reason
+                .as_deref()
+                .unwrap_or("missing build receipt")
+        ));
+        return Ok(());
+    };
+    for (name, artifact) in &profile.artifacts {
+        lines.push(format!("{arm}/{kind}/{name}\t{}", artifact.sha256));
+    }
+    lines.push(format!(
+        "{arm}/{kind}/build-receipt\t{}",
+        FramedIdentity::of(&serde_json::to_vec(&profile.build)?)
+    ));
+    Ok(())
 }
 
 fn append_compatibility(campaign: &Campaign, lines: &mut Vec<String>) {
