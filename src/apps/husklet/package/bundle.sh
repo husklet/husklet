@@ -133,7 +133,25 @@ done < <(find "$NATIVE_BUNDLE_TARGET/release/build" -type f -name 'libhl_native_
 [ ${#NATIVE_DYLIBS[@]} -eq 1 ] \
   || die "expected exactly one dedicated native engine dylib, found ${#NATIVE_DYLIBS[@]}"
 XARGS+=( -s "$(dirname "${NATIVE_DYLIBS[0]}")" )
+# The engine is dlopen'd at runtime by loader.rs, never linked, so dylibbundler -- which walks
+# link-time dependencies -- will never discover it. Stage it into Frameworks ourselves and hand the
+# staged copy to dylibbundler as an extra binary so its own dependency graph is relocated too.
+mkdir -p "$FW"
+# Stage outside the bundle entirely: dylibbundler owns -d and rewrites what it finds there, so a
+# copy placed in Frameworks before it runs does not survive -- and anything left loose inside the
+# bundle root makes codesign fail with "unsealed contents present in the bundle root". Fix the
+# staged copy's own dependency graph first, then install it.
+NATIVE_STAGE="$BUNDLE_TARGET/.native-engine-stage.$$"
+mkdir -p "$NATIVE_STAGE"
+cp -f "${NATIVE_DYLIBS[0]}" "$NATIVE_STAGE/libhl_native_engine.dylib"
+chmod u+w "$NATIVE_STAGE/libhl_native_engine.dylib"
+XARGS+=( -x "$NATIVE_STAGE/libhl_native_engine.dylib" )
 dylibbundler -of -cd -b -d "$FW" -p '@executable_path/../Frameworks' "${XARGS[@]}" >/dev/null
+cp -f "$NATIVE_STAGE/libhl_native_engine.dylib" "$FW/libhl_native_engine.dylib"
+chmod u+w "$FW/libhl_native_engine.dylib"
+install_name_tool -id '@executable_path/../Frameworks/libhl_native_engine.dylib' \
+  "$FW/libhl_native_engine.dylib"
+rm -rf "$NATIVE_STAGE"
 [ -f "$FW/libhl_native_engine.dylib" ] \
   || die "Cargo-built native engine dylib was not relocated into the application bundle"
 
