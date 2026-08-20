@@ -611,12 +611,18 @@ static void ckpt_restore_reserve_release(uint64_t lo, uint64_t hi) {
 static uint64_t ckpt_restore_host_pool_edge(void) {
     static uint64_t edge;
     if (edge != 0) return edge;
-    long page = sysconf(_SC_PAGESIZE);
-    if (page <= 0) return UINT64_MAX;
-    void *probe = mmap(NULL, (size_t)page, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    // The probe asks where the host's allocator PLACES a mapping, so its unit is the placement
+    // granularity that linux_abi/page.h owns -- not the accounting page size beside it, which on a host
+    // whose allocation granularity is coarser than its page (Windows: 64 KiB against 4 KiB) is not a
+    // length mmap will accept for a fresh reservation at all. The reservation walk above already asks
+    // page.h the same question; asking the C library directly made this the one placement decision in
+    // the file that did not go through the owner.
+    size_t granularity = hl_linux_host_map_granularity();
+    if (granularity == 0) return UINT64_MAX;
+    void *probe = mmap(NULL, granularity, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (probe == MAP_FAILED) return UINT64_MAX;
     uint64_t top = (uint64_t)(uintptr_t)probe;
-    (void)munmap(probe, (size_t)page);
+    (void)munmap(probe, granularity);
     if (top <= CKPT_RESTORE_HOST_POOL_GAP) return UINT64_MAX;
     edge = top - CKPT_RESTORE_HOST_POOL_GAP;
     return edge;
@@ -1696,7 +1702,7 @@ static int ckpt_anon_shared_roundtrip_test(uint32_t scenario) {
         // In its own process: the scenario deliberately retires one naming generation and mints
         // another, and that generation plus the seed table are process-global restore state a sibling
         // test running in the same binary would otherwise see change underneath it.
-        pid_t generation_child = fork();
+        pid_t generation_child = hl_host_process_clone_current();
         if (generation_child == 0) _exit(ckpt_anon_shared_leftover_test());
         if (generation_child < 0) return 39;
         int generation_status = 0;
@@ -1720,7 +1726,7 @@ static int ckpt_anon_shared_roundtrip_test(uint32_t scenario) {
         munmap(shared, length);
         return 21;
     }
-    pid_t child = fork();
+    pid_t child = hl_host_process_clone_current();
     if (child == 0) {
         // Async-signal-safe only: no allocation, no locking, no stdio. _exit, never return.
         close(channel[0]);

@@ -2036,14 +2036,14 @@ static int ckpt_capture_member(int64_t candidate, int64_t root) {
 static int ckpt_membership_orphan(int *reported) {
     int ready[2];
     if (pipe(ready) != 0) return -1;
-    pid_t middle = fork();
+    pid_t middle = hl_host_process_clone_current();
     if (middle < 0) {
         (void)close(ready[0]);
         (void)close(ready[1]);
         return -1;
     }
     if (middle == 0) { // async-signal-safe only: forked out of a multi-threaded caller
-        pid_t orphan = fork();
+        pid_t orphan = hl_host_process_clone_current();
         if (orphan == 0) {
             (void)setsid(); // a guest session leader, the shape that once emptied peer enumeration
             struct timespec span = {30, 0};
@@ -2378,7 +2378,7 @@ HL_API int HL_TARGET_LOCAL(checkpoint_pipe_capture_test)(uint32_t scenario) {
         ckpt_sink_install(&g_ckpt_pipe_test_ops);
         pid_t children[2] = {-1, -1};
         for (int index = 0; verdict == 0 && index < 2; ++index) {
-            children[index] = fork();
+            children[index] = hl_host_process_clone_current();
             if (children[index] == 0) {
                 g_ckpt_capture_destructive = 0;
                 int rc = ckpt_capture_pipe_reason(pair[0], 0x11, NULL, NULL);
