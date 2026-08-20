@@ -600,6 +600,25 @@ The same asymmetry applies to killing processes by pattern. A lane matched four
 `cargo test` processes on the macOS host, killed all of them to unblock its own,
 and only one was its own. Resolve a PID and kill that PID.
 
+## A worktree under a home directory cannot be tested without privilege
+
+`/root` is `0700`, so a test that drops privilege cannot traverse to anything
+built inside it. Two lanes hit this on the same day: `rootless_publish` re-execs
+its own test binary as an unprivileged account and failed with EACCES until the
+binary was copied elsewhere, and a lane that wanted to certify a gate as a
+non-root user could not, because doing so would have meant loosening the mode on
+a directory three other lanes were working in.
+
+Put worktrees under **`/srv/worktrees/<name>`**, which is `0755`, when the work
+may need running without privilege. `CARGO_TARGET_DIR` under `/var/tmp` is
+already fine -- that path is `1777`.
+
+This matters beyond convenience. CI runs unprivileged, and several suites here
+(`pid_namespace`, `namespace_transaction`, `unix_identity`, `seccomp_vm`) can
+behave differently for an account that is not root; this box additionally sets
+`kernel.apparmor_restrict_unprivileged_userns=1`. A gate certified only as root
+is evidence about root, and should say so.
+
 ## Running on the other host is one wrapper away
 
 `mac bash -lc '...'` runs a command on the macOS host. A lane investigating a
