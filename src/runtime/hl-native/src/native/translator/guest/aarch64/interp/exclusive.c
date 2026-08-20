@@ -64,8 +64,9 @@ static int interp_exec_compare_exchange_pair(struct cpu *cpu, uint32_t insn, uin
 // Load/store exclusive, plus the ordered (LDAR/STLR) and CAS members of the box.
 static int interp_exec_load_store_exclusive(struct cpu *cpu, uint32_t insn) {
     uint64_t gpc = cpu->pc;
+    // Load/store exclusive is a GPR box: bit26 (V) is pinned to 0 by the mask below and there is no
+    // SIMD&FP member to select with it.
     int rt = (int)(insn & 31), rn = (int)((insn >> 5) & 31), rt2 = (int)((insn >> 10) & 31);
-    unsigned vector = (insn >> 26) & 1;
 
     if ((insn & 0x3F000000u) == 0x08000000u) {
         unsigned size = (insn >> 30) & 3, o2 = (insn >> 23) & 1, load = (insn >> 22) & 1;

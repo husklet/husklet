@@ -574,8 +574,8 @@ static void exec_reload_image(struct cpu *cpu, exec_prepared *prepared) {
     prepared->arguments[prepared->argument_count < HL_MAXARGV - 1 ? prepared->argument_count : HL_MAXARGV - 1] = NULL;
 
     struct loaded main_loaded;
-    hl_identity_digest interpreter_identity = {0};
 #ifdef PCACHE_EXEC_HOOKS
+    hl_identity_digest interpreter_identity = {0};
     pcache_exec_force_main();
 #endif
     load_elf(path_copy, &main_loaded, NULL, &prepared->main_image.bytes);
@@ -587,7 +587,9 @@ static void exec_reload_image(struct cpu *cpu, exec_prepared *prepared) {
 #endif
         struct loaded interpreter_loaded;
         load_elf(interpreter_host, &interpreter_loaded, NULL, &prepared->program_interpreter.bytes);
+#ifdef PCACHE_EXEC_HOOKS
         interpreter_identity = interpreter_loaded.identity;
+#endif
         jump = interpreter_loaded.entry;
         at_base = interpreter_loaded.base;
     }

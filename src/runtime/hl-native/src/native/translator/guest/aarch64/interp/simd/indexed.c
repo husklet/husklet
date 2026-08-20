@@ -1,7 +1,10 @@
 static int interp_simd_indexed(struct cpu *cpu, uint32_t insn, uint32_t decode, unsigned scalar, unsigned q,
                                unsigned u) {
     uint64_t gpc = cpu->pc;
-    int rd = (int)(insn & 31), rn = (int)((insn >> 5) & 31), rm = (int)((insn >> 16) & 31);
+    int rd = (int)(insn & 31), rn = (int)((insn >> 5) & 31);
+    // The second source register is M:Rm (bit20 : bits[19:16]) and the lane index is H:L:M, H:L or H by
+    // element size, so every use below goes through interp_elem_index() or spells the join out; a plain
+    // bits[20:16] read would be the index bits folded into the register number.
     // AdvSIMD vector x indexed element -- the box every compiled `*_lane` intrinsic lands in. `size` names the
     // integer element (01 = H, 10 = S) but the FP FORMAT for FMLA/FMLS/FMUL/FMULX (00 = H, 10 = S, 11 = D);
     // interp_elem_index() is keyed on the resulting element size, which is what the index split follows.
