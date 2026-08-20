@@ -366,6 +366,13 @@ jobs:
       #                                    defect as `native-windows-amd64` above:
       #                                    `cargo check` runs `build.rs`, so both
       #                                    compile the same C.
+      # COST, MEASURED IN CI RATHER THAN ESTIMATED. Adding both scan-build attributes
+      # was predicted to take this job from 20.0 to ~27 minutes, from a 7 minute cold
+      # local run. Actual: 24.1 minutes on the first CI run, which paid a one-off
+      # `clang-analyzer` substitution, then 20.1 and 20.4 -- indistinguishable from the
+      # 20.0 before they were added. Once that closure is cached the two attributes are
+      # effectively free, because `host-linux-aarch64` had already substituted the
+      # aarch64 cross toolchain. There is no timeout pressure here.
       - name: Verify the Linux-only flake checks that are green
         run: >-
           nix --extra-experimental-features 'nix-command flakes' build -L --no-link
