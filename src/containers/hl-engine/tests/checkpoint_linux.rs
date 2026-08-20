@@ -4859,7 +4859,12 @@ fn a_child_status_the_capture_reaped_is_returned_to_its_parent_after_restore_on_
                     capture_port.output()
                 )
             });
-        assert_eq!(capture.wait().unwrap().guest_status, 0, "{isa:?}: {}", capture_port.output());
+        assert_eq!(
+            capture.wait().unwrap().guest_status,
+            0,
+            "{isa:?}: {}",
+            capture_port.output()
+        );
         {
             let stored = store.0.lock().unwrap();
             assert!(stored.contains_key("MANIFEST"), "{isa:?} published no manifest");
@@ -4938,9 +4943,9 @@ fn a_capture_that_cannot_preserve_a_status_it_destroyed_refuses_on_both_isas() {
         .unwrap();
         capture.start().unwrap();
         port.wait_output(b"UNWAITED-CHILD-ZOMBIE");
-        let refusal = capture.capture_checkpoint_until(checkpoint_deadline()).expect_err(
-            "a capture that destroyed a child exit status it could not carry was reported as successful",
-        );
+        let refusal = capture
+            .capture_checkpoint_until(checkpoint_deadline())
+            .expect_err("a capture that destroyed a child exit status it could not carry was reported as successful");
         let _ = capture.wait();
         let stored = store.0.lock().unwrap();
         assert!(
