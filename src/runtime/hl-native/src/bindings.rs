@@ -1250,8 +1250,13 @@ mod tests {
             let mut pending: libc::sigset_t = std::mem::zeroed();
             libc::sigpending(&raw mut pending);
             if libc::sigismember(&raw const pending, libc::SIGPIPE) == 1 {
-                let immediate = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-                libc::sigtimedwait(&raw const blocked, std::ptr::null_mut(), &raw const immediate);
+                // `sigwait`, not `sigtimedwait`, which Darwin does not provide. The `write`
+                // above queued SIGPIPE to *this* thread and `sigpending` has just confirmed it
+                // is still pending on it, so no other thread can accept it first and `sigwait`
+                // returns immediately -- the same non-blocking drain the zero timeout
+                // expressed, on both hosts.
+                let mut drained: libc::c_int = 0;
+                libc::sigwait(&raw const blocked, &raw mut drained);
             }
             libc::pthread_sigmask(libc::SIG_SETMASK, &raw const previous, std::ptr::null_mut());
         }
