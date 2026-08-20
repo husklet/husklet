@@ -464,6 +464,9 @@ fn spawn_input(
         .name("hl-terminal-input".to_owned())
         .spawn(move || {
             let mut bytes = [0_u8; 8192];
+            // One effect for the life of the pump. Its buffers are cleared, not reallocated, so a
+            // steady stream of keystrokes runs the discipline without touching the allocator.
+            let mut effect = line_discipline::Effect::default();
             while !stop.load(Ordering::Acquire) {
                 let count = match port.read(&mut bytes) {
                     Ok(0) | Err(_) => break,
@@ -475,7 +478,8 @@ fn spawn_input(
                     }
                     continue;
                 };
-                let effect = guest.receive(&bytes[..count]);
+                effect.clear();
+                guest.receive(&bytes[..count], &mut effect);
                 if !guest.deliver(&effect, &mut master, port.as_ref(), &stop) {
                     break;
                 }
@@ -519,6 +523,8 @@ fn spawn_output(
         .name("hl-terminal-output".to_owned())
         .spawn(move || {
             let mut bytes = [0_u8; 16 * 1024];
+            // Reused across batches for the same reason the input pump reuses its effect.
+            let mut processed = Vec::new();
             while !stop.load(Ordering::Acquire) {
                 let mut poll = libc::pollfd {
                     fd: master.as_raw_fd(),
@@ -569,7 +575,8 @@ fn spawn_output(
                     None => write_output(port.as_ref(), &bytes[..count]),
                     Some(guest) => {
                         guest.await_output_resumed(&stop);
-                        write_output(port.as_ref(), &guest.output_bytes(&bytes[..count]))
+                        guest.post_process(&bytes[..count], &mut processed);
+                        write_output(port.as_ref(), &processed)
                     }
                 };
                 let mut active = in_flight.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -637,31 +644,27 @@ impl GuestDiscipline {
 
     /// Feeds one batch of host input through the discipline, after adopting any termios the guest has
     /// installed since the last batch.
-    fn receive(&self, bytes: &[u8]) -> line_discipline::Effect {
-        let mut effect = self.synchronise();
-        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let produced = state.receive(bytes);
-        drop(state);
-        effect.to_guest.extend_from_slice(&produced.to_guest);
-        effect.echo.extend_from_slice(&produced.echo);
-        effect.signals.extend_from_slice(&produced.signals);
-        effect.end_of_file |= produced.end_of_file;
-        effect.flush_input |= produced.flush_input;
-        effect.output_stopped = produced.output_stopped.or(effect.output_stopped);
-        effect
+    ///
+    /// Both stages append to the caller's effect, in that order, so the batch allocates nothing and
+    /// copies nothing: what a keystroke costs is the discipline itself plus one uncontended lock.
+    fn receive(&self, bytes: &[u8], effect: &mut line_discipline::Effect) {
+        self.synchronise(effect);
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .receive(bytes, effect);
     }
 
     /// Adopts the guest's termios when it has moved. The common case is one relaxed load.
-    fn synchronise(&self) -> line_discipline::Effect {
-        let mut effect = line_discipline::Effect::default();
+    fn synchronise(&self, effect: &mut line_discipline::Effect) {
         let current = hl_native::terminal_termios_generation();
         if current == self.generation.load(Ordering::Relaxed) {
-            return effect;
+            return;
         }
         self.generation.store(current, Ordering::Relaxed);
         let mut image = [0_u8; 36];
         if hl_native::terminal_termios(self.slave.as_raw_fd(), &mut image).is_none() {
-            return effect;
+            return;
         }
         // The guest's own TCSETS reached the host slave and undid the raw mode. Re-assert it before
         // any byte is written, and re-pair the guest's image with the projection that produces, so
@@ -669,9 +672,10 @@ impl GuestDiscipline {
         if make_raw(&self.slave).is_some() {
             let _ = hl_native::terminal_termios_adopt(self.slave.as_raw_fd(), &image);
         }
-        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.set_termios(Termios::from_image(&image), &mut effect);
-        effect
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .set_termios(Termios::from_image(&image), effect);
     }
 
     /// Puts the host termios back the way the pty was opened.
@@ -679,11 +683,20 @@ impl GuestDiscipline {
         let _ = install(&self.slave, &self.original);
     }
 
-    fn output_bytes(&self, bytes: &[u8]) -> Vec<u8> {
-        self.state
+    /// Applies `OPOST` to one batch of guest output, replacing whatever `out` held.
+    ///
+    /// Only the 36-byte termios is read under the lock; the pass over the batch runs outside it. The
+    /// pump reads up to 16 KiB at a time, and holding the discipline's lock across that pass put the
+    /// output thread directly in the input thread's way -- every echoed keystroke returns through
+    /// this path, so the two pumps met on the lock once per keystroke.
+    fn post_process(&self, bytes: &[u8], out: &mut Vec<u8>) {
+        let termios = self
+            .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .output_bytes(bytes)
+            .termios();
+        out.clear();
+        termios.write_output(bytes, out);
     }
 
     /// Blocks the output pump while `IXON` has stopped output, as the host discipline would.
@@ -1146,6 +1159,63 @@ mod tests {
         assert_eq!(seen.len(), 4096);
         assert_eq!(seen[4095], b'\n');
         assert!(seen[..4095].iter().all(|byte| *byte == b'b'));
+    }
+
+    /// Keystroke-to-echo latency through the whole input pump, reported as percentiles.
+    ///
+    /// A measurement rather than an assertion, so it is ignored by default. Run it with
+    /// `--ignored --nocapture` on the host whose latency you mean to quote, and quote that host.
+    /// The reader spins: a sleeping reader measures the sleep, which has already voided one run of
+    /// this measurement.
+    #[test]
+    #[ignore = "a latency measurement, not an assertion"]
+    fn keystroke_echo_latency() {
+        const WARMUP: usize = 2000;
+        const SAMPLES: usize = 5000;
+        let port = Arc::new(Port::default());
+        let terminal = Terminal::new(port.clone(), 24, 80).unwrap();
+        let bridge = NativeTerminalBridge::attach(terminal, InputDiscipline::Linux).unwrap();
+        // Without this the run silently measures the host discipline instead, and a whole A/B
+        // table can read as evidence about code none of its arms executed. That has happened.
+        assert_eq!(
+            bridge.discipline(),
+            InputDiscipline::Linux,
+            "the Linux discipline was not adopted, so this measures the host's"
+        );
+        let mut samples: Vec<u64> = Vec::with_capacity(SAMPLES);
+        // 'a' then ERASE, so the edited line oscillates between zero and one byte: every keystroke
+        // produces echo, none of them ever reaches the master, and nothing grows without bound.
+        for index in 0..(WARMUP + SAMPLES) {
+            let typed = if index % 2 == 0 { b'a' } else { 0x7f };
+            let (seen, start) = {
+                let mut state = port.state.lock().unwrap();
+                let seen = state.1.len();
+                state.0.push_back(typed);
+                port.changed.notify_all();
+                (seen, Instant::now())
+            };
+            let deadline = start + Duration::from_secs(5);
+            loop {
+                if port.state.lock().unwrap().1.len() > seen {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "the echo never arrived");
+                std::hint::spin_loop();
+            }
+            if index >= WARMUP {
+                samples.push(u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX));
+            }
+        }
+        samples.sort_unstable();
+        let at = |percent: usize| samples[(samples.len() - 1) * percent / 100];
+        println!(
+            "latency n={} p50={}ns p90={}ns p99={}ns",
+            samples.len(),
+            at(50),
+            at(90),
+            at(99),
+        );
+        drop(bridge);
     }
 
     struct SaturatingPort {
