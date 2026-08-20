@@ -81,3 +81,18 @@ void hl_host_directory_close(hl_host_directory *directory) {
 void hl_host_directory_abandon(hl_host_directory *directory) {
     if (directory != NULL) directory->state = NULL;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+#include "hl/base.h"
+
+/* The macOS host caches a DIR* behind a file handle and this probe pins it into the engine-private
+   descriptor band. There is no such cached stream here -- and no private band either, which private.c
+   refuses at length -- so there is no invariant to assert. The symbol is in the native test export
+   manifest, which the Windows link resolves against the artifact rather than the caller, so it exists
+   and refuses. The Rust hook stays macOS-only; this arm is what keeps the link honest. */
+HL_API int32_t hl_c_backend_directory_stream_private_test(uint32_t scenario);
+HL_API int32_t hl_c_backend_directory_stream_private_test(uint32_t scenario) {
+    (void)scenario;
+    return -ENOTSUP;
+}
+#endif

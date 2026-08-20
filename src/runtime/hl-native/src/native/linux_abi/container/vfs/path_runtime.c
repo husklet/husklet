@@ -1576,6 +1576,7 @@ static int fdvis_after_fork_rollback_test(void) {
            commit_survived_timeout;
 }
 
+#if !defined(_WIN32)
 static int fdvis_stalled_parent_test(void) {
     struct fdvis_slot *identities =
         mmap(NULL, sizeof *identities * FDVIS_N, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
@@ -1636,6 +1637,15 @@ static int fdvis_stalled_parent_test(void) {
     (void)munmap(control, sizeof *control);
     return clean;
 }
+#else
+/* This scenario forks and rendezvouses through a MAP_SHARED anonymous page; the Windows target has
+ * neither spelling. It reports 0 -- a refusal scenario 7 propagates to its caller -- rather than 1,
+ * which would report a half that never ran as having passed. The sibling rollback scenario above is
+ * portable and still runs here. */
+static int fdvis_stalled_parent_test(void) {
+    return 0;
+}
+#endif
 #endif
 
 static void proc_fdvis_cleanup(void) {

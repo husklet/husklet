@@ -64,3 +64,31 @@ void hl_host_child_watch_close(hl_host_child_watch *watch) {
         watch->active = 0;
     }
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+#include "hl/base.h"
+
+/* The POSIX hosts define these two beside the mechanisms they drive -- the activation-ready pause sits
+ * next to the self-pipe the child writes, and the force-terminate probe next to kill(-pid, SIGKILL).
+ * Neither mechanism exists here (see the refusal above), but both symbols are named in the native test
+ * export manifest, so the Windows artifact must still define them. A hook that merely vanishes is not a
+ * compile error: it is `cannot export ...: symbol not defined` at link, and on a host whose loader
+ * resolved lazily it would be a MissingBridge at load instead. */
+HL_API void hl_c_backend_activation_ready_pause(int paused);
+HL_API int32_t hl_c_backend_host_process_force_test(int32_t pid);
+
+HL_API void hl_c_backend_activation_ready_pause(int paused) {
+    /* The POSIX arm parks the child between fork and the readiness write so a test can observe the gap.
+       There is no such child here -- the launch this would pause is the refusal above -- so there is no
+       state worth keeping and nothing that could later read it. */
+    (void)paused;
+}
+
+HL_API int32_t hl_c_backend_host_process_force_test(int32_t pid) {
+    /* The POSIX probe asserts that a force terminate reaches the whole process GROUP. Windows has no
+       process group in that sense, so there is no weaker true answer to give -- refuse rather than
+       report a success the host never performed. */
+    (void)pid;
+    return ENOTSUP;
+}
+#endif

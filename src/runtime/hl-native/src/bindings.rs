@@ -809,10 +809,24 @@ mod tests {
     #[cfg(feature = "native-test-hooks")]
     #[test]
     fn descriptor_path_publication_copies_and_clears_on_both_guest_isas() {
-        for scenario in [0, 1, 2, 3, 4, 5, 6, 7] {
+        for scenario in [0, 1, 2, 3, 4, 5, 6] {
             assert!(fdvis_path_publication_test(1, scenario), "arm64 scenario {scenario}");
             assert!(fdvis_path_publication_test(2, scenario), "x86 scenario {scenario}");
         }
+        // Scenario 7's second half forks and rendezvouses through a MAP_SHARED page, which the
+        // Windows arm of path_runtime.c refuses. Naming the host here rather than dropping the
+        // scenario keeps the refusal visible: the C hook returns 0 there, so this assertion would
+        // fail rather than silently pass, and a Windows run says which case it did not cover.
+        #[cfg(not(windows))]
+        {
+            assert!(fdvis_path_publication_test(1, 7), "arm64 scenario 7");
+            assert!(fdvis_path_publication_test(2, 7), "x86 scenario 7");
+        }
+        #[cfg(windows)]
+        assert!(
+            !fdvis_path_publication_test(1, 7),
+            "scenario 7 forks; the Windows arm must refuse rather than report a pass"
+        );
     }
 
     #[test]

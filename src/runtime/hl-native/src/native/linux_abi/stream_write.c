@@ -196,7 +196,7 @@ int64_t hl_linux_pwritev(hl_linux_abi *linux_abi, hl_linux_fd fd, const hl_host_
 }
 
 
-#if defined(HL_NATIVE_TEST_HOOKS)
+#if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
 #include "../bridge/host.h"
 
 #include <fcntl.h>
@@ -342,5 +342,15 @@ release:
     free(fixture.ofds);
     hl_c_bridge_host_destroy(fixture.host);
     return verdict;
+}
+#elif defined(HL_NATIVE_TEST_HOOKS)
+/* The fixture builds its descriptor table over a real pipe and a real O_CLOEXEC file; the Windows
+ * target has neither spelling, and the loader still resolves every exported test symbol, so the hook
+ * must exist and refuse rather than vanish into a MissingBridge at load time. */
+HL_API int hl_c_backend_setfl_append_write_test(uint32_t scenario);
+HL_API int hl_c_backend_setfl_append_write_test(uint32_t scenario) {
+    (void)scenario;
+    errno = ENOTSUP;
+    return -1;
 }
 #endif

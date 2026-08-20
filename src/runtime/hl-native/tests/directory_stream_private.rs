@@ -43,10 +43,16 @@ fn closing_a_directory_handle_retires_its_stream_row() {
 fn engine_private_directory_streams_are_uncovered_on_this_host() {
     let notice = "SKIP directory_stream_private: 2 cases left UNCOVERED -- the macOS host adapter's \
                   DIR* descriptor band exists only on Darwin.\n";
+    // The CRT's _write takes its count as an unsigned int, while POSIX write takes a size_t, so the
+    // length is converted at the call rather than the type being assumed.
+    #[cfg(windows)]
+    let count = notice.len() as libc::c_uint;
+    #[cfg(not(windows))]
+    let count = notice.len();
     // SAFETY: a write of a `'static` initialized buffer to the process's stderr descriptor. It
     // borrows nothing beyond the call, and a short or failed write is not an error worth acting on.
     #[allow(unsafe_code)]
     unsafe {
-        libc::write(2, notice.as_ptr().cast(), notice.len());
+        libc::write(2, notice.as_ptr().cast(), count);
     }
 }
