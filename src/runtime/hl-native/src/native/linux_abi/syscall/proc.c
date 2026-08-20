@@ -158,6 +158,10 @@ static int exec_fd_is_engine(int fd) {
     if (fd < 0) return 1;
     if (cmsg_inflight_is_retained(fd)) return 1;
     if (hl_host_process_fd_private_current(fd)) return 1;
+    /* Asked of the transport itself, not of the private ledger, because a fork child owns no ledger rows
+       until fork_complete replays them and a guest close_range() can arrive first. See the contract on
+       hl_ckpt_channel_owns_descriptor. */
+    if (hl_ckpt_channel_owns_descriptor(fd)) return 1;
     if (eventfd_peer_is_engine_fd(fd)) return 1;
     if (sfd_wr_is(fd)) return 1; // signalfd write ends are engine-private (read ends are ordinary guest fds)
     if (fd == g_root_fd) return 1;
