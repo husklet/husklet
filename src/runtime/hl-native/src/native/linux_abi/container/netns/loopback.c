@@ -825,8 +825,23 @@ static int sock_internal_connect_prepare(int fd, int checkpoint_pending) {
     socklen_t local_length = sizeof local;
     if (getsockname(fd, (struct sockaddr *)&local, &local_length) != 0) return -1;
     size_t path_offset = offsetof(struct sockaddr_un, sun_path);
-    int named = local.sun_path[0] != '\0' || local_length > (socklen_t)(path_offset + 1u);
-    if (local.sun_family == AF_UNIX && local_length > (socklen_t)path_offset && named) {
+    /* Whether this socket already carries a name has to be read from the returned PATH, not from the
+     * returned LENGTH.  Linux reports offsetof(sun_path) for an unbound AF_UNIX socket, so a longer
+     * result meant a name -- including a Linux abstract name, whose first byte is NUL.  Darwin reports
+     * the whole sockaddr_un (measured: len=16, sun_path all NUL) for an unbound socket, so the length
+     * test called every fresh client "already named", took the early return, and never bound the private
+     * identity name: the connector published no ticket and reported no local-hidden identity, which is
+     * the cross-process peer=0 this file exists to prevent. A nonzero byte inside the reported path is
+     * the one form both kernels agree on. */
+    size_t path_length = local_length > (socklen_t)path_offset ? (size_t)local_length - path_offset : 0;
+    if (path_length > sizeof local.sun_path) path_length = sizeof local.sun_path;
+    int named = 0;
+    for (size_t index = 0; index < path_length; ++index)
+        if (local.sun_path[index] != '\0') {
+            named = 1;
+            break;
+        }
+    if (local.sun_family == AF_UNIX && named) {
         local.sun_path[sizeof local.sun_path - 1] = '\0';
         /* Already bound to the private name from an earlier prepare: re-assert the relation from our OWN
          * retained peer object.  Nothing is recovered from the bound name -- it is a nonce, not a fact. */
