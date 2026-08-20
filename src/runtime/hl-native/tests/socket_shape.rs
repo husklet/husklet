@@ -1,4 +1,4 @@
-//! Host-shape assumptions at the AF_UNIX boundary, measured rather than read out of a header.
+//! Host-shape assumptions at the `AF_UNIX` boundary, measured rather than read out of a header.
 //!
 //! Every assertion here is a place where Linux and Darwin answer the SAME question with a different
 //! shape, so a value that is a faithful proxy for a property on one host is not one on the other.
@@ -6,13 +6,13 @@
 //!
 //! | question                                              | Linux                     | Darwin                    |
 //! |-------------------------------------------------------|---------------------------|---------------------------|
-//! | `getsockname` on an unbound AF_UNIX socket             | len 2 (`offsetof sun_path`) | len 16, `sun_path` all NUL |
+//! | `getsockname` on an unbound `AF_UNIX` socket             | len 2 (`offsetof sun_path`) | len 16, `sun_path` all NUL |
 //! | `getpeername` on a socket accepted from an unnamed peer| len 2                     | len 16, `sun_path` all NUL |
 //! | `getsockname` on a socket bound to a pathname          | len 2 + strlen + 1        | len 106 (whole `sockaddr_un`) |
-//! | three `SCM_RIGHTS` fds into a one-fd control buffer     | controllen 24, cmsg_len 24, 2 fds, all valid | controllen 16, cmsg_len 24, claims 3, ONE valid |
-//! | `send` of 2049 bytes on an AF_UNIX datagram pair        | ok (SO_SNDBUF 229376)     | EMSGSIZE (SO_SNDBUF 2048) |
+//! | three `SCM_RIGHTS` fds into a one-fd control buffer     | `controllen` 24, `cmsg_len` 24, 2 fds, all valid | `controllen` 16, `cmsg_len` 24, claims 3, ONE valid |
+//! | `send` of 2049 bytes on an `AF_UNIX` datagram pair        | ok (`SO_SNDBUF` 229376)     | `EMSGSIZE` (`SO_SNDBUF` 2048) |
 //!
-//! Both ISA arms of every hook are exercised: the aarch64 and x86_64 engines are separate translation
+//! Both ISA arms of every hook are exercised: the aarch64 and `x86_64` engines are separate translation
 //! units of the same C, so a fix present in one and missing in the other is a real shape here.
 
 #![allow(unsafe_code)]
@@ -85,7 +85,7 @@ fn guest_address(isa: u32, operation: u32, descriptor: i32) -> (u32, Vec<u8>) {
     (length, out)
 }
 
-/// An AF_UNIX socket that was never bound has NO name, and the guest learns that from the reported
+/// An `AF_UNIX` socket that was never bound has NO name, and the guest learns that from the reported
 /// length: Linux reports the bare two-byte family. Darwin reports the whole `sockaddr_un` with the path
 /// zero-filled, and reading that padding as a name published a 16-byte abstract-looking address to the
 /// guest for an endpoint that has none.
@@ -199,7 +199,9 @@ fn a_truncated_scm_rights_record_publishes_only_delivered_descriptors_on_both_is
             (*header).cmsg_level = libc::SOL_SOCKET;
             (*header).cmsg_type = libc::SCM_RIGHTS;
             (*header).cmsg_len = libc::CMSG_LEN(3 * size_of::<i32>() as u32) as _;
-            std::ptr::copy_nonoverlapping(raw.as_ptr(), libc::CMSG_DATA(header).cast::<i32>(), 3);
+            // A byte copy: CMSG_DATA is only cmsghdr-aligned, and the descriptors are read back the
+            // same way, so nothing here depends on the payload being i32-aligned.
+            std::ptr::copy_nonoverlapping(raw.as_ptr().cast::<u8>(), libc::CMSG_DATA(header), 3 * size_of::<i32>());
             assert!(
                 libc::sendmsg(sender.as_raw_fd(), &raw const message, 0) > 0,
                 "sendmsg: {}",
@@ -241,7 +243,7 @@ fn a_truncated_scm_rights_record_publishes_only_delivered_descriptors_on_both_is
     }
 }
 
-/// A Linux AF_UNIX datagram is bounded by SO_SNDBUF (~208KB by default); Darwin starts every one at the
+/// A Linux `AF_UNIX` datagram is bounded by `SO_SNDBUF` (~208KB by default); Darwin starts every one at the
 /// 2048-byte `net.local.dgram.maxdgram`, so a datagram that is legal on Linux is refused on macOS. The
 /// engine's creation policy raises the window; without it the send fails.
 #[test]
