@@ -1,6 +1,8 @@
 // hl/linux_abi -- guest mapping and Linux memory-lock state.
 #include "gmap.h"
 
+#include "../../page.h"
+
 #include <errno.h>
 #include <stdlib.h>
 #if !defined(_WIN32)
@@ -40,6 +42,23 @@ typedef struct hl_exec_mapping {
 static hl_exec_mapping g_exec_mappings[HL_EXEC_MAPPING_CAPACITY];
 static size_t g_exec_mapping_count;
 
+int hl_gmap_host_release_span(uint64_t address, uint64_t length, uint64_t granularity, uint64_t *start,
+                              uint64_t *end) {
+    uint64_t low;
+    uint64_t high;
+    if (start == NULL || end == NULL || length == 0 || granularity == 0 ||
+        (granularity & (granularity - 1)) != 0 || address > UINT64_MAX - length)
+        return 0;
+    low = address & ~(granularity - 1);
+    high = address + length;
+    if (high > UINT64_MAX - (granularity - 1)) return 0;
+    high = (high + granularity - 1) & ~(granularity - 1);
+    if (high <= low) return 0;
+    *start = low;
+    *end = high;
+    return 1;
+}
+
 /* Teardown for a registry range the engine holds NO ownership handle for. Everything this registry mapped
  * itself is released through the seam -- discard() and release() above and below -- and only two populations
  * reach here: a provider mapping the provider placed at a fixed address and a loader range whose handle a
@@ -49,13 +68,29 @@ static size_t g_exec_mapping_count;
  * backends, not something this file can settle.
  *
  * Windows never populates either case, because both of these arrive from paths the Windows host does not
- * run, so there is no range here to release and no reachable behaviour to preserve. */
+ * run, so there is no range here to release and no reachable behaviour to preserve.
+ *
+ * Rounded OUT to the host granularity, which is sound only because both callers empty the whole registry:
+ * hl_gmap_reset() for a re-forked restorer dropping its parent's inherited address space, and
+ * exec_reload_image() dropping the address space the exec replaces. Nothing the registry still owns lives on
+ * a partial edge page, so a rounded release cannot reach a mapping that survives the teardown -- and the
+ * engine never places a guest region on a host page it shares with host storage.
+ *
+ * Unrounded, this released nothing at all on Apple Silicon whenever a guest range began off a 16 KiB
+ * boundary, because Darwin's munmap(2) refuses an unaligned address rather than rounding. The deterministic
+ * guest arena starts one 4 KiB guard page above HL_LINUX_SNAPSHOT_BASE, so the 256 MiB brk heap of every
+ * exec'd guest is exactly such a range: a re-forked restorer kept its parent's heap mapped, and a member
+ * whose own image named the same address then failed its exact claim with EEXIST and took the tree's commit
+ * barrier down with it. */
 static void gmap_release_unowned(uint64_t address, uint64_t length) {
 #if defined(_WIN32)
     (void)address;
     (void)length;
 #else
-    (void)munmap((void *)(uintptr_t)address, (size_t)length);
+    uint64_t start;
+    uint64_t end;
+    if (!hl_gmap_host_release_span(address, length, (uint64_t)hl_linux_host_map_granularity(), &start, &end)) return;
+    (void)munmap((void *)(uintptr_t)start, (size_t)(end - start));
 #endif
 }
 
