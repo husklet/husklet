@@ -94,11 +94,15 @@ fn os_owned_arenas_are_transactional_and_collision_safe() {
 
 static unsigned char *claim_sentinel(uint64_t address, uint64_t length) {
 #if defined(__APPLE__)
+    // mach_vm_allocate reports through kern_return_t and never touches errno, so a Darwin failure here
+    // used to leave whatever errno the previous call happened to set -- and the assertions below read
+    // errno to tell "occupied" from "unreachable". Translate the status the same way arena_claim does.
     mach_vm_address_t claimed = (mach_vm_address_t)address;
-    return mach_vm_allocate(mach_task_self(), &claimed, (mach_vm_size_t)length, VM_FLAGS_FIXED) == KERN_SUCCESS &&
-                   claimed == address
-               ? (unsigned char *)(uintptr_t)claimed
-               : NULL;
+    kern_return_t status = mach_vm_allocate(mach_task_self(), &claimed, (mach_vm_size_t)length, VM_FLAGS_FIXED);
+    if (status == KERN_SUCCESS && claimed == address) return (unsigned char *)(uintptr_t)claimed;
+    if (status == KERN_SUCCESS) (void)mach_vm_deallocate(mach_task_self(), claimed, (mach_vm_size_t)length);
+    errno = status == KERN_INVALID_ADDRESS ? ENOTSUP : EEXIST;
+    return NULL;
 #else
     void *claimed = mmap((void *)(uintptr_t)address, (size_t)length, PROT_READ | PROT_WRITE,
                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
