@@ -337,7 +337,11 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
     // with 16-byte SSE loads -> those over-read past the top. Keep that region mapped.
     const hl_host_services *host = effective_host_services();
     hl_host_memory_mapping stack_mapping = {HL_HOST_MEMORY_MAPPING_ABI, sizeof(stack_mapping), 0, 0, 0, 0};
-    uint64_t stack_address = hl_option_get("HL_CHECKPOINT") ? UINT64_C(0x0000058000000000) : 0;
+    // checkpoint/restore: draw the main stack from the deterministic high arena (0 => normal placement),
+    // exactly as the aarch64 arm does in linux_abi/elf.c. A literal address here is not equivalent: it
+    // leaves the arena cursor believing its own band is free, so the first kernel-placed guest mapping is
+    // hinted onto memory this launch already holds and the kernel silently relocates it into its own pool.
+    uint64_t stack_address = hl_linux_snapshot_reserve(&g_ckpt_snapshot, LOGUARD + SZ + GUARD);
     hl_host_result stack_result =
         host->memory->map_anonymous(host->context, stack_address, LOGUARD + SZ + GUARD,
                                     HL_HOST_MEMORY_READ | HL_HOST_MEMORY_WRITE, HL_HOST_MEMORY_PRIVATE, &stack_mapping);
