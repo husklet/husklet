@@ -68,3 +68,22 @@ fn accepts_paths_inside_the_owning_crate() {
     );
     assert!(values.is_empty());
 }
+
+#[test]
+fn a_differential_test_may_read_the_authoritative_owner_source() {
+    let production = findings(
+        "src/options.rs",
+        "const REGISTRY: &str = include_str!(\"../../runtime/hl-native/src/native/engine/options.c\");\n",
+    );
+    assert_eq!(production.len(), 1, "production code still owes the boundary");
+    assert!(production[0].message.contains("owned by another directory"));
+
+    let differential = findings(
+        "src/options.rs",
+        "#[cfg(test)]\nmod tests {\n    const REGISTRY: &str = include_str!(\"../../runtime/hl-native/src/native/engine/options.c\");\n}\n",
+    );
+    assert!(
+        differential.is_empty(),
+        "a test pinning two owners against each other is not an escape: {differential:#?}"
+    );
+}

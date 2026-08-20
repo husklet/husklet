@@ -76,121 +76,75 @@ const _: () = assert!(offset_of!(SyscallTrapResult, image_generation) == 16);
 pub(super) type SyscallDispatch =
     unsafe extern "C" fn(*mut c_void, c_uint, *mut SyscallCpuAarch64, *mut SyscallTrapResult) -> c_int;
 
-pub(super) unsafe fn hl_engine_abi() -> c_uint {
-    crate::loader::api()
-        .ok()
-        .and_then(|api| api.engine_abi)
-        .map_or(0, |function| unsafe { function() })
+/// Defines one call into the engine's resolved export table.
+///
+/// Every entry shares a single safety argument, so it is stated here once rather than repeated
+/// verbatim at each site. `loader::api()` publishes the table only after the shared object's ABI
+/// version and build fingerprint have been checked against this binary, so a `Some(function)` is
+/// an export of the declared signature belonging to an object that stays mapped for the rest of
+/// the process; no Rust storage is referenced, so nothing can be dropped underneath it. Each
+/// generated function is itself `unsafe`, so its caller carries the validity, lifetime, alignment
+/// and aliasing of the pointer arguments it forwards, and the engine may be entered concurrently
+/// because every export takes its state through those arguments rather than through process
+/// globals. The C side reports failure as a returned status and never unwinds, so no panic
+/// crosses the boundary; an object that does not export the entry yields the absent value.
+macro_rules! engine_entry {
+    ($(#[$attribute:meta])* $name:ident($($argument:ident: $type:ty),* $(,)?) -> $result:ty, $absent:expr, $field:ident) => {
+        $(#[$attribute])*
+        pub(super) unsafe fn $name($($argument: $type),*) -> $result {
+            crate::loader::api()
+                .ok()
+                .and_then(|api| api.$field)
+                // SAFETY: a published table entry is a live export of this signature; the caller of
+                // this `unsafe fn` owns the arguments it forwards. Stated in full on `engine_entry!`.
+                .map_or($absent, |function| unsafe { function($($argument),*) })
+        }
+    };
+    ($(#[$attribute:meta])* $name:ident($($argument:ident: $type:ty),* $(,)?), $field:ident) => {
+        $(#[$attribute])*
+        pub(super) unsafe fn $name($($argument: $type),*) {
+            if let Some(function) = crate::loader::api().ok().and_then(|api| api.$field) {
+                // SAFETY: a published table entry is a live export of this signature; the caller of
+                // this `unsafe fn` owns the arguments it forwards. Stated in full on `engine_entry!`.
+                unsafe { function($($argument),*) };
+            }
+        }
+    };
 }
 
-pub(super) unsafe fn hl_engine_version() -> *const c_char {
-    crate::loader::api()
-        .ok()
-        .and_then(|api| api.engine_version)
-        .map_or(std::ptr::null(), |function| unsafe { function() })
-}
+engine_entry!(hl_engine_abi() -> c_uint, 0, engine_abi);
 
-pub(super) unsafe fn hl_c_backend_leak_check_nonvacuity() -> c_int {
-    crate::loader::api()
-        .ok()
-        .and_then(|api| api.leak_check_nonvacuity)
-        .map_or(3, |function| unsafe { function() })
-}
+engine_entry!(hl_engine_version() -> *const c_char, std::ptr::null(), engine_version);
 
-#[cfg(unix)]
-pub(super) unsafe fn hl_c_backend_checkpoint_broker_pair(parent: *mut c_int, child: *mut c_int) -> c_int {
-    crate::loader::api()
-        .ok()
-        .and_then(|api| api.checkpoint_broker_pair)
-        .map_or(3, |function| unsafe { function(parent, child) })
-}
+engine_entry!(hl_c_backend_leak_check_nonvacuity() -> c_int, 3, leak_check_nonvacuity);
 
-#[cfg(unix)]
+engine_entry!(#[cfg(unix)]
+hl_c_backend_checkpoint_broker_pair(parent: *mut c_int, child: *mut c_int) -> c_int, 3, checkpoint_broker_pair);
+
+engine_entry!(#[cfg(unix)]
 #[allow(dead_code)]
-pub(super) unsafe fn hl_c_backend_checkpoint_broker_accept(
-    broker: c_int,
-    timeout_ms: c_int,
-    host_pid: *mut u64,
-) -> c_int {
-    crate::loader::api()
-        .ok()
-        .and_then(|api| api.checkpoint_broker_accept)
-        .map_or(3, |function| unsafe { function(broker, timeout_ms, host_pid) })
-}
+hl_c_backend_checkpoint_broker_accept(broker: c_int, timeout_ms: c_int, host_pid: *mut u64) -> c_int, 3, checkpoint_broker_accept);
 
-#[cfg(unix)]
-pub(super) unsafe fn hl_c_backend_checkpoint_broker_accept_authenticated(
-    broker: c_int,
-    timeout_ms: c_int,
-    host_pid: *mut u64,
-    host_birth: *mut u64,
-    host_generation: *mut u64,
-    process_handle: *mut c_int,
-) -> c_int {
-    crate::loader::api()
-        .ok()
-        .and_then(|api| api.checkpoint_broker_accept_authenticated)
-        .map_or(3, |function| unsafe {
-            function(
-                broker,
-                timeout_ms,
-                host_pid,
-                host_birth,
-                host_generation,
-                process_handle,
-            )
-        })
-}
+engine_entry!(#[cfg(unix)]
+hl_c_backend_checkpoint_broker_accept_authenticated(broker: c_int, timeout_ms: c_int, host_pid: *mut u64, host_birth: *mut u64, host_generation: *mut u64, process_handle: *mut c_int) -> c_int, 3, checkpoint_broker_accept_authenticated);
 
-#[cfg(unix)]
-pub(super) unsafe fn hl_c_backend_checkpoint_trigger_create(
-    descriptor: *mut c_int,
-    mapping: *mut *mut c_void,
-) -> c_int {
-    crate::loader::api()
-        .ok()
-        .and_then(|api| api.checkpoint_trigger_create)
-        .map_or(3, |function| unsafe { function(descriptor, mapping) })
-}
+engine_entry!(#[cfg(unix)]
+hl_c_backend_checkpoint_trigger_create(descriptor: *mut c_int, mapping: *mut *mut c_void) -> c_int, 3, checkpoint_trigger_create);
 
-#[cfg(unix)]
-pub(super) unsafe fn hl_c_backend_checkpoint_trigger_bump(mapping: *mut c_void) -> c_uint {
-    crate::loader::api()
-        .ok()
-        .and_then(|api| api.checkpoint_trigger_bump)
-        .map_or(0, |function| unsafe { function(mapping) })
-}
+engine_entry!(#[cfg(unix)]
+hl_c_backend_checkpoint_trigger_bump(mapping: *mut c_void) -> c_uint, 0, checkpoint_trigger_bump);
 
-#[cfg(unix)]
-pub(super) unsafe fn hl_c_backend_checkpoint_trigger_destroy(mapping: *mut c_void, descriptor: c_int) {
-    if let Some(function) = crate::loader::api().ok().and_then(|api| api.checkpoint_trigger_destroy) {
-        unsafe { function(mapping, descriptor) };
-    }
-}
+engine_entry!(#[cfg(unix)]
+hl_c_backend_checkpoint_trigger_destroy(mapping: *mut c_void, descriptor: c_int), checkpoint_trigger_destroy);
 
-#[cfg(unix)]
-pub(super) unsafe fn hl_c_backend_checkpoint_adopt(isa: c_uint, broker: c_int, trigger: c_int) -> c_int {
-    crate::loader::api()
-        .ok()
-        .and_then(|api| api.checkpoint_adopt)
-        .map_or(3, |function| unsafe { function(isa, broker, trigger) })
-}
+engine_entry!(#[cfg(unix)]
+hl_c_backend_checkpoint_adopt(isa: c_uint, broker: c_int, trigger: c_int) -> c_int, 3, checkpoint_adopt);
 
-#[cfg(unix)]
-pub(super) unsafe fn hl_c_backend_checkpoint_interrupt_signal(isa: c_uint) -> c_int {
-    crate::loader::api()
-        .ok()
-        .and_then(|api| api.checkpoint_interrupt_signal)
-        .map_or(0, |function| unsafe { function(isa) })
-}
+engine_entry!(#[cfg(unix)]
+hl_c_backend_checkpoint_interrupt_signal(isa: c_uint) -> c_int, 0, checkpoint_interrupt_signal);
 
-#[cfg(unix)]
-pub(super) unsafe fn hl_c_backend_checkpoint_configure(backend: *mut Backend, broker: c_int, trigger: c_int) -> c_int {
-    crate::loader::api()
-        .ok()
-        .and_then(|api| api.checkpoint_configure)
-        .map_or(3, |function| unsafe { function(backend, broker, trigger) })
-}
+engine_entry!(#[cfg(unix)]
+hl_c_backend_checkpoint_configure(backend: *mut Backend, broker: c_int, trigger: c_int) -> c_int, 3, checkpoint_configure);
 
 #[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn hl_c_backend_create(
@@ -212,6 +166,10 @@ pub(super) unsafe fn hl_c_backend_create(
 ) -> c_int {
     let Ok(api) = crate::loader::api() else {
         if !output.is_null() {
+            // SAFETY: `output` is the caller's out-parameter, checked non-null here and required by
+            // this function's contract to be a writable, aligned `*mut Backend` slot owned by the
+            // caller for the call. Clearing it is the failure half of that contract: the caller must
+            // not read a stale handle out of a create that never ran.
             unsafe { output.write(std::ptr::null_mut()) };
         }
         #[cfg(unix)]
@@ -224,6 +182,12 @@ pub(super) unsafe fn hl_c_backend_create(
     let Some(function) = api.create else {
         return 3;
     };
+    // SAFETY: `function` is a resolved export of the loaded engine, whose ABI version and build
+    // fingerprint the loader checked before publishing it, and the object stays mapped for the rest
+    // of the process. Every pointer below belongs to the caller of this `unsafe fn`, which its
+    // contract requires to keep them valid for the call; the engine copies the plan, the option
+    // vectors and the descriptor table before returning, takes ownership of `provider_fd`, and
+    // stores the new handle through `output`. It reports failure as a status and never unwinds.
     unsafe {
         function(
             isa,
@@ -245,33 +209,13 @@ pub(super) unsafe fn hl_c_backend_create(
     }
 }
 
-pub(super) unsafe fn hl_c_backend_run(backend: *mut Backend, argc: c_int, argv: *const *const c_char) -> c_int {
-    crate::loader::api()
-        .ok()
-        .and_then(|api| api.run)
-        .map_or(3, |function| unsafe { function(backend, argc, argv) })
-}
+engine_entry!(hl_c_backend_run(backend: *mut Backend, argc: c_int, argv: *const *const c_char) -> c_int, 3, run);
 
-pub(super) unsafe fn hl_c_backend_request(backend: *mut Backend, request: c_uint, signal: c_int) -> c_int {
-    crate::loader::api()
-        .ok()
-        .and_then(|api| api.request)
-        .map_or(3, |function| unsafe { function(backend, request, signal) })
-}
+engine_entry!(hl_c_backend_request(backend: *mut Backend, request: c_uint, signal: c_int) -> c_int, 3, request);
 
-pub(super) unsafe fn hl_c_backend_exit(backend: *mut Backend, result: *mut EngineExit) -> c_int {
-    crate::loader::api()
-        .ok()
-        .and_then(|api| api.exit)
-        .map_or(3, |function| unsafe { function(backend, result) })
-}
+engine_entry!(hl_c_backend_exit(backend: *mut Backend, result: *mut EngineExit) -> c_int, 3, exit);
 
-pub(super) unsafe fn hl_c_backend_guest_pid(backend: *const Backend) -> c_int {
-    crate::loader::api()
-        .ok()
-        .and_then(|api| api.guest_pid)
-        .map_or(0, |function| unsafe { function(backend) })
-}
+engine_entry!(hl_c_backend_guest_pid(backend: *const Backend) -> c_int, 0, guest_pid);
 
 pub(super) fn hl_c_backend_process_identity_signal(handle: c_int, host_pid: u64, signal: c_int) -> c_int {
     crate::loader::api()
@@ -327,456 +271,137 @@ pub(super) fn hl_c_backend_terminal_termios_adopt(native_fd: c_int, image: &[u8;
         })
 }
 
-pub(super) unsafe fn hl_c_backend_destroy(backend: *mut Backend) {
-    if let Some(function) = crate::loader::api().ok().and_then(|api| api.destroy) {
-        unsafe { function(backend) };
-    }
-}
+engine_entry!(hl_c_backend_destroy(backend: *mut Backend), destroy);
 
 #[cfg(feature = "native-test-hooks")]
 fn test_api() -> &'static crate::loader::TestApi {
     crate::loader::tests().unwrap_or_else(|error| panic!("native test bridge unavailable: {error}"))
 }
 
-#[cfg(feature = "native-test-hooks")]
-#[allow(dead_code)]
-pub(super) unsafe fn hl_c_backend_checkpoint_peer_authenticate_test(
-    descriptor: c_int,
-    claimed_pid: u64,
-    host_pid: *mut u64,
-    host_birth: *mut u64,
-) -> c_int {
-    unsafe { (test_api().checkpoint_peer_authenticate)(descriptor, claimed_pid, host_pid, host_birth) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-pub(super) unsafe fn hl_c_backend_checkpoint_channel_connect_test(broker_child: c_int) -> c_int {
-    unsafe { (test_api().checkpoint_channel_connect)(broker_child) }
-}
-
-#[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
-pub(super) unsafe fn hl_c_backend_checkpoint_process_identity_open_test(
-    pid: c_int,
-    expected_birth: u64,
-    expected_generation: u64,
-    actual_birth: *mut u64,
-    actual_generation: *mut u64,
-) -> c_int {
-    unsafe {
-        (test_api().checkpoint_process_identity_open)(
-            pid,
-            expected_birth,
-            expected_generation,
-            actual_birth,
-            actual_generation,
-        )
-    }
-}
-
-#[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
-pub(super) unsafe fn hl_c_backend_checkpoint_peer_identity_open_test(
-    descriptor: c_int,
-    claimed_pid: u64,
-    actual_pid: *mut u64,
-    actual_birth: *mut u64,
-    actual_generation: *mut u64,
-) -> c_int {
-    unsafe {
-        (test_api().checkpoint_peer_identity_open)(descriptor, claimed_pid, actual_pid, actual_birth, actual_generation)
-    }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_bound_vector_io_test(
-    scenario: c_uint,
-    result: *mut i64,
-    calls: *mut c_uint,
-    bytes: *mut c_ulonglong,
-) -> c_int {
-    unsafe { (test_api().aarch64_bound_vector_io)(scenario, result, calls, bytes) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_bound_vector_io_test(
-    scenario: c_uint,
-    result: *mut i64,
-    calls: *mut c_uint,
-    bytes: *mut c_ulonglong,
-) -> c_int {
-    unsafe { (test_api().x86_64_bound_vector_io)(scenario, result, calls, bytes) }
-}
-
-#[cfg(all(test, feature = "native-test-hooks"))]
-unsafe fn hl_aarch64_fdvis_path_publication_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().aarch64_fdvis_path_publication)(scenario) }
-}
-
-#[cfg(all(test, feature = "native-test-hooks"))]
-unsafe fn hl_x86_64_fdvis_path_publication_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().x86_64_fdvis_path_publication)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_namespace_transaction_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().aarch64_namespace_transaction)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_namespace_transaction_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().x86_64_namespace_transaction)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_store_preflight_test() -> c_int {
-    unsafe { (test_api().x86_64_store_preflight)() }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_reserved_register_test() -> c_int {
-    unsafe { (test_api().aarch64_reserved_register)() }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_reserved_register_test() -> c_int {
-    unsafe { (test_api().x86_64_reserved_register)() }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_signal_errno_frame_test(
-    domain: c_uint,
-    redirect: c_uint,
-    nr: c_ulonglong,
-    raw: i64,
-    observed: *mut i64,
-    completed: *mut i64,
-) -> c_int {
-    unsafe { (test_api().aarch64_signal_errno_frame)(domain, redirect, nr, raw, observed, completed) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_signal_errno_frame_test(
-    domain: c_uint,
-    redirect: c_uint,
-    nr: c_ulonglong,
-    raw: i64,
-    observed: *mut i64,
-    completed: *mut i64,
-) -> c_int {
-    unsafe { (test_api().x86_64_signal_errno_frame)(domain, redirect, nr, raw, observed, completed) }
-}
-
-macro_rules! test_no_argument {
-    ($name:ident, $field:ident) => {
-        #[cfg(feature = "native-test-hooks")]
-        unsafe extern "C" fn $name() -> c_int {
-            unsafe { (test_api().$field)() }
+/// Defines one call into a feature-gated native test hook.
+///
+/// These share a safety argument distinct from `engine_entry!`: `test_api()` resolves the hook
+/// table eagerly and panics rather than returning when the loaded object does not export it, so
+/// a generated body never has an absent case and always calls a live export of the declared
+/// signature. Each hook owns its own fixture -- its descriptors, mappings, threads and child
+/// processes -- for the whole call and has released or reaped all of them before it returns a
+/// scalar status, so nothing it touches outlives the call and no Rust storage is aliased. The
+/// generated function is `unsafe`, so its caller owns the pointer arguments it forwards; the C
+/// side reports failure as a status and never unwinds across the boundary.
+macro_rules! test_entry {
+    ($(#[$attribute:meta])* $name:ident($($argument:ident: $type:ty),* $(,)?) -> $result:ty, $field:ident) => {
+        $(#[$attribute])*
+        pub(super) unsafe fn $name($($argument: $type),*) -> $result {
+            // SAFETY: a resolved hook is a live export of this signature owning its own fixture;
+            // the caller of this `unsafe fn` owns the arguments. Stated in full on `test_entry!`.
+            unsafe { (test_api().$field)($($argument),*) }
+        }
+    };
+    ($(#[$attribute:meta])* $name:ident($($argument:ident: $type:ty),* $(,)?), $field:ident) => {
+        $(#[$attribute])*
+        pub(super) unsafe fn $name($($argument: $type),*) {
+            // SAFETY: a resolved hook is a live export of this signature owning its own fixture;
+            // the caller of this `unsafe fn` owns the arguments. Stated in full on `test_entry!`.
+            unsafe { (test_api().$field)($($argument),*) };
         }
     };
 }
 
-test_no_argument!(
-    hl_aarch64_checkpoint_signal_precedence_test,
-    aarch64_checkpoint_signal_precedence
-);
-test_no_argument!(
-    hl_x86_64_checkpoint_signal_precedence_test,
-    x86_64_checkpoint_signal_precedence
-);
-test_no_argument!(
-    hl_aarch64_checkpoint_restart_register_test,
-    aarch64_checkpoint_restart_register
-);
-test_no_argument!(
-    hl_x86_64_checkpoint_restart_register_test,
-    x86_64_checkpoint_restart_register
-);
-test_no_argument!(
-    hl_aarch64_checkpoint_restore_rollback_test,
-    aarch64_checkpoint_restore_rollback
-);
-test_no_argument!(hl_aarch64_terminal_termios_store_test, aarch64_terminal_termios_store);
-test_no_argument!(hl_x86_64_terminal_termios_store_test, x86_64_terminal_termios_store);
-test_no_argument!(
-    hl_x86_64_checkpoint_restore_rollback_test,
-    x86_64_checkpoint_restore_rollback
-);
+test_entry!(#[cfg(feature = "native-test-hooks")]
+#[allow(dead_code)]
+hl_c_backend_checkpoint_peer_authenticate_test(descriptor: c_int, claimed_pid: u64, host_pid: *mut u64, host_birth: *mut u64) -> c_int, checkpoint_peer_authenticate);
 
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_unix_identity_test(
-    operation: c_uint,
-    fd: c_int,
-    object: c_ulonglong,
-    local: *mut c_ulonglong,
-    peer: *mut c_ulonglong,
-    hidden: *mut c_uint,
-) -> c_int {
-    unsafe { (test_api().aarch64_unix_identity)(operation, fd, object, local, peer, hidden) }
-}
+test_entry!(#[cfg(feature = "native-test-hooks")]
+hl_c_backend_checkpoint_channel_connect_test(broker_child: c_int) -> c_int, checkpoint_channel_connect);
 
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_unix_identity_test(
-    operation: c_uint,
-    fd: c_int,
-    object: c_ulonglong,
-    local: *mut c_ulonglong,
-    peer: *mut c_ulonglong,
-    hidden: *mut c_uint,
-) -> c_int {
-    unsafe { (test_api().x86_64_unix_identity)(operation, fd, object, local, peer, hidden) }
-}
+test_entry!(#[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
+hl_c_backend_checkpoint_process_identity_open_test(pid: c_int, expected_birth: u64, expected_generation: u64, actual_birth: *mut u64, actual_generation: *mut u64) -> c_int, checkpoint_process_identity_open);
 
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_unix_identity_capture_test(fd: c_int) -> c_int {
-    unsafe { (test_api().aarch64_unix_identity_capture)(fd) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_unix_identity_capture_test(fd: c_int) -> c_int {
-    unsafe { (test_api().x86_64_unix_identity_capture)(fd) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_socket_shape_test(
-    operation: c_uint,
-    fd: c_int,
-    capacity: c_uint,
-    out: *mut u8,
-    out_length: *mut c_uint,
-) -> c_int {
-    unsafe { (test_api().aarch64_socket_shape)(operation, fd, capacity, out, out_length) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_socket_shape_test(
-    operation: c_uint,
-    fd: c_int,
-    capacity: c_uint,
-    out: *mut u8,
-    out_length: *mut c_uint,
-) -> c_int {
-    unsafe { (test_api().x86_64_socket_shape)(operation, fd, capacity, out, out_length) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_checkpoint_restore_claim_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().aarch64_checkpoint_restore_claim)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_checkpoint_restore_claim_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().x86_64_checkpoint_restore_claim)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_checkpoint_restore_slice_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().aarch64_checkpoint_restore_slice)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_checkpoint_restore_slice_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().x86_64_checkpoint_restore_slice)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_checkpoint_gmap_release_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().aarch64_checkpoint_gmap_release)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_checkpoint_gmap_release_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().x86_64_checkpoint_gmap_release)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_checkpoint_anon_shared_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().aarch64_checkpoint_anon_shared)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_checkpoint_anon_shared_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().x86_64_checkpoint_anon_shared)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_checkpoint_rendezvous_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().aarch64_checkpoint_rendezvous)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_checkpoint_rendezvous_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().x86_64_checkpoint_rendezvous)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_checkpoint_launch_identity_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().aarch64_checkpoint_launch_identity)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_checkpoint_launch_identity_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().x86_64_checkpoint_launch_identity)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_checkpoint_membership_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().aarch64_checkpoint_membership)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_checkpoint_membership_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().x86_64_checkpoint_membership)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_pid_namespace_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().aarch64_pid_namespace)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_pid_namespace_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().x86_64_pid_namespace)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_checkpoint_identity_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().aarch64_checkpoint_identity)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_checkpoint_identity_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().x86_64_checkpoint_identity)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_checkpoint_election_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().aarch64_checkpoint_election)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_checkpoint_election_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().x86_64_checkpoint_election)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_checkpoint_pipe_capture_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().aarch64_checkpoint_pipe_capture)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_checkpoint_pipe_capture_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().x86_64_checkpoint_pipe_capture)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_checkpoint_stdio_alias_capture_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().aarch64_checkpoint_stdio_alias_capture)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_checkpoint_stdio_alias_capture_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().x86_64_checkpoint_stdio_alias_capture)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_checkpoint_socket_halfclose_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().aarch64_checkpoint_socket_halfclose)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_checkpoint_socket_halfclose_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().x86_64_checkpoint_socket_halfclose)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_aarch64_checkpoint_ipc_admission_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().aarch64_checkpoint_ipc_admission)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_x86_64_checkpoint_ipc_admission_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().x86_64_checkpoint_ipc_admission)(scenario) }
-}
-
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_c_backend_errno_from_host_test(domain: c_uint, host_errno: c_int) -> c_int {
-    unsafe { (test_api().errno_from_host)(domain, host_errno) }
-}
-
-#[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
-unsafe fn hl_c_backend_directory_stream_private_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().directory_stream_private)(scenario) }
-}
+test_entry!(#[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
+hl_c_backend_checkpoint_peer_identity_open_test(descriptor: c_int, claimed_pid: u64, actual_pid: *mut u64, actual_birth: *mut u64, actual_generation: *mut u64) -> c_int, checkpoint_peer_identity_open);
 
 #[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
 pub(crate) fn directory_stream_private_test(scenario: u32) -> i32 {
     // SAFETY: this feature-gated hook owns its host context and directory fixture end to end.
-    unsafe { hl_c_backend_directory_stream_private_test(scenario) }
+    unsafe { (test_api().directory_stream_private)(scenario) }
 }
 
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_c_backend_identity_registry_test(scenario: c_uint, iterations: c_uint) -> c_int {
-    unsafe { (test_api().identity_registry)(scenario, iterations) }
-}
+test_entry!(#[cfg(all(test, feature = "native-test-hooks"))]
+hl_c_backend_checkpoint_test_prune_foreign_descriptors() -> c_uint, checkpoint_test_prune_foreign_descriptors);
 
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_c_backend_private_fork_lock_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().private_fork_lock)(scenario) }
-}
+test_entry!(
+    #[cfg(all(test, feature = "native-test-hooks"))]
+    hl_c_backend_checkpoint_test_fail_registry_allocation(),
+    checkpoint_test_fail_registry_allocation
+);
 
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_c_backend_process_identity_token_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().process_identity_token)(scenario) }
-}
+test_entry!(#[cfg(all(test, feature = "native-test-hooks"))]
+hl_c_backend_checkpoint_test_fail_private_adopt(position: c_uint), checkpoint_test_fail_private_adopt);
 
-#[cfg(feature = "native-test-hooks")]
-unsafe fn hl_c_backend_setfl_append_write_test(scenario: c_uint) -> c_int {
-    unsafe { (test_api().setfl_append_write)(scenario) }
-}
+test_entry!(#[cfg(all(test, feature = "native-test-hooks"))]
+hl_c_backend_checkpoint_test_private_descriptor_count() -> u64, checkpoint_test_private_descriptor_count);
 
-#[cfg(all(test, feature = "native-test-hooks"))]
-pub(super) unsafe fn hl_c_backend_checkpoint_test_prune_foreign_descriptors() -> c_uint {
-    unsafe { (test_api().checkpoint_test_prune_foreign_descriptors)() }
-}
-
-#[cfg(all(test, feature = "native-test-hooks"))]
-pub(super) unsafe fn hl_c_backend_checkpoint_test_fail_registry_allocation() {
-    unsafe { (test_api().checkpoint_test_fail_registry_allocation)() };
-}
-
-#[cfg(all(test, feature = "native-test-hooks"))]
-pub(super) unsafe fn hl_c_backend_checkpoint_test_fail_private_adopt(position: c_uint) {
-    unsafe { (test_api().checkpoint_test_fail_private_adopt)(position) };
-}
-
-#[cfg(all(test, feature = "native-test-hooks"))]
-pub(super) unsafe fn hl_c_backend_checkpoint_test_private_descriptor_count() -> u64 {
-    unsafe { (test_api().checkpoint_test_private_descriptor_count)() }
-}
-
-#[cfg(all(test, feature = "native-test-hooks", unix))]
-pub(super) unsafe fn hl_c_backend_host_process_force_test(pid: c_int) -> c_int {
-    unsafe { (test_api().host_process_force)(pid) }
-}
+test_entry!(#[cfg(all(test, feature = "native-test-hooks", unix))]
+hl_c_backend_host_process_force_test(pid: c_int) -> c_int, host_process_force);
 
 // Only `a_peer_that_leads_its_own_session_is_still_enumerated_as_a_peer` calls this, and that
 // test is Linux-only because it reads the coordinator's /proc view; the C hook exists on both
 // hosts, so the cfg tracks the caller rather than the symbol.
-#[cfg(all(test, feature = "native-test-hooks", target_os = "linux"))]
-pub(super) unsafe fn hl_c_backend_host_process_peer_enumerated_test(pid: c_int) -> c_int {
-    unsafe { (test_api().host_process_peer_enumerated)(pid) }
+test_entry!(#[cfg(all(test, feature = "native-test-hooks", target_os = "linux"))]
+hl_c_backend_host_process_peer_enumerated_test(pid: c_int) -> c_int, host_process_peer_enumerated);
+
+test_entry!(#[cfg(all(test, feature = "native-test-hooks"))]
+hl_c_backend_activation_ready_pause(paused: c_int), activation_ready_pause);
+
+/// Runs the ISA-selected scenario hook and maps its scalar status onto a result.
+///
+/// One safety statement covers this helper and its no-argument sibling, which is why the sixteen
+/// callers below carry none of their own. Both hooks are resolved entries of `TestApi`, so each is
+/// a live export of the declared signature in an object that stays mapped for the process. A hook
+/// owns its whole fixture -- descriptors, mappings, threads and child processes -- for the call and
+/// has closed, unmapped, joined or reaped every one before returning, so it aliases no Rust storage
+/// and leaves nothing behind. `scenario` is a scalar selector, the return is a scalar status, and
+/// the C side never unwinds across the boundary.
+#[cfg(feature = "native-test-hooks")]
+fn scenario_status(
+    isa: u32,
+    aarch64: crate::loader::ScenarioTest,
+    x86_64: crate::loader::ScenarioTest,
+    scenario: u32,
+) -> Result<(), i32> {
+    let hook = match isa {
+        1 => aarch64,
+        2 => x86_64,
+        _ => return Err(-22),
+    };
+    // SAFETY: stated in full on this function's documentation.
+    let status = unsafe { hook(scenario) };
+    if status == 0 { Ok(()) } else { Err(status) }
 }
 
-#[cfg(all(test, feature = "native-test-hooks"))]
-pub(super) unsafe fn hl_c_backend_activation_ready_pause(paused: c_int) {
-    unsafe { (test_api().activation_ready_pause)(paused) };
+/// Runs the ISA-selected hook that takes no scenario, under `scenario_status`'s safety statement.
+#[cfg(feature = "native-test-hooks")]
+fn no_argument_status(
+    isa: u32,
+    aarch64: crate::loader::NoArgumentTest,
+    x86_64: crate::loader::NoArgumentTest,
+) -> Result<(), i32> {
+    let hook = match isa {
+        1 => aarch64,
+        2 => x86_64,
+        _ => return Err(-22),
+    };
+    // SAFETY: stated in full on `scenario_status`.
+    let status = unsafe { hook() };
+    if status == 0 { Ok(()) } else { Err(status) }
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn bound_vector_io_test(isa: u32, scenario: u32) -> Result<(i64, u32, u64), i32> {
     let (mut result, mut calls, mut bytes) = (i64::MIN, u32::MAX, u64::MAX);
     let hook = match isa {
-        1 => hl_aarch64_bound_vector_io_test,
-        2 => hl_x86_64_bound_vector_io_test,
+        1 => test_api().aarch64_bound_vector_io,
+        2 => test_api().x86_64_bound_vector_io,
         _ => return Err(-22),
     };
     // SAFETY: the feature-gated C hook accepts writable scalar outputs and owns its fixture memory.
@@ -792,7 +417,7 @@ pub(crate) fn bound_vector_io_test(isa: u32, scenario: u32) -> Result<(i64, u32,
 pub(crate) fn identity_registry_test(scenario: u32, iterations: u32) -> Result<(), i32> {
     // SAFETY: the feature-gated native hook owns its private shared registry and child processes. Inputs are
     // scalar scenario controls, and the hook returns only after every child has been reaped.
-    let status = unsafe { hl_c_backend_identity_registry_test(scenario, iterations) };
+    let status = unsafe { (test_api().identity_registry)(scenario, iterations) };
     if status == 0 { Ok(()) } else { Err(status) }
 }
 
@@ -800,7 +425,7 @@ pub(crate) fn identity_registry_test(scenario: u32, iterations: u32) -> Result<(
 pub(crate) fn setfl_append_write_test(scenario: u32) -> Result<(), i32> {
     // SAFETY: the feature-gated native hook owns the descriptor table, the host services and the kernel
     // objects it builds, and releases all of them before returning. Its input is a scalar scenario selector.
-    let status = unsafe { hl_c_backend_setfl_append_write_test(scenario) };
+    let status = unsafe { (test_api().setfl_append_write)(scenario) };
     if status == 0 { Ok(()) } else { Err(status) }
 }
 
@@ -808,7 +433,7 @@ pub(crate) fn setfl_append_write_test(scenario: u32) -> Result<(), i32> {
 pub(crate) fn process_identity_token_test(scenario: u32) -> Result<(), i32> {
     // SAFETY: the feature-gated native hook reads only /proc records for this process and pid 1, and owns
     // the one child it forks, reaping it before returning. Its input is a scalar scenario selector.
-    let status = unsafe { hl_c_backend_process_identity_token_test(scenario) };
+    let status = unsafe { (test_api().process_identity_token)(scenario) };
     if status == 0 { Ok(()) } else { Err(status) }
 }
 
@@ -816,15 +441,15 @@ pub(crate) fn process_identity_token_test(scenario: u32) -> Result<(), i32> {
 pub(crate) fn private_fork_lock_test(scenario: u32) -> Result<(), i32> {
     // SAFETY: the feature-gated native hook owns its own descriptor, thread, and child process, and
     // returns only after the child has been reaped and the holder thread joined.
-    let status = unsafe { hl_c_backend_private_fork_lock_test(scenario) };
+    let status = unsafe { (test_api().private_fork_lock)(scenario) };
     if status == 0 { Ok(()) } else { Err(status) }
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn namespace_transaction_test(isa: u32, scenario: u32) -> Result<(), i32> {
     let hook = match isa {
-        1 => hl_aarch64_namespace_transaction_test,
-        2 => hl_x86_64_namespace_transaction_test,
+        1 => test_api().aarch64_namespace_transaction,
+        2 => test_api().x86_64_namespace_transaction,
         _ => return Err(-22),
     };
     // SAFETY: each feature-gated hook owns its shared transaction fixture and
@@ -836,8 +461,8 @@ pub(crate) fn namespace_transaction_test(isa: u32, scenario: u32) -> Result<(), 
 #[cfg(all(test, feature = "native-test-hooks"))]
 pub(crate) fn fdvis_path_publication_test(isa: u32, scenario: u32) -> bool {
     let hook = match isa {
-        1 => hl_aarch64_fdvis_path_publication_test,
-        2 => hl_x86_64_fdvis_path_publication_test,
+        1 => test_api().aarch64_fdvis_path_publication,
+        2 => test_api().x86_64_fdvis_path_publication,
         _ => return false,
     };
     // SAFETY: the feature-gated hook owns and restores its isolated descriptor-path fixture.
@@ -847,25 +472,25 @@ pub(crate) fn fdvis_path_publication_test(isa: u32, scenario: u32) -> bool {
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn x86_store_preflight_test() -> i32 {
     // SAFETY: the feature-gated hook owns its local emitter and CPU fixtures.
-    unsafe { hl_x86_64_store_preflight_test() }
+    unsafe { (test_api().x86_64_store_preflight)() }
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn aarch64_reserved_register_test() -> i32 {
     // SAFETY: the feature-gated hook owns its local emitter buffer and restores every global it moves.
-    unsafe { hl_aarch64_reserved_register_test() }
+    unsafe { (test_api().aarch64_reserved_register)() }
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn x86_reserved_register_test() -> i32 {
     // SAFETY: the feature-gated hook owns its local emitter buffer and restores every global it moves.
-    unsafe { hl_x86_64_reserved_register_test() }
+    unsafe { (test_api().x86_64_reserved_register)() }
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn linux_errno_from_host(domain: u32, host_errno: i32) -> i32 {
     // SAFETY: this pure test export accepts and returns one scalar value.
-    unsafe { hl_c_backend_errno_from_host_test(domain, host_errno) }
+    unsafe { (test_api().errno_from_host)(domain, host_errno) }
 }
 
 #[cfg(feature = "native-test-hooks")]
@@ -877,8 +502,8 @@ pub(crate) fn signal_errno_frame_test(
     raw: i64,
 ) -> Result<(i64, i64), i32> {
     let hook = match isa {
-        1 => hl_aarch64_signal_errno_frame_test,
-        2 => hl_x86_64_signal_errno_frame_test,
+        1 => test_api().aarch64_signal_errno_frame,
+        2 => test_api().x86_64_signal_errno_frame,
         _ => return Err(-22),
     };
     let (mut observed, mut completed) = (i64::MIN, i64::MIN);
@@ -905,12 +530,12 @@ pub(crate) fn checkpoint_continuation_contract_test(isa: u32) -> Result<(), i32>
     type Hook = unsafe extern "C" fn() -> c_int;
     let (signal, registers): (Hook, Hook) = match isa {
         1 => (
-            hl_aarch64_checkpoint_signal_precedence_test,
-            hl_aarch64_checkpoint_restart_register_test,
+            test_api().aarch64_checkpoint_signal_precedence,
+            test_api().aarch64_checkpoint_restart_register,
         ),
         2 => (
-            hl_x86_64_checkpoint_signal_precedence_test,
-            hl_x86_64_checkpoint_restart_register_test,
+            test_api().x86_64_checkpoint_signal_precedence,
+            test_api().x86_64_checkpoint_restart_register,
         ),
         _ => return Err(-22),
     };
@@ -926,219 +551,175 @@ pub(crate) fn checkpoint_continuation_contract_test(isa: u32) -> Result<(), i32>
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn checkpoint_restore_claim_test(isa: u32, scenario: u32) -> Result<(), i32> {
-    let status = unsafe {
-        match isa {
-            1 => hl_aarch64_checkpoint_restore_claim_test(scenario),
-            2 => hl_x86_64_checkpoint_restore_claim_test(scenario),
-            _ => return Err(-22),
-        }
-    };
-    if status == 0 { Ok(()) } else { Err(status) }
+    scenario_status(
+        isa,
+        test_api().aarch64_checkpoint_restore_claim,
+        test_api().x86_64_checkpoint_restore_claim,
+        scenario,
+    )
 }
 
 /// Exercise the restore-side host-page slicing that keeps a rounded claim off a neighbouring guest
 /// region's already-claimed host page.
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn checkpoint_restore_slice_test(isa: u32, scenario: u32) -> Result<(), i32> {
-    // SAFETY: the feature-gated hook reads only its own stack fixtures and returns a scalar.
-    let status = unsafe {
-        match isa {
-            1 => hl_aarch64_checkpoint_restore_slice_test(scenario),
-            2 => hl_x86_64_checkpoint_restore_slice_test(scenario),
-            _ => return Err(-22),
-        }
-    };
-    if status == 0 { Ok(()) } else { Err(status) }
+    scenario_status(
+        isa,
+        test_api().aarch64_checkpoint_restore_slice,
+        test_api().x86_64_checkpoint_restore_slice,
+        scenario,
+    )
 }
 
 /// Exercise the registry teardown a re-forked restorer runs before it claims its own image, and the
 /// host-granularity rounding that teardown depends on.
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn checkpoint_gmap_release_test(isa: u32, scenario: u32) -> Result<(), i32> {
-    // SAFETY: the feature-gated hook maps and releases only its own probe range and returns a scalar.
-    let status = unsafe {
-        match isa {
-            1 => hl_aarch64_checkpoint_gmap_release_test(scenario),
-            2 => hl_x86_64_checkpoint_gmap_release_test(scenario),
-            _ => return Err(-22),
-        }
-    };
-    if status == 0 { Ok(()) } else { Err(status) }
+    scenario_status(
+        isa,
+        test_api().aarch64_checkpoint_gmap_release,
+        test_api().x86_64_checkpoint_gmap_release,
+        scenario,
+    )
 }
 
 /// Exercise the anonymous `MAP_SHARED` identity and its restore-side republication.
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn checkpoint_anon_shared_test(isa: u32, scenario: u32) -> Result<(), i32> {
-    // SAFETY: the feature-gated hook owns every mapping and descriptor it creates, unlinks the named
     // objects it publishes, runs its cross-process arm in a forked child it reaps, borrows no caller
     // memory, and returns a scalar.
-    let status = unsafe {
-        match isa {
-            1 => hl_aarch64_checkpoint_anon_shared_test(scenario),
-            2 => hl_x86_64_checkpoint_anon_shared_test(scenario),
-            _ => return Err(-22),
-        }
-    };
-    if status == 0 { Ok(()) } else { Err(status) }
+    scenario_status(
+        isa,
+        test_api().aarch64_checkpoint_anon_shared,
+        test_api().x86_64_checkpoint_anon_shared,
+        scenario,
+    )
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn pid_namespace_test(isa: u32, scenario: u32) -> Result<(), i32> {
-    // SAFETY: the feature-gated hook runs the scenario in a forked, setsid child it reaps, so the
     // process-wide container identity state it seeds never reaches this process. It borrows no caller
     // memory and returns a scalar.
-    let status = unsafe {
-        match isa {
-            1 => hl_aarch64_pid_namespace_test(scenario),
-            2 => hl_x86_64_pid_namespace_test(scenario),
-            _ => return Err(-22),
-        }
-    };
-    if status == 0 { Ok(()) } else { Err(status) }
+    scenario_status(
+        isa,
+        test_api().aarch64_pid_namespace,
+        test_api().x86_64_pid_namespace,
+        scenario,
+    )
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn checkpoint_identity_test(isa: u32, scenario: u32) -> Result<(), i32> {
-    // SAFETY: the feature-gated hook saves and restores the process-wide checkpoint identity state it
     // touches, runs the scenario in a forked child it reaps, borrows no caller memory, and returns a scalar.
-    let status = unsafe {
-        match isa {
-            1 => hl_aarch64_checkpoint_identity_test(scenario),
-            2 => hl_x86_64_checkpoint_identity_test(scenario),
-            _ => return Err(-22),
-        }
-    };
-    if status == 0 { Ok(()) } else { Err(status) }
+    scenario_status(
+        isa,
+        test_api().aarch64_checkpoint_identity,
+        test_api().x86_64_checkpoint_identity,
+        scenario,
+    )
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn checkpoint_election_test(isa: u32, scenario: u32) -> Result<(), i32> {
-    // SAFETY: the feature-gated hook mutates only process-wide checkpoint identity state it saves and
     // restores, forks nothing, opens no descriptor, borrows no caller memory, and returns a scalar status.
-    let status = unsafe {
-        match isa {
-            1 => hl_aarch64_checkpoint_election_test(scenario),
-            2 => hl_x86_64_checkpoint_election_test(scenario),
-            _ => return Err(-22),
-        }
-    };
-    if status == 0 { Ok(()) } else { Err(status) }
+    scenario_status(
+        isa,
+        test_api().aarch64_checkpoint_election,
+        test_api().x86_64_checkpoint_election,
+        scenario,
+    )
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn checkpoint_rendezvous_test(isa: u32, scenario: u32) -> Result<(), i32> {
-    // SAFETY: the feature-gated hook forks its own peer and its own responder, owns every descriptor it
     // opens and closes them, restores the process-wide checkpoint broker descriptor it swapped, reaps
     // every child it created, and returns a scalar status. It borrows no caller memory.
-    let status = unsafe {
-        match isa {
-            1 => hl_aarch64_checkpoint_rendezvous_test(scenario),
-            2 => hl_x86_64_checkpoint_rendezvous_test(scenario),
-            _ => return Err(-22),
-        }
-    };
-    if status == 0 { Ok(()) } else { Err(status) }
+    scenario_status(
+        isa,
+        test_api().aarch64_checkpoint_rendezvous,
+        test_api().x86_64_checkpoint_rendezvous,
+        scenario,
+    )
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn checkpoint_launch_identity_test(isa: u32, scenario: u32) -> Result<(), i32> {
-    // SAFETY: the feature-gated hook borrows no caller memory. It writes two engine statics, restores both
     // before returning, and answers a scalar status.
-    let status = unsafe {
-        match isa {
-            1 => hl_aarch64_checkpoint_launch_identity_test(scenario),
-            2 => hl_x86_64_checkpoint_launch_identity_test(scenario),
-            _ => return Err(-22),
-        }
-    };
-    if status == 0 { Ok(()) } else { Err(status) }
+    scenario_status(
+        isa,
+        test_api().aarch64_checkpoint_launch_identity,
+        test_api().x86_64_checkpoint_launch_identity,
+        scenario,
+    )
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn checkpoint_membership_test(isa: u32, scenario: u32) -> Result<(), i32> {
-    // SAFETY: the feature-gated hook forks its own orphan, owns every descriptor it opens, mutates only
     // the process-wide HL_PROCESS_DOMAIN option it also sets, kills the orphan it created, and returns a
     // scalar status. It borrows no caller memory.
-    let status = unsafe {
-        match isa {
-            1 => hl_aarch64_checkpoint_membership_test(scenario),
-            2 => hl_x86_64_checkpoint_membership_test(scenario),
-            _ => return Err(-22),
-        }
-    };
-    if status == 0 { Ok(()) } else { Err(status) }
+    scenario_status(
+        isa,
+        test_api().aarch64_checkpoint_membership,
+        test_api().x86_64_checkpoint_membership,
+        scenario,
+    )
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn checkpoint_pipe_capture_test(isa: u32, scenario: u32) -> Result<(), i32> {
-    // SAFETY: the feature-gated hook creates its own pipe and its own shared page, installs a sink that
     // owns no caller memory, restores the previous sink and the destructive-capture flag, and returns a
     // scalar status.
-    let status = unsafe {
-        match isa {
-            1 => hl_aarch64_checkpoint_pipe_capture_test(scenario),
-            2 => hl_x86_64_checkpoint_pipe_capture_test(scenario),
-            _ => return Err(-22),
-        }
-    };
-    if status == 0 { Ok(()) } else { Err(status) }
+    scenario_status(
+        isa,
+        test_api().aarch64_checkpoint_pipe_capture,
+        test_api().x86_64_checkpoint_pipe_capture,
+        scenario,
+    )
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn checkpoint_stdio_alias_capture_test(isa: u32, scenario: u32) -> Result<(), i32> {
-    // SAFETY: the feature-gated hook builds its own host services, descriptor tables and kernel pipes,
     // swaps the process-wide guest box for the duration of the call, restores it, releases everything it
     // created, borrows no caller memory, and returns a scalar status.
-    let status = unsafe {
-        match isa {
-            1 => hl_aarch64_checkpoint_stdio_alias_capture_test(scenario),
-            2 => hl_x86_64_checkpoint_stdio_alias_capture_test(scenario),
-            _ => return Err(-22),
-        }
-    };
-    if status == 0 { Ok(()) } else { Err(status) }
+    scenario_status(
+        isa,
+        test_api().aarch64_checkpoint_stdio_alias_capture,
+        test_api().x86_64_checkpoint_stdio_alias_capture,
+        scenario,
+    )
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn checkpoint_socket_halfclose_test(isa: u32, scenario: u32) -> Result<(), i32> {
-    // SAFETY: the feature-gated hook creates its own socketpair, installs a sink whose whole backing store
     // is its own static buffer, clears the identity it assigned, restores the previous sink and the
     // destructive-capture flag, and returns a scalar status.
-    let status = unsafe {
-        match isa {
-            1 => hl_aarch64_checkpoint_socket_halfclose_test(scenario),
-            2 => hl_x86_64_checkpoint_socket_halfclose_test(scenario),
-            _ => return Err(-22),
-        }
-    };
-    if status == 0 { Ok(()) } else { Err(status) }
+    scenario_status(
+        isa,
+        test_api().aarch64_checkpoint_socket_halfclose,
+        test_api().x86_64_checkpoint_socket_halfclose,
+        scenario,
+    )
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn checkpoint_ipc_admission_test(isa: u32, scenario: u32) -> Result<(), i32> {
-    // SAFETY: the feature-gated hook installs one object into the registry it is
     // exercising, evaluates the gate, and restores the previous contents before
     // returning a scalar status; it allocates nothing the caller owns.
-    let status = unsafe {
-        match isa {
-            1 => hl_aarch64_checkpoint_ipc_admission_test(scenario),
-            2 => hl_x86_64_checkpoint_ipc_admission_test(scenario),
-            _ => return Err(-22),
-        }
-    };
-    if status == 0 { Ok(()) } else { Err(status) }
+    scenario_status(
+        isa,
+        test_api().aarch64_checkpoint_ipc_admission,
+        test_api().x86_64_checkpoint_ipc_admission,
+        scenario,
+    )
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn checkpoint_restore_rollback_test(isa: u32) -> Result<(), i32> {
-    let status = unsafe {
-        match isa {
-            1 => hl_aarch64_checkpoint_restore_rollback_test(),
-            2 => hl_x86_64_checkpoint_restore_rollback_test(),
-            _ => return Err(-22),
-        }
-    };
-    if status == 0 { Ok(()) } else { Err(status) }
+    no_argument_status(
+        isa,
+        test_api().aarch64_checkpoint_restore_rollback,
+        test_api().x86_64_checkpoint_restore_rollback,
+    )
 }
 
 #[cfg(feature = "native-test-hooks")]
@@ -1149,14 +730,11 @@ pub(crate) fn terminal_termios_install_test(fd: c_int, image: &[u8; 36]) {
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn terminal_termios_store_test(isa: u32) -> Result<(), i32> {
-    let status = unsafe {
-        match isa {
-            1 => hl_aarch64_terminal_termios_store_test(),
-            2 => hl_x86_64_terminal_termios_store_test(),
-            _ => return Err(-22),
-        }
-    };
-    if status == 0 { Ok(()) } else { Err(status) }
+    no_argument_status(
+        isa,
+        test_api().aarch64_terminal_termios_store,
+        test_api().x86_64_terminal_termios_store,
+    )
 }
 
 #[cfg(feature = "native-test-hooks")]
@@ -1164,13 +742,15 @@ pub(crate) fn unix_identity_test(isa: u32, operation: u32, fd: i32, object: u64)
     let mut local = 0;
     let mut peer = 0;
     let mut hidden = 0;
-    let status = unsafe {
-        match isa {
-            1 => hl_aarch64_unix_identity_test(operation, fd, object, &raw mut local, &raw mut peer, &raw mut hidden),
-            2 => hl_x86_64_unix_identity_test(operation, fd, object, &raw mut local, &raw mut peer, &raw mut hidden),
-            _ => return Err(-libc::EINVAL),
-        }
+    let hook = match isa {
+        1 => test_api().aarch64_unix_identity,
+        2 => test_api().x86_64_unix_identity,
+        _ => return Err(-libc::EINVAL),
     };
+    // SAFETY: `local`, `peer` and `hidden` are this frame's locals, live for the call and borrowed
+    // by nobody else, so the three out-pointers are unaliased and correctly aligned for the widths
+    // the hook writes; it stores nothing beyond the call. `fd` is borrowed, not consumed.
+    let status = unsafe { hook(operation, fd, object, &raw mut local, &raw mut peer, &raw mut hidden) };
     if status == 0 || ((operation == 1 || operation == 16) && status == 1) {
         Ok((local, peer, hidden))
     } else {
@@ -1181,25 +761,29 @@ pub(crate) fn unix_identity_test(isa: u32, operation: u32, fd: i32, object: u64)
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn socket_shape_test(isa: u32, operation: u32, fd: i32, capacity: u32, out: &mut [u8]) -> Result<u32, i32> {
     let mut length = u32::try_from(out.len()).unwrap_or(u32::MAX);
-    let status = unsafe {
-        match isa {
-            1 => hl_aarch64_socket_shape_test(operation, fd, capacity, out.as_mut_ptr(), &raw mut length),
-            2 => hl_x86_64_socket_shape_test(operation, fd, capacity, out.as_mut_ptr(), &raw mut length),
-            _ => return Err(libc::EINVAL),
-        }
+    let hook = match isa {
+        1 => test_api().aarch64_socket_shape,
+        2 => test_api().x86_64_socket_shape,
+        _ => return Err(libc::EINVAL),
     };
+    // SAFETY: `out` is a caller-owned slice held mutably for the call, and `length` carries its
+    // true element count in, so the hook cannot write past it; `length` is a local, so the buffer
+    // and its bound are unaliased. The hook retains neither after returning a scalar status.
+    let status = unsafe { hook(operation, fd, capacity, out.as_mut_ptr(), &raw mut length) };
     if status == 0 { Ok(length) } else { Err(status) }
 }
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn unix_identity_capture_test(isa: u32, fd: i32) -> Result<(), i32> {
-    let status = unsafe {
-        match isa {
-            1 => hl_aarch64_unix_identity_capture_test(fd),
-            2 => hl_x86_64_unix_identity_capture_test(fd),
-            _ => return Err(-libc::EINVAL),
-        }
+    let hook = match isa {
+        1 => test_api().aarch64_unix_identity_capture,
+        2 => test_api().x86_64_unix_identity_capture,
+        _ => return Err(-libc::EINVAL),
     };
+    // SAFETY: the hook takes one borrowed descriptor and no pointers, so there is nothing for it
+    // to alias or outlive; it captures the descriptor's identity into engine-owned storage and
+    // returns a scalar status.
+    let status = unsafe { hook(fd) };
     if status == 0 { Ok(()) } else { Err(status) }
 }
 

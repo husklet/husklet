@@ -1,0 +1,430 @@
+name: Linux
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# WHY THIS JOB LIVES IN ITS OWN WORKFLOW, AND GROUPS PER COMMIT.
+#
+# `ci.yml` deliberately lets a run on `main` finish rather than be cancelled by the
+# next push -- see the comment there, and the fifteen consecutive `cancelled` runs
+# that prompted it. That fix is bounded by design: GitHub keeps at most one running
+# plus one pending run per group, so when pushes arrive faster than runs finish, the
+# pending one is superseded. Measured 2026-08-20: 3 of 6 consecutive CI runs on
+# `main` reached a verdict and 2 were superseded while pending.
+#
+# Nothing is undetected by that -- the code is cumulative, so a defect at a skipped
+# commit is still caught at the next commit that runs. What is lost is ATTRIBUTION:
+# you learn `main` is red, not which commit reddened it. With nine lanes merging,
+# that is the difference between a lane fixing its own break and someone bisecting.
+#
+# Grouping per commit fixes attribution but costs a concurrent runner per push, and
+# the constraint is macOS: GitHub allows 5 concurrent macOS runners. Today the macOS
+# jobs are short (8.4 and 5.7 minutes) and per-SHA grouping would fit -- but the 5.7
+# is a FAST FAILURE at `nix flake check`, and becomes a real run the day design-lint
+# is fixed. Making all of `ci.yml` per-SHA would therefore be affordable now and
+# possibly not immediately after the fix we most want to land.
+#
+# So only the Linux jobs are split out. They run on `ubuntu-24.04` and
+# `ubuntu-24.04-arm`, where concurrency is not the scarce resource, and they are the
+# jobs most likely to catch a regression --
+# it carries the workspace tests, both `hl-native` feature arms, every Clippy
+# surface and the GUI binaries. macOS and Windows stay in `ci.yml` and keep
+# collapsing.
+#
+# A JOB-LEVEL `concurrency:` KEY CANNOT DO THIS, and that is the whole reason this
+# is a separate file rather than four added lines. Workflow-level concurrency
+# cancels a PENDING run before any of its jobs start, so a per-SHA group on the job
+# never gets the chance to apply. The next person to look at this will reach for the
+# simpler thing first; it does not work.
+concurrency:
+  group: linux-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  workspace-linux-amd64:
+    name: Workspace quality and tests / AMD64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      # `hl-native`'s build script bakes a fingerprint of `src/native` into every crate
+      # above it, so a C edit already invalidates the Rust artifacts that matter.
+      # Incremental objects buy nothing against that and only inflate the saved cache.
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Require an AMD64 Linux host
+        run: |
+          set -euo pipefail
+          architecture="$(uname -m)"
+          test "$architecture" = x86_64 || {
+            echo "Husklet's Linux lane requires an x86_64 host, got: $architecture" >&2
+            exit 1
+          }
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@786fff0690178f1234e4e1fe9b536e94f5433196 # v20
+        with:
+          diagnostic-endpoint: ""
+
+      # The x86_64-linux dev shell closure is 5.7 GiB -- two cross toolchains, the guest
+      # libraries, the GTK4/VTE stack and Xvfb. Substituting it from cache.nixos.org on
+      # every run is the single largest fixed cost in this job, so it is cached whole.
+      # The store is capped before saving and week-old entries on this ref are purged, to
+      # keep the Linux entry from crowding the macOS ones out of the repository's cache.
+      - name: Cache the Nix development environment
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
+          gc-max-store-size-linux: 6G
+          purge: true
+          purge-primary-key: never
+          purge-prefixes: nix-${{ runner.os }}-${{ runner.arch }}-
+          purge-created: 604800
+
+      # A full `target` from a fresh registry is 6.7 GiB here and almost all of it is
+      # workspace artifacts, which are stale on any commit after the one that filled the
+      # cache. This action keeps the dependency half and drops the workspace half, which
+      # is the part worth paying cache budget for. Only `main` writes, so pull requests
+      # restore a predictable entry instead of each seeding its own.
+      # RUSTUP_TOOLCHAIN is set for this step alone: the action shells out to the host's
+      # `cargo`, and `rust-toolchain.toml` would otherwise send rustup off to download
+      # 1.93.1 before the dev shell -- which already has it -- is ever entered.
+      - name: Cache the Cargo registry and dependency build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        with:
+          shared-key: husklet-linux-ci
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Size the build to the runner
+        # The dev shell's hook pins CARGO_BUILD_JOBS to 1 unless the caller sets it, so a
+        # lane on the shared development box cannot swamp a sibling's measurement. A CI
+        # runner is nobody's shared box, and at one job this sequence takes hours.
+        run: echo "CARGO_BUILD_JOBS=$(nproc)" >> "$GITHUB_ENV"
+
+      - name: Fetch locked application dependencies
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo fetch --locked
+
+      - name: Check every workspace target
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo check --workspace --all-targets --locked --offline
+
+      - name: Verify formatting across every workspace crate
+        # `--all` is not decoration: plain `cargo fmt --check` reaches only the seven
+        # `default-members`. This is the spelling `flake.nix` uses for the same gate.
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo fmt --all --check --message-format short
+
+      - name: Lint the native engine surface
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo clippy -p hl-native --all-targets --locked --offline -- -D warnings
+
+      - name: Lint the native engine surface with its test hooks
+        # This is the invocation that would have caught 68d047599's parent. The reserved-
+        # register hooks live behind `#if defined(HL_NATIVE_TEST_HOOKS)` and called
+        # emitters that exist only under `HL_HOST_CPU_AARCH64`, so `hl-native`'s build
+        # script failed outright on x86_64 -- but only with this feature enabled. The
+        # feature also decides which targets Cargo will build at all and which symbols
+        # have a writer, so the with/without pair is two different crates to Clippy.
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo clippy -p hl-native --all-targets --features native-test-hooks
+          --locked --offline -- -D warnings
+
+      - name: Lint the engine composition root
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo clippy -p hl-engine --lib --locked --offline -- -D warnings
+
+      - name: Lint the container-runtime application surface
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo clippy -p husklet --all-targets --features runtime
+          --locked --offline -- -D warnings
+
+      - name: Lint the GUI application surface
+        # `[[bin]] husklet` is `required-features = ["gui"]` and Cargo skips an
+        # unbuildable target in silence, so without this the ~10,800 lines the signed
+        # application is built from are covered by nothing on this host. The Linux dev
+        # shell carries gtk4/vte-gtk4/librsvg precisely so this invocation can run.
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo clippy -p husklet --all-targets --features gui
+          --locked --offline -- -D warnings
+
+      # ---------------------------------------------------------------------------
+      # WHAT THIS JOB DELIBERATELY DOES NOT RUN, AND WHY. The one item below is a known
+      # red on x86_64 Linux, measured rather than guessed. It is not `#[ignore]`d,
+      # disabled, or marked `continue-on-error` anywhere in the tree, and this job now
+      # carries NO `--skip` at all. A job that reports success over a real failure is
+      # worth less than no job at all; when this is fixed, delete its entry here in the
+      # same commit.
+      #
+      #   1. `cargo test -p husklet --lib --features runtime` HAS NO STEP AT ALL, so the
+      #      `runtime`-only surface of the application has no Linux test gate.
+      #      `runtime::domain::product_checkpoint_test::continue_later_restores_the_
+      #      primary_sleep_tree_across_repeated_cycles` and `..::continue_later_keeps_a_
+      #      terminal_backed_pane_execution_across_repeated_cycles` fail 3/3
+      #      deterministically here: the domain worker exits 101 before publication and
+      #      the restore slot reports `stage=failed(12) error=17` (EEXIST). That is a
+      #      REAL ENGINE DEFECT ON THIS ARCHITECTURE and a lane is fixing it. ADD THE STEP
+      #      THE DAY THAT LANDS. Two more of that module's tests are red for their own
+      #      reasons and want the same commit: `runtime::resources::tests::daemon_crash_
+      #      before_acknowledgement_is_degraded_and_reaps_the_process_group` fails as root
+      #      and unprivileged alike and is undiagnosed, and
+      #      `..::stop_wait_failure_attempts_rollback_before_returning` sabotages a
+      #      directory with chmod, which `CAP_DAC_OVERRIDE` walks straight through, so it
+      #      passes only because a GitHub runner is not root.
+      #   2. `cargo test -p husklet --lib --features gui` HAS NO STEP EITHER, and it is
+      #      the same hole as item 1 rather than a second one. `husklet`'s library test
+      #      `config::terminal_tests` is `#[cfg(all(test, feature = "gui"))]` in the LIB
+      #      and falls between this job's `--lib` gates (which use `runtime`) and its
+      #      `gui` gate (which is `--bins`), so it runs nowhere. But the obvious command
+      #      to reach it also pulls in the entire `runtime` library surface named above.
+      #      Measured on x86_64 Linux at f248ad92a: 178 passed, 3 FAILED --
+      #      `product_checkpoint_test::continue_later_keeps_a_terminal_backed_pane_
+      #      execution_across_repeated_cycles` and `resources::tests::daemon_crash_
+      #      before_acknowledgement_is_degraded_and_reaps_the_process_group`, both of
+      #      which item 1 records as red regardless of privilege, plus `resources::
+      #      tests::stop_wait_failure_attempts_rollback_before_returning`, which is red
+      #      HERE only because this host is root and would pass on a runner.
+      #      So this step lands in the same commit as item 1, not before it. Adding it
+      #      now would redden the job for defects a lane is already fixing, and skipping
+      #      those by name would be three named exclusions to cover one small test.
+      #   3. `hl-gui/tests/wire.rs` holds 8 tests behind `#![cfg(feature = "wire")]`,
+      #      which is not a default feature: `cargo test -p hl-gui --test wire` reports
+      #      `running 0 tests ... ok`. They are reachable only through workspace feature
+      #      unification under `--workspace --all-targets`, which no step here runs, so
+      #      they are covered by nothing. Not yet claimed by any lane.
+      #   4. THE REVERSE GAP, and it belongs to the macOS job rather than this one:
+      #      `hl-engine/tests/checkpoint_linux.rs` is `#![cfg(target_os = "linux")]` and
+      #      ~4,400 lines. `nix flake check` on macos-26 is the only job that runs
+      #      integration tests at all, and on that host this suite compiles to zero --
+      #      as do `kevent_changelist_echo.rs` and the Linux-gated cases in
+      #      `restore_collision.rs`, `unix_identity.rs` and `header_self_containment.rs`.
+      #      So the one job that runs integration tests is the one host where the
+      #      largest integration suite is gated out. Both halves look covered; neither
+      #      is. Fixing it means running them HERE, which needs a Linux `flake check`
+      #      path this job does not yet have.
+      # ---------------------------------------------------------------------------
+
+      # THIS STEP EXCLUDES NOTHING. All 88 tests run.
+      #
+      # It used to skip `screens::workspace::extensions::test::a_workspaces_extensions_
+      # are_on_its_sidebar_and_hear_what_is_clicked`, which SIGSEGVd inside GTK 20/20 at
+      # four CPUs. The cause was not thread affinity: GTK 4.22 sets `gtk_initialized`
+      # before it opens a display, so on a display-less host the SECOND `gtk_init_check`
+      # in a process answers true with no display behind it, and this binary had two
+      # tests that each called `gtk::init()`. Fixed at `bin/test_support.rs`, which gives
+      # the binary one GTK-owning thread. Measured on x86_64 Linux, gtk4 4.22.4:
+      # `taskset -c 0-3` 20/20 SIGSEGV before, 20/20 green after; `--test-threads` 1, 2,
+      # 4, 8 and 16 all green at four CPUs.
+      #
+      # This suite opens no display. Do not wrap it in `xvfb-run` to "fix" anything --
+      # but be aware that without one the two GTK tests SKIP, so their assertions do not
+      # run here. Running this step under `xvfb-run` is what would make them mean
+      # something on Linux; that is a separate decision, not a repair.
+      - name: Test the GUI application binaries
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo test -p husklet --bins --features gui --locked --offline
+
+      - name: Test the engine composition root
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo test -p hl-engine --lib --locked --offline
+
+      # `src/apps/engine/tests/retained_direct_linux.rs` had never executed on any host
+      # in this project's history, for two independent reasons: no runner is both Linux
+      # AND aarch64 (this job is ubuntu-24.04, the aarch64 job is macos-26), and the only
+      # job running any integration test at all is `nix flake check` on macos-26. The
+      # arch gate has since been measured unnecessary and dropped and the target runs 4
+      # tests -- but `cargo check --workspace --all-targets` only COMPILES them and
+      # `cargo test --workspace --lib --bins` excludes `tests/` entirely, so the fix
+      # stayed invisible. This step is what runs them.
+      - name: Test the engine application's integration targets
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo test -p engine --tests --locked --offline
+
+      # `--all-targets` reaches hl-native's integration tests, which no CI job on any
+      # host has ever run. That is the exact gap that let a tree which did not compile
+      # on x86_64 at all reach main: the two reserved-register hooks called emitters
+      # existing only under HL_HOST_CPU_AARCH64, and only a real build on this host
+      # notices. Both feature arms, because they are different suites -- re-measured on
+      # this host at 622befa08, 108 tests without the hooks and 224 with them.
+      #
+      # The hooks arm is green HERE while proving nothing about the JIT: see the
+      # `native-linux-arm64` job below, which exists because `reserved_register`'s two
+      # assertions answer the not-applicable sentinel 4 on x86 and only reach a real
+      # verdict on an aarch64 host.
+      - name: Test the native engine package
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo test -p hl-native --all-targets --locked --offline --no-fail-fast
+
+      - name: Test the native engine package with its test hooks
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo test -p hl-native --all-targets --features native-test-hooks
+          --locked --offline --no-fail-fast
+
+      # AGENTS.md names this the gate every lane must run, and until today no CI job on
+      # any host had ever run it on Linux. It excludes nothing. `--no-fail-fast` so a
+      # failure reports the whole picture rather than the first crate that reddened.
+      - name: Test every workspace library and binary
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo test --workspace --lib --bins --locked --offline --no-fail-fast
+
+      # THE EIGHT LINUX-ONLY FLAKE CHECKS HAD NO RUNNER ANYWHERE. They are
+      # `lib.optionalAttrs pkgs.stdenv.isLinux` in `flake.nix`, so the macOS job's
+      # `nix flake check` cannot see them, and this job runs cargo commands rather than
+      # the flake. That is how two real C defects went unreported for months: an
+      # always-true `-Werror=type-limits` bound in `fork_diagnostic.c` and an
+      # `ENOATTR`/`ENODATA` tautology in `exec.c`, both of which a human had to find.
+      #
+      # Four are green and run here. The other four are HONESTLY RED and are named
+      # rather than silenced -- delete a line the day its check passes:
+      #   alpine-compatibility          -- red since a vacuous filter was made honest.
+      #   scan-build-linux-aarch64      -- 14 `deadcode.DeadStores`, 11 of them in the
+      #   scan-build-linux-x86_64          aarch64 decode helpers. Only visible at all
+      #                                    since the strict-GCC abort in front of them
+      #                                    was cleared; `--status-bugs` fails on any.
+      #   host-windows-x86_64-gnu-smoke -- `_SC_PAGESIZE` undeclared and implicit
+      #                                    `fork`/`geteuid`/`flock` under mingw. Same
+      #                                    defect as `native-windows-amd64` above:
+      #                                    `cargo check` runs `build.rs`, so both
+      #                                    compile the same C.
+      - name: Verify the Linux-only flake checks that are green
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' build -L --no-link
+          .#checks.x86_64-linux.host-linux-aarch64
+          .#checks.x86_64-linux.host-linux-x86_64
+          .#checks.x86_64-linux.installed-product
+          .#checks.x86_64-linux.host-darwin-cross-contract
+
+  native-linux-arm64:
+    name: Native engine / ARM64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+    # WHY A SECOND ARCHITECTURE FOR ONE COMMAND.
+    #
+    # `cargo test -p hl-native --all-targets --features native-test-hooks` already runs
+    # in the AMD64 job above, and it is GREEN THERE WITHOUT TESTING ANYTHING that this
+    # job exists to test. `tests/reserved_register.rs` says so in its own source: both
+    # hooks emit real code and scan it, so they are answerable only where the emitters
+    # are compiled -- an AArch64 host. Off it they return `4`, "not applicable", and the
+    # fixture asserts `4` rather than compiling itself out, so the exports still have to
+    # resolve. `0` is the verdict that means the emitters were compiled in AND scanned.
+    #
+    # A GREEN FIXTURE ON x86 IS A SENTINEL, NOT A RESULT. Only an aarch64 host can turn
+    # that assertion into evidence, and until this job existed no runner anywhere was
+    # one: this workflow and `ci.yml`'s Windows job are x86, and the `macos-26` job
+    # builds `checks.aarch64-darwin.host-darwin-aarch64-native` and runs a single ABI
+    # test. So the ~120 `e_*` emitters, W^X publication, block chaining, IBTC and the
+    # provenance map had no CI coverage on any host, and the two reserved-register
+    # defects fixed on 2026-08-20 would have regressed silently.
+    #
+    # Measured here rather than inherited, on x86_64 at 622befa08: `reserved_register`'s
+    # two tests RUN and PASS, and they pass BY ASSERTING 4 -- which is the whole problem
+    # this job exists to fix, stated as a number. The suite is 224 tests with the hooks
+    # against 108 without.
+    #
+    # The aarch64 VM lane measured 217 against 107 on a real ARM64 kernel, at 6fde34d36.
+    # DO NOT SUBTRACT THOSE FROM THESE: they are different commits, and the x86 pair has
+    # a 116-test delta of its own, so the two arms each gate tests the other does not.
+    # The claim this job rests on is not a count difference, it is that two specific
+    # assertions can only reach their meaningful verdict on an aarch64 host.
+    #
+    # The lane corroborated that the JIT is genuinely live there three independent ways --
+    # the 18 lowering translation units compile 0 times on x86 and 18 on aarch64 (read
+    # out of DWARF by source path), the shared object carries 80 `e_*` emitter bodies
+    # there and 0 here, and a live guest holds two 64 MiB `/memfd:hl-code` W^X mappings
+    # that disassemble as ARM64 translated-block prologues, against zero such mappings
+    # on x86.
+    #
+    # `ubuntu-24.04-arm` is a NATIVE arm64 runner, not emulation, so this should cost
+    # roughly what the equivalent x86 work costs. If it ever reddens, the fixture is
+    # reporting something real about the JIT -- read it, do not paper over it.
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Require an ARM64 Linux host
+        # Not ceremony: if this ever runs on x86 the hooks answer `4`, the fixture passes,
+        # and the job reports success while covering exactly nothing -- which is the state
+        # this job was added to end. Fail loudly instead.
+        run: |
+          set -euo pipefail
+          architecture="$(uname -m)"
+          test "$architecture" = aarch64 || {
+            echo "Husklet's ARM64 lane requires an aarch64 host, got: $architecture" >&2
+            echo "On any other architecture the reserved-register hooks return the" >&2
+            echo "not-applicable sentinel 4 and this job would prove nothing." >&2
+            exit 1
+          }
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@786fff0690178f1234e4e1fe9b536e94f5433196 # v20
+        with:
+          diagnostic-endpoint: ""
+
+      # `runner.arch` is part of both keys, so this entry cannot collide with the AMD64
+      # job's despite the identical shape.
+      - name: Cache the Nix development environment
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
+          gc-max-store-size-linux: 6G
+          purge: true
+          purge-primary-key: never
+          purge-prefixes: nix-${{ runner.os }}-${{ runner.arch }}-
+          purge-created: 604800
+
+      # A DISTINCT `shared-key` from the AMD64 job. Its entry holds x86_64 object files
+      # and restoring those here would at best waste the download and at worst hand this
+      # build artifacts it cannot link.
+      - name: Cache the Cargo registry and dependency build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        with:
+          shared-key: husklet-linux-arm64-ci
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Size the build to the runner
+        run: echo "CARGO_BUILD_JOBS=$(nproc)" >> "$GITHUB_ENV"
+
+      - name: Fetch locked application dependencies
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo fetch --locked
+
+      # The `--features native-test-hooks` arm is the whole point; the arm without them
+      # is already covered on AMD64 and adds nothing here.
+      - name: Test the native engine package with its test hooks
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo test -p hl-native --all-targets --features native-test-hooks
+          --locked --offline --no-fail-fast

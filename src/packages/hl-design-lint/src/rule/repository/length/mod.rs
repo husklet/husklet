@@ -5,6 +5,7 @@ use crate::{
     Result,
     model::{Finding, Review, Severity},
     rule::Rule,
+    rule::support::syntax::{item_attributes, test_only},
     source::Workspace,
 };
 
@@ -102,34 +103,4 @@ fn declaration(item: &syn::Item) -> bool {
     use syn::Item;
 
     matches!(item, Item::Enum(_) | Item::Struct(_) | Item::Const(_) | Item::Macro(_))
-}
-
-fn test_only(item: &syn::Item) -> bool {
-    let Some(attributes) = item_attributes(item) else {
-        return false;
-    };
-    crate::source::requires_test(attributes) || attributes.iter().any(|attribute| attribute.path().is_ident("test"))
-}
-
-fn item_attributes(item: &syn::Item) -> Option<&[syn::Attribute]> {
-    use syn::Item;
-
-    Some(match item {
-        Item::Const(item) => &item.attrs,
-        Item::Enum(item) => &item.attrs,
-        Item::ExternCrate(item) => &item.attrs,
-        Item::Fn(item) => &item.attrs,
-        Item::ForeignMod(item) => &item.attrs,
-        Item::Impl(item) => &item.attrs,
-        Item::Macro(item) => &item.attrs,
-        Item::Mod(item) => &item.attrs,
-        Item::Static(item) => &item.attrs,
-        Item::Struct(item) => &item.attrs,
-        Item::Trait(item) => &item.attrs,
-        Item::TraitAlias(item) => &item.attrs,
-        Item::Type(item) => &item.attrs,
-        Item::Union(item) => &item.attrs,
-        Item::Use(item) => &item.attrs,
-        _ => return None,
-    })
 }
