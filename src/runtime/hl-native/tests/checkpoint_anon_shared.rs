@@ -29,9 +29,22 @@ fn two_processes_restore_one_shared_object_rather_than_two_private_copies() {
     }
 }
 
+/// A segment abandoned by a crashed earlier restore -- the shape a creator that leaves through
+/// `_exit` leaves behind, since no `atexit` handler runs -- is neither adopted nor able to fail the
+/// next restore. The restore generation is part of the object's name, so a recycled kernel object id
+/// no longer spells a name an earlier run could have created, and the bytes a restore maps are the
+/// captured ones rather than whatever the leftover happened to hold.
+#[test]
+fn a_leftover_segment_is_never_adopted_by_a_later_restore() {
+    for isa in [1, 2] {
+        hl_native::checkpoint_anon_shared_test(isa, 2)
+            .unwrap_or_else(|status| panic!("ISA {isa} leftover scenario failed with status {status}"));
+    }
+}
+
 #[test]
 fn the_anonymous_shared_hook_rejects_unknown_scenarios() {
     for isa in [1, 2] {
-        assert_eq!(hl_native::checkpoint_anon_shared_test(isa, 2), Err(99));
+        assert_eq!(hl_native::checkpoint_anon_shared_test(isa, 3), Err(99));
     }
 }

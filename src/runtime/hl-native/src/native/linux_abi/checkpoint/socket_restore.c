@@ -996,6 +996,9 @@ static void ckpt_restore_commit_failed(void) {
         ckpt_restore_commit_wake();
         (void)ckpt_restore_commit_futex(&g_restore_commit->released, CKPT_FUTEX_WAKE, INT_MAX, NULL);
     }
+    // `_exit` runs no atexit handler, so the names this member published would otherwise outlive the
+    // restore that made them. Drop them here, on the one funnel every member failure passes through.
+    ckpt_anon_shared_unlink_all();
     _exit(70);
 }
 
@@ -1013,9 +1016,16 @@ static void ckpt_restore_commit_wait(void) {
                                       memory_order_release);
             atomic_fetch_add_explicit(&g_restore_commit->released, 1, memory_order_release);
             (void)ckpt_restore_commit_futex(&g_restore_commit->released, CKPT_FUTEX_WAKE, INT_MAX, NULL);
+            // Past the barrier every member has finished its memory restore, so no further member will
+            // open these names. Retiring them here -- not from an atexit handler an `_exit` skips --
+            // is what bounds a segment's life to the restore that created it.
+            ckpt_anon_shared_unlink_all();
             return;
         }
-        if (decision == 2) _exit(70);
+        if (decision == 2) {
+            ckpt_anon_shared_unlink_all();
+            _exit(70);
+        }
         if (ckpt_restore_deadline_expired()) ckpt_restore_commit_failed();
         (void)ckpt_restore_commit_futex(&g_restore_commit->decision, CKPT_FUTEX_WAIT, 0, NULL);
     }
@@ -1291,6 +1301,9 @@ static int ckpt_restore_tree_body(const char *rootfs, const struct ckpt_phase_le
     uint64_t phase = ckpt_phase_begin(phases);
     struct ckpt_manifest man;
     ckpt_restore_hold_tty_signals();
+    // Before anything forks: every member must inherit ONE anonymous-shared naming generation, or two
+    // sharers of the same object derive different names and silently restore private copies.
+    ckpt_anon_shared_generation_init();
     // Bind the image source before anything is read; every re-forked child inherits the binding.
     if (ckpt_source_bind() == NULL) {
         fprintf(stderr, "[restore] restore requested without a broker descriptor\n");
@@ -1451,11 +1464,15 @@ static int ckpt_restore_tree_body(const char *rootfs, const struct ckpt_phase_le
     if (ckpt_restore_commit_publish() != 0) {
         fprintf(stderr, "[restore] restored descendants did not reach the commit barrier\n");
         ckpt_restore_commit_abort();
+        ckpt_anon_shared_unlink_all();
         ckpt_restore_commit_destroy();
         free(images);
         return 70;
     }
     free(images);
+    // Every member is past the barrier, so the anonymous-shared names have no remaining opener; the
+    // objects themselves stay alive for exactly as long as somebody still maps them.
+    ckpt_anon_shared_unlink_all();
     ckpt_restore_backings_close();
     ckpt_restore_pipe_seeds_close();
     ckpt_restore_eventfd_seeds_close();

@@ -192,19 +192,74 @@ static int ckpt_restore_backing_seed(const char *procdir, uint64_t object_id, ui
 // the descriptor cannot be relied on to reach the other sharers. Each member would create its own
 // file and get a private copy -- the same defect, moved.
 //
-// So the object is republished by NAME under the CURRENT namespace, exactly as SysV segments are
-// (ipc_lock_state.c): whichever member arrives first creates it, every other member opens the same
+// So the object is republished by NAME under the CURRENT restore generation, exactly as SysV segments
+// are (ipc_lock_state.c): whichever member arrives first creates it, every other member opens the same
 // name, and all of them map it MAP_SHARED at their captured address. Fork order stops mattering.
-// The creator arms the unlink, so the name lives exactly as long as the restored container's first
-// member -- and shm_unlink only removes the NAME, never a live mapping.
+//
+// THE NAME IS A PURE FUNCTION OF (restore generation, object id), AND THE GENERATION IS THE POINT.
+// The old name was (ipc_ns(), object_id) and BOTH halves recycle: ipc_ns() hashes a host pid, and a
+// kernel object id -- a Darwin vm_object id, a Linux shmem inode number -- is handed out again freely
+// once the object is gone. A segment left behind by a crashed earlier restore could therefore be
+// opened by a later one under the very same name. When the leftover was too small the restore failed
+// (`ftruncate` EINVAL on Darwin, where a POSIX shm object may be sized only once and only by its
+// creator); when it was large enough the restore MAPPED IT INSTEAD OF THE CAPTURED BYTES and the guest
+// silently resumed on stale memory. That second outcome is the one this discipline exists to make
+// unreachable: a restore may only ever open a name its OWN generation minted, so adoption of a
+// foreign segment is not a race that is won but a name that does not exist.
 #define CKPT_ANON_SHARED_UNLINK_MAX 64
-static char g_anon_shared_unlink[CKPT_ANON_SHARED_UNLINK_MAX][48];
+#define CKPT_ANON_SHARED_NAME_MAX 26
+static char g_anon_shared_unlink[CKPT_ANON_SHARED_UNLINK_MAX][CKPT_ANON_SHARED_NAME_MAX];
 static int g_nanon_shared_unlink;
+static uint64_t g_anon_shared_generation;
 
+// Mint the generation ONCE, EAGERLY, BEFORE any member is forked; every member inherits it across
+// fork. Minting it lazily would be a sharing bug rather than a naming one: a member whose first
+// anonymous-shared object is needed after the fork would mint a generation of its own, derive a
+// different name from the same object id, and quietly stop sharing with the members it is supposed to
+// share with -- the private-copy defect this whole path exists to prevent, reintroduced by the fix.
+static void ckpt_anon_shared_generation_init(void) {
+    if (g_anon_shared_generation != 0) return;
+    uint64_t minted = 0;
+    arc4random_buf(&minted, sizeof minted);
+    g_anon_shared_generation = minted ? minted : 1;
+}
+
+// Darwin caps a POSIX shm name at 31 bytes (PSHMNAMLEN), so the 128 bits of identity are emitted in a
+// 64-character alphabet (22 characters) rather than as hex (32, which does not fit).
+static void ckpt_anon_shared_name(uint64_t object_id, char out[CKPT_ANON_SHARED_NAME_MAX]) {
+    static const char alphabet[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_-";
+    out[0] = '/';
+    out[1] = 'h';
+    out[2] = 'l';
+    for (int i = 0; i < 11; i++) {
+        out[3 + i] = alphabet[(g_anon_shared_generation >> (i * 6)) & 63u];
+        out[14 + i] = alphabet[(object_id >> (i * 6)) & 63u];
+    }
+    out[25] = '\0';
+}
+
+// Every process that CREATES OR OPENS a name registers it, not only the creator. The name is derivable
+// by any member, so unlinking it needs no privileged owner -- and that is what closes the `_exit` hole:
+// the member that created a segment may leave through `_exit` (a restore-commit failure does exactly
+// that, and so does the fork-round-trip fixture), which runs no `atexit` handler, but every other
+// sharer of that object holds the same name and unlinks it on its own way out. Ownership lives in the
+// name, which survives an `_exit` because it never lived in the exiting process to begin with.
 static void ckpt_anon_shared_unlink_all(void) {
     for (int index = 0; index < g_nanon_shared_unlink; index++) shm_unlink(g_anon_shared_unlink[index]);
     g_nanon_shared_unlink = 0;
 }
+
+static void ckpt_anon_shared_unlink_register(const char *name) {
+    for (int index = 0; index < g_nanon_shared_unlink; index++)
+        if (strcmp(g_anon_shared_unlink[index], name) == 0) return;
+    if (g_nanon_shared_unlink >= CKPT_ANON_SHARED_UNLINK_MAX) return;
+    if (g_nanon_shared_unlink == 0) (void)atexit(ckpt_anon_shared_unlink_all);
+    snprintf(g_anon_shared_unlink[g_nanon_shared_unlink++], CKPT_ANON_SHARED_NAME_MAX, "%s", name);
+}
+
+// How long an opener will wait for the creator to publish the object's size. A restore that cannot see
+// the agreed size fails; it never proceeds on a short object, and never resizes one it did not create.
+#define CKPT_ANON_SHARED_SIZE_WAIT_US 2000000
 
 static int ckpt_restore_anon_shared_seed(uint64_t object_id, uint64_t minimum_size) {
     for (int i = 0; i < g_nrestore_backings; i++)
@@ -220,8 +275,17 @@ static int ckpt_restore_anon_shared_seed(uint64_t object_id, uint64_t minimum_si
     if (ckpt_vector_reserve((void **)&g_restore_backings, &g_restore_backings_capacity, sizeof *g_restore_backings,
                             g_nrestore_backings + 1) != 0)
         return -1;
-    char name[48];
-    snprintf(name, sizeof name, "/hl%08xa%016llx", ipc_ns(), (unsigned long long)object_id);
+    // A generation that is still zero here means no pre-fork mint ran. Refuse rather than mint one
+    // now: a name minted after the fork is a name no sibling can derive, and the restore would come up
+    // with private copies of memory the guest believes is shared.
+    if (g_anon_shared_generation == 0) {
+        fprintf(stderr, "[restore] refuse: anonymous shared object %llx has no restore generation\n",
+                (unsigned long long)object_id);
+        errno = EINVAL;
+        return -1;
+    }
+    char name[CKPT_ANON_SHARED_NAME_MAX];
+    ckpt_anon_shared_name(object_id, name);
     int created = 0;
     int fd = shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0600);
     if (fd >= 0)
@@ -229,16 +293,37 @@ static int ckpt_restore_anon_shared_seed(uint64_t object_id, uint64_t minimum_si
     else if (errno == EEXIST)
         fd = shm_open(name, O_RDWR, 0600);
     if (fd < 0) return -1;
+    ckpt_anon_shared_unlink_register(name);
+    // ONLY THE CREATOR SIZES THE OBJECT. Darwin permits `ftruncate` on a POSIX shm object exactly once,
+    // by its creator; a second call returns EINVAL. An opener therefore waits for the creator's size
+    // instead of setting it, and a wait that times out is a restore failure, not a short mapping.
     struct stat status;
-    if (fstat(fd, &status) != 0 ||
-        ((uint64_t)status.st_size < minimum_size && ftruncate(fd, (off_t)minimum_size) != 0)) {
-        close(fd);
-        if (created) shm_unlink(name);
-        return -1;
-    }
-    if (created && g_nanon_shared_unlink < CKPT_ANON_SHARED_UNLINK_MAX) {
-        if (g_nanon_shared_unlink == 0) (void)atexit(ckpt_anon_shared_unlink_all);
-        snprintf(g_anon_shared_unlink[g_nanon_shared_unlink++], sizeof g_anon_shared_unlink[0], "%s", name);
+    if (created) {
+        if (fstat(fd, &status) != 0 || ((uint64_t)status.st_size < minimum_size &&
+                                        ftruncate(fd, (off_t)minimum_size) != 0)) {
+            int failure = errno;
+            close(fd);
+            shm_unlink(name);
+            errno = failure;
+            return -1;
+        }
+    } else {
+        int sized = 0;
+        for (unsigned waited = 0; waited <= CKPT_ANON_SHARED_SIZE_WAIT_US; waited += 200) {
+            if (fstat(fd, &status) != 0) break;
+            if ((uint64_t)status.st_size >= minimum_size) {
+                sized = 1;
+                break;
+            }
+            usleep(200);
+        }
+        if (!sized) {
+            fprintf(stderr, "[restore] anonymous shared object %llx never reached %llu bytes\n",
+                    (unsigned long long)object_id, (unsigned long long)minimum_size);
+            close(fd);
+            errno = EINVAL;
+            return -1;
+        }
     }
     int private_fd = hl_host_process_fd_private_adopt(fd);
     if (private_fd < 0) {
@@ -1287,6 +1372,65 @@ fail:
 // 20/20 failures for this test alone on macOS 26.3.1 arm64, 1/20 when the sibling tests' threads
 // changed the layout enough to leave the region at offset 0. Mirroring production's arithmetic is
 // what makes the assertion about sharing rather than about allocator luck.
+// A LEFTOVER SEGMENT FROM A CRASHED EARLIER RESTORE MUST NEVER BE ADOPTED.
+//
+// Constructed deliberately rather than waited for: a first generation seeds an object, writes a
+// recognisable pattern into it and abandons the name exactly as a creator that leaves through `_exit`
+// does. A second generation then asks for the SAME object id -- the collision the kernel hands out for
+// free once an id is recycled -- and must come back with the captured bytes' object, never the stale
+// one. Under the old (ipc_ns, object_id) name the two generations spelled the same name, so the second
+// restore opened the abandoned segment: too small, it failed the restore with `ftruncate` EINVAL on
+// Darwin (a POSIX shm object is sizeable once, by its creator); large enough, it was mapped and the
+// guest resumed on stale memory with no diagnostic at all. This asserts the second outcome is gone.
+static int ckpt_anon_shared_leftover_test(void) {
+    const uint64_t object_id = 0x5eedc0dedeadbeefull;
+    const uint64_t size = 8192;
+    ckpt_anon_shared_generation_init();
+    char stale_name[CKPT_ANON_SHARED_NAME_MAX];
+    ckpt_anon_shared_name(object_id, stale_name);
+    int stale = ckpt_restore_anon_shared_seed(object_id, size);
+    if (stale < 0) return 30;
+    unsigned char *stale_map = mmap(NULL, (size_t)size, PROT_READ | PROT_WRITE, MAP_SHARED, stale, 0);
+    if (stale_map == MAP_FAILED) return 31;
+    memset(stale_map, 0xAB, (size_t)size);
+    munmap(stale_map, (size_t)size);
+    // Abandon it the way a crashed member does: drop the descriptors, keep the NAME.
+    ckpt_restore_backings_close();
+    g_nanon_shared_unlink = 0;
+    int abandoned = shm_open(stale_name, O_RDWR, 0600);
+    if (abandoned < 0) { // the leftover must really exist, or the rest of this proves nothing
+        shm_unlink(stale_name);
+        return 32;
+    }
+    close(abandoned);
+
+    // A NEW restore generation, the SAME recycled object id.
+    g_anon_shared_generation = 0;
+    ckpt_anon_shared_generation_init();
+    char fresh_name[CKPT_ANON_SHARED_NAME_MAX];
+    ckpt_anon_shared_name(object_id, fresh_name);
+    int verdict = 0;
+    if (strcmp(fresh_name, stale_name) == 0) verdict = 33; // a recycled id must not spell a recycled name
+    int fresh = verdict == 0 ? ckpt_restore_anon_shared_seed(object_id, size) : -1;
+    if (verdict == 0 && fresh < 0) verdict = 34; // a leftover must not be able to FAIL the restore either
+    unsigned char *fresh_map = fresh >= 0 ? (unsigned char *)mmap(NULL, (size_t)size, PROT_READ | PROT_WRITE,
+                                                                 MAP_SHARED, fresh, 0)
+                                          : (unsigned char *)MAP_FAILED;
+    if (verdict == 0 && fresh_map == MAP_FAILED) verdict = 35;
+    if (verdict == 0) {
+        for (size_t i = 0; i < (size_t)size; i++)
+            if (fresh_map[i] != 0) { // stale content in place of the captured bytes: the worst outcome
+                verdict = 36;
+                break;
+            }
+    }
+    if (fresh_map != MAP_FAILED) munmap(fresh_map, (size_t)size);
+    ckpt_restore_backings_close();
+    ckpt_anon_shared_unlink_all();
+    shm_unlink(stale_name);
+    return verdict;
+}
+
 static int ckpt_anon_shared_roundtrip_test(uint32_t scenario) {
     const size_t length = 8192;
     if (scenario == 0) {
@@ -1331,7 +1475,20 @@ static int ckpt_anon_shared_roundtrip_test(uint32_t scenario) {
         munmap(private_region, length);
         return verdict;
     }
+    if (scenario == 2) {
+        // In its own process: the scenario deliberately retires one naming generation and mints
+        // another, and that generation plus the seed table are process-global restore state a sibling
+        // test running in the same binary would otherwise see change underneath it.
+        pid_t generation_child = fork();
+        if (generation_child == 0) _exit(ckpt_anon_shared_leftover_test());
+        if (generation_child < 0) return 39;
+        int generation_status = 0;
+        if (waitpid(generation_child, &generation_status, 0) != generation_child) return 39;
+        if (!WIFEXITED(generation_status)) return 39;
+        return WEXITSTATUS(generation_status);
+    }
     if (scenario != 1) return 99;
+    ckpt_anon_shared_generation_init();
     // What each process independently derives for the region, and what both must agree on.
     struct ckpt_anon_shared_named {
         uint64_t identity;
@@ -1403,8 +1560,22 @@ static int ckpt_anon_shared_roundtrip_test(uint32_t scenario) {
     // The child's write, made through ITS OWN mapping of the restored object, is visible here.
     if (verdict == 0 && memcmp(restored + 4096, "CHILD", 5) != 0) verdict = 27;
     if (restored != MAP_FAILED) munmap(restored, length);
+    char name[CKPT_ANON_SHARED_NAME_MAX];
+    if (verdict == 0) ckpt_anon_shared_name(here.identity, name);
     ckpt_restore_backings_close();
     ckpt_anon_shared_unlink_all();
+    // THE SEGMENT DID NOT OUTLIVE THE RESTORE THAT MADE IT. Its creator was the child, and the child
+    // left through `_exit`, which runs no atexit handler -- so the old creator-only unlink list never
+    // fired and the name survived into the next run, where a recycled object id could adopt it. The
+    // name is derivable by every sharer, so the parent retires it on the creator's behalf.
+    if (verdict == 0) {
+        int leftover = shm_open(name, O_RDWR, 0600);
+        if (leftover >= 0) {
+            close(leftover);
+            shm_unlink(name);
+            verdict = 28;
+        }
+    }
     munmap(shared, length);
     return verdict;
 }
