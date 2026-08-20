@@ -644,10 +644,24 @@
               export HL_SCENARIO_TARGET="$1"
               export HL_ALPINE_ARCHIVE="$2"
 
-              timeout --kill-after=30s 10m \
-                cargo test -p husklet --features runtime --lib --locked --offline \
-                runtime::domain::product_checkpoint_test::continue_later_restores_sleep_tree_in_two_fresh_domain_processes \
-                -- --exact --nocapture --test-threads=1
+              # 19693a4c9 renamed `continue_later_restores_sleep_tree_in_two_fresh_domain_
+              # processes` and did not update this line. `cargo test <filter> -- --exact`
+              # exits 0 when the filter matches nothing, so from that commit until this one
+              # both arms of this gate reported `running 0 tests ... test result: ok` and
+              # the product's Continue-later contract was covered by nothing at all.
+              # Both survivors are red on x86_64 today -- the domain worker exits 101 before
+              # publication and the restore slot reports stage=failed(12) error=17 (EEXIST).
+              # That is a real engine defect an engine lane owns; this gate is supposed to
+              # say so. Do not silence it by narrowing the filter again.
+              for test_name in \
+                continue_later_restores_the_primary_sleep_tree_across_repeated_cycles \
+                continue_later_keeps_a_terminal_backed_pane_execution_across_repeated_cycles
+              do
+                timeout --kill-after=30s 10m \
+                  cargo test -p husklet --features runtime --lib --locked --offline \
+                  "runtime::domain::product_checkpoint_test::$test_name" \
+                  -- --exact --nocapture --test-threads=1
+              done
               run_ignored hl-container run_options process_run_options
               for test_name in \
                 launch_contracts \
