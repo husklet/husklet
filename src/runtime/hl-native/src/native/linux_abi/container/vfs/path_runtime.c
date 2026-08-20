@@ -729,8 +729,8 @@ static uint64_t fdvis_key(int pid, int fd) {
 }
 
 static uint64_t fdvis_process_token(int pid) {
-    hl_host_process_info info;
-    return pid > 0 && hl_host_process_read(pid, &info) ? info.start_time_ns : 0;
+    uint64_t start_time_ns = 0;
+    return hl_host_process_start_time_ns(pid, &start_time_ns) ? start_time_ns : 0;
 }
 
 static uint64_t fdvis_identity(int pid, uint64_t start_ns) {

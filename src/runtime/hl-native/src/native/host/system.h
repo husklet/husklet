@@ -86,6 +86,14 @@ int hl_host_system_read(hl_host_system_info *info, hl_host_cpu_ticks *cores, siz
 /* Snapshot one live native process. Returns zero when the pid is absent or inaccessible. */
 int hl_host_process_read(int64_t pid, hl_host_process_info *info);
 
+/* Resolve only a process's start-time identity token, writing it to start_time_ns and returning
+ * non-zero on success. Equivalent to hl_host_process_read()'s start_time_ns field, but the calling
+ * process's own token is memoized: it is immutable for the process's lifetime and the memo is keyed on
+ * the pid it was taken under, so a fork invalidates it automatically. Peer pids are always observed
+ * fresh, because a remembered start time for a recycled peer pid would defeat the very reuse check the
+ * token exists to perform. */
+int hl_host_process_start_time_ns(int64_t pid, uint64_t *start_time_ns);
+
 /* Capture real host limits and topology below guest ABI emulation. */
 int hl_host_process_resource_read(hl_host_process_resource_snapshot *snapshot);
 

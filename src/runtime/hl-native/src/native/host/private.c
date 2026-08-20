@@ -92,8 +92,8 @@ static void hl_private_register_atfork(void) {
 }
 
 static uint64_t hl_private_process_start(int64_t pid) {
-    hl_host_process_info info;
-    return hl_host_process_read(pid, &info) ? info.start_time_ns : 0;
+    uint64_t start_time_ns = 0;
+    return hl_host_process_start_time_ns(pid, &start_time_ns) ? start_time_ns : 0;
 }
 
 static uint64_t hl_private_identity(int64_t pid, uint64_t start) {

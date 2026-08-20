@@ -41,6 +41,10 @@ name = "private_fd_fork_lock"
 required-features = ["native-test-hooks"]
 
 [[test]]
+name = "process_identity_token"
+required-features = ["native-test-hooks"]
+
+[[test]]
 name = "identity_registry"
 
 [[test]]
