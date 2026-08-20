@@ -34,6 +34,17 @@ pub trait Rule {
     fn severity(&self) -> Severity;
     /// Analyzes the parsed workspace.
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>>;
+    /// The diagnostic identifiers this rule reports under, when they are finer than [`Rule::id`].
+    ///
+    /// A rule that reports one diagnostic leaves this empty and is summarized under its own id. A
+    /// rule that shares one analysis across several independent budgets -- a C file's length and a
+    /// C function's length are measured together but mean different things -- names them here, so
+    /// the roll-up totals each budget separately instead of adding a file's excess lines to a
+    /// function's. Every identifier a finding uses must appear, or its findings are summarized
+    /// nowhere.
+    fn diagnostics(&self) -> &'static [&'static str] {
+        &[]
+    }
 }
 
 /// Ordered collection of lint rules.
