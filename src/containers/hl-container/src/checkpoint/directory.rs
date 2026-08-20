@@ -317,12 +317,19 @@ impl DirectoryImage {
     ) -> Result<MutexGuard<'a, DirectoryImageState>, CheckpointError> {
         #[cfg(unix)]
         Self::remove_tree_at_until(&self.directory, &state.generation, Some(deadline))?;
+        // `?` cannot carry an `io::Error` here: `CheckpointError` deliberately implements no
+        // `From<io::Error>`, so every other non-POSIX arm in this subtree names the failure through
+        // `CheckpointError::new`. This one did not, and nothing compiles it -- the mingw check builds
+        // only `hl-native`/`hl-engine`/`engine`, and `hl-container` cannot cross-build at all because
+        // `aws-lc-sys` refuses the target -- so the arm had never been type-checked on any host.
         #[cfg(not(unix))]
-        std::fs::remove_dir_all(self.root.join(&state.generation)).or_else(|error| {
-            (error.kind() == std::io::ErrorKind::NotFound)
-                .then_some(())
-                .ok_or(error)
-        })?;
+        std::fs::remove_dir_all(self.root.join(&state.generation))
+            .or_else(|error| {
+                (error.kind() == std::io::ErrorKind::NotFound)
+                    .then_some(())
+                    .ok_or(error)
+            })
+            .map_err(|error| CheckpointError::new(format!("remove checkpoint generation: {error}")))?;
         state.generation = Self::generation();
         state.transaction = None;
         Ok(state)

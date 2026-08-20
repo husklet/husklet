@@ -289,6 +289,14 @@ mod ffi {
     pub(super) struct Signal;
 
     impl Signal {
+        /// `ProcessGroup::hangup` and `Processes::close` call this on every host, so the non-POSIX
+        /// arm has to answer it. It was missing, and the two call sites carry no `#[cfg]` of their
+        /// own, so this module was narrower than its consumers -- the same shape that cost 73
+        /// Windows errors in `hl-engine`'s `runtime::terminal`.
+        pub(super) fn close_tree(_process: i32, _grace: std::time::Duration) -> io::Result<()> {
+            Self::unsupported()
+        }
+
         pub(super) fn hangup(_group: i32) -> io::Result<()> {
             Self::unsupported()
         }
