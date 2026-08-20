@@ -60,9 +60,19 @@ static int hl_engine_child_result_claim(void) {
     return 0;
 }
 
+/* `guest_status` is the raw argument of the guest's exit/exit_group, which Linux does not preserve:
+   do_group_exit() stores (status & 0xff) << 8, so a waiter only ever observes the low eight bits.
+   The child reaches the host `_exit` with the same raw value and the host kernel truncates it there,
+   so publishing the raw value would put a status in the record that no waiter can ever read back --
+   exit(-1) published 0xffffffff while the parent's wait reported 255, and the parent's consistency
+   check correctly rejected the pair as HL_STATUS_CORRUPT. Truncate here, at the single publish point
+   every exit path funnels through, so the record carries the status a waiter observes and the check
+   keeps comparing two values of the same kind. A publish that genuinely disagrees with the child's
+   own exit still fails the check, because both sides are truncated from different raw values. */
 void hl_engine_child_result_publish(int32_t guest_status, hl_status engine_status, uint64_t detail) {
+    int32_t observed_status = (int32_t)((uint32_t)guest_status & 0xffu);
     hl_engine_child_result record = {
-        0,      HL_ENGINE_CHILD_RESULT_VERSION,   guest_status, engine_status, HL_ENGINE_CHILD_RESULT_EXIT, 0,
+        0,      HL_ENGINE_CHILD_RESULT_VERSION,   observed_status, engine_status, HL_ENGINE_CHILD_RESULT_EXIT, 0,
         detail, hl_run_linux_guest_translations(), 0, 0};
     if (!hl_engine_child_result_claim()) return;
     /* The identity outlives the exit it is published beside: a whole-record store would erase the

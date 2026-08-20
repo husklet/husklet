@@ -423,8 +423,29 @@ jobs:
 
       # The `--features native-test-hooks` arm is the whole point; the arm without them
       # is already covered on AMD64 and adds nothing here.
+      #
+      # A GREEN EXIT CODE IS NOT SUFFICIENT EVIDENCE FOR THIS STEP, and this job exists
+      # because of exactly that: on x86 the identical command is green while the two
+      # assertions answer the not-applicable sentinel. A future `#[cfg]`, a renamed
+      # feature, a dropped `required-features` target or a rename of either test would
+      # make them vanish silently and leave THIS job green for the same empty reason --
+      # `cargo test` reports `ok` for a target that ran nothing. So the run is captured
+      # and both verdicts are required BY NAME.
+      #
+      # Checked both ways against real captured runs on x86_64 before landing: both
+      # lines are present in a `--features native-test-hooks` run and absent from a run
+      # without it, so the grep discriminates rather than always matching.
       - name: Test the native engine package with its test hooks
-        run: >-
-          nix --extra-experimental-features 'nix-command flakes' develop . --command
-          cargo test -p hl-native --all-targets --features native-test-hooks
-          --locked --offline --no-fail-fast
+        run: |
+          set -o pipefail
+          nix --extra-experimental-features 'nix-command flakes' develop . --command \
+            cargo test -p hl-native --all-targets --features native-test-hooks \
+            --locked --offline --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/hooks.log"
+          for verdict in \
+            emitted_code_never_holds_a_live_value_in_the_reserved_register \
+            emitted_x86_flag_lowerings_never_name_the_reserved_register; do
+            grep -qE "^test $verdict \.\.\. ok$" "$RUNNER_TEMP/hooks.log" || {
+              echo "::error title=Reserved-register verdict missing::$verdict did not report ok on this aarch64 host. This job's only purpose is to run that assertion where it answers 0 rather than the not-applicable sentinel 4, so a run without it proves nothing and is failed deliberately."
+              exit 1
+            }
+          done
