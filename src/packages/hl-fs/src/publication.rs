@@ -424,7 +424,14 @@ mod tests {
             .unwrap();
         std::fs::set_permissions(sandbox.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         std::os::unix::fs::chown(sandbox.path(), Some(UNPRIVILEGED), Some(UNPRIVILEGED)).unwrap();
-        let executable = std::env::current_exe().unwrap();
+        // The test binary itself must also be reachable. A target directory under a home
+        // directory is a normal place for one to live and a normal home directory is 0700, so
+        // the child cannot traverse to it however permissive the sandbox is. Copy the binary
+        // into the sandbox the child already owns rather than requiring the tree it was built
+        // in to be world-traversable.
+        let executable = sandbox.path().join("hl-fs-rootless-child");
+        std::fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
         let result = std::process::Command::new(&executable)
             .arg("--exact")
             .arg("publication::tests::rootless_child")
