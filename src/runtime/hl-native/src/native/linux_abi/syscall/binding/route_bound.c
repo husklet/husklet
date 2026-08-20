@@ -542,15 +542,11 @@ static int64_t bound_native_control(hl_linux_fd_snapshot source, uint32_t reques
             break;
         }
         if (request == 0x5401u) { /* TCGETS */
-            struct termios native;
-            if (tcgetattr(native_fd, &native) != 0)
-                result = -errno;
+            int host_status = terminal_termios_host_image(native_fd, argument);
+            if (host_status != 0)
+                result = host_status;
             else {
-#if defined(__linux__)
-                memcpy(argument, &native, 36);
-#else
-                termios_m2l(&native, argument);
-#endif
+                terminal_termios_apply_recall(native_fd, argument);
                 result = 0;
             }
         } else if (request == 0x802c542au) { /* TCGETS2 */
@@ -575,6 +571,9 @@ static int64_t bound_native_control(hl_linux_fd_snapshot source, uint32_t reques
                 }
             }
 #endif
+            /* termios2's leading 36 bytes are the termios image, so the same
+             * guest-authored view applies. */
+            if (result == 0) terminal_termios_apply_recall(native_fd, argument);
         } else if (request >= 0x402c542bu && request <= 0x402c542du) { /* TCSETS2/W2/F2 */
 #if defined(__linux__)
             result = ioctl(native_fd, request, argument) == 0 ? 0 : -errno;
@@ -591,6 +590,7 @@ static int64_t bound_native_control(hl_linux_fd_snapshot source, uint32_t reques
                 result = tcsetattr(native_fd, action, &native) == 0 ? 0 : -errno;
             }
 #endif
+            if (result == 0) terminal_termios_observe_set(native_fd, argument);
         } else if (request >= 0x5402u && request <= 0x5404u) { /* TCSETS{,W,F} */
 
             struct termios native;
@@ -603,6 +603,7 @@ static int64_t bound_native_control(hl_linux_fd_snapshot source, uint32_t reques
 #endif
                 int action = request == 0x5402u ? TCSANOW : request == 0x5403u ? TCSADRAIN : TCSAFLUSH;
                 result = tcsetattr(native_fd, action, &native) == 0 ? 0 : -errno;
+                if (result == 0) terminal_termios_observe_set(native_fd, argument);
             }
         } else if (request == 0x5413u || request == 0x5414u) { /* TIOCGWINSZ/TIOCSWINSZ */
             result = ioctl(native_fd, request == 0x5413u ? TIOCGWINSZ : TIOCSWINSZ, argument) == 0 ? 0 : -errno;

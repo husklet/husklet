@@ -291,6 +291,18 @@ pub fn checkpoint_restore_rollback_test(isa: u32) -> Result<(), i32> {
     bindings::checkpoint_restore_rollback_test(isa)
 }
 
+/// Exercise the engine-owned per-terminal termios store for `isa`.
+///
+/// The store is process-wide within each guest-ISA namespace, so the check
+/// serializes against itself.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn terminal_termios_store_test(isa: u32) -> Result<(), i32> {
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    bindings::terminal_termios_store_test(isa)
+}
+
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 pub fn unix_identity_test(isa: u32, operation: u32, fd: i32, object: u64) -> Result<(u64, u64, u32), i32> {
