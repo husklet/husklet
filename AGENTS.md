@@ -108,6 +108,35 @@ non-fast-forward you must go and look at. Re-read `git rev-parse main` right
 before pushing if you use the branch name anyway, and compare it to the commit
 you gated.
 
+**Gate the diff, not the repository -- but only under a mechanical rule.** The
+full gate is about twenty minutes, and on a `main` that moves every ten a lane
+can spend three of them in a row proving things its diff could not have broken.
+One lane ran `cargo test --workspace --lib --bins` three times because a YAML
+comment changed. The rule that earns the saving without losing anything:
+
+- **Workflow-only means `git diff --name-only <base>..<tip>` touches nothing
+  outside `.github/`.** Not "mostly workflow", not "workflow plus one comment".
+  A single path outside and you run the full gate. The predicate is mechanical
+  precisely so it cannot be argued with at 2am.
+- For those commits: `actionlint` over every workflow, **plus the specific
+  checks the diff touches, run for real.**
+- **`flake.nix` is never workflow-only.** It builds code; it gets the full gate.
+- Divergence check and `git push <sha>:main` still apply. They are seconds, and
+  each has caught a real mistake.
+
+The part that is not negotiable: **a workflow commit that adds a step is a claim
+that the step passes, and that claim needs the step run somewhere.** Verify the
+thing you are adding on the exact tip you are adding it to. What you may skip is
+re-running the suites the diff cannot reach.
+
+**Ask of every check whether anything runs it.** A gate nobody invokes cannot
+fail, and that is indistinguishable from a gate that passes. `scan-build` found
+two real C defects here and ran in **no CI job on any host** -- `ci.yml` never
+named it, and a `lib.optionalAttrs pkgs.stdenv.isLinux` attribute is invisible
+to the macOS `nix flake check`. It was found only because a lane asked whether
+an assertion *it had just written* would ever be exercised. Ask that of anything
+you add, on the day you add it.
+
 `--bins` is not optional. `cargo test --workspace --lib` alone runs **no** test
 in a crate that has no library target, and `testing` is bin-only: `cargo test -p
 testing --lib` answers `no library targets found in package testing`, silently
