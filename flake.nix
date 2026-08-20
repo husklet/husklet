@@ -1095,6 +1095,10 @@
                 pkgs.git
                 pkgs.go
                 pkgs.nixfmt
+                # The extensions under extensions/ are JavaScript packages with
+                # their own tests; without a runtime they can only be checked on
+                # a machine that happens to have one.
+                pkgs.nodejs_22
                 pkgs.pkg-config
                 (rustFor pkgs)
               ]

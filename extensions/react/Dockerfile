@@ -7,9 +7,19 @@ FROM node:22-alpine
 
 # The package lives inside the working directory's own module tree, because ESM
 # resolution walks directories and ignores NODE_PATH entirely.
+# React is a peer dependency of the package — an extension and the renderer
+# must share one copy, or every hook call fails — so this image, which is that
+# shared environment, installs it at the root where both resolve to it.
+#
+# It is installed before the package is placed, because installing afterwards
+# prunes anything npm did not put there itself.
+WORKDIR /app
+RUN npm install --no-audit --no-fund --save-exact react@18.3.1 react-reconciler@0.29.2
+
+# The package lives inside the working directory's own module tree, because ESM
+# resolution walks directories and ignores NODE_PATH entirely.
 WORKDIR /app/node_modules/@husklet/react
 COPY package.json ./
-RUN npm install --omit=dev --no-audit --no-fund
 COPY src ./src
 COPY README.md ./
 
