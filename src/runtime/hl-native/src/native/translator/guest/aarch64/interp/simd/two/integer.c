@@ -1,13 +1,12 @@
 static int interp_simd_two_register(struct cpu *cpu, uint32_t insn, uint32_t decode, unsigned scalar, unsigned q,
                                     unsigned u) {
     uint64_t gpc = cpu->pc;
-    int rd = (int)(insn & 31), rn = (int)((insn >> 5) & 31), rm = (int)((insn >> 16) & 31);
-    // AdvSIMD two-register misc
+    int rd = (int)(insn & 31), rn = (int)((insn >> 5) & 31);
+    // AdvSIMD two-register misc: one source. Bits[21:17] are the fixed 10000 and bit16 is opcode<4>.
     if ((decode & 0x9F3E0C00u) == 0x0E200800u) {
         unsigned size = (insn >> 22) & 3u, opcode = (insn >> 12) & 0x1Fu;
         interp_vec source = interp_vec_read(cpu, rn), result;
         memset(result.byte, 0, sizeof result.byte);
-        unsigned bytes = q ? 16u : 8u;
 
         int floating = interp_simd_two_register_float(cpu, insn, scalar, q, u);
         if (floating != INTERP_SIMD_UNHANDLED) return floating;

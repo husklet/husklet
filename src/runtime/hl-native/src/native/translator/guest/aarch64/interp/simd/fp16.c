@@ -1,6 +1,6 @@
 static int interp_simd_fp16(struct cpu *cpu, uint32_t insn, uint32_t decode, unsigned scalar, unsigned q, unsigned u) {
     uint64_t gpc = cpu->pc;
-    int rd = (int)(insn & 31), rn = (int)((insn >> 5) & 31), rm = (int)((insn >> 16) & 31);
+    int rd = (int)(insn & 31), rn = (int)((insn >> 5) & 31); // two-register: one source, no Rm
     // AdvSIMD two-register miscellaneous (FP16): the same operations at half precision, in a box of their
     // own at bits[23:17] == 1111100 that the mask below does not reach. Only the members this file
     // implements are decoded; the rest of the box (FABS/FNEG/FSQRT/FRINT*/FCVT*/FCMxx at .4H/.8H/H) has

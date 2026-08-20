@@ -1,7 +1,7 @@
 static int interp_simd_copy(struct cpu *cpu, uint32_t insn, uint32_t decode, unsigned scalar, unsigned q, unsigned u) {
     uint64_t gpc = cpu->pc;
-    int rd = (int)(insn & 31), rn = (int)((insn >> 5) & 31), rm = (int)((insn >> 16) & 31);
-    // AdvSIMD copy: DUP, INS, SMOV, UMOV
+    int rd = (int)(insn & 31), rn = (int)((insn >> 5) & 31);
+    // AdvSIMD copy: DUP, INS, SMOV, UMOV. Two operands only -- bits[20:16] are imm5, not Rm.
     // bits[23:21] must ALL be 000: leaving 23:22 unconstrained swallowed the whole three-same-FP16 box
     // below, which shares bit21 == 0 and bit10 == 1, and ran it as INS/DUP with imm5 = Rm.
     if ((decode & 0x9FE08400u) == 0x0E000400u) {
