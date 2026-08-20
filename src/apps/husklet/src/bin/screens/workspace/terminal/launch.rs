@@ -106,6 +106,14 @@ impl std::fmt::Display for ChildStatus {
 /// Nothing here changes launch control flow. It exists because a pane that has replayed history is
 /// visually indistinguishable from a live shell, which is what let a Ctrl-C typed at a replayed
 /// prompt look like a shell that had died.
+///
+/// The notice claimed for a while that "keystrokes are not delivered to a shell", and that was
+/// false in the one direction a warning must never be false in. The pane owns its pty from
+/// `PtyProcess::spawn` a few lines below, so a line typed against the replayed prompt is held in
+/// the tty's input queue and read by the shell the instant it starts -- a verification run typed
+/// one and watched it execute. A banner exists so a live pane can be told from a replayed one; a
+/// banner the user can catch lying teaches them to distrust the true cases too. So it now says what
+/// actually happens to the keystroke.
 struct NotYetLive;
 
 impl NotYetLive {
@@ -113,14 +121,18 @@ impl NotYetLive {
     const DIM: &'static str = "\u{1b}[2m";
     const RESET: &'static str = "\u{1b}[0m";
 
+    /// What becomes of a keystroke typed while the pane is not live. True of both openings.
+    const QUEUED: &'static str = "Anything you type now is queued by the terminal and runs when the shell starts.";
+
     fn notice(restoring: bool) -> String {
         let prefix = hl::runtime::domain::RESTORE_NOTICE_PREFIX;
         let words = if restoring {
-            "Restoring this workspace. The output above is history from your last session; this pane is not live yet and keystrokes are not delivered to a shell."
+            "Restoring this workspace. The output above is history from your last session; this pane is not live yet."
         } else {
-            "Starting this workspace. This pane is not live yet and keystrokes are not delivered to a shell."
+            "Starting this workspace. This pane is not live yet."
         };
-        format!("\r\n{}{prefix}{words}{}\r\n", Self::DIM, Self::RESET)
+        let queued = Self::QUEUED;
+        format!("\r\n{}{prefix}{words} {queued}{}\r\n", Self::DIM, Self::RESET)
     }
 }
 
@@ -259,6 +271,19 @@ mod child_status_tests {
         }
         assert!(restoring.contains("history from your last session"));
         assert!(!starting.contains("history from your last session"));
+
+        // The pane owns its pty before the notice can be read, so a keystroke is queued and run,
+        // not dropped. Claiming otherwise is a false statement about the user's own input.
+        for notice in [&restoring, &starting] {
+            assert!(
+                notice.contains("queued by the terminal and runs when the shell starts"),
+                "the notice must say what becomes of a keystroke typed against it"
+            );
+            assert!(
+                !notice.contains("not delivered"),
+                "a keystroke typed at a not-yet-live pane is delivered; the notice must not deny it"
+            );
+        }
     }
     use std::cell::Cell;
 
