@@ -1156,3 +1156,20 @@ cases:
     # exactly 835 translations, and >800 proves this boundary-heavy body was translated rather than
     # accepting a completion-only record. The stdout remains the functional view-boundary oracle.
     expect: { exit: 0, stdout: golden/nativeviewboundary.out, diagnostics: [{ counter: translations, greater-than: 800 }] }
+  - id: runtime/memory/coarse-page-hole
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    # A guest 4 KiB munmap inside a larger HOST page (macOS publishes 16 KiB)
+    # cannot be released without taking the live neighbours with it, so the
+    # engine keeps the backing mapped and enforces the hole in software with
+    # the soft-memory guard. This pins what that guard must preserve: the
+    # surviving pages keep their bytes across many-page blocks and unaligned
+    # cross-page widths, and BOTH a read and a write of the unmapped page
+    # still raise SIGSEGV. Native Linux (4 KiB pages, where the host honours
+    # the unmap directly) produces the same transcript, which is what makes
+    # it a portable oracle for the emulated case.
+    build: { source: source/coarse_page_hole.c, output: coarse-page-hole, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/coarse-page-hole }
+    run: []
+    expect: { exit: 0, stdout: golden/coarse_page_hole.out }

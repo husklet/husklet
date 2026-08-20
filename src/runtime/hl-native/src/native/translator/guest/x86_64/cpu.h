@@ -9,6 +9,32 @@
 
 // ---------------- guest CPU state ----------------
 // Offsets are baked into emitted code; keep in sync (see the OFF_* defines).
+/*
+ * Direct-mapped soft-memory TLB.  One slot per guest page index, each slot a
+ * page-tagged entry with exactly the validity of the single entry it replaces.
+ * A single entry made every block touching two live pages return to the
+ * dispatcher on alternate accesses.
+ */
+#define SOFT_TLB_INDEX_BITS 9
+#define SOFT_TLB_ENTRIES (1u << SOFT_TLB_INDEX_BITS)
+#define SOFT_TLB_TAG_INVALID (~(uint64_t)0xfff)
+struct hl_soft_tlb_entry {
+    uint64_t page;       /* page-aligned tag; SOFT_TLB_TAG_INVALID = empty */
+    uint64_t last;       /* exclusive end of the validated interval */
+    uint64_t delta;      /* host address - guest address */
+    uint64_t protection; /* HL_LOGICAL_VMA_* permission bits */
+};
+#define SOFT_TLB_SLOT(c, address) (&(c)->soft_tlb[((address) >> 12) & (SOFT_TLB_ENTRIES - 1)])
+#define SOFT_TLB_INVALIDATE_ALL(c)                                                                                     \
+    do {                                                                                                               \
+        for (unsigned _soft_slot = 0; _soft_slot < SOFT_TLB_ENTRIES; ++_soft_slot) {                                   \
+            (c)->soft_tlb[_soft_slot].page = SOFT_TLB_TAG_INVALID;                                                     \
+            (c)->soft_tlb[_soft_slot].last = 0;                                                                        \
+            (c)->soft_tlb[_soft_slot].delta = 0;                                                                       \
+            (c)->soft_tlb[_soft_slot].protection = 0;                                                                  \
+        }                                                                                                              \
+    } while (0)
+
 struct cpu {
     uint64_t r[16];         // 0x000: rax,rcx,rdx,rbx,rsp,rbp,rsi,rdi,r8..r15
     uint64_t rip;           // 0x080 (128) next guest PC (set on block exit)
@@ -164,6 +190,13 @@ struct cpu {
     uint64_t checkpoint_syscall;
     int64_t checkpoint_timeout_ns;
     uint32_t checkpoint_continuation;
+    /* The emitted guard reads this array; the soft_* scalars above stay the
+       most-recently-installed entry and remain the direct-store span cache.
+       LAST in the struct on purpose: an entry is addressed as
+       [cpu + index*32 + OFF_SOFT_TLB + field], so only OFF_SOFT_TLB has to fit
+       the scaled imm12 and the array can grow without pushing any other baked
+       offset out of range. */
+    _Alignas(32) struct hl_soft_tlb_entry soft_tlb[SOFT_TLB_ENTRIES];
 };
 
 #define OFF_FCPTR ((int)__builtin_offsetof(struct cpu, fastclk_ptr))
@@ -298,7 +331,20 @@ _Static_assert(__builtin_offsetof(struct cpu, mmscratch) == OFF_MM, "OFF_MM drif
 #define OFF_SOFT_PROTECTION ((int)__builtin_offsetof(struct cpu, soft_protection))
 #define OFF_SOFT_WIDTH ((int)__builtin_offsetof(struct cpu, soft_width))
 #define OFF_SOFT_REQUIRED ((int)__builtin_offsetof(struct cpu, soft_required))
-#define G_SOFT_TLB_CLEAR(c) ((c)->soft_snapshot = 0)
+#define OFF_SOFT_TLB ((int)__builtin_offsetof(struct cpu, soft_tlb))
+_Static_assert(sizeof(struct hl_soft_tlb_entry) == 32, "soft TLB entry stride is baked as lsl #5");
+/* Every OFF_SOFT_* is consumed by a scaled unsigned ldr/str (imm12*8): an
+   offset past 32760 silently truncates into a DIFFERENT field. */
+_Static_assert(__builtin_offsetof(struct cpu, soft_tlb) % 8 == 0 &&
+                   __builtin_offsetof(struct cpu, soft_tlb) + 24 <= 32760 &&
+                   __builtin_offsetof(struct cpu, soft_required) <= 32760 &&
+                   __builtin_offsetof(struct cpu, soft_width) <= 32760,
+               "a baked cpu offset moved out of ldr/str imm12 range");
+#define G_SOFT_TLB_CLEAR(c)                                                                                            \
+    do {                                                                                                               \
+        (c)->soft_snapshot = 0;                                                                                        \
+        SOFT_TLB_INVALIDATE_ALL(c);                                                                                    \
+    } while (0)
 
 // FPREM/FPREM1 join the libm group on the JIT side: the C2 partial-remainder loop, |Q| mod 8 at any
 // magnitude and the #IS screen are all exact-integer work the emitted f64 sequence got wrong (a fused

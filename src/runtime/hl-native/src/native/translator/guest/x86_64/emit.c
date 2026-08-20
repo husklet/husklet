@@ -879,16 +879,20 @@ static void emit_soft_guard(int address_register, uint64_t size, uint64_t rip, u
     if (!jit_guest_soft_active()) return;
     e_str(address_register, 28, OFF_BUS_EA);
     e_str(9, 28, OFF_BUS_SCRATCH);
-    e_ldr(16, 28, OFF_SOFT_SNAPSHOT);
-    uint32_t *invalid = (uint32_t *)g_cp;
-    emit32(0); /* cbz x16,miss */
-    e_lsr_i(9, address_register, 12, 1);
-    emit32(0xD374CC00u | (9u << 5) | 9u); /* lsl x9,x9,#12 */
-    e_ldr(16, 28, OFF_SOFT_PAGE);
-    e_rrr(A_EOR, 9, 9, 16, 1, 0);
+    /* x9 addresses the direct-mapped entry for the whole probe, x16 is the
+       scratch.  Both the tag test and the end test use only those two, so the
+       NZCV save/restore the single-entry lowering needed is gone as well. */
+    emit32(0xD3400000u | (12u << 16) | ((12u + SOFT_TLB_INDEX_BITS - 1u) << 10) |
+           ((unsigned)address_register << 5) | 16u); /* ubfx x16,addr,#12,#BITS */
+    emit32(0x8B000000u | (16u << 16) | (5u << 10) | (28u << 5) | 9u); /* add x9,x28,x16,lsl #5 */
+    /* Page tag: addr ^ tag has bits >= 12 clear exactly when the slot holds
+       this page.  SOFT_TLB_TAG_INVALID never matches a guest address. */
+    e_ldr(16, 9, OFF_SOFT_TLB + 0);
+    e_rrr(A_EOR, 16, 16, address_register, 1, 0);
+    e_lsr_i(16, 16, 12, 1);
     uint32_t *wrong_page = (uint32_t *)g_cp;
-    emit32(0); /* cbnz x9,miss */
-    e_ldr(16, 28, OFF_SOFT_PROTECTION);
+    emit32(0); /* cbnz x16,miss */
+    e_ldr(16, 9, OFF_SOFT_TLB + 24);
     uint32_t *denied_read = NULL, *denied_write = NULL;
     if (required & 1u) {
         denied_read = (uint32_t *)g_cp;
@@ -898,18 +902,16 @@ static void emit_soft_guard(int address_register, uint64_t size, uint64_t rip, u
         denied_write = (uint32_t *)g_cp;
         emit32(0); /* tbz x16,#1,miss */
     }
-    emit32(0xD53B4200u | 16u);
-    e_str(16, 28, OFF_NZCV);
-    emit32(0xB1000000u | (((uint32_t)size & 0xfffu) << 10) | ((unsigned)address_register << 5) | 9u);
-    uint32_t *overflow_branch = (uint32_t *)g_cp;
-    emit32(0);
-    e_ldr(16, 28, OFF_SOFT_LAST);
-    emit32(0xEB00001Fu | (16u << 16) | (9u << 5));
+    /* last - addr - size, tested by sign bit: the tag test already proved
+       addr lies in the entry's page and last is above it, so the only way to
+       go negative is the access running past the validated end. */
+    e_ldr(16, 9, OFF_SOFT_TLB + 8);
+    e_rrr(A_SUB, 16, 16, address_register, 1, 0);
+    e_subi_sh(16, 16, (unsigned)size, 1, 0);
+    e_lsr_i(16, 16, 63, 1);
     uint32_t *span_branch = (uint32_t *)g_cp;
-    emit32(0);
-    e_ldr(16, 28, OFF_NZCV);
-    emit32(0xD51B4200u | 16u);
-    e_ldr(16, 28, OFF_SOFT_DELTA);
+    emit32(0); /* cbnz x16,span */
+    e_ldr(16, 9, OFF_SOFT_TLB + 16);
     e_ldr(9, 28, OFF_BUS_SCRATCH);
     e_rrr(A_ADD, address_register, address_register, 16, 1, 0);
     uint32_t *resume_branch = (uint32_t *)g_cp;
@@ -932,8 +934,6 @@ static void emit_soft_guard(int address_register, uint64_t size, uint64_t rip, u
     e_br(16);
 
     uint8_t *span = g_cp;
-    e_ldr(16, 28, OFF_NZCV);
-    emit32(0xD51B4200u | 16u);
     e_ldr(9, 28, OFF_BUS_SCRATCH);
     emit_spill();
     e_movconst(16, size);
@@ -948,18 +948,13 @@ static void emit_soft_guard(int address_register, uint64_t size, uint64_t rip, u
     e_br(16);
 
     uint8_t *resume = g_cp;
-#define PATCH_CBZ_X(p, target)                                                                                         \
-    (*(p) = 0xB4000000u | (((uint32_t)(((target) - (uint8_t *)(p)) / 4) & 0x7ffffu) << 5) | 16u)
-    PATCH_CBZ_X(invalid, miss);
-    *wrong_page = 0xB5000000u | (((uint32_t)((miss - (uint8_t *)wrong_page) / 4) & 0x7ffffu) << 5) | 9u;
+    *wrong_page = 0xB5000000u | (((uint32_t)((miss - (uint8_t *)wrong_page) / 4) & 0x7ffffu) << 5) | 16u;
     if (denied_read)
         *denied_read = 0x36000000u | (((uint32_t)((miss - (uint8_t *)denied_read) / 4) & 0x3fffu) << 5) | 16u;
     if (denied_write)
         *denied_write = 0x36080000u | (((uint32_t)((miss - (uint8_t *)denied_write) / 4) & 0x3fffu) << 5) | 16u;
-    *overflow_branch = 0x54000002u | (((uint32_t)((span - (uint8_t *)overflow_branch) / 4) & 0x7ffffu) << 5);
-    *span_branch = 0x54000008u | (((uint32_t)((span - (uint8_t *)span_branch) / 4) & 0x7ffffu) << 5);
+    *span_branch = 0xB5000000u | (((uint32_t)((span - (uint8_t *)span_branch) / 4) & 0x7ffffu) << 5) | 16u;
     *resume_branch = 0x14000000u | ((uint32_t)((resume - (uint8_t *)resume_branch) / 4) & 0x03ffffffu);
-#undef PATCH_CBZ_X
 }
 
 /* AArch64 may split an unaligned store at a host page boundary before the

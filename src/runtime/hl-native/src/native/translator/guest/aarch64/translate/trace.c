@@ -54,6 +54,26 @@ static void aarch64_smc_copyout(uint64_t first, uint64_t last) {
     hl_logical_vma_visit_exec_aliases(first, last, aarch64_smc_queue_range, c);
 }
 
+/*
+ * Publish a resolved interval into the direct-mapped soft TLB.  The slot is
+ * chosen by the ACCESSED page, so a wide view is reachable from every page of
+ * it after that page's first miss; the emitted interval test rejects a slot
+ * whose occupant does not cover the access, which is what makes an untagged
+ * direct-mapped array sound.
+ */
+static void aarch64_soft_tlb_install(struct cpu *c, uint64_t first, uint64_t last, uint64_t delta,
+                                     uint64_t protection) {
+    c->soft_page = first;
+    c->soft_limit = last;
+    c->soft_delta = delta;
+    c->soft_protection = protection;
+    struct hl_soft_tlb_entry *entry = SOFT_TLB_SLOT(c, c->soft_ea);
+    entry->page = first;
+    entry->limit = last;
+    entry->delta = delta;
+    entry->protection = protection;
+}
+
 /* Return 1 to retry the instruction, 0 for a guest protection fault. */
 static int aarch64_soft_tlb_miss(struct cpu *c) {
     // On a host whose VM granule is wider than Linux's 4 KB page, munmap may
@@ -93,10 +113,7 @@ static int aarch64_soft_tlb_miss(struct cpu *c) {
         c->reason = R_SOFTSPAN;
         return 1;
     }
-    c->soft_page = first;
-    c->soft_limit = last;
-    c->soft_delta = resolved ? (uint64_t)(uintptr_t)host - c->soft_ea : 0;
-    c->soft_protection = protection;
+    aarch64_soft_tlb_install(c, first, last, resolved ? (uint64_t)(uintptr_t)host - c->soft_ea : 0, protection);
     c->reason = R_BRANCH;
     return 1;
 }
@@ -165,10 +182,8 @@ static int aarch64_soft_prepare_bounce(struct cpu *c) {
     if (pthread_sigmask(SIG_BLOCK, &all, (sigset_t *)(void *)c->soft_bounce_host_mask) != 0) return 0;
     c->soft_bounce_write = (uint64_t)write;
     c->soft_bounce_pending = 1;
-    c->soft_page = c->soft_ea;
-    c->soft_limit = c->soft_ea + c->soft_bytes;
-    c->soft_delta = (uint64_t)(uintptr_t)c->soft_bounce - c->soft_ea;
-    c->soft_protection = c->soft_required;
+    aarch64_soft_tlb_install(c, c->soft_ea, c->soft_ea + c->soft_bytes,
+                             (uint64_t)(uintptr_t)c->soft_bounce - c->soft_ea, c->soft_required);
     c->reason = R_BRANCH;
     if (g_prof) g_prof_soft_bounce_prepare++;
     return 1;
@@ -182,6 +197,9 @@ static int aarch64_soft_bounce_commit(struct cpu *c) {
     c->soft_bounce_pending = 0;
     c->soft_page = UINT64_MAX;
     c->soft_protection = 0;
+    /* The bounce entry aliases cpu->soft_bounce, not guest storage: it is
+       valid for exactly the one retried access and must not survive it. */
+    SOFT_TLB_ENTRY_INVALIDATE(SOFT_TLB_SLOT(c, c->soft_ea));
     (void)pthread_sigmask(SIG_SETMASK, (const sigset_t *)(const void *)c->soft_bounce_host_mask, NULL);
     return ok;
 }
@@ -205,10 +223,7 @@ static int aarch64_soft_tlb_span(struct cpu *c) {
         if (step == 0) return 0;
         cursor += step;
     }
-    c->soft_page = c->soft_ea;
-    c->soft_limit = c->soft_ea + c->soft_bytes;
-    c->soft_delta = delta;
-    c->soft_protection = c->soft_required;
+    aarch64_soft_tlb_install(c, c->soft_ea, c->soft_ea + c->soft_bytes, delta, c->soft_required);
     c->reason = R_BRANCH;
     return 1;
 }
