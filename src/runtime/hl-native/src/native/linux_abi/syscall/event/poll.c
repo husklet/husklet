@@ -1,5 +1,82 @@
 /* Included by event.c: unity-build access with bounded syscall handlers. */
 
+#if !defined(__linux__)
+// macOS poll(2) is ~7us per call WHENEVER IT REPORTS NOTHING READY and ~0.37us when it does; select(2)
+// on the SAME descriptors costs 0.22us either way (measured on Darwin 26.3, arm64: pipe read end idle
+// poll 7.37us / select 0.23us, ready pipe write end poll 0.36us). An idle guest event loop therefore paid
+// ~7us of pure XNU cost per wakeup. Gate the host poll behind a select(2) probe over the same descriptors
+// and the same wait: when select reports nothing, poll would report nothing too, so the expensive call is
+// skipped entirely; when select reports readiness, poll runs with a zero timeout and takes its FAST path,
+// so exact Linux revents (POLLHUP/POLLERR/POLLPRI/POLLRDNORM...) still come from poll and nothing about the
+// reported bits changes.
+//
+// The gate is declined -- and the plain host poll used -- whenever select cannot express the request:
+// a descriptor at or above FD_SETSIZE, an events mask with no read/write/priority bit (Linux still reports
+// POLLHUP/POLLERR/POLLNVAL for events==0, which empty select sets cannot see), an events mask carrying a
+// bit outside the representable group, or a select failure such as EBADF from a closed descriptor (that is
+// exactly the POLLNVAL case, which only poll can report per-descriptor).
+#define POLL_SELECT_READ (POLLIN | POLLRDNORM | POLLRDBAND)
+#define POLL_SELECT_WRITE (POLLOUT | POLLWRNORM | POLLWRBAND)
+#define POLL_SELECT_KNOWN (POLL_SELECT_READ | POLL_SELECT_WRITE | POLLPRI)
+
+static int poll_select_gate_ready(struct pollfd *fds, nfds_t n, int timeout_ms, int *decided) {
+    fd_set read_set, write_set, except_set;
+    int highest = -1;
+    nfds_t index;
+    int rc;
+    struct timeval tv;
+    *decided = 0;
+    if (fds == NULL) return 0;
+    FD_ZERO(&read_set);
+    FD_ZERO(&write_set);
+    FD_ZERO(&except_set);
+    for (index = 0; index < n; ++index) {
+        int fd = fds[index].fd;
+        short events = fds[index].events;
+        if (fd < 0) continue;
+        if (fd >= FD_SETSIZE) return 0;
+        if ((events & POLL_SELECT_KNOWN) == 0 || (events & ~(short)POLL_SELECT_KNOWN) != 0) return 0;
+        if (events & POLL_SELECT_READ) FD_SET(fd, &read_set);
+        if (events & POLL_SELECT_WRITE) FD_SET(fd, &write_set);
+        if (events & POLLPRI) FD_SET(fd, &except_set);
+        if (fd > highest) highest = fd;
+    }
+    if (highest < 0) return 0; // nothing select could watch: let poll decide (nfds==0, all fds negative)
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    rc = select(highest + 1, &read_set, &write_set, &except_set, timeout_ms < 0 ? NULL : &tv);
+    if (rc < 0) {
+        if (errno == EINTR) {
+            *decided = 1; // a real interruption: the caller's EINTR handling must see it, not a re-poll
+            return -1;
+        }
+        return 0; // EBADF and friends: fall through to poll so POLLNVAL is reported per descriptor
+    }
+    if (rc == 0) {
+        for (index = 0; index < n; ++index) fds[index].revents = 0;
+        *decided = 1;
+        return 0;
+    }
+    return 1; // something is ready; the caller polls with a zero timeout and hits the host fast path
+}
+
+// Host wait for one poll scan. Semantically identical to poll(fds, n, timeout_ms).
+static int poll_host_wait(struct pollfd *fds, nfds_t n, int timeout_ms) {
+    for (;;) {
+        int decided = 0;
+        int gate = poll_select_gate_ready(fds, n, timeout_ms, &decided);
+        int r;
+        if (decided) return gate;
+        if (gate <= 0) return poll(fds, n, timeout_ms); // gate declined: plain host poll, unchanged behaviour
+        r = poll(fds, n, 0);
+        // An infinite wait must never return 0. If the readiness select saw was consumed between the two
+        // calls, wait again rather than reporting a timeout that cannot happen.
+        if (r == 0 && timeout_ms < 0) continue;
+        return r;
+    }
+}
+#endif
+
 static int svc_pselect6(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                       uint64_t a4, uint64_t a5) {
     (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
@@ -252,7 +329,7 @@ static int svc_ppoll(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
                 int64_t ms = (ns + 999999LL) / 1000000LL;
                 tmo = ms > 0x7fffffff ? 0x7fffffff : (int)ms;
             }
-            r = poll(fds, (nfds_t)a1, signalfd_ready > 0 ? 0 : tmo);
+            r = poll_host_wait(fds, (nfds_t)a1, signalfd_ready > 0 ? 0 : tmo);
 #endif
             ts_wait_leave(); // S while blocked (glibc pause on aarch64 -> ppoll)
             if (r < 0 && errno == EINTR && sfd_any_ready_for_cpu(c)) r = 0;

@@ -1,0 +1,21 @@
+nfds0_t0                     rc=0
+nfds0_t60                    rc=0 slept=1
+idle_pollin_t0               rc=0 revents=0
+writeend_pollout_t0          rc=1 revents=0x4
+ready_pollin_t0              rc=1 revents=0x1
+ready_pollin_tneg            rc=1 revents=0x1
+mixed_two                    rc=1 r0=0x1 r1=0
+negative_fd                  rc=0 revents=0
+events0_idle                 rc=0 revents=0
+idle_timeout60               rc=0 revents=0 slept=1
+ppoll_idle_zero              rc=0 revents=0
+ppoll_ready_zero             rc=1 revents=0x4
+highfd_idle                  rc=0 revents=0 above=1
+highfd_ready                 rc=1 revents=0x1
+closed_fd_alone              rc=1 revents=0x20
+closed_fd_with_live          rc=2 r0=0x20 r1=0x4
+hup_pollin                   rc=1 hup=1
+blocking_eintr               rc=-1 eintr=1 handled=1
+select_idle                  rc=0 set=0
+select_ready                 rc=1 set=1
+done

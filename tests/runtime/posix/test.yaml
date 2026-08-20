@@ -219,6 +219,13 @@ cases:
     artifact: { destination: /opt/husklet/posix-pipe2way }
     run: []
     expect: { exit: 0, stdout: golden/pipe2way.out }
+  - id: runtime/posix/pollgate
+    status: active
+    compat: { class: compatibility }
+    build: { source: pollgate.c, output: pollgate, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pollgate }
+    run: []
+    expect: { exit: 0, stdout: golden/pollgate.out }
   - id: runtime/posix/pollpipe
     status: active
     compat: { class: compatibility }
