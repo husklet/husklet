@@ -541,6 +541,16 @@ unsafe fn hl_x86_64_checkpoint_rendezvous_test(scenario: c_uint) -> c_int {
 }
 
 #[cfg(feature = "native-test-hooks")]
+unsafe fn hl_aarch64_checkpoint_launch_identity_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().aarch64_checkpoint_launch_identity)(scenario) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_x86_64_checkpoint_launch_identity_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().x86_64_checkpoint_launch_identity)(scenario) }
+}
+
+#[cfg(feature = "native-test-hooks")]
 unsafe fn hl_aarch64_checkpoint_membership_test(scenario: c_uint) -> c_int {
     unsafe { (test_api().aarch64_checkpoint_membership)(scenario) }
 }
@@ -903,6 +913,20 @@ pub(crate) fn checkpoint_rendezvous_test(isa: u32, scenario: u32) -> Result<(), 
         match isa {
             1 => hl_aarch64_checkpoint_rendezvous_test(scenario),
             2 => hl_x86_64_checkpoint_rendezvous_test(scenario),
+            _ => return Err(-22),
+        }
+    };
+    if status == 0 { Ok(()) } else { Err(status) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn checkpoint_launch_identity_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    // SAFETY: the feature-gated hook borrows no caller memory. It writes two engine statics, restores both
+    // before returning, and answers a scalar status.
+    let status = unsafe {
+        match isa {
+            1 => hl_aarch64_checkpoint_launch_identity_test(scenario),
+            2 => hl_x86_64_checkpoint_launch_identity_test(scenario),
             _ => return Err(-22),
         }
     };

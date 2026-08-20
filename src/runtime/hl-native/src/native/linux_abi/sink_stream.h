@@ -160,8 +160,13 @@ static int ckpt_sink_stream_flush(struct ckpt_sink_stream *stream) {
     if (stream->failed) return -1;
     if (stream->buffered == 0) return 0;
     // Append: the buffer always sits at the object's logical end, because write_at flushes before patching.
-    if (ckpt_stream_call(HL_CKPT_OP_OBJECT_WRITE, NULL, stream->id, 0, 0, stream->buffer, stream->buffered, NULL, NULL,
-                         0) != HL_CKPT_STATUS_OK) {
+    int flush_status = ckpt_stream_call(HL_CKPT_OP_OBJECT_WRITE, NULL, stream->id, 0, 0, stream->buffer,
+                                        stream->buffered, NULL, NULL, 0);
+    if (flush_status != HL_CKPT_STATUS_OK) {
+        // The broker's answer is the whole reason this member is about to abort, and it used to be
+        // discarded here: the caller saw only -1 and printed "see the refusal above" with nothing above it.
+        fprintf(stderr, "[ckpt] refuse: the broker rejected %zu byte(s) for object %llu with status %d\n",
+                stream->buffered, (unsigned long long)stream->id, flush_status);
         stream->failed = 1;
         return -1;
     }
@@ -187,8 +192,11 @@ static int ckpt_sink_stream_write(struct ckpt_sink_stream *stream, const void *d
 
 static int ckpt_sink_stream_write_at(struct ckpt_sink_stream *stream, uint64_t offset, const void *data, size_t size) {
     if (stream->failed || ckpt_sink_stream_flush(stream) != 0) return -1;
-    if (ckpt_stream_call(HL_CKPT_OP_OBJECT_WRITE_AT, NULL, stream->id, offset, 0, data, size, NULL, NULL, 0) !=
-        HL_CKPT_STATUS_OK) {
+    int patch_status = ckpt_stream_call(HL_CKPT_OP_OBJECT_WRITE_AT, NULL, stream->id, offset, 0, data, size, NULL,
+                                       NULL, 0);
+    if (patch_status != HL_CKPT_STATUS_OK) {
+        fprintf(stderr, "[ckpt] refuse: the broker rejected a %zu byte patch at %llu of object %llu with status %d\n",
+                size, (unsigned long long)offset, (unsigned long long)stream->id, patch_status);
         stream->failed = 1;
         return -1;
     }

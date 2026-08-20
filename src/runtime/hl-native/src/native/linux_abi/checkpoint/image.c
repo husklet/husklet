@@ -960,6 +960,15 @@ static int ckpt_write_region_at(struct ckpt_sink *sink, struct ckpt_sink_stream 
 }
 
 // Sparse-dump every tracked guest mapping (image/interp/heap/stack/anon/file mmap). Non-zero HOST pages only.
+/* A refused page dump names the step and the region it refused at. Every one of these paths used to
+ * return -1 in silence, so `ABORT -- see the refusal above` pointed at nothing and the member's real
+ * reason never reached the log the failure is observed in. Diagnostic only: no control flow changes. */
+static void ckpt_pages_refuse(const char *step, uint64_t address) {
+    char message[192];
+    snprintf(message, sizeof message, "[ckpt] refuse: cannot %s\n", step);
+    fprintf(stderr, message, (unsigned long long)address);
+}
+
 static int ckpt_dump_pages(struct ckpt_sink *sink, struct ckpt_sink_stream *f, size_t pagesz, uint64_t *out_n) {
     uint64_t nreg = 0;
     // One host mapping-table read for the whole dump; every region's anonymous-shared lookup is
@@ -1029,7 +1038,7 @@ static int ckpt_dump_pages(struct ckpt_sink *sink, struct ckpt_sink_stream *f, s
         }
         hl_logical_vma_descriptor logical;
         int is_logical = hl_logical_vma_global_describe(addr, &logical);
-        if (is_logical < 0) return -1;
+        if (is_logical < 0) { ckpt_pages_refuse("describe the logical VMA at %#llx", addr); return -1; }
         if (is_logical == 1) {
             /*
              * gmap tracks the original mmap while mprotect may split the
@@ -1039,10 +1048,11 @@ static int ckpt_dump_pages(struct ckpt_sink *sink, struct ckpt_sink_stream *f, s
             size_t descriptor_count = hl_logical_vma_global_export(NULL, 0);
             hl_logical_vma_descriptor *descriptors =
                 descriptor_count ? malloc(descriptor_count * sizeof(*descriptors)) : NULL;
-            if (descriptor_count && descriptors == NULL) return -1;
+            if (descriptor_count && descriptors == NULL) { ckpt_pages_refuse("allocate the logical VMA descriptors for %#llx", addr); return -1; }
             if (hl_logical_vma_global_export(descriptors, descriptor_count) != descriptor_count) {
                 free(descriptors);
                 errno = EAGAIN;
+                ckpt_pages_refuse("export the logical VMA descriptors for %#llx", addr);
                 return -1;
             }
             qsort(descriptors, descriptor_count, sizeof(*descriptors), ckpt_logical_descriptor_compare);
@@ -1064,6 +1074,7 @@ static int ckpt_dump_pages(struct ckpt_sink *sink, struct ckpt_sink_stream *f, s
                     ckpt_dump_region_bytes(sink, f, pagesz, &logical_region) != 0 ||
                     ckpt_write_region_at(sink, f, (uint64_t)logical_header, &logical_region) != 0) {
                     free(descriptors);
+                    ckpt_pages_refuse("write a logical region inside %#llx", addr);
                     return -1;
                 }
                 nreg++;
@@ -1072,13 +1083,15 @@ static int ckpt_dump_pages(struct ckpt_sink *sink, struct ckpt_sink_stream *f, s
             continue;
         }
         int64_t header_offset = ckpt_sink_tell(sink, f);
-        if (header_offset < 0) return -1;
-        if (ckpt_write_region(sink, f, &reg) != 0) return -1;
-        if ((!reg.backing_anon_shared || anon_shared_publisher) && ckpt_dump_region_bytes(sink, f, pagesz, &reg) != 0)
+        if (header_offset < 0) { ckpt_pages_refuse("take the stream offset for region %#llx", addr); return -1; }
+        if (ckpt_write_region(sink, f, &reg) != 0) { ckpt_pages_refuse("write the region header for %#llx", addr); return -1; }
+        if ((!reg.backing_anon_shared || anon_shared_publisher) && ckpt_dump_region_bytes(sink, f, pagesz, &reg) != 0) {
+            ckpt_pages_refuse("write the region bytes for %#llx", addr);
             return -1;
+        }
         // Patch the region header in place now that npages is known (the streaming equivalent of the
         // old seek-back-and-rewrite).
-        if (ckpt_write_region_at(sink, f, (uint64_t)header_offset, &reg) != 0) return -1;
+        if (ckpt_write_region_at(sink, f, (uint64_t)header_offset, &reg) != 0) { ckpt_pages_refuse("patch the region header for %#llx", addr); return -1; }
         nreg++;
     }
     *out_n = nreg;
@@ -1101,7 +1114,17 @@ static int ckpt_self_identity(struct ckpt_meta *m, int gpid) {
     if (gpid <= 0) return -1;
     // A launch top that is not the container init is a container exec session: hl-container forks it out of
     // its own daemon, so its host parent is outside the container and it has no guest parent at all.
-    int domain_root = gpid != 1 && container_pid() == 1;
+    //
+    // "IS A LAUNCH TOP" IS ASKED OF THE LAUNCH, NOT OF THE PID. This used to read `container_pid() == 1`,
+    // which was a true statement about launch tops only while every launch top folded its own identity to
+    // guest 1. Once the identity registry gave each launch its real guest pid, an exec top answered its own
+    // number, `domain_root` went false, and the exec top fell through to the parent lookup below -- where
+    // its host parent is hl-container's daemon, outside the container and in no pidmap, so `self identity`
+    // refused and took the whole capture down with it. `g_init_hostpid` is written exactly once per launch,
+    // by the launch top itself (container/state.c:456,561; reached from engine/target/aarch64.c:567 and
+    // engine/target/x86_64.c:1117 alike), and is inherited unchanged across fork -- so `it equals getpid()`
+    // is true of a launch top and of nothing else, whatever guest pid that launch was handed.
+    int domain_root = gpid != 1 && g_init_hostpid != 0 && g_init_hostpid == (int)getpid();
     m->self_gpid = gpid;
     m->domain_root_gpid = domain_root ? 1 : 0;
     if (domain_root) {
@@ -1118,17 +1141,73 @@ static int ckpt_self_identity(struct ckpt_meta *m, int gpid) {
         m->ppid_gpid = 0;
     } else {
         int pp = getppid();
-        if (hl_linux_pidmap_guest_checked(&g_pidmap, (int32_t)pp, &m->ppid_gpid) != 0) return -1;
+        if (hl_linux_pidmap_guest_checked(&g_pidmap, (int32_t)pp, &m->ppid_gpid) != 0) {
+            fprintf(stderr, "[ckpt] refuse: guest %d has no guest identity for its host parent %d\n", gpid, pp);
+            return -1;
+        }
         if (!hl_linux_pidmap_is_active(&g_pidmap) && g_init_hostpid && pp == g_init_hostpid) m->ppid_gpid = 1;
     }
     int pg = getpgid(0);
-    if (hl_linux_pidmap_guest_checked(&g_pgidmap, (int32_t)pg, &m->pgid_gpid) != 0) return -1;
+    if (hl_linux_pidmap_guest_checked(&g_pgidmap, (int32_t)pg, &m->pgid_gpid) != 0) {
+        fprintf(stderr, "[ckpt] refuse: guest %d has no guest identity for its host process group %d\n", gpid, pg);
+        return -1;
+    }
     if (!hl_linux_pidmap_is_active(&g_pgidmap) && g_init_hostpid && pg == g_init_hostpid) m->pgid_gpid = 1;
     int sd = hl_host_process_read(getpid(), &process) ? (int)process.session : getsid(0);
-    if (hl_linux_pidmap_guest_checked(&g_sidmap, (int32_t)sd, &m->sid_gpid) != 0) return -1;
+    if (hl_linux_pidmap_guest_checked(&g_sidmap, (int32_t)sd, &m->sid_gpid) != 0) {
+        fprintf(stderr, "[ckpt] refuse: guest %d has no guest identity for its host session %d\n", gpid, sd);
+        return -1;
+    }
     if (!hl_linux_pidmap_is_active(&g_sidmap) && g_init_hostpid && sd == g_init_hostpid) m->sid_gpid = 1;
     return 0;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+// ------------------------------------------ exec-session identity: behavioral fixture
+//
+// Drives the REAL ckpt_self_identity for the two shapes the `domain_root` predicate must tell apart, and
+// it is a fixture only depth three can answer: a launch top whose guest pid is 1 reads the same under
+// either predicate, so both scenarios use a launch that was handed a guest pid OTHER than 1 and carries a
+// registered self identity -- exactly what a container `exec` session is once the identity registry hands
+// each launch its own guest pid, and exactly the state in which container_pid() stopped answering 1.
+//
+//   0  THIS process is the launch top (g_init_hostpid == getpid()) and its registered guest pid is 7.
+//      It is a container exec session: no guest parent, its own group, its own session. Under the retired
+//      container_pid()==1 predicate this took the descendant path instead and reported its HOST parent,
+//      group and session -- which is a different answer, not merely a slower one, so this scenario
+//      separates the two designs rather than agreeing with both.
+//   1  THIS process is NOT the launch top (g_init_hostpid names another process), with the same guest pid
+//      7 registered. It is an ordinary forked guest process and must NOT be treated as a domain root: it
+//      keeps a real parent and takes its group and session from the host. This is the direction the fix
+//      must not widen -- a predicate that answered "domain root" for everything would pass scenario 0 and
+//      fail here.
+HL_API int HL_TARGET_LOCAL(checkpoint_launch_identity_test)(uint32_t scenario) {
+    if (scenario > 1) return -22;
+    int saved_init = g_init_hostpid;
+    int saved_self = g_self_gpid;
+    struct ckpt_meta m;
+    memset(&m, 0, sizeof m);
+    g_self_gpid = 7;
+    g_init_hostpid = scenario == 0 ? (int)getpid() : (int)getpid() + 1;
+    int host_group = (int)getpgid(0);
+    int rc = ckpt_self_identity(&m, 7);
+    g_init_hostpid = saved_init;
+    g_self_gpid = saved_self;
+    if (rc != 0) return -1;
+    if (m.self_gpid != 7) return -2;
+    if (scenario == 0) {
+        if (m.domain_root_gpid != 1) return -3;
+        if (m.ppid_gpid != 0) return -4;      /* an exec top has no guest parent at all */
+        if (m.pgid_gpid != 7) return -5;      /* its own group, never the daemon's outside the container */
+        if (m.sid_gpid != 7) return -6;       /* and its own session */
+        return 0;
+    }
+    if (m.domain_root_gpid != 0) return -7;   /* a forked descendant is not a domain root */
+    if (m.ppid_gpid == 0) return -8;          /* it has a real guest parent */
+    if (m.pgid_gpid != host_group) return -9; /* and takes its group from the host, not from its own pid */
+    return 0;
+}
+#endif
 
 // Dump THIS process (RAM + cpu + fds) into `procdir` (temp dir + rename). Returns 0 on success, -1 on any
 // failure or P3 refusal (nothing published on failure).
@@ -1161,7 +1240,10 @@ static int ckpt_register_ready(struct cpu **live, int count) {
     hl_ckpt_reply reply;
     int status = ckpt_stream_call(HL_CKPT_OP_REGISTER_READY, NULL, 0, 0, 0, payload, payload_size, &reply, NULL, 0);
     free(payload);
-    return status == HL_CKPT_STATUS_OK && reply.value != 0 ? 0 : -1;
+    if (status == HL_CKPT_STATUS_OK && reply.value != 0) return 0;
+    fprintf(stderr, "[ckpt] refuse: REGISTER_READY for host process %d answered status %d member %llu\n",
+            (int)getpid(), status, (unsigned long long)reply.value);
+    return -1;
 }
 
 // A member that has finished its own group holds its whole-process freeze -- every thread stopped in
@@ -1282,6 +1364,16 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir, int park) {
     return result;
 }
 
+/* A member's dump ends in exactly one place, and the reason it ended there must survive to the log the
+ * failure is observed in. Every step that can end the dump names itself, because `ABORT -- see the refusal
+ * above` is worse than useless when the step that failed printed nothing: three lanes read the resulting
+ * silence as evidence about the broker. The step name is the only diagnostic; it changes no control flow. */
+#define CKPT_DUMP_FAIL(step)                                                                                   \
+    do {                                                                                                       \
+        failed_step = (step);                                                                                  \
+        goto done;                                                                                             \
+    } while (0)
+
 static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
     // HL_UNTRUSTED routes every host-authority object through the sentry process, so this worker's
     // descriptor table does not describe the guest: ckpt_scan_fds would capture sentry-relative
@@ -1314,6 +1406,7 @@ static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
         return -1;
     }
     struct ckpt_sink_stream *fp = NULL, *ff = NULL;
+    const char *failed_step = NULL;
     int ok = 0;
     size_t pagesz = hl_linux_host_map_granularity();
 
@@ -1335,7 +1428,7 @@ static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
     m.stack_lo = g_stack_lo;
     m.stack_hi = g_stack_hi;
     m.n_fds = (uint64_t)nfd;
-    if (ckpt_self_identity(&m, ckpt_group_gpid(group)) != 0) goto done; // common cleanup: frees fdrecs and reports the abort
+    if (ckpt_self_identity(&m, ckpt_group_gpid(group)) != 0) CKPT_DUMP_FAIL("self identity"); // common cleanup: frees fdrecs and reports the abort
     snprintf(m.exe_path, sizeof m.exe_path, "%s", g_exe_path ? g_exe_path : "");
     for (int s = 0; s < 65; s++) { // capture this process's guest signal dispositions (restored on thaw)
         m.sig_handler[s] = g_sigact[s].handler;
@@ -1343,31 +1436,31 @@ static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
         m.sig_mask[s] = g_sigact[s].mask;
     }
 
-    if (ckpt_sink_begin(sink, group, "pages", 0, &fp) != 0) goto done;
-    if (ckpt_dump_pages(sink, fp, pagesz, &m.n_regions) != 0) goto done;
-    if (ckpt_sink_finish(sink, &fp) != 0) goto done;
+    if (ckpt_sink_begin(sink, group, "pages", 0, &fp) != 0) CKPT_DUMP_FAIL("open the pages stream");
+    if (ckpt_dump_pages(sink, fp, pagesz, &m.n_regions) != 0) CKPT_DUMP_FAIL("dump the memory pages");
+    if (ckpt_sink_finish(sink, &fp) != 0) CKPT_DUMP_FAIL("finish the pages stream");
 
     {
         size_t payload = (size_t)g_ckpt_cpu_count * sizeof *g_ckpt_cpu_images;
         size_t total = sizeof(struct ckpt_cpu_header) + payload;
         struct ckpt_cpu_header *cpu_file = malloc(total);
-        if (!cpu_file) goto done;
+        if (!cpu_file) CKPT_DUMP_FAIL("allocate the CPU image");
         *cpu_file = (struct ckpt_cpu_header){CKPT_CPU_MAGIC, CKPT_VERSION, G_CKPT_ARCH, (uint64_t)g_ckpt_cpu_count,
                                              sizeof(struct cpu)};
         memcpy(cpu_file + 1, g_ckpt_cpu_images, payload);
         int cpu_rc = ckpt_sink_put(sink, group, "cpu", 0, cpu_file, total);
         free(cpu_file);
-        if (cpu_rc != 0) goto done;
+        if (cpu_rc != 0) CKPT_DUMP_FAIL("store the CPU image");
     }
 
-    if (ckpt_sink_begin(sink, group, "fds", 0, &ff) != 0) goto done;
+    if (ckpt_sink_begin(sink, group, "fds", 0, &ff) != 0) CKPT_DUMP_FAIL("open the fds stream");
     for (int i = 0; i < nfd; i++)
-        if (ckpt_sink_write(sink, ff, &fdrecs[i], sizeof fdrecs[i]) != 0) goto done;
-    if (ckpt_sink_finish(sink, &ff) != 0) goto done;
+        if (ckpt_sink_write(sink, ff, &fdrecs[i], sizeof fdrecs[i]) != 0) CKPT_DUMP_FAIL("write an fd record");
+    if (ckpt_sink_finish(sink, &ff) != 0) CKPT_DUMP_FAIL("finish the fds stream");
 
     // SysV IPC is container-scoped and reachable from no descriptor, so it is captured here
     // rather than by the fd scan above. A failure to read the registry refuses the dump.
-    if (ckpt_sysv_capture(sink, group) != 0) goto done;
+    if (ckpt_sysv_capture(sink, group) != 0) CKPT_DUMP_FAIL("capture SysV IPC");
 
     for (int i = 0; i < nfd; i++) {
         if (fdrecs[i].kind != CKF_INOTIFY || fdrecs[i].path[0] == 0) continue;
@@ -1377,27 +1470,27 @@ static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
         if (duplicate) continue;
         size_t bytes = 0;
         if (hl_linux_inotify_export(g_linux_box, (hl_linux_fd)fdrecs[i].gfd, NULL, 0, &bytes) != HL_STATUS_OK)
-            goto done;
+            CKPT_DUMP_FAIL("size the inotify export");
         void *image = malloc(bytes);
-        if (image == NULL) goto done;
+        if (image == NULL) CKPT_DUMP_FAIL("allocate the inotify export");
         size_t actual = 0;
         if (hl_linux_inotify_export(g_linux_box, (hl_linux_fd)fdrecs[i].gfd, image, bytes, &actual) != HL_STATUS_OK ||
             actual != bytes) {
             free(image);
-            goto done;
+            CKPT_DUMP_FAIL("read the inotify export");
         }
         int stored = ckpt_sink_put(sink, group, fdrecs[i].path, 0, image, bytes);
         free(image);
-        if (stored != 0) goto done;
+        if (stored != 0) CKPT_DUMP_FAIL("store the inotify export");
     }
 
-    if (ckpt_dump_epoll(sink, group, fdrecs, nfd) != 0) goto done;
-    if (ckpt_dump_inotify(sink, group) != 0) goto done;
-    if (ckpt_dump_signal_state(sink, group) != 0) goto done;
-    if (ckpt_dump_filesystem_state(sink, group) != 0) goto done;
+    if (ckpt_dump_epoll(sink, group, fdrecs, nfd) != 0) CKPT_DUMP_FAIL("dump the epoll set");
+    if (ckpt_dump_inotify(sink, group) != 0) CKPT_DUMP_FAIL("dump the inotify set");
+    if (ckpt_dump_signal_state(sink, group) != 0) CKPT_DUMP_FAIL("dump the signal state");
+    if (ckpt_dump_filesystem_state(sink, group) != 0) CKPT_DUMP_FAIL("dump the filesystem state");
 
     // meta written LAST within the group (it carries the section counts).
-    if (ckpt_sink_put(sink, group, "meta", 0, &m, sizeof m) != 0) goto done;
+    if (ckpt_sink_put(sink, group, "meta", 0, &m, sizeof m) != 0) CKPT_DUMP_FAIL("store the group meta");
     ok = 1;
 
 done:
@@ -1405,7 +1498,8 @@ done:
     if (ff) ckpt_sink_abort(sink, &ff);
     free(fdrecs);
     if (!ok) {
-        fprintf(stderr, "[ckpt] %s: ABORT -- see the refusal above; nothing from this process is published\n", group);
+        fprintf(stderr, "[ckpt] refuse: %s could not %s\n", group, failed_step ? failed_step : "complete its dump");
+        fprintf(stderr, "[ckpt] %s: ABORT -- nothing from this process is published\n", group);
         return -1;
     }
     fprintf(stderr, "[ckpt] %s: commit\n", group);

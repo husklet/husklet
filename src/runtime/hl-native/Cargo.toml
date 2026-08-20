@@ -60,6 +60,10 @@ name = "checkpoint_membership"
 required-features = ["native-test-hooks"]
 
 [[test]]
+name = "checkpoint_launch_identity"
+required-features = ["native-test-hooks"]
+
+[[test]]
 name = "checkpoint_rendezvous"
 required-features = ["native-test-hooks"]
 
