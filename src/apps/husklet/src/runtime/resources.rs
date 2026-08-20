@@ -380,23 +380,28 @@ mod tests {
             std::fs::write(descendant, child.id().to_string()).unwrap();
             std::mem::forget(child);
         }
-        if let Some(success) = std::env::var_os("HL_TEST_DAEMON_SUCCESS") {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            runtime.block_on(async {
-                let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()).unwrap();
-                std::fs::write(&ready, b"ready").unwrap();
-                hangup.recv().await.expect("checkpoint request");
-                std::fs::write(success, b"ok\n").unwrap();
-            });
-            return;
-        }
-        std::fs::write(ready, b"ready").unwrap();
-        loop {
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        // The checkpoint request is a `SIGHUP`, so this stand-in installs a handler for it exactly as
+        // the production daemon does (`src/apps/daemon/src/main.rs` selects `Disposition::Checkpoint`
+        // from its own `SignalKind::hangup` stream). Depending on the *inherited* disposition instead
+        // makes the fixture a measurement of whoever started the test binary: under `nohup`, or any
+        // launcher that ignores `SIGHUP`, an inheriting helper survives the request, the daemon is
+        // waited out for the full 45-second checkpoint deadline and stopped with `SIGTERM`, and the
+        // degraded-checkpoint warning names a timeout rather than the missing acknowledgement.
+        let acknowledgement = std::env::var_os("HL_TEST_DAEMON_SUCCESS");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()).unwrap();
+            std::fs::write(&ready, b"ready").unwrap();
+            hangup.recv().await.expect("checkpoint request");
+            let Some(success) = acknowledgement else {
+                // The daemon that dies on the request without committing an acknowledgement.
+                std::process::exit(1);
+            };
+            std::fs::write(success, b"ok\n").unwrap();
+        });
     }
 
     fn spawn_daemon_helper(
@@ -607,13 +612,20 @@ mod tests {
         std::fs::write(daemon.directory.join("shutdown.success"), b"ok\n").unwrap();
         let (mut child, descendant) = spawn_daemon_helper(&daemon, &temporary, true, true, false, false);
 
+        let requested = std::time::Instant::now();
         let preparation = daemon.prepare_checkpoint().unwrap();
+        let request = requested.elapsed();
         let status = child.wait().unwrap();
 
         assert!(!status.success());
-        assert!(preparation
-            .warning()
-            .is_some_and(|warning| warning.contains("without committing a checkpoint acknowledgement")));
+        assert!(
+            preparation
+                .warning()
+                .is_some_and(|warning| warning.contains("without committing a checkpoint acknowledgement")),
+            "a daemon that died before acknowledging must degrade the checkpoint, not be accepted or \
+             waited out: warning={:?} after {request:?}",
+            preparation.warning()
+        );
         assert_process_reaped(descendant.unwrap());
     }
 

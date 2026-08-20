@@ -141,12 +141,25 @@ mod ffi {
             let owner = unsafe { libc::getpid() };
 
             // SAFETY: the hook runs in the child after `fork` and before `exec`. It invokes only
-            // value-only libc syscalls, retains no Rust storage, acquires no lock, allocates
-            // nothing, invokes no destructor, and cannot unwind across the ABI. Linux prctl
-            // binds the private engine session to its launcher so a killed launcher cannot leave
-            // a detached engine holding its bootstrap descriptors indefinitely.
+            // async-signal-safe libc entry points over storage this frame owns for the whole call,
+            // retains no Rust storage, acquires no lock, allocates nothing, invokes no destructor,
+            // and cannot unwind across the ABI. Linux prctl binds the private engine session to its
+            // launcher so a killed launcher cannot leave a detached engine holding its bootstrap
+            // descriptors indefinitely.
             unsafe {
                 self.pre_exec(move || {
+                    // Everything this boundary detaches is supervised by signal afterwards: the
+                    // checkpoint request, the stop, and the process-group cleanup. A signal mask is
+                    // inherited across `fork` and preserved across `exec`, and registering this hook
+                    // is what takes the spawn off `posix_spawn`, whose attributes would have handed
+                    // the child an empty one. Restore that guarantee rather than letting a session
+                    // start with a request its supervisor can never deliver.
+                    let mut deliverable: libc::sigset_t = std::mem::zeroed();
+                    if libc::sigemptyset(&raw mut deliverable) < 0
+                        || libc::sigprocmask(libc::SIG_SETMASK, &raw const deliverable, std::ptr::null_mut()) < 0
+                    {
+                        return Err(io::Error::last_os_error());
+                    }
                     #[cfg(target_os = "linux")]
                     {
                         if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) < 0 {
