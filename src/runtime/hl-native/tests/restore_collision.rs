@@ -103,3 +103,18 @@ int main(void) {
     let run = Command::new(executable).status().expect("run restore collision probe");
     assert!(run.success(), "restore collision probe failed with {run}");
 }
+
+/// A re-forked restorer drops its parent's inherited address space before it claims its own image at the
+/// captured guest addresses. The deterministic arena starts the brk heap one 4 KiB guard page above
+/// `HL_LINUX_SNAPSHOT_BASE`, so on a 16 KiB host that range begins mid-page and Darwin's `munmap(2)` refuses
+/// an unaligned address outright: the teardown released nothing, the parent's heap stayed live, and any
+/// member whose own image named the same address failed its exact claim with `EEXIST`.
+#[test]
+fn a_registry_teardown_releases_the_host_pages_a_guest_range_occupies_on_both_isas() {
+    for isa in [1, 2] {
+        for scenario in [0, 1] {
+            hl_native::checkpoint_gmap_release_test(isa, scenario)
+                .unwrap_or_else(|status| panic!("ISA {isa} gmap release scenario {scenario} failed at {status}"));
+        }
+    }
+}

@@ -546,6 +546,16 @@ unsafe fn hl_x86_64_checkpoint_restore_slice_test(scenario: c_uint) -> c_int {
 }
 
 #[cfg(feature = "native-test-hooks")]
+unsafe fn hl_aarch64_checkpoint_gmap_release_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().aarch64_checkpoint_gmap_release)(scenario) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_x86_64_checkpoint_gmap_release_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().x86_64_checkpoint_gmap_release)(scenario) }
+}
+
+#[cfg(feature = "native-test-hooks")]
 unsafe fn hl_aarch64_checkpoint_anon_shared_test(scenario: c_uint) -> c_int {
     unsafe { (test_api().aarch64_checkpoint_anon_shared)(scenario) }
 }
@@ -864,6 +874,21 @@ pub(crate) fn checkpoint_restore_slice_test(isa: u32, scenario: u32) -> Result<(
         match isa {
             1 => hl_aarch64_checkpoint_restore_slice_test(scenario),
             2 => hl_x86_64_checkpoint_restore_slice_test(scenario),
+            _ => return Err(-22),
+        }
+    };
+    if status == 0 { Ok(()) } else { Err(status) }
+}
+
+/// Exercise the registry teardown a re-forked restorer runs before it claims its own image, and the
+/// host-granularity rounding that teardown depends on.
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn checkpoint_gmap_release_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    // SAFETY: the feature-gated hook maps and releases only its own probe range and returns a scalar.
+    let status = unsafe {
+        match isa {
+            1 => hl_aarch64_checkpoint_gmap_release_test(scenario),
+            2 => hl_x86_64_checkpoint_gmap_release_test(scenario),
             _ => return Err(-22),
         }
     };

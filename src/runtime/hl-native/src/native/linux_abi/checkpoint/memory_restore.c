@@ -266,6 +266,27 @@ static void ckpt_restore_backings_close(void) {
 // Name whatever already holds [lo, hi). Only reached from the collision path below, where "what is in the
 // way" is the whole question and a bare address answers none of it.
 static void ckpt_report_overlap(uint64_t lo, uint64_t hi) {
+#if defined(__APPLE__)
+    /* Darwin has no /proc/self/maps, so the portable reader below names nothing here -- the collision
+     * diagnostic was silent on exactly the host whose restores collide. Walk the Mach VM map instead. */
+    mach_vm_address_t address = (mach_vm_address_t)lo;
+    while (address < (mach_vm_address_t)hi) {
+        mach_vm_size_t size = 0;
+        vm_region_basic_info_data_64_t info;
+        mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+        mach_port_t object = MACH_PORT_NULL;
+        if (mach_vm_region(mach_task_self(), &address, &size, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &count,
+                           &object) != KERN_SUCCESS)
+            break;
+        if (address >= (mach_vm_address_t)hi) break;
+        fprintf(stderr, "[restore]   in the way: %llx-%llx prot=%x/%x shared=%d reserved=%d\n",
+                (unsigned long long)address, (unsigned long long)(address + size), info.protection,
+                info.max_protection, (int)info.shared, (int)info.reserved);
+        if (size == 0) break;
+        address += size;
+    }
+    return;
+#else
     FILE *maps = fopen("/proc/self/maps", "r");
     char line[512];
     if (maps == NULL) return;
@@ -276,6 +297,7 @@ static void ckpt_report_overlap(uint64_t lo, uint64_t hi) {
         fprintf(stderr, "[restore]   in the way: %s", line);
     }
     fclose(maps);
+#endif
 }
 
 static void *ckpt_map_exact_nonreplacing(uint64_t address, size_t length, int protection, int flags, int fd,
@@ -476,6 +498,49 @@ HL_API int HL_TARGET_LOCAL(checkpoint_restore_slice_test)(uint32_t scenario) {
 }
 #endif
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+/* A re-forked restorer drops its parent's inherited address space through hl_gmap_reset() before it claims
+ * its own image at exactly the captured guest addresses. That teardown has to reach the HOST pages the guest
+ * range occupies: guest ranges are 4 KiB-granular and the deterministic arena places the brk heap one guard
+ * page above HL_LINUX_SNAPSHOT_BASE, so on a 16 KiB host the range begins mid-page and Darwin's munmap(2)
+ * refuses it outright. Scenario 0 measures the real registry against the real host; scenario 1 pins the
+ * rounding itself against an explicit 16 KiB granularity, so it is answerable on a 4 KiB host too. */
+HL_API int HL_TARGET_LOCAL(checkpoint_gmap_release_test)(uint32_t scenario) {
+    if (scenario == 1) {
+        uint64_t start = 0, end = 0;
+        if (!hl_gmap_host_release_span(UINT64_C(0x50000001000), UINT64_C(0x4000), UINT64_C(0x4000), &start, &end))
+            return 1;
+        if (start != UINT64_C(0x50000000000)) return 2;  /* the head page the guest range begins inside */
+        if (end != UINT64_C(0x50000008000)) return 3;    /* and the tail page it ends inside */
+        if (hl_gmap_host_release_span(UINT64_C(0x1000), 0, UINT64_C(0x4000), &start, &end)) return 4;
+        if (hl_gmap_host_release_span(UINT64_C(0x1000), UINT64_C(0x1000), 0, &start, &end)) return 5;
+        return 0;
+    }
+    if (scenario != 0) return 10;
+    uint64_t grain = (uint64_t)hl_linux_host_map_granularity();
+    if (grain == 0 || (grain & (grain - 1)) != 0) return 20;
+    /* Reproduce the arena's shape wherever the host allows it: a guest range that begins one 4 KiB guard
+     * page inside a host page and therefore spans two of them. A 4 KiB host cannot express that at all --
+     * every guest address is host-aligned there -- so it measures the single-page teardown instead, and
+     * scenario 1 carries the rounding itself. */
+    uint64_t offset = grain > HL_LINUX_GUEST_PAGE_SIZE ? HL_LINUX_GUEST_PAGE_SIZE : 0;
+    size_t span = (size_t)(offset != 0 ? grain * 2u : grain);
+    void *host = mmap(NULL, span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (host == MAP_FAILED) return 21;
+    uint64_t base = (uint64_t)(uintptr_t)host;
+    hl_gmap_add(base + offset, grain);
+    hl_gmap_reset();
+    void *claimed = NULL;
+    int reclaimed = ckpt_claim_exact(base, span, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1,
+                                     0, &claimed);
+    int claim_errno = errno;
+    (void)munmap((void *)(uintptr_t)base, span);
+    if (reclaimed != 0) return claim_errno == EEXIST ? 22 : 23;
+    return 0;
+}
+
+#endif
+
 static void ckpt_restore_rollback(const struct ckpt_region *topology, size_t processed, size_t registered,
                                   const uint64_t *mapped_a, const uint64_t *mapped_e, size_t nmapped) {
     int restore_errno = errno != 0 ? errno : EIO;
@@ -657,8 +722,10 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
                                      map_offset + (off_t)(cursor - map_a), &r) != 0) {
                     int claim_errno = errno;
                     fprintf(stderr,
-                            "[restore] cannot claim guest region %llx+%llx without replacing a live host mapping\n",
-                            (unsigned long long)a, (unsigned long long)reg.len);
+                            "[restore] gpid %d cannot claim guest region %llx+%llx (map %llx-%llx fd=%d) without "
+                            "replacing a live host mapping\n",
+                            g_self_gpid, (unsigned long long)a, (unsigned long long)reg.len,
+                            (unsigned long long)map_a, (unsigned long long)map_e, map_fd);
                     ckpt_report_overlap(map_a, map_e);
                     errno = claim_errno;
                     fprintf(stderr, "[restore] exact guest-address claim failed: %s\n", strerror(errno));

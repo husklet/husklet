@@ -136,7 +136,7 @@ mod tests {
             &AtomicBool::new(false),
         )
         .unwrap();
-        assert_eq!(outcome, Outcome::Exited(Some(0)));
+        assert_child_exited_zero(outcome, &directory);
     }
 
     #[test]
@@ -154,7 +154,20 @@ mod tests {
             &AtomicBool::new(false),
         )
         .unwrap();
-        assert_eq!(outcome, Outcome::Exited(Some(0)));
+        assert_child_exited_zero(outcome, &directory);
+    }
+
+    /// The captured streams are bounded at 1 KiB, so a failing child's libtest panic is itself large
+    /// enough to be reported as `OutputLimit`. Quote what was captured, or the outcome names the
+    /// symptom and hides the assertion that produced it.
+    fn assert_child_exited_zero(outcome: Outcome, directory: &tempfile::TempDir) {
+        assert_eq!(
+            outcome,
+            Outcome::Exited(Some(0)),
+            "child stdout: {}\nchild stderr: {}",
+            String::from_utf8_lossy(&fs::read(directory.path().join("stdout")).unwrap_or_default()),
+            String::from_utf8_lossy(&fs::read(directory.path().join("stderr")).unwrap_or_default())
+        );
     }
 
     #[test]
@@ -199,7 +212,7 @@ mod tests {
     #[ignore = "executed as the controlled exact-environment subprocess"]
     fn exact_environment_child() {
         assert_eq!(
-            raw_environment(),
+            exec_environment(),
             [
                 &b"HL_PROCESS_ENV_CHILD=1"[..],
                 &b"FIRST=one"[..],
@@ -209,6 +222,26 @@ mod tests {
                 &b"EMPTY="[..],
             ]
         );
+    }
+
+    /// Darwin's libSystem calls `setenv("__CF_USER_TEXT_ENCODING", ...)` before `main` whenever the
+    /// variable is absent, so a child's `environ` is never byte-identical to the `envp` it was
+    /// `posix_spawn`ed with. That injection is the host's, not this crate's: dropping exactly that
+    /// record leaves every property the exec contract owns -- order, duplicate retention, non-UTF-8
+    /// bytes, an empty value, and the absence of every inherited variable -- still asserted below.
+    fn exec_environment() -> Vec<Vec<u8>> {
+        let mut records = raw_environment();
+        if cfg!(target_os = "macos") {
+            let injected = records
+                .iter()
+                .position(|record| record.starts_with(b"__CF_USER_TEXT_ENCODING="));
+            assert!(
+                injected.is_some(),
+                "Darwin no longer injects __CF_USER_TEXT_ENCODING; drop this allowance and assert the raw environment"
+            );
+            records.remove(injected.expect("checked above"));
+        }
+        records
     }
 
     fn raw_environment() -> Vec<Vec<u8>> {
@@ -254,14 +287,23 @@ mod tests {
     #[test]
     fn timeout_kills_group_without_pipe_wait() {
         let directory = tempfile::tempdir().unwrap();
+        // The deadline must outlast `sh` reaching its `echo` -- under a loaded box a 30 ms budget
+        // terminated the group before the pid was ever written and the test failed parsing an empty
+        // capture. It stays far below the 60 s the held pipe would cost, and the elapsed bound below
+        // is what actually pins that supervision never waits for the writer.
+        let started = Instant::now();
         let outcome = run(
             OwnedCommand::new("sh").args(["-c", "sleep 60 & echo $!; wait"]),
             &capture(&directory),
-            Duration::from_millis(30),
+            Duration::from_millis(250),
             &AtomicBool::new(false),
         )
         .unwrap();
         assert_eq!(outcome, Outcome::TimedOut);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "supervision waited for the held pipe"
+        );
         assert_reported_process_gone(&directory.path().join("stdout"));
     }
 

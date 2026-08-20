@@ -107,10 +107,25 @@ impl CloseRequest {
     }
 
     fn failure(parent: &gtk::ApplicationWindow, error: &std::io::Error) {
-        let failure = hl_gui::Dialog::new("Could not close workspace")
+        // A close failure used to exist only inside this dialog, and the click that dismissed it
+        // destroyed the only copy: `stderr` of the signed application goes nowhere, so a user
+        // reporting "it errored" left no artifact at all. The engine's refusal reason arrives here
+        // verbatim -- `close.result` carries it through `ResultFile::wait` -- so write that same
+        // sentence down before showing it, and show it unchanged.
+        hl_log::hl_error!(hl_log::tag::UI, "{}", Self::failure_line(error));
+        crate::gtk_adapter::Dialog::present(Some(parent.upcast_ref()), Self::failure_dialog(error), |_| {});
+    }
+
+    /// The dialog the user sees, carrying the reason unabridged.
+    fn failure_dialog(error: &std::io::Error) -> hl_gui::Dialog {
+        hl_gui::Dialog::new("Could not close workspace")
             .detail(error.to_string())
-            .action(hl_gui::Action::new(hl_gui::EventId::new("dismiss"), "Dismiss"));
-        crate::gtk_adapter::Dialog::present(Some(parent.upcast_ref()), failure, |_| {});
+            .action(hl_gui::Action::new(hl_gui::EventId::new("dismiss"), "Dismiss"))
+    }
+
+    /// The sentence written to the log. One line, so a multi-line engine refusal stays greppable.
+    fn failure_line(error: &std::io::Error) -> String {
+        format!("could not close workspace: {}", error.to_string().replace('\n', " | "))
     }
 }
 
@@ -259,6 +274,32 @@ mod tests {
             let _ = child.wait();
             panic!("a failed continue stranded its HUP-resistant launcher");
         }
+    }
+
+    /// The whole point of the refusal reasons the engine now produces is that the user reads one.
+    /// `ResultFile::wait` turns `close.result` into exactly this error, so a generic sentence here
+    /// would discard a reason the system already knew.
+    #[test]
+    fn the_engine_refusal_reason_reaches_the_dialog_the_user_sees() {
+        let refused = std::io::Error::other("checkpoint refused by the engine: guest fd 10 is a pipe");
+        let dialog = CloseRequest::failure_dialog(&refused);
+
+        assert_eq!(dialog.title, "Could not close workspace");
+        assert_eq!(
+            dialog.detail.as_deref(),
+            Some("checkpoint refused by the engine: guest fd 10 is a pipe")
+        );
+    }
+
+    /// The same reason must survive the click that dismissed the dialog.
+    #[test]
+    fn a_close_failure_is_written_as_one_greppable_line() {
+        let refused = std::io::Error::other("1 of 7 participants never committed\nexecution 7f3a: no reply");
+
+        assert_eq!(
+            CloseRequest::failure_line(&refused),
+            "could not close workspace: 1 of 7 participants never committed | execution 7f3a: no reply"
+        );
     }
 
     #[test]

@@ -35,6 +35,15 @@ void hl_gmap_unmap_range(uint64_t start, uint64_t end);
 void hl_gmap_supersede_range(uint64_t start, uint64_t end);
 void hl_gmap_reset(void);
 
+/* The host range a wholesale registry teardown must release for the registry range [address, length).
+ *
+ * A guest range is 4 KiB-granular; a host honours a release only at its own granularity, and Darwin does not
+ * round for the caller -- munmap(2) returns EINVAL and releases NOTHING when the address is not a multiple of
+ * the 16 KiB Apple Silicon page. The registry therefore has to name the host pages its guest range occupies,
+ * or a teardown silently leaves the whole mapping live. Returns 0 when the range names no host page. */
+int hl_gmap_host_release_span(uint64_t address, uint64_t length, uint64_t granularity, uint64_t *start,
+                              uint64_t *end);
+
 /* Loader allocations have opaque host ownership independent of guest VMA splits. */
 int hl_exec_mapping_add(uint64_t address, uint64_t length, hl_host_handle host_mapping);
 void hl_exec_mapping_discard_range(uint64_t address, uint64_t length);

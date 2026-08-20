@@ -1,7 +1,12 @@
 #define HL_VFS_CURSOR_LAYERS (HL_LINUX_VFS_LOWER_CAPACITY + 1)
 #define HL_VFS_MOUNT_NOEXEC (1u << 0)
+#include <limits.h>
 #include <stdatomic.h>
 #include <stdint.h>
+
+// `hl_vfs_cursor_authority_component` folds a single component through the host naming rules; the
+// header carries both the Darwin implementation and the verbatim passthrough every other host uses.
+#include "case_names.h"
 #if defined(__GNUC__) || defined(__clang__)
 #define HL_VFS_CURSOR_UNUSED __attribute__((unused))
 #else
