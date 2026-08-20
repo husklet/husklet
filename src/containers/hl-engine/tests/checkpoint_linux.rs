@@ -126,6 +126,23 @@ fn sleep_tree_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     output
 }
 
+fn blocked_tree_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    let (compiler, name) = match isa {
+        GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-blocked-tree-aarch64"),
+        GuestIsa::X86_64 => ("x86_64-linux-gnu-gcc", "checkpoint-blocked-tree-x86_64"),
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/blocked_tree.c");
+    let output = directory.join(name);
+    let status = std::process::Command::new(compiler)
+        .args(["-static", "-O2", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
+    assert!(status.success(), "{compiler} failed with {status}");
+    output
+}
+
 /// A peer that exited before it could ever join the capture does not stall it and does not fail it.
 ///
 /// The peer is enumerated and interrupted like every other participant and then exits at its safepoint
@@ -259,7 +276,8 @@ fn a_peer_that_died_after_joining_still_refuses_the_capture_on_both_isas() {
 fn a_peer_that_appeared_after_the_enumeration_is_captured_rather_than_miscounted_on_both_isas() {
     let compiling = fixture_compilation();
     let fixtures = tempfile::tempdir().unwrap();
-    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, sleep_tree_fixture(isa, fixtures.path())));
+    let executables =
+        [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, blocked_tree_fixture(isa, fixtures.path())));
     drop(compiling);
     let _exclusive = exclusive_checkpoint_test();
     for (isa, executable) in executables {
@@ -302,6 +320,65 @@ fn a_peer_that_appeared_after_the_enumeration_is_captured_rather_than_miscounted
                 .count(),
             2,
             "{isa:?} published a manifest whose process count is not exactly the init and its child"
+        );
+    }
+}
+
+/// A member the coordinator never enumerated, whose state is genuinely lost, still refuses the capture.
+///
+/// This is the silent-data-loss shape, reproduced deterministically. `HL_CKPT_TEST_PEER_FORGOTTEN_AFTER_KICK`
+/// kicks one member -- so it really does reach its safepoint and really does prove membership -- and then
+/// drops it from the coordinator's enumeration for the rest of the capture, which is the reported hole
+/// verbatim: a peer that registered, exited, and was then enumerated as 0 peers.
+/// `HL_CKPT_TEST_PEER_EXIT_AFTER_JOIN` makes that member die after registering and before committing its
+/// group, so it published under an admitted membership and its state IS unsaved. The rendezvous cannot
+/// help here by construction: it only waits for peers it enumerated, and it enumerated none.
+///
+/// The only party that knows the process was a member is the broker, which is why the manifest's expected
+/// process set is taken from the sealed `REGISTER_READY` ledger rather than from anything the coordinator
+/// counted. Without that, this capture reports `checkpoint OK: 1 process(es)` with a registered member
+/// missing -- a successful close over an image that has lost state, which this design treats as strictly
+/// worse than a failed close.
+#[test]
+fn a_registered_member_the_enumeration_never_saw_still_refuses_the_capture_on_both_isas() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, sleep_tree_fixture(isa, fixtures.path())));
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+    for (isa, executable) in executables {
+        let temporary = tempfile::tempdir().unwrap();
+        let release = temporary.path().join("release");
+        let final_release = temporary.path().join("final-release");
+        let output = temporary.path().join("release.output");
+        let image = Arc::new(Store::default());
+        let capture = Engine::with_checkpoint(
+            isa,
+            plan(
+                &executable,
+                &release,
+                &final_release,
+                &[
+                    "HL_CHECKPOINT",
+                    "HL_CKPT_TEST_PEER_FORGOTTEN_AFTER_KICK",
+                    "HL_CKPT_TEST_PEER_EXIT_AFTER_JOIN",
+                ],
+            ),
+            streams(true),
+            image.clone(),
+            image.clone(),
+        )
+        .unwrap();
+        capture.start().unwrap();
+        wait_for(&output, "CHILD-READY");
+        let refusal = capture
+            .capture_checkpoint_until(checkpoint_deadline())
+            .expect_err("a capture missing a member the enumeration never saw was reported as successful");
+        let _ = capture.wait();
+        let stored = image.0.lock().unwrap();
+        assert!(
+            !stored.contains_key("MANIFEST"),
+            "{isa:?} published a manifest for a capture whose registered member never committed: {refusal:?}"
         );
     }
 }

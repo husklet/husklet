@@ -1637,10 +1637,16 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     int known_capacity = 0;
     if (scan == NULL)
         ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_RESOURCES, "cannot allocate the peer enumeration buffer");
-    /* Test-only, and it models the fork-after-enumeration race exactly rather than approximating it: one
-     * live member is withheld from the FIRST scan only, which is indistinguishable to everything
-     * downstream from a process that came into existence one instruction after that scan returned. */
-    int hide_one = hl_option_get("HL_CKPT_TEST_PEER_HIDDEN_FROM_ENUMERATION") != NULL;
+    /* Test-only, and they model the two ways enumeration can be wrong about a real process rather than
+     * approximating them. HIDDEN_FROM_ENUMERATION withholds one live member from the FIRST scan only,
+     * which is indistinguishable downstream from a process that came into existence one instruction after
+     * that scan returned. FORGOTTEN_AFTER_KICK lets one member be kicked -- so it really does prove
+     * membership to the broker -- and then drops it from the known set and from every later scan, which is
+     * the reported blind spot exactly: a peer that registered, exited, and was then enumerated as 0 peers.
+     * Only the broker knows that process was ever a member. */
+    int hide_first_scan = hl_option_get("HL_CKPT_TEST_PEER_HIDDEN_FROM_ENUMERATION") != NULL;
+    int forget_after_kick = hl_option_get("HL_CKPT_TEST_PEER_FORGOTTEN_AFTER_KICK") != NULL;
+    long long hidden = 0;
     int ndone = 0;
     int nexempt = 0;
     int quiet = 0;
@@ -1672,8 +1678,9 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
             for (int i = 0; i < nfoll; i++)
                 if (foll[i].identity == scan[index].identity) already = 1;
             if (already) continue;
-            if (hide_one) { // withheld from this first scan only; the next pass adopts it
-                hide_one = 0;
+            if (scan[index].identity == hidden) continue; /* forgotten: this scan never reports it again */
+            if (hide_first_scan && t == 0) {
+                hide_first_scan = 0;
                 fprintf(stderr, "[ckpt] participant %lld withheld from the first enumeration (test hook)\n",
                         (long long)scan[index].identity);
                 continue;
@@ -1699,6 +1706,14 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
             int kicked = hl_host_process_interrupt(scan[index]);
             fprintf(stderr, "[ckpt] participant %lld %s\n", (long long)scan[index].identity,
                     kicked ? "interrupted" : "NOT interrupted (it cannot reach a safepoint)");
+            if (forget_after_kick) { /* kicked, so it can prove membership -- and then never enumerated again */
+                forget_after_kick = 0;
+                hidden = scan[index].identity;
+                nfoll--;
+                discovered = 0;
+                fprintf(stderr, "[ckpt] participant %lld dropped from the enumeration after its kick (test hook)\n",
+                        (long long)hidden);
+            }
         }
         for (int i = 0; i < nfoll; i++) {
             if (completed[i]) continue;

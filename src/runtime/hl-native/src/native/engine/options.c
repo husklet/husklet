@@ -47,6 +47,10 @@ static const hl_option_definition hl_option_definitions[] = {
     HL_INTERNAL_OPTION("HL_CKPT_TEST_PEER_EXIT_AFTER_JOIN",
                        "test-only capture peer that exits after proving membership and before committing",
                        HL_OPTION_FLAG),
+    HL_INTERNAL_OPTION("HL_CKPT_TEST_PEER_FORGOTTEN_AFTER_KICK",
+                       "test-only capture peer that is kicked and then dropped from the coordinator's enumeration, "
+                       "so only the broker knows it is a member",
+                       HL_OPTION_FLAG),
     HL_INTERNAL_OPTION("HL_CKPT_TEST_PEER_HIDDEN_FROM_ENUMERATION",
                        "test-only capture peer withheld from the coordinator's first enumeration, exactly as a "
                        "process forked immediately after the scan is",
