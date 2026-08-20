@@ -184,6 +184,15 @@ pub fn checkpoint_restore_slice_test(isa: u32, scenario: u32) -> Result<(), i32>
     bindings::checkpoint_restore_slice_test(isa, scenario)
 }
 
+/// Exercise the guest-mapping registry teardown a re-forked restorer runs before it claims its own image:
+/// scenario 0 measures the real registry against the real host, scenario 1 pins the host-granularity
+/// rounding against an explicit 16 KiB page so a 4 KiB host answers it too.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn checkpoint_gmap_release_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    bindings::checkpoint_gmap_release_test(isa, scenario)
+}
+
 /// Exercise anonymous `MAP_SHARED` capture identity and restore-side republication: scenario 0 checks the
 /// identity and the shared-vs-private discriminator, scenario 1 proves one object serves two processes.
 #[cfg(feature = "native-test-hooks")]
