@@ -1279,10 +1279,19 @@ static int ckpt_register_ready(struct cpu **live, int count) {
 // CRASH SAFETY has two independent legs, because a member holding g_stw_reg_lock forever is unrecoverable:
 //   - the broker owns release. A dead or exited coordinator drops the capture, and a dead BROKER breaks
 //     this channel, which reads as RESUME. Release is tied to a descriptor, not to anyone's liveness poll.
-//   - a deadline. A broker that is alive but wedged cannot hold the tree: CKPT_PARK_DEADLINE_US bounds
-//     the park at the same ~5s as the whole-tree budget in ckpt_coordinate_and_exit, and expiry RESUMEs.
+//   - the ANSWER, not a clock. The park used to expire after a fixed ~5 s, chosen to match the whole-tree
+//     budget the rendezvous no longer has, and that pairing was load-bearing in the worst way: on a busy
+//     box the rendezvous legitimately takes longer than 5 s, every member's park then expired and RESUMEd
+//     itself, and the tree the coordinator was still assembling came back to life underneath it. Measured
+//     on the Linux VM at load ~19: six members committed, all six printed `released: capture abandoned` at
+//     ~5 s, and the guest resumed forking -- 607 transients enumerated and kicked over the next 55 s, none
+//     of which could ever end the rendezvous, until the embedder's own deadline expired. A member holding
+//     the freeze is the whole point of the park, so it must not decide on its own that a live capture has
+//     taken too long. A HOLD answer is proof the broker is alive AND that this capture is still running,
+//     so the park waits for as long as it keeps getting one. Every way the capture can actually die --
+//     coordinator gone, broker gone, channel broken -- fails the round trip instead, and a failed round
+//     trip reads as RESUME below, which is the leg that keeps this crash-safe without a clock.
 #define CKPT_PARK_POLL_US 2000
-#define CKPT_PARK_DEADLINE_US (5 * 1000 * 1000)
 
 static uint64_t ckpt_park_release_state(void) {
     hl_ckpt_reply reply;
@@ -1292,13 +1301,11 @@ static uint64_t ckpt_park_release_state(void) {
 }
 
 static uint64_t ckpt_park_until_released(void) {
-    for (unsigned long long waited = 0; waited < (unsigned long long)CKPT_PARK_DEADLINE_US;
-         waited += CKPT_PARK_POLL_US) {
+    for (;;) {
         uint64_t state = ckpt_park_release_state();
         if (state != HL_CKPT_RELEASE_HOLD) return state;
         usleep(CKPT_PARK_POLL_US);
     }
-    return HL_CKPT_RELEASE_RESUME;
 }
 
 /* The step that ended THIS process's own dump, set by ckpt_dump_self_locked before it returns -1.
@@ -1783,6 +1790,16 @@ done:
  * cost of firing late is a slower failure. */
 #define CKPT_RENDEZVOUS_STALL_PASSES 500
 
+/* The other way this loop can fail to end, and the one waiting cannot fix: a tree that never stops
+ * forking. Quiescence needs a pass that adopts nobody, so a guest process that is still running and still
+ * forking keeps the rendezvous honestly busy for as long as it goes on -- every child is a real member and
+ * kicking it is the right thing to do. That is a live rendezvous, not a stalled one, so the stall detector
+ * above will never end it; it ends when the forking source freezes, which is what its own kick achieves.
+ * A source that never freezes therefore has to be refused instead, by name, after this many CONSECUTIVE
+ * passes each of which adopted somebody new. Nothing healthy forks continuously for that long after the
+ * freeze: an ordinary tree's stragglers are adopted within a pass or two of the trigger. */
+#define CKPT_RENDEZVOUS_CHURN_PASSES 500
+
 static void ckpt_coordinate_and_exit(struct cpu *c) {
     const struct ckpt_phase_ledger phases = {
         .enabled = hl_option_get("HL_CHECKPOINT_PHASE_LEDGER") != NULL,
@@ -1832,6 +1849,7 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     int nexempt = 0;
     int quiet = 0;
     int stalled = 0;
+    int churning = 0;
     /* Per known peer, the host CPU time it had consumed when it was last seen to advance. Parallel to
      * `foll`/`completed` and grown with them. */
     uint64_t *consumed = NULL;
@@ -1958,11 +1976,22 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
          * outstanding set stood still. */
         stalled = discovered || settled ? 0 : stalled + 1;
         if (stalled >= CKPT_RENDEZVOUS_STALL_PASSES) break;
+        churning = discovered ? churning + 1 : 0;
+        if (churning >= CKPT_RENDEZVOUS_CHURN_PASSES) break;
         usleep(10000);
     }
     free(scan);
     free(consumed);
     fprintf(stderr, "[ckpt] coordinator pid=%d found %d peer(s), %d exempt\n", getpid(), nfoll, nexempt);
+    if (churning >= CKPT_RENDEZVOUS_CHURN_PASSES) {
+        char reason[HL_CKPT_STREAM_NAME_MAX];
+        snprintf(reason, sizeof reason,
+                 "the guest tree never stopped forking: a new process was adopted in every one of the last "
+                 "%d ms, so no enumeration ever found the tree quiescent and the set of members cannot be "
+                 "closed; %d peer(s) were enumerated and %d exempted",
+                 CKPT_RENDEZVOUS_CHURN_PASSES * 10, nfoll, nexempt);
+        ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_PEER_QUIESCENCE, reason);
+    }
     if (ndone != nfoll) {
         // Name every participant still outstanding at the rendezvous deadline: "the group never committed"
         // is otherwise indistinguishable from "nothing was ever asked to commit". The host is told about
