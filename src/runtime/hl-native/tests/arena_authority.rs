@@ -31,34 +31,78 @@ fn os_owned_arenas_are_transactional_and_collision_safe() {
 #define MAP_FIXED_NOREPLACE 0x100000
 #endif
 
+// THE LOW-32 ZONE IS A HOST CAPABILITY, AND DARWIN DOES NOT HAVE IT.
+// HL_ARENA_LOW32 is a HOST address range below 4 GiB. On arm64 macOS every normal Mach-O carries a
+// 4 GiB __PAGEZERO, so mach_vm_allocate(VM_FLAGS_FIXED) answers KERN_INVALID_ADDRESS for every
+// address under 0x100000000 -- measured at 0x40000000, 0x80000000, 0xc0000000, 0xffff0000 and
+// 0x100000000, first succeeding at 0x110000000. No process on that host can claim such a range, and
+// no fixture address can be chosen that would. So on Darwin the zone is configured ABSENT ([0,0))
+// and the assertions that need a real low-32 claim are compiled out; what replaces them is the
+// explicit statement of the limitation at return 36 below -- a non-empty low32 config MUST fail
+// with ENOTSUP rather than looking like a transient collision.
+#if defined(__APPLE__)
+#define HL_TEST_LOW32 0
+#else
+#define HL_TEST_LOW32 1
+#endif
+
 #define NORMAL_BASE UINT64_C(0x50000000000)
 #define NORMAL_LIMIT UINT64_C(0x50001000000)
+#if HL_TEST_LOW32
 #define LOW_BASE UINT64_C(0x40000000)
 #define LOW_LIMIT UINT64_C(0x41000000)
+#else
+#define LOW_BASE UINT64_C(0)
+#define LOW_LIMIT UINT64_C(0)
+#endif
 #define NORMAL2_BASE UINT64_C(0x60000000000)
 #define NORMAL2_LIMIT UINT64_C(0x60001000000)
+#if HL_TEST_LOW32
 #define LOW2_BASE UINT64_C(0x42000000)
 #define LOW2_LIMIT UINT64_C(0x43000000)
+#else
+#define LOW2_BASE UINT64_C(0)
+#define LOW2_LIMIT UINT64_C(0)
+#endif
 #define NORMAL3_BASE UINT64_C(0x70000000000)
 #define NORMAL3_LIMIT UINT64_C(0x70001000000)
+#if HL_TEST_LOW32
 #define LOW3_BASE UINT64_C(0x44000000)
 #define LOW3_LIMIT UINT64_C(0x45000000)
+#else
+#define LOW3_BASE UINT64_C(0)
+#define LOW3_LIMIT UINT64_C(0)
+#endif
 #define NORMAL4_BASE UINT64_C(0x80000000000)
 #define NORMAL4_LIMIT UINT64_C(0x80001000000)
+#if HL_TEST_LOW32
 #define LOW4_BASE UINT64_C(0x46000000)
 #define LOW4_LIMIT UINT64_C(0x47000000)
+#else
+#define LOW4_BASE UINT64_C(0)
+#define LOW4_LIMIT UINT64_C(0)
+#endif
 #define NORMAL5_BASE UINT64_C(0x90000000000)
 #define NORMAL5_LIMIT UINT64_C(0x90001000000)
+#if HL_TEST_LOW32
 #define LOW5_BASE UINT64_C(0x48000000)
 #define LOW5_LIMIT UINT64_C(0x49000000)
+#else
+#define LOW5_BASE UINT64_C(0)
+#define LOW5_LIMIT UINT64_C(0)
+#endif
 
 static unsigned char *claim_sentinel(uint64_t address, uint64_t length) {
 #if defined(__APPLE__)
+    // mach_vm_allocate reports through kern_return_t and never touches errno, so a Darwin failure here
+    // used to leave whatever errno the previous call happened to set -- and the assertions below read
+    // errno to tell "occupied" from "unreachable". Translate the status the same way arena_claim does.
     mach_vm_address_t claimed = (mach_vm_address_t)address;
-    return mach_vm_allocate(mach_task_self(), &claimed, (mach_vm_size_t)length, VM_FLAGS_FIXED) == KERN_SUCCESS &&
-                   claimed == address
-               ? (unsigned char *)(uintptr_t)claimed
-               : NULL;
+    kern_return_t status = mach_vm_allocate(mach_task_self(), &claimed, (mach_vm_size_t)length, VM_FLAGS_FIXED);
+    if (status == KERN_SUCCESS && claimed == address) return (unsigned char *)(uintptr_t)claimed;
+    if (status == KERN_SUCCESS) (void)mach_vm_deallocate(mach_task_self(), claimed, (mach_vm_size_t)length);
+    errno = status == KERN_INVALID_ADDRESS ? ENOTSUP : EEXIST;
+    return NULL;
 #else
     void *claimed = mmap((void *)(uintptr_t)address, (size_t)length, PROT_READ | PROT_WRITE,
                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
@@ -172,6 +216,7 @@ int main(void) {
         if (sentinel[index] != 0xa5) return 3;
     if (release_sentinel(sentinel, granule) != 0) return 4;
 
+#if HL_TEST_LOW32
     sentinel = claim_sentinel(LOW_BASE, granule);
     if (sentinel == NULL) return 35;
     memset(sentinel, 0x5a, (size_t)granule);
@@ -181,6 +226,19 @@ int main(void) {
     unsigned char *normal = claim_sentinel(NORMAL_BASE, granule);
     if (normal == NULL) return 38;
     if (release_sentinel(normal, granule) != 0 || release_sentinel(sentinel, granule) != 0) return 39;
+#else
+    // The limitation itself, asserted. A host that cannot address the low 4 GiB must say so with
+    // ENOTSUP -- not EEXIST, which names a collision a caller could retry out of. The normal zone
+    // must be left unclaimed when this refusal fires.
+    unsigned char *normal;
+    hl_arena_config unreachable = config;
+    unreachable.low32_base = UINT64_C(0x40000000);
+    unreachable.low32_limit = UINT64_C(0x41000000);
+    if (hl_arena_authority_init(&authority, &unreachable) != -1 || errno != ENOTSUP) return 36;
+    normal = claim_sentinel(NORMAL_BASE, granule);
+    if (normal == NULL) return 38;
+    if (release_sentinel(normal, granule) != 0) return 39;
+#endif
 
     if (hl_arena_authority_init(&authority, &config) != 0) return 5;
     if (hl_arena_manifest_get(&authority, &before) != 0 || before.granule != granule ||
@@ -191,8 +249,16 @@ int main(void) {
     if (hl_arena_transaction_reserve(&transaction, HL_ARENA_NORMAL, 1, &first) != 0 ||
         first.address != NORMAL_BASE || first.length != granule ||
         hl_arena_reservation_owned(&authority, &first)) return 8;
+#if HL_TEST_LOW32
     if (hl_arena_transaction_reserve(&transaction, HL_ARENA_LOW32, granule + 1, &low) != 0 ||
         low.address != LOW_BASE || low.length != 2 * granule || low.address + low.length > UINT64_C(0x100000000)) return 9;
+#else
+    // An absent zone owns no address, so every reservation in it is out of memory -- never a silent
+    // fallback into the normal zone, which would hand a caller an address it cannot use.
+    if (hl_arena_transaction_reserve(&transaction, HL_ARENA_LOW32, granule + 1, &low) != -1 || errno != ENOMEM)
+        return 9;
+    memset(&low, 0, sizeof(low));
+#endif
     forged = first;
     forged.identity++;
     if (hl_arena_reservation_owned(&authority, &forged)) return 10;
@@ -219,23 +285,31 @@ int main(void) {
             &transaction, &forged, HL_ARENA_PROTECTION_READ | HL_ARENA_PROTECTION_WRITE) != -1 ||
         errno != EACCES || sentinel[0] != 0xa7 || sentinel[granule - 1] != 0xa7) return 75;
     if (release_sentinel(sentinel, granule) != 0) return 76;
+#if HL_TEST_LOW32
     if (hl_arena_transaction_materialize_anonymous(&transaction, &low, HL_ARENA_PROTECTION_READ) != 0 ||
         *(const unsigned char *)(uintptr_t)low.address != 0) return 83;
+#endif
     if (hl_arena_authority_fork_prepare(&authority) != -1 || errno != EBUSY) return 77;
 
     state.authority = &authority;
     if (pthread_create(&thread, NULL, contend, &state) != 0 || pthread_join(thread, NULL) != 0) return 11;
     if (state.result != -1 || state.error != EBUSY) return 12;
 
-    if (hl_arena_transaction_rollback(&transaction) != 0 || !write_faults(materialized) ||
-        !write_faults((unsigned char *)(uintptr_t)low.address)) return 78;
+    if (hl_arena_transaction_rollback(&transaction) != 0 || !write_faults(materialized)) return 78;
+#if HL_TEST_LOW32
+    if (!write_faults((unsigned char *)(uintptr_t)low.address)) return 78;
+#endif
     if (hl_arena_authority_fork_prepare(&authority) != 0 ||
         hl_arena_fork_context_prepare(&fork_context) != 0) return 91;
     pid_t rollback_child = fork();
     if (rollback_child < 0) return 92;
     if (rollback_child == 0) {
         if (hl_arena_after_fork_child(&fork_context) != 0 || hl_arena_authority_fork_child(&authority) != 0 ||
-            !range_is_claimed(first.address, first.length) || !range_is_claimed(low.address, low.length))
+            !range_is_claimed(first.address, first.length)
+#if HL_TEST_LOW32
+            || !range_is_claimed(low.address, low.length)
+#endif
+        )
             _exit(93);
         _exit(0);
     }
@@ -249,11 +323,16 @@ int main(void) {
 
     if (hl_arena_transaction_begin(&authority, &transaction) != 0 ||
         hl_arena_transaction_reserve(&transaction, HL_ARENA_NORMAL, granule, &first) != 0 ||
+#if HL_TEST_LOW32
         hl_arena_transaction_reserve(&transaction, HL_ARENA_LOW32, granule, &low) != 0 ||
+#endif
         hl_arena_transaction_materialize_anonymous(
-            &transaction, &first, HL_ARENA_PROTECTION_READ | HL_ARENA_PROTECTION_WRITE) != 0 ||
-        hl_arena_transaction_materialize_anonymous(
-            &transaction, &low, HL_ARENA_PROTECTION_READ | HL_ARENA_PROTECTION_EXECUTE) != 0)
+            &transaction, &first, HL_ARENA_PROTECTION_READ | HL_ARENA_PROTECTION_WRITE) != 0
+#if HL_TEST_LOW32
+        || hl_arena_transaction_materialize_anonymous(
+               &transaction, &low, HL_ARENA_PROTECTION_READ | HL_ARENA_PROTECTION_EXECUTE) != 0
+#endif
+    )
         return 14;
     materialized = (unsigned char *)(uintptr_t)first.address;
     materialized[0] = 0xd4;
@@ -270,7 +349,11 @@ int main(void) {
     if (materialized_child < 0) return 85;
     if (materialized_child == 0) {
         if (hl_arena_after_fork_child(&fork_context) != 0 || hl_arena_authority_fork_child(&authority) != 0 ||
-            materialized[0] != 0xd4 || *(const unsigned char *)(uintptr_t)low.address != 0)
+            materialized[0] != 0xd4
+#if HL_TEST_LOW32
+            || *(const unsigned char *)(uintptr_t)low.address != 0
+#endif
+        )
             _exit(86);
         materialized[0] = 0xe5;
         _exit(0);
@@ -341,7 +424,11 @@ int main(void) {
     hl_arena_transaction_rollback(&transaction);
     hl_arena_test_generation(&authority, UINT64_MAX - 1);
     if (hl_arena_transaction_begin(&authority, &transaction) != 0 ||
+#if HL_TEST_LOW32
         hl_arena_transaction_reserve(&transaction, HL_ARENA_LOW32, granule, &low) != 0 ||
+#else
+        hl_arena_transaction_reserve(&transaction, HL_ARENA_NORMAL, granule, &low) != 0 ||
+#endif
         hl_arena_authority_fork_prepare(&authority) != 0 ||
         hl_arena_fork_context_prepare(&fork_context) != 0) return 62;
     child = fork();
@@ -362,8 +449,10 @@ int main(void) {
 
     sentinel = claim_sentinel(NORMAL_BASE, NORMAL_LIMIT - NORMAL_BASE);
     if (sentinel != NULL || errno != EEXIST) return 33;
+#if HL_TEST_LOW32
     normal = claim_sentinel(LOW_BASE, LOW_LIMIT - LOW_BASE);
     if (normal != NULL || errno != EEXIST) return 34;
+#endif
     if (hl_arena_authority_init(&authority, &config) != -1 || errno != EALREADY) return 40;
 
     if (hl_arena_authority_init(&second, &config2) != 0 ||
@@ -395,10 +484,13 @@ int main(void) {
     if (hl_arena_authority_init(&exhausted, &config4) != -1 || errno != EOVERFLOW) return 57;
     if (hl_arena_authority_init(&exhausted, &config4) != -1 || errno != EOVERFLOW) return 58;
     sentinel = claim_sentinel(NORMAL4_BASE, NORMAL4_LIMIT - NORMAL4_BASE);
+    if (sentinel == NULL) return 59;
+    if (release_sentinel(sentinel, NORMAL4_LIMIT - NORMAL4_BASE) != 0) return 60;
+#if HL_TEST_LOW32
     normal = claim_sentinel(LOW4_BASE, LOW4_LIMIT - LOW4_BASE);
-    if (sentinel == NULL || normal == NULL) return 59;
-    if (release_sentinel(sentinel, NORMAL4_LIMIT - NORMAL4_BASE) != 0 ||
-        release_sentinel(normal, LOW4_LIMIT - LOW4_BASE) != 0) return 60;
+    if (normal == NULL) return 59;
+    if (release_sentinel(normal, LOW4_LIMIT - LOW4_BASE) != 0) return 60;
+#endif
     return hl_arena_authority_destroy(&third) == 0 ? 0 : 61;
 }
 "#,

@@ -17,8 +17,10 @@ fn anonymous_shared_mappings_have_a_kernel_object_identity_and_private_ones_do_n
     }
 }
 
-/// Two processes derive the same identity for the region they share and, through the restore-side
-/// seed for it, end up mapping ONE object: a write by one is visible to the other.
+/// Two processes derive the same identity AND offset for the region they share and, through the
+/// restore-side seed for it mapped at that offset, end up mapping ONE object: a write by one is
+/// visible to the other. The offset is not always zero -- Darwin coalesces adjacent shared anonymous
+/// mappings into one vm_object -- and carrying it is exactly what `memory_restore` does.
 #[test]
 fn two_processes_restore_one_shared_object_rather_than_two_private_copies() {
     for isa in [1, 2] {

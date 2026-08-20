@@ -203,8 +203,14 @@ void hl_arena_test_fail_next_placeholder_restore(void) {
 }
 #endif
 
+// An absent zone is the empty range [0, 0). It owns no address, so there is nothing to claim and
+// nothing to release, and every zone-keyed operation below reads a cursor equal to its limit and
+// answers ENOMEM. Darwin needs this: see arena_low32_absent_on_this_host below.
+static int arena_zone_absent(uint64_t base, uint64_t limit) { return base == 0 && limit == 0; }
+
 static int arena_claim(uint64_t base, uint64_t limit) {
     uint64_t length = limit - base;
+    if (arena_zone_absent(base, limit)) return 0;
 #if defined(_WIN32)
     typedef PVOID(WINAPI * virtual_alloc2_fn)(HANDLE, PVOID, SIZE_T, ULONG, ULONG, PVOID, ULONG);
     HMODULE kernel = GetModuleHandleW(L"kernelbase.dll");
@@ -226,7 +232,14 @@ static int arena_claim(uint64_t base, uint64_t limit) {
     kern_return_t status = mach_vm_allocate(mach_task_self(), &address, (mach_vm_size_t)length, VM_FLAGS_FIXED);
     if (status != KERN_SUCCESS || address != (mach_vm_address_t)base) {
         if (status == KERN_SUCCESS) (void)mach_vm_deallocate(mach_task_self(), address, (mach_vm_size_t)length);
-        errno = EEXIST;
+        // KERN_INVALID_ADDRESS is NOT "occupied". It means the range is outside this task's addressable
+        // map, so no retry, no eviction and no other process exiting can ever make it claimable, and a
+        // caller told EEXIST will keep asking. Report ENOTSUP so the host limitation is named where it is
+        // discovered. Measured on macOS 26.3.1 arm64: every normal Mach-O carries a 4 GiB __PAGEZERO
+        // (otool -l: vmsize 0x100000000), and mach_vm_allocate(VM_FLAGS_FIXED) answers
+        // KERN_INVALID_ADDRESS at 0x40000000, 0x80000000, 0xc0000000, 0xffff0000 and 0x100000000, first
+        // succeeding at 0x110000000 -- so NO HL_ARENA_LOW32 range is claimable in such a process.
+        errno = status == KERN_INVALID_ADDRESS ? ENOTSUP : EEXIST;
         return -1;
     }
     if (mach_vm_protect(mach_task_self(), address, (mach_vm_size_t)length, FALSE, VM_PROT_NONE) != KERN_SUCCESS) {
@@ -249,6 +262,7 @@ static int arena_claim(uint64_t base, uint64_t limit) {
 }
 
 static void arena_release(uint64_t base, uint64_t limit) {
+    if (arena_zone_absent(base, limit)) return;
 #if defined(_WIN32)
     (void)limit;
     (void)VirtualFree((void *)(uintptr_t)base, 0, MEM_RELEASE);
@@ -325,13 +339,25 @@ static int aligned_range(uint64_t base, uint64_t limit, uint64_t granule) {
            limit % granule == 0;
 }
 
+// THE LOW-32 ZONE IS OPTIONAL, AND ON DARWIN IT IS UNOBTAINABLE.
+// Its contract is a HOST address range below 4 GiB (low32_limit <= 0x100000000). On arm64 macOS the
+// low 4 GiB is __PAGEZERO in every normal Mach-O and arena_claim reports ENOTSUP for it (measured;
+// see the Darwin arm of arena_claim), so a Darwin engine configures the zone absent. That is not a
+// gap in this module: the product's answer to a guest that needs a low-32 address -- a non-PIE
+// ET_EXEC linked at 0x400000 -- is to map the image HIGH and re-point every absolute reference
+// through g_nonpie_bias (linux_abi/thread/futex_mapping.c, linux_abi/elf.c). A low-32 GUEST address
+// is a coordinate this engine supplies; a low-32 HOST claim is one macOS does not.
+static int arena_zone_range_valid(uint64_t base, uint64_t limit, uint64_t granule) {
+    return arena_zone_absent(base, limit) || aligned_range(base, limit, granule);
+}
+
 int hl_arena_manifest_valid(const hl_arena_manifest *manifest) {
     uint64_t host_granule = hl_arena_host_granule();
     return manifest != NULL && manifest->magic == HL_ARENA_MANIFEST_MAGIC &&
            manifest->version == HL_ARENA_MANIFEST_VERSION && manifest->size == sizeof(*manifest) && host_granule != 0 &&
            manifest->granule >= host_granule && manifest->granule % host_granule == 0 &&
            aligned_range(manifest->normal_base, manifest->normal_limit, manifest->granule) &&
-           aligned_range(manifest->low32_base, manifest->low32_limit, manifest->granule) &&
+           arena_zone_range_valid(manifest->low32_base, manifest->low32_limit, manifest->granule) &&
            manifest->normal_cursor >= manifest->normal_base && manifest->normal_cursor <= manifest->normal_limit &&
            manifest->low32_cursor >= manifest->low32_base && manifest->low32_cursor <= manifest->low32_limit &&
            manifest->normal_cursor % manifest->granule == 0 && manifest->low32_cursor % manifest->granule == 0 &&
@@ -348,7 +374,7 @@ int hl_arena_authority_init(hl_arena_authority *authority, const hl_arena_config
     if (authority == NULL || config == NULL || host_granule == 0 || config->granule < host_granule ||
         config->granule % host_granule != 0 ||
         !aligned_range(config->normal_base, config->normal_limit, config->granule) ||
-        !aligned_range(config->low32_base, config->low32_limit, config->granule) ||
+        !arena_zone_range_valid(config->low32_base, config->low32_limit, config->granule) ||
         !(config->normal_limit <= config->low32_base || config->low32_limit <= config->normal_base) ||
         config->low32_limit > UINT64_C(0x100000000)) {
         errno = EINVAL;
@@ -372,8 +398,13 @@ int hl_arena_authority_init(hl_arena_authority *authority, const hl_arena_config
         return -1;
     }
     if (arena_claim(config->low32_base, config->low32_limit) != 0) {
+        // Keep the claim's own errno: ENOTSUP (this host can never address the range) and EEXIST
+        // (occupied right now) are different answers to the caller, and the release below must not
+        // overwrite either.
+        int claim_error = errno;
         arena_release(config->normal_base, config->normal_limit);
         atomic_store_explicit(&authority->lifecycle, HL_ARENA_EMPTY, memory_order_release);
+        errno = claim_error;
         return -1;
     }
     if (arena_identity(&nonce, &identity) != 0) {

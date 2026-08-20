@@ -1272,11 +1272,21 @@ fail:
 //    collision: they really are one object, and the identity+offset pair restores both losslessly.
 //    Linux mints a separate shmem inode per mmap, so only Linux can assert two distinct ids.
 //
-// Scenario 1 (one object, two processes): a parent and a forked child independently derive the id
-// for the region they share, then each takes the RESTORE-side seed for that id and maps it. The
-// child writes; the parent must read the child's bytes back through its own mapping. Before the
-// fix the same sequence produced two unrelated private copies, which is exactly what nine
-// PostgreSQL members got.
+// Scenario 1 (one object, two processes): a parent and a forked child independently derive the
+// (id, offset) pair for the region they share, then each takes the RESTORE-side seed for that id
+// and maps it AT THAT OFFSET. The child writes; the parent must read the child's bytes back through
+// its own mapping. Before the fix the same sequence produced two unrelated private copies, which is
+// exactly what nine PostgreSQL members got.
+//
+// THE OFFSET IS PART OF THE ANSWER, NOT NOISE. This scenario used to demand offset == 0 and map the
+// seed at 0, which is not what the restore does: memory_restore's region loop sizes the seed
+// `adjusted_offset + map_len` and passes `map_offset = adjusted_offset`. On Darwin the demand is not
+// merely stricter, it is wrong -- adjacent shared anonymous mappings coalesce into ONE vm_object, so
+// a region legitimately starts partway in (measured at 0x4000) and the object is still the object.
+// The old form therefore reported a broken restore whenever the host's layout happened to coalesce:
+// 20/20 failures for this test alone on macOS 26.3.1 arm64, 1/20 when the sibling tests' threads
+// changed the layout enough to leave the region at offset 0. Mirroring production's arithmetic is
+// what makes the assertion about sharing rather than about allocator luck.
 static int ckpt_anon_shared_roundtrip_test(uint32_t scenario) {
     const size_t length = 8192;
     if (scenario == 0) {
@@ -1322,6 +1332,11 @@ static int ckpt_anon_shared_roundtrip_test(uint32_t scenario) {
         return verdict;
     }
     if (scenario != 1) return 99;
+    // What each process independently derives for the region, and what both must agree on.
+    struct ckpt_anon_shared_named {
+        uint64_t identity;
+        uint64_t offset;
+    };
     unsigned char *shared = mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (shared == MAP_FAILED) return 20;
     memset(shared, 0, length);
@@ -1335,47 +1350,54 @@ static int ckpt_anon_shared_roundtrip_test(uint32_t scenario) {
     if (child == 0) {
         // Async-signal-safe only: no allocation, no locking, no stdio. _exit, never return.
         close(channel[0]);
-        uint64_t identity = 0, offset = 0;
+        struct ckpt_anon_shared_named named = {0, 0};
         ckpt_anon_shared_scan();
-        if (!ckpt_anon_shared_object((uint64_t)(uintptr_t)shared, length, &identity, &offset) || offset != 0)
-            identity = 0;
-        int seed = identity != 0 ? ckpt_restore_anon_shared_seed(identity, length) : -1;
-        unsigned char *restored =
-            seed >= 0 ? mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED, seed, 0) : MAP_FAILED;
+        if (!ckpt_anon_shared_object((uint64_t)(uintptr_t)shared, length, &named.identity, &named.offset))
+            named.identity = 0;
+        int seed = named.identity != 0 ? ckpt_restore_anon_shared_seed(named.identity, named.offset + length) : -1;
+        unsigned char *restored = seed >= 0 ? mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED, seed,
+                                                   (off_t)named.offset)
+                                            : MAP_FAILED;
         if (restored != MAP_FAILED) memcpy(restored + 4096, "CHILD", 5);
-        if (restored == MAP_FAILED) identity = 0;
-        ssize_t ignored = write(channel[1], &identity, sizeof identity);
+        if (restored == MAP_FAILED) named.identity = 0;
+        ssize_t ignored = write(channel[1], &named, sizeof named);
         (void)ignored;
         close(channel[1]);
         _exit(0);
     }
     close(channel[1]);
     int verdict = 0;
-    uint64_t child_identity = 0;
+    struct ckpt_anon_shared_named from_child = {0, 0};
     if (child < 0) verdict = 22;
     else {
         size_t read_bytes = 0;
-        while (read_bytes < sizeof child_identity) {
-            ssize_t got = read(channel[0], (unsigned char *)&child_identity + read_bytes, sizeof child_identity - read_bytes);
+        while (read_bytes < sizeof from_child) {
+            ssize_t got = read(channel[0], (unsigned char *)&from_child + read_bytes, sizeof from_child - read_bytes);
             if (got <= 0) break;
             read_bytes += (size_t)got;
         }
-        if (read_bytes != sizeof child_identity || child_identity == 0) verdict = 23;
+        if (read_bytes != sizeof from_child || from_child.identity == 0) verdict = 23;
     }
     close(channel[0]);
     int status = 0;
     if (child > 0) waitpid(child, &status, 0);
-    uint64_t identity = 0, offset = 0;
+    struct ckpt_anon_shared_named here = {0, 0};
     ckpt_anon_shared_scan();
-    if (verdict == 0 && (!ckpt_anon_shared_object((uint64_t)(uintptr_t)shared, length, &identity, &offset) ||
-                         identity == 0 || offset != 0))
+    if (verdict == 0 &&
+        (!ckpt_anon_shared_object((uint64_t)(uintptr_t)shared, length, &here.identity, &here.offset) ||
+         here.identity == 0))
         verdict = 24;
-    // The two processes must have named the SAME object without any engine-side coordination.
-    if (verdict == 0 && identity != child_identity) verdict = 25;
+    // The two processes must have named the SAME object at the SAME offset without any engine-side
+    // coordination. The offset is asserted because it is what the restore maps at: two processes that
+    // agreed on the id but not the offset would map two disjoint windows of one object and lose the
+    // sharing just as completely as two private copies would.
+    if (verdict == 0 && (here.identity != from_child.identity || here.offset != from_child.offset)) verdict = 25;
     unsigned char *restored = MAP_FAILED;
     if (verdict == 0) {
-        int seed = ckpt_restore_anon_shared_seed(identity, length);
-        restored = seed >= 0 ? mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED, seed, 0) : MAP_FAILED;
+        int seed = ckpt_restore_anon_shared_seed(here.identity, here.offset + length);
+        restored = seed >= 0
+                       ? mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED, seed, (off_t)here.offset)
+                       : MAP_FAILED;
         if (restored == MAP_FAILED) verdict = 26;
     }
     // The child's write, made through ITS OWN mapping of the restored object, is visible here.
