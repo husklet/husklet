@@ -6,13 +6,18 @@ static int ioctl_terminal_request(struct cpu *c, int fd, unsigned long rq, void 
     case 0x5401: {
         struct termios t;
         // TCGETS
-        if (is_master && g_ptm_tset[fd])
-            t = g_ptm_term[fd]; // master keeps its own termios (Linux)
-        else if (tcgetattr(tfd, &t) < 0) {
+        if (is_master && g_ptm_tset[fd]) {
+            // A master's termios is engine state, so the guest's own image answers exactly.
+            memcpy(arg, g_ptm_image[fd], 36);
+            G_RET(c) = 0;
+            break;
+        }
+        if (tcgetattr(tfd, &t) < 0) {
             G_RET(c) = (uint64_t)(-errno);
             break;
         }
         termios_m2l(&t, (uint8_t *)arg);
+        terminal_termios_apply_recall(tfd, (uint8_t *)arg);
         G_RET(c) = 0;
         break;
     }
@@ -26,11 +31,14 @@ static int ioctl_terminal_request(struct cpu *c, int fd, unsigned long rq, void 
         int r = tcsetattr(tfd, act, &t); // push live to any open real slave (best effort on a master)
         if (is_master) {
             g_ptm_term[fd] = t;
+            memcpy(g_ptm_image[fd], arg, 36);
             g_ptm_tset[fd] = 1;
             G_RET(c) = 0;
         } // master always accepts
-        else
+        else {
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
+            if (r == 0) terminal_termios_observe_set(tfd, (const uint8_t *)arg);
+        }
         break;
     }
     case 0x802c542a: {
@@ -45,6 +53,11 @@ static int ioctl_terminal_request(struct cpu *c, int fd, unsigned long rq, void 
         termios_m2l(&t, (uint8_t *)arg);
         *(uint32_t *)((uint8_t *)arg + 36) = (uint32_t)cfgetispeed(&t);
         *(uint32_t *)((uint8_t *)arg + 40) = (uint32_t)cfgetospeed(&t);
+        // termios2's leading 36 bytes are the termios image, so the same guest-authored view applies.
+        if (is_master && g_ptm_tset[fd])
+            memcpy(arg, g_ptm_image[fd], 36);
+        else
+            terminal_termios_apply_recall(tfd, (uint8_t *)arg);
         G_RET(c) = 0;
         break;
     }
@@ -60,10 +73,13 @@ static int ioctl_terminal_request(struct cpu *c, int fd, unsigned long rq, void 
         int r = tcsetattr(tfd, act, &t);
         if (is_master) {
             g_ptm_term[fd] = t;
+            memcpy(g_ptm_image[fd], arg, 36);
             g_ptm_tset[fd] = 1;
             G_RET(c) = 0;
-        } else
+        } else {
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
+            if (r == 0) terminal_termios_observe_set(tfd, (const uint8_t *)arg);
+        }
         break;
     }
     case 0x5413: // TIOCGWINSZ (struct same on all)
@@ -238,8 +254,13 @@ static void ioctl_descriptor_request(struct cpu *c, int fd, unsigned long rq, vo
         }
         pid_t fg = tcgetpgrp(fd);
         if (fg <= 0) fg = getpgrp();
-        if (g_init_hostpid && fg == g_init_hostpid) fg = 1; // init's real group -> guest pgid 1
-        if (arg) *(int *)arg = (int)fg;
+        int guest_fg;
+        if (hl_linux_pidmap_guest_checked(&g_pgidmap, (int)fg, &guest_fg) != 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-ENOTTY);
+            break;
+        }
+        if (!hl_linux_pidmap_is_active(&g_pgidmap) && g_init_hostpid && fg == g_init_hostpid) guest_fg = 1;
+        if (arg) *(int *)arg = guest_fg;
         G_RET(c) = 0;
         break;
     }
@@ -250,18 +271,35 @@ static void ioctl_descriptor_request(struct cpu *c, int fd, unsigned long rq, vo
             break;
         }
         pid_t pg = arg ? *(int *)arg : 0;
-        if (pg == 1 && g_init_hostpid) pg = g_init_hostpid; // guest pgid 1 -> init's real host group
+        int host_pg;
+        if (pg > 0 && hl_linux_pidmap_host_checked(&g_pgidmap, (int)pg, &host_pg) != 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+            break;
+        }
+        if (pg > 0) pg = (pid_t)host_pg;
+        if (!hl_linux_pidmap_is_active(&g_pgidmap) && pg == 1 && g_init_hostpid) pg = g_init_hostpid;
         if (isatty(fd) && pg > 0) {
             // A pipeline leader calls tcsetpgrp while still in a background group (the parent shell sets
             // the foreground group concurrently); without blocking SIGTTOU here the host kernel would
             // STOP it mid-handoff -> the foreground command freezes ("[1]+ Stopped"). Block SIGTTOU so
             // the real tcsetpgrp installs the fg group cleanly (kernel still routes ^C/^Z afterwards).
             sigset_t sv;
-            tty_ctl_block(&sv);
-            (void)tcsetpgrp(fd, pg);
-            tty_ctl_restore(&sv);
+            if (tty_ctl_block(&sv) != 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-errno);
+                break;
+            }
+            int control_result = tcsetpgrp(fd, pg);
+            int control_error = control_result == 0 ? 0 : errno;
+            if (tty_ctl_restore(&sv) != 0 && control_result == 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-errno);
+                break;
+            }
+            if (control_result != 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-control_error);
+                break;
+            }
         }
-        G_RET(c) = 0; // never surface an error -> bash never warns
+        G_RET(c) = 0;
         break;
     }
     // TIOCSCTTY -- acquire the controlling terminal for real when `fd` is a tty (best effort; the
@@ -299,8 +337,13 @@ static void ioctl_descriptor_request(struct cpu *c, int fd, unsigned long rq, vo
             G_RET(c) = (uint64_t)(int64_t)(-errno);
             break;
         }
-        if (g_init_hostpid && sid == g_init_hostpid) sid = 1; // init's real session -> guest sid 1
-        if (arg) *(int *)arg = (int)sid;
+        int guest_sid;
+        if (hl_linux_pidmap_guest_checked(&g_sidmap, (int)sid, &guest_sid) != 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-ENOTTY);
+            break;
+        }
+        if (!hl_linux_pidmap_is_active(&g_sidmap) && g_init_hostpid && sid == g_init_hostpid) guest_sid = 1;
+        if (arg) *(int *)arg = guest_sid;
         G_RET(c) = 0;
 #else
         G_RET(c) = (uint64_t)(-25); // ENOTTY (host lacks TIOCGSID, e.g. Darwin build)

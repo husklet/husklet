@@ -19,7 +19,10 @@ use configuration::Configuration;
 use identity::RuntimeIdentity;
 use lifecycle::{Disposition, Lease, Shutdown};
 use publication::{ConfigurationIdentity as PublishedConfiguration, Protocol as PublishedProtocol, Publication};
-use restore::RestoreSummary;
+use restore::{Notice as RestoreNotice, RestoreSummary};
+
+/// Prefix marking a line of the reopen notice as Husklet's own words rather than guest output.
+pub use restore::NOTICE_PREFIX as RESTORE_NOTICE_PREFIX;
 use runtime::Runtime;
 
 const CONTAINER: &str = "workspace";
@@ -221,8 +224,74 @@ impl Domain {
         }
     }
 
+    /// Closes a domain and its owning attachments as one startup handover.
+    pub fn close_handover(&self, choice: Close, close_attachments: impl FnOnce() -> io::Result<()>) -> io::Result<()> {
+        std::fs::create_dir_all(&self.directory)?;
+        Self::handover_with(
+            || Lease::acquire_wait(&self.directory.join("startup.lock"), HANDOVER),
+            || match std::os::unix::net::UnixStream::connect(self.socket()) {
+                Ok(connection) => match choice {
+                    Close::Kill => {
+                        drop(connection);
+                        Shutdown::request(&self.control(), Disposition::Kill)
+                    }
+                    Close::Continue => {
+                        let result = ResultFile::new(&self.directory);
+                        result.clear()?;
+                        drop(connection);
+                        Shutdown::request(&self.control(), Disposition::Checkpoint)?;
+                        result.wait(&self.socket(), std::time::Duration::from_secs(90))
+                    }
+                },
+                Err(error) if Peer::offline(&error) => Ok(()),
+                Err(error) => Err(error),
+            },
+            close_attachments,
+            || Lease::wait_available(&self.directory.join("domain.lock"), HANDOVER),
+        )
+    }
+
+    /// Runs the close request, then reaps the owning attachments, then waits for the domain lease,
+    /// and reports the first failure among them.
+    ///
+    /// Every stage runs even when an earlier one fails, for both close choices. A `Continue` whose
+    /// checkpoint reports failure used to return before `close_attachments`, on the assumption that
+    /// a rejected capture leaves the domain intact. It does not: the daemon services a shutdown
+    /// request and stops regardless of what the capture reported -- observed on a user's machine as
+    /// `server stopping` 51 ms after a capture timeout -- so returning early stranded the pane
+    /// launcher workers on a domain that was already going away.
+    fn handover_with<G>(
+        acquire_startup: impl FnOnce() -> io::Result<G>,
+        request: impl FnOnce() -> io::Result<()>,
+        close_attachments: impl FnOnce() -> io::Result<()>,
+        wait_domain: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()> {
+        let _startup = acquire_startup()?;
+        let request = request();
+        let attachments = close_attachments();
+        let settled = wait_domain();
+        request.and(attachments).and(settled)
+    }
+
     pub fn take_restore_summary(workspace: &WorkspaceConfig) -> io::Result<Option<String>> {
-        RestoreSummary::new(workspace).take()
+        let restore = RestoreSummary::new(workspace);
+        let Some(summary) = restore.read()? else {
+            return Ok(None);
+        };
+        restore.clear()?;
+        if workspace.docker_sock {
+            crate::runtime::resources::Daemon::new(workspace).clear_checkpoint_warning()?;
+        }
+        Ok(Some(RestoreNotice::for_terminal(&summary)))
+    }
+
+    fn publish_restore_summary(workspace: &WorkspaceConfig, failures: &mut Vec<String>) -> io::Result<()> {
+        if workspace.docker_sock {
+            if let Some(warning) = crate::runtime::resources::Daemon::new(workspace).checkpoint_warning()? {
+                failures.push(warning);
+            }
+        }
+        RestoreSummary::new(workspace).publish(failures)
     }
 
     fn wait_for_start(&self, mut child: std::process::Child, timeout: std::time::Duration) -> io::Result<PathBuf> {
@@ -270,15 +339,62 @@ impl Domain {
         }
     }
 
+    fn cleanup_outcome(steps: impl IntoIterator<Item = (&'static str, io::Result<()>)>) -> io::Result<()> {
+        let failures = steps
+            .into_iter()
+            .filter_map(|(step, result)| result.err().map(|error| format!("{step}: {error}")))
+            .collect::<Vec<_>>();
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(io::Error::other(failures.join("; ")))
+        }
+    }
+
+    async fn stop_kill(
+        containers: &hl_container::Containers,
+        workspace: &WorkspaceConfig,
+        docker: Option<&crate::runtime::resources::Daemon>,
+    ) -> io::Result<()> {
+        Self::stop_kill_with(
+            || docker.map_or(Ok(()), |daemon| daemon.close(crate::runtime::resources::Close::Kill)),
+            || crate::runtime::execution::PaneExecution::clear_all(workspace),
+            async {
+                containers
+                    .shutdown(std::time::Duration::from_secs(5))
+                    .await
+                    .map_err(io::Error::other)
+            },
+        )
+        .await
+    }
+
+    async fn stop_kill_with(
+        docker: impl FnOnce() -> io::Result<()>,
+        attachments: impl FnOnce() -> io::Result<()>,
+        processes: impl std::future::Future<Output = io::Result<()>>,
+    ) -> io::Result<()> {
+        // These owners are independent. In particular, failure to clear a pane attachment must
+        // never suppress the container shutdown that terminally reaps the guest process tree.
+        let docker = docker();
+        let attachments = attachments();
+        let processes = processes.await;
+        Self::cleanup_outcome([
+            ("Docker service cleanup", docker),
+            ("terminal attachment cleanup", attachments),
+            ("workspace process cleanup", processes),
+        ])
+    }
+
     pub async fn serve(workspace: &WorkspaceConfig) -> io::Result<()> {
         let owner = Self::new(workspace);
         tokio::fs::create_dir_all(&owner.directory).await?;
         let _lease = Lease::acquire(&owner.directory.join("domain.lock"))?;
         let (containers, platform) = Runtime::open(workspace).await?;
         let mut failures = Runtime::remove_stale_executions(&containers).await?;
-        Runtime::ensure_container(&containers, workspace).await?;
+        failures.extend(Runtime::ensure_container(&containers, workspace).await?);
         failures.extend(Runtime::restore_checkpoints(&containers).await?);
-        RestoreSummary::new(workspace).publish(&failures)?;
+        Self::publish_restore_summary(workspace, &mut failures)?;
         let configuration = PublishedConfiguration::new(&owner.directory);
         let protocol = PublishedProtocol::new(&owner.directory);
         let close_result = ResultFile::new(&owner.directory);
@@ -316,14 +432,7 @@ impl Domain {
                         .then(|| crate::runtime::resources::Daemon::new(&stopped_workspace));
                     let stopped = match disposition {
                         Disposition::Kill => {
-                            let docker = docker
-                                .map_or(Ok(()), |daemon| daemon.close(crate::runtime::resources::Close::Kill));
-                            let workspace =
-                                match crate::runtime::execution::PaneExecution::clear_all(&stopped_workspace) {
-                                    Ok(()) => stopping.shutdown(std::time::Duration::from_secs(5)).await,
-                                    Err(error) => Err(hl_container::Error::Runtime(error.to_string())),
-                                };
-                            docker.and_then(|()| workspace.map_err(io::Error::other))
+                            Self::stop_kill(&stopping, &stopped_workspace, docker.as_ref()).await
                         }
                         Disposition::Checkpoint => {
                             let Some(stopped) = Self::stop_checkpoint(&stopping, docker.as_ref(), &close_result).await
@@ -370,5 +479,7 @@ impl Domain {
     }
 }
 
+#[cfg(all(test, unix))]
+mod product_checkpoint_test;
 #[cfg(test)]
 mod test;

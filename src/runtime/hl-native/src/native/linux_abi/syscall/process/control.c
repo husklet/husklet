@@ -137,14 +137,27 @@ static int svc_proc_155(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // ONLY with ESRCH (no process with that pid) -- never EPERM/EINVAL. The old handler returned the
         // raw -1 on failure, which svc_done_host then misread as -EPERM (errno "1"): getpgid02's -99/unused_pid
         // wrongly reported EPERM instead of ESRCH. Force ESRCH for any lookup failure.
-        pid_t pid = ((pid_t)a0 == 1 && g_init_hostpid) ? g_init_hostpid : (pid_t)a0;
+        int host;
+        if ((pid_t)a0 == 0)
+            host = 0;
+        else if (hl_linux_pidmap_host_checked(&g_pidmap, (int)a0, &host) != 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+            break;
+        }
+        if (!hl_linux_pidmap_is_active(&g_pidmap) && (int)a0 == 1 && g_init_hostpid) host = g_init_hostpid;
+        pid_t pid = (pid_t)host;
         pid_t r = getpgid(pid);
         if (r < 0) {
             G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
             break;
         }
-        if (g_init_hostpid && r == g_init_hostpid) r = 1;
-        G_RET(c) = (uint64_t)r;
+        int guest;
+        if (hl_linux_pidmap_guest_checked(&g_pgidmap, (int)r, &guest) != 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+            break;
+        }
+        if (!hl_linux_pidmap_is_active(&g_pgidmap) && g_init_hostpid && r == g_init_hostpid) guest = 1;
+        G_RET(c) = (uint64_t)(unsigned)guest;
         break;
     }
     default: return 0;
@@ -158,14 +171,27 @@ static int svc_proc_156(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     case 156: {
         // getsid: same contract as getpgid above -- fails only with ESRCH for a pid that names no process
         // (getsid02's unused_pid), so map a raw -1 to ESRCH rather than let svc_done_host coin it into EPERM.
-        pid_t pid = ((pid_t)a0 == 1 && g_init_hostpid) ? g_init_hostpid : (pid_t)a0;
+        int host;
+        if ((pid_t)a0 == 0)
+            host = 0;
+        else if (hl_linux_pidmap_host_checked(&g_pidmap, (int)a0, &host) != 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+            break;
+        }
+        if (!hl_linux_pidmap_is_active(&g_pidmap) && (int)a0 == 1 && g_init_hostpid) host = g_init_hostpid;
+        pid_t pid = (pid_t)host;
         pid_t r = getsid(pid);
         if (r < 0) {
             G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
             break;
         }
-        if (g_init_hostpid && r == g_init_hostpid) r = 1;
-        G_RET(c) = (uint64_t)r;
+        int guest;
+        if (hl_linux_pidmap_guest_checked(&g_sidmap, (int)r, &guest) != 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+            break;
+        }
+        if (!hl_linux_pidmap_is_active(&g_sidmap) && g_init_hostpid && r == g_init_hostpid) guest = 1;
+        G_RET(c) = (uint64_t)(unsigned)guest;
         break;
     }
     default: return 0;

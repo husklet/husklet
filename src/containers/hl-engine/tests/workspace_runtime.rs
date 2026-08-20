@@ -165,3 +165,35 @@ fn run_teardown(executable: &Path, mode: &str) {
         }
     }
 }
+
+/// The loader must place every argument the launch carried. A fixed 2048-entry vector previously
+/// overran `build_stack`'s `argp[]` at exactly 2049 entries ("*** stack smashing detected ***"),
+/// while the host kernel runs the same command unremarkably -- and the count below that bound was
+/// silently truncated on the exec path, which is how `mv` with 5000 paths came to move files onto
+/// a plain file. Cover the last accepted count, the count that used to overrun, and a realistic
+/// large vector, on both ISA arms.
+#[test]
+fn launch_carries_the_complete_argument_vector() {
+    let root = std::env::temp_dir().join(format!("hl-argument-vector-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    for (isa, name) in [(GuestIsa::Aarch64, "aarch64"), (GuestIsa::X86_64, "x86_64")] {
+        let executable = root.join(format!("argument-vector-{name}"));
+        guest::argument_vector(name, &executable);
+        for count in [2048_usize, 2049, 5000] {
+            let mut builder = Builder::new(isa, &executable).with_argument(count.to_string());
+            for index in 2..count {
+                builder = builder.with_argument(index.to_string());
+            }
+            let engine = builder.build().unwrap();
+            engine.start().unwrap();
+            let exit = engine.wait().unwrap();
+            engine.destroy().unwrap();
+            assert_eq!(
+                (exit.kind, exit.guest_status),
+                (hl_engine::engine::ExitKind::Code, 0),
+                "{name} guest saw an incomplete argument vector at argc={count}"
+            );
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

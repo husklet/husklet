@@ -1,7 +1,7 @@
-use super::definition::{ArmSupport, Campaign};
+use super::definition::{ArmSupport, Campaign, ProfileKind};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(super) const CELLS: [(&str, &str); 6] = [("E", "E"), ("R", "R"), ("I", "I"), ("E", "R"), ("E", "I"), ("R", "I")];
+pub(super) const CELLS: [(&str, &str); 3] = [("E", "R"), ("E", "I"), ("R", "I")];
 const ORDER: [[usize; 2]; 4] = [[0, 1], [1, 0], [1, 0], [0, 1]];
 const WARMUP_INVOCATIONS: usize = 6;
 
@@ -13,13 +13,20 @@ pub(super) struct Step {
     pub round: u32,
     pub position: usize,
     pub arm: String,
+    pub profile: ProfileKind,
+    pub paired_profile: ProfileKind,
 }
 
 impl Step {
     pub fn key(&self) -> String {
         format!(
-            "{}|{}|{}|{}|{}",
-            self.workload, self.layout, self.cell, self.round, self.position
+            "{}|{}|{}|{}|{}|{}",
+            self.workload,
+            self.layout,
+            self.cell,
+            self.profile.as_str(),
+            self.round,
+            self.position
         )
     }
 
@@ -30,19 +37,28 @@ impl Step {
             _ => return None,
         };
         Some(format!(
-            "{}|{}|{}|{}|{}",
-            self.workload, self.layout, self.cell, self.round, position
+            "{}|{}|{}|{}|{}|{}",
+            self.workload,
+            self.layout,
+            self.cell,
+            self.paired_profile.as_str(),
+            self.round,
+            position
         ))
     }
 }
 
 /// Fixed, timing-independent warmups immediately preceding a cell's first measured pair.
 pub(super) fn pair_warmups(pair: &[Step]) -> Vec<Step> {
-    let mut arms = pair.iter().map(|step| step.arm.as_str()).collect::<Vec<_>>();
-    arms.sort_unstable();
-    arms.dedup();
-    arms.into_iter()
-        .flat_map(|arm| {
+    let mut profiles = pair
+        .iter()
+        .map(|step| (step.arm.as_str(), step.profile))
+        .collect::<Vec<_>>();
+    profiles.sort_unstable();
+    profiles.dedup();
+    profiles
+        .into_iter()
+        .flat_map(|(arm, profile)| {
             (0..WARMUP_INVOCATIONS).map(move |_| Step {
                 workload: pair[0].workload.clone(),
                 layout: pair[0].layout.clone(),
@@ -50,6 +66,8 @@ pub(super) fn pair_warmups(pair: &[Step]) -> Vec<Step> {
                 round: pair[0].round,
                 position: 0,
                 arm: arm.to_owned(),
+                profile,
+                paired_profile: profile,
             })
         })
         .collect()
@@ -72,7 +90,23 @@ pub(super) fn warmups_for_first_missing(
 }
 
 pub(super) fn measurements(campaign: &Campaign) -> Vec<Step> {
-    plan(campaign, campaign.rounds)
+    campaign
+        .workloads
+        .iter()
+        .flat_map(|(workload, definition)| {
+            definition.commands.keys().flat_map(move |layout| {
+                let support = &definition.arm_support[layout];
+                let crossed =
+                    supported_cells(support).flat_map(move |cell| cell_steps(workload, layout, cell, campaign.rounds));
+                let guest = std::path::Path::new(&definition.commands[layout][0]);
+                let nulls = ["E", "I"]
+                    .into_iter()
+                    .filter(move |arm| support[*arm].available() && campaign.independent_null_qualified(arm, guest))
+                    .flat_map(move |arm| null_steps(workload, layout, arm, campaign.rounds));
+                crossed.chain(nulls)
+            })
+        })
+        .collect()
 }
 
 pub(super) fn calibration(campaign: &Campaign, arms: &[String], rounds: u32) -> Vec<Step> {
@@ -107,20 +141,9 @@ fn cell_steps_owned(workload: &str, layout: &str, arm: &str, rounds: u32) -> Vec
                     round,
                     position,
                     arm: arm.to_owned(),
+                    profile: ProfileKind::Primary,
+                    paired_profile: ProfileKind::Primary,
                 })
-        })
-        .collect()
-}
-
-fn plan(campaign: &Campaign, rounds: u32) -> Vec<Step> {
-    campaign
-        .workloads
-        .iter()
-        .flat_map(|(workload, definition)| {
-            definition.commands.keys().flat_map(move |layout| {
-                let support = &definition.arm_support[layout];
-                supported_cells(support).flat_map(move |cell| cell_steps(workload, layout, cell, rounds))
-            })
         })
         .collect()
 }
@@ -145,6 +168,29 @@ fn cell_steps(workload: &str, layout: &str, (left, right): (&str, &str), rounds:
                     round,
                     position,
                     arm: arms[index].to_owned(),
+                    profile: ProfileKind::Primary,
+                    paired_profile: ProfileKind::Primary,
+                })
+        })
+        .collect()
+}
+
+fn null_steps(workload: &str, layout: &str, arm: &str, rounds: u32) -> Vec<Step> {
+    let profiles = [ProfileKind::Primary, ProfileKind::IndependentNull];
+    (0..rounds)
+        .flat_map(|round| {
+            ORDER[round as usize % ORDER.len()]
+                .into_iter()
+                .enumerate()
+                .map(move |(position, index)| Step {
+                    workload: workload.to_owned(),
+                    layout: layout.to_owned(),
+                    cell: format!("{arm}{arm}"),
+                    round,
+                    position,
+                    arm: arm.to_owned(),
+                    profile: profiles[index],
+                    paired_profile: profiles[1 - index],
                 })
         })
         .collect()
@@ -152,7 +198,7 @@ fn cell_steps(workload: &str, layout: &str, (left, right): (&str, &str), rounds:
 
 #[cfg(test)]
 mod tests {
-    use super::{ArmSupport, BTreeMap, ORDER, Step};
+    use super::{ArmSupport, BTreeMap, ORDER, ProfileKind, Step};
 
     #[test]
     fn crossed_order_balances_position_and_temporal_strata() {
@@ -169,10 +215,12 @@ mod tests {
             round: 2,
             position: 0,
             arm: "E".into(),
+            profile: ProfileKind::Primary,
+            paired_profile: ProfileKind::Primary,
         };
-        assert_eq!(step.paired_key().as_deref(), Some("malloc|plain|EI|2|1"));
+        assert_eq!(step.paired_key().as_deref(), Some("malloc|plain|EI|primary|2|1"));
         step.position = 1;
-        assert_eq!(step.paired_key().as_deref(), Some("malloc|plain|EI|2|0"));
+        assert_eq!(step.paired_key().as_deref(), Some("malloc|plain|EI|primary|2|0"));
         step.position = 2;
         assert!(step.paired_key().is_none());
     }
@@ -191,10 +239,7 @@ mod tests {
                 },
             ),
         ]);
-        assert_eq!(
-            super::supported_cells(&support).collect::<Vec<_>>(),
-            [("E", "E"), ("I", "I"), ("E", "I")]
-        );
+        assert_eq!(super::supported_cells(&support).collect::<Vec<_>>(), [("E", "I")]);
     }
 
     #[test]
@@ -206,6 +251,25 @@ mod tests {
             assert_eq!(pair[0].round, pair[1].round);
             assert_eq!([pair[0].position, pair[1].position], [0, 1]);
         }
+    }
+
+    #[test]
+    fn independent_null_exchanges_build_profiles_in_balanced_order() {
+        let steps = super::null_steps("malloc", "plain", "E", 4);
+        assert_eq!(steps.len(), 8);
+        for pair in steps.chunks_exact(2) {
+            assert_eq!(pair[0].paired_key().as_deref(), Some(pair[1].key().as_str()));
+            assert_eq!(pair[1].paired_key().as_deref(), Some(pair[0].key().as_str()));
+            assert_ne!(pair[0].profile, pair[1].profile);
+        }
+        assert_eq!(
+            steps
+                .iter()
+                .filter(|step| step.position == 0 && step.profile == ProfileKind::Primary)
+                .count(),
+            2
+        );
+        assert!(steps.iter().all(|step| step.cell == "EE" && step.arm == "E"));
     }
 
     #[test]

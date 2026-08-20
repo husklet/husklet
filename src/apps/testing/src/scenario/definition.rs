@@ -164,7 +164,19 @@ struct Expectation {
     #[serde(default)]
     stdout_exact: Option<PathBuf>,
     #[serde(default)]
+    stdout_regex: Option<PathBuf>,
+    #[serde(default)]
+    stdout_stream_regex: Option<PathBuf>,
+    #[serde(default)]
+    fork_diagnostics: Option<ForkDiagnostics>,
+    #[serde(default)]
     output_empty: bool,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForkDiagnostics {
+    pub maximum_records: usize,
 }
 
 #[derive(Default, Deserialize)]
@@ -232,6 +244,9 @@ pub struct Sample {
     pub exit: i32,
     pub stdout_contains: Vec<PathBuf>,
     pub stdout_exact: Option<PathBuf>,
+    pub stdout_regex: Option<PathBuf>,
+    pub stdout_stream_regex: Option<PathBuf>,
+    pub fork_diagnostics: Option<ForkDiagnostics>,
     pub output_empty: bool,
 }
 
@@ -365,10 +380,49 @@ impl Sample {
             .stdout_exact
             .map(|path| local_file(directory, path, "exact golden output"))
             .transpose()?;
-        if case.expect.output_empty && (!stdout_contains.is_empty() || stdout_exact.is_some()) {
+        let stdout_regex = case
+            .expect
+            .stdout_regex
+            .map(|path| local_file(directory, path, "regular-expression output"))
+            .transpose()?;
+        let stdout_stream_regex = case
+            .expect
+            .stdout_stream_regex
+            .map(|path| local_file(directory, path, "stdout stream regular-expression output"))
+            .transpose()?;
+        if let Some(path) = &stdout_regex {
+            validate_output_regex(path)?;
+        }
+        if let Some(path) = &stdout_stream_regex {
+            validate_output_regex(path)?;
+        }
+        if case.expect.fork_diagnostics.is_some() && !case.execution.emits_diagnostics() {
+            return Err(format!("{} requires fork diagnostics without native diagnostics", case.id).into());
+        }
+        if case
+            .expect
+            .fork_diagnostics
+            .is_some_and(|value| value.maximum_records == 0)
+        {
+            return Err(format!("{} sets a zero fork diagnostic bound", case.id).into());
+        }
+        if stdout_exact.is_some() && stdout_regex.is_some() {
+            return Err(format!("{} combines exact and regular-expression output assertions", case.id).into());
+        }
+        if case.expect.output_empty
+            && (!stdout_contains.is_empty()
+                || stdout_exact.is_some()
+                || stdout_regex.is_some()
+                || stdout_stream_regex.is_some())
+        {
             return Err(format!("{} combines an empty-output assertion with a golden output", case.id).into());
         }
-        if stdout_contains.is_empty() && stdout_exact.is_none() && !case.expect.output_empty {
+        if stdout_contains.is_empty()
+            && stdout_exact.is_none()
+            && stdout_regex.is_none()
+            && stdout_stream_regex.is_none()
+            && !case.expect.output_empty
+        {
             return Err(format!("{} defines no output oracle", case.id).into());
         }
         let readiness = case.readiness.map(Readiness::validate).transpose()?;
@@ -391,9 +445,22 @@ impl Sample {
             exit: case.expect.exit,
             stdout_contains,
             stdout_exact,
+            stdout_regex,
+            stdout_stream_regex,
+            fork_diagnostics: case.expect.fork_diagnostics,
             output_empty: case.expect.output_empty,
         })
     }
+}
+
+fn validate_output_regex(path: &Path) -> Result<(), Error> {
+    let expression = fs::read_to_string(path)?;
+    if expression.len() > MAX_TEXT {
+        return Err(format!("output expression {} exceeds {MAX_TEXT} bytes", path.display()).into());
+    }
+    regex::bytes::Regex::new(expression.trim_end_matches(['\r', '\n']))
+        .map(|_| ())
+        .map_err(|error| format!("invalid output expression {}: {error}", path.display()).into())
 }
 
 fn load_actions(

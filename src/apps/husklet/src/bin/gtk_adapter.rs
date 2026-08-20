@@ -20,6 +20,7 @@ impl Dialog {
             .modal(true)
             .resizable(false)
             .default_width(420)
+            .accessible_role(gtk::AccessibleRole::Dialog)
             .build();
         if let Some(parent) = parent {
             window.set_transient_for(Some(parent));
@@ -31,15 +32,24 @@ impl Dialog {
         content.set_margin_start(20);
         content.set_margin_end(20);
 
+        // Accessibility, not decoration: a dialog that asks the user to decide something about their
+        // own work is the worst possible place to be unreachable. The title names the window and the
+        // detail -- which is where an engine refusal reason arrives verbatim -- is announced with it
+        // rather than left as loose text a screen reader has no reason to visit.
         let title = gtk::Label::new(Some(&model.title));
         title.set_xalign(0.0);
         title.add_css_class("title-3");
+        title.set_accessible_role(gtk::AccessibleRole::Heading);
         content.append(&title);
+        window.update_relation(&[gtk::accessible::Relation::LabelledBy(&[title.upcast_ref()])]);
         if let Some(detail) = model.detail {
-            let detail = gtk::Label::new(Some(&detail));
-            detail.set_xalign(0.0);
-            detail.set_wrap(true);
-            content.append(&detail);
+            let label = gtk::Label::new(Some(&detail));
+            label.set_xalign(0.0);
+            label.set_wrap(true);
+            label.set_accessible_role(gtk::AccessibleRole::Label);
+            label.update_property(&[gtk::accessible::Property::Label(&detail)]);
+            content.append(&label);
+            window.update_relation(&[gtk::accessible::Relation::DescribedBy(&[label.upcast_ref()])]);
         }
 
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -72,6 +82,9 @@ impl Dialog {
 
     fn button(window: &gtk::Window, action: Action, handler: Rc<impl Fn(EventId) + 'static>) -> gtk::Button {
         let button = gtk::Button::with_label(&action.label);
+        // A button whose only name is its rendered glyphs has no name at all to anything that does
+        // not read pixels. Name it explicitly rather than relying on the label child being walked.
+        button.update_property(&[gtk::accessible::Property::Label(&action.label)]);
         match action.role {
             Role::Suggested => button.add_css_class("suggested-action"),
             Role::Destructive => button.add_css_class("destructive-action"),

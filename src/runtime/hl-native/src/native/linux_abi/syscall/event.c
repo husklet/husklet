@@ -981,6 +981,7 @@ static void svc_epoll_wait_common(struct cpu *c, int ep, uint64_t guest_out, int
     // capture a monotonic deadline at entry and, whenever we produced no guest event but the guest still
     // wants to block, re-enter kevent for the time that remains. Each re-block genuinely sleeps in kevent
     // (the EVFILT_USER knote is EV_CLEAR, already consumed) -- no busy spin.
+    if (timeout_ns >= 0) (void)checkpoint_resume_timeout_ns(&timeout_ns);
     struct timespec deadline;
     epoll_deadline_from_timeout(timeout_ns, &deadline);
     int oi = 0;
@@ -1042,6 +1043,7 @@ static void svc_epoll_wait_common(struct cpu *c, int ep, uint64_t guest_out, int
         ts_wait_leave();
         if (opt && !lk) g_ep_chgn[ep] = 0; // consumed (threaded flushed it under the lock already)
         if (r < 0) {
+            if (timeout_ns >= 0) checkpoint_prepare_timeout(c, epoll_deadline_remaining(&deadline));
             G_RET(c) = (uint64_t)(-errno);
             break;
         }

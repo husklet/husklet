@@ -11,7 +11,7 @@ mod support;
 
 pub use c::{
     Allocation as CAllocation, CallPolicy as CCallPolicy, Interface as CInterface, Policy as CPolicy,
-    ResultUse as CResult, Safety as CSafety, Structure as CStructure,
+    ResultUse as CResult, Safety as CSafety, Structure as CStructure, TestOnlyState as CTestOnlyState,
     analyzer::{AnalyzerConfig as CAnalyzerConfig, run as run_c_analyzers},
 };
 pub use repository::{

@@ -137,7 +137,43 @@ static void svc_fs_extended_status_291(struct cpu *c, uint64_t nr, uint64_t a0, 
         // Route ownership through the SHARED virtualization (cuid/cgid default + guest-chown xattr via
         // the cache) so statx's uid/gid are byte-identical to fstat/newfstatat for the same file.
         uint32_t vuid, vgid;
-        stat_virt_ids(&s, xpath, xfd, &vuid, &vgid);
+        mode_t virtual_mode;
+        if (!S_ISSOCK(s.st_mode)) {
+            stat_virt_ids_raw(&s, xpath, xfd, &vuid, &vgid);
+            virtual_mode = stat_virt_mode_raw(&s, xpath, xfd);
+        } else {
+            rc = -EBUSY;
+#if defined(_WIN32)
+            stat_virt_ids_raw(&s, xpath, xfd, &vuid, &vgid);
+            virtual_mode = stat_virt_mode_raw(&s, xpath, xfd);
+            rc = 0;
+#else
+            for (unsigned attempt = 0; attempt < 64; ++attempt) {
+                struct namespace_transaction_read read;
+                if (namespace_transaction_read_begin(&read) != 0) {
+                    rc = -errno;
+                    break;
+                }
+                xpath = NULL;
+                xfd = -1;
+                rc = statx_resolve_status(provider, gp, raw, p, a0, nofollow, empty, &s, &xpath, &xfd,
+                                          backing_path, sizeof backing_path);
+                if (rc != 0) break;
+                stat_virt_ids_raw(&s, xpath, xfd, &vuid, &vgid);
+                virtual_mode = stat_virt_mode_raw(&s, xpath, xfd);
+                if (namespace_transaction_read_validate(&read) == 0) {
+                    rc = 0;
+                    break;
+                }
+                rc = -errno;
+                if (errno != EAGAIN) break;
+            }
+#endif
+            if (rc != 0) {
+                G_RET(c) = (uint64_t)(int64_t)rc;
+                break;
+            }
+        }
         uint8_t encoded_statx[256];
         uint8_t *d = encoded_statx;
         // Birth time is mirrored from the host filesystem so the mask bit is honest per-fs (see
@@ -157,7 +193,7 @@ static void svc_fs_extended_status_291(struct cpu *c, uint64_t nr, uint64_t a0, 
         *(uint32_t *)(d + 20) = vuid;
         *(uint32_t *)(d + 24) = vgid;
         // stx_mode @28
-        *(uint16_t *)(d + 28) = (uint16_t)stat_virt_mode(&s, xpath, xfd);
+        *(uint16_t *)(d + 28) = (uint16_t)virtual_mode;
         // stx_ino @32
         *(uint64_t *)(d + 32) = s.st_ino;
         // stx_size @40

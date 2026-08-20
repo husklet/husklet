@@ -304,11 +304,11 @@ static int proc_mountstats_text(char *b, size_t n) {
 // ABI9 gives every launch an opaque ownership domain independent of networking, hostname, and filesystem
 // generation. It is inherited in process memory across every guest fork and survives guest exec. Older
 // direct-mode entry points retain the namespace/session fallback until they are removed.
-static void proc_reg_key(char *out, size_t n) {
+static int proc_reg_domain_key(char *out, size_t n) {
     const char *k = hl_option_get("HL_PROCESS_DOMAIN");
     if (k && strlen(k) == 32) {
         snprintf(out, n, "/tmp/.hl-domain.%s", k);
-        return;
+        return 1;
     }
     k = hl_option_get("HL_NETNS");
     if (!k || !k[0]) k = hl_option_get("HL_HOSTNAME");
@@ -320,10 +320,58 @@ static void proc_reg_key(char *out, size_t n) {
         s[o] = 0;
         if (o) {
             snprintf(out, n, "/tmp/.hl-pids.%s", s);
-            return;
+            return 1;
         }
     }
+    return 0;
+}
+
+// The session-derived name is a LAST-RESORT presentation key for a bare launch with no container
+// identity at all. It is deliberately NOT a domain: a guest setsid(2) is emulated with the host's, so
+// the key changes underneath a process that makes itself a session leader. Membership never uses it.
+static void proc_reg_key(char *out, size_t n) {
+    if (proc_reg_domain_key(out, n)) return;
     snprintf(out, n, "/tmp/.hl-pids.s%d", (int)getsid(0));
+}
+
+/*
+ * Membership of a container's process domain.
+ *
+ * HL_PROCESS_DOMAIN is the control plane's opaque 128-bit identity for ONE container. hl-container hands
+ * the same value to the container's launch and to every `exec` session of that container
+ * (service/container/exec.rs resolves it with `process_domain(&container.id)`), and the engine inherits
+ * it in process memory across guest fork and across guest exec. It is therefore the authoritative answer
+ * to "does this host process belong to that container", and authoritative for a reason no process-derived
+ * property can be: nothing a guest does to itself can join or leave a domain, because the domain is
+ * assigned from outside. Every member publishes its birth record before it runs guest code, so the set is
+ * complete ahead of any later registration and a reader can size it at any instant.
+ */
+
+/* 1 when `host_pid` is a live process that published a birth record into THIS process's container domain
+   and whose host start time still matches that record. 0 when this process has no container domain at all:
+   a bare engine launch has no membership to answer for, and the registry's session-derived fallback key is
+   NOT a domain -- a guest setsid(2) would move a process between fallback keys. */
+static int hl_linux_container_process_domain_member(int32_t host_pid) {
+    char dir[80], path[144], text[32];
+    if (host_pid <= 0 || !proc_reg_domain_key(dir, sizeof dir)) return 0;
+    snprintf(path, sizeof path, "%s/b%d", dir, (int)host_pid);
+    int descriptor = open(path, O_RDONLY | O_CLOEXEC);
+    if (descriptor < 0) return 0;
+    ssize_t count;
+    do {
+        count = read(descriptor, text, sizeof text - 1);
+    } while (count < 0 && errno == EINTR);
+    (void)close(descriptor);
+    if (count <= 0) return 0;
+    text[count] = 0;
+    errno = 0;
+    char *end;
+    uint64_t start_time_ns;
+    unsigned long long recorded = strtoull(text, &end, 10);
+    if (errno != 0 || end == text || (*end != '\n' && *end != 0) || recorded == 0) return 0;
+    // A live process whose start time still matches the record. Both halves are load-bearing: without
+    // the start time a recycled host pid would inherit a departed member's place in the freeze.
+    return hl_host_process_start_time_ns(host_pid, &start_time_ns) && start_time_ns == recorded;
 }
 
 /*
@@ -347,10 +395,11 @@ static char g_launch_reg_birth_file[160];
 
 static void launch_reg_publish(int hostpid, int remember) {
     char dir[80], birth[32], path[160];
-    hl_host_process_info process;
-    if (hostpid <= 0 || !launch_reg_key(dir, sizeof dir) || !hl_host_process_read(hostpid, &process)) return;
+    uint64_t start_time_ns;
+    if (hostpid <= 0 || !launch_reg_key(dir, sizeof dir) || !hl_host_process_start_time_ns(hostpid, &start_time_ns))
+        return;
     hl_compat_mkdir(dir, 0777);
-    int size = snprintf(birth, sizeof birth, "%llu\n", (unsigned long long)process.start_time_ns);
+    int size = snprintf(birth, sizeof birth, "%llu\n", (unsigned long long)start_time_ns);
     snprintf(path, sizeof path, "%s/b%d", dir, hostpid);
     if (size > 0 && hl_host_file_store(&g_jit_services, path, 0600, birth, (size_t)size) == 0 && remember)
         snprintf(g_launch_reg_birth_file, sizeof g_launch_reg_birth_file, "%s", path);
@@ -385,7 +434,7 @@ static void launch_reg_terminate_peers(void) {
             char text[32];
             long raw;
             uint64_t expected;
-            hl_host_process_info process;
+            uint64_t start_time_ns;
             if (entry->d_name[0] != 'b' || entry->d_name[1] < '1' || entry->d_name[1] > '9') continue;
             errno = 0;
             raw = strtol(entry->d_name + 1, &end, 10);
@@ -410,7 +459,7 @@ static void launch_reg_terminate_peers(void) {
             char *birth_end;
             expected = strtoull(text, &birth_end, 10);
             if (errno != 0 || birth_end == text || (*birth_end != '\n' && *birth_end != 0) || expected == 0 ||
-                !hl_host_process_read(raw, &process) || process.start_time_ns != expected) {
+                !hl_host_process_start_time_ns(raw, &start_time_ns) || start_time_ns != expected) {
                 (void)unlink(path);
                 continue;
             }
@@ -456,6 +505,20 @@ static void proc_reg_unlink(void) {
     }
 }
 
+// Publish the PID-reuse-safe birth record "b<hostpid>": the host start time of that process. It is the
+// record that lets ANY reader decide membership without trusting a pid alone -- both the activation
+// teardown scan and the container process-domain membership predicate below compare it against the live
+// process. `remember` optionally receives the written path so the publisher can unlink its own record.
+static void proc_reg_birth_publish(const char *dir, int hostpid, char *remember, size_t remember_size) {
+    uint64_t start_time_ns;
+    char birth[32], path[144];
+    if (hostpid <= 0 || !hl_host_process_start_time_ns(hostpid, &start_time_ns)) return;
+    int size = snprintf(birth, sizeof birth, "%llu\n", (unsigned long long)start_time_ns);
+    snprintf(path, sizeof path, "%s/b%d", dir, hostpid);
+    if (size > 0 && hl_host_file_store(&g_jit_services, path, 0600, birth, (size_t)size) == 0 && remember)
+        snprintf(remember, remember_size, "%s", path);
+}
+
 static void proc_reg_write_files(const char *dir, const char *buf, int len, const char *exe) {
     char tmp[144];
     snprintf(tmp, sizeof tmp, "%s/.t%d", dir, (int)getpid());
@@ -481,16 +544,7 @@ static void proc_reg_write_files(const char *dir, const char *buf, int len, cons
                 (void)hl_host_file_unlink(&g_jit_services, xtmp);
         }
     }
-    {
-        hl_host_process_info process;
-        char birth[32], path[144];
-        if (hl_host_process_read(getpid(), &process)) {
-            int size = snprintf(birth, sizeof birth, "%llu\n", (unsigned long long)process.start_time_ns);
-            snprintf(path, sizeof path, "%s/b%d", dir, (int)getpid());
-            if (size > 0 && hl_host_file_store(&g_jit_services, path, 0600, birth, (size_t)size) == 0)
-                snprintf(g_reg_birth_file, sizeof g_reg_birth_file, "%s", path);
-        }
-    }
+    proc_reg_birth_publish(dir, (int)getpid(), g_reg_birth_file, sizeof g_reg_birth_file);
 }
 
 // Publish THIS process's guest identity: "<comm>\n" then the full argv NUL-separated. Written to a temp
@@ -948,3 +1002,4 @@ static int proc_fd_dir_pid_open(int guest, int host) {
 // ALWAYS has a non-zero VmRSS -- top/htop/ps would otherwise show this process at RES=0, a engine-specific divergence
 // (a peer pid already reports a live resident size through host process stats; self must not read 0). Floor the tracked
 // charge with this engine process's real resident size so the reported RSS is non-zero and plausible.
+

@@ -7,17 +7,25 @@
 #include "hl/linux_abi.h"
 #include "hl/syscall_trap.h"
 #include "../host/system.h"
+#include "../host/process.h"
 #include "main_plan.h"
 #include "host.h"
 
 #include <fcntl.h>
+#include <errno.h>
+#include <poll.h>
 #include <stdbool.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#if defined(__linux__)
+#include <sys/socket.h>
+#include <sys/syscall.h>
+#endif
 #include <unistd.h>
 
 #if defined(_WIN32)
@@ -135,6 +143,12 @@ HL_API int32_t hl_c_backend_errno_from_host_test(uint32_t domain, int32_t host_e
 
 extern int HL_BRIDGE_CKPT(broker_pair)(hl_activation_descriptor *, hl_activation_descriptor *);
 extern hl_activation_descriptor HL_BRIDGE_CKPT(broker_accept)(hl_activation_descriptor, int, uint64_t *);
+extern int HL_BRIDGE_CKPT(channel_authenticate_peer)(int, uint64_t, uint64_t *);
+#if defined(HL_NATIVE_TEST_HOOKS)
+extern void HL_BRIDGE_CKPT(channel_publish)(int);
+extern int HL_BRIDGE_CKPT(channel_acquire)(void);
+extern void HL_BRIDGE_CKPT(channel_forget_for_test)(void);
+#endif
 extern int HL_BRIDGE_CKPT(trigger_create)(hl_activation_descriptor *, void **);
 extern uint32_t HL_BRIDGE_CKPT(trigger_bump)(void *);
 extern void HL_BRIDGE_CKPT(trigger_destroy)(void *, hl_activation_descriptor);
@@ -158,6 +172,132 @@ HL_API int32_t hl_c_backend_checkpoint_broker_accept(int32_t broker, int32_t tim
     if (broker < 0 || timeout_ms < 0) return -1;
     channel = HL_BRIDGE_CKPT(broker_accept)((hl_activation_descriptor)broker, timeout_ms, host_pid);
     return channel == HL_ACTIVATION_DESCRIPTOR_NONE || channel > INT32_MAX ? -1 : (int32_t)channel;
+}
+
+HL_API int32_t hl_c_backend_checkpoint_broker_accept_authenticated(int32_t broker, int32_t timeout_ms,
+                                                                   uint64_t *host_pid, uint64_t *host_birth,
+                                                                   uint64_t *host_generation,
+                                                                   int32_t *process_handle) {
+    hl_activation_descriptor channel;
+#if defined(__linux__)
+    hl_host_process_info process;
+#endif
+    if (host_pid != NULL) *host_pid = 0;
+    if (host_birth != NULL) *host_birth = 0;
+    if (host_generation != NULL) *host_generation = 0;
+    if (process_handle != NULL) *process_handle = -1;
+    if (broker < 0 || timeout_ms < 0 || host_pid == NULL || host_birth == NULL || host_generation == NULL ||
+        process_handle == NULL)
+        return -1;
+    channel = HL_BRIDGE_CKPT(broker_accept)((hl_activation_descriptor)broker, timeout_ms, host_pid);
+#if defined(__linux__)
+    if (channel != HL_ACTIVATION_DESCRIPTOR_NONE && channel <= INT32_MAX) {
+        socklen_t handle_size = (socklen_t)sizeof *process_handle;
+#ifndef SO_PEERPIDFD
+#define SO_PEERPIDFD 77
+#endif
+        if (getsockopt((int)channel, SOL_SOCKET, SO_PEERPIDFD, process_handle, &handle_size) != 0 ||
+            handle_size != (socklen_t)sizeof *process_handle || *process_handle < 0)
+            *process_handle = -1;
+    }
+    if (channel == HL_ACTIVATION_DESCRIPTOR_NONE || channel > INT32_MAX || *process_handle < 0 ||
+        *host_pid > INT64_MAX || syscall(SYS_pidfd_send_signal, *process_handle, 0, NULL, 0) != 0 ||
+        !hl_host_process_read((int64_t)*host_pid, &process) || process.start_time_ns == 0 ||
+        syscall(SYS_pidfd_send_signal, *process_handle, 0, NULL, 0) != 0) {
+        if (channel != HL_ACTIVATION_DESCRIPTOR_NONE && channel <= INT32_MAX) (void)close((int)channel);
+        if (*process_handle >= 0) (void)close(*process_handle);
+        *process_handle = -1;
+        *host_pid = 0;
+        return -1;
+    }
+#elif defined(__APPLE__)
+    if (channel == HL_ACTIVATION_DESCRIPTOR_NONE || channel > INT32_MAX || *host_pid > INT64_MAX) {
+        if (channel != HL_ACTIVATION_DESCRIPTOR_NONE && channel <= INT32_MAX) (void)close((int)channel);
+        *host_pid = 0;
+        return -1;
+    }
+    *process_handle = hl_host_process_peer_identity_open((int)channel, *host_pid, host_pid, host_birth,
+                                                         host_generation);
+    if (*process_handle < 0) {
+        (void)close((int)channel);
+        *host_pid = 0;
+        return -1;
+    }
+#else
+    if (channel != HL_ACTIVATION_DESCRIPTOR_NONE && channel <= INT32_MAX) (void)close((int)channel);
+    *host_pid = 0;
+    return -1;
+#endif
+#if defined(__linux__)
+    *host_birth = process.start_time_ns;
+#endif
+    return (int32_t)channel;
+}
+
+HL_API int32_t hl_c_backend_checkpoint_peer_authenticate_test(int32_t descriptor, uint64_t claimed_pid,
+                                                             uint64_t *host_pid, uint64_t *host_birth) {
+    hl_host_process_info process;
+    if (host_pid != NULL) *host_pid = 0;
+    if (host_birth != NULL) *host_birth = 0;
+    if (descriptor < 0 || host_pid == NULL || host_birth == NULL ||
+        HL_BRIDGE_CKPT(channel_authenticate_peer)(descriptor, claimed_pid, host_pid) != 0 || *host_pid > INT64_MAX ||
+        !hl_host_process_read((int64_t)*host_pid, &process) || process.start_time_ns == 0) {
+        if (host_pid != NULL) *host_pid = 0;
+        return -1;
+    }
+    *host_birth = process.start_time_ns;
+    return 0;
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
+HL_API int32_t hl_c_backend_checkpoint_channel_connect_test(int32_t broker_child) {
+    if (broker_child < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    HL_BRIDGE_CKPT(channel_publish)(broker_child);
+    /* Each call mints a channel the caller then owns and closes, so the per-process cache must not
+       hand the next caller the descriptor the previous one already closed. */
+    HL_BRIDGE_CKPT(channel_forget_for_test)();
+    return HL_BRIDGE_CKPT(channel_acquire)();
+}
+#else
+HL_API int32_t hl_c_backend_checkpoint_channel_connect_test(int32_t broker_child) {
+    (void)broker_child;
+    errno = ENOTSUP;
+    return -1;
+}
+#endif
+HL_API int32_t hl_c_backend_checkpoint_process_identity_open_test(int32_t pid, uint64_t expected_birth,
+                                                                 uint64_t expected_generation,
+                                                                 uint64_t *actual_birth,
+                                                                 uint64_t *actual_generation) {
+#if defined(__APPLE__)
+    return hl_host_process_identity_open((pid_t)pid, expected_birth, expected_generation, actual_birth,
+                                         actual_generation);
+#else
+    (void)pid;
+    (void)expected_birth;
+    (void)expected_generation;
+    if (actual_birth != NULL) *actual_birth = 0;
+    if (actual_generation != NULL) *actual_generation = 0;
+    return -1;
+#endif
+}
+
+HL_API int32_t hl_c_backend_checkpoint_peer_identity_open_test(int32_t descriptor, uint64_t claimed_pid,
+                                                              uint64_t *actual_pid, uint64_t *actual_birth,
+                                                              uint64_t *actual_generation) {
+#if defined(__APPLE__)
+    return hl_host_process_peer_identity_open(descriptor, claimed_pid, actual_pid, actual_birth, actual_generation);
+#else
+    (void)descriptor;
+    (void)claimed_pid;
+    if (actual_pid != NULL) *actual_pid = 0;
+    if (actual_birth != NULL) *actual_birth = 0;
+    if (actual_generation != NULL) *actual_generation = 0;
+    return -1;
+#endif
 }
 
 HL_API int32_t hl_c_backend_checkpoint_trigger_create(int32_t *descriptor, void **mapping) {
@@ -219,6 +359,64 @@ HL_API int32_t hl_c_backend_checkpoint_adopt(uint32_t isa, int32_t broker, int32
 }
 
 extern int HL_BRIDGE_CKPT(interrupt_signal)(void);
+
+/* The engine-owned per-terminal termios is `static` inside a per-guest-ISA namespaced translation
+ * unit, so there are genuinely two stores and neither is authoritative on its own: a process runs one
+ * engine, but which of the two holds an entry follows the guest's ISA. Both are asked, in a fixed
+ * order, and the first hit answers -- the stores are keyed by terminal identity, so a terminal that is
+ * in both would carry the same image anyway. */
+extern uint64_t hl_x86_64_terminal_termios_generation(void);
+extern int hl_x86_64_terminal_termios_image(int32_t native_fd, uint8_t *out);
+extern int hl_x86_64_terminal_termios_capture(int32_t native_fd, uint8_t *out);
+extern int hl_x86_64_terminal_termios_adopt(int32_t native_fd, const uint8_t *image);
+#if !defined(HL_BUILD_TARGET_X86_64_ONLY)
+extern uint64_t hl_aarch64_terminal_termios_generation(void);
+extern int hl_aarch64_terminal_termios_image(int32_t native_fd, uint8_t *out);
+extern int hl_aarch64_terminal_termios_capture(int32_t native_fd, uint8_t *out);
+extern int hl_aarch64_terminal_termios_adopt(int32_t native_fd, const uint8_t *image);
+#endif
+
+HL_API uint64_t hl_c_backend_terminal_termios_generation(void) {
+    /* A sum, not a max: either store advancing must move the total, and both only ever increase. */
+#if defined(HL_BUILD_TARGET_X86_64_ONLY)
+    return hl_x86_64_terminal_termios_generation();
+#else
+    return hl_aarch64_terminal_termios_generation() + hl_x86_64_terminal_termios_generation();
+#endif
+}
+
+HL_API int32_t hl_c_backend_terminal_termios(int32_t native_fd, uint8_t *out) {
+    if (out == NULL) return 0;
+#if !defined(HL_BUILD_TARGET_X86_64_ONLY)
+    if (hl_aarch64_terminal_termios_image(native_fd, out)) return 1;
+#endif
+    return hl_x86_64_terminal_termios_image(native_fd, out) ? 1 : 0;
+}
+
+/* The host's own termios as a Linux image. The two per-ISA translation units compile the identical
+ * host read, so either arm answers for any terminal; the aarch64 arm is asked first only to keep the
+ * order the accessors above use, and the x86_64 arm is the fallback that also serves an x86-only
+ * build. */
+HL_API int32_t hl_c_backend_terminal_termios_capture(int32_t native_fd, uint8_t *out) {
+    if (out == NULL) return 0;
+#if !defined(HL_BUILD_TARGET_X86_64_ONLY)
+    if (hl_aarch64_terminal_termios_capture(native_fd, out)) return 1;
+#endif
+    return hl_x86_64_terminal_termios_capture(native_fd, out) ? 1 : 0;
+}
+
+/* Adopt a guest image against the host projection as it stands now, in every store this build has.
+ * Both are written rather than the first that succeeds: which store a terminal's entry lives in
+ * follows the guest ISA, which the pump does not know and must not have to. */
+HL_API int32_t hl_c_backend_terminal_termios_adopt(int32_t native_fd, const uint8_t *image) {
+    int32_t adopted = 0;
+    if (image == NULL) return 0;
+#if !defined(HL_BUILD_TARGET_X86_64_ONLY)
+    if (hl_aarch64_terminal_termios_adopt(native_fd, image)) adopted = 1;
+#endif
+    if (hl_x86_64_terminal_termios_adopt(native_fd, image)) adopted = 1;
+    return adopted;
+}
 
 HL_API int32_t hl_c_backend_checkpoint_interrupt_signal(uint32_t isa) {
 #if defined(HL_BUILD_TARGET_X86_64_ONLY)
@@ -511,6 +709,33 @@ HL_API int32_t hl_c_backend_exit_status(const hl_c_backend *backend) {
     return hl_c_backend_exit((hl_c_backend *)backend, &result) == HL_STATUS_OK ? result.guest_status : -1;
 }
 
+HL_API int32_t hl_c_backend_process_identity_signal(int32_t handle, uint64_t host_pid, int32_t signal) {
+    if (handle < 0 || host_pid == 0 || host_pid > INT64_MAX || signal < 0 || signal > 64) return -1;
+#if defined(__linux__)
+    /* The pidfd names one incarnation, so the kernel itself refuses a reused pid. */
+    return syscall(SYS_pidfd_send_signal, handle, signal, NULL, 0) == 0 ? 0 : -1;
+#elif defined(__APPLE__)
+    {
+        /* No pidfd: the capability is a NOTE_EXIT watch, so a readable handle means this incarnation
+           is already gone and the pid may belong to someone else. Refuse rather than retarget. */
+        struct pollfd waiting = {.fd = handle, .events = POLLIN, .revents = 0};
+        int ready;
+        do {
+            ready = poll(&waiting, 1, 0);
+        } while (ready < 0 && errno == EINTR);
+        if (ready != 0 || waiting.revents != 0) return -1;
+        return kill((pid_t)host_pid, signal) == 0 ? 0 : -1;
+    }
+#else
+    (void)signal;
+    return -1;
+#endif
+}
+
+HL_API int32_t hl_c_backend_guest_pid(const hl_c_backend *backend) {
+    return backend == NULL ? 0 : hl_engine_guest_pid(((hl_c_backend *)backend)->engine);
+}
+
 HL_API uint64_t hl_c_backend_exit_detail(const hl_c_backend *backend) {
     hl_engine_exit result = {.abi = HL_ENGINE_ABI, .size = sizeof(result)};
     return hl_c_backend_exit((hl_c_backend *)backend, &result) == HL_STATUS_OK ? result.detail : 0;
@@ -527,4 +752,14 @@ HL_API void hl_c_backend_destroy(hl_c_backend *backend) {
     hl_c_bridge_host_destroy(backend->host);
     free(backend);
     hl_c_backend_leak_check_verdict();
+}
+
+#ifndef HL_NATIVE_BUILD_FINGERPRINT
+#define HL_NATIVE_BUILD_FINGERPRINT unfingerprinted
+#endif
+#define HL_FINGERPRINT_TEXT_(value) #value
+#define HL_FINGERPRINT_TEXT(value) HL_FINGERPRINT_TEXT_(value)
+
+HL_API const char *hl_c_backend_build_fingerprint(void) {
+    return HL_FINGERPRINT_TEXT(HL_NATIVE_BUILD_FINGERPRINT);
 }

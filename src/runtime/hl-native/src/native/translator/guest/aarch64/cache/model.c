@@ -28,6 +28,12 @@
 //     block chaining + per-site IC guards are PC-relative (alias/position-invariant); the per-site IC's
 //     cached {target,body} literals are NEUTRALIZED on load (RK_ICSITE zeroes the pair so the guard never
 //     matches a stale body -- the site refills at runtime), and the shared g_ibtc data table is zeroed.
+//     ONE arena-internal absolute pointer resisted that rule and is recorded instead of avoided: the BUS
+//     guard's resume literal (emit_a64_bus_guard_saved) holds J_RX(literal + 8) so the shared cold stub
+//     can branch back to the site, and the stub reaches it through a register, not PC-relatively.
+//     RK_BUSRESUME records the literal's arena offset and the loader recomputes it from the live RX base.
+//     Without the record a restored guard branches into the WRITING process's address space the first
+//     time it takes its slow path -- which, once the ledger is armed, is every guard.
 //   * The tier-2 back-edge counters (&g_t2cnt[slot]) are per-process BSS; we persist the g_t2gpc/g_t2cnt
 //     slot arrays so a restored counter still promotes the RIGHT loop, and RK_T2CNT re-points the bake.
 //   * The SMC precise-gate page set (g_txpg) is persisted and re-inserted on load: a warm run's guest
@@ -74,7 +80,7 @@
 // interpreter). Opt in via HL_PCACHE=1.
 
 #define PC_MAGIC 0x34414350544a4c48ull // "HLJTPCA4" (LE tag)
-#define PC_VERSION 13                  // v13 disables persistence for mutable file-backed library mappings.
+#define PC_VERSION 14                  // v14 relocates the BUS-guard resume literal (RK_BUSRESUME).
 #define PC_VERSION_EFF PC_VERSION
 #define PC_TRANSLATOR_ABI HL_PCACHE_ABI_AARCH64
 #define PC_IMG_BASE 0x0000040000000000ull    // 4 TB -- fixed guest image base (probed free on Apple silicon)
@@ -102,6 +108,7 @@ static int pc_window_contains(uint64_t extent, uint64_t offset, uint64_t width, 
 #define RK_ICSITE 4     // 16-byte per-site IC {target,body} literal pair -> zero on load (neutralize)
 #define RK_BUSFAULT 5   // 4-insn pointer to the generic translated-memory BUS query
 #define RK_GUEST_ADRP 6 // one-insn ADRP of a fixed guest page; re-encode for the live arena RX base
+#define RK_BUSRESUME 7  // 8-byte BUS-guard resume literal: an absolute RX pointer into THIS arena
 
 // ---- engine state (defined here; used by the recorded emitters + load/save) ----
 static int g_pcache;   // persistent cache active (HL_PCACHE=1)

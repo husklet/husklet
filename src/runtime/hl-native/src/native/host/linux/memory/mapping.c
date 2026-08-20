@@ -5,6 +5,10 @@
 
 #include <errno.h>
 #include <sys/mman.h>
+
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0
+#endif
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -473,26 +477,104 @@ static hl_host_result hl_linux_memory_code_write(void *context) {
     return hl_linux_result(HL_STATUS_OK, 0, 0);
 }
 
+/* Host storage must never occupy an address a guest can legitimately hold.  A guest's addresses are ELF and
+   Linux addresses: a restore reproduces the captured image at exactly those VAs or it fails closed, so a host
+   allocation that lands on one is an unrecoverable restore, not a placement detail.
+
+   The translation code cache used to be reserved with mmap(NULL, ...), which draws from the same kernel
+   top-down pool that places every kernel-placed guest mapping.  Capture and restore reserve in different
+   orders -- a restoring engine builds its cache before it replays the image -- so the cache regularly held
+   exactly the range the restored guest required and memory_restore refused, correctly, to replace a live host
+   mapping.  Relocating the guest is not available (its pointers are unrelocatable) and re-rolling the cache
+   after a collision only makes the failure rarer, so the cache is placed out of reach by construction.
+
+   Out of reach means below the kernel's top-down pool: guest mappings descend from the process's mmap base,
+   so an arena one terabyte beneath it is unreachable until a guest holds a terabyte of mappings.  The base is
+   probed from the kernel rather than fixed, because the usable virtual range differs per host (a fixed
+   high constant is unmappable on a four-level-paging x86-64 host) and because host storage must stay in the
+   same region of the address space as the engine's own text and data.  The deterministic guest arena at
+   HL_LINUX_SNAPSHOT_BASE (linux_abi/container/snapshot.h) grows upward from far below, so it cannot meet the
+   arena either.  Every reservation is MAP_FIXED_NOREPLACE, so host storage never replaces anything. */
+#define HL_LINUX_HOST_CODE_ARENA_GAP UINT64_C(0x10000000000)  /* 1 TiB below the top-down pool */
+#define HL_LINUX_HOST_CODE_ARENA_SIZE UINT64_C(0x1000000000)  /* 64 GiB of host storage */
+
+static uint64_t g_host_code_arena_base;
+static uint64_t g_host_code_arena_cursor;
+static pthread_mutex_t g_host_code_arena_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* The lowest address the kernel's top-down allocator hands out at this moment, less the guard gap. */
+static uint64_t hl_linux_host_code_arena_locate(uint64_t page) {
+    void *probe = mmap(NULL, (size_t)page, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint64_t top;
+    if (probe == MAP_FAILED) return 0;
+    top = (uint64_t)(uintptr_t)probe;
+    (void)munmap(probe, (size_t)page);
+    if (top <= HL_LINUX_HOST_CODE_ARENA_GAP + HL_LINUX_HOST_CODE_ARENA_SIZE) return 0;
+    return (top - HL_LINUX_HOST_CODE_ARENA_GAP) & ~(UINT64_C(0x40000000) - 1);
+}
+
 static void *hl_linux_map_aligned(int descriptor, uint64_t size, uint64_t alignment, int protection, int flags) {
-    size_t reserve_size;
-    void *reservation;
-    uintptr_t base;
-    uintptr_t aligned;
-    if (alignment <= (uint64_t)sysconf(_SC_PAGESIZE)) return mmap(NULL, (size_t)size, protection, flags, descriptor, 0);
-    if (size > SIZE_MAX - alignment) {
+    long page = sysconf(_SC_PAGESIZE);
+    uint64_t grain;
+    uint64_t span;
+    uint64_t arena_base;
+    uint64_t arena_end;
+    unsigned attempts;
+    if (page <= 0 || size == 0 || size > SIZE_MAX || alignment == 0 || (alignment & (alignment - 1)) != 0) {
+        errno = EINVAL;
+        return MAP_FAILED;
+    }
+    grain = alignment > (uint64_t)page ? alignment : (uint64_t)page;
+    if (size > UINT64_MAX - grain) {
         errno = ENOMEM;
         return MAP_FAILED;
     }
-    reserve_size = (size_t)(size + alignment);
-    reservation = mmap(NULL, reserve_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (reservation == MAP_FAILED) return MAP_FAILED;
-    base = (uintptr_t)reservation;
-    aligned = (base + (uintptr_t)alignment - 1) & ~((uintptr_t)alignment - 1);
-    if (aligned != base) (void)munmap((void *)base, (size_t)(aligned - base));
-    if (base + reserve_size != aligned + size)
-        (void)munmap((void *)(aligned + size), (size_t)(base + reserve_size - aligned - size));
-    reservation = mmap((void *)aligned, (size_t)size, protection, flags | MAP_FIXED, descriptor, 0);
-    return reservation;
+    span = (size + grain - 1) & ~(grain - 1);
+    if (span == 0 || span > HL_LINUX_HOST_CODE_ARENA_SIZE) {
+        errno = ENOMEM;
+        return MAP_FAILED;
+    }
+    pthread_mutex_lock(&g_host_code_arena_lock);
+    if (g_host_code_arena_base == 0) {
+        g_host_code_arena_base = hl_linux_host_code_arena_locate((uint64_t)page);
+        g_host_code_arena_cursor = g_host_code_arena_base;
+    }
+    arena_base = g_host_code_arena_base;
+    if (arena_base == 0) {
+        pthread_mutex_unlock(&g_host_code_arena_lock);
+        errno = ENOMEM;
+        return MAP_FAILED;
+    }
+    arena_end = arena_base + HL_LINUX_HOST_CODE_ARENA_SIZE;
+    /* A bump cursor that wraps rather than exhausts: a long-lived process re-reserves on every cache flush,
+       and MAP_FIXED_NOREPLACE keeps a second pass over released arena addresses from replacing anything.  The
+       attempt bound turns a genuinely full arena into a bounded failure instead of a spin. */
+    for (attempts = 0; attempts < 4096u; attempts++) {
+        uint64_t base = (g_host_code_arena_cursor + grain - 1) & ~(grain - 1);
+        void *reservation;
+        int placement;
+        if (base < arena_base || base > arena_end - span) base = arena_base;
+        g_host_code_arena_cursor = base + span;
+        pthread_mutex_unlock(&g_host_code_arena_lock);
+        placement = flags | MAP_FIXED_NOREPLACE;
+        reservation = mmap((void *)(uintptr_t)base, (size_t)span, protection, placement, descriptor, 0);
+        if (reservation == (void *)(uintptr_t)base) {
+            if (span > size) (void)munmap((void *)(uintptr_t)(base + size), (size_t)(span - size));
+            return reservation;
+        }
+        if (reservation != MAP_FAILED) {
+            /* A host whose mmap lacks MAP_FIXED_NOREPLACE semantics relocated the request into the top-down
+               pool.  Release it and keep searching inside the arena rather than leaving host storage in
+               guest territory. */
+            (void)munmap(reservation, (size_t)span);
+        } else if (errno != EEXIST) {
+            return MAP_FAILED;
+        }
+        pthread_mutex_lock(&g_host_code_arena_lock);
+    }
+    pthread_mutex_unlock(&g_host_code_arena_lock);
+    errno = ENOMEM;
+    return MAP_FAILED;
 }
 
 static hl_host_result hl_linux_memory_reserve_code(void *context, uint64_t size, uint64_t alignment, uint32_t flags,
@@ -588,9 +670,12 @@ static hl_host_result hl_linux_memory_repair_code(void *context, hl_host_code_ma
         descriptor = memfd_create("hl-code", MFD_CLOEXEC);
         if (descriptor < 0) return hl_linux_errno_result();
         if (ftruncate(descriptor, (off_t)inherited.size) != 0) goto fresh_failed;
-        writable = mmap(NULL, (size_t)inherited.size, PROT_READ | PROT_WRITE, MAP_SHARED, descriptor, 0);
+        /* Same arena, same reason: a fork child that rebuilds its cache must not take a VA the guest owns. */
+        writable = hl_linux_map_aligned(descriptor, inherited.size, (uint64_t)hl_host_page_size(), PROT_READ | PROT_WRITE,
+                                        MAP_SHARED);
         if (writable == MAP_FAILED) goto fresh_failed;
-        executable = mmap(NULL, (size_t)inherited.size, PROT_READ | PROT_EXEC, MAP_SHARED, descriptor, 0);
+        executable = hl_linux_map_aligned(descriptor, inherited.size, (uint64_t)hl_host_page_size(),
+                                          PROT_READ | PROT_EXEC, MAP_SHARED);
         if (executable == MAP_FAILED) goto fresh_failed;
 
         if (preserve != 0) {

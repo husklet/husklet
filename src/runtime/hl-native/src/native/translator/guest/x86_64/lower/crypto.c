@@ -224,11 +224,11 @@ static int lower_ptest(struct insn *I, uint64_t next) {
     int s = crypto_rm_vec(I, next);
     hl_x86_emit_vector3(0x4E201C00u, 16, D, s);
     emit32(0x6E30A800u | (16 << 5) | 16);
-    emit32(0x0E013C00u | (16 << 5) | 18);
+    emit32(0x0E013C00u | (16 << 5) | 27);
     hl_x86_emit_vector3(0x4E601C00u, 17, s, D);
     emit32(0x6E30A800u | (17 << 5) | 17);
     emit32(0x0E013C00u | (17 << 5) | 19);
-    e_subi_s(31, 18, 0, 0);
+    e_subi_s(31, 27, 0, 0);
     e_cset(20, 0, 1);
     e_subi_s(31, 19, 0, 0);
     e_cset(21, 1, 1);
@@ -236,10 +236,10 @@ static int lower_ptest(struct insn *I, uint64_t next) {
     e_rrr(A_ORR, 20, 20, 21, 1, 29);
     e_str(20, 28, OFF_NZCV);
     emit32(0xD51B4200u | 20);
-    e_movconst(18, 1);
-    e_str(18, 28, OFF_PF);
-    e_movconst(18, 0);
-    e_str(18, 28, OFF_AF);
+    e_movconst(27, 1);
+    e_str(27, 28, OFF_PF);
+    e_movconst(27, 0);
+    e_str(27, 28, OFF_AF);
     return TX_NEXT;
 }
 

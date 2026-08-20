@@ -4,6 +4,27 @@ use std::io;
 
 pub(super) use ffi::CommandSession;
 
+#[cfg(test)]
+pub(super) fn signal_for_test(process: u32, signal: libc::c_int) -> io::Result<()> {
+    let process = libc::pid_t::try_from(process)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "process identity exceeds pid_t"))?;
+    ffi::signal(process, signal)
+}
+
+#[cfg(test)]
+pub(super) fn signal_group_for_test(process: u32, signal: libc::c_int) -> io::Result<()> {
+    let process = libc::pid_t::try_from(process)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "process identity exceeds pid_t"))?;
+    ffi::signal_group(process, signal)
+}
+
+#[cfg(test)]
+pub(super) fn process_exists_for_test(process: u32) -> io::Result<bool> {
+    let process = libc::pid_t::try_from(process)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "process identity exceeds pid_t"))?;
+    ffi::exists(process)
+}
+
 pub(super) struct Peer {
     process: libc::pid_t,
 }
@@ -174,6 +195,22 @@ mod ffi {
         })
     }
 
+    #[cfg(test)]
+    pub(super) fn exists(process: libc::pid_t) -> io::Result<bool> {
+        validate(process)?;
+        // SAFETY: signal zero performs existence and permission checking only. The integer process
+        // identity carries no Rust alias, the kernel retains nothing, and the call cannot unwind.
+        if unsafe { libc::kill(process, 0) } == 0 {
+            return Ok(true);
+        }
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::ESRCH) => Ok(false),
+            Some(libc::EPERM) => Ok(true),
+            _ => Err(error),
+        }
+    }
+
     pub(super) fn signal_process_with(
         process: libc::pid_t,
         signal: libc::c_int,
@@ -270,9 +307,8 @@ mod ffi {
 
 #[cfg(test)]
 mod tests {
+    use super::{ffi, process_exists_for_test, Peer};
     use std::io;
-
-    use super::{ffi, Peer};
 
     #[test]
     fn unix_peer_identity_comes_from_the_kernel() {
@@ -285,6 +321,15 @@ mod tests {
 
         assert_eq!(Peer::new(&client).unwrap().process, std::process::id() as i32);
         drop(accepted);
+    }
+
+    #[test]
+    fn liveness_distinguishes_a_reaped_process_from_an_idempotent_signal() {
+        assert!(process_exists_for_test(std::process::id()).unwrap());
+        let mut child = std::process::Command::new("/bin/true").spawn().unwrap();
+        let identity = child.id();
+        child.wait().unwrap();
+        assert!(!process_exists_for_test(identity).unwrap());
     }
 
     #[test]

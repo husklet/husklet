@@ -46,6 +46,16 @@ struct guest_bus_range {
 };
 static struct guest_bus_range g_gbus[GNA_MAX];
 static _Atomic int g_ngbus;
+/* Past-EOF ranges whose guest pages are currently PROT_NONE.  Linux answers a
+   touch there with a permission fault and never with SIGBUS, so such a range
+   must not arm the translated BUS guard -- but its justification returns the
+   moment the guest restores an accessible protection, so it is parked here
+   rather than discarded.  ld.so PROT_NONEs the inter-segment hole of every
+   shared library it maps, and that hole is the tail of the whole-span
+   file-backed reservation, so without this every dynamically linked guest
+   armed the ledger during startup and never disarmed it. */
+static struct guest_bus_range g_gbus_parked[GNA_MAX];
+static int g_ngbus_parked;
 static _Atomic uint64_t g_bus_generation = 1;
 static atomic_flag g_bus_lock = ATOMIC_FLAG_INIT;
 static int g_bus_fail_closed;
@@ -69,6 +79,49 @@ static pthread_once_t g_bus_atfork_once = PTHREAD_ONCE_INIT;
 static pthread_mutex_t g_bus_transition = PTHREAD_MUTEX_INITIALIZER;
 static void gbus_clear(uint64_t lo, uint64_t hi);
 static int gbus_add(uint64_t lo, uint64_t hi);
+
+/* Remove [lo,hi) from the parked set, splitting a straddling entry so a
+   partial re-protect restores exactly the covered part.  A split that cannot
+   be recorded falls closed, matching gbus_clear_locked: a parked range that
+   silently vanished would lose a real SIGBUS after the guest restores an
+   accessible protection. */
+static int gbus_parked_clear_locked(uint64_t lo, uint64_t hi) {
+    int changed = 0;
+    for (int index = 0; index < g_ngbus_parked;) {
+        uint64_t base = g_gbus_parked[index].lo, end = g_gbus_parked[index].hi;
+        if (lo >= end || hi <= base) {
+            index++;
+            continue;
+        }
+        changed = 1;
+        int head = base < lo, tail = hi < end;
+        if (!head && !tail) {
+            g_gbus_parked[index] = g_gbus_parked[--g_ngbus_parked];
+            continue;
+        }
+        if (head)
+            g_gbus_parked[index].hi = lo;
+        else
+            g_gbus_parked[index].lo = hi;
+        if (head && tail) {
+            if (g_ngbus_parked < GNA_MAX)
+                g_gbus_parked[g_ngbus_parked++] = (struct guest_bus_range){hi, end};
+            else
+                g_bus_fail_closed = 1;
+        }
+        index++;
+    }
+    return changed;
+}
+
+static void gbus_parked_append_locked(uint64_t lo, uint64_t hi) {
+    if (hi <= lo) return;
+    (void)gbus_parked_clear_locked(lo, hi);
+    if (g_ngbus_parked < GNA_MAX)
+        g_gbus_parked[g_ngbus_parked++] = (struct guest_bus_range){lo, hi};
+    else
+        g_bus_fail_closed = 1;
+}
 
 static int gbus_clear_locked(uint64_t lo, uint64_t hi) {
     int changed = 0;

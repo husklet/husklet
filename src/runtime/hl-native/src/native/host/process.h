@@ -1,12 +1,26 @@
 #ifndef HL_HOST_PROCESS_H
 #define HL_HOST_PROCESS_H
 
+#include "system.h"
+
 #include <sys/types.h>
 #include <unistd.h>
 
 // Return a close-on-exec descriptor that becomes persistently readable when pid exits.
 // The caller owns the descriptor. Returns -1 with errno set when the host cannot watch pid.
 int hl_host_process_open(pid_t pid);
+
+/* Mint a stable liveness capability for exactly one macOS process incarnation.
+ * `expected_birth` is zero when the caller has not yet observed the process and
+ * otherwise fences the result to that birth timestamp. The returned close-on-
+ * exec descriptor is owned by the caller and becomes readable on NOTE_EXIT.
+ * Other hosts use their native process-handle primitive at the call site. */
+#if defined(__APPLE__)
+int hl_host_process_identity_open(pid_t pid, uint64_t expected_birth, uint64_t expected_generation,
+                                  uint64_t *actual_birth, uint64_t *actual_generation);
+int hl_host_process_peer_identity_open(int socket_descriptor, uint64_t claimed_pid, uint64_t *actual_pid,
+                                       uint64_t *actual_birth, uint64_t *actual_generation);
+#endif
 
 #if defined(_WIN32)
 /*

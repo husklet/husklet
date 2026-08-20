@@ -100,7 +100,7 @@ impl Service {
             .await
             .remove(&JournalId::container(container.id.clone()));
         if let Some(io) = self.io.lock().await.remove(&JournalId::container(container.id.clone())) {
-            io.finish();
+            io.finish().await;
         }
         Ok(container)
     }

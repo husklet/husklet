@@ -149,27 +149,15 @@ int lower_sse_sign_mask(struct insn *instruction, int vm, int mmx) {
         e_vmov8(18, vm);
         source = 18;
     }
-    if (!nosseopt()) {
-        g_pmovmskb_n++;
-        e_vshr_imm(17, source, 8, 7, 0);
-        emit32(0x6F001400u | (25u << 16) | (17 << 5) | 17);
-        emit32(0x6F001400u | (50u << 16) | (17 << 5) | 17);
-        emit32(0x6F001400u | (100u << 16) | (17 << 5) | 17);
-        emit32(0x0E003C00u | (1u << 16) | (17 << 5) | 16);
-        emit32(0x0E003C00u | (17u << 16) | sse_register_field(17, 5) |
-               sse_register_field(instruction->reg, 0));
-        e_rrr(A_ORR, instruction->reg, 16, instruction->reg, 0, 8);
-    } else {
-        e_str_q(source, 28, OFF_MM);
-        e_addi(17, 28, OFF_MM, 1);
-        e_movz(instruction->reg, 0, 0);
-        for (int lane = 0; lane < 16; lane++) {
-            emit32(0x39400000u | ((unsigned)lane << 10) | (17 << 5) | 16);
-            emit32(0x53071C00u | (16 << 5) | 16);
-            emit32(0x2A000000u | sse_register_field(16, 16) | ((unsigned)lane << 10) |
-                   sse_register_field(instruction->reg, 5) | sse_register_field(instruction->reg, 0));
-        }
-    }
+    g_pmovmskb_n++;
+    e_vshr_imm(17, source, 8, 7, 0);
+    emit32(0x6F001400u | (25u << 16) | (17 << 5) | 17);
+    emit32(0x6F001400u | (50u << 16) | (17 << 5) | 17);
+    emit32(0x6F001400u | (100u << 16) | (17 << 5) | 17);
+    emit32(0x0E003C00u | (1u << 16) | (17 << 5) | 16);
+    emit32(0x0E003C00u | (17u << 16) | sse_register_field(17, 5) |
+           sse_register_field(instruction->reg, 0));
+    e_rrr(A_ORR, instruction->reg, 16, instruction->reg, 0, 8);
     return TX_NEXT;
 }
 
@@ -256,7 +244,7 @@ int lower_sse_packed_shift(struct insn *instruction, uint64_t guest_pc, uint64_t
             if (shift > 15) {
                 e_v3(0x6E201C00u, destination, destination, destination);
             } else if (shift) {
-                if (!crypto_state->zero_ready || nosseopt()) e_v3(0x6E201C00u, 26, 26, 26);
+                if (!crypto_state->zero_ready) e_v3(0x6E201C00u, 26, 26, 26);
                 crypto_state->zero_ready = 1;
                 if (operation == 3)
                     e_ext(destination, destination, 26, shift);

@@ -319,6 +319,80 @@ fn a_socket_no_domain_owns_is_cleared_for_the_replacement() {
 }
 
 #[test]
+fn failed_continue_still_closes_attachments_and_waits_for_the_domain() {
+    let attachments = std::cell::Cell::new(false);
+    let waited = std::cell::Cell::new(false);
+    let error = Domain::handover_with(
+        || Ok(()),
+        || Err(io::Error::other("checkpoint rejected")),
+        || {
+            attachments.set(true);
+            Ok(())
+        },
+        || {
+            waited.set(true);
+            Ok(())
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "checkpoint rejected");
+    assert!(
+        attachments.get(),
+        "a failed continue stranded its pane launcher workers"
+    );
+    assert!(waited.get(), "a failed continue skipped the domain lease wait");
+}
+
+#[test]
+fn handover_holds_startup_ownership_until_attachments_and_domain_are_closed() {
+    let root = tempfile::tempdir().unwrap();
+    let startup = root.path().join("startup.lock");
+    let domain = root.path().join("domain.lock");
+    let owner = Lease::acquire(&domain).unwrap();
+    let (attachments_closed, closed) = std::sync::mpsc::channel();
+    let (launcher_exited, exit_confirmed) = std::sync::mpsc::channel();
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+    let startup_in_thread = startup.clone();
+    let domain_in_thread = domain.clone();
+    let closing = std::thread::spawn(move || {
+        let result = Domain::handover_with(
+            || Lease::acquire_wait(&startup_in_thread, std::time::Duration::from_secs(1)),
+            || Ok(()),
+            || {
+                attachments_closed.send(()).unwrap();
+                exit_confirmed.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+                Ok(())
+            },
+            || Lease::wait_available(&domain_in_thread, std::time::Duration::from_secs(1)),
+        );
+        finished_tx.send(()).unwrap();
+        result
+    });
+
+    closed.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+    assert!(
+        finished_rx.try_recv().is_err(),
+        "handover returned while attachment cleanup was waiting for launcher exit"
+    );
+    let Err(error) = Lease::acquire(&startup) else {
+        panic!("a concurrent startup acquired the handover lease");
+    };
+    assert!(
+        matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::AlreadyExists),
+        "unexpected startup-lock contention error: {error}"
+    );
+    launcher_exited.send(()).unwrap();
+    assert!(
+        finished_rx.try_recv().is_err(),
+        "handover returned after launcher exit but while the domain lease was held"
+    );
+    drop(owner);
+    finished_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+    closing.join().unwrap().unwrap();
+    drop(Lease::acquire(&startup).unwrap());
+}
+
+#[test]
 fn a_restart_marks_its_boundary_in_the_appended_domain_log() {
     let root = tempfile::tempdir().unwrap();
     let workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);
@@ -364,11 +438,12 @@ fn restore_summary_is_consumed_once_and_names_each_failure() {
         ])
         .unwrap();
 
-    let text = summary.take().unwrap().unwrap();
-    assert!(text.contains("workspace restored with 2 failure(s)"));
+    let text = summary.read().unwrap().unwrap();
+    assert!(text.contains("2 programs could not be resumed as live processes"));
     assert!(text.contains("terminal pane-1: restored process cannot be attached"));
     assert!(text.contains("container database: checkpoint object is incomplete"));
-    assert_eq!(summary.take().unwrap(), None);
+    summary.clear().unwrap();
+    assert_eq!(summary.read().unwrap(), None);
 }
 
 #[test]
@@ -381,5 +456,246 @@ fn successful_restore_removes_an_obsolete_failure_summary() {
     summary.publish(&["old failure".into()]).unwrap();
     summary.publish(&[]).unwrap();
 
-    assert_eq!(summary.take().unwrap(), None);
+    assert_eq!(summary.read().unwrap(), None);
+}
+
+#[tokio::test]
+async fn kill_cleanup_attempts_process_reap_after_every_earlier_failure() {
+    let calls = std::sync::Mutex::new(Vec::new());
+    let outcome = Domain::stop_kill_with(
+        || {
+            calls.lock().unwrap().push("docker");
+            Err(io::Error::other("daemon stuck"))
+        },
+        || {
+            calls.lock().unwrap().push("attachments");
+            Err(io::Error::other("launcher unavailable"))
+        },
+        async {
+            calls.lock().unwrap().push("processes");
+            Err(io::Error::other("guest reap timed out"))
+        },
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+
+    assert_eq!(*calls.lock().unwrap(), ["docker", "attachments", "processes"]);
+    assert!(outcome.contains("Docker service cleanup: daemon stuck"));
+    assert!(outcome.contains("terminal attachment cleanup: launcher unavailable"));
+    assert!(outcome.contains("workspace process cleanup: guest reap timed out"));
+}
+
+#[tokio::test]
+async fn auxiliary_restore_failure_does_not_abort_later_restore_or_domain_serving() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let starts = Rc::clone(&events);
+    let executions = Rc::clone(&events);
+    let serving = Rc::clone(&events);
+
+    // This mirrors the `?` boundary in `Domain::serve`: an independent process
+    // failure is diagnostic data, so only a repository-level error may prevent
+    // the daemon from being constructed and served.
+    let startup: Result<Vec<String>, &'static str> = async {
+        let failures = Runtime::restore_independently(
+            [
+                ("broken-id".into(), "broken-cache".into()),
+                ("healthy-id".into(), "healthy-database".into()),
+            ],
+            move |id| {
+                let starts = Rc::clone(&starts);
+                async move {
+                    starts.borrow_mut().push(format!("container {id}"));
+                    if id == "broken-id" {
+                        Err("missing optional volume")
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+            move || {
+                let executions = Rc::clone(&executions);
+                async move {
+                    executions.borrow_mut().push("executions".into());
+                    Ok(vec![("pane-2", "terminal endpoint unavailable")])
+                }
+            },
+            |_id| async { Ok(()) },
+        )
+        .await?;
+        serving.borrow_mut().push("serve".into());
+        Ok(failures)
+    }
+    .await;
+
+    assert_eq!(
+        startup.unwrap(),
+        [
+            "broken-cache: missing optional volume",
+            "execution pane-2: terminal endpoint unavailable",
+        ]
+    );
+    assert_eq!(
+        events.borrow().as_slice(),
+        ["container broken-id", "container healthy-id", "executions", "serve"]
+    );
+}
+
+#[test]
+fn docker_warning_survives_relaunch_until_the_ui_acknowledges_it() {
+    let root = tempfile::tempdir().unwrap();
+    let mut workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);
+    workspace.storage = Some(root.path().join("x".repeat(192)));
+    workspace.docker_sock = true;
+    let daemon = crate::runtime::resources::Daemon::new(&workspace);
+    let preparation = daemon.prepare_checkpoint().unwrap();
+    let warning = preparation.warning().unwrap().to_owned();
+    drop(preparation);
+
+    Domain::publish_restore_summary(&workspace, &mut Vec::new()).unwrap();
+    assert!(RestoreSummary::new(&workspace)
+        .read()
+        .unwrap()
+        .unwrap()
+        .contains(&warning));
+    assert_eq!(daemon.checkpoint_warning().unwrap().as_deref(), Some(warning.as_str()));
+
+    // A second domain launch before any terminal/UI consumer must republish, not acknowledge, it.
+    Domain::publish_restore_summary(&workspace, &mut Vec::new()).unwrap();
+    assert_eq!(daemon.checkpoint_warning().unwrap().as_deref(), Some(warning.as_str()));
+
+    let delivered = Domain::take_restore_summary(&workspace).unwrap().unwrap();
+    assert!(delivered.contains(&warning));
+    assert_eq!(daemon.checkpoint_warning().unwrap(), None);
+    assert_eq!(Domain::take_restore_summary(&workspace).unwrap(), None);
+}
+
+#[test]
+fn restore_notice_marks_every_line_as_husklet_output_and_shortens_the_typed_reason() {
+    let root = tempfile::tempdir().unwrap();
+    let mut workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);
+    workspace.storage = Some(root.path().to_owned());
+    let summary = RestoreSummary::new(&workspace);
+
+    summary
+        .publish(&[
+            "execution 95032ffd73334c859c8bd2f1292dd438: exec 95032ffd73334c859c8bd2f1292dd438 \
+             cannot be reattached after a whole-image restore: the restored member is a forked \
+             child of the container's engine process"
+                .into(),
+        ])
+        .unwrap();
+    let text = summary.read().unwrap().unwrap();
+
+    // Every line is attributed to Husklet, so it can never read as something the guest printed.
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        assert!(
+            line.starts_with(crate::runtime::domain::RESTORE_NOTICE_PREFIX),
+            "unmarked notice line: {line:?}"
+        );
+    }
+    // One short line: a short id used once, the refusal's first clause, no engine internals.
+    assert!(
+        text.contains("\u{2022} execution 95032ffd: cannot be reattached after a whole-image restore\n"),
+        "{text}"
+    );
+    assert_eq!(text.matches("95032ffd").count(), 1, "{text}");
+    assert!(
+        !text.contains("forked child of the container's engine process"),
+        "{text}"
+    );
+    // Preserved scrollback is explained rather than presented as a failure report.
+    assert!(text.contains("preserved history"));
+    assert!(text.contains("could not be resumed as a live process"));
+    assert!(!text.contains("failure(s)"), "alarming wording survived: {text}");
+}
+
+#[test]
+fn restore_notice_counts_more_than_one_unresumable_process() {
+    let root = tempfile::tempdir().unwrap();
+    let mut workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);
+    workspace.storage = Some(root.path().to_owned());
+    let summary = RestoreSummary::new(&workspace);
+
+    summary
+        .publish(&["execution a: gone".into(), "execution b: gone".into()])
+        .unwrap();
+    let text = summary.read().unwrap().unwrap();
+
+    assert!(text.contains("2 programs could not be resumed"), "{text}");
+}
+
+/// The user's reported journey, at the record layer: one workspace closed with Continue later and
+/// reopened, over and over. Each reopen refuses to reattach the pane's execution, and each reopen
+/// then creates a fresh pane execution which is checkpointed by the next close.
+///
+/// Every cycle must report exactly the one program it could not resume. Before the refused record
+/// was discarded, cycle N reported N of them, because nothing in the workspace's life removes a
+/// `Created` execution that owns a checkpoint.
+#[tokio::test]
+async fn repeated_continue_later_cycles_report_one_refusal_each_and_never_accumulate() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    // The durable execution records of one workspace, keyed by id, surviving every cycle.
+    let records: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    let mut reported = Vec::new();
+
+    for cycle in 1..=10 {
+        // The pane execution checkpointed by the previous close is the record awaiting restore.
+        let awaiting = records.borrow().clone();
+        let discarded = Rc::clone(&records);
+        let failures: Vec<String> = Runtime::restore_independently(
+            std::iter::empty::<(String, String)>(),
+            |_id: String| async { Ok::<(), String>(()) },
+            move || async move {
+                Ok(awaiting
+                    .into_iter()
+                    .map(|id| (id, "the restored member exposes no live handle".to_owned()))
+                    .collect::<Vec<_>>())
+            },
+            move |id: String| {
+                let discarded = Rc::clone(&discarded);
+                async move {
+                    discarded.borrow_mut().retain(|existing| existing != &id);
+                    Ok::<(), String>(())
+                }
+            },
+        )
+        .await
+        .expect("restore reports independent failures rather than aborting");
+        reported.push(failures.len());
+        // Reopening the workspace opens one pane, whose execution the next close checkpoints.
+        records.borrow_mut().push(format!("pane-{cycle}"));
+    }
+
+    assert_eq!(
+        reported,
+        [0, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        "each reopen must report only the execution that this cycle could not resume"
+    );
+    assert_eq!(
+        records.borrow().len(),
+        1,
+        "a refused execution record must not survive the restore that reported it"
+    );
+}
+
+/// A refusal is the line the reader acts on; a failure to discard the refused record must not
+/// replace it, duplicate it, or abort the restore of anything else.
+#[tokio::test]
+async fn a_discard_failure_neither_hides_nor_duplicates_the_refusal_it_follows() {
+    let failures: Vec<String> = Runtime::restore_independently(
+        std::iter::empty::<(String, String)>(),
+        |_id: String| async { Ok::<(), String>(()) },
+        || async { Ok(vec![("pane-1".to_owned(), "no live handle".to_owned())]) },
+        |_id: String| async { Err::<(), String>("record storage is read-only".to_owned()) },
+    )
+    .await
+    .expect("a discard failure is diagnostic, not a repository error");
+
+    assert_eq!(failures, ["execution pane-1: no live handle"]);
 }

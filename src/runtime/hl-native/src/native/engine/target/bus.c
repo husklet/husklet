@@ -13,6 +13,10 @@ void hl_target_bus_changed(hl_target_bus *bus, uint64_t generation, int active) 
     hl_guest_bus_changed(&bus->guest, generation, active);
 }
 
+void hl_target_bus_arm_latched(hl_target_bus *bus) {
+    hl_guest_bus_arm_latched(&bus->guest);
+}
+
 int hl_target_bus_active(const hl_target_bus *bus) {
     return hl_guest_bus_active(&bus->guest);
 }

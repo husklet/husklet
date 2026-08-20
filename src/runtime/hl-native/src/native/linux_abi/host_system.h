@@ -15,6 +15,8 @@
  * call site names it, and none of them justifies a header of its own.
  */
 
+#include <stdint.h>
+
 #if !defined(_WIN32)
 
 #include <stdio.h>
@@ -29,7 +31,6 @@
 #else /* Windows */
 
 #include <errno.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -67,5 +68,17 @@ static inline uint64_t makedev(unsigned int high, unsigned int low) {
 }
 
 #endif /* _WIN32 */
+
+/* Split a device number produced by the host ABI. Unix hosts must use their
+ * native dev_t encoding (Darwin and Linux differ); the Windows compatibility
+ * definitions above deliberately use the Linux encoding used by the guest
+ * device model. */
+static inline unsigned int hl_host_device_major(uint64_t device) {
+    return major(device);
+}
+
+static inline unsigned int hl_host_device_minor(uint64_t device) {
+    return minor(device);
+}
 
 #endif

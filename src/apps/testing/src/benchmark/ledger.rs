@@ -27,6 +27,7 @@ fn follows_schedule(row: &Row, step: &Step) -> bool {
         && row.round == step.round
         && row.position == step.position
         && row.arm == step.arm
+        && row.profile == step.profile
 }
 
 impl Ledger {
@@ -203,6 +204,8 @@ mod tests {
             round: 0,
             position,
             arm: "E".into(),
+            profile: crate::benchmark::definition::ProfileKind::Primary,
+            paired_profile: crate::benchmark::definition::ProfileKind::Primary,
         }
     }
 
@@ -215,6 +218,7 @@ mod tests {
             round: step.round,
             position: step.position,
             arm: step.arm.clone(),
+            profile: step.profile,
             output: "same".into(),
             output_frame: "frame".into(),
             diagnostic: None,

@@ -70,10 +70,21 @@ static int svc_proc_260(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         }
         // checkpoint restore: a wait targeting a specific checkpoint-time guest pid must name the live host
         // pid the tree was re-forked with (identity no-op on a normal launch when the pid map is empty).
-        if (hl_linux_pidmap_count(&g_pidmap) != 0 && (int)a0 > 0)
-            a0 = (uint64_t)(unsigned)hl_linux_pidmap_host(&g_pidmap, (int)a0);
-        else if (hl_linux_pidmap_count(&g_pidmap) != 0 && (int)a0 < -1)
-            a0 = (uint64_t)(int64_t)(-hl_linux_pidmap_host(&g_pidmap, -(int)a0));
+        if (hl_linux_pidmap_is_active(&g_pidmap) && (int)a0 > 0) {
+            int host;
+            if (hl_linux_pidmap_host_checked(&g_pidmap, (int)a0, &host) != 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-ECHILD);
+                break;
+            }
+            a0 = (uint64_t)(unsigned)host;
+        } else if (hl_linux_pidmap_is_active(&g_pgidmap) && (int)a0 < -1) {
+            int host;
+            if (hl_linux_pidmap_host_checked(&g_pgidmap, -(int)a0, &host) != 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-ECHILD);
+                break;
+            }
+            a0 = (uint64_t)(int64_t)(-host);
+        }
         // when ptrace is already in use in this session (a tracee link exists -> nactive>0) route the
         // wait through the ptrace pump, which surfaces tracee ptrace-stops (Linux-encoded) AND real child
         // exits and tears a link down when its tracee dies. For the ENTIRE non-ptrace matrix nactive is 0,
@@ -220,14 +231,14 @@ static int svc_proc_260(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // 0x7f / continued 0xffff) leaves the pid table; drop its container-registry record here so a
         // signal-killed child (which never ran its own exit cleanup) can't leave a stale membership marker
         // that a recycled host pid could inherit. Use the host pid `r` before the restore remap below.
-        if (r > 0 && (st & 0xff) != 0x7f && st != 0xffff) proc_reg_reap((int)r);
+        if (r > 0 && (st & 0xff) != 0x7f && st != 0xffff) host_pid_unregister_reaped((int)r);
         // checkpoint restore: report the reaped child under the guest pid the checkpoint recorded, and drop
         // its translation once it is reaped so a future host pid can never alias it (no-op on normal launch).
-        if (hl_linux_pidmap_count(&g_pidmap) != 0 && r > 0) {
-            int gp = hl_linux_pidmap_guest(&g_pidmap, (int)r);
-            if (gp != (int)r) {
+        if (hl_linux_pidmap_is_active(&g_pidmap) && r > 0) {
+            int gp;
+            if (hl_linux_pidmap_guest_checked(&g_pidmap, (int)r, &gp) == 0) {
                 if (((st & 0x7f) == 0) || (((st & 0x7f) != 0x7f) && ((st & 0x7f) != 0)))
-                    (void)hl_linux_pidmap_remove_host(&g_pidmap, (int)r);
+                    (void)hl_linux_identity_registry_reap(&g_pidmap, &g_pgidmap, &g_sidmap, (int)r);
                 r = (pid_t)gp;
             }
         }

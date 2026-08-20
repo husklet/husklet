@@ -124,10 +124,17 @@ fn histogram_entry(fields: &str) -> Option<String> {
     Some(format!("{}:{}", pc?, weight?))
 }
 
-/// One counter comparison from a case `expect.diagnostics` list.
+/// One engine diagnostic assertion from a case `expect.diagnostics` list.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum Assertion {
+    Counter(CounterAssertion),
+    Record(RecordAssertion),
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub(crate) struct Assertion {
+pub(crate) struct CounterAssertion {
     counter: String,
     #[serde(default)]
     greater_than: Option<u64>,
@@ -135,7 +142,18 @@ pub(crate) struct Assertion {
     equals: Option<u64>,
 }
 
-impl Assertion {
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub(crate) struct RecordAssertion {
+    record: String,
+    count: usize,
+    #[serde(default)]
+    fields: BTreeMap<String, String>,
+    #[serde(default)]
+    nonnegative: Vec<String>,
+}
+
+impl CounterAssertion {
     /// Exactly one comparison, so a mistyped key cannot deserialise into an assertion that
     /// nothing can violate.
     fn validate(&self) -> Result<(), Error> {
@@ -170,6 +188,90 @@ impl Assertion {
                 self.counter
             )),
             _ => None,
+        }
+    }
+}
+
+impl RecordAssertion {
+    fn validate(&self) -> Result<(), Error> {
+        if self.record.trim().is_empty() || self.count == 0 {
+            return Err("a diagnostic record assertion needs a name and nonzero count".into());
+        }
+        if self
+            .fields
+            .keys()
+            .chain(&self.nonnegative)
+            .any(|field| field.trim().is_empty() || field.contains('='))
+        {
+            return Err(format!("diagnostic record {:?} has an invalid field name", self.record).into());
+        }
+        Ok(())
+    }
+
+    fn violation(&self, stderr: &[u8]) -> Option<String> {
+        let stderr = String::from_utf8_lossy(stderr);
+        let records = stderr
+            .lines()
+            .filter_map(|line| {
+                let fields = line.trim_start().strip_prefix(&self.record)?;
+                fields.chars().next().is_some_and(char::is_whitespace).then_some(fields)
+            })
+            .collect::<Vec<_>>();
+        if records.len() != self.count {
+            return Some(format!(
+                "engine diagnostic record {:?} appeared {} times, expected {}",
+                self.record,
+                records.len(),
+                self.count
+            ));
+        }
+        for record in records {
+            let Some(fields) = record_fields(record) else {
+                return Some(format!(
+                    "engine diagnostic record {:?} contains a malformed or duplicate field",
+                    self.record
+                ));
+            };
+            for (name, expected) in &self.fields {
+                if fields.get(name.as_str()).copied() != Some(expected.as_str()) {
+                    return Some(format!(
+                        "engine diagnostic record {:?} field {name:?} is {:?}, expected {expected:?}",
+                        self.record,
+                        fields.get(name.as_str())
+                    ));
+                }
+            }
+            for name in &self.nonnegative {
+                let Some(value) = fields.get(name.as_str()).and_then(|value| value.parse::<i128>().ok()) else {
+                    return Some(format!(
+                        "engine diagnostic record {:?} field {name:?} is absent or not an integer",
+                        self.record
+                    ));
+                };
+                if value < 0 {
+                    return Some(format!(
+                        "engine diagnostic record {:?} field {name:?} is negative: {value}",
+                        self.record
+                    ));
+                }
+            }
+        }
+        None
+    }
+}
+
+impl Assertion {
+    fn validate(&self) -> Result<(), Error> {
+        match self {
+            Self::Counter(assertion) => assertion.validate(),
+            Self::Record(assertion) => assertion.validate(),
+        }
+    }
+
+    fn violation(&self, counters: &Counters, stderr: &[u8]) -> Option<String> {
+        match self {
+            Self::Counter(assertion) => assertion.violation(counters),
+            Self::Record(assertion) => assertion.violation(stderr),
         }
     }
 }
@@ -224,6 +326,17 @@ fn add_fields(counters: &mut BTreeMap<String, u64>, fields: &str) {
     }
 }
 
+fn record_fields(record: &str) -> Option<BTreeMap<&str, &str>> {
+    let mut fields = BTreeMap::new();
+    for field in record.split_whitespace() {
+        let (name, value) = field.split_once('=')?;
+        if name.is_empty() || value.is_empty() || fields.insert(name, value).is_some() {
+            return None;
+        }
+    }
+    Some(fields)
+}
+
 /// The first unmet assertion, or none. Absent diagnostics violate every assertion rather than
 /// skipping it, because silently passing on missing data is the gap this exists to close.
 pub(crate) fn violation(assertions: &[Assertion], stderr: &[u8]) -> Option<String> {
@@ -231,7 +344,9 @@ pub(crate) fn violation(assertions: &[Assertion], stderr: &[u8]) -> Option<Strin
         return None;
     }
     let counters = Counters::parse(stderr);
-    assertions.iter().find_map(|assertion| assertion.violation(&counters))
+    assertions
+        .iter()
+        .find_map(|assertion| assertion.violation(&counters, stderr))
 }
 
 #[cfg(test)]
@@ -276,6 +391,33 @@ mod tests {
         let message = violation(&assertions("- { counter: crossings, greater-than: 0 }"), b"").unwrap();
         assert!(message.contains("never emitted"), "{message}");
         assert!(message.contains("no execution diagnostic record"), "{message}");
+    }
+
+    const FORK_FAILURE: &[u8] = b"hl-fork-failure: stage=pids-limit result_errno=11 host_snapshot_status=1 \
+                                  host_threads=03 host_children=0 local_tasks=1 pids_total=1 pids_max=1 \
+                                  open_fds=12 nofile_cur=1024 nofile_max=4096 nproc_cur=2048 nproc_max=4096\n";
+
+    const FORK_ASSERTION: &str = "- record: 'hl-fork-failure:'\n  count: 1\n  fields:\n    stage: pids-limit\n    result_errno: '11'\n    host_snapshot_status: '1'\n  nonnegative: [host_threads, host_children, local_tasks, pids_total, pids_max, open_fds, nofile_cur, nofile_max, nproc_cur, nproc_max]\n";
+
+    #[test]
+    fn structured_failure_record_requires_one_parseable_real_host_snapshot() {
+        assert!(violation(&assertions(FORK_ASSERTION), FORK_FAILURE).is_none());
+
+        let missing = violation(&assertions(FORK_ASSERTION), b"").unwrap();
+        assert!(missing.contains("appeared 0 times"), "{missing}");
+
+        let duplicate = [FORK_FAILURE, FORK_FAILURE].concat();
+        let duplicate = violation(&assertions(FORK_ASSERTION), &duplicate).unwrap();
+        assert!(duplicate.contains("appeared 2 times"), "{duplicate}");
+
+        let negative = FORK_FAILURE
+            .windows(b"host_threads=03".len())
+            .position(|window| window == b"host_threads=03")
+            .expect("fixture field");
+        let mut negative_report = FORK_FAILURE.to_vec();
+        negative_report[negative + "host_threads=".len()] = b'-';
+        let negative = violation(&assertions(FORK_ASSERTION), &negative_report).unwrap();
+        assert!(negative.contains("is negative"), "{negative}");
     }
 
     #[test]
@@ -388,6 +530,15 @@ mod tests {
         assert!(validate(assertions("- { counter: crossings, equals: 1, greater-than: 0 }"), true).is_err());
         assert!(validate(assertions("- { counter: \" \", equals: 1 }"), true).is_err());
         assert!(validate(assertions("- { counter: crossings, equals: 1 }"), true).is_ok());
+        assert!(validate(assertions("- { record: '', count: 1 }"), true).is_err());
+        assert!(validate(assertions("- { record: event, count: 0 }"), true).is_err());
+        assert!(
+            validate(
+                assertions("- { record: event, count: 1, nonnegative: ['bad=name'] }"),
+                true
+            )
+            .is_err()
+        );
     }
 
     #[test]

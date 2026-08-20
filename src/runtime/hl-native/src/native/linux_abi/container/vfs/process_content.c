@@ -584,7 +584,7 @@ static int proc_open_peer_process(const char *rp) {
         if (fl && gp2 > 0) {
             int host;
             int is_oom_leaf = !strcmp(fl, "oom_score_adj") || !strcmp(fl, "oom_adj") || !strcmp(fl, "oom_score");
-            if (proc_pid_member(gp2, &host) ||
+            if (guest_pid_member_checked(gp2, &host) ||
                 (is_oom_leaf && (host = (gp2 == 1 && g_init_hostpid) ? g_init_hostpid : gp2) > 0 &&
                  !(kill(host, 0) != 0 && errno == ESRCH))) {
                 if (!strncmp(fl, "ns/", 3) && fl[3] && ns_clone_flag(fl + 3)) {
@@ -1463,7 +1463,7 @@ static int proc_open(const char *requested_path) {
 
 // Linux-layout stat for a synthesized /proc or /sys file (so stat()/access() see it -- find, du,
 // container runtimes that stat /etc/mtab -> /proc/mounts, JVM that stats cgroup files, etc.).
-static void fill_linux_stat(uint8_t *d, const struct stat *s, const char *hostpath, int fd);
+static int fill_linux_stat(uint8_t *d, const struct stat *s, const char *hostpath, int fd, int nofollow);
 
 // The pseudo /dev nodes the rootfs lacks but open() (fs.c) backs with a real host device. Returns the
 // host path open() would use, else NULL. stat()/access() consult this so the nodes report as EXISTING

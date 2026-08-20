@@ -7,6 +7,9 @@
 #include "../../host/system.h"
 #include "key.h"
 #include "pidmap.h"
+// The container-wide identity registry rides the one shared object every launch of a container already
+// inherits (see container_identity_descriptor below).
+#include "../../engine/checkpoint_channel.h"
 #include "ports.h"
 #include "snapshot.h"
 
@@ -44,11 +47,19 @@ static hl_limit_table g_limits;
 
 // current anon charge (bytes)
 static _Atomic uint64_t g_mem_charged = 0;
-// Max argv/envp entries the exec-forward + stack-build path carries. Linux caps only at ARG_MAX (bytes);
-// a former fixed 256 silently truncated large generated argv lists (a different command ran). 2048 covers
-// realistic exec argv/env while keeping the stack arrays bounded.
+// Max argv/envp entries the exec-forward + stack-build path carries. Linux caps argv/envp only by BYTES
+// (MAX_ARG_STRLEN = 128 KiB per single string, ARG_MAX = RLIMIT_STACK/4 = 2 MiB in total) and reports
+// -E2BIG when either is exceeded; it never truncates and never reorders. Two earlier caps did truncate:
+// a fixed 256, then 2048 -- a `mv` with 5000 paths silently ran with a DIFFERENT last argument, so the
+// target of the move became an ordinary file ("Not a directory"). The array bound below is what keeps the
+// stack-resident pointer vectors bounded (AGENTS.md: guest-provided counts are bounded before allocation);
+// every consumer must now FAIL CLOSED with -E2BIG at this bound rather than proceed with a short vector.
 #ifndef HL_MAXARGV
-#define HL_MAXARGV 2048
+#define HL_MAXARGV 8192
+#endif
+// Same bound for the environment vector: build_stack lays out argv and envp from equally-sized arrays.
+#ifndef HL_MAXENVP
+#define HL_MAXENVP HL_MAXARGV
 #endif
 // live task count (init = 1)
 static _Atomic int g_pids_cur = 1;
@@ -248,11 +259,12 @@ static hl_linux_snapshot g_ckpt_snapshot;
 // generation this process last acted on. Both stay 0/NULL unless armed, so ckpt_pending() is inert on a
 // normal launch (and always for x86, which never arms checkpoint) -- the whole gate is unaffected.
 static volatile uint32_t *g_ckpt_trigger;
-static uint32_t g_ckpt_seen_gen;
+static _Atomic uint32_t g_ckpt_seen_gen;
 static _Atomic int g_ckpt_barrier_active;
+static _Atomic uint32_t g_ckpt_fanout_gen;
 
 uint32_t ckpt_request_generation(void) {
-    return g_ckpt_seen_gen;
+    return atomic_load_explicit(&g_ckpt_seen_gen, memory_order_acquire);
 }
 
 // A whole-tree checkpoint has been requested. Consulted by syscall_should_restart / svc_poll_retry so a
@@ -264,7 +276,8 @@ static int ckpt_pending(void) __attribute__((unused));
 
 static int ckpt_pending(void) {
     return atomic_load_explicit(&g_ckpt_barrier_active, memory_order_acquire) ||
-           (g_ckpt_trigger && (*g_ckpt_trigger != g_ckpt_seen_gen));
+           (g_ckpt_trigger && (__atomic_load_n(g_ckpt_trigger, __ATOMIC_ACQUIRE) !=
+                               atomic_load_explicit(&g_ckpt_seen_gen, memory_order_acquire)));
 }
 
 // This restored process's OWN guest pid (0 => normal launch, report the host pid). A checkpoint restore
@@ -303,6 +316,367 @@ static int container_pid(void) {
 // reaped-child pid, bash's job table, kill(pid)). It is empty on every normal launch, so every translation is
 // an identity no-op and behavior outside the restore path is unchanged.
 static hl_linux_pidmap g_pidmap;
+// Process, process-group and session identifiers share Linux's numeric namespace but not their lifetime.
+// In particular, reaping a group leader retires its process identity without retiring the group identity.
+static hl_linux_pidmap g_pgidmap;
+static hl_linux_pidmap g_sidmap;
+static hl_linux_identity_registry g_identity_registry = {.lock_fd = -1};
+
+static int restore_process_identity_add(int guest, int host) {
+    return hl_linux_pidmap_add(&g_pidmap, guest, host);
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+// Lets the pid-namespace fixture stand two launches on one container object without an engine, driving the
+// real preparation, the real join and the real allocate/publish pair rather than an imitation of them.
+static int g_identity_descriptor_for_test = -1;
+#endif
+
+// The descriptor whose shared region holds THIS CONTAINER's identity registry, or -1 when this launch has
+// none and must fall back to a private one.
+//
+// The checkpoint trigger is that object: it is created once per container by the embedder and inherited by
+// the spec tree's launch and by every exec session's launch alike -- which is exactly the set of processes
+// that must agree on one pid namespace. A bare (embedder-less) run has no trigger and is a single launch,
+// so a private registry is the whole namespace there and nothing is shared with anyone.
+static int container_identity_descriptor(void) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (g_identity_descriptor_for_test >= 0) return g_identity_descriptor_for_test;
+#endif
+    return hl_ckpt_trigger_descriptor();
+}
+
+// A launch that HAS the container's shared identity object must use it, and must fail if it cannot.
+//
+// The fallback below is for the one launch that owns no such object -- a bare engine run, which is alone in
+// its namespace by construction and can allocate privately without any other process being able to collide
+// with it. Extending that fallback to a launch which HAS the object but failed to map or lock it is what
+// turned a host incompatibility into a silent identity collision: on macOS the mmap and the record lock both
+// failed, every launch of one container fell back to a private registry, and the spec tree and each exec
+// session all issued guest 1, 2, 3, 4. Two live processes then named one `proc.<guest pid>` image group and
+// the capture -- correctly -- refused. There is no safe private answer once a container object exists.
+static int ckpt_restore_identity_prepare_shared(void) {
+    int descriptor = container_identity_descriptor();
+    if (descriptor >= 0)
+        return hl_linux_identity_registry_prepare_shared_descriptor(&g_identity_registry, descriptor, &g_pidmap,
+                                                                    &g_pgidmap, &g_sidmap);
+    return hl_linux_identity_registry_prepare(&g_identity_registry, &g_pidmap, &g_pgidmap, &g_sidmap);
+}
+
+// A post-restore fork must extend the live namespace in shared memory. Both sides may race here; the
+// registry serializes allocation and returns the same guest id for an already-published host process.
+static int restore_process_identity_publish(int guest, int host) {
+    if (!hl_linux_pidmap_is_active(&g_pidmap)) return host;
+    return hl_linux_pidmap_add(&g_pidmap, guest, host) == 0 ? guest : -1;
+}
+
+// Activate only after the restore barrier has hydrated every live identity. Until then a child inherits a
+// deliberately incomplete snapshot while its siblings are still being forked, so fail-closed lookup would
+// reject identities which are merely not published yet.
+static __attribute__((unused)) void ckpt_restore_identity_activate(void) {
+    hl_linux_pidmap_activate(&g_pidmap);
+    hl_linux_pidmap_activate(&g_pgidmap);
+    hl_linux_pidmap_activate(&g_sidmap);
+}
+
+// ---- normal-launch PID namespace ------------------------------------------------------------------------
+// A container is a PID namespace, so every guest process -- not only the init -- must carry a namespace-local
+// identity. Before this the engine virtualized ONLY the init (g_init_hostpid <-> 1) and passed every child's
+// HOST pid straight through: `sh -c 'sh -c "echo \$\$"'` printed 1 then 2171607, /proc listed `1` beside
+// `1867410`, and /proc/self/status named a PPid with no guest existence. That is host placement leaking into
+// guest-visible runtime metadata, which the mission forbids.
+//
+// The mapping machinery this needs already exists for checkpoint restore, which keeps guest pids stable
+// across a re-fork; the only thing restore-specific about it was WHEN it was turned on. Seeding it at
+// container init makes every consumer's already-written active branch the normal path, and every fork then
+// allocates the next small guest pid through hl_linux_pidmap_allocate_guest (clone.c).
+//
+// The group and session maps are seeded from the init's REAL host pgid/sid rather than from its pid. The
+// inactive path folded only `host == g_init_hostpid` to 1 and leaked the raw host value otherwise, so an
+// engine launched into a shell's process group already reported a host pgid to the guest.
+static int container_pid_namespace_begin(void) {
+    if (hl_linux_pidmap_is_active(&g_pidmap)) return 0; // a restore hydrates and activates its own namespace
+    if (ckpt_restore_identity_prepare_shared() != 0) return -1;
+    int host_pid = (int)getpid();
+    int host_pgid = (int)getpgrp();
+    int host_sid = (int)getsid(0);
+    if (host_pgid <= 0) host_pgid = host_pid;
+    if (host_sid <= 0) host_sid = host_pgid;
+    // NOT an unconditional seed of guest 1. A container is served by several engine launches -- the spec
+    // tree's and one per exec session -- and only the first of them is the namespace init; a launch that
+    // claimed guest 1 for itself gave the container a second process called 1 and, one fork later, a second
+    // process called 2, 3, 4. Two live processes then answered the same guest pid, which is also the name a
+    // capture files an image group under, so two of them claimed one group and the capture was refused.
+    // Docker answers this the same way: `docker exec` runs at an ordinary namespace pid, not at 1.
+    int guest_parent = 0;
+    int guest = (int)hl_linux_identity_registry_join(&g_pidmap, &g_pgidmap, &g_sidmap, host_pid, host_pgid, host_sid,
+                                                     &guest_parent);
+    if (guest <= 0) return -1;
+    ckpt_restore_identity_activate();
+    g_self_gpid = guest;
+    // A PID-namespace init has no parent inside its namespace; an exec session's host parent is the
+    // container daemon, which has no guest existence, so the guest sees Linux's reparent to init.
+    g_self_gppid = guest_parent;
+    return 0;
+}
+
+// Host -> namespace-local translation for the /proc, /sys and cgroup synthesis, which renders identities it
+// read from HOST process metadata. Returns 0 for a host identity with no guest existence; a caller rendering
+// a field that cannot be absent (a parent) substitutes 1, exactly as Linux reparents an orphan to init.
+// The inactive arm is the pre-namespace fold, kept so a bare (rootfs-less) run is unchanged.
+static int guest_pid_from_host(int host) {
+    int guest;
+    if (host <= 0) return 0;
+    if (hl_linux_pidmap_is_active(&g_pidmap))
+        return hl_linux_pidmap_guest_checked(&g_pidmap, host, &guest) == 0 ? guest : 0;
+    return (g_init_hostpid && host == g_init_hostpid) ? 1 : host;
+}
+
+// This process's namespace-local parent. Shared by getppid(2) and the /proc/self/{stat,status} rendering so
+// the two can never disagree -- they did: status reported a host PPid naming a process with no guest
+// existence while getppid() reported the folded value.
+static int proc_self_guest_ppid(int self_gpid) {
+    if (g_self_gppid >= 0) return g_self_gppid;
+    if (self_gpid == 1) return 0;
+    int parent = (int)getppid();
+    if (hl_linux_pidmap_is_active(&g_pidmap)) {
+        int guest;
+        // A miss means the host reparented us out of the container after our parent was reaped, which the
+        // guest must see as Linux's orphan reparent to init.
+        return hl_linux_pidmap_guest_checked(&g_pidmap, parent, &guest) == 0 ? guest : 1;
+    }
+    return (g_init_hostpid && parent == g_init_hostpid) ? 1 : parent;
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+// ------------------------------------------------------- pid namespace: behavioral fixture
+//
+// Drives the REAL container_pid_namespace_begin, the REAL allocate/publish pair that clone.c runs across a
+// fork, and the REAL translations the /proc synthesis renders with. The defect it pins: only the init was
+// virtualized, so `sh -c 'sh -c "echo $$"'` printed 1 then a HOST pid, /proc listed a host-shaped entry
+// beside `1`, and /proc/self/status named a PPid with no guest existence.
+//
+// Scenario 1 is the closed direction, and it is what stops the fix from being "render everything": a host
+// process that is NOT a container member must have no guest rendering at all, so a host pid can never
+// reach the guest through the /proc, cgroup or peer-identity paths.
+static int pid_namespace_scenario(uint32_t scenario) {
+    g_init_hostpid = (int)getpid();
+    g_hostpid_cache = 0;
+    if (container_pid_namespace_begin() != 0) return -1;
+
+    if (container_pid() != 1) return -1;                          // the launch top is the namespace init
+    if (proc_self_guest_ppid(container_pid()) != 0) return -1;    // and it has no parent inside it
+    if (guest_pid_from_host((int)getpid()) != 1) return -1;
+
+    if (scenario == 1) {
+        // The fixture's own parent is the test binary: live, related, and outside the container.
+        int outsider = (int)getppid();
+        return outsider > 0 && guest_pid_from_host(outsider) == 0 ? 0 : -1;
+    }
+
+    int guest_child = (int)hl_linux_pidmap_allocate_guest(&g_pidmap);
+    // Namespace-local: the second process in the namespace, not a host pid. A host pid would be six or
+    // seven digits here, which is exactly what the guest used to print.
+    if (guest_child != 2) return -1;
+    pid_t child = fork();
+    if (child < 0) return -1;
+    if (child == 0) {
+        if (restore_process_identity_publish(guest_child, (int)getpid()) != guest_child) _exit(3);
+        g_self_gpid = guest_child; // the two lines clone.c runs in the child
+        g_self_gppid = -1;
+        g_hostpid_cache = 0;
+        if (container_pid() != guest_child) _exit(4);                      // getpid() is guest-local
+        if (proc_self_guest_ppid(container_pid()) != 1) _exit(5);          // PPid names the init, not a host pid
+        if (guest_pid_from_host((int)getpid()) != guest_child) _exit(6);   // /proc renders it the same way
+        // A grandchild, because a CHILD of the init cannot separate the namespace from the old
+        // init-only fold: both answer 1 for its parent. A grandchild's parent is an ordinary guest
+        // process, which the fold could only render as a host pid.
+        int guest_grandchild = (int)hl_linux_pidmap_allocate_guest(&g_pidmap);
+        if (guest_grandchild != guest_child + 1) _exit(7);
+        pid_t grandchild = fork();
+        if (grandchild < 0) _exit(8);
+        if (grandchild == 0) {
+            if (restore_process_identity_publish(guest_grandchild, (int)getpid()) != guest_grandchild) _exit(9);
+            g_self_gpid = guest_grandchild;
+            g_self_gppid = -1;
+            g_hostpid_cache = 0;
+            if (container_pid() != guest_grandchild) _exit(10);
+            // The whole defect in one assertion: its parent is a process the guest can see.
+            if (proc_self_guest_ppid(container_pid()) != guest_child) _exit(11);
+            _exit(0);
+        }
+        int grandchild_status = 0;
+        while (waitpid(grandchild, &grandchild_status, 0) < 0 && errno == EINTR) {}
+        if (!WIFEXITED(grandchild_status) || WEXITSTATUS(grandchild_status) != 0) _exit(12);
+        _exit(0);
+    }
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) return -1;
+    // The parent's view of the child agrees with the child's view of itself, and the child's HOST pid is
+    // not a thing the guest can see.
+    if (guest_pid_from_host((int)child) != guest_child) return -1;
+    return 0;
+}
+
+// ------------------------------------------------------- pid namespace: uniqueness across launches
+//
+// A container is ONE namespace served by SEVERAL engine launches -- the spec tree's, and one per exec
+// session, each forked out of the container daemon rather than out of the init. The registry was private
+// to a launch, so every launch seeded guest 1 for itself and then allocated the same 2, 3, 4 for its forks.
+// Two live processes in one container therefore answered the same guest pid, and since a capture files a
+// process's image under `proc.<guest pid>`, two of them claimed one image group: the second GROUP_BEGIN
+// collided, that member aborted, and the whole capture failed. Measured 6/6 with proc.3 duplicated.
+//
+// Depth three per launch, not one: a launch top on its own cannot separate the two designs, because the
+// duplicate a private registry produces is guest 1 in both -- and 1 is also what the pre-namespace fold
+// answered. The forks are what make the collision the product hit (proc.3, never proc.1) reachable here.
+static int pid_namespace_descend(int writer, int depth) {
+    if (depth <= 0) return 0;
+    int guest_child = (int)hl_linux_pidmap_allocate_guest(&g_pidmap);
+    if (guest_child <= 0) return -1;
+    pid_t child = fork();
+    if (child < 0) return -1;
+    if (child == 0) {
+        // The two lines clone.c runs in a fork child, and nothing else.
+        int published = restore_process_identity_publish(guest_child, (int)getpid()) == guest_child;
+        g_self_gpid = guest_child;
+        g_self_gppid = -1;
+        g_hostpid_cache = 0;
+        int reported = container_pid();
+        if (!published || reported != guest_child ||
+            write(writer, &reported, sizeof reported) != (ssize_t)sizeof reported)
+            _exit(3);
+        _exit(pid_namespace_descend(writer, depth - 1) == 0 ? 0 : 4);
+    }
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
+}
+
+// One engine launch entering the container `object` names: the real preparation, the real join, the real
+// allocate/publish pair. It reports the guest pid of every process it creates, itself included.
+static int pid_namespace_launch(int object, int writer) {
+    memset(&g_pidmap, 0, sizeof g_pidmap);
+    memset(&g_pgidmap, 0, sizeof g_pgidmap);
+    memset(&g_sidmap, 0, sizeof g_sidmap);
+    memset(&g_identity_registry, 0, sizeof g_identity_registry);
+    g_identity_registry.lock_fd = -1;
+    g_identity_descriptor_for_test = object;
+    g_self_gpid = 0;
+    g_self_gppid = -1;
+    g_hostpid_cache = 0;
+    g_init_hostpid = (int)getpid(); // every launch's top records itself, which is what made them all "1"
+    if (container_pid_namespace_begin() != 0) return -1;
+    int top = container_pid();
+    if (top <= 0 || write(writer, &top, sizeof top) != (ssize_t)sizeof top) return -1;
+    return pid_namespace_descend(writer, 2);
+}
+
+// The object is the one hl_ckpt_trigger_create mints for a real container, NOT a stand-in the fixture
+// makes for itself. That distinction is the whole assertion: an earlier version of this fixture created its
+// own unlinked mkstemp() file, which is a real inode on every host and therefore supports a page-aligned
+// mmap and a POSIX record lock everywhere -- so it passed on macOS while production, whose object was an
+// unlinked shm_open() segment mapped at a hard 4096, could do NEITHER there and quietly gave every launch a
+// private registry. A fixture that provides its own better object cannot see a defect in the real one.
+static int pid_namespace_launches_share_one_namespace(void) {
+    enum { LAUNCHES = 2, PER_LAUNCH = 3, EXPECTED = LAUNCHES * PER_LAUNCH };
+    hl_activation_descriptor trigger = HL_ACTIVATION_DESCRIPTOR_NONE;
+    void *mapping = NULL;
+    if (hl_ckpt_trigger_create(&trigger, &mapping) != 0) return -1;
+    int object = (int)trigger;
+    int failed = 0;
+    int channel[2];
+    if (pipe(channel) != 0) {
+        hl_ckpt_trigger_destroy(mapping, trigger);
+        return -1;
+    }
+    pid_t launches[LAUNCHES];
+    for (int index = 0; index < LAUNCHES; ++index) {
+        pid_t launch = fork();
+        if (launch < 0) {
+            launches[index] = -1;
+            failed = 1;
+            break;
+        }
+        if (launch == 0) {
+            (void)close(channel[0]);
+            (void)setsid(); // a launch top leads its own host session, exactly as the engine's does
+            _exit(pid_namespace_launch(object, channel[1]) == 0 ? 0 : 1);
+        }
+        launches[index] = launch;
+    }
+    (void)close(channel[1]);
+    int seen[EXPECTED];
+    size_t count = 0;
+    while (count < EXPECTED) {
+        ssize_t taken = read(channel[0], &seen[count], sizeof seen[count]);
+        if (taken == 0) break;
+        if (taken < 0) {
+            if (errno == EINTR) continue;
+            failed = 1;
+            break;
+        }
+        if (taken != (ssize_t)sizeof seen[count]) {
+            failed = 1;
+            break;
+        }
+        ++count;
+    }
+    (void)close(channel[0]);
+    for (int index = 0; index < LAUNCHES; ++index) {
+        if (launches[index] <= 0) continue;
+        int status = 0;
+        while (waitpid(launches[index], &status, 0) < 0 && errno == EINTR) {}
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) failed = 1;
+    }
+    hl_ckpt_trigger_destroy(mapping, trigger);
+    if (failed || count != EXPECTED) return -1;
+    int inits = 0;
+    for (size_t left = 0; left < count; ++left) {
+        if (seen[left] <= 0) return -1;
+        if (seen[left] == 1) ++inits;
+        // THE INVARIANT: two live processes of one container never answer the same guest pid.
+        for (size_t right = left + 1; right < count; ++right)
+            if (seen[left] == seen[right]) return -1;
+    }
+    // And exactly one of them is the namespace init: an exec session gets an ordinary pid, not a second 1.
+    return inits == 1 ? 0 : -1;
+}
+
+// A container init leads its own host session and process group; a test binary's process does not. Run the
+// scenario in a forked child that has called setsid(), which is the launch shape rather than an imitation
+// of it, and report through the exit status.
+HL_API int HL_TARGET_LOCAL(pid_namespace_test)(uint32_t scenario) {
+    if (scenario > 2) return -22;
+    pid_t child = fork();
+    if (child < 0) return -1;
+    if (child == 0) {
+        if (setsid() < 0) _exit(2);
+        int outcome = scenario == 2 ? pid_namespace_launches_share_one_namespace() : pid_namespace_scenario(scenario);
+        _exit(outcome == 0 ? 0 : 1);
+    }
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
+}
+#endif
+
+static int guest_pgid_from_host(int host) {
+    int guest;
+    if (host <= 0) return 0;
+    if (hl_linux_pidmap_is_active(&g_pgidmap))
+        return hl_linux_pidmap_guest_checked(&g_pgidmap, host, &guest) == 0 ? guest : 0;
+    return (g_init_hostpid && host == g_init_hostpid) ? 1 : host;
+}
+
+static int guest_sid_from_host(int host) {
+    int guest;
+    if (host <= 0) return 0;
+    if (hl_linux_pidmap_is_active(&g_sidmap))
+        return hl_linux_pidmap_guest_checked(&g_sidmap, host, &guest) == 0 ? guest : 0;
+    return (g_init_hostpid && host == g_init_hostpid) ? 1 : host;
+}
 
 // HL_NET_ISOLATE makes the guest loopback-only: no
 // eth0 is presented in the interface model (netlink RTM_GETLINK/GETADDR/GETROUTE dumps + SIOCGIFCONF in
@@ -383,6 +757,7 @@ static int cgid(void) {
 
 #include "../host_fs.h"
 #include "owner.h"
+#include "vfs/namespace_transaction.h"
 #include "dac_policy.h"
 #include "credentials.h"
 #define HL_MODE_XATTR "user.hl.mode"
@@ -488,13 +863,14 @@ static int mode_transaction_path(int directory, const char *path, const char *xa
     return -1;
 }
 
-static mode_t stat_virt_mode(const struct stat *status, const char *hostpath, int fd) {
+static mode_t stat_virt_mode_raw(const struct stat *status, const char *hostpath, int fd) {
     if (S_ISLNK(status->st_mode)) return (status->st_mode & S_IFMT) | 0777;
     mode_t mode;
     return mode_xattr_get(hostpath, fd, &mode) ? (status->st_mode & S_IFMT) | mode : status->st_mode;
 }
 
-static void stat_virt_ids(const struct stat *s, const char *hostpath, int fd, uint32_t *out_uid, uint32_t *out_gid) {
+static void stat_virt_ids_raw(const struct stat *s, const char *hostpath, int fd, uint32_t *out_uid,
+                              uint32_t *out_gid) {
     /* A rootfs is unpacked by the unprivileged host process, so host ownership is only a storage
      * implementation detail.  OCI entries without explicit owner metadata are guest-root owned;
      * runtime-created entries are stamped below with their current fsuid/fsgid. */
@@ -507,6 +883,41 @@ static void stat_virt_ids(const struct stat *s, const char *hostpath, int fd, ui
     }
     *out_uid = uid;
     *out_gid = gid;
+}
+
+/* A pathname Unix socket is visible to the host kernel before its guest owner
+ * record is committed.  Keep the normal file path free of transaction
+ * atomics; sockets take one coherent optimistic snapshot and retry if a
+ * publication crossed it. */
+static int stat_virt_snapshot(const struct stat *status, const char *hostpath, int fd, mode_t *out_mode,
+                              uint32_t *out_uid, uint32_t *out_gid) {
+    if (status == NULL || out_mode == NULL || out_uid == NULL || out_gid == NULL) return -EINVAL;
+    if (!S_ISSOCK(status->st_mode)) {
+        stat_virt_ids_raw(status, hostpath, fd, out_uid, out_gid);
+        *out_mode = stat_virt_mode_raw(status, hostpath, fd);
+        return 0;
+    }
+#if defined(_WIN32)
+    stat_virt_ids_raw(status, hostpath, fd, out_uid, out_gid);
+    *out_mode = stat_virt_mode_raw(status, hostpath, fd);
+    return 0;
+#else
+    for (unsigned attempt = 0; attempt < 64; ++attempt) {
+        struct namespace_transaction_read read;
+        if (namespace_transaction_read_begin(&read) != 0) return -errno;
+        uint32_t uid, gid;
+        mode_t mode = stat_virt_mode_raw(status, hostpath, fd);
+        stat_virt_ids_raw(status, hostpath, fd, &uid, &gid);
+        if (namespace_transaction_read_validate(&read) == 0) {
+            *out_mode = mode;
+            *out_uid = uid;
+            *out_gid = gid;
+            return 0;
+        }
+        if (errno != EAGAIN) return -errno;
+    }
+    return -EBUSY;
+#endif
 }
 
 // ---- runtime credential overlay (USER ns) -- defined here (BEFORE fs.c AND proc.c in the unity TU) --
@@ -758,22 +1169,45 @@ static int64_t dac_requested_id(uint64_t raw) {
 static int dac_snapshot_path(const char *path, int nofollow, hl_dac_snapshot *snapshot) {
     struct stat status;
     uint32_t uid, gid;
+    mode_t mode;
     if ((nofollow ? lstat(path, &status) : stat(path, &status)) != 0) return -errno;
-    stat_virt_ids(&status, path, -1, &uid, &gid);
-    snapshot->uid = uid;
-    snapshot->gid = gid;
-    snapshot->mode = (uint32_t)stat_virt_mode(&status, path, -1);
+    if (!S_ISSOCK(status.st_mode)) {
+        stat_virt_ids_raw(&status, path, -1, &uid, &gid);
+        snapshot->uid = uid;
+        snapshot->gid = gid;
+        snapshot->mode = (uint32_t)stat_virt_mode_raw(&status, path, -1);
+        return 0;
+    }
+#if defined(_WIN32)
+    stat_virt_ids_raw(&status, path, -1, &snapshot->uid, &snapshot->gid);
+    snapshot->mode = (uint32_t)stat_virt_mode_raw(&status, path, -1);
     return 0;
+#else
+    for (unsigned attempt = 0; attempt < 64; ++attempt) {
+        struct namespace_transaction_read read;
+        if (namespace_transaction_read_begin(&read) != 0) return -errno;
+        if ((nofollow ? lstat(path, &status) : stat(path, &status)) != 0) return -errno;
+        stat_virt_ids_raw(&status, path, -1, &uid, &gid);
+        mode = stat_virt_mode_raw(&status, path, -1);
+        if (!S_ISSOCK(status.st_mode) || namespace_transaction_read_validate(&read) == 0) {
+            snapshot->uid = uid;
+            snapshot->gid = gid;
+            snapshot->mode = (uint32_t)mode;
+            return 0;
+        }
+        if (errno != EAGAIN) return -errno;
+    }
+    return -EBUSY;
+#endif
 }
 
 static int dac_snapshot_fd(int descriptor, hl_dac_snapshot *snapshot) {
     struct stat status;
-    uint32_t uid, gid;
     if (fstat(descriptor, &status) != 0) return -errno;
-    stat_virt_ids(&status, NULL, descriptor, &uid, &gid);
-    snapshot->uid = uid;
-    snapshot->gid = gid;
-    snapshot->mode = (uint32_t)stat_virt_mode(&status, NULL, descriptor);
+    mode_t mode;
+    int result = stat_virt_snapshot(&status, NULL, descriptor, &mode, &snapshot->uid, &snapshot->gid);
+    if (result != 0) return result;
+    snapshot->mode = (uint32_t)mode;
     return 0;
 }
 
@@ -818,8 +1252,9 @@ static void newfile_stamp_fd(int fd) {
                 slash[1] = '\0';
             else
                 *slash = '\0';
-            if (stat(path, &parent) == 0 && (stat_virt_mode(&parent, path, -1) & S_ISGID) != 0) {
-                stat_virt_ids(&parent, path, -1, &parent_uid, &parent_gid);
+            if (stat(path, &parent) == 0 && S_ISDIR(parent.st_mode) &&
+                (stat_virt_mode_raw(&parent, path, -1) & S_ISGID) != 0) {
+                stat_virt_ids_raw(&parent, path, -1, &parent_uid, &parent_gid);
                 g = (int)parent_gid;
             }
         }

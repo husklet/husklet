@@ -805,7 +805,7 @@ static int bound_route_paths_bound(struct cpu *c, uint64_t nr, uint64_t a0, uint
                 if (measured <= 0) {
                     result = -ENOENT;
                 } else {
-                    result = guest_fill_linux_stat(a2, &status, NULL, -1);
+                    result = guest_fill_linux_stat(a2, &status, NULL, -1, (a3 & UINT64_C(0x100)) != 0);
                 }
                 break;
             }

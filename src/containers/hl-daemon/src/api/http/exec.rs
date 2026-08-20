@@ -1,6 +1,8 @@
+mod attach;
 mod inspect;
 mod start;
 
+pub(super) use attach::attach;
 pub(super) use inspect::inspect;
 pub(super) use start::start;
 

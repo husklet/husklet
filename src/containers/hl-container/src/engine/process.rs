@@ -9,12 +9,32 @@ use std::sync::{
 
 static NEXT_PROCESS: AtomicU64 = AtomicU64::new(1);
 
+fn wait_thread<T, F>(name: String, operation: F) -> std::io::Result<tokio::sync::oneshot::Receiver<T>>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (result, wait) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new().name(name).spawn(move || {
+        let _ = result.send(operation());
+    })?;
+    Ok(wait)
+}
+
 pub(super) struct Process {
     pub(super) id: u64,
     pub(super) child: Mutex<Option<Arc<hl_engine::runtime::Engine>>>,
     pub(super) logs: Mutex<Option<crate::service::LogReceiver>>,
     pub(super) domain: hl_engine::Domain,
-    pub(super) checkpointable: bool,
+    /// Publishes this process's freeze channel to its domain for exactly as long as this process
+    /// runs. Held, never read: the registration lives in `DomainChannelEntry`'s `Drop`, so dropping
+    /// the field is what withdraws the channel, and a member that outlived its coordinator would
+    /// otherwise join a broker nobody is listening on. The leading underscore is the field's whole
+    /// contract -- there is no reader and there must not be one.
+    pub(super) _domain_channel: Option<super::DomainChannelEntry>,
+    /// The sessions of the members this launch restored, each holding the terminal created for it before
+    /// the restore started. Empty for every launch that restored nothing.
+    pub(super) members: Vec<Arc<super::member::MemberSession>>,
 }
 
 impl Process {
@@ -93,15 +113,45 @@ impl Running for Process {
         self.domain
     }
 
-    fn checkpointable(&self) -> bool {
-        self.checkpointable
+    fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
+        self.child
+            .lock()
+            .ok()
+            .and_then(|engine| engine.as_ref().and_then(|engine| engine.guest_pid()))
+    }
+
+    fn restored_member(&self, guest_pid: std::num::NonZeroI32) -> Option<hl_engine::runtime::RestoredMember> {
+        self.child
+            .lock()
+            .ok()
+            .and_then(|engine| engine.as_ref().and_then(|engine| engine.restored_member(guest_pid)))
+    }
+
+    fn member_process(&self, guest_pid: std::num::NonZeroI32) -> Option<Arc<dyn Running>> {
+        // Both halves, or nothing. The session is the terminal this launch created for that member before
+        // it started; the member is the process the restore actually announced under that guest pid. A
+        // launch that started fresh has neither, and a member the host prepared no terminal for has only
+        // one -- and half of the pair is not a resumable session, it is a refusal.
+        let session = self
+            .members
+            .iter()
+            .find(|session| session.guest_pid() == guest_pid)
+            .map(Arc::clone)?;
+        let member = self.restored_member(guest_pid)?;
+        Some(Arc::new(super::member::MemberProcess::new(
+            self.domain,
+            session,
+            member,
+        )))
     }
 
     async fn wait(self: Arc<Self>) -> Result<ExitStatus> {
         let engine = self.engine()?;
-        let exit = tokio::task::spawn_blocking(move || engine.wait())
+        let wait = wait_thread(format!("hl-engine-wait-{}", self.id), move || engine.wait())
+            .map_err(|error| Error::Runtime(format!("engine wait thread: {error}")))?;
+        let exit = wait
             .await
-            .map_err(|error| Error::Runtime(format!("engine wait task: {error}")))?
+            .map_err(|_| Error::Runtime("engine wait thread ended without a result".into()))?
             .map_err(|error| Error::Runtime(format!("engine wait: {error:?}")))?;
         self.child
             .lock()
@@ -137,6 +187,11 @@ impl Running for Process {
                         .capture_checkpoint_until(deadline.into_std())
                         .map_err(|error| Error::Runtime(format!("engine checkpoint: {error:?}")));
                 }
+                // A permanent refusal (an unsupported sandbox policy) never becomes supported by
+                // waiting; polling it to the deadline would report a 30s stall instead of a cause.
+                Err(error) if error.is_permanent_refusal() => {
+                    return Err(Error::Runtime(format!("engine checkpoint unsupported: {error:?}")));
+                }
                 Err(_) if tokio::time::Instant::now() < deadline => {
                     tokio::time::sleep(std::time::Duration::from_millis(1)).await;
                 }
@@ -162,6 +217,60 @@ impl Running for Process {
 }
 
 #[cfg(test)]
+mod runtime_drop_tests {
+    use super::wait_thread;
+
+    #[test]
+    fn indefinite_native_wait_does_not_block_runtime_drop() {
+        const CHILD: &str = "HL_TEST_INDEFINITE_WAIT_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let wait = wait_thread("hl-test-indefinite-native-wait".into(), || {
+                    loop {
+                        std::thread::park();
+                    }
+                })
+                .unwrap();
+                assert!(
+                    tokio::time::timeout(std::time::Duration::from_millis(10), wait)
+                        .await
+                        .is_err()
+                );
+            });
+            drop(runtime);
+            return;
+        }
+
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "engine::process::runtime_drop_tests::indefinite_native_wait_does_not_block_runtime_drop",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success(), "wait subprocess failed: {status}");
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("indefinite native wait blocked Tokio runtime drop");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::Process;
     use crate::service::Running as _;
@@ -170,11 +279,12 @@ mod tests {
 
     fn reaped() -> Arc<Process> {
         Arc::new(Process {
+            members: Vec::new(),
             id: 1,
             child: Mutex::new(None),
             logs: Mutex::new(None),
             domain: hl_engine::Domain::new().unwrap(),
-            checkpointable: false,
+            _domain_channel: None,
         })
     }
 

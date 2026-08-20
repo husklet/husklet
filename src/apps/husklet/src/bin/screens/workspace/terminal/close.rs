@@ -50,29 +50,22 @@ impl CloseRequest {
         choice: crate::components::dialog::CloseChoice,
         result: &std::sync::Arc<std::sync::Mutex<Option<std::io::Result<()>>>>,
     ) {
-        Self::spawn_close_with(
-            workspace,
-            choice,
-            result,
-            |workspace, disposition| hl::runtime::domain::Domain::new(workspace).close(disposition),
-            Processes::close_workspace,
-        );
+        Self::spawn_close_with(workspace, choice, result, |workspace, disposition| {
+            hl::runtime::domain::Domain::new(workspace)
+                .close_handover(disposition, || Processes::close_workspace(&workspace.key()))
+        });
     }
 
     fn spawn_close_with(
         workspace: WorkspaceConfig,
         choice: crate::components::dialog::CloseChoice,
         result: &std::sync::Arc<std::sync::Mutex<Option<std::io::Result<()>>>>,
-        close_domain: impl FnOnce(&WorkspaceConfig, hl::runtime::domain::Close) -> std::io::Result<()> + Send + 'static,
-        close_launchers: impl FnOnce(&str) -> std::io::Result<()> + Send + 'static,
+        close_runtime: impl FnOnce(&WorkspaceConfig, hl::runtime::domain::Close) -> std::io::Result<()> + Send + 'static,
     ) {
         let completed = result.clone();
         std::thread::spawn(move || {
             let disposition = Self::disposition(choice);
-            let closed = Self::close_runtime(
-                || close_domain(&workspace, disposition),
-                || close_launchers(&workspace.key()),
-            );
+            let closed = close_runtime(&workspace, disposition);
             if let Ok(mut result) = completed.lock() {
                 *result = Some(closed);
             }
@@ -84,15 +77,6 @@ impl CloseRequest {
             crate::components::dialog::CloseChoice::Kill => hl::runtime::domain::Close::Kill,
             crate::components::dialog::CloseChoice::Continue => hl::runtime::domain::Close::Continue,
         }
-    }
-
-    fn close_runtime(
-        close_domain: impl FnOnce() -> std::io::Result<()>,
-        close_launchers: impl FnOnce() -> std::io::Result<()>,
-    ) -> std::io::Result<()> {
-        let domain = close_domain();
-        let launchers = close_launchers();
-        domain.and(launchers)
     }
 
     fn poll_close(
@@ -123,10 +107,25 @@ impl CloseRequest {
     }
 
     fn failure(parent: &gtk::ApplicationWindow, error: &std::io::Error) {
-        let failure = hl_gui::Dialog::new("Could not close workspace")
+        // A close failure used to exist only inside this dialog, and the click that dismissed it
+        // destroyed the only copy: `stderr` of the signed application goes nowhere, so a user
+        // reporting "it errored" left no artifact at all. The engine's refusal reason arrives here
+        // verbatim -- `close.result` carries it through `ResultFile::wait` -- so write that same
+        // sentence down before showing it, and show it unchanged.
+        hl_log::hl_error!(hl_log::tag::UI, "{}", Self::failure_line(error));
+        crate::gtk_adapter::Dialog::present(Some(parent.upcast_ref()), Self::failure_dialog(error), |_| {});
+    }
+
+    /// The dialog the user sees, carrying the reason unabridged.
+    fn failure_dialog(error: &std::io::Error) -> hl_gui::Dialog {
+        hl_gui::Dialog::new("Could not close workspace")
             .detail(error.to_string())
-            .action(hl_gui::Action::new(hl_gui::EventId::new("dismiss"), "Dismiss"));
-        crate::gtk_adapter::Dialog::present(Some(parent.upcast_ref()), failure, |_| {});
+            .action(hl_gui::Action::new(hl_gui::EventId::new("dismiss"), "Dismiss"))
+    }
+
+    /// The sentence written to the log. One line, so a multi-line engine refusal stays greppable.
+    fn failure_line(error: &std::io::Error) -> String {
+        format!("could not close workspace: {}", error.to_string().replace('\n', " | "))
     }
 }
 
@@ -134,7 +133,6 @@ impl CloseRequest {
 mod tests {
     use super::{CloseRequest, Processes, WorkspaceConfig};
     use crate::components::dialog::CloseChoice;
-    use std::cell::Cell;
     use std::io::BufRead as _;
 
     fn result() -> std::sync::Arc<std::sync::Mutex<Option<std::io::Result<()>>>> {
@@ -194,19 +192,11 @@ mod tests {
         let completed = result();
         CloseRequest::spawn_close(workspace, choice, &completed);
         wait(&completed).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        loop {
-            if let Some(status) = child.try_wait().unwrap() {
-                assert!(!status.success());
-                break;
-            }
-            if std::time::Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                panic!("production workspace close left its HUP-resistant launcher alive");
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        let status = child
+            .try_wait()
+            .unwrap()
+            .expect("workspace close returned before its HUP-resistant launcher exited");
+        assert!(!status.success());
     }
 
     #[cfg(unix)]
@@ -232,16 +222,11 @@ mod tests {
         let key = workspace.key();
         let mut child = hup_resistant_launcher(&key);
         let completed = result();
-        CloseRequest::spawn_close_with(
-            workspace,
-            CloseChoice::Kill,
-            &completed,
-            |_, disposition| {
-                assert_eq!(disposition, hl::runtime::domain::Close::Kill);
-                Err(std::io::Error::other("domain close failed"))
-            },
-            Processes::close_workspace,
-        );
+        CloseRequest::spawn_close_with(workspace, CloseChoice::Kill, &completed, move |_, disposition| {
+            assert_eq!(disposition, hl::runtime::domain::Close::Kill);
+            Processes::close_workspace(&key)?;
+            Err(std::io::Error::other("domain close failed"))
+        });
         assert_eq!(wait(&completed).unwrap_err().to_string(), "domain close failed");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while child.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {
@@ -254,6 +239,69 @@ mod tests {
         }
     }
 
+    /// The Continue mirror of [`domain_error_still_reaps_the_exact_workspace_launcher`].
+    ///
+    /// A capture that reports failure is the observed production case -- `close.result` carrying
+    /// `runtime failed: ...` -- and the daemon stops on the shutdown request regardless of what the
+    /// capture reported. The launcher workers must therefore be reaped on this path too, and the
+    /// close must still surface the failure to the user.
+    #[cfg(unix)]
+    #[test]
+    fn continue_error_still_reaps_the_exact_workspace_launcher() {
+        let workspace = WorkspaceConfig::new(
+            format!("close-continue-error-reap-{}", std::process::id()),
+            "ubuntu",
+            hl_ws::Arch::Arm64,
+        );
+        let key = workspace.key();
+        let mut child = hup_resistant_launcher(&key);
+        let completed = result();
+        CloseRequest::spawn_close_with(workspace, CloseChoice::Continue, &completed, move |_, disposition| {
+            assert_eq!(disposition, hl::runtime::domain::Close::Continue);
+            Processes::close_workspace(&key)?;
+            Err(std::io::Error::other("runtime failed: capture timed out"))
+        });
+        assert_eq!(
+            wait(&completed).unwrap_err().to_string(),
+            "runtime failed: capture timed out"
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while child.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if child.try_wait().unwrap().is_none() {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("a failed continue stranded its HUP-resistant launcher");
+        }
+    }
+
+    /// The whole point of the refusal reasons the engine now produces is that the user reads one.
+    /// `ResultFile::wait` turns `close.result` into exactly this error, so a generic sentence here
+    /// would discard a reason the system already knew.
+    #[test]
+    fn the_engine_refusal_reason_reaches_the_dialog_the_user_sees() {
+        let refused = std::io::Error::other("checkpoint refused by the engine: guest fd 10 is a pipe");
+        let dialog = CloseRequest::failure_dialog(&refused);
+
+        assert_eq!(dialog.title, "Could not close workspace");
+        assert_eq!(
+            dialog.detail.as_deref(),
+            Some("checkpoint refused by the engine: guest fd 10 is a pipe")
+        );
+    }
+
+    /// The same reason must survive the click that dismissed the dialog.
+    #[test]
+    fn a_close_failure_is_written_as_one_greppable_line() {
+        let refused = std::io::Error::other("1 of 7 participants never committed\nexecution 7f3a: no reply");
+
+        assert_eq!(
+            CloseRequest::failure_line(&refused),
+            "could not close workspace: 1 of 7 participants never committed | execution 7f3a: no reply"
+        );
+    }
+
     #[test]
     fn close_choices_map_to_their_domain_dispositions() {
         assert_eq!(
@@ -264,37 +312,5 @@ mod tests {
             CloseRequest::disposition(CloseChoice::Continue),
             hl::runtime::domain::Close::Continue
         );
-    }
-
-    #[test]
-    fn workspace_close_reaps_launchers_after_the_domain() {
-        let stage = Cell::new(0);
-        CloseRequest::close_runtime(
-            || {
-                assert_eq!(stage.replace(1), 0);
-                Ok(())
-            },
-            || {
-                assert_eq!(stage.replace(2), 1);
-                Ok(())
-            },
-        )
-        .unwrap();
-        assert_eq!(stage.get(), 2);
-    }
-
-    #[test]
-    fn failed_domain_close_still_reaps_launchers() {
-        let reaped = Cell::new(false);
-        let error = CloseRequest::close_runtime(
-            || Err(std::io::Error::other("domain close failed")),
-            || {
-                reaped.set(true);
-                Ok(())
-            },
-        )
-        .unwrap_err();
-        assert!(reaped.get());
-        assert_eq!(error.to_string(), "domain close failed");
     }
 }

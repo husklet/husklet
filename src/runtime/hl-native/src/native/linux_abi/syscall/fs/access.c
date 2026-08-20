@@ -324,8 +324,13 @@ static void svc_fs_access_54(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             char dp[4200];
             if (hl_native_fd_path(pfd, dp, sizeof dp) == 0) {
                 char hp[4400];
-                if (path_join(hp, sizeof hp, dp, fin) == 0)
-                    hl_owner_set_path(hp, dac_requested_id(a2), dac_requested_id(a3), nofollow);
+                if (path_join(hp, sizeof hp, dp, fin) == 0 &&
+                    hl_owner_set_path(hp, dac_requested_id(a2), dac_requested_id(a3), nofollow) != 0) {
+                    int error = errno;
+                    close(pfd);
+                    G_RET(c) = (uint64_t)(int64_t)(-error);
+                    break;
+                }
             }
             close(pfd);
             G_RET(c) = 0;
@@ -343,8 +348,9 @@ static void svc_fs_access_54(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             G_RET(c) = (uint64_t)(int64_t)(-errno);
             break;
         }
-        hl_owner_set_path(p, dac_requested_id(a2), dac_requested_id(a3), nofollow);
-        G_RET(c) = 0;
+        G_RET(c) = hl_owner_set_path(p, dac_requested_id(a2), dac_requested_id(a3), nofollow) == 0
+                       ? 0
+                       : (uint64_t)(int64_t)(-errno);
         break;
     }
     default: break;
@@ -368,7 +374,10 @@ static void svc_fs_access_55(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             G_RET(c) = (uint64_t)(int64_t)(-errno);
             break;
         }
-        hl_owner_set_fd((int)a0, dac_requested_id(a1), dac_requested_id(a2));
+        if (hl_owner_set_fd((int)a0, dac_requested_id(a1), dac_requested_id(a2)) != 0) {
+            G_RET(c) = (uint64_t)(int64_t)(-errno);
+            break;
+        }
         // the guest-owner xattr just changed -> drop this path's cached stat so a later stat reports it
         if ((int)a0 >= 0 && (int)a0 < 1024 && g_fdpath[(int)a0][0]) hl_fdcache_evict_path(g_fdpath[(int)a0]);
         G_RET(c) = 0;
@@ -528,6 +537,14 @@ static int open_synthetic_device(struct cpu *c, const char *path, int flags, int
             return 1;
         }
         int open_flags = host_flags;
+        /* `typed_open_flags` erases the Linux O_NOCTTY bit because it is not
+           meaningful for ordinary typed filesystem opens.  A synthesized
+           devpts slave is the exception: dropping it lets a session leader
+           accidentally acquire the guest-created slave as its controlling
+           terminal, and closing the master then kills the guest with SIGHUP.
+           Preserve the guest's terminal-open intent at this boundary. */
+        const int guest_no_controlling_terminal = 0x100;
+        if (flags & guest_no_controlling_terminal) open_flags |= O_NOCTTY;
         if (flags & 0x800) open_flags |= O_NONBLOCK;
         if (flags & 0x80000) open_flags |= O_CLOEXEC;
         int descriptor = nofile_gate(duplicate_anchor ? dup(anchor) : open(slave, open_flags, 0));
@@ -773,6 +790,23 @@ static int open_synthetic_path(struct cpu *c, uint64_t a0, uint64_t a1, int lf, 
 static int open_jailed_resolution_error(int directory, const char *path, uint32_t intent,
                                         const hl_provider_node *projected) {
     if ((intent & HL_OPEN_CREATE) || projected != NULL) return 0;
+    /* Four-walk collapse. This probe exists because the LEGACY OVERLAY path
+     * resolver reports an over-deep or cyclic link as an absent host path and
+     * so turns Linux's ELOOP into ENOENT; the cursor owns merged-layer
+     * traversal and reports the original error. With no lower layers the
+     * resolution actually used is jail_at + the host resolve_beneath walk, and
+     * MEASURED (aarch64 and x86_64, symlink self-loop, mutual pair, and
+     * O_NOFOLLOW on a symlink): the beneath walk bounds symlink traversal
+     * itself, fails the plan, and the request falls through to
+     * openat(parent, leaf, O_NOFOLLOW), which the KERNEL answers with ELOOP.
+     * The probe is then a whole extra per-component walk whose only output is
+     * an error the real resolution already produces. Single-layer namespaces
+     * skip it; overlay namespaces keep it.
+     *
+     * Do not re-derive this from resolve_at's own symlink budget: raising that
+     * budget to 10^9 left every ELOOP case reporting ELOOP unchanged, so
+     * resolve_at is NOT the producer on this path. */
+    if (g_nlower == 0) return 0;
     hl_vfs_cursor_entry resolved;
     memset(&resolved, 0, sizeof resolved);
     int error = hl_vfs_cursor_resolve_at(directory, path, (intent & HL_OPEN_NOFOLLOW) != 0, &resolved);
@@ -1230,6 +1264,7 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         if (open_synthetic_path(c, a0, a1, lf, mf, is_opath)) break;
         /* Descriptor magic links are reopened from the descriptor authority below.  Routing their
          * synthetic pathname through the provider first resolves a nonexistent literal /proc entry. */
+        int dac_authorized_open = 0;
         int descriptor_reopen = procfd_num_at((int)a0, (const char *)a1) >= 0;
         if (!descriptor_reopen && jail_routed_at((int)a0, (const char *)a1)) {
             // A plain O_NOFOLLOW open rejects a final symlink; O_PATH|O_NOFOLLOW names the link instead.
@@ -1247,6 +1282,7 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
                 G_RET(c) = (uint64_t)(int64_t)dac_status;
                 break;
             }
+            dac_authorized_open = 1;
         }
         if (lf & 0x40) mf |= O_CREAT;
         if (lf & 0x80) mf |= O_EXCL;
@@ -1255,6 +1291,11 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         if (lf & 0x800) mf |= O_NONBLOCK;
         if (lf & G_O_DIRECTORY) mf |= O_DIRECTORY;
         if (lf & 0x80000) mf |= O_CLOEXEC;
+        // Synchronised-I/O opens are a durability contract, not a hint, and both bits were dropped
+        // here: a 500x4KiB O_DSYNC loop cost 1.7 ms under the engine against 700 ms for the same loop
+        // run natively on the same btrfs file -- exactly the cost of the SAME loop with no barrier at
+        // all (1.6 ms). The engine was acknowledging a barrier it never issued. See guest_sync.h.
+        mf |= hl_guest_sync_open_flags(lf);
         // when a runtime-dropped process (gosu postgres) O_CREATs a file, the new inode must be
         // owned by its current fsuid/fsgid, not the cuid/cgid default. Only meaningful when O_CREAT is
         // set AND a cred drop makes the stamp differ from the default; the pre-existence probe (so we
@@ -1344,9 +1385,17 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
             break;
         }
-        if (open_jailed_path(c, a0, a1, a2, a3, lf, mf, osymlink, is_opath, nf_want, openat2_intent, projected,
-                             overlay_guest))
-            break;
+        {
+            // The virtual DAC granted above; if the host owner bits still deny and the inode is ours,
+            // lend the owner bits for exactly this host open and take them back straight after.
+            hl_dac_host_grant host_grant;
+            dac_host_grant_begin(&host_grant, (int)a0, (const char *)a1, dac_open_host_access(lf, is_opath),
+                                 dac_authorized_open);
+            int handled = open_jailed_path(c, a0, a1, a2, a3, lf, mf, osymlink, is_opath, nf_want, openat2_intent,
+                                           projected, overlay_guest);
+            dac_host_grant_end(&host_grant);
+            if (handled) break;
+        }
         char pb[4200];
         // no jail
         /* openat2 containment (RESOLVE_NO_SYMLINKS/BENEATH/IN_ROOT, carried as

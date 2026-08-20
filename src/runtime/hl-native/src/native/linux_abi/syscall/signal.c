@@ -13,11 +13,63 @@
 // EINTR) we restart too -- there is no SA_RESTART-less handler whose contract we'd be breaking. The
 // awaited handler stays pending and is delivered by the dispatcher's maybe_deliver_signal once the
 // restarted syscall finally returns.
+enum checkpoint_continuation_kind {
+    CKPT_CONTINUATION_NONE = 0,
+    CKPT_CONTINUATION_SYSCALL = 1,
+    CKPT_CONTINUATION_TIMEOUT = 2,
+};
+
+static _Thread_local uint32_t g_checkpoint_resume_kind;
+static _Thread_local int64_t g_checkpoint_resume_timeout_ns;
+
+static int checkpoint_resume_timeout_ns(int64_t *timeout_ns) {
+    if (g_checkpoint_resume_kind != CKPT_CONTINUATION_TIMEOUT || timeout_ns == NULL) return 0;
+    *timeout_ns = g_checkpoint_resume_timeout_ns;
+    g_checkpoint_resume_kind = CKPT_CONTINUATION_NONE;
+    g_checkpoint_resume_timeout_ns = -1;
+    return 1;
+}
+
+static int checkpoint_resume_timeout(uint64_t syscall, struct timespec *timeout) {
+    if (g_checkpoint_resume_kind != CKPT_CONTINUATION_TIMEOUT || timeout == NULL) return 0;
+    (void)syscall;
+    int64_t ns;
+    (void)checkpoint_resume_timeout_ns(&ns);
+    timeout->tv_sec = (time_t)(ns / 1000000000LL);
+    timeout->tv_nsec = (long)(ns % 1000000000LL);
+    return 1;
+}
+
+static void checkpoint_mark_syscall(struct cpu *c) {
+    c->checkpoint_continuation = CKPT_CONTINUATION_SYSCALL;
+    c->checkpoint_timeout_ns = -1;
+    c->redirect = 1;
+    g_syscall_restart = 1;
+}
+
+static int checkpoint_resolve_interrupt(struct cpu *c, int deliverable, int all_sa_restart, int checkpoint) {
+    if (deliverable) {
+        if (all_sa_restart) {
+            c->redirect = 1;
+            g_syscall_restart = 1;
+        }
+        return 0;
+    }
+    if (checkpoint) {
+        checkpoint_mark_syscall(c);
+        return 0;
+    }
+    return 1;
+}
+
+static void checkpoint_prepare_timeout(struct cpu *c, int64_t remaining_ns) {
+    if (c->checkpoint_continuation != CKPT_CONTINUATION_SYSCALL) return;
+    c->checkpoint_continuation = CKPT_CONTINUATION_TIMEOUT;
+    c->checkpoint_timeout_ns = remaining_ns < 0 ? 0 : remaining_ns;
+}
+
 static int syscall_should_restart(struct cpu *c) {
     if (ptrace_stop_requested()) return 0; // ATTACH/INTERRUPT must reach the ptrace dispatcher
-    if (ckpt_pending())
-        return 0; // a whole-tree checkpoint was requested: return EINTR so this process reaches
-                  // its dispatcher safepoint (ckpt_poll) instead of transparently re-blocking
     if (__atomic_load_n(&c->exited, __ATOMIC_SEQ_CST)) return 0; // execve teardown: don't re-block, unwind out
     // Process-wide pending (g_pending) AND this thread's directed-pending (c->tpending, set by tkill/tgkill):
     // a thread blocked in read/accept/recv must be interrupted by a thread-directed signal too, not only a
@@ -32,7 +84,7 @@ static int syscall_should_restart(struct cpu *c) {
     }
     // Nothing runnable pending: a spurious/host-actioned EINTR a real kernel would not surface -> re-block the
     // host call transparently in place (the old restart-in-loop behaviour, kept for this case only).
-    if (!deliverable) return 1;
+    if (!deliverable) return checkpoint_resolve_interrupt(c, 0, 1, ckpt_pending());
     // A runnable guest handler MUST run before the interrupted call proceeds -- Linux runs the handler on EVERY
     // interrupted slow syscall, THEN (for SA_RESTART) restarts it. Restarting in place here never returns to the
     // dispatcher, so maybe_deliver_signal never fires and the handler is stranded until the call finally
@@ -41,11 +93,7 @@ static int syscall_should_restart(struct cpu *c) {
     // SA_RESTART, leave the guest PC on the SVC (c->redirect) so the syscall re-executes AFTER the handler runs
     // (transparent restart); otherwise advance past it and let the guest observe EINTR. Either way the pending
     // handler is delivered by the dispatcher's maybe_deliver_signal at the next block boundary.
-    if (all_sa_restart) {
-        c->redirect = 1;
-        g_syscall_restart = 1; // service() restores the arg0/return-aliased register before re-executing
-    }
-    return 0;
+    return checkpoint_resolve_interrupt(c, 1, all_sa_restart, ckpt_pending());
 }
 
 // An interruptible host syscall failed: should the caller retry it? True iff it was interrupted (EINTR)
@@ -69,14 +117,38 @@ static int syscall_should_restart(struct cpu *c) {
 static int svc_poll_retry(struct cpu *c) {
     if (errno != EINTR) return 0;                                // a genuine error -> let it propagate
     if (ptrace_stop_requested()) return 0;                       // publish an ATTACH/INTERRUPT stop
-    if (ckpt_pending()) return 0;                                // checkpoint requested: return EINTR -> safepoint
     if (__atomic_load_n(&c->exited, __ATOMIC_SEQ_CST)) return 0; // execve teardown: stop re-blocking, unwind out
     for (int s = 1; s <= 64; s++) {
         if (!signal_deliverable(c, s)) continue;
-        if (g_sigact[s].handler > 1) return 0;        // a runnable guest handler -> return EINTR + deliver it
+        if (g_sigact[s].handler > 1) return 0;        // guest signal semantics take precedence over checkpointing
+    }
+    if (ckpt_pending()) {
+        checkpoint_mark_syscall(c);
+        return 0;
     }
     return 1; // nothing deliverable -> hide this EINTR and re-block (spurious/internal wakeup)
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+HL_API int HL_TARGET_LOCAL(checkpoint_signal_precedence_test)(void) {
+    struct cpu cpu = {0};
+    g_syscall_restart = 0;
+    if (checkpoint_resolve_interrupt(&cpu, 1, 0, 1) != 0 || cpu.redirect ||
+        cpu.checkpoint_continuation != CKPT_CONTINUATION_NONE || g_syscall_restart)
+        return 1;
+    memset(&cpu, 0, sizeof cpu);
+    g_syscall_restart = 0;
+    if (checkpoint_resolve_interrupt(&cpu, 1, 1, 1) != 0 || !cpu.redirect ||
+        cpu.checkpoint_continuation != CKPT_CONTINUATION_NONE || !g_syscall_restart)
+        return 2;
+    memset(&cpu, 0, sizeof cpu);
+    g_syscall_restart = 0;
+    if (checkpoint_resolve_interrupt(&cpu, 0, 1, 1) != 0 || !cpu.redirect ||
+        cpu.checkpoint_continuation != CKPT_CONTINUATION_SYSCALL || !g_syscall_restart)
+        return 3;
+    return 0;
+}
+#endif
 
 // Route a thread-directed signal (tkill/tgkill at `tid`). If it names ANOTHER live thread and the signal
 // has a real guest handler, deliver it to exactly that thread (its cpu->tpending) -- a process-wide
@@ -140,10 +212,21 @@ static int svc_signal_target(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         // checkpoint restore: a kill naming a checkpoint-time guest pid/pgid must reach the live host process
         // the tree was re-forked with (identity no-op on a normal launch when the pid map is empty). Self / own-group /
         // broadcast (a0 == self, 0, -1) are left untranslated so the self path below still matches.
-        if (hl_linux_pidmap_count(&g_pidmap) != 0 && (int)a0 > 0 && (int)a0 != container_pid())
-            a0 = (uint64_t)(unsigned)hl_linux_pidmap_host(&g_pidmap, (int)a0);
-        else if (hl_linux_pidmap_count(&g_pidmap) != 0 && (int)a0 < -1)
-            a0 = (uint64_t)(int64_t)(-hl_linux_pidmap_host(&g_pidmap, -(int)a0));
+        if (hl_linux_pidmap_is_active(&g_pidmap) && (int)a0 > 0 && (int)a0 != container_pid()) {
+            int host;
+            if (hl_linux_pidmap_host_checked(&g_pidmap, (int)a0, &host) != 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+                break;
+            }
+            a0 = (uint64_t)(unsigned)host;
+        } else if (hl_linux_pidmap_is_active(&g_pgidmap) && (int)a0 < -1) {
+            int host;
+            if (hl_linux_pidmap_host_checked(&g_pgidmap, -(int)a0, &host) != 0) {
+                G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
+                break;
+            }
+            a0 = (uint64_t)(int64_t)(-host);
+        }
         if ((int)a0 == 0) {
             // kill(0, sig): Linux signals EVERY process in the CALLER's process group. hl shares its host
             // session/process-group with the launcher + sibling engines, so a raw kill(-getpgrp()) would
@@ -175,8 +258,13 @@ static int svc_signal_target(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             // back through host_sigh, same as any other cross-process delivery. pgid 1 is the container
             // init <-> its real host group leader.
             pid_t gpgid = (pid_t)(-(int)a0);
-            if (gpgid == 1 && g_init_hostpid) gpgid = g_init_hostpid;
-            G_RET(c) = kill(-gpgid, sig_l2m((int)a1)) < 0 ? (uint64_t)(-errno) : 0;
+            if (!hl_linux_pidmap_is_active(&g_pgidmap) && gpgid == 1 && g_init_hostpid) gpgid = g_init_hostpid;
+            int delivered = container_group_kill(gpgid, sig_l2m((int)a1), (int)getpid());
+            if (getpgrp() == gpgid) {
+                if ((int)a1 != 0) raise_guest_signal(c, (int)a1);
+                delivered++;
+            }
+            G_RET(c) = delivered > 0 ? 0 : (uint64_t)(int64_t)(-ESRCH);
         } else
         // Cross-process: the target is another hl engine whose host_sigh is installed on the MACOS signal
         // number (rt_sigaction, case 134, installs on sig_l2m(sig)); its host_sigh translates back via
@@ -195,7 +283,7 @@ static int svc_signal_target(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             // pid -- a sibling engine (another container), the launcher, or any of the hl user's processes.
             // Legitimate cross-guest-process signalling still works (a real peer IS a registry member). Gated
             // on container mode (g_init_hostpid); bare (non-container) mode keeps the historical host model.
-            if (g_init_hostpid && !container_host_member((int)tgt)) {
+            if (g_init_hostpid && !host_pid_registered_checked((int)tgt)) {
                 G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
                 break;
             }

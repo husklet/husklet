@@ -56,6 +56,18 @@ pub struct Policy {
     /// C allocation functions whose nullable results require checking before dereference.
     #[serde(default)]
     pub c_allocation: CAllocationPolicy,
+    /// Conditional-compilation macros that select test-only C code.
+    #[serde(default)]
+    pub c_test_only_state: CTestOnlyStatePolicy,
+}
+
+/// Portable policy naming the macros that mark test-only C compilation.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CTestOnlyStatePolicy {
+    /// Exact macro names whose definition selects code absent from production builds.
+    #[serde(default)]
+    pub macros: Vec<String>,
 }
 
 /// Portable nullability policy for C allocation functions.

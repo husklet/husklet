@@ -8,6 +8,18 @@ pub(crate) enum JournalId {
     Exec(ExecId),
 }
 
+/// Names the journal's owner, so a failure that can arise on either the container's own worker or
+/// on any one of its sealed exec members says which of them it was. Both spellings reach the user
+/// verbatim through `close.result`.
+impl std::fmt::Display for JournalId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Container(id) => write!(formatter, "container {id}"),
+            Self::Exec(id) => write!(formatter, "exec session {id}"),
+        }
+    }
+}
+
 impl JournalId {
     pub(crate) fn container(id: ContainerId) -> Self {
         Self::Container(id)

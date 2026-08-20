@@ -15,19 +15,27 @@ use std::{
     },
 };
 
+mod authority;
 mod broker;
+pub(super) mod member_stdio;
+pub(super) mod members;
+mod participants;
 #[path = "checkpoint_protocol.rs"]
 mod protocol;
 mod publication;
+mod reciprocity;
 mod request;
 #[cfg(test)]
 #[path = "checkpoint_test.rs"]
 mod test;
 mod transaction;
+use participants::ParticipantLedger;
 use protocol::{
-    CLAIM, COMMIT, DIGEST, GROUP_ABORT, GROUP_BEGIN, GROUP_COMMIT, GROUP_COUNT, GROUP_PRESENT, OBJECT_ABORT,
-    OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, PAYLOAD_MAX, RECOVERY_COMPLETE,
-    REQUEST_BYTES, Reply, Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, STATUS_ALREADY, UNCLAIM,
+    CAPTURE_REFUSED, CLAIM, COMMIT, DIGEST, GROUP_ABORT, GROUP_BEGIN, GROUP_COMMIT, GROUP_COUNT, GROUP_PRESENT,
+    MEMBER_EXITED, MEMBER_RESTORED, MEMBER_STDIO, OBJECT_ABORT, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE,
+    OBJECT_WRITE_AT, PARTICIPANT_REGISTERED, PAYLOAD_MAX, RECOVERY_COMPLETE, REGISTER_READY, RELEASE_EXIT,
+    RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply, Request, SEAL_MEMBERSHIP, SOURCE_LIST,
+    SOURCE_READ, SOURCE_SIZE, STATUS_ALREADY, UNCLAIM,
 };
 
 const HASH_BASIS: u64 = 14_695_981_039_346_656_037;
@@ -46,14 +54,24 @@ struct State {
     groups: HashSet<String>,
     claims: HashSet<String>,
     digest: BTreeMap<String, (u64, u64)>,
+    /// The `proc.<gpid>/fds` inventories of the running capture, retained for
+    /// the reciprocal socket-topology join `publish_manifest` performs.
+    topology: reciprocity::SocketTopology,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CaptureFailure {
     Deadline,
     Failed,
+    /// The engine decided not to publish this capture and said why. Distinct from `Failed` because it
+    /// is a decision with a recoverable reason (`Server::capture_refusal`) rather than a breakage, and
+    /// because it is reported at the moment of the decision rather than at a deadline.
+    Refused,
     Poisoned,
     Busy,
+    /// The generation the byte store offered for recovery is not finalized, so
+    /// native restore must not read it.
+    Unfinalized,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,6 +80,10 @@ enum CapturePhase {
     Recovery {
         id: u64,
         deadline: std::time::Instant,
+    },
+    RecoveryFinished {
+        id: u64,
+        result: Result<(), CaptureFailure>,
     },
     Active {
         id: u64,
@@ -85,6 +107,8 @@ struct CaptureState {
     phase: CapturePhase,
     mutations: usize,
     recovery_report_published: bool,
+    recovery_result: Option<(u64, Result<(), CaptureFailure>)>,
+    capture_result: Option<(u64, Result<(), CaptureFailure>)>,
 }
 
 struct MutationAdmission<'a> {
@@ -118,9 +142,28 @@ pub(crate) struct Server {
     capture_changed: Condvar,
     channels: Mutex<HashMap<i32, Arc<UnixStream>>>,
     recovery_connections: Mutex<HashMap<u64, u64>>,
+    /// Members of the restored tree that have announced themselves, keyed on the guest pid the image
+    /// names each of them by. Outlives the recovery scope: recovery ends exactly when the tree starts
+    /// running, which is when a host begins needing to reach into it.
+    members: Arc<members::RestoredMembers>,
+    /// The terminal the host pre-created for each member it is about to revive, keyed on the same guest
+    /// pid. Registered before the restore starts, because a member asks for it from inside its own
+    /// descriptor restore.
+    member_terminals: Arc<member_stdio::MemberTerminals>,
+    participants: Mutex<Option<ParticipantLedger>>,
+    /// Why the engine refused the last capture, in its own words.
+    ///
+    /// A refusal used to exist only as a `[ckpt] refuse:` line on the engine's stderr, so every
+    /// host-side report of a failed capture named the failure and not the cause. The coordinator now
+    /// sends the reason before it exits, and this is where it is held for the report.
+    refusal: Mutex<Option<String>>,
     committed: AtomicBool,
     running: AtomicBool,
     connections: AtomicUsize,
+    #[cfg(test)]
+    dispatches: AtomicUsize,
+    #[cfg(test)]
+    accepts: AtomicUsize,
 }
 
 impl Server {
@@ -134,17 +177,96 @@ impl Server {
                 phase: CapturePhase::Idle,
                 mutations: 0,
                 recovery_report_published: false,
+                recovery_result: None,
+                capture_result: None,
             }),
             capture_changed: Condvar::new(),
             channels: Mutex::new(HashMap::new()),
             recovery_connections: Mutex::new(HashMap::new()),
+            members: Arc::new(members::RestoredMembers::default()),
+            member_terminals: Arc::new(member_stdio::MemberTerminals::default()),
+            participants: Mutex::new(None),
+            refusal: Mutex::new(None),
             committed: AtomicBool::new(false),
             running: AtomicBool::new(true),
             connections: AtomicUsize::new(0),
+            #[cfg(test)]
+            dispatches: AtomicUsize::new(0),
+            #[cfg(test)]
+            accepts: AtomicUsize::new(0),
         }
     }
 
+    /// Why the engine refused the last capture, in the coordinator's own words, or `None` when no
+    /// refusal was reported for it.
+    #[must_use]
+    pub(crate) fn capture_refusal(&self) -> Option<String> {
+        self.refusal.lock().ok().and_then(|reason| reason.clone())
+    }
+
+    /// Record a refusal reason the coordinator reported, replacing whatever the previous capture left.
+    pub(super) fn record_refusal(&self, reason: String) {
+        if let Ok(mut held) = self.refusal.lock() {
+            *held = Some(reason);
+        }
+    }
+
+    /// One member of the restored tree, by the guest pid its image names it by.
+    ///
+    /// `None` for a guest pid no restore announced, which includes every guest pid when this domain
+    /// was started fresh rather than restored. The member is addressable for as long as its process
+    /// incarnation lives, and reports its own exit afterwards.
+    #[must_use]
+    pub(crate) fn restored_member(&self, guest_pid: std::num::NonZeroI32) -> Option<Arc<members::RestoredMember>> {
+        self.members.get(guest_pid)
+    }
+
+    /// Registers the terminal one sealed member will reattach to when the restore revives it.
+    ///
+    /// Must be called before the restore starts. The member asks for this from inside its descriptor
+    /// restore, which is the first thing that runs after its memory is back, and an unanswered member
+    /// keeps the container's single bridge for the rest of its life.
+    pub(crate) fn register_member_terminal(
+        &self,
+        guest_pid: std::num::NonZeroI32,
+        terminal: std::os::fd::OwnedFd,
+    ) -> Result<(), &'static str> {
+        self.member_terminals.register(guest_pid, terminal)
+    }
+
+    /// Blocks until at least `count` checkpoint channels have ever been accepted.
+    ///
+    /// Tests must not poll `connections`, which is a level and returns to zero as
+    /// soon as a channel closes: a worker that opens and closes its channel inside
+    /// one scheduling slice leaves a level poll spinning forever. `accepts` only
+    /// ever increases, so the edge cannot be missed, and the wait is bounded.
+    #[cfg(test)]
+    pub(crate) fn await_accepts(&self, count: usize) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while self.accepts.load(Ordering::Acquire) < count {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "checkpoint channel was never accepted"
+            );
+            std::thread::yield_now();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn dispatch_count(&self) -> usize {
+        self.dispatches.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
     pub(crate) fn begin_capture(&self, generation: u32, deadline: std::time::Instant) -> Result<u64, CaptureFailure> {
+        self.begin_capture_after_admission(deadline, || generation)
+    }
+
+    pub(crate) fn begin_capture_after_admission(
+        &self,
+        deadline: std::time::Instant,
+        activate: impl FnOnce() -> u32,
+    ) -> Result<u64, CaptureFailure> {
         if std::time::Instant::now() >= deadline {
             return Err(CaptureFailure::Deadline);
         }
@@ -155,22 +277,95 @@ impl Server {
                 _ => CaptureFailure::Busy,
             });
         }
-        let id = u64::from(generation);
+        self.begin_transaction(deadline)?;
+        let id = u64::from(activate());
         if id == 0 {
+            let discarded = self.discard_transaction(deadline);
+            capture.phase = CapturePhase::Poisoned;
+            self.capture_changed.notify_all();
+            discarded?;
             return Err(CaptureFailure::Poisoned);
         }
-        self.begin_transaction(deadline)?;
         self.committed.store(false, Ordering::Release);
+        // Each capture seals its own membership: a ledger from an earlier capture
+        // must never admit a process into this one.
+        *self.participants.lock().map_err(|_| CaptureFailure::Poisoned)? =
+            Some(ParticipantLedger::new(id).map_err(|_| CaptureFailure::Poisoned)?);
+        // The announced members are the processes this capture is about to freeze and retire. Holding
+        // them past it would hand a caller a capability on a process the image has replaced.
+        self.members.clear();
+        // Same reasoning for the terminals: an unclaimed registration names a member of the tree this
+        // capture is sealing, and the next restore registers its own.
+        self.member_terminals.clear();
         capture.phase = CapturePhase::Active { id, deadline };
         capture.mutations = 0;
         capture.recovery_report_published = false;
         Ok(id)
     }
 
+    pub(crate) fn wait_capture_ready(&self, deadline: std::time::Instant) -> Result<(), CaptureFailure> {
+        let mut capture = self.capture_lock()?;
+        loop {
+            match capture.phase {
+                CapturePhase::Idle => return Ok(()),
+                CapturePhase::Recovery { .. }
+                | CapturePhase::RecoveryFinished { .. }
+                | CapturePhase::Aborting { .. } => {
+                    let now = std::time::Instant::now();
+                    if now >= deadline {
+                        return Err(CaptureFailure::Deadline);
+                    }
+                    let (next, timeout) = self
+                        .capture_changed
+                        .wait_timeout(capture, deadline.saturating_duration_since(now))
+                        .map_err(|_| CaptureFailure::Poisoned)?;
+                    capture = next;
+                    if timeout.timed_out() && !matches!(capture.phase, CapturePhase::Idle) {
+                        return Err(CaptureFailure::Deadline);
+                    }
+                }
+                CapturePhase::Poisoned => return Err(CaptureFailure::Poisoned),
+                _ => return Err(CaptureFailure::Busy),
+            }
+        }
+    }
+
+    /// Refuses recovery unless the byte store's offered generation is finalized.
+    ///
+    /// The checkpoint byte store is adversarial: it can offer a staged
+    /// generation, a truncated one, or a directory an attacker assembled. Native
+    /// restore reads whatever recovery admits, so the finalized-versus-prepared
+    /// decision has to be taken here, before the recovery generation is
+    /// activated and before any object is served.
+    fn finalized_record(&self, deadline: std::time::Instant) -> Result<(), CaptureFailure> {
+        let names = self
+            .source
+            .list_until(deadline)
+            .map_err(|_| CaptureFailure::Unfinalized)?;
+        if authority::RecordState::of_generation(&names).admits_recovery() {
+            return Ok(());
+        }
+        hl_log::hl_error!(
+            hl_log::tag::CHECKPOINT,
+            "checkpoint recovery refused: generation is prepared, not finalized"
+        );
+        Err(CaptureFailure::Unfinalized)
+    }
+
+    #[cfg(test)]
     pub(crate) fn begin_recovery(&self, generation: u32, deadline: std::time::Instant) -> Result<u64, CaptureFailure> {
+        self.begin_recovery_after_admission(deadline, || generation)
+    }
+
+    pub(crate) fn begin_recovery_after_admission(
+        &self,
+        deadline: std::time::Instant,
+        activate: impl FnOnce() -> u32,
+    ) -> Result<u64, CaptureFailure> {
         if std::time::Instant::now() >= deadline {
             return Err(CaptureFailure::Deadline);
         }
+        self.finalized_record(deadline)?;
         let mut capture = self.capture_lock()?;
         if !matches!(capture.phase, CapturePhase::Idle) {
             return Err(match capture.phase {
@@ -178,11 +373,19 @@ impl Server {
                 _ => CaptureFailure::Busy,
             });
         }
-        let id = u64::from(generation);
+        self.begin_transaction(deadline)?;
+        let id = u64::from(activate());
         if id == 0 {
+            let discarded = self.discard_transaction(deadline);
+            capture.phase = CapturePhase::Poisoned;
+            self.capture_changed.notify_all();
+            discarded?;
             return Err(CaptureFailure::Poisoned);
         }
-        self.begin_transaction(deadline)?;
+        // RecoveryAdmission is a linear owner: its scoped waiter must finish before another recovery
+        // can admit. Clearing the sole retained result here is therefore both bounded retention and
+        // an explicit fence against 32-bit generation reuse.
+        capture.recovery_result = None;
         capture.phase = CapturePhase::Recovery { id, deadline };
         capture.mutations = 0;
         capture.recovery_report_published = false;
@@ -190,6 +393,14 @@ impl Server {
     }
 
     pub(crate) fn abort_recovery(&self, id: u64) -> Result<(), CaptureFailure> {
+        self.settle_recovery(id, None)
+    }
+
+    pub(crate) fn fail_recovery(&self, id: u64, failure: CaptureFailure) -> Result<(), CaptureFailure> {
+        self.settle_recovery(id, Some(failure))
+    }
+
+    fn settle_recovery(&self, id: u64, failure: Option<CaptureFailure>) -> Result<(), CaptureFailure> {
         let settlement_deadline = std::time::Instant::now() + ABORT_SETTLEMENT_TIMEOUT;
         let mut capture = self.capture_lock()?;
         match capture.phase {
@@ -226,15 +437,35 @@ impl Server {
                     return Err(CaptureFailure::Poisoned);
                 }
                 capture.phase = if discarded.is_ok() {
-                    CapturePhase::Idle
+                    failure.map_or(CapturePhase::Idle, |failure| CapturePhase::RecoveryFinished {
+                        id,
+                        result: Err(failure),
+                    })
                 } else {
                     CapturePhase::Poisoned
                 };
                 self.capture_changed.notify_all();
                 discarded
             }
+            CapturePhase::RecoveryFinished { id: active, result } if active == id => {
+                capture.phase = CapturePhase::Idle;
+                self.capture_changed.notify_all();
+                result
+            }
             CapturePhase::Idle => Ok(()),
-            CapturePhase::Poisoned => Err(CaptureFailure::Poisoned),
+            CapturePhase::Poisoned => {
+                drop(capture);
+                let discarded = self.discard_transaction(settlement_deadline);
+                if discarded.is_ok() {
+                    let mut capture = self.capture_lock()?;
+                    capture.phase = failure.map_or(CapturePhase::Idle, |failure| CapturePhase::RecoveryFinished {
+                        id,
+                        result: Err(failure),
+                    });
+                    self.capture_changed.notify_all();
+                }
+                discarded
+            }
             _ => Err(CaptureFailure::Busy),
         }
     }
@@ -242,13 +473,19 @@ impl Server {
     pub(crate) fn wait_recovery(&self, id: u64) -> Result<(), CaptureFailure> {
         let mut capture = self.capture_lock()?;
         loop {
+            if let Some((completed, result)) = capture.recovery_result
+                && completed == id
+            {
+                return result;
+            }
             match capture.phase {
                 CapturePhase::Recovery { id: active, deadline } if active == id => {
                     let now = std::time::Instant::now();
                     if now >= deadline {
                         drop(capture);
-                        self.abort_recovery(id)?;
-                        return Err(CaptureFailure::Deadline);
+                        self.fail_recovery(id, CaptureFailure::Deadline)?;
+                        capture = self.capture_lock()?;
+                        continue;
                     }
                     let (next, timeout) = self
                         .capture_changed
@@ -257,8 +494,8 @@ impl Server {
                     capture = next;
                     if timeout.timed_out() {
                         drop(capture);
-                        self.abort_recovery(id)?;
-                        return Err(CaptureFailure::Deadline);
+                        self.fail_recovery(id, CaptureFailure::Deadline)?;
+                        capture = self.capture_lock()?;
                     }
                 }
                 CapturePhase::Aborting { id: active } if active == id => {
@@ -267,11 +504,27 @@ impl Server {
                         .wait(capture)
                         .map_err(|_| CaptureFailure::Poisoned)?;
                 }
+                CapturePhase::RecoveryFinished { id: active, result } if active == id => {
+                    capture.recovery_result = Some((id, result));
+                    capture.phase = CapturePhase::Idle;
+                    self.capture_changed.notify_all();
+                    return result;
+                }
                 CapturePhase::Idle => return Ok(()),
-                CapturePhase::Poisoned => return Err(CaptureFailure::Poisoned),
+                CapturePhase::Poisoned => {
+                    drop(capture);
+                    self.fail_recovery(id, CaptureFailure::Poisoned)?;
+                    capture = self.capture_lock()?;
+                }
                 _ => return Err(CaptureFailure::Busy),
             }
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn poison_coordination(&self) -> ! {
+        let _held = self.capture.lock().unwrap();
+        panic!("intentional recovery coordination poison");
     }
 
     fn capture_lock(&self) -> Result<std::sync::MutexGuard<'_, CaptureState>, CaptureFailure> {
@@ -281,18 +534,9 @@ impl Server {
                 let mut capture = poisoned.into_inner();
                 capture.phase = CapturePhase::Poisoned;
                 self.capture_changed.notify_all();
+                self.capture.clear_poison();
                 Err(CaptureFailure::Poisoned)
             }
-        }
-    }
-
-    fn active_deadline(&self) -> Result<(u64, std::time::Instant), CaptureFailure> {
-        let capture = self.capture_lock()?;
-        match capture.phase {
-            CapturePhase::Active { id, deadline } if std::time::Instant::now() < deadline => Ok((id, deadline)),
-            CapturePhase::Active { .. } => Err(CaptureFailure::Deadline),
-            CapturePhase::Poisoned => Err(CaptureFailure::Poisoned),
-            _ => Err(CaptureFailure::Busy),
         }
     }
 
@@ -359,6 +603,8 @@ impl Server {
             CapturePhase::Idle => Ok(None),
             CapturePhase::Recovery { deadline, .. } if std::time::Instant::now() < deadline => Ok(Some(deadline)),
             CapturePhase::Recovery { .. } => Err(CaptureFailure::Deadline),
+            CapturePhase::RecoveryFinished { result: Ok(()), .. } => Ok(None),
+            CapturePhase::RecoveryFinished { result: Err(error), .. } => Err(error),
             CapturePhase::Active { deadline, .. } if std::time::Instant::now() < deadline => Ok(Some(deadline)),
             CapturePhase::Active { .. } => Err(CaptureFailure::Deadline),
             CapturePhase::Publishing { .. } => Err(CaptureFailure::Busy),
@@ -432,6 +678,7 @@ impl Server {
                         return Err(CaptureFailure::Poisoned);
                     }
                     capture.phase = CapturePhase::Poisoned;
+                    capture.capture_result = Some((id, Err(failure)));
                     self.capture_changed.notify_all();
                     transition.finished = true;
                     return discarded.map(|()| failure);
@@ -485,6 +732,11 @@ impl Server {
     ) -> Result<Option<Result<(), CaptureFailure>>, CaptureFailure> {
         let mut capture = self.capture_lock()?;
         loop {
+            if let Some((completed, result)) = capture.capture_result
+                && completed == id
+            {
+                return Ok(Some(result));
+            }
             match capture.phase {
                 CapturePhase::Active { id: active, deadline } if active == id => {
                     let now = std::time::Instant::now();
@@ -565,6 +817,7 @@ impl Server {
                             .settle_failed_capture(id, failure)
                             .map(|failure| Some(Err(failure)));
                     }
+                    capture.capture_result = Some((id, result));
                     capture.phase = CapturePhase::Complete;
                     return Ok(Some(Ok(())));
                 }

@@ -4,7 +4,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     sync::{Arc, Condvar, Mutex as StdMutex},
     time::Duration,
 };
@@ -12,13 +12,37 @@ use std::{
 const CHECKPOINT_OBJECT: &str = "rust/image";
 const CHECKPOINT_MANIFEST_MAGIC: &[u8; 8] = b"HLRUST01";
 
+mod member;
 mod process;
 mod spec;
+use member::MemberSession;
 use process::Process;
 use spec::Spec;
 
+/// Every domain freeze channel this runtime currently coordinates, keyed by the
+/// process domain identity the guest processes are launched into.
+type DomainChannels = StdMutex<HashMap<[u64; 2], hl_engine::composition::CheckpointChannel>>;
+
 #[derive(Default)]
-pub(crate) struct Engine;
+pub(crate) struct Engine {
+    domains: Arc<DomainChannels>,
+}
+
+/// Keeps a coordinator's freeze channel published for its domain's exec sessions
+/// and withdraws it when the coordinator process is released, so a session started
+/// after the coordinator is gone cannot join a dead broker.
+pub(super) struct DomainChannelEntry {
+    domains: Arc<DomainChannels>,
+    identity: [u64; 2],
+}
+
+impl Drop for DomainChannelEntry {
+    fn drop(&mut self) {
+        if let Ok(mut domains) = self.domains.lock() {
+            domains.remove(&self.identity);
+        }
+    }
+}
 
 struct CheckpointTransport {
     image: Arc<dyn crate::CheckpointImage>,
@@ -164,9 +188,51 @@ impl hl_engine::composition::CheckpointSource for CheckpointTransport {
 }
 
 struct TerminalState {
-    receiver: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
     pending: VecDeque<u8>,
     closed: bool,
+}
+
+/// The client's input queue, held outside the state lock so a reader parked on
+/// it never delays `close` or a concurrent drain of already-received bytes.
+type InputQueue = StdMutex<Option<tokio::sync::mpsc::Receiver<Vec<u8>>>>;
+
+/// Unparks the reader that installed it, so an arriving keystroke wakes the
+/// guest's read immediately instead of at the next cancellation tick.
+struct ReaderWaker(std::thread::Thread);
+
+impl std::task::Wake for ReaderWaker {
+    fn wake(self: Arc<Self>) {
+        self.0.unpark();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.unpark();
+    }
+}
+
+/// Blocks until the sender enqueues bytes, the sender is dropped, or `deadline`
+/// passes.
+///
+/// `Poll::Pending` means the deadline expired with the queue still open, which
+/// is the caller's opportunity to observe cancellation. Waking on the sender's
+/// own notification rather than on a poll interval is what keeps keystroke
+/// latency at the cost of a thread wakeup instead of half a poll period.
+fn receive_until(
+    receiver: &mut tokio::sync::mpsc::Receiver<Vec<u8>>,
+    deadline: std::time::Instant,
+) -> std::task::Poll<Option<Vec<u8>>> {
+    let waker = std::task::Waker::from(Arc::new(ReaderWaker(std::thread::current())));
+    let mut context = std::task::Context::from_waker(&waker);
+    loop {
+        if let std::task::Poll::Ready(received) = receiver.poll_recv(&mut context) {
+            return std::task::Poll::Ready(received);
+        }
+        let now = std::time::Instant::now();
+        let Some(remaining) = deadline.checked_duration_since(now) else {
+            return std::task::Poll::Pending;
+        };
+        std::thread::park_timeout(remaining);
+    }
 }
 
 /// Container-owned adapter for the engine's host-terminal port.
@@ -176,24 +242,28 @@ struct TerminalState {
 /// timed waits avoid holding a lock across a channel operation or busy-spinning.
 struct TerminalChannel {
     state: StdMutex<TerminalState>,
+    input: InputQueue,
     changed: Condvar,
     output: crate::service::LogSender,
 }
 
 struct OutputChannel {
     state: StdMutex<TerminalState>,
+    input: InputQueue,
     changed: Condvar,
     output: crate::service::LogSender,
 }
 
 impl OutputChannel {
+    const CANCELLATION_POLL: Duration = TerminalChannel::CANCELLATION_POLL;
+
     fn new(receiver: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>, output: crate::service::LogSender) -> Self {
         Self {
             state: StdMutex::new(TerminalState {
-                receiver,
                 pending: VecDeque::new(),
                 closed: false,
             }),
+            input: StdMutex::new(receiver),
             changed: Condvar::new(),
             output,
         }
@@ -202,6 +272,24 @@ impl OutputChannel {
     fn lock(&self) -> std::sync::MutexGuard<'_, TerminalState> {
         self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+
+    /// Waits one cancellation period for client input, appending whatever
+    /// arrives to `pending`. Returns false once the client's sender is gone.
+    fn receive(&self) -> bool {
+        let mut input = self.input.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(receiver) = input.as_mut() else {
+            return false;
+        };
+        match receive_until(receiver, std::time::Instant::now() + Self::CANCELLATION_POLL) {
+            std::task::Poll::Ready(Some(bytes)) => {
+                drop(input);
+                self.lock().pending.extend(bytes);
+            }
+            std::task::Poll::Ready(None) => *input = None,
+            std::task::Poll::Pending => {}
+        }
+        true
+    }
 }
 
 impl hl_engine::composition::StandardStreamPort for OutputChannel {
@@ -209,32 +297,22 @@ impl hl_engine::composition::StandardStreamPort for OutputChannel {
         if output.is_empty() {
             return Ok(0);
         }
-        let mut state = self.lock();
         loop {
-            if state.closed {
+            {
+                let mut state = self.lock();
+                if state.closed {
+                    return Ok(0);
+                }
+                if !state.pending.is_empty() {
+                    let length = output.len().min(state.pending.len());
+                    for destination in &mut output[..length] {
+                        *destination = state.pending.pop_front().expect("bounded by pending length");
+                    }
+                    return Ok(length);
+                }
+            }
+            if !self.receive() {
                 return Ok(0);
-            }
-            if !state.pending.is_empty() {
-                let length = output.len().min(state.pending.len());
-                for destination in &mut output[..length] {
-                    *destination = state.pending.pop_front().expect("bounded by pending length");
-                }
-                return Ok(length);
-            }
-            let received = match state.receiver.as_mut() {
-                Some(receiver) => receiver.try_recv(),
-                None => return Ok(0),
-            };
-            match received {
-                Ok(bytes) => state.pending.extend(bytes),
-                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => state.receiver = None,
-                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
-                    state = self
-                        .changed
-                        .wait_timeout(state, TerminalChannel::CANCELLATION_POLL)
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .0;
-                }
             }
         }
     }
@@ -263,7 +341,7 @@ impl hl_engine::composition::StandardStreamPort for OutputChannel {
                 }
                 Err(tokio::sync::mpsc::error::TrySendError::Full(returned)) => {
                     chunk = returned;
-                    std::thread::sleep(TerminalChannel::CANCELLATION_POLL);
+                    std::thread::sleep(Self::CANCELLATION_POLL);
                 }
             }
         }
@@ -281,10 +359,10 @@ impl TerminalChannel {
     fn new(receiver: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>, output: crate::service::LogSender) -> Self {
         Self {
             state: StdMutex::new(TerminalState {
-                receiver,
                 pending: VecDeque::new(),
                 closed: false,
             }),
+            input: StdMutex::new(receiver),
             changed: Condvar::new(),
             output,
         }
@@ -293,6 +371,24 @@ impl TerminalChannel {
     fn lock(&self) -> std::sync::MutexGuard<'_, TerminalState> {
         self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+
+    /// Waits one cancellation period for client input, appending whatever
+    /// arrives to `pending`. Returns false once the client's sender is gone.
+    fn receive(&self) -> bool {
+        let mut input = self.input.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(receiver) = input.as_mut() else {
+            return false;
+        };
+        match receive_until(receiver, std::time::Instant::now() + Self::CANCELLATION_POLL) {
+            std::task::Poll::Ready(Some(bytes)) => {
+                drop(input);
+                self.lock().pending.extend(bytes);
+            }
+            std::task::Poll::Ready(None) => *input = None,
+            std::task::Poll::Pending => {}
+        }
+        true
+    }
 }
 
 impl hl_engine::composition::TerminalPort for TerminalChannel {
@@ -300,32 +396,22 @@ impl hl_engine::composition::TerminalPort for TerminalChannel {
         if output.is_empty() {
             return Ok(0);
         }
-        let mut state = self.lock();
         loop {
-            if state.closed {
+            {
+                let mut state = self.lock();
+                if state.closed {
+                    return Ok(0);
+                }
+                if !state.pending.is_empty() {
+                    let length = output.len().min(state.pending.len());
+                    for destination in &mut output[..length] {
+                        *destination = state.pending.pop_front().expect("bounded by pending length");
+                    }
+                    return Ok(length);
+                }
+            }
+            if !self.receive() {
                 return Ok(0);
-            }
-            if !state.pending.is_empty() {
-                let length = output.len().min(state.pending.len());
-                for destination in &mut output[..length] {
-                    *destination = state.pending.pop_front().expect("bounded by pending length");
-                }
-                return Ok(length);
-            }
-            let received = match state.receiver.as_mut() {
-                Some(receiver) => receiver.try_recv(),
-                None => return Ok(0),
-            };
-            match received {
-                Ok(bytes) => state.pending.extend(bytes),
-                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => state.receiver = None,
-                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
-                    state = self
-                        .changed
-                        .wait_timeout(state, Self::CANCELLATION_POLL)
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .0;
-                }
             }
         }
     }
@@ -404,23 +490,62 @@ impl Runtime for Engine {
             None => hl_engine::composition::StandardStreams::default()
                 .with_output(Arc::new(OutputChannel::new(config.input.take(), sender))),
         };
-        let checkpoint = config
-            .checkpoint
-            .map(|checkpoint| Arc::new(CheckpointTransport::new(checkpoint.image)));
-        let checkpointable = checkpoint.is_some();
+        let identity = spec.domain.identity();
+        let role = config.checkpoint.take();
+        // A member joins the coordinator's broker and trigger. Resolving the channel
+        // before construction keeps the refusal on the launch boundary: a session that
+        // cannot reach its domain's freeze must not start armed on a channel of its own.
+        let member = match &role {
+            Some(crate::service::CheckpointRole::DomainMember) => Some(
+                self.domains
+                    .lock()
+                    .map_err(|_| Error::Runtime("checkpoint domain registry is poisoned".into()))?
+                    .get(&identity)
+                    .cloned()
+                    .ok_or_else(|| Error::Runtime("process domain has no checkpoint coordinator to join".into()))?,
+            ),
+            _ => None,
+        };
+        let checkpoint = match role {
+            Some(crate::service::CheckpointRole::Coordinator(checkpoint)) => {
+                Some(Arc::new(CheckpointTransport::new(checkpoint.image)))
+            }
+            Some(crate::service::CheckpointRole::DomainMember) | None => None,
+        };
         let engine = Arc::new(
-            match checkpoint {
-                Some(transport) => hl_engine::runtime::Engine::with_checkpoint(
+            match (checkpoint, member) {
+                (Some(transport), _) => hl_engine::runtime::Engine::with_checkpoint(
                     spec.isa,
                     spec.plan,
                     streams,
                     transport.clone(),
                     transport,
                 ),
-                None => hl_engine::runtime::Engine::with_streams(spec.isa, spec.plan, streams),
+                (None, Some(channel)) => {
+                    hl_engine::runtime::Engine::with_checkpoint_channel(spec.isa, spec.plan, streams, channel)
+                }
+                (None, None) => hl_engine::runtime::Engine::with_streams(spec.isa, spec.plan, streams),
             }
             .map_err(|error| Error::Runtime(format!("engine construction: {error:?}")))?,
         );
+        let domain_channel = engine.checkpoint_channel().map(|channel| {
+            if let Ok(mut domains) = self.domains.lock() {
+                domains.insert(identity, channel);
+            }
+            DomainChannelEntry {
+                domains: Arc::clone(&self.domains),
+                identity,
+            }
+        });
+        // Before `start`, because start IS the restore: a member asks for its terminal from inside its own
+        // descriptor restore, so a registration made afterwards answers nothing. Registering by value is
+        // deliberate -- the slave descriptor is moved into the engine here, so a launch that dropped this
+        // step would not compile rather than quietly restore a tree with no per-member I/O.
+        let members = config
+            .member_terminals
+            .drain(..)
+            .map(|member| MemberSession::open(&engine, member).map(Arc::new))
+            .collect::<Result<Vec<_>>>()?;
         engine
             .start()
             .map_err(|error| Error::Runtime(format!("engine start: {error:?}")))?;
@@ -430,7 +555,8 @@ impl Runtime for Engine {
             child: StdMutex::new(Some(engine)),
             logs: StdMutex::new(Some(receiver)),
             domain: spec.domain,
-            checkpointable,
+            _domain_channel: domain_channel,
+            members,
         }))
     }
 }
@@ -583,6 +709,7 @@ mod tests {
 
     fn launch() -> ProcessConfig {
         ProcessConfig {
+            member_terminals: Vec::new(),
             network_namespace: "container-test".to_owned(),
             rootfs: "/rootfs".into(),
             overlay: None,
@@ -632,10 +759,12 @@ mod tests {
     fn checkpoint_transport_arms_capture_and_requested_restore() {
         for restore in [false, true] {
             let mut launch = launch();
-            launch.checkpoint = Some(crate::service::CheckpointConfig {
-                image: Arc::new(Image::default()),
-                restore,
-            });
+            launch.checkpoint = Some(crate::service::CheckpointRole::Coordinator(
+                crate::service::CheckpointConfig {
+                    image: Arc::new(Image::default()),
+                    restore,
+                },
+            ));
             let spec = Spec::try_from(&launch).unwrap();
             assert_eq!(spec.plan.options.get("HL_CHECKPOINT"), Some("1"));
             assert_eq!(spec.plan.options.get("HL_RESTORE"), restore.then_some("1"));
@@ -664,7 +793,11 @@ mod tests {
     }
 
     #[test]
-    fn native_execution_reaches_the_engine_launch_plan() {
+    fn native_execution_selects_only_the_retained_c_diagnostics_option() {
+        // The engine has no native-execution switch: `src/runtime/hl-native/src/native/engine/options.c`
+        // is the authoritative option registry and defines neither `HL_NATIVE_EXECUTION` nor
+        // `HL_NATIVE_DIAGNOSTICS`. `Execution::Native` therefore carries exactly one launch effect,
+        // the retained-C diagnostics request.
         let mut launch = launch();
         launch.execution = crate::Execution::native(true);
         let spec = Spec::try_from(&launch).unwrap();
@@ -674,7 +807,7 @@ mod tests {
     }
 
     #[test]
-    fn native_execution_without_diagnostics_omits_diagnostics_option() {
+    fn native_execution_without_diagnostics_selects_no_launch_option() {
         let mut launch = launch();
         launch.execution = crate::Execution::native(false);
         let spec = Spec::try_from(&launch).unwrap();
@@ -824,5 +957,50 @@ mod tests {
             std::io::ErrorKind::BrokenPipe
         );
         worker.join().unwrap();
+    }
+
+    #[test]
+    fn terminal_read_wakes_on_arriving_input_rather_than_the_poll_interval() {
+        let (input, receiver) = tokio::sync::mpsc::channel(8);
+        let (output, _logs) = crate::service::log_channel();
+        let terminal = Arc::new(TerminalChannel::new(Some(receiver), output));
+        let reader = Arc::clone(&terminal);
+        let sent: Arc<Mutex<Option<std::time::Instant>>> = Arc::new(Mutex::new(None));
+        let sent_writer = Arc::clone(&sent);
+        let samples = 21;
+        let worker = std::thread::spawn(move || {
+            let mut latencies = Vec::with_capacity(samples);
+            for _ in 0..samples {
+                let mut byte = [0_u8; 8];
+                assert_eq!(reader.read(&mut byte).unwrap(), 1);
+                let arrived = std::time::Instant::now();
+                let at = sent_writer
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("send is timestamped before it is sent");
+                latencies.push(arrived.duration_since(at));
+            }
+            latencies
+        });
+
+        for _ in 0..samples {
+            // Longer than the cancellation poll, so every keystroke lands on an
+            // already-waiting reader rather than on a queue it has yet to drain.
+            std::thread::sleep(TerminalChannel::CANCELLATION_POLL * 2);
+            *sent.lock().unwrap() = Some(std::time::Instant::now());
+            input.blocking_send(vec![b'x']).unwrap();
+        }
+        let mut latencies = worker.join().unwrap();
+        latencies.sort_unstable();
+
+        // A reader woken only by the poll timer averages half the period; one
+        // woken by the sender is bounded by a thread wakeup instead.
+        let median = latencies[latencies.len() / 2];
+        assert!(
+            median * 4 < TerminalChannel::CANCELLATION_POLL,
+            "median keystroke delivery {median:?} is within a poll period of {:?}",
+            TerminalChannel::CANCELLATION_POLL
+        );
     }
 }

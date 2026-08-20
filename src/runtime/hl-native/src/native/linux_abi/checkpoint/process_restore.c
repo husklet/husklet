@@ -34,17 +34,38 @@ static void ckpt_restore_reset_inherited_fds(const struct ckpt_fd *records, int 
     }
 }
 
-static void ckpt_restore_retire_typed_fd(const struct ckpt_fd *record) {
-    int kind = record->kind;
-    int native_kind = kind == CKF_FILE || kind == CKF_PIPE || kind == CKF_BLOB || kind == CKF_MEMFD ||
-                      kind == CKF_EVENTFD || kind == CKF_TIMERFD || kind == CKF_INOTIFY || kind == CKF_EPOLL ||
-                      kind == CKF_SOCKETPAIR || kind == CKF_SOCKET || kind == CKF_SIGNALFD;
-    if (!native_kind || g_linux_box == NULL ||
+static int ckpt_restore_record_replaces_typed_fd(int kind) {
+    switch (kind) {
+        case CKF_FILE:
+        case CKF_PIPE:
+        case CKF_BLOB:
+        case CKF_MEMFD:
+        case CKF_EVENTFD:
+        case CKF_TIMERFD:
+        case CKF_INOTIFY:
+        case CKF_EPOLL:
+        case CKF_SOCKETPAIR:
+        case CKF_SOCKET:
+        case CKF_SIGNALFD:
+        case CKF_DEVICE:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int ckpt_restore_retire_typed_fd(const struct ckpt_fd *record) {
+    if (!ckpt_restore_record_replaces_typed_fd(record->kind) || g_linux_box == NULL ||
         hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)record->gfd, &(hl_linux_fd_snapshot){0}) != HL_STATUS_OK)
-        return;
-    (void)hl_linux_close(g_linux_box, (hl_linux_fd)record->gfd);
+        return 0;
+    /* The typed table owns the provider handle while the process descriptor table owns the numeric shadow.
+     * A restore that replaces the object must retire both before publishing the native replacement.  In
+     * particular, CKF_DEVICE at fd 0 is commonly /dev/null; leaving its typed entry alive makes the next
+     * checkpoint inspect a stale provider handle instead of the newly opened native descriptor. */
+    if (hl_linux_close(g_linux_box, (hl_linux_fd)record->gfd) < 0) return -1;
     proc_fdvis_close(record->gfd);
-    (void)close(record->gfd);
+    if (close(record->gfd) != 0 && errno != EBADF) return -1;
+    return 0;
 }
 
 static void ckpt_restore_socket_state(int fd, const struct ckpt_socket_state *state) {
@@ -81,6 +102,12 @@ static int ckpt_restore_socketpair_fd(const struct ckpt_fd *records, int count, 
         fcntl(fd, F_SETFD, (record->descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0)
         return -1;
     const struct ckpt_socket_state *state = &endpoint->state;
+    int source = ckpt_restore_prior_ofd(records, (int)(record - records), record->ofd_id);
+    sock_state_drop(fd);
+    if (source >= 0 && g_sock_state_ref[source] != 0)
+        sock_state_dup(fd, source);
+    else
+        sock_internal_shutdown_fresh(fd);
     g_sock_object[fd] = record->object_id;
     g_sock_peer_object[fd] = record->auxiliary;
     g_sock_fam[fd] = endpoint->state_loaded ? (uint16_t)state->guest_family : AF_UNIX;
@@ -88,7 +115,15 @@ static int ckpt_restore_socketpair_fd(const struct ckpt_fd *records, int count, 
     g_sock_dgram[fd] = record->offset == SOCK_DGRAM || record->offset == SOCK_SEQPACKET;
     g_sock_seqpacket[fd] = record->offset == SOCK_SEQPACKET;
     g_sock_conn[fd] = 1;
-    if (endpoint->state_loaded) ckpt_restore_socket_state(fd, state);
+    if (endpoint->state_loaded) {
+        ckpt_restore_socket_state(fd, state);
+        /* The host half-close was applied to the shared description once, in ckpt_prepare_restore_sockets.
+         * The engine's own mask is per-arena-slot and this descriptor's slot is fresh, so it has to be
+         * re-observed here or the guest's next shutdown()/checkpoint would read a socket that has no
+         * closed direction while the kernel says otherwise. */
+        int direction = ckpt_socket_shutdown_direction(state->shutdown_mask);
+        if (direction >= 0) sock_state_shutdown_observed(fd, direction);
+    }
     int peer = ckpt_restore_prior_kind(records, count, CKF_SOCKETPAIR, record->auxiliary);
     if (peer >= 0) g_sock_pair_peer[fd] = peer + 1;
     return proc_fdvis_publish_native_fd(fd);
@@ -103,6 +138,12 @@ static int ckpt_restore_bound_socket_fd(const struct ckpt_fd *records, int index
         fcntl(fd, F_SETFD, (record->descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0)
         return -1;
     const struct ckpt_socket_state *state = &saved->state;
+    int source = ckpt_restore_prior_ofd(records, index, record->ofd_id);
+    sock_state_drop(fd);
+    if (source >= 0 && g_sock_state_ref[source] != 0)
+        sock_state_dup(fd, source);
+    else
+        sock_internal_shutdown_fresh(fd);
     g_sock_object[fd] = record->object_id;
     g_sock_peer_object[fd] = 0;
     g_sock_fam[fd] = (uint16_t)state->guest_family;
@@ -119,9 +160,9 @@ static int ckpt_restore_bound_socket_fd(const struct ckpt_fd *records, int index
     g_udp_local_interface[fd] = state->udp_local_interface;
     g_udp_peer_interface[fd] = state->udp_peer_interface;
     if (state->udp_local_port != 0 && state->host_family == AF_UNIX) {
-        int source = ckpt_restore_prior_kind(records, index, CKF_SOCKET, record->object_id);
-        if (source >= 0) {
-            udp_ref_dup(fd, source);
+        int prior = ckpt_restore_prior_kind(records, index, CKF_SOCKET, record->object_id);
+        if (prior >= 0) {
+            udp_ref_dup(fd, prior);
         } else {
             const struct sockaddr_un *address = (const void *)&state->local;
             if (udp_ref_create(fd, address->sun_path) != 0) return -1;
@@ -371,7 +412,48 @@ static int ckpt_restore_saved_ofd(const struct ckpt_fd *record) {
     return proc_fdvis_publish_native_fd(record->gfd) == 0 ? 1 : -1;
 }
 
+/* Bind guest fds 0, 1 and 2 to the terminal the host created for THIS member.
+ *
+ * A whole-image restore re-forks every captured process out of one launch, and `checkpoint/image.c` records
+ * a captured session's guest fds 0..2 as CKF_TTY so the restore rebinds them to a live terminal. Without a
+ * per-member terminal that could only ever be the restoring engine's own bridge -- one bridge for a tree of
+ * many -- which is why a host holding one member individually still had no I/O to seat a pane on.
+ *
+ * A member the host registered no terminal for reads -1 and keeps the inherited bridge, exactly as before
+ * this existed. Requested once per restored process: the request is what consumes the registration. */
+static void ckpt_restore_bind_member_stdio(void) {
+    int terminal = ckpt_stream_member_stdio(g_self_gpid);
+    if (terminal < 0) return;
+    for (int gfd = 0; gfd <= 2; gfd++) {
+        /* Release the BOUND stdio object first, and only then rebind the descriptor.
+         *
+         * The engine's launch-time stdio is not the host descriptor sitting at guest fd 0: it is a host
+         * object imported at engine construction and installed at that guest fd, and every guest read and
+         * write resolves through it (`bound_snapshot`). A re-forked member inherits the CONTAINER engine's
+         * three, so a dup2 alone moved the member's own host descriptors and left the guest still reading
+         * and writing the container's bridge -- measured: the pane's shell reached EOF on the container's
+         * stdin and exited silently while the engine's own stderr went to the new terminal. Closing the
+         * bound object makes the guest descriptor resolve to the raw one again, which is the terminal
+         * installed on the next line. */
+        if (g_linux_box != NULL) (void)hl_linux_close(g_linux_box, (hl_linux_fd)gfd);
+        if (terminal != gfd) (void)dup2(terminal, gfd);
+    }
+    if (terminal > 2) (void)close(terminal);
+}
+
 static int ckpt_restore_tty_fd(const struct ckpt_fd *record) {
+    if (record->gfd > STDERR_FILENO && (record->auxiliary & CKFA_STDIO_ALIAS) != 0) {
+        /* A duplicate of one of the launch-time standard descriptors, not of the controlling terminal.
+           The restore fork already holds that descriptor -- either the container's inherited stdio bridge,
+           or, once ckpt_restore_bind_member_stdio has run, this member's OWN terminal. Rebuilding the alias
+           from the descriptor rather than from a remembered identity is what keeps the alias and fd 0/1/2
+           pointing at one open file description in both cases; a container whose stdio is a runtime pipe
+           has no ctty to rebuild it from at all. */
+        int standard = (int)((record->auxiliary >> CKFA_STDIO_ALIAS_SHIFT) & CKFA_STDIO_ALIAS_MASK);
+        if (dup2(standard, record->gfd) < 0) return -1;
+        if (record->descriptor_flags & FD_CLOEXEC) fcntl(record->gfd, F_SETFD, FD_CLOEXEC);
+        return 0;
+    }
     if (record->gfd > 2) {
         int ctty = ckpt_ctty_open();
         if (ctty >= 0 && record->gfd != ctty && dup2(ctty, record->gfd) >= 0 && (record->flags & FD_CLOEXEC))
@@ -451,7 +533,7 @@ static int ckpt_restore_device_fd(const struct ckpt_fd *record) {
 
 static int ckpt_restore_fd_record(const char *procdir, const struct ckpt_fd *records, int count, int index) {
     const struct ckpt_fd *record = &records[index];
-    ckpt_restore_retire_typed_fd(record);
+    if (ckpt_restore_retire_typed_fd(record) != 0) return -1;
     if (record->kind == CKF_EPOLL) return 0;
     if (record->kind == CKF_SOCKETPAIR) return ckpt_restore_socketpair_fd(records, count, record);
     if (record->kind == CKF_SOCKET) return ckpt_restore_bound_socket_fd(records, index, record);
@@ -536,6 +618,12 @@ static int ckpt_restore_fds_dir(const char *procdir) {
     ckpt_source_fclose(f);
     ckpt_fd_terminate_all(records, (size_t)count);
     ckpt_restore_reset_inherited_fds(records, count);
+    /* BEFORE the record loop, not inside it. Two records depend on fds 0..2 already naming this member's own
+       terminal: its own CKF_TTY records, and any CKFA_STDIO_ALIAS duplicate the guest made of one of them,
+       which is rebuilt with dup2 from the standard descriptor and would otherwise capture whatever was
+       inherited. Binding once up front gives both one open file description, and a later record that
+       genuinely owns fd 0, 1 or 2 -- a redirect from a file, say -- still overwrites it in record order. */
+    ckpt_restore_bind_member_stdio();
     for (int index = 0; index < count; ++index)
         if (ckpt_restore_fd_record(procdir, records, count, index) != 0) {
             free(records);
@@ -662,6 +750,7 @@ static void ckpt_restore_hold_tty_signals(void) {
 // The process table read from the checkpoint (one entry per proc.<gpid>/meta), used to rebuild the tree.
 struct ckpt_proc {
     int gpid, ppid, pgid, sid;
+    int domain_root; // the container process domain this member joins when it has no guest parent (see ckpt_meta)
     uint64_t version;
     int viable;
     char reason[192];
@@ -692,6 +781,7 @@ static int ckpt_scan_procs(void) {
         g_rprocs[g_nrprocs].ppid = m.ppid_gpid;
         g_rprocs[g_nrprocs].pgid = m.pgid_gpid;
         g_rprocs[g_nrprocs].sid = m.sid_gpid;
+        g_rprocs[g_nrprocs].domain_root = m.domain_root_gpid;
         g_rprocs[g_nrprocs].version = m.version;
         g_rprocs[g_nrprocs].viable = 1;
         g_rprocs[g_nrprocs].reason[0] = 0;
@@ -700,35 +790,110 @@ static int ckpt_scan_procs(void) {
     return g_nrprocs > 0 ? 0 : -1;
 }
 
+// The member whose restore re-forks this one. A parentless domain member is still forked by the domain's
+// init -- restore has exactly one driver and no other process exists to fork it -- but that is a HOST fork
+// edge only: the guest ppid it adopts stays the recorded 0 (socket_restore.c sets g_self_gppid from meta).
+static int ckpt_restore_parent_gpid(const struct ckpt_proc *process) {
+    return process->ppid > 0 ? process->ppid : process->domain_root;
+}
+
+static int ckpt_proc_index(int gpid) {
+    for (int i = 0; i < g_nrprocs; ++i)
+        if (g_rprocs[i].gpid == gpid) return i;
+    return -1;
+}
+
 static int ckpt_validate_proc_tree(const struct ckpt_manifest *man) {
-    if ((uint64_t)g_nrprocs != man->n_procs) return -1;
+    // This table is copied into the fixed-capacity guest/host pid map after fork. Refuse an image which
+    // cannot fit before creating even the first child; silently truncating it would make wait/kill target
+    // unrelated host identities after restore.
+    if (man->n_procs == 0 || man->n_procs > HL_LINUX_PIDMAP_CAPACITY ||
+        (uint64_t)g_nrprocs != man->n_procs || man->root_gpid != 1)
+        return -1;
+
+    int *relations = malloc((size_t)g_nrprocs * 3 * sizeof *relations);
+    if (!relations) return -1;
+    int *parents = relations;
+    int *groups = relations + g_nrprocs;
+    int *sessions = relations + 2 * g_nrprocs;
     int roots = 0;
     for (int i = 0; i < g_nrprocs; i++) {
-        if (g_rprocs[i].version != man->version) return -1;
-        if (g_rprocs[i].gpid == man->root_gpid) {
-            if (g_rprocs[i].ppid != 0) return -1;
+        const struct ckpt_proc *process = &g_rprocs[i];
+        if (process->version != man->version || process->gpid <= 0 || process->pgid <= 0 || process->sid <= 0)
+            goto invalid;
+        for (int j = 0; j < i; ++j)
+            if (g_rprocs[j].gpid == process->gpid) goto invalid;
+
+        if (process->gpid == man->root_gpid) {
+            if (process->ppid != 0 || process->domain_root != 0) goto invalid;
             roots++;
-            continue;
+        } else if (process->ppid <= 0) {
+            // A member with no guest parent is admissible only when it POSITIVELY declares the container
+            // process domain it belongs to, and only that of this image's own init. A container exec session
+            // is the case: hl-container forks it out of its own daemon, so it is a sibling of guest pid 1 and
+            // Docker reports it PPID 0. Everything the tree model asserts still holds -- exactly one root,
+            // every member reachable from it, no cycles -- because the domain edge is walked as the parent
+            // link below. An image that simply omits the parent (domain_root == 0) is still refused.
+            if (process->ppid != 0 || process->domain_root != man->root_gpid) goto invalid;
         }
-        int ancestor = g_rprocs[i].ppid;
-        int reached_root = 0;
-        for (int depth = 0; depth < g_nrprocs; depth++) {
-            if (ancestor == man->root_gpid) {
-                reached_root = 1;
+    }
+    if (roots != 1) goto invalid;
+
+    for (int i = 0; i < g_nrprocs; ++i) {
+        const struct ckpt_proc *process = &g_rprocs[i];
+        parents[i] = ckpt_restore_parent_gpid(process) == 0 ? -1 : ckpt_proc_index(ckpt_restore_parent_gpid(process));
+        groups[i] = -1;
+        for (int j = 0; j < g_nrprocs; ++j) {
+            if (g_rprocs[j].pgid != process->pgid) continue;
+            if (g_rprocs[j].sid != process->sid) goto invalid;
+            if (groups[i] < 0) groups[i] = j;
+        }
+        sessions[i] = ckpt_proc_index(process->sid);
+        if (process->gpid != man->root_gpid && parents[i] < 0) goto invalid;
+    }
+
+    for (int i = 0; i < g_nrprocs; ++i) {
+        const struct ckpt_proc *process = &g_rprocs[i];
+        // Walking at most n indexed parent links proves both reachability and acyclicity without recursion.
+        int ancestor = i;
+        for (int depth = 0;; ++depth) {
+            if (ancestor < 0 || depth >= g_nrprocs) goto invalid;
+            if (g_rprocs[ancestor].gpid == man->root_gpid) break;
+            ancestor = parents[ancestor];
+        }
+
+        int group_index = groups[i];
+        int session_index = sessions[i];
+        if (group_index < 0 || session_index < 0 || g_rprocs[session_index].sid != process->sid ||
+            g_rprocs[session_index].pgid != process->sid)
+            goto invalid;
+
+        // setsid creates a process which is simultaneously the session and process-group leader. Every other
+        // process inherits its saved parent's session; accepting any other transition creates a leaderless or
+        // cross-session group which the host cannot reconstruct faithfully.
+        if (process->gpid == process->sid) {
+            if (process->pgid != process->gpid) goto invalid;
+        } else if (parents[i] < 0 || process->sid != g_rprocs[parents[i]].sid) {
+            goto invalid;
+        }
+    }
+
+    if (man->fg_pgid_gpid < 0) goto invalid;
+    if (man->fg_pgid_gpid > 0) {
+        int foreground = -1;
+        for (int i = 0; i < g_nrprocs; ++i)
+            if (g_rprocs[i].pgid == man->fg_pgid_gpid) {
+                foreground = i;
                 break;
             }
-            int parent = -1;
-            for (int j = 0; j < g_nrprocs; j++)
-                if (g_rprocs[j].gpid == ancestor) {
-                    parent = g_rprocs[j].ppid;
-                    break;
-                }
-            if (parent <= 0) break;
-            ancestor = parent;
-        }
-        if (!reached_root) return -1; // missing parent or detached cycle
+        if (foreground < 0) goto invalid;
     }
-    return roots == 1 ? 0 : -1;
+    free(relations);
+    return 0;
+
+invalid:
+    free(relations);
+    return -1;
 }
 
 // The requested policy, or -1 when the caller never asked for one (unset, or the DEFAULT wire value).
@@ -778,7 +943,7 @@ static void ckpt_process_stop(struct ckpt_proc *process, const char *reason) {
         changed = 0;
         for (int i = 0; i < g_nrprocs; ++i) {
             struct ckpt_proc *child = &g_rprocs[i];
-            struct ckpt_proc *parent = ckpt_proc_find(child->ppid);
+            struct ckpt_proc *parent = ckpt_proc_find(ckpt_restore_parent_gpid(child));
             if (child->viable && parent && !parent->viable) {
                 child->viable = 0;
                 snprintf(child->reason, sizeof child->reason, "ancestor %d was stopped", parent->gpid);
@@ -1105,6 +1270,28 @@ static int ckpt_restore_preflight(int policy) {
         if (!feof(file) && process->viable) ckpt_process_stop(process, "descriptor image is corrupt");
         ckpt_source_fclose(file);
     }
+    // A permissive recovery may remove members of a group or session. A process group remains reconstructible
+    // while any same-session member survives (restore elects a replacement host leader), but a session cannot
+    // exist without its saved leader. Apply this after resource preflight and before any restore-side fork.
+    for (int changed = 1; changed;) {
+        changed = 0;
+        for (int i = 0; i < g_nrprocs; ++i) {
+            struct ckpt_proc *process = &g_rprocs[i];
+            if (!process->viable) continue;
+            struct ckpt_proc *session = ckpt_proc_find(process->sid);
+            int group_viable = 0;
+            for (int j = 0; j < g_nrprocs; ++j)
+                group_viable |= g_rprocs[j].viable && g_rprocs[j].pgid == process->pgid &&
+                                g_rprocs[j].sid == process->sid;
+            if (!group_viable) {
+                ckpt_process_stop(process, "process group is not recoverable");
+                changed = 1;
+            } else if (!session || !session->viable) {
+                ckpt_process_stop(process, "session leader is not recoverable");
+                changed = 1;
+            }
+        }
+    }
     struct ckpt_proc *root = ckpt_proc_find(1);
     int stopped = 0;
     for (int i = 0; i < g_nrprocs; ++i)
@@ -1126,3 +1313,110 @@ static int ckpt_restore_preflight(int policy) {
     }
     return 0;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+// ------------------------------------------------------- captured identity: behavioral fixture
+//
+// Drives the REAL ckpt_self_identity (the only writer of a member's meta identity) and the REAL
+// ckpt_validate_proc_tree (the only reader that decides whether an image is restorable) over the exact
+// two-member shape a container with one exec session captures: the container init, filed as proc.1, and an
+// exec session's top process, filed as proc.<its own gpid> by ckpt_self_group.
+//
+// Both are LAUNCH TOPS -- target/{aarch64,x86_64}.c set g_init_hostpid to getpid() per launch -- so the
+// fixture sets g_init_hostpid exactly as a launch does and lets the production code decide the rest. That
+// is the whole defect: container_pid() answered 1 for both, so every exec session recorded self_gpid = 1
+// with ppid_gpid = 0 while its group was named proc.<host pid>, and the validator refused the image with
+// "process tree does not match manifest" before the first fork. Verified on a live PostgreSQL capture:
+// `checkpoint OK: 12 process(es)` and three psql members each carrying self=1 ppid=0 pgid=1 sid=1.
+//
+// Scenario 1 is the refusal side, and it is what keeps the validator honest: an image whose parentless
+// member declares NO domain is still refused. The fix is an identity a member positively declares, not a
+// validator that stopped checking.
+static int ckpt_identity_scenario(uint32_t scenario) {
+    int saved_init = g_init_hostpid;
+    int saved_cache = g_hostpid_cache;
+    int saved_gpid = g_self_gpid;
+    struct ckpt_proc *saved_procs = g_rprocs;
+    int saved_nrprocs = g_nrprocs;
+    int saved_capacity = g_rprocs_capacity;
+    struct ckpt_proc table[2];
+    struct ckpt_meta init_meta, exec_meta;
+    char group[64];
+    int verdict = -1;
+
+    g_self_gpid = 0;
+    g_hostpid_cache = 0;
+    g_init_hostpid = getpid(); // a launch top: this process is guest pid 1 by the only rule the engine has
+    memset(&init_meta, 0, sizeof init_meta);
+    memset(&exec_meta, 0, sizeof exec_meta);
+
+    // The group name is the identity the coordinator and the member already agreed on, so the meta is
+    // derived from it rather than from a second spelling of the same question.
+    ckpt_self_group(group, sizeof group);
+    int exec_gpid = ckpt_group_gpid(group);
+    if (exec_gpid <= 1) goto done; // an exec session must not be filed as proc.1
+    if (ckpt_self_identity(&exec_meta, exec_gpid) != 0) goto done;
+    if (ckpt_self_identity(&init_meta, 1) != 0) goto done;
+
+    // What the exec top must record: its group's gpid, no parent, and the domain it belongs to.
+    if (exec_meta.self_gpid != exec_gpid || exec_meta.ppid_gpid != 0 || exec_meta.domain_root_gpid != 1) goto done;
+    // Its own group and session, not the container init's: the g_init_hostpid fold that maps the init's
+    // host group/session onto guest 1 fires on an exec session's OWN identity.
+    if (exec_meta.pgid_gpid != exec_gpid || exec_meta.sid_gpid != exec_gpid) goto done;
+    if (init_meta.self_gpid != 1 || init_meta.ppid_gpid != 0 || init_meta.domain_root_gpid != 0) goto done;
+
+    // ckpt_scan_procs takes each member's gpid from the DIRECTORY NAME and everything else from the meta.
+    memset(table, 0, sizeof table);
+    const struct ckpt_meta *metas[2] = {&init_meta, &exec_meta};
+    const int gpids[2] = {1, exec_gpid};
+    for (int i = 0; i < 2; ++i) {
+        table[i].gpid = gpids[i];
+        table[i].ppid = metas[i]->ppid_gpid;
+        table[i].pgid = metas[i]->pgid_gpid;
+        table[i].sid = metas[i]->sid_gpid;
+        table[i].domain_root = metas[i]->domain_root_gpid;
+        table[i].version = CKPT_VERSION;
+        table[i].viable = 1;
+    }
+    if (scenario == 1) table[1].domain_root = 0; // the pre-fix image: parentless and claiming no domain
+
+    struct ckpt_manifest manifest;
+    memset(&manifest, 0, sizeof manifest);
+    manifest.version = CKPT_VERSION;
+    manifest.n_procs = 2;
+    manifest.root_gpid = 1;
+    manifest.fg_pgid_gpid = 1;
+
+    g_rprocs = table;
+    g_nrprocs = 2;
+    g_rprocs_capacity = 2;
+    int validated = ckpt_validate_proc_tree(&manifest);
+    g_rprocs = saved_procs;
+    g_nrprocs = saved_nrprocs;
+    g_rprocs_capacity = saved_capacity;
+    if (validated != (scenario == 0 ? 0 : -1)) goto done;
+    verdict = 0;
+done:
+    g_init_hostpid = saved_init;
+    g_hostpid_cache = saved_cache;
+    g_self_gpid = saved_gpid;
+    return verdict;
+}
+
+// A container init is the leader of its own host session and process group -- that is what makes the
+// g_init_hostpid fold map its group and session onto guest 1 -- and a test binary's process is not. Run the
+// scenario in a forked child that has called setsid(), which is the launch shape rather than an imitation
+// of it, and report through the exit status.
+HL_API int HL_TARGET_LOCAL(checkpoint_identity_test)(uint32_t scenario) {
+    if (scenario > 1) return -22;
+    pid_t child = fork();
+    if (child < 0) return -1;
+    if (child == 0) {
+        if (setsid() < 0) _exit(2);
+        _exit(ckpt_identity_scenario(scenario) == 0 ? 0 : 1);
+    }
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
+}
+#endif

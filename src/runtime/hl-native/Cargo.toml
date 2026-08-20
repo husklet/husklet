@@ -33,9 +33,87 @@ name = "bound_vector_io"
 required-features = ["native-test-hooks"]
 
 [[test]]
+name = "directory_stream_private"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "reserved_register"
+required-features = ["native-test-hooks"]
+
+[[test]]
 name = "errno_namespace"
 required-features = ["native-test-hooks"]
 
 [[test]]
+name = "private_fd_fork_lock"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "process_identity_token"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "identity_registry"
+
+[[test]]
 name = "x86_store_preflight"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "restore_collision"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "checkpoint_membership"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "checkpoint_launch_identity"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "checkpoint_rendezvous"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "checkpoint_election"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "checkpoint_identity"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "checkpoint_anon_shared"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "checkpoint_pipe_capture"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "checkpoint_stdio_alias"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "checkpoint_socket_halfclose"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "unix_identity"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "socket_shape"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "arena_sidecar"
+
+[[test]]
+name = "macos_process_identity"
+required-features = ["native-test-hooks"]
+
+[[test]]
+name = "terminal_termios"
 required-features = ["native-test-hooks"]

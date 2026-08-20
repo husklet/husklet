@@ -59,19 +59,43 @@ pub(super) const RESOLVE_B: &str = "bbbbbbbb-0000-4000-8000-000000000002";
 pub(super) const RESOLVE_AMBIGUOUS: &str = "aaaaaaaa-1111-4000-8000-000000000003";
 
 pub(super) type RecordedMounts = Arc<std::sync::Mutex<Vec<Vec<(std::path::PathBuf, std::path::PathBuf, Access)>>>>;
+pub(super) type RecordedInputs = Arc<std::sync::Mutex<Vec<(u64, Vec<u8>)>>>;
 
 type CheckpointLaunch = Option<bool>;
+
+struct DelayedLog {
+    initial: Vec<u8>,
+    late: Vec<u8>,
+    ready: tokio::sync::oneshot::Sender<()>,
+    release: tokio::sync::oneshot::Receiver<()>,
+}
+
+struct DelayedProcessLog {
+    late: Vec<u8>,
+    ready: tokio::sync::oneshot::Sender<()>,
+    release: tokio::sync::oneshot::Receiver<()>,
+    sender: crate::service::LogSender,
+}
 
 pub(super) struct FakeRuntime {
     pub(super) next: AtomicU64,
     pub(super) fail: AtomicBool,
+    pub(super) launch_failures: Arc<std::sync::Mutex<std::collections::BTreeMap<String, String>>>,
     pub(super) fail_wait: AtomicBool,
-    pub(super) fail_checkpoint: AtomicU64,
+    pub(super) fail_signal: AtomicBool,
+    pub(super) blocking_wait: AtomicBool,
+    pub(super) panic_wait: AtomicBool,
+    pub(super) fail_checkpoint: Arc<AtomicU64>,
+    pub(super) checkpoint_exits: Arc<AtomicU64>,
     pub(super) hold_logs: AtomicBool,
     pub(super) checkpointable: AtomicBool,
+    /// One entry per launch: `Some(true)` coordinator, `Some(false)` domain member.
+    pub(super) checkpoint_roles: Arc<std::sync::Mutex<Vec<Option<bool>>>>,
     pub(super) delay: Duration,
+    pub(super) restore_delay: Option<Duration>,
     pub(super) result: ExitStatus,
     pub(super) signals: Arc<std::sync::Mutex<Vec<Signal>>>,
+    pub(super) waits: Arc<AtomicU64>,
     pub(super) suspensions: Arc<std::sync::Mutex<Vec<bool>>>,
     pub(super) mounts: RecordedMounts,
     pub(super) networks: Arc<std::sync::Mutex<Vec<Vec<NetworkConfig>>>>,
@@ -82,9 +106,14 @@ pub(super) struct FakeRuntime {
     pub(super) terminals: Arc<std::sync::Mutex<Vec<Option<crate::Size>>>>,
     pub(super) checkpoints: Arc<std::sync::Mutex<Vec<CheckpointLaunch>>>,
     pub(super) domains: Arc<std::sync::Mutex<Vec<(hl_engine::Domain, bool)>>>,
+    pub(super) inputs: RecordedInputs,
     pub(super) domain_reads: Arc<AtomicU64>,
     pub(super) resizes: Arc<std::sync::Mutex<Vec<crate::Size>>>,
     pub(super) health: std::sync::Mutex<Option<(Duration, std::collections::VecDeque<ExitStatus>)>>,
+    delayed_logs: std::sync::Mutex<std::collections::VecDeque<DelayedLog>>,
+    /// Every member session any launch was asked to revive, so a test can address the process a
+    /// reattachment seated and prove it is that one and not a replacement.
+    pub(super) members: std::sync::Mutex<Vec<Arc<FakeMemberProcess>>>,
 }
 
 impl FakeRuntime {
@@ -92,13 +121,21 @@ impl FakeRuntime {
         Self {
             next: AtomicU64::new(40),
             fail: AtomicBool::new(false),
+            launch_failures: Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new())),
             fail_wait: AtomicBool::new(false),
-            fail_checkpoint: AtomicU64::new(0),
+            fail_signal: AtomicBool::new(false),
+            blocking_wait: AtomicBool::new(false),
+            panic_wait: AtomicBool::new(false),
+            fail_checkpoint: Arc::new(AtomicU64::new(0)),
+            checkpoint_exits: Arc::new(AtomicU64::new(0)),
             hold_logs: AtomicBool::new(false),
             checkpointable: AtomicBool::new(true),
+            checkpoint_roles: Arc::new(std::sync::Mutex::new(Vec::new())),
             delay: Duration::from_millis(10),
+            restore_delay: None,
             result,
             signals: Arc::new(std::sync::Mutex::new(Vec::new())),
+            waits: Arc::new(AtomicU64::new(0)),
             suspensions: Arc::new(std::sync::Mutex::new(Vec::new())),
             mounts: Arc::new(std::sync::Mutex::new(Vec::new())),
             networks: Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -109,10 +146,29 @@ impl FakeRuntime {
             terminals: Arc::new(std::sync::Mutex::new(Vec::new())),
             checkpoints: Arc::new(std::sync::Mutex::new(Vec::new())),
             domains: Arc::new(std::sync::Mutex::new(Vec::new())),
+            inputs: Arc::new(std::sync::Mutex::new(Vec::new())),
             domain_reads: Arc::new(AtomicU64::new(0)),
             resizes: Arc::new(std::sync::Mutex::new(Vec::new())),
             health: std::sync::Mutex::new(None),
+            delayed_logs: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            members: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    pub(super) fn delay_next_log(
+        &self,
+        initial: impl Into<Vec<u8>>,
+        late: impl Into<Vec<u8>>,
+    ) -> (tokio::sync::oneshot::Receiver<()>, tokio::sync::oneshot::Sender<()>) {
+        let (ready, ready_rx) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = tokio::sync::oneshot::channel();
+        self.delayed_logs.lock().unwrap().push_back(DelayedLog {
+            initial: initial.into(),
+            late: late.into(),
+            ready,
+            release: release_rx,
+        });
+        (ready_rx, release)
     }
 }
 
@@ -121,15 +177,118 @@ struct FakeProcess {
     delay: Duration,
     result: ExitStatus,
     fail_wait: bool,
+    fail_signal: bool,
+    blocking_wait: bool,
+    panic_wait: bool,
     signals: Arc<std::sync::Mutex<Vec<Signal>>>,
+    waits: Arc<AtomicU64>,
     suspensions: Arc<std::sync::Mutex<Vec<bool>>>,
     resizes: Arc<std::sync::Mutex<Vec<crate::Size>>>,
     logs: std::sync::Mutex<Option<crate::service::LogReceiver>>,
     _log_owner: Option<crate::service::LogSender>,
     checkpoint_armed: bool,
-    checkpoint_failure: bool,
+    checkpoint_failure: Arc<AtomicU64>,
+    checkpoint_exit: tokio::sync::watch::Sender<bool>,
+    checkpoint_exits: Arc<AtomicU64>,
+    delayed_log: std::sync::Mutex<Option<DelayedProcessLog>>,
     domain: hl_engine::Domain,
     domain_reads: Arc<AtomicU64>,
+    /// Stands in for the guest identity a real launch publishes. Derived from the launch identifier
+    /// so every fake launch has a distinct, predictable one.
+    guest_pid: Option<std::num::NonZeroI32>,
+    /// The sessions of the members this launch was asked to revive, one per terminal the service
+    /// pre-created for it. A launch that restores nothing has none, which is what keeps a freshly
+    /// started container from ever answering as a resumed one.
+    members: Vec<Arc<FakeMemberProcess>>,
+}
+
+/// One restored member of a fake launch, owned the way a started process is.
+///
+/// It exists only because the launch was given a terminal for that member before it started -- the same
+/// pairing the production adapter requires -- so a test cannot accidentally get a resumable session out
+/// of a launch that restored nothing.
+pub(super) struct FakeMemberProcess {
+    id: u64,
+    guest_pid: std::num::NonZeroI32,
+    domain: hl_engine::Domain,
+    result: ExitStatus,
+    exited: tokio::sync::watch::Sender<bool>,
+    logs: std::sync::Mutex<Option<crate::service::LogReceiver>>,
+    output: crate::service::LogSender,
+    signals: Arc<std::sync::Mutex<Vec<Signal>>>,
+    resizes: Arc<std::sync::Mutex<Vec<crate::Size>>>,
+    /// Everything typed at this member's terminal, so a test can prove a pane's input reaches the
+    /// member's own session rather than the container's shared bridge.
+    typed: Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+}
+
+impl FakeMemberProcess {
+    pub(super) fn typed(&self) -> Vec<Vec<u8>> {
+        self.typed.lock().unwrap().clone()
+    }
+
+    pub(super) fn guest_pid(&self) -> std::num::NonZeroI32 {
+        self.guest_pid
+    }
+
+    /// Emits one line on this member's own terminal.
+    pub(super) async fn say(&self, bytes: &[u8]) {
+        self.output
+            .send(crate::LogChunk {
+                stream: crate::Stream::Stdout,
+                bytes: bytes.to_vec(),
+            })
+            .await
+            .expect("member output receiver closed");
+    }
+}
+
+#[async_trait]
+impl Running for FakeMemberProcess {
+    fn id(&self) -> u64 {
+        self.id
+    }
+    fn domain(&self) -> hl_engine::Domain {
+        self.domain
+    }
+    fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
+        Some(self.guest_pid)
+    }
+    fn restored_member(&self, _guest_pid: std::num::NonZeroI32) -> Option<hl_engine::runtime::RestoredMember> {
+        None
+    }
+    async fn wait(self: Arc<Self>) -> Result<ExitStatus> {
+        let mut exited = self.exited.subscribe();
+        while !*exited.borrow() {
+            if exited.changed().await.is_err() {
+                break;
+            }
+        }
+        Ok(self.result)
+    }
+    async fn signal(&self, signal: Signal) -> Result<()> {
+        self.signals.lock().unwrap().push(signal);
+        if signal == Signal::KILL {
+            self.exited.send_replace(true);
+        }
+        Ok(())
+    }
+    async fn pause(&self) -> Result<()> {
+        Ok(())
+    }
+    async fn resume(&self) -> Result<()> {
+        Ok(())
+    }
+    async fn checkpoint(&self, _timeout: Duration) -> Result<()> {
+        Err(Error::Runtime("a restored member holds no image of its own".into()))
+    }
+    async fn resize(&self, size: crate::Size) -> Result<()> {
+        self.resizes.lock().unwrap().push(size);
+        Ok(())
+    }
+    fn take_logs(&self) -> Option<crate::service::LogReceiver> {
+        self.logs.lock().unwrap().take()
+    }
 }
 
 #[async_trait]
@@ -141,11 +300,55 @@ impl Running for FakeProcess {
         self.domain_reads.fetch_add(1, Ordering::SeqCst);
         self.domain
     }
-    fn checkpointable(&self) -> bool {
-        self.checkpoint_armed
+    fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
+        self.guest_pid
+    }
+    fn restored_member(&self, _guest_pid: std::num::NonZeroI32) -> Option<hl_engine::runtime::RestoredMember> {
+        // A fake launch restores nothing, so it announces no member. Every test that needs a reachable
+        // member drives the real broker.
+        None
+    }
+    fn member_process(&self, guest_pid: std::num::NonZeroI32) -> Option<Arc<dyn Running>> {
+        self.members
+            .iter()
+            .find(|member| member.guest_pid == guest_pid)
+            .map(|member| Arc::clone(member) as Arc<dyn Running>)
     }
     async fn wait(self: Arc<Self>) -> Result<ExitStatus> {
-        tokio::time::sleep(self.delay).await;
+        self.waits.fetch_add(1, Ordering::SeqCst);
+        let delayed = self.delayed_log.lock().unwrap().take();
+        if let Some(delayed) = delayed {
+            let _ = delayed.ready.send(());
+            delayed
+                .release
+                .await
+                .map_err(|_| Error::Runtime("delayed log release was dropped".into()))?;
+            delayed
+                .sender
+                .send(crate::LogChunk {
+                    stream: crate::Stream::Stdout,
+                    bytes: delayed.late,
+                })
+                .await
+                .map_err(|_| Error::Runtime("delayed log receiver closed".into()))?;
+        }
+        if self.blocking_wait {
+            let delay = self.delay;
+            tokio::task::spawn_blocking(move || std::thread::sleep(delay))
+                .await
+                .unwrap();
+        } else {
+            let mut checkpoint_exit = self.checkpoint_exit.subscribe();
+            if !*checkpoint_exit.borrow() {
+                tokio::select! {
+                    () = tokio::time::sleep(self.delay) => {}
+                    changed = checkpoint_exit.changed() => {
+                        assert!(changed.is_ok() && *checkpoint_exit.borrow(), "checkpoint exit channel closed");
+                    }
+                }
+            }
+        }
+        assert!(!self.panic_wait, "injected wait panic");
         if self.fail_wait {
             return Err(Error::Runtime("injected wait failure".into()));
         }
@@ -153,6 +356,9 @@ impl Running for FakeProcess {
     }
     async fn signal(&self, signal: Signal) -> Result<()> {
         self.signals.lock().unwrap().push(signal);
+        if self.fail_signal {
+            return Err(Error::Runtime("injected signal failure".into()));
+        }
         Ok(())
     }
     async fn pause(&self) -> Result<()> {
@@ -164,10 +370,12 @@ impl Running for FakeProcess {
         Ok(())
     }
     async fn checkpoint(&self, _timeout: Duration) -> Result<()> {
-        if self.checkpoint_failure {
+        if self.checkpoint_failure.load(Ordering::SeqCst) == self.id {
             return Err(Error::Runtime("injected checkpoint failure".into()));
         }
         if self.checkpoint_armed {
+            self.checkpoint_exit.send_replace(true);
+            self.checkpoint_exits.fetch_add(1, Ordering::SeqCst);
             Ok(())
         } else {
             Err(Error::Runtime("process was not armed for checkpoint".into()))
@@ -186,6 +394,10 @@ impl Running for FakeProcess {
 impl Runtime for FakeRuntime {
     async fn start(&self, launch: ProcessConfig) -> Result<Arc<dyn Running>> {
         assert!(launch.rootfs.is_absolute());
+        let restoring = matches!(
+            launch.checkpoint,
+            Some(crate::service::CheckpointRole::Coordinator(ref checkpoint)) if checkpoint.restore
+        );
         let domain = launch.domain.unwrap_or(
             hl_engine::Domain::new().map_err(|error| Error::Runtime(format!("domain allocation failed: {error}")))?,
         );
@@ -196,10 +408,10 @@ impl Runtime for FakeRuntime {
         self.isolations.lock().unwrap().push(launch.isolation);
         self.publishes.lock().unwrap().push(launch.publish);
         self.terminals.lock().unwrap().push(launch.terminal);
-        self.checkpoints
-            .lock()
-            .unwrap()
-            .push(launch.checkpoint.as_ref().map(|checkpoint| checkpoint.restore));
+        self.checkpoints.lock().unwrap().push(match launch.checkpoint {
+            Some(crate::service::CheckpointRole::Coordinator(ref checkpoint)) => Some(checkpoint.restore),
+            Some(crate::service::CheckpointRole::DomainMember) | None => None,
+        });
         self.domains.lock().unwrap().push((domain, launch.domain_owner));
         self.mounts.lock().unwrap().push(
             launch
@@ -212,42 +424,130 @@ impl Runtime for FakeRuntime {
         if self.fail.load(Ordering::SeqCst) {
             return Err(Error::Runtime("injected launch failure".into()));
         }
+        if let Some(error) = self
+            .launch_failures
+            .lock()
+            .unwrap()
+            .get(&launch.process.program)
+            .cloned()
+        {
+            return Err(Error::Runtime(error));
+        }
         let (sender, receiver) = crate::service::log_channel();
-        sender
-            .try_send(crate::LogChunk {
-                stream: crate::Stream::Stdout,
-                bytes: b"fake-out\n".to_vec(),
+        let delayed = self.delayed_logs.lock().unwrap().pop_front();
+        let delayed_log = if let Some(delayed) = delayed {
+            sender
+                .try_send(crate::LogChunk {
+                    stream: crate::Stream::Stdout,
+                    bytes: delayed.initial,
+                })
+                .unwrap();
+            Some(DelayedProcessLog {
+                late: delayed.late,
+                ready: delayed.ready,
+                release: delayed.release,
+                sender: sender.clone(),
             })
-            .unwrap();
-        sender
-            .try_send(crate::LogChunk {
-                stream: crate::Stream::Stderr,
-                bytes: b"fake-err\n".to_vec(),
-            })
-            .unwrap();
+        } else {
+            sender
+                .try_send(crate::LogChunk {
+                    stream: crate::Stream::Stdout,
+                    bytes: b"fake-out\n".to_vec(),
+                })
+                .unwrap();
+            sender
+                .try_send(crate::LogChunk {
+                    stream: crate::Stream::Stderr,
+                    bytes: b"fake-err\n".to_vec(),
+                })
+                .unwrap();
+            None
+        };
         let log_owner = self.hold_logs.load(Ordering::SeqCst).then_some(sender);
         let (delay, result) = if is_health {
             let mut health = self.health.lock().unwrap();
             let (delay, results) = health.as_mut().expect("health runtime is configured");
             (*delay, results.pop_front().unwrap_or(self.result))
         } else {
-            (self.delay, self.result)
+            (
+                if restoring {
+                    self.restore_delay.unwrap_or(self.delay)
+                } else {
+                    self.delay
+                },
+                self.result,
+            )
         };
         let id = self.next.fetch_add(1, Ordering::SeqCst);
+        let (checkpoint_exit, _) = tokio::sync::watch::channel(false);
+        if let Some(mut input) = launch.input {
+            let received = Arc::clone(&self.inputs);
+            tokio::spawn(async move {
+                while let Some(bytes) = input.recv().await {
+                    received.lock().unwrap().push((id, bytes));
+                }
+            });
+        }
+        self.checkpoint_roles.lock().unwrap().push(
+            launch
+                .checkpoint
+                .as_ref()
+                .map(|role| matches!(role, crate::service::CheckpointRole::Coordinator(_))),
+        );
+        let members = launch
+            .member_terminals
+            .into_iter()
+            .map(|member| {
+                let (output, receiver) = crate::service::log_channel();
+                let typed = Arc::new(std::sync::Mutex::new(Vec::new()));
+                if let Some(mut input) = member.input {
+                    let typed = Arc::clone(&typed);
+                    tokio::spawn(async move {
+                        while let Some(bytes) = input.recv().await {
+                            typed.lock().unwrap().push(bytes);
+                        }
+                    });
+                }
+                let (exited, _) = tokio::sync::watch::channel(false);
+                Arc::new(FakeMemberProcess {
+                    id: self.next.fetch_add(1, Ordering::SeqCst),
+                    guest_pid: member.guest_pid,
+                    domain,
+                    result: ExitStatus::Code(0),
+                    exited,
+                    logs: std::sync::Mutex::new(Some(receiver)),
+                    output,
+                    signals: Arc::clone(&self.signals),
+                    resizes: Arc::clone(&self.resizes),
+                    typed,
+                })
+            })
+            .collect::<Vec<_>>();
+        self.members.lock().unwrap().extend(members.iter().map(Arc::clone));
         Ok(Arc::new(FakeProcess {
             id,
+            members,
             delay,
             result,
             fail_wait: self.fail_wait.load(Ordering::SeqCst),
+            fail_signal: self.fail_signal.load(Ordering::SeqCst),
+            blocking_wait: self.blocking_wait.load(Ordering::SeqCst),
+            panic_wait: self.panic_wait.load(Ordering::SeqCst),
             signals: Arc::clone(&self.signals),
+            waits: Arc::clone(&self.waits),
             suspensions: Arc::clone(&self.suspensions),
             resizes: Arc::clone(&self.resizes),
             logs: std::sync::Mutex::new(Some(receiver)),
             _log_owner: log_owner,
-            checkpoint_armed: launch.checkpoint.is_some() && self.checkpointable.load(Ordering::SeqCst),
-            checkpoint_failure: self.fail_checkpoint.load(Ordering::SeqCst) == id,
+            checkpoint_armed: matches!(launch.checkpoint, Some(crate::service::CheckpointRole::Coordinator(_)))
+                && self.checkpointable.load(Ordering::SeqCst),
+            checkpoint_failure: Arc::clone(&self.fail_checkpoint),
+            checkpoint_exit,
+            checkpoint_exits: Arc::clone(&self.checkpoint_exits),
+            delayed_log: std::sync::Mutex::new(delayed_log),
             domain,
             domain_reads: Arc::clone(&self.domain_reads),
+            guest_pid: i32::try_from(id).ok().and_then(std::num::NonZeroI32::new),
         }))
     }
 }

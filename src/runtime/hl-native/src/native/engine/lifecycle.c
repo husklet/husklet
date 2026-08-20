@@ -4,6 +4,7 @@
 #include "options.h"
 #include "executable_authority.h"
 #include "hl/syscall_trap.h"
+#include "../host/system.h"
 #if defined(__APPLE__)
 #include "../linux_abi/dns.h"
 #endif
@@ -16,7 +17,10 @@
 #include <stdint.h>
 #include <pthread.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
 #if !defined(_WIN32)
+#include <poll.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #endif
@@ -59,8 +63,11 @@ static int hl_engine_child_result_claim(void) {
 void hl_engine_child_result_publish(int32_t guest_status, hl_status engine_status, uint64_t detail) {
     hl_engine_child_result record = {
         0,      HL_ENGINE_CHILD_RESULT_VERSION,   guest_status, engine_status, HL_ENGINE_CHILD_RESULT_EXIT, 0,
-        detail, hl_run_linux_guest_translations()};
+        detail, hl_run_linux_guest_translations(), 0, 0};
     if (!hl_engine_child_result_claim()) return;
+    /* The identity outlives the exit it is published beside: a whole-record store would erase the
+       guest pid the parent is still entitled to read after the child is reaped. */
+    record.guest_pid = atomic_load_explicit((_Atomic int32_t *)&active_result->guest_pid, memory_order_acquire);
     memcpy(active_result, &record, sizeof(record));
     atomic_store_explicit((_Atomic uint32_t *)&active_result->magic, HL_ENGINE_CHILD_RESULT_MAGIC,
                           memory_order_release);
@@ -81,6 +88,14 @@ void hl_engine_child_result_publish_signal(int32_t guest_signal) {
     atomic_store_explicit(&result_published, 2, memory_order_release);
 }
 
+/* Publishes this engine child's container-namespace pid. Called once, from the container identity
+   the guest runs under, and never from a guest fork child: a fork clears active_result, so a
+   descendant cannot overwrite the identity its launcher published. */
+void hl_engine_child_result_publish_guest_pid(int32_t guest_pid) {
+    if (active_result == NULL || guest_pid <= 0) return;
+    atomic_store_explicit((_Atomic int32_t *)&active_result->guest_pid, guest_pid, memory_order_release);
+}
+
 void hl_engine_child_result_after_fork(void) {
     active_result = NULL;
     atomic_store_explicit(&result_published, 2, memory_order_release);
@@ -99,9 +114,17 @@ typedef struct hl_production_entry_context {
     int checkpoint_broker;
     int checkpoint_trigger;
     int checkpoint_control;
+    int diagnostic_port;
     const void *interpreter_image;
     size_t interpreter_size;
+    int activation_ready_read;
+    int activation_ready_write;
+    const hl_host_process_fd_private_plan *child_descriptor_plan;
 } hl_production_entry_context;
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+void hl_host_activation_ready_test_wait(void);
+#endif
 
 #if defined(_WIN32)
 /*
@@ -505,7 +528,7 @@ static hl_status hl_production_claim_terminal(const hl_production_entry_context 
         (void)attachments->release(context->host->context, borrowed.value);
         return HL_STATUS_OK;
     }
-    if (setsid() < 0 || ioctl(descriptor, TIOCSCTTY, 0) < 0 || tcsetpgrp(descriptor, getpgrp()) < 0) {
+    if (ioctl(descriptor, TIOCSCTTY, 0) < 0 || tcsetpgrp(descriptor, getpgrp()) < 0) {
         saved_errno = errno;
         (void)attachments->release(context->host->context, borrowed.value);
         errno = saved_errno;
@@ -530,10 +553,69 @@ static void *hl_checkpoint_control_main(void *opaque) {
     return NULL;
 }
 
+/* Every checkpointable guest process inherits this endpoint. Closing the
+ * engine-owner endpoint revokes the whole restored generation without a PID
+ * scan, including members whose process groups were reconstructed. */
+#if !defined(_WIN32)
+static int hl_checkpoint_lifetime_descriptor = -1;
+
+static void *hl_checkpoint_lifetime_main(void *opaque) {
+    int descriptor = (int)(intptr_t)opaque;
+    struct pollfd owner = {.fd = descriptor, .events = POLLHUP | POLLERR};
+    for (;;) {
+        int ready;
+        do {
+            ready = poll(&owner, 1, -1);
+        } while (ready < 0 && errno == EINTR);
+        if (ready < 0 || (owner.revents & (POLLHUP | POLLERR | POLLNVAL)) != 0) {
+            (void)kill(getpid(), SIGKILL);
+            _exit(128 + SIGKILL);
+        }
+    }
+}
+
+int hl_engine_checkpoint_lifetime_after_fork(void) {
+    pthread_t lifetime;
+    if (hl_checkpoint_lifetime_descriptor < 0) return 0;
+    if (pthread_create(&lifetime, NULL, hl_checkpoint_lifetime_main,
+                       (void *)(intptr_t)hl_checkpoint_lifetime_descriptor) != 0)
+        return -1;
+    return pthread_detach(lifetime);
+}
+#else
+int hl_engine_checkpoint_lifetime_after_fork(void) { return 0; }
+#endif
+
 static int32_t hl_production_entry(void *opaque) {
     hl_production_entry_context *context = opaque;
+    int checkpoint_control = context->checkpoint_control;
+    int activation_ready_write = context->activation_ready_write;
+    unsigned char ready = 1;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    hl_host_activation_ready_test_wait();
+#endif
+    if (setsid() < 0) return HL_STATUS_PLATFORM_FAILURE;
+    if (context->activation_ready_read >= 0) {
+        int activation_read = context->activation_ready_read;
+        if (close(activation_read) != 0) {
+            int close_error = errno;
+            if (close_error != EINTR || fcntl(activation_read, F_GETFD) >= 0 || errno != EBADF)
+                return HL_STATUS_PLATFORM_FAILURE;
+        }
+    }
     hl_engine_checkpoint_fork_child(context->checkpoint_broker, context->checkpoint_trigger,
                                     context->checkpoint_control);
+    /* The production worker is an exec-like boundary even though the host primitive is fork: only typed
+     * bindings and the explicitly duplicated control channels cross. Caller/library ambient descriptors
+     * remain untouched in the parent and cannot occupy or be named through the guest descriptor table. */
+    if (hl_host_process_fd_private_plan_child(context->child_descriptor_plan) != 0) return HL_STATUS_PLATFORM_FAILURE;
+    if (context->diagnostic_port >= 0) {
+        char value[32];
+        snprintf(value, sizeof value, "%d", context->diagnostic_port);
+        if (hl_options_set(context->options, "HL_DIAGNOSTIC_PORT", value, 1) != 0) return HL_STATUS_OUT_OF_MEMORY;
+    }
+    activation_ready_write = hl_host_process_fd_private_adopt(activation_ready_write);
+    if (activation_ready_write < 0) return HL_STATUS_PLATFORM_FAILURE;
     /* Keep process-directed checkpoint kicks away from helper/control threads.
      * Guest executor registration selectively unblocks the reserved signal. */
     hl_ckpt_interrupt_block();
@@ -556,14 +638,28 @@ static int32_t hl_production_entry(void *opaque) {
         (void)snprintf(broker, sizeof(broker), "%d", context->checkpoint_broker);
         (void)snprintf(trigger, sizeof(trigger), "%d", context->checkpoint_trigger);
         if (hl_ckpt_channel_adopt(broker, trigger) != 0) return HL_STATUS_PLATFORM_FAILURE;
-        if (context->checkpoint_control >= 0) {
+        if (checkpoint_control >= 0) {
+            checkpoint_control = hl_host_process_fd_private_adopt(checkpoint_control);
+            if (checkpoint_control < 0) return HL_STATUS_PLATFORM_FAILURE;
+        }
+    }
+    if (context->checkpoint_broker >= 0) {
+        if (checkpoint_control >= 0) {
+#if !defined(_WIN32)
+            hl_checkpoint_lifetime_descriptor = checkpoint_control;
+#endif
+            if (hl_engine_checkpoint_lifetime_after_fork() != 0) return HL_STATUS_PLATFORM_FAILURE;
             pthread_t control;
-            if (pthread_create(&control, NULL, hl_checkpoint_control_main,
-                               (void *)(intptr_t)context->checkpoint_control) != 0)
+            if (pthread_create(&control, NULL, hl_checkpoint_control_main, (void *)(intptr_t)checkpoint_control) != 0)
                 return HL_STATUS_PLATFORM_FAILURE;
             if (pthread_detach(control) != 0) return HL_STATUS_PLATFORM_FAILURE;
         }
     }
+    if (write(activation_ready_write, &ready, sizeof(ready)) != (ssize_t)sizeof(ready))
+        return HL_STATUS_PLATFORM_FAILURE;
+    /* The readiness byte is the parent's success boundary. Retain this registered engine-private writer
+     * until process exit instead of making success depend on close(2)'s ambiguous EINTR state. It is above
+     * the guest interval, excluded from checkpoint descriptor capture, and has one explicit lifetime owner. */
     int32_t result = hl_run_linux_guest(
         context->host, context->box, context->config->rootfs, executable, spec == NULL ? NULL : spec->image,
         spec == NULL ? 0 : spec->image_size, NULL, context->config->main_image_plan, context->interpreter_image,
@@ -576,12 +672,26 @@ static int32_t hl_production_entry(void *opaque) {
 }
 #endif
 
+static int32_t hl_production_process_guest_pid(hl_host_handle token) {
+    const hl_production_result_state *state = (const hl_production_result_state *)(uintptr_t)token;
+    if (state == NULL || state->record == NULL) return 0;
+    return atomic_load_explicit((const _Atomic int32_t *)&state->record->guest_pid, memory_order_acquire);
+}
+
 static void hl_production_result_release(const hl_host_services *host, hl_host_handle token) {
     hl_production_result_state *state = (hl_production_result_state *)(uintptr_t)token;
     if (state == NULL) return;
     if (state->mapping.handle != HL_HOST_HANDLE_INVALID)
         (void)host->memory->release(host->context, state->mapping.handle);
     free(state);
+}
+
+static int hl_production_diagnostic_port(const hl_options *options) {
+    const char *value = hl_options_get(options, "HL_DIAGNOSTIC_PORT");
+    if (value == NULL) return -1;
+    char *end = NULL;
+    long descriptor = strtol(value, &end, 10);
+    return end != value && *end == 0 && descriptor >= 0 && descriptor <= INT_MAX ? (int)descriptor : -2;
 }
 
 static hl_status hl_production_start_process(const hl_host_services *host, hl_linux_abi *box, hl_options *options,
@@ -647,6 +757,17 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
         free(payload);
     }
 #else
+    int activation_ready[2] = {-1, -1};
+    int diagnostic_port = hl_production_diagnostic_port(options);
+    hl_host_process_fd_private_plan *child_descriptor_plan = NULL;
+    if (diagnostic_port == -2) {
+        hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);
+        return HL_STATUS_INVALID_ARGUMENT;
+    }
+    if (pipe(activation_ready) < 0) {
+        hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);
+        return HL_STATUS_RESOURCE_LIMIT;
+    }
     entry.config = config;
     entry.argc = argc;
     entry.argv = argv;
@@ -659,8 +780,45 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
     entry.checkpoint_broker = checkpoint_broker;
     entry.checkpoint_trigger = checkpoint_trigger;
     entry.checkpoint_control = checkpoint_control;
+    entry.diagnostic_port = diagnostic_port;
     entry.interpreter_image = interpreter_image;
     entry.interpreter_size = interpreter_size;
+    entry.activation_ready_read = activation_ready[0];
+    entry.activation_ready_write = activation_ready[1];
+    if (box != NULL) {
+        const int retained_descriptors[] = {activation_ready[1], checkpoint_broker, checkpoint_trigger,
+                                            checkpoint_control, diagnostic_port};
+        if (hl_host_process_fd_private_plan_prepare(STDERR_FILENO + 1, retained_descriptors,
+                                                    sizeof(retained_descriptors) / sizeof(*retained_descriptors),
+                                                    &child_descriptor_plan) != 0) {
+            close(activation_ready[0]);
+            close(activation_ready[1]);
+            hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);
+            return HL_STATUS_PLATFORM_FAILURE;
+        }
+    }
+    if (box != NULL) {
+        entry.checkpoint_broker = hl_host_process_fd_private_plan_descriptor(child_descriptor_plan, checkpoint_broker);
+        entry.checkpoint_trigger =
+            hl_host_process_fd_private_plan_descriptor(child_descriptor_plan, checkpoint_trigger);
+        entry.checkpoint_control =
+            hl_host_process_fd_private_plan_descriptor(child_descriptor_plan, checkpoint_control);
+        entry.activation_ready_write =
+            hl_host_process_fd_private_plan_descriptor(child_descriptor_plan, activation_ready[1]);
+        int child_diagnostic_port = hl_host_process_fd_private_plan_descriptor(child_descriptor_plan, diagnostic_port);
+        entry.diagnostic_port = child_diagnostic_port;
+        if (entry.activation_ready_write < 0 ||
+            (checkpoint_broker >= 0 && (entry.checkpoint_broker < 0 || entry.checkpoint_trigger < 0)) ||
+            (checkpoint_control >= 0 && entry.checkpoint_control < 0) || diagnostic_port == -2 ||
+            (diagnostic_port >= 0 && child_diagnostic_port < 0)) {
+            (void)hl_host_process_fd_private_plan_release(&child_descriptor_plan);
+            close(activation_ready[0]);
+            close(activation_ready[1]);
+            hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);
+            return HL_STATUS_PLATFORM_FAILURE;
+        }
+    }
+    entry.child_descriptor_plan = child_descriptor_plan;
     hl_engine_checkpoint_fork_prepare();
     if (box == NULL) {
         spawned = host->process->spawn_cloned(host->context, hl_production_entry, &entry);
@@ -673,8 +831,25 @@ static hl_status hl_production_start_process(const hl_host_services *host, hl_li
         }
     }
     hl_engine_checkpoint_fork_parent();
+    if (hl_host_process_fd_private_plan_release(&child_descriptor_plan) != 0 && spawned.status == HL_STATUS_OK)
+        spawned.status = HL_STATUS_PLATFORM_FAILURE;
+    close(activation_ready[1]);
+    if (spawned.status == HL_STATUS_OK) {
+        unsigned char ready = 0;
+        ssize_t received;
+        do {
+            received = read(activation_ready[0], &ready, sizeof(ready));
+        } while (received < 0 && errno == EINTR);
+        if (received != (ssize_t)sizeof(ready) || ready != 1) spawned.status = HL_STATUS_PLATFORM_FAILURE;
+    }
+    close(activation_ready[0]);
 #endif
     if (spawned.status != HL_STATUS_OK) {
+        if (spawned.value != HL_HOST_HANDLE_INVALID) {
+            (void)host->process->terminate(host->context, spawned.value, HL_HOST_PROCESS_TERMINATE_FORCE);
+            (void)host->process->wait(host->context, spawned.value, HL_HOST_DEADLINE_INFINITE);
+            (void)host->process->close(host->context, spawned.value);
+        }
         hl_production_result_release(host, (hl_host_handle)(uintptr_t)result);
         return (hl_status)spawned.status;
     }
@@ -740,7 +915,8 @@ static hl_status hl_production_finish_process(const hl_host_services *host, hl_h
 }
 
 static const hl_engine_backend backend = {HL_PRODUCTION_GUEST_ISA, hl_production_start_process,
-                                          hl_production_finish_process, hl_production_result_release};
+                                          hl_production_finish_process, hl_production_result_release,
+                                          hl_production_process_guest_pid};
 
 void hl_target_register_backend(void) {
     hl_engine_backend_register(&backend);

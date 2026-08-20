@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static uint64_t g_ckpt_stream_next_id = 1;
 
@@ -41,11 +42,110 @@ static int ckpt_stream_call(uint32_t op, const char *name, uint64_t stream, uint
     return reply->status;
 }
 
+// Tell the host that this capture has been REFUSED, and by what. Best effort and never load-bearing for
+// correctness: the refusal itself is already decided and the coordinator exits regardless. What it buys is
+// that the host fails the capture on the decision rather than on its own deadline, and can name the reason.
+static void ckpt_stream_capture_refused(const char *reason) {
+    if (reason == NULL || reason[0] == 0) reason = "the coordinator refused the capture";
+    (void)ckpt_stream_call(HL_CKPT_OP_CAPTURE_REFUSED, reason, 0, 0, 0, NULL, 0, NULL, NULL, 0);
+}
+
+// Ask the broker whether `host_pid` ever proved exact membership (REGISTER_READY) of the capture
+// generation this process is running. Returns 1 registered, 0 never registered, -1 unknown.
+//
+// Only a 0 carries information the coordinator may act on, and only about a process that is ALREADY GONE:
+// a live peer can still register. -1 and 1 are the same answer to the caller -- do not drop this member --
+// which is what keeps a broker that is unreachable, poisoned, or out of scope from being read as consent.
+static int ckpt_stream_participant_registered(long long host_pid) {
+    uint64_t identity = (uint64_t)host_pid;
+    hl_ckpt_reply reply;
+    if (host_pid <= 0) return -1;
+    if (ckpt_stream_call(HL_CKPT_OP_PARTICIPANT_REGISTERED, NULL, 0, 0, 0, &identity, sizeof identity, &reply, NULL,
+                         0) != HL_CKPT_STATUS_OK)
+        return -1;
+    return reply.value != 0 ? 1 : 0;
+}
+
+// Close this capture's membership and read back the exact number of processes that proved it. Returns 0
+// with *count set, or -1 when the broker could not answer -- and an unanswered seal must refuse the
+// capture, because the alternative is publishing a manifest whose expected process set nobody fixed.
+static int ckpt_stream_seal_membership(uint64_t *count) {
+    hl_ckpt_reply reply;
+    if (count == NULL) return -1;
+    if (ckpt_stream_call(HL_CKPT_OP_SEAL_MEMBERSHIP, NULL, 0, 0, 0, NULL, 0, &reply, NULL, 0) != HL_CKPT_STATUS_OK)
+        return -1;
+    *count = reply.value;
+    return 0;
+}
+
 static int ckpt_stream_recovery_complete(void) {
     return ckpt_stream_call(HL_CKPT_OP_RECOVERY_COMPLETE, NULL, 0, 0, 0, NULL, 0, NULL, NULL, 0) ==
                    HL_CKPT_STATUS_OK
                ? 0
                : -1;
+}
+
+// Announce this restored process to the broker under the guest pid the image named it by.
+//
+// The connection this rides on is the process's OWN channel (hl_ckpt_channel_acquire re-creates one per
+// process after every fork), so the broker has already authenticated the caller: this call supplies the
+// only thing that authentication cannot, which is which captured member the live process IS. Sent after
+// the identity is hydrated and before the commit barrier, so it lands inside the recovery scope.
+//
+// A refusal is not fatal to the restore. The tree is already correct; only the host's ability to reach
+// this member individually is lost, and the host refuses to reattach rather than inventing one.
+static int ckpt_stream_member_restored(int guest_pid) {
+    unsigned char payload[8] = {0};
+    uint32_t encoded = (uint32_t)guest_pid;
+    if (guest_pid <= 0) return -1;
+    memcpy(payload, &encoded, sizeof encoded);
+    return ckpt_stream_call(HL_CKPT_OP_MEMBER_RESTORED, NULL, 0, 0, 0, payload, sizeof payload, NULL, NULL, 0) ==
+                   HL_CKPT_STATUS_OK
+               ? 0
+               : -1;
+}
+
+// Ask the broker for the terminal this member's captured session was attached to.
+//
+// Sent from inside the descriptor restore, which runs BEFORE the identity is hydrated -- so it cannot ride
+// the MEMBER_RESTORED announcement and carries the guest pid itself. `g_self_gpid` is adopted at the top of
+// ckpt_restore_proc_run, long before any descriptor is rebuilt, so it already holds this member's own
+// captured name here.
+//
+// Returns the received descriptor, or -1 when the host registered no terminal for this member and when the
+// transport failed. Both are the same answer to the caller: keep the descriptor the restore would otherwise
+// have produced. Never returns a descriptor belonging to another session -- the server answers only for the
+// guest pid it was asked about, and hands each registration out once.
+static int ckpt_stream_member_stdio(int guest_pid) {
+    hl_ckpt_request request = {0};
+    hl_ckpt_reply reply;
+    unsigned char payload[8] = {0};
+    uint32_t encoded = (uint32_t)guest_pid;
+    int descriptor = -1;
+    if (guest_pid <= 0) return -1;
+    memcpy(payload, &encoded, sizeof encoded);
+    request.op = HL_CKPT_OP_MEMBER_STDIO;
+    request.length = (uint64_t)sizeof payload;
+    request.generation = ckpt_request_generation();
+    if (hl_ckpt_channel_call_receive_descriptor(&request, payload, &reply, &descriptor) != 0) return -1;
+    if (reply.status != HL_CKPT_STATUS_OK && descriptor >= 0) {
+        (void)close(descriptor);
+        return -1;
+    }
+    return reply.status == HL_CKPT_STATUS_OK ? descriptor : -1;
+}
+
+// Report this restored member's own guest exit status on its way out.
+//
+// A host holding the member sees the process vanish either way; this is what lets it report the status the
+// guest actually produced instead of "gone, cause unknown". Best effort by construction: a member killed
+// outright never runs this, which is exactly the case the host must still describe honestly.
+static void ckpt_stream_member_exited(int status, uint32_t kind) {
+    unsigned char payload[8] = {0};
+    int32_t encoded = (int32_t)status;
+    memcpy(payload, &encoded, sizeof encoded);
+    memcpy(payload + 4, &kind, sizeof kind);
+    (void)ckpt_stream_call(HL_CKPT_OP_MEMBER_EXITED, NULL, 0, 0, 0, payload, sizeof payload, NULL, NULL, 0);
 }
 
 static void ckpt_sink_stream_name(struct ckpt_sink *sink, const char *group, const char *name, char *out, size_t size) {
@@ -60,8 +160,13 @@ static int ckpt_sink_stream_flush(struct ckpt_sink_stream *stream) {
     if (stream->failed) return -1;
     if (stream->buffered == 0) return 0;
     // Append: the buffer always sits at the object's logical end, because write_at flushes before patching.
-    if (ckpt_stream_call(HL_CKPT_OP_OBJECT_WRITE, NULL, stream->id, 0, 0, stream->buffer, stream->buffered, NULL, NULL,
-                         0) != HL_CKPT_STATUS_OK) {
+    int flush_status = ckpt_stream_call(HL_CKPT_OP_OBJECT_WRITE, NULL, stream->id, 0, 0, stream->buffer,
+                                        stream->buffered, NULL, NULL, 0);
+    if (flush_status != HL_CKPT_STATUS_OK) {
+        // The broker's answer is the whole reason this member is about to abort, and it used to be
+        // discarded here: the caller saw only -1 and printed "see the refusal above" with nothing above it.
+        fprintf(stderr, "[ckpt] refuse: the broker rejected %zu byte(s) for object %llu with status %d\n",
+                stream->buffered, (unsigned long long)stream->id, flush_status);
         stream->failed = 1;
         return -1;
     }
@@ -87,8 +192,11 @@ static int ckpt_sink_stream_write(struct ckpt_sink_stream *stream, const void *d
 
 static int ckpt_sink_stream_write_at(struct ckpt_sink_stream *stream, uint64_t offset, const void *data, size_t size) {
     if (stream->failed || ckpt_sink_stream_flush(stream) != 0) return -1;
-    if (ckpt_stream_call(HL_CKPT_OP_OBJECT_WRITE_AT, NULL, stream->id, offset, 0, data, size, NULL, NULL, 0) !=
-        HL_CKPT_STATUS_OK) {
+    int patch_status = ckpt_stream_call(HL_CKPT_OP_OBJECT_WRITE_AT, NULL, stream->id, offset, 0, data, size, NULL,
+                                       NULL, 0);
+    if (patch_status != HL_CKPT_STATUS_OK) {
+        fprintf(stderr, "[ckpt] refuse: the broker rejected a %zu byte patch at %llu of object %llu with status %d\n",
+                size, (unsigned long long)offset, (unsigned long long)stream->id, patch_status);
         stream->failed = 1;
         return -1;
     }
@@ -223,8 +331,7 @@ static const ckpt_sink_vtable g_ckpt_sink_stream_ops = {
 // inherited from activation, which is the only honest outcome: there is nowhere to put the bytes.
 static struct ckpt_sink *ckpt_sink_bind_stream(void) {
     if (hl_ckpt_channel_broker() < 0) return NULL;
-    g_ckpt_sink.ops = &g_ckpt_sink_stream_ops;
-    return &g_ckpt_sink;
+    return ckpt_sink_install(&g_ckpt_sink_stream_ops);
 }
 
 #endif

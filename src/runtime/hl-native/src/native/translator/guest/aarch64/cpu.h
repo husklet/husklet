@@ -3,6 +3,36 @@
 // emitted code. x18/x28/x30 are STOLEN by the engine (x28=cpu ptr, x30=host link, x18=scratch);
 // guest values live in cpu->x[].
 
+/*
+ * Direct-mapped soft-memory TLB.  One entry per guest page index; each entry
+ * describes the FULL interval the mapping resolution proved (a logical-VMA
+ * view, or the identity page), so an entry that legitimately spans several
+ * pages is accepted from whichever index installed it -- the interval test
+ * below is self-validating and needs no tag.  A single entry made every block
+ * touching two live pages return to the dispatcher on alternate accesses.
+ */
+#define SOFT_TLB_INDEX_BITS 9
+#define SOFT_TLB_ENTRIES (1u << SOFT_TLB_INDEX_BITS)
+struct hl_soft_tlb_entry {
+    uint64_t page;       /* inclusive first guest address covered */
+    uint64_t limit;      /* exclusive last guest address covered */
+    uint64_t delta;      /* host address - guest address */
+    uint64_t protection; /* HL_LOGICAL_VMA_* permission bits */
+};
+#define SOFT_TLB_SLOT(c, address) (&(c)->soft_tlb[((address) >> 12) & (SOFT_TLB_ENTRIES - 1)])
+#define SOFT_TLB_ENTRY_INVALIDATE(e)                                                                                   \
+    do {                                                                                                               \
+        (e)->page = UINT64_MAX;                                                                                        \
+        (e)->limit = 0;                                                                                                \
+        (e)->delta = 0;                                                                                                \
+        (e)->protection = 0;                                                                                           \
+    } while (0)
+#define SOFT_TLB_INVALIDATE_ALL(c)                                                                                     \
+    do {                                                                                                               \
+        for (unsigned _soft_slot = 0; _soft_slot < SOFT_TLB_ENTRIES; ++_soft_slot)                                     \
+            SOFT_TLB_ENTRY_INVALIDATE(&(c)->soft_tlb[_soft_slot]);                                                     \
+    } while (0)
+
 // ---------------- guest CPU state ----------------
 // Offsets are baked into the emitted code below; keep them in sync.
 struct cpu {
@@ -104,6 +134,17 @@ struct cpu {
     // (which republishes cpu->V). A plain R_SYSCALL exit reads this: 0 -> slim GPR-only spill, else FULL.
     // Appended after the baked-offset fields so the emitted-code offsets above are unaffected.
     uint64_t vdirty;
+    /*
+     * NZCV save slot for the non-PIE guest-base fold.  The fold must compare
+     * the effective address against the image window without disturbing the
+     * guest's condition flags, and the only engine-private host registers in
+     * this ABI (x16/x17) are already carrying the address and the constant.
+     * The obvious third register, host x18, is unusable: Darwin reserves it
+     * and clears it asynchronously between any two instructions, so a flag
+     * value parked there returns as zero and silently rewrites the guest's
+     * condition codes.  Park the flags in the CPU record instead.
+     */
+    uint64_t nzcv_fold;
     /* Synchronous translated-memory SIGBUS handoff; consumed only by dispatcher reason R_BUS. */
     uint64_t fault_addr;
     uint64_t bus_ea;
@@ -140,6 +181,19 @@ struct cpu {
     // needs a host interrupt only in that window; translated code observes
     // irq itself and dispatcher code is already at a delivery boundary.
     volatile uint64_t in_service;
+    /* A host EINTR used solely to reach a checkpoint safepoint must not become
+       a guest-visible EINTR.  This tail is architectural checkpoint state;
+       emitted code has no offsets into it. */
+    uint64_t checkpoint_syscall;
+    int64_t checkpoint_timeout_ns;
+    uint32_t checkpoint_continuation;
+    /* The emitted guard reads this array; the soft_* scalars above stay the
+       most-recently-installed entry for the C-side resolution paths.  It is
+       LAST in the struct on purpose: an entry is addressed as
+       [cpu + index*32 + OFF_SOFT_TLB + field], so only OFF_SOFT_TLB itself has
+       to fit the scaled imm12 and the array can grow without pushing any other
+       baked offset out of range. */
+    _Alignas(32) struct hl_soft_tlb_entry soft_tlb[SOFT_TLB_ENTRIES];
 };
 
 // One coherent description of the AArch64 CPU exposed to the Linux guest.  Every discovery surface
@@ -255,6 +309,7 @@ static int is_stolen(int r) {
 #define R_SOFTMISS 8
 #define R_SOFTSPAN 9
 #define R_SOFTCOMMIT 10
+#define OFF_NZCV_FOLD ((int)offsetof(struct cpu, nzcv_fold))
 #define OFF_FAULT_ADDR ((int)offsetof(struct cpu, fault_addr))
 #define OFF_BUS_EA ((int)offsetof(struct cpu, bus_ea))
 #define OFF_BUS_FILTER ((int)offsetof(struct cpu, bus_filter))
@@ -263,6 +318,11 @@ static int is_stolen(int r) {
 #define OFF_SOFT_LIMIT ((int)offsetof(struct cpu, soft_limit))
 #define OFF_SOFT_FILTER_FIRST ((int)offsetof(struct cpu, soft_filter_first))
 #define OFF_SOFT_FILTER_LAST ((int)offsetof(struct cpu, soft_filter_last))
+#define OFF_SOFT_TLB ((int)offsetof(struct cpu, soft_tlb))
+/* The guard addresses an entry field as ldr Xt,[ptr,#OFF_SOFT_TLB+k] (scaled imm12*8). */
+_Static_assert(offsetof(struct cpu, soft_tlb) % 8 == 0 && offsetof(struct cpu, soft_tlb) + 24 <= 32760,
+               "OFF_SOFT_TLB out of ldr/str imm12 range");
+_Static_assert(sizeof(struct hl_soft_tlb_entry) == 32, "soft TLB entry stride is baked as lsl #5");
 #define OFF_SOFT_DELTA ((int)offsetof(struct cpu, soft_delta))
 #define OFF_SOFT_PROTECTION ((int)offsetof(struct cpu, soft_protection))
 #define OFF_SOFT_EA ((int)offsetof(struct cpu, soft_ea))
@@ -275,6 +335,14 @@ static int is_stolen(int r) {
 #define OFF_SOFT_SPAN_PROTECTION ((int)offsetof(struct cpu, soft_span_protection))
 #define OFF_SOFT_BOUNCE_PENDING ((int)offsetof(struct cpu, soft_bounce_pending))
 #define OFF_SOFT_BOUNCE ((int)offsetof(struct cpu, soft_bounce))
+/* Every OFF_SOFT_* above is consumed by a scaled unsigned ldr/str (imm12*8):
+   an offset past 32760 silently truncates into a DIFFERENT field rather than
+   failing, so assert the whole soft group, not only the new array. */
+_Static_assert(offsetof(struct cpu, soft_bounce_pending) <= 32760 && offsetof(struct cpu, soft_bounce) <= 32760 &&
+                   offsetof(struct cpu, soft_pc) <= 32760 && offsetof(struct cpu, soft_required) <= 32760 &&
+                   offsetof(struct cpu, soft_ea) <= 32760 && offsetof(struct cpu, soft_span_protection) <= 32760 &&
+                   offsetof(struct cpu, irq) <= 32760,
+               "a baked cpu offset moved out of ldr/str imm12 range");
 #define G_SOFT_STATE_RESET(c)                                                                                          \
     do {                                                                                                               \
         (c)->soft_page = UINT64_MAX;                                                                                   \
@@ -283,6 +351,7 @@ static int is_stolen(int r) {
         (c)->soft_filter_last = 0;                                                                                     \
         (c)->soft_delta = 0;                                                                                           \
         (c)->soft_protection = 0;                                                                                      \
+        SOFT_TLB_INVALIDATE_ALL(c);                                                                                    \
         (c)->soft_ea = 0;                                                                                              \
         (c)->soft_bytes = 0;                                                                                           \
         (c)->soft_required = 0;                                                                                        \

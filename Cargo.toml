@@ -13,6 +13,12 @@ members = [
 exclude = [
     "src/containers/.cache",
 ]
+# `hl-gui-gtk` is the only member of the default set that needs a system library:
+# gtk4 through pkg-config. The pinned dev shell supplies it (`flake.nix` carries
+# `pkgs.gtk4` on Linux and Darwin alike), so `cargo build` inside `nix develop`
+# works everywhere. Outside that shell it fails in `gtk4-sys`'s build script on a
+# host without the GTK4 development files. `hl-gui` itself is toolkit-neutral and
+# depends on nothing; libadwaita is not used anywhere in the workspace.
 default-members = [
     "src/apps/extension",
     "src/apps/storybook",
@@ -53,14 +59,14 @@ regex = "1.13.0"
 serde = "1"
 serde_json = "1"
 serde_yaml = "0.9"
-toml = "0.9"
-sha2 = "0.11"
+sha2 = { version = "0.11", features = ["zeroize"] }
 socket2 = "0.6"
 tar = "0.4"
 tempfile = "3"
 thiserror = "2"
 tokio = "1"
 tokio-util = "0.7"
+toml = "0.9"
 tower = "0.5"
 uuid = "1"
 

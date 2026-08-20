@@ -325,6 +325,169 @@ async fn executions_are_single_use_and_keep_independent_output() {
 }
 
 #[tokio::test]
+async fn running_execution_can_be_reattached_without_starting_a_replacement() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("reattach-parent")).await.unwrap();
+    containers.start("reattach-parent").await.unwrap();
+    let initial = Size::new(24, 80).unwrap();
+    let resized = Size::new(42, 132).unwrap();
+    let exec = containers
+        .executions()
+        .create(
+            "reattach-parent",
+            ExecSpec::new(Process::new("/bin/sh").console(Console::default().terminal(initial))),
+        )
+        .await
+        .unwrap();
+    let original = containers.executions().start(&exec.id).await.unwrap();
+    let launches_before = runtime.programs.lock().unwrap().len();
+
+    assert!(matches!(
+        containers.executions().attach(&exec.id, Some(resized)).await,
+        Err(Error::Runtime(message)) if message.contains("already has an interactive attachment")
+    ));
+    drop(original);
+    let reattached = containers.executions().attach(&exec.id, Some(resized)).await.unwrap();
+
+    assert_eq!(runtime.programs.lock().unwrap().len(), launches_before);
+    assert_eq!(runtime.resizes.lock().unwrap().as_slice(), [resized]);
+    assert!(matches!(
+        containers.executions().inspect(&exec.id).await.unwrap().state,
+        ExecState::Running { .. }
+    ));
+    assert!(matches!(
+        containers.executions().start(&exec.id).await,
+        Err(Error::InvalidExecState { .. })
+    ));
+    assert!(matches!(
+        containers.executions().attach(&exec.id, None).await,
+        Err(Error::Runtime(message)) if message.contains("already has an interactive attachment")
+    ));
+    drop(reattached);
+    containers.executions().attach(&exec.id, None).await.unwrap();
+}
+
+#[tokio::test]
+async fn execution_attach_rejects_created_records_instead_of_starting_them() {
+    let containers = service(Arc::new(FakeRuntime::new(ExitStatus::Code(0)))).await;
+    containers.create(spec("attach-created-parent")).await.unwrap();
+    containers.start("attach-created-parent").await.unwrap();
+    let exec = containers
+        .executions()
+        .create("attach-created-parent", ExecSpec::new(Process::new("/bin/sh")))
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        containers.executions().attach(&exec.id, None).await,
+        Err(Error::InvalidExecState { .. })
+    ));
+    assert_eq!(
+        containers.executions().inspect(&exec.id).await.unwrap().state,
+        ExecState::Created
+    );
+}
+
+#[tokio::test]
+async fn running_record_without_its_exact_live_io_cannot_fake_a_successful_attachment() {
+    let storage = Arc::new(Memory::default());
+    let containers = test_containers(storage.clone(), Arc::new(FakeRuntime::new(ExitStatus::Code(0))))
+        .await
+        .unwrap();
+    containers.create(spec("missing-io-parent")).await.unwrap();
+    containers.start("missing-io-parent").await.unwrap();
+    let exec = containers
+        .executions()
+        .create("missing-io-parent", ExecSpec::new(Process::new("/bin/sh")))
+        .await
+        .unwrap();
+    let mut corrupt = crate::storage::Execs::get(storage.as_ref(), &exec.id)
+        .await
+        .unwrap()
+        .unwrap();
+    corrupt.state = ExecState::Running {
+        process_id: 999,
+        started_at_ms: 1,
+    };
+    crate::storage::Execs::replace(storage.as_ref(), &corrupt)
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        containers.executions().attach(&exec.id, None).await,
+        Err(Error::Runtime(message)) if message.contains("has no live I/O")
+    ));
+}
+
+#[tokio::test]
+async fn failed_exec_volume_resolution_preserves_input_for_repair_and_retry() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let storage = Arc::new(Memory::default());
+    let containers = test_containers(storage.clone(), runtime.clone()).await.unwrap();
+    let volume = containers
+        .volumes()
+        .create(VolumeSpec::new("retry-volume"))
+        .await
+        .unwrap();
+    containers
+        .create(spec("retry-volume-owner").mount(Mount::volume("retry-volume", "/data", Access::ReadWrite)))
+        .await
+        .unwrap();
+    containers.start("retry-volume-owner").await.unwrap();
+    let mut process = Process::new("/bin/sh");
+    process.console.stdin = true;
+    let exec = containers
+        .executions()
+        .create(
+            "retry-volume-owner",
+            ExecSpec::new(process).streams(Streams {
+                stdin: true,
+                stdout: true,
+                stderr: true,
+            }),
+        )
+        .await
+        .unwrap();
+
+    crate::storage::VolumeStore::remove(storage.as_ref(), "retry-volume")
+        .await
+        .unwrap();
+    assert!(matches!(
+        containers.executions().start(&exec.id).await,
+        Err(Error::VolumeNotFound(name)) if name == "retry-volume"
+    ));
+    crate::storage::VolumeStore::insert(storage.as_ref(), &volume)
+        .await
+        .unwrap();
+
+    let session = containers.executions().start(&exec.id).await.unwrap();
+    session.write(b"retry-input\n").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert!(
+        runtime
+            .inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, bytes)| bytes == b"retry-input\n")
+    );
+    assert!(
+        containers
+            .executions()
+            .inspect(&exec.id)
+            .await
+            .unwrap()
+            .state
+            .is_active()
+    );
+}
+
+#[tokio::test]
 async fn execution_wait_started_while_created_survives_start_and_returns_the_exit() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(23));
     runtime.delay = Duration::from_millis(30);
@@ -393,4 +556,204 @@ async fn execution_wait_reports_runtime_failure_instead_of_fabricating_an_exit_s
     let error = containers.executions().wait(&execution.id).await.unwrap_err();
 
     assert!(matches!(error, Error::Runtime(message) if message == "runtime failed: injected wait failure"));
+}
+
+#[tokio::test]
+async fn sealing_a_domain_member_records_the_guest_pid_its_image_names_it_by() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("member-identity-parent")).await.unwrap();
+    containers.start("member-identity-parent").await.unwrap();
+    let exec = containers
+        .executions()
+        .create("member-identity-parent", ExecSpec::new(Process::new("/bin/psql")))
+        .await
+        .unwrap();
+    let session = containers.executions().start(&exec.id).await.unwrap();
+    drop(session);
+    let running = containers.executions().inspect(&exec.id).await.unwrap();
+    let ExecState::Running { process_id, .. } = running.state else {
+        panic!("exec did not reach a running state: {:?}", running.state);
+    };
+    assert_eq!(
+        running.guest_pid, None,
+        "an unsealed member carries no captured identity"
+    );
+
+    containers
+        .checkpoint("member-identity-parent", Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let sealed = containers.executions().inspect(&exec.id).await.unwrap();
+    assert!(sealed.checkpoint.is_some(), "capture did not seal the member");
+    assert_eq!(
+        sealed.guest_pid.map(std::num::NonZeroI32::get),
+        Some(i32::try_from(process_id).unwrap()),
+        "sealing a member did not record the guest identity its restore re-forks it under"
+    );
+}
+
+#[tokio::test]
+async fn restoring_a_sealed_member_refuses_by_name_instead_of_relaunching_its_command() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("member-restore-parent")).await.unwrap();
+    containers.start("member-restore-parent").await.unwrap();
+    let exec = containers
+        .executions()
+        .create("member-restore-parent", ExecSpec::new(Process::new("/bin/psql")))
+        .await
+        .unwrap();
+    let session = containers.executions().start(&exec.id).await.unwrap();
+    drop(session);
+    containers
+        .checkpoint("member-restore-parent", Duration::from_secs(5))
+        .await
+        .unwrap();
+    let sealed = containers.executions().inspect(&exec.id).await.unwrap();
+    assert_eq!(sealed.state, ExecState::Created);
+    assert!(sealed.checkpoint.is_some(), "capture did not seal the member");
+    let launches_before = runtime.programs.lock().unwrap().len();
+    let starts_before = containers.service.exec_start_attempts();
+
+    let failures = containers.executions().restore_checkpoints().await.unwrap();
+
+    assert_eq!(failures.len(), 1, "expected exactly one refused member: {failures:?}");
+    assert_eq!(failures[0].0, exec.id);
+    assert!(
+        matches!(&failures[0].1, Error::ExecNotReattachable { id, .. } if id == &exec.id),
+        "restore did not refuse by name: {:?}",
+        failures[0].1
+    );
+    assert_eq!(
+        runtime.programs.lock().unwrap().len(),
+        launches_before,
+        "restore relaunched the member's command"
+    );
+    assert_eq!(
+        containers.service.exec_start_attempts(),
+        starts_before,
+        "restore reached start_exec"
+    );
+    assert!(
+        containers
+            .executions()
+            .inspect(&exec.id)
+            .await
+            .unwrap()
+            .checkpoint
+            .is_some(),
+        "a refused restore consumed the member's token"
+    );
+}
+
+/// A sealed, terminal-backed member comes back as the SAME process, seated on its own terminal.
+///
+/// This is the whole point of the refusal above having been a refusal rather than a relaunch. The pane's
+/// `sleep 10000` is not restarted: the session that reappears is the process the restore re-forked, and
+/// the terminal it is seated on is the one the launch created for it before the restore began -- which is
+/// why a pane can type into it and read from it at all.
+#[tokio::test]
+async fn restoring_a_sealed_terminal_backed_member_seats_the_restored_process_instead_of_a_new_one() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("member-reattach-parent")).await.unwrap();
+    containers.start("member-reattach-parent").await.unwrap();
+    let size = Size::new(24, 80).unwrap();
+    let process = Process::new("/bin/sleep")
+        .args(["10000"])
+        .console(Console::default().terminal(size));
+    let exec = containers
+        .executions()
+        .create(
+            "member-reattach-parent",
+            ExecSpec::new(process).streams(crate::Streams {
+                stdin: true,
+                stdout: true,
+                stderr: true,
+            }),
+        )
+        .await
+        .unwrap();
+    let session = containers.executions().start(&exec.id).await.unwrap();
+    drop(session);
+    containers
+        .checkpoint("member-reattach-parent", Duration::from_secs(5))
+        .await
+        .unwrap();
+    let sealed = containers.executions().inspect(&exec.id).await.unwrap();
+    let guest_pid = sealed
+        .guest_pid
+        .expect("capture recorded no guest identity for the member");
+    assert!(sealed.checkpoint.is_some(), "capture did not seal the member");
+
+    // The restore. Every sealed member's terminal has to be created inside this call, before the guest
+    // starts, because a restoring member asks for it from inside its own descriptor restore.
+    let launches_before = runtime.programs.lock().unwrap().len();
+    let starts_before = containers.service.exec_start_attempts();
+    containers.start("member-reattach-parent").await.unwrap();
+    let failures = containers.executions().restore_checkpoints().await.unwrap();
+
+    assert!(failures.is_empty(), "a restored member was refused: {failures:?}");
+    assert_eq!(
+        runtime.programs.lock().unwrap().len(),
+        launches_before + 1,
+        "the restore launched something other than the container itself"
+    );
+    assert_eq!(
+        containers.service.exec_start_attempts(),
+        starts_before,
+        "restore reached start_exec, which would have run the pane's command a second time"
+    );
+    let member = {
+        let members = runtime.members.lock().unwrap();
+        assert_eq!(members.len(), 1, "the launch was given the wrong number of terminals");
+        Arc::clone(&members[0])
+    };
+    assert_eq!(
+        member.guest_pid(),
+        guest_pid,
+        "the terminal was created for a member the record never named"
+    );
+
+    let reattached = containers.executions().inspect(&exec.id).await.unwrap();
+    let ExecState::Running { process_id, .. } = reattached.state else {
+        panic!("a reattached member is not running: {:?}", reattached.state);
+    };
+    assert_eq!(
+        process_id,
+        member.id(),
+        "the seated session is not the restored member's own process"
+    );
+    assert_eq!(reattached.checkpoint, None, "a reattached member kept its sealed token");
+
+    // Attaching is what a pane does, and it must reach THIS member: its output arrives on the terminal
+    // the launch created for it, and what the pane types goes back to the same place.
+    let mut attachment = containers.executions().attach(&exec.id, None).await.unwrap();
+    member.say(b"still-sleeping\n").await;
+    let entry = tokio::time::timeout(Duration::from_secs(5), attachment.next())
+        .await
+        .expect("the restored member produced no output")
+        .expect("attachment ended")
+        .unwrap();
+    assert_eq!(entry.bytes, b"still-sleeping\n");
+    attachment.write(b"typed\n").await.unwrap();
+    for _ in 0..200 {
+        if !member.typed().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(
+        member.typed(),
+        vec![b"typed\n".to_vec()],
+        "a pane's input did not reach the restored member's own terminal"
+    );
 }

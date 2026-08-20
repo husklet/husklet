@@ -18,7 +18,14 @@
 #define HL_EXEC_ELF_MACHINE 0xB7u // EM_AARCH64
 #endif
 
-enum { HL_EXEC_ARGUMENT_BYTES = 128 * 1024 };
+// Linux bounds execve arguments twice, and the two bounds are different quantities:
+//   MAX_ARG_STRLEN -- 32 pages == 128 KiB, the limit on ONE argument string;
+//   ARG_MAX        -- RLIMIT_STACK/4 == 2 MiB at the default 8 MiB stack, the limit on ALL of them.
+// Exceeding either is -E2BIG. A single 128 KiB budget shared across the whole vector (what this used to
+// be) rejects an ordinary large argv -- 2839 paths of ~46 bytes already exhausts it -- long before the
+// kernel would. Measured on the host: 50,000 x 21-byte arguments exec fine, 100,000 give E2BIG.
+enum { HL_EXEC_ARGUMENT_STRING_BYTES = 128 * 1024 };
+enum { HL_EXEC_ARGUMENT_TOTAL_BYTES = 2 * 1024 * 1024 };
 
 /* Diagnostic counters remain enabled in a fork child because they participate
  * in translation-cache identity.  Only the process that began the execution
@@ -151,6 +158,10 @@ static int exec_fd_is_engine(int fd) {
     if (fd < 0) return 1;
     if (cmsg_inflight_is_retained(fd)) return 1;
     if (hl_host_process_fd_private_current(fd)) return 1;
+    /* Asked of the transport itself, not of the private ledger, because a fork child owns no ledger rows
+       until fork_complete replays them and a guest close_range() can arrive first. See the contract on
+       hl_ckpt_channel_owns_descriptor. */
+    if (hl_ckpt_channel_owns_descriptor(fd)) return 1;
     if (eventfd_peer_is_engine_fd(fd)) return 1;
     if (sfd_wr_is(fd)) return 1; // signalfd write ends are engine-private (read ends are ordinary guest fds)
     if (fd == g_root_fd) return 1;
@@ -210,31 +221,17 @@ static void exec_close_cloexec(void) {
     // scanning. Host process inspection returns just the live descriptors (a couple dozen), so the sweep becomes
     // O(open fds). The real close-on-exec semantics are unchanged: every open non-engine CLOEXEC fd is
     // still closed. Fall back to a bounded linear scan only if host enumeration is unavailable.
-    size_t need = 0;
     exec_close_bound_cloexec_all();
-    if (!hl_host_process_fds(getpid(), NULL, 0, &need)) {
-        exec_close_cloexec_scan(getdtablesize());
-        return;
-    }
-    // Over-allocate a little: fds can be opened between the sizing call and the listing call.
-    size_t cap = need <= SIZE_MAX - 32 ? need + 32 : need;
-    hl_host_process_fd *fds = cap != 0 ? malloc(cap * sizeof *fds) : NULL;
-    if (!fds) {
-        exec_close_cloexec_scan(getdtablesize());
-        return;
-    }
+    // ONE enumeration pass. The old size-then-list pair walked /proc/self/fd twice, and each walk is
+    // O(fd-TABLE SIZE) inside the kernel -- ~1.1ms per pass once the engine-private descriptor band has
+    // expanded this process's table to 65536+ slots, whatever the ~30 descriptors actually open. The
+    // collecting form also retires the truncation hazard the old comment describes: the buffer grows
+    // inside the single pass, so there is no window between a sizing call and a listing call in which a
+    // descriptor can appear and have its tail silently dropped. Enumeration failure still falls back to
+    // the exhaustive bounded scan, which cannot miss.
+    hl_host_process_fd *fds = NULL;
     size_t got = 0;
-    if (!hl_host_process_fds(getpid(), fds, cap, &got)) {
-        free(fds);
-        exec_close_cloexec_scan(getdtablesize());
-        return;
-    }
-    // Truncated listing: more fds were open than the sized buffer could hold (they can be opened between
-    // the sizing call and this one, which is why cap was over-allocated in the first place). Clamping
-    // `got` here silently dropped the tail, leaving those CLOEXEC descriptors OPEN across the exec -- the
-    // exact leak this sweep exists to prevent, and one that only shows up when the process is busy enough
-    // to win that race. Fall back to the exhaustive scan, which cannot miss.
-    if (got > cap) {
+    if (!hl_host_process_fds_collect(getpid(), &fds, &got)) {
         free(fds);
         exec_close_cloexec_scan(getdtablesize());
         return;
@@ -305,6 +302,13 @@ static void vfork_import_guest_memory(pid_t child) {
 
 static void fork_child_hooks(struct cpu *c) {
     g_profile_output_owner = 0;
+    /* fork keeps the owner socket but removes its watcher thread. Re-arm it
+     * before restored or newly cloned guest code can escape owner revocation. */
+    if (hl_engine_checkpoint_lifetime_after_fork() != 0) {
+        c->exit_code = 70;
+        c->exited = 1;
+        return;
+    }
 #ifdef G_SOFT_STATE_RESET
     G_SOFT_STATE_RESET(c);
 #endif
@@ -360,6 +364,10 @@ static void fork_child_hooks(struct cpu *c) {
                                  // wipefork/dontfork_apply_child below, which mutate the registry in this child
     ts_after_fork();             // drop the inherited task-state slot cache so the child re-claims its own
     container_pid_after_fork();  // child has a new host pid -> drop the cached getpid() so it re-reads its own
+    hl_host_process_identity_after_fork(); // retire the self (pid, start-time) memo the private-fd registry
+                                 // rows and the fdvis owner stamps are keyed on. pthread_atfork already
+                                 // does this; the explicit call keeps the child's identity correct even
+                                 // for a future child that arrives without running atfork handlers
     poslk_after_fork();          // re-cache pid; child inherits NONE of the parent's fcntl record locks
     flock_broker_after_fork();   // flock ownership is OFD-scoped and IS inherited across fork
     proc_reg_after_fork();       // publish the fork child in /proc and stop it inheriting the parent's registry path
@@ -377,15 +385,20 @@ typedef struct bound_fork_state {
     struct fdvis_fork_plan fdvis_plan;
     int fdvis_prepared;
     int seq_prepared;
+    const char *diagnostic_stage;
 } bound_fork_state;
+
+#include "process/fork_diagnostic.c"
 
 static int bound_fork_prepare(bound_fork_state *state) {
     hl_status status;
     memset(state, 0, sizeof(*state));
     if (g_linux_box == NULL) {
+        state->diagnostic_stage = "private-prepare";
         int private_status = hl_host_process_fd_private_fork_prepare();
         if (private_status != 0) return private_status;
         state->private_prepared = 1;
+        state->diagnostic_stage = "fdvis-prepare";
         int fdvis_status = proc_fdvis_fork_prepare(&state->fdvis_plan);
         if (fdvis_status != 0) {
             (void)hl_host_process_fd_private_fork_complete(0);
@@ -395,6 +408,7 @@ static int bound_fork_prepare(bound_fork_state *state) {
         state->fdvis_prepared = 1;
         seq_ref_fork_prepare();
         state->seq_prepared = 1;
+        state->diagnostic_stage = "prepared";
         return 0;
     }
     state->watch_plan.capacity = bound_mapping_watch_capacity();
@@ -404,7 +418,9 @@ static int bound_fork_prepare(bound_fork_state *state) {
     state->watch_plan.records = state->watch_plan.capacity == 0
                                     ? NULL
                                     : malloc((size_t)state->watch_plan.capacity * sizeof(*state->watch_plan.records));
+    state->diagnostic_stage = "watch-allocation";
     if (state->watch_plan.capacity != 0 && state->watch_plan.records == NULL) { return -ENOMEM; }
+    state->diagnostic_stage = "watch-prepare";
     if (bound_mapping_fork_prepare(&state->watch_plan) != 0) {
         free(state->watch_plan.records);
         state->watch_plan.records = NULL;
@@ -418,6 +434,7 @@ static int bound_fork_prepare(bound_fork_state *state) {
     // iterate only [0,count); the unused tail is never read, so no zero-fill is required. malloc avoids the
     // per-fork memset of the capacity-sized (ofd_capacity) records block that calloc would perform.
     state->plan.records = malloc((size_t)state->plan.capacity * sizeof(*state->plan.records));
+    state->diagnostic_stage = "ofd-allocation";
     if (state->plan.records == NULL) {
         (void)bound_mapping_fork_complete(&state->watch_plan, 0);
         state->watch_prepared = 0;
@@ -425,6 +442,7 @@ static int bound_fork_prepare(bound_fork_state *state) {
         state->watch_plan.records = NULL;
         return -ENOMEM;
     }
+    state->diagnostic_stage = "ofd-prepare";
     status = hl_linux_abi_fork_prepare(g_linux_box, &state->plan);
     if (status != HL_STATUS_OK) {
         (void)bound_mapping_fork_complete(&state->watch_plan, 0);
@@ -436,6 +454,7 @@ static int bound_fork_prepare(bound_fork_state *state) {
         return status == HL_STATUS_BUSY ? -EAGAIN : status == HL_STATUS_OUT_OF_MEMORY ? -ENOMEM : -EIO;
     }
     {
+        state->diagnostic_stage = "private-prepare";
         int private_status = hl_host_process_fd_private_fork_prepare();
         if (private_status != 0) {
             (void)hl_linux_abi_fork_parent(g_linux_box, &state->plan);
@@ -450,6 +469,7 @@ static int bound_fork_prepare(bound_fork_state *state) {
     }
     state->private_prepared = 1;
     {
+        state->diagnostic_stage = "fdvis-prepare";
         int fdvis_status = proc_fdvis_fork_prepare(&state->fdvis_plan);
         if (fdvis_status != 0) {
             (void)hl_host_process_fd_private_fork_complete(0);
@@ -467,6 +487,7 @@ static int bound_fork_prepare(bound_fork_state *state) {
     state->fdvis_prepared = 1;
     seq_ref_fork_prepare();
     state->seq_prepared = 1;
+    state->diagnostic_stage = "prepared";
     return 0;
 }
 
@@ -474,6 +495,7 @@ static int bound_fork_complete(bound_fork_state *state, int child, int child_pid
     hl_status status;
     int fdvis_status = 0;
     if (state->seq_prepared && child_pid < 0) seq_ref_fork_cancel();
+    state->seq_prepared = 0;
     if (state->fdvis_prepared) {
         if (child_pid > 0)
             fdvis_status = proc_fdvis_after_fork(&state->fdvis_plan, child_pid, child);
@@ -481,19 +503,26 @@ static int bound_fork_complete(bound_fork_state *state, int child, int child_pid
             proc_fdvis_fork_cancel(&state->fdvis_plan);
         free(state->fdvis_plan.entries);
         state->fdvis_plan.entries = NULL;
+        state->fdvis_prepared = 0;
     }
     int private_status = state->private_prepared ? hl_host_process_fd_private_fork_complete(child) : 0;
-    if (g_linux_box == NULL) return private_status;
+    state->private_prepared = 0;
+    if (g_linux_box == NULL) {
+        state->diagnostic_stage = private_status == 0 ? "completed" : "complete-failed";
+        return private_status;
+    }
     status = child ? hl_linux_abi_fork_child(g_linux_box, &state->plan)
                    : hl_linux_abi_fork_parent(g_linux_box, &state->plan);
     if (state->watch_prepared && bound_mapping_fork_complete(&state->watch_plan, child) != 0 && status == HL_STATUS_OK)
         status = HL_STATUS_PLATFORM_FAILURE;
+    state->watch_prepared = 0;
     if (private_status != 0 && status == HL_STATUS_OK) status = HL_STATUS_OUT_OF_MEMORY;
     if (fdvis_status != 0 && status == HL_STATUS_OK) status = HL_STATUS_OUT_OF_MEMORY;
     free(state->plan.records);
     state->plan.records = NULL;
     free(state->watch_plan.records);
     state->watch_plan.records = NULL;
+    state->diagnostic_stage = status == HL_STATUS_OK ? "completed" : "complete-failed";
     return status == HL_STATUS_OK ? 0 : -EIO;
 }
 
@@ -590,7 +619,10 @@ static int sched_pid_live(int gpid) {
     // The old raw kill((pid_t)gpid, 0) probe leaked the existence of (and let sched_* operate on) ARBITRARY
     // same-user host processes outside the container -- the same host-pid authority leak the kill/pidfd paths
     // close via container_host_member. A genuine in-container peer is a registry member -> still resolvable.
-    if (g_init_hostpid) return container_host_member(gpid) ? 0 : -ESRCH;
+    if (g_init_hostpid) {
+        int host;
+        return guest_pid_registered_checked(gpid, &host) ? 0 : -ESRCH;
+    }
     if (kill((pid_t)gpid, 0) == 0) return 0; // bare (non-container) mode: historical host-pid probe
     return (errno == ESRCH) ? -ESRCH : 0;    // EPERM etc. -> the task exists, just not signalable
 }

@@ -268,7 +268,7 @@ static int svc_rare_process_descriptor(struct cpu *c, uint64_t nr, uint64_t a0, 
             hpid = (pid_t)getpid();
         } else if (g_init_hostpid) {
             int h;
-            if (!container_gpid_member((int)pid, &h)) {
+            if (!guest_pid_registered_checked((int)pid, &h)) {
                 G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
                 break;
             }
@@ -312,7 +312,7 @@ static int svc_rare_process_descriptor(struct cpu *c, uint64_t nr, uint64_t a0, 
             // guest-pid namespace: reject a pidfd whose target is no longer a live member of this container
             // -> ESRCH (matches a real pidfd to an exited/departed process, and closes the same host-pid
             // authority leak as kill, case 129 -- the pidfd could otherwise deliver to an arbitrary host pid).
-            if (g_init_hostpid && !container_host_member((int)pid)) {
+            if (g_init_hostpid && !host_pid_registered_checked((int)pid)) {
                 G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
                 break;
             }
@@ -876,8 +876,23 @@ static int svc_rare_scheduler_memory(struct cpu *c, uint64_t nr, uint64_t a0, ui
                                      uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 157: {
-        pid_t s = setsid();
-        G_RET(c) = s < 0 ? (uint64_t)(-errno) : (uint64_t)s;
+        int guest = container_pid();
+        int32_t shared_sid = 0;
+        pid_t s;
+        if (hl_linux_pidmap_is_active(&g_sidmap)) {
+            if (hl_linux_identity_registry_setsid(&g_pidmap, &g_pgidmap, &g_sidmap, guest, &shared_sid) != 0) {
+                G_RET(c) = (uint64_t)(-errno);
+                break;
+            }
+            s = (pid_t)shared_sid;
+        } else {
+            s = setsid();
+        }
+        if (s < 0) {
+            G_RET(c) = (uint64_t)(-errno);
+            break;
+        }
+        G_RET(c) = (uint64_t)(unsigned)guest;
         break;
     }
     // scheduling: stub with sane SCHED_OTHER values (real-time priorities aren't offered)
@@ -1270,6 +1285,20 @@ static void svc_rare_waitid(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2
         }
         idt = P_PID;
         idv = (id_t)tp;
+    } else if (idt == P_PID && idv != 0) {
+        int host;
+        if (hl_linux_pidmap_host_checked(&g_pidmap, (int)idv, &host) != 0) {
+            G_RET(c) = (uint64_t)(int64_t)-ECHILD;
+            return;
+        }
+        idv = (id_t)host;
+    } else if (idt == P_PGID && idv != 0) {
+        int host;
+        if (hl_linux_pidmap_host_checked(&g_pgidmap, (int)idv, &host) != 0) {
+            G_RET(c) = (uint64_t)(int64_t)-ECHILD;
+            return;
+        }
+        idv = (id_t)host;
     }
     int lopt = (int)a3, mopt = 0;
     // Linux wait-option bits -> macOS bits (only WNOHANG/WEXITED share a value)
@@ -1315,7 +1344,12 @@ static void svc_rare_waitid(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2
             *(int *)(gi + 0) = 17;   // si_signo = Linux SIGCHLD
             *(int *)(gi + 4) = 0;    // si_errno
             *(int *)(gi + 8) = code; // si_code (CLD_* values match Linux<->macOS)
-            *(int *)(gi + 16) = (int)si.si_pid;
+            int guest_child;
+            if (hl_linux_pidmap_guest_checked(&g_pidmap, (int)si.si_pid, &guest_child) != 0) {
+                G_RET(c) = (uint64_t)(int64_t)-ECHILD;
+                return;
+            }
+            *(int *)(gi + 16) = guest_child;
             *(int *)(gi + 20) = (int)si.si_uid;
             *(int *)(gi + 24) = status; // si_status
         }
@@ -1329,7 +1363,11 @@ static void svc_rare_waitid(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2
     // child leaves no stale membership marker a recycled host pid could inherit.
     if (si.si_pid != 0 && !(lopt & 0x01000000) &&
         (si.si_code == CLD_EXITED || si.si_code == CLD_KILLED || si.si_code == CLD_DUMPED))
-        proc_reg_reap((int)si.si_pid);
+    {
+        host_pid_unregister_reaped((int)si.si_pid);
+        if (hl_linux_pidmap_is_active(&g_pidmap))
+            (void)hl_linux_identity_registry_reap(&g_pidmap, &g_pgidmap, &g_sidmap, (int)si.si_pid);
+    }
     // Raw waitid(2) fills arg 5 (struct rusage *) when non-NULL (glibc's wrapper passes NULL, but the
     // raw syscall and some runtimes use it). macOS waitid has no rusage variant, so report the reaped
     // child's accounting best-effort from RUSAGE_CHILDREN in the guest's Linux layout -- leaving the

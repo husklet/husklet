@@ -1018,6 +1018,10 @@ static int g_ndirs;
 static void dirs_drop(int fd) {
     for (int i = 0; i < g_ndirs; i++)
         if (g_dirs[i].fd == fd) {
+            // The stream's host descriptor was adopted into the engine-private band (fs/directory.c); retire
+            // its ledger row BEFORE closedir() frees the number, or the row outlives the descriptor and a
+            // later adopt landing on the same number inherits a stale entry.
+            hl_host_process_fd_private_remove(dirfd(g_dirs[i].d));
             closedir(g_dirs[i].d);
             g_dirs[i] = g_dirs[--g_ndirs];
             return;

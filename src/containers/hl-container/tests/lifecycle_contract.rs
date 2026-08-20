@@ -136,6 +136,37 @@ async fn checkpoint_restore_preserves_filesystem_and_container_control() -> Resu
 
 #[tokio::test]
 #[ignore = "requires HL_ALPINE_ARCHIVE"]
+async fn checkpoint_restore_restarts_interrupted_sleep_syscalls() -> Result<(), Error> {
+    let _process = LIFECYCLE_PROCESS.lock().await;
+    let fixture = bounded("sleep checkpoint fixture", Fixture::new()).await?;
+    let name = "lifecycle-checkpoint-sleep";
+    let outcome = bounded("sleep checkpoint lifecycle", async {
+        let process = Process::new("/bin/sh").args([
+            "-c",
+            "sleep 1000 & a=$!; sleep 1000 & b=$!; sleep 1000 & c=$!; \
+             while kill -0 \"$a\" && kill -0 \"$b\" && kill -0 \"$c\"; do \
+                 printf x >> /tmp/checkpoint-sleep-progress; sleep .05; \
+             done; printf 'sleep child lost\n' > /tmp/checkpoint-sleep-failure; exit 91",
+        ]);
+        fixture.containers.create(fixture.spec(name, process)).await?;
+        fixture.containers.start(name).await?;
+        let progress = fixture.rootfs.join("tmp/checkpoint-sleep-progress");
+        wait_for_size(&progress, 2).await?;
+        fixture.containers.checkpoint(name, Duration::from_secs(10)).await?;
+        fixture.containers.start(name).await?;
+        let resumed = std::fs::metadata(&progress)?.len();
+        wait_for_size(&progress, resumed + 1).await?;
+        require(
+            !fixture.rootfs.join("tmp/checkpoint-sleep-failure").exists(),
+            "checkpoint surfaced its interrupt to a sleeping child",
+        )
+    })
+    .await;
+    finish(outcome, cleanup(&fixture.containers, name).await)
+}
+
+#[tokio::test]
+#[ignore = "requires HL_ALPINE_ARCHIVE"]
 async fn health_probes_reach_healthy_and_unhealthy_states() -> Result<(), Error> {
     let _process = LIFECYCLE_PROCESS.lock().await;
     let fixture = bounded("health fixture", Fixture::new()).await?;

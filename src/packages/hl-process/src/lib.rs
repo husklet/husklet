@@ -18,6 +18,8 @@ mod drain;
 mod platform;
 #[cfg(unix)]
 mod unix;
+#[cfg(unix)]
+pub mod unix_descriptor;
 #[cfg(windows)]
 mod windows;
 

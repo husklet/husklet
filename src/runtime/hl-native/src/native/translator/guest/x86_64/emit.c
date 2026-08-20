@@ -6,25 +6,6 @@
 // (the same-ISA-independent half: these emit HOST code, copied from jit.c +
 //  a few width-typed loads/stores the x86 front-end needs.)
 
-// Host FEAT_LRCPC (LDAPR) presence, gating the x86-TSO acquire-load fast path (e_load/e_ldapr/offset
-// forms): present -> single LDAPR (fewer barriers, the win); absent -> the byte-identical original
-// LDR + DMB ISHLD sequence (correct, no speedup). LDAPR is an ARMv8.3 instruction and UNDEFs (SIGILL) on a
-// pre-8.3 host, so it must never be emitted unless the host advertises it. Set once, before any translation
-// runs, by a constructor. It is enabled ONLY on a Linux host: the LDAPR unaligned-crossing alignment-fault
-// fixup (ldapr_align_fixup) is wired solely into the Linux SIGBUS run path (jit86_lazyguard), so on any
-// other host the fast path stays OFF (== baseline behavior, no unhandled BUS_ADRALN).
-// The probe is AArch64-only: AT_HWCAP is a PER-ARCHITECTURE bit vector, and bit 15 of the same word on
-// x86-64 is CPUID.1:EDX CMOV -- set everywhere, so probing it would pin the LDAPR path ON forever.
-int g_host_lrcpc = 0;
-#if defined(__linux__) && defined(HL_HOST_CPU_AARCH64)
-#include <sys/auxv.h>
-#ifndef HWCAP_LRCPC
-#define HWCAP_LRCPC (1u << 15) // AArch64 AT_HWCAP bit 15
-#endif
-__attribute__((constructor)) static void hl_detect_host_lrcpc(void) {
-    g_host_lrcpc = (getauxval(AT_HWCAP) & HWCAP_LRCPC) ? 1 : 0;
-}
-#endif
 void emit32(uint32_t in) {
     *(uint32_t *)g_cp = in;
     g_cp += 4;
@@ -135,33 +116,16 @@ static void e_dmb_ishld(void) {
     emit32(0xD50339BFu);
 }
 
-// forward decls: the LDAPR offset-load forms below materialize the EA with add/sub-immediate
+// Forward declarations used by address lowering below.
 void e_addi(int rd, int rn, unsigned imm12, int sf);
 void e_subi(int rd, int rn, unsigned imm12, int sf);
 static void e_addi_sh(int rd, int rn, unsigned imm12, int sf, int sh);
 
-// x86-TSO acquire load via LDAPR (Load-AcquirePC, FEAT_LRCPC): ONE instruction that supplies the
-// LoadLoad+LoadStore ordering x86-TSO requires on every guest load -- replacing the LDR + DMB ISHLD
-// pair (the DMB ISHLD dominates load-heavy x86 cost). RCpc acquire == the exact edges DMB ISHLD gave.
-// LDAPR is [Xn] base-only (no immediate offset) and has no 128-bit vector form.
-//
-// ALIGNMENT: on FEAT_LSE2 hosts (Apple M-series) an unaligned LDAPR is legal UNLESS it crosses a
-// 16-byte granule, where the CPU raises SIGBUS/BUS_ADRALN. x86 permits every unaligned normal load, so
-// such a fault is ALWAYS our synthetic one (a guest load emitted as LDR never alignment-faults on Normal
-// memory). The SIGBUS/BUS_ADRALN fixup (ldapr_align_fixup, linux_abi/x86.c) emulates the rare crossing
-// load (plain unaligned read + DMB ISHLD acquire) and steps past the LDAPR -- see the safety argument there.
-static void e_ldapr(int w, int rt, int rn) { // ldapr{b,h,,} rt,[rn]
-    uint32_t b = w == 1 ? 0x38BFC000u : w == 2 ? 0x78BFC000u : w == 4 ? 0xB8BFC000u : 0xF8BFC000u;
-    emit32(b | (rn << 5) | rt);
-}
-
 // Guest width-typed load at [rn, #0]. w = 1/2/4/8 bytes. (zero-extends on load)
 void e_load(int w, int rt, int rn) {
-    if (g_host_lrcpc) {
-        e_ldapr(w, rt, rn);
-        return;
-    }
-    // Fallback (no FEAT_LRCPC): the original LDR + DMB ISHLD -- byte-identical to pre-LDAPR behavior.
+    // x86 scalar loads may be unaligned. AArch64 LDAPR alignment-faults and turns common packed-data
+    // accesses into synchronous SIGBUS emulation, so use the naturally unaligned LDR plus the acquire
+    // barrier required by the x86 memory model on every host.
     uint32_t b = w == 1 ? 0x39400000u : w == 2 ? 0x79400000u : w == 4 ? 0xB9400000u : 0xF9400000u;
     emit32(b | (rn << 5) | rt);
     e_dmb_ishld();
@@ -180,29 +144,10 @@ void e_ldrs(int w, int rt, int rn) {                                        // s
 
 // Address-mode-folded load/store: fold a [base+disp] memory operand into ONE ldr/str.
 // Scaled unsigned-offset form (disp a multiple of w, disp/w in [0,4095]):
-// Offset load forms: LDAPR is base-only, so materialize the effective address into the EA scratch (x17)
-// with add/sub-immediate, then LDAPR [x17]. add+ldapr is the same instruction count as ldr+dmb but drops
-// the barrier. x17 is the designated EA scratch (guest GPRs occupy x0..x15; rn is a guest reg here), so
-// clobbering it between the add and the load is safe. The SIGBUS fixup reads the base reg (x17) from the
-// fault context, so a crossing unaligned offset load is caught exactly as the base form is.
-static void e_load_uoff(int w, int rt, int rn, unsigned disp) { // x17 = rn+disp; ldapr rt,[x17]
-    if (!g_host_lrcpc) { // Fallback: original folded ldr{b,h,,} rt,[rn,#disp] + DMB ISHLD (byte-identical).
-        uint32_t b = w == 1 ? 0x39400000u : w == 2 ? 0x79400000u : w == 4 ? 0xB9400000u : 0xF9400000u;
-        emit32(b | (((disp / (unsigned)w) & 0xFFF) << 10) | (rn << 5) | rt);
-        e_dmb_ishld();
-        return;
-    }
-    if (disp == 0) {
-        e_ldapr(w, rt, rn);
-        return;
-    }
-    if (disp < 0x1000u) {
-        e_addi(17, rn, disp, 1);
-    } else { // disp <= 4095*8 = 0x7FF8: split into <<12 hi + lo (both fit imm12)
-        e_addi_sh(17, rn, disp >> 12, 1, 1);
-        if (disp & 0xFFFu) e_addi(17, 17, disp & 0xFFFu, 1);
-    }
-    e_ldapr(w, rt, 17);
+static void e_load_uoff(int w, int rt, int rn, unsigned disp) {
+    uint32_t b = w == 1 ? 0x39400000u : w == 2 ? 0x79400000u : w == 4 ? 0xB9400000u : 0xF9400000u;
+    emit32(b | (((disp / (unsigned)w) & 0xFFF) << 10) | (rn << 5) | rt);
+    e_dmb_ishld();
 }
 
 void e_store_uoff(int w, int rt, int rn, unsigned disp) { // str{b,h,,} rt,[rn,#disp]
@@ -212,22 +157,10 @@ void e_store_uoff(int w, int rt, int rn, unsigned disp) { // str{b,h,,} rt,[rn,#
 }
 
 // Unscaled signed-offset form (simm9 in [-256,255]) -- covers small negative disps:
-static void e_ldur(int w, int rt, int rn, int simm9) { // x17 = rn+simm9; ldapr rt,[x17]
-    if (!g_host_lrcpc) { // Fallback: original ldur{b,h,,} rt,[rn,#simm9] + DMB ISHLD (byte-identical).
-        uint32_t b = w == 1 ? 0x38400000u : w == 2 ? 0x78400000u : w == 4 ? 0xB8400000u : 0xF8400000u;
-        emit32(b | (((uint32_t)simm9 & 0x1FF) << 12) | (rn << 5) | rt);
-        e_dmb_ishld();
-        return;
-    }
-    if (simm9 == 0) {
-        e_ldapr(w, rt, rn);
-        return;
-    }
-    if (simm9 > 0)
-        e_addi(17, rn, (unsigned)simm9, 1);
-    else
-        e_subi(17, rn, (unsigned)(-simm9), 1); // simm9 >= -256 -> fits imm12
-    e_ldapr(w, rt, 17);
+static void e_ldur(int w, int rt, int rn, int simm9) {
+    uint32_t b = w == 1 ? 0x38400000u : w == 2 ? 0x78400000u : w == 4 ? 0xB8400000u : 0xF8400000u;
+    emit32(b | (((uint32_t)simm9 & 0x1FF) << 12) | (rn << 5) | rt);
+    e_dmb_ishld();
 }
 
 void e_stur(int w, int rt, int rn, int simm9) { // stur{b,h,,} rt,[rn,#simm9]
@@ -946,16 +879,20 @@ static void emit_soft_guard(int address_register, uint64_t size, uint64_t rip, u
     if (!jit_guest_soft_active()) return;
     e_str(address_register, 28, OFF_BUS_EA);
     e_str(9, 28, OFF_BUS_SCRATCH);
-    e_ldr(16, 28, OFF_SOFT_SNAPSHOT);
-    uint32_t *invalid = (uint32_t *)g_cp;
-    emit32(0); /* cbz x16,miss */
-    e_lsr_i(9, address_register, 12, 1);
-    emit32(0xD374CC00u | (9u << 5) | 9u); /* lsl x9,x9,#12 */
-    e_ldr(16, 28, OFF_SOFT_PAGE);
-    e_rrr(A_EOR, 9, 9, 16, 1, 0);
+    /* x9 addresses the direct-mapped entry for the whole probe, x16 is the
+       scratch.  Both the tag test and the end test use only those two, so the
+       NZCV save/restore the single-entry lowering needed is gone as well. */
+    emit32(0xD3400000u | (12u << 16) | ((12u + SOFT_TLB_INDEX_BITS - 1u) << 10) |
+           ((unsigned)address_register << 5) | 16u); /* ubfx x16,addr,#12,#BITS */
+    emit32(0x8B000000u | (16u << 16) | (5u << 10) | (28u << 5) | 9u); /* add x9,x28,x16,lsl #5 */
+    /* Page tag: addr ^ tag has bits >= 12 clear exactly when the slot holds
+       this page.  SOFT_TLB_TAG_INVALID never matches a guest address. */
+    e_ldr(16, 9, OFF_SOFT_TLB + 0);
+    e_rrr(A_EOR, 16, 16, address_register, 1, 0);
+    e_lsr_i(16, 16, 12, 1);
     uint32_t *wrong_page = (uint32_t *)g_cp;
-    emit32(0); /* cbnz x9,miss */
-    e_ldr(16, 28, OFF_SOFT_PROTECTION);
+    emit32(0); /* cbnz x16,miss */
+    e_ldr(16, 9, OFF_SOFT_TLB + 24);
     uint32_t *denied_read = NULL, *denied_write = NULL;
     if (required & 1u) {
         denied_read = (uint32_t *)g_cp;
@@ -965,18 +902,16 @@ static void emit_soft_guard(int address_register, uint64_t size, uint64_t rip, u
         denied_write = (uint32_t *)g_cp;
         emit32(0); /* tbz x16,#1,miss */
     }
-    emit32(0xD53B4200u | 16u);
-    e_str(16, 28, OFF_NZCV);
-    emit32(0xB1000000u | (((uint32_t)size & 0xfffu) << 10) | ((unsigned)address_register << 5) | 9u);
-    uint32_t *overflow_branch = (uint32_t *)g_cp;
-    emit32(0);
-    e_ldr(16, 28, OFF_SOFT_LAST);
-    emit32(0xEB00001Fu | (16u << 16) | (9u << 5));
+    /* last - addr - size, tested by sign bit: the tag test already proved
+       addr lies in the entry's page and last is above it, so the only way to
+       go negative is the access running past the validated end. */
+    e_ldr(16, 9, OFF_SOFT_TLB + 8);
+    e_rrr(A_SUB, 16, 16, address_register, 1, 0);
+    e_subi_sh(16, 16, (unsigned)size, 1, 0);
+    e_lsr_i(16, 16, 63, 1);
     uint32_t *span_branch = (uint32_t *)g_cp;
-    emit32(0);
-    e_ldr(16, 28, OFF_NZCV);
-    emit32(0xD51B4200u | 16u);
-    e_ldr(16, 28, OFF_SOFT_DELTA);
+    emit32(0); /* cbnz x16,span */
+    e_ldr(16, 9, OFF_SOFT_TLB + 16);
     e_ldr(9, 28, OFF_BUS_SCRATCH);
     e_rrr(A_ADD, address_register, address_register, 16, 1, 0);
     uint32_t *resume_branch = (uint32_t *)g_cp;
@@ -999,8 +934,6 @@ static void emit_soft_guard(int address_register, uint64_t size, uint64_t rip, u
     e_br(16);
 
     uint8_t *span = g_cp;
-    e_ldr(16, 28, OFF_NZCV);
-    emit32(0xD51B4200u | 16u);
     e_ldr(9, 28, OFF_BUS_SCRATCH);
     emit_spill();
     e_movconst(16, size);
@@ -1015,18 +948,13 @@ static void emit_soft_guard(int address_register, uint64_t size, uint64_t rip, u
     e_br(16);
 
     uint8_t *resume = g_cp;
-#define PATCH_CBZ_X(p, target)                                                                                         \
-    (*(p) = 0xB4000000u | (((uint32_t)(((target) - (uint8_t *)(p)) / 4) & 0x7ffffu) << 5) | 16u)
-    PATCH_CBZ_X(invalid, miss);
-    *wrong_page = 0xB5000000u | (((uint32_t)((miss - (uint8_t *)wrong_page) / 4) & 0x7ffffu) << 5) | 9u;
+    *wrong_page = 0xB5000000u | (((uint32_t)((miss - (uint8_t *)wrong_page) / 4) & 0x7ffffu) << 5) | 16u;
     if (denied_read)
         *denied_read = 0x36000000u | (((uint32_t)((miss - (uint8_t *)denied_read) / 4) & 0x3fffu) << 5) | 16u;
     if (denied_write)
         *denied_write = 0x36080000u | (((uint32_t)((miss - (uint8_t *)denied_write) / 4) & 0x3fffu) << 5) | 16u;
-    *overflow_branch = 0x54000002u | (((uint32_t)((span - (uint8_t *)overflow_branch) / 4) & 0x7ffffu) << 5);
-    *span_branch = 0x54000008u | (((uint32_t)((span - (uint8_t *)span_branch) / 4) & 0x7ffffu) << 5);
+    *span_branch = 0xB5000000u | (((uint32_t)((span - (uint8_t *)span_branch) / 4) & 0x7ffffu) << 5) | 16u;
     *resume_branch = 0x14000000u | ((uint32_t)((resume - (uint8_t *)resume_branch) / 4) & 0x03ffffffu);
-#undef PATCH_CBZ_X
 }
 
 /* AArch64 may split an unaligned store at a host page boundary before the
@@ -1151,7 +1079,7 @@ void emit_memory_guard(int address_register, uint64_t size, uint64_t rip, uint32
     e_ldr(9, 9, 0);
     e_shv(S_LSRV, 9, 9, 17, 1);
     uint32_t *filter_miss = (uint32_t *)g_cp;
-    emit32(0); /* tbz x18,#0,resume */
+    emit32(0); /* tbz x9,#0,resume-filter-miss */
     uint8_t *slow = g_cp;
     *force_slow = 0x37000000u | (1u << 19) | (((uint32_t)((slow - (uint8_t *)force_slow) / 4) & 0x3FFFu) << 5) | 16u;
     e_ldr(9, 28, OFF_BUS_SCRATCH);
@@ -1668,10 +1596,10 @@ static void emit_fast_syscall(uint64_t next) {
 // past the fixed 2-insn poll header -- every in-cache cycle still polls via its backward or
 // indirect edge (see the g_fwdskip invariant note in engine/cache.c).
 void emit_chain_exit(uint64_t target) {
-    if (g_trace || g_nochain || g_threaded) {
+    if (g_threaded) {
         emit_exit_const(target, R_BRANCH);
         return;
-    } // debug: no chaining -> exact rip per block
+    }
     void *body = map_body(target);
     uint32_t *slot = (uint32_t *)g_cp;
     int fwd = g_fwdskip && target > g_emit_gpc;
@@ -1690,47 +1618,25 @@ void emit_chain_exit(uint64_t target) {
 // Scratch x16/x17/x19/x20/x21 are not guest registers here, and `sub` (not `subs`)
 // keeps nzcv live, so the cached body is entered exactly like a chained block.
 void emit_ibranch(void) {
-    if (g_trace || g_nochain || g_noibtc) { // debug: always dispatch (exact rip)
-        e_str(16, 28, OFF_RIP);
-        emit_spill();
-        e_movconst(16, R_BRANCH);
-        e_str(16, 28, OFF_RSN);
-        emit_host_ptr(16, (uint64_t)block_return, PRELOC_BLOCKRET);
-        e_br(16);
-        return;
-    }
-    // opt2: probe the IBTC. 2-way set-associative (default) vs the old direct-mapped 1-way (IBTC1WAY=1).
-    // The two variants differ only in the probe; the MISS tail below is shared and patched per final way.
+    // Probe the two-way set-associative IBTC; the miss tail is patched after both ways.
     uint32_t *p_miss;                                     // cbnz x20 -> Lmiss patch site (last way)
     emit32(0xD3423800u | (16 << 5) | 17);                 // ubfx x17, x16, #2, #13  ((tgt>>2)&0x1FFF)
-    if (ibtc1way()) {                                     // IBTC1WAY=1: exact prior 1-way probe (shared g_ibtc)
-        emit_host_ptr(19, (uint64_t)g_ibtc, PRELOC_IBTC); // x19 = &g_ibtc  (3-insn materialize)
-        emit32(0x8B000000u | (17 << 16) | (4 << 10) | (19 << 5) | 19); // add x19, x19, x17, lsl #4   (16B slot)
-        e_ldr(20, 19, 0);                                              // x20 = slot.target
-        emit32(0xCB000000u | (16 << 16) | (20 << 5) | 20);             // sub x20, x20, x16  (NOT subs: keep nzcv)
-        p_miss = (uint32_t *)g_cp;
-        emit32(0); // cbnz x20, Lmiss
-        e_ldr(21, 19, 8);
-        e_br(21);                // HIT: x21 = slot.body -> jump (regs live)
-    } else {                     // opt2 default: 2-way probe, base from cpu->ibtc_base
-        e_ldr(19, 28, OFF_IBTC); // x19 = cpu->ibtc_base  (1 insn, replaces movz/movk x3)
-        emit32(0x8B000000u | (17 << 16) | (5 << 10) | (19 << 5) | 19); // add x19, x19, x17, lsl #5   (32B set)
-        e_ldr(20, 19, 0);                                              // x20 = way0.target
-        emit32(0xCB000000u | (16 << 16) | (20 << 5) | 20);             // sub x20, x20, x16  (NOT subs: keep nzcv)
-        uint32_t *p_w1 = (uint32_t *)g_cp;
-        emit32(0); // cbnz x20, Lway1
-        e_ldr(21, 19, 8);
-        e_br(21); // HIT way0: x21 = way0.body -> jump (regs live)
-        uint32_t *Lway1 = (uint32_t *)g_cp;
-        e_ldr(20, 19, 16);                                 // x20 = way1.target
-        emit32(0xCB000000u | (16 << 16) | (20 << 5) | 20); // sub x20, x20, x16
-        p_miss = (uint32_t *)g_cp;
-        emit32(0); // cbnz x20, Lmiss
-        e_ldr(21, 19, 24);
-        e_br(21); // HIT way1: x21 = way1.body -> jump (regs live)
-        *p_w1 =
-            0xB5000000u | (((uint32_t)(((uint8_t *)Lway1 - (uint8_t *)p_w1) / 4) & 0x7FFFF) << 5) | 20; // cbnz->Lway1
-    }
+    e_ldr(19, 28, OFF_IBTC);
+    emit32(0x8B000000u | (17 << 16) | (5 << 10) | (19 << 5) | 19);
+    e_ldr(20, 19, 0);
+    emit32(0xCB000000u | (16 << 16) | (20 << 5) | 20);
+    uint32_t *p_w1 = (uint32_t *)g_cp;
+    emit32(0);
+    e_ldr(21, 19, 8);
+    e_br(21);
+    uint32_t *Lway1 = (uint32_t *)g_cp;
+    e_ldr(20, 19, 16);
+    emit32(0xCB000000u | (16 << 16) | (20 << 5) | 20);
+    p_miss = (uint32_t *)g_cp;
+    emit32(0);
+    e_ldr(21, 19, 24);
+    e_br(21);
+    *p_w1 = 0xB5000000u | (((uint32_t)(((uint8_t *)Lway1 - (uint8_t *)p_w1) / 4) & 0x7FFFF) << 5) | 20;
     uint32_t *miss = (uint32_t *)g_cp;
     e_str(16, 28, OFF_RIP);
     emit_spill(); // MISS: slow path

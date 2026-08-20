@@ -1,6 +1,9 @@
 // Shared ownership metadata for macOS's DGRAM-backed Linux SOCK_SEQPACKET emulation. Definitions live
 // ahead of ancillary translation because SCM_RIGHTS send/receive participates in the same lifetime.
+#include "../ownership/transport.h"
+
 #define SEQ_REF_N 4096
+#define SOCK_STATE_N 4096
 
 struct seq_ref {
     volatile uint32_t used;
@@ -10,6 +13,45 @@ struct seq_ref {
 static struct seq_ref *g_seq_refs;
 static uint16_t g_seq_ref[HL_NFD];
 static uint8_t g_seq_end[HL_NFD];
+
+/* Mutable open-socket-description state must survive a trusted guest fork. The
+ * descriptor-to-slot map is process-local and inherited by fork; each slot is
+ * allocated from shared memory so a shutdown observed by one descendant is
+ * visible to every process that inherited or duplicated that description. */
+struct sock_state {
+    volatile uint32_t used;
+    volatile uint32_t refs;
+    volatile uint32_t shutdown;
+};
+static struct sock_state *g_sock_states;
+static uint16_t g_sock_state_ref[HL_NFD];
+
+#define SOCK_IDENTITY_TICKET_N 4096
+#define SOCK_IDENTITY_TICKET_FREE 0u
+#define SOCK_IDENTITY_TICKET_PUBLISHED 1u
+#define SOCK_IDENTITY_TICKET_CLAIMED 2u
+/* The acceptor has claimed the nonce and written its OWN minted object id back into the slot; the slot
+ * now belongs to the publisher, which collects that id and frees it.  A RESOLVED slot is not claimable,
+ * so the nonce is still one-shot -- the second phase transfers a value, it does not resolve a name. */
+#define SOCK_IDENTITY_TICKET_RESOLVED 3u
+
+struct sock_identity_ticket {
+    volatile uint32_t state;
+    /* Host pid of the publisher.  A ticket table now outlives the process that wrote into it (it is a
+     * file in the engine's namespace directory, not fork-inherited memory), so a worker killed between
+     * publish and release would strand its slot forever.  Reclaiming a PUBLISHED slot whose publisher is
+     * gone bounds that, and cannot resurrect identity: the nonce is retired with the slot. */
+    volatile uint32_t publisher;
+    volatile uint64_t nonce_high;
+    volatile uint64_t nonce_low;
+    /* Each endpoint object is minted by the process that OWNS that endpoint, so its high 32 bits encode
+     * that process's pid: the connector writes client_object at publish, the acceptor writes
+     * server_object at claim.  A checkpoint reciprocity join needs both owners, and a pair minted
+     * entirely by the connector names only one. */
+    volatile uint64_t client_object;
+    volatile uint64_t server_object;
+};
+static struct sock_identity_ticket *g_sock_identity_tickets;
 
 // ---- SCM ancillary data: Linux<->macOS cmsg framing translation (SOL_SOCKET/SCM_RIGHTS fd passing).
 // hl uses host fds directly as guest fds, so the fd integers in an SCM_RIGHTS payload need no remap --
@@ -82,6 +124,7 @@ struct hl_cmsg_ofd_meta {
     uint32_t ordinal;
     uint64_t identity;
 };
+_Static_assert(sizeof(struct hl_cmsg_ofd_meta) == HL_SOCKET_OWNER_OFD_ACK_OFFSET, "immutable OFD marker prefix");
 
 struct hl_cmsg_memfd_meta {
     uint32_t magic;
@@ -276,7 +319,7 @@ static int cmsg_timerfd_marker(const struct hl_cmsg_timerfd_meta *m) {
 #define cmsg_inflight_is_retained(fd) (0)
 #else
 #define SCM_INFLIGHT_MAX 256
-#define SCM_INFLIGHT_ACK_OFFSET ((off_t)sizeof(struct hl_cmsg_ofd_meta))
+#define SCM_INFLIGHT_ACK_OFFSET ((off_t)HL_SOCKET_OWNER_OFD_ACK_OFFSET)
 
 struct scm_inflight_hold {
     int retained; // engine-private duplicate of the passed descriptor
@@ -347,13 +390,15 @@ static int cmsg_inflight_is_retained(int fd) {
 }
 #endif
 
-static int cmsg_ofd_marker(const struct hl_cmsg_ofd_meta *m) {
+static int cmsg_ofd_marker(const struct hl_cmsg_ofd_meta *m, const hl_socket_owner_transport *owner) {
     if (g_cmsg_ntmpfds >= (int)(sizeof g_cmsg_tmpfds / sizeof g_cmsg_tmpfds[0])) return -1;
     char name[] = "/tmp/.hl-ofdXXXXXX";
     int fd = mkstemp(name);
     if (fd < 0) return -1;
     unlink(name);
-    if (write(fd, m, sizeof *m) != (ssize_t)sizeof *m) {
+    if (write(fd, m, sizeof *m) != (ssize_t)sizeof *m ||
+        (owner != NULL &&
+         pwrite(fd, owner, sizeof *owner, HL_SOCKET_OWNER_OFD_EXTENSION_OFFSET) != (ssize_t)sizeof *owner)) {
         close(fd);
         return -1;
     }
@@ -378,6 +423,14 @@ static int cmsg_import_ofd_trailer(int *fds, int nfds) {
         if (metadata.ordinal >= (uint32_t)(visible - 1) || !metadata.identity) break;
         int fd = fds[metadata.ordinal];
         if (fd >= 0 && fd < HL_NFD) g_ofd_id[fd] = metadata.identity;
+        hl_socket_owner_transport owner;
+        if (pread(marker, &owner, sizeof owner, HL_SOCKET_OWNER_OFD_EXTENSION_OFFSET) == (ssize_t)sizeof owner &&
+            owner.magic == HL_SOCKET_OWNER_TRANSPORT_MAGIC && owner.version == HL_SOCKET_OWNER_TRANSPORT_VERSION &&
+            owner.size == sizeof owner && owner.key.birth_ns != 0 && (owner.key.device != 0 || owner.key.object != 0)) {
+            /* hl_socket_owner_attach(fd, owner.key) is wired once the fd-owner
+             * lifecycle table is merged. The successful send already owns the
+             * descriptor reference, so import must not increment it. */
+        }
         cmsg_inflight_ack(marker); // the fd is installed in this process now: the sender may drop its hold
         close(marker);
         visible--;
@@ -992,7 +1045,7 @@ static int cmsg_export_ofd(struct cmsg_export *export, const int *fds, int count
             .ordinal = (uint32_t)index,
             .identity = g_ofd_id[fds[index]],
         };
-        int marker = cmsg_ofd_marker(&metadata);
+        int marker = cmsg_ofd_marker(&metadata, NULL);
         if (marker < 0) return EMSGSIZE;
         export->descriptors[export->count++] = marker;
         cmsg_inflight_hold(fds[index], marker);
@@ -1082,6 +1135,24 @@ static ssize_t cmsg_m2l(const struct msghdr *mh, uint8_t *g, size_t cap, size_t 
     for (struct cmsghdr *c = CMSG_FIRSTHDR((struct msghdr *)mh); c; c = CMSG_NXTHDR((struct msghdr *)mh, c)) {
         if (c->cmsg_len < CMSG_LEN(0)) break;
         size_t dlen = (size_t)c->cmsg_len - CMSG_LEN(0); // payload bytes (macOS hdr=12)
+        /* cmsg_len is the SENDER's record length and the two hosts disagree about whether the kernel
+         * clamps it to what it actually delivered.  Measured, three SCM_RIGHTS descriptors received into
+         * a one-descriptor control buffer: Linux reports msg_controllen=24 cmsg_len=24 and delivers the
+         * two descriptors that fit; Darwin reports msg_controllen=16 cmsg_len=24 and delivers ONE, so
+         * cmsg_len claims two descriptors that were never written.  Trusting it reads past the control
+         * buffer and hands the guest -- or close()s, on the truncation path below -- whatever integers
+         * happen to follow it.  Clamp every record to the bytes the kernel actually reported. */
+        const uint8_t *control_base = (const uint8_t *)mh->msg_control;
+        size_t record_offset = (size_t)((const uint8_t *)c - control_base);
+        size_t delivered = (size_t)mh->msg_controllen > record_offset + CMSG_LEN(0)
+                               ? (size_t)mh->msg_controllen - record_offset - CMSG_LEN(0)
+                               : 0;
+        if (dlen > delivered) {
+            if (truncp) *truncp = 1; // the record is short: the guest must see MSG_CTRUNC either way
+            dlen = delivered;
+        }
+        if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS) dlen -= dlen % sizeof(int);
+        if (dlen == 0 && c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS) break;
         if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS && dlen >= sizeof(int)) {
             int nfds = (int)(dlen / sizeof(int));
             int *fds = (int *)CMSG_DATA(c);
@@ -1129,8 +1200,12 @@ static ssize_t cmsg_m2l(const struct msghdr *mh, uint8_t *g, size_t cap, size_t 
 #if defined(SCM_CREDENTIALS)
         if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_CREDENTIALS && dlen >= 12) {
             const uint32_t *host = (const uint32_t *)CMSG_DATA(c);
-            int guest_pid = hl_linux_pidmap_guest(&g_pidmap, (int32_t)host[0]);
-            if (g_init_hostpid && guest_pid == g_init_hostpid) guest_pid = 1;
+            int guest_pid;
+            if (hl_linux_pidmap_guest_checked(&g_pidmap, (int32_t)host[0], &guest_pid) != 0) {
+                errno = ESRCH;
+                return -1;
+            }
+            if (!hl_linux_pidmap_is_active(&g_pidmap) && g_init_hostpid && guest_pid == g_init_hostpid) guest_pid = 1;
             *(uint32_t *)(g + go + LX_CMSGHDR) = (uint32_t)guest_pid;
             *(uint32_t *)(g + go + LX_CMSGHDR + 4) = (uint32_t)cuid();
             *(uint32_t *)(g + go + LX_CMSGHDR + 8) = (uint32_t)cgid();

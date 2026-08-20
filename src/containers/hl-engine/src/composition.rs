@@ -19,6 +19,15 @@ pub enum CompositionError {
     MissingCheckpointSource,
     /// Native execution does not yet own a PTY/stdio bridge for the requested terminal.
     UnsupportedTerminal,
+    /// The private engine could not be loaded, so a capability that is the engine's -- the guest line
+    /// discipline, guest termios -- cannot be provided.
+    ///
+    /// This is refused rather than degraded on purpose. The host line discipline is a *working*
+    /// fallback, so an absent engine used to present as a terminal that merely behaved differently:
+    /// a release test binary that could not find the engine ran the host discipline and reported
+    /// success. An absent engine is a load failure and must read as one, exactly as a mismatched
+    /// engine already does.
+    EngineUnavailable,
     RuntimeConstruction,
     TransactionBusy,
     DeadlineExceeded,
@@ -222,10 +231,24 @@ impl StandardStreams {
     }
 }
 
+/// The native checkpoint broker and trigger word shared by one process domain.
+///
+/// A container launch mints exactly one broker socket and one trigger memfd. Every
+/// exec session started into the same domain joins that pair instead of minting its
+/// own, so the coordinator's generation bump is observed at the safepoint gates of
+/// every sealed member and every member commits into the same store.
+#[cfg(unix)]
+#[derive(Clone)]
+pub struct CheckpointChannel(pub(crate) Arc<hl_native::CheckpointTransport>);
+
 #[derive(Clone)]
 pub struct RuntimeServices {
     pub checkpoint_sink: Option<Arc<dyn CheckpointSink>>,
     pub checkpoint_source: Option<Arc<dyn CheckpointSource>>,
+    /// Set on a session that joins an existing domain freeze. Mutually exclusive
+    /// with `checkpoint_sink`/`checkpoint_source`: a member has no image of its own.
+    #[cfg(unix)]
+    pub checkpoint_channel: Option<CheckpointChannel>,
     pub streams: StandardStreams,
 }
 
@@ -242,6 +265,41 @@ pub trait GuestMachine: Send + Sync {
     fn stop(&self, request: StopRequest) -> Result<(), EngineError>;
     fn checkpoint_supported(&self) -> Result<(), EngineError> {
         Err(EngineError::Unsupported)
+    }
+    /// The container-namespace pid of the guest process this machine launched, once it has one.
+    ///
+    /// It is the identity a checkpoint image names this process by, so it is what a host may hold
+    /// across a capture: a restore re-forks the member under exactly this number.
+    fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
+        None
+    }
+    /// One member of the tree this machine restored, by the guest pid its image names it by.
+    ///
+    /// `None` for a machine that started fresh, and for a guest pid no restore announced. A member
+    /// that is present can be asked whether it is still the same live process, signalled, and read for
+    /// the exit it reported -- it is never relaunched, because a relaunch is a different process.
+    #[cfg(unix)]
+    fn restored_member(&self, _guest_pid: std::num::NonZeroI32) -> Option<crate::runtime::RestoredMember> {
+        None
+    }
+    /// Registers the terminal one sealed member will reattach to when this machine restores it.
+    ///
+    /// Must be called before [`Self::start`]. A restoring member asks for its terminal from inside its
+    /// own descriptor restore, so a registration that arrives after the start is an answer to a question
+    /// that has already been answered without it -- and the member spends the rest of its life on the
+    /// container's single bridge.
+    #[cfg(unix)]
+    fn provide_member_terminal(
+        &self,
+        _guest_pid: std::num::NonZeroI32,
+        _terminal: std::os::fd::OwnedFd,
+    ) -> Result<(), EngineError> {
+        Err(EngineError::Unsupported)
+    }
+    /// The domain freeze channel this machine owns, if it is the coordinator.
+    #[cfg(unix)]
+    fn checkpoint_channel(&self) -> Option<CheckpointChannel> {
+        None
     }
     fn capture_checkpoint(&self) -> Result<(), EngineError> {
         Err(EngineError::Unsupported)
@@ -316,6 +374,29 @@ impl<M: GuestMachine> MachineLauncher<M> {
         self.machine.checkpoint_supported()
     }
 
+    fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
+        self.machine.guest_pid()
+    }
+
+    #[cfg(unix)]
+    fn restored_member(&self, guest_pid: std::num::NonZeroI32) -> Option<crate::runtime::RestoredMember> {
+        self.machine.restored_member(guest_pid)
+    }
+
+    #[cfg(unix)]
+    fn provide_member_terminal(
+        &self,
+        guest_pid: std::num::NonZeroI32,
+        terminal: std::os::fd::OwnedFd,
+    ) -> Result<(), EngineError> {
+        self.machine.provide_member_terminal(guest_pid, terminal)
+    }
+
+    #[cfg(unix)]
+    fn checkpoint_channel(&self) -> Option<CheckpointChannel> {
+        self.machine.checkpoint_channel()
+    }
+
     fn capture_checkpoint(&self) -> Result<(), EngineError> {
         self.machine.capture_checkpoint()
     }
@@ -376,8 +457,42 @@ impl<M: GuestMachine + 'static, W: Workspace> EngineBackend<M, W> {
         self.engine.launcher().checkpoint_supported()
     }
 
+    /// The container-namespace pid of the launched guest process, once it has one.
+    #[must_use]
+    pub fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
+        self.engine.launcher().guest_pid()
+    }
+
+    /// One member of the tree this engine restored, by the guest pid its image names it by.
+    #[cfg(unix)]
+    #[must_use]
+    pub fn restored_member(&self, guest_pid: std::num::NonZeroI32) -> Option<crate::runtime::RestoredMember> {
+        self.engine.launcher().restored_member(guest_pid)
+    }
+
+    /// Registers the terminal one sealed member will reattach to, before this engine starts its restore.
+    ///
+    /// # Errors
+    /// Returns [`EngineError::Unsupported`] when this engine coordinates no checkpoint, so a caller that
+    /// believes it has provided per-member I/O cannot be silently wrong about it.
+    #[cfg(unix)]
+    pub fn provide_member_terminal(
+        &self,
+        guest_pid: std::num::NonZeroI32,
+        terminal: std::os::fd::OwnedFd,
+    ) -> Result<(), EngineError> {
+        self.engine.launcher().provide_member_terminal(guest_pid, terminal)
+    }
+
     pub fn capture_checkpoint(&self) -> Result<(), EngineError> {
         self.engine.launcher().capture_checkpoint()
+    }
+
+    /// The domain freeze channel every session in this domain must join.
+    #[cfg(unix)]
+    #[must_use]
+    pub fn checkpoint_channel(&self) -> Option<CheckpointChannel> {
+        self.engine.launcher().checkpoint_channel()
     }
 
     /// Captures the running process tree before an absolute monotonic deadline.
@@ -399,10 +514,18 @@ impl<M: GuestMachine + 'static, W: Workspace> EngineBackend<M, W> {
         if services.streams.terminal().is_some() && services.streams.output().is_some() {
             return Err(CompositionError::RuntimeConstruction);
         }
-        if plan.options.get("HL_CHECKPOINT").is_some() && services.checkpoint_sink.is_none() {
+        #[cfg(unix)]
+        let joined = services.checkpoint_channel.is_some();
+        #[cfg(not(unix))]
+        let joined = false;
+        #[cfg(unix)]
+        if joined && (services.checkpoint_sink.is_some() || services.checkpoint_source.is_some()) {
+            return Err(CompositionError::RuntimeConstruction);
+        }
+        if plan.options.get("HL_CHECKPOINT").is_some() && services.checkpoint_sink.is_none() && !joined {
             return Err(CompositionError::MissingCheckpointSink);
         }
-        if plan.options.get("HL_RESTORE").is_some() && services.checkpoint_source.is_none() {
+        if plan.options.get("HL_RESTORE").is_some() && services.checkpoint_source.is_none() && !joined {
             return Err(CompositionError::MissingCheckpointSource);
         }
         Ok(())

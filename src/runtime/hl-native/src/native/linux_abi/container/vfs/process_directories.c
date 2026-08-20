@@ -81,7 +81,8 @@ static int cgroup_procs_text(char *buf, size_t n, int with_threads) {
             if (host <= 0) continue;
             if (host != me && kill(host, 0) != 0 && errno == ESRCH) continue; // stale registry entry
             if (host == me) have_self = 1;
-            int gp = (g_init_hostpid && host == g_init_hostpid) ? 1 : host;
+            int gp = guest_pid_from_host(host);
+            if (gp <= 0) continue;
             o += snprintf(buf + o, n - (size_t)o, "%d\n", gp);
         }
         closedir(d);
@@ -165,9 +166,16 @@ static int proc_pid_descendant(int host) {
     return 0;
 }
 
+static int host_pid_registered_checked(int host);
+
 // Is guest pid `gp` a live member of this container? Fills *hostout with its host pid (gp==1 -> init).
-static int proc_pid_member(int gp, int *hostout) {
-    int host = (gp == 1 && g_init_hostpid) ? g_init_hostpid : gp;
+static int guest_pid_member_checked(int guest, int *hostout) {
+    int host = (guest == 1 && g_init_hostpid) ? g_init_hostpid : guest;
+    if (hl_linux_pidmap_is_active(&g_pidmap)) {
+        if (hl_linux_pidmap_host_checked(&g_pidmap, guest, &host) != 0) return 0;
+        *hostout = host;
+        return host_pid_registered_checked(host);
+    }
     *hostout = host;
     if (host == (int)getpid()) return 1;
     if (host <= 0) return 0;
@@ -176,9 +184,21 @@ static int proc_pid_member(int gp, int *hostout) {
     snprintf(path, sizeof path, "%s/%d", dir, host);
     if (access(path, F_OK) == 0 && !(kill(host, 0) != 0 && errno == ESRCH)) return 1;
     if (kill(host, 0) != 0) return 0;
-    // registry may lag (or is off outside container mode): accept a live session peer, or a descendant of
-    // ours that left the session.
-    return getsid(host) == getsid(0) || proc_pid_descendant(host);
+    // Outside restored typed mode, tolerate a lagging marker only for a process whose host ancestry proves
+    // container ownership. Host sessions are shared by unrelated engines and are never membership authority.
+    return proc_pid_descendant(host);
+}
+
+// Translate a host identity obtained from host process metadata into the guest namespace, then apply the
+// same membership policy as a guest /proc lookup. Keeping this separate prevents a host PID that happens to
+// equal a restored guest PID from being accepted through a try-both fallback.
+static int host_pid_member_checked(int host, int *guestout) {
+    int guest = host;
+    if (hl_linux_pidmap_is_active(&g_pidmap) && hl_linux_pidmap_guest_checked(&g_pidmap, host, &guest) != 0) return 0;
+    int resolved;
+    if (!guest_pid_member_checked(guest, &resolved) || resolved != host) return 0;
+    if (guestout) *guestout = guest;
+    return 1;
 }
 
 // Does `rp` name a /proc/<pid>/... path for a pid other than this process? Such a path must never reach the
@@ -263,13 +283,13 @@ static unsigned ns_clone_flag(const char *name) {
 // a real PID namespace. A member that is a genuine peer stays reachable, so legitimate cross-guest-process
 // signalling (the case rare.c pidfd + kill(-pgid) rely on) is preserved.
 
-// STRICT host-pid membership for the security boundary (kill/pidfd reject). Unlike proc_pid_member (which
+// STRICT host-pid membership for the security boundary (kill/pidfd reject). Unlike the guest /proc lookup (which
 // tolerates registry lag with a permissive same-session fallback for /proc DISPLAY -- too loose here, since
 // sibling engines share our host session), this demands a published registry record AND a live process, so
 // a pid outside the container, or a stale marker whose pid is gone, is NOT a member. Self and the container
 // init are always members. Every fork publishes the child's marker in the PARENT before it returns (see
 // proc_reg_mark_child), so a just-forked descendant is a member the instant its pid exists (no fork race).
-static int container_host_member(int h) {
+static int host_pid_registered_checked(int h) {
     if (h <= 0) return 0;
     if (h == (int)getpid() || (g_init_hostpid && h == g_init_hostpid)) return 1;
     char dir[80], path[128];
@@ -281,12 +301,13 @@ static int container_host_member(int h) {
 
 // Resolve a GUEST pid to its container-local host pid and require membership. gp==1 -> the init. Returns 1
 // and fills *hostout when gp names a process inside this container; 0 (leaving *hostout resolved) otherwise.
-static int container_gpid_member(int gp, int *hostout) __attribute__((unused));
+static int guest_pid_registered_checked(int gp, int *hostout) __attribute__((unused));
 
-static int container_gpid_member(int gp, int *hostout) {
+static int guest_pid_registered_checked(int gp, int *hostout) {
     int host = (gp == 1 && g_init_hostpid) ? g_init_hostpid : gp;
+    if (hl_linux_pidmap_is_active(&g_pidmap) && hl_linux_pidmap_host_checked(&g_pidmap, gp, &host) != 0) return 0;
     if (hostout) *hostout = host;
-    return container_host_member(host);
+    return host_pid_registered_checked(host);
 }
 
 // Publish a fresh child's membership marker from the PARENT, synchronously at fork, so the child is a
@@ -294,7 +315,7 @@ static int container_gpid_member(int gp, int *hostout) {
 // replaces this empty marker with its full comm/argv via an atomic rename). Cheap (one create); only in
 // container mode. Closes the fork-window race where a strict membership check would wrongly ESRCH a
 // legitimate just-forked descendant that had not yet run its own publish.
-static void proc_reg_mark_child(int hostpid) {
+static void host_pid_register_child(int hostpid) {
     launch_reg_publish(hostpid, 0);
     if (!g_init_hostpid || hostpid <= 0) return;
     char dir[80], path[144];
@@ -318,7 +339,7 @@ static void proc_reg_mark_child(int hostpid) {
 // unlinks its own record, but one killed by a signal (SIGKILL) never runs that cleanup -- and a host pid
 // cannot be reused until it is reaped, so removing the marker exactly at reap keeps a recycled pid from
 // inheriting stale in-container membership. Idempotent (unlink of an absent path is a no-op).
-static void proc_reg_reap(int hostpid) {
+static void host_pid_unregister_reaped(int hostpid) {
     char launch_dir[80], launch_path[160];
     if (hostpid > 0 && launch_reg_key(launch_dir, sizeof launch_dir)) {
         snprintf(launch_path, sizeof launch_path, "%s/b%d", launch_dir, hostpid);
@@ -380,19 +401,23 @@ static int proc_stat_pid_text(char *b, size_t n, int gp, int host) {
         int hp;
         if (pi.ppid_host == g_init_hostpid)
             ppid = 1;
-        else if (proc_pid_member(pi.ppid_host, &hp))
-            ppid = pi.ppid_host;
+        else if (host_pid_member_checked(pi.ppid_host, &hp))
+            ppid = hp;
     }
-    int pgrp = ok ? (pi.pgid_host == g_init_hostpid ? 1 : pi.pgid_host) : gp;
+    int pgrp = ok ? guest_pgid_from_host(pi.pgid_host) : gp;
+    if (pgrp <= 0) pgrp = gp;
     // Field 6 (session): the peer's real host session id (init's session -> guest 1), NOT its own pid. The
     // old code printed gp (the pid), so getsid() and /proc/<pid>/stat disagreed for a normal child.
     int hsid = (int)getsid(host);
-    int psess = (hsid > 0) ? ((g_init_hostpid && hsid == g_init_hostpid) ? 1 : hsid) : gp;
+    int psess = guest_sid_from_host(hsid);
+    if (psess <= 0) psess = gp;
     int tty_device = 0;
     if (ok && pi.tty_host > 0)
-        tty_device = (int)hl_linux_device_make(major((dev_t)pi.tty_host), minor((dev_t)pi.tty_host));
+        tty_device = (int)hl_linux_device_make(hl_host_device_major((uint64_t)pi.tty_host),
+                                               hl_host_device_minor((uint64_t)pi.tty_host));
     int foreground_group = ok ? pi.tpgid_host : -1;
-    if (g_init_hostpid && foreground_group == g_init_hostpid) foreground_group = 1;
+    if (foreground_group > 0) foreground_group = guest_pgid_from_host(foreground_group);
+    if (foreground_group == 0) foreground_group = -1;
     long hz = sysconf(_SC_CLK_TCK);
     if (hz <= 0) hz = 100;
     unsigned long pgsz = (unsigned long)hl_linux_host_page_size();
@@ -428,8 +453,8 @@ static int proc_status_pid_text(char *b, size_t n, int gp, int host) {
         int hp;
         if (pi.ppid_host == g_init_hostpid)
             ppid = 1;
-        else if (proc_pid_member(pi.ppid_host, &hp))
-            ppid = pi.ppid_host;
+        else if (host_pid_member_checked(pi.ppid_host, &hp))
+            ppid = hp;
     }
     unsigned long rss = ok ? (unsigned long)(pi.rss / 1024) : 0;
     unsigned long vsz = rss + (128UL << 10); // bounded footprint, not the huge host DBT vsize (see stat text)
@@ -671,7 +696,7 @@ static int proc_dir_try_open(const char *rp) {
     memcpy(num, q, (size_t)i);
     num[i] = 0;
     int pid = atoi(num), host;
-    if (pid != (int)getpid() && pid != container_pid() && pid != 1 && !proc_pid_member(pid, &host)) return -2;
+    if (pid != (int)getpid() && pid != container_pid() && pid != 1 && !guest_pid_member_checked(pid, &host)) return -2;
     const char *rest = q + i; // "" | "/task" | "/task/<tid>" | "/task/<tid>/<leaf>" | "/<leaf>"
     if (rest[0] == 0 || (rest[0] == '/' && rest[1] == 0)) {
         char gpath[32];
@@ -738,7 +763,8 @@ static int proc_root_dir_open(void) {
                 if (path_join(rp, sizeof rp, dir, e->d_name) == 0) unlink(rp);
                 continue;
             }
-            int guest = (g_init_hostpid && host == g_init_hostpid) ? 1 : host;
+            int guest = guest_pid_from_host(host);
+            if (guest <= 0) continue;
             char p[96];
             snprintf(p, sizeof p, "%s/%d", tmpl, guest);
             hl_compat_mkdir(p, 0555); // a real (empty) subdir: getdents reports DT_DIR, and htop opens /proc/<pid>

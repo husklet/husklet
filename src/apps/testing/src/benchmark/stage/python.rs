@@ -62,6 +62,7 @@ print(f'PHASE python-sqlite-read us={read} ok={read_proof}')";
 
 pub(super) struct PythonProfile {
     pub interpreter: std::path::PathBuf,
+    pub null_interpreter: std::path::PathBuf,
     pub sqlite_identity: String,
 }
 
@@ -95,7 +96,8 @@ impl PythonProfile {
         plain_factors: &str,
         sqlite_factors: &str,
     ) -> Result<Self, Error> {
-        let interpreter = output.join("native/python3");
+        let interpreter = output.join("native/primary/python3");
+        let null_interpreter = output.join("native/independent-null/python3");
         let slices = mac(&["/mnt/mac/usr/bin/lipo".into(), "-archs".into(), MACOS_PYTHON.into()])?;
         if !std::str::from_utf8(&slices)?
             .split_ascii_whitespace()
@@ -104,6 +106,7 @@ impl PythonProfile {
             return Err("macOS /usr/bin/python3 has no x86_64 slice".into());
         }
         mac(&["cp".into(), MACOS_PYTHON.into(), mac_path(&interpreter)])?;
+        mac(&["cp".into(), MACOS_PYTHON.into(), mac_path(&null_interpreter)])?;
         let copied_slices = mac(&["/mnt/mac/usr/bin/lipo".into(), "-archs".into(), mac_path(&interpreter)])?;
         if !std::str::from_utf8(&copied_slices)?
             .split_ascii_whitespace()
@@ -154,6 +157,7 @@ impl PythonProfile {
         ])?;
         Ok(Self {
             interpreter,
+            null_interpreter,
             sqlite_identity: String::from_utf8(sqlite_identity)?.trim().to_owned(),
         })
     }

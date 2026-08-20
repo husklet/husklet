@@ -175,6 +175,9 @@ static pthread_mutex_t g_cache_lock = PTHREAD_MUTEX_INITIALIZER;
     } while (0)
 // >0 once a guest thread is spawned
 static int g_threaded;
+// Monotonic synchronization authority for decisions which must not race the
+// interval between authorizing a guest peer and registering its host thread.
+static _Atomic int g_ever_threaded;
 
 // gpc->host block map capacity. Sized so the CACHE_SZ arena fills (-> the dispatcher's wholesale
 // flush) LONG before this open-addressed table does: even all-minimum-size blocks (prologue + a one-insn
@@ -772,6 +775,16 @@ static uint64_t g_prof_miss, g_prof_sys, g_lse_n;
 static uint64_t g_prof_soft_hull_sampled, g_prof_soft_cached_sampled, g_prof_soft_sites_sampled;
 static uint64_t g_prof_soft_miss, g_prof_soft_span, g_prof_soft_bounce_prepare, g_prof_soft_bounce_commit;
 static uint64_t g_prof_smc_queued, g_prof_smc_commit;
+/* Translated bytes the aarch64 soft-memory lowering costs, summed over every
+   guarded site, its miss lowering and the shared bodies.  This is the arena
+   pressure the guard adds, which is the axis on which the inline and
+   shared-resolver lowerings trade against each other; it is exact, not
+   sampled.  Defined in this shared unit so the x86 [prof] reporter -- which
+   shares linux_abi/syscall/process/identity.c -- links, and stays 0 there. */
+static uint64_t g_prof_soft_guard_bytes;
+/* How many guarded sites took each lowering.  0 shared sites is the shipped
+   default; HL_SOFT_SHARED_RESOLVER moves them.  Exact, not sampled. */
+static uint64_t g_prof_soft_shared_sites, g_prof_soft_inline_sites;
 // PROF=1: dispatcher crossings / IBTC misses / translations
 // A3 §B instrumentation (PROF=1). Runtime: shadow pushes executed, predicted-return FAST hits (host
 // ret, RAS), and returns that fell through emit_shadow_ret to the IBTC fallback. Translate-time:
@@ -1627,6 +1640,15 @@ static void reclaim_retired(void) {
 // so a later reclaim_retired() frees it once every thread has drifted off its generation.
 static int retire_current(void) {
     if (g_nretired < STW_RETIRED_MAX) {
+        /* A fork child NEVER runs in a retired arena: jit_after_fork() cache_unmap()s every entry of
+           g_retired on both the preserving and the rebuilding path, before fork_child_hooks returns and
+           long before the child's next run_block.  So the child's inherited copy of this arena is pure
+           fork cost, and on macOS the executable arena is expensive to inherit in a way plain anonymous
+           memory is not (measured: ~+0.58ms of fork() per untouched 64 MiB MAP_JIT arena, charged again
+           on EVERY subsequent fork for as long as the arena is retained).  Hand the child a hole
+           instead.  Parent-side state is untouched, which is what a peer parked mid-block in this arena
+           requires, and the child's later cache_unmap of the hole is a no-op munmap. */
+        (void)hl_arena_drop_child_inheritance(g_cache, CACHE_SZ);
         g_retired[g_nretired].handle = g_code_mapping.handle;
         g_retired[g_nretired].rw = g_cache;
         g_retired[g_nretired].rw2rx = g_rw2rx;

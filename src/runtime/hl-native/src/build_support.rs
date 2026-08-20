@@ -226,17 +226,73 @@ mod tests {
     }
 
     #[test]
+    fn target_checkpoint_restore_discards_host_transient_cpu_state_on_both_isas() {
+        let contracts = [
+            (
+                "aarch64",
+                &[
+                    "(c)->vdirty = 0",
+                    "(c)->fault_addr = 0",
+                    "(c)->bus_ea = 0",
+                    "(c)->bus_filter = 0",
+                    "(c)->bus_force = 0",
+                    "G_SOFT_STATE_RESET(c)",
+                ][..],
+            ),
+            (
+                "x86_64",
+                &[
+                    "(c)->vdirty = 0",
+                    "(c)->fault_addr = 0",
+                    "(c)->bus_ea = 0",
+                    "(c)->bus_filter = 0",
+                    "(c)->bus_force = 0",
+                    "G_SOFT_TLB_CLEAR(c)",
+                ][..],
+            ),
+        ];
+        for (target, required) in contracts {
+            let path = format!("src/native/engine/target/{target}.c");
+            let source = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {path}: {error}"));
+            let (_, sanitize) = source
+                .split_once("#define G_CKPT_CPU_SANITIZE(c)")
+                .unwrap_or_else(|| panic!("{path} has no checkpoint CPU sanitizer"));
+            let (sanitize, _) = sanitize
+                .split_once("} while (0)")
+                .unwrap_or_else(|| panic!("{path} checkpoint CPU sanitizer is unterminated"));
+            for statement in required {
+                assert!(
+                    sanitize.contains(statement),
+                    "{path} restore keeps host-transient CPU state: {statement}"
+                );
+            }
+            for preserved in ["G_SMC_QUEUE_RESET", "smc_range_count = 0", "smc_range_overflow = 0"] {
+                assert!(
+                    !sanitize.contains(preserved),
+                    "{path} restore discards pending guest SMC work: {preserved}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn windows_link_inputs_use_target_spelling() {
         assert!(super::WINDOWS_SYSTEM_LIBRARIES.contains(&"ws2_32"));
         assert!(super::WINDOWS_SYSTEM_LIBRARIES.contains(&"ntdll"));
     }
 
     #[test]
-    fn bridge_export_manifest_is_sorted_and_contains_checkpoint_configuration() {
+    fn bridge_export_manifest_contains_versioned_and_ownership_boundaries() {
         let manifest = include_str!("native/bridge/exports.txt");
         let symbols = super::export_symbols(manifest);
-        assert!(symbols.contains(&"hl_c_backend_checkpoint_configure"));
-        assert_eq!(symbols.len(), 22);
+        for required in [
+            "hl_c_bridge_api_v1",
+            "hl_c_backend_checkpoint_configure",
+            "hl_c_backend_executable_open",
+            "hl_c_backend_executable_discard",
+        ] {
+            assert!(symbols.contains(&required), "missing bridge export {required}");
+        }
     }
 
     #[test]

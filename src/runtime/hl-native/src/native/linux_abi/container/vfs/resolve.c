@@ -462,10 +462,39 @@ static int jail_open_plan(int dirfd, const char *raw, uint32_t intent, uint32_t 
         while (*relative == '/')
             relative++;
         if (!*relative) relative = ".";
+#ifdef __APPLE__
+        /* The host resolver walks the guest's own spelling. On a case-folding volume that spelling
+         * can land on a differently-cased sibling, and it cannot see the escape form this namespace
+         * stores an uppercase name under -- a non-creating open of `Foo` returned `foo`'s contents
+         * whenever a raw `foo` existed. Projecting the path would not be enough either, because a
+         * symlink target spliced in mid-walk is a guest name too and is never projected. So take the
+         * collapse only where the physical spelling of the whole path IS the guest spelling;
+         * anywhere the namespace escapes or re-cases a component, the per-component native walk
+         * above already holds the correct answer and keeps it. An ordinary image tree is entirely in
+         * the first case. */
+        char case_absolute[8400], case_physical[8400];
+        const char *case_root =
+            volume >= 0 ? (g_vols[volume].isfile ? NULL : g_vols[volume].hcanon) : g_rootfs_canon;
+        if (strcmp(relative, ".") != 0 &&
+            (case_root == NULL || case_root[0] == 0 ||
+             snprintf(case_absolute, sizeof case_absolute, "/%s", relative) >= (int)sizeof case_absolute ||
+             hl_case_path(case_root, case_absolute, case_physical, sizeof case_physical) != 0 ||
+             strcmp(case_physical + 1, relative) != 0))
+            route_root = HL_HOST_HANDLE_INVALID;
+        /* Equal spellings are not enough on their own, exactly as the paragraph above says: the host
+         * resolver splices a symlink's target itself, and that target is a guest name this namespace
+         * never projected, so it lands on whichever cased sibling the volume folds it onto -- `Link ->
+         * CaseFile` read `casefile`. Refuse a symlink here and let the per-component walk, which
+         * resplices a target through `hl_case_component`, keep the answer it already has. An ordinary
+         * image tree resolves without a symlink and keeps the collapse. */
+        uint32_t route_policy = policy | HL_HOST_RESOLVE_NO_SYMLINKS;
+#else
+        uint32_t route_policy = policy;
+#endif
         if (route_root != HL_HOST_HANDLE_INVALID &&
             g_host_services->file
-                    ->resolve_beneath(g_host_services->context, route_root, relative, strlen(relative), policy,
-                                      &resolved)
+                    ->resolve_beneath(g_host_services->context, route_root, relative, strlen(relative),
+                                      route_policy, &resolved)
                     .status == HL_STATUS_OK) {
             plan->directory = resolved.parent;
             plan->target = resolved.target;
@@ -498,6 +527,25 @@ static int jail_open_plan(int dirfd, const char *raw, uint32_t intent, uint32_t 
                         opened = g_host_services->file->open_beneath(
                             g_host_services->context, route_root, relative, strlen(relative),
                             host_access | HL_HOST_FILE_NONBLOCK, host_creation, permissions, open_policy);
+                } else if (g_host_services->file->open_relative != NULL) {
+                    /* Four-walk collapse. `open_beneath` re-runs the whole
+                     * beneath-resolution that `resolve_beneath` just performed,
+                     * so a non-creating open paid two identical per-component
+                     * walks. Open the object THIS resolution produced instead:
+                     * `resolved.final` relative to the retained `resolved.parent`
+                     * directory handle, with NOFOLLOW on the final component --
+                     * byte for byte what `hl_linux_file_open_beneath` does after
+                     * its own (now redundant) walk. Because the parent handle is
+                     * held across check and use and the leaf is opened without
+                     * following, a concurrent rename or symlink swap cannot
+                     * redirect the open away from the resolved object; the
+                     * previous shape re-resolved from the jail root and could.
+                     * Creating opens keep the two-walk path: `open_beneath`
+                     * applies its own NOFOLLOW_FINAL policy to the exclusive
+                     * attempt, and that ordering is not reproduced here. */
+                    opened = g_host_services->file->open_relative(
+                        g_host_services->context, resolved.parent, plan->path, plan->path_size,
+                        host_access | HL_HOST_FILE_NONBLOCK | HL_HOST_FILE_NOFOLLOW, host_creation, permissions);
                 } else {
                     opened = g_host_services->file->open_beneath(g_host_services->context, route_root, relative,
                                                                  strlen(relative), host_access | HL_HOST_FILE_NONBLOCK,

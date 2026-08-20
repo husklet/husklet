@@ -57,10 +57,26 @@ fn main() {
         workspace.join("src/containers"),
         workspace.join("src/workspaces/hl-ws"),
     ];
+    let runtime_identity = identity(&workspace, inputs);
+    println!("cargo:rustc-env=HUSKLET_RUNTIME_BUILD_ID={runtime_identity}");
+
+    // GApplication routes activation by application id. A developer or newly installed build must
+    // never be routed into a still-running process whose executable came from a different source
+    // generation. Keep this identity separate from the execution-domain identity: changing only UI
+    // code must isolate the app primary without invalidating otherwise compatible checkpoints.
+    let application_inputs = [workspace.join("Cargo.lock"), workspace.join("src")];
+    let application_identity = identity(&workspace, application_inputs);
+    println!("cargo:rerun-if-env-changed=HL_APPLICATION_ID");
+    let application_id = std::env::var("HL_APPLICATION_ID")
+        .unwrap_or_else(|_| format!("com.husklet.app.b{}", &application_identity[..16]));
+    println!("cargo:rustc-env=HUSKLET_APPLICATION_ID={application_id}");
+}
+
+fn identity(workspace: &Path, inputs: impl IntoIterator<Item = PathBuf>) -> String {
     let mut digest = sha2::Sha256::new();
     for file in RuntimeIdentityInputs::discover(inputs) {
         println!("cargo:rerun-if-changed={}", file.display());
-        let relative = file.strip_prefix(&workspace).unwrap_or(&file);
+        let relative = file.strip_prefix(workspace).unwrap_or(&file);
         let bytes = std::fs::read(&file)
             .unwrap_or_else(|error| panic!("read runtime identity input {}: {error}", file.display()));
         digest.update(
@@ -76,9 +92,8 @@ fn main() {
         );
         digest.update(bytes);
     }
-    let identity = digest.finalize().iter().fold(String::new(), |mut text, byte| {
+    digest.finalize().iter().fold(String::new(), |mut text, byte| {
         let _ = write!(text, "{byte:02x}");
         text
-    });
-    println!("cargo:rustc-env=HUSKLET_RUNTIME_BUILD_ID={identity}");
+    })
 }

@@ -18,11 +18,7 @@ typedef struct hl_x86_ibtc_entry {
     void *body;
 } hl_x86_ibtc_entry;
 
-extern int g_trace;
-extern int g_noibtc;
-extern int g_itrace;
 extern uint64_t g_emit_gpc;
-extern int g_systrace;
 extern uint64_t g_disp_n;
 extern int g_dispatch_diagnostics;
 extern uint64_t g_ibtc_fill;
@@ -40,23 +36,15 @@ extern hl_reloc_table g_reloc_table;
 #define g_reloc (g_reloc_table.records)
 #define g_nreloc (g_reloc_table.count)
 extern int g_pcache_poison;
-extern uint64_t g_tracecap;
-extern int g_diag;
-extern int g_nochain;
 extern uint64_t g_loadbase;
 extern const char *g_exe_path;
 extern const char *g_self_path;
 extern uint64_t g_pmovmskb_n;
-extern int g_notier2x;
 extern uint64_t g_prof_t2fold;
 extern uint64_t g_prof_xflag;
 extern uint64_t g_prof_xflag_scan;
 
-int ibtc1way(void);
 uint64_t coldprof_now_ns(const hl_host_services *services);
-int nosseopt(void);
-int noeaopt(void);
-int notier2x(void);
 void hl_x86_count_rep_movs(void);
 void hl_x86_count_rep_stos(void);
 

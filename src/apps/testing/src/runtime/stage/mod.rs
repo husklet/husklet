@@ -266,11 +266,11 @@ fn inspect_artifacts(runner: &Path, library: &Path) -> Result<(), Error> {
 }
 
 fn require_readelf_contract(runner: &str, library: &str, symbols: &str, expected_exports: &str) -> Result<(), Error> {
-    if !runner
+    if runner
         .lines()
         .any(|line| line.contains("(NEEDED)") && line.contains("[libhl_native_engine.so]"))
     {
-        return Err("staged testing runner does not require libhl_native_engine.so".into());
+        return Err("staged testing runner bypasses the explicit native loader".into());
     }
     if !library
         .lines()

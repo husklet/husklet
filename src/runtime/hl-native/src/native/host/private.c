@@ -13,9 +13,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <time.h>
 #include <sys/resource.h>
 #if defined(__APPLE__)
+#include <libproc.h>
 #include <sys/sysctl.h>
+#include <sys/syscall.h>
 #endif
 #include <unistd.h>
 
@@ -41,10 +44,56 @@ static _Thread_local uint64_t hl_private_start;
 static uint64_t *hl_private_fork_cells;
 static size_t hl_private_fork_count;
 static pthread_mutex_t hl_private_fork_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_once_t hl_private_fork_atfork_once = PTHREAD_ONCE_INIT;
+/* Identity of the thread that armed the managed fork protocol by taking the lock in
+   hl_host_process_fd_private_fork_prepare().  Read only by the fork child handler. */
+static _Atomic int hl_private_fork_armed;
+static _Atomic(pthread_t) hl_private_fork_owner;
+
+static void hl_private_fork_disarm(void) {
+    atomic_store_explicit(&hl_private_fork_armed, 0, memory_order_relaxed);
+}
+
+/* pthread_atfork child handler.  fork() from a multi-threaded process copies
+   hl_private_fork_lock in whatever state a sibling thread left it, and the child --
+   which has only the calling thread -- then blocks on it forever.  This runs in the
+   child before fork() returns, so it must not allocate, free, log, panic, or acquire
+   a lock: every statement below is a plain store.
+
+   The managed fork path (fork_prepare -> fork() -> fork_complete) deliberately hands
+   the child a HELD lock and a heap snapshot that fork_complete() replays and unlocks,
+   so that case must be left exactly as it is.  It is identified by the arming thread
+   being the thread that called fork(); only that thread survives into the child.  Any
+   other fork is unmanaged and gets the lock and the snapshot reset.
+
+   The shared record table itself is NOT reset here.  It is a MAP_SHARED anonymous
+   mapping, so the child sees the parent's live rows rather than a copy, and clearing
+   it would destroy the parent's state.  It does not need resetting: rows are keyed by
+   (pid, start_ns), the child's pid differs, so the child simply owns no rows and
+   repopulates by claiming its own. */
+static void hl_private_fork_child(void) {
+    if (atomic_load_explicit(&hl_private_fork_armed, memory_order_relaxed) &&
+        pthread_equal(atomic_load_explicit(&hl_private_fork_owner, memory_order_relaxed), pthread_self()))
+        return;
+    /* The parent may have been mid-snapshot inside fork_prepare().  Drop the inherited
+       pointer without free(): free() takes the allocator lock and is not fork-safe here.
+       Leaking one bounded buffer in the child is preferable to replaying a partial
+       parent snapshot into the child's rows, which would be silent. */
+    hl_private_fork_cells = NULL;
+    hl_private_fork_count = 0;
+    hl_private_pid = 0;
+    hl_private_start = 0;
+    hl_private_fork_disarm();
+    hl_private_fork_lock = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
+}
+
+static void hl_private_register_atfork(void) {
+    (void)pthread_atfork(NULL, NULL, hl_private_fork_child);
+}
 
 static uint64_t hl_private_process_start(int64_t pid) {
-    hl_host_process_info info;
-    return hl_host_process_read(pid, &info) ? info.start_time_ns : 0;
+    uint64_t start_time_ns = 0;
+    return hl_host_process_start_time_ns(pid, &start_time_ns) ? start_time_ns : 0;
 }
 
 static uint64_t hl_private_identity(int64_t pid, uint64_t start) {
@@ -123,8 +172,9 @@ static uint64_t hl_private_cell(int fd, uint32_t references) {
 }
 
 static void hl_private_cleanup(void) {
-    int64_t pid = (int64_t)getpid();
-    uint64_t start = hl_private_process_start(pid);
+    int64_t pid = 0;
+    uint64_t start = 0;
+    (void)hl_host_process_self_identity(&pid, &start);
     for (unsigned index = 0; index < HL_PRIVATE_PROCESSES; ++index) {
         hl_private_process *process = &hl_private[index];
         if (atomic_load_explicit(&process->state, memory_order_acquire) != HL_PRIVATE_LIVE ||
@@ -144,6 +194,7 @@ static void hl_private_cleanup(void) {
 
 void hl_host_private_init(void) {
     size_t records_size = sizeof(*hl_private) * HL_PRIVATE_PROCESSES;
+    (void)pthread_once(&hl_private_fork_atfork_once, hl_private_register_atfork);
     if (hl_private != NULL) return;
     void *memory =
         mmap(NULL, records_size + sizeof(*hl_private_epoch), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
@@ -161,8 +212,9 @@ __attribute__((constructor)) static void hl_private_constructor(void) {
 #endif
 
 static int hl_private_add_unlocked(int fd) {
-    int64_t pid = (int64_t)getpid();
-    uint64_t start = hl_private_process_start(pid);
+    int64_t pid = 0;
+    uint64_t start = 0;
+    (void)hl_host_process_self_identity(&pid, &start);
     if (hl_private_pid != pid || hl_private_start != start) {
         hl_private_pid = pid;
         hl_private_start = start;
@@ -216,7 +268,31 @@ int hl_host_process_fd_private_add(int fd) {
     return result;
 }
 
-int hl_host_process_fd_private_floor(void) {
+/* The private-descriptor floor is derived from the host RLIMIT_NOFILE soft limit (and, on Darwin, from
+ * kern.maxfilesperproc). hl_host_process_fd_private_adopt() calls it once per adopted descriptor, which
+ * made getrlimit 15 of the 20 the engine issued per guest open() on Linux and 20 of 20 on macOS.
+ *
+ * The host limit is provably immutable from inside this process: the guest's limits are emulated end to
+ * end in g_limits (linux_abi/container/state.c), linux_abi/host_proc.h refuses setrlimit/prlimit
+ * outright so that layer cannot even name the host call, and the only setrlimit() call site in the tree
+ * is RLIMIT_CORE in checkpoint/socket_restore.c. Limits are also inherited across fork(), so the value
+ * is correct in a child too -- but the cache is keyed on the self identity pair anyway, so a child
+ * re-derives once and can never inherit a floor stamped by a process that is not it.
+ *
+ * What that reasoning does NOT cover is an EXTERNAL prlimit(2) aimed at this process, which is the one
+ * way the soft limit can drop under us. Only a DROP is harmful -- a raised limit merely leaves the
+ * private band lower than it could be, and F_DUPFD_CLOEXEC to a lower floor still succeeds. So adopt
+ * treats a failed relocation as a reason to discard the cache and re-derive once, which restores the
+ * per-descriptor observation exactly where its absence could change an answer, and nowhere else. */
+static _Atomic int hl_private_floor_value;
+static _Atomic int64_t hl_private_floor_pid;
+static _Atomic uint64_t hl_private_floor_start;
+
+static void hl_private_floor_forget(void) {
+    atomic_store_explicit(&hl_private_floor_pid, 0, memory_order_release);
+}
+
+static int hl_private_floor_derive(void) {
     struct rlimit limit;
     if (getrlimit(RLIMIT_NOFILE, &limit) != 0) return -errno;
 #if defined(__APPLE__)
@@ -261,6 +337,22 @@ int hl_host_process_fd_private_floor(void) {
     return (int)guest;
 }
 
+int hl_host_process_fd_private_floor(void) {
+    int64_t pid = 0;
+    uint64_t start = 0;
+    int floor;
+    if (!hl_host_process_self_identity(&pid, &start) || pid <= 0) return hl_private_floor_derive();
+    if (atomic_load_explicit(&hl_private_floor_pid, memory_order_acquire) == pid &&
+        atomic_load_explicit(&hl_private_floor_start, memory_order_acquire) == start)
+        return atomic_load_explicit(&hl_private_floor_value, memory_order_acquire);
+    floor = hl_private_floor_derive();
+    if (floor < 0) return floor;
+    atomic_store_explicit(&hl_private_floor_value, floor, memory_order_release);
+    atomic_store_explicit(&hl_private_floor_start, start, memory_order_release);
+    atomic_store_explicit(&hl_private_floor_pid, pid, memory_order_release);
+    return floor;
+}
+
 uint32_t hl_engine_guest_fd_limit(void) {
     // The guest-visible fd ceiling (RLIMIT_NOFILE, /proc/self/limits) must be STABLE across hosts --
     // HL_LINUX_FD_LIMIT-capped, derived only from the host RLIMIT_NOFILE -- so goldens match on every runner.
@@ -284,7 +376,22 @@ int hl_host_process_fd_private_adopt(int fd) {
     int floor = hl_host_process_fd_private_floor();
     if (floor < 0) return floor;
     int relocated = fd >= floor ? fd : fcntl(fd, F_DUPFD_CLOEXEC, floor);
-    if (relocated < 0) return -errno;
+    if (relocated < 0) {
+        /* The floor is cached, so a relocation failure is the one moment worth paying a fresh getrlimit
+         * for: an external prlimit(2) that lowered the soft limit under us leaves the cached floor above
+         * the new ceiling and every adopt would fail forever otherwise. Re-derive and retry exactly once;
+         * a floor that did not move means the failure was the descriptor's, not the limit's. */
+        int saved = errno;
+        hl_private_floor_forget();
+        int refreshed = hl_host_process_fd_private_floor();
+        if (refreshed < 0 || refreshed == floor) {
+            errno = saved;
+            return -saved;
+        }
+        floor = refreshed;
+        relocated = fd >= floor ? fd : fcntl(fd, F_DUPFD_CLOEXEC, floor);
+        if (relocated < 0) return -errno;
+    }
     int status = hl_host_process_fd_private_add(relocated);
     if (status != 0) {
         if (relocated != fd) close(relocated);
@@ -294,9 +401,143 @@ int hl_host_process_fd_private_adopt(int fd) {
     return relocated;
 }
 
+typedef struct hl_host_process_fd_private_relocation {
+    int source;
+    int private_descriptor;
+} hl_host_process_fd_private_relocation;
+
+struct hl_host_process_fd_private_plan {
+    int minimum;
+    int floor;
+    size_t capacity;
+    size_t scratch_size;
+    size_t count;
+    hl_host_process_fd_private_relocation relocations[];
+};
+
+static void *hl_private_plan_scratch(const hl_host_process_fd_private_plan *plan) {
+    return (void *)(plan->relocations + plan->capacity);
+}
+
+#if defined(__APPLE__)
+static int hl_private_plan_open_descriptors(void *buffer, int size) {
+    /* proc_pidinfo is a libproc wrapper and is not promised async-signal-safe. This path runs after fork in
+     * a multithreaded embedder, so enter XNU's documented proc_info syscall directly: call 2 is
+     * PROC_INFO_CALL_PIDINFO and the remaining arguments exactly match proc_pidinfo(pid, flavor, arg,...). */
+    long result = syscall(SYS_proc_info, 2, (int)getpid(), PROC_PIDLISTFDS, 0, buffer, size);
+    if (result < 0) return -1;
+    if (result > INT32_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    return (int)result;
+}
+#endif
+
+int hl_host_process_fd_private_plan_release(hl_host_process_fd_private_plan **plan) {
+    int result = 0;
+    if (plan == NULL) return -EINVAL;
+    if (*plan == NULL) return 0;
+    for (size_t index = 0; index < (*plan)->count; ++index) {
+        int descriptor = (*plan)->relocations[index].private_descriptor;
+        /* POSIX leaves descriptor state ambiguous after EINTR, so retrying could close a number another
+         * thread has already reused. Close exactly once, finish the whole batch, and report the first error. */
+        if (close(descriptor) != 0 && result == 0) result = -errno;
+    }
+    free(*plan);
+    *plan = NULL;
+    return result;
+}
+
+int hl_host_process_fd_private_plan_prepare(int minimum, const int *descriptors, size_t descriptor_count,
+                                            hl_host_process_fd_private_plan **out) {
+    hl_host_process_fd_private_plan *plan = NULL;
+    int floor;
+    int result = 0;
+    size_t scratch_size = 0;
+    if (out == NULL || minimum < 0 || (descriptor_count != 0 && descriptors == NULL)) return -EINVAL;
+    *out = NULL;
+    floor = hl_host_process_fd_private_floor();
+    if (floor < 0) return floor;
+#if defined(__APPLE__)
+    if ((size_t)floor + HL_HOST_PRIVATE_DESCRIPTOR_MINIMUM > SIZE_MAX / sizeof(struct proc_fdinfo)) return -EOVERFLOW;
+    scratch_size = ((size_t)floor + HL_HOST_PRIVATE_DESCRIPTOR_MINIMUM) * sizeof(struct proc_fdinfo);
+#endif
+    if (descriptor_count > (SIZE_MAX - sizeof(*plan)) / sizeof(*plan->relocations)) return -EOVERFLOW;
+    size_t records_size = descriptor_count * sizeof(*plan->relocations);
+    if (scratch_size > SIZE_MAX - sizeof(*plan) - records_size) return -EOVERFLOW;
+    plan = calloc(1, sizeof(*plan) + records_size + scratch_size);
+    if (plan == NULL) return -ENOMEM;
+    plan->minimum = minimum;
+    plan->floor = floor;
+    plan->capacity = descriptor_count;
+    plan->scratch_size = scratch_size;
+    for (size_t index = 0; index < descriptor_count; ++index) {
+        int descriptor = descriptors[index];
+        if (descriptor < 0) continue;
+        if (fcntl(descriptor, F_GETFD) < 0) {
+            result = -errno;
+            goto done;
+        }
+        int duplicate = fcntl(descriptor, F_DUPFD_CLOEXEC, floor);
+        if (duplicate < 0) {
+            result = -errno;
+            goto done;
+        }
+        plan->relocations[plan->count++] =
+            (hl_host_process_fd_private_relocation){descriptor, duplicate};
+    }
+    result = 0;
+    *out = plan;
+    plan = NULL;
+done:
+    (void)hl_host_process_fd_private_plan_release(&plan);
+    return result;
+}
+
+int hl_host_process_fd_private_plan_descriptor(const hl_host_process_fd_private_plan *plan, int descriptor) {
+    if (descriptor < 0 || plan == NULL) return descriptor;
+    for (size_t index = 0; index < plan->count; ++index)
+        if (plan->relocations[index].source == descriptor) return plan->relocations[index].private_descriptor;
+    if (descriptor < plan->minimum || descriptor >= plan->floor) return descriptor;
+    return -1;
+}
+
+int hl_host_process_fd_private_plan_child(const hl_host_process_fd_private_plan *plan) {
+    if (plan == NULL) return 0;
+#if defined(__linux__)
+    if (plan->minimum < plan->floor && close_range((unsigned)plan->minimum, (unsigned)(plan->floor - 1), 0) != 0)
+        return -errno;
+#else
+    int needed = hl_private_plan_open_descriptors(NULL, 0);
+    if (needed <= 0) return errno == 0 ? -EIO : -errno;
+    if ((size_t)needed > plan->scratch_size) return -EOVERFLOW;
+    int received = hl_private_plan_open_descriptors(hl_private_plan_scratch(plan), needed);
+    if (received <= 0) return errno == 0 ? -EIO : -errno;
+    if (received > needed || received % (int)sizeof(struct proc_fdinfo) != 0) return -EIO;
+    struct proc_fdinfo *entries = hl_private_plan_scratch(plan);
+    size_t count = (size_t)received / sizeof(*entries);
+    for (size_t index = 0; index < count; ++index) {
+        int descriptor = entries[index].proc_fd;
+        if (descriptor < plan->minimum || descriptor >= plan->floor) continue;
+        if (close(descriptor) != 0 && errno != EBADF) return -errno;
+    }
+#endif
+    /* An explicitly retained endpoint can occupy 0..2 when the embedder closed a standard descriptor, or
+     * can already be above the private floor. Its high duplicate is the child authority; retire the source
+     * that the interval operation intentionally did not cover. */
+    for (size_t index = 0; index < plan->count; ++index) {
+        int source = plan->relocations[index].source;
+        if (source >= plan->minimum && source < plan->floor) continue;
+        if (close(source) != 0 && errno != EBADF) return -errno;
+    }
+    return 0;
+}
+
 static void hl_private_remove_unlocked(int fd) {
-    int64_t pid = (int64_t)getpid();
-    uint64_t start = hl_private_process_start(pid);
+    int64_t pid = 0;
+    uint64_t start = 0;
+    (void)hl_host_process_self_identity(&pid, &start);
     if (!hl_private || fd < 0) return;
     for (unsigned record = 0; record < HL_PRIVATE_PROCESSES; ++record) {
         hl_private_process *process = &hl_private[record];
@@ -351,13 +592,16 @@ int hl_host_process_fd_private_is(int64_t pid, uint64_t start_ns, int fd) {
 }
 
 int hl_host_process_fd_private_current(int fd) {
-    int64_t pid = (int64_t)getpid();
-    return hl_host_process_fd_private_is(pid, hl_private_process_start(pid), fd);
+    int64_t pid = 0;
+    uint64_t start = 0;
+    (void)hl_host_process_self_identity(&pid, &start);
+    return hl_host_process_fd_private_is(pid, start, fd);
 }
 
 size_t hl_host_process_fd_private_count_current(void) {
-    int64_t pid = (int64_t)getpid();
-    uint64_t start = hl_private_process_start(pid);
+    int64_t pid = 0;
+    uint64_t start = 0;
+    (void)hl_host_process_self_identity(&pid, &start);
     size_t count = 0;
     if (!hl_private) return 0;
     for (unsigned record = 0; record < HL_PRIVATE_PROCESSES; ++record) {
@@ -373,9 +617,12 @@ size_t hl_host_process_fd_private_count_current(void) {
 }
 
 int hl_host_process_fd_private_fork_prepare(void) {
-    int64_t pid = (int64_t)getpid();
-    uint64_t start = hl_private_process_start(pid);
+    int64_t pid = 0;
+    uint64_t start = 0;
+    (void)hl_host_process_self_identity(&pid, &start);
     if (pthread_mutex_lock(&hl_private_fork_lock) != 0) return -EDEADLK;
+    atomic_store_explicit(&hl_private_fork_owner, pthread_self(), memory_order_relaxed);
+    atomic_store_explicit(&hl_private_fork_armed, 1, memory_order_relaxed);
     free(hl_private_fork_cells);
     hl_private_fork_cells = NULL;
     hl_private_fork_count = 0;
@@ -404,6 +651,7 @@ int hl_host_process_fd_private_fork_prepare(void) {
                     free(hl_private_fork_cells);
                     hl_private_fork_cells = NULL;
                     hl_private_fork_count = 0;
+                    hl_private_fork_disarm();
                     (void)pthread_mutex_unlock(&hl_private_fork_lock);
                     return -ENOMEM;
                 }
@@ -419,6 +667,7 @@ int hl_host_process_fd_private_fork_prepare(void) {
             free(hl_private_fork_cells);
             hl_private_fork_cells = NULL;
             hl_private_fork_count = 0;
+            hl_private_fork_disarm();
             (void)pthread_mutex_unlock(&hl_private_fork_lock);
             return -EAGAIN;
         }
@@ -431,8 +680,9 @@ int hl_host_process_fd_private_fork_prepare(void) {
 int hl_host_process_fd_private_fork_complete(int child) {
     int result = 0;
     if (child) {
-        hl_private_pid = (int64_t)getpid();
-        hl_private_start = hl_private_process_start(hl_private_pid);
+        hl_private_pid = 0;
+        hl_private_start = 0;
+        (void)hl_host_process_self_identity(&hl_private_pid, &hl_private_start);
         for (size_t index = 0; index < hl_private_fork_count; ++index) {
             int fd = (int)((uint32_t)(hl_private_fork_cells[index] >> 32) - 1u);
             uint32_t references = (uint32_t)hl_private_fork_cells[index];
@@ -447,6 +697,7 @@ int hl_host_process_fd_private_fork_complete(int child) {
     free(hl_private_fork_cells);
     hl_private_fork_cells = NULL;
     hl_private_fork_count = 0;
+    hl_private_fork_disarm();
     (void)pthread_mutex_unlock(&hl_private_fork_lock);
     return result;
 }
@@ -454,3 +705,88 @@ int hl_host_process_fd_private_fork_complete(int child) {
 void hl_host_process_fd_private_cleanup(void) {
     hl_private_cleanup();
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+#include <signal.h>
+#include <sys/wait.h>
+#if defined(__linux__)
+#include <sys/prctl.h>
+#endif
+
+#define HL_PRIVATE_FORK_HOLD_NS 1500000000L
+#define HL_PRIVATE_FORK_SETTLE_NS 200000000L
+#define HL_PRIVATE_FORK_WAIT_MS 10000
+
+static void hl_private_sleep(long nanoseconds) {
+    struct timespec delay = {nanoseconds / 1000000000L, nanoseconds % 1000000000L};
+    while (nanosleep(&delay, &delay) != 0 && errno == EINTR) continue;
+}
+
+/* Holds the fork lock for a window wide enough that a fork() started after it can only
+   observe the lock held -- the same shape as the real hold across the /proc stat read. */
+static void *hl_private_fork_lock_holder(void *argument) {
+    (void)argument;
+    if (pthread_mutex_lock(&hl_private_fork_lock) != 0) return NULL;
+    hl_private_sleep(HL_PRIVATE_FORK_HOLD_NS);
+    (void)pthread_mutex_unlock(&hl_private_fork_lock);
+    return NULL;
+}
+
+/* Scenario 1: fork() while a sibling thread holds hl_private_fork_lock, and have the child
+   take the locking path. Without the pthread_atfork child handler the child inherits a
+   locked mutex whose owner does not exist in the child and blocks forever; the wait below
+   is bounded so that regression is reported rather than wedging the caller. */
+HL_API int hl_c_backend_private_fork_lock_test(uint32_t scenario) {
+    if (scenario != 1) {
+        errno = EINVAL;
+        return -EINVAL;
+    }
+    hl_host_private_init();
+    int descriptor = dup(STDERR_FILENO);
+    if (descriptor < 0) return -errno;
+    pthread_t holder;
+    if (pthread_create(&holder, NULL, hl_private_fork_lock_holder, NULL) != 0) {
+        close(descriptor);
+        return -EAGAIN;
+    }
+    hl_private_sleep(HL_PRIVATE_FORK_SETTLE_NS);
+    pid_t child = fork();
+    if (child == 0) {
+#if defined(__linux__)
+        (void)prctl(PR_SET_PDEATHSIG, SIGKILL);
+#endif
+        /* A wedged child must not orphan: one survived its lane by 17 minutes. */
+        (void)alarm(30);
+        _exit(hl_host_process_fd_private_add(descriptor) == 0 ? 0 : 3);
+    }
+    int result;
+    if (child < 0) {
+        result = -errno;
+    } else {
+        int status = 0;
+        int reaped = 0;
+        for (int elapsed = 0; elapsed < HL_PRIVATE_FORK_WAIT_MS; elapsed += 20) {
+            pid_t seen = waitpid(child, &status, WNOHANG);
+            if (seen == child) {
+                reaped = 1;
+                break;
+            }
+            if (seen < 0 && errno != EINTR) break;
+            hl_private_sleep(20000000L);
+        }
+        if (!reaped) {
+            (void)kill(child, SIGKILL);
+            (void)waitpid(child, &status, 0);
+            result = -ETIMEDOUT;
+        } else if (!WIFEXITED(status)) {
+            result = -EINTR;
+        } else {
+            result = WEXITSTATUS(status) == 0 ? 0 : -EIO;
+        }
+    }
+    (void)pthread_join(holder, NULL);
+    hl_host_process_fd_private_remove(descriptor);
+    close(descriptor);
+    return result;
+}
+#endif

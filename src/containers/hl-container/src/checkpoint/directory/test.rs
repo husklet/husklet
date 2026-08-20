@@ -69,7 +69,7 @@ fn shared_namespace_serializes_capture_ownership() {
     let second_images = DirectoryImages::open(temporary.path()).unwrap();
     let first = first_images.open("shared").unwrap();
     let second = second_images.open("shared").unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let owner = first.begin_until(deadline).unwrap();
     first.put_until(owner, "first", b"owned", deadline).unwrap();
     assert!(second.begin_until(deadline).is_err());
@@ -82,12 +82,17 @@ fn expired_owner_is_reclaimed_and_stale_token_is_fenced() {
     let temporary = tempfile::tempdir().unwrap();
     let images = DirectoryImages::open(temporary.path()).unwrap();
     let image = images.open("reclaim").unwrap();
-    let lease = std::time::Instant::now() + std::time::Duration::from_millis(2);
+    // `begin_until` uses its deadline as the transaction lease, so the lease must also cover the
+    // capture writes made under it. A durable `put_until` costs 4-9ms on APFS against 26-275us on
+    // Linux, so a two-millisecond lease asserted a filesystem latency, not a fencing property.
+    let lease = std::time::Instant::now() + std::time::Duration::from_millis(250);
     let stale = image.begin_until(lease).unwrap();
     image.put_until(stale, "stale", b"old", lease).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(5));
+    while std::time::Instant::now() <= lease {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let current = image.begin_until(deadline).unwrap();
     image.put_until(current, "current", b"new", deadline).unwrap();
     assert!(image.put_until(stale, "late", b"bad", deadline).is_err());
@@ -151,7 +156,7 @@ fn active_capture_cannot_be_superseded_by_another_provider() {
 
     let older = first_process.open("container").unwrap();
     let newer = second_process.open("container").unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let owner = older.begin_until(deadline).unwrap();
     older.put_until(owner, "state", b"older", deadline).unwrap();
     assert!(newer.begin_until(deadline).is_err());
@@ -171,7 +176,7 @@ fn reopening_during_capture_does_not_refresh_its_publication_base() {
     image.put("state", b"first").unwrap();
     image.commit(b"manifest-one").unwrap();
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let transaction = image.begin_until(deadline).unwrap();
     image.put_until(transaction, "state", b"candidate", deadline).unwrap();
 

@@ -19,6 +19,5 @@ typedef struct hl_x86_avx_state {
 uint64_t hl_x86_avx_address(const hl_x86_avx_state *state, uint64_t address);
 void hl_x86_avx_run(const hl_x86_avx_state *state, struct cpu *cpu);
 void hl_x86_sse_run(const hl_x86_avx_state *state, struct cpu *cpu);
-void hl_x86_avx_dump(void);
 
 #endif

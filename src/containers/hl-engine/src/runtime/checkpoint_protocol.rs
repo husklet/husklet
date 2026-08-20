@@ -8,7 +8,7 @@ pub(super) const PAYLOAD_MAX: usize = 4 * 1024 * 1024;
 pub(super) const REQUEST_BYTES: usize = 48;
 const REPLY_BYTES: usize = 32;
 pub(super) const STATUS_OK: i32 = 0;
-const STATUS_ERROR: i32 = -1;
+pub(super) const STATUS_ERROR: i32 = -1;
 pub(super) const STATUS_ALREADY: i32 = 1;
 
 pub(super) const OBJECT_BEGIN: u32 = 1;
@@ -30,6 +30,40 @@ pub(super) const SOURCE_LIST: u32 = 16;
 pub(super) const SOURCE_SIZE: u32 = 17;
 pub(super) const SOURCE_READ: u32 = 18;
 pub(super) const RECOVERY_COMPLETE: u32 = 19;
+pub(super) const REGISTER_READY: u32 = 20;
+pub(super) const RELEASE_WAIT: u32 = 21;
+/// A restored process announces which captured member it is, on the channel the broker has already
+/// authenticated it on. Payload is `[u32 guest pid][u32 zero]`.
+pub(super) const MEMBER_RESTORED: u32 = 22;
+/// A restored member reports its own guest exit status on its way out. Payload is
+/// `[i32 status][u32 kind]`.
+pub(super) const MEMBER_EXITED: u32 = 23;
+/// The coordinator has DECIDED not to publish this capture, and says why: the name is the reason,
+/// the same text the engine writes to its own stderr. It is what turns a decided refusal into a
+/// host-side failure at the moment of the decision rather than at the host's own deadline.
+pub(super) const CAPTURE_REFUSED: u32 = 24;
+/// Did a host process ever prove exact membership of the running capture generation? Payload is
+/// `[u64 host pid]`; the reply value is 1 when a `REGISTER_READY` record exists for that pid at this
+/// generation and 0 when none does. The coordinator asks only about a process it has already observed to
+/// be GONE, and a 0 is what tells it that process published nothing and can be dropped from the
+/// rendezvous without losing state.
+pub(super) const PARTICIPANT_REGISTERED: u32 = 25;
+/// A restoring member asks for the terminal the host created for it, naming itself by guest pid because
+/// this runs before `MEMBER_RESTORED` can announce anything. Payload is `[u32 guest pid][u32 zero]`. The
+/// reply carries one descriptor over `SCM_RIGHTS`, or none when the host registered no terminal.
+pub(super) const MEMBER_STDIO: u32 = 26;
+/// The coordinator closes membership for this capture and asks how many processes proved it. No
+/// payload; the reply value is the sealed member count. It is the single instant at which the set of
+/// processes the manifest must contain is fixed, and after it `REGISTER_READY` is refused -- so no fork
+/// and no exit can straddle the count. Gated like a publishing op: only a process that itself proved
+/// membership may seal.
+pub(super) const SEAL_MEMBERSHIP: u32 = 27;
+
+/// What a parked member must do next. `RELEASE_WAIT` answers with exactly one of
+/// these, and it is the only thing that ends a park.
+pub(super) const RELEASE_HOLD: u64 = 0;
+pub(super) const RELEASE_EXIT: u64 = 1;
+pub(super) const RELEASE_RESUME: u64 = 2;
 
 #[derive(Debug)]
 pub(super) struct Request {
@@ -115,14 +149,21 @@ impl Reply {
         }
     }
 
-    pub(super) fn write(&self, channel: &mut impl Write) -> std::io::Result<()> {
+    /// The fixed reply header. Separated from [`Self::write`] because the descriptor-passing reply has to
+    /// hand the same bytes to `sendmsg` rather than to `write_all`: `SCM_RIGHTS` travels attached to one
+    /// message, so the header and the rights cannot be sent by two different calls.
+    pub(super) fn header(&self) -> [u8; REPLY_BYTES] {
         let mut header = [0_u8; REPLY_BYTES];
         header[0..4].copy_from_slice(&MAGIC_REPLY.to_ne_bytes());
         header[4..8].copy_from_slice(&ABI.to_ne_bytes());
         header[8..12].copy_from_slice(&self.status.to_ne_bytes());
         header[16..24].copy_from_slice(&self.value.to_ne_bytes());
         header[24..32].copy_from_slice(&(self.payload.len() as u64).to_ne_bytes());
-        channel.write_all(&header)?;
+        header
+    }
+
+    pub(super) fn write(&self, channel: &mut impl Write) -> std::io::Result<()> {
+        channel.write_all(&self.header())?;
         channel.write_all(&self.payload)?;
         channel.flush()
     }

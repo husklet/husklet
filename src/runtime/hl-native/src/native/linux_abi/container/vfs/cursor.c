@@ -1,7 +1,12 @@
 #define HL_VFS_CURSOR_LAYERS (HL_LINUX_VFS_LOWER_CAPACITY + 1)
 #define HL_VFS_MOUNT_NOEXEC (1u << 0)
+#include <limits.h>
 #include <stdatomic.h>
 #include <stdint.h>
+
+// `hl_vfs_cursor_authority_component` folds a single component through the host naming rules; the
+// header carries both the Darwin implementation and the verbatim passthrough every other host uses.
+#include "case_names.h"
 #if defined(__GNUC__) || defined(__clang__)
 #define HL_VFS_CURSOR_UNUSED __attribute__((unused))
 #else
@@ -154,6 +159,27 @@ static int hl_vfs_cursor_authority_component(const hl_vfs_cursor_authority *auth
     return snprintf(physical, capacity, "%s", guest) >= (int)capacity ? -ENAMETOOLONG : 0;
 }
 
+static void hl_vfs_cursor_metadata_to_status(const hl_host_file_metadata *metadata, struct stat *status) {
+    memset(status, 0, sizeof *status);
+    status->st_dev = (dev_t)metadata->stable_device;
+    status->st_ino = (ino_t)metadata->stable_object;
+    status->st_mode = (mode_t)(metadata->permissions & 07777u);
+    if (metadata->type == HL_HOST_FILE_TYPE_DIRECTORY)
+        status->st_mode |= S_IFDIR;
+    else if (metadata->type == HL_HOST_FILE_TYPE_SYMLINK)
+        status->st_mode |= S_IFLNK;
+    else if (metadata->type == HL_HOST_FILE_TYPE_REGULAR)
+        status->st_mode |= S_IFREG;
+    else if (metadata->type == HL_HOST_FILE_TYPE_CHARACTER)
+        status->st_mode |= S_IFCHR;
+    else if (metadata->type == HL_HOST_FILE_TYPE_BLOCK)
+        status->st_mode |= S_IFBLK;
+    else if (metadata->type == HL_HOST_FILE_TYPE_FIFO)
+        status->st_mode |= S_IFIFO;
+    else if (metadata->type == HL_HOST_FILE_TYPE_SOCKET)
+        status->st_mode |= S_IFSOCK;
+}
+
 static int hl_vfs_cursor_authority_metadata(const hl_vfs_cursor_authority *authority, const char *component,
                                             struct stat *status) {
     if (authority == NULL || component == NULL || status == NULL) return -EINVAL;
@@ -174,24 +200,49 @@ static int hl_vfs_cursor_authority_metadata(const hl_vfs_cursor_authority *autho
     (void)file->close(authority->value.host.services->context, opened.value);
     error = hl_vfs_cursor_host_error(described);
     if (error != 0) return error;
-    memset(status, 0, sizeof *status);
-    status->st_dev = (dev_t)metadata.stable_device;
-    status->st_ino = (ino_t)metadata.stable_object;
-    status->st_mode = (mode_t)(metadata.permissions & 07777u);
-    if (metadata.type == HL_HOST_FILE_TYPE_DIRECTORY)
-        status->st_mode |= S_IFDIR;
-    else if (metadata.type == HL_HOST_FILE_TYPE_SYMLINK)
-        status->st_mode |= S_IFLNK;
-    else if (metadata.type == HL_HOST_FILE_TYPE_REGULAR)
-        status->st_mode |= S_IFREG;
-    else if (metadata.type == HL_HOST_FILE_TYPE_CHARACTER)
-        status->st_mode |= S_IFCHR;
-    else if (metadata.type == HL_HOST_FILE_TYPE_BLOCK)
-        status->st_mode |= S_IFBLK;
-    else if (metadata.type == HL_HOST_FILE_TYPE_FIFO)
-        status->st_mode |= S_IFIFO;
-    else if (metadata.type == HL_HOST_FILE_TYPE_SOCKET)
-        status->st_mode |= S_IFSOCK;
+    hl_vfs_cursor_metadata_to_status(&metadata, status);
+    return 0;
+}
+
+// Metadata for `component` that ALSO hands back the descriptor/handle the probe had to open, so the
+// immediately following open of the SAME component costs nothing. On the HOST authority
+// hl_vfs_cursor_authority_metadata must open_relative(PATH_ONLY|NOFOLLOW), read the metadata, and close
+// again; every caller in hl_vfs_cursor_lookup_intent then re-opened that identical component with the
+// identical PATH_ONLY|NOFOLLOW flags. `retained` receives that same open description (kind INVALID when
+// the authority is NATIVE, where the probe is a single fstatat and there is nothing to retain, or when
+// the probe failed). It is a PATH-ONLY, NOFOLLOW description of the named entry -- so it substitutes for
+// hl_vfs_cursor_authority_open_path and for nothing else; the caller must close it otherwise. O_DIRECTORY
+// is not part of it: that flag only turns a non-directory into ENOTDIR, and the caller reuses the
+// description exclusively after `status` has already proven S_ISDIR, so the two open descriptions are
+// indistinguishable.
+static int hl_vfs_cursor_authority_probe(const hl_vfs_cursor_authority *authority, const char *component,
+                                         struct stat *status, hl_vfs_cursor_authority *retained) {
+    if (retained == NULL) return -EINVAL;
+    memset(retained, 0, sizeof *retained);
+    if (authority == NULL || component == NULL || status == NULL) return -EINVAL;
+    if (authority->kind != HL_VFS_CURSOR_AUTHORITY_HOST)
+        return hl_vfs_cursor_authority_metadata(authority, component, status);
+    if (authority->value.host.services == NULL || authority->value.host.services->file == NULL) return -EINVAL;
+    const hl_host_file_services *file = authority->value.host.services->file;
+    if (file->open_relative == NULL || file->metadata == NULL || file->close == NULL) return -ENOSYS;
+    hl_host_result opened =
+        file->open_relative(authority->value.host.services->context, authority->value.host.handle, component,
+                            strlen(component), HL_HOST_FILE_PATH_ONLY | HL_HOST_FILE_NOFOLLOW, 0, 0);
+    int error = hl_vfs_cursor_host_error(opened);
+    if (error != 0) return error;
+    hl_host_file_metadata metadata_slot;
+    hl_vfs_cursor_authority held = {0};
+    held.kind = HL_VFS_CURSOR_AUTHORITY_HOST;
+    held.value.host.handle = opened.value;
+    held.value.host.services = authority->value.host.services;
+    hl_host_result described = file->metadata(authority->value.host.services->context, opened.value, &metadata_slot);
+    error = hl_vfs_cursor_host_error(described);
+    if (error != 0) {
+        hl_vfs_cursor_authority_close(&held);
+        return error;
+    }
+    hl_vfs_cursor_metadata_to_status(&metadata_slot, status);
+    *retained = held;
     return 0;
 }
 
@@ -224,12 +275,13 @@ static int hl_vfs_cursor_authority_open_path(const hl_vfs_cursor_authority *auth
                                              int directory, hl_vfs_cursor_authority *output) {
     if (authority == NULL || component == NULL || output == NULL) return -EINVAL;
     if (authority->kind == HL_VFS_CURSOR_AUTHORITY_NATIVE) {
+        int descriptor;
 #if defined(__linux__)
-        int descriptor = openat(authority->value.descriptor, component,
-                                O_PATH | O_CLOEXEC | O_NOFOLLOW | (directory ? O_DIRECTORY : 0));
+        descriptor = openat(authority->value.descriptor, component,
+                            O_PATH | O_CLOEXEC | O_NOFOLLOW | (directory ? O_DIRECTORY : 0));
 #elif defined(__APPLE__)
-        int descriptor = openat(authority->value.descriptor, component,
-                                O_SYMLINK | O_CLOEXEC | (directory ? O_DIRECTORY : 0));
+        descriptor = openat(authority->value.descriptor, component,
+                            O_SYMLINK | O_CLOEXEC | (directory ? O_DIRECTORY : 0));
 #else
         return -ENOSYS;
 #endif
@@ -415,12 +467,16 @@ static int hl_vfs_cursor_lookup_intent(const hl_vfs_cursor *cursor, const char *
     size_t selected = cursor->count;
     struct stat selected_status;
     char selected_component[768] = "";
+    // PATH-ONLY, NOFOLLOW description of the selected entry, retained from the probe that found it (HOST
+    // authority only -- see hl_vfs_cursor_authority_probe). Every exit below either transfers it into
+    // `output` or closes it.
+    hl_vfs_cursor_authority probed = {0};
     for (size_t index = 0; index < cursor->count; index++) {
         char physical[768];
         int metadata_error =
             hl_vfs_cursor_authority_component(&cursor->layers[index], component, physical, sizeof physical);
         if (metadata_error == 0)
-            metadata_error = hl_vfs_cursor_authority_metadata(&cursor->layers[index], physical, &selected_status);
+            metadata_error = hl_vfs_cursor_authority_probe(&cursor->layers[index], physical, &selected_status, &probed);
         if (metadata_error == 0) {
             selected = index;
             snprintf(selected_component, sizeof selected_component, "%s", physical);
@@ -429,7 +485,10 @@ static int hl_vfs_cursor_lookup_intent(const hl_vfs_cursor *cursor, const char *
         // Only genuine absence permits consulting a lower layer. ENOTDIR means a higher-layer ancestor or
         // entry masks every descendant; EACCES/EIO/resource failures likewise cannot grant lower authority.
         if (metadata_error != -ENOENT) return metadata_error;
-        if (hl_vfs_cursor_marker(&cursor->layers[index], component)) return -ENOENT;
+        // A `.wh.NAME` whiteout in THIS layer hides NAME in every layer BELOW it. With no layer below,
+        // the probe cannot change the answer: the loop would fall through to the -ENOENT return just as
+        // the marker branch does. Skip it rather than pay a host probe for an unobservable distinction.
+        if (index + 1 < cursor->count && hl_vfs_cursor_marker(&cursor->layers[index], component)) return -ENOENT;
     }
     if (selected == cursor->count) return -ENOENT;
     output->status = selected_status;
@@ -437,39 +496,66 @@ static int hl_vfs_cursor_lookup_intent(const hl_vfs_cursor *cursor, const char *
     int guest_length = !strcmp(cursor->guest, "/")
                            ? snprintf(guest_entry, sizeof guest_entry, "/%s", component)
                            : snprintf(guest_entry, sizeof guest_entry, "%s/%s", cursor->guest, component);
-    if (guest_length < 0 || (size_t)guest_length >= sizeof guest_entry) return -ENAMETOOLONG;
+    if (guest_length < 0 || (size_t)guest_length >= sizeof guest_entry) {
+        hl_vfs_cursor_authority_close(&probed);
+        return -ENAMETOOLONG;
+    }
     output->mount_flags = hl_vfs_mount_flags_for_guest(guest_entry, cursor->mount_flags);
     if (S_ISLNK(selected_status.st_mode)) {
         int error = hl_vfs_cursor_authority_readlink(&cursor->layers[selected], selected_component, output->symlink,
                                                      sizeof output->symlink);
-        if (error != 0) return error;
-        if (path_only_file) {
-            error = hl_vfs_cursor_authority_open_path(&cursor->layers[selected], selected_component, 0, &output->file);
-            if (error != 0) return error;
+        if (error == 0 && path_only_file) {
+            if (probed.kind != HL_VFS_CURSOR_AUTHORITY_INVALID) {
+                output->file = probed;
+                probed = (hl_vfs_cursor_authority){0};
+            } else {
+                error = hl_vfs_cursor_authority_open_path(&cursor->layers[selected], selected_component, 0,
+                                                          &output->file);
+            }
         }
+        hl_vfs_cursor_authority_close(&probed);
+        if (error != 0) return error;
         output->kind = HL_VFS_CURSOR_SYMLINK;
         return 0;
     }
     if (!S_ISDIR(selected_status.st_mode)) {
-        hl_vfs_cursor_authority opened;
-        int error = path_only_file ? hl_vfs_cursor_authority_open_path(&cursor->layers[selected], selected_component, 0,
+        hl_vfs_cursor_authority opened = {0};
+        int error = 0;
+        if (path_only_file && probed.kind != HL_VFS_CURSOR_AUTHORITY_INVALID) {
+            opened = probed;
+            probed = (hl_vfs_cursor_authority){0};
+        } else {
+            error = path_only_file ? hl_vfs_cursor_authority_open_path(&cursor->layers[selected], selected_component, 0,
                                                                        &opened)
                                    : hl_vfs_cursor_authority_open_child(&cursor->layers[selected], selected_component, 0,
                                                                         &opened);
+        }
+        hl_vfs_cursor_authority_close(&probed);
         if (error != 0) return error;
         output->file = opened;
         output->kind = HL_VFS_CURSOR_FILE;
         return 0;
     }
 
-    int error = path_only_file
+    int error = 0;
+    if (path_only_file && probed.kind != HL_VFS_CURSOR_AUTHORITY_INVALID) {
+        output->directory.layers[output->directory.count] = probed;
+        probed = (hl_vfs_cursor_authority){0};
+    } else {
+        error = path_only_file
                     ? hl_vfs_cursor_authority_open_path(&cursor->layers[selected], selected_component, 1,
                                                         &output->directory.layers[output->directory.count])
                     : hl_vfs_cursor_authority_open_child(&cursor->layers[selected], selected_component, 1,
                                                          &output->directory.layers[output->directory.count]);
+    }
+    hl_vfs_cursor_authority_close(&probed);
     if (error != 0) return error;
     output->directory.count++;
-    output->directory.opaque_cut = hl_vfs_cursor_opaque(&output->directory.layers[0]);
+    // An opaque marker means only one thing: hide the layers BELOW the selected one. When there is no
+    // such layer the flag has no reader -- the merge loop guarded by it is empty -- so the probe is
+    // unobservable work. `opaque_cut` is consumed exactly here and nowhere else.
+    output->directory.opaque_cut =
+        selected + 1 < cursor->count && hl_vfs_cursor_opaque(&output->directory.layers[0]);
     output->directory.mount_flags = output->mount_flags;
     if (!output->directory.opaque_cut)
         for (size_t index = selected + 1; index < cursor->count; index++) {
@@ -489,7 +575,11 @@ static int hl_vfs_cursor_lookup_intent(const hl_vfs_cursor *cursor, const char *
                 hl_vfs_cursor_entry_release(output);
                 return error;
             }
-            if (hl_vfs_cursor_opaque(&output->directory.layers[output->directory.count++])) {
+            // Same argument as above: on the LAST layer there is nothing left to cut, and the loop ends
+            // either way, so the marker probe cannot change the merged cursor.
+            output->directory.count++;
+            if (index + 1 < cursor->count &&
+                hl_vfs_cursor_opaque(&output->directory.layers[output->directory.count - 1])) {
                 output->directory.opaque_cut = 1;
                 break;
             }

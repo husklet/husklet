@@ -18,24 +18,30 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
                                          0x20000000ull | // CLONE_NEWPID
                                          0x40000000ull;  // CLONE_NEWNET
         if (a0 & namespace_flags) {
+            fork_diagnostic_emit(c, nr, a0, "namespace-flags", EINVAL, -1, NULL);
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
         }
         // CLONE_THREAD: stack arg IS the top
         if (a0 & 0x10000) {
-            G_RET(c) = (uint64_t)spawn_thread(c, a0, a1, a3, a2, a4);
+            int64_t result = spawn_thread(c, a0, a1, a3, a2, a4);
+            if (result < 0) fork_diagnostic_emit(c, nr, a0, "thread-spawn", (int)-result, -1, NULL);
+            G_RET(c) = (uint64_t)result;
             break;
         }
         // cgroup pids.max also gates a FORKED PROCESS: a forked child is a new container task, so a fork
         // past the limit must fail EAGAIN exactly as clone(CLONE_THREAD) does (the container-wide count is
         // one shared budget across the process tree). Previously only in-process threads were gated.
-        if (g_pids_max && acct_pids_total() >= g_pids_max) {
+        int pids_total = g_pids_max ? acct_pids_total() : -1;
+        if (g_pids_max && pids_total >= g_pids_max) {
+            fork_diagnostic_emit(c, nr, a0, "pids-limit", EAGAIN, pids_total, NULL);
             G_RET(c) = (uint64_t)(int64_t)(-EAGAIN);
             break;
         }
         int share_fs = (a0 & 0x00000200ull) != 0; // CLONE_FS
         int fs_status = share_fs ? guest_fs_share() : 0;
         if (fs_status != 0) {
+            fork_diagnostic_emit(c, nr, a0, "share-fs", -fs_status, pids_total, NULL);
             G_RET(c) = (uint64_t)(int64_t)fs_status;
             break;
         }
@@ -48,15 +54,33 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         bound_fork_state bound_fork;
         int bound_status = bound_fork_prepare(&bound_fork);
         if (bound_status != 0) {
+            fork_diagnostic_emit(c, nr, a0, "snapshot-prepare", -bound_status, pids_total, &bound_fork);
             G_RET(c) = (uint64_t)(int64_t)bound_status;
             break;
         }
         int vfork_pipe[2] = {-1, -1};
         int vfork_ack[2] = {-1, -1};
         int is_vfork = (a0 & 0x4000) != 0;
+        // The host implements a guest vfork with process-private COW memory. On
+        // child _exit we import that memory to preserve Linux's shared-address-
+        // space behavior, but only before the process has acquired threading
+        // authority. g_ever_threaded is published before pthread_create, so
+        // unlike a live-registry count it also covers a peer in its registration
+        // window, and its atomic acquire cannot race or observe a stale zero.
+        // Importing a fork-time snapshot
+        // into a live multithreaded parent rolls allocator and application state
+        // backward (a failed posix_spawn followed by malloc hit glibc's heap
+        // consistency abort). The only defined multithreaded vfork-child actions
+        // are exec/_exit, neither of which requires child writes to be published.
+        int import_vfork_exit_memory =
+            is_vfork && !atomic_load_explicit(&g_ever_threaded, memory_order_acquire);
         if (is_vfork && (pipe(vfork_pipe) != 0 || pipe(vfork_ack) != 0)) {
+            int pipe_error = errno;
+            fork_diagnostic_emit(c, nr, a0, "vfork-pipe", pipe_error, pids_total, &bound_fork);
+            fork_diagnostic_close_pair(vfork_pipe);
+            fork_diagnostic_close_pair(vfork_ack);
             bound_fork_complete(&bound_fork, 0, -1);
-            G_RET(c) = (uint64_t)(int64_t)(-errno);
+            G_RET(c) = (uint64_t)(int64_t)(-pipe_error);
             break;
         }
         if (is_vfork) {
@@ -65,29 +89,56 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         }
         int runtime_source_tid = cpu_tid(c);
         if (!hl_target_task_event(c, HL_TASK_EVENT_PREPARE_FORK, 0, (uint64_t)runtime_source_tid, 0)) {
+            fork_diagnostic_emit(c, nr, a0, "task-prepare", EAGAIN, pids_total, &bound_fork);
             (void)bound_fork_complete(&bound_fork, 0, -1);
-            if (is_vfork) {
-                close(vfork_pipe[0]);
-                close(vfork_pipe[1]);
-            }
+            fork_diagnostic_close_pair(vfork_pipe);
+            fork_diagnostic_close_pair(vfork_ack);
+            G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
+            break;
+        }
+        int guest_child_pid = hl_linux_pidmap_is_active(&g_pidmap) ? (int)hl_linux_pidmap_allocate_guest(&g_pidmap) : 0;
+        if (hl_linux_pidmap_is_active(&g_pidmap) && guest_child_pid <= 0) {
+            fork_diagnostic_emit(c, nr, a0, "pid-allocate", EAGAIN, pids_total, &bound_fork);
+            (void)hl_target_task_event(c, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)runtime_source_tid, 0);
+            (void)bound_fork_complete(&bound_fork, 0, -1);
+            fork_diagnostic_close_pair(vfork_pipe);
+            fork_diagnostic_close_pair(vfork_ack);
             G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
             break;
         }
         pid_t pid = hl_host_process_clone_current();
         int fork_error = errno;
+        if (pid < 0) fork_diagnostic_emit(c, nr, a0, "host-fork", fork_error, pids_total, &bound_fork);
+        guest_child_pid = pid < 0 ? -1 : restore_process_identity_publish(
+                                                   guest_child_pid, pid == 0 ? (int)getpid() : (int)pid);
+        if (pid >= 0 && guest_child_pid <= 0) {
+            if (pid == 0) _exit(127);
+            fork_diagnostic_emit(c, nr, a0, "identity-publish", EAGAIN, pids_total, &bound_fork);
+            kill(pid, SIGKILL);
+            while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
+            (void)hl_target_task_event(c, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)runtime_source_tid, 0);
+            (void)bound_fork_complete(&bound_fork, 0, -1);
+            fork_diagnostic_close_pair(vfork_pipe);
+            fork_diagnostic_close_pair(vfork_ack);
+            G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
+            break;
+        }
         if (is_vfork) {
             if (pid == 0) {
-                close(vfork_pipe[0]);
-                close(vfork_ack[1]);
+                fork_diagnostic_close_descriptor(&vfork_pipe[0]);
+                fork_diagnostic_close_descriptor(&vfork_ack[1]);
                 g_vfork_release_fd = vfork_pipe[1];
                 g_vfork_ack_fd = vfork_ack[0];
+                vfork_pipe[1] = -1;
+                vfork_ack[0] = -1;
             } else {
-                close(vfork_pipe[1]);
-                close(vfork_ack[0]);
+                fork_diagnostic_close_descriptor(&vfork_pipe[1]);
+                fork_diagnostic_close_descriptor(&vfork_ack[0]);
             }
         }
         bound_status = bound_fork_complete(&bound_fork, pid == 0, pid == 0 ? (int)getpid() : (int)pid);
         if (bound_status != 0) {
+            fork_diagnostic_emit(c, nr, a0, "snapshot-complete", -bound_status, pids_total, &bound_fork);
             (void)hl_target_task_event(c, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)runtime_source_tid, 0);
             if (pid == 0) _exit(127);
             if (pid > 0) {
@@ -95,7 +146,8 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
                 kill(pid, SIGKILL);
                 while (waitpid(pid, &failed_status, 0) < 0 && errno == EINTR) {}
             }
-            if (is_vfork && vfork_pipe[0] >= 0) close(vfork_pipe[0]);
+            fork_diagnostic_close_pair(vfork_pipe);
+            fork_diagnostic_close_pair(vfork_ack);
             G_RET(c) = (uint64_t)(int64_t)bound_status;
             break;
         }
@@ -106,14 +158,25 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             uint64_t source_tid = (uint64_t)runtime_source_tid;
             if (!hl_target_task_event(c, HL_TASK_EVENT_FORK_PROCESS, child_pid, source_tid, pid == 0)) {
                 if (pid == 0) _exit(127);
+                fork_diagnostic_emit(c, nr, a0, "task-publish", EAGAIN, pids_total, &bound_fork);
                 int failed_status;
                 kill(pid, SIGKILL);
                 while (waitpid(pid, &failed_status, 0) < 0 && errno == EINTR) {}
+                (void)hl_target_task_event(c, HL_TASK_EVENT_CANCEL_FORK, 0, source_tid, 0);
+                fork_diagnostic_close_pair(vfork_pipe);
+                fork_diagnostic_close_pair(vfork_ack);
                 G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
                 break;
             }
         }
         if (pid == 0) {
+            if (hl_linux_pidmap_is_active(&g_pidmap)) {
+                g_self_gpid = guest_child_pid;
+                // The child's parent is THIS process, not the one recorded for it. Clearing the inherited
+                // value sends getppid() back through the live map (identity.c), which is both correct here
+                // and correct after the parent is reaped and the host reparents us out of the container.
+                g_self_gppid = -1;
+            }
             guest_fs_after_fork(share_fs);
             // clone(child_stack): Linux resumes the child on the supplied stack regardless of CLONE_VM.
             // glibc seeds its clone trampoline (fn ptr + arg) there before the syscall. Restricting this to
@@ -127,7 +190,7 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             // zeroes it and FUTEX_WAKEs a joiner. The old code ignored both, so pthread/runtime handshakes
             // that read the child tid from these slots saw stale memory.
             if ((a0 & 0x01000000) && a4) {
-                int tid = (int)getpid();
+                int tid = guest_child_pid;
                 (void)guest_copy_to(a4, &tid, sizeof tid);
             }
             if (a0 & 0x00200000) c->ctid = a4;
@@ -147,7 +210,7 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         }
         if (pid > 0) { // parent side of a successful fork: count it for /proc/stat processes + pids.current
             atomic_fetch_add(&g_forks_since_boot, 1);
-            proc_reg_mark_child((int)pid); // guest-pid namespace: register the child NOW (parent-side, race-
+            host_pid_register_child((int)pid); // host registry: register the child NOW (parent-side, race-
                                            // free) so a kill/pidfd membership check can never ESRCH it before
                                            // it runs its own proc_reg_after_fork publish
             acct_child_born((int)pid);     // register the child's OWN task slot (container-wide pids.current)
@@ -159,26 +222,29 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
                 received = read(vfork_pipe[0], &committed, sizeof committed);
             while (received < 0 && errno == EINTR);
             if (received == 1 && committed == 2) {
-                vfork_import_guest_memory(pid);
+                if (import_vfork_exit_memory) vfork_import_guest_memory(pid);
+                // The child waits for this acknowledgement before exiting so
+                // process_vm_readv could inspect it. Release it even when a live
+                // peer makes importing the snapshot unsafe.
                 while (write(vfork_ack[1], &committed, sizeof committed) < 0 && errno == EINTR) {}
             }
-            close(vfork_pipe[0]);
-            close(vfork_ack[1]);
+            fork_diagnostic_close_descriptor(&vfork_pipe[0]);
+            fork_diagnostic_close_descriptor(&vfork_ack[1]);
         } else if (pid < 0 && is_vfork) {
-            close(vfork_pipe[0]);
-            close(vfork_ack[1]);
+            fork_diagnostic_close_pair(vfork_pipe);
+            fork_diagnostic_close_pair(vfork_ack);
         }
         // CLONE_PARENT_SETTID(0x00100000): store the child's tid (its pid) into the PARENT's *ptid (a2).
         // Mutually exclusive with CLONE_PIDFD (which also uses the ptid slot), so it never clobbers a pidfd.
         if (pid > 0 && (a0 & 0x00100000) && !(a0 & 0x1000) && a2) {
-            int parent_tid = (int)pid;
+            int parent_tid = guest_child_pid;
             if (guest_copy_to(a2, &parent_tid, sizeof parent_tid) != sizeof parent_tid) {
                 G_RET(c) = (uint64_t)(int64_t)-EFAULT;
                 break;
             }
         }
         // parent: pid, child: 0
-        G_RET(c) = pid < 0 ? (uint64_t)(-errno) : (uint64_t)pid;
+        G_RET(c) = pid < 0 ? (uint64_t)(-errno) : (uint64_t)(pid == 0 ? 0 : guest_child_pid);
         // A fork/vfork that was normalized to clone repurposed the guest's arg registers; put them back so
         // the syscall preserves every GPR but rax, as the real kernel does (no-op for a genuine clone).
         G_FORK_PRESERVE(c);
@@ -278,11 +344,13 @@ static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // is below the VER0 clone_args (we read only its first 64 bytes) or implausibly large; -EFAULT if
         // the args struct isn't mapped.
         if (a1 < 64 || a1 > 4096) {
+            fork_diagnostic_emit(c, nr, 0, "clone3-size", EINVAL, -1, NULL);
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
         }
         uint64_t ca[8];
         if (guest_copy_from(ca, a0, sizeof ca) != sizeof ca) {
+            fork_diagnostic_emit(c, nr, 0, "clone3-arguments", EFAULT, -1, NULL);
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
             break;
         }
@@ -290,22 +358,28 @@ static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         const uint64_t namespace_flags = 0x00020000ull | 0x02000000ull | 0x04000000ull | 0x08000000ull | 0x10000000ull |
                                          0x20000000ull | 0x40000000ull;
         if (flags & namespace_flags) {
+            fork_diagnostic_emit(c, nr, flags, "namespace-flags", EINVAL, -1, NULL);
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
         }
         // CLONE_THREAD: sp = stack + stack_size
         if (flags & 0x10000) {
-            G_RET(c) = (uint64_t)spawn_thread(c, flags, ca[5] + ca[6], ca[7], ca[3], ca[2]);
+            int64_t result = spawn_thread(c, flags, ca[5] + ca[6], ca[7], ca[3], ca[2]);
+            if (result < 0) fork_diagnostic_emit(c, nr, flags, "thread-spawn", (int)-result, -1, NULL);
+            G_RET(c) = (uint64_t)result;
             break;
         }
         // cgroup pids.max gates a clone3 forked PROCESS too (see case 220): fork past the limit -> EAGAIN.
-        if (g_pids_max && acct_pids_total() >= g_pids_max) {
+        int pids_total = g_pids_max ? acct_pids_total() : -1;
+        if (g_pids_max && pids_total >= g_pids_max) {
+            fork_diagnostic_emit(c, nr, flags, "pids-limit", EAGAIN, pids_total, NULL);
             G_RET(c) = (uint64_t)(int64_t)(-EAGAIN);
             break;
         }
         int share_fs = (flags & 0x00000200ull) != 0; // CLONE_FS
         int fs_status = share_fs ? guest_fs_share() : 0;
         if (fs_status != 0) {
+            fork_diagnostic_emit(c, nr, flags, "share-fs", -fs_status, pids_total, NULL);
             G_RET(c) = (uint64_t)(int64_t)fs_status;
             break;
         }
@@ -313,19 +387,43 @@ static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         bound_fork_state bound_fork;
         int bound_status = bound_fork_prepare(&bound_fork);
         if (bound_status != 0) {
+            fork_diagnostic_emit(c, nr, flags, "snapshot-prepare", -bound_status, pids_total, &bound_fork);
             G_RET(c) = (uint64_t)(int64_t)bound_status;
             break;
         }
         int runtime_source_tid = cpu_tid(c);
         if (!hl_target_task_event(c, HL_TASK_EVENT_PREPARE_FORK, 0, (uint64_t)runtime_source_tid, 0)) {
             (void)bound_fork_complete(&bound_fork, 0, -1);
+            fork_diagnostic_emit(c, nr, flags, "task-prepare", EAGAIN, pids_total, &bound_fork);
+            G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
+            break;
+        }
+        int guest_child_pid = hl_linux_pidmap_is_active(&g_pidmap) ? (int)hl_linux_pidmap_allocate_guest(&g_pidmap) : 0;
+        if (hl_linux_pidmap_is_active(&g_pidmap) && guest_child_pid <= 0) {
+            fork_diagnostic_emit(c, nr, flags, "pid-allocate", EAGAIN, pids_total, &bound_fork);
+            (void)hl_target_task_event(c, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)runtime_source_tid, 0);
+            (void)bound_fork_complete(&bound_fork, 0, -1);
             G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
             break;
         }
         pid_t pid = hl_host_process_clone_current();
         int fork_error = errno;
+        if (pid < 0) fork_diagnostic_emit(c, nr, flags, "host-fork", fork_error, pids_total, &bound_fork);
+        guest_child_pid = pid < 0 ? -1 : restore_process_identity_publish(
+                                                   guest_child_pid, pid == 0 ? (int)getpid() : (int)pid);
+        if (pid >= 0 && guest_child_pid <= 0) {
+            if (pid == 0) _exit(127);
+            fork_diagnostic_emit(c, nr, flags, "identity-publish", EAGAIN, pids_total, &bound_fork);
+            kill(pid, SIGKILL);
+            while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
+            (void)hl_target_task_event(c, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)runtime_source_tid, 0);
+            (void)bound_fork_complete(&bound_fork, 0, -1);
+            G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
+            break;
+        }
         bound_status = bound_fork_complete(&bound_fork, pid == 0, pid == 0 ? (int)getpid() : (int)pid);
         if (bound_status != 0) {
+            fork_diagnostic_emit(c, nr, flags, "snapshot-complete", -bound_status, pids_total, &bound_fork);
             (void)hl_target_task_event(c, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)runtime_source_tid, 0);
             if (pid == 0) _exit(127);
             if (pid > 0) {
@@ -343,9 +441,11 @@ static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             if (!hl_target_task_event(c, HL_TASK_EVENT_FORK_PROCESS, child_pid, (uint64_t)runtime_source_tid,
                                       pid == 0)) {
                 if (pid == 0) _exit(127);
+                fork_diagnostic_emit(c, nr, flags, "task-publish", EAGAIN, pids_total, &bound_fork);
                 int failed_status;
                 kill(pid, SIGKILL);
                 while (waitpid(pid, &failed_status, 0) < 0 && errno == EINTR) {}
+                (void)hl_target_task_event(c, HL_TASK_EVENT_CANCEL_FORK, 0, (uint64_t)runtime_source_tid, 0);
                 G_RET(c) = (uint64_t)(int64_t)-EAGAIN;
                 break;
             }
@@ -355,13 +455,20 @@ static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // path caches / kqueues / fork-unsafe locks). clone3 historically lacked the W^X re-assert and the
         // DIR*-cache drop the clone site had; the shared helper closes that drift.
         if (pid == 0) {
+            if (hl_linux_pidmap_is_active(&g_pidmap)) {
+                g_self_gpid = guest_child_pid;
+                // The child's parent is THIS process, not the one recorded for it. Clearing the inherited
+                // value sends getppid() back through the live map (identity.c), which is both correct here
+                // and correct after the parent is reaped and the host reparents us out of the container.
+                g_self_gppid = -1;
+            }
             guest_fs_after_fork(share_fs);
             if ((flags & 0x100) && ca[5]) G_SP(c) = ca[5] + ca[6];
             fork_child_hooks(c);
             // clone_args: child_tid = ca[2]. CLONE_CHILD_SETTID stores the child's tid there; CLONE_CHILD_
             // CLEARTID remembers it so exit zeroes it + wakes a joiner (mirrors case 220).
             if ((flags & 0x01000000) && ca[2]) {
-                int tid = (int)getpid();
+                int tid = guest_child_pid;
                 (void)guest_copy_to(ca[2], &tid, sizeof tid);
             }
             if (flags & 0x00200000) c->ctid = ca[2];
@@ -378,19 +485,19 @@ static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         }
         if (pid > 0) { // parent side of a successful clone3 fork: count it (see case 220)
             atomic_fetch_add(&g_forks_since_boot, 1);
-            proc_reg_mark_child((int)pid); // guest-pid namespace: parent-side registration (see case 220)
+            host_pid_register_child((int)pid); // host registry: parent-side registration (see case 220)
             acct_child_born((int)pid);     // register the child's OWN task slot (container-wide pids.current)
         }
         // clone_args: parent_tid = ca[3]. CLONE_PARENT_SETTID stores the child's tid (pid) into the PARENT's
         // parent_tid (a distinct field from pidfd in clone3, so it never conflicts with CLONE_PIDFD).
         if (pid > 0 && (flags & 0x00100000) && ca[3]) {
-            int tid = (int)pid;
+            int tid = guest_child_pid;
             if (guest_copy_to(ca[3], &tid, sizeof tid) != sizeof tid) {
                 G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
                 break;
             }
         }
-        G_RET(c) = pid < 0 ? (uint64_t)(-errno) : (uint64_t)pid;
+        G_RET(c) = pid < 0 ? (uint64_t)(-errno) : (uint64_t)(pid == 0 ? 0 : guest_child_pid);
         break;
     }
     default: return 0;

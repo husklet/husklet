@@ -34,6 +34,29 @@ static void patch_adr(uint32_t *, uint8_t *, unsigned);
 static int shadowgate(void);
 static void emit_prof_bump(void *);
 
+/*
+ * Soft-guard lowering selector.
+ *
+ * The shared resolver (below) keeps four instructions at each guest memory
+ * access and performs the interval/permission check once per class in one
+ * out-of-line body.  That is the smallest translation, but every guarded
+ * access pays a taken branch plus the resolver's own prologue, and the guest
+ * ISA's own x86 counterpart (guest/x86_64/emit.c emit_soft_guard) has always
+ * lowered the same check INLINE.  Inline is now the aarch64 default too, so
+ * both arms share one shape; the HL_SOFT_SHARED_RESOLVER environment
+ * variable restores the resolver for A/B and as a fallback.  Read straight
+ * from the environment, not from the option store: codegen is selected on the
+ * first block translated, which can be on a thread whose (thread-local) option
+ * store has not imported anything.  The choice is folded into the persistent-cache
+ * translator identity (cache/identity.c) so an arena emitted under one
+ * lowering can never be loaded under the other.
+ */
+static int a64_soft_shared_resolver(void) {
+    static int selected = -1;
+    if (selected < 0) selected = getenv("HL_SOFT_SHARED_RESOLVER") != NULL;
+    return selected;
+}
+
 static int soft_profile_sample(uint64_t pc) {
     return g_prof && ((((pc >> 2) * UINT64_C(0x9e3779b97f4a7c15)) >> 58) == 0);
 }
@@ -47,10 +70,57 @@ static uint32_t a64_tbz_x(int reg, unsigned bit, int64_t words) {
            (unsigned)reg;
 }
 
+/* ubfx Xd,Xn,#12,#SOFT_TLB_INDEX_BITS -- the guest page index of an EA. */
+static void emit_a64_soft_tlb_index(int destination, int address) {
+    emit32(0xD3400000u | (12u << 16) | ((12u + SOFT_TLB_INDEX_BITS - 1u) << 10) | ((unsigned)address << 5) |
+           (unsigned)destination);
+}
+
+/* add Xd,Xcpu,Xindex,lsl #5 -- the entry base for OFF_SOFT_TLB-relative loads. */
+static void emit_a64_soft_tlb_entry(int destination, int index) {
+    emit32(0x8B000000u | ((unsigned)index << 16) | (5u << 10) | ((unsigned)CPUREG << 5) | (unsigned)destination);
+}
+
+/* sub Xd,Xd,#bytes without touching NZCV; bytes may be 4096, past imm12. */
+static void emit_a64_soft_sub_bytes(int reg, uint64_t bytes) {
+    if (bytes == 4096)
+        emit32(0xD1400000u | (1u << 10) | ((unsigned)reg << 5) | (unsigned)reg);
+    else
+        e_subi(reg, reg, (unsigned)bytes);
+}
+
+#define SOFT_BYTES_BEGIN uint8_t *soft_bytes_mark = g_cp
+#define SOFT_BYTES_END g_prof_soft_guard_bytes += (uint64_t)(g_cp - soft_bytes_mark)
+
+static void a64_soft_guard_restore(struct a64_soft_guard *guard, int reg, int offset);
+
+/*
+ * Darwin reserves host x18 for the platform and clears it asynchronously: a
+ * value left there is observably zero after any exception return, between two
+ * consecutive instructions and with no fault of its own.  The inline guard
+ * below keeps the direct-mapped entry base live across four loads, so parking
+ * it in x18 turns every guarded access into an intermittent
+ * `ldr Xt,[xzr,#OFF_SOFT_TLB+k]` -- a null-page read at a fixed low address,
+ * which on arm64 macOS lands in the 4 GiB __PAGEZERO and raises SEGV_ACCERR.
+ * Measured on Darwin 25.3: a spin loop observes x18 zeroed within ~30
+ * iterations; the same loop on arm64 Linux holds it for thousands, which is
+ * why only the macOS host can express this.  There is no third engine-private
+ * host register in this ABI, so borrow a guest one and spill it to its own CPU
+ * slot for the length of the probe -- the discipline the shared resolver
+ * already applies to x14/x15.  Never `ea` (it carries the effective address)
+ * and never `tmp` (the probe's value scratch).
+ */
+static int a64_soft_guard_base_register(int ea, int tmp) {
+    for (int reg = 0; reg <= 30; ++reg)
+        if (reg != ea && reg != tmp && !is_stolen(reg)) return reg;
+    return -1;
+}
+
 static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2, uint64_t bytes, uint32_t required,
                                                        uint64_t pc) {
     struct a64_soft_guard guard = {.ea = ea, .tmp = tmp, .tmp2 = tmp2, .bytes = bytes, .required = required, .pc = pc};
     int resume_ea = ea;
+    SOFT_BYTES_BEGIN;
     if (!jit_guest_soft_active()) return guard;
     guard.active = 1;
     guard.profile_sample = soft_profile_sample(pc);
@@ -63,15 +133,20 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
      * scratch: real x18 is reserved by Darwin and may be cleared asynchronously.
      * Shadow-enabled builds retain the proven inline guard below.
      */
-    guard.shared = shadowgate() < 0 && !g_tier2_build && !guard.profile_sample && resume_ea != 15;
+    guard.shared =
+        a64_soft_shared_resolver() && shadowgate() < 0 && !g_tier2_build && !guard.profile_sample && resume_ea != 15;
+    if (guard.shared)
+        g_prof_soft_shared_sites++;
+    else
+        g_prof_soft_inline_sites++;
     if (guard.shared) {
         if (ea != 16) e_movr(16, ea);
         guard.ea = 16;
         guard.tmp = 17;
-        guard.tmp2 = 18;
+        guard.tmp2 = -1; /* the shared resolver owns its own base; host x18 is never used */
         ea = 16;
         tmp = 17;
-        tmp2 = 18;
+        tmp2 = -1;
     }
 
     if (guard.shared) {
@@ -107,31 +182,51 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
         guard.native = g_cp;
         e_ldr(15, CPUREG, 15 * 8);
         if (resume_ea != 16) e_movr(resume_ea, 16);
+        SOFT_BYTES_END;
         return guard;
     }
 
     /* Width-independent cached interval hit, using sign bits of non-setting
        subtracts. Linux userspace canonical addresses are below 2^63, so an
-       unsigned underflow is exactly the high-bit test here. */
-    e_ldr(tmp, CPUREG, OFF_SOFT_PAGE); /* inclusive first */
-    emit32(0xCB000000u | ((unsigned)tmp << 16) | ((unsigned)ea << 5) | (unsigned)tmp2);
-    emit32(0xD37FFC00u | ((unsigned)tmp2 << 5) | (unsigned)tmp2); /* lsr tmp2,tmp2,#63 */
+       unsigned underflow is exactly the high-bit test here.  tmp2 holds the
+       direct-mapped entry base for the whole sequence; tmp is the scratch. */
+    int borrowed_base = -1;
+    if (tmp2 == 18) {
+        borrowed_base = a64_soft_guard_base_register(ea, tmp);
+        if (borrowed_base < 0) {
+            static const char message[] = "no host register free for the soft-memory guard entry base";
+            (void)jit_fail(HL_STATUS_OUT_OF_MEMORY, message, sizeof message - 1u);
+            _exit(70);
+        }
+        /* The borrowed register holds its guest value here, so the spill is a
+           refresh of the CPU record and the miss exit restores it before the
+           architectural spill runs. */
+        e_str(borrowed_base, CPUREG, borrowed_base * 8);
+        a64_soft_guard_restore(&guard, borrowed_base, borrowed_base * 8);
+        tmp2 = borrowed_base;
+        guard.tmp2 = borrowed_base;
+    }
+    emit_a64_soft_tlb_index(tmp, ea);
+    emit_a64_soft_tlb_entry(tmp2, tmp);
+
+    e_ldr(tmp, tmp2, OFF_SOFT_TLB + 0); /* inclusive first */
+    emit32(0xCB000000u | ((unsigned)tmp << 16) | ((unsigned)ea << 5) | (unsigned)tmp);
+    emit32(0xD37FFC00u | ((unsigned)tmp << 5) | (unsigned)tmp); /* lsr tmp,tmp,#63 */
     guard.miss[guard.nmiss++] = (uint32_t *)g_cp;
     guard.miss_bit[guard.nmiss - 1] = -1;
-    guard.miss_reg[guard.nmiss - 1] = tmp2;
+    guard.miss_reg[guard.nmiss - 1] = tmp;
     emit32(0);
 
-    e_ldr(tmp, CPUREG, OFF_SOFT_LIMIT); /* exclusive end */
-    e_movconst(tmp2, bytes);
-    emit32(0x8B000000u | ((unsigned)tmp2 << 16) | ((unsigned)ea << 5) | (unsigned)tmp2);
-    emit32(0xCB000000u | ((unsigned)tmp2 << 16) | ((unsigned)tmp << 5) | (unsigned)tmp2);
-    emit32(0xD37FFC00u | ((unsigned)tmp2 << 5) | (unsigned)tmp2);
+    e_ldr(tmp, tmp2, OFF_SOFT_TLB + 8);                                               /* exclusive end */
+    emit32(0xCB000000u | ((unsigned)ea << 16) | ((unsigned)tmp << 5) | (unsigned)tmp); /* sub tmp,tmp,ea */
+    emit_a64_soft_sub_bytes(tmp, bytes);
+    emit32(0xD37FFC00u | ((unsigned)tmp << 5) | (unsigned)tmp);
     guard.miss[guard.nmiss++] = (uint32_t *)g_cp;
     guard.miss_bit[guard.nmiss - 1] = -1;
-    guard.miss_reg[guard.nmiss - 1] = tmp2;
+    guard.miss_reg[guard.nmiss - 1] = tmp;
     emit32(0);
 
-    e_ldr(tmp, CPUREG, OFF_SOFT_PROTECTION);
+    e_ldr(tmp, tmp2, OFF_SOFT_TLB + 24);
     if (required & HL_LOGICAL_VMA_READ) {
         guard.miss[guard.nmiss++] = (uint32_t *)g_cp;
         guard.miss_bit[guard.nmiss - 1] = 0;
@@ -144,9 +239,11 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
         guard.miss_reg[guard.nmiss - 1] = tmp;
         emit32(0); /* tbz tmp,#1,miss */
     }
-    e_ldr(tmp, CPUREG, OFF_SOFT_DELTA);
+    e_ldr(tmp, tmp2, OFF_SOFT_TLB + 16);
+    if (borrowed_base >= 0) e_ldr(borrowed_base, CPUREG, borrowed_base * 8); /* last use of the entry base */
     emit32(0x8B000000u | ((unsigned)tmp << 16) | ((unsigned)ea << 5) | (unsigned)ea); /* add ea,ea,tmp */
     guard.native = g_cp;
+    SOFT_BYTES_END;
     return guard;
 }
 
@@ -196,6 +293,7 @@ static void emit_a64_soft_exit_site(const struct a64_soft_guard *guard) {
 
 static void emit_a64_soft_guard_end(struct a64_soft_guard *guard) {
     if (!guard->active) return;
+    SOFT_BYTES_BEGIN;
     if (guard->shared) {
         uint32_t *skip = (uint32_t *)g_cp;
         emit32(0); /* b resume */
@@ -219,6 +317,7 @@ static void emit_a64_soft_guard_end(struct a64_soft_guard *guard) {
         }
         int32_t narrow_delta = (int32_t)miss_delta;
         memcpy(guard->metadata + 8, &narrow_delta, sizeof narrow_delta);
+        SOFT_BYTES_END;
         return;
     }
     uint32_t *skip = (uint32_t *)g_cp;
@@ -234,6 +333,7 @@ static void emit_a64_soft_guard_end(struct a64_soft_guard *guard) {
             *guard->miss[i] =
                 a64_tbz_x(guard->miss_reg[i], (unsigned)guard->miss_bit[i], (miss - (uint8_t *)guard->miss[i]) / 4);
     }
+    SOFT_BYTES_END;
     // Profiling must not insert register-using code into this live-EA path.
 }
 
@@ -252,6 +352,7 @@ static void aarch64_soft_filter_refresh(struct cpu *c) {
 
 static void emit_a64_soft_stub(void) {
     if (!g_soft_stub_patch_count && !g_soft_resolver_patch_count && !g_soft_legacy_stub_patch_count) return;
+    SOFT_BYTES_BEGIN;
     if (g_soft_resolver_patch_count) {
         uint32_t *cold_miss_patches[1024];
         int cold_miss_bits[1024]; /* -1 = CBNZ x15, otherwise TBZ x15,bit */
@@ -279,8 +380,16 @@ static void emit_a64_soft_stub(void) {
             }
 
             /* x16 = guest EA, x17 = immutable site metadata. x15 was saved by
-               the site and is safe scratch; x18 must never be used on Darwin. */
-            e_ldr(15, CPUREG, OFF_SOFT_PAGE);
+               the site and is safe scratch; x18 must never be used on Darwin.
+               The direct-mapped entry base needs a SECOND scratch, so guest
+               x14 is spilled to its own register slot across the probe and
+               restored on both the hit and the miss exit -- exactly the
+               discipline the site already applies to x15. */
+            e_str(14, CPUREG, 14 * 8);
+            emit_a64_soft_tlb_index(15, 16);
+            emit_a64_soft_tlb_entry(14, 15);
+
+            e_ldr(15, 14, OFF_SOFT_TLB + 0);
             emit32(0xCB000000u | (15u << 16) | (16u << 5) | 15u);
             emit32(0xD37FFC00u | (15u << 5) | 15u);
             assert(cold_miss_count < sizeof cold_miss_patches / sizeof cold_miss_patches[0]);
@@ -288,7 +397,7 @@ static void emit_a64_soft_stub(void) {
             cold_miss_bits[cold_miss_count++] = -1;
             emit32(0);
 
-            e_ldr(15, CPUREG, OFF_SOFT_LIMIT);
+            e_ldr(15, 14, OFF_SOFT_TLB + 8);
             if (bytes == 4096)
                 emit32(0xD1400000u | (1u << 10) | (15u << 5) | 15u);
             else
@@ -300,7 +409,7 @@ static void emit_a64_soft_stub(void) {
             cold_miss_bits[cold_miss_count++] = -1;
             emit32(0);
 
-            e_ldr(15, CPUREG, OFF_SOFT_PROTECTION);
+            e_ldr(15, 14, OFF_SOFT_TLB + 24);
             if (required & HL_LOGICAL_VMA_READ) {
                 assert(cold_miss_count < sizeof cold_miss_patches / sizeof cold_miss_patches[0]);
                 cold_miss_patches[cold_miss_count] = (uint32_t *)g_cp;
@@ -313,12 +422,14 @@ static void emit_a64_soft_stub(void) {
                 cold_miss_bits[cold_miss_count++] = 1;
                 emit32(0); /* tbz x15,#WRITE,miss */
             }
-            e_ldr(15, CPUREG, OFF_SOFT_DELTA);
+            e_ldr(15, 14, OFF_SOFT_TLB + 16);
             emit32(0x8B000000u | (15u << 16) | (16u << 5) | 16u);
+            e_ldr(14, CPUREG, 14 * 8);
             e_addi(17, 17, 16);
             e_br(17);
         }
         uint8_t *resolver_miss = g_cp;
+        e_ldr(14, CPUREG, 14 * 8);
         for (unsigned i = 0; i < cold_miss_count; ++i) {
             uint32_t *patch = cold_miss_patches[i];
             int64_t displacement = (resolver_miss - (uint8_t *)patch) / 4;
@@ -381,6 +492,7 @@ static void emit_a64_soft_stub(void) {
         emit_blockret(9);
         e_br(9);
     }
+    SOFT_BYTES_END;
 }
 
 /* A discontinuous-view retry executes against cpu->soft_bounce.  Force one
@@ -396,12 +508,13 @@ static void emit_a64_soft_bounce_commit(uint64_t next_pc) {
     *clear = 0xB4000000u | (((uint32_t)((resume - (uint8_t *)clear) / 4) & 0x7ffffu) << 5) | 16u;
 }
 
-static void emit_a64_soft_fold_address(int address, int temporary, int flags) {
+static void emit_a64_soft_fold_address(int address, int temporary) {
     if (!guestbase_on()) return;
     emit32(0xD360FC00u | ((unsigned)address << 5) | (unsigned)temporary); // lsr temporary, address, #32
     uint32_t *high = (uint32_t *)g_cp;
-    emit32(0);                             // cbnz temporary, done
-    emit32(0xD53B4200u | (unsigned)flags); // mrs flags, nzcv
+    emit32(0);                                  // cbnz temporary, done
+    emit32(0xD53B4200u | (unsigned)temporary);  // mrs temporary, nzcv
+    e_str(temporary, CPUREG, OFF_NZCV_FOLD);    // park the guest flags (host x18 is not a register here)
     e_movconst(temporary, g_nonpie_lo);
     emit32(0xEB000000u | ((unsigned)temporary << 16) | ((unsigned)address << 5) | 31u); // cmp address, lo
     uint32_t *below = (uint32_t *)g_cp;
@@ -413,7 +526,8 @@ static void emit_a64_soft_fold_address(int address, int temporary, int flags) {
     e_movconst(temporary, g_nonpie_bias);
     emit32(0x8B000000u | ((unsigned)temporary << 16) | ((unsigned)address << 5) | (unsigned)address);
     uint8_t *restore = g_cp;
-    emit32(0xD51B4200u | (unsigned)flags); // msr nzcv, flags
+    e_ldr(temporary, CPUREG, OFF_NZCV_FOLD);
+    emit32(0xD51B4200u | (unsigned)temporary); // msr nzcv, temporary
     uint8_t *done = g_cp;
     *high = 0xB5000000u | (((uint32_t)((done - (uint8_t *)high) / 4) & 0x7ffffu) << 5) | (unsigned)temporary;
     *below = 0x54000000u | (((uint32_t)((restore - (uint8_t *)below) / 4) & 0x7ffffu) << 5) | 3u;
@@ -428,7 +542,7 @@ static void emit_a64_soft_exclusive(uint32_t in) {
         e_ldr(16, CPUREG, base * 8);
     else
         e_movr(16, base);
-    emit_a64_soft_fold_address(16, 17, 18);
+    emit_a64_soft_fold_address(16, 17);
     emit_a64_bus_guard(16, a64_mem_bytes(in), g_emit_gpc);
 
     int mask = gpr_field_mask(in);

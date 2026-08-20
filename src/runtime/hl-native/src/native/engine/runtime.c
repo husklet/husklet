@@ -42,6 +42,7 @@ struct hl_engine {
     atomic_flag lock;
     atomic_bool checkpoint_control_lock;
     hl_host_handle process;
+    hl_host_handle process_result;
     uint32_t state;
     uint32_t pending_termination;
     hl_linux_abi box;
@@ -383,6 +384,15 @@ static hl_status hl_engine_checkpoint_control_ready(hl_engine *engine) {
         return HL_STATUS_PLATFORM_FAILURE;
     engine->checkpoint_control_ready = 1;
     return HL_STATUS_OK;
+#endif
+}
+
+static void hl_engine_checkpoint_arena_stop(hl_engine *engine) {
+#if defined(_WIN32)
+    (void)engine;
+#else
+    if (engine->checkpoint_control_parent >= 0)
+        (void)shutdown(engine->checkpoint_control_parent, SHUT_RDWR);
 #endif
 }
 
@@ -1236,6 +1246,7 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
     }
     hl_engine_lock(engine);
     engine->process = process;
+    engine->process_result = process_result;
     if (engine->state != HL_ENGINE_DESTROYING) engine->state = HL_ENGINE_RUNNING;
     pending = engine->pending_termination;
     hl_engine_unlock(engine);
@@ -1254,8 +1265,12 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
             (void)engine->host.process->terminate(engine->host.context, process, HL_HOST_PROCESS_TERMINATE_FORCE);
     }
     waited = engine->host.process->wait(engine->host.context, process, HL_HOST_DEADLINE_INFINITE);
+    hl_engine_checkpoint_arena_stop(engine);
     hl_engine_lock(engine);
     engine->process = HL_HOST_HANDLE_INVALID;
+    /* Withdrawn before finish_process, which consumes the token: a reader that outlived the guest must
+       find no handle rather than a released one. */
+    engine->process_result = HL_HOST_HANDLE_INVALID;
     hl_engine_unlock(engine);
     closed = engine->host.process->close(engine->host.context, process);
     if (waited.status != HL_STATUS_OK) {
@@ -1289,16 +1304,28 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
     return status;
 }
 
+int32_t hl_engine_guest_pid(hl_engine *engine) {
+    hl_host_handle token;
+    int32_t guest_pid = 0;
+    if (engine == NULL) return 0;
+    hl_engine_lock(engine);
+    token = engine->process_result;
+    if (token != HL_HOST_HANDLE_INVALID && engine->backend != NULL && engine->backend->process_guest_pid != NULL)
+        guest_pid = engine->backend->process_guest_pid(token);
+    hl_engine_unlock(engine);
+    return guest_pid;
+}
+
 hl_status hl_engine_request(hl_engine *engine, uint32_t request, const void *data, size_t data_size) {
     uint32_t reason;
     hl_host_handle process;
     hl_status status;
     if (engine == NULL || (data_size != 0 && data == NULL)) return HL_STATUS_INVALID_ARGUMENT;
     if (request == HL_ENGINE_REQUEST_CHECKPOINT_PRIVATE) {
-        uint32_t signal_number;
 #if defined(_WIN32)
         return HL_STATUS_NOT_SUPPORTED;
 #else
+        uint32_t signal_number;
         if (data == NULL || data_size != sizeof(signal_number)) return HL_STATUS_INVALID_ARGUMENT;
         memcpy(&signal_number, data, sizeof(signal_number));
         if (signal_number == 0 || signal_number > 64) return HL_STATUS_INVALID_ARGUMENT;
@@ -1363,6 +1390,7 @@ hl_status hl_engine_request(hl_engine *engine, uint32_t request, const void *dat
     process = engine->process;
     hl_engine_unlock(engine);
     if (process == HL_HOST_HANDLE_INVALID) return HL_STATUS_OK;
+    if (reason == HL_HOST_PROCESS_TERMINATE_FORCE) hl_engine_checkpoint_arena_stop(engine);
     status = (hl_status)engine->host.process->terminate(engine->host.context, process, reason).status;
     if (status == HL_STATUS_INVALID_ARGUMENT) {
         hl_engine_lock(engine);
@@ -1382,6 +1410,7 @@ void hl_engine_destroy(hl_engine *engine) {
         engine->pending_termination = HL_HOST_PROCESS_TERMINATE_FORCE;
         process = engine->process;
         hl_engine_unlock(engine);
+        hl_engine_checkpoint_arena_stop(engine);
         if (process != HL_HOST_HANDLE_INVALID)
             (void)engine->host.process->terminate(engine->host.context, process, HL_HOST_PROCESS_TERMINATE_FORCE);
         for (;;) {

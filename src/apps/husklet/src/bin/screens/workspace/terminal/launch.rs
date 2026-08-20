@@ -45,8 +45,11 @@ impl Launch<'_> {
         let pid = self.pid.clone();
         glib::child_watch_add_local(glib::Pid(child), move |_pid, status| {
             let status = ChildStatus::finish(&pid, status);
-            if !status.succeeded() {
+            if status.should_report(window.closing.get()) {
                 terminal.feed(format!("\r\n\x1b[31mworkspace session ended ({status})\x1b[0m\r\n").as_bytes());
+                return;
+            }
+            if !status.succeeded() {
                 return;
             }
             PaneView::new(&window, &terminal).close();
@@ -82,6 +85,10 @@ impl ChildStatus {
     fn succeeded(self) -> bool {
         self == Self::Exited(0)
     }
+
+    fn should_report(self, closing: bool) -> bool {
+        !closing && !self.succeeded()
+    }
 }
 
 impl std::fmt::Display for ChildStatus {
@@ -91,6 +98,41 @@ impl std::fmt::Display for ChildStatus {
             Self::Signaled(signal) => write!(formatter, "signal {signal}"),
             Self::Unknown(status) => write!(formatter, "wait status {status:#x}"),
         }
+    }
+}
+
+/// The state a pane is in between being drawn and its shell accepting a keystroke.
+///
+/// Nothing here changes launch control flow. It exists because a pane that has replayed history is
+/// visually indistinguishable from a live shell, which is what let a Ctrl-C typed at a replayed
+/// prompt look like a shell that had died.
+///
+/// The notice claimed for a while that "keystrokes are not delivered to a shell", and that was
+/// false in the one direction a warning must never be false in. The pane owns its pty from
+/// `PtyProcess::spawn` a few lines below, so a line typed against the replayed prompt is held in
+/// the tty's input queue and read by the shell the instant it starts -- a verification run typed
+/// one and watched it execute. A banner exists so a live pane can be told from a replayed one; a
+/// banner the user can catch lying teaches them to distrust the true cases too. So it now says what
+/// actually happens to the keystroke.
+struct NotYetLive;
+
+impl NotYetLive {
+    /// Dim styling, matching the reopen notice, applied only where it is written to a terminal.
+    const DIM: &'static str = "\u{1b}[2m";
+    const RESET: &'static str = "\u{1b}[0m";
+
+    /// What becomes of a keystroke typed while the pane is not live. True of both openings.
+    const QUEUED: &'static str = "Anything you type now is queued by the terminal and runs when the shell starts.";
+
+    fn notice(restoring: bool) -> String {
+        let prefix = hl::runtime::domain::RESTORE_NOTICE_PREFIX;
+        let words = if restoring {
+            "Restoring this workspace. The output above is history from your last session; this pane is not live yet."
+        } else {
+            "Starting this workspace. This pane is not live yet."
+        };
+        let queued = Self::QUEUED;
+        format!("\r\n{}{prefix}{words} {queued}{}\r\n", Self::DIM, Self::RESET)
     }
 }
 
@@ -177,6 +219,12 @@ pub(crate) fn make_terminal_ex(
     if !replay.is_empty() {
         term.feed(&replay);
     }
+    // Replayed scrollback ends in the prompt the previous session left behind, and that prompt does
+    // not accept input: the worker below has not started a shell yet, and on a reopened workspace it
+    // will not for as long as the restore takes. Say so, in the same attributed voice the restore
+    // summary uses, so "restoring" is legible as a state distinct from "ready". The notice carries
+    // the notice prefix, so it is filtered out of the scrollback this pane persists.
+    term.feed(NotYetLive::notice(!replay.is_empty()).as_bytes());
     // NOTE: we deliberately do NOT use VTE's spawn_async — on macOS it fork()s inside the multithreaded
     // GTK process and does non-async-signal-safe work before exec, which crashes the child before it
     // runs (every command "exits 11"). Instead spawn via posix_spawn (async-safe) onto a PTY we own.
@@ -198,7 +246,43 @@ pub(crate) const URL_REGEX: &str = r"(?:https?://|www\.)[^\s<>\x22'`{}|\\^\[\]]+
 
 #[cfg(test)]
 mod child_status_tests {
-    use super::ChildStatus;
+    use super::{ChildStatus, NotYetLive};
+
+    #[test]
+    fn a_pane_that_is_not_live_yet_says_so_in_husklets_own_attributed_voice() {
+        let prefix = hl::runtime::domain::RESTORE_NOTICE_PREFIX;
+        let restoring = NotYetLive::notice(true);
+        let starting = NotYetLive::notice(false);
+
+        for notice in [&restoring, &starting] {
+            assert!(notice.contains(prefix), "the notice must be attributed to Husklet");
+            assert!(
+                notice.contains("not live yet"),
+                "the notice must name the state, not merely decorate it"
+            );
+            // Persistence drops any line carrying the prefix, so the notice describes one launch
+            // and can never be replayed as though it were guest output.
+            assert!(
+                super::HistorySnapshot::persistent(notice).trim().is_empty(),
+                "the notice must never be persisted as scrollback"
+            );
+        }
+        assert!(restoring.contains("history from your last session"));
+        assert!(!starting.contains("history from your last session"));
+
+        // The pane owns its pty before the notice can be read, so a keystroke is queued and run,
+        // not dropped. Claiming otherwise is a false statement about the user's own input.
+        for notice in [&restoring, &starting] {
+            assert!(
+                notice.contains("queued by the terminal and runs when the shell starts"),
+                "the notice must say what becomes of a keystroke typed against it"
+            );
+            assert!(
+                !notice.contains("not delivered"),
+                "a keystroke typed at a not-yet-live pane is delivered; the notice must not deny it"
+            );
+        }
+    }
     use std::cell::Cell;
 
     #[test]
@@ -220,5 +304,18 @@ mod child_status_tests {
             let _ = ChildStatus::finish(&pid, status);
             assert_eq!(pid.get(), 0);
         }
+    }
+
+    #[test]
+    fn intentional_workspace_close_suppresses_launcher_exit_diagnostics() {
+        for status in [
+            ChildStatus::Signaled(libc::SIGHUP),
+            ChildStatus::Signaled(libc::SIGKILL),
+            ChildStatus::Exited(70),
+        ] {
+            assert!(!status.should_report(true));
+            assert!(status.should_report(false));
+        }
+        assert!(!ChildStatus::Exited(0).should_report(false));
     }
 }

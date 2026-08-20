@@ -1,7 +1,60 @@
+// Linux exclusive namespace creation reports an existing absolute target before consulting the target's
+// parent write permission or a read-only mount.  Resolve from a newly-owned namespace root: borrowing cwd or
+// a pathname remembered for a dirfd would make an absolute request depend on unrelated process state.  The
+// cursor walk follows each prefix symlink before interpreting a later `..`, and the final lookup is nofollow
+// so a dangling symlink is still an existing name.  Trailing separators are removed only for that lookup;
+// the unchanged create path retains them if the final name is absent.
+static int absolute_exclusive_create_precheck(const char *raw) {
+    if (raw == NULL || raw[0] != '/') return 0;
+    char path[HL_LINUX_PATH_MAX + 1];
+    if (path_copy(path, sizeof path, raw) != 0) return -ENAMETOOLONG;
+    size_t length = strlen(path);
+    while (length > 1 && path[length - 1] == '/') path[--length] = 0;
+
+    hl_vfs_cursor root;
+    int error = hl_vfs_cursor_namespace_root(&root);
+    if (error != 0) return error;
+    uint32_t groups[HL_NGROUPS_MAX];
+    hl_dac_credentials credentials = dac_credentials_current(groups);
+    hl_vfs_cursor_entry entry;
+    error = hl_vfs_cursor_walk(&root, &root, path, 1, 1, 0, NULL, 0, NULL, NULL, NULL,
+                               dac_authorize_cursor_search, &credentials, &entry);
+    if (error == 0) {
+        hl_vfs_cursor_entry_release(&entry);
+        error = -EEXIST;
+    } else if (error == -ENOENT) {
+        // Distinguish an absent final name (creation may proceed) from an absent prefix (preserve ENOENT).
+        error = hl_vfs_cursor_walk(&root, &root, path, 1, 1, 1, NULL, 0, NULL, NULL, NULL,
+                                   dac_authorize_cursor_search, &credentials, &entry);
+    }
+    hl_vfs_cursor_release(&root);
+    return error;
+}
+
+static int mknodat_type_error(mode_t mode) {
+    switch (mode & S_IFMT) {
+    case 0:
+    case S_IFREG:
+    case S_IFCHR:
+    case S_IFBLK:
+    case S_IFIFO:
+    case S_IFSOCK: return 0;
+    case S_IFDIR: return -EPERM;
+    default: return -EINVAL;
+    }
+}
+
 static void svc_fs_namespace_33(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
                                 uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 33: {
+        int validation = mknodat_type_error((mode_t)a2);
+        if (!validation) validation = at_dirfd_check((int)a0, (const char *)a1);
+        if (!validation) validation = absolute_exclusive_create_precheck((const char *)a1);
+        if (validation) {
+            G_RET(c) = (uint64_t)(int64_t)validation;
+            break;
+        }
         if (jail_ro_at((int)a0, (const char *)a1)) {
             G_RET(c) = (uint64_t)(int64_t)(-EROFS);
             break;
@@ -12,7 +65,7 @@ static void svc_fs_namespace_33(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
                 abs_guest((int)a0, (const char *)a1, gpm, sizeof gpm);
                 // Merged-view errno the upper-only host mknodat can't produce (lower name -> EEXIST; a
                 // lower-only non-dir ancestor -> ENOTDIR; missing ancestor -> ENOENT). Before whiteout clear.
-                int pc = overlay_create_precheck(gpm);
+                int pc = ((const char *)a1)[0] == '/' ? 0 : overlay_create_precheck(gpm);
                 if (pc) {
                     G_RET(c) = (uint64_t)(int64_t)pc;
                     break;
@@ -60,6 +113,12 @@ static void svc_fs_namespace_34(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
     switch (nr) {
     // mknodat(dirfd, path, mode, dev)
     case 34: {
+        int validation = at_dirfd_check((int)a0, (const char *)a1);
+        if (!validation) validation = absolute_exclusive_create_precheck((const char *)a1);
+        if (validation) {
+            G_RET(c) = (uint64_t)(int64_t)validation;
+            break;
+        }
         if (jail_ro_at((int)a0, (const char *)a1)) {
             G_RET(c) = (uint64_t)(int64_t)(-EROFS);
             break;
@@ -74,7 +133,7 @@ static void svc_fs_namespace_34(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
                 abs_guest((int)a0, (const char *)a1, gpm, sizeof gpm);
                 // Merged-view errno the upper-only host mkdirat can't produce (a lower still provides the
                 // name -> EEXIST; a lower-only non-dir ancestor -> ENOTDIR; missing ancestor -> ENOENT).
-                int pc = overlay_create_precheck(gpm);
+                int pc = ((const char *)a1)[0] == '/' ? 0 : overlay_create_precheck(gpm);
                 if (pc) {
                     G_RET(c) = (uint64_t)(int64_t)pc;
                     break;
@@ -366,6 +425,11 @@ static void svc_fs_namespace_36(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
                 break;
             }
         }
+        int absolute_precheck = absolute_exclusive_create_precheck((const char *)a2);
+        if (absolute_precheck) {
+            G_RET(c) = (uint64_t)(int64_t)absolute_precheck;
+            break;
+        }
         if (jail_ro_at((int)a1, (const char *)a2)) {
             G_RET(c) = (uint64_t)(int64_t)(-EROFS);
             break;
@@ -379,7 +443,7 @@ static void svc_fs_namespace_36(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
                 abs_guest((int)a1, (const char *)a2, gpm, sizeof gpm);
                 // Merged-view errno the upper-only host symlinkat can't produce (lower name -> EEXIST; a
                 // lower-only non-dir ancestor -> ENOTDIR; missing ancestor -> ENOENT). Before whiteout clear.
-                int pc = overlay_create_precheck(gpm);
+                int pc = ((const char *)a2)[0] == '/' ? 0 : overlay_create_precheck(gpm);
                 if (pc) {
                     G_RET(c) = (uint64_t)(int64_t)pc;
                     break;

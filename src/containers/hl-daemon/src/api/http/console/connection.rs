@@ -114,7 +114,12 @@ impl Connection {
                     // watching input and keep draining; a client that really went away
                     // surfaces as a write failure below.
                     Ok(InputEnd::Closed) => {
-                        if !streams.stdin {
+                        // An owning exec attachment uses socket lifetime as
+                        // process lifetime. EOF is therefore a full owner
+                        // disconnect, even when stdin was enabled; otherwise a
+                        // quiet process can retain its attachment lease and
+                        // kill-on-disconnect authority forever.
+                        if self.disconnect.is_some() || !streams.stdin {
                             disconnected = true;
                             break;
                         }
@@ -132,10 +137,12 @@ impl Connection {
                     _ => break,
                 },
             };
+            let sequence = entry.sequence;
             if Self::write_entry(&mut writer, entry, streams, terminal).await.is_err() {
                 disconnected = true;
                 break;
             }
+            self.session.acknowledge(sequence);
         }
         let _ = writer.shutdown().await;
         if let Some(task) = input_task {
@@ -163,7 +170,9 @@ impl Connection {
     {
         let history = session.history().await.map_err(std::io::Error::other)?;
         for entry in history {
+            let sequence = entry.sequence;
             Self::write_entry(writer, entry, streams, terminal).await?;
+            session.acknowledge(sequence);
         }
         Ok(())
     }

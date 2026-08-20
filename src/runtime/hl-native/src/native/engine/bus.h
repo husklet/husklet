@@ -15,13 +15,17 @@ typedef struct hl_guest_bus {
     hl_guest_bus_query query;
     const hl_guest_bus_ops *ops;
     void *context;
-    _Atomic uint64_t generation;
-    _Atomic int enabled;
+    /* generation<<1 | active, advanced as one word: see hl_guest_bus_changed. */
+    _Atomic uint64_t state;
+    /* Set once the bus can no longer prove it is able to invalidate code
+       translated while disarmed; the bus then stays armed for good. */
+    _Atomic int latched;
 } hl_guest_bus;
 
 void hl_guest_bus_init(hl_guest_bus *, const hl_guest_bus_ops *, void *);
 void hl_guest_bus_bind(hl_guest_bus *, hl_guest_bus_query, int, uint64_t);
 void hl_guest_bus_changed(hl_guest_bus *, uint64_t, int);
+void hl_guest_bus_arm_latched(hl_guest_bus *);
 int hl_guest_bus_active(const hl_guest_bus *);
 uint64_t hl_guest_bus_fault(const hl_guest_bus *, uint64_t, uint64_t);
 void hl_guest_bus_begin(hl_guest_bus *);
@@ -30,6 +34,7 @@ void jit_guest_bus_bind(hl_guest_bus_query, int, uint64_t);
 void jit_guest_bus_changed(void *, uint64_t, int);
 void jit_guest_bus_transition_begin(void *);
 void jit_guest_bus_transition_end(void *);
+void jit_guest_bus_arm_latched(void);
 int jit_guest_bus_active(void);
 uint64_t jit_guest_bus_fault(uint64_t, uint64_t);
 #endif

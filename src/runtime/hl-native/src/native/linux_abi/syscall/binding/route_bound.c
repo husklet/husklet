@@ -335,8 +335,7 @@ static int bound_route_sync(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1
             break;
         }
         path[status.value] = 0;
-        hl_owner_set_path(path, dac_requested_id(a1), dac_requested_id(a2), 0);
-        result = 0;
+        result = hl_owner_set_path(path, dac_requested_id(a1), dac_requested_id(a2), 0) == 0 ? 0 : -errno;
         break;
     }
     default: return 0;
@@ -543,15 +542,11 @@ static int64_t bound_native_control(hl_linux_fd_snapshot source, uint32_t reques
             break;
         }
         if (request == 0x5401u) { /* TCGETS */
-            struct termios native;
-            if (tcgetattr(native_fd, &native) != 0)
-                result = -errno;
+            int host_status = terminal_termios_host_image(native_fd, argument);
+            if (host_status != 0)
+                result = host_status;
             else {
-#if defined(__linux__)
-                memcpy(argument, &native, 36);
-#else
-                termios_m2l(&native, argument);
-#endif
+                terminal_termios_apply_recall(native_fd, argument);
                 result = 0;
             }
         } else if (request == 0x802c542au) { /* TCGETS2 */
@@ -576,6 +571,9 @@ static int64_t bound_native_control(hl_linux_fd_snapshot source, uint32_t reques
                 }
             }
 #endif
+            /* termios2's leading 36 bytes are the termios image, so the same
+             * guest-authored view applies. */
+            if (result == 0) terminal_termios_apply_recall(native_fd, argument);
         } else if (request >= 0x402c542bu && request <= 0x402c542du) { /* TCSETS2/W2/F2 */
 #if defined(__linux__)
             result = ioctl(native_fd, request, argument) == 0 ? 0 : -errno;
@@ -592,6 +590,7 @@ static int64_t bound_native_control(hl_linux_fd_snapshot source, uint32_t reques
                 result = tcsetattr(native_fd, action, &native) == 0 ? 0 : -errno;
             }
 #endif
+            if (result == 0) terminal_termios_observe_set(native_fd, argument);
         } else if (request >= 0x5402u && request <= 0x5404u) { /* TCSETS{,W,F} */
 
             struct termios native;
@@ -604,6 +603,7 @@ static int64_t bound_native_control(hl_linux_fd_snapshot source, uint32_t reques
 #endif
                 int action = request == 0x5402u ? TCSANOW : request == 0x5403u ? TCSADRAIN : TCSAFLUSH;
                 result = tcsetattr(native_fd, action, &native) == 0 ? 0 : -errno;
+                if (result == 0) terminal_termios_observe_set(native_fd, argument);
             }
         } else if (request == 0x5413u || request == 0x5414u) { /* TIOCGWINSZ/TIOCSWINSZ */
             result = ioctl(native_fd, request == 0x5413u ? TIOCGWINSZ : TIOCSWINSZ, argument) == 0 ? 0 : -errno;
@@ -613,22 +613,46 @@ static int64_t bound_native_control(hl_linux_fd_snapshot source, uint32_t reques
                 if (group < 0)
                     result = -errno;
                 else {
-                    int encoded = group == g_init_hostpid ? 1 : (int)group;
-                    memcpy(argument, &encoded, sizeof(encoded));
-                    result = 0;
+                    int encoded;
+                    if (hl_linux_pidmap_guest_checked(&g_pgidmap, (int)group, &encoded) != 0)
+                        result = -ENOTTY;
+                    else {
+                        if (!hl_linux_pidmap_is_active(&g_pgidmap) && group == g_init_hostpid) encoded = 1;
+                        memcpy(argument, &encoded, sizeof(encoded));
+                        result = 0;
+                    }
                 }
             }
         } else if (request == 0x5410u) { /* TIOCSPGRP */
             {
                 int encoded;
                 memcpy(&encoded, argument, sizeof(encoded));
-                pid_t group = encoded;
-                if (group == 1 && g_init_hostpid) group = g_init_hostpid;
-                result = tcsetpgrp(native_fd, group) == 0 ? 0 : -errno;
+                int host_group;
+                if (encoded > 0 && hl_linux_pidmap_host_checked(&g_pgidmap, encoded, &host_group) != 0) {
+                    result = -ESRCH;
+                    goto bound_ioctl_done;
+                }
+                pid_t group = encoded > 0 ? (pid_t)host_group : encoded;
+                if (!hl_linux_pidmap_is_active(&g_pgidmap) && group == 1 && g_init_hostpid) group = g_init_hostpid;
+                // The borrowed attachment is the terminal selected by the embedder. Require it to belong to
+                // this session and operate on it directly; /dev/tty may name an unrelated outer runner PTY.
+                // Other PTYs retain requested-fd ENOTTY/session semantics through native_fd.
+                pid_t session = getsid(0);
+                int controlling_binding = session > 0 && tcgetsid(native_fd) == session;
+                sigset_t saved;
+                if (!controlling_binding) {
+                    result = -ENOTTY;
+                } else if (tty_ctl_block(&saved) != 0) {
+                    result = -errno;
+                } else {
+                    result = tcsetpgrp(native_fd, group) == 0 ? 0 : -errno;
+                    if (tty_ctl_restore(&saved) != 0 && result == 0) result = -errno;
+                }
             }
         } else { /* TIOCSCTTY */
             result = ioctl(native_fd, TIOCSCTTY, 0) == 0 || errno == EPERM ? 0 : -errno;
         }
+    bound_ioctl_done:
         if (borrowed > 0) bound_attachment_release(native_fd);
     } else {
         result = -ENOTTY;
@@ -696,8 +720,13 @@ static int bound_route_directory(struct cpu *c, uint64_t nr, uint64_t a0, uint64
         size_t used = 0;
         result = 0;
         for (uint32_t index = 0; index < (uint32_t)read.value; ++index) {
-            size_t record_size = (19u + entries[index].name_size + 1u + 7u) & ~(size_t)7u;
-            if (entries[index].name_size > 255 || record_size > byte_capacity - used) {
+            // Same presentation rule as the ordinary getdents64 path: a stored case escape is the
+            // engine's spelling, never the guest's, so decode it before it reaches the guest buffer.
+            char decoded[256];
+            const char *name = hl_case_visible(entries[index].name, decoded, sizeof decoded);
+            size_t name_size = strlen(name);
+            size_t record_size = (19u + name_size + 1u + 7u) & ~(size_t)7u;
+            if (name_size > 255 || record_size > byte_capacity - used) {
                 result = -EIO;
                 break;
             }
@@ -707,7 +736,7 @@ static int bound_route_directory(struct cpu *c, uint64_t nr, uint64_t a0, uint64
             *(uint64_t *)(record + 8) = entries[index].next_offset;
             *(uint16_t *)(record + 16) = (uint16_t)record_size;
             record[18] = (uint8_t)entries[index].type;
-            memcpy(record + 19, entries[index].name, entries[index].name_size);
+            memcpy(record + 19, name, name_size);
             used += record_size;
         }
         if (result == 0 && guest_copy_to(a1, output, used) != (ssize_t)used)

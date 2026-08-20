@@ -20,8 +20,10 @@ int g_rwx_guest;
 #include "../host_sysv.h"
 #include "../host_sysv.h"
 #include "../host_dirent.h" // <dirent.h>, or the Linux dirent shape where the host structure has no d_type
+#include "../container/vfs/case_escape.h" // a stored entry is presented to the guest under its own name, not the case escape
 #include <stdlib.h>
 #include "../host_proc.h" // times(2): CPU accounting (struct tms is layout-compatible with Linux)
+#include "../guest_sync.h"
 #include "../host_fs.h"   // host struct statfs -> translated to the Linux statfs layout
 #include <time.h>         // sysinfo(2) uptime = now - host boot time
 #include "../errno.h"
@@ -580,7 +582,7 @@ static int proc_self_exe(const char *p, char *tgt, size_t cap) {
             // a PEER container process's /proc/<pid>/exe: serve its published canonical exe path
             // (each engine process publishes it at boot + execve -- see proc_reg_publish).
             int host;
-            if (strcmp(end + 1, "exe") || !proc_pid_member((int)pid, &host)) return 0;
+            if (strcmp(end + 1, "exe") || !guest_pid_member_checked((int)pid, &host)) return 0;
             return proc_reg_exe_read(host, tgt, cap);
         }
         rest = end + 1;
@@ -653,6 +655,12 @@ static void guest_abspath_at(int dirfd, const char *raw, char *out, size_t n) {
  * native sentinel path; binding.c supplies the allocator after the syscall families are included. */
 static int64_t bound_dup_at_least(hl_linux_fd source, int minimum, uint32_t descriptor_flags);
 static int bound_exec_descriptor(int descriptor);
+/* The engine-owned per-terminal termios store is defined with the bound terminal router in binding.c and
+ * is used by fs/control.c as well, which is included first. Declaring the two entry points rather than
+ * moving the definition keeps binding.c's include order -- and therefore every system header it pulls in
+ * -- exactly where it was. */
+static void terminal_termios_observe_set(int native_fd, const uint8_t *image);
+static void terminal_termios_apply_recall(int native_fd, uint8_t *argument);
 #include "fs.c"
 static void bound_mapping_reset(void);
 static size_t bound_mapping_watch_capacity(void);
@@ -662,6 +670,16 @@ static int bound_mapping_fork_complete(hl_linux_watch_fork_plan *plan, int child
 #include "rare.c"
 #include "ptrace.c" // bug real ptrace tracer/tracee coordination (uses helpers above + G_* macros)
 #include "binding.c"
+
+static void syscall_restart_architectural_state(struct cpu *c, uint64_t argument_zero, uint64_t number_register) {
+    G_A0(c) = argument_zero;
+#if defined(HL_GUEST_SIGACTION_HAS_RESTORER)
+    G_PC(c) -= 2;
+    G_RET(c) = number_register;
+#else
+    (void)number_register;
+#endif
+}
 
 static void service(struct cpu *c) {
     // Mark this thread as "in a host syscall" for the whole service window (incl. any blocking wait such
@@ -690,25 +708,29 @@ static void service(struct cpu *c) {
     // On x86-64 the syscall NUMBER and the return value share RAX (G_RET), so once the interrupted call wrote
     // its -EINTR result the number is gone -- a transparent restart would re-issue `syscall` with -EINTR as
     // the number. Preserve the entry number register so the SA_RESTART restart re-executes the SAME syscall.
+    uint64_t _svc_nrreg = 0;
 #if defined(HL_GUEST_SIGACTION_HAS_RESTORER)
-    uint64_t _svc_nrreg = G_RET(c);
+    _svc_nrreg = G_RET(c);
 #endif
     g_syscall_restart = 0;
     // Preserve the canonical syscall number across dispatch. x86 aliases the syscall-number and return-value
     // register (RAX), so G_NR(c) after service_local() would translate the result instead of identifying the
     // completed syscall. Post-dispatch FD publication and restart bookkeeping must never depend on tracing.
     uint64_t _rnr = G_NR(c);
+    g_checkpoint_resume_kind = CKPT_CONTINUATION_NONE;
+    g_checkpoint_resume_timeout_ns = -1;
+    if (c->checkpoint_continuation != CKPT_CONTINUATION_NONE && c->checkpoint_syscall == _rnr) {
+        g_checkpoint_resume_kind = c->checkpoint_continuation;
+        g_checkpoint_resume_timeout_ns = c->checkpoint_timeout_ns;
+    }
+    c->checkpoint_continuation = CKPT_CONTINUATION_NONE;
+    c->checkpoint_timeout_ns = -1;
     // seccomp gate: run the guest's installed cBPF filter(s) / STRICT policy against this syscall BEFORE it
     // is routed anywhere. On an intercepted syscall (ERRNO/TRAP/TRACE/KILL/strict-violation) the result is
     // already set in G_RET / a signal is queued / the process is killed, so we must NOT service it. Inert
     // (one predicted-not-taken load) until a guest installs a filter. Runs on the RAW guest register state,
     // before x86 legacy-syscall normalization, so the filter sees the number/args the guest actually issued.
     if (__builtin_expect(seccomp_gate(c) != 0, 0)) {
-#if HL_ENABLE_LOGGING
-        if (g_systrace)
-            fprintf(stderr, "[ret pid=%d] %llu -> %lld (seccomp)\n", (int)getpid(), (unsigned long long)_rnr,
-                    (long long)(int64_t)G_RET(c));
-#endif
         __atomic_store_n(&c->in_service, 0, __ATOMIC_SEQ_CST);
         g_in_service = 0;
         return;
@@ -722,6 +744,7 @@ static void service(struct cpu *c) {
     } else {
         service_local(c); // trusted: byte-identical path
     }
+    if (c->checkpoint_continuation != CKPT_CONTINUATION_NONE) c->checkpoint_syscall = _rnr;
     if (!g_untrusted && (int64_t)G_RET(c) >= 0) {
         int fd = (int)G_RET(c);
         switch (_rnr) {
@@ -755,27 +778,38 @@ static void service(struct cpu *c) {
     // register the dispatch overwrote with the (discarded) EINTR result. The negative EINTR already made the
     // fd-publish block above a no-op, so this runs strictly after it.
     if (g_syscall_restart && c->redirect) {
-        G_A0(c) = _svc_arg0;
+        syscall_restart_architectural_state(c, _svc_arg0, _svc_nrreg);
 #if defined(HL_GUEST_SIGACTION_HAS_RESTORER)
         // x86 pre-advances rip past the `syscall` instruction (0F 05, 2 bytes) at emit time, so `redirect`
         // alone -- which only suppresses aarch64's post-service pc+=4 -- cannot re-execute it. Rewind rip to
         // the syscall instruction so the pending SA_RESTART handler's sigframe saves that pc and sigreturn
         // resumes ON it, transparently restarting the interrupted read()/waitpid() (eintr_restart_read/wait,
         // sarestart). aarch64 needs no rewind: leaving pc on the SVC is exactly what skipping the +4 does.
-        G_PC(c) -= 2;
-        // Restore RAX to the original syscall number (it shares the register with the just-written -EINTR
-        // return), so the re-executed `syscall` re-issues the same call rather than a garbage number.
-        G_RET(c) = _svc_nrreg;
 #endif
     }
-#if HL_ENABLE_LOGGING
-    if (g_systrace)
-        fprintf(stderr, "[ret pid=%d] %llu -> %lld\n", (int)getpid(), (unsigned long long)_rnr,
-                (long long)(int64_t)G_RET(c));
-#endif
     __atomic_store_n(&c->in_service, 0, __ATOMIC_SEQ_CST);
     g_in_service = 0;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+HL_API int HL_TARGET_LOCAL(checkpoint_restart_register_test)(void) {
+    struct cpu cpu = {0};
+    const uint64_t argument = UINT64_C(0x123456789abcdef0);
+    const uint64_t number = UINT64_C(0x135);
+    const uint64_t pc = UINT64_C(0x400020);
+    G_A0(&cpu) = UINT64_C(0xdead);
+    G_RET(&cpu) = UINT64_C(0xbeef);
+    G_PC(&cpu) = pc;
+    syscall_restart_architectural_state(&cpu, argument, number);
+    if (G_A0(&cpu) != argument) return 1;
+#if defined(HL_GUEST_SIGACTION_HAS_RESTORER)
+    if (G_RET(&cpu) != number || G_PC(&cpu) != pc - 2) return 2;
+#else
+    if (G_PC(&cpu) != pc) return 3;
+#endif
+    return 0;
+}
+#endif
 
 static void service_local(struct cpu *c) {
     // Frontends whose guest has legacy syscalls without a canonical (aarch64) equivalent rewrite them
@@ -788,12 +822,6 @@ static void service_local(struct cpu *c) {
     uint64_t nr = G_NR(c), a0 = G_A0(c), a1 = G_A1(c), a2 = G_A2(c), a3 = G_A3(c), a4 = G_A4(c), a5 = G_A5(c);
     HL_LOGF(&g_jit_log, HL_LOG_TAG_SYSCALL, "nr=%llu a0=%#llx a1=%#llx a2=%#llx", (unsigned long long)nr,
             (unsigned long long)a0, (unsigned long long)a1, (unsigned long long)a2);
-#if HL_ENABLE_LOGGING
-    if (g_trace || g_systrace)
-        fprintf(stderr, "[sys pid=%d] %llu (%llx,%llx,%llx,%llx,%llx,%llx)\n", (int)getpid(), (unsigned long long)nr,
-                (unsigned long long)a0, (unsigned long long)a1, (unsigned long long)a2, (unsigned long long)a3,
-                (unsigned long long)a4, (unsigned long long)a5);
-#endif
     // --- non-PIE ET_EXEC pointer-arg redirect (g2h) --------------------------------------------------
     // The table lives in nonpie_args.h -- ONE list, shared with the sentry trust boundary, which applies it
     // restricted to what it forwards. Runs BEFORE the resolution-bump switch below, which itself
@@ -906,11 +934,6 @@ static void service_local(struct cpu *c) {
     // corrupting the guest's stream and stalling the build on pipe backpressure. It is a debug aid, so gate it
     // behind the same syscall-tracing flags as the [sys] trace above -- silent by default. The ENOSYS
     // return below is the real, correct behaviour and stays unconditional.
-#if HL_ENABLE_LOGGING
-    if (g_trace || g_systrace)
-        fprintf(stderr, "[jit] unhandled syscall %llu (a0=%llx a1=%llx) at pc=%llx\n", (unsigned long long)nr,
-                (unsigned long long)a0, (unsigned long long)a1, (unsigned long long)G_PC(c));
-#endif
     G_RET(c) = (uint64_t)(-ENOSYS);
     // Boundary errno translation: every case sets G_RET(c) to a host(macOS) errno on error
     // (-errno, saved e, helper returns, or a macOS E* constant). Map to the Linux errno the guest

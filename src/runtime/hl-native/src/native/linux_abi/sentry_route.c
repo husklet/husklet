@@ -121,16 +121,25 @@ static int sentry_route_wait(struct cpu *c, uint64_t nr) {
 
 static int sentry_route_clone(struct cpu *c, uint64_t nr) {
     if (nr != 220 && nr != 435) return 0;
+    fork_diagnostic_route previous_route =
+        fork_diagnostic_route_enter("sentry-worker", (int)g_worker_pid, (int)g_sentry_pid,
+                                    atomic_load_explicit(&g_guest_children, memory_order_relaxed),
+                                    atomic_load_explicit(&g_worker_threads, memory_order_relaxed), t_ring);
     uint64_t clone3_flags = 0;
     if (nr == 435 && G_A0(c) &&
         guest_copy_from(&clone3_flags, G_A0(c), sizeof clone3_flags) != sizeof clone3_flags) {
+        fork_diagnostic_emit(c, nr, 0, "sentry-clone3-arguments", EFAULT, -1, NULL);
+        fork_diagnostic_route_leave(previous_route);
         G_RET(c) = (uint64_t)(int64_t)-EFAULT;
         return 1;
     }
     int is_thread = nr == 220 ? (G_A0(c) & 0x10000) != 0 : (clone3_flags & 0x10000) != 0;
     int is_vfork = nr == 220 ? (G_A0(c) & 0x4000) != 0 : (clone3_flags & 0x4000) != 0;
+    uint64_t flags = nr == 220 ? G_A0(c) : clone3_flags;
     int64_t snapshot = is_thread ? 0 : sentry_ctl_op(SENTRY_OP_FORK_PREPARE, 0, 0);
     if (!is_thread && snapshot < 0) {
+        fork_diagnostic_emit(c, nr, flags, "sentry-snapshot", (int)-snapshot, -1, NULL);
+        fork_diagnostic_route_leave(previous_route);
         G_RET(c) = (uint64_t)snapshot;
         return 1;
     }
@@ -138,6 +147,8 @@ static int sentry_route_clone(struct cpu *c, uint64_t nr) {
     if (!is_thread && !is_vfork && pipe(sync) != 0) {
         int error = errno;
         sentry_ctl_op(SENTRY_OP_FORK_CANCEL, (uint64_t)snapshot, 0);
+        fork_diagnostic_emit(c, nr, flags, "sentry-sync-pipe", error, -1, NULL);
+        fork_diagnostic_route_leave(previous_route);
         G_RET(c) = (uint64_t)(int64_t)-error;
         return 1;
     }
@@ -147,6 +158,7 @@ static int sentry_route_clone(struct cpu *c, uint64_t nr) {
             int64_t installed = sentry_ctl_op(SENTRY_OP_FORK, (uint64_t)snapshot, (uint64_t)(uint32_t)getpid());
             if (installed < 0) _exit(127);
             sentry_fork_child();
+            fork_diagnostic_route_leave(previous_route);
             return 1;
         }
         close(sync[1]);
@@ -158,11 +170,13 @@ static int sentry_route_clone(struct cpu *c, uint64_t nr) {
         close(sync[0]);
         if (received != sizeof ready || ready != 1) _exit(127);
         sentry_fork_child();
+        fork_diagnostic_route_leave(previous_route);
         return 1;
     }
     if (!is_thread && (int64_t)G_RET(c) > 0) {
         if (is_vfork) {
             atomic_fetch_add(&g_guest_children, 1);
+            fork_diagnostic_route_leave(previous_route);
             return 1;
         }
         close(sync[0]);
@@ -174,7 +188,9 @@ static int sentry_route_clone(struct cpu *c, uint64_t nr) {
             kill(child, SIGKILL);
             int status;
             while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+            fork_diagnostic_emit(c, nr, flags, "sentry-install", (int)-installed, -1, NULL);
             G_RET(c) = (uint64_t)installed;
+            fork_diagnostic_route_leave(previous_route);
             return 1;
         }
         unsigned char ready = 1;
@@ -185,7 +201,9 @@ static int sentry_route_clone(struct cpu *c, uint64_t nr) {
             int status;
             while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
             sentry_ctl_op(SENTRY_OP_REAP, (uint64_t)child, 0);
+            fork_diagnostic_emit(c, nr, flags, "sentry-sync-publish", EIO, -1, NULL);
             G_RET(c) = (uint64_t)(int64_t)-EIO;
+            fork_diagnostic_route_leave(previous_route);
             return 1;
         }
         atomic_fetch_add(&g_guest_children, 1);
@@ -194,6 +212,7 @@ static int sentry_route_clone(struct cpu *c, uint64_t nr) {
         close(sync[1]);
         sentry_ctl_op(SENTRY_OP_FORK_CANCEL, (uint64_t)snapshot, 0);
     }
+    fork_diagnostic_route_leave(previous_route);
     return 1;
 }
 

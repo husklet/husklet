@@ -29,6 +29,14 @@ macro_rules! launch {
         }
     };
 }
+macro_rules! debug {
+    ($name:literal, $_purpose:literal, $shape:ident) => {
+        Definition {
+            name: $name,
+            shape: Shape::$shape,
+        }
+    };
+}
 macro_rules! internal {
     ($name:literal, $_purpose:literal, $shape:ident) => {
         Definition {
@@ -40,6 +48,32 @@ macro_rules! internal {
 
 const DEFINITIONS: &[Definition] = &[
     launch!("HL_CHECKPOINT", "arm checkpoint capture over the store channel", Flag),
+    internal!(
+        "HL_CHECKPOINT_COORDINATOR",
+        "this launch owns the domain freeze: exactly one engine per checkpoint broker",
+        Flag
+    ),
+    internal!(
+        "HL_CHECKPOINT_PHASE_LEDGER",
+        "emit checkpoint phase timing records for performance gates",
+        Flag
+    ),
+    internal!(
+        "HL_DIAGNOSTIC_PORT",
+        "private engine diagnostic writer descriptor",
+        Integer
+    ),
+    internal!(
+        "HL_CHECKPOINT_PHASE_CLOCK_FAIL",
+        "inject an unavailable checkpoint phase clock",
+        Flag
+    ),
+    internal!("HL_CHECKPOINT_PHASE_ISA", "checkpoint phase ledger guest ISA", Text),
+    internal!(
+        "HL_CHECKPOINT_PHASE_GENERATION",
+        "checkpoint restore phase ledger generation",
+        Integer
+    ),
     launch!(
         "HL_CHECKPOINT_POLICY",
         "checkpoint incompatible-resource recovery policy",
@@ -69,88 +103,8 @@ const DEFINITIONS: &[Definition] = &[
     launch!("HL_NET_ISOLATE", "disable guest external networking", Flag),
     launch!("HL_NET_HOST", "use the host network stack directly", Flag),
     launch!(
-        "HL_NATIVE_ADMISSION_CACHE",
-        "reuse the previous native admission across consecutive inline services",
-        Flag
-    ),
-    launch!(
-        "HL_NATIVE_DIRECT_STICKY",
-        "use sticky run-mode flip scoring before a bounded direct hold",
-        Flag
-    ),
-    launch!(
-        "HL_NATIVE_DIRECT_STICKY_LIMIT",
-        "run-mode flip budget the sticky hold is taken at",
-        Text
-    ),
-    launch!(
-        "HL_NATIVE_DIRECT_HOLD_RUNS",
-        "base-budget resolver-run equivalents a bounded direct hold must serve",
-        Integer
-    ),
-    launch!(
-        "HL_NATIVE_DIRECT_STICKY_PERMANENT",
-        "never return direct authority to a process that alternated run mode",
-        Flag
-    ),
-    launch!(
-        "HL_NATIVE_SPLIT_MODE_EXECUTORS",
-        "use separate lazy aarch64 native executors for resolver and direct modes",
-        Flag
-    ),
-    launch!(
-        "HL_A64_DIRTY_OVERFLOW_CONTINUE",
-        "compatibility request to continue aarch64 native execution after dirty-journal saturation",
-        Flag
-    ),
-    launch!(
-        "HL_A64_DIRTY_OVERFLOW_EXIT",
-        "use the legacy aarch64 native exit after exact dirty-journal saturation",
-        Flag
-    ),
-    launch!(
-        "HL_A64_NO_WRITE_COMMIT",
-        "drop the aarch64 post-store dirty-journal commit and publish the whole window per crossing",
-        Flag
-    ),
-    launch!(
-        "HL_A64_NO_WRITE_RESERVE",
-        "drop the aarch64 pre-store dirty-journal reservation",
-        Flag
-    ),
-    launch!(
-        "HL_A64_RUNTIME_WRITE_RESERVE",
-        "run the aarch64 pre-store dirty-journal reservation only at store sites observed to saturate the ring",
-        Flag
-    ),
-    launch!(
-        "HL_NATIVE_DIAGNOSTICS",
-        "report native execution counters at launch exit",
-        Flag
-    ),
-    launch!(
         "HL_C_DIAGNOSTICS",
         "report retained C translation and dispatch phase counters at launch exit",
-        Flag
-    ),
-    internal!(
-        "HL_C_EXECUTION_ATTESTATION",
-        "request one cold retained-C completion record from the Rust lifecycle supervisor",
-        Flag
-    ),
-    internal!(
-        "HL_C_NO_RUNTIME_EXIT",
-        "disable the Rust-owned retained-C exit route for same-binary measurement",
-        Flag
-    ),
-    internal!(
-        "HL_C_NO_RUNTIME_IDENTITY",
-        "disable Rust-owned retained-C task identity for same-binary measurement",
-        Flag
-    ),
-    launch!(
-        "HL_NATIVE_EXECUTION",
-        "enable the bounded native execution adapter",
         Flag
     ),
     launch!("HL_PCACHE", "enable persistent translated-code caching", Flag),
@@ -165,6 +119,56 @@ const DEFINITIONS: &[Definition] = &[
         "HL_CKPT_TEST_FAIL_AFTER_FORK",
         "test-only restore failure after rebuilding descendants",
         Flag
+    ),
+    internal!(
+        "HL_CKPT_TEST_FAIL_TRIGGER_REATTACH",
+        "test-only restored checkpoint trigger reattachment failure",
+        Flag
+    ),
+    internal!(
+        "HL_CKPT_TEST_PEER_EXIT_BEFORE_JOIN",
+        "test-only capture peer that exits before proving membership",
+        Flag
+    ),
+    internal!(
+        "HL_CKPT_TEST_PEER_EXIT_AFTER_JOIN",
+        "test-only capture peer that exits after proving membership",
+        Flag
+    ),
+    internal!(
+        "HL_CKPT_TEST_PEER_SLOW_SAFEPOINT",
+        "test-only capture peer that works far longer than the rendezvous stall window before committing",
+        Flag
+    ),
+    internal!(
+        "HL_CKPT_TEST_PEER_STALLS_AT_SAFEPOINT",
+        "test-only capture peer that never commits and consumes no host CPU time",
+        Flag
+    ),
+    internal!(
+        "HL_CKPT_TEST_PEER_FORGOTTEN_AFTER_KICK",
+        "test-only capture peer dropped from the coordinator's enumeration after it is kicked",
+        Flag
+    ),
+    internal!(
+        "HL_CKPT_TEST_REAPED_UNNAMEABLE",
+        "test-only capture whose reap destroys an unnameable child exit status",
+        Flag
+    ),
+    internal!(
+        "HL_CKPT_TEST_PEER_HIDDEN_FROM_ENUMERATION",
+        "test-only capture peer withheld from the coordinator's first enumeration",
+        Flag
+    ),
+    internal!(
+        "HL_CKPT_TEST_FAIL_TTY_MASK",
+        "test-only terminal-claim mask failure",
+        Flag
+    ),
+    internal!(
+        "HL_CKPT_TEST_FAIL_PIDMAP_AT",
+        "test-only restore identity-publication failure at this guest pid",
+        Integer
     ),
     launch!("HL_ROOTFS_RO", "mount the guest root filesystem read-only", Flag),
     launch!("HL_SANDBOX", "apply host confinement to the untrusted worker", Flag),
@@ -187,10 +191,8 @@ const DEFINITIONS: &[Definition] = &[
         "guest exec environment suppresses engine defaults",
         Flag
     ),
-    Definition {
-        name: "HL_LOG",
-        shape: Shape::Text,
-    },
+    debug!("HL_LOG", "debug-build logging tag selector", Text),
+    debug!("HL_FATAL_DIAGNOSTICS", "fatal guest register publication", Flag),
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -295,33 +297,211 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), DEFINITIONS.len());
         assert_eq!(DEFINITIONS[0].name, "HL_CHECKPOINT");
-        assert_eq!(DEFINITIONS.last().unwrap().name, "HL_LOG");
+        let tail = &DEFINITIONS[DEFINITIONS.len() - 2..];
+        assert_eq!(tail[0].name, "HL_LOG");
+        assert_eq!(tail[1].name, "HL_FATAL_DIAGNOSTICS");
+    }
+
+    /// The C registry in `src/runtime/hl-native/src/native/engine/options.c` is the
+    /// authoritative one: `hl_options_set` rejects a name it does not define, so a worker
+    /// launched with a Rust-only option fails to start. A Rust-only name therefore promises
+    /// a launch effect no layer implements, and a C-only name is unreachable through the
+    /// product surface. Three failure-injection options
+    /// (`HL_CKPT_TEST_FAIL_AFTER_FORK`, `HL_CKPT_TEST_FAIL_TRIGGER_REATTACH`,
+    /// `HL_CKPT_TEST_FAIL_TTY_MASK`) drifted this way and their tests passed because the
+    /// engine never launched, not because the injected failure was handled.
+    const C_REGISTRY: &str = include_str!("../../../runtime/hl-native/src/native/engine/options.c");
+
+    fn c_registry_definitions() -> Vec<(String, Shape)> {
+        let body = C_REGISTRY
+            .split_once("hl_option_definitions[] = {")
+            .expect("C registry table")
+            .1
+            .split_once("\n};")
+            .expect("C registry table end")
+            .0;
+        let mut definitions = Vec::new();
+        for entry in body.split("_OPTION(").skip(1) {
+            let name = entry
+                .split_once('"')
+                .and_then(|(_, rest)| rest.split_once('"'))
+                .expect("option name")
+                .0;
+            let shape = entry
+                .split_once("HL_OPTION_")
+                .expect("option shape")
+                .1
+                .split_once(')')
+                .expect("option shape end")
+                .0
+                .trim();
+            let shape = match shape {
+                "TEXT" => Shape::Text,
+                "PATH" => Shape::Path,
+                "INTEGER" => Shape::Integer,
+                "FLAG" => Shape::Flag,
+                "RECORDS" => Shape::Records,
+                other => panic!("unknown C option shape {other} for {name}"),
+            };
+            definitions.push((name.to_owned(), shape));
+        }
+        definitions
     }
 
     #[test]
-    fn dirty_overflow_policies_are_explicit_launch_options() {
-        let mut options = Options::default();
-        for name in ["HL_A64_DIRTY_OVERFLOW_CONTINUE", "HL_A64_DIRTY_OVERFLOW_EXIT"] {
-            let definition = DEFINITIONS.iter().find(|definition| definition.name == name).unwrap();
-            assert_eq!(definition.shape, Shape::Flag);
-            assert_eq!(options.get(name), None);
-            options.set(name, "1", true).unwrap();
-            assert_eq!(options.get(name), Some("1"));
+    fn c_registry_parse_is_not_vacuous() {
+        let c = c_registry_definitions();
+        assert!(c.len() > 40, "parsed only {} C options", c.len());
+        assert!(c.contains(&("HL_UID".to_owned(), Shape::Integer)));
+        assert!(c.contains(&("HL_CHECKPOINT".to_owned(), Shape::Flag)));
+        assert!(c.contains(&("HL_CWD".to_owned(), Shape::Path)));
+    }
+
+    #[test]
+    fn every_option_is_registered_on_both_sides_with_the_same_shape() {
+        let mut c = c_registry_definitions();
+        c.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut rust = DEFINITIONS
+            .iter()
+            .map(|definition| (definition.name.to_owned(), definition.shape))
+            .collect::<Vec<_>>();
+        rust.sort_by(|left, right| left.0.cmp(&right.0));
+        let rust_only = rust.iter().filter(|entry| !c.contains(entry)).collect::<Vec<_>>();
+        let c_only = c.iter().filter(|entry| !rust.contains(entry)).collect::<Vec<_>>();
+        assert!(
+            rust_only.is_empty() && c_only.is_empty(),
+            "option registries drifted; a Rust-only name makes the worker refuse to start.\n             registered only in hl-engine/src/options.rs: {rust_only:?}\n             registered only in native/engine/options.c: {c_only:?}"
+        );
+    }
+
+    /// The native tree, for scanning what the engine actually *reads*.
+    fn native_sources() -> Vec<String> {
+        fn walk(directory: &std::path::Path, sources: &mut Vec<String>) {
+            for entry in std::fs::read_dir(directory).expect("native directory").flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, sources);
+                } else if path.extension().is_some_and(|kind| kind == "c" || kind == "h") {
+                    sources.push(std::fs::read_to_string(&path).unwrap_or_default());
+                }
+            }
+        }
+        let native = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runtime/hl-native/src/native");
+        let mut sources = Vec::new();
+        walk(&native, &mut sources);
+        assert!(sources.len() > 50, "scanned only {} native sources", sources.len());
+        sources
+    }
+
+    /// Every injection name the engine reads, taken from the engine rather than from a list a lane
+    /// has to remember to update.
+    fn injection_names_read_by_the_engine() -> Vec<String> {
+        let mut names = Vec::new();
+        for source in native_sources() {
+            for fragment in source.split("hl_option_get(\"").skip(1) {
+                let Some((name, _)) = fragment.split_once('"') else {
+                    continue;
+                };
+                if name.starts_with("HL_CKPT_TEST_") && !names.iter().any(|held| held == name) {
+                    names.push(name.to_owned());
+                }
+            }
+        }
+        names.sort_unstable();
+        names
+    }
+
+    /// An unregistered name is not a typo, it is an injection that can never fire.
+    ///
+    /// `hl_option_get` resolves a name against the registry and answers NULL for anything it does
+    /// not define, so a read of an unregistered option is dead code that silently reports "not
+    /// armed" forever -- and a test written against it passes without ever injecting. Three
+    /// injections had already drifted the other way (registered in Rust only, so the worker refused
+    /// to start); `HL_CKPT_TEST_FAIL_PIDMAP_AT` had drifted this way, read by
+    /// `ckpt_restore_identity_hydrate` and defined nowhere.
+    #[test]
+    fn every_injection_the_engine_reads_is_registered() {
+        let read = injection_names_read_by_the_engine();
+        assert!(read.len() >= 6, "found only {read:?}");
+        let unregistered = read
+            .iter()
+            .filter(|name| !DEFINITIONS.iter().any(|definition| definition.name == name.as_str()))
+            .collect::<Vec<_>>();
+        assert!(
+            unregistered.is_empty(),
+            "read by the engine but registered nowhere, so the injection can never fire: {unregistered:?}"
+        );
+    }
+
+    /// The scoping guarantee, pinned where it is expressed.
+    ///
+    /// `HL_OPTION_TEST_INJECTION` is what makes `hl_options_clone` drop an armed injection, so an
+    /// injection cannot be inherited by a nested engine built with no explicit options, nor carried
+    /// across an exec by the guest environment update. Classifying a new injection as
+    /// `HL_INTERNAL_OPTION` would silently restore that inheritance, so the class is asserted here
+    /// against the same authoritative C source the shape cross-check reads.
+    #[test]
+    fn every_injection_is_classified_as_one_in_the_c_registry() {
+        let body = C_REGISTRY
+            .split_once("hl_option_definitions[] = {")
+            .expect("C registry table")
+            .1
+            .split_once("\n};")
+            .expect("C registry table end")
+            .0;
+        for name in injection_names_read_by_the_engine() {
+            let entry = body
+                .split("_OPTION(")
+                .find(|entry| entry.starts_with(&format!("\"{name}\"")))
+                .unwrap_or_else(|| panic!("{name} is not in the C registry"));
+            let macro_name = body
+                .split_once(&format!("_OPTION(\"{name}\""))
+                .expect("registry entry")
+                .0;
+            assert!(
+                macro_name.ends_with("HL_INJECTION"),
+                "{name} is registered as {}_OPTION, so hl_options_clone would copy it into every \
+                 derived option set instead of scoping it to the launch that armed it",
+                macro_name
+                    .rsplit(|character: char| character.is_whitespace())
+                    .next()
+                    .unwrap_or("")
+            );
+            let _ = entry;
         }
     }
 
     #[test]
-    fn split_mode_executors_is_an_explicit_launch_option() {
-        let definition = DEFINITIONS
-            .iter()
-            .find(|definition| definition.name == "HL_NATIVE_SPLIT_MODE_EXECUTORS")
-            .unwrap();
-        assert_eq!(definition.shape, Shape::Flag);
-
-        let mut options = Options::default();
-        assert_eq!(options.get(definition.name), None);
-        options.set(definition.name, "1", true).unwrap();
-        assert_eq!(options.get(definition.name), Some("1"));
+    fn retired_native_executor_options_are_not_registered() {
+        // The Rust native executor these named was deleted; the C engine's authoritative registry
+        // (src/runtime/hl-native/src/native/engine/options.c) never defined them, so accepting them
+        // would promise a launch effect no layer implements.
+        for name in [
+            "HL_NATIVE_EXECUTION",
+            "HL_NATIVE_DIAGNOSTICS",
+            "HL_NATIVE_ADMISSION_CACHE",
+            "HL_NATIVE_DIRECT_STICKY",
+            "HL_NATIVE_DIRECT_STICKY_LIMIT",
+            "HL_NATIVE_DIRECT_HOLD_RUNS",
+            "HL_NATIVE_DIRECT_STICKY_PERMANENT",
+            "HL_NATIVE_SPLIT_MODE_EXECUTORS",
+            // Same class, found by diffing the two registries: registered in Rust only,
+            // with no consumer in C or Rust anywhere in the tree.
+            "HL_A64_DIRTY_OVERFLOW_CONTINUE",
+            "HL_A64_DIRTY_OVERFLOW_EXIT",
+            "HL_A64_NO_WRITE_COMMIT",
+            "HL_A64_NO_WRITE_RESERVE",
+            "HL_A64_RUNTIME_WRITE_RESERVE",
+            "HL_C_EXECUTION_ATTESTATION",
+            "HL_C_NO_RUNTIME_EXIT",
+            "HL_C_NO_RUNTIME_IDENTITY",
+        ] {
+            assert!(
+                !DEFINITIONS.iter().any(|definition| definition.name == name),
+                "{name} is registered but nothing consumes it"
+            );
+            assert!(Options::default().set(name, "1", true).is_err(), "{name} was accepted");
+        }
     }
 
     #[test]

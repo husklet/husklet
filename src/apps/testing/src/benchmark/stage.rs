@@ -1,6 +1,6 @@
 use super::definition::{
-    Arm, ArmSupport, Artifact, CAMPAIGN_SCHEMA, Campaign, GuestPath, Layout as CampaignLayout, Workload,
-    artifact_identity,
+    Arm, ArmSupport, Artifact, BuildReceipt, CAMPAIGN_SCHEMA, Campaign, GuestPath, Layout as CampaignLayout, Profile,
+    Workload, artifact_identity,
 };
 use crate::{
     platform::{HostProcess, ProcessCapture},
@@ -74,12 +74,14 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
     let rootfs = output.join("rootfs");
     let arch = output.join("tools/arch");
     let docker = output.join("tools/docker");
-    fs::create_dir_all(output.join("native"))?;
+    fs::create_dir_all(output.join("native/primary"))?;
+    fs::create_dir_all(output.join("native/independent-null"))?;
     fs::create_dir_all(arch.parent().ok_or("tool has no parent")?)?;
 
     let layouts = malloc::layouts(&source, &rootfs, &output);
     for layout in &layouts {
         mac(&layout.native_arguments)?;
+        mac(&layout.native_null_arguments)?;
     }
     mac(&["cp".into(), "/mnt/mac/usr/bin/arch".into(), mac_path(&arch)])?;
     mac(&["cp".into(), "/mnt/mac/usr/local/bin/docker".into(), mac_path(&docker)])?;
@@ -127,12 +129,16 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
         options.sqlite_factor.as_str(),
     )?;
     let husklet = HuskletProfile::stage(&workspace, &output, &options.mac_cargo)?;
-    let python_husklet =
-        PythonHusklet::stage(&output, &rootfs, &husklet.command, options.python_plain_factor.as_str())?;
+    let python_husklet = PythonHusklet::stage(
+        &output,
+        &rootfs,
+        &husklet.primary.command,
+        options.python_plain_factor.as_str(),
+    )?;
     let sqlite_husklet = sqlite::SqliteProfile::stage_husklet(
         &output,
         &rootfs,
-        &husklet.command,
+        &husklet.primary.command,
         &output.join("sqlite-exact-output.frame"),
         options.sqlite_factor.as_str(),
     )?;
@@ -155,8 +161,10 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
         &python_husklet.interpreter,
         &sqlite_husklet.interpreter,
         &sqlite.command,
-        &husklet.command,
-        &husklet.library,
+        &husklet.primary.command,
+        &husklet.primary.library,
+        &husklet.independent_null.command,
+        &husklet.independent_null.library,
     ] {
         identities.push_str(&format!("{}\t{}\n", path.display(), artifact_identity(path)?));
     }
@@ -195,8 +203,12 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
                 .strip_prefix(&rootfs)?
                 .to_str()
                 .ok_or("malloc guest path is not UTF-8")?;
-            let husklet_output =
-                husklet_rootfs_guest(&husklet.command, &rootfs, guest, &[options.malloc_factor.as_str()])?;
+            let husklet_output = husklet_rootfs_guest(
+                &husklet.primary.command,
+                &rootfs,
+                guest,
+                &[options.malloc_factor.as_str()],
+            )?;
             let husklet_frame = malloc_frame(&husklet_output)?;
             require_parity("malloc/plain Husklet", &native_frame, &husklet_frame)?;
             fs::write(output.join("husklet-plain.out"), husklet_output)?;
@@ -219,8 +231,8 @@ pub(super) fn run(options: Options) -> Result<(), Error> {
         output.join("husklet-command.tsv"),
         format!(
             "command\t{}\nhost-architecture\taarch64-apple-darwin\nguest-architecture\tx86_64-linux\nsmoke\t--backend-receipt\nreceipt\t{}\n",
-            husklet.command.display(),
-            husklet.receipt
+            husklet.primary.command.display(),
+            husklet.primary.receipt
         ),
     )?;
     let campaign = campaign(
@@ -249,7 +261,7 @@ use campaign::{campaign, merge_rootfs};
 #[path = "stage/campaign.rs"]
 mod campaign;
 
-use profile::{HuskletProfile, RetainedProfile};
+use profile::{HuskletBuild, HuskletProfile, RetainedProfile};
 
 #[path = "stage/profile.rs"]
 mod profile;

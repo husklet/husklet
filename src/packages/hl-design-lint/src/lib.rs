@@ -17,13 +17,14 @@ use std::path::PathBuf;
 pub use error::{LintError, Result};
 pub use model::{Finding, Location, Related, Review, ReviewState, Severity, Summary};
 pub use policy::{
-    BoundaryPolicy, CAllocationPolicy, CInterfacePolicy, CResultPolicy, CSafetyPolicy, DependencyPolicy,
-    DocumentationPolicy, LayerPolicy, OwnershipPolicy, PackageDependencyBudget, Policy, SourcePolicy, SourceSelector,
+    BoundaryPolicy, CAllocationPolicy, CInterfacePolicy, CResultPolicy, CSafetyPolicy, CTestOnlyStatePolicy,
+    DependencyPolicy, DocumentationPolicy, LayerPolicy, OwnershipPolicy, PackageDependencyBudget, Policy, SourcePolicy,
+    SourceSelector,
 };
 pub use report::{Cases, Diagnostic, Markdown, Reporter};
 pub use rule::{
     AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CAllocation, CAnalyzerConfig, CCallPolicy, CInterface,
-    CPolicy, CResult, CSafety, CStructure, CatchAllModule, CatchAllSourcePath, CeremonialStructure,
+    CPolicy, CResult, CSafety, CStructure, CTestOnlyState, CatchAllModule, CatchAllSourcePath, CeremonialStructure,
     ConstructorOwnership, DependencyDirection, Documentation, DuplicateEntity, EmptyDirectory, EnvironmentAccess,
     FileLength, FileName, FiniteStateString, FolderNoun, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult,
     IntegrationCandidate, ManualDispatch, MaximumNesting, ModelDuplication, ModulePrefix, PathModules, PlatformCommand,
@@ -70,6 +71,7 @@ impl Linter {
             c_result,
             c_safety,
             c_allocation,
+            c_test_only_state,
         } = policy;
         let escape = rule::RepositoryEscape::new(&source);
         let mut linter = Self::new(
@@ -124,7 +126,8 @@ impl Linter {
                 .register(rule::CSafety::new(c_safety))
                 .register(rule::CAllocation::new(c_allocation))
                 .register(rule::CStructure)
-                .register(rule::CPolicy::new()),
+                .register(rule::CPolicy::new())
+                .register(rule::CTestOnlyState::new(c_test_only_state)),
         );
         linter.source_policy = source;
         linter
@@ -266,6 +269,7 @@ mod tests {
             "c-unchecked-allocation",
             "c-source-structure",
             "c-source-policy",
+            "c-test-only-state",
         ];
         assert_eq!(
             summaries.iter().map(|summary| summary.rule).collect::<Vec<_>>(),
@@ -326,7 +330,7 @@ fn caller() {
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
 
-        assert_eq!(summaries.len(), 48);
+        assert_eq!(summaries.len(), 49);
         assert!(
             reporter
                 .0

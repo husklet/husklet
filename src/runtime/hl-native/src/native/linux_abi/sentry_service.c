@@ -260,6 +260,7 @@ static int table_clone_locked(const struct sentry_proc *source) {
             g_proc_text_ro[duplicate] = g_proc_text_ro[source->real[v]];
             g_pagemap_fd[duplicate] = g_pagemap_fd[source->real[v]];
             fd_carry_sock(duplicate, source->real[v]);
+            ofd_link_dup(duplicate, source->real[v]);
         }
     }
     return index;

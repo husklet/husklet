@@ -96,6 +96,14 @@ static struct ckpt_sink *ckpt_sink_current(void) {
     return g_ckpt_sink.ops ? &g_ckpt_sink : NULL;
 }
 
+// Point the process-wide sink at an implementation, or at nothing. The global is private to this header, so
+// every install goes through here: sink_stream.h's binder on the production path, and the checkpoint
+// fixtures that stand a sink up around one writer and put the previous one back.
+static struct ckpt_sink *ckpt_sink_install(const ckpt_sink_vtable *ops) {
+    g_ckpt_sink.ops = ops;
+    return ckpt_sink_current();
+}
+
 // ---------------------------------------------------------------- generic entry points
 
 static int ckpt_sink_begin(struct ckpt_sink *sink, const char *group, const char *name, uint32_t flags,

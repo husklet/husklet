@@ -1,10 +1,6 @@
 #include "glue.h"
 
-int g_trace;
-int g_noibtc;
-int g_itrace;
 uint64_t g_emit_gpc;
-int g_systrace;
 uint64_t g_disp_n;
 int g_dispatch_diagnostics;
 uint64_t g_ibtc_fill;
@@ -20,21 +16,13 @@ uint64_t g_force_base;
 hl_reloc g_reloc_storage[PC_RELOC_CAP];
 hl_reloc_table g_reloc_table = {g_reloc_storage, 0, (int)PC_RELOC_CAP};
 int g_pcache_poison;
-uint64_t g_tracecap;
-int g_diag;
-int g_nochain;
 uint64_t g_loadbase;
 const char *g_exe_path = "";
 const char *g_self_path = "";
 uint64_t g_pmovmskb_n;
-int g_notier2x = -1;
 uint64_t g_prof_t2fold;
 uint64_t g_prof_xflag;
 uint64_t g_prof_xflag_scan;
-
-int ibtc1way(void) {
-    return 0;
-}
 
 uint64_t coldprof_now_ns(const hl_host_services *services) {
     hl_host_result result;
@@ -44,22 +32,10 @@ uint64_t coldprof_now_ns(const hl_host_services *services) {
     return result.status == HL_STATUS_OK ? result.value : 0;
 }
 
-int nosseopt(void) {
-    return 0;
-}
-
-int noeaopt(void) {
-    return 0;
-}
-
 void hl_x86_count_rep_movs(void) {
     g_repmovs_n++;
 }
 
 void hl_x86_count_rep_stos(void) {
     g_repstos_n++;
-}
-
-int notier2x(void) {
-    return g_notier2x;
 }

@@ -47,21 +47,32 @@ static int exec_image_is_write_open_scan(const struct stat *image, int limit) {
 // all retain the same text-busy identity. This check intentionally precedes thread_exec_owner_handoff; a failed exec
 // must not retire sibling guest threads. Guest descriptor operations have no process-wide table lock today, so this
 // is the same live-table snapshot used by the CLOEXEC sweep below rather than a claim of atomic host exec exclusion.
-static int exec_image_is_write_open(const struct stat *image) {
+// Both images in one enumeration. Each /proc/self/fd walk is a kernel scan of the whole fd TABLE, not of the
+// open descriptors: the engine-private band is anchored at the guest ceiling (HL_LINUX_FD_LIMIT = 65536), so
+// the table this process carries is >= 65536 slots for its whole life and one walk measures ~1.1 ms on this
+// host against ~1.3 us before the band is adopted. The two checks below are adjacent with no intervening
+// operation, so serving them from a single snapshot is exactly the snapshot either one would have taken and
+// changes no window: this call remains, as the comment above says, a live-table snapshot rather than a claim
+// of atomic host exec exclusion.
+static int exec_images_are_write_open(const struct stat *image, const struct stat *second) {
     if (hl_linux_writable_identity_open(g_linux_box, (uint64_t)image->st_dev, (uint64_t)image->st_ino)) return 1;
-    size_t need = 0;
-    if (!hl_host_process_fds(getpid(), NULL, 0, &need)) return exec_image_is_write_open_scan(image, getdtablesize());
-    size_t capacity = need <= SIZE_MAX - 32 ? need + 32 : need;
-    hl_host_process_fd *fds = capacity != 0 ? malloc(capacity * sizeof *fds) : NULL;
-    if (!fds) return exec_image_is_write_open_scan(image, getdtablesize());
+    if (second != NULL &&
+        hl_linux_writable_identity_open(g_linux_box, (uint64_t)second->st_dev, (uint64_t)second->st_ino))
+        return 1;
+    hl_host_process_fd *fds = NULL;
     size_t count = 0;
-    if (!hl_host_process_fds(getpid(), fds, capacity, &count) || count > capacity) {
+    // One enumeration, not a sizing pass plus a listing pass: on Linux each pass is a full kernel walk of
+    // the fd TABLE (65536+ slots once the engine-private band is anchored), so the second pass cost as much
+    // as the first and bought only a length this call already gets back.
+    if (!hl_host_process_fds_collect(getpid(), &fds, &count)) {
         free(fds);
-        return exec_image_is_write_open_scan(image, getdtablesize());
+        return exec_image_is_write_open_scan(image, getdtablesize()) ||
+               (second != NULL && exec_image_is_write_open_scan(second, getdtablesize()));
     }
     int busy = 0;
     for (size_t index = 0; index < count && !busy; index++) {
-        busy = exec_writable_fd_matches(fds[index].descriptor, image);
+        busy = exec_writable_fd_matches(fds[index].descriptor, image) ||
+               (second != NULL && exec_writable_fd_matches(fds[index].descriptor, second));
     }
     free(fds);
     return busy;
@@ -137,18 +148,20 @@ static int exec_image_adopt(int descriptor, const char *path, exec_image *image)
         exec_image_release(image);
         return -EACCES;
     }
-    stat_virt_ids(&image->status, NULL, descriptor, &image->dac.uid, &image->dac.gid);
-    image->dac.mode = (uint32_t)stat_virt_mode(&image->status, NULL, descriptor);
+    stat_virt_ids_raw(&image->status, NULL, descriptor, &image->dac.uid, &image->dac.gid);
+    image->dac.mode = (uint32_t)stat_virt_mode_raw(&image->status, NULL, descriptor);
     uint32_t groups[HL_NGROUPS_MAX];
     hl_dac_credentials credentials = dac_credentials_current(groups);
     if (hl_dac_authorize_access(&image->dac, &credentials, HL_DAC_EXECUTE) != 0) {
         exec_image_release(image);
         return -EACCES;
     }
-    if (exec_image_is_write_open(&image->status)) {
-        exec_image_release(image);
-        return -ETXTBSY;
-    }
+    /* No ETXTBSY probe here. exec_prepare_request re-checks the resolved main image and the program
+     * interpreter immediately before committing, and that late check is the authoritative one: it runs after
+     * exec_collect_argv / exec_prepare_script / exec_prepare_interpreter, so it observes the descriptor table
+     * a sibling guest thread may have mutated in the meantime, which a probe taken here cannot. Probing at
+     * adopt time as well cost a second full /proc/self/fd walk per image -- and a third and fourth on any
+     * dynamically linked or #! guest -- for an answer the late check re-derives. */
     if (hl_linux_image_read_fd(descriptor, &image->bytes) != 0) {
         exec_image_release(image);
         return -EACCES;
@@ -244,10 +257,11 @@ static void exec_authority_seed_initial(const hl_host_services *host, hl_host_ha
     hl_host_result borrowed = attachments->borrow_file(host->context, executable);
     if (borrowed.status != HL_STATUS_OK) return;
     int descriptor = (int)borrowed.value;
-    if (fstat(descriptor, &g_authorized_executable_status) == 0) {
-        stat_virt_ids(&g_authorized_executable_status, NULL, descriptor, &g_authorized_executable_dac.uid,
-                      &g_authorized_executable_dac.gid);
-        g_authorized_executable_dac.mode = (uint32_t)stat_virt_mode(&g_authorized_executable_status, NULL, descriptor);
+    if (fstat(descriptor, &g_authorized_executable_status) == 0 && S_ISREG(g_authorized_executable_status.st_mode)) {
+        stat_virt_ids_raw(&g_authorized_executable_status, NULL, descriptor, &g_authorized_executable_dac.uid,
+                          &g_authorized_executable_dac.gid);
+        g_authorized_executable_dac.mode =
+            (uint32_t)stat_virt_mode_raw(&g_authorized_executable_status, NULL, descriptor);
         g_authorized_executable_metadata_ready = 1;
         if (exec_image_capabilities(descriptor, &g_authorized_executable_file_capabilities) != 0)
             g_authorized_executable_metadata_ready = 0;
@@ -337,11 +351,18 @@ static int exec_resolve_shebang_images(char **argv, int argc, int capacity, exec
 
 static int exec_collect_argv(uint64_t argv_address, char **argv, int *argc) {
     size_t argument_bytes = 0;
-    char *probe = malloc(HL_EXEC_ARGUMENT_BYTES + 1u);
+    char *probe = malloc(HL_EXEC_ARGUMENT_STRING_BYTES + 1u);
     if (!probe) return -ENOMEM;
     *argc = 0;
     int error = 0;
-    while (argv_address && *argc < HL_MAXARGV - 1) {
+    while (argv_address) {
+        // Fail closed at the vector bound. Stopping here silently would hand the new program a TRUNCATED
+        // argv -- a different command with a different last argument -- which is strictly worse than a
+        // failed exec. Linux answers -E2BIG once its byte budgets are exhausted; so do we.
+        if (*argc >= HL_MAXARGV - 1) {
+            error = -E2BIG;
+            break;
+        }
         uint64_t guest_argument = 0;
         if (guest_copy_from(&guest_argument, argv_address + (uint64_t)*argc * sizeof guest_argument,
                             sizeof guest_argument) != sizeof guest_argument) {
@@ -349,13 +370,16 @@ static int exec_collect_argv(uint64_t argv_address, char **argv, int *argc) {
             break;
         }
         if (!guest_argument) break;
-        size_t remaining = HL_EXEC_ARGUMENT_BYTES - argument_bytes;
-        int length = guest_copy_string(probe, remaining + 1, guest_argument);
+        // Per-string MAX_ARG_STRLEN and whole-vector ARG_MAX are separate limits; take the tighter of the
+        // two as this string's copy bound so either overrun surfaces as -E2BIG below.
+        size_t remaining = HL_EXEC_ARGUMENT_TOTAL_BYTES - argument_bytes;
+        size_t string_limit = remaining < HL_EXEC_ARGUMENT_STRING_BYTES ? remaining : HL_EXEC_ARGUMENT_STRING_BYTES;
+        int length = guest_copy_string(probe, string_limit + 1, guest_argument);
         if (length == -EFAULT) {
             error = -EFAULT;
             break;
         }
-        if (length < 0 || (size_t)length + 1 > remaining) {
+        if (length < 0 || (size_t)length + 1 > string_limit) {
             error = -E2BIG;
             break;
         }
@@ -486,8 +510,8 @@ static int exec_prepare_request(uint64_t path_address, uint64_t argv_address, ui
     error = exec_prepare_script(path_address, prepared);
     if (error == 0) error = exec_prepare_interpreter(prepared);
     if (error == 0 &&
-        (exec_image_is_write_open(&prepared->main_image.status) ||
-         (prepared->has_program_interpreter && exec_image_is_write_open(&prepared->program_interpreter.status))))
+        exec_images_are_write_open(&prepared->main_image.status,
+                                   prepared->has_program_interpreter ? &prepared->program_interpreter.status : NULL))
         error = -ETXTBSY;
     if (error != 0) {
         exec_prepared_discard(prepared);

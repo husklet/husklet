@@ -99,16 +99,90 @@ pub enum EngineError {
     NotStarted,
     Destroyed,
     LaunchFailed,
+    /// Engine composition refused the launch. The originating
+    /// [`CompositionError`](crate::composition::CompositionError) is retained so
+    /// callers and logs keep the cause instead of a bare launch failure.
+    CompositionFailed(crate::composition::CompositionError),
     /// Native construction refused the configured engine with this stable `hl_status` value.
     NativeCreateFailed(i32),
+    /// The private native library could not be loaded or did not satisfy the bridge contract.
+    NativeLoadFailed(hl_native::LoadKind),
     /// The native engine completed its run boundary with this stable `hl_status` value.
     NativeRunFailed(i32),
     WorkspaceFailed,
     WaitFailed,
+    /// The native process reached a terminal state while a checkpoint transaction was still active.
+    CheckpointExited(EngineExit),
     StopFailed,
     NativeStopFailed(i32),
     Synchronization,
+    /// The launch selected a sandbox policy the checkpoint engine cannot capture under.
+    ///
+    /// `HL_UNTRUSTED` moves every host-authority object (open files, sockets, pipes) into the
+    /// sentry process, so the worker's own descriptor table no longer describes the guest and the
+    /// capture path refuses. Unlike the transient refusals a checkpoint preflight retries, this
+    /// one is a property of the launch and cannot become supported while the guest is running.
+    CheckpointUnsupportedUnderSandbox,
+    /// Recovery refused the generation the checkpoint store offered because it is
+    /// staged, not finalized.
+    ///
+    /// The byte store is adversarial and its committed-generation pointer is data
+    /// rather than authority, so a generation whose transaction never committed --
+    /// or one an attacker assembled -- must never reach native restore. Like the
+    /// sandbox refusal this is a property of the stored image, not a transient
+    /// state, so a preflight must not poll on it.
+    CheckpointGenerationUnfinalized,
+    /// A checkpoint capture that started but did not complete.
+    ///
+    /// This is not a launch failure and must never be reported as one: the guest launched, ran, and
+    /// was still running when the capture was refused or abandoned. A macOS build reported every
+    /// refused capture as `LaunchFailed`, which reached the desktop as a bare launch-failure
+    /// dialog on a workspace the user had just been typing into.
+    CaptureFailed,
+    /// A checkpoint capture the engine DECIDED not to publish, having said why.
+    ///
+    /// Distinct from `CaptureFailed`, which is what a capture that broke or was abandoned reports.
+    /// A refusal is a decision with a cause the engine can name -- an unsupported descriptor, a member
+    /// that never reached a safepoint -- and the cause is available from the checkpoint control that
+    /// produced this error. Reporting the two the same way is what made every checkpoint refusal
+    /// surface as an unexplained failure thirty seconds after the decision that caused it.
+    CaptureRefused,
+    /// The launch names a writable root filesystem owned by a host user the engine cannot act as.
+    ///
+    /// The engine runs as an unprivileged host uid and materializes guest ownership in its own
+    /// owner overlay (`container/owner.h`, `HL_FILE_OWNERS`); it never acquires host privilege. A
+    /// rootfs unpacked under `sudo`, or `chown -R 0:0`ed, is therefore unwritable no matter what
+    /// the guest's `id -u` reports, and every guest write fails `EACCES` with no explanation --
+    /// `git clone` and `git checkout` are the usual first casualties. Granting the access would be
+    /// host-privilege escalation and cannot even be implemented: `chmod(2)` refuses for a non-owner
+    /// without `CAP_FOWNER`. The contract is that a rootfs is materialized under a uid the engine
+    /// can act as, exactly as rootless Docker materializes into a user namespace where the host uid
+    /// is guest 0. This refusal states it at launch instead of letting the workspace half-work.
+    RootfsNotOwnedByEngine {
+        /// The host uid that owns the writable root the launch named.
+        rootfs_uid: u32,
+        /// The host uid the engine actually runs as.
+        engine_uid: u32,
+    },
+    /// The capture ledger was left poisoned by a panicking participant, so no capture can be
+    /// admitted until the engine is rebuilt.
+    CapturePoisoned,
     Unsupported,
+}
+
+impl EngineError {
+    /// Whether re-asking would ever produce a different answer.
+    ///
+    /// A checkpoint preflight polls until its deadline, which turns a permanent refusal into a
+    /// full-timeout stall reported as an opaque preflight failure. A permanent refusal must be
+    /// surfaced on the first observation instead.
+    #[must_use]
+    pub fn is_permanent_refusal(self) -> bool {
+        matches!(
+            self,
+            Self::CheckpointUnsupportedUnderSandbox | Self::CheckpointGenerationUnfinalized | Self::Unsupported
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

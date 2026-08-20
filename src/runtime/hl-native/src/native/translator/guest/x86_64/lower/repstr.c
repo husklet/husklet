@@ -206,8 +206,8 @@ int hl_x86_lower_repstr(struct insn *I, uint64_t next, hl_x86_repstr_state *stat
                         ((uint64_t)(state->direction == HL_X86_DIRECTION_BACKWARD ? 1 : 0) << 11);
         e_movconst(16, desc);
         if (state->direction == HL_X86_DIRECTION_DYNAMIC) { // DF unknown statically -> OR in the runtime direction bit
-            e_ldr(18, 28, OFF_DF);                          // x18 = cpu->df (0/1)
-            e_rrr(A_ORR, 16, 16, 18, 1, 11);                // desc |= df << 11
+            e_ldr(27, 28, OFF_DF);                          // x27 = cpu->df (0/1)
+            e_rrr(A_ORR, 16, 16, 27, 1, 11);                // desc |= df << 11
         }
         e_str(16, 28, OFF_DIVOP);
         emit_exit_const(next, R_REPSTR); // spills regs+flags; do_repstr() resumes at `next`

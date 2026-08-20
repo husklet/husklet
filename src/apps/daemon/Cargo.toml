@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
+fs2.workspace = true
 hl-container = { path = "../../containers/hl-container" }
 hl-daemon = { path = "../../containers/hl-daemon" }
 hl-images = { path = "../../containers/hl-images" }

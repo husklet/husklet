@@ -24,6 +24,7 @@
 #include <limits.h>
 #include <time.h>
 #include <sys/time.h>
+#include "../../linux_abi/host_system.h"
 #include "../../linux_abi/host_uio.h" // <sys/uio.h>, or the guest iovec layout where the host has none
 #include "../../linux_abi/host_socket.h"
 #include "../../linux_abi/host_poll.h" // <poll.h>, or a typed absence where the host has no mixed-handle readiness
@@ -82,6 +83,7 @@ static void jit_guest_soft_restore_deactivate(void);
 static void jit_guest_soft_deactivate(void);
 static int jit_guest_soft_active(void);
 static int gna_hit(uint64_t address, uint64_t length);
+static uint64_t gna_prefix(uint64_t address, uint64_t length);
 static void gna_filter(uint64_t *first, uint64_t *last);
 
 hl_status hl_run_linux_guest_status(void) {
@@ -531,6 +533,11 @@ static void ckpt_poll(struct cpu *c);
 #define G_CKPT_CPU_SANITIZE(c)                                                                                         \
     do {                                                                                                               \
         (c)->ic_site = 0;                                                                                              \
+        (c)->vdirty = 0;                                                                                               \
+        (c)->fault_addr = 0;                                                                                           \
+        (c)->bus_ea = 0;                                                                                               \
+        (c)->bus_filter = 0;                                                                                           \
+        (c)->bus_force = 0;                                                                                            \
         G_SOFT_STATE_RESET(c);                                                                                         \
     } while (0)
 // checkpoint.c's restore driver (included below) rebuilds the container from these, defined later in this TU.
@@ -559,6 +566,8 @@ static int container_init(const char *rootfs) {
     hl_gmap_bind_limits(&g_limits);
     // PID ns: only containers (rootfs) get PID 1
     if (rootfs) g_init_hostpid = getpid();
+    // Every guest process gets a namespace-local pid, not only the init (state.c).
+    if (rootfs && container_pid_namespace_begin() != 0) return -1;
     // Cross-process cgroup accounting: a fresh shared slot table for this container init is inherited
     // by every guest fork (see state.c).
     if (rootfs) acct_container_reset(effective_host_services());
@@ -646,6 +655,11 @@ static int container_init(const char *rootfs) {
     // derive the run user's supplementary group set from the image rootfs (runc additionalGids), after
     // g_uid/g_gid + the overlay lowers are resolved, so getgroups(2) and /proc/self/status Groups: report it.
     if (g_rootfs) container_parse_groups();
+    // The container identity this process runs under is now decided, so publish the one number a
+    // checkpoint preserves for it. A launched member's guest pid is what the image names its group by
+    // (`proc.<guest pid>`) and what a restore re-forks it under, so it is the only identity a host can
+    // hold across a capture. Both target arms publish it; keep them in step.
+    hl_engine_child_result_publish_guest_pid(ckpt_image_self_gpid());
     return 0;
 }
 
@@ -708,6 +722,7 @@ static int engine_global_init(void) {
     g_prof_soft_miss = g_prof_soft_span = 0;
     g_prof_soft_bounce_prepare = g_prof_soft_bounce_commit = 0;
     g_prof_smc_queued = g_prof_smc_commit = 0;
+    g_prof_soft_guard_bytes = g_prof_soft_shared_sites = g_prof_soft_inline_sites = 0;
     g_no_stw_reclaim = 0;
     g_steal1617 = 1;
     g_noibslim = 0;
@@ -868,11 +883,23 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     exec_authority_seed_initial(host, executable, executable_authority);
     g_engine_result_status = HL_STATUS_OK;
     if (argument_count > (uint32_t)INT_MAX) return 2;
+    // The launch argv is copied into build_stack's fixed pointer vector. Nothing between here and there
+    // bounded it, so a launch with more than HL_MAXARGV entries wrote past `argp[]` -- observed as
+    // "*** stack smashing detected ***" at exactly 2049 entries under the previous 2048 bound, where the
+    // host kernel runs the same command without complaint. Reject the launch instead of corrupting the
+    // loader's frame.
+    if (argument_count > (uint32_t)(HL_MAXARGV - 1)) {
+        fprintf(stderr, "hl-engine: guest argument vector exceeds %d entries\n", HL_MAXARGV - 1);
+        return 2;
+    }
     argc = (int)argument_count;
     hl_target_services_inject(&g_target_services, host);
     hl_gmap_bind_host(host);
     futex_table_init(host);
     seq_ref_arena_init(host);
+#if !defined(_WIN32)
+    if (namespace_transaction_init(host) != 0) return 1;
+#endif
     eventfd_count_init(host);
     fdvis_init(host);
     ts_init(host);
@@ -928,16 +955,16 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     // up to SHEBANG_MAX nested levels), rewriting argv to [finalInterp, ..., scriptpath, args...] and
     // loading the FINAL interpreter. A missing/non-shebang ELF falls straight through unchanged below.
     char sb_store[SHEBANG_MAX * 2][256];
-    char *sb_argv[256];
+    char *sb_argv[HL_MAXARGV];
     int sb_argc = 0;
     sb_argv[sb_argc++] = (char *)prog; // `prog` is find_in_path-resolved; the chain keeps it as scriptpath
-    for (int i = 1; i < argc && sb_argc < 255; i++)
+    for (int i = 1; i < argc && sb_argc < HL_MAXARGV - 1; i++)
         sb_argv[sb_argc++] = (char *)argv[i];
     sb_argv[sb_argc] = NULL;
     const char *sb_finalhost;
     char sb_fhb[4200];
     int sb_new =
-        resolve_shebang_chain(sb_argv, sb_argc, 256, prog_host, sb_store, sb_fhb, sizeof sb_fhb, &sb_finalhost);
+        resolve_shebang_chain(sb_argv, sb_argc, HL_MAXARGV, prog_host, sb_store, sb_fhb, sizeof sb_fhb, &sb_finalhost);
     if (sb_new < 0) {
         fprintf(stderr, "hl-engine: too many nested #! interpreters (ELOOP): %s\n", prog);
         return hl_vfs_cursor_state_finish(40); // ELOOP
@@ -956,6 +983,11 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     load_program(argv[0], &lm, &li, &jump, &at_base, &have_interp, image_plan);
     // try to restore the arena from the persistent cache.
     if (g_pcache) {
+        /* Persistence boundary: arm and latch the ledger before anything is
+           restored or translated, so every block this run persists carries
+           guards and no later mapping activation can rotate the arena out
+           from under a restored one. See hl_guest_bus_arm_latched. */
+        jit_guest_bus_arm_latched();
         g_pc_entry = jump;
         int hit = pcache_load(jump); // graceful MISS on any stale/corrupt/truncated cache -> translate fresh
         if (g_coldprof) fprintf(stderr, "[pcache] %s reloc=%d\n", hit ? "HIT" : "MISS", g_nreloc);
@@ -985,3 +1017,67 @@ void hl_target_runtime_init(void) {
 uint64_t hl_run_linux_guest_translations(void) {
     return g_dispatch_profile.translations;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+/*
+ * Host x18 is reserved by Darwin and cleared asynchronously between arbitrary
+ * instructions, so emitted code may never keep a live value there. The two
+ * lowerings that once did -- the inline soft-memory guard's direct-mapped entry
+ * base and the non-PIE guest-base fold's NZCV save -- produced an intermittent
+ * `ldr Xt,[xzr,#OFF_SOFT_TLB+k]` into __PAGEZERO and a silent condition-flag
+ * rewrite respectively. Emit both into a local buffer and read the register
+ * fields back: no emitted instruction may name x18 as a base, destination, or
+ * MRS/MSR operand. Returns zero when the emitted code is clean.
+ */
+static int hl_aarch64_reserved_register_scan(const uint32_t *words, size_t count) {
+    for (size_t index = 0; index < count; ++index) {
+        uint32_t word = words[index];
+        if (word == 0xD53B4212u || word == 0xD51B4212u) return 1; /* mrs/msr through x18 */
+        int base = (int)((word >> 5) & 31u);
+        int destination = (int)(word & 31u);
+        if ((word & 0x3B000000u) == 0x39000000u && (base == 18 || destination == 18)) return 1; /* ldr/str */
+        if ((word & 0x7F200000u) == 0x0B000000u &&
+            (base == 18 || destination == 18 || (int)((word >> 16) & 31u) == 18))
+            return 1; /* add/sub shifted register */
+    }
+    return 0;
+}
+
+HL_API int hl_aarch64_reserved_register_test(void) {
+    uint32_t code[512];
+    memset(code, 0, sizeof code);
+    uint8_t *saved_cp = g_cp;
+    uint64_t saved_lo = g_nonpie_lo, saved_bias = g_nonpie_bias, saved_hi = g_nonpie_hi;
+    int saved_soft = jit_guest_soft_active();
+    g_cp = (uint8_t *)code;
+    if (!saved_soft) jit_guest_soft_restore_activate();
+    g_nonpie_lo = UINT64_C(0x400000);
+    g_nonpie_hi = UINT64_C(0x800000);
+    g_nonpie_bias = UINT64_C(0x100000000);
+
+    /* The historical hazard shape: ea/tmp engine-private, entry base requested as x18. */
+    struct a64_soft_guard guard = emit_a64_soft_guard_begin(16, 17, 18, 8, HL_LOGICAL_VMA_READ, UINT64_C(0x401000));
+    int guarded = guard.active;
+    emit_a64_soft_guard_end(&guard);
+    emit_a64_soft_fold_address(16, 17);
+
+    size_t emitted = (size_t)(((uint32_t *)g_cp) - code);
+    g_cp = saved_cp;
+    g_nonpie_lo = saved_lo;
+    g_nonpie_hi = saved_hi;
+    g_nonpie_bias = saved_bias;
+    if (!saved_soft) jit_guest_soft_restore_deactivate();
+
+    /* Non-vacuity: the scan must have real code to read, including the entry-base
+     * loads the guard is built from, or a clean answer means nothing. */
+    if (!guarded || emitted < 8u || emitted > sizeof code / sizeof code[0]) return 2;
+    int soft_tlb_loads = 0;
+    for (size_t index = 0; index < emitted; ++index)
+        if ((code[index] & 0xFFC00000u) == 0xF9400000u &&
+            (int)(((code[index] >> 10) & 0xFFFu) * 8u) >= OFF_SOFT_TLB &&
+            (int)(((code[index] >> 10) & 0xFFFu) * 8u) < OFF_SOFT_TLB + (int)sizeof(struct hl_soft_tlb_entry))
+            soft_tlb_loads++;
+    if (soft_tlb_loads < 4) return 3;
+    return hl_aarch64_reserved_register_scan(code, emitted) ? 1 : 0;
+}
+#endif

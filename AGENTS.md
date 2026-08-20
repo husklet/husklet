@@ -14,7 +14,8 @@ Sections 13–340 are process rules, and almost every one exists because it cost
 real work. If you are about to **measure** anything, the ones that have voided
 results are "Balance the arm order", "A control that merely seems unaffected is
 not a control", "`bench --results` is a resumable ledger", "Identical source does
-not mean an identical binary", and "Reading a profile". If you are about to
+not mean an identical binary", "A C change reaching the binary is a separate
+claim, and it has its own check", and "Reading a profile". If you are about to
 **commit**, they are "What green means" and its four subsections. Everything from
 "Mission" onward is durable architecture and changes rarely.
 
@@ -96,6 +97,20 @@ in a crate that has no library target, and `testing` is bin-only: `cargo test -p
 testing --lib` answers `no library targets found in package testing`, silently
 in a workspace-wide run. Every assertion in `testing`'s benchmark and syscall
 audit gates was invisible to the command this file told everyone to run.
+
+`--all-targets` does not run a required-features test either
+
+`cargo test -p hl-native --all-targets` reports green while running **zero** of the
+tests in a target declared `required-features = ["native-test-hooks"]`. Cargo skips
+such a target silently, exactly as it does for the application binaries below.
+`tests/namespace_transaction.rs` is one of these, and a lane discovered mid-run that
+the gate command this file recommends was not exercising any of it.
+
+That matters twice over: the same feature flag is what makes a symbol's only writer
+test-only, which is the defect `c-test-only-state` exists to catch. So the build
+configuration that hides the writer is also the one whose tests do not run by
+default. Add `--features native-test-hooks` as a second invocation when you touch
+anything behind that flag, and say which of the two you ran.
 
 ### `--all-targets` does not reach the application
 
@@ -439,6 +454,21 @@ directory, so a shell that has wandered into a worktree gets structure from
 somewhere else. Worktrees carry their own `.codegraph/`; if yours does not, run
 `codegraph init -i` there rather than trusting the parent's index.
 
+The same applies to **which commit**, and it has cost two lanes a detour on the
+same day. A lane that cuts a worktree, works for an hour, and then compares its
+lint or test findings against `main` is comparing against a tree that has moved —
+one lane concluded a `loader.rs` line "does not exist upstream" when `main` had
+advanced fifteen commits underneath it. Diff findings against **your parent
+commit**, not against `main`.
+
+`cargo clippy ... -- -D warnings` makes this sharper, because it denies lints the
+crate's configured set only warns about, so it surfaces pre-existing findings as
+though they were yours. That does not make it the wrong command — it is
+`flake.nix:412`, the repository's own verification gate, and without the flag
+clippy exits 0 no matter what is wrong because `workspace.lints` sets everything
+to `warn`. But attribute its output against your parent before claiming or
+disclaiming a finding.
+
 ## The x86 arm of the scheduler lags the arm64 arm
 
 `native_aarch64` and `native_x86` are maintained in parallel by hand and the x86
@@ -508,6 +538,167 @@ ratio a phase can show for no reason at all. If the null arm's spread covers the
 candidate's effect, the candidate is not evidence however clean the other
 controls read. Phases with small absolute times are where this bites — a few
 hundred microseconds of drift is percent-level on a 2.6 ms phase.
+
+## A worktree on one host is invisible to the other, and git will prune it
+
+The macOS host and the Linux VM share the repository but **not** `/var/tmp`. A
+worktree registered from one host at a `/var/tmp` path does not exist as far as
+the other host is concerned, so any `git worktree` command run there — including
+the `git worktree prune` that `git worktree add` performs implicitly — treats it
+as stale and deletes its administrative directory.
+
+Two lanes lost worktrees to this on the same day. The branch ref and the commits
+survive in the shared repository, but the worktree's `HEAD`, `gitdir` and
+`commondir` are gone, which surfaces as a `nix develop` failing mid-gate or as a
+clippy error with no obvious cause — not as anything that mentions worktrees.
+
+So: **do not run `git worktree` commands on one host while another host holds a
+`/var/tmp` worktree**, and if a gate fails for a reason that makes no sense,
+check that your worktree still has its administrative directory before believing
+the error.
+
+The same asymmetry applies to killing processes by pattern. A lane matched four
+`cargo test` processes on the macOS host, killed all of them to unblock its own,
+and only one was its own. Resolve a PID and kill that PID.
+
+## Running on the other host is one wrapper away
+
+`mac bash -lc '...'` runs a command on the macOS host. A lane investigating a
+defect that only exists on Darwin reported "I could not run on macOS" and handed
+over a source-reasoned hypothesis it had never executed; another lane ran the
+same investigation with the wrapper and settled it. If a defect is host-specific,
+an investigation on the other host cannot conclude it -- reach for the wrapper
+before declaring the measurement impossible.
+
+Two asymmetries to carry with it. `/Users/x/dd` is shared at the same path on
+both hosts; `/var/tmp` is not, and each host's copy is its own. And macOS has no
+`flock(1)`, so the fd 8/9 box lock is a Linux-only protocol -- on macOS, record
+the load average instead and say so.
+
+`/Users/x/.local/bin/timeout`, the macOS GNU-timeout shim, hangs any `$(...)`
+command substitution: its background watchdog `sleep` holds the pipe open, so
+the substitution waits out the full duration. It cost one lane a ten-minute
+sweep and left three orphaned `sleep` processes behind.
+
+## A measurement names its host, or it names nothing
+
+The engine runs on two hosts and they are not interchangeable. The same guest
+binary doing the same pure-CPU work measured **58x slower under the engine on
+the macOS host than under the same engine on the Linux VM** — on the same
+physical Mac, so the silicon is identical. `apt-get update` is 7.5 s on the
+Linux host and ~119 s on the macOS host. The penalty is code-shape specific:
+branchy, pointer-chasing, memory-touching code explodes, while straight-line
+NEON reads 3.4x and a large file write reads 2.0x.
+
+This went unnoticed for a long time because the head-to-head that exposed it was
+taken on macOS while essentially every attribution in the perf record — per-exec
+cost, the fd-scan work, `gencaches`, the floor benchmark — was taken on the Linux
+VM. Those numbers were not wrong; they described a host on which the dominant
+user-facing defect is absent.
+
+So: **state the host with every number you report**, and treat a result from one
+host as silent about the other. When a user-facing complaint is about the macOS
+app, a Linux measurement cannot confirm or refute it. Reach for the Linux VM when
+you want a fast iteration loop, and re-confirm on macOS before you believe a
+ratio describes what the user feels.
+
+## A C change reaching the binary is a separate claim, and it has its own check
+
+The engine is **dlopened, never linked**. `libhl_native_engine.so` is built by
+`hl-native`'s build script into its Cargo `OUT_DIR`, and the process loads it at
+runtime: on Linux the worker does not contain the engine and does not list it in
+`ldd`. Three consequences, each of which has cost a lane real work:
+
+- **A Rust binary's sha256 is unchanged by almost every C edit.** That is the
+  designed behaviour, not a symptom. A lane read four byte-identical test-binary
+  hashes across base, a patched tree, a reverted tree and a forced relink, and
+  concluded its C never reached the build. The hashes proved nothing either way.
+- **Copying the test binary does not snapshot the engine.** The same lane saved
+  `bin/base`, `bin/fixed` and `bin/fixed2`; all three are one file by sha256 and
+  all three resolve to the single mutable `.so` in the target directory — the one
+  the *last* build wrote. Arms cannot be separated that way. To hold an arm, copy
+  the `.so` too, or give each arm its own `CARGO_TARGET_DIR`.
+- **The stale `.so` is real and has fired repeatedly.** A `.so` built into one
+  `build/hl-native-<hash>/out` while a binary loads another — a different feature
+  set, a different target directory, or a copy taken at another moment — runs the
+  previous engine silently.
+
+### What is and is not sufficient evidence
+
+Insufficient, all three demonstrated:
+
+- The **static archive** changing, or containing the new symbol. `libhl_c_backend_target_aarch64.a`
+  grew and carried the new symbol in exactly the run that was later believed stale.
+- **`strings` on the `.so`.** It answers what is on disk, not what the process mapped.
+- The **Rust binary's hash**, in either direction — see above.
+
+A **runtime `fprintf` probe** is sound only if you first prove the line you are
+comparing against actually prints. The lane's decisive check was an unconditional
+`fprintf` added beside the existing `[ckpt] coordinator pid=` line; the new line
+did not appear, and that was read as proof of staleness. Neither line appears in
+any of the twenty logs it preserved, because `ckpt_coordinate_and_exit` is not on
+that test's path at all. The check compared an absent line to an absent baseline.
+If you use a runtime probe, put it somewhere whose output you have already seen.
+
+### The check to run
+
+`cargo test -p hl-native --test build_freshness`
+
+It recomputes a content fingerprint over every file under `src/native` and compares
+it to the value Cargo baked into the running executable, and it loads the engine so
+the loader's own comparison runs. They diverge exactly when the executable predates
+the tree. The same value is compiled into the `.so` and exported as
+`hl_c_backend_build_fingerprint`; the loader refuses a shared object whose value
+disagrees and names both fingerprints, so a stale artifact is a load failure rather
+than a quiet measurement of the previous engine.
+
+Because the fingerprint is a `cargo:rustc-env`, a C edit now also invalidates the
+Cargo fingerprint of every Rust artifact built against `hl-native`. Downstream
+binaries are rebuilt and their hashes do change — the byte-identical reading that
+started this is gone. That is a deliberate cost: a C-only edit now recompiles the
+Rust crates above `hl-native` as well, which on this workspace is about two minutes
+rather than forty seconds. It buys the property that a saved binary is an arm.
+
+Incremental builds themselves are sound, in the shared tree and in a worktree with
+its own `CARGO_TARGET_DIR` alike: the build script's `rerun-if-changed` covers every
+file under `src/native`, and it recompiles and relinks unconditionally when it runs.
+`cargo clean` is not the remedy for anything here.
+
+### `build_freshness` red on the shared tree means the tree moved, not that Cargo failed
+
+A lane merged into `/Users/x/dd/husklet`, ran `cargo test -p hl-native --all-targets`
+twice, and failed `build_freshness` both times with the same pair of fingerprints —
+then `touch build.rs` and the next run was green. It read that as
+`cargo:rerun-if-changed` not firing for `src/native`. It fires. Three things were
+measured that day and all three exonerate Cargo: the build script emits 649
+`rerun-if-changed` lines covering every directory and every file under `src/native`
+and Cargo honours all of them; the same edit-then-build cycle was reproduced on
+virtiofs (`/Users`) and on VM-local btrfs (`/var/tmp`) with identical results, with
+the target directory on either filesystem and no clock skew between them; and Cargo
+**backdates** a build script's `output` file to the start of the invocation, precisely
+so an edit made during a long script is not lost.
+
+What actually happened is in the reflog. `src/native` changed at 12:20:42, again at
+12:21:09, and again at 12:29:13 — three merges inside the lane's six-minute window.
+The gate build reads the C sources when the build script starts and the gate test
+reads them when the test runs, and `hl-native`'s build script compiles the whole
+engine in between. Any merge landing in that gap makes the two reads disagree, which
+is exactly what `build_freshness` says. The `touch build.rs` run was not a fix; it
+was the first run that happened to fall inside a quiet window.
+
+Reproduced deterministically in a detached worktree: edit a C file, start the gate,
+and edit a second C file in another directory 22 seconds in — the run fails with the
+same shape every time. Leave the tree alone during the build and the same two files
+rebuild and the gate is green, so the mechanism is the concurrent write and nothing
+else.
+
+So: **run the gate in your own worktree, and do not merge into a checkout while a
+gate is building in it.** A red `build_freshness` in a shared checkout is first
+evidence that somebody wrote to `src/native` during your build; re-run it in a
+worktree before believing anything about the build system. The build script now
+refuses this case at the moment it happens — it recomputes the fingerprint after
+linking and fails with both values if the sources moved under it — so the mixed
+artifact is never handed to a lane as a silent one.
 
 ## A control that merely seems unaffected is not a control
 
@@ -597,22 +788,45 @@ on its branch or worktree; never manufacture a cosmetic commit merely to meet th
 deadline.
 
 Compatibility workers receive engine launch options only through the typed
-`HL_COMPAT_ENGINE_OPTIONS` setting (for example
-`HL_COMPAT_ENGINE_OPTIONS='HL_NATIVE_EXECUTION=1;HL_NATIVE_DIAGNOSTICS=1'`).
-Setting an engine option such as `HL_NATIVE_EXECUTION` directly in the inventory
-supervisor's ambient environment does not configure the guest engine and must
-never be cited as native-mode evidence. Before a long run, prove the selected
-mode with one fast row and require the corresponding native diagnostics.
+`HL_COMPAT_ENGINE_OPTIONS` setting. Setting an engine option directly in the
+inventory supervisor's ambient environment does not configure the guest engine and
+must never be cited as evidence of a selected mode.
 
-The same trap applies to a **direct** `hl-x86_64` / `hl-aarch64` invocation, and
-there it is worse because nothing looks wrong. The engine takes options only via
-`--engine-option HL_NATIVE_EXECUTION=1`; the ambient variable does nothing, the
-run completes, and it prints a perfectly plausible `PHASE … us=… ok=…` with
-native entirely off. A lane produced an interpreter number wearing a native label
-this way and caught it only by checking `probes` in the diagnostics.
+### There is no native/interpreter switch, and the counters that proved it are gone
 
-So: pass engine options as `--engine-option`, and confirm the mode from a counter
-(`probes`, `entries`) rather than from the command you believe you ran.
+This subsection used to instruct lanes to request native execution with
+`HL_NATIVE_EXECUTION=1` and to confirm it from `probes`/`entries` on the
+`hl-native-entry:` line. **Every part of that is now stale, and following it wastes
+a lane.** Re-derived on 2026-08-18:
+
+- `HL_NATIVE_EXECUTION` had no consumer anywhere in the repository — C or Rust. The
+  authoritative engine registry is
+  `src/runtime/hl-native/src/native/engine/options.c`, and it never defined any
+  `HL_NATIVE_*` option. The eight dead entries have been removed from
+  `src/containers/hl-engine/src/options.rs`; `retired_native_executor_options_are_not_registered`
+  pins their absence.
+- `hl-native-entry:`, `probes` and `entries` have **no producer** in the tree. Only
+  testing-side parsers mention them. A lane that waits for those counters is waiting
+  for output nothing emits, and may conclude its own build is broken.
+- There is no interpreter in the production engine. `translator/` and
+  `engine/target/{aarch64,x86_64}.c` are the execution path; the native-vs-interpreter
+  split belonged to the deleted Rust executor, which the "Historical" subsection below
+  already marks as gone. Container workloads were never interpreter numbers.
+- The engine workers accept **no `--engine-option` flag at all**. `LaunchArguments`
+  (`src/apps/engine/src/lib.rs:55-68`) has only `--guest-isa`, `--report-exit`,
+  `--rootfs`, the executable and its arguments, and both construction sites use
+  `Options::default()`. Measured: `./target/release/hl-aarch64 --engine-option
+  HL_C_DIAGNOSTICS=1 /bin/ls /` exits **2 with no output**, while the same command
+  without the flag runs the engine. So an unknown option does not get silently
+  ignored — it kills the run before the guest starts.
+
+The durable lesson survives its example: **confirm a mode from a counter, not from the
+command you believe you ran** — but first confirm the counter still has a producer.
+The instruction above outlived the mechanism it described by long enough to mislead
+several lanes.
+
+Retained-C diagnostics remain real and are requested with `HL_C_DIAGNOSTICS`, which is
+the one launch effect `Execution::Native` still carries.
 
 A commit may be called stable or buildable only after verification from that exact
 committed tree. A passing build in a dirty shared worktree is not evidence for

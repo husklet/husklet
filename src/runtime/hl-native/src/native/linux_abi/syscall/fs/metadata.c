@@ -61,8 +61,7 @@ static void svc_fs_metadata_79(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t
                     provider_stat.st_rdev = (dev_t)hl_linux_device_make(service->major, service->minor);
                 provider_stat.st_size = (off_t)metadata.size;
                 provider_stat.st_nlink = 1;
-                (void)guest_fill_linux_stat(a2, &provider_stat, NULL, -1);
-                G_RET(c) = 0;
+                G_RET(c) = (uint64_t)(int64_t)guest_fill_linux_stat(a2, &provider_stat, NULL, -1, 0);
                 break;
             }
         }
@@ -105,16 +104,14 @@ static void svc_fs_metadata_79(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t
                     es.st_mode = S_IFLNK | 0777;
                     es.st_size = 0;
                     es.st_nlink = 1;
-                    (void)guest_fill_linux_stat(a2, &es, NULL, -1); // synth /proc/self/exe symlink
-                    G_RET(c) = 0;
+                    G_RET(c) = (uint64_t)(int64_t)guest_fill_linux_stat(a2, &es, NULL, -1, 1);
                     break;
                 }
                 // stat (follow): stat the actual executable file through the jail
                 char hb[4200];
                 const char *hp = xresolve_overlay(ep, hb, sizeof hb);
                 if (stat(hp, &es) == 0) {
-                    (void)guest_fill_linux_stat(a2, &es, hp, -1);
-                    G_RET(c) = 0;
+                    G_RET(c) = (uint64_t)(int64_t)guest_fill_linux_stat(a2, &es, hp, -1, 0);
                     break;
                 }
                 // file unexpectedly missing -> fall through to the generic ENOENT path
@@ -152,15 +149,13 @@ static void svc_fs_metadata_79(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t
                         es.st_mode = S_IFLNK | 0777;
                         es.st_size = 0;
                         es.st_nlink = 1;
-                        (void)guest_fill_linux_stat(a2, &es, NULL, -1);
-                        G_RET(c) = 0;
+                        G_RET(c) = (uint64_t)(int64_t)guest_fill_linux_stat(a2, &es, NULL, -1, 1);
                         break;
                     }
                     char hb[4200];
                     const char *hp = xresolve_overlay(tgt, hb, sizeof hb);
                     if (stat(hp, &es) == 0) {
-                        (void)guest_fill_linux_stat(a2, &es, hp, -1);
-                        G_RET(c) = 0;
+                        G_RET(c) = (uint64_t)(int64_t)guest_fill_linux_stat(a2, &es, hp, -1, 0);
                         break;
                     }
                 }
@@ -185,8 +180,7 @@ static void svc_fs_metadata_79(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t
                         G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
                         break;
                     }
-                    (void)guest_fill_linux_stat(a2, &synth_s, NULL, -1);
-                    G_RET(c) = 0;
+                    G_RET(c) = (uint64_t)(int64_t)guest_fill_linux_stat(a2, &synth_s, NULL, -1, 0);
                     break;
                 }
             }
@@ -209,7 +203,7 @@ static void svc_fs_metadata_79(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t
                     G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
                     break;
                 }
-                (void)guest_fill_linux_stat(a2, &s, p, -1);
+                rc = guest_fill_linux_stat(a2, &s, p, -1, 0);
             }
             G_RET(c) = (uint64_t)(int64_t)rc;
             break;
@@ -229,8 +223,8 @@ static void svc_fs_metadata_79(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
             break;
         }
-        (void)guest_fill_linux_stat(a2, &s, empty_self ? NULL : p, empty_self ? (int)a0 : -1);
-        G_RET(c) = 0;
+        G_RET(c) = (uint64_t)(int64_t)guest_fill_linux_stat(a2, &s, empty_self ? NULL : p,
+                                                           empty_self ? (int)a0 : -1, (a3 & 0x100) != 0);
         break;
     }
     default: break;
@@ -255,8 +249,7 @@ static void svc_fs_metadata_80(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
             break;
         }
-        (void)guest_fill_linux_stat(a1, &s, NULL, (int)a0);
-        G_RET(c) = 0;
+        G_RET(c) = (uint64_t)(int64_t)guest_fill_linux_stat(a1, &s, NULL, (int)a0, 0);
         break;
     }
     default: break;

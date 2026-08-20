@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use hl_client::api::{Channel, Session, Size};
-use hl_client::model::{Attachment, ExecConfig, ExecStart};
+use hl_client::model::{Attachment, ExecAttach, ExecConfig, ExecStart};
 use hl_client::{Client, Config, Error};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -205,6 +205,45 @@ async fn terminal_attachment_splits_for_concurrent_input_and_output() {
     let (written, received) = tokio::join!(input.write(b"help\n"), output.next());
     written.unwrap();
     assert_eq!(received.unwrap().unwrap().bytes(), b"ready\r\n".as_slice());
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn running_terminal_reattach_uses_the_distinct_attach_operation() {
+    let root = TempDir::new().unwrap();
+    let socket = root.path().join("daemon.sock");
+    let listener = listener(&socket);
+    let server = tokio::spawn(async move {
+        let (mut peer, _) = listener.accept().await.unwrap();
+        let captured = request(&mut peer).await;
+        let (headers, body) = parts(&captured);
+        assert!(headers.starts_with("POST /v1.43/exec/restored%2Fterminal/attach HTTP/1.1\r\n"));
+        assert_eq!(body, br#"{"Tty":true,"KillOnDisconnect":true,"ConsoleSize":[31,97]}"#);
+        peer.write_all(
+            b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\nrestored-once\r\n",
+        )
+        .await
+        .unwrap();
+    });
+
+    let client = Client::unix(&socket).unwrap();
+    let session = client
+        .executions()
+        .attach(
+            "restored/terminal",
+            &ExecAttach {
+                tty: true,
+                kill_on_disconnect: true,
+                console_size: Some([31, 97]),
+            },
+        )
+        .await
+        .unwrap();
+    let (_input, mut output) = session.into_terminal().unwrap();
+    assert_eq!(
+        output.next().await.unwrap().unwrap().bytes(),
+        b"restored-once\r\n".as_slice()
+    );
     server.await.unwrap();
 }
 

@@ -1,4 +1,6 @@
 struct hl_linux_bpf_filter;
+static int checkpoint_relay_after_fork(void);
+static int checkpoint_relay_start(void);
 
 static void thread_after_fork(void) {
     pthread_mutex_init(&g_threg_m, NULL); // thread registry (tkill/tgkill lookup, thread_register)
@@ -33,6 +35,10 @@ static void thread_after_fork(void) {
     pthread_mutex_init(&g_shkey_m, NULL);
     if (g_threg_live <= 1) {
         g_fbk_active = g_fbk_private; // the child's __thread active pointer must still select the private table
+        if (checkpoint_relay_after_fork() != 0 && self) {
+            self->exit_code = 70;
+            self->exited = 1;
+        }
         return;
     }
     futex_private_table_after_fork();
@@ -55,6 +61,10 @@ static void thread_after_fork(void) {
         g_my_threg = -1;
         g_threg_live = 0;
     }
+    if (checkpoint_relay_after_fork() != 0 && self) {
+        self->exit_code = 70;
+        self->exited = 1;
+    }
 }
 
 // A dedicated host signal used only to INTERRUPT a sibling guest thread out of a blocking host syscall
@@ -64,16 +74,218 @@ static void thread_after_fork(void) {
 // emulated guest signal -- the same free-signal reasoning the STW code uses for SIGEMT.
 #define THREAD_INT_SIG SIGINFO
 
-static void thread_int_handler(int sig) {
+static _Thread_local struct cpu *g_thread_cpu;
+static _Atomic int g_ckpt_relay_writer = -1;
+static _Atomic uint32_t g_ckpt_relay_requested;
+static _Atomic uint32_t g_ckpt_relay_queued;
+static _Atomic uint32_t g_ckpt_relay_handlers;
+_Static_assert(ATOMIC_INT_LOCK_FREE == 2, "checkpoint signal relay requires lock-free integer atomics");
+static int g_ckpt_relay_reader = -1;
+static pthread_t g_ckpt_relay_thread;
+static int g_ckpt_relay_started;
+
+static int thread_int_is_external(const siginfo_t *information) {
+#if defined(SI_TKILL)
+    return information == NULL || information->si_code != SI_TKILL;
+#elif defined(__APPLE__)
+    // Darwin does not expose Linux's SI_TKILL. pthread_kill originates in this
+    // process, while the checkpoint coordinator is a different host process.
+    return information == NULL || information->si_pid != getpid();
+#else
+    // Hosts without reliable sender provenance conservatively coalesce the
+    // signal. Such hosts do not currently enable checkpoint/restore.
+    return 1;
+#endif
+}
+
+static void thread_int_handler(int sig, siginfo_t *information, void *context) {
     (void)sig;
+    (void)context;
+    int saved = errno;
+    (void)atomic_fetch_add_explicit(&g_ckpt_relay_handlers, 1, memory_order_acquire);
     // Its base job is to make a blocked host syscall return EINTR (empty body suffices). When checkpoint/
     // restore is armed, ALSO set cpu->irq so a chained in-cache guest loop (which never returns to the
     // dispatcher on its own) is bounced out to the safepoint where ckpt_poll runs. Inert on a normal launch
     // (the snapshot state is disabled), so the gate is unchanged; SIGINFO is guest-clobber-proof (sig_l2m omits 29).
     if (hl_linux_snapshot_enabled(&g_ckpt_snapshot)) {
-        struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
-        if (c) c->irq = 1;
+        struct cpu *c = g_thread_cpu;
+        if (c) __atomic_store_n(&c->irq, 1, __ATOMIC_RELAXED);
     }
+    if (thread_int_is_external(information)) {
+        (void)atomic_fetch_add_explicit(&g_ckpt_relay_requested, 1, memory_order_relaxed);
+        uint32_t idle = 0;
+        if (atomic_compare_exchange_strong_explicit(&g_ckpt_relay_queued, &idle, 1, memory_order_acq_rel,
+                                                    memory_order_relaxed)) {
+            int writer = atomic_load_explicit(&g_ckpt_relay_writer, memory_order_acquire);
+            unsigned char byte = 1;
+            if (writer < 0 || (write(writer, &byte, 1) < 0 && errno != EAGAIN))
+                atomic_store_explicit(&g_ckpt_relay_queued, 0, memory_order_release);
+        }
+    }
+    (void)atomic_fetch_sub_explicit(&g_ckpt_relay_handlers, 1, memory_order_release);
+    errno = saved;
+}
+
+static void checkpoint_relay_kick_threads(void) {
+    pthread_mutex_lock(&g_threg_m);
+    for (int slot = 0; slot < THREAD_REG_MAX; ++slot) {
+        struct cpu *cpu = g_threg[slot].c;
+        if (cpu == NULL) continue;
+        __atomic_store_n(&cpu->irq, 1, __ATOMIC_SEQ_CST);
+        pthread_cond_t *condition = __atomic_load_n(&g_threg[slot].waitc, __ATOMIC_SEQ_CST);
+        if (condition != NULL) {
+            pthread_mutex_t *mutex = g_threg[slot].waitm;
+            pthread_mutex_lock(mutex);
+            pthread_cond_broadcast(condition);
+            pthread_mutex_unlock(mutex);
+        }
+        if (!pthread_equal(g_threg[slot].th, pthread_self())) (void)pthread_kill(g_threg[slot].th, THREAD_INT_SIG);
+    }
+    pthread_mutex_unlock(&g_threg_m);
+}
+
+static void *checkpoint_relay_main(void *argument) {
+    int reader = *(int *)argument;
+    sigset_t blocked;
+    sigemptyset(&blocked);
+    sigaddset(&blocked, THREAD_INT_SIG);
+    (void)pthread_sigmask(SIG_BLOCK, &blocked, NULL);
+    for (;;) {
+        unsigned char byte;
+        ssize_t count;
+        do
+            count = read(reader, &byte, sizeof byte);
+        while (count < 0 && errno == EINTR);
+        if (count <= 0) break;
+        for (;;) {
+            uint32_t observed = atomic_load_explicit(&g_ckpt_relay_requested, memory_order_acquire);
+            checkpoint_relay_kick_threads();
+            atomic_store_explicit(&g_ckpt_relay_queued, 0, memory_order_release);
+            if (atomic_load_explicit(&g_ckpt_relay_requested, memory_order_acquire) == observed) break;
+            uint32_t idle = 0;
+            if (!atomic_compare_exchange_strong_explicit(&g_ckpt_relay_queued, &idle, 1, memory_order_acq_rel,
+                                                         memory_order_relaxed))
+                break;
+        }
+    }
+    return NULL;
+}
+
+static void checkpoint_relay_close_descriptor(int *descriptor) {
+    if (*descriptor < 0) return;
+    hl_host_process_fd_private_remove(*descriptor);
+    (void)close(*descriptor);
+    *descriptor = -1;
+}
+
+static int checkpoint_relay_unpublish_writer(void) {
+    int writer = atomic_exchange_explicit(&g_ckpt_relay_writer, -1, memory_order_acq_rel);
+    while (atomic_load_explicit(&g_ckpt_relay_handlers, memory_order_acquire) != 0)
+        sched_yield();
+    return writer;
+}
+
+static void checkpoint_relay_stop(void) {
+    sigset_t blocked, previous;
+    sigemptyset(&blocked);
+    sigaddset(&blocked, THREAD_INT_SIG);
+    (void)pthread_sigmask(SIG_BLOCK, &blocked, &previous);
+    int writer = checkpoint_relay_unpublish_writer();
+    if (writer >= 0) {
+        hl_host_process_fd_private_remove(writer);
+        (void)close(writer);
+    }
+    if (g_ckpt_relay_started && !pthread_equal(g_ckpt_relay_thread, pthread_self()))
+        (void)pthread_join(g_ckpt_relay_thread, NULL);
+    checkpoint_relay_close_descriptor(&g_ckpt_relay_reader);
+    g_ckpt_relay_started = 0;
+    atomic_store_explicit(&g_ckpt_relay_queued, 0, memory_order_release);
+    (void)pthread_sigmask(SIG_SETMASK, &previous, NULL);
+}
+
+static void checkpoint_relay_at_exit(void) {
+    checkpoint_relay_stop();
+}
+
+static int checkpoint_relay_start(void) {
+    if (g_ckpt_relay_started) return 0;
+    sigset_t blocked, previous;
+    sigemptyset(&blocked);
+    sigaddset(&blocked, THREAD_INT_SIG);
+    (void)pthread_sigmask(SIG_BLOCK, &blocked, &previous);
+    int descriptors[2];
+    if (pipe(descriptors) != 0) {
+        (void)pthread_sigmask(SIG_SETMASK, &previous, NULL);
+        return -1;
+    }
+    int reader = hl_host_process_fd_private_adopt(descriptors[0]);
+    int writer = reader >= 0 ? hl_host_process_fd_private_adopt(descriptors[1]) : -1;
+    if (reader < 0 || writer < 0) {
+        if (reader >= 0) {
+            hl_host_process_fd_private_remove(reader);
+            (void)close(reader);
+        } else {
+            (void)close(descriptors[0]);
+        }
+        if (writer >= 0) {
+            hl_host_process_fd_private_remove(writer);
+            (void)close(writer);
+        } else {
+            (void)close(descriptors[1]);
+        }
+        (void)pthread_sigmask(SIG_SETMASK, &previous, NULL);
+        return -1;
+    }
+    int flags = fcntl(writer, F_GETFL);
+    if (flags < 0 || fcntl(writer, F_SETFL, flags | O_NONBLOCK) != 0 || fcntl(reader, F_SETFD, FD_CLOEXEC) != 0 ||
+        fcntl(writer, F_SETFD, FD_CLOEXEC) != 0) {
+        checkpoint_relay_close_descriptor(&reader);
+        checkpoint_relay_close_descriptor(&writer);
+        (void)pthread_sigmask(SIG_SETMASK, &previous, NULL);
+        return -1;
+    }
+    g_ckpt_relay_reader = reader;
+    atomic_store_explicit(&g_ckpt_relay_requested, 0, memory_order_relaxed);
+    atomic_store_explicit(&g_ckpt_relay_queued, 0, memory_order_relaxed);
+    if (pthread_create(&g_ckpt_relay_thread, NULL, checkpoint_relay_main, &g_ckpt_relay_reader) != 0) {
+        checkpoint_relay_close_descriptor(&g_ckpt_relay_reader);
+        checkpoint_relay_close_descriptor(&writer);
+        (void)pthread_sigmask(SIG_SETMASK, &previous, NULL);
+        return -1;
+    }
+    atomic_store_explicit(&g_ckpt_relay_writer, writer, memory_order_release);
+    g_ckpt_relay_started = 1;
+    static int exit_registered;
+    if (!exit_registered) {
+        exit_registered = 1;
+        (void)atexit(checkpoint_relay_at_exit);
+    }
+    (void)pthread_sigmask(SIG_SETMASK, &previous, NULL);
+    return 0;
+}
+
+static int checkpoint_relay_after_fork(void) {
+    // Only the calling thread survives fork, so the inherited relay cannot be
+    // joined. Invalidate both inherited descriptors before publishing a fresh
+    // process-private channel.
+    sigset_t blocked, previous;
+    sigemptyset(&blocked);
+    sigaddset(&blocked, THREAD_INT_SIG);
+    (void)pthread_sigmask(SIG_BLOCK, &blocked, &previous);
+    int writer = atomic_exchange_explicit(&g_ckpt_relay_writer, -1, memory_order_acq_rel);
+    // Only the calling thread survives. A parent-side handler count can name a
+    // vanished thread and must never be waited on in the child.
+    atomic_store_explicit(&g_ckpt_relay_handlers, 0, memory_order_release);
+    if (writer >= 0) {
+        hl_host_process_fd_private_remove(writer);
+        (void)close(writer);
+    }
+    checkpoint_relay_close_descriptor(&g_ckpt_relay_reader);
+    g_ckpt_relay_started = 0;
+    atomic_store_explicit(&g_ckpt_relay_queued, 0, memory_order_release);
+    int result = g_ckpt_trigger != NULL ? checkpoint_relay_start() : 0;
+    (void)pthread_sigmask(SIG_SETMASK, &previous, NULL);
+    return result;
 }
 
 static pthread_once_t g_thread_int_once = PTHREAD_ONCE_INIT;
@@ -82,13 +294,17 @@ static void thread_int_install(void) {
     hl_guest_fetch_set_direct_validator(guest_exec_direct_valid);
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
-    sa.sa_handler = thread_int_handler;
+    sa.sa_sigaction = thread_int_handler;
     sigemptyset(&sa.sa_mask);
     // Host AArch64 executes with the guest SP live.  Keep this engine-only
     // interrupt frame off that stack; NO SA_RESTART still makes a blocking
     // syscall return EINTR so its retry loop can bail on exited.
-    sa.sa_flags = SA_ONSTACK;
+    sa.sa_flags = SA_ONSTACK | SA_SIGINFO;
     sigaction(THREAD_INT_SIG, &sa, NULL);
+}
+
+static void thread_int_ensure_installed(void) {
+    pthread_once(&g_thread_int_once, thread_int_install);
 }
 
 // The guest tid this cpu answers gettid() with (see proc.c case 178): its own id, or the init's pid 1.
@@ -112,9 +328,10 @@ static void thread_wait_clear(void) {
 }
 
 static void thread_register(struct cpu *c) {
+    g_thread_cpu = c;
     c->bus_filter = (uint64_t)(uintptr_t)g_bus_page_filter;
     c->bus_force = (uint64_t)(uintptr_t)&g_bus_filter_force;
-    pthread_once(&g_thread_int_once, thread_int_install);
+    thread_int_ensure_installed();
     // Keep THREAD_INT_SIG deliverable on this thread so a peer's execve teardown can interrupt its syscalls.
     sigset_t unb;
     sigemptyset(&unb);
@@ -171,6 +388,7 @@ static void thread_unregister(struct cpu *c) {
         }
     pthread_mutex_unlock(&g_threg_m);
     g_my_threg = -1;
+    g_thread_cpu = NULL;
 }
 
 // Deliver signal `sig` to the guest thread `tid`: set that thread's per-thread pending bit so it (and not
@@ -189,7 +407,8 @@ static int thread_target_signal_info(int tid, int sig, int tag, int error, int c
     pthread_mutex_lock(&g_threg_m);
     for (int i = 0; i < THREAD_REG_MAX; i++)
         if (g_threg[i].c && cpu_tid(g_threg[i].c) == tid) {
-            int published = thread_directed_signal_publish(g_threg[i].c, sig, tag, error, code, value, pid, uid, address);
+            int published =
+                thread_directed_signal_publish(g_threg[i].c, sig, tag, error, code, value, pid, uid, address);
             if (published < 0) {
                 found = -1;
                 break;
@@ -469,6 +688,7 @@ static int thread_restore_group(const struct cpu *images, int count, const struc
     // See spawn_thread: discard single-threaded (barrier-elided) blocks before the restored peers run.
     if (!g_threaded && !G_THREAD_START_FLUSH()) return -EAGAIN;
     g_threaded = 1;
+    atomic_store_explicit(&g_ever_threaded, 1, memory_order_release);
     for (int i = 0; i < count; i++) {
         if (images[i].tid == 0) continue;
         struct cpu *child = malloc(sizeof *child);
@@ -568,6 +788,10 @@ static int spawn_thread(struct cpu *parent, uint64_t flags, uint64_t stack_top, 
         return -EAGAIN;
     }
     g_threaded = 1;
+    // Publish threading authority before sentry preparation and pthread_create.
+    // A concurrent vfork must never mistake an authorized, not-yet-registered
+    // peer for a single-threaded process and import a stale COW snapshot.
+    atomic_store_explicit(&g_ever_threaded, 1, memory_order_release);
     if (sentry_thread_prepare(child) != 0) {
         (void)hl_target_task_event(child, HL_TASK_EVENT_EXIT_THREAD, 0, (uint64_t)tid, 0);
         free(child);

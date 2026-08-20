@@ -65,8 +65,76 @@ typedef enum hl_ckpt_stream_op {
     HL_CKPT_OP_SOURCE_LIST = 16, /* name = prefix -> payload = NUL-terminated names, value = count */
     HL_CKPT_OP_SOURCE_SIZE = 17, /* name -> value = size, status 1 when absent */
     HL_CKPT_OP_SOURCE_READ = 18, /* name, offset, length -> payload (short read at end of object) */
-    HL_CKPT_OP_RECOVERY_COMPLETE = 19 /* restore is complete; release its publication authority */
+    HL_CKPT_OP_RECOVERY_COMPLETE = 19, /* restore is complete; release its publication authority */
+    /* Exact capture membership. Sent by a process whose threads are all stopped and whose
+       thread registry is held; payload is [u32 count][u32 zero][u32 executor]*count, and
+       reply.value is the server-assigned member ID. No image bytes may be published by a
+       process that has not been acknowledged for the running capture generation. */
+    HL_CKPT_OP_REGISTER_READY = 20,
+    /* Park release. Sent repeatedly by a member that has finished its own group and is holding its
+       whole-process freeze (every thread stopped, thread registry held). The reply names what the
+       member must do next, and is the ONLY thing that ends a park:
+         HL_CKPT_RELEASE_HOLD   the capture is still running -- stay stopped and alive
+         HL_CKPT_RELEASE_EXIT   the manifest committed -- the image owns this process now
+         HL_CKPT_RELEASE_RESUME the capture will not be published -- unfreeze and run again
+       Read-only and never a mutation, so a parked member cannot hold the manifest publication
+       behind it. A transport failure (the broker died) is read as RESUME by the member: release is
+       tied to the broker's descriptor, so a dead coordinator cannot leave the tree frozen. */
+    HL_CKPT_OP_RELEASE_WAIT = 21,
+    /* A restored process announces itself. Sent once by every process a whole-image restore re-forks,
+       after its identity is hydrated and before it reaches the commit barrier, so the broker learns
+       which guest pid the connection it already authenticated belongs to. payload is
+       [u32 guest pid][u32 zero]. The connection's authenticated peer capability is what the host then
+       holds the member by: the guest pid is the durable name, the capability is the reach. */
+    HL_CKPT_OP_MEMBER_RESTORED = 22,
+    /* A restored member reports its own guest exit status on its way out, so a host holding the member
+       reads the status the guest produced instead of inferring one from a vanished process. payload is
+       [i32 status][u32 kind], kind 1 = exit code, 2 = terminating signal. Admissible in any phase from
+       a connection that announced itself with MEMBER_RESTORED, and from no other. */
+    HL_CKPT_OP_MEMBER_EXITED = 23,
+    /* The coordinator has DECIDED not to publish this capture, and says why. `name` is the reason,
+       the same text the engine writes to its own stderr as "[ckpt] refuse: ...". Sent immediately
+       before the coordinator exits, and it is the only thing that turns a decided refusal into a
+       host-side failure: without it the host learns nothing until its own deadline expires, so a
+       decision taken at 0.3s was reported at 30s and named none of it. Carries no image bytes and
+       requires no membership -- a process that refuses is by definition publishing nothing. */
+    HL_CKPT_OP_CAPTURE_REFUSED = 24,
+    /* Did this host process ever prove exact membership of the running capture generation?
+       payload is [u64 host pid]; reply.value is 1 when that pid holds a REGISTER_READY record for the
+       generation named in the request, and 0 when it holds none. Read-only, and the ONLY thing the
+       coordinator may conclude from a 0 is that the process published nothing: the broker refuses every
+       byte-publishing op from a connection that has not registered, so "never registered" is exactly
+       "contributed no bytes to this image". Any status other than OK means the answer is unknown, and
+       an unknown answer is treated as "registered" -- the coordinator never drops a member on a guess. */
+    HL_CKPT_OP_PARTICIPANT_REGISTERED = 25,
+    /* A restoring process asks for the terminal its captured session was attached to. Sent from inside
+       the descriptor restore, which runs BEFORE the identity is hydrated and therefore before
+       MEMBER_RESTORED can announce anything, so this request carries the guest pid itself:
+       payload is [u32 guest pid][u32 zero]. The reply carries ONE descriptor over SCM_RIGHTS -- the
+       slave end of a pty the host created for exactly this member before it started the restore -- and
+       the member duplicates it onto guest fds 0, 1 and 2.
+
+       Answered with a descriptor only for a guest pid the host pre-registered a terminal for. Every other
+       member gets an ordinary OK carrying no descriptor and keeps the container's own bridge: a member
+       whose stdio the host cannot produce must inherit the previous behaviour, never a descriptor
+       belonging to a different session. */
+    HL_CKPT_OP_MEMBER_STDIO = 26,
+    /* Close membership for this capture and answer how many processes proved it. No payload; reply.value
+       is the sealed member count. This is the ONE instant at which the set of processes the manifest must
+       contain is fixed, and it exists because the coordinator's own enumeration cannot fix it: a tree
+       forks and exits across the instant a scan is taken, so the scan can both miss a process the image
+       contains and name one it does not. After the seal REGISTER_READY is refused, so no fork and no exit
+       can straddle the count. Any status other than OK means the count is unknown, and an unknown count
+       refuses the capture -- it is never read as a number. */
+    HL_CKPT_OP_SEAL_MEMBERSHIP = 27
 } hl_ckpt_stream_op;
+
+#define HL_CKPT_MEMBER_EXIT_CODE UINT32_C(1)
+#define HL_CKPT_MEMBER_EXIT_SIGNAL UINT32_C(2)
+
+#define HL_CKPT_RELEASE_HOLD UINT64_C(0)
+#define HL_CKPT_RELEASE_EXIT UINT64_C(1)
+#define HL_CKPT_RELEASE_RESUME UINT64_C(2)
 
 /* Announces one engine process on the broker. Carries exactly one descriptor: that process's channel. */
 typedef struct hl_ckpt_hello {

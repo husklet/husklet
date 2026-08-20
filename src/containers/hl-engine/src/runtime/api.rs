@@ -11,7 +11,15 @@ pub(crate) use execution::{ProductionFactory, ProductionMachine};
 mod checkpoint;
 
 #[cfg(unix)]
+mod member;
+#[cfg(unix)]
+pub use member::{MemberExit, RestoredMember};
+
+#[cfg(unix)]
+mod line_discipline;
 mod terminal;
+#[cfg(unix)]
+pub use terminal::MemberTerminal;
 
 use crate::activation::GuestIsa;
 use crate::composition::{CompositionError, EngineBackend, RuntimeServices};
@@ -129,6 +137,8 @@ impl Builder {
         let services = RuntimeServices {
             checkpoint_sink: None,
             checkpoint_source: None,
+            #[cfg(unix)]
+            checkpoint_channel: None,
             streams: crate::composition::StandardStreams::default(),
         };
         let Ok(backend) = EngineBackend::construct(self.isa, plan, services, &factory, workspace.clone()) else {
@@ -173,6 +183,8 @@ impl Engine {
         let services = RuntimeServices {
             checkpoint_sink: None,
             checkpoint_source: None,
+            #[cfg(unix)]
+            checkpoint_channel: None,
             streams,
         };
         Self::construct(isa, plan, services)
@@ -189,6 +201,33 @@ impl Engine {
         let services = RuntimeServices {
             checkpoint_sink: Some(sink),
             checkpoint_source: Some(source),
+            #[cfg(unix)]
+            checkpoint_channel: None,
+            streams,
+        };
+        Self::construct(isa, plan, services)
+    }
+
+    /// Constructs a runtime that joins an existing process domain's freeze.
+    ///
+    /// The session shares the coordinator's broker socket and trigger word, so the
+    /// coordinator's generation bump reaches its safepoint gates and its guest
+    /// processes commit into the coordinator's store. It owns no checkpoint image
+    /// and cannot be captured on its own.
+    ///
+    /// # Errors
+    /// Returns the composition refusal that prevented construction.
+    #[cfg(unix)]
+    pub fn with_checkpoint_channel(
+        isa: GuestIsa,
+        plan: RuntimePlan,
+        streams: crate::composition::StandardStreams,
+        channel: crate::composition::CheckpointChannel,
+    ) -> Result<Self, EngineError> {
+        let services = RuntimeServices {
+            checkpoint_sink: None,
+            checkpoint_source: None,
+            checkpoint_channel: Some(channel),
             streams,
         };
         Self::construct(isa, plan, services)
@@ -201,17 +240,24 @@ impl Engine {
         })?;
         let factory = ProductionFactory;
         let backend = EngineBackend::construct(isa, plan, services, &factory, workspace.clone()).map_err(|error| {
-            if error == CompositionError::UnsupportedTerminal {
-                EngineError::Unsupported
-            } else {
-                EngineError::LaunchFailed
-            }
+            hl_log::hl_error!(hl_log::tag::EXEC, "engine composition failed: error={error:?}");
+            Self::launch_error(error)
         })?;
         Ok(Self {
             backend,
             workspace,
             terminal,
         })
+    }
+
+    /// Maps a composition refusal onto the public engine error, retaining the
+    /// originating cause for every case the boundary does not translate.
+    fn launch_error(error: CompositionError) -> EngineError {
+        if error == CompositionError::UnsupportedTerminal {
+            EngineError::Unsupported
+        } else {
+            EngineError::CompositionFailed(error)
+        }
     }
 
     pub fn start(&self) -> Result<(), EngineError> {
@@ -226,8 +272,50 @@ impl Engine {
     pub fn checkpoint_supported(&self) -> Result<(), EngineError> {
         self.backend.checkpoint_supported()
     }
+    /// The container-namespace pid of the guest process this engine launched, once it has one.
+    ///
+    /// A whole-image checkpoint names each captured member by this number and a restore re-forks it
+    /// under the same one, so it is the only identity of a launched guest that survives a capture.
+    #[must_use]
+    pub fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
+        self.backend.guest_pid()
+    }
+    /// One member of the process tree this engine restored, by the guest pid its image names it by.
+    ///
+    /// This is how a host reaches a process a whole-image restore re-forked: the restore produces one
+    /// engine handle for a tree of many, and this addresses one of them. `None` for an engine that
+    /// started fresh, and for any guest pid the restore did not announce -- in which case a caller
+    /// must refuse to present the member as live rather than start a replacement for it.
+    #[cfg(unix)]
+    #[must_use]
+    pub fn restored_member(&self, guest_pid: std::num::NonZeroI32) -> Option<crate::runtime::RestoredMember> {
+        self.backend.restored_member(guest_pid)
+    }
+    /// Registers the terminal one sealed member will reattach to when this engine restores it.
+    ///
+    /// The producer of a restored member's I/O is necessarily the host, and necessarily earlier than any
+    /// attachment: the member asks for its terminal during its own descriptor restore, long before a pane
+    /// exists to ask on its behalf. So this must be called before [`Self::start`], once per member whose
+    /// session the host intends to be able to reattach.
+    ///
+    /// # Errors
+    /// Returns [`EngineError::Unsupported`] when this engine coordinates no checkpoint.
+    #[cfg(unix)]
+    pub fn provide_member_terminal(
+        &self,
+        guest_pid: std::num::NonZeroI32,
+        terminal: std::os::fd::OwnedFd,
+    ) -> Result<(), EngineError> {
+        self.backend.provide_member_terminal(guest_pid, terminal)
+    }
     pub fn capture_checkpoint(&self) -> Result<(), EngineError> {
         self.backend.capture_checkpoint()
+    }
+    /// The freeze channel every session in this engine's process domain must join.
+    #[cfg(unix)]
+    #[must_use]
+    pub fn checkpoint_channel(&self) -> Option<crate::composition::CheckpointChannel> {
+        self.backend.checkpoint_channel()
     }
     /// Captures the running process tree before the caller's monotonic deadline.
     ///
@@ -269,6 +357,33 @@ mod tests {
         assert_eq!(
             Builder::initial_working_directory(false).unwrap(),
             std::env::current_dir().unwrap()
+        );
+    }
+}
+
+#[cfg(test)]
+mod launch_error_tests {
+    use super::{CompositionError, Engine, EngineError};
+
+    #[test]
+    fn non_terminal_composition_failures_keep_their_cause() {
+        for error in [
+            CompositionError::MissingCheckpointSink,
+            CompositionError::MissingCheckpointSource,
+            CompositionError::RuntimeConstruction,
+            CompositionError::TransactionBusy,
+            CompositionError::DeadlineExceeded,
+            CompositionError::PublishedNotDurable,
+        ] {
+            assert_eq!(Engine::launch_error(error), EngineError::CompositionFailed(error));
+        }
+    }
+
+    #[test]
+    fn unsupported_terminal_stays_unsupported() {
+        assert_eq!(
+            Engine::launch_error(CompositionError::UnsupportedTerminal),
+            EngineError::Unsupported
         );
     }
 }

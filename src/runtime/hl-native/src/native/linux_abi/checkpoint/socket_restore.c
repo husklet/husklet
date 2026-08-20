@@ -104,20 +104,30 @@ static int ckpt_prepare_restore_sockets(void) {
                     (unsigned long long)g_restore_socket_endpoints[index].identity);
             return -1;
         }
+    /* Half-close last, because shutdown() is irreversible and both directions would defeat the steps above:
+     * SHUT_RD makes the queue this endpoint was just refilled with unreadable, and SHUT_WR would refuse the
+     * peer's refill, which is written through THIS end.  Applying it here reproduces the state measured on
+     * the host: an endpoint whose peer holds SHUT_WR reads 0 for ever while both ends stay open, and the
+     * far end goes on receiving. */
     for (int index = 0; index < g_nrestore_socket_endpoints; ++index) {
         struct ckpt_restore_socket_endpoint *endpoint = &g_restore_socket_endpoints[index];
-        if (!endpoint->peer_closed) continue;
+        if (!endpoint->state_loaded || endpoint->fd < 0) continue;
+        int direction = ckpt_socket_shutdown_direction(endpoint->state.shutdown_mask);
+        if (direction >= 0 && shutdown(endpoint->fd, direction) != 0 && errno != ENOTCONN) return -1;
+    }
+    /* A peer no restored process holds can never be read or written again, so leaving it open would keep a
+     * connection that is gone from ever reporting end of stream.  This is the only remaining "peer closed"
+     * judgement, and it is a fact about the image rather than an inference from recv(). */
+    for (int index = 0; index < g_nrestore_socket_endpoints; ++index) {
+        struct ckpt_restore_socket_endpoint *endpoint = &g_restore_socket_endpoints[index];
+        if (!endpoint->guest_present) continue;
         struct ckpt_restore_socket_endpoint *peer = ckpt_restore_socket_find(endpoint->peer_identity);
         if (peer == NULL) return -1;
-        if (peer->guest_present) {
-            endpoint->peer_closed = 0;
-            continue;
-        }
-        if (peer->fd >= 0) {
-            hl_host_process_fd_private_remove(peer->fd);
-            close(peer->fd);
-            peer->fd = -1;
-        }
+        endpoint->peer_closed = !peer->guest_present;
+        if (peer->guest_present || peer->fd < 0) continue;
+        hl_host_process_fd_private_remove(peer->fd);
+        close(peer->fd);
+        peer->fd = -1;
     }
     return 0;
 }
@@ -140,12 +150,17 @@ static int ckpt_prepare_restore_socket_states(void) {
         if (!g_rprocs[process].viable) continue;
         snprintf(records_path, sizeof records_path, "proc.%d/fds", g_rprocs[process].gpid);
         FILE *records = ckpt_source_fopen(records_path);
-        if (!records) return -1;
+        if (!records) {
+            fprintf(stderr, "[restore] refuse: standalone sockets -- cannot open %s\n", records_path);
+            return -1;
+        }
         struct ckpt_fd record;
         while (ckpt_rd_fd(records, &record) == 0) {
             if (record.kind != CKF_SOCKET || ckpt_restore_socket_state_find(record.object_id) != NULL) continue;
             if (!record.object_id || ckpt_vector_reserve((void **)&g_restore_sockets, &g_restore_sockets_capacity,
                                                          sizeof *g_restore_sockets, g_nrestore_sockets + 1) != 0) {
+                fprintf(stderr, "[restore] refuse: standalone socket in %s has no object identity or exceeds capacity\n",
+                        records_path);
                 ckpt_source_fclose(records);
                 return -1;
             }
@@ -155,10 +170,17 @@ static int ckpt_prepare_restore_socket_states(void) {
             snprintf(state_path, sizeof state_path, "%s", record.path);
             if (ckpt_source_load(state_path, &socket_state->state, sizeof socket_state->state) != 0 ||
                 socket_state->state.magic != CKPT_SOCKET_STATE_MAGIC ||
-                socket_state->state.local_size > sizeof socket_state->state.local)
+                socket_state->state.local_size > sizeof socket_state->state.local) {
+                fprintf(stderr,
+                        "[restore] refuse: standalone socket %016llx state %s unreadable (magic %08x, local_size %u)\n",
+                        (unsigned long long)socket_state->identity, state_path, (unsigned)socket_state->state.magic,
+                        (unsigned)socket_state->state.local_size);
+                ckpt_source_fclose(records);
                 return -1;
+            }
         }
         if (!feof(records)) {
+            fprintf(stderr, "[restore] refuse: standalone sockets -- %s ended mid-record\n", records_path);
             ckpt_source_fclose(records);
             return -1;
         }
@@ -167,29 +189,45 @@ static int ckpt_prepare_restore_socket_states(void) {
     for (int index = 0; index < g_nrestore_sockets; ++index) {
         struct ckpt_restore_socket *saved = &g_restore_sockets[index];
         struct ckpt_socket_state *state = &saved->state;
+        // The loopback/bridge switch rendezvous name is an ENGINE-PRIVATE HOST path (g_netns/p<port>), not a
+        // guest pathname. bind() in endpoint.inc binds it literally; routing it through the guest overlay the
+        // way an ordinary guest AF_UNIX name is routed strands the inode inside the rootfs upper where nothing
+        // resolves it (observed as ENOENT on a restored PostgreSQL 0.0.0.0:5432 listener).
+        int virtual_netns_name = 0;
         if (state->host_family == AF_UNIX &&
             (state->udp_local_port != 0 || state->lo_port != 0 || state->br_port != 0)) {
             char virtual_path[200];
             if (state->udp_local_port != 0) {
                 if (state->udp_local_interface != 0) {
                     if (br_path((int)state->udp_local_interface - 1, state->udp_local_ip,
-                                (uint16_t)state->udp_local_port, virtual_path, sizeof virtual_path) != 0)
+                                (uint16_t)state->udp_local_port, virtual_path, sizeof virtual_path) != 0) {
+                        fprintf(stderr, "[restore] refuse: socket %016llx bridge UDP path unresolvable\n",
+                                (unsigned long long)saved->identity);
                         return -1;
+                    }
                 } else {
                     lo_path((uint16_t)state->udp_local_port, virtual_path, sizeof virtual_path);
                 }
             } else if (state->br_port != 0) {
                 if (br_path((int)state->br_interface - 1, state->br_ip, (uint16_t)state->br_port, virtual_path,
-                            sizeof virtual_path) != 0)
+                            sizeof virtual_path) != 0) {
+                    fprintf(stderr, "[restore] refuse: socket %016llx bridge path unresolvable\n",
+                            (unsigned long long)saved->identity);
                     return -1;
+                }
             } else {
                 lo_tcp_path((uint16_t)state->lo_port, state->lo_v6only, virtual_path, sizeof virtual_path);
             }
             struct sockaddr_un address;
-            if (unix_addr_set(&address, virtual_path) != 0) return -1;
+            if (unix_addr_set(&address, virtual_path) != 0) {
+                fprintf(stderr, "[restore] refuse: socket %016llx virtual address %s does not fit sun_path\n",
+                        (unsigned long long)saved->identity, virtual_path);
+                return -1;
+            }
             memset(&state->local, 0, sizeof state->local);
             memcpy(&state->local, &address, sizeof address);
             state->local_size = sizeof address;
+            virtual_netns_name = 1;
         }
         int fd = socket((int)state->host_family, (int)state->type, (int)state->protocol);
         if (fd < 0) {
@@ -200,12 +238,24 @@ static int ckpt_prepare_restore_socket_states(void) {
         }
         (void)hl_native_set_no_sigpipe(fd);
         if (ckpt_restore_socket_options(fd, state) != 0) {
+            fprintf(stderr, "[restore] refuse: socket %016llx option replay failed: %s\n",
+                    (unsigned long long)saved->identity, strerror(errno));
             close(fd);
             return -1;
         }
         if (ckpt_socket_state_is_bound(state)) {
             if (state->host_family == AF_UNIX) {
                 struct sockaddr_un *address = (void *)&state->local;
+                if (virtual_netns_name) {
+                    unlink(address->sun_path);
+                    if (unix_sock_at(fd, address->sun_path, 0) != 0) {
+                        fprintf(stderr, "[restore] refuse: socket %016llx bind to switch path %s failed: %s\n",
+                                (unsigned long long)saved->identity, address->sun_path, strerror(errno));
+                        close(fd);
+                        return -1;
+                    }
+                    goto socket_bound;
+                }
                 if (address->sun_path[0] == '/' && unix_path_routed(address->sun_path)) {
                     char host[1024];
                     if (g_rootfs)
@@ -214,6 +264,8 @@ static int ckpt_prepare_restore_socket_states(void) {
                         xlate(address->sun_path, host, sizeof host);
                     unlink(host);
                     if (unix_sock_at(fd, host, 0) != 0) {
+                        fprintf(stderr, "[restore] refuse: socket %016llx bind to routed path %s failed: %s\n",
+                                (unsigned long long)saved->identity, address->sun_path, strerror(errno));
                         close(fd);
                         return -1;
                     }
@@ -237,6 +289,8 @@ static int ckpt_prepare_restore_socket_states(void) {
         }
         saved->fd = hl_host_process_fd_private_adopt(fd);
         if (saved->fd < 0) {
+            fprintf(stderr, "[restore] refuse: socket %016llx could not be adopted as a private descriptor\n",
+                    (unsigned long long)saved->identity);
             close(fd);
             return -1;
         }
@@ -425,36 +479,56 @@ static int ckpt_restore_eventfds_initialize(void) {
 }
 
 // The guest group (guest pgid; 1 == init) that owned the controlling terminal's foreground at checkpoint,
-// carried from the manifest so the matching re-forked leader can reclaim the tty. Inherited across the
-// restore forks (set in the init before it forks the tree).
+// carried from the manifest so the restored init can publish the handoff after every group exists.
 static int g_ckpt_fg_gpid = 0;
+static pid_t ckpt_restore_live_pid(int guest);
+static pid_t ckpt_restore_live_group(int guest_group);
 
-// Make THIS process's group the controlling terminal's foreground group. Called by the process that led the
-// foreground job's group at checkpoint, right AFTER it re-creates that group (ckpt_restore_pgrp), so the pgid
-// argument names a group that already exists. SIGTTOU is blocked so a background caller isn't stopped by the
-// handoff. Best-effort -- a failure just leaves the (safe) inherited foreground group.
-static void ckpt_claim_tty_fg(void) {
+// The restored init owns the controlling terminal and performs the handoff only after every descendant has
+// rebuilt its process group and reached the publication barrier. A descendant cannot reliably open the
+// launcher's controlling tty during recovery; ignoring that failure leaves terminal SIGINT aimed at init.
+static int ckpt_claim_tty_fg(int guest_group) {
+    if (guest_group <= 0) return 0;
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (hl_option_get("HL_CKPT_TEST_FAIL_TTY_MASK") != NULL) {
+        errno = EIO;
+        return -1;
+    }
+#endif
     int tf = ckpt_ctty_open();
-    if (tf < 0) return;
+    if (tf < 0) return -1;
     sigset_t sv, bl;
     sigemptyset(&bl);
     sigaddset(&bl, SIGTTOU);
-    sigprocmask(SIG_BLOCK, &bl, &sv);
-    (void)tcsetpgrp(tf, getpgrp());
-    sigprocmask(SIG_SETMASK, &sv, NULL);
+    if (sigprocmask(SIG_BLOCK, &bl, &sv) != 0) {
+        int error = errno;
+        ckpt_ctty_close(tf);
+        errno = error;
+        return -1;
+    }
+    pid_t group = ckpt_restore_live_group(guest_group);
+    int result = group > 0 && tcsetpgrp(tf, group) == 0 && tcgetpgrp(tf) == group ? 0 : -1;
+    int error = result == 0 ? 0 : errno;
+    if (result != 0 && error == 0) error = EIO;
+    if (sigprocmask(SIG_SETMASK, &sv, NULL) != 0 && result == 0) {
+        result = -1;
+        error = errno;
+    }
     ckpt_ctty_close(tf);
+    if (result != 0) errno = error;
+    return result;
 }
 
 // Replay the captured line discipline onto the fresh pty. The restored guest keeps its in-memory belief about
 // the terminal (readline's "already prepared" flag), so a mode it set before the capture has to be there when
 // it resumes. SIGTTOU is blocked: the init is not yet the foreground group at this point. Best effort -- a
 // non-tty or an unsettable mode just leaves the launcher's default cooked terminal.
-static void ckpt_restore_tty_mode(const struct ckpt_manifest *man) {
+static int ckpt_restore_tty_mode(const struct ckpt_manifest *man) {
     struct termios tio;
     int tf = man->tty_termios ? ckpt_ctty_open() : -1;
     if (tf < 0 || tcgetattr(tf, &tio) != 0) {
         ckpt_ctty_close(tf);
-        return;
+        return 0;
     }
     size_t cc = sizeof tio.c_cc < sizeof man->tty_cc ? sizeof tio.c_cc : sizeof man->tty_cc;
     tio.c_iflag = (tcflag_t)man->tty_iflag;
@@ -467,24 +541,61 @@ static void ckpt_restore_tty_mode(const struct ckpt_manifest *man) {
     sigset_t sv, bl;
     sigemptyset(&bl);
     sigaddset(&bl, SIGTTOU);
-    sigprocmask(SIG_BLOCK, &bl, &sv);
+    if (sigprocmask(SIG_BLOCK, &bl, &sv) != 0) {
+        ckpt_ctty_close(tf);
+        return -1;
+    }
     (void)tcsetattr(tf, TCSANOW, &tio);
-    sigprocmask(SIG_SETMASK, &sv, NULL);
+    int result = sigprocmask(SIG_SETMASK, &sv, NULL);
     ckpt_ctty_close(tf);
+    return result;
 }
 
-// Best-effort reconstruction of this process's group/session relative to the LIVE (re-forked) tree. A
-// process that led its own group/session re-creates it; otherwise it joins its (already-inherited) parent
-// group. Errors are ignored (the process is at worst left in its inherited group -- never fatal).
-static void ckpt_restore_pgrp(int gpid, int pgid_gpid, int sid_gpid) {
-    if (sid_gpid == gpid && getsid(0) != getpid()) setsid(); // was a session leader
-    if (pgid_gpid == gpid) {
-        setpgid(0, 0); // was its own group leader
-    } else if (pgid_gpid > 0) {
-        int leader = (pgid_gpid == 1 && g_init_hostpid) ? g_init_hostpid : hl_linux_pidmap_host(&g_pidmap, pgid_gpid);
-        setpgid(0, leader); // join the (usually already-inherited) parent group
-    }
-}
+// Reconstruct this process's group/session relative to the LIVE (re-forked) tree. Idempotent verification
+// accepts a relation already inherited from the parent, but a requested relation that cannot be established
+// fails this process's atomic restore instead of publishing a tree with misdirected terminal signals.
+static int ckpt_restore_pgrp(int gpid, int pgid_gpid, int sid_gpid);
+
+enum ckpt_restore_state {
+    CKPT_RESTORE_PLANNED = 0,
+    CKPT_RESTORE_SPAWNED = 1,
+    CKPT_RESTORE_FILESYSTEM = 2,
+    CKPT_RESTORE_SESSION = 3,
+    CKPT_RESTORE_MEMORY = 4,
+    CKPT_RESTORE_DESCRIPTORS = 5,
+    CKPT_RESTORE_SIGNALS = 6,
+    CKPT_RESTORE_IDENTITY = 7,
+    CKPT_RESTORE_PROCESS_GROUP = 8,
+    CKPT_RESTORE_THREAD_GROUP = 9,
+    CKPT_RESTORE_READY = 10,
+    CKPT_RESTORE_RELEASED = 11,
+    CKPT_RESTORE_FAILED = 12,
+};
+
+struct ckpt_restore_process_slot {
+    int guest_pid;
+    int guest_ppid;
+    int guest_pgid;
+    int guest_sid;
+    _Atomic pid_t host_pid;
+    _Atomic int state;
+    _Atomic int error;
+};
+
+struct ckpt_restore_group_slot {
+    int guest_pgid;
+    int guest_sid;
+    int elected_guest;
+    int members;
+    _Atomic pid_t host_pgid;
+};
+
+struct ckpt_restore_session_slot {
+    int guest_sid;
+    int leader_guest;
+    int members;
+    _Atomic pid_t host_sid;
+};
 
 struct ckpt_restore_commit {
     _Atomic int decision;
@@ -492,13 +603,173 @@ struct ckpt_restore_commit {
     _Atomic int failed;
     _Atomic int released;
     int processes;
-    _Atomic pid_t pids[];
+    int groups;
+    int sessions;
+    struct timespec deadline;
+    struct ckpt_restore_process_slot process[HL_LINUX_PIDMAP_CAPACITY];
+    struct ckpt_restore_group_slot group[HL_LINUX_PIDMAP_CAPACITY];
+    struct ckpt_restore_session_slot session[HL_LINUX_PIDMAP_CAPACITY];
 };
 
 enum { CKPT_FUTEX_WAIT = 0, CKPT_FUTEX_WAKE = 1 };
 
 static struct ckpt_restore_commit *g_restore_commit;
 static size_t g_restore_commit_size;
+static int ckpt_restore_process_index(int gpid);
+
+static void ckpt_restore_commit_stage(int state) {
+    if (g_restore_commit == NULL) return;
+    int index = ckpt_restore_process_index(g_self_gpid);
+    if (index >= 0) atomic_store_explicit(&g_restore_commit->process[index].state, state, memory_order_release);
+}
+
+static const char *ckpt_restore_state_name(int state) {
+    switch (state) {
+    case CKPT_RESTORE_PLANNED: return "planned";
+    case CKPT_RESTORE_SPAWNED: return "spawned";
+    case CKPT_RESTORE_FILESYSTEM: return "filesystem";
+    case CKPT_RESTORE_SESSION: return "session";
+    case CKPT_RESTORE_MEMORY: return "memory";
+    case CKPT_RESTORE_DESCRIPTORS: return "descriptors";
+    case CKPT_RESTORE_SIGNALS: return "signals";
+    case CKPT_RESTORE_IDENTITY: return "identity";
+    case CKPT_RESTORE_PROCESS_GROUP: return "process-group";
+    case CKPT_RESTORE_THREAD_GROUP: return "thread-group";
+    case CKPT_RESTORE_READY: return "ready";
+    case CKPT_RESTORE_RELEASED: return "released";
+    case CKPT_RESTORE_FAILED: return "failed";
+    default: return "unknown";
+    }
+}
+
+static void ckpt_restore_commit_report(int expected) {
+    if (g_restore_commit == NULL) return;
+    int report_errno = errno;
+    fprintf(stderr, "[restore] commit expected=%d ready=%d released=%d failed=%d errno=%d\n", expected,
+            atomic_load_explicit(&g_restore_commit->ready, memory_order_acquire),
+            atomic_load_explicit(&g_restore_commit->released, memory_order_acquire),
+            atomic_load_explicit(&g_restore_commit->failed, memory_order_acquire), report_errno);
+    for (int index = 0; index < g_restore_commit->processes; ++index) {
+        struct ckpt_restore_process_slot *slot = &g_restore_commit->process[index];
+        pid_t host = atomic_load_explicit(&slot->host_pid, memory_order_acquire);
+        int state = atomic_load_explicit(&slot->state, memory_order_acquire);
+        int error = atomic_load_explicit(&slot->error, memory_order_acquire);
+        int alive = 0;
+#if defined(WNOWAIT)
+        siginfo_t information;
+        memset(&information, 0, sizeof information);
+        if (host == getpid()) {
+            alive = 1;
+        } else if (host > 0 && slot->guest_ppid == 1 &&
+                   waitid(P_PID, (id_t)host, &information, WEXITED | WNOHANG | WNOWAIT) == 0) {
+            alive = information.si_pid == 0;
+        } else if (host > 0) {
+            int probe = kill(host, 0);
+            alive = probe == 0 || errno == EPERM;
+        }
+#else
+        alive = host > 0 && (host == getpid() || kill(host, 0) == 0 || errno == EPERM);
+#endif
+        fprintf(stderr, "[restore] slot gpid=%d host=%d alive=%d stage=%s(%d) error=%d\n", slot->guest_pid, (int)host,
+                alive, ckpt_restore_state_name(state), state, error);
+    }
+    errno = report_errno;
+}
+
+static int ckpt_restore_group_index(int guest_pgid) {
+    if (g_restore_commit == NULL) return -1;
+    for (int index = 0; index < g_restore_commit->groups; ++index)
+        if (g_restore_commit->group[index].guest_pgid == guest_pgid) return index;
+    return -1;
+}
+
+static int ckpt_restore_session_index(int guest_sid) {
+    if (g_restore_commit == NULL) return -1;
+    for (int index = 0; index < g_restore_commit->sessions; ++index)
+        if (g_restore_commit->session[index].guest_sid == guest_sid) return index;
+    return -1;
+}
+
+static pid_t ckpt_restore_live_group(int guest_group) {
+    int index = ckpt_restore_group_index(guest_group);
+    if (index < 0) {
+        errno = ESRCH;
+        return -1;
+    }
+    pid_t host = atomic_load_explicit(&g_restore_commit->group[index].host_pgid, memory_order_acquire);
+    if (host <= 0) errno = ESRCH;
+    return host;
+}
+
+static int ckpt_restore_deadline_expired(void) {
+    struct timespec now;
+    return g_restore_commit == NULL || clock_gettime(CLOCK_MONOTONIC, &now) != 0 ||
+           now.tv_sec > g_restore_commit->deadline.tv_sec ||
+           (now.tv_sec == g_restore_commit->deadline.tv_sec && now.tv_nsec >= g_restore_commit->deadline.tv_nsec);
+}
+
+static pid_t ckpt_restore_live_pid(int guest) {
+    int index = ckpt_restore_process_index(guest);
+    if (g_restore_commit == NULL || index < 0) {
+        errno = ESRCH;
+        return -1;
+    }
+    for (;;) {
+        pid_t host = atomic_load_explicit(&g_restore_commit->process[index].host_pid, memory_order_acquire);
+        if (host > 0) {
+            (void)restore_process_identity_add(guest, (int)host);
+            return host;
+        }
+        if (atomic_load_explicit(&g_restore_commit->failed, memory_order_acquire) != 0 ||
+            ckpt_restore_deadline_expired()) {
+            errno = ETIMEDOUT;
+            return -1;
+        }
+        struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+        (void)nanosleep(&pause, NULL);
+    }
+}
+
+static int ckpt_restore_pgrp(int gpid, int pgid_gpid, int sid_gpid) {
+    if (restore_process_identity_add(gpid, (int)getpid()) != 0) return -1;
+    int session_index = ckpt_restore_session_index(sid_gpid);
+    int group_index = ckpt_restore_group_index(pgid_gpid);
+    if (session_index < 0 || group_index < 0) {
+        errno = ESRCH;
+        return -1;
+    }
+    pid_t expected_sid = atomic_load_explicit(&g_restore_commit->session[session_index].host_sid, memory_order_acquire);
+    if (expected_sid <= 0 || getsid(0) != expected_sid) {
+        errno = EPERM;
+        return -1;
+    }
+    if (hl_linux_pidmap_add(&g_sidmap, sid_gpid, (int)expected_sid) != 0) return -1;
+    struct ckpt_restore_group_slot *group = &g_restore_commit->group[group_index];
+    if (group->elected_guest == gpid) {
+        if (getpgrp() != getpid() && setpgid(0, 0) != 0) return -1;
+        atomic_store_explicit(&group->host_pgid, getpid(), memory_order_release);
+    } else {
+        pid_t host_group;
+        for (;;) {
+            host_group = atomic_load_explicit(&group->host_pgid, memory_order_acquire);
+            if (host_group > 0) break;
+            if (atomic_load_explicit(&g_restore_commit->failed, memory_order_acquire) != 0 ||
+                ckpt_restore_deadline_expired()) {
+                errno = ETIMEDOUT;
+                return -1;
+            }
+            struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+            (void)nanosleep(&pause, NULL);
+        }
+        if (getpgrp() != host_group && setpgid(0, host_group) != 0) return -1;
+    }
+    pid_t host_group = atomic_load_explicit(&group->host_pgid, memory_order_acquire);
+    if (host_group <= 0 || getpgrp() != host_group) {
+        errno = EIO;
+        return -1;
+    }
+    return hl_linux_pidmap_add(&g_pgidmap, pgid_gpid, (int)host_group);
+}
 
 static int ckpt_restore_commit_futex(_Atomic int *word, int operation, int value, const struct timespec *timeout) {
 #if defined(_WIN32)
@@ -538,16 +809,57 @@ static int ckpt_restore_commit_create(void) {
     errno = ENOTSUP;
     return -1;
 #else
-    if ((size_t)g_nrprocs > (SIZE_MAX - sizeof(struct ckpt_restore_commit)) / sizeof(pid_t)) return -1;
-    g_restore_commit_size = sizeof(struct ckpt_restore_commit) + (size_t)g_nrprocs * sizeof(pid_t);
+    if (g_nrprocs <= 0 || g_nrprocs > HL_LINUX_PIDMAP_CAPACITY) return -1;
+    g_restore_commit_size = sizeof(struct ckpt_restore_commit);
     g_restore_commit = mmap(NULL, g_restore_commit_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (g_restore_commit == MAP_FAILED) {
         g_restore_commit = NULL;
         return -1;
     }
     g_restore_commit->processes = g_nrprocs;
+    if (clock_gettime(CLOCK_MONOTONIC, &g_restore_commit->deadline) != 0) {
+        (void)munmap(g_restore_commit, g_restore_commit_size);
+        g_restore_commit = NULL;
+        g_restore_commit_size = 0;
+        return -1;
+    }
+    g_restore_commit->deadline.tv_sec += 10;
+    for (int index = 0; index < g_nrprocs; ++index) {
+        struct ckpt_proc *process = &g_rprocs[index];
+        struct ckpt_restore_process_slot *slot = &g_restore_commit->process[index];
+        slot->guest_pid = process->gpid;
+        slot->guest_ppid = process->ppid;
+        slot->guest_pgid = process->pgid;
+        slot->guest_sid = process->sid;
+        if (!process->viable) continue;
+        int group = ckpt_restore_group_index(process->pgid);
+        if (group < 0) {
+            group = g_restore_commit->groups++;
+            g_restore_commit->group[group].guest_pgid = process->pgid;
+            g_restore_commit->group[group].guest_sid = process->sid;
+            g_restore_commit->group[group].elected_guest = process->gpid;
+        }
+        struct ckpt_restore_group_slot *group_slot = &g_restore_commit->group[group];
+        group_slot->members++;
+        if (process->gpid == process->pgid ||
+            (group_slot->elected_guest != process->pgid && process->gpid < group_slot->elected_guest))
+            group_slot->elected_guest = process->gpid;
+        int session = ckpt_restore_session_index(process->sid);
+        if (session < 0) {
+            session = g_restore_commit->sessions++;
+            g_restore_commit->session[session].guest_sid = process->sid;
+            g_restore_commit->session[session].leader_guest = process->sid;
+        }
+        g_restore_commit->session[session].members++;
+    }
     int root = ckpt_restore_process_index(1);
-    if (root >= 0) atomic_store_explicit(&g_restore_commit->pids[root], getpid(), memory_order_release);
+    if (root >= 0) {
+        atomic_store_explicit(&g_restore_commit->process[root].host_pid, getpid(), memory_order_release);
+        atomic_store_explicit(&g_restore_commit->process[root].state, CKPT_RESTORE_SPAWNED, memory_order_release);
+    }
+    int root_session = ckpt_restore_session_index(g_rprocs[root].sid);
+    if (root_session >= 0)
+        atomic_store_explicit(&g_restore_commit->session[root_session].host_sid, getsid(0), memory_order_release);
     return 0;
 #endif
 }
@@ -556,6 +868,87 @@ static void ckpt_restore_commit_destroy(void) {
     if (g_restore_commit != NULL) (void)munmap(g_restore_commit, g_restore_commit_size);
     g_restore_commit = NULL;
     g_restore_commit_size = 0;
+}
+
+static int ckpt_restore_wait_spawned(void) {
+    for (;;) {
+        int complete = 1;
+        for (int index = 0; index < g_nrprocs; ++index) {
+            if (!g_rprocs[index].viable) continue;
+            if (atomic_load_explicit(&g_restore_commit->process[index].host_pid, memory_order_acquire) <= 0) {
+                complete = 0;
+                break;
+            }
+        }
+        if (complete) return 0;
+        if (atomic_load_explicit(&g_restore_commit->failed, memory_order_acquire) != 0 ||
+            ckpt_restore_deadline_expired()) {
+            errno = ETIMEDOUT;
+            return -1;
+        }
+        struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+        (void)nanosleep(&pause, NULL);
+    }
+}
+
+static int ckpt_restore_session_prepare(int gpid, int sid_gpid) {
+    int session_index = ckpt_restore_session_index(sid_gpid);
+    if (session_index < 0) {
+        errno = ESRCH;
+        return -1;
+    }
+    struct ckpt_restore_session_slot *session = &g_restore_commit->session[session_index];
+    if (session->leader_guest == gpid) {
+        if (getsid(0) != getpid() && setsid() < 0) return -1;
+        if (getsid(0) != getpid()) {
+            errno = EIO;
+            return -1;
+        }
+        atomic_store_explicit(&session->host_sid, getpid(), memory_order_release);
+    } else {
+        pid_t host_sid = atomic_load_explicit(&session->host_sid, memory_order_acquire);
+        if (host_sid <= 0 || getsid(0) != host_sid) {
+            errno = EPERM;
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int ckpt_restore_identity_hydrate(void) {
+    if (ckpt_restore_wait_spawned() != 0) return -1;
+    const char *fail = hl_option_get("HL_CKPT_TEST_FAIL_PIDMAP_AT");
+    for (int index = 0; index < g_nrprocs; ++index) {
+        if (!g_rprocs[index].viable) continue;
+        int guest = g_rprocs[index].gpid;
+        int host = atomic_load_explicit(&g_restore_commit->process[index].host_pid, memory_order_acquire);
+        if ((fail != NULL && atoi(fail) == guest) || host <= 0 || hl_linux_pidmap_add(&g_pidmap, guest, host) != 0)
+            return -1;
+    }
+    return 0;
+}
+
+static int ckpt_restore_identity_finalize(void) {
+    for (int index = 0; index < g_restore_commit->groups; ++index) {
+        pid_t host = 0;
+        while ((host = atomic_load_explicit(&g_restore_commit->group[index].host_pgid, memory_order_acquire)) <= 0) {
+            if (atomic_load_explicit(&g_restore_commit->failed, memory_order_acquire) != 0 ||
+                ckpt_restore_deadline_expired()) {
+                errno = ETIMEDOUT;
+                return -1;
+            }
+            const struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+            (void)nanosleep(&pause, NULL);
+        }
+        if (hl_linux_pidmap_add(&g_pgidmap, g_restore_commit->group[index].guest_pgid, (int)host) != 0) return -1;
+    }
+    for (int index = 0; index < g_restore_commit->sessions; ++index) {
+        pid_t host = atomic_load_explicit(&g_restore_commit->session[index].host_sid, memory_order_acquire);
+        if (host <= 0 || hl_linux_pidmap_add(&g_sidmap, g_restore_commit->session[index].guest_sid, (int)host) != 0)
+            return -1;
+    }
+    ckpt_restore_identity_activate();
+    return 0;
 }
 
 static void ckpt_restore_commit_wake(void) {
@@ -567,13 +960,25 @@ static void ckpt_restore_commit_abort(void) {
     atomic_store_explicit(&g_restore_commit->decision, 2, memory_order_release);
     ckpt_restore_commit_wake();
     for (int index = 0; index < g_restore_commit->processes; ++index) {
-        pid_t process = atomic_load_explicit(&g_restore_commit->pids[index], memory_order_acquire);
+        pid_t process = atomic_load_explicit(&g_restore_commit->process[index].host_pid, memory_order_acquire);
         if (process > 0 && process != getpid()) (void)kill(process, SIGKILL);
     }
+    struct timespec deadline;
+    if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0) return;
+    deadline.tv_sec += 2;
     for (;;) {
         int status;
-        pid_t child = waitpid(-1, &status, 0);
+        pid_t child = waitpid(-1, &status, WNOHANG);
         if (child > 0) continue;
+        if (child == 0) {
+            struct timespec now;
+            if (clock_gettime(CLOCK_MONOTONIC, &now) != 0 || now.tv_sec > deadline.tv_sec ||
+                (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec))
+                break;
+            struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+            (void)nanosleep(&pause, NULL);
+            continue;
+        }
         if (child < 0 && errno == EINTR) continue;
         break;
     }
@@ -581,23 +986,47 @@ static void ckpt_restore_commit_abort(void) {
 
 static void ckpt_restore_commit_failed(void) {
     if (g_restore_commit != NULL) {
+        int index = ckpt_restore_process_index(g_self_gpid);
+        if (index >= 0) {
+            atomic_store_explicit(&g_restore_commit->process[index].error, errno ? errno : EIO, memory_order_release);
+            atomic_store_explicit(&g_restore_commit->process[index].state, CKPT_RESTORE_FAILED, memory_order_release);
+        }
         atomic_fetch_add_explicit(&g_restore_commit->failed, 1, memory_order_release);
         (void)ckpt_restore_commit_futex(&g_restore_commit->ready, CKPT_FUTEX_WAKE, INT_MAX, NULL);
+        ckpt_restore_commit_wake();
+        (void)ckpt_restore_commit_futex(&g_restore_commit->released, CKPT_FUTEX_WAKE, INT_MAX, NULL);
     }
+    // `_exit` runs no atexit handler, so the names this member published would otherwise outlive the
+    // restore that made them. Drop them here, on the one funnel every member failure passes through.
+    ckpt_anon_shared_unlink_all();
     _exit(70);
 }
 
 static void ckpt_restore_commit_wait(void) {
+    int index = ckpt_restore_process_index(g_self_gpid);
+    if (index >= 0)
+        atomic_store_explicit(&g_restore_commit->process[index].state, CKPT_RESTORE_READY, memory_order_release);
     atomic_fetch_add_explicit(&g_restore_commit->ready, 1, memory_order_release);
     (void)ckpt_restore_commit_futex(&g_restore_commit->ready, CKPT_FUTEX_WAKE, INT_MAX, NULL);
     for (;;) {
         int decision = atomic_load_explicit(&g_restore_commit->decision, memory_order_acquire);
         if (decision == 1) {
+            if (index >= 0)
+                atomic_store_explicit(&g_restore_commit->process[index].state, CKPT_RESTORE_RELEASED,
+                                      memory_order_release);
             atomic_fetch_add_explicit(&g_restore_commit->released, 1, memory_order_release);
             (void)ckpt_restore_commit_futex(&g_restore_commit->released, CKPT_FUTEX_WAKE, INT_MAX, NULL);
+            // Past the barrier every member has finished its memory restore, so no further member will
+            // open these names. Retiring them here -- not from an atexit handler an `_exit` skips --
+            // is what bounds a segment's life to the restore that created it.
+            ckpt_anon_shared_unlink_all();
             return;
         }
-        if (decision == 2) _exit(70);
+        if (decision == 2) {
+            ckpt_anon_shared_unlink_all();
+            _exit(70);
+        }
+        if (ckpt_restore_deadline_expired()) ckpt_restore_commit_failed();
         (void)ckpt_restore_commit_futex(&g_restore_commit->decision, CKPT_FUTEX_WAIT, 0, NULL);
     }
 }
@@ -606,22 +1035,31 @@ static int ckpt_restore_commit_publish(void) {
     int expected = -1; /* exclude the init process itself */
     for (int index = 0; index < g_nrprocs; ++index)
         expected += g_rprocs[index].viable;
-    struct timespec deadline;
-    if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0) return -1;
-    deadline.tv_sec += 10;
     while (atomic_load_explicit(&g_restore_commit->ready, memory_order_acquire) < expected) {
-        if (atomic_load_explicit(&g_restore_commit->failed, memory_order_acquire) != 0) return -1;
-        struct timespec now;
-        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0 || now.tv_sec > deadline.tv_sec ||
-            (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec))
+        if (atomic_load_explicit(&g_restore_commit->failed, memory_order_acquire) != 0) {
+            errno = ECHILD;
+            ckpt_restore_commit_report(expected);
             return -1;
+        }
+        if (ckpt_restore_deadline_expired()) {
+            errno = ETIMEDOUT;
+            ckpt_restore_commit_report(expected);
+            return -1;
+        }
         struct timespec pause = {.tv_sec = 0, .tv_nsec = 10000000};
         (void)ckpt_restore_commit_futex(&g_restore_commit->ready, CKPT_FUTEX_WAIT,
                                         atomic_load_explicit(&g_restore_commit->ready, memory_order_relaxed), &pause);
     }
+    if (ckpt_claim_tty_fg(g_ckpt_fg_gpid) != 0) return -1;
     atomic_store_explicit(&g_restore_commit->decision, 1, memory_order_release);
     ckpt_restore_commit_wake();
     while (atomic_load_explicit(&g_restore_commit->released, memory_order_acquire) < expected) {
+        if (atomic_load_explicit(&g_restore_commit->failed, memory_order_acquire) != 0 ||
+            ckpt_restore_deadline_expired()) {
+            errno = atomic_load_explicit(&g_restore_commit->failed, memory_order_acquire) != 0 ? ECHILD : ETIMEDOUT;
+            ckpt_restore_commit_report(expected);
+            return -1;
+        }
         struct timespec pause = {.tv_sec = 0, .tv_nsec = 10000000};
         (void)ckpt_restore_commit_futex(&g_restore_commit->released, CKPT_FUTEX_WAIT,
                                         atomic_load_explicit(&g_restore_commit->released, memory_order_relaxed),
@@ -630,13 +1068,103 @@ static int ckpt_restore_commit_publish(void) {
     return 0;
 }
 
+/* GIVE BACK THE EXIT STATUSES THE CAPTURE'S OWN REAP DESTROYED.
+ *
+ * The image records, per process, the children whose kernel zombies the freeze consumed (capture.c, struct
+ * ckpt_reaped_child). A guest process's pending child status has no engine-side representation -- the kernel
+ * zombie IS the state -- so the only way to hand one back is to produce a real corpse again: fork a child
+ * that terminates exactly as the recorded status says, and publish it in the pid map under the guest pid the
+ * checkpoint recorded. The restored parent's wait4 then translates that guest pid to this fresh host pid,
+ * reaps it, and completes with the status it was blocked for. Without it the parent resumes into wait4 for a
+ * pid that no longer exists and blocks forever -- a hang, with nothing logged, out of a capture that
+ * reported success.
+ *
+ * The corpse is a bare fork(): it runs nothing but the termination itself, publishes no birth record, and is
+ * therefore not a guest process and not a member of any later capture -- it is a status in the only shape
+ * the kernel has for one. Called AFTER the pid map is finalized, so the mapping it adds is live before any
+ * guest instruction runs, and BEFORE thread_restore_group, so the fork is taken while this process is still
+ * single-threaded.
+ *
+ * Diagnostics are deliberately absent: ckpt_restore_fds_dir has already rebound guest fds 0-2 by this point,
+ * so anything written to stderr here lands on the restored guest's terminal rather than the worker log. The
+ * caller reports through the restore commit machinery instead. */
+static int ckpt_restore_reaped_children(const char *procdir, const struct ckpt_meta *m) {
+    if (m->n_reaped == 0) return 0;
+    if (m->n_reaped > CKPT_REAPED_MAX) return -1;
+    size_t records = (size_t)m->n_reaped * sizeof(struct ckpt_reaped_child);
+    size_t total = sizeof(struct ckpt_reaped_header) + records;
+    struct ckpt_reaped_header *image = malloc(total);
+    if (image == NULL) return -1;
+    char path[1300];
+    snprintf(path, sizeof path, "%s/reaped", procdir);
+    if (ckpt_source_load(path, image, total) != 0 || image->magic != CKPT_REAPED_MAGIC ||
+        image->count != m->n_reaped) {
+        free(image);
+        return -1;
+    }
+    const struct ckpt_reaped_child *child_records = (const struct ckpt_reaped_child *)(image + 1);
+    int failed = 0;
+    for (uint64_t index = 0; index < m->n_reaped && !failed; ++index) {
+        int status = child_records[index].status;
+        int gpid = child_records[index].gpid;
+        if (gpid <= 0) {
+            failed = 1;
+            break;
+        }
+        pid_t corpse = fork();
+        if (corpse == 0) {
+            /* A recorded signal death is reproduced by dying of that signal, so the status word the parent
+             * reaps is built by the same kernel that built the original one. Cores are suppressed: the
+             * guest's own RLIMIT_CORE is what syscall/process/wait.c derives WCOREDUMP from, and a restore
+             * must not litter the workspace with core files nobody asked for. */
+            struct rlimit no_core = {0, 0};
+            (void)setrlimit(RLIMIT_CORE, &no_core);
+            if (WIFSIGNALED(status)) {
+                int termination = WTERMSIG(status);
+                struct sigaction fatal;
+                sigset_t deliverable;
+                memset(&fatal, 0, sizeof fatal);
+                fatal.sa_handler = SIG_DFL;
+                (void)sigaction(termination, &fatal, NULL);
+                sigemptyset(&deliverable);
+                sigaddset(&deliverable, termination);
+                (void)sigprocmask(SIG_UNBLOCK, &deliverable, NULL);
+                (void)raise(termination);
+            }
+            _exit(WEXITSTATUS(status));
+        }
+        if (corpse < 0 || hl_linux_pidmap_add(&g_pidmap, gpid, (int)corpse) != 0) {
+            if (corpse > 0) {
+                int discarded = 0;
+                (void)kill(corpse, SIGKILL);
+                while (waitpid(corpse, &discarded, 0) < 0 && errno == EINTR) {}
+            }
+            failed = 1;
+            break;
+        }
+        /* Do not resume the guest until the corpse really is one: a parent whose first act after resuming is
+         * a WNOHANG wait must not read "nothing to report" for a status this image promised it. */
+        siginfo_t reached;
+        for (;;) {
+            memset(&reached, 0, sizeof reached);
+            if (waitid(P_PID, (id_t)corpse, &reached, WEXITED | WNOWAIT) == 0) break;
+            if (errno == EINTR) continue;
+            failed = 1;
+            break;
+        }
+    }
+    free(image);
+    return failed ? -1 : 0;
+}
+
 static void ckpt_restore_proc_run(int gpid); // fwd
 
 // Re-fork every child of `gpid` (per the checkpoint ppid table); each child restores its own subtree and
 // resumes. Records the checkpoint-gpid -> live-hostpid mapping so this process's guest pids resolve.
 static void ckpt_fork_children(int gpid, struct cpu *parent) {
     for (int i = 0; i < g_nrprocs; i++) {
-        if (!g_rprocs[i].viable || g_rprocs[i].ppid != gpid || g_rprocs[i].gpid == gpid) continue;
+        if (!g_rprocs[i].viable || ckpt_restore_parent_gpid(&g_rprocs[i]) != gpid || g_rprocs[i].gpid == gpid)
+            continue;
         int cg = g_rprocs[i].gpid;
         int source = cpu_tid(parent);
         if (!hl_target_task_event(parent, HL_TASK_EVENT_PREPARE_FORK, 0, (uint64_t)source, 0)) {
@@ -658,10 +1186,10 @@ static void ckpt_fork_children(int gpid, struct cpu *parent) {
             ckpt_restore_proc_run(cg); // never returns
             _exit(0);
         } else if (p > 0) {
-            (void)hl_linux_pidmap_add(&g_pidmap, cg, (int)p);
+            (void)restore_process_identity_add(cg, (int)p);
             int index = ckpt_restore_process_index(cg);
             if (g_restore_commit != NULL && index >= 0)
-                atomic_store_explicit(&g_restore_commit->pids[index], p, memory_order_release);
+                atomic_store_explicit(&g_restore_commit->process[index].host_pid, p, memory_order_release);
         } else {
             fprintf(stderr, "[restore] fork for gpid %d failed: %s\n", cg, strerror(errno));
         }
@@ -676,6 +1204,7 @@ static void ckpt_restore_proc_run(int gpid) {
     snprintf(pd, sizeof pd, "proc.%d", gpid);
     struct ckpt_meta m;
     if (ckpt_read_meta_dir(pd, &m) != 0) ckpt_restore_commit_failed();
+    ckpt_restore_commit_stage(CKPT_RESTORE_FILESYSTEM);
     if (ckpt_restore_filesystem_state(pd) != 0) ckpt_restore_commit_failed();
 
     // adopt our restored identity BEFORE any pid-reporting syscall or /proc publish
@@ -695,22 +1224,49 @@ static void ckpt_restore_proc_run(int gpid) {
     // (si_addr == sp, pc at glibc's __syscall_cancel_arch_end).
     fork_child_hooks(&c); // shared after-fork engine reset (cache re-alias, kqueue rebuild, lock/threg/Mach)
 
+    ckpt_restore_commit_stage(CKPT_RESTORE_SESSION);
+    if (ckpt_restore_session_prepare(gpid, m.sid_gpid) != 0) ckpt_restore_commit_failed();
+    ckpt_fork_children(gpid, &c); // publish the complete topology before any cousin/group dependency is awaited
+
+    int trigger_detached = ckpt_trigger_detach_for_restore();
+    if (trigger_detached < 0) ckpt_restore_commit_failed();
+
     // drop the COW-inherited parent guest memory + registries, then load our own
     /* The forked restorer inherited a COW copy of the parent's typed VMA ledger and
      * host mapping ownership. Release those handles before forgetting the generic
      * map registry, otherwise every restored child leaks its parent's mappings. */
+    /* Includes the SysV attachments inherited from the restored init: their addresses name the
+     * INIT's address space, so releasing them after ckpt_restore_mem_dir would munmap this
+     * member's own restored guest memory. ckpt_restore_sysv_state re-attaches this member's own
+     * captured set afterwards. */
+    ckpt_sysv_detach_inherited();
     bound_mapping_reset();
     hl_logical_vma_global_reset_quiescent();
     hl_gmap_reset();
     g_nanonmap = 0;
     gna_reset();
+    ckpt_restore_commit_stage(CKPT_RESTORE_MEMORY);
     if (ckpt_restore_mem_dir(pd, &m) != 0) ckpt_restore_commit_failed();
+    if (ckpt_trigger_reattach_after_restore(trigger_detached) != 0) ckpt_restore_commit_failed();
 
     ckpt_reinstall_sigacts(&m); // restore guest signal dispositions (AFTER the fork hooks reset host state)
 
-    if (ckpt_restore_fds_dir(pd) != 0 || ckpt_restore_signal_state(pd) != 0) ckpt_restore_commit_failed();
-    ckpt_restore_pgrp(gpid, m.pgid_gpid, m.sid_gpid);
-    if (g_ckpt_fg_gpid == gpid) ckpt_claim_tty_fg(); // this process led the tty's foreground job -> reclaim it
+    ckpt_restore_commit_stage(CKPT_RESTORE_DESCRIPTORS);
+    if (ckpt_restore_fds_dir(pd) != 0) ckpt_restore_commit_failed();
+    // After the memory restore, so MAP_FIXED re-attachment overwrites the restored anonymous
+    // pages with the shared segment at exactly the address the guest captured.
+    if (ckpt_restore_sysv_state(pd) != 0) ckpt_restore_commit_failed();
+    ckpt_restore_commit_stage(CKPT_RESTORE_SIGNALS);
+    if (ckpt_restore_signal_state(pd) != 0) ckpt_restore_commit_failed();
+    ckpt_restore_commit_stage(CKPT_RESTORE_IDENTITY);
+    if (ckpt_restore_identity_hydrate() != 0) ckpt_restore_commit_failed();
+    ckpt_restore_commit_stage(CKPT_RESTORE_PROCESS_GROUP);
+    if (ckpt_restore_pgrp(gpid, m.pgid_gpid, m.sid_gpid) != 0) {
+        fprintf(stderr, "[restore] cannot restore process group for gpid %d: %s\n", gpid, strerror(errno));
+        ckpt_restore_commit_failed();
+    }
+    if (ckpt_restore_identity_finalize() != 0) ckpt_restore_commit_failed();
+    if (ckpt_restore_reaped_children(pd, &m) != 0) ckpt_restore_commit_failed();
 
     static char exe[512];
     snprintf(exe, sizeof exe, "%s", m.exe_path);
@@ -718,7 +1274,7 @@ static void ckpt_restore_proc_run(int gpid) {
     char *pubargv[2] = {(char *)(exe[0] ? exe : "guest"), NULL};
     proc_reg_publish(g_exe_path, 1, pubargv);
 
-    ckpt_fork_children(gpid, &c); // re-fork our own children before we resume (so a wait finds them)
+    ckpt_restore_commit_stage(CKPT_RESTORE_THREAD_GROUP);
     if (thread_restore_group(images, (int)m.n_threads, &c) != 0) ckpt_restore_commit_failed();
     free(images);
     ckpt_restore_backings_close();
@@ -729,22 +1285,34 @@ static void ckpt_restore_proc_run(int gpid) {
                                           * process leaked its signalfd seed
                                           * reader+writer pair for its lifetime */
     ckpt_restore_socket_seeds_close();
+    // Announced before the commit barrier, so it lands inside the broker's recovery scope. A refusal
+    // costs this member its individual reachability from the host and nothing else: the restore is
+    // already correct, and a host that cannot reach a member refuses to reattach it.
+    (void)ckpt_stream_member_restored(gpid);
     ckpt_restore_commit_wait();
     run_guest(&c);
+    ckpt_stream_member_exited(c.exit_code, HL_CKPT_MEMBER_EXIT_CODE);
     _exit(c.exit_code);
 }
 
 // Full restore driver: rebuild the whole tree from the store and resume it. The INIT (gpid 1) restores its
 // RAM FIRST (before engine init, so MAP_FIXED lands on free VAs), then re-forks the tree.
-static int ckpt_restore_tree(const char *rootfs) {
+static int ckpt_restore_tree_body(const char *rootfs, const struct ckpt_phase_ledger *phases, int *completed) {
+    uint64_t phase = ckpt_phase_begin(phases);
     struct ckpt_manifest man;
     ckpt_restore_hold_tty_signals();
+    // Before anything forks: every member must inherit ONE anonymous-shared naming generation, or two
+    // sharers of the same object derive different names and silently restore private copies.
+    ckpt_anon_shared_generation_init();
     // Bind the image source before anything is read; every re-forked child inherits the binding.
     if (ckpt_source_bind() == NULL) {
         fprintf(stderr, "[restore] restore requested without a broker descriptor\n");
         return 2;
     }
-    if (ckpt_read_manifest(&man) != 0) return 2;
+    if (ckpt_read_manifest(&man) != 0) {
+        fprintf(stderr, "[restore] refuse: the store holds no readable manifest\n");
+        return 2;
+    }
     if (ckpt_scan_procs() != 0) {
         fprintf(stderr, "[restore] the store holds no process images\n");
         return 2;
@@ -754,7 +1322,12 @@ static int ckpt_restore_tree(const char *rootfs) {
         return 2;
     }
     int recovery_policy = ckpt_recovery_policy();
-    if (ckpt_restore_preflight(recovery_policy) != 0) return 2;
+    if (ckpt_restore_preflight(recovery_policy) != 0) {
+        fprintf(stderr, "[restore] refuse: restore preflight rejected the image (policy %d)\n", recovery_policy);
+        return 2;
+    }
+    ckpt_phase_finish(phases, "restore_validation", phase, 0);
+    phase = ckpt_phase_begin(phases);
     if (ckpt_prepare_restore_pipes() != 0) {
         fprintf(stderr, "[restore] cannot rebuild checkpoint pipe objects\n");
         return 2;
@@ -778,18 +1351,31 @@ static int ckpt_restore_tree(const char *rootfs) {
 
     const char *ipd = "proc.1";
     struct ckpt_meta im;
-    if (ckpt_read_meta_dir(ipd, &im) != 0) return 2;
+    if (ckpt_read_meta_dir(ipd, &im) != 0) {
+        fprintf(stderr, "[restore] refuse: cannot read %s/meta\n", ipd);
+        return 2;
+    }
     if (ckpt_restore_mem_dir(ipd, &im) != 0) {
         fprintf(stderr, "[restore] init memory restore failed\n");
         return 2;
     } // init RAM before any engine allocation
+    ckpt_phase_finish(phases, "restore_resources_memory", phase, 0);
+    phase = ckpt_phase_begin(phases);
 
     container_init(rootfs); // sets g_init_hostpid = getpid() -> this process becomes guest pid 1
+    g_self_gpid = 1;
+    g_self_gppid = 0;
     // container_init establishes the rootfs and its default cwd; replay the captured process context after it
     // so neither the rootfs chdir nor HL_CWD can overwrite the checkpointed directory.
-    if (ckpt_restore_filesystem_state(ipd) != 0) return 2;
+    if (ckpt_restore_filesystem_state(ipd) != 0) {
+        fprintf(stderr, "[restore] refuse: init filesystem-state restore failed\n");
+        return 2;
+    }
     int irc = engine_global_init();
-    if (irc) return irc;
+    if (irc) {
+        fprintf(stderr, "[restore] refuse: engine global init failed (%d)\n", irc);
+        return irc;
+    }
     if (ckpt_prepare_restore_socket_states() != 0) {
         fprintf(stderr, "[restore] cannot rebuild checkpoint standalone sockets\n");
         return 2;
@@ -806,6 +1392,12 @@ static int ckpt_restore_tree(const char *rootfs) {
         fprintf(stderr, "[restore] init descriptor restore failed\n");
         return 70;
     }
+    // Before ckpt_fork_children: the init creates the SysV namespace object under the NEW
+    // namespace hash and every restored descendant inherits that mapping.
+    if (ckpt_restore_sysv_state(ipd) != 0) {
+        fprintf(stderr, "[restore] init SysV IPC restore failed\n");
+        return 70;
+    }
     struct cpu c, *images = NULL;
     if (ckpt_restore_cpu_dir(ipd, &im, &images) != 0 || ckpt_restore_leader(images, im.n_threads, &c) != 0) {
         fprintf(stderr, "[restore] init CPU restore failed\n");
@@ -816,6 +1408,10 @@ static int ckpt_restore_tree(const char *rootfs) {
         fprintf(stderr, "[restore] init signal-state restore failed\n");
         return 70;
     }
+    if (ckpt_restore_identity_prepare_shared() != 0) {
+        fprintf(stderr, "[restore] cannot prepare shared identity authority\n");
+        return 70;
+    }
     if (ckpt_restore_commit_create() != 0) {
         fprintf(stderr, "[restore] cannot create process-tree commit barrier\n");
         return 70;
@@ -823,15 +1419,10 @@ static int ckpt_restore_tree(const char *rootfs) {
     char *pubargv[2] = {(char *)(exe[0] ? exe : "guest"), NULL};
     proc_reg_publish(g_exe_path, 1, pubargv);
 
-    // Re-create the init's OWN process group. Restore re-forks the init under the launcher, so it starts in
-    // the launcher's group, while at capture it led its own (an interactive shell's job-control setup does
-    // setpgid(0,1), which it never repeats after resume). Uncorrected, the guest pgid 1 -> g_init_hostpid
-    // translation names a group the shell is not in: its tcsetpgrp handoff after a foreground job puts the
-    // terminal's foreground on that empty group, its next read on the ctty is a background read, and with
-    // SIGTTIN blocked that read fails EIO -- readline reports EOF and the shell logs out after one line.
-    // Only the GROUP is re-created: the session belongs to the launcher, which owns the pty.
-    if (im.pgid_gpid == 1) (void)setpgid(0, 0);
-    ckpt_restore_tty_mode(&man);
+    if (ckpt_restore_tty_mode(&man) != 0) {
+        fprintf(stderr, "[restore] cannot restore terminal mode signal mask: %s\n", strerror(errno));
+        return 70;
+    }
     // Publish which guest group owned the tty foreground, so whichever re-forked process is that group's leader
     // claims the controlling terminal AFTER it re-creates its group (see ckpt_claim_tty_fg). Set before the fork
     // so every child inherits it. Without this the resumed tree's fg group defaults to the init's, and a tty
@@ -845,6 +1436,24 @@ static int ckpt_restore_tree(const char *rootfs) {
         free(images);
         return 70;
     }
+    ckpt_restore_commit_stage(CKPT_RESTORE_IDENTITY);
+    if (ckpt_restore_identity_hydrate() != 0) {
+        fprintf(stderr, "[restore] cannot publish restored init identity: %s\n", strerror(errno));
+        ckpt_restore_commit_abort();
+        ckpt_restore_commit_destroy();
+        free(images);
+        return 70;
+    }
+    ckpt_restore_commit_stage(CKPT_RESTORE_PROCESS_GROUP);
+    if (ckpt_restore_pgrp(1, im.pgid_gpid, im.sid_gpid) != 0 || ckpt_restore_identity_finalize() != 0 ||
+        ckpt_restore_reaped_children(ipd, &im) != 0) {
+        fprintf(stderr, "[restore] cannot publish restored init identity: %s\n", strerror(errno));
+        ckpt_restore_commit_abort();
+        ckpt_restore_commit_destroy();
+        free(images);
+        return 70;
+    }
+    ckpt_restore_commit_stage(CKPT_RESTORE_THREAD_GROUP);
     if (thread_restore_group(images, (int)im.n_threads, &c) != 0) {
         fprintf(stderr, "[restore] init thread-group restore failed\n");
         ckpt_restore_commit_abort();
@@ -855,23 +1464,46 @@ static int ckpt_restore_tree(const char *rootfs) {
     if (ckpt_restore_commit_publish() != 0) {
         fprintf(stderr, "[restore] restored descendants did not reach the commit barrier\n");
         ckpt_restore_commit_abort();
+        ckpt_anon_shared_unlink_all();
         ckpt_restore_commit_destroy();
         free(images);
         return 70;
     }
     free(images);
+    // Every member is past the barrier, so the anonymous-shared names have no remaining opener; the
+    // objects themselves stay alive for exactly as long as somebody still maps them.
+    ckpt_anon_shared_unlink_all();
     ckpt_restore_backings_close();
     ckpt_restore_pipe_seeds_close();
     ckpt_restore_eventfd_seeds_close();
     ckpt_restore_signalfd_seeds_close();
     ckpt_restore_socket_seeds_close();
     ckpt_restore_commit_destroy();
-    if (g_ckpt_fg_gpid == 1) ckpt_claim_tty_fg(); // the init itself was foreground (idle prompt)
     if (ckpt_stream_recovery_complete() != 0) {
         fprintf(stderr, "[restore] cannot close recovery publication scope\n");
         return 70;
     }
+    ckpt_phase_finish(phases, "restore_process_commit", phase, 0);
+    ckpt_phase_terminal(phases, "success", 0);
+    *completed = 1;
 
     run_guest(&c);
     return c.exit_code;
+}
+
+static int ckpt_restore_tree(const char *rootfs) {
+    const char *phase_isa = hl_option_get("HL_CHECKPOINT_PHASE_ISA");
+    const char *phase_generation = hl_option_get("HL_CHECKPOINT_PHASE_GENERATION");
+    const struct ckpt_phase_ledger phases = {
+        .enabled = hl_option_get("HL_CHECKPOINT_PHASE_LEDGER") != NULL,
+        .isa = phase_isa != NULL ? phase_isa : ckpt_phase_isa_name(G_CKPT_ARCH),
+        .generation =
+            phase_generation != NULL ? (uint32_t)strtoul(phase_generation, NULL, 10) : ckpt_request_generation(),
+        .clock_failure = hl_option_get("HL_CHECKPOINT_PHASE_CLOCK_FAIL") != NULL,
+        .descriptor = ckpt_phase_descriptor(),
+    };
+    int completed = 0;
+    int status = ckpt_restore_tree_body(rootfs, &phases, &completed);
+    if (!completed) ckpt_phase_terminal(&phases, "failure", status);
+    return status;
 }

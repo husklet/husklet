@@ -52,6 +52,176 @@ cases:
             echo HTOP_INSTALLED_AND_RUNNABLE
     expect: { stdout_contains: golden/htop.txt }
 
+  - id: netinstall/ubuntu24-apt-install-htop
+    image: ubuntu:24.04
+    class: long
+    timeout: 240
+    resources: [network, registry, disk_heavy]
+    actions:
+      - shell:
+          script: |
+            set -eu
+            export LC_ALL=C
+            export DEBIAN_FRONTEND=noninteractive
+            fail_stage() {
+                stage=$1
+                status=$2
+                log=$3
+                printf 'APT_%s_FAILED status=%s\n' "$stage" "$status" >&2
+                cat "$log" >&2
+                exit "$status"
+            }
+            reject_dirty_log() {
+                stage=$1
+                log=$2
+                if grep -Eq '^(Err:|W:|E:)|NO_PUBKEY|BADSIG|EXPKEYSIG' "$log"; then
+                    fail_stage "$stage" 1 "$log"
+                fi
+            }
+            rm -rf /var/lib/apt/lists/*
+            update_started=$(date +%s)
+            if apt-get update >/tmp/apt-update.log 2>&1; then
+                update_finished=$(date +%s)
+            else
+                fail_stage UPDATE "$?" /tmp/apt-update.log
+            fi
+            reject_dirty_log UPDATE /tmp/apt-update.log
+            set -- /var/lib/apt/lists/*InRelease
+            test -f "$1" || fail_stage SIGNATURE 1 /tmp/apt-update.log
+            for inrelease do
+                if gpgv --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg "$inrelease" \
+                    >/tmp/apt-signature.log 2>&1; then
+                    :
+                else
+                    fail_stage SIGNATURE "$?" /tmp/apt-signature.log
+                fi
+            done
+            install_started=$(date +%s)
+            if apt-get install -y --no-install-recommends htop >/tmp/apt-install.log 2>&1; then
+                install_finished=$(date +%s)
+            else
+                fail_stage INSTALL "$?" /tmp/apt-install.log
+            fi
+            reject_dirty_log INSTALL /tmp/apt-install.log
+            command -v htop >/dev/null
+            dpkg -s htop | grep -q '^Status: install ok installed'
+            apt-cache policy htop | grep -q 'Installed: [0-9]'
+            htop --version | grep -Eq '^htop [0-9]'
+            if ! command -v ldd >/dev/null; then
+                echo 'HTOP_LDD_FAILED status=127 reason=missing-command' >&2
+                exit 127
+            fi
+            if ldd_output=$(ldd "$(command -v htop)" 2>&1); then
+                if printf '%s\n' "$ldd_output" | grep -q 'not found'; then
+                    printf 'HTOP_LDD_FAILED status=1 reason=missing-dependency\n%s\n' "$ldd_output" >&2
+                    exit 1
+                fi
+            else
+                status=$?
+                printf 'HTOP_LDD_FAILED status=%s\n%s\n' "$status" "$ldd_output" >&2
+                exit "$status"
+            fi
+            printf 'APT_STAGE_TIMING update_seconds=%s install_seconds=%s\n' \
+                "$((update_finished - update_started))" "$((install_finished - install_started))"
+            echo HTOP_INSTALLED_AND_RUNNABLE
+    expect: { stdout_regex: golden/ubuntu24-htop.regex }
+
+  - id: netinstall/ubuntu24-native-diagnostics-apt-install-htop
+    image: ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
+    execution:
+      native: true
+      diagnostics: true
+    class: long
+    targets: [arm64, amd64]
+    timeout: 240
+    resources: [network, registry, disk_heavy, process_heavy]
+    actions:
+      - shell:
+          script: |
+            set -eu
+            export LC_ALL=C
+            export DEBIAN_FRONTEND=noninteractive
+            bounded_log() {
+                tail -c 65536 "$1" >&2 || true
+            }
+            fail_stage() {
+                stage=$1
+                status=$2
+                log=$3
+                printf 'APT_NATIVE_%s_FAILED status=%s\n' "$stage" "$status" >&2
+                bounded_log "$log"
+                exit "$status"
+            }
+            reject_dirty_log() {
+                stage=$1
+                log=$2
+                if grep -Eq '^(Err:|W:|E:)|NO_PUBKEY|BADSIG|EXPKEYSIG' "$log"; then
+                    fail_stage "$stage" 1 "$log"
+                fi
+            }
+            total_started=$(date +%s%3N)
+            rm -rf /var/lib/apt/lists/*
+            update_started=$(date +%s%3N)
+            if apt-get update >/tmp/apt-native-update.log 2>&1; then
+                update_finished=$(date +%s%3N)
+            else
+                fail_stage UPDATE "$?" /tmp/apt-native-update.log
+            fi
+            reject_dirty_log UPDATE /tmp/apt-native-update.log
+            signature_started=$(date +%s%3N)
+            inrelease_count=0
+            for inrelease in /var/lib/apt/lists/*InRelease; do
+                test -f "$inrelease" || fail_stage SIGNATURE 1 /tmp/apt-native-update.log
+                inrelease_count=$((inrelease_count + 1))
+                if gpgv --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg "$inrelease" \
+                    >/tmp/apt-native-signature.log 2>&1; then
+                    :
+                else
+                    fail_stage SIGNATURE "$?" /tmp/apt-native-signature.log
+                fi
+            done
+            test "$inrelease_count" -gt 0 || fail_stage SIGNATURE 1 /tmp/apt-native-update.log
+            signature_finished=$(date +%s%3N)
+            install_started=$(date +%s%3N)
+            if apt-get install -y --no-install-recommends htop >/tmp/apt-native-install.log 2>&1; then
+                install_finished=$(date +%s%3N)
+            else
+                fail_stage INSTALL "$?" /tmp/apt-native-install.log
+            fi
+            reject_dirty_log INSTALL /tmp/apt-native-install.log
+            verify_started=$(date +%s%3N)
+            command -v htop >/dev/null
+            dpkg -s htop | grep -q '^Status: install ok installed$'
+            apt-cache policy htop | grep -q 'Installed: [0-9]'
+            htop --version | grep -Eq '^htop [0-9]'
+            if ! command -v ldd >/dev/null; then
+                echo 'HTOP_LDD_FAILED status=127 reason=missing-command' >&2
+                exit 127
+            fi
+            if ldd_output=$(ldd "$(command -v htop)" 2>&1); then
+                if printf '%s\n' "$ldd_output" | grep -q 'not found'; then
+                    printf 'HTOP_LDD_FAILED status=1 reason=missing-dependency\n%s\n' "$ldd_output" >&2
+                    exit 1
+                fi
+            else
+                status=$?
+                printf 'HTOP_LDD_FAILED status=%s reason=ldd-failed\n%s\n' "$status" "$ldd_output" >&2
+                exit "$status"
+            fi
+            verify_finished=$(date +%s%3N)
+            printf 'APT_NATIVE_DIAGNOSTIC_TIMING update_ms=%s signature_ms=%s install_ms=%s verify_ms=%s total_ms=%s inrelease=%s\n' \
+                "$((update_finished - update_started))" \
+                "$((signature_finished - signature_started))" \
+                "$((install_finished - install_started))" \
+                "$((verify_finished - verify_started))" \
+                "$((verify_finished - total_started))" \
+                "$inrelease_count"
+            echo 'APT_NATIVE_PROCESS_RESULT update=0 install=0 htop=0'
+            echo HTOP_INSTALLED_AND_RUNNABLE
+    expect:
+      stdout_stream_regex: golden/ubuntu24-native-diagnostics-htop.regex
+      fork_diagnostics: { maximum_records: 4096 }
+
   - id: netinstall/ubuntu-apt-update-clean
     image: ubuntu:22.04
     class: long

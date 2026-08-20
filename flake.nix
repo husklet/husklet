@@ -107,16 +107,25 @@
               done
               exec ${lib.escapeShellArg (ccFor guest)} $static_search "$@"
             '';
+          # The guest sqlite the compatibility guests link against cannot be cross-built from a Darwin
+          # builder: its `tcl` dependency's configure misdetects the build host and compiles
+          # `tclUnixTime.c` against `mach/mach_time.h`, which no Linux sysroot carries. So the alias
+          # forwards sqlite's include and library paths only where sqlite exists; every guest that
+          # does not link it -- `hl-native`'s `engine::tests` re-exec pair among them -- builds on
+          # both hosts through the same `<isa>-linux-gnu-gcc` spelling.
           compilerAliasFor =
             guest:
             let
               guestPkgs = pkgsFor guest;
+              sqliteFlags = lib.optionals pkgs.stdenv.isLinux [
+                "-isystem ${lib.escapeShellArg "${guestPkgs.sqlite.dev}/include"}"
+                "-L${lib.escapeShellArg "${guestPkgs.sqlite.out}/lib"}"
+              ];
             in
             pkgs.writeShellScriptBin "${guest.isa}-linux-gnu-gcc" ''
               exec ${lib.escapeShellArg (ccFor guest)} \
-                -isystem ${lib.escapeShellArg "${guestPkgs.sqlite.dev}/include"} \
                 -L${lib.escapeShellArg "${guestPkgs.glibc.static}/lib"} \
-                -L${lib.escapeShellArg "${guestPkgs.sqlite.out}/lib"} "$@"
+                ${lib.concatStringsSep " " sqliteFlags} "$@"
             '';
         in
         rec {
@@ -340,7 +349,7 @@
               for binary in target/release/hl-engine target/release/hl-aarch64 target/release/hl-x86_64
               do
                 ! patchelf --print-rpath "$binary" | tr : '\n' | grep -F '/build/' >/dev/null
-                patchelf --print-needed "$binary" | grep -Fx libhl_native_engine.so >/dev/null
+                ! patchelf --print-needed "$binary" | grep -Fx libhl_native_engine.so >/dev/null
               done
             ''}
             runHook postBuild
@@ -361,32 +370,10 @@
             cmp "''${native_libraries[0]}" "$out/lib/$(basename "''${native_libraries[0]}")"
             runHook postInstall
           '';
-          postFixup =
-            lib.optionalString pkgs.stdenv.isLinux ''
+          postFixup = lib.optionalString pkgs.stdenv.isLinux ''
             strip --strip-unneeded "$out/bin/hl-engine" "$out/bin/hl-aarch64" \
               "$out/bin/hl-x86_64" "$out/lib/libhl_native_engine.so"
-            for binary in "$out/bin/hl-engine" "$out/bin/hl-aarch64" "$out/bin/hl-x86_64"
-            do
-              existing_rpath=$(patchelf --print-rpath "$binary")
-              filtered_rpath=""
-              IFS=: read -ra rpath_entries <<< "$existing_rpath"
-              for entry in "''${rpath_entries[@]}"; do
-                if [ "$entry" != "$out/lib" ]; then
-                  filtered_rpath="''${filtered_rpath:+$filtered_rpath:}$entry"
-                fi
-              done
-              patchelf --set-rpath "\$ORIGIN/../lib''${filtered_rpath:+:$filtered_rpath}" "$binary"
-              patchelf --print-needed "$binary" | grep -Fx libhl_native_engine.so >/dev/null
-              test "$(patchelf --print-rpath "$binary" | cut -d: -f1)" = '$ORIGIN/../lib'
-              ! patchelf --print-rpath "$binary" | tr : '\n' | grep -Fx "$out/lib" >/dev/null
-            done
-            ''
-            + lib.optionalString pkgs.stdenv.isDarwin ''
-              for binary in "$out/bin/hl-engine" "$out/bin/hl-aarch64" "$out/bin/hl-x86_64"
-              do
-                install_name_tool -add_rpath '@loader_path/../lib' "$binary"
-              done
-            '';
+          '';
           meta = {
             description = "Userspace execution engine for Linux programs";
             homepage = "https://github.com/husklet/engine";
@@ -433,6 +420,8 @@
               cargo check --workspace --all-targets --locked --offline
               cargo clippy --workspace --all-targets --locked --offline -- -D warnings
               cargo test --workspace --all-targets --locked --offline --no-fail-fast
+              ${lib.optionalString pkgs.stdenv.isLinux ''export HL_PRODUCT_CHECKPOINT_REQUIRED=1''}
+              cargo test -p husklet --features runtime --lib --locked --offline --no-fail-fast
               cargo test --workspace --doc --locked --offline
               ${lib.optionalString pkgs.stdenv.isLinux ''
                 # AddressSanitizer covers native lifetime violations that leak
@@ -570,6 +559,180 @@
           }
         );
 
+      nativeHookVerificationFor =
+        pkgs:
+        (rustPlatformFor pkgs).buildRustPackage {
+          pname = "hl-native-test-hooks-verification";
+          inherit version;
+          src = workspaceSource;
+          cargoLock.lockFile = ./Cargo.lock;
+          strictDeps = true;
+          nativeBuildInputs = commonNativeInputs pkgs ++ [
+            pkgs.coreutils
+            (rustFor pkgs)
+          ];
+          doCheck = false;
+          buildPhase = ''
+            runHook preBuild
+            export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
+            for native_test in \
+              bound_vector_io \
+              errno_namespace \
+              identity_registry \
+              x86_store_preflight \
+              restore_collision
+            do
+              timeout --kill-after=30s 10m \
+                cargo test -p hl-native --features native-test-hooks --test "$native_test" \
+                --locked --offline -- --test-threads=1
+            done
+            runHook postBuild
+          '';
+          installPhase = ''
+            mkdir -p "$out"
+            touch "$out/passed"
+          '';
+        };
+
+      alpineCompatibilityFor =
+        pkgs:
+        let
+          archives = alpineArchivesFor pkgs;
+        in
+        (rustPlatformFor pkgs).buildRustPackage {
+          pname = "hl-alpine-compatibility";
+          inherit version;
+          src = workspaceSource;
+          cargoLock.lockFile = ./Cargo.lock;
+          strictDeps = true;
+          nativeBuildInputs = commonNativeInputs pkgs ++ [
+            pkgs.coreutils
+            (rustFor pkgs)
+          ];
+          doCheck = false;
+          buildPhase = ''
+            runHook preBuild
+            export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
+            export HL_PRODUCT_CHECKPOINT_REQUIRED=1
+
+            run_ignored() {
+              package="$1"
+              test_target="$2"
+              test_name="$3"
+              shift 3
+              timeout --kill-after=30s 10m \
+                cargo test -p "$package" --test "$test_target" "$@" --locked --offline \
+                "$test_name" -- --ignored --exact --nocapture --test-threads=1
+            }
+
+            run_alpine_gate() {
+              export HL_SCENARIO_TARGET="$1"
+              export HL_ALPINE_ARCHIVE="$2"
+
+              timeout --kill-after=30s 10m \
+                cargo test -p husklet --features runtime --lib --locked --offline \
+                runtime::domain::product_checkpoint_test::continue_later_restores_sleep_tree_in_two_fresh_domain_processes \
+                -- --exact --nocapture --test-threads=1
+              run_ignored hl-container run_options process_run_options
+              for test_name in \
+                launch_contracts \
+                sigterm_stop \
+                exec_contracts \
+                signalling_an_exec_does_not_stop_its_container \
+                failed_exec_launches_are_process_local_and_retryable
+              do
+                run_ignored hl-container process_contract "$test_name"
+              done
+              for test_name in \
+                new_file_is_visible \
+                overwritten_file_is_visible \
+                directory_tree_is_visible \
+                held_directory_is_coherent
+              do
+                run_ignored hl-container filesystem_coherence "$test_name"
+              done
+              for test_name in \
+                hangup_reaches_the_guest_signal_handler \
+                configured_quit_reaches_the_guest_signal_handler \
+                pause_stops_guest_progress_until_unpause \
+                checkpoint_restore_preserves_filesystem_and_container_control \
+                checkpoint_restore_restarts_interrupted_sleep_syscalls \
+                health_probes_reach_healthy_and_unhealthy_states
+              do
+                run_ignored hl-container lifecycle_contract "$test_name"
+              done
+            }
+
+            run_alpine_gate arm64 ${archives.arm64}
+            run_alpine_gate amd64 ${archives.amd64}
+
+            # The public daemon fixtures currently own an ARM64 container specification.
+            # Keep their fixture-required tests explicit until that API accepts a guest target.
+            export HL_SCENARIO_TARGET=arm64
+            export HL_ALPINE_ARCHIVE=${archives.arm64}
+            for test_name in \
+              bridge_routing_contract \
+              alpine_runtime_contracts \
+              shell_vfork_exec_releases_parent_and_preserves_output \
+              shared_mount_lock_contention \
+              attach_runtime_contracts \
+              failed_exec_upgrade_cleanup \
+              descendant_cleanup
+            do
+              run_ignored hl-daemon daemon-api "$test_name" --features runtime
+            done
+            runHook postBuild
+          '';
+          installPhase = ''
+            mkdir -p "$out"
+            touch "$out/passed"
+          '';
+        };
+
+      postgresCheckpointGateFor =
+        pkgs:
+        pkgs.writeShellApplication {
+          name = "husklet-postgres-checkpoint-gate";
+          runtimeInputs = [
+            pkgs.coreutils
+            pkgs.nix
+          ];
+          text = ''
+            repository="$PWD"
+            test -f "$repository/Cargo.lock" || {
+              printf 'run this gate from the Husklet repository root\n' >&2
+              exit 2
+            }
+
+            for target in arm64 amd64; do
+              case "$target" in
+                arm64) upper_target=ARM64 ;;
+                amd64) upper_target=AMD64 ;;
+              esac
+              archive_name="HL_POSTGRES_''${upper_target}_ROOTFS_ARCHIVE"
+              manifest_name="HL_POSTGRES_''${upper_target}_FIXTURE_MANIFEST"
+              archive="''${!archive_name:-}"
+              manifest="''${!manifest_name:-}"
+              test -f "$archive" || {
+                printf '%s must name the pinned %s PostgreSQL rootfs archive\n' "$archive_name" "$target" >&2
+                exit 2
+              }
+              test -f "$manifest" || {
+                printf '%s must name the pinned %s PostgreSQL fixture manifest\n' "$manifest_name" "$target" >&2
+                exit 2
+              }
+              HL_SCENARIO_TARGET="$target" \
+              HL_POSTGRES_ROOTFS_ARCHIVE="$archive" \
+              HL_POSTGRES_FIXTURE_MANIFEST="$manifest" \
+                timeout --kill-after=30s 15m \
+                nix develop "$repository" --command \
+                cargo test -p hl-container --test postgres_checkpoint --locked --offline \
+                acceptance::postgres_survives_three_product_checkpoint_cycles -- \
+                --ignored --exact --nocapture --test-threads=1
+            done
+          '';
+        };
+
       installedProductFor =
         pkgs: engine:
         pkgs.runCommand "hl-engine-installed-product"
@@ -603,15 +766,15 @@
             do
               binary="$prefix/bin/$name"
               test -x "$binary"
-              patchelf --print-needed "$binary" | grep -Fx libhl_native_engine.so >/dev/null
+              ! patchelf --print-needed "$binary" | grep -Fx libhl_native_engine.so >/dev/null
               patchelf --print-rpath "$binary" | tr : '\n' > "$TMPDIR/$name.runpath"
-              test "$(head -n1 "$TMPDIR/$name.runpath")" = '$ORIGIN/../lib'
-              tail -n+2 "$TMPDIR/$name.runpath" | while IFS= read -r entry; do
+              while IFS= read -r entry; do
+                if test -z "$entry"; then continue; fi
                 case "$entry" in
                   /nix/store/*/lib) ;;
                   *) printf 'unsafe RUNPATH entry in %s: %s\n' "$name" "$entry" >&2; exit 1 ;;
                 esac
-              done
+              done < "$TMPDIR/$name.runpath"
               env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
                 "$binary" --backend-receipt > "$TMPDIR/$name.receipt"
               env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
@@ -623,12 +786,8 @@
                 "$TMPDIR/$name.receipt" >/dev/null
             done
 
-            LD_DEBUG=libs "$prefix/bin/hl-engine" --backend-receipt \
-              > "$TMPDIR/receipt.json" 2> "$TMPDIR/loader.log"
-            grep -F "trying file=$prefix/bin/../lib/libhl_native_engine.so" \
-              "$TMPDIR/loader.log" >/dev/null
-            grep -F "calling init: $prefix/bin/../lib/libhl_native_engine.so" \
-              "$TMPDIR/loader.log" >/dev/null
+            env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
+              "$prefix/bin/hl-engine" --backend-receipt > "$TMPDIR/receipt.json"
 
             chmod u+w "$prefix/lib"
             mv "$library" "$TMPDIR/libhl_native_engine.so"
@@ -639,7 +798,6 @@
               exit 1
             fi
             test ! -s "$TMPDIR/missing-library.stdout"
-            grep -F 'libhl_native_engine.so' "$TMPDIR/missing-library.stderr" >/dev/null
             mv "$TMPDIR/libhl_native_engine.so" "$library"
 
             mkdir -p "$out"
@@ -647,7 +805,7 @@
             (cd "$prefix" && sha256sum bin/hl-engine bin/hl-aarch64 bin/hl-x86_64 \
               lib/libhl_native_engine.so) > "$out/SHA256SUMS"
             printf '%s\n' \
-              'copied-prefix bounded RUNPATH, NEEDED, backend ABI, and sibling-library loader selection passed' \
+              'copied-prefix explicit loader, no native NEEDED, backend ABI, and sibling-library selection passed' \
               > "$out/evidence"
           '';
 
@@ -837,8 +995,12 @@
               test -s "$binary"
               ${windows.stdenv.cc.targetPrefix}objdump -f "$binary" \
                 | grep -F 'file format pei-x86-64' >/dev/null
-              ${windows.stdenv.cc.targetPrefix}objdump -p "$binary" \
+              ! ${windows.stdenv.cc.targetPrefix}objdump -p "$binary" \
                 | grep -F 'DLL Name: hl_native_engine.dll' >/dev/null
+              ${windows.stdenv.cc.targetPrefix}objdump -p "$binary" \
+                | grep -F 'LoadLibraryExW' >/dev/null
+              ${windows.stdenv.cc.targetPrefix}objdump -p "$binary" \
+                | grep -F 'GetProcAddress' >/dev/null
             done
             dll="$(find target/${target}/debug/build -path '*/out/hl_native_engine.dll' -print -quit)"
             import="$(find target/${target}/debug/build -path '*/out/libhl_native_engine.dll.a' -print -quit)"
@@ -853,6 +1015,31 @@
               | awk '$2 == "T" && $3 ~ /^hl_/ { print $3 }' \
               | sort -u > actual-engine-exports
             diff -u expected-engine-exports actual-engine-exports
+            ${lib.escapeShellArg compiler} -std=c11 -Wall -Wextra -Werror \
+              -DHL_SHARED \
+              -Isrc/runtime/hl-native/src/native \
+              -Isrc/runtime/hl-native/src/native/include \
+              -Isrc/runtime/hl-native/src/native/bridge \
+              src/runtime/hl-native/tests/bridge-abi/windows.c "$import" \
+              -o checkpoint-bridge-contract.exe
+            ${windows.stdenv.cc.targetPrefix}objdump -f checkpoint-bridge-contract.exe \
+              | grep -F 'file format pei-x86-64' >/dev/null
+            ${windows.stdenv.cc.targetPrefix}objdump -p checkpoint-bridge-contract.exe \
+              | grep -F 'DLL Name: hl_native_engine.dll' >/dev/null
+            for symbol in \
+              hl_c_backend_checkpoint_adopt \
+              hl_c_backend_checkpoint_broker_accept \
+              hl_c_backend_checkpoint_broker_pair \
+              hl_c_backend_checkpoint_configure \
+              hl_c_backend_checkpoint_interrupt_signal \
+              hl_c_backend_checkpoint_trigger_bump \
+              hl_c_backend_checkpoint_trigger_create \
+              hl_c_backend_checkpoint_trigger_destroy; do
+              ${windows.stdenv.cc.targetPrefix}objdump -p checkpoint-bridge-contract.exe \
+                | grep -F "$symbol" >/dev/null
+            done
+            cargo test --locked --offline --target ${target} -p hl-native \
+              --test identity_registry --no-run
             ${lib.escapeShellArg compiler} -std=c11 -DHL_SHARED -DHL_BUILDING_ENGINE \
               -Isrc/runtime/hl-native/src/native -Isrc/runtime/hl-native/src/native/include \
               -c src/runtime/hl-native/src/native/bridge/host.c -o host-bridge.obj
@@ -922,7 +1109,7 @@
           installPhase = ''
             mkdir -p "$out"
             printf '%s\n' \
-              'GNU Windows hl-native/hl-engine Rust target compile, final engine-executable links through the generated import library, complete engine DLL/import-library link with exact public exports, every Windows host-service translation unit, forced POSIX compatibility, and strict C/C++ public-header contracts; this is compile/link evidence, not MSVC SDK or runtime proof' \
+              'GNU Windows hl-native/hl-engine Rust target compile, engine executables use the explicit secure loader without a direct engine-DLL import, the C bridge links through the generated import library, complete engine DLL/import-library link with exact public exports, every Windows host-service translation unit, forced POSIX compatibility, and strict C/C++ public-header contracts; this is compile/link evidence, not MSVC SDK or runtime proof' \
               > "$out/evidence"
           '';
         };
@@ -948,8 +1135,7 @@
             binary="$prefix/bin/$name"
             test -x "$binary"
             lipo -archs "$binary" | grep -Fx 'arm64' >/dev/null
-            otool -L "$binary" | grep -F '@rpath/libhl_native_engine.dylib' >/dev/null
-            otool -l "$binary" | grep -A2 LC_RPATH | grep -F '@loader_path/../lib' >/dev/null
+            ! otool -L "$binary" | grep -F 'libhl_native_engine.dylib' >/dev/null
             env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
               "$binary" --backend-receipt > "$TMPDIR/$name.receipt"
             env -i PATH=/usr/bin:/bin HOME="$prefix/home" \
@@ -969,10 +1155,9 @@
             exit 1
           fi
           test ! -s "$TMPDIR/missing-library.stdout"
-          grep -F 'libhl_native_engine.dylib' "$TMPDIR/missing-library.stderr" >/dev/null
           mv "$TMPDIR/libhl_native_engine.dylib" "$library"
           mkdir -p "$out"
-          printf '%s\n' 'native Darwin copied-prefix exact ARM64 architecture, install name, exports, rpath, deterministic hash-bound backend receipts, and sibling-library isolation passed' > "$out/evidence"
+          printf '%s\n' 'native Darwin copied-prefix exact ARM64 architecture, install name, exports, explicit loader, deterministic hash-bound backend receipts, and sibling-library isolation passed' > "$out/evidence"
           '';
 
       darwinHostAbiFor =
@@ -1055,8 +1240,10 @@
           "design-lint" = verification;
           "lint-cases" = verification;
           "compat-fixtures" = verification;
+          "native-test-hooks" = nativeHookVerificationFor pkgs;
         }
         // lib.optionalAttrs pkgs.stdenv.isLinux {
+          "alpine-compatibility" = alpineCompatibilityFor pkgs;
           "installed-product" = installedProductFor pkgs engine;
           "host-linux-aarch64" = linuxHostCompileFor pkgs "aarch64";
           "host-linux-x86_64" = linuxHostCompileFor pkgs "x86_64";
@@ -1075,6 +1262,10 @@
         lint-cases = {
           type = "app";
           program = "${lintCasesFor pkgs}/bin/husklet-lint-cases";
+        };
+        postgres-checkpoint-gate = {
+          type = "app";
+          program = "${postgresCheckpointGateFor pkgs}/bin/husklet-postgres-checkpoint-gate";
         };
       });
 
@@ -1105,10 +1296,12 @@
               ++ lib.optionals toolchain.canBuildGuests (
                 toolchain.crossCompilers
                 ++ toolchain.rustStaticLinkers
-                ++ lib.optionals pkgs.stdenv.isLinux (
-                  toolchain.compilerAliases
-                  ++ toolchain.guestLibraries
-                )
+                # The `<isa>-linux-gnu-gcc` aliases were Linux-only, so every test that builds a guest
+                # by that spelling -- `hl-native`'s `engine::tests` re-exec pair among them -- hard
+                # failed on the Darwin shell even though the cross compilers themselves were already
+                # in it. macOS is the host the product ships on; those tests must run there.
+                ++ toolchain.compilerAliases
+                ++ lib.optionals pkgs.stdenv.isLinux toolchain.guestLibraries
                 ++ toolchain.emulators
               );
               shellHook = ''

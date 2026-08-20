@@ -179,7 +179,15 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
         exit(1);
     }
     uint8_t *f = image.bytes;
-    out->identity = hl_identity_image_digest(image.bytes, image.size);
+    // The image digest is the persistent translation cache's key and NOTHING else reads it: the only
+    // consumer is pcache_exec_reload, which returns immediately when the cache is off. Computing it
+    // unconditionally hashes the WHOLE image with software SHA-256 on every load, which is ~3.1 ms of the
+    // 13.5 ms fixed per-process exec cost for a 712 KB static guest and scales with image size. Key it on
+    // the same g_pcache the consumer keys on, so a cache-on run is byte-identical and a cache-off run
+    // stops producing a value no one will read. An empty digest is exactly what hl_identity_digest_empty
+    // already denotes.
+    out->identity = g_pcache ? hl_identity_image_digest(image.bytes, image.size)
+                             : (hl_identity_digest){0};
     hl_linux_elf64_layout layout;
     if (hl_linux_elf64_validate(&image, 0x3E, &layout) != 0) {
         hl_linux_image_release(&image);
@@ -291,10 +299,6 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
     out->phdr = etype == 2 ? basepage + phoff : (uint64_t)base + phoff;
     out->phent = phentsize;
     out->phnum = phnum;
-    extern int g_diag;
-    if (g_trace || g_diag)
-        fprintf(stderr, "[LOADED] %s base=%llx span=%llx end=%llx entry=%llx\n", path, (unsigned long long)base,
-                (unsigned long long)span, (unsigned long long)((uint64_t)base + span), (unsigned long long)out->entry);
     hl_linux_image_release(&image);
 }
 
@@ -355,7 +359,9 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
     extern uint64_t g_stack_lo, g_stack_hi; // publish for /proc/self/maps [stack] synthesis (vfs.c)
     g_stack_lo = (uint64_t)stk;
     g_stack_hi = (uint64_t)(stk + SZ + GUARD);
-    uint64_t argp[HL_MAXARGV], envp_[256]; // argv can be large post-exec (ARG_MAX); env stays small
+    // argv and envp are bounded identically (HL_MAXARGV/HL_MAXENVP); every producer fails closed with
+    // -E2BIG at that bound, so neither vector can arrive longer than these arrays.
+    uint64_t argp[HL_MAXARGV], envp_[HL_MAXENVP];
     set_guest_cmdline(argc, argv);         // capture the full argv for /proc/self/cmdline (bare-mode fallback)
     int envc = 0;
     for (int i = 0; i < argc; i++) {
@@ -368,7 +374,7 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
     // execve by exec_forward_env). Forward EXACTLY those FIRST so they override the built-in defaults; the
     // defaults then fill ONLY the keys the container didn't set (match on the "KEY=" prefix). Mirrors the
     // shared aarch64 build_stack (linux_abi/elf.c) -- without this, x86 guests ignored the container env.
-    const char *estr[256];
+    const char *estr[HL_MAXENVP];
     const char *ge = hl_process_guest_environment_get();
     char *gecopy = NULL;
     // execve() escape-encodes records (HL_GUEST_ENV_ESC=1) so a value's own newline isn't mistaken for a
@@ -380,7 +386,7 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
     if (ge) {
         gecopy = strdup(ge);
         char *save = NULL;
-        for (char *ln = strtok_r(gecopy, "\n", &save); ln && envc < 250; ln = strtok_r(NULL, "\n", &save)) {
+        for (char *ln = strtok_r(gecopy, "\n", &save); ln && envc < HL_MAXENVP - 6; ln = strtok_r(NULL, "\n", &save)) {
             if (env_escaped) {
                 char *r = ln, *w = ln; // unescape in place (only ever shrinks)
                 while (*r) {
@@ -400,7 +406,7 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
         }
     }
     int guest_envc = envc;
-    for (int i = 0; !env_exact && g_guest_env[i] && envc < 255; i++) {
+    for (int i = 0; !env_exact && g_guest_env[i] && envc < HL_MAXENVP - 1; i++) {
         const char *eq = strchr(g_guest_env[i], '=');
         size_t klen = eq ? (size_t)(eq - g_guest_env[i]) + 1 : 0;
         int dup = 0;
@@ -486,10 +492,6 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
         memcpy(g_auxv_data + g_auxv_len + 8, &aux[i][1], 8);
         g_auxv_len += 16;
     }
-    extern int g_diag;
-    if (g_diag)
-        fprintf(stderr, "[stack] base=%p top=%p guard_end=%p sp=%p plat=%llx rnd=%llx\n", (void *)stk, (void *)top,
-                (void *)(stk + SZ + GUARD), (void *)sp, (unsigned long long)plat, (unsigned long long)rnd);
     return (uint64_t)sp;
 }
 
@@ -752,7 +754,7 @@ static int nonpie_fixup(siginfo_t *si, void *ucv) {
 // CONSTRAINED UNPREDICTABLE-free only when SCTLR.nAA permits it, and never across a 16-byte granule).
 // Without this fixup an otherwise-valid guest program dies of SIGBUS.
 //
-// Exactly as for the LDAPR fixup above: a BUS_ADRALN raised at an engine-emitted LSE atomic host PC is
+// A BUS_ADRALN raised at an engine-emitted LSE atomic host PC is
 // ALWAYS synthetic (x86 permits the access), never a guest-visible fault, so emulating it and resuming is
 // sound. The emulation performs the read-modify-write under a dedicated global lock with acquire-release
 // barriers, which keeps it atomic against OTHER unaligned guest atomics -- the case a split-lock guest
@@ -842,70 +844,7 @@ static int lse_align_fixup(int sig, siginfo_t *si, void *ucv) {
 
 #endif
 
-// x86-TSO LDAPR alignment-fault fixup. Guest loads are emitted as LDAPR (Load-AcquirePC) to supply the
-// x86-TSO LoadLoad+LoadStore ordering in one instruction (emit.c). On a FEAT_LSE2 host an unaligned LDAPR
-// that crosses a 16-byte granule raises SIGBUS/BUS_ADRALN. x86 permits every unaligned normal load, and a
-// guest load is never emitted as any OTHER alignment-checked host instruction (plain LDR does not
-// alignment-fault on Normal cacheable memory) -- therefore a BUS_ADRALN at an engine-emitted LDAPR host PC
-// is ALWAYS this synthetic case, NEVER a guest-visible fault. Emulate the load with a plain unaligned read
-// plus DMB ISHLD (the exact LoadLoad+LoadStore acquire edges LDAPR provides -- identical to the old
-// LDR+DMB ISHLD sequence), write the zero-extended value into Rt, and step the host PC past the LDAPR.
-// Returns 1 iff handled; declines (0) for anything that is not one of our LDAPRs so real faults flow on.
-
-// HOST-CPU GATE, third of the same kind: LDAPR is A64, and x86-64 (TSO gives the acquire edge free) emits
-// none and never alignment-faults a load.
-#if defined(HL_HOST_HAS_A64_CONTEXT)
-
-static int ldapr_align_fixup(int sig, siginfo_t *si, void *ucv) {
-    extern int g_host_lrcpc; // set from host AT_HWCAP (emit.c); 0 => no LDAPR emitted
-    if (!g_host_lrcpc || sig != SIGBUS || !si || !ucv) return 0; // inert on the LDR+DMB fallback path
-#ifdef BUS_ADRALN
-    if (si->si_code != BUS_ADRALN) return 0;
-#else
-    if (si->si_code != 1) return 0;
-#endif
-    ucontext_t *uc = (ucontext_t *)ucv;
-    uint64_t hpc = (uint64_t)HL_HOST_UC_PC(uc);
-    // The faulting instruction must live inside the live RX code arena, else it is not one we emitted.
-    extern int jit_pc_in_cache(uint64_t pc, uint64_t *base);
-    if (!jit_pc_in_cache(hpc, NULL)) return 0;
-    uint32_t insn = *(uint32_t *)hpc;
-    // LDAPR{B,H,,} <Rt>,[<Xn>]: mask out size[31:30], Rn[9:5], Rt[4:0].
-    if ((insn & 0x3FFFFC00u) != 0x38BFC000u) return 0;
-    uint64_t *X = HL_HOST_UC_REGS(uc);
-    int size = insn >> 30; // 0=B 1=H 2=W 3=X -> 1/2/4/8 bytes
-    int rn = (insn >> 5) & 0x1F;
-    int rt = insn & 0x1F;
-    uint64_t addr = (rn == 31) ? (uint64_t)HL_HOST_UC_SP(uc) : X[rn];
-    unsigned width = 1u << size;
-    // A crossing access could span into an unmapped page (a genuine guest #PF on x86). Only emulate when
-    // the whole access is mapped; otherwise decline so the normal fault path delivers the real fault.
-    if (!hl_host_range_mapped((uintptr_t)addr, width)) return 0;
-    uint64_t val = 0;
-    memcpy(&val, (const void *)addr, width);        // little-endian host==guest; zero-extends to 64 bits
-    __asm__ __volatile__("dmb ishld" ::: "memory"); // acquire: order the load before later loads/stores
-    if (rt != 31) X[rt] = val;                      // Rt==31 would be ZR (discard); never emitted for a load
-    HL_HOST_UC_PC(uc) += 4;
-    return 1;
-}
-
-#else
-
-// Not an AArch64 host: no LDAPR was emitted. 0 ("not handled") lets a genuine alignment fault be reported.
-static int ldapr_align_fixup(int sig, siginfo_t *si, void *ucv) {
-    (void)sig;
-    (void)si;
-    (void)ucv;
-    return 0;
-}
-
-#endif
-
 void jit86_lazyguard(int sig, siginfo_t *si, void *uc) {
-    // x86-TSO LDAPR unaligned-crossing alignment fault -> emulate + resume. First, before any classifier:
-    // this synthetic BUS_ADRALN is neither a guest fault nor a lazy-map candidate. (No-op unless the fault
-    // is a BUS_ADRALN at an engine LDAPR host PC.)
-    if (ldapr_align_fixup(sig, si, uc)) return;
     // Same shape, for guest ATOMICs: an unaligned (split-lock) x86 lock/xchg lowered to an LSE atomic
     // alignment-faults on AArch64 although x86 permits it. Emulate + resume; see lse_align_fixup.
     if (lse_align_fixup(sig, si, uc)) return;
@@ -1071,7 +1010,7 @@ __attribute__((constructor)) static void jit86_sync_fault_guards_constructor(voi
  * the POSIX arms install.
  *
  * It does no classification of its own. The two guards above already are the classifier -- 200 lines of
- * ordering that decides between a probe fault, an LDAPR/LSE alignment emulation, a non-PIE absolute-data
+ * ordering that decides between a probe fault, LSE alignment emulation, a non-PIE absolute-data
  * fixup, a PROT_NONE registry hit, a read-only registry hit, self-modifying code, a lazy page grow, guest
  * signal delivery, and a faithful guest termination -- and that ordering is not host-specific. Reproducing
  * it against the host fault record would create a second copy that must stay in step with the first, and

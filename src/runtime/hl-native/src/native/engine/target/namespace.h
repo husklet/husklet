@@ -27,13 +27,22 @@
 #define hl_engine_child_result_after_fork HL_TARGET_LOCAL(engine_child_result_after_fork)
 #define hl_engine_child_result_publish HL_TARGET_LOCAL(engine_child_result_publish)
 #define hl_engine_child_result_publish_signal HL_TARGET_LOCAL(engine_child_result_publish_signal)
+#define hl_engine_child_result_publish_guest_pid HL_TARGET_LOCAL(engine_child_result_publish_guest_pid)
+#define hl_engine_checkpoint_lifetime_after_fork HL_TARGET_LOCAL(engine_checkpoint_lifetime_after_fork)
 
 /* Each embedded translator carries checkpoint channel state consumed by its
  * Linux-ABI unity unit. Keep adoption and execution in the same ISA namespace. */
 #define hl_ckpt_channel_adopt HL_TARGET_LOCAL(ckpt_channel_adopt)
 #define hl_ckpt_channel_acquire HL_TARGET_LOCAL(ckpt_channel_acquire)
+#define hl_ckpt_channel_forget_for_test HL_TARGET_LOCAL(ckpt_channel_forget_for_test)
+#define hl_ckpt_channel_current_for_test HL_TARGET_LOCAL(ckpt_channel_current_for_test)
+#define hl_ckpt_channel_authenticate_peer HL_TARGET_LOCAL(ckpt_channel_authenticate_peer)
+#define hl_ckpt_channel_test_claimed_pid HL_TARGET_LOCAL(ckpt_channel_test_claimed_pid)
 #define hl_ckpt_channel_call HL_TARGET_LOCAL(ckpt_channel_call)
+#define hl_ckpt_channel_call_receive_descriptor HL_TARGET_LOCAL(ckpt_channel_call_receive_descriptor)
 #define hl_ckpt_channel_broker HL_TARGET_LOCAL(ckpt_channel_broker)
+#define hl_ckpt_channel_failure HL_TARGET_LOCAL(ckpt_channel_failure)
+#define hl_ckpt_channel_owns_descriptor HL_TARGET_LOCAL(ckpt_channel_owns_descriptor)
 #define hl_ckpt_channel_publish HL_TARGET_LOCAL(ckpt_channel_publish)
 #define hl_ckpt_trigger_descriptor HL_TARGET_LOCAL(ckpt_trigger_descriptor)
 #define hl_ckpt_trigger_publish HL_TARGET_LOCAL(ckpt_trigger_publish)
@@ -45,6 +54,9 @@
 #define hl_ckpt_interrupt_signal HL_TARGET_LOCAL(ckpt_interrupt_signal)
 #define hl_ckpt_interrupt_executors HL_TARGET_LOCAL(ckpt_interrupt_executors)
 #define ckpt_request_generation HL_TARGET_LOCAL(ckpt_request_generation)
+#define hl_checkpoint_restore_claim_test HL_TARGET_LOCAL(checkpoint_restore_claim_test)
+#define hl_checkpoint_restore_slice_test HL_TARGET_LOCAL(checkpoint_restore_slice_test)
+#define hl_checkpoint_gmap_release_test HL_TARGET_LOCAL(checkpoint_gmap_release_test)
 
 #define hl_linux_bus_active HL_TARGET_LOCAL(linux_bus_active)
 #define hl_linux_bus_fault HL_TARGET_LOCAL(linux_bus_fault)
@@ -59,6 +71,7 @@
 
 #define jit_cache_diag HL_TARGET_LOCAL(jit_cache_diag)
 #define jit_guest_bus_active HL_TARGET_LOCAL(jit_guest_bus_active)
+#define jit_guest_bus_arm_latched HL_TARGET_LOCAL(jit_guest_bus_arm_latched)
 #define jit_guest_bus_bind HL_TARGET_LOCAL(jit_guest_bus_bind)
 #define jit_guest_bus_changed HL_TARGET_LOCAL(jit_guest_bus_changed)
 #define jit_guest_bus_fault HL_TARGET_LOCAL(jit_guest_bus_fault)

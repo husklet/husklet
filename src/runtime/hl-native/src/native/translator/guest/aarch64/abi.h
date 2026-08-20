@@ -72,6 +72,7 @@ static void aarch64_soft_filter_refresh(struct cpu *);
     do {                                                                                                               \
         (c)->soft_page = UINT64_MAX;                                                                                   \
         (c)->soft_protection = 0;                                                                                      \
+        SOFT_TLB_INVALIDATE_ALL(c);                                                                                    \
         (c)->soft_span_bytes = 0;                                                                                      \
         (c)->soft_span_protection = 0;                                                                                 \
     } while (0)

@@ -1,12 +1,13 @@
 #![allow(unsafe_code)]
 
+use super::line_discipline::{self, LineDiscipline, Signal, Termios};
 use crate::composition::{
     CompositionError, StandardStream, StandardStreamPort, Terminal, TerminalAttachment, TerminalPort,
 };
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -264,33 +265,64 @@ impl TerminalAttachment for NativeTerminalControl {
 }
 
 pub(super) struct NativeTerminalBridge {
-    slave: OwnedFd,
+    /// `None` once the slave has been taken for a restored member: that member's engine process receives
+    /// the descriptor over `SCM_RIGHTS` and owns it from then on, and the host keeping a second copy would
+    /// hold the master open past the member's exit and turn an end-of-file into a hang.
+    slave: Option<OwnedFd>,
     monitor: File,
     stop: Arc<AtomicBool>,
     in_flight: Arc<Mutex<usize>>,
     terminal: Arc<Terminal>,
     port: Arc<dyn TerminalPort>,
+    guest: Option<Arc<GuestDiscipline>>,
     workers: Vec<JoinHandle<()>>,
 }
 
+/// Which line discipline stands between the host's keystrokes and the guest's `read`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum InputDiscipline {
+    /// The host kernel's. What every terminal here used to get, and still the only choice for a pty
+    /// whose slave this process does not keep: the discipline needs that descriptor to read the
+    /// guest's termios and to raise end-of-file.
+    ///
+    /// On a macOS host this is the BSD discipline, whose `MAX_CANON` is 1024 and which **flushes the
+    /// whole input queue** on overflow, so a pasted canonical line of 1025 bytes or more is silently
+    /// destroyed while every write reports success.
+    Host,
+    /// The Linux `N_TTY` discipline, run in this process over a raw host slave.
+    ///
+    /// A raw BSD slave applies backpressure instead of flushing -- measured: the write goes short and
+    /// every accepted byte is delivered, at any length -- so the channel underneath is lossless and
+    /// [`super::line_discipline`] supplies the semantics the guest expects, including Linux's 4096-byte
+    /// canonical line and its truncate-rather-than-discard overflow.
+    Linux,
+}
+
 impl NativeTerminalBridge {
-    pub(super) fn attach(terminal: Arc<Terminal>) -> Result<Self, CompositionError> {
+    pub(super) fn attach(terminal: Arc<Terminal>, discipline: InputDiscipline) -> Result<Self, CompositionError> {
         let (master, slave) = open_pair(terminal.initial())?;
         set_nonblocking(&master)?;
         let input_master = duplicate(&master)?;
         let output_master = duplicate(&master)?;
         let monitor = duplicate(&master)?;
+        // Built before the master is moved into the control: it needs a descriptor of its own for
+        // `tcgetpgrp`, and none of the pumps' duplicates outlive a failure here.
+        let guest = match discipline {
+            InputDiscipline::Host => None,
+            InputDiscipline::Linux => Some(GuestDiscipline::adopt(&slave, &master)?),
+        };
         let control = Arc::new(NativeTerminalControl { master });
         terminal.attach(control)?;
         let stop = Arc::new(AtomicBool::new(false));
         let in_flight = Arc::new(Mutex::new(0));
         let port = terminal.port();
-        let input = spawn_input(Arc::clone(&port), Arc::clone(&stop), input_master)?;
+        let input = spawn_input(Arc::clone(&port), Arc::clone(&stop), input_master, guest.clone())?;
         let output = match spawn_output(
             Arc::clone(&port),
             Arc::clone(&stop),
             Arc::clone(&in_flight),
             output_master,
+            guest.clone(),
         ) {
             Ok(worker) => worker,
             Err(error) => {
@@ -301,18 +333,42 @@ impl NativeTerminalBridge {
             }
         };
         Ok(Self {
-            slave,
+            slave: Some(slave),
             monitor,
             stop,
             in_flight,
             terminal,
             port,
+            guest,
             workers: vec![input, output],
         })
     }
 
+    /// Which discipline this bridge actually ended up running.
+    ///
+    /// Not the one that was asked for: adopting the Linux discipline needs the engine's termios
+    /// store, and a bridge that could not reach it falls back to the host's rather than running with
+    /// a guest view it cannot keep truthful.
+    #[cfg(test)]
+    pub(super) fn discipline(&self) -> InputDiscipline {
+        if self.guest.is_some() {
+            InputDiscipline::Linux
+        } else {
+            InputDiscipline::Host
+        }
+    }
+
     pub(super) fn standard_fds(&self) -> [i32; 3] {
-        [self.slave.as_raw_fd(); 3]
+        [self.slave.as_ref().expect("engine-bound terminal slave").as_raw_fd(); 3]
+    }
+
+    /// Takes the slave end, transferring it to the caller.
+    ///
+    /// Used for a restored member's terminal, whose slave is handed to the member's own process rather
+    /// than bound as this engine's standard descriptors. A bridge whose slave has been taken must not be
+    /// asked for [`Self::standard_fds`].
+    pub(super) fn take_slave(&mut self) -> Option<OwnedFd> {
+        self.slave.take()
     }
 
     pub(super) fn flush(&self) {
@@ -344,6 +400,11 @@ impl Drop for NativeTerminalBridge {
         self.port.close();
         for worker in self.workers.drain(..) {
             let _ = worker.join();
+        }
+        // After the pumps have stopped, never before: a running pump would re-assert raw mode on the
+        // next input batch and undo this.
+        if let Some(guest) = self.guest.as_ref() {
+            guest.release();
         }
     }
 }
@@ -397,17 +458,29 @@ fn spawn_input(
     port: Arc<dyn TerminalPort>,
     stop: Arc<AtomicBool>,
     mut master: File,
+    guest: Option<Arc<GuestDiscipline>>,
 ) -> Result<JoinHandle<()>, CompositionError> {
     std::thread::Builder::new()
         .name("hl-terminal-input".to_owned())
         .spawn(move || {
             let mut bytes = [0_u8; 8192];
+            // One effect for the life of the pump. Its buffers are cleared, not reallocated, so a
+            // steady stream of keystrokes runs the discipline without touching the allocator.
+            let mut effect = line_discipline::Effect::default();
             while !stop.load(Ordering::Acquire) {
                 let count = match port.read(&mut bytes) {
                     Ok(0) | Err(_) => break,
                     Ok(count) => count,
                 };
-                if write_master(&mut master, &bytes[..count], &stop).is_err() {
+                let Some(guest) = guest.as_ref() else {
+                    if write_master(&mut master, &bytes[..count], &stop).is_err() {
+                        break;
+                    }
+                    continue;
+                };
+                effect.clear();
+                guest.receive(&bytes[..count], &mut effect);
+                if !guest.deliver(&effect, &mut master, port.as_ref(), &stop) {
                     break;
                 }
             }
@@ -444,11 +517,14 @@ fn spawn_output(
     stop: Arc<AtomicBool>,
     in_flight: Arc<Mutex<usize>>,
     mut master: File,
+    guest: Option<Arc<GuestDiscipline>>,
 ) -> Result<JoinHandle<()>, CompositionError> {
     std::thread::Builder::new()
         .name("hl-terminal-output".to_owned())
         .spawn(move || {
             let mut bytes = [0_u8; 16 * 1024];
+            // Reused across batches for the same reason the input pump reuses its effect.
+            let mut processed = Vec::new();
             while !stop.load(Ordering::Acquire) {
                 let mut poll = libc::pollfd {
                     fd: master.as_raw_fd(),
@@ -493,7 +569,16 @@ fn spawn_output(
                         }
                     }
                 }
-                let written = write_output(port.as_ref(), &bytes[..count]);
+                // A raw host slave post-processes nothing, so `OPOST` is applied here or every
+                // guest newline reaches the display without its carriage return.
+                let written = match guest.as_ref() {
+                    None => write_output(port.as_ref(), &bytes[..count]),
+                    Some(guest) => {
+                        guest.await_output_resumed(&stop);
+                        guest.post_process(&bytes[..count], &mut processed);
+                        write_output(port.as_ref(), &processed)
+                    }
+                };
                 let mut active = in_flight.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 *active -= 1;
                 drop(active);
@@ -503,6 +588,244 @@ fn spawn_output(
             }
         })
         .map_err(|_| CompositionError::RuntimeConstruction)
+}
+
+/// The Linux `N_TTY` discipline running over one raw host pty, and everything it needs from the host.
+///
+/// The host slave is raw for the whole life of the terminal, so the host kernel neither canonicalises,
+/// echoes, post-processes, nor raises signals. Each of those is supplied here instead, from the
+/// guest's own termios rather than the host's -- which is the point, because the two are made to
+/// disagree deliberately and only the guest's is authoritative.
+struct GuestDiscipline {
+    /// A duplicate of the slave. Identifies the terminal to the engine's termios store, carries the
+    /// raw mode, and is the descriptor whose queue a signal flush discards.
+    slave: OwnedFd,
+    /// A duplicate of the master, for `tcgetpgrp`. The guest's own `TIOCSPGRP` reaches a real
+    /// `tcsetpgrp` on the host slave, so the host already knows the foreground group and no
+    /// guest-to-host pid translation is needed to signal it.
+    master: OwnedFd,
+    /// The host termios the slave carried before this discipline made it raw. The bridge puts it
+    /// back on the way out, so the divergence the pump creates on purpose never outlives the pump --
+    /// the descriptor may be duplicated into a checkpoint capture or a restored member's engine, and
+    /// a raw device with no discipline above it is not something to leave lying around.
+    original: libc::termios,
+    state: Mutex<LineDiscipline>,
+    /// The termios generation `state` was last synchronised at. One relaxed load per input batch
+    /// decides whether the image has to be read again; nothing in the keystroke path fstats or calls
+    /// `tcgetattr`.
+    generation: AtomicU64,
+    output_stopped: AtomicBool,
+}
+
+impl GuestDiscipline {
+    /// Puts the slave in raw mode and takes over the discipline, or fails and leaves the terminal
+    /// exactly as it was.
+    ///
+    /// Every step here needs the engine: the cooked image, the re-pairing, and the store the guest's
+    /// own `TCGETS` reads back all live in it. So an engine that did not load is reported as
+    /// [`CompositionError::EngineUnavailable`], naming the loader's reason, instead of leaving the
+    /// caller with the host discipline and no way to tell.
+    fn adopt(slave: &OwnedFd, master: &OwnedFd) -> Result<Arc<Self>, CompositionError> {
+        if let Some(error) = hl_native::artifact_load_error() {
+            eprintln!("[terminal] refuse: the guest line discipline needs the private engine: {error}");
+            return Err(CompositionError::EngineUnavailable);
+        }
+        let missing = || CompositionError::RuntimeConstruction;
+        let slave = duplicate_owned(slave).ok_or_else(missing)?;
+        let master = duplicate_owned(master).ok_or_else(missing)?;
+        // What the guest would have seen had nothing changed: a freshly opened pty's cooked termios.
+        // It is captured before the slave goes raw, because afterwards the host no longer holds it.
+        let mut image = [0_u8; 36];
+        hl_native::terminal_termios_capture(slave.as_raw_fd(), &mut image).ok_or_else(missing)?;
+        let original = attributes(&slave).ok_or_else(missing)?;
+        make_raw(&slave).ok_or_else(missing)?;
+        // Re-pair that cooked image with the raw projection the host now holds, so the guest's own
+        // TCGETS keeps answering with a cooked terminal instead of the raw mode imposed here.
+        hl_native::terminal_termios_adopt(slave.as_raw_fd(), &image).ok_or_else(missing)?;
+        Ok(Arc::new(Self {
+            slave,
+            master,
+            original,
+            state: Mutex::new(LineDiscipline::new(Termios::from_image(&image))),
+            generation: AtomicU64::new(hl_native::terminal_termios_generation()),
+            output_stopped: AtomicBool::new(false),
+        }))
+    }
+
+    /// Feeds one batch of host input through the discipline, after adopting any termios the guest has
+    /// installed since the last batch.
+    ///
+    /// Both stages append to the caller's effect, in that order, so the batch allocates nothing and
+    /// copies nothing: what a keystroke costs is the discipline itself plus one uncontended lock.
+    fn receive(&self, bytes: &[u8], effect: &mut line_discipline::Effect) {
+        self.synchronise(effect);
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .receive(bytes, effect);
+    }
+
+    /// Adopts the guest's termios when it has moved. The common case is one relaxed load.
+    fn synchronise(&self, effect: &mut line_discipline::Effect) {
+        let current = hl_native::terminal_termios_generation();
+        if current == self.generation.load(Ordering::Relaxed) {
+            return;
+        }
+        self.generation.store(current, Ordering::Relaxed);
+        let mut image = [0_u8; 36];
+        if hl_native::terminal_termios(self.slave.as_raw_fd(), &mut image).is_none() {
+            return;
+        }
+        // The guest's own TCSETS reached the host slave and undid the raw mode. Re-assert it before
+        // any byte is written, and re-pair the guest's image with the projection that produces, so
+        // the guest still reads back what it installed.
+        if make_raw(&self.slave).is_some() {
+            let _ = hl_native::terminal_termios_adopt(self.slave.as_raw_fd(), &image);
+        }
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .set_termios(Termios::from_image(&image), effect);
+    }
+
+    /// Puts the host termios back the way the pty was opened.
+    fn release(&self) {
+        let _ = install(&self.slave, &self.original);
+    }
+
+    /// Applies `OPOST` to one batch of guest output, replacing whatever `out` held.
+    ///
+    /// Only the 36-byte termios is read under the lock; the pass over the batch runs outside it. The
+    /// pump reads up to 16 KiB at a time, and holding the discipline's lock across that pass put the
+    /// output thread directly in the input thread's way -- every echoed keystroke returns through
+    /// this path, so the two pumps met on the lock once per keystroke.
+    fn post_process(&self, bytes: &[u8], out: &mut Vec<u8>) {
+        let termios = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .termios();
+        out.clear();
+        termios.write_output(bytes, out);
+    }
+
+    /// Blocks the output pump while `IXON` has stopped output, as the host discipline would.
+    fn await_output_resumed(&self, stop: &AtomicBool) {
+        while self.output_stopped.load(Ordering::Acquire) && !stop.load(Ordering::Acquire) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// Carries out what one batch produced. Returns false when the pump should stop.
+    fn deliver(
+        &self,
+        effect: &line_discipline::Effect,
+        master: &mut File,
+        port: &dyn TerminalPort,
+        stop: &AtomicBool,
+    ) -> bool {
+        if let Some(stopped) = effect.output_stopped {
+            self.output_stopped.store(stopped, Ordering::Release);
+        }
+        if effect.flush_input {
+            // SAFETY: the discipline owns a live duplicate of the pty slave for the whole call.
+            unsafe { libc::tcflush(self.slave.as_raw_fd(), libc::TCIFLUSH) };
+        }
+        if !effect.echo.is_empty() && !write_output(port, &effect.echo) {
+            return false;
+        }
+        if !effect.to_guest.is_empty() && write_master(master, &effect.to_guest, stop).is_err() {
+            return false;
+        }
+        for signal in &effect.signals {
+            self.raise(*signal);
+        }
+        if effect.end_of_file {
+            return self.raise_end_of_file(master, stop);
+        }
+        true
+    }
+
+    /// Delivers a terminal-generated signal to the pty's foreground process group.
+    fn raise(&self, signal: Signal) {
+        // SAFETY: the discipline owns a live duplicate of the pty master for the whole call.
+        let group = unsafe { libc::tcgetpgrp(self.master.as_raw_fd()) };
+        if group <= 0 {
+            return;
+        }
+        let number = match signal {
+            Signal::Interrupt => libc::SIGINT,
+            Signal::Quit => libc::SIGQUIT,
+            Signal::Suspend => libc::SIGTSTP,
+        };
+        // SAFETY: `killpg` takes two integers and the group was just read from the live master.
+        unsafe { libc::killpg(group, number) };
+    }
+
+    /// Raises end-of-file on the guest's `read`.
+    ///
+    /// A raw slave has no `VEOF`, so the slave is flipped to canonical for exactly one byte, the EOF
+    /// character is written, and the raw mode is restored. Measured on both hosts: the guest's read
+    /// returns zero and the channel keeps working afterwards, and an idle raw slave reads `EAGAIN`
+    /// first, so the zero is genuinely end-of-file rather than an empty read.
+    fn raise_end_of_file(&self, master: &mut File, stop: &AtomicBool) -> bool {
+        let (Some(mut attributes), Some(eof)) = (attributes(&self.slave), self.end_of_file_character()) else {
+            // Nothing to raise: the guest disabled VEOF with `_POSIX_VDISABLE`, or the slave is gone.
+            return true;
+        };
+        attributes.c_lflag |= libc::ICANON;
+        attributes.c_lflag &= !(libc::ECHO | libc::ISIG);
+        attributes.c_cc[libc::VEOF] = eof;
+        if install(&self.slave, &attributes).is_none() {
+            return true;
+        }
+        // The raw mode is restored whatever the write did: leaving the slave canonical would put the
+        // discipline this module replaces back in the path.
+        let written = write_master(master, &[eof], stop).is_ok();
+        let _ = make_raw(&self.slave);
+        let mut image = [0_u8; 36];
+        if hl_native::terminal_termios(self.slave.as_raw_fd(), &mut image).is_some() {
+            let _ = hl_native::terminal_termios_adopt(self.slave.as_raw_fd(), &image);
+        }
+        // A master that refused the end-of-file byte is gone, and so is the reason to keep pumping.
+        written
+    }
+
+    fn end_of_file_character(&self) -> Option<u8> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .end_of_file_character()
+    }
+}
+
+fn duplicate_owned(descriptor: &OwnedFd) -> Option<OwnedFd> {
+    // SAFETY: `dup` borrows a live descriptor and returns a fresh one on success.
+    let copy = unsafe { libc::dup(descriptor.as_raw_fd()) };
+    // SAFETY: a successful dup transferred a uniquely owned descriptor.
+    (copy >= 0).then(|| unsafe { OwnedFd::from_raw_fd(copy) })
+}
+
+fn attributes(descriptor: &OwnedFd) -> Option<libc::termios> {
+    let mut attributes = std::mem::MaybeUninit::<libc::termios>::uninit();
+    // SAFETY: the descriptor is live and `attributes` is writable for the whole call.
+    let read = unsafe { libc::tcgetattr(descriptor.as_raw_fd(), attributes.as_mut_ptr()) };
+    // SAFETY: a successful tcgetattr initialized the structure.
+    (read == 0).then(|| unsafe { attributes.assume_init() })
+}
+
+fn install(descriptor: &OwnedFd, attributes: &libc::termios) -> Option<()> {
+    // SAFETY: both the descriptor and the attributes stay live for this synchronous call.
+    (unsafe { libc::tcsetattr(descriptor.as_raw_fd(), libc::TCSANOW, &raw const *attributes) } == 0).then_some(())
+}
+
+/// Puts a descriptor in raw mode, which is what makes the channel underneath lossless: a raw BSD
+/// slave applies backpressure at its buffer instead of flushing the whole canonical queue.
+fn make_raw(descriptor: &OwnedFd) -> Option<()> {
+    let mut attributes = attributes(descriptor)?;
+    // SAFETY: `attributes` is a valid initialized termios for the duration of the call.
+    unsafe { libc::cfmakeraw(&raw mut attributes) };
+    install(descriptor, &attributes)
 }
 
 fn write_output(port: &dyn TerminalPort, bytes: &[u8]) -> bool {
@@ -518,7 +841,7 @@ fn write_output(port: &dyn TerminalPort, bytes: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{NativeOutputBridge, NativeTerminalBridge};
+    use super::{InputDiscipline, NativeOutputBridge, NativeTerminalBridge};
     use crate::composition::{StandardStream, StandardStreamPort, Terminal, TerminalPort};
     use std::collections::VecDeque;
     use std::io::{Read, Write};
@@ -688,7 +1011,7 @@ mod tests {
     fn terminal_flush_waits_for_bytes_accepted_by_the_output_port() {
         let port = Arc::new(BlockingTerminalPort::default());
         let terminal = Terminal::new(port.clone(), 24, 80).unwrap();
-        let bridge = NativeTerminalBridge::attach(terminal).unwrap();
+        let bridge = NativeTerminalBridge::attach(terminal, InputDiscipline::Host).unwrap();
         let descriptor = bridge.standard_fds()[1];
         // SAFETY: dup returns a fresh descriptor and the result is checked.
         let copy = unsafe { libc::dup(descriptor) };
@@ -725,7 +1048,12 @@ mod tests {
     fn owned_pty_binds_stdio_pumps_and_resize() {
         let port = Arc::new(Port::default());
         let terminal = Terminal::new(port.clone(), 24, 80).unwrap();
-        let bridge = NativeTerminalBridge::attach(terminal.clone()).unwrap();
+        let bridge = NativeTerminalBridge::attach(terminal.clone(), InputDiscipline::Linux).unwrap();
+        assert_eq!(
+            bridge.discipline(),
+            InputDiscipline::Linux,
+            "the Linux discipline was not adopted, so this exercises the host's"
+        );
         let descriptors = bridge.standard_fds();
         assert_eq!(descriptors, [descriptors[0]; 3]);
         // SAFETY: dup returns a fresh descriptor and the result is checked.
@@ -773,6 +1101,218 @@ mod tests {
         assert!(terminal.resize(42, 110).is_err());
     }
 
+    /// Reads exactly `expected` bytes from `slave`, or panics with what it did get.
+    fn read_exactly(slave: &mut std::fs::File, expected: usize) -> Vec<u8> {
+        let mut collected = Vec::new();
+        let mut chunk = [0_u8; 8192];
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while collected.len() < expected && Instant::now() < deadline {
+            match slave.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(count) => collected.extend_from_slice(&chunk[..count]),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Err(error) => panic!("read the pty slave: {error}"),
+            }
+        }
+        assert_eq!(
+            collected.len(),
+            expected,
+            "the guest saw {} of {expected} bytes",
+            collected.len()
+        );
+        collected
+    }
+
+    /// The defect this whole module exists for, end to end over a real pty.
+    ///
+    /// On a macOS host the slave carries the BSD discipline, whose `MAX_CANON` is 1024 and which
+    /// **flushes the entire input queue** on overflow: a pasted line of 1025 bytes or more is
+    /// silently destroyed and the shell waits forever for a command that never arrives. Linux allows
+    /// 4096 and truncates instead. With the Linux discipline adopted here the guest sees the Linux
+    /// answer on both hosts.
+    #[test]
+    fn a_pasted_canonical_line_reaches_the_guest_at_every_length() {
+        let port = Arc::new(Port::default());
+        let terminal = Terminal::new(port.clone(), 24, 80).unwrap();
+        let bridge = NativeTerminalBridge::attach(terminal, InputDiscipline::Linux).unwrap();
+        assert_eq!(
+            bridge.discipline(),
+            InputDiscipline::Linux,
+            "the Linux discipline was not adopted, so this measures the host's"
+        );
+        // SAFETY: dup returns a fresh descriptor and the result is checked.
+        let copy = unsafe { libc::dup(bridge.standard_fds()[0]) };
+        assert!(copy >= 0);
+        // SAFETY: the descriptor is live and F_SETFL only updates its status flags.
+        unsafe { libc::fcntl(copy, libc::F_SETFL, libc::O_NONBLOCK) };
+        // SAFETY: successful dup transferred a uniquely owned descriptor.
+        let mut slave = unsafe { std::fs::File::from_raw_fd(copy) };
+
+        for length in [281_usize, 1024, 1025, 1651, 4001] {
+            let mut typed = vec![b'a'; length];
+            typed.push(b'\n');
+            port.state.lock().unwrap().0.extend(typed.iter().copied());
+            port.changed.notify_all();
+            let seen = read_exactly(&mut slave, length + 1);
+            assert_eq!(seen, typed, "a {length}-byte canonical line did not arrive whole");
+        }
+
+        // Past the Linux capacity the line is truncated and kept, never thrown away, and the
+        // terminator overwrites the last byte rather than extending past the buffer.
+        let mut typed = vec![b'b'; 5001];
+        typed.push(b'\n');
+        port.state.lock().unwrap().0.extend(typed.iter().copied());
+        port.changed.notify_all();
+        let seen = read_exactly(&mut slave, crate::runtime::line_discipline::CANONICAL_CAPACITY);
+        assert_eq!(seen.len(), 4096);
+        assert_eq!(seen[4095], b'\n');
+        assert!(seen[..4095].iter().all(|byte| *byte == b'b'));
+    }
+
+    /// Keystroke-to-echo latency through the whole input pump, reported as percentiles.
+    ///
+    /// A measurement rather than an assertion, so it is ignored by default. Run it with
+    /// `--ignored --nocapture` on the host whose latency you mean to quote, and quote that host.
+    /// The reader spins: a sleeping reader measures the sleep, which has already voided one run of
+    /// this measurement.
+    #[test]
+    #[ignore = "a latency measurement, not an assertion"]
+    fn keystroke_echo_latency() {
+        const WARMUP: usize = 2000;
+        const SAMPLES: usize = 5000;
+        let port = Arc::new(Port::default());
+        let terminal = Terminal::new(port.clone(), 24, 80).unwrap();
+        let bridge = NativeTerminalBridge::attach(terminal, InputDiscipline::Linux).unwrap();
+        // Without this the run silently measures the host discipline instead, and a whole A/B
+        // table can read as evidence about code none of its arms executed. That has happened.
+        assert_eq!(
+            bridge.discipline(),
+            InputDiscipline::Linux,
+            "the Linux discipline was not adopted, so this measures the host's"
+        );
+        let mut samples: Vec<u64> = Vec::with_capacity(SAMPLES);
+        // 'a' then ERASE, so the edited line oscillates between zero and one byte: every keystroke
+        // produces echo, none of them ever reaches the master, and nothing grows without bound.
+        for index in 0..(WARMUP + SAMPLES) {
+            let typed = if index % 2 == 0 { b'a' } else { 0x7f };
+            let (seen, start) = {
+                let mut state = port.state.lock().unwrap();
+                let seen = state.1.len();
+                state.0.push_back(typed);
+                port.changed.notify_all();
+                (seen, Instant::now())
+            };
+            let deadline = start + Duration::from_secs(5);
+            loop {
+                if port.state.lock().unwrap().1.len() > seen {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "the echo never arrived");
+                std::hint::spin_loop();
+            }
+            if index >= WARMUP {
+                samples.push(u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX));
+            }
+        }
+        samples.sort_unstable();
+        let at = |percent: usize| samples[(samples.len() - 1) * percent / 100];
+        println!(
+            "latency n={} p50={}ns p90={}ns p99={}ns",
+            samples.len(),
+            at(50),
+            at(90),
+            at(99),
+        );
+        drop(bridge);
+    }
+
+    /// A restored member's terminal runs the HOST discipline, deliberately.
+    ///
+    /// It is the terminal a reattached pane is seated on after a Continue-later restore, so on macOS
+    /// it still destroys a canonical line of 1025 bytes or more -- the defect
+    /// [`a_pasted_canonical_line_reaches_the_guest_at_every_length`] exists to prevent. This pins the
+    /// fallback so that flipping it to [`InputDiscipline::Linux`] is a decision somebody has to make
+    /// against the reason in [`MemberTerminal::open`], rather than a one-word edit that reads like an
+    /// improvement and leaves a re-forked member's shell stuck in canonical mode.
+    #[test]
+    fn a_restored_member_terminal_falls_back_to_the_host_discipline() {
+        let port = Arc::new(Port::default());
+        let terminal = Terminal::new(port, 24, 80).unwrap();
+        let (member, slave) = super::MemberTerminal::open(terminal).expect("member terminal");
+        assert_eq!(
+            member.discipline(),
+            InputDiscipline::Host,
+            "a restored member's terminal must keep the host discipline while the guest's termios \
+             store does not cross the restore fork"
+        );
+        drop(slave);
+        drop(member);
+    }
+
+    /// The engine's per-terminal termios store does not cross a fork, which is why the discipline
+    /// above cannot be the Linux one.
+    ///
+    /// A whole-image restore re-forks every captured process, so a restored member runs in a process
+    /// of its own with a private copy of the engine's statics. Its guest's `TCSETS` is recorded
+    /// there. This is the measurement, not the assumption: a child records a different image for the
+    /// SAME terminal device -- same `dev`/`ino`, which is all the store keys on -- and the parent
+    /// must still read back its own.
+    ///
+    /// The entry is what is asserted, not the generation counter: that counter is one number for
+    /// every terminal in the process, so a sibling test adopting its own pty moves it and an
+    /// assertion on it fails under `cargo test` while passing when run alone. It did.
+    #[test]
+    fn the_guest_termios_store_does_not_cross_the_restore_fork() {
+        if let Some(error) = hl_native::artifact_load_error() {
+            eprintln!("termios store fork check skipped: the engine is unavailable: {error}");
+            return;
+        }
+        let (master, slave) = super::open_pair((24, 80)).expect("pty pair");
+        let mut parent_image = [0_u8; 36];
+        if hl_native::terminal_termios_capture(slave.as_raw_fd(), &mut parent_image).is_none() {
+            panic!("capture the host termios of a fresh pty");
+        }
+        // A bit no fresh pty carries, so the two images cannot be confused for one another.
+        parent_image[16] = 0x5a;
+        hl_native::terminal_termios_adopt(slave.as_raw_fd(), &parent_image).expect("adopt in the parent");
+
+        let mut child_image = parent_image;
+        child_image[16] = 0xa5;
+        // SAFETY: the child performs one FFI call and `_exit`s. It allocates nothing, takes no Rust
+        // lock, and never returns into the test harness, so no lock this process held at fork time
+        // is ever acquired in it.
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0, "fork a stand-in for a restored member");
+        if child == 0 {
+            let recorded = hl_native::terminal_termios_adopt(slave.as_raw_fd(), &child_image).is_some();
+            // SAFETY: `_exit` performs no cleanup, which is the point.
+            unsafe { libc::_exit(i32::from(!recorded)) };
+        }
+        let mut status = 0;
+        // SAFETY: `status` is writable and `child` is this process's child.
+        assert!(unsafe { libc::waitpid(child, &raw mut status, 0) } == child);
+        assert_eq!(
+            libc::WEXITSTATUS(status),
+            0,
+            "the child could not record a guest termios of its own"
+        );
+
+        let mut seen = [0_u8; 36];
+        assert!(
+            hl_native::terminal_termios(slave.as_raw_fd(), &mut seen).is_some(),
+            "the parent lost its own entry"
+        );
+        assert_eq!(
+            seen, parent_image,
+            "a re-forked member's guest termios reached this process's store, so the pump could \
+             follow it and MemberTerminal could run the Linux discipline"
+        );
+        drop(master);
+        drop(slave);
+    }
+
     struct SaturatingPort {
         closed: AtomicBool,
         enabled: AtomicBool,
@@ -812,7 +1352,7 @@ mod tests {
             reads: AtomicUsize::new(0),
         });
         let terminal = Terminal::new(port.clone(), 24, 80).unwrap();
-        let bridge = NativeTerminalBridge::attach(terminal).unwrap();
+        let bridge = NativeTerminalBridge::attach(terminal, InputDiscipline::Host).unwrap();
         let mut attributes = std::mem::MaybeUninit::<libc::termios>::uninit();
         // SAFETY: the bridge owns a live PTY slave and `attributes` is writable.
         assert_eq!(
@@ -849,5 +1389,77 @@ mod tests {
         completed
             .recv_timeout(Duration::from_secs(1))
             .expect("PTY bridge drop remained blocked behind a full master buffer");
+    }
+}
+
+/// The terminal one restored member reattaches to.
+///
+/// A whole-image restore rebinds every member's captured guest fds 0..2 to a live terminal, and until a
+/// per-member terminal existed that could only be the restoring engine's own bridge -- one bridge for a
+/// tree of many. This is the producer for a single member: an ordinary pty whose master end this host
+/// pumps to and from the port it was built with, and whose slave end is handed to the member's process
+/// during its descriptor restore.
+///
+/// It must be created BEFORE the container starts, because the member asks for it from inside that
+/// restore, long before any pane exists to ask on its behalf.
+#[cfg(unix)]
+pub struct MemberTerminal {
+    bridge: NativeTerminalBridge,
+    terminal: Arc<Terminal>,
+}
+
+#[cfg(unix)]
+impl MemberTerminal {
+    /// Opens the pty and starts its pumps, yielding the slave end to register with the engine.
+    ///
+    /// The slave is returned rather than retained: the member owns it once the engine hands it over, and a
+    /// copy kept here would hold the master open past the member's exit, turning an end-of-file into a
+    /// hang for whoever is reading the session.
+    ///
+    /// # Errors
+    /// Returns [`CompositionError::RuntimeConstruction`] when the pty or its pumps cannot be created.
+    pub fn open(terminal: Arc<Terminal>) -> Result<(Self, OwnedFd), CompositionError> {
+        // Explicitly the host discipline, and the reason is not the one this comment used to give.
+        //
+        // The lifetime objection -- that keeping a copy of the slave here would hold the master open
+        // past the member's exit and turn an end-of-file into a hang -- is real but solvable: the
+        // session that owns this terminal already observes the member's exit on its own poll, so it
+        // could drop the discipline's copy at that moment and let the master see its end-of-file.
+        //
+        // What is NOT solvable from this side is where the guest's termios lives. A restored member
+        // is a re-forked process of its own, and the engine's per-terminal termios store is a plain
+        // static inside the dlopened engine, so the fork gives the member a private copy: its
+        // `TCSETS` bumps ITS generation, never this process's, and
+        // `the_guest_termios_store_does_not_cross_the_restore_fork` pins exactly that. A discipline
+        // running here would therefore be frozen at the image the pty was opened with and would keep
+        // canonicalising a line for a shell that had asked for `-icanon` -- every keystroke withheld
+        // until Enter, no per-key echo, arrow keys and editors dead. That is far worse than losing a
+        // line over 1024 bytes, so a restored member keeps the host discipline until the store the
+        // guest writes to is one both processes can read. On macOS it therefore still loses a
+        // canonical line over 1024 bytes, and `a_restored_member_terminal_falls_back_to_the_host_discipline`
+        // keeps that fallback deliberate rather than accidental.
+        let mut bridge = NativeTerminalBridge::attach(Arc::clone(&terminal), InputDiscipline::Host)?;
+        let slave = bridge.take_slave().ok_or(CompositionError::RuntimeConstruction)?;
+        Ok((Self { bridge, terminal }, slave))
+    }
+
+    /// Which discipline this member's terminal actually runs. See [`Self::open`] for why it is the
+    /// host's.
+    #[cfg(test)]
+    pub(super) fn discipline(&self) -> InputDiscipline {
+        self.bridge.discipline()
+    }
+
+    /// Resizes this member's terminal, never its container's.
+    ///
+    /// # Errors
+    /// Returns [`CompositionError`] when the size is empty or the pty refuses the change.
+    pub fn resize(&self, rows: u16, columns: u16) -> Result<(), CompositionError> {
+        self.terminal.resize(rows, columns)
+    }
+
+    /// Waits for output already produced to reach the port, as the engine's own bridge does at exit.
+    pub fn flush(&self) {
+        self.bridge.flush();
     }
 }

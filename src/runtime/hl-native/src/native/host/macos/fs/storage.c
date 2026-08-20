@@ -259,13 +259,29 @@ static hl_host_result hl_macos_file_read_directory(void *context, hl_host_handle
     if (saved_error == 0 && shared == NULL) saved_error = EIO;
     if (shared != NULL) pthread_mutex_lock(&shared->lock);
     if (saved_error == 0 && entry->directory == NULL) {
+        /* The stream needs its own descriptor (readdir owns the offset, and `entry->descriptor` stays the
+         * handle's), but F_DUPFD_CLOEXEC from 0 lands on the LOWEST FREE NUMBER -- inside the guest's own
+         * descriptor band -- and, unlike entry->descriptor and entry->append_descriptor, it was never
+         * adopted into the engine-private ledger. Nothing that protects engine descriptors could see it:
+         * exec_fd_is_engine() consults the ledger, so the guest's close_range(3, ~0U) closed it, and
+         * engine_fd_vacate() does not enumerate these streams, so a guest dup2(x, N) closed it. The DIR*
+         * stayed cached on the handle, so the next read_directory rewound a stream whose descriptor the
+         * guest had taken: readdir() returned NULL with errno 0 and this function reported EINVAL, or
+         * simply ended the listing early. Adopt it like every other engine host descriptor. */
         int duplicate = fcntl(entry->descriptor, F_DUPFD_CLOEXEC, 0);
+        if (duplicate >= 0) {
+            int adopted = hl_host_process_fd_private_adopt(duplicate);
+            /* No room above the private floor: keep the unadopted descriptor rather than failing the
+             * listing outright -- exposed to the races above, but strictly better than no listing. */
+            if (adopted >= 0) duplicate = adopted;
+        }
         if (duplicate < 0) {
             saved_error = errno;
         } else {
             entry->directory = fdopendir(duplicate);
             if (entry->directory == NULL) {
                 saved_error = errno;
+                hl_host_process_fd_private_remove(duplicate);
                 close(duplicate);
             } else {
                 entry->directory_position = 0;

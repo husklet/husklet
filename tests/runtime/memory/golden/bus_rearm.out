@@ -1,0 +1,1 @@
+bus-rearm cycles=4 rearm=1 disarmed-quiet=1 guarded-quiet=1 metadata=1 signals=8

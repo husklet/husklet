@@ -1,3 +1,4 @@
+hl_c_backend_build_fingerprint
 hl_c_backend_checkpoint_adopt
 hl_c_backend_checkpoint_broker_accept
 hl_c_backend_checkpoint_broker_pair
@@ -14,9 +15,16 @@ hl_c_backend_exit
 hl_c_backend_exit_detail
 hl_c_backend_exit_kind
 hl_c_backend_exit_status
+hl_c_backend_guest_pid
 hl_c_backend_leak_check_nonvacuity
+hl_c_backend_process_identity_signal
 hl_c_backend_request
 hl_c_backend_run
+hl_c_backend_terminal_termios
+hl_c_backend_terminal_termios_adopt
+hl_c_backend_terminal_termios_capture
+hl_c_backend_terminal_termios_generation
 hl_c_backend_translation_count
+hl_c_bridge_api_v1
 hl_engine_abi
 hl_engine_version

@@ -29,13 +29,56 @@ int hl_ckpt_channel_adopt(const char *broker, const char *trigger);
  * child never shares a channel (and therefore never interleaves a request) with its parent.
  * Returns -1 when no broker was published or the connect failed. */
 int hl_ckpt_channel_acquire(void);
+int hl_ckpt_channel_authenticate_peer(int descriptor, uint64_t claimed_pid, uint64_t *authenticated_pid);
+#if defined(HL_NATIVE_TEST_HOOKS)
+void hl_ckpt_channel_test_claimed_pid(uint64_t claimed_pid);
+void hl_ckpt_channel_forget_for_test(void);
+int hl_ckpt_channel_current_for_test(void);
+#endif
 
 /* One round trip. `name` (or NULL) is sent NUL-terminated; `payload` is `request->length` bytes. Reply
  * payload is copied into `out` (up to `capacity`); a longer reply is a protocol error. Returns 0 when a
  * well-formed reply arrived -- the operation's own status is in `reply->status` -- and -1 when the transport
  * or the framing failed. */
+/* Names the step at which this process's LAST channel round trip failed, or NULL if none has.
+ *
+ * The transport reports one -1 for four unrelated events -- no broker, a channel that could not be minted,
+ * a write that found the far end gone, and a reply that never arrived -- and a caller that prints only the
+ * -1 has told the reader nothing. Three lanes have read "answered status -1" as a broker refusal, which is
+ * the one thing it is NOT: a refusal carries a status and a reply. Recording the step is diagnostic only
+ * and changes no control flow. */
+const char *hl_ckpt_channel_failure(void);
+
+/* Whether `descriptor` is one this process's checkpoint transport owns: the broker, the trigger, or this
+ * process's channel.
+ *
+ * The engine already refuses to close its own descriptors on the guest's behalf, and it decides which
+ * they are from the engine-private ledger (hl_host_process_fd_private_current). That ledger is keyed by
+ * (pid, start time), so a fork CHILD owns no rows until hl_host_process_fd_private_fork_complete has
+ * replayed the parent's -- and a child that reaches a guest close_range() before, or without, that replay
+ * reads its inherited transport descriptors as ordinary guest fds and closes them. glibc sanitizes the
+ * descriptor table with close_range(3, ~0U) in every posix_spawn child, so an ordinary shell running
+ * `sleep .05` produces one such child every time; the loss is invisible until a capture catches one of
+ * them alive, whereupon its REGISTER_READY dies at sendmsg with EBADF, that member refuses its own dump,
+ * and the whole close is refused for a healthy tree.
+ *
+ * These three descriptors are held in this file's own statics, so ownership can be answered here without
+ * consulting anything a fork may not have rebuilt yet. Answering it from the owner rather than from a
+ * derived index is what makes the answer independent of when the ledger is repopulated. */
+int hl_ckpt_channel_owns_descriptor(int descriptor);
+
 int hl_ckpt_channel_call(hl_ckpt_request *request, const char *name, const void *payload, hl_ckpt_reply *reply,
                          void *out, size_t capacity);
+
+/* One round trip whose reply may carry a descriptor over SCM_RIGHTS. The request is framed exactly as
+ * hl_ckpt_channel_call frames it; only the reply is read with recvmsg, because a plain read() would take
+ * the header and DISCARD the rights attached to it. The reply carries no payload.
+ *
+ * `*out_descriptor` is set to the received descriptor, or left at -1 when the server answered without one
+ * -- which is an ordinary answer, not a failure, and is how the server declines a request it has nothing
+ * registered for. Returns 0 when a well-formed reply arrived and -1 on a transport or framing failure. */
+int hl_ckpt_channel_call_receive_descriptor(hl_ckpt_request *request, const void *payload, hl_ckpt_reply *reply,
+                                            int *out_descriptor);
 
 /* The checkpoint TRIGGER is a 4-byte generation counter shared by every engine process and bumped by the
  * embedder to request a capture. ckpt_poll reads it at every safepoint, so it has to be a plain memory load;

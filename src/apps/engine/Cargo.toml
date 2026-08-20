@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 clap.workspace = true
 hl-engine = { path = "../../containers/hl-engine" }
+hl-native = { path = "../../runtime/hl-native" }
 hl-log = { path = "../../packages/hl-log" }
 sha2.workspace = true
 

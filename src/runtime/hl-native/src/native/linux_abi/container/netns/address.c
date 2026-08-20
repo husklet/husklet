@@ -320,7 +320,22 @@ static int sa_un_m2l(const struct sockaddr *m, socklen_t mlen, uint8_t *g, sockl
     size_t off = offsetof(struct sockaddr_un, sun_path);
     // Abstract-namespace name (leading NUL), including a kernel autobind address: an opaque binary blob,
     // not a filesystem path -- echo it to the guest verbatim (no volume/path translation, no NUL scan).
-    if ((size_t)mlen > off && u->sun_path[0] == 0) {
+    //
+    // A leading NUL only means "abstract" on a kernel that reports a TIGHT length.  Measured on both
+    // hosts for a socket that was never bound: Linux getsockname reports offsetof(sun_path) == 2, so the
+    // branch is not reached at all; Darwin reports the WHOLE sockaddr_un (len=16 unnamed, len=106 bound)
+    // with sun_path all-NUL, so an unnamed socket entered this branch and was published to the guest as a
+    // 16-byte abstract address where Linux reports the bare 2-byte family.  Programs read that length to
+    // decide whether an endpoint has a name at all, so the padding must not be mistaken for a name.
+    // Darwin has no abstract namespace (measured: bind() of a leading-NUL address fails ENOENT), and the
+    // guest's abstract binds are rewritten to filesystem paths and echoed from g_unix_bind well before
+    // this point -- so on Darwin a leading NUL here is padding, never a name.
+#if defined(__APPLE__)
+    const int abstract_name = 0;
+#else
+    const int abstract_name = (size_t)mlen > off && u->sun_path[0] == 0;
+#endif
+    if (abstract_name) {
         size_t alen = (size_t)mlen - off;
         uint8_t t[2 + sizeof u->sun_path];
         if (alen > sizeof u->sun_path) alen = sizeof u->sun_path;
@@ -391,3 +406,59 @@ static int sa_un_m2l(const struct sockaddr *m, socklen_t mlen, uint8_t *g, sockl
 // guest socket is already a real host AF_UNIX socket (case 198), so only the ADDRESS is rewritten.
 static char g_absdir[200];
 static int g_abs_init;
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+/*
+ * The host->guest sockaddr and control-message translations, reachable without a guest.  Both are
+ * Darwin-portability boundaries whose Linux and Darwin inputs differ in shape rather than in value --
+ * an unnamed AF_UNIX address and a truncated SCM_RIGHTS record -- so the property under test is what
+ * the guest is told, and that is only observable on the far side of the translation.
+ *
+ *   operation 0: getsockname(fd)   -> sa_un_m2l
+ *   operation 1: getpeername(fd)   -> sa_un_m2l
+ *   operation 2: recvmsg(fd) into `capacity` host control bytes -> cmsg_m2l
+ *   operation 3: apply the AF_UNIX datagram buffer policy to fd
+ *
+ * `out`/`out_length` carry the guest-visible bytes in and the guest-visible length out.
+ */
+HL_API int HL_TARGET_LOCAL(socket_shape_test)(uint32_t operation, int fd, uint32_t capacity, uint8_t *out,
+                                              uint32_t *out_length) {
+    if (fd < 0 || out == NULL || out_length == NULL) return EINVAL;
+    if (operation == 3) {
+        sock_unix_dgram_buffers(fd);
+        *out_length = 0;
+        return 0;
+    }
+    if (operation == 0 || operation == 1) {
+        struct sockaddr_storage host_address;
+        socklen_t host_length = sizeof host_address;
+        memset(&host_address, 0, sizeof host_address);
+        if ((operation == 0 ? getsockname(fd, (struct sockaddr *)&host_address, &host_length)
+                            : getpeername(fd, (struct sockaddr *)&host_address, &host_length)) != 0)
+            return errno != 0 ? errno : EIO;
+        int guest_length = sa_un_m2l((struct sockaddr *)&host_address, host_length, out, (socklen_t)*out_length);
+        if (guest_length < 0) return EAFNOSUPPORT;
+        *out_length = (uint32_t)guest_length;
+        return 0;
+    }
+    if (operation != 2) return EINVAL;
+    if (capacity > 4096) return EINVAL;
+    uint8_t control[4096];
+    uint8_t payload[8];
+    struct iovec vector = {.iov_base = payload, .iov_len = sizeof payload};
+    struct msghdr message;
+    memset(control, 0, sizeof control);
+    memset(&message, 0, sizeof message);
+    message.msg_iov = &vector;
+    message.msg_iovlen = 1;
+    message.msg_control = control;
+    message.msg_controllen = capacity;
+    if (recvmsg(fd, &message, 0) < 0) return errno != 0 ? errno : EIO;
+    int truncated = 0;
+    ssize_t written = cmsg_m2l(&message, out, (size_t)*out_length, 0, &truncated);
+    if (written < 0) return EIO;
+    *out_length = (uint32_t)written;
+    (void)truncated; // the guest's MSG_CTRUNC is asserted through the record the translation produced
+    return 0;
+}
+#endif

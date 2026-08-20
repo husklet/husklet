@@ -28,6 +28,11 @@ use tokio::sync::{Mutex, Notify};
 struct Run {
     process: Arc<dyn Running>,
     health: tokio::sync::watch::Sender<bool>,
+    output_complete: tokio::sync::watch::Receiver<bool>,
+}
+
+struct OutputOwner {
+    abort: tokio::task::AbortHandle,
 }
 
 pub(crate) struct Service {
@@ -40,10 +45,21 @@ pub(crate) struct Service {
     exits: Mutex<HashMap<String, ExitStatus>>,
     failures: Mutex<HashMap<JournalId, String>>,
     live: Mutex<HashMap<ContainerId, Run>>,
+    launch_cleanups: Mutex<HashMap<ContainerId, tokio::task::AbortHandle>>,
+    launch_cleanup_failures: Mutex<HashMap<ContainerId, String>>,
     restarts: Mutex<HashMap<ContainerId, tokio::sync::watch::Sender<bool>>>,
     exec_live: Mutex<HashMap<ExecId, Arc<dyn Running>>>,
+    exec_output_complete: Mutex<HashMap<ExecId, tokio::sync::watch::Receiver<bool>>>,
+    output_owners: Mutex<HashMap<JournalId, Arc<OutputOwner>>>,
+    exec_cleanups: Mutex<HashMap<ExecId, tokio::task::AbortHandle>>,
+    exec_cleanup_failures: Mutex<HashMap<ExecId, String>>,
     exec_waiters: Mutex<HashMap<ExecId, Arc<Notify>>>,
     io: Mutex<HashMap<JournalId, Arc<Io>>>,
+    next_io_generation: AtomicU64,
+    #[cfg(test)]
+    checkpoint_all_gate: Mutex<CheckpointAllGate>,
+    #[cfg(test)]
+    exec_start_attempts: AtomicU64,
     last_created_ms: AtomicU64,
     rootfs: Option<hl_images::rootfs::Roots>,
     images: Option<hl_images::Images>,
@@ -54,6 +70,13 @@ pub(crate) struct Service {
     events: std::sync::RwLock<Vec<Arc<dyn crate::LifecycleEvents>>>,
     event_history: std::sync::Mutex<Vec<crate::LifecycleEvent>>,
     checkpoints: Arc<dyn crate::CheckpointImages>,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct CheckpointAllGate {
+    ready: Option<tokio::sync::oneshot::Sender<()>>,
+    release: Option<tokio::sync::oneshot::Receiver<()>>,
 }
 
 pub(crate) struct Dependencies<S> {
@@ -98,10 +121,21 @@ impl Service {
             exits: Mutex::new(HashMap::new()),
             failures: Mutex::new(HashMap::new()),
             live: Mutex::new(HashMap::new()),
+            launch_cleanups: Mutex::new(HashMap::new()),
+            launch_cleanup_failures: Mutex::new(HashMap::new()),
             restarts: Mutex::new(HashMap::new()),
             exec_live: Mutex::new(HashMap::new()),
+            exec_output_complete: Mutex::new(HashMap::new()),
+            output_owners: Mutex::new(HashMap::new()),
+            exec_cleanups: Mutex::new(HashMap::new()),
+            exec_cleanup_failures: Mutex::new(HashMap::new()),
             exec_waiters: Mutex::new(HashMap::new()),
             io: Mutex::new(HashMap::new()),
+            next_io_generation: AtomicU64::new(1),
+            #[cfg(test)]
+            checkpoint_all_gate: Mutex::new(CheckpointAllGate::default()),
+            #[cfg(test)]
+            exec_start_attempts: AtomicU64::new(0),
             last_created_ms: AtomicU64::new(0),
             rootfs,
             images,
@@ -142,5 +176,54 @@ impl Service {
                 sink.emit(event.clone());
             }
         }
+    }
+
+    fn next_io_generation(&self) -> Result<u64> {
+        self.next_io_generation
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| value.checked_add(1))
+            .map_err(|_| Error::Runtime("process I/O generation space is exhausted".into()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn exhaust_io_generations(&self) {
+        self.next_io_generation.store(u64::MAX, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn gate_checkpoint_all(
+        &self,
+    ) -> (tokio::sync::oneshot::Receiver<()>, tokio::sync::oneshot::Sender<()>) {
+        let (ready, ready_rx) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = tokio::sync::oneshot::channel();
+        *self.checkpoint_all_gate.lock().await = CheckpointAllGate {
+            ready: Some(ready),
+            release: Some(release_rx),
+        };
+        (ready_rx, release)
+    }
+
+    #[cfg(test)]
+    async fn wait_checkpoint_all_gate(&self) {
+        let (ready, release) = {
+            let mut gate = self.checkpoint_all_gate.lock().await;
+            (gate.ready.take(), gate.release.take())
+        };
+        if let (Some(ready), Some(release)) = (ready, release) {
+            let _ = ready.send(());
+            let _ = release.await;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn exec_start_attempts(&self) -> u64 {
+        self.exec_start_attempts.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn checkpoint_order(&self) -> Result<Vec<ContainerId>> {
+        self.containers
+            .list()
+            .await
+            .map(|containers| containers.into_iter().map(|container| container.id).collect())
     }
 }

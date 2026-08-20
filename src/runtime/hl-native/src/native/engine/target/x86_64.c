@@ -34,7 +34,10 @@ static int g_test_store_preflight_calls;
 // Register model (the win from x86 having only 16 GPRs, see DESIGN.md §4):
 //   guest  rax rcx rdx rbx rsp rbp rsi rdi  r8..r15
 //   host    x0  x1  x2  x3  x4  x5  x6  x7  x8..x15   (guest reg# == host reg#)
-//   cpu ptr : x28 (PINNED for the whole block)   scratch : x16,x17   forbidden: x18
+//   cpu ptr : x28 (PINNED for the whole block)   scratch : x16,x17 + the trampoline-preserved x19..x27
+//   forbidden: x18 -- Darwin reserves the platform register and clears it asynchronously between two
+//   arbitrary instructions, so a value parked there is lost with no fault. hl_x86_64_reserved_register_test
+//   decodes the emitted words of every lowering that once used it and fails if any names x18 again.
 //   flags   : ARM nzcv saved/restored to cpu->nzcv (exact for cmp/test->jcc, §9)
 //
 // Status: BOOTSTRAP. Implements enough to run a freestanding write+exit guest and a
@@ -444,7 +447,7 @@ static const hl_x86_address_emitter address_emitter = {
 
 static hl_x86_address_state address_state(void) {
     return (hl_x86_address_state){NULL,   &address_emitter, g_nonpie_lo, g_nonpie_hi,           g_nonpie_bias,
-                                  OFF_FS, OFF_GS,           !noeaopt(),  jit_guest_bus_active()};
+                                  OFF_FS, OFF_GS,           1,           jit_guest_bus_active()};
 }
 
 void emit_ea_core(struct insn *insn, uint64_t next, int bias) {
@@ -757,6 +760,21 @@ static int soft_tlb_miss(struct cpu *c) {
                 c->reason = R_SOFTSPAN;
                 return 0;
             }
+            /* Extending the entry past the view's own guest_last grants one
+               delta over addresses no view covers.  On a host whose granule is
+               wider than the guest page that tail can be a 4 KiB logical hole
+               whose backing is deliberately still mapped, so neither the view
+               table nor the host can refuse it -- only gna records the unmap.
+               The identity branch below already opens with this test; the
+               cross-boundary case has to pay it too, or a guest can read and
+               write a page it has unmapped. */
+            {
+                uint64_t accessible = gna_prefix(address, width);
+                if (accessible < width) {
+                    c->fault_addr = address + accessible;
+                    return raise_guest_data_map_fault(c);
+                }
+            }
             last = end;
 #else
             c->reason = R_SOFTSPAN;
@@ -774,6 +792,21 @@ static int soft_tlb_miss(struct cpu *c) {
         if (width > UINT64_MAX - address) {
             c->fault_addr = address;
             return raise_guest_data_map_fault(c);
+        }
+        /* gna is the architectural accessibility ledger, and on a host whose
+           granule is wider than the guest page it is the ONLY record that a
+           4 KiB munmap happened: the containing host page stays mapped to keep
+           an adjacent live guest page alive, so host_range_mapped and the
+           store preflight both answer "present".  Consult it before the
+           identity fallback grants read/write/exec over the whole page, or a
+           guest that unmapped a page can still reach it.  aarch64's miss
+           handler already opens with the same test (translate/trace.c). */
+        {
+            uint64_t accessible = gna_prefix(address, width);
+            if (accessible < width) {
+                c->fault_addr = address + accessible;
+                return raise_guest_data_map_fault(c);
+            }
         }
         if (required & HL_LOGICAL_VMA_WRITE) {
             size_t writable = x86_store_writable_prefix((uintptr_t)nonpie_fold(address), (size_t)width);
@@ -826,7 +859,44 @@ static int soft_tlb_miss(struct cpu *c) {
         c->soft_last = last;
     }
     c->soft_page = address & ~UINT64_C(4095);
+    /*
+     * Every soft-TLB entry is a standing grant: once published, the emitted
+     * guard serves EVERY later access inside [soft_page, soft_last) inline,
+     * with no further C.  Both branches above reach this one point, so it is
+     * where the whole-engine invariant belongs -- no entry authorises a byte
+     * the accessibility ledger refuses -- rather than in each branch that
+     * happens to widen the grant.  aarch64 holds the same invariant in
+     * aarch64_soft_tlb_install (translate/trace.c).  It matters because on a
+     * host whose granule is wider than the guest page the ledger is the ONLY
+     * record that a 4 KiB munmap happened: the containing host page stays
+     * mapped to keep a live neighbour, so the view table, host_range_mapped
+     * and the store preflight all answer "present".  Clamp the grant to the
+     * accessible prefix; fault when the access itself does not fit inside it.
+     */
+    if (c->soft_last > c->soft_page) {
+        uint64_t granted = c->soft_last - c->soft_page;
+        uint64_t accessible = gna_prefix(c->soft_page, granted);
+        if (accessible < granted) {
+            uint64_t limit = c->soft_page + accessible;
+            if (limit <= address || width > limit - address) {
+                c->fault_addr = limit > address ? limit : address;
+                return raise_guest_data_map_fault(c);
+            }
+            c->soft_last = limit;
+        }
+    }
     c->soft_snapshot = snapshot != NULL ? (uint64_t)(uintptr_t)snapshot : 1;
+    /* Publish the same entry the single-entry cache held into the slot for the
+       accessed page.  The emitted guard's page tag makes the slot self-
+       validating, so a direct-mapped array carries no validity the scalars did
+       not already carry -- only more of it at once. */
+    {
+        struct hl_soft_tlb_entry *entry = SOFT_TLB_SLOT(c, address);
+        entry->page = c->soft_page;
+        entry->last = c->soft_last;
+        entry->delta = c->soft_delta;
+        entry->protection = c->soft_protection;
+    }
     c->reason = R_BRANCH;
     return 0;
 }
@@ -881,6 +951,148 @@ HL_API int hl_x86_64_store_preflight_test(void) {
 }
 #endif
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+/*
+ * Host x18 is reserved by Darwin and cleared asynchronously between two
+ * arbitrary instructions, so emitted code may never keep a live value there.
+ * The x86_64 register model at the top of this file has always said
+ * "forbidden: x18", yet seven lowerings named it anyway: PUSHF/POPF/LAHF/SAHF,
+ * emit_restore_rflags, both rotate flag folds, PTEST and the dynamic-direction
+ * string descriptor.  None of them crash the way the aarch64 soft-TLB guard
+ * did -- every one of them parks a *flag* value there, so a zeroed x18 rewrote
+ * the guest's condition codes silently and the guest took the wrong branch.
+ *
+ * Emit those lowerings into a local buffer and decode the register fields of
+ * every GPR-class word back: no emitted instruction may name x18 as a source,
+ * destination, base or index.  Vector registers are unaffected (v18 is not the
+ * platform register), so the classifier below deliberately admits only the
+ * integer instruction classes this backend emits.
+ *
+ * Returns 0 clean, 1 when a word names the reserved register, 2 when a
+ * sub-fixture emitted nothing, and 3 when the witness instructions the scan is
+ * built around are missing -- so a pass can never come from an empty buffer.
+ */
+#define HL_X86_RESERVED_GPR 18
+
+static int x86_reserved_gpr_word(uint32_t word) {
+    int rd = (int)(word & 31u), rn = (int)((word >> 5) & 31u), rm = (int)((word >> 16) & 31u);
+    int ra = (int)((word >> 10) & 31u);
+    int reserved = HL_X86_RESERVED_GPR;
+#define HL_X86_ANY2 (rd == reserved || rn == reserved)
+#define HL_X86_ANY3 (HL_X86_ANY2 || rm == reserved)
+    if ((word & 0xFFFFFFE0u) == 0xD53B4200u || (word & 0xFFFFFFE0u) == 0xD51B4200u) return rd == reserved;
+    if ((word & 0x3F000000u) == 0x39000000u) return HL_X86_ANY2;                   /* ldr/str, unsigned offset */
+    if ((word & 0x3F000000u) == 0x38000000u) return HL_X86_ANY3;                   /* ldr/str, register/indexed */
+    if ((word & 0x3E000000u) == 0x28000000u) return HL_X86_ANY2 || ra == reserved; /* ldp/stp */
+    if ((word & 0x1F000000u) == 0x0A000000u) return HL_X86_ANY3;                   /* logical, shifted register */
+    if ((word & 0x1F000000u) == 0x0B000000u) return HL_X86_ANY3;                   /* add/sub, shifted/extended */
+    if ((word & 0x1F800000u) == 0x11000000u) return HL_X86_ANY2;                   /* add/sub, immediate */
+    if ((word & 0x1F800000u) == 0x12000000u) return HL_X86_ANY2;                   /* logical, immediate */
+    if ((word & 0x1F800000u) == 0x12800000u) return rd == reserved;                /* movz/movk/movn */
+    if ((word & 0x1F800000u) == 0x13000000u) return HL_X86_ANY2;                   /* sbfm/bfm/ubfm */
+    if ((word & 0x1F800000u) == 0x13800000u) return HL_X86_ANY3;                   /* extr */
+    if ((word & 0x1FE00000u) == 0x1A400000u) return HL_X86_ANY3;                   /* ccmp/ccmn register */
+    if ((word & 0x1FE00000u) == 0x1A800000u) return HL_X86_ANY3;                   /* csel/csinc/csinv/csneg */
+    if ((word & 0x1FE00000u) == 0x1AC00000u) return HL_X86_ANY3;                   /* udiv/lslv/lsrv/asrv/rorv */
+    if ((word & 0x1F000000u) == 0x1B000000u) return HL_X86_ANY3 || ra == reserved; /* madd/msub */
+    if ((word & 0x7E000000u) == 0x34000000u) return rd == reserved;                /* cbz/cbnz */
+    if ((word & 0x7E000000u) == 0x36000000u) return rd == reserved;                /* tbz/tbnz */
+    if ((word & 0x9FE0FC00u) == 0x0E003C00u) return rd == reserved;                /* umov: vector -> GPR */
+    if ((word & 0xFFFFFC1Fu) == 0xD61F0000u) return rn == reserved;                /* br/blr */
+    return 0;
+#undef HL_X86_ANY3
+#undef HL_X86_ANY2
+}
+
+/* Recognized-class words carry the scan; count them so a buffer of nothing but
+   vector spill words cannot read as a clean integer scan. */
+static int x86_reserved_gpr_classified(uint32_t word) {
+    return (word & 0x3F000000u) == 0x39000000u || (word & 0x1F000000u) == 0x0A000000u ||
+           (word & 0x1F000000u) == 0x0B000000u || (word & 0x1F800000u) == 0x12800000u ||
+           (word & 0x1F800000u) == 0x13000000u;
+}
+
+HL_API int hl_x86_64_reserved_register_test(void) {
+    static uint32_t code[8192];
+    memset(code, 0, sizeof code);
+    uint8_t *saved_cp = g_cp;
+    enum hl_x86_direction saved_direction = hl_x86_legacy_direction();
+    g_cp = (uint8_t *)code;
+
+    size_t mark = 0, emitted = 0;
+    int empty = 0;
+#define HL_X86_FIXTURE(expression)                                                                                     \
+    do {                                                                                                               \
+        mark = (size_t)((uint32_t *)g_cp - code);                                                                      \
+        (void)(expression);                                                                                            \
+        emitted = (size_t)((uint32_t *)g_cp - code);                                                                   \
+        if (emitted <= mark) empty = 1;                                                                                \
+    } while (0)
+
+    struct insn insn;
+    memset(&insn, 0, sizeof insn);
+    insn.len = 1;
+    insn.opsize = 8;
+    insn.op = 0x9E; /* SAHF */
+    HL_X86_FIXTURE(lower_flag_register_transfer(&insn));
+    insn.op = 0x9F; /* LAHF */
+    HL_X86_FIXTURE(lower_flag_register_transfer(&insn));
+    insn.op = 0x9C; /* PUSHFQ */
+    HL_X86_FIXTURE(lower_flag_stack_control(&insn, UINT64_C(0x401000)));
+    insn.op = 0x9D; /* POPFQ -> emit_restore_rflags */
+    HL_X86_FIXTURE(lower_flag_stack_control(&insn, UINT64_C(0x401000)));
+    HL_X86_FIXTURE(e_rot_flags_const(16, 0, 64, 1));
+    HL_X86_FIXTURE(e_rot_flags_cl(16, 1, 64));
+
+    hl_x86_crypto_state crypto = {0, 0, 1};
+    memset(&insn, 0, sizeof insn);
+    insn.len = 4;
+    insn.two = 1;
+    insn.map3 = 2;
+    insn.p66 = 1;
+    insn.opsize = 8;
+    insn.op = 0x17; /* PTEST xmm1, xmm2 */
+    insn.reg = 1;
+    insn.rm_reg = 2;
+    HL_X86_FIXTURE(hl_x86_lower_crypto(&insn, UINT64_C(0x401010), &crypto));
+
+    hl_x86_repstr_state repstr = {HL_X86_DIRECTION_DYNAMIC, 1};
+    memset(&insn, 0, sizeof insn);
+    insn.len = 1;
+    insn.opsize = 8;
+    insn.op = 0xA7; /* CMPSQ, dynamic direction -> the cpu->df descriptor fold */
+    HL_X86_FIXTURE(hl_x86_lower_repstr(&insn, UINT64_C(0x401020), &repstr));
+#undef HL_X86_FIXTURE
+
+    size_t count = (size_t)((uint32_t *)g_cp - code);
+    g_cp = saved_cp;
+    hl_x86_legacy_direction_set(saved_direction);
+    hl_x86_integer_reset_flags();
+    if (empty || count < 64u || count > sizeof code / sizeof code[0]) return 2;
+
+    /* Witnesses: the exact instructions the reserved register used to appear in.
+       Without them a clean scan would say nothing about these lowerings. */
+    int nzcv_writes = 0, pf_stores = 0, id_stores = 0, df_loads = 0, vector_to_gpr = 0, classified = 0;
+    for (size_t index = 0; index < count; ++index) {
+        uint32_t word = code[index];
+        if ((word & 0xFFFFFFE0u) == 0xD51B4200u) nzcv_writes++;
+        if ((word & 0xFFFFFFE0u) == (0xF9000000u | (((unsigned)OFF_PF / 8u) << 10) | (28u << 5))) pf_stores++;
+        if ((word & 0xFFFFFFE0u) == (0xF9000000u | (((unsigned)OFF_ID / 8u) << 10) | (28u << 5))) id_stores++;
+        if ((word & 0xFFFFFFE0u) == (0xF9400000u | (((unsigned)OFF_DF / 8u) << 10) | (28u << 5))) df_loads++;
+        if ((word & 0x9FE0FC00u) == 0x0E003C00u) vector_to_gpr++;
+        if (x86_reserved_gpr_classified(word)) classified++;
+    }
+    if (nzcv_writes < 4 || pf_stores < 2 || id_stores < 1 || df_loads < 2 || vector_to_gpr < 2 || classified < 60)
+        return 3;
+
+    for (size_t index = 0; index < count; ++index)
+        if (x86_reserved_gpr_word(code[index])) return 1;
+    return 0;
+}
+
+#undef HL_X86_RESERVED_GPR
+#endif
+
 static int x86_signal_cache_contains(void *context, uint64_t pc) {
     (void)context;
     return jit_pc_in_retained_cache(pc);
@@ -912,7 +1124,7 @@ static void build_signal_frame(struct cpu *c, int sig, int synchronous) {
         .sigreturn_pc = sig == 32 && (g_sigact[sig].flags & UINT64_C(0x04000000)) && g_sigact[sig].restorer
                             ? g_sigact[sig].restorer
                             : SIGRETURN_PC,
-        .trace = g_trace,
+        .trace = 0,
     };
     hl_x86_signal_build(c, sig, &state);
 }
@@ -1089,6 +1301,8 @@ static int container_init(const char *rootfs) {
     // returned the real host pid, and bash's setpgid(0,1)/tcsetpgrp targeted host pid 1 (launchd) -> the
     // foreground command got SIGTTOU/SIGTTIN-stopped ("[N]+ Stopped  ls") instead of running.
     if (rootfs) g_init_hostpid = getpid();
+    // Every guest process gets a namespace-local pid, not only the init (state.c).
+    if (rootfs && container_pid_namespace_begin() != 0) return -1;
     // Cross-process cgroup accounting: a fresh shared slot table for this container init is inherited
     // by every guest fork (see state.c).
     if (rootfs) acct_container_reset(effective_host_services());
@@ -1181,6 +1395,11 @@ static int container_init(const char *rootfs) {
     // derive the run user's supplementary group set from the image rootfs (runc additionalGids), after
     // g_uid/g_gid + the overlay lowers are resolved, so getgroups(2) and /proc/self/status Groups: report it.
     if (g_rootfs) container_parse_groups();
+    // The container identity this process runs under is now decided, so publish the one number a
+    // checkpoint preserves for it. A launched member's guest pid is what the image names its group by
+    // (`proc.<guest pid>`) and what a restore re-forks it under, so it is the only identity a host can
+    // hold across a capture. Both target arms publish it; keep them in step.
+    hl_engine_child_result_publish_guest_pid(ckpt_image_self_gpid());
     return 0;
 }
 
@@ -1237,13 +1456,10 @@ static int engine_global_init(void) {
             return 1;
         }
     }
-    g_trace = 0;
-    g_systrace = 0;
     g_prof = hl_option_get("HL_C_DIAGNOSTICS") != NULL;
     g_profile_output_owner = 1;
-    g_dispatch_diagnostics = g_prof || g_trace || g_nochain;
+    g_dispatch_diagnostics = g_prof;
     g_fwdskip = 8;
-    g_notier2x = 0;
     extern void jit86_lazyguard(int, siginfo_t *, void *);
 #if defined(_WIN32)
     // One process-wide vectored exception handler in place of two sigactions. It is not a preference: a
@@ -1397,7 +1613,7 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
                                     "[prof] dispatcher round-trips=%llu  IBTC fills=%llu  (IBTC %s)\n",
                                     (unsigned long long)g_dispatch_profile.crossings,
                                     (unsigned long long)g_dispatch_profile.translations, (unsigned long long)g_disp_n,
-                                    (unsigned long long)g_ibtc_fill, g_noibtc ? "OFF" : "ON");
+                                    (unsigned long long)g_ibtc_fill, "ON");
         if (profile_size > 0) {
             size_t bounded = (size_t)profile_size < sizeof profile ? (size_t)profile_size : sizeof profile - 1u;
             (void)hl_linux_write(g_linux_box, STDERR_FILENO, profile, bounded);
@@ -1422,11 +1638,23 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     g_authorized_executable_size = executable_size;
     exec_authority_seed_initial(host, executable, executable_authority);
     if (argument_count > (uint32_t)INT_MAX) return 2;
+    // The launch argv is copied into build_stack's fixed pointer vector. Nothing between here and there
+    // bounded it, so a launch with more than HL_MAXARGV entries wrote past `argp[]` -- observed as
+    // "*** stack smashing detected ***" at exactly 2049 entries under the previous 2048 bound, where the
+    // host kernel runs the same command without complaint. Reject the launch instead of corrupting the
+    // loader's frame.
+    if (argument_count > (uint32_t)(HL_MAXARGV - 1)) {
+        fprintf(stderr, "hl-engine: guest argument vector exceeds %d entries\n", HL_MAXARGV - 1);
+        return 2;
+    }
     argc = (int)argument_count;
     hl_target_services_inject(&g_target_services, host);
     hl_gmap_bind_host(host);
     futex_table_init(host);
     seq_ref_arena_init(host);
+#if !defined(_WIN32)
+    if (namespace_transaction_init(host) != 0) return 1;
+#endif
     eventfd_count_init(host);
     fdvis_init(host);
     ts_init(host);
@@ -1462,18 +1690,18 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     // non-shebang ELF entry falls straight through unchanged (argc/argv untouched -> byte-identical).
     static char sb_gb[1024], sb_pb[4200], sb_fhb[4200];
     static char sb_store[SHEBANG_MAX * 2][256];
-    static char *sb_argv[256];
+    static char *sb_argv[HL_MAXARGV];
     const char *sb_prog = find_in_path(argv[0], sb_gb, sizeof sb_gb); // bare "sh" -> "/bin/sh" via PATH
     set_guest_comm(sb_prog); // Linux comm = basename of the exec NAME (stays the script's for a shebang entry)
     const char *sb_prog_host = xresolve_overlay(sb_prog, sb_pb, sizeof sb_pb);
     int sb_argc = 0;
     sb_argv[sb_argc++] = (char *)sb_prog;
-    for (int i = 1; i < argc && sb_argc < 255; i++)
+    for (int i = 1; i < argc && sb_argc < HL_MAXARGV - 1; i++)
         sb_argv[sb_argc++] = (char *)argv[i];
     sb_argv[sb_argc] = NULL;
     const char *sb_finalhost;
-    int sb_new =
-        resolve_shebang_chain(sb_argv, sb_argc, 256, sb_prog_host, sb_store, sb_fhb, sizeof sb_fhb, &sb_finalhost);
+    int sb_new = resolve_shebang_chain(sb_argv, sb_argc, HL_MAXARGV, sb_prog_host, sb_store, sb_fhb, sizeof sb_fhb,
+                                       &sb_finalhost);
     if (sb_new < 0) {
         fprintf(stderr, "hl-engine: too many nested #! interpreters (ELOOP): %s\n", argv[0]);
         return hl_vfs_cursor_state_finish(40); // ELOOP
@@ -1491,6 +1719,11 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     load_program(argv[0], &lm, &li, &jump, &at_base, &have_interp,
                  image_plan); // (sets g_pc_binid + fixed bases when g_pcache)
     if (g_pcache) {
+        /* Persistence boundary: arm and latch the ledger before anything is
+           restored or translated, so every block this run persists carries
+           guards and no later mapping activation can rotate the arena out
+           from under a restored one. See hl_guest_bus_arm_latched. */
+        jit_guest_bus_arm_latched();
         g_pc_entry = jump;
         int hit = pcache_load(jump); // graceful MISS on any stale/corrupt/truncated cache -> translate fresh
         if (g_coldprof) fprintf(stderr, "[pcache] %s reloc=%d\n", hit ? "HIT (translation skipped)" : "MISS", g_nreloc);

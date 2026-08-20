@@ -51,7 +51,7 @@ impl Executions {
     /// # Errors
     /// Returns lookup, lifecycle, runtime, or persistence failures.
     pub async fn start(&self, id: &ExecId) -> Result<Session> {
-        self.service.start_exec(id, None).await
+        self.service.start_exec(id, None, true).await
     }
 
     /// Starts a terminal execution at an exact initial size.
@@ -61,7 +61,18 @@ impl Executions {
     /// # Errors
     /// Returns lookup, lifecycle, missing-terminal, runtime, or persistence failures.
     pub async fn start_at(&self, id: &ExecId, size: crate::Size) -> Result<Session> {
-        self.service.start_exec(id, Some(size)).await
+        self.service.start_exec(id, Some(size), true).await
+    }
+
+    /// Attaches to an execution which is already running.
+    ///
+    /// Unlike [`Self::start`], this never creates or restarts a process. It is
+    /// intended for reconnecting to a checkpoint-restored interactive exec.
+    ///
+    /// # Errors
+    /// Returns lookup, lifecycle, missing-terminal, runtime, or persistence failures.
+    pub async fn attach(&self, id: &ExecId, size: Option<crate::Size>) -> Result<Session> {
+        self.service.attach_exec(id, size).await
     }
 
     /// Changes the size of a running execution's terminal.
@@ -88,25 +99,14 @@ impl Executions {
         self.service.remove_exec(id).await
     }
 
-    /// Verifies that every running execution has an armed checkpoint transport.
+    /// Reattaches every execution whose durable checkpoint is ready to restore.
     ///
-    /// # Errors
-    /// Returns the first runtime or persistence failure.
-    pub async fn require_checkpointable(&self) -> Result<()> {
-        self.service.checkpointable_execs().await.map(|_| ())
-    }
-
-    /// Checkpoints every running execution without checkpointing its container's initial process.
+    /// A sealed member's process is revived by the container's own whole-image restore, so this
+    /// never starts a process: relaunching the session's command would produce a second, fresh
+    /// process alongside the restored one and report it as recovered. Where no handle for the
+    /// restored member exists the record is reported as a failure, by name.
     ///
-    /// # Errors
-    /// Returns the first capture, runtime, or persistence failure.
-    pub async fn checkpoint_all(&self, timeout: std::time::Duration) -> Result<()> {
-        self.service.checkpoint_execs(timeout).await
-    }
-
-    /// Restarts every execution whose durable checkpoint is ready to restore.
-    ///
-    /// Independent failures are returned together so startup can restore every viable execution
+    /// Independent failures are returned together so startup can reattach every viable execution
     /// and report the complete degraded state instead of abandoning later records.
     ///
     /// # Errors
@@ -117,7 +117,7 @@ impl Executions {
             if execution.checkpoint.is_none() || !matches!(execution.state, ExecState::Created) {
                 continue;
             }
-            if let Err(error) = self.start(&execution.id).await {
+            if let Err(error) = self.service.reattach_exec(&execution.id).await {
                 failures.push((execution.id, error));
             }
         }

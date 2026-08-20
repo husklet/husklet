@@ -241,6 +241,11 @@ static int svc_fcntl_get_flags(struct cpu *c, int descriptor, uint64_t argument,
             // fd opened (or F_SETFL'd) O_DIRECT round-trips instead of being silently dropped.
             if (r & O_DIRECT) lf |= G_O_DIRECT;
 #endif
+            // Synchronised-I/O status flags round-trip from the real host fd, mirroring O_DIRECT
+            // above; without this an fd opened O_DSYNC read back as a plain fd, so a guest could not
+            // even verify the barrier it asked for. F_SETFL deliberately does NOT forward them: Linux
+            // cannot change O_DSYNC/O_SYNC through F_SETFL either (fcntl(2), BUGS). See guest_sync.h.
+            lf |= hl_host_sync_guest_flags(r);
             // eventfd: the host read end is kept permanently O_NONBLOCK internally, so report the guest's
             // OWN blocking/non-blocking intent (g_eventfd_gnb), not the host flag. See vfs.c g_eventfd_gnb.
             if ((int)a0 >= 0 && (int)a0 < HL_NFD && g_eventfd_peer[(int)a0]) {
@@ -466,19 +471,32 @@ static int svc_fcntl_extended(struct cpu *c, int descriptor, int lcmd, uint64_t 
 }
 
 static int fcntl_owner_guest_to_host(int owner) {
+    if (owner == 0) return 0;
     if (owner == container_pid()) return (int)getpid();
-    if (owner == 1 && g_init_hostpid) return g_init_hostpid;
-    int host = hl_linux_pidmap_host(&g_pidmap, owner);
+    int host;
+    if (owner < 0) {
+        if (hl_linux_pidmap_host_checked(&g_pgidmap, -owner, &host) != 0) return -1;
+        return -host;
+    }
+    if (hl_linux_pidmap_host_checked(&g_pidmap, owner, &host) != 0) return -1;
+    if (!hl_linux_pidmap_is_active(&g_pidmap) && owner == 1 && g_init_hostpid) host = g_init_hostpid;
     // In container mode a raw, unmapped guest PID must never become authority
     // over an unrelated host process.  The process registry is the same strict
     // membership boundary used by kill/pidfd; report ESRCH for non-members.
-    return g_init_hostpid && !container_host_member(host) ? -1 : host;
+    return g_init_hostpid && !host_pid_registered_checked(host) ? -1 : host;
 }
 
 static int fcntl_owner_host_to_guest(int owner) {
+    if (owner == 0) return 0;
     if (owner == (int)getpid()) return container_pid();
-    if (g_init_hostpid && owner == g_init_hostpid) return 1;
-    return hl_linux_pidmap_guest(&g_pidmap, owner);
+    int guest;
+    if (owner < 0) {
+        if (hl_linux_pidmap_guest_checked(&g_pgidmap, -owner, &guest) != 0) return -1;
+        return -guest;
+    }
+    if (hl_linux_pidmap_guest_checked(&g_pidmap, owner, &guest) != 0) return -1;
+    if (!hl_linux_pidmap_is_active(&g_pidmap) && g_init_hostpid && owner == g_init_hostpid) guest = 1;
+    return guest;
 }
 
 // Linux libc implements F_GETOWN through F_GETOWN_EX so a negative process-group

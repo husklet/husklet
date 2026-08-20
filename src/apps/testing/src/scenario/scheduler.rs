@@ -93,7 +93,7 @@ fn spawn(
                 first_sample,
             )
             .await;
-            if !matches!(warmup.result, execution::CaseResult::Passed) {
+            if !matches!(warmup.result, execution::CaseResult::Passed(_)) {
                 return Ok(work
                     .keys
                     .into_iter()
@@ -130,7 +130,7 @@ fn spawn(
                 key.sample,
             )
             .await;
-            stopped = !matches!(outcome.result, execution::CaseResult::Passed);
+            stopped = !matches!(outcome.result, execution::CaseResult::Passed(_));
             completed.push(Completion {
                 key,
                 elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -237,7 +237,7 @@ impl<T> ProviderState<T> {
 }
 
 fn retains_provider(result: &execution::CaseResult) -> bool {
-    matches!(result, execution::CaseResult::Passed)
+    matches!(result, execution::CaseResult::Passed(_))
 }
 
 async fn enter(semaphore: Arc<Semaphore>) -> Result<OwnedSemaphorePermit, String> {
@@ -424,6 +424,8 @@ async fn fingerprint(work: &[Work], warm_provider: bool) -> Result<String, Error
         inputs.extend(case.fixtures.iter().map(|fixture| fixture.source.clone()));
         inputs.extend(case.stdout_contains.iter().cloned());
         inputs.extend(case.stdout_exact.iter().cloned());
+        inputs.extend(case.stdout_regex.iter().cloned());
+        inputs.extend(case.stdout_stream_regex.iter().cloned());
     }
     inputs.sort();
     inputs.dedup();
@@ -613,7 +615,7 @@ mod tests {
 
     #[test]
     fn only_a_passed_case_can_reuse_provider_state() {
-        assert!(retains_provider(&CaseResult::Passed));
+        assert!(retains_provider(&CaseResult::Passed(String::new())));
         assert!(!retains_provider(&CaseResult::Failed("failure".to_owned())));
         assert!(!retains_provider(&CaseResult::ExpectedFailure("expected".to_owned())));
         assert!(!retains_provider(&CaseResult::UnexpectedPass));
@@ -635,10 +637,10 @@ mod tests {
         });
         let warmup_identity = slot.value.as_ref().unwrap().identity;
         slot.value.as_mut().unwrap().case_state.push("warmup");
-        slot.finish(&CaseResult::Passed);
+        slot.finish(&CaseResult::Passed(String::new()));
         let first_sample_identity = slot.value.as_ref().unwrap().identity;
         slot.value.as_mut().unwrap().case_state.push("sample-1");
-        slot.finish(&CaseResult::Passed);
+        slot.finish(&CaseResult::Passed(String::new()));
         let second_sample_identity = slot.value.as_ref().unwrap().identity;
         assert_eq!(
             (warmup_identity, first_sample_identity, second_sample_identity),

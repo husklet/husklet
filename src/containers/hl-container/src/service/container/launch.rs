@@ -1,8 +1,8 @@
 use super::{
-    Arc, Container, ContainerState, Error, JournalId, NetworkConfig, Notify, ProcessConfig, Result, Run, Running,
+    Arc, Container, ContainerState, Error, Io, JournalId, NetworkConfig, Notify, ProcessConfig, Result, Run, Running,
     Service, Signal, now_ms,
 };
-use crate::service::CheckpointConfig;
+use crate::service::{CheckpointConfig, MemberTerminal};
 
 impl Service {
     pub(super) async fn process_domain(&self, container: &crate::ContainerId) -> Result<hl_engine::Domain> {
@@ -14,8 +14,49 @@ impl Service {
             .ok_or_else(|| crate::Error::Corrupt(format!("running container {container} has no live process domain")))
     }
 
+    /// Prepares the terminal each sealed member of this container's restore will reattach to.
+    ///
+    /// The producer has to run here, before the launch, and that is not a convenience: a restoring member
+    /// asks for its terminal from inside its own descriptor restore, which happens while `Runtime::start`
+    /// is still executing. There is no later moment -- a pane attaches minutes afterwards, and by then the
+    /// member has already bound whatever descriptors it could find.
+    ///
+    /// One is prepared per sealed record that names a guest pid AND was a terminal-backed session, which
+    /// is every pane. A record missing either is left alone: it keeps the honest refusal it already gets
+    /// rather than being seated on a terminal nothing captured.
+    ///
+    /// The `Io` created here is the one [`Self::reattach_exec`](crate::service::Service::reattach_exec)
+    /// will hand a pane, so it is registered under the exec's journal exactly as a started session's is.
+    async fn prepare_member_terminals(&self, container: &Container) -> Result<Vec<MemberTerminal>> {
+        let mut prepared = Vec::new();
+        for exec in self.execs.list().await? {
+            if exec.container != container.id
+                || exec.checkpoint.is_none()
+                || !matches!(exec.state, crate::ExecState::Created)
+            {
+                continue;
+            }
+            let (Some(guest_pid), Some(size)) = (exec.guest_pid, exec.spec.process.console.terminal) else {
+                continue;
+            };
+            let journal = JournalId::exec(exec.id.clone());
+            let live_at = self.logs.cursor(&journal).await?;
+            let io = self.new_exec_io(&exec, live_at).await?;
+            prepared.push(MemberTerminal {
+                guest_pid,
+                size,
+                input: io.take_input().await?,
+            });
+        }
+        Ok(prepared)
+    }
+
     pub(crate) async fn start(self: &Arc<Self>, reference: &str) -> Result<()> {
         let _guard = self.operations.lock().await;
+        self.start_locked(reference).await
+    }
+
+    pub(super) async fn start_locked(self: &Arc<Self>, reference: &str) -> Result<()> {
         let container = self.resolve(reference).await?;
         if container.state.is_active() {
             return Err(Error::AlreadyRunning(container.id));
@@ -24,10 +65,29 @@ impl Service {
     }
 
     pub(super) async fn launch_locked(self: &Arc<Self>, mut container: Container, explicit: bool) -> Result<()> {
+        self.launch_cleanups.lock().await.retain(|_, task| !task.is_finished());
+        if let Some(error) = self.launch_cleanup_failures.lock().await.get(&container.id) {
+            return Err(Error::Runtime(format!(
+                "container {} launch cleanup is poisoned: {error}",
+                container.id
+            )));
+        }
+        if self.launch_cleanups.lock().await.contains_key(&container.id) {
+            return Err(Error::Runtime(format!(
+                "container {} is quarantined while its unpublished process is being reaped",
+                container.id
+            )));
+        }
         self.ensure_ports_available(&container).await?;
         self.networks.attach_default_for_publication_locked(&container).await?;
         let networks = self.launch_networks(&container).await?;
-        let io = self.io(&container).await;
+        let generation = container
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| Error::Runtime("container generation space is exhausted".into()))?;
+        let journal = JournalId::container(container.id.clone());
+        let start_cursor = self.logs.cursor(&journal).await?;
+        let io = self.io_for_generation(&container, generation, start_cursor).await;
         let input = io.take_input().await?;
         let process_spec = container.spec.process.clone();
         let requested_mounts = container.spec.mounts.clone();
@@ -39,13 +99,21 @@ impl Service {
             .checkpoint
             .as_ref()
             .map_or_else(|| container.id.to_string(), |checkpoint| checkpoint.namespace.clone());
-        let checkpoint = Some(CheckpointConfig {
+        // Every sealed member this restore is about to revive needs its terminal to exist BEFORE the
+        // guest starts: the member asks for it from inside its own descriptor restore. Prepared here,
+        // with the launch, because this is the last moment at which it is still possible.
+        let member_terminals = if container.checkpoint.is_some() {
+            self.prepare_member_terminals(&container).await?
+        } else {
+            Vec::new()
+        };
+        let checkpoint = Some(crate::service::CheckpointRole::Coordinator(CheckpointConfig {
             image: self
                 .checkpoints
                 .open(&checkpoint_namespace)
                 .map_err(|error| Error::Runtime(error.to_string()))?,
             restore: container.checkpoint.is_some(),
-        });
+        }));
         let process = self
             .runtime
             .start(ProcessConfig {
@@ -68,6 +136,7 @@ impl Service {
                 publish: container.spec.publish.clone(),
                 input,
                 terminal: container.spec.process.console.terminal,
+                member_terminals,
                 domain: None,
                 domain_owner: true,
             })
@@ -75,11 +144,11 @@ impl Service {
         let process = match process {
             Ok(process) => process,
             Err(error) => {
-                self.io.lock().await.remove(&JournalId::container(container.id.clone()));
+                self.retire_io_generation(&journal, &io).await;
                 return Err(error);
             }
         };
-        container.generation = container.generation.saturating_add(1);
+        container.generation = generation;
         container.checkpoint = None;
         container.runtime_diagnostic = None;
         container.restart.started(explicit);
@@ -92,20 +161,19 @@ impl Service {
         };
         container.health = container.spec.healthcheck.as_ref().map(|_| crate::Health::starting());
         if let Err(error) = self.containers.replace(&container).await {
-            if let Err(cleanup) = process.signal(Signal::KILL).await {
-                return Err(Error::Runtime(format!(
-                    "failed to persist start ({error}); process cleanup also failed ({cleanup})"
-                )));
-            }
-            return Err(error);
+            return Err(self
+                .rollback_unpublished_launch(container.id.clone(), process, &journal, &io, error)
+                .await);
         }
         self.emit(crate::LifecycleAction::Start, &container);
         let (health, health_rx) = tokio::sync::watch::channel(false);
+        let (output_complete, output_completion) = tokio::sync::watch::channel(false);
         self.live.lock().await.insert(
             container.id.clone(),
             Run {
                 process: Arc::clone(&process),
                 health,
+                output_complete: output_completion,
             },
         );
         self.waiters
@@ -127,13 +195,104 @@ impl Service {
                 .run(),
             );
         }
+        let id = container.id;
+        let journal = JournalId::container(id.clone());
+        let owner_service = Arc::clone(&service);
+        let owner_journal = journal.clone();
+        let owner = tokio::spawn(async move { owner_service.own(process, owner_journal, io, output_complete).await });
+        let output_owner = Arc::new(super::OutputOwner {
+            abort: owner.abort_handle(),
+        });
+        self.output_owners
+            .lock()
+            .await
+            .insert(journal.clone(), Arc::clone(&output_owner));
         tokio::spawn(async move {
-            let id = container.id;
-            let journal = JournalId::container(id.clone());
-            let result = Arc::clone(&service).own(process, journal).await;
+            let result = owner
+                .await
+                .map_err(|error| Error::Runtime(format!("process output owner failed: {error}")))
+                .and_then(std::convert::identity);
+            service.retire_output_owner(&journal, &output_owner).await;
             service.finish(id, generation, result).await;
         });
         Ok(())
+    }
+
+    async fn rollback_unpublished_launch(
+        self: &Arc<Self>,
+        id: crate::ContainerId,
+        process: Arc<dyn Running>,
+        journal: &JournalId,
+        io: &Arc<Io>,
+        publication: Error,
+    ) -> Error {
+        let mut cleanup = Vec::new();
+        if let Err(error) = process.signal(Signal::KILL).await {
+            cleanup.push(format!("kill failed: {error}"));
+        }
+        let mut wait = tokio::spawn(Arc::clone(&process).wait());
+        match tokio::time::timeout(unpublished_reap_timeout(), &mut wait).await {
+            Ok(Ok(Ok(_))) => {}
+            Ok(Ok(Err(error))) => {
+                let failure = format!("unpublished process reap failed: {error}");
+                self.poison_launch_cleanup(id.clone(), failure.clone()).await;
+                cleanup.push(failure);
+            }
+            Ok(Err(error)) => {
+                let failure = format!("unpublished reap task failed: {error}");
+                self.poison_launch_cleanup(id.clone(), failure.clone()).await;
+                cleanup.push(failure);
+            }
+            Err(_) => {
+                cleanup.push(format!("reap timed out after {:?}", unpublished_reap_timeout()));
+                let service = Arc::downgrade(self);
+                let cleanup_id = id.clone();
+                let cleanup_task = tokio::spawn(async move {
+                    let result = wait.await;
+                    let Some(service) = service.upgrade() else {
+                        return;
+                    };
+                    let _guard = service.operations.lock().await;
+                    match result {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(error)) => {
+                            service
+                                .poison_launch_cleanup(
+                                    cleanup_id.clone(),
+                                    format!("unpublished process reap failed: {error}"),
+                                )
+                                .await;
+                        }
+                        Err(error) => {
+                            service
+                                .poison_launch_cleanup(
+                                    cleanup_id.clone(),
+                                    format!("unpublished reap task failed: {error}"),
+                                )
+                                .await;
+                        }
+                    }
+                    service.launch_cleanups.lock().await.remove(&cleanup_id);
+                });
+                self.launch_cleanups
+                    .lock()
+                    .await
+                    .insert(id, cleanup_task.abort_handle());
+            }
+        }
+        self.retire_io_generation(journal, io).await;
+        if cleanup.is_empty() {
+            publication
+        } else {
+            Error::Runtime(format!(
+                "failed to persist start ({publication}); process cleanup also failed ({})",
+                cleanup.join("; ")
+            ))
+        }
+    }
+
+    async fn poison_launch_cleanup(&self, id: crate::ContainerId, failure: String) {
+        self.launch_cleanup_failures.lock().await.insert(id, failure);
     }
 
     pub(super) async fn launch_networks(&self, container: &Container) -> Result<Vec<NetworkConfig>> {
@@ -169,4 +328,14 @@ impl Service {
             .map(|run| Arc::clone(&run.process))
             .ok_or_else(|| Error::Corrupt(format!("active container {} has no owned process", container.id)))
     }
+}
+
+#[cfg(test)]
+fn unpublished_reap_timeout() -> std::time::Duration {
+    std::time::Duration::from_millis(25)
+}
+
+#[cfg(not(test))]
+fn unpublished_reap_timeout() -> std::time::Duration {
+    std::time::Duration::from_secs(5)
 }

@@ -1,0 +1,1 @@
+\AAPT_NATIVE_DIAGNOSTIC_TIMING update_ms=[0-9]+ signature_ms=[0-9]+ install_ms=[0-9]+ verify_ms=[0-9]+ total_ms=[0-9]+ inrelease=[1-9][0-9]*\nAPT_NATIVE_PROCESS_RESULT update=0 install=0 htop=0\nHTOP_INSTALLED_AND_RUNNABLE\n\z

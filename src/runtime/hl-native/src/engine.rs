@@ -20,6 +20,23 @@ use layout::validate_elf_image;
 
 pub const STATUS_OK: i32 = 0;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Error {
+    Load(crate::LoadKind),
+    Status(i32),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Load(kind) => write!(formatter, "native library load failed: {kind:?}"),
+            Self::Status(status) => write!(formatter, "native engine status {status}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
 /// Low-level creation arguments for the native engine.
 ///
 /// Strings, arrays, image descriptors, and standard descriptors are borrowed
@@ -70,9 +87,13 @@ impl Engine {
     /// Option pointers must satisfy the C ABI.
     /// Borrowed create inputs need only remain valid for this call; C copies
     /// configuration.
-    pub unsafe fn create(config: EngineConfig<'_>) -> Result<Self, i32> {
+    pub unsafe fn create(config: EngineConfig<'_>) -> Result<Self, Error> {
+        if let Err(error) = crate::loader::api() {
+            consume_provider(config.provider_fd);
+            return Err(Error::Load(error.kind()));
+        }
         // SAFETY: forwarded unchanged; the hook does not observe raw inputs.
-        unsafe { Self::create_after_pinning(config, || {}) }
+        unsafe { Self::create_after_pinning(config, || {}) }.map_err(Error::Status)
     }
 
     unsafe fn create_after_pinning(config: EngineConfig<'_>, after_pin: impl FnOnce()) -> Result<Self, i32> {
@@ -148,6 +169,19 @@ impl Engine {
         (status == STATUS_OK).then_some(()).ok_or(status)
     }
 
+    /// The container-namespace pid of the guest process this engine launched.
+    ///
+    /// `None` until the launched process has published its container identity, and again once it has
+    /// been reaped. A checkpoint image names each captured member by exactly this number and a restore
+    /// re-forks it under the same one, so it is the only identity of a launched guest that survives a
+    /// whole-image capture.
+    #[must_use]
+    pub fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
+        // SAFETY: `self` owns a live backend. The C side reads one atomically published field of a
+        // shared mapping under the engine lock and retains nothing.
+        std::num::NonZeroI32::new(unsafe { bindings::hl_c_backend_guest_pid(self.0.as_ptr()) })
+    }
+
     #[must_use]
     pub fn exit(&self) -> Exit {
         let mut result = bindings::EngineExit {
@@ -167,6 +201,25 @@ impl Engine {
             status: result.guest_status,
             detail: result.detail,
         }
+    }
+}
+
+fn consume_provider(descriptor: i32) {
+    if descriptor < 0 {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        // SAFETY: every nonnegative provider descriptor transfers to create, including loader failure.
+        unsafe { libc::close(descriptor) };
+    }
+    #[cfg(windows)]
+    {
+        unsafe extern "C" {
+            fn _close(descriptor: i32) -> i32;
+        }
+        // SAFETY: the bridge contract defines provider_fd as a C-runtime descriptor on Windows.
+        unsafe { _close(descriptor) };
     }
 }
 
@@ -566,6 +619,199 @@ mod tests {
         );
     }
 
+    /// A coordinator must find a peer that has made itself a session leader.
+    ///
+    /// This is the POSITIVE half of checkpoint membership, and it is the half no in-memory broker test
+    /// can state: the engine emulates the guest's `setsid(2)` with the host's, so a guest that leads a
+    /// session -- every `PostgreSQL` backend, every shell job -- has its own host session id. While peer
+    /// enumeration also required a matching session, a live cluster produced ZERO peers, the coordinator
+    /// published a one-process manifest, and the eight real members that arrived afterwards were refused
+    /// at `REGISTER_READY` because the capture they belonged to had already finished. The negative
+    /// ("an unregistered publisher is refused") was tested; this direction was not.
+    #[cfg(all(feature = "native-test-hooks", target_os = "linux"))]
+    #[test]
+    fn a_peer_that_leads_its_own_session_is_still_enumerated_as_a_peer() {
+        let mut ready = [-1; 2];
+        let mut release = [-1; 2];
+        // SAFETY: both arrays name writable storage for two new descriptors each.
+        assert_eq!(unsafe { libc::pipe(ready.as_mut_ptr()) }, 0);
+        // SAFETY: as above.
+        assert_eq!(unsafe { libc::pipe(release.as_mut_ptr()) }, 0);
+
+        // SAFETY: the child touches only async-signal-safe calls on inherited descriptors -- no
+        // allocation, no lock, no Rust destructor walk -- because it is forked out of a multi-threaded
+        // test binary and any other work can deadlock against a lock held at fork time.
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0, "fork failed");
+        if child == 0 {
+            // SAFETY: child side; every descriptor below is inherited and owned here.
+            unsafe {
+                libc::setsid();
+                let byte = [1_u8];
+                libc::write(ready[1], byte.as_ptr().cast(), 1);
+                let mut block = [0_u8; 1];
+                libc::read(release[0], block.as_mut_ptr().cast(), 1);
+                libc::_exit(0);
+            }
+        }
+        // SAFETY: the parent has no further use for these ends.
+        unsafe {
+            libc::close(ready[1]);
+            libc::close(release[0]);
+        }
+        let mut byte = [0_u8; 1];
+        // SAFETY: byte is writable and the descriptor is owned here.
+        let observed = unsafe { libc::read(ready[0], byte.as_mut_ptr().cast(), 1) };
+
+        // SAFETY: `child` is an exact live PID owned by this test.
+        let session = unsafe { libc::getsid(child) };
+        // SAFETY: the hook reads only this process's own /proc view.
+        let enumerated = unsafe { crate::bindings::hl_c_backend_host_process_peer_enumerated_test(child) };
+
+        // SAFETY: releasing and reaping the exact child forked above.
+        unsafe {
+            let byte = [1_u8];
+            libc::write(release[1], byte.as_ptr().cast(), 1);
+            let mut status = 0;
+            libc::waitpid(child, &raw mut status, 0);
+            libc::close(ready[0]);
+            libc::close(release[1]);
+        }
+
+        assert_eq!(observed, 1, "child never reached setsid");
+        assert_eq!(
+            session, child,
+            "the peer was not its own session leader, so it proves nothing"
+        );
+        assert_eq!(enumerated, 1, "a session-leading peer was not enumerated");
+    }
+
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn host_force_stop_kills_exact_activation_group_and_preserves_unrelated_process() {
+        use std::io::BufRead as _;
+        use std::process::Stdio;
+
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "sleep 60 & echo $!; wait"]).stdout(Stdio::piped());
+        let mut activation = IsolatedTestChild::spawn(command).unwrap();
+        let leader = i32::try_from(activation.0.as_ref().unwrap().id()).unwrap();
+        let output = activation.0.as_mut().unwrap().stdout.take().unwrap();
+        let mut output = std::io::BufReader::new(output);
+        let mut line = String::new();
+        output.read_line(&mut line).unwrap();
+        let descendant = line.trim().parse::<i32>().unwrap();
+        let mut unrelated = std::process::Command::new("/bin/sleep").arg("60").spawn().unwrap();
+        let unrelated_pid = i32::try_from(unrelated.id()).unwrap();
+
+        // SAFETY: these are exact live PIDs created and still owned by this test.
+        unsafe {
+            assert_eq!(libc::getpgid(leader), leader);
+            assert_eq!(libc::getpgid(descendant), leader);
+            assert_eq!(libc::kill(unrelated_pid, 0), 0);
+            assert_eq!(crate::bindings::hl_c_backend_host_process_force_test(leader), 0);
+        }
+        activation.0.as_mut().unwrap().wait().unwrap();
+        activation.0 = None;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            // SAFETY: signal zero probes only the exact descendant PID printed above.
+            if unsafe { libc::kill(descendant, 0) } != 0
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "force-stopped descendant {descendant} remained live"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            unrelated.try_wait().unwrap().is_none(),
+            "force stop killed unrelated PID {unrelated_pid}"
+        );
+        unrelated.kill().unwrap();
+        unrelated.wait().unwrap();
+        assert_eq!(
+            output.bytes().collect::<std::io::Result<Vec<_>>>().unwrap(),
+            Vec::<u8>::new()
+        );
+    }
+
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn production_force_stop_is_safe_before_session_ready_and_while_waiting() {
+        struct ResumeActivation;
+        impl Drop for ResumeActivation {
+            fn drop(&mut self) {
+                // SAFETY: the test hook only releases the deliberately paused child.
+                unsafe { crate::bindings::hl_c_backend_activation_ready_pause(0) };
+            }
+        }
+
+        let mut unrelated = std::process::Command::new("/bin/sleep").arg("60").spawn().unwrap();
+        // SAFETY: this arms a test-only pause before the activation child's setsid handshake.
+        unsafe { crate::bindings::hl_c_backend_activation_ready_pause(1) };
+        let resume = ResumeActivation;
+        let (engine, _standard) = create_engine(1);
+        let argument = CString::new("guest").unwrap();
+        std::thread::scope(|scope| {
+            let running = scope.spawn(|| engine.run(&[argument.as_ptr()]));
+            engine.request(2, 0).unwrap();
+            drop(resume);
+            running.join().unwrap().unwrap();
+        });
+        assert!(
+            unrelated.try_wait().unwrap().is_none(),
+            "pre-session force stop killed an unrelated process"
+        );
+
+        for _ in 0..32 {
+            let (engine, _standard) = create_engine(1);
+            std::thread::scope(|scope| {
+                let running = scope.spawn(|| engine.run(&[argument.as_ptr()]));
+                std::thread::yield_now();
+                engine.request(2, 0).unwrap();
+                running.join().unwrap().unwrap();
+            });
+            assert!(
+                unrelated.try_wait().unwrap().is_none(),
+                "force/wait race killed an unrelated process"
+            );
+        }
+        unrelated.kill().unwrap();
+        unrelated.wait().unwrap();
+    }
+
+    /// Whether the Linux cross compiler these guest images need is actually installed.
+    ///
+    /// The dev shell provides both cross compilers, and when they are present the coverage MUST run:
+    /// it is the only exercise of guest process re-exec on the host the product ships on, so skipping
+    /// it there would delete the coverage rather than defer it. Outside the shell the compiler is
+    /// genuinely absent and a hard panic reddens a gate for a missing tool rather than for a defect.
+    ///
+    /// The notice goes to the real stderr descriptor rather than through `eprintln!`, because the test
+    /// harness captures Rust-level output and prints it only for a FAILING test -- which would make an
+    /// unrun arm indistinguishable from a passing one. A test that quietly does nothing is worse than
+    /// one that fails, so the skip names the test and the ISA it left uncovered where it can be seen.
+    #[allow(unsafe_code)]
+    fn guest_compiler_present(name: &str, test: &str, isa: u32) -> bool {
+        if matches!(guest_compiler(name).arg("--version").output(), Ok(result) if result.status.success()) {
+            return true;
+        }
+        let notice = format!(
+            "SKIP {test}: ISA {isa} left UNCOVERED -- `{name}` is not installed. \
+             Run inside `nix develop`, which provides both Linux cross compilers.\n"
+        );
+        // SAFETY: a write of an owned, initialized buffer to the process's stderr descriptor. It
+        // borrows nothing beyond the call, and a short or failed write is not an error worth acting on.
+        unsafe {
+            libc::write(2, notice.as_ptr().cast(), notice.len());
+        }
+        false
+    }
+
     fn guest_compiler(name: &str) -> std::process::Command {
         let mut command = std::process::Command::new(name);
         // The Nix Darwin shell exports host linker flags such as `-lintl`.
@@ -869,6 +1115,13 @@ int main(int argc, char **argv) {
 }
 "#;
         for (isa, compiler) in [(1, "aarch64-linux-gnu-gcc"), (2, "x86_64-linux-gnu-gcc")] {
+            if !guest_compiler_present(
+                compiler,
+                "unlinked_pinned_image_can_reexec_proc_self_exe_on_both_isas",
+                isa,
+            ) {
+                continue;
+            }
             let root = tempfile::tempdir().unwrap();
             std::fs::create_dir_all(root.path().join("bin")).unwrap();
             let source = root.path().join("self.c");
@@ -981,6 +1234,13 @@ int main(int argc, char **argv) {
 "#;
         use std::os::unix::fs::PermissionsExt as _;
         for (isa, compiler) in [(1, "aarch64-linux-gnu-gcc"), (2, "x86_64-linux-gnu-gcc")] {
+            if !guest_compiler_present(
+                compiler,
+                "failed_prepared_exec_never_publishes_candidate_authority",
+                isa,
+            ) {
+                continue;
+            }
             let root = tempfile::tempdir().unwrap();
             let source = root.path().join("authority.c");
             std::fs::write(&source, SOURCE).unwrap();
@@ -1221,17 +1481,28 @@ int main(int argc, char **argv) {
             let observed = std::thread::scope(|scope| {
                 let running = scope.spawn(|| engine.run(&[argument.as_ptr()]));
                 let reading = scope.spawn(|| {
-                    let mut values = Vec::with_capacity(50_000);
+                    let mut values = vec![initial];
                     for _ in 0..50_000 {
-                        values.push(engine.exit());
+                        let value = engine.exit();
+                        if !values.contains(&value) {
+                            values.push(value);
+                        }
                     }
                     engine.request(2, 0).unwrap();
-                    for _ in 0..1_000_000 {
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    loop {
                         let value = engine.exit();
-                        values.push(value);
+                        if !values.contains(&value) {
+                            values.push(value);
+                        }
                         if value != initial {
                             break;
                         }
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "ISA {isa} did not publish an exit within five seconds"
+                        );
+                        std::thread::yield_now();
                     }
                     values
                 });

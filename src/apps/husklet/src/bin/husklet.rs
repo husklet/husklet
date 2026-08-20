@@ -18,6 +18,7 @@ use gtk::gdk;
 use gtk::gio;
 use gtk::glib;
 use gtk::prelude::*;
+use sha2::Digest as _;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -48,7 +49,7 @@ use host::{
 use screens::workspace::overview::Overview;
 use screens::workspace::terminal::{Terminal, Window as TerminalWindow};
 
-const APP_ID: &str = "com.husklet.app";
+const MANAGER_WINDOW_NAME: &str = "husklet-manager";
 
 // One committed near-black palette (matches the design mockup).
 // Per-workspace terminal resolution.
@@ -125,6 +126,24 @@ impl AppConfig {
 
 static APP_CONFIG: std::sync::OnceLock<AppConfig> = std::sync::OnceLock::new();
 
+/// Gives one source generation one primary while preventing a rebuilt/test bundle from activating
+/// an unrelated primary that happens to use Husklet's public bundle identifier. Test automation can
+/// add an explicit run scope without weakening normal single-instance behavior.
+fn application_id(base: &str, instance: Option<&std::ffi::OsStr>) -> String {
+    let mut id = base.to_owned();
+    if let Some(instance) = instance {
+        let digest = sha2::Sha256::digest(instance.as_encoded_bytes());
+        let suffix = digest[..8].iter().fold(String::new(), |mut value, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(value, "{byte:02x}");
+            value
+        });
+        id.push_str(".i");
+        id.push_str(&suffix);
+    }
+    id
+}
+
 fn main() -> glib::ExitCode {
     hl::logging::configure();
     if let Some(code) = host::worker::Worker::run() {
@@ -135,7 +154,11 @@ fn main() -> glib::ExitCode {
         .set(AppConfig::parse())
         .ok()
         .expect("application config initialized once");
-    let app = gtk::Application::builder().application_id(APP_ID).build();
+    let id = application_id(
+        env!("HUSKLET_APPLICATION_ID"),
+        std::env::var_os("HL_APP_INSTANCE").as_deref(),
+    );
+    let app = gtk::Application::builder().application_id(&id).build();
     app.connect_startup(configure_application);
     app.connect_activate(|application| Application(application.clone()).open_manager());
     app.run()
@@ -177,12 +200,23 @@ fn close_windows(application: &gtk::Application) {
 
 impl Application {
     fn open_manager(&self) {
+        if let Some(window) = self
+            .0
+            .windows()
+            .into_iter()
+            .find(|window| window.widget_name() == MANAGER_WINDOW_NAME)
+        {
+            window.present();
+            host::appearance::Appearance::apply();
+            return;
+        }
         let window = gtk::ApplicationWindow::builder()
             .application(&self.0)
             .title("Husklet")
             .default_width(480)
             .default_height(560)
             .build();
+        window.set_widget_name(MANAGER_WINDOW_NAME);
 
         let home = screens::home::View::new();
 
@@ -267,6 +301,31 @@ impl Application {
 
     fn open_terminal(&self, ws: &WorkspaceConfig) {
         TerminalWindow::open(&self.0, ws);
+    }
+}
+
+#[cfg(test)]
+mod application_identity_tests {
+    use super::application_id;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn configured_bundle_identity_is_preserved() {
+        assert_eq!(
+            application_id("com.husklet.app.b0123456789abcdef", None),
+            "com.husklet.app.b0123456789abcdef"
+        );
+    }
+
+    #[test]
+    fn explicit_test_scopes_are_stable_and_isolated() {
+        let base = "com.husklet.app.b0123456789abcdef";
+        let first = application_id(base, Some(OsStr::new("run-one")));
+        let repeated = application_id(base, Some(OsStr::new("run-one")));
+        let second = application_id(base, Some(OsStr::new("run-two")));
+        assert_eq!(first, repeated);
+        assert_ne!(first, second);
+        assert!(first.starts_with("com.husklet.app.b0123456789abcdef.i"));
     }
 }
 

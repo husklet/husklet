@@ -1,7 +1,7 @@
 use super::{
-    BTreeMap, COMMIT, CaptureFailure, CapturePhase, DIGEST, HASH_BASIS, HASH_PRIME, MutationAdmission, OBJECT_ABORT,
-    OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, Object, Ordering, RECOVERY_COMPLETE,
-    Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, Server,
+    BTreeMap, COMMIT, CaptureFailure, CapturePhase, DIGEST, HASH_BASIS, HASH_PRIME, MEMBER_RESTORED, MEMBER_STDIO,
+    MutationAdmission, OBJECT_ABORT, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, Object,
+    Ordering, RECOVERY_COMPLETE, Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, Server,
 };
 
 impl Server {
@@ -77,6 +77,11 @@ impl Server {
                 .state
                 .lock()
                 .map_err(|_| crate::composition::CompositionError::RuntimeConstruction)?;
+            // Retained here rather than read back later: `CheckpointSink` has no
+            // read method, and `SOURCE_READ` resolves the previous generation.
+            // This is the only point at which the broker holds an inventory's
+            // bytes.
+            state.topology.observe(&object.name, &object.bytes);
             state.digest.insert(
                 object.name.clone(),
                 (
@@ -140,6 +145,25 @@ impl Server {
             }
         };
 
+        if let Err(violation) = self.joined_socket_topology() {
+            // Named, and named before a generation exists: the alternative is an
+            // image that restores a connected pair whose far end was never
+            // frozen, which reads as healthy and is not.
+            hl_log::hl_error!(
+                hl_log::tag::CHECKPOINT,
+                "checkpoint capture {id}: socket topology is not reciprocal -- {violation}"
+            );
+            let mut capture = self.capture_lock()?;
+            capture.phase = CapturePhase::Finished {
+                id,
+                result: Err(CaptureFailure::Failed),
+            };
+            self.capture_changed.notify_all();
+            drop(capture);
+            self.interrupt_channels();
+            return Err(CaptureFailure::Failed);
+        }
+
         let transaction = self.transaction_token()?;
         let result = match self.sink.commit_until(transaction, manifest, deadline) {
             Ok(()) => Ok(()),
@@ -170,6 +194,20 @@ impl Server {
         }
         self.capture_changed.notify_all();
         result
+    }
+
+    /// Discharges the reciprocal-topology obligation over every descriptor
+    /// inventory this capture published. See `reciprocity.rs` for what it does
+    /// and does not prove.
+    fn joined_socket_topology(&self) -> Result<usize, super::reciprocity::Violation> {
+        // Read through a poisoned lock deliberately: the join is read-only, and
+        // skipping the obligation because another thread panicked would be the
+        // one failure mode this proof exists to remove.
+        let state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        state.topology.join()
     }
 
     pub(super) fn source_get(&self, name: &str) -> Result<Vec<u8>, ()> {
@@ -218,10 +256,24 @@ impl Server {
                     && std::time::Instant::now() < deadline
                     && (matches!(request.op, SOURCE_LIST | SOURCE_SIZE | SOURCE_READ | DIGEST)
                         || request.op == RECOVERY_COMPLETE
+                        || request.op == MEMBER_RESTORED
+                        // The terminal request runs EARLIER than the announcement, inside the member's
+                        // descriptor restore, and is admitted on the same terms: only a running restore
+                        // may claim a member's pre-created terminal.
+                        || request.op == MEMBER_STDIO
                         || self.recovery_object_request(connection, request, name))
             }
-            CapturePhase::Complete | CapturePhase::Aborting { .. } => false,
-            CapturePhase::Active { id, .. } | CapturePhase::Publishing { id } => u64::from(request.generation) == id,
+            CapturePhase::Complete | CapturePhase::Aborting { .. } | CapturePhase::RecoveryFinished { .. } => false,
+            // `SOURCE_*` resolve `self.source`, the committed generation a restore
+            // reads. During a capture that is the PREVIOUS image, not the group
+            // being written, and `CheckpointSink` exposes no read path, so there is
+            // no store that could answer correctly. Serving them here would return a
+            // plausible reply from the wrong image. `RECOVERY_COMPLETE` belongs to
+            // the recovery scope alone.
+            CapturePhase::Active { id, .. } | CapturePhase::Publishing { id } => {
+                u64::from(request.generation) == id
+                    && !matches!(request.op, SOURCE_LIST | SOURCE_SIZE | SOURCE_READ | RECOVERY_COMPLETE)
+            }
             CapturePhase::Finished { id, .. } => u64::from(request.generation) == id && request.op == COMMIT,
             CapturePhase::Poisoned => false,
         }

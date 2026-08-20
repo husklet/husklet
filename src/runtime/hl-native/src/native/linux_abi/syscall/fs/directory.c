@@ -179,9 +179,35 @@ static void svc_fs_directory_61(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
                 break;
             }
         if (!dir) {
-            dir = fdopendir(dup(fd));
+            // The stream needs its OWN host descriptor (readdir consumes the offset, and the guest keeps
+            // using `fd`), but a bare dup() lands on the lowest free number -- inside the GUEST's descriptor
+            // band -- and is invisible to every mechanism that protects engine descriptors: exec_fd_is_engine()
+            // consults the private ledger, so close_range(3, ~0U) closes it; engine_fd_vacate() enumerates
+            // g_root_fd/signalfd/g_vols/eventfd peers but not these streams, so a guest dup2(x, N) closes it;
+            // and dup() clears FD_CLOEXEC so it also survives the emulated execve sweep and accumulates. The
+            // DIR* stays cached in g_dirs[] keyed on the guest fd either way, so the next getdents64 reads a
+            // stream whose descriptor the guest already closed: readdir() returns NULL and getdents64 returns
+            // 0 -- a silent early end-of-directory with no errno, the documented "broke glob" failure reached
+            // by a second route. Adopt it into the engine-private band like every other engine host fd.
+            int stream = dup(fd);
+            if (stream >= 0) {
+                int adopted = hl_host_process_fd_private_adopt(stream);
+                if (adopted >= 0)
+                    stream = adopted; // relocated above the private floor, ledger row added, original closed
+                else {
+                    // No room above the floor: keep the unadopted descriptor rather than failing the listing.
+                    // It is exposed to the races above, which is strictly better than -EMFILE here.
+                    errno = 0;
+                }
+            }
+            dir = stream >= 0 ? fdopendir(stream) : NULL;
             if (!dir) {
-                G_RET(c) = (uint64_t)(-errno);
+                int failure = errno; // remove/close below must not overwrite the reason
+                if (stream >= 0) {
+                    hl_host_process_fd_private_remove(stream);
+                    close(stream);
+                }
+                G_RET(c) = (uint64_t)(int64_t)(-failure);
                 break;
             }
             if (g_ndirs < 64) {
@@ -204,7 +230,14 @@ static void svc_fs_directory_61(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
         long pos = telldir(dir);
         int einval = 0;
         while ((de = readdir(dir))) {
-            size_t nl = strlen(de->d_name), lr = (19 + nl + 1 + 7) & ~7ull;
+            // Present the guest's own name. On a case-folding host the namespace stores a
+            // case-colliding component escaped, and a listing that emitted the stored spelling would
+            // hand `ls` a hex blob and make glob-then-open read a name that is not the name. The
+            // escape is a total, deterministic function of the guest bytes, so the reverse is a pure
+            // decode of this entry -- no lookup, and nothing re-resolved by string.
+            char decoded[256];
+            const char *name = hl_case_visible(de->d_name, decoded, sizeof decoded);
+            size_t nl = strlen(name), lr = (19 + nl + 1 + 7) & ~7ull;
             if (o + lr > (size_t)a2) {
                 seekdir(dir, pos);
                 // Linux getdents64: a result buffer too small to hold even the first pending entry
@@ -227,7 +260,7 @@ static void svc_fs_directory_61(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
             *(uint64_t *)(ld + 8) = o + lr;
             *(uint16_t *)(ld + 16) = (uint16_t)lr;
             *(ld + 18) = de->d_type;
-            memcpy(ld + 19, de->d_name, nl);
+            memcpy(ld + 19, name, nl);
             ld[19 + nl] = 0;
             if (guest_copy_to(a1 + o, record, lr) != (ssize_t)lr) {
                 seekdir(dir, pos);
@@ -238,7 +271,10 @@ static void svc_fs_directory_61(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
             pos = telldir(dir);
         }
         G_RET(c) = einval > 0 ? (uint64_t)(int64_t)(-EINVAL) : einval < 0 ? (uint64_t)(int64_t)(-EFAULT) : (uint64_t)o;
-        if (!dir_cached) closedir(dir); // untracked (cache-full) stream: release it, else DIR* + fd leak
+        if (!dir_cached) { // untracked (cache-full) stream: release it, else DIR* + fd leak
+            hl_host_process_fd_private_remove(dirfd(dir)); // retire the ledger row before closedir frees the number
+            closedir(dir);
+        }
         break;
     }
     // readlinkat(dirfd, path, buf, bufsiz)
@@ -514,7 +550,7 @@ static int readlink_peer(struct cpu *c, const char *path, char *buf, size_t size
     if (!path) return 0;
     int peer = -1, host_pid = 0;
     const char *leaf = proc_any_leaf(path, &peer);
-    if (!leaf || !proc_pid_member(peer, &host_pid)) return 0;
+    if (!leaf || !guest_pid_member_checked(peer, &host_pid)) return 0;
     if (!strncmp(leaf, "ns/", 3) && leaf[3]) {
         char target[64];
         int length = ns_link_target(leaf + 3, target, sizeof target);

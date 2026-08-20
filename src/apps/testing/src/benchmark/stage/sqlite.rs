@@ -9,9 +9,12 @@ const MINIMUM_PHASE_MICROSECONDS: u64 = 5_000;
 
 pub(super) struct SqliteProfile {
     pub command: std::path::PathBuf,
+    pub null_command: std::path::PathBuf,
     pub guest: std::path::PathBuf,
     pub linux_identity: String,
     pub source_identity: String,
+    pub primary_build: Vec<Vec<String>>,
+    pub null_build: Vec<Vec<String>>,
 }
 
 pub(super) struct SqliteHusklet {
@@ -28,7 +31,8 @@ impl SqliteProfile {
         arch_tool: &Path,
         factor: &str,
     ) -> Result<Self, Error> {
-        let command = output.join("native/sqlite");
+        let command = output.join("native/primary/sqlite");
+        let null_command = output.join("native/independent-null/sqlite");
         let guest = rootfs.join("benchmark/sqlite");
         if !amalgamation_archive.is_absolute() || !amalgamation_archive.is_file() {
             return Err("--sqlite-amalgamation must name an absolute regular file".into());
@@ -51,46 +55,56 @@ impl SqliteProfile {
         if super::raw_sha256(&sqlite_c)? != SQLITE_C_SHA256 || super::raw_sha256(&sqlite_h)? != SQLITE_H_SHA256 {
             return Err("extracted SQLite amalgamation identity mismatch".into());
         }
-        let sqlite_object = output.join("native/sqlite3.o");
-        let fixture_object = output.join("native/sqlite-fixture.o");
-        mac(&[
-            "/mnt/mac/usr/bin/clang".into(),
-            "-O3".into(),
-            "-DSQLITE_THREADSAFE=0".into(),
-            "-DSQLITE_OMIT_LOAD_EXTENSION".into(),
-            "-arch".into(),
-            "x86_64".into(),
-            "-c".into(),
-            mac_path(&sqlite_c),
-            "-o".into(),
-            mac_path(&sqlite_object),
-        ])?;
-        mac(&[
-            "/mnt/mac/usr/bin/clang".into(),
-            "-O3".into(),
-            "-Wall".into(),
-            "-Wextra".into(),
-            "-Werror".into(),
-            "-Wconversion".into(),
-            "-Wshadow".into(),
-            "-arch".into(),
-            "x86_64".into(),
-            "-I".into(),
-            mac_path(&sqlite_directory),
-            "-c".into(),
-            mac_path(source),
-            "-o".into(),
-            mac_path(&fixture_object),
-        ])?;
-        mac(&[
-            "/mnt/mac/usr/bin/clang".into(),
-            "-arch".into(),
-            "x86_64".into(),
-            mac_path(&sqlite_object),
-            mac_path(&fixture_object),
-            "-o".into(),
-            mac_path(&command),
-        ])?;
+        let build_native = |label: &str, command: &Path| -> Result<Vec<Vec<String>>, Error> {
+            let sqlite_object = output.join(format!("native/{label}/sqlite3.o"));
+            let fixture_object = output.join(format!("native/{label}/sqlite-fixture.o"));
+            let commands = vec![
+                vec![
+                    "/mnt/mac/usr/bin/clang".into(),
+                    "-O3".into(),
+                    "-DSQLITE_THREADSAFE=0".into(),
+                    "-DSQLITE_OMIT_LOAD_EXTENSION".into(),
+                    "-arch".into(),
+                    "x86_64".into(),
+                    "-c".into(),
+                    mac_path(&sqlite_c),
+                    "-o".into(),
+                    mac_path(&sqlite_object),
+                ],
+                vec![
+                    "/mnt/mac/usr/bin/clang".into(),
+                    "-O3".into(),
+                    "-Wall".into(),
+                    "-Wextra".into(),
+                    "-Werror".into(),
+                    "-Wconversion".into(),
+                    "-Wshadow".into(),
+                    "-arch".into(),
+                    "x86_64".into(),
+                    "-I".into(),
+                    mac_path(&sqlite_directory),
+                    "-c".into(),
+                    mac_path(source),
+                    "-o".into(),
+                    mac_path(&fixture_object),
+                ],
+                vec![
+                    "/mnt/mac/usr/bin/clang".into(),
+                    "-arch".into(),
+                    "x86_64".into(),
+                    mac_path(&sqlite_object),
+                    mac_path(&fixture_object),
+                    "-o".into(),
+                    mac_path(command),
+                ],
+            ];
+            for invocation in &commands {
+                mac(invocation)?;
+            }
+            Ok(commands)
+        };
+        let primary_build = build_native("primary", &command)?;
+        let null_build = build_native("independent-null", &null_command)?;
         let linux_build = "apk add --no-cache build-base=0.5-r3 >/dev/null && cc -O3 -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION -c /sqlite/sqlite3.c -o /tmp/sqlite3.o && cc -O3 -Wall -Wextra -Werror -Wconversion -Wshadow -I/sqlite -c /source.c -o /tmp/fixture.o && cc -static /tmp/sqlite3.o /tmp/fixture.o -o /out/sqlite";
         mac_preparation_compile(&[
             mac_path(docker),
@@ -145,9 +159,12 @@ impl SqliteProfile {
         )?;
         Ok(Self {
             command,
+            null_command,
             guest,
             linux_identity,
             source_identity: SQLITE_C_SHA256.into(),
+            primary_build,
+            null_build,
         })
     }
 

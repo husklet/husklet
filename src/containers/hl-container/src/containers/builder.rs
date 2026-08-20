@@ -116,7 +116,7 @@ impl Builder {
             Persistence::File => {
                 Assembly {
                     storage: Arc::new(Disk::open(root).await?),
-                    runtime: Arc::new(Engine),
+                    runtime: Arc::new(Engine::default()),
                     rootfs: Some(rootfs),
                     images: Some(images),
                     volume_root,
@@ -130,7 +130,7 @@ impl Builder {
             Persistence::Memory => {
                 Assembly {
                     storage: Arc::new(Memory::default()),
-                    runtime: Arc::new(Engine),
+                    runtime: Arc::new(Engine::default()),
                     rootfs: Some(rootfs),
                     images: Some(images),
                     volume_root,

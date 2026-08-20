@@ -7,6 +7,24 @@ build:
   compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
   flags: []
 cases:
+  - id: runtime/process/fork-pids-limit-diagnostic
+    targets: [arm64, amd64]
+    status: !oracle-excluded
+      reason: "The assertion covers a Husklet engine diagnostic record, which QEMU does not emit"
+      evidence: "The guest-visible EAGAIN contract is checked by the same bounded invocation"
+    compat: { class: compatibility }
+    build: { source: source/fork_pids_limit_diagnostic.c, output: fork-pids-limit-diagnostic, flags: [-static, -O2, -std=c11] }
+    artifact: { destination: /opt/husklet/fork-pids-limit-diagnostic }
+    environment: { HL_PIDS_MAX: "1" }
+    run: []
+    expect:
+      exit: 0
+      stdout: golden/fork_pids_limit_diagnostic.txt
+      diagnostics:
+        - record: "hl-fork-failure:"
+          count: 1
+          fields: { stage: pids-limit, result_errno: "11", host_snapshot_status: "1" }
+          nonnegative: [host_pid, host_ppid, host_threads, host_children, children_truncated, local_tasks, pids_total, pids_max, open_fds, nofile_cur, nofile_max, nofile_status, nproc_cur, nproc_max, nproc_status]
   - id: runtime/process/job-control
     status: active
     compat: { class: compatibility }
@@ -463,6 +481,15 @@ cases:
     run: []
     timeout: 120
     expect: { exit: 0, stdout: golden/vfork_wait.txt }
+  - id: runtime/process/vfork-failed-exec-heap
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/vfork_failed_exec_heap.c, output: vfork-failed-exec-heap, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/vfork-failed-exec-heap }
+    run: []
+    timeout: 30
+    expect: { exit: 0, stdout: golden/vfork_failed_exec_heap.txt }
   - id: runtime/process/pgroup-session
     targets: [arm64, amd64]
     status: active
@@ -776,6 +803,15 @@ cases:
     run: []
     timeout: 120
     expect: { exit: 0, stdout: golden/exec_cloexec.txt }
+  - id: runtime/process/exec-fd-namespace
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/exec_fd_namespace.c, output: exec-fd-namespace, flags: ["-static", "-O2", "-std=gnu11"] }
+    artifact: { destination: /opt/husklet/exec-fd-namespace }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/exec_fd_namespace.txt }
   - id: runtime/process/capget-version
     targets: [arm64, amd64]
     status: active

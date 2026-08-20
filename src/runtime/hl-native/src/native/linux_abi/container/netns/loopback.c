@@ -183,12 +183,16 @@ static uint8_t g_sock_seqpacket[HL_NFD];
 // recycled only after both endpoint reference counts reach zero.
 static void seq_ref_arena_init(const hl_host_services *host) {
     void *arena = NULL;
-    if (g_seq_refs != NULL && g_udp_refs != NULL) return;
+    if (g_seq_refs != NULL && g_udp_refs != NULL && g_sock_states != NULL) return;
     if (g_seq_refs == NULL && hl_linux_shared_create(host, sizeof(struct seq_ref) * SEQ_REF_N, &arena) == HL_STATUS_OK)
         g_seq_refs = (struct seq_ref *)arena;
     arena = NULL;
     if (g_udp_refs == NULL && hl_linux_shared_create(host, sizeof(struct udp_ref) * UDP_REF_N, &arena) == HL_STATUS_OK)
         g_udp_refs = (struct udp_ref *)arena;
+    arena = NULL;
+    if (g_sock_states == NULL &&
+        hl_linux_shared_create(host, sizeof(struct sock_state) * SOCK_STATE_N, &arena) == HL_STATUS_OK)
+        g_sock_states = (struct sock_state *)arena;
 }
 
 static int udp_ref_create(int fd, const char *path) {
@@ -243,16 +247,91 @@ static void udp_ref_drop(int fd) {
     }
 }
 
+enum {
+    SOCK_SHUTDOWN_READ = 1u,
+    SOCK_SHUTDOWN_WRITE = 2u,
+};
+
+static int sock_state_create(int fd) {
+    if (fd < 0 || fd >= HL_NFD || g_sock_states == NULL) return -1;
+    for (uint32_t i = 0; i < SOCK_STATE_N; i++) {
+        if (!__sync_bool_compare_and_swap(&g_sock_states[i].used, 0, 1)) continue;
+        __atomic_store_n(&g_sock_states[i].shutdown, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&g_sock_states[i].refs, 1, __ATOMIC_RELEASE);
+        g_sock_state_ref[fd] = (uint16_t)(i + 1);
+        return 0;
+    }
+    errno = ENFILE;
+    return -1;
+}
+
+static void sock_state_drop(int fd);
+
+static void sock_state_dup(int dst, int src) {
+    if (g_sock_states == NULL || src < 0 || src >= HL_NFD || dst < 0 || dst >= HL_NFD ||
+        g_sock_state_ref[src] == 0)
+        return;
+    if (dst == src) return;
+    sock_state_drop(dst);
+    uint32_t slot = g_sock_state_ref[src] - 1;
+    __atomic_add_fetch(&g_sock_states[slot].refs, 1, __ATOMIC_ACQ_REL);
+    g_sock_state_ref[dst] = g_sock_state_ref[src];
+}
+
+static void sock_state_drop(int fd) {
+    if (g_sock_states == NULL || fd < 0 || fd >= HL_NFD || g_sock_state_ref[fd] == 0) return;
+    uint32_t slot = g_sock_state_ref[fd] - 1;
+    g_sock_state_ref[fd] = 0;
+    if (__atomic_sub_fetch(&g_sock_states[slot].refs, 1, __ATOMIC_ACQ_REL) == 0) {
+        __atomic_store_n(&g_sock_states[slot].shutdown, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&g_sock_states[slot].used, 0, __ATOMIC_RELEASE);
+    }
+}
+
+static void sock_state_shutdown_observed(int fd, int direction) {
+    if (g_sock_states == NULL || fd < 0 || fd >= HL_NFD || g_sock_state_ref[fd] == 0) return;
+    uint32_t bits = 0;
+    if (direction == SHUT_RD || direction == SHUT_RDWR) bits |= SOCK_SHUTDOWN_READ;
+    if (direction == SHUT_WR || direction == SHUT_RDWR) bits |= SOCK_SHUTDOWN_WRITE;
+    if (bits != 0)
+        __atomic_or_fetch(&g_sock_states[g_sock_state_ref[fd] - 1].shutdown, bits, __ATOMIC_ACQ_REL);
+}
+
+static uint32_t sock_state_shutdown(int fd) {
+    if (g_sock_states == NULL || fd < 0 || fd >= HL_NFD || g_sock_state_ref[fd] == 0) return 0;
+    return __atomic_load_n(&g_sock_states[g_sock_state_ref[fd] - 1].shutdown, __ATOMIC_ACQUIRE);
+}
+
+static void sock_state_fork_prepare(void) {
+    if (g_sock_states == NULL) return;
+    for (int fd = 0; fd < HL_NFD; fd++)
+        if (g_sock_state_ref[fd] != 0)
+            __atomic_add_fetch(&g_sock_states[g_sock_state_ref[fd] - 1].refs, 1, __ATOMIC_ACQ_REL);
+}
+
+static void sock_state_fork_cancel(void) {
+    if (g_sock_states == NULL) return;
+    for (int fd = 0; fd < HL_NFD; fd++) {
+        if (g_sock_state_ref[fd] == 0) continue;
+        uint32_t slot = g_sock_state_ref[fd] - 1;
+        if (__atomic_sub_fetch(&g_sock_states[slot].refs, 1, __ATOMIC_ACQ_REL) == 0) {
+            __atomic_store_n(&g_sock_states[slot].shutdown, 0, __ATOMIC_RELAXED);
+            __atomic_store_n(&g_sock_states[slot].used, 0, __ATOMIC_RELEASE);
+        }
+    }
+}
+
 // exit_group(2) tears the whole process down with a raw _exit() that never runs fd_reset_emul, so any
 // rendezvous inode still owned by an un-closed descriptor (e.g. a fork()ed client child that inherits the
 // server's listening fd and _exit()s without closing it) would keep its refcount pinned above zero and
 // orphan the AF_UNIX inode on the fs. Drop this process's remaining udp/bridge refs at exit so the LAST
 // reference across the whole process tree unlinks the inode -- mirroring the kernel freeing an INET port
 // when its last owning process dies. Per-fd and idempotent: fds already closed carry no ref.
-static void udp_ref_process_exit(void) {
-    if (!g_udp_refs) return;
-    for (int fd = 0; fd < HL_NFD; fd++)
+static void socket_ref_process_exit(void) {
+    for (int fd = 0; fd < HL_NFD; fd++) {
         if (g_udp_ref[fd]) udp_ref_drop(fd);
+        if (g_sock_state_ref[fd]) sock_state_drop(fd);
+    }
 }
 
 static int seq_ref_pair(int first, int second) {
@@ -297,27 +376,29 @@ static void seq_ref_drop(int fd) {
 // Reserve the references the child will inherit before fork. A failed fork rolls them back; a successful
 // fork consumes the reservation, requiring no allocation or lock in the post-fork child.
 static void seq_ref_fork_prepare(void) {
-    if (g_seq_refs == NULL) return;
-    for (int fd = 0; fd < HL_NFD; fd++) {
-        if (!g_seq_ref[fd]) continue;
-        uint32_t slot = g_seq_ref[fd] - 1;
-        __atomic_add_fetch(&g_seq_refs[slot].refs[g_seq_end[fd]], 1, __ATOMIC_ACQ_REL);
-    }
+    if (g_seq_refs != NULL)
+        for (int fd = 0; fd < HL_NFD; fd++) {
+            if (!g_seq_ref[fd]) continue;
+            uint32_t slot = g_seq_ref[fd] - 1;
+            __atomic_add_fetch(&g_seq_refs[slot].refs[g_seq_end[fd]], 1, __ATOMIC_ACQ_REL);
+        }
     if (g_udp_refs)
         for (int fd = 0; fd < HL_NFD; fd++)
             if (g_udp_ref[fd]) __atomic_add_fetch(&g_udp_refs[g_udp_ref[fd] - 1].refs, 1, __ATOMIC_ACQ_REL);
+    sock_state_fork_prepare();
 }
 
 static void seq_ref_fork_cancel(void) {
-    if (!g_seq_refs) return;
-    for (int fd = 0; fd < HL_NFD; fd++) {
-        if (!g_seq_ref[fd]) continue;
-        uint32_t slot = g_seq_ref[fd] - 1;
-        __atomic_sub_fetch(&g_seq_refs[slot].refs[g_seq_end[fd]], 1, __ATOMIC_ACQ_REL);
-    }
+    if (g_seq_refs)
+        for (int fd = 0; fd < HL_NFD; fd++) {
+            if (!g_seq_ref[fd]) continue;
+            uint32_t slot = g_seq_ref[fd] - 1;
+            __atomic_sub_fetch(&g_seq_refs[slot].refs[g_seq_end[fd]], 1, __ATOMIC_ACQ_REL);
+        }
     if (g_udp_refs)
         for (int fd = 0; fd < HL_NFD; fd++)
             if (g_udp_ref[fd]) __atomic_sub_fetch(&g_udp_refs[g_udp_ref[fd] - 1].refs, 1, __ATOMIC_ACQ_REL);
+    sock_state_fork_cancel();
 }
 
 // fd -> (its socketpair/O_DIRECT-pipe PARTNER fd + 1); 0 = no known partner. Recorded for both ends at
@@ -329,7 +410,262 @@ static void seq_ref_fork_cancel(void) {
 static int g_sock_pair_peer[HL_NFD];
 static uint64_t g_sock_object[HL_NFD];
 static uint64_t g_sock_peer_object[HL_NFD];
+/* The host pathname carrying a connection identity is engine-private.  These bits keep that transport
+ * detail out of the guest's getsockname/getpeername results. */
+static uint8_t g_sock_identity_local_hidden[HL_NFD];
+static uint8_t g_sock_identity_peer_hidden[HL_NFD];
+/* shutdown(2) changes the open socket description and therefore every dup and fork alias. Linux does not
+ * expose this state through getsockopt, so the shared socket-state arena retains it at the syscall boundary.
+ * Checkpoint capture carries the mask in each endpoint's socket-state record and restore replays it with
+ * shutdown(2) after the queues are refilled. */
+/* Ordinary pathname/abstract AF_UNIX connections carry a reciprocal topology that spans processes, so
+ * capturing one endpoint is meaningful only if the other endpoint is captured in the same generation.
+ * The whole-process freeze that makes that provable is now authoritative (every member parks inside its
+ * own stop-the-world until the broker releases it), and the proof itself is discharged over the sealed
+ * tree by the broker's reciprocity join at publish_manifest -- before any generation exists. What this
+ * flag now demands of the descriptor is the local half of that obligation: an endpoint whose reciprocal
+ * peer is not named here can never be joined by anything downstream, so it still fails closed. */
+static uint8_t g_sock_identity_reciprocity_required[HL_NFD];
+/* fd -> 1 if this socket has no slot in the shared socket-state arena, so its half-close mask and its
+ * cross-alias state are simply unknown. Distinct from the reciprocity obligation above: a complete pair
+ * identity says nothing about state we never retained, and capture must fail closed on it either way. */
+static uint8_t g_sock_state_unretained[HL_NFD];
+/* fd -> (identity ticket slot + 1); 0 = this descriptor published no ticket.  The nonce is retained
+ * beside the index because the slot is recycled: a fork inherits this map, so two processes can hold the
+ * same index for the same fd, and whichever loses the retirement race must not go on to retire or collect
+ * whatever ticket next occupies that slot.  Matching the nonce makes both operations idempotent. */
+static uint16_t g_sock_identity_ticket[HL_NFD];
+static uint64_t g_sock_identity_ticket_nonce[HL_NFD][2];
 static _Atomic uint32_t g_sock_object_next = 1;
+
+/* ---- Engine-private connection-identity namespace.
+ *
+ * The directory is created mode 0700 and re-validated before use: a pre-created symlink, a directory
+ * owned by another uid, or a loosened mode all fail closed rather than silently hosting identity.  It is
+ * NOT a guest-translatable path -- guest AF_UNIX pathname binds resolve through the overlay (or a bind
+ * volume) and the bare-mode passthrough refuses this prefix outright (hl_socket_identity_path_reserved).
+ */
+static char g_sock_identity_dir[64];
+static int8_t g_sock_identity_dir_state; // 0 unresolved, 1 usable, -1 refused
+
+static const char *sock_identity_directory(void) {
+    if (g_sock_identity_dir_state) return g_sock_identity_dir_state > 0 ? g_sock_identity_dir : NULL;
+    g_sock_identity_dir_state = -1;
+    const char *namespace_key = hl_option_get("HL_NETNS"); // same key as abs_init/ipc_ns_key
+    char candidate[64];
+    int length = snprintf(candidate, sizeof candidate, HL_SOCKET_IDENTITY_PREFIX "%.40s",
+                          (namespace_key && namespace_key[0]) ? namespace_key : "default");
+    if (length <= 0 || (size_t)length >= sizeof candidate) return NULL;
+    if (hl_compat_mkdir(candidate, 0700) != 0 && errno != EEXIST) return NULL;
+    struct stat info;
+    if (lstat(candidate, &info) != 0 || !S_ISDIR(info.st_mode) || (info.st_mode & 07777) != 0700 ||
+        info.st_uid != geteuid())
+        return NULL;
+    memcpy(g_sock_identity_dir, candidate, (size_t)length + 1u);
+    g_sock_identity_dir_state = 1;
+    return g_sock_identity_dir;
+}
+
+/* ---- Identity tickets.
+ *
+ * A connector reserves a ticket holding the reciprocal object ids, publishes only its random nonce in the
+ * bind name, and the acceptor CLAIMS that nonce out of this table -- once.  The table lives in the same
+ * shared arena family as sock_state, so it is visible to every process that inherited the engine, and to
+ * nothing else: a guest cannot address it, cannot enumerate it, and cannot guess a 128-bit nonce.  This
+ * is what replaces "parse the filename and adopt what it says".
+ */
+
+/* ---- Where the ticket table lives, and why it is not an inherited arena.
+ *
+ * The connector and the acceptor are routinely SIBLING engine workers, not fork relatives: a container
+ * exec (psql against a running postmaster) is forked from the hl-container daemon, runs its own
+ * hl_run_linux_guest, and inherits no arena from the container's pid1 worker -- only typed bindings and
+ * the explicitly duplicated control channels cross that boundary.  A MAP_SHARED memfd created at the ISA
+ * seam is therefore private to one worker's fork lineage, and every cross-worker claim missed: an
+ * instrumented postgres run showed three distinct publisher tables against an acceptor table holding zero
+ * published tickets.  Guest AF_UNIX identity is exactly the state that must span that boundary.
+ *
+ * What DOES span it is the namespace key.  HL_NETNS already rendezvouses independent workers of the same
+ * container (abstract sockets, IPC identity, procfs agreement), and sock_identity_directory() is the
+ * engine-owned, mode-0700, euid-owned, symlink-checked directory derived from it.  The table is a file in
+ * that directory, mapped MAP_SHARED, so every worker of one container maps the same pages and workers of
+ * different containers cannot see each other's.  This widens no trust boundary: it reuses the directory
+ * whose ownership the identity design already validates and whose prefix guest binds are already refused.
+ * Sizing is serialized on the file with flock, so a worker that reaches the table before the creator has
+ * published its size waits rather than mapping a short object. */
+static void sock_identity_ticket_arena_attach(void) {
+    if (g_sock_identity_tickets != NULL) return;
+    const char *directory = sock_identity_directory();
+    if (directory == NULL) return;
+    char path[HL_SOCKET_IDENTITY_PATH_SIZE];
+    int length = snprintf(path, sizeof path, "%s/tickets", directory);
+    if (length <= 0 || (size_t)length >= sizeof path) return;
+    size_t bytes = sizeof(struct sock_identity_ticket) * SOCK_IDENTITY_TICKET_N;
+    int descriptor = open(path, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (descriptor < 0) return;
+    struct stat info;
+    /* The directory is ours and 0700, but validate the object itself on the same terms rather than
+     * inheriting the directory's verdict: a regular file, our euid, 0600, one link. */
+    if (fstat(descriptor, &info) != 0 || !S_ISREG(info.st_mode) || info.st_uid != geteuid() ||
+        (info.st_mode & 07777) != 0600 || info.st_nlink != 1) {
+        close(descriptor);
+        return;
+    }
+    if (flock(descriptor, LOCK_EX) != 0) {
+        close(descriptor);
+        return;
+    }
+    if ((fstat(descriptor, &info) != 0 || (size_t)info.st_size != bytes) &&
+        ftruncate(descriptor, (off_t)bytes) != 0) {
+        (void)flock(descriptor, LOCK_UN);
+        close(descriptor);
+        return;
+    }
+    void *mapped = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, descriptor, 0);
+    (void)flock(descriptor, LOCK_UN);
+    close(descriptor);
+    if (mapped == MAP_FAILED) return;
+    g_sock_identity_tickets = (struct sock_identity_ticket *)mapped;
+}
+
+static void sock_identity_ticket_release(int fd) {
+    if (fd < 0 || fd >= HL_NFD) return;
+    uint16_t slot = g_sock_identity_ticket[fd];
+    uint64_t high = g_sock_identity_ticket_nonce[fd][0], low = g_sock_identity_ticket_nonce[fd][1];
+    g_sock_identity_ticket[fd] = 0;
+    g_sock_identity_ticket_nonce[fd][0] = g_sock_identity_ticket_nonce[fd][1] = 0;
+    if (!slot || g_sock_identity_tickets == NULL) return;
+    struct sock_identity_ticket *ticket = &g_sock_identity_tickets[slot - 1];
+    if (ticket->nonce_high != high || ticket->nonce_low != low) return; // recycled: not ours any more
+    /* Only the publisher retires its own ticket, whether the acceptor never claimed it (PUBLISHED) or
+     * claimed it and wrote its object back (RESOLVED) and the publisher is giving up on collecting. */
+    if (__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_PUBLISHED,
+                                     SOCK_IDENTITY_TICKET_CLAIMED) ||
+        __sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_RESOLVED,
+                                     SOCK_IDENTITY_TICKET_CLAIMED)) {
+        ticket->nonce_high = ticket->nonce_low = 0;
+        ticket->client_object = ticket->server_object = 0;
+        ticket->publisher = 0;
+        __atomic_store_n(&ticket->state, SOCK_IDENTITY_TICKET_FREE, __ATOMIC_RELEASE);
+    }
+}
+
+/* A PUBLISHED or RESOLVED ticket whose publisher no longer exists can never be claimed or collected -- its nonce died with the
+ * name that carried it -- so the slot is recoverable.  Retiring it through the same CAS the claimer uses
+ * keeps the one-shot property: whoever wins the transition owns the slot, and the loser sees FREE. */
+static void sock_identity_ticket_reclaim_abandoned(struct sock_identity_ticket *ticket) {
+    uint32_t publisher = ticket->publisher;
+    if (!publisher || (int)publisher == (int)getpid()) return;
+    if (kill((pid_t)publisher, 0) == 0 || errno != ESRCH) return;
+    if (!__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_PUBLISHED,
+                                      SOCK_IDENTITY_TICKET_CLAIMED) &&
+        !__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_RESOLVED,
+                                      SOCK_IDENTITY_TICKET_CLAIMED))
+        return;
+    ticket->nonce_high = ticket->nonce_low = 0;
+    ticket->client_object = ticket->server_object = 0;
+    ticket->publisher = 0;
+    __atomic_store_n(&ticket->state, SOCK_IDENTITY_TICKET_FREE, __ATOMIC_RELEASE);
+}
+
+/* Phase one: the connector deposits ONLY its own object id.  The peer half of the pair is left empty for
+ * the acceptor to mint, because an id minted here would encode this process's pid on a descriptor owned by
+ * another process, and a reciprocity join over such a pair names one owner twice. */
+static int sock_identity_ticket_publish(int fd, uint64_t client, uint64_t *high, uint64_t *low) {
+    sock_identity_ticket_arena_attach();
+    if (fd < 0 || fd >= HL_NFD || g_sock_identity_tickets == NULL || !client) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (hl_socket_identity_nonce_new(high, low) != 0) {
+        errno = EIO;
+        return -1;
+    }
+    sock_identity_ticket_release(fd); // a re-prepared descriptor must not strand its previous ticket
+    for (uint32_t pass = 0; pass < 2u; pass++) {
+        for (uint32_t index = 0; index < SOCK_IDENTITY_TICKET_N; index++) {
+            struct sock_identity_ticket *ticket = &g_sock_identity_tickets[index];
+            if (pass == 1u) sock_identity_ticket_reclaim_abandoned(ticket);
+            if (!__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_FREE,
+                                              SOCK_IDENTITY_TICKET_CLAIMED))
+                continue;
+            ticket->nonce_high = *high;
+            ticket->nonce_low = *low;
+            ticket->client_object = client;
+            ticket->server_object = 0;
+            ticket->publisher = (uint32_t)getpid();
+            __atomic_store_n(&ticket->state, SOCK_IDENTITY_TICKET_PUBLISHED, __ATOMIC_RELEASE);
+            g_sock_identity_ticket[fd] = (uint16_t)(index + 1);
+            g_sock_identity_ticket_nonce[fd][0] = *high;
+            g_sock_identity_ticket_nonce[fd][1] = *low;
+            return 0;
+        }
+    }
+    errno = ENFILE;
+    return -1;
+}
+
+/* Phase two, one shot: a nonce resolves to identity exactly once.  The claimer takes the connector's
+ * object and deposits its OWN, so the slot ends up holding the reciprocal pair with each half minted by
+ * the process that owns that endpoint.  A replayed name -- from a guest that observed one, or from a stale
+ * inode -- still resolves to nothing: only the PUBLISHED->CLAIMED transition resolves a nonce, and it
+ * happens exactly once.  The value deposited is never guest-supplied; it is this process's freshly minted
+ * object id, so the write-back transfers an engine-minted fact and cannot inject a chosen one. */
+static int sock_identity_ticket_claim(uint64_t high, uint64_t low, uint64_t *client, uint64_t server) {
+    sock_identity_ticket_arena_attach();
+    if (g_sock_identity_tickets == NULL || (!high && !low) || !client || !server) return -1;
+    for (uint32_t index = 0; index < SOCK_IDENTITY_TICKET_N; index++) {
+        struct sock_identity_ticket *ticket = &g_sock_identity_tickets[index];
+        if (__atomic_load_n(&ticket->state, __ATOMIC_ACQUIRE) != SOCK_IDENTITY_TICKET_PUBLISHED ||
+            ticket->nonce_high != high || ticket->nonce_low != low)
+            continue;
+        if (!__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_PUBLISHED,
+                                          SOCK_IDENTITY_TICKET_CLAIMED))
+            continue;
+        *client = ticket->client_object;
+        if (!*client || *client == server) {
+            /* Nothing to reciprocate: retire the slot rather than leave a resolution nobody can use. */
+            ticket->nonce_high = ticket->nonce_low = 0;
+            ticket->client_object = ticket->server_object = 0;
+            ticket->publisher = 0;
+            __atomic_store_n(&ticket->state, SOCK_IDENTITY_TICKET_FREE, __ATOMIC_RELEASE);
+            return -1;
+        }
+        /* The nonce stays until collection so the publisher can recognise ITS slot after recycling, and
+         * it is no longer resolvable: only PUBLISHED -> CLAIMED resolves a name, and that has happened. */
+        ticket->server_object = server;
+        __atomic_store_n(&ticket->state, SOCK_IDENTITY_TICKET_RESOLVED, __ATOMIC_RELEASE);
+        return 0;
+    }
+    return -1;
+}
+
+/* The publisher collects the acceptor-minted half of its own slot.  It reads only the slot it published
+ * (g_sock_identity_ticket[fd]), so no other process can steer this descriptor's peer identity, and the
+ * slot is retired through the same CAS the claimer uses -- collection is one-shot too. */
+static int sock_identity_ticket_collect(int fd, uint64_t *server) {
+    if (fd < 0 || fd >= HL_NFD || server == NULL) return -1;
+    uint16_t slot = g_sock_identity_ticket[fd];
+    if (!slot || g_sock_identity_tickets == NULL) return -1;
+    struct sock_identity_ticket *ticket = &g_sock_identity_tickets[slot - 1];
+    if (ticket->nonce_high != g_sock_identity_ticket_nonce[fd][0] ||
+        ticket->nonce_low != g_sock_identity_ticket_nonce[fd][1])
+        return -1; // recycled into another connection's ticket: nothing here is ours
+    if (__atomic_load_n(&ticket->state, __ATOMIC_ACQUIRE) != SOCK_IDENTITY_TICKET_RESOLVED) return -1;
+    uint64_t resolved = ticket->server_object;
+    if (!__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_RESOLVED,
+                                      SOCK_IDENTITY_TICKET_CLAIMED))
+        return -1;
+    ticket->nonce_high = ticket->nonce_low = 0;
+    ticket->client_object = ticket->server_object = 0;
+    ticket->publisher = 0;
+    __atomic_store_n(&ticket->state, SOCK_IDENTITY_TICKET_FREE, __ATOMIC_RELEASE);
+    g_sock_identity_ticket[fd] = 0;
+    g_sock_identity_ticket_nonce[fd][0] = g_sock_identity_ticket_nonce[fd][1] = 0;
+    if (!resolved) return -1;
+    *server = resolved;
+    return 0;
+}
 
 static uint64_t sock_object_new(void) {
     uint32_t sequence = atomic_fetch_add_explicit(&g_sock_object_next, 1u, memory_order_relaxed);
@@ -337,8 +673,16 @@ static uint64_t sock_object_new(void) {
     return ((uint64_t)(uint32_t)getpid() << 32) | sequence;
 }
 
+static void sock_internal_shutdown_fresh(int fd) {
+    if (fd < 0 || fd >= HL_NFD) return;
+    sock_state_drop(fd);
+    g_sock_state_unretained[fd] = (uint8_t)(sock_state_create(fd) != 0);
+}
+
 static void sock_pair_identity_assign(int first, int second) {
     if (first < 0 || first >= HL_NFD || second < 0 || second >= HL_NFD) return;
+    sock_internal_shutdown_fresh(first);
+    sock_internal_shutdown_fresh(second);
     uint64_t first_object = sock_object_new();
     uint64_t second_object = sock_object_new();
     g_sock_object[first] = first_object;
@@ -347,48 +691,329 @@ static void sock_pair_identity_assign(int first, int second) {
     g_sock_peer_object[second] = first_object;
 }
 
-/* Private loopback/bridge streams are AF_UNIX transports hidden behind guest INET sockets. Encode their
- * reciprocal object identities in the client's AF_UNIX bind name, so accept can recover them with
- * getpeername() without placing engine-private bytes in the guest stream. */
-static int sock_internal_connect_prepare(int fd) {
+static int sock_internal_alias_matches(int fd, int candidate, uint64_t ofd) {
+    return candidate == fd || (ofd != 0 && g_ofd_id[candidate] == ofd);
+}
+
+/* Encode reciprocal object identities in an engine-private client AF_UNIX bind name, so accept can recover
+ * them with getpeername() without placing engine-private bytes in the guest stream. */
+static void sock_internal_alias_relation(int fd, uint64_t peer, int local_hidden, int checkpoint_pending) {
+    if (fd < 0 || fd >= HL_NFD || !g_sock_object[fd]) return;
+    uint64_t ofd = g_ofd_id[fd];
+    int first = ofd ? 0 : fd, end = ofd ? HL_NFD : fd + 1;
+    for (int alias = first; alias < end; alias++) {
+        if (!sock_internal_alias_matches(fd, alias, ofd)) continue;
+        g_sock_peer_object[alias] = peer;
+        if (local_hidden) g_sock_identity_local_hidden[alias] = 1;
+        if (checkpoint_pending) g_sock_identity_reciprocity_required[alias] = 1;
+    }
+}
+
+static void sock_internal_async_error_store(int fd, int error) {
+    if (fd < 0 || fd >= HL_NFD || !g_sock_object[fd]) return;
+    uint64_t ofd = g_ofd_id[fd];
+    int first = ofd ? 0 : fd, end = ofd ? HL_NFD : fd + 1;
+    for (int alias = first; alias < end; alias++)
+        if (sock_internal_alias_matches(fd, alias, ofd)) g_so_error[alias] = error;
+}
+
+static int sock_internal_async_error_take(int fd) {
+    if (fd < 0 || fd >= HL_NFD) return 0;
+    int error = g_so_error[fd];
+    uint64_t ofd = g_ofd_id[fd];
+    if (!ofd) {
+        g_so_error[fd] = 0;
+        return error;
+    }
+    for (int alias = 0; alias < HL_NFD; alias++)
+        if (sock_internal_alias_matches(fd, alias, ofd)) g_so_error[alias] = 0;
+    return error;
+}
+
+static void sock_internal_unix_peer_note(int fd, const char *name, int native_peer) {
+    if (fd < 0 || fd >= HL_NFD || !g_sock_object[fd]) return;
+    uint64_t ofd = g_ofd_id[fd];
+    int first = ofd ? 0 : fd, end = ofd ? HL_NFD : fd + 1;
+    for (int alias = first; alias < end; alias++) {
+        if (!sock_internal_alias_matches(fd, alias, ofd)) continue;
+        unix_peer_note(alias, name);
+        g_sock_native_peer[alias] = (uint8_t)native_peer;
+    }
+}
+
+/* Adopt the acceptor-minted peer id as soon as it is available.  Cheap and idempotent: without a RESOLVED
+ * slot of our own it does nothing.  Called where the answer is needed (checkpoint admission) and where it
+ * is most likely to have arrived (a completed connect). */
+static void sock_internal_identity_collect(int fd) {
+    uint64_t server = 0;
+    if (fd < 0 || fd >= HL_NFD || !g_sock_identity_local_hidden[fd] || !g_sock_object[fd]) return;
+    if (sock_identity_ticket_collect(fd, &server) != 0) return;
+    sock_internal_alias_relation(fd, server, 0, 0);
+}
+
+static void sock_internal_connect_observed(int fd, int error) {
+    if (fd < 0 || fd >= HL_NFD || !g_sock_object[fd]) return;
+    int collect = 0;
+    uint64_t ofd = g_ofd_id[fd];
+    int first = ofd ? 0 : fd, end = ofd ? HL_NFD : fd + 1;
+    for (int alias = first; alias < end; alias++) {
+        if (!sock_internal_alias_matches(fd, alias, ofd)) continue;
+        if (error == EINPROGRESS) {
+            g_sock_conn[alias] = 0;
+            g_sock_connecting[alias] = 1;
+        } else if (error == 0) {
+            g_sock_conn[alias] = 1;
+            g_sock_connecting[alias] = 0;
+            collect = 1;
+        } else {
+            g_sock_conn[alias] = 0;
+            g_sock_connecting[alias] = 0;
+            if (g_sock_identity_local_hidden[alias]) g_sock_peer_object[alias] = 0;
+            sock_identity_ticket_release(alias); // a refused dial retires its ticket; nothing can claim it
+        }
+    }
+    if (collect) sock_internal_identity_collect(fd);
+}
+
+static void sock_internal_shutdown_observed(int fd, int direction) {
+    if (fd < 0 || fd >= HL_NFD || !g_sock_object[fd]) return;
+    sock_state_shutdown_observed(fd, direction);
+}
+
+static int sock_internal_shutdown(int fd, int direction) {
+    if (shutdown(fd, direction) != 0) return -1;
+    sock_internal_shutdown_observed(fd, direction);
+    return 0;
+}
+
+static int sock_internal_checkpoint_admit(int fd) {
+    if (fd < 0 || fd >= HL_NFD) {
+        errno = EBADF;
+        return -1;
+    }
+    sock_internal_identity_collect(fd); // a reciprocity join needs the acceptor-minted half of the pair
+    if (g_sock_state_unretained[fd]) {
+        fprintf(stderr, "[ckpt] admit-arm: fd %d socket_state_unretained\n", fd);
+        errno = ENOTSUP; // no retained socket state: the half-close mask and alias set are unknown
+        return -1;
+    }
+    /* The reciprocal half of an ordinary AF_UNIX connection is proved by the broker over every sealed
+     * member's inventory (checkpoint/reciprocity.rs), not here: this process can see only its own end.
+     * What it can prove locally is that the pair is nameable at all -- an endpoint that names no peer, or
+     * names itself, carries no obligation the join could ever discharge and would be published as a
+     * connection with no far end. */
+    if (g_sock_identity_reciprocity_required[fd] &&
+        (g_sock_peer_object[fd] == 0 || g_sock_peer_object[fd] == g_sock_object[fd])) {
+        fprintf(stderr, "[ckpt] admit-arm: fd %d reciprocal_peer_unnamed\n", fd);
+        errno = ENOTSUP;
+        return -1;
+    }
+    if (g_sock_connecting[fd]) {
+        fprintf(stderr, "[ckpt] admit-arm: fd %d connecting\n", fd);
+        errno = EBUSY;
+        return -1;
+    }
+    return 0;
+}
+
+static int sock_internal_connect_prepare(int fd, int checkpoint_pending) {
     if (fd < 0 || fd >= HL_NFD || !g_sock_object[fd]) {
         errno = EINVAL;
         return -1;
     }
+    struct sockaddr_un local = {0};
+    socklen_t local_length = sizeof local;
+    if (getsockname(fd, (struct sockaddr *)&local, &local_length) != 0) return -1;
+    size_t path_offset = offsetof(struct sockaddr_un, sun_path);
+    /* Whether this socket already carries a name has to be read from the returned PATH, not from the
+     * returned LENGTH.  Linux reports offsetof(sun_path) for an unbound AF_UNIX socket, so a longer
+     * result meant a name -- including a Linux abstract name, whose first byte is NUL.  Darwin reports
+     * the whole sockaddr_un (measured: len=16, sun_path all NUL) for an unbound socket, so the length
+     * test called every fresh client "already named", took the early return, and never bound the private
+     * identity name: the connector published no ticket and reported no local-hidden identity, which is
+     * the cross-process peer=0 this file exists to prevent. A nonzero byte inside the reported path is
+     * the one form both kernels agree on. */
+    size_t path_length = local_length > (socklen_t)path_offset ? (size_t)local_length - path_offset : 0;
+    if (path_length > sizeof local.sun_path) path_length = sizeof local.sun_path;
+    int named = 0;
+    for (size_t index = 0; index < path_length; ++index)
+        if (local.sun_path[index] != '\0') {
+            named = 1;
+            break;
+        }
+    if (local.sun_family == AF_UNIX && named) {
+        local.sun_path[sizeof local.sun_path - 1] = '\0';
+        /* Already bound to the private name from an earlier prepare: re-assert the relation from our OWN
+         * retained peer object.  Nothing is recovered from the bound name -- it is a nonce, not a fact. */
+        if (g_sock_identity_local_hidden[fd] && (g_sock_identity_ticket[fd] || g_sock_peer_object[fd])) {
+            sock_internal_alias_relation(fd, g_sock_peer_object[fd], 1, checkpoint_pending);
+        }
+        /* A guest-bound client must keep its address and still be allowed to connect.  It cannot carry the
+         * private identity name, so leave peer identity absent and let checkpoint admission reject it. */
+        if (checkpoint_pending) sock_internal_alias_relation(fd, g_sock_peer_object[fd], 0, 1);
+        return 0;
+    }
     // A failed AF_UNIX connect poisons its socket and the retry path replaces it with lo_swap(). Re-bind
-    // every replacement, while retaining the same logical peer object across attempts.
-    uint64_t peer = g_sock_peer_object[fd] ? g_sock_peer_object[fd] : sock_object_new();
+    // every replacement; the peer half stays empty until an acceptor mints and returns it.
+    const char *directory = sock_identity_directory();
+    uint64_t nonce_high = 0, nonce_low = 0;
+    if (directory == NULL) {
+        errno = EPERM; // no engine-private namespace -> no identity, rather than an unsafe one
+        return -1;
+    }
+    if (sock_identity_ticket_publish(fd, g_sock_object[fd], &nonce_high, &nonce_low) != 0) return -1;
     char path[HL_SOCKET_IDENTITY_PATH_SIZE];
-    if (hl_socket_identity_format(path, sizeof path, g_sock_object[fd], peer) != 0) {
+    if (hl_socket_identity_format(path, sizeof path, directory, nonce_high, nonce_low) != 0) {
+        sock_identity_ticket_release(fd);
         errno = EINVAL;
         return -1;
     }
     struct sockaddr_un address;
-    if (unix_addr_set(&address, path) < 0) return -1;
+    int bound = unix_addr_set(&address, path) < 0 ? -1 : (unlink(path), bind(fd, (struct sockaddr *)&address, sizeof address));
+    if (bound != 0) {
+        int saved = errno;
+        sock_identity_ticket_release(fd);
+        errno = saved;
+        return -1;
+    }
     unlink(path);
-    if (bind(fd, (struct sockaddr *)&address, sizeof address) != 0) return -1;
-    unlink(path);
-    g_sock_peer_object[fd] = peer;
+    sock_internal_alias_relation(fd, g_sock_peer_object[fd], 1, checkpoint_pending);
     return 0;
 }
 
-static int sock_internal_accept_identify(int fd) {
+static void sock_internal_connect_failed(int fd) {
+    if (fd < 0 || fd >= HL_NFD) return;
+    /* A reserved peer becomes authoritative only when connect succeeds (or remains in progress).  The
+     * private local bind cannot be undone without replacing the descriptor, but clearing the relation makes
+     * checkpoint capture fail closed instead of inventing a connected peer after a refused dial. */
+    sock_internal_connect_observed(fd, ECONNREFUSED);
+}
+
+static int sock_internal_accept_identify(int fd, int checkpoint_pending) {
+    if (fd >= 0 && fd < HL_NFD && checkpoint_pending) g_sock_identity_reciprocity_required[fd] = 1;
     struct sockaddr_un peer = {0};
     socklen_t length = sizeof peer;
     if (getpeername(fd, (struct sockaddr *)&peer, &length) != 0) return -1;
     peer.sun_path[sizeof peer.sun_path - 1] = '\0';
-    if (peer.sun_family != AF_UNIX ||
-        strncmp(peer.sun_path, HL_SOCKET_IDENTITY_PREFIX, sizeof(HL_SOCKET_IDENTITY_PREFIX) - 1) != 0)
-        return 0;
-    uint64_t client = 0, server = 0;
-    if (hl_socket_identity_parse(peer.sun_path, &client, &server) != 0) {
-        errno = EPROTO;
-        return -1;
-    }
-    g_sock_object[fd] = server;
+    const char *directory = sock_identity_directory();
+    uint64_t nonce_high = 0, nonce_low = 0;
+    if (peer.sun_family != AF_UNIX || directory == NULL ||
+        hl_socket_identity_nonce_parse(peer.sun_path, directory, &nonce_high, &nonce_low) != 0)
+        return 0; // not one of ours: leave the accepted socket's freshly allocated identity alone
+    /* The name got us a nonce and nothing more.  Identity exists only if that nonce is still an
+     * outstanding ticket in the engine-private table, and claiming it consumes it.  A forged or replayed
+     * name therefore yields no identity at all -- it can never yield a CHOSEN one.
+     *
+     * The accepted descriptor KEEPS the object accept() minted for it in THIS process, so its id encodes
+     * this process's pid, and that id is what the claim deposits for the connector to collect.  Adopting a
+     * connector-minted server id instead made both halves of the pair encode the connector's pid, leaving
+     * a checkpoint reciprocity join with no computable second owner. */
+    uint64_t client = 0, server = g_sock_object[fd];
+    if (!server || sock_identity_ticket_claim(nonce_high, nonce_low, &client, server) != 0) return 0;
     g_sock_peer_object[fd] = client;
+    g_sock_identity_peer_hidden[fd] = 1;
+    g_sock_identity_reciprocity_required[fd] = (uint8_t)checkpoint_pending;
     return 1;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static void sock_internal_identity_test_initialize(int fd, uint64_t object, uint64_t ofd) {
+    if (g_sock_states == NULL) {
+        void *arena = mmap(NULL, sizeof(struct sock_state) * SOCK_STATE_N, PROT_READ | PROT_WRITE,
+                           MAP_ANON | MAP_SHARED, -1, 0);
+        if (arena != MAP_FAILED) g_sock_states = (struct sock_state *)arena;
+    }
+    sock_identity_ticket_arena_attach();
+    g_sock_object[fd] = object;
+    g_sock_peer_object[fd] = 0;
+    g_sock_identity_local_hidden[fd] = 0;
+    g_sock_identity_peer_hidden[fd] = 0;
+    g_sock_identity_reciprocity_required[fd] = 0;
+    g_sock_state_unretained[fd] = 0;
+    sock_identity_ticket_release(fd);
+    g_sock_connecting[fd] = 0;
+    g_sock_conn[fd] = 0;
+    g_so_error[fd] = 0;
+    sock_state_drop(fd);
+    if (object == 0) {
+        g_ofd_id[fd] = 0;
+        g_sock_fam[fd] = 0;
+        g_sock_stream[fd] = 0;
+        return;
+    }
+    int source = -1;
+    if (ofd != 0)
+        for (int candidate = 0; candidate < HL_NFD; candidate++)
+            if (candidate != fd && g_ofd_id[candidate] == ofd && g_sock_state_ref[candidate] != 0) {
+                source = candidate;
+                break;
+            }
+    g_ofd_id[fd] = ofd;
+    if (source >= 0)
+        sock_state_dup(fd, source);
+    else if (sock_state_create(fd) != 0)
+        g_sock_state_unretained[fd] = 1;
+    g_sock_fam[fd] = object ? AF_UNIX : 0;
+    g_sock_stream[fd] = object != 0;
+}
+
+HL_API int HL_TARGET_LOCAL(unix_identity_test)(uint32_t operation, int fd, uint64_t object, uint64_t *local,
+                                               uint64_t *peer, uint32_t *hidden) {
+    if (fd < 0 || fd >= HL_NFD || local == NULL || peer == NULL || hidden == NULL) return EINVAL;
+    int status = 0;
+    switch (operation) {
+    case 0:
+        sock_internal_identity_test_initialize(fd, object, g_ofd_id[fd]);
+        status = sock_internal_connect_prepare(fd, 1);
+        break;
+    case 1:
+        sock_internal_identity_test_initialize(fd, object, g_ofd_id[fd]);
+        status = sock_internal_accept_identify(fd, 1);
+        break;
+    case 2: sock_internal_connect_failed(fd); break;
+    case 3: sock_internal_identity_test_initialize(fd, 0, 0); break;
+    case 4:
+        sock_internal_identity_test_initialize(fd, object, 0);
+        status = sock_internal_connect_prepare(fd, 0);
+        break;
+    case 5: sock_internal_connect_observed(fd, EINPROGRESS); break;
+    case 6: sock_internal_connect_observed(fd, ECONNREFUSED); break;
+    case 7: sock_internal_connect_observed(fd, 0); break;
+    case 8: status = sock_internal_checkpoint_admit(fd); break;
+    case 9: sock_internal_identity_test_initialize(fd, object, object); break;
+    case 10: break;
+    case 11:
+        sock_internal_identity_test_initialize(fd, object, 0);
+        g_sock_peer_object[fd] = object + 1;
+        break;
+    /* 15/16 mint through the production allocator instead of taking a test-chosen object, so a test can
+     * observe which PROCESS an endpoint id encodes -- the property a reciprocity join depends on. */
+    case 15:
+        sock_internal_identity_test_initialize(fd, sock_object_new(), 0);
+        status = sock_internal_connect_prepare(fd, 1);
+        break;
+    case 16:
+        sock_internal_identity_test_initialize(fd, sock_object_new(), 0);
+        status = sock_internal_accept_identify(fd, 1);
+        break;
+    case 12: status = sock_internal_shutdown(fd, SHUT_RD); break;
+    case 13: status = sock_internal_shutdown(fd, SHUT_WR); break;
+    case 14: status = sock_internal_shutdown(fd, SHUT_RDWR); break;
+    default: return EINVAL;
+    }
+    if (status < 0) return errno != 0 ? errno : EIO;
+    *local = g_sock_object[fd];
+    *peer = g_sock_peer_object[fd];
+    uint32_t shutdown_state = sock_state_shutdown(fd);
+    *hidden = (uint32_t)g_sock_identity_local_hidden[fd] | ((uint32_t)g_sock_identity_peer_hidden[fd] << 1) |
+              ((uint32_t)g_sock_identity_reciprocity_required[fd] << 2) | ((uint32_t)g_sock_connecting[fd] << 3) |
+              ((uint32_t)g_sock_conn[fd] << 4) |
+              ((shutdown_state & SOCK_SHUTDOWN_READ) != 0 ? UINT32_C(1) << 5 : 0) |
+              ((shutdown_state & SOCK_SHUTDOWN_WRITE) != 0 ? UINT32_C(1) << 6 : 0) |
+              ((uint32_t)g_sock_state_unretained[fd] << 7);
+    return status;
+}
+#endif
 
 // fd -> a DISTINCT synthetic peer pid stamped on both ends at socketpair() creation (0 = none). macOS
 // captures LOCAL_PEERPID at socketpair-creation time and reports the CREATOR's pid on BOTH ends, never
@@ -411,6 +1036,20 @@ static int sock_alloc_synth_peer(void) {
         v = 0x40000000;
     }
     return v;
+}
+
+/* A Linux AF_UNIX datagram is bounded only by SO_SNDBUF, whose default is ~208KB; Darwin's default is
+ * net.local.dgram.maxdgram, and a socket inherits it as an SO_SNDBUF of 2048.  Measured on both hosts
+ * over a socketpair(AF_UNIX, SOCK_DGRAM): Linux sends 2048/2049/4096/8192/65536 bytes without complaint,
+ * Darwin sends 2048 and answers EMSGSIZE for every larger size -- a guest datagram that is legal on
+ * Linux is refused on macOS.  A per-socket buffer overrides the maxdgram default (verified: with the
+ * buffer raised, all five sizes send), which is what the SEQPACKET backing already relies on.  Give an
+ * ordinary AF_UNIX datagram socket the same Linux-sized window at creation.  A failed setsockopt is not
+ * an error: the socket is still usable for the small datagrams that fit the default. */
+static void sock_unix_dgram_buffers(int fd) {
+    int size = 1 << 20; // 1 MiB: above the ~208KB a Linux AF_UNIX datagram socket starts with
+    (void)setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &size, sizeof size);
+    (void)setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &size, sizeof size);
 }
 
 static int seq_is(int fd) {
@@ -438,6 +1077,10 @@ static void cmsg_note_recv_sock_fd(int fd) {
     if (getsockname(fd, (struct sockaddr *)&ss, &sl) != 0 || ss.ss_family != AF_UNIX) return;
 
     g_sock_fam[fd] = AF_UNIX;
+    sock_state_drop(fd);
+    /* SCM_RIGHTS currently carries OFD identity but not the authenticated socket endpoint graph.  Refuse
+     * checkpointing this descriptor until that graph proves its peer and cross-process shutdown state. */
+    g_sock_identity_reciprocity_required[fd] = 1;
     g_sock_stream[fd] = (ty == SOCK_STREAM);
     g_sock_dgram[fd] = (ty == SOCK_DGRAM);
     if (!g_sock_peer_pid[fd]) g_sock_peer_pid[fd] = sock_alloc_synth_peer();
@@ -652,6 +1295,16 @@ static void fill_inet6_lo(uint8_t *sa, socklen_t *l, uint16_t port) {
     if (l) *l = 28;
 }
 
+/* Linux sockaddr_un begins with a two-byte family on every supported guest ISA.  Do not copy the host's
+ * sockaddr_un prefix here: Darwin begins it with one-byte sun_len followed by one-byte sun_family. */
+static void fill_unix_unnamed(uint8_t *sa, socklen_t *length) {
+    if (!length) return;
+    socklen_t capacity = *length;
+    const uint8_t family[2] = {(uint8_t)(AF_UNIX & 0xff), (uint8_t)((AF_UNIX >> 8) & 0xff)};
+    if (sa && capacity != 0) memcpy(sa, family, capacity < 2 ? (size_t)capacity : 2u);
+    *length = 2;
+}
+
 // ---- NET bridge (2A "virtual switch"): per-USER-NETWORK rendezvous for container<->container traffic.
 // Generalizes the loopback redirect from "127/8 -> per-container dir" to "this user network's subnet ->
 // SHARED per-network dir". A guest TCP socket whose peer is ANOTHER container's IP on the same user
@@ -708,6 +1361,11 @@ static void fd_carry_sock(int dst, int src) {
     g_sock_pair_peer[dst] = g_sock_pair_peer[src]; // dup aliases the same end -> same partner
     g_sock_object[dst] = g_sock_object[src];
     g_sock_peer_object[dst] = g_sock_peer_object[src];
+    g_sock_identity_local_hidden[dst] = g_sock_identity_local_hidden[src];
+    g_sock_identity_peer_hidden[dst] = g_sock_identity_peer_hidden[src];
+    g_sock_identity_reciprocity_required[dst] = g_sock_identity_reciprocity_required[src];
+    g_sock_state_unretained[dst] = g_sock_state_unretained[src];
+    sock_state_dup(dst, src);
     g_sock_peer_pid[dst] = g_sock_peer_pid[src]; // ... and the same synthetic peer node identity
     g_sock_passcred[dst] = g_sock_passcred[src];
     g_sock_conn[dst] = g_sock_conn[src];

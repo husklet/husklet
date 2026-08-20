@@ -34,6 +34,7 @@ hl-images = { path = "../../containers/hl-images", optional = true }
 hl-gui = { path = "../../workspaces/hl-gui", optional = true }
 hl-gui-gtk = { path = "../../workspaces/hl-gui-gtk", optional = true }
 libc = { version = "0.2", optional = true }
+fs2 = { workspace = true, optional = true }
 tokio = { version = "1", features = ["fs", "rt-multi-thread", "macros", "signal"], optional = true }
 serde_json = { version = "1", optional = true }
 sha2 = { workspace = true, optional = true }
@@ -47,6 +48,7 @@ objc2-foundation = { version = "0.2", features = ["NSThread"], optional = true }
 objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSWindow", "NSResponder", "NSView", "NSAppearance", "NSColor"], optional = true }
 
 [dev-dependencies]
+flate2.workspace = true
 tempfile.workspace = true
 
 [build-dependencies]
@@ -68,6 +70,7 @@ runtime = [
     "dep:hl-daemon",
     "dep:hl-client",
     "dep:hl-images",
+    "dep:fs2",
     "dep:libc",
     "dep:tokio",
     "dep:serde_json",

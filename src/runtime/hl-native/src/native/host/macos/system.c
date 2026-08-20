@@ -12,6 +12,7 @@
 #include <string.h>
 #include <signal.h>
 #include <sys/proc_info.h>
+#include <sys/resource.h>
 #include <sys/sysctl.h>
 #include <time.h>
 #include <unistd.h>
@@ -117,6 +118,37 @@ int hl_host_process_read(int64_t pid, hl_host_process_info *info) {
     return 1;
 }
 
+int hl_host_process_resource_read(hl_host_process_resource_snapshot *snapshot) {
+    struct rlimit nofile;
+    struct rlimit nproc;
+    pid_t children[1024];
+    hl_host_process_info process;
+    if (snapshot == NULL) return 0;
+    memset(snapshot, 0, sizeof *snapshot);
+    snapshot->open_descriptors = -1;
+    snapshot->threads = -1;
+    snapshot->caller_children = -1;
+    snapshot->nofile_status = getrlimit(RLIMIT_NOFILE, &nofile);
+    if (snapshot->nofile_status == 0) {
+        snapshot->nofile_current = nofile.rlim_cur;
+        snapshot->nofile_maximum = nofile.rlim_max;
+    }
+    snapshot->nproc_status = getrlimit(RLIMIT_NPROC, &nproc);
+    if (snapshot->nproc_status == 0) {
+        snapshot->nproc_current = nproc.rlim_cur;
+        snapshot->nproc_maximum = nproc.rlim_max;
+    }
+    if (hl_host_process_read(getpid(), &process)) snapshot->threads = (int32_t)process.threads;
+    int descriptor_bytes = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, NULL, 0);
+    if (descriptor_bytes > 0) snapshot->open_descriptors = descriptor_bytes / (int)sizeof(struct proc_fdinfo);
+    int child_count = proc_listchildpids(getpid(), children, (int)sizeof children);
+    if (child_count >= 0) {
+        snapshot->caller_children = child_count;
+        snapshot->children_truncated = child_count >= (int)(sizeof children / sizeof children[0]);
+    }
+    return 1;
+}
+
 static uint32_t hl_macos_fd_kind(uint32_t kind) {
     if (kind == PROX_FDTYPE_VNODE) return HL_HOST_FD_FILE;
     if (kind == PROX_FDTYPE_PIPE) return HL_HOST_FD_PIPE;
@@ -165,6 +197,31 @@ int hl_host_process_fds(int64_t pid, hl_host_process_fd *entries, size_t capacit
     }
     free(native);
     *count = total;
+    return 1;
+}
+
+/* Darwin's PROC_PIDLISTFDS sizing call is not the pathological one Linux's /proc readdir is, so this
+ * keeps the size-then-list shape and over-allocates against the same open-in-between race the two-call
+ * form always had. Callers see the single-pass contract either way. */
+int hl_host_process_fds_collect(int64_t pid, hl_host_process_fd **entries, size_t *count) {
+    hl_host_process_fd *listing;
+    size_t need = 0;
+    size_t capacity;
+    size_t got = 0;
+    if (entries == NULL || count == NULL) return 0;
+    *entries = NULL;
+    *count = 0;
+    if (!hl_host_process_fds(pid, NULL, 0, &need)) return 0;
+    capacity = need <= SIZE_MAX - 32 ? need + 32 : need;
+    if (capacity > SIZE_MAX / sizeof *listing) return 0;
+    listing = capacity != 0 ? malloc(capacity * sizeof *listing) : NULL;
+    if (capacity != 0 && listing == NULL) return 0;
+    if (!hl_host_process_fds(pid, listing, capacity, &got) || got > capacity) {
+        free(listing);
+        return 0;
+    }
+    *entries = listing;
+    *count = got;
     return 1;
 }
 
@@ -230,11 +287,12 @@ int hl_host_process_peers(hl_host_process_peer *entries, size_t capacity, size_t
     struct kinfo_proc *processes;
     int mib[3] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL};
     pid_t self = getpid();
-    pid_t session = getsid(0);
     size_t bytes = 0;
     size_t total = 0;
-    if (count == NULL || (capacity != 0 && entries == NULL) || proc_pidpath(self, self_path, sizeof self_path) <= 0 ||
-        session < 0)
+    /* No session filter: the engine emulates the guest's setsid(2) with the host's, so a guest session
+       leader has its own host session and the filter would exclude it. The caller narrows the set to its
+       own descendants, which is tighter. Kept identical to the Linux arm deliberately. */
+    if (count == NULL || (capacity != 0 && entries == NULL) || proc_pidpath(self, self_path, sizeof self_path) <= 0)
         return 0;
     if (sysctl(mib, 3, NULL, &bytes, NULL, 0) != 0 || bytes == 0) return 0;
     bytes += 16 * sizeof *processes;
@@ -247,7 +305,7 @@ int hl_host_process_peers(hl_host_process_peer *entries, size_t capacity, size_t
     for (size_t index = 0; index < bytes / sizeof *processes; ++index) {
         char path[PROC_PIDPATHINFO_MAXSIZE];
         pid_t pid = processes[index].kp_proc.p_pid;
-        if (pid <= 0 || pid == self || getsid(pid) != session || proc_pidpath(pid, path, sizeof path) <= 0 ||
+        if (pid <= 0 || pid == self || proc_pidpath(pid, path, sizeof path) <= 0 ||
             strcmp(path, self_path) != 0)
             continue;
         if (total < capacity) entries[total].identity = pid;
@@ -257,6 +315,23 @@ int hl_host_process_peers(hl_host_process_peer *entries, size_t capacity, size_t
     *count = total;
     return 1;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+#include "hl/base.h"
+/* 1 when `pid` is enumerated as a live engine peer of this process, 0 when it is not.
+   Exists because peer enumeration is only ever exercised by a coordinator against a REAL forked
+   process tree: an in-memory fake cannot express "this peer became a session leader", which is the
+   condition that silently emptied the result for every setsid-using guest. */
+HL_API int32_t hl_c_backend_host_process_peer_enumerated_test(int32_t pid) {
+    hl_host_process_peer peers[512];
+    size_t count = 0;
+    if (!hl_host_process_peers(peers, sizeof peers / sizeof *peers, &count)) return -1;
+    if (count > sizeof peers / sizeof *peers) count = sizeof peers / sizeof *peers;
+    for (size_t index = 0; index < count; ++index)
+        if (peers[index].identity == (int64_t)pid) return 1;
+    return 0;
+}
+#endif
 
 int hl_host_process_interrupt(hl_host_process_peer peer) {
     return peer.identity > 0 && peer.identity <= INT32_MAX && kill((pid_t)peer.identity, SIGINFO) == 0;

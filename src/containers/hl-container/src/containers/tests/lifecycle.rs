@@ -330,6 +330,187 @@ async fn checkpoint_is_durable_and_start_restores_while_arming_the_next_capture(
 }
 
 #[tokio::test]
+async fn checkpoint_restore_replaces_stdin_authority_before_the_new_process_starts() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    let mut process = Process::new("fake");
+    process.console.stdin = true;
+    containers
+        .create(ContainerSpec::from_directory("/", process).name("generation-input"))
+        .await
+        .unwrap();
+
+    let stale = containers.attach("generation-input").await.unwrap().input();
+    containers.start("generation-input").await.unwrap();
+    stale.write(b"before-checkpoint\n".to_vec()).await.unwrap();
+    containers
+        .checkpoint("generation-input", Duration::from_secs(1))
+        .await
+        .unwrap();
+    assert!(
+        stale.write(b"stale-after-checkpoint\n".to_vec()).await.is_err(),
+        "checkpointed stdin retained write authority"
+    );
+
+    let restored = containers.attach("generation-input").await.unwrap().input();
+    containers.start("generation-input").await.unwrap();
+    restored.write(b"restored-generation\n".to_vec()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(25)).await;
+
+    let inputs = runtime.inputs.lock().unwrap();
+    assert!(inputs.iter().any(|(_, bytes)| bytes == b"before-checkpoint\n"));
+    assert!(inputs.iter().any(|(_, bytes)| bytes == b"restored-generation\n"));
+    assert!(!inputs.iter().any(|(_, bytes)| bytes == b"stale-after-checkpoint\n"));
+    drop(inputs);
+    containers.remove_force("generation-input").await.unwrap();
+}
+
+#[tokio::test]
+async fn container_restore_waits_for_old_output_generation_before_opening_the_new_one() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("container-output-generation")).await.unwrap();
+    let mut old = containers.attach("container-output-generation").await.unwrap();
+    let (old_waiting, release_old) = runtime.delay_next_log(b"container-old-initial\n", b"container-old-late\n");
+    containers.start("container-output-generation").await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), old_waiting)
+        .await
+        .expect("old container log owner did not enter wait")
+        .unwrap();
+
+    let exits = runtime.checkpoint_exits.load(Ordering::SeqCst);
+    let checkpoint_containers = containers.clone();
+    let checkpoint = tokio::spawn(async move {
+        checkpoint_containers
+            .checkpoint("container-output-generation", Duration::from_secs(1))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while runtime.checkpoint_exits.load(Ordering::SeqCst) == exits {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("container checkpoint never requested process exit");
+    assert!(
+        !checkpoint.is_finished(),
+        "checkpoint escaped before the old output owner drained"
+    );
+    release_old.send(()).unwrap();
+    checkpoint.await.unwrap().unwrap();
+
+    let old_entries = [old.next().await.unwrap().unwrap(), old.next().await.unwrap().unwrap()];
+    assert_eq!(old_entries[0].bytes, b"container-old-initial\n");
+    assert_eq!(old_entries[1].bytes, b"container-old-late\n");
+    assert!(old.next().await.unwrap().is_none());
+
+    let mut restored = containers.attach("container-output-generation").await.unwrap();
+    assert!(restored.history().await.unwrap().is_empty());
+    containers.start("container-output-generation").await.unwrap();
+    let new_entries = [
+        restored.next().await.unwrap().unwrap(),
+        restored.next().await.unwrap().unwrap(),
+    ];
+    assert_eq!(new_entries[0].bytes, b"fake-out\n");
+    assert_eq!(new_entries[1].bytes, b"fake-err\n");
+    assert!(
+        new_entries
+            .iter()
+            .all(|entry| !entry.bytes.starts_with(b"container-old-"))
+    );
+    containers.remove_force("container-output-generation").await.unwrap();
+}
+
+#[tokio::test]
+async fn checkpoint_all_rolls_back_a_captured_container_when_its_output_owner_panics() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    runtime.panic_wait.store(true, Ordering::SeqCst);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("capture-output-panic")).await.unwrap();
+    containers.start("capture-output-panic").await.unwrap();
+    let launches = runtime.programs.lock().unwrap().len();
+
+    let error = containers.checkpoint_all(Duration::from_secs(1)).await.unwrap_err();
+    assert!(error.to_string().contains("output owner exited"));
+    let restored = containers.inspect("capture-output-panic").await.unwrap();
+    assert!(matches!(restored.state, ContainerState::Running { .. }));
+    assert!(restored.checkpoint.is_none());
+    assert_eq!(runtime.programs.lock().unwrap().len(), launches + 1);
+}
+
+#[tokio::test]
+async fn checkpoint_all_aborts_a_wedged_output_owner_before_rollback() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(10);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("wedged-output-owner")).await.unwrap();
+    let (waiting, release) = runtime.delay_next_log(b"before-timeout\n", b"after-timeout\n");
+    containers.start("wedged-output-owner").await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), waiting)
+        .await
+        .expect("output owner did not reach the injected wedge")
+        .unwrap();
+    let launches = runtime.programs.lock().unwrap().len();
+
+    let error = containers.checkpoint_all(Duration::from_millis(10)).await.unwrap_err();
+    // The failure names the journal it was waiting on: a capture waits on the container's own
+    // worker and on every sealed exec member, and an unattributed message cannot say which.
+    let restored = containers.inspect("wedged-output-owner").await.unwrap();
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "runtime failed: timed out waiting for container {} process output ownership to close",
+            restored.id
+        )
+    );
+    assert!(matches!(restored.state, ContainerState::Running { .. }));
+    assert!(restored.checkpoint.is_none());
+    assert_eq!(runtime.programs.lock().unwrap().len(), launches + 1);
+    assert!(
+        release.send(()).is_err(),
+        "timed-out output owner was still alive after rollback"
+    );
+}
+
+#[tokio::test]
+async fn checkpoint_all_rolls_back_a_later_capture_after_an_earlier_failure() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("a-checkpoint-rejected")).await.unwrap();
+    containers.create(spec("b-output-owner-panics")).await.unwrap();
+    let order = containers.service.checkpoint_order().await.unwrap();
+    assert_eq!(order.len(), 2);
+    let rejected_process = runtime.next.load(Ordering::SeqCst);
+    containers.start(order[0].as_str()).await.unwrap();
+    runtime.panic_wait.store(true, Ordering::SeqCst);
+    containers.start(order[1].as_str()).await.unwrap();
+    runtime.panic_wait.store(false, Ordering::SeqCst);
+    runtime.fail_checkpoint.store(rejected_process, Ordering::SeqCst);
+    let launches = runtime.programs.lock().unwrap().len();
+
+    let error = containers.checkpoint_all(Duration::from_secs(1)).await.unwrap_err();
+    assert!(
+        error.to_string().contains("injected checkpoint failure"),
+        "unexpected primary checkpoint error: {error}"
+    );
+    for name in ["a-checkpoint-rejected", "b-output-owner-panics"] {
+        let container = containers.inspect(name).await.unwrap();
+        assert!(matches!(container.state, ContainerState::Running { .. }), "{name}");
+        assert!(container.checkpoint.is_none(), "{name}");
+    }
+    assert_eq!(runtime.programs.lock().unwrap().len(), launches + 1);
+}
+
+#[tokio::test]
 async fn discarded_checkpoint_preserves_container_and_forces_a_fresh_start() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_secs(1);
@@ -391,6 +572,41 @@ async fn failed_restore_retains_the_checkpoint_for_retry() {
 }
 
 #[tokio::test]
+async fn failed_restore_terminates_its_reserved_session_and_retry_gets_a_fresh_one() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    let mut process = Process::new("fake");
+    process.console.stdin = true;
+    containers
+        .create(ContainerSpec::from_directory("/", process).name("restore-session-retry"))
+        .await
+        .unwrap();
+    containers.start("restore-session-retry").await.unwrap();
+    containers
+        .checkpoint("restore-session-retry", Duration::from_secs(1))
+        .await
+        .unwrap();
+
+    let failed_generation = containers.attach("restore-session-retry").await.unwrap().input();
+    runtime.fail.store(true, Ordering::SeqCst);
+    assert!(containers.start("restore-session-retry").await.is_err());
+    assert!(failed_generation.write(b"orphaned\n".to_vec()).await.is_err());
+
+    runtime.fail.store(false, Ordering::SeqCst);
+    let retry = containers.attach("restore-session-retry").await.unwrap().input();
+    containers.start("restore-session-retry").await.unwrap();
+    retry.write(b"retry\n".to_vec()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    let inputs = runtime.inputs.lock().unwrap();
+    assert!(inputs.iter().any(|(_, bytes)| bytes == b"retry\n"));
+    assert!(!inputs.iter().any(|(_, bytes)| bytes == b"orphaned\n"));
+    drop(inputs);
+    containers.remove_force("restore-session-retry").await.unwrap();
+}
+
+#[tokio::test]
 async fn checkpoint_all_captures_running_and_paused_containers_for_later_restore() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_secs(1);
@@ -416,101 +632,88 @@ async fn checkpoint_all_captures_running_and_paused_containers_for_later_restore
 }
 
 #[tokio::test]
-async fn execution_checkpoint_restores_without_capturing_the_container_init() {
+async fn checkpoint_all_holds_one_operation_guard_from_exec_preflight_through_capture() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_secs(1);
     let runtime = Arc::new(runtime);
     let containers = service(Arc::clone(&runtime)).await;
-    containers.create(spec("workspace")).await.unwrap();
-    containers.start("workspace").await.unwrap();
+    containers.create(spec("atomic-checkpoint-parent")).await.unwrap();
+    containers.start("atomic-checkpoint-parent").await.unwrap();
     let exec = containers
         .executions()
-        .create(
-            "workspace",
-            ExecSpec::new(Process::new("/bin/sh").console(Console::default().terminal(Size::new(24, 80).unwrap()))),
-        )
+        .create("atomic-checkpoint-parent", ExecSpec::new(Process::new("/bin/sh")))
         .await
         .unwrap();
-    let _session = containers.executions().start(&exec.id).await.unwrap();
-    let wait_id = exec.id.clone();
-    let wait_containers = containers.clone();
-    let mut wait = tokio::spawn(async move { wait_containers.executions().wait(&wait_id).await });
+    let launches = runtime.programs.lock().unwrap().len();
+    let attempts = containers.service.exec_start_attempts();
+    let (preflight, release) = containers.service.gate_checkpoint_all().await;
 
-    containers
-        .executions()
-        .checkpoint_all(Duration::from_secs(1))
+    let checkpoint_containers = containers.clone();
+    let checkpoint = tokio::spawn(async move { checkpoint_containers.checkpoint_all(Duration::from_secs(1)).await });
+    tokio::time::timeout(Duration::from_secs(1), preflight)
         .await
+        .expect("checkpoint_all did not reach the post-preflight barrier")
         .unwrap();
-    assert!(matches!(
-        containers.inspect("workspace").await.unwrap().state,
-        ContainerState::Running { .. }
-    ));
-    let checkpointed = containers.executions().inspect(&exec.id).await.unwrap();
-    assert_eq!(checkpointed.state, ExecState::Created);
-    assert_eq!(
-        checkpointed
-            .checkpoint
-            .as_ref()
-            .map(|checkpoint| checkpoint.namespace.as_str()),
-        Some(format!("exec-{}", exec.id).as_str())
-    );
+
+    let start_containers = containers.clone();
+    let start_id = exec.id.clone();
+    let start = tokio::spawn(async move { start_containers.executions().start(&start_id).await });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while containers.service.exec_start_attempts() == attempts {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("concurrent exec start did not reach the operation guard");
     assert!(
-        tokio::time::timeout(Duration::from_millis(25), &mut wait)
-            .await
-            .is_err(),
-        "checkpointed execution wait returned before restore"
+        !start.is_finished(),
+        "exec start crossed checkpoint_all's operation boundary"
     );
+    assert_eq!(runtime.programs.lock().unwrap().len(), launches);
 
-    containers.shutdown(Duration::from_secs(1)).await.unwrap();
-    containers.start("workspace").await.unwrap();
-    let _restored = containers.executions().start(&exec.id).await.unwrap();
+    release.send(()).unwrap();
+    checkpoint.await.unwrap().unwrap();
+    let error = start
+        .await
+        .unwrap()
+        .err()
+        .expect("concurrent exec start unexpectedly crossed the checkpoint boundary");
+    assert!(matches!(error, Error::InvalidState { .. }));
     assert!(matches!(
-        containers.executions().inspect(&exec.id).await.unwrap().state,
-        ExecState::Running { .. }
+        containers.inspect("atomic-checkpoint-parent").await.unwrap().state,
+        ContainerState::Exited { .. }
     ));
-    assert_eq!(
-        runtime.checkpoints.lock().unwrap().as_slice(),
-        [Some(false), Some(false), Some(false), Some(true)]
-    );
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), wait)
-            .await
-            .expect("restored execution wait timed out")
-            .unwrap()
-            .unwrap(),
-        ExitStatus::Code(0)
-    );
+    assert_eq!(runtime.programs.lock().unwrap().len(), launches);
 }
 
 #[tokio::test]
-async fn checkpoint_rejection_preserves_every_running_process() {
-    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
-    runtime.delay = Duration::from_secs(1);
-    runtime.checkpointable.store(false, Ordering::SeqCst);
-    let runtime = Arc::new(runtime);
+async fn exhausted_exec_io_generation_fails_before_launch() {
+    let runtime = Arc::new(FakeRuntime::new(ExitStatus::Code(0)));
     let containers = service(Arc::clone(&runtime)).await;
-    containers.create(spec("workspace")).await.unwrap();
-    containers.start("workspace").await.unwrap();
+    containers
+        .create(spec("exec-generation-exhausted-parent"))
+        .await
+        .unwrap();
+    containers.start("exec-generation-exhausted-parent").await.unwrap();
     let exec = containers
         .executions()
         .create(
-            "workspace",
-            ExecSpec::new(Process::new("/bin/sh").console(Console::default().terminal(Size::new(24, 80).unwrap()))),
+            "exec-generation-exhausted-parent",
+            ExecSpec::new(Process::new("/bin/sh")),
         )
         .await
         .unwrap();
-    let _session = containers.executions().start(&exec.id).await.unwrap();
+    let launches = runtime.programs.lock().unwrap().len();
+    containers.service.exhaust_io_generations();
 
-    let error = containers.checkpoint_all(Duration::from_secs(1)).await.unwrap_err();
-
-    assert!(error.to_string().contains("not checkpointable"));
-    let container = containers.inspect("workspace").await.unwrap();
-    assert!(matches!(container.state, ContainerState::Running { .. }));
-    assert_eq!(container.checkpoint, None);
-    let execution = containers.executions().inspect(&exec.id).await.unwrap();
-    assert!(matches!(execution.state, ExecState::Running { .. }));
-    assert_eq!(execution.checkpoint, None);
-    assert!(runtime.suspensions.lock().unwrap().is_empty());
+    let error = containers
+        .executions()
+        .start(&exec.id)
+        .await
+        .err()
+        .expect("exhausted generation unexpectedly launched an exec");
+    assert!(error.to_string().contains("I/O generation space is exhausted"));
+    assert_eq!(runtime.programs.lock().unwrap().len(), launches);
 }
 
 #[tokio::test]
@@ -582,6 +785,107 @@ async fn failed_launch_does_not_publish_running_state() {
     containers.create(spec("bad")).await.unwrap();
     assert!(matches!(containers.start("bad").await, Err(Error::Runtime(_))));
     assert_eq!(containers.inspect("bad").await.unwrap().state, ContainerState::Created);
+}
+
+#[tokio::test]
+async fn failed_start_publication_retires_reserved_io_and_retry_allocates_fresh_authority() {
+    let storage = Arc::new(Memory::default());
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_millis(10);
+    let runtime = Arc::new(runtime);
+    let containers = test_containers(Arc::clone(&storage), runtime.clone()).await.unwrap();
+    let mut process = Process::new("fake");
+    process.console.stdin = true;
+    containers
+        .create(ContainerSpec::from_directory("/", process).name("publication-retry"))
+        .await
+        .unwrap();
+    let stale = containers.attach("publication-retry").await.unwrap().input();
+    storage.fail_next_container_replace();
+
+    assert!(containers.start("publication-retry").await.is_err());
+    assert!(stale.write(b"stale-publication\n".to_vec()).await.is_err());
+    let retry = containers.attach("publication-retry").await.unwrap().input();
+    containers.start("publication-retry").await.unwrap();
+    retry.write(b"retry-publication\n".to_vec()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(5)).await;
+
+    let inputs = runtime.inputs.lock().unwrap();
+    assert!(inputs.iter().any(|(_, bytes)| bytes == b"retry-publication\n"));
+    assert!(!inputs.iter().any(|(_, bytes)| bytes == b"stale-publication\n"));
+}
+
+#[tokio::test]
+async fn failed_start_publication_quarantines_retry_until_unpublished_process_is_reaped() {
+    let storage = Arc::new(Memory::default());
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_millis(75);
+    let runtime = Arc::new(runtime);
+    let containers = test_containers(Arc::clone(&storage), runtime.clone()).await.unwrap();
+    containers.create(spec("publication-quarantine")).await.unwrap();
+    storage.fail_next_container_replace();
+
+    let failure = containers.start("publication-quarantine").await.unwrap_err();
+    assert!(failure.to_string().contains("reap timed out"));
+    let quarantined = containers.start("publication-quarantine").await.unwrap_err();
+    assert!(quarantined.to_string().contains("quarantined"));
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    containers.start("publication-quarantine").await.unwrap();
+}
+
+#[tokio::test]
+async fn failed_unpublished_process_reap_permanently_poisons_retry() {
+    let storage = Arc::new(Memory::default());
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_millis(1);
+    runtime.fail_wait.store(true, Ordering::SeqCst);
+    let runtime = Arc::new(runtime);
+    let containers = test_containers(Arc::clone(&storage), runtime).await.unwrap();
+    containers.create(spec("publication-reap-failure")).await.unwrap();
+    storage.fail_next_container_replace();
+
+    let failure = containers.start("publication-reap-failure").await.unwrap_err();
+    assert!(failure.to_string().contains("unpublished process reap failed"));
+    let poisoned = containers.start("publication-reap-failure").await.unwrap_err();
+    assert!(poisoned.to_string().contains("cleanup is poisoned"));
+}
+
+#[tokio::test]
+async fn panicked_unpublished_reap_task_permanently_poisons_retry() {
+    let storage = Arc::new(Memory::default());
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_millis(1);
+    runtime.panic_wait.store(true, Ordering::SeqCst);
+    let runtime = Arc::new(runtime);
+    let containers = test_containers(Arc::clone(&storage), runtime).await.unwrap();
+    containers.create(spec("publication-reap-panic")).await.unwrap();
+    storage.fail_next_container_replace();
+
+    let failure = containers.start("publication-reap-panic").await.unwrap_err();
+    assert!(failure.to_string().contains("unpublished reap task failed"));
+    let poisoned = containers.start("publication-reap-panic").await.unwrap_err();
+    assert!(poisoned.to_string().contains("cleanup is poisoned"));
+}
+
+#[tokio::test]
+async fn exhausted_container_generation_fails_before_allocating_process_io() {
+    let storage = Arc::new(Memory::default());
+    let runtime = Arc::new(FakeRuntime::new(ExitStatus::Code(0)));
+    let containers = test_containers(Arc::clone(&storage), runtime.clone()).await.unwrap();
+    let created = containers.create(spec("generation-exhausted")).await.unwrap();
+    let mut exhausted = crate::storage::Containers::get(storage.as_ref(), &created.id)
+        .await
+        .unwrap()
+        .unwrap();
+    exhausted.generation = u64::MAX;
+    crate::storage::Containers::replace(storage.as_ref(), &exhausted)
+        .await
+        .unwrap();
+
+    assert!(containers.attach("generation-exhausted").await.is_err());
+    assert!(containers.start("generation-exhausted").await.is_err());
+    assert!(runtime.programs.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -793,4 +1097,188 @@ async fn force_removal_of_a_guest_that_ignores_the_stop_signal_is_bounded() {
         "{error:?}"
     );
     assert!(runtime.signals.lock().unwrap().contains(&Signal::KILL));
+}
+
+/// An exec session holds the far ends of its container's sockets and pipes, so it
+/// must be sealed into the container's freeze rather than armed on a checkpoint
+/// channel of its own. Two channels means two trigger words: the coordinator's
+/// generation bump never reaches the session's safepoint gates, and anything the
+/// session did dump would commit into a store the container's sink cannot read.
+#[tokio::test]
+async fn an_exec_session_joins_its_container_freeze_rather_than_its_own_channel() {
+    let runtime = Arc::new(FakeRuntime::new(ExitStatus::Code(0)));
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("workspace")).await.unwrap();
+    containers.start("workspace").await.unwrap();
+    let exec = containers
+        .executions()
+        .create(
+            "workspace",
+            ExecSpec::new(Process::new("/bin/sh").console(Console::default().terminal(Size::new(24, 80).unwrap()))),
+        )
+        .await
+        .unwrap();
+    let _session = containers.executions().start(&exec.id).await.unwrap();
+
+    assert_eq!(
+        runtime.checkpoint_roles.lock().unwrap().as_slice(),
+        [Some(true), Some(false)],
+        "the container launch coordinates the freeze and its exec session joins it"
+    );
+}
+
+#[tokio::test]
+async fn committed_capture_leaves_no_sealed_domain_member_still_running() {
+    // A capture that commits IS the container's stop: `checkpoint_locked` records
+    // `Exited { Code(0) }` and the very next thing a caller does is `start()`, which restores
+    // into the same network namespace, the same SysV control block and the same filesystem
+    // generation. That is only sound if the whole PROCESS DOMAIN has already been reaped --
+    // the container's own worker and every exec session sealed into its freeze. The container's
+    // worker is covered (its output owner only signals completion after `wait()` returns);
+    // the sealed members were not, so the restore could run beside the previous generation's
+    // still-live tree.
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_millis(500);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("domain-member-handoff")).await.unwrap();
+    containers.start("domain-member-handoff").await.unwrap();
+    let member = containers
+        .executions()
+        .create("domain-member-handoff", ExecSpec::new(Process::new("fake")))
+        .await
+        .unwrap();
+    let _session = containers.executions().start(&member.id).await.unwrap();
+
+    containers.checkpoint_all(Duration::from_secs(5)).await.unwrap();
+
+    let captured = containers.inspect("domain-member-handoff").await.unwrap();
+    assert!(
+        matches!(captured.state, ContainerState::Exited { .. }),
+        "a committed capture must leave the container stopped: {:?}",
+        captured.state
+    );
+    assert!(captured.checkpoint.is_some());
+    let sealed = containers.executions().inspect(&member.id).await.unwrap();
+    assert!(
+        sealed.checkpoint.is_some(),
+        "domain member was not sealed by the capture"
+    );
+    // `remove` refuses while the member is still registered as a live runtime process, so it
+    // reports exactly the property under test without a test-only accessor.
+    containers
+        .executions()
+        .remove(&member.id)
+        .await
+        .expect("sealed domain member was still running after its capture committed");
+}
+
+/// A restore that dies while rebuilding guest memory has already exited by the time anything asks,
+/// and the caller that must notice it is asking with a deadline. `NotRunning` answers such a
+/// container immediately; `NextExit` waits for the exit AFTER this one at an unchanged generation,
+/// so a caller that reached for it would time out over exactly the failures it exists to catch.
+#[tokio::test(start_paused = true)]
+async fn an_already_exited_container_answers_not_running_immediately_and_next_exit_never() {
+    let runtime = Arc::new(FakeRuntime::new(ExitStatus::Code(1)));
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("workspace")).await.unwrap();
+    containers.start("workspace").await.unwrap();
+    containers.wait("workspace").await.unwrap();
+
+    assert_eq!(
+        containers
+            .wait_for("workspace", WaitCondition::NotRunning)
+            .await
+            .unwrap(),
+        Some(ExitStatus::Code(1))
+    );
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            containers.wait_for("workspace", WaitCondition::NextExit),
+        )
+        .await
+        .is_err()
+    );
+}
+
+/// A capture waits on the container's own output worker and then on every sealed exec member, and
+/// both waits raise the same class of failure. The message must name the journal that ran out of
+/// time: a user's `close.result` carrying an unattributed timeout cannot say whether the container
+/// or one of its exec sessions was the one that never released.
+#[tokio::test]
+async fn a_wedged_exec_member_names_itself_in_the_capture_timeout() {
+    let runtime = Arc::new(FakeRuntime::new(ExitStatus::Code(0)));
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("member-attribution")).await.unwrap();
+    containers.start("member-attribution").await.unwrap();
+    let (waiting, release) = runtime.delay_next_log(b"member-before\n", b"member-after\n");
+    let execution = containers
+        .executions()
+        .create("member-attribution", ExecSpec::new(Process::new("fake")))
+        .await
+        .unwrap();
+    let _session = containers.executions().start(&execution.id).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), waiting)
+        .await
+        .expect("exec member did not reach the injected wedge")
+        .unwrap();
+
+    let error = containers.checkpoint_all(Duration::from_millis(50)).await.unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "runtime failed: timed out waiting for exec session {} process output ownership to close",
+            execution.id
+        )
+    );
+    let _ = release.send(());
+}
+
+/// Three wedged members must not cost three timeouts. `close_handover` gives the whole capture a
+/// fixed budget, so a capture whose own wait scales with the member count is abandoned by its
+/// caller before it can report which journal was late -- the user then sees a bare handover
+/// failure instead of the attributed message above. The waits share one deadline.
+#[tokio::test]
+async fn a_capture_bounds_every_member_wait_by_one_shared_deadline() {
+    const BUDGET: Duration = Duration::from_millis(200);
+    let runtime = Arc::new(FakeRuntime::new(ExitStatus::Code(0)));
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("member-budget")).await.unwrap();
+    containers.start("member-budget").await.unwrap();
+    let mut releases = Vec::new();
+    let mut wedged = Vec::new();
+    for index in 0..3 {
+        let (waiting, release) = runtime.delay_next_log(format!("before-{index}\n"), format!("after-{index}\n"));
+        releases.push(release);
+        let execution = containers
+            .executions()
+            .create("member-budget", ExecSpec::new(Process::new("fake")))
+            .await
+            .unwrap();
+        let session = containers.executions().start(&execution.id).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), waiting)
+            .await
+            .expect("exec member did not reach the injected wedge")
+            .unwrap();
+        wedged.push((execution.id, session));
+    }
+
+    let started = std::time::Instant::now();
+    let error = containers.checkpoint_all(BUDGET).await.unwrap_err();
+    let elapsed = started.elapsed();
+
+    assert!(
+        wedged.iter().any(|(id, _)| error.to_string()
+            == format!("runtime failed: timed out waiting for exec session {id} process output ownership to close")),
+        "capture failure did not name a wedged member: {error}"
+    );
+    assert!(
+        elapsed < BUDGET * 2,
+        "three wedged members spent {elapsed:?} against a {BUDGET:?} capture budget"
+    );
+    for release in releases {
+        let _ = release.send(());
+    }
 }
