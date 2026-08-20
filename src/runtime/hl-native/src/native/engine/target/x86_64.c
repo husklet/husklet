@@ -1593,10 +1593,15 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
 // common execution tail, including calibration and diagnostic output, so standalone
 // behavior is byte-identical.
 static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t jump, uint64_t at_base) {
+    // checkpoint/restore: place the brk heap in the deterministic high arena (0 hint => normal NULL
+    // placement), exactly as the aarch64 arm does. It must be RESERVED from the arena rather than named by
+    // a literal: the arena is a bump cursor, so an address it did not issue is an address it will issue
+    // again, and the kernel answers a hint it cannot honor by placing the mapping in its own top-down pool
+    // -- where the restoring engine's own host storage lives.
     uint64_t heap;
-    uint64_t heap_address = hl_option_get("HL_CHECKPOINT") ? UINT64_C(0x0000050000000000) : 0;
-    if (hl_gmap_map_anonymous(heap_address, 256u << 20, HL_HOST_MEMORY_READ | HL_HOST_MEMORY_WRITE,
-                              HL_HOST_MEMORY_PRIVATE, &heap) != HL_STATUS_OK)
+    if (hl_gmap_map_anonymous(hl_linux_snapshot_reserve(&g_ckpt_snapshot, 256u << 20), 256u << 20,
+                              HL_HOST_MEMORY_READ | HL_HOST_MEMORY_WRITE, HL_HOST_MEMORY_PRIVATE,
+                              &heap) != HL_STATUS_OK)
         return 70;
     brk_lo = brk_cur = heap;
     brk_hi = brk_lo + (256u << 20);
