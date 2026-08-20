@@ -339,24 +339,37 @@ impl Runtime {
             targets,
             |id| async move { containers.start(&id).await.map(|_| ()) },
             || async { containers.executions().restore_checkpoints().await },
+            |id| async move { containers.executions().remove(&id).await },
         )
         .await
         .map_err(io::Error::other)
     }
 
-    pub(super) async fn restore_independently<I, J, E, S, SF, X, XF>(
+    /// Starts each checkpointed container, reattaches each checkpointed execution, and settles the
+    /// records of the executions that could not be reattached.
+    ///
+    /// A refused reattach is terminal for that record: nothing later in the workspace's life can
+    /// revive it, and `remove_stale_executions` only discards records that never reached a
+    /// checkpoint. Left in place, a refused record is re-listed by every subsequent restore, so
+    /// cycling one workspace grows the notice by one line per close -- the second reopen reports
+    /// two unresumable programs, the third reports three -- while its journal and checkpoint
+    /// objects are never released. Discard the record once, in the same pass that reports it.
+    pub(super) async fn restore_independently<I, J, E, S, SF, X, XF, D, DF>(
         targets: I,
         mut start: S,
         restore_executions: X,
+        mut discard: D,
     ) -> Result<Vec<String>, E>
     where
         I: IntoIterator<Item = (String, String)>,
-        J: std::fmt::Display,
+        J: Clone + std::fmt::Display,
         E: std::fmt::Display,
         S: FnMut(String) -> SF,
         SF: std::future::Future<Output = Result<(), E>>,
         X: FnOnce() -> XF,
         XF: std::future::Future<Output = Result<Vec<(J, E)>, E>>,
+        D: FnMut(J) -> DF,
+        DF: std::future::Future<Output = Result<(), E>>,
     {
         let mut failures = Vec::new();
         for (id, label) in targets {
@@ -366,6 +379,14 @@ impl Runtime {
         }
         for (id, error) in restore_executions().await? {
             failures.push(format!("execution {id}: {error}"));
+            // Reported, therefore settled. A discard failure is its own diagnostic and must not
+            // suppress the refusal above, which is the line the reader acts on.
+            if let Err(error) = discard(id.clone()).await {
+                hl_log::hl_info!(
+                    hl_log::tag::CONTAINER,
+                    "restore could not discard the unresumable execution {id}: {error}"
+                );
+            }
         }
         Ok(failures)
     }

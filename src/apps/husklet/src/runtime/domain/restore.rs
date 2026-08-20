@@ -95,7 +95,11 @@ impl Notice {
             "Session restored. The output above is preserved history from your last session.".to_owned(),
             counted,
         ];
-        lines.extend(failures.iter().map(|failure| format!("  \u{2022} {}", summarize(failure))));
+        lines.extend(
+            failures
+                .iter()
+                .map(|failure| format!("  \u{2022} {}", summarize(failure))),
+        );
         lines.push("Everything else came back. Run a command again when you need it live.".to_owned());
         lines
             .into_iter()
