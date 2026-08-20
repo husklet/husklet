@@ -1,7 +1,7 @@
 #![cfg(feature = "native-test-hooks")]
 
 /// Both hooks emit real code and scan it, so both are answerable only where the emitters are compiled --
-/// an AArch64 host. Off it they report `4`, "not applicable", and these fixtures assert that rather than
+/// an `AArch64` host. Off it they report `4`, "not applicable", and these fixtures assert that rather than
 /// compiling themselves out: the exports still have to resolve, and the verdict that must never appear on
 /// a host without the emitters is a clean `0`.
 const CLEAN: i32 = if cfg!(target_arch = "aarch64") { 0 } else { 4 };

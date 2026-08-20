@@ -213,7 +213,7 @@ pub fn checkpoint_continuation_contract_test(isa: u32) -> Result<(), i32> {
 /// `hl_gmap_add`, `hl_gmap_reset` and `hl_gmap_unmap_range` share one process-wide guest-mapping table
 /// across both guest-ISA namespaces -- `linux_abi/container/vfs/gmap.c` is a single translation unit, not
 /// a per-target one -- and the entries it releases name host pages it then unmaps. Two of these hooks on
-/// two libtest threads therefore tear each other's mappings down: measured on x86_64 Linux as an
+/// two libtest threads therefore tear each other's mappings down: measured on `x86_64` Linux as an
 /// intermittent SIGSEGV in the test binary, roughly one run in three. The scenarios are unchanged; only
 /// their concurrency is.
 #[cfg(feature = "native-test-hooks")]
