@@ -42,6 +42,36 @@ fn the_host_termios_translation_cannot_carry_every_linux_flag() {
         );
     }
 
+    // Guest-created /dev/ptmx pairs go through fs/control.c, which has the identical round trip. A
+    // master's termios is engine state with no host object behind it, so its guest image is cached
+    // directly; a pts slave is a real host terminal and uses the store like any bound terminal.
+    let control = fs::read_to_string(native.join("linux_abi/syscall/fs/control.c"))
+        .expect("read the ptmx terminal ioctl routing");
+    assert_eq!(
+        control.matches("memcpy(arg, g_ptm_image[fd], 36)").count(),
+        2,
+        "TCGETS and TCGETS2 on a pty master must answer from the guest's own image"
+    );
+    assert_eq!(
+        control.matches("memcpy(g_ptm_image[fd], arg, 36)").count(),
+        2,
+        "TCSETS and TCSETS2 on a pty master must record the guest's own image"
+    );
+    assert_eq!(
+        control
+            .matches("terminal_termios_apply_recall(tfd, (uint8_t *)arg)")
+            .count(),
+        2,
+        "TCGETS and TCGETS2 on a pts slave must answer from the engine-owned image"
+    );
+    assert_eq!(
+        control
+            .matches("terminal_termios_observe_set(tfd, (const uint8_t *)arg)")
+            .count(),
+        2,
+        "TCSETS and TCSETS2 on a pts slave must record the image the guest installed"
+    );
+
     let route = fs::read_to_string(native.join("linux_abi/syscall/binding/route_bound.c"))
         .expect("read the bound terminal ioctl routing");
     // Both getters and both setters must be wired. Counting rather than

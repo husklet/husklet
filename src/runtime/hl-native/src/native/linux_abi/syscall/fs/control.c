@@ -6,13 +6,18 @@ static int ioctl_terminal_request(struct cpu *c, int fd, unsigned long rq, void 
     case 0x5401: {
         struct termios t;
         // TCGETS
-        if (is_master && g_ptm_tset[fd])
-            t = g_ptm_term[fd]; // master keeps its own termios (Linux)
-        else if (tcgetattr(tfd, &t) < 0) {
+        if (is_master && g_ptm_tset[fd]) {
+            // A master's termios is engine state, so the guest's own image answers exactly.
+            memcpy(arg, g_ptm_image[fd], 36);
+            G_RET(c) = 0;
+            break;
+        }
+        if (tcgetattr(tfd, &t) < 0) {
             G_RET(c) = (uint64_t)(-errno);
             break;
         }
         termios_m2l(&t, (uint8_t *)arg);
+        terminal_termios_apply_recall(tfd, (uint8_t *)arg);
         G_RET(c) = 0;
         break;
     }
@@ -26,11 +31,14 @@ static int ioctl_terminal_request(struct cpu *c, int fd, unsigned long rq, void 
         int r = tcsetattr(tfd, act, &t); // push live to any open real slave (best effort on a master)
         if (is_master) {
             g_ptm_term[fd] = t;
+            memcpy(g_ptm_image[fd], arg, 36);
             g_ptm_tset[fd] = 1;
             G_RET(c) = 0;
         } // master always accepts
-        else
+        else {
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
+            if (r == 0) terminal_termios_observe_set(tfd, (const uint8_t *)arg);
+        }
         break;
     }
     case 0x802c542a: {
@@ -45,6 +53,11 @@ static int ioctl_terminal_request(struct cpu *c, int fd, unsigned long rq, void 
         termios_m2l(&t, (uint8_t *)arg);
         *(uint32_t *)((uint8_t *)arg + 36) = (uint32_t)cfgetispeed(&t);
         *(uint32_t *)((uint8_t *)arg + 40) = (uint32_t)cfgetospeed(&t);
+        // termios2's leading 36 bytes are the termios image, so the same guest-authored view applies.
+        if (is_master && g_ptm_tset[fd])
+            memcpy(arg, g_ptm_image[fd], 36);
+        else
+            terminal_termios_apply_recall(tfd, (uint8_t *)arg);
         G_RET(c) = 0;
         break;
     }
@@ -60,10 +73,13 @@ static int ioctl_terminal_request(struct cpu *c, int fd, unsigned long rq, void 
         int r = tcsetattr(tfd, act, &t);
         if (is_master) {
             g_ptm_term[fd] = t;
+            memcpy(g_ptm_image[fd], arg, 36);
             g_ptm_tset[fd] = 1;
             G_RET(c) = 0;
-        } else
+        } else {
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
+            if (r == 0) terminal_termios_observe_set(tfd, (const uint8_t *)arg);
+        }
         break;
     }
     case 0x5413: // TIOCGWINSZ (struct same on all)

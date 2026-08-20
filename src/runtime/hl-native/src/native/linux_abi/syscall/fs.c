@@ -784,12 +784,19 @@ static const char *shm_hostpath(const char *guest, char *buf, size_t n) {
 // tmux depend on to notice the child exited.
 static uint8_t g_ptm_tset[HL_NFD], g_ptm_wset[HL_NFD];
 static struct termios g_ptm_term[HL_NFD]; // host-form termios last set on the master
+/* The guest-authored Linux termios image behind g_ptm_term. A master's termios is engine state with no
+ * host object behind it, and termios_l2m/termios_m2l carry only the flags with a BSD counterpart, so
+ * round-tripping the guest through g_ptm_term alone drops ECHOCTL, ECHOKE, ECHOPRT, EXTPROC, XTABS and
+ * the rest on a macOS host. Keeping the image the guest actually wrote makes TCGETS exact. Demand-zero
+ * BSS indexed like its siblings; only a live master ever touches a page. */
+static uint8_t g_ptm_image[HL_NFD][36];
 static struct winsize g_ptm_win[HL_NFD];  // winsize last set on the master
 
 static void ptm_clear(int fd) {
     if (fd >= 0 && fd < HL_NFD) {
         g_ptm_tset[fd] = 0;
         g_ptm_wset[fd] = 0;
+        memset(g_ptm_image[fd], 0, sizeof g_ptm_image[fd]);
     }
 }
 

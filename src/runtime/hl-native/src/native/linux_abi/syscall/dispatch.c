@@ -654,6 +654,12 @@ static void guest_abspath_at(int dirfd, const char *raw, char *out, size_t n) {
  * native sentinel path; binding.c supplies the allocator after the syscall families are included. */
 static int64_t bound_dup_at_least(hl_linux_fd source, int minimum, uint32_t descriptor_flags);
 static int bound_exec_descriptor(int descriptor);
+/* The engine-owned per-terminal termios store is defined with the bound terminal router in binding.c and
+ * is used by fs/control.c as well, which is included first. Declaring the two entry points rather than
+ * moving the definition keeps binding.c's include order -- and therefore every system header it pulls in
+ * -- exactly where it was. */
+static void terminal_termios_observe_set(int native_fd, const uint8_t *image);
+static void terminal_termios_apply_recall(int native_fd, uint8_t *argument);
 #include "fs.c"
 static void bound_mapping_reset(void);
 static size_t bound_mapping_watch_capacity(void);
