@@ -113,7 +113,16 @@ async fn authenticated_registry_pull_validates_and_never_leaks_credentials() {
         rejection.push(record);
     }
     let rejection = serde_json::to_string(&rejection).unwrap();
-    assert!(rejection.contains("Not authorized"));
+    // Pins the two things an operator has to act on -- that this was a registry refusal, and the
+    // status the registry answered with -- and no longer pins `oci_client`'s "Not authorized"
+    // prose. That spelling belongs to a third-party crate, nothing in the workspace matches on
+    // it, and pinning it is what kept the registry's own response body out of the message: Docker
+    // Hub returns this same 401 both for a bad credential and for an exhausted anonymous quota,
+    // and only the body tells the two apart. This fixture sends `Content-Length: 0`, so `registry
+    // said:` is correctly absent here; `hl-images` covers the body-bearing case.
+    assert!(rejection.contains("registry operation failed"), "{rejection}");
+    assert!(rejection.contains("HTTP 401"), "{rejection}");
+    assert!(!rejection.contains("registry said"), "{rejection}");
     assert!(!rejection.contains("wrong-secret"));
 
     let invalid = raw_http(&socket, b"POST /v1.43/images/create?fromImage=example.invalid%2Fdemo HTTP/1.1\r\nHost: localhost\r\nX-Registry-Auth: not-base64!\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;

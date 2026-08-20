@@ -75,10 +75,7 @@ impl Registry {
     /// Returns an error for missing/corrupt content, authentication, or registry failures.
     pub async fn push(&self, image: &Image, target: &Reference, content: &FsStore) -> Result<()> {
         let remote = target.remote()?;
-        self.client
-            .auth(&remote, &self.auth.registry(), oci_client::RegistryOperation::Push)
-            .await
-            .map_err(Self::error)?;
+        self.authorize_for(&remote, oci_client::RegistryOperation::Push).await?;
         let manifest = content.read_bounded(&image.target, 16 * 1024 * 1024).await?;
         let document: Manifest =
             serde_json::from_slice(&manifest).map_err(|error| Error::MalformedOci(error.to_string()))?;
@@ -102,6 +99,30 @@ impl Registry {
             .await
             .map_err(Self::error)?;
         Ok(())
+    }
+
+    /// Take the repository's pull token before any endpoint that needs one.
+    ///
+    /// Push has always done this; pull relied on `pull_manifest_raw` to do it implicitly, and it
+    /// does not report the outcome -- `Client::get_auth_token` discards a failed token exchange
+    /// with `.ok()??` and lets the request continue unauthenticated, so a registry that explained
+    /// itself at the token endpoint arrives as a bare 401 from the manifest URL with the
+    /// explanation gone. Asking here also removes the throwaway manifest fetch the blob path used
+    /// to make for this same purpose: a token request instead of a whole manifest download.
+    async fn authorize(&self, remote: &oci_client::Reference) -> Result<()> {
+        self.authorize_for(remote, oci_client::RegistryOperation::Pull).await
+    }
+
+    async fn authorize_for(
+        &self,
+        remote: &oci_client::Reference,
+        operation: oci_client::RegistryOperation,
+    ) -> Result<()> {
+        self.client
+            .auth(remote, &self.auth.registry(), operation)
+            .await
+            .map(drop)
+            .map_err(Self::error)
     }
 
     fn manifest(bytes: &[u8], digest: &str) -> Result<Descriptor> {
@@ -172,8 +193,32 @@ impl Registry {
         Ok(())
     }
 
-    fn error(error: impl std::fmt::Display) -> Error {
-        Error::Registry(error.to_string())
+    /// Report a registry failure with the status and the registry's own response body.
+    ///
+    /// `oci_client` 0.17 keeps the body for every failing status except 401: `UnauthorizedError`
+    /// is built from the URL alone and the bytes are dropped. That is the one status Docker Hub
+    /// uses for both a credential failure and an exhausted anonymous quota, so the variant with no
+    /// body is the variant whose body decides what an operator should do. The pull path calls
+    /// [`Client::auth`] explicitly for that reason -- see `resolve` -- which turns a refused
+    /// authorization into `AuthenticationFailure` carrying the token endpoint's answer verbatim.
+    ///
+    /// Nothing here classifies that answer. Docker Hub spells the distinction `UNAUTHORIZED`
+    /// against `TOOMANYREQUESTS`; other registries do not, and text the operator reads is worth
+    /// more than a verdict this function would get wrong.
+    fn error(error: oci_client::errors::OciDistributionError) -> Error {
+        use oci_client::errors::OciDistributionError as Oci;
+        match error {
+            Oci::AuthenticationFailure(body) => Error::registry("the registry refused to authorize", Some(body)),
+            Oci::ServerError { code, url, message } => {
+                Error::registry(format!("HTTP {code} from {url}"), Some(message))
+            }
+            Oci::RegistryError { envelope, url } => Error::registry(
+                format!("HTTP error from {url}"),
+                Some(serde_json::to_string(&envelope).unwrap_or_else(|_| envelope.to_string())),
+            ),
+            Oci::UnauthorizedError { url } => Error::registry(format!("HTTP 401 from {url}"), None),
+            other => Error::registry(other.to_string(), None),
+        }
     }
 }
 
@@ -187,6 +232,7 @@ struct Manifest {
 impl Source for Registry {
     async fn resolve(&self, reference: &Reference) -> Result<Descriptor> {
         let remote = reference.remote()?;
+        self.authorize(&remote).await?;
         let (bytes, digest) = self
             .client
             .pull_manifest_raw(&remote, &self.auth.registry(), MANIFEST_MEDIA_TYPES)
@@ -206,6 +252,7 @@ impl Source for Registry {
             )
             .parse()
             .map_err(|error| Error::InvalidReference(format!("{error}")))?;
+            self.authorize(&pinned).await?;
             let (bytes, digest) = self
                 .client
                 .pull_manifest_raw(&pinned, &self.auth.registry(), MANIFEST_MEDIA_TYPES)
@@ -220,12 +267,7 @@ impl Source for Registry {
             return Ok(Box::pin(stream::once(async move { Ok(bytes) })));
         }
         let remote = reference.remote()?;
-        // Authorize the repository before its blob endpoint is used.
-        let _ = self
-            .client
-            .pull_manifest_raw(&remote, &self.auth.registry(), MANIFEST_MEDIA_TYPES)
-            .await
-            .map_err(Self::error)?;
+        self.authorize(&remote).await?;
         let digest = descriptor.digest().to_string();
         let stream = self
             .client
@@ -258,6 +300,73 @@ mod tests {
             Auth::Bearer("token".into()).registry(),
             RegistryAuth::Bearer("token".into())
         );
+    }
+
+    /// The registry's own answer is what tells an operator to add credentials or to wait, so every
+    /// `oci_client` failure that still holds one has to hand it over here.
+    #[test]
+    fn a_registry_refusal_reports_the_status_and_the_registry_own_words() {
+        use oci_client::errors::{OciDistributionError as Oci, OciEnvelope};
+
+        let quota = Registry::error(Oci::AuthenticationFailure(
+            r#"{"errors":[{"code":"TOOMANYREQUESTS","message":"pull request limit exceeded"}]}"#.into(),
+        ))
+        .to_string();
+        assert!(quota.contains("TOOMANYREQUESTS"), "{quota}");
+        assert!(quota.contains("pull request limit exceeded"), "{quota}");
+
+        let credentials = Registry::error(Oci::AuthenticationFailure(
+            r#"{"errors":[{"code":"UNAUTHORIZED","message":"authentication required"}]}"#.into(),
+        ))
+        .to_string();
+        assert!(credentials.contains("UNAUTHORIZED"), "{credentials}");
+        assert_ne!(quota, credentials, "the same refusal must not read the same either way");
+
+        let server = Registry::error(Oci::ServerError {
+            code: 429,
+            url: "https://index.docker.io/v2/library/ubuntu/manifests/24.04".into(),
+            message: "You have reached your pull rate limit.".into(),
+        })
+        .to_string();
+        assert!(server.contains("HTTP 429"), "{server}");
+        assert!(server.contains("You have reached your pull rate limit."), "{server}");
+
+        let envelope: OciEnvelope = serde_json::from_str(
+            r#"{"errors":[{"code":"DENIED","message":"requested access to the resource is denied"}]}"#,
+        )
+        .unwrap();
+        let denied = Registry::error(Oci::RegistryError {
+            envelope,
+            url: "https://index.docker.io/v2/private/app/manifests/1".into(),
+        })
+        .to_string();
+        assert!(denied.contains("DENIED"), "{denied}");
+        assert!(
+            denied.contains("requested access to the resource is denied"),
+            "{denied}"
+        );
+
+        // `oci_client` 0.17 drops the body for exactly this status, so there is nothing to carry
+        // and the message says so by naming the status and the endpoint and nothing else.
+        let unauthorized = Registry::error(Oci::UnauthorizedError {
+            url: "https://index.docker.io/v2/library/ubuntu/manifests/24.04".into(),
+        })
+        .to_string();
+        assert_eq!(
+            unauthorized,
+            "registry operation failed: HTTP 401 from https://index.docker.io/v2/library/ubuntu/manifests/24.04"
+        );
+    }
+
+    /// A registry controls its own response body, so the error that carries it has to be the place
+    /// the length stops -- every consumer downstream renders it into a log line or an API message.
+    #[test]
+    fn a_hostile_registry_body_is_bounded_before_it_reaches_a_log() {
+        let flood = "A".repeat(512 * 1024);
+        let rendered =
+            Registry::error(oci_client::errors::OciDistributionError::AuthenticationFailure(flood)).to_string();
+        assert!(rendered.len() < 4096, "{}", rendered.len());
+        assert!(rendered.contains("(524288 bytes, truncated)"), "{rendered}");
     }
 
     #[tokio::test]
