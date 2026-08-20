@@ -4790,3 +4790,167 @@ fn signalfd_first_capture_activation_stress_on_both_isas() {
         }
     }
 }
+
+fn unwaited_child_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    let (compiler, name) = match isa {
+        GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-unwaited-child-aarch64"),
+        GuestIsa::X86_64 => ("x86_64-linux-gnu-gcc", "checkpoint-unwaited-child-x86_64"),
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/unwaited_child.c");
+    let output = directory.join(name);
+    let status = std::process::Command::new(compiler)
+        .args(["-static", "-O2", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
+    assert!(status.success(), "{compiler} failed with {status}");
+    output
+}
+
+/// A child exit status the capture's own reap destroys survives into the restored tree.
+///
+/// The coordinator reaps with `waitpid(-1, WNOHANG)` from inside the container init, which IS a guest
+/// process, so a guest zombie it collects is a pending child status DELETED -- there is no engine-side
+/// table behind it, the kernel corpse is the state. The observed production failure was not a refusal but
+/// a workspace that reopened and never came back to life: `checkpoint OK: 4 process(es)` where healthy
+/// cycles publish 5, then a restored shell resuming into `wait4` for a pid that no longer existed, 725 s
+/// of `State: S`, `wchan=do_wait`, zero CPU, and nothing logged by any component.
+///
+/// The fixture holds that exact state deliberately (see `unwaited_child.c`), and the assertion is the
+/// GUEST'S: after the restore it must reap its own child, by the pid `fork` gave it, with the status the
+/// child exited with. Without the preservation the restored parent has no such child at all and the
+/// fixture exits 70 -- so this cannot pass by the old and new code answering the same value.
+///
+/// The image assertion is the other half. `proc.1/reaped` must be present after the capture: a fix that
+/// made the restore tolerant of the missing status -- returning ECHILD promptly instead of hanging -- would
+/// still be a capture that reported success with a member's state unsaved, and it would fail here.
+#[test]
+fn a_child_status_the_capture_reaped_is_returned_to_its_parent_after_restore_on_both_isas() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executables =
+        [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, unwaited_child_fixture(isa, fixtures.path())));
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+
+    for (isa, executable) in executables {
+        let temporary = tempfile::tempdir().unwrap();
+        let release = temporary.path().join("release");
+        let final_release = temporary.path().join("final-release");
+        let store = Arc::new(Store::default());
+
+        let capture_port = Arc::new(TestTerminal::default());
+        let capture = Engine::with_checkpoint(
+            isa,
+            plan(&executable, &release, &final_release, &["HL_CHECKPOINT"]),
+            StandardStreams::default().with_terminal(Terminal::new(capture_port.clone(), 24, 80).unwrap()),
+            store.clone(),
+            store.clone(),
+        )
+        .unwrap();
+        capture.start().unwrap();
+        capture_port.wait_output(b"UNWAITED-CHILD-ZOMBIE");
+        capture
+            .capture_checkpoint_until(checkpoint_deadline())
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{isa:?} refused a capture over an uncollected child status: {error:?}: {}",
+                    capture_port.output()
+                )
+            });
+        assert_eq!(
+            capture.wait().unwrap().guest_status,
+            0,
+            "{isa:?}: {}",
+            capture_port.output()
+        );
+        {
+            let stored = store.0.lock().unwrap();
+            assert!(stored.contains_key("MANIFEST"), "{isa:?} published no manifest");
+            assert!(
+                stored.contains_key("proc.1/reaped"),
+                "{isa:?} published a checkpoint that reports success while the child exit status its own \
+                 reap destroyed is in no image object: {:?}",
+                stored.keys().collect::<Vec<_>>()
+            );
+        }
+
+        let restore_port = Arc::new(TestTerminal::default());
+        let restore = Engine::with_checkpoint(
+            isa,
+            plan(&executable, &release, &final_release, &["HL_RESTORE"]),
+            StandardStreams::default().with_terminal(Terminal::new(restore_port.clone(), 24, 80).unwrap()),
+            store.clone(),
+            store.clone(),
+        )
+        .unwrap();
+        restore.start().unwrap();
+        restore_port.input(b"\n");
+        let restored = restore
+            .wait()
+            .unwrap_or_else(|error| panic!("{isa:?} restore failed: {error:?}: {}", restore_port.output()));
+        assert_eq!(
+            restored.guest_status,
+            0,
+            "{isa:?} restored parent did not reap its own child with the captured status: {}",
+            restore_port.output()
+        );
+        assert!(
+            restore_port.output().contains("UNWAITED-CHILD-REAPED"),
+            "{isa:?}: {}",
+            restore_port.output()
+        );
+    }
+}
+
+/// The other half, and the one that stops the fix from being a best-effort: a capture that CANNOT preserve
+/// a status it destroyed refuses, loudly, instead of publishing a manifest.
+///
+/// The status is gone by the time the coordinator notices -- `waitpid` released the corpse -- so there is
+/// nothing left to recover; the only honest answer is to fail the close. A refusal is a workspace that will
+/// not close, which is bad; a `checkpoint OK` over a parent that can never be woken is worse, because
+/// nothing tells the user anything is wrong. `HL_CKPT_TEST_REAPED_UNNAMEABLE` drives the real refusal
+/// through the real recording path, which no guest can reach on purpose (a fork's guest identity is
+/// published before the child can exit).
+#[test]
+fn a_capture_that_cannot_preserve_a_status_it_destroyed_refuses_on_both_isas() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executables =
+        [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, unwaited_child_fixture(isa, fixtures.path())));
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+
+    for (isa, executable) in executables {
+        let temporary = tempfile::tempdir().unwrap();
+        let release = temporary.path().join("release");
+        let final_release = temporary.path().join("final-release");
+        let store = Arc::new(Store::default());
+        let port = Arc::new(TestTerminal::default());
+        let capture = Engine::with_checkpoint(
+            isa,
+            plan(
+                &executable,
+                &release,
+                &final_release,
+                &["HL_CHECKPOINT", "HL_CKPT_TEST_REAPED_UNNAMEABLE"],
+            ),
+            StandardStreams::default().with_terminal(Terminal::new(port.clone(), 24, 80).unwrap()),
+            store.clone(),
+            store.clone(),
+        )
+        .unwrap();
+        capture.start().unwrap();
+        port.wait_output(b"UNWAITED-CHILD-ZOMBIE");
+        let refusal = capture
+            .capture_checkpoint_until(checkpoint_deadline())
+            .expect_err("a capture that destroyed a child exit status it could not carry was reported as successful");
+        let _ = capture.wait();
+        let stored = store.0.lock().unwrap();
+        assert!(
+            !stored.contains_key("MANIFEST"),
+            "{isa:?} published a manifest over a destroyed child exit status: {refusal:?}"
+        );
+    }
+}

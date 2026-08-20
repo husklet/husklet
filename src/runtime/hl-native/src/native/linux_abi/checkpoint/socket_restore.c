@@ -1058,6 +1058,95 @@ static int ckpt_restore_commit_publish(void) {
     return 0;
 }
 
+/* GIVE BACK THE EXIT STATUSES THE CAPTURE'S OWN REAP DESTROYED.
+ *
+ * The image records, per process, the children whose kernel zombies the freeze consumed (capture.c, struct
+ * ckpt_reaped_child). A guest process's pending child status has no engine-side representation -- the kernel
+ * zombie IS the state -- so the only way to hand one back is to produce a real corpse again: fork a child
+ * that terminates exactly as the recorded status says, and publish it in the pid map under the guest pid the
+ * checkpoint recorded. The restored parent's wait4 then translates that guest pid to this fresh host pid,
+ * reaps it, and completes with the status it was blocked for. Without it the parent resumes into wait4 for a
+ * pid that no longer exists and blocks forever -- a hang, with nothing logged, out of a capture that
+ * reported success.
+ *
+ * The corpse is a bare fork(): it runs nothing but the termination itself, publishes no birth record, and is
+ * therefore not a guest process and not a member of any later capture -- it is a status in the only shape
+ * the kernel has for one. Called AFTER the pid map is finalized, so the mapping it adds is live before any
+ * guest instruction runs, and BEFORE thread_restore_group, so the fork is taken while this process is still
+ * single-threaded.
+ *
+ * Diagnostics are deliberately absent: ckpt_restore_fds_dir has already rebound guest fds 0-2 by this point,
+ * so anything written to stderr here lands on the restored guest's terminal rather than the worker log. The
+ * caller reports through the restore commit machinery instead. */
+static int ckpt_restore_reaped_children(const char *procdir, const struct ckpt_meta *m) {
+    if (m->n_reaped == 0) return 0;
+    if (m->n_reaped > CKPT_REAPED_MAX) return -1;
+    size_t records = (size_t)m->n_reaped * sizeof(struct ckpt_reaped_child);
+    size_t total = sizeof(struct ckpt_reaped_header) + records;
+    struct ckpt_reaped_header *image = malloc(total);
+    if (image == NULL) return -1;
+    char path[1300];
+    snprintf(path, sizeof path, "%s/reaped", procdir);
+    if (ckpt_source_load(path, image, total) != 0 || image->magic != CKPT_REAPED_MAGIC ||
+        image->count != m->n_reaped) {
+        free(image);
+        return -1;
+    }
+    const struct ckpt_reaped_child *child_records = (const struct ckpt_reaped_child *)(image + 1);
+    int failed = 0;
+    for (uint64_t index = 0; index < m->n_reaped && !failed; ++index) {
+        int status = child_records[index].status;
+        int gpid = child_records[index].gpid;
+        if (gpid <= 0) {
+            failed = 1;
+            break;
+        }
+        pid_t corpse = fork();
+        if (corpse == 0) {
+            /* A recorded signal death is reproduced by dying of that signal, so the status word the parent
+             * reaps is built by the same kernel that built the original one. Cores are suppressed: the
+             * guest's own RLIMIT_CORE is what syscall/process/wait.c derives WCOREDUMP from, and a restore
+             * must not litter the workspace with core files nobody asked for. */
+            struct rlimit no_core = {0, 0};
+            (void)setrlimit(RLIMIT_CORE, &no_core);
+            if (WIFSIGNALED(status)) {
+                int termination = WTERMSIG(status);
+                struct sigaction fatal;
+                sigset_t deliverable;
+                memset(&fatal, 0, sizeof fatal);
+                fatal.sa_handler = SIG_DFL;
+                (void)sigaction(termination, &fatal, NULL);
+                sigemptyset(&deliverable);
+                sigaddset(&deliverable, termination);
+                (void)sigprocmask(SIG_UNBLOCK, &deliverable, NULL);
+                (void)raise(termination);
+            }
+            _exit(WEXITSTATUS(status));
+        }
+        if (corpse < 0 || hl_linux_pidmap_add(&g_pidmap, gpid, (int)corpse) != 0) {
+            if (corpse > 0) {
+                int discarded = 0;
+                (void)kill(corpse, SIGKILL);
+                while (waitpid(corpse, &discarded, 0) < 0 && errno == EINTR) {}
+            }
+            failed = 1;
+            break;
+        }
+        /* Do not resume the guest until the corpse really is one: a parent whose first act after resuming is
+         * a WNOHANG wait must not read "nothing to report" for a status this image promised it. */
+        siginfo_t reached;
+        for (;;) {
+            memset(&reached, 0, sizeof reached);
+            if (waitid(P_PID, (id_t)corpse, &reached, WEXITED | WNOWAIT) == 0) break;
+            if (errno == EINTR) continue;
+            failed = 1;
+            break;
+        }
+    }
+    free(image);
+    return failed ? -1 : 0;
+}
+
 static void ckpt_restore_proc_run(int gpid); // fwd
 
 // Re-fork every child of `gpid` (per the checkpoint ppid table); each child restores its own subtree and
@@ -1167,6 +1256,7 @@ static void ckpt_restore_proc_run(int gpid) {
         ckpt_restore_commit_failed();
     }
     if (ckpt_restore_identity_finalize() != 0) ckpt_restore_commit_failed();
+    if (ckpt_restore_reaped_children(pd, &m) != 0) ckpt_restore_commit_failed();
 
     static char exe[512];
     snprintf(exe, sizeof exe, "%s", m.exe_path);
@@ -1342,7 +1432,8 @@ static int ckpt_restore_tree_body(const char *rootfs, const struct ckpt_phase_le
         return 70;
     }
     ckpt_restore_commit_stage(CKPT_RESTORE_PROCESS_GROUP);
-    if (ckpt_restore_pgrp(1, im.pgid_gpid, im.sid_gpid) != 0 || ckpt_restore_identity_finalize() != 0) {
+    if (ckpt_restore_pgrp(1, im.pgid_gpid, im.sid_gpid) != 0 || ckpt_restore_identity_finalize() != 0 ||
+        ckpt_restore_reaped_children(ipd, &im) != 0) {
         fprintf(stderr, "[restore] cannot publish restored init identity: %s\n", strerror(errno));
         ckpt_restore_commit_abort();
         ckpt_restore_commit_destroy();

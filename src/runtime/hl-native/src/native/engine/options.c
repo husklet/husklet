@@ -78,6 +78,10 @@ static const hl_option_definition hl_option_definitions[] = {
                        "test-only capture peer that is kicked and then dropped from the coordinator's enumeration, "
                        "so only the broker knows it is a member",
                        HL_OPTION_FLAG),
+    HL_INJECTION_OPTION("HL_CKPT_TEST_REAPED_UNNAMEABLE",
+                       "test-only: the capture's own reap destroys a child exit status it cannot name in the "
+                       "guest pid namespace, so the capture must refuse rather than publish",
+                       HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_CKPT_TEST_PEER_HIDDEN_FROM_ENUMERATION",
                        "test-only capture peer withheld from the coordinator's first enumeration, exactly as a "
                        "process forked immediately after the scan is",

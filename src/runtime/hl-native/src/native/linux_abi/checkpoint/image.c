@@ -1433,6 +1433,15 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir, int park) {
         goto done;                                                                                             \
     } while (0)
 
+/* THE STATUSES THE FREEZE CONSUMED.
+ *
+ * Filled by ckpt_reap_and_record below, drained into this coordinator's own image group by
+ * ckpt_dump_self_locked. File-scope because the two are in the same translation unit and the collection has
+ * to outlive the rendezvous loop that produces it: the coordinator dumps itself only after quiescence. Empty
+ * in every non-coordinating member, which never reaps anybody. */
+static struct ckpt_reaped_child *g_ckpt_reaped;
+static size_t g_ckpt_reaped_count;
+
 static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
     g_ckpt_member_refusal = NULL; /* one dump, one reason: never report the previous attempt's step */
     // HL_UNTRUSTED routes every host-authority object through the sentry process, so this worker's
@@ -1494,6 +1503,7 @@ static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
     m.stack_lo = g_stack_lo;
     m.stack_hi = g_stack_hi;
     m.n_fds = (uint64_t)nfd;
+    m.n_reaped = (uint64_t)g_ckpt_reaped_count;
     if (ckpt_self_identity(&m, ckpt_group_gpid(group)) != 0) CKPT_DUMP_FAIL("self identity"); // common cleanup: frees fdrecs and reports the abort
     snprintf(m.exe_path, sizeof m.exe_path, "%s", g_exe_path ? g_exe_path : "");
     for (int s = 0; s < 65; s++) { // capture this process's guest signal dispositions (restored on thaw)
@@ -1552,6 +1562,21 @@ static int ckpt_dump_self_locked(struct cpu *c, const char *group) {
 
     if (ckpt_dump_epoll(sink, group, fdrecs, nfd) != 0) CKPT_DUMP_FAIL("dump the epoll set");
     if (ckpt_dump_inotify(sink, group) != 0) CKPT_DUMP_FAIL("dump the inotify set");
+    // The child exit statuses this capture's own reap destroyed (coordinator only; empty everywhere else).
+    // A failure here refuses the dump rather than publishing a group whose parent will wait forever.
+    if (g_ckpt_reaped_count > 0) {
+        size_t records = g_ckpt_reaped_count * sizeof *g_ckpt_reaped;
+        size_t total = sizeof(struct ckpt_reaped_header) + records;
+        struct ckpt_reaped_header *image = malloc(total);
+        if (image == NULL) CKPT_DUMP_FAIL("allocate the reaped-child image");
+        image->magic = CKPT_REAPED_MAGIC;
+        image->count = (uint64_t)g_ckpt_reaped_count;
+        memcpy(image + 1, g_ckpt_reaped, records);
+        int stored = ckpt_sink_put(sink, group, "reaped", 0, image, total);
+        free(image);
+        if (stored != 0) CKPT_DUMP_FAIL("store the child exit statuses the capture consumed");
+    }
+
     if (ckpt_dump_signal_state(sink, group) != 0) CKPT_DUMP_FAIL("dump the signal state");
     if (ckpt_dump_filesystem_state(sink, group) != 0) CKPT_DUMP_FAIL("dump the filesystem state");
 
@@ -1762,6 +1787,86 @@ done:
 }
 #endif
 
+static void ckpt_coordinator_refuse(const struct ckpt_phase_ledger *phases, uint32_t cause, const char *reason);
+
+/* Record one status the coordinator's reap just took off a child, so restore can hand it back.
+ *
+ * REFUSING IS THE FALLBACK, NOT THE DESIGN. The status is already destroyed by the time this runs -- waitpid
+ * released the zombie -- so a case this cannot record is a case in which a member's state is unsaved, and the
+ * only honest answer left is to refuse the capture by name. That is the whole reason the naming is
+ * fail-closed on a restored tree: outside a restore a guest pid IS its host pid and there is nothing to
+ * resolve, but under an active pid map a host pid with no guest identity is a child this image could not
+ * describe even if it carried it. */
+static void ckpt_record_reaped_child(const struct ckpt_phase_ledger *phases, pid_t host, int status) {
+    int gpid = 0;
+    /* Test-only, and it models the ONE way the naming can genuinely fail rather than approximating it: a
+     * reaped child with no identity in an active guest pid namespace. No fixture can produce that on
+     * purpose -- clone.c publishes a child's guest identity before the child can run, let alone exit -- so
+     * without the hook the refusal below is a branch no test can reach, which is exactly the shape that
+     * hides a capture reporting success over unsaved state. */
+    int unnameable = hl_option_get("HL_CKPT_TEST_REAPED_UNNAMEABLE") != NULL;
+    if (unnameable || hl_linux_pidmap_is_active(&g_pidmap)) {
+        if (unnameable || hl_linux_pidmap_guest_checked(&g_pidmap, (int32_t)host, &gpid) != 0 || gpid <= 0) {
+            char reason[HL_CKPT_STREAM_NAME_MAX];
+            snprintf(reason, sizeof reason,
+                     "the capture reaped child %lld, destroying the exit status its guest parent had not "
+                     "collected, and that child has no identity in the guest pid namespace -- the "
+                     "status cannot be carried in the image, so this capture would resume a parent onto a "
+                     "wait that can never complete",
+                     (long long)host);
+            ckpt_coordinator_refuse(phases, CKPT_REFUSAL_PEER_QUIESCENCE, reason);
+        }
+    } else {
+        gpid = (int)host; /* identity namespace outside a restore */
+    }
+    if (g_ckpt_reaped_count >= CKPT_REAPED_MAX) {
+        char reason[HL_CKPT_STREAM_NAME_MAX];
+        snprintf(reason, sizeof reason,
+                 "the capture reaped more than %d unwaited child exit statuses; the image cannot carry them "
+                 "all, and publishing it would resume parents onto waits that can never complete",
+                 CKPT_REAPED_MAX);
+        ckpt_coordinator_refuse(phases, CKPT_REFUSAL_PEER_QUIESCENCE, reason);
+    }
+    struct ckpt_reaped_child *grown = realloc(g_ckpt_reaped, (g_ckpt_reaped_count + 1) * sizeof *grown);
+    if (grown == NULL)
+        ckpt_coordinator_refuse(phases, CKPT_REFUSAL_RESOURCES,
+                                "cannot record a child exit status the capture destroyed");
+    g_ckpt_reaped = grown;
+    g_ckpt_reaped[g_ckpt_reaped_count].gpid = gpid;
+    g_ckpt_reaped[g_ckpt_reaped_count].status = status;
+    g_ckpt_reaped_count++;
+}
+
+/* WHY THE REAP IS STILL HERE.
+ *
+ * kill(pid, 0) succeeds on a zombie, so an exited transient child reads as reachable for as long as it stays
+ * unreaped: without this the exemption below would never fire for it and the rendezvous would wait out its
+ * stall window on a corpse before refusing a healthy close. Not reaping at all also leaves the coordinator
+ * accumulating zombies for the whole capture. What changes is only that the status is written down before it
+ * is released. */
+static void ckpt_reap_and_record(const struct ckpt_phase_ledger *phases) {
+    for (;;) {
+        int status = 0;
+        pid_t child = waitpid(-1, &status, WNOHANG);
+        if (child <= 0) break;
+        ckpt_record_reaped_child(phases, child, status);
+    }
+}
+
+/* A reaped child that COMMITTED a group is a captured member, not a lost status: it is restored as a live
+ * process and its parent's wait for it is answered by that process exiting again. Only the corpses nobody
+ * captured need synthesizing. Run once, after quiescence, when the set of committed groups is final. */
+static void ckpt_reaped_drop_captured_members(struct ckpt_sink *sink) {
+    size_t kept = 0;
+    for (size_t index = 0; index < g_ckpt_reaped_count; ++index) {
+        char group[64];
+        snprintf(group, sizeof group, "proc.%d", g_ckpt_reaped[index].gpid);
+        if (ckpt_sink_group_present(sink, group) == 1) continue;
+        g_ckpt_reaped[kept++] = g_ckpt_reaped[index];
+    }
+    g_ckpt_reaped_count = kept;
+}
+
 /* Consecutive rescans that must find nothing new, with every known peer finished, before the tree counts
  * as quiescent. Two rather than one, because the first pass is quiet before anything has been adopted and
  * because a fork is only ever visible to a scan taken after it. */
@@ -1854,12 +1959,14 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
      * `foll`/`completed` and grown with them. */
     uint64_t *consumed = NULL;
     for (unsigned long long t = 0;; t++) {
-        int st;
         int settled = 0;
         // Reap BEFORE the liveness test below, not after: an unreaped child of ours is a zombie, and
         // kill(pid, 0) succeeds on a zombie, so an exited transient child would read as still reachable
-        // for as long as it stayed unreaped and would never qualify for the exemption.
-        while (waitpid(-1, &st, WNOHANG) > 0) {}
+        // for as long as it stayed unreaped and would never qualify for the exemption. Every status it
+        // takes is RECORDED first -- that reap used to destroy the pending child status a guest parent was
+        // blocked in wait4 for, and the restored parent then waited forever for a pid that never existed
+        // again. See ckpt_record_reaped_child.
+        ckpt_reap_and_record(&phases);
         // Rescan and adopt. A peer discovered here is kicked exactly as one found by the first scan is;
         // nothing else distinguishes them, because nothing else should.
         int discovered = 0;
@@ -2021,7 +2128,10 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     }
     ckpt_phase_finish(&phases, "peer_quiescence", phase, 0);
 
-    // Dump ourselves (the init) last.
+    // Dump ourselves (the init) last. The statuses the freeze consumed go into THIS group: waitpid(-1)
+    // reaps only this process's own children, and an orphan reparents to this process, so the coordinator is
+    // the parent of every corpse it collected -- by construction, on both ISAs.
+    ckpt_reaped_drop_captured_members(sink);
     phase = ckpt_phase_begin(&phases);
     if (ckpt_dump_self(c, "proc.1", 0) != 0)
         ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_SELF_DUMP,
@@ -2115,6 +2225,11 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     fprintf(stderr, "[ckpt] checkpoint OK: %d process(es)\n", nproc);
     int st;
     phase = ckpt_phase_begin(&phases);
+    // Final reap, deliberately NOT recording: the manifest is already published, so a status destroyed here
+    // could not be carried anyway. Nothing unrecorded can reach it -- the rendezvous ended quiescent, every
+    // member is parked inside its own freeze and cannot run guest code, and therefore cannot fork or exit,
+    // until the host releases it after this point. This collects the corpses of members that already exited
+    // during the capture, whose groups are in the image.
     while (waitpid(-1, &st, WNOHANG) > 0) {} // final reap
     ckpt_phase_finish(&phases, "native_reap", phase, 0);
     hl_engine_child_result_publish(0, HL_STATUS_OK, 0);
