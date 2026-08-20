@@ -1017,3 +1017,67 @@ void hl_target_runtime_init(void) {
 uint64_t hl_run_linux_guest_translations(void) {
     return g_dispatch_profile.translations;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+/*
+ * Host x18 is reserved by Darwin and cleared asynchronously between arbitrary
+ * instructions, so emitted code may never keep a live value there. The two
+ * lowerings that once did -- the inline soft-memory guard's direct-mapped entry
+ * base and the non-PIE guest-base fold's NZCV save -- produced an intermittent
+ * `ldr Xt,[xzr,#OFF_SOFT_TLB+k]` into __PAGEZERO and a silent condition-flag
+ * rewrite respectively. Emit both into a local buffer and read the register
+ * fields back: no emitted instruction may name x18 as a base, destination, or
+ * MRS/MSR operand. Returns zero when the emitted code is clean.
+ */
+static int hl_aarch64_reserved_register_scan(const uint32_t *words, size_t count) {
+    for (size_t index = 0; index < count; ++index) {
+        uint32_t word = words[index];
+        if (word == 0xD53B4212u || word == 0xD51B4212u) return 1; /* mrs/msr through x18 */
+        int base = (int)((word >> 5) & 31u);
+        int destination = (int)(word & 31u);
+        if ((word & 0x3B000000u) == 0x39000000u && (base == 18 || destination == 18)) return 1; /* ldr/str */
+        if ((word & 0x7F200000u) == 0x0B000000u &&
+            (base == 18 || destination == 18 || (int)((word >> 16) & 31u) == 18))
+            return 1; /* add/sub shifted register */
+    }
+    return 0;
+}
+
+HL_API int hl_aarch64_reserved_register_test(void) {
+    uint32_t code[512];
+    memset(code, 0, sizeof code);
+    uint8_t *saved_cp = g_cp;
+    uint64_t saved_lo = g_nonpie_lo, saved_bias = g_nonpie_bias, saved_hi = g_nonpie_hi;
+    int saved_soft = jit_guest_soft_active();
+    g_cp = (uint8_t *)code;
+    if (!saved_soft) jit_guest_soft_restore_activate();
+    g_nonpie_lo = UINT64_C(0x400000);
+    g_nonpie_hi = UINT64_C(0x800000);
+    g_nonpie_bias = UINT64_C(0x100000000);
+
+    /* The historical hazard shape: ea/tmp engine-private, entry base requested as x18. */
+    struct a64_soft_guard guard = emit_a64_soft_guard_begin(16, 17, 18, 8, HL_LOGICAL_VMA_READ, UINT64_C(0x401000));
+    int guarded = guard.active;
+    emit_a64_soft_guard_end(&guard);
+    emit_a64_soft_fold_address(16, 17);
+
+    size_t emitted = (size_t)(((uint32_t *)g_cp) - code);
+    g_cp = saved_cp;
+    g_nonpie_lo = saved_lo;
+    g_nonpie_hi = saved_hi;
+    g_nonpie_bias = saved_bias;
+    if (!saved_soft) jit_guest_soft_restore_deactivate();
+
+    /* Non-vacuity: the scan must have real code to read, including the entry-base
+     * loads the guard is built from, or a clean answer means nothing. */
+    if (!guarded || emitted < 8u || emitted > sizeof code / sizeof code[0]) return 2;
+    int soft_tlb_loads = 0;
+    for (size_t index = 0; index < emitted; ++index)
+        if ((code[index] & 0xFFC00000u) == 0xF9400000u &&
+            (int)(((code[index] >> 10) & 0xFFFu) * 8u) >= OFF_SOFT_TLB &&
+            (int)(((code[index] >> 10) & 0xFFFu) * 8u) < OFF_SOFT_TLB + (int)sizeof(struct hl_soft_tlb_entry))
+            soft_tlb_loads++;
+    if (soft_tlb_loads < 4) return 3;
+    return hl_aarch64_reserved_register_scan(code, emitted) ? 1 : 0;
+}
+#endif
