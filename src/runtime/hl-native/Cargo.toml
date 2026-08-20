@@ -33,6 +33,10 @@ name = "bound_vector_io"
 required-features = ["native-test-hooks"]
 
 [[test]]
+name = "reserved_register"
+required-features = ["native-test-hooks"]
+
+[[test]]
 name = "errno_namespace"
 required-features = ["native-test-hooks"]
 
