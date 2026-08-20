@@ -61,6 +61,8 @@ pub(crate) type TermiosInstallTest = unsafe extern "C" fn(c_int, *const u8);
 pub(crate) type UnixIdentityTest = unsafe extern "C" fn(c_uint, c_int, u64, *mut u64, *mut u64, *mut c_uint) -> c_int;
 #[cfg(feature = "native-test-hooks")]
 pub(crate) type UnixIdentityCaptureTest = unsafe extern "C" fn(c_int) -> c_int;
+#[cfg(feature = "native-test-hooks")]
+pub(crate) type SocketShapeTest = unsafe extern "C" fn(c_uint, c_int, c_uint, *mut u8, *mut c_uint) -> c_int;
 
 pub(crate) type GuestPid = unsafe extern "C" fn(*const Backend) -> c_int;
 pub(crate) type ProcessIdentitySignal = unsafe extern "C" fn(c_int, u64, c_int) -> c_int;
@@ -164,6 +166,8 @@ pub(crate) struct TestApi {
     pub(crate) x86_64_unix_identity: UnixIdentityTest,
     pub(crate) aarch64_unix_identity_capture: UnixIdentityCaptureTest,
     pub(crate) x86_64_unix_identity_capture: UnixIdentityCaptureTest,
+    pub(crate) aarch64_socket_shape: SocketShapeTest,
+    pub(crate) x86_64_socket_shape: SocketShapeTest,
     pub(crate) errno_from_host: unsafe extern "C" fn(c_uint, c_int) -> c_int,
     pub(crate) identity_registry: unsafe extern "C" fn(c_uint, c_uint) -> c_int,
     pub(crate) private_fork_lock: unsafe extern "C" fn(c_uint) -> c_int,
@@ -491,6 +495,8 @@ fn load_tests(library: &DynamicLibrary, path: &Path) -> Result<TestApi, LoadErro
         x86_64_unix_identity: symbol!("hl_x86_64_unix_identity_test", UnixIdentityTest),
         aarch64_unix_identity_capture: symbol!("hl_aarch64_unix_identity_capture_test", UnixIdentityCaptureTest),
         x86_64_unix_identity_capture: symbol!("hl_x86_64_unix_identity_capture_test", UnixIdentityCaptureTest),
+        aarch64_socket_shape: symbol!("hl_aarch64_socket_shape_test", SocketShapeTest),
+        x86_64_socket_shape: symbol!("hl_x86_64_socket_shape_test", SocketShapeTest),
         errno_from_host: symbol!(
             "hl_c_backend_errno_from_host_test",
             unsafe extern "C" fn(c_uint, c_int) -> c_int

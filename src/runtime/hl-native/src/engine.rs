@@ -784,6 +784,34 @@ mod tests {
         unrelated.wait().unwrap();
     }
 
+    /// Whether the Linux cross compiler these guest images need is actually installed.
+    ///
+    /// The dev shell provides both cross compilers, and when they are present the coverage MUST run:
+    /// it is the only exercise of guest process re-exec on the host the product ships on, so skipping
+    /// it there would delete the coverage rather than defer it. Outside the shell the compiler is
+    /// genuinely absent and a hard panic reddens a gate for a missing tool rather than for a defect.
+    ///
+    /// The notice goes to the real stderr descriptor rather than through `eprintln!`, because the test
+    /// harness captures Rust-level output and prints it only for a FAILING test -- which would make an
+    /// unrun arm indistinguishable from a passing one. A test that quietly does nothing is worse than
+    /// one that fails, so the skip names the test and the ISA it left uncovered where it can be seen.
+    #[allow(unsafe_code)]
+    fn guest_compiler_present(name: &str, test: &str, isa: u32) -> bool {
+        if matches!(guest_compiler(name).arg("--version").output(), Ok(result) if result.status.success()) {
+            return true;
+        }
+        let notice = format!(
+            "SKIP {test}: ISA {isa} left UNCOVERED -- `{name}` is not installed. \
+             Run inside `nix develop`, which provides both Linux cross compilers.\n"
+        );
+        // SAFETY: a write of an owned, initialized buffer to the process's stderr descriptor. It
+        // borrows nothing beyond the call, and a short or failed write is not an error worth acting on.
+        unsafe {
+            libc::write(2, notice.as_ptr().cast(), notice.len());
+        }
+        false
+    }
+
     fn guest_compiler(name: &str) -> std::process::Command {
         let mut command = std::process::Command::new(name);
         // The Nix Darwin shell exports host linker flags such as `-lintl`.
@@ -1087,6 +1115,13 @@ int main(int argc, char **argv) {
 }
 "#;
         for (isa, compiler) in [(1, "aarch64-linux-gnu-gcc"), (2, "x86_64-linux-gnu-gcc")] {
+            if !guest_compiler_present(
+                compiler,
+                "unlinked_pinned_image_can_reexec_proc_self_exe_on_both_isas",
+                isa,
+            ) {
+                continue;
+            }
             let root = tempfile::tempdir().unwrap();
             std::fs::create_dir_all(root.path().join("bin")).unwrap();
             let source = root.path().join("self.c");
@@ -1199,6 +1234,13 @@ int main(int argc, char **argv) {
 "#;
         use std::os::unix::fs::PermissionsExt as _;
         for (isa, compiler) in [(1, "aarch64-linux-gnu-gcc"), (2, "x86_64-linux-gnu-gcc")] {
+            if !guest_compiler_present(
+                compiler,
+                "failed_prepared_exec_never_publishes_candidate_authority",
+                isa,
+            ) {
+                continue;
+            }
             let root = tempfile::tempdir().unwrap();
             let source = root.path().join("authority.c");
             std::fs::write(&source, SOURCE).unwrap();

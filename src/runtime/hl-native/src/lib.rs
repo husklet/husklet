@@ -354,6 +354,19 @@ pub fn unix_identity_test(isa: u32, operation: u32, fd: i32, object: u64) -> Res
     bindings::unix_identity_test(isa, operation, fd, object)
 }
 
+/// The host->guest sockaddr and control-message translations, without a guest.
+///
+/// `operation` selects `getsockname` (0), `getpeername` (1), `recvmsg` into `capacity` host control
+/// bytes (2), or the AF_UNIX datagram buffer policy (3). `out` receives the guest-visible bytes and the
+/// returned length is the guest-visible length.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn socket_shape_test(isa: u32, operation: u32, fd: i32, capacity: u32, out: &mut [u8]) -> Result<u32, i32> {
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    bindings::socket_shape_test(isa, operation, fd, capacity, out)
+}
+
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 pub fn unix_identity_capture_test(isa: u32, fd: i32) -> Result<(), i32> {

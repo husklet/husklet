@@ -1038,6 +1038,20 @@ static int sock_alloc_synth_peer(void) {
     return v;
 }
 
+/* A Linux AF_UNIX datagram is bounded only by SO_SNDBUF, whose default is ~208KB; Darwin's default is
+ * net.local.dgram.maxdgram, and a socket inherits it as an SO_SNDBUF of 2048.  Measured on both hosts
+ * over a socketpair(AF_UNIX, SOCK_DGRAM): Linux sends 2048/2049/4096/8192/65536 bytes without complaint,
+ * Darwin sends 2048 and answers EMSGSIZE for every larger size -- a guest datagram that is legal on
+ * Linux is refused on macOS.  A per-socket buffer overrides the maxdgram default (verified: with the
+ * buffer raised, all five sizes send), which is what the SEQPACKET backing already relies on.  Give an
+ * ordinary AF_UNIX datagram socket the same Linux-sized window at creation.  A failed setsockopt is not
+ * an error: the socket is still usable for the small datagrams that fit the default. */
+static void sock_unix_dgram_buffers(int fd) {
+    int size = 1 << 20; // 1 MiB: above the ~208KB a Linux AF_UNIX datagram socket starts with
+    (void)setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &size, sizeof size);
+    (void)setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &size, sizeof size);
+}
+
 static int seq_is(int fd) {
     return fd >= 0 && fd < HL_NFD && g_sock_seqpacket[fd];
 }
