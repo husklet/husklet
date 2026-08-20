@@ -336,7 +336,10 @@ fn failed_continue_still_closes_attachments_and_waits_for_the_domain() {
     )
     .unwrap_err();
     assert_eq!(error.to_string(), "checkpoint rejected");
-    assert!(attachments.get(), "a failed continue stranded its pane launcher workers");
+    assert!(
+        attachments.get(),
+        "a failed continue stranded its pane launcher workers"
+    );
     assert!(waited.get(), "a failed continue skipped the domain lease wait");
 }
 

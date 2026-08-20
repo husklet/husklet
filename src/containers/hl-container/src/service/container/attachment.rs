@@ -178,8 +178,7 @@ impl Service {
             Ok(())
         } else {
             Err(Error::Runtime(
-                format!("{id} process output owner signalled completion without closing its generation")
-                    .into(),
+                format!("{id} process output owner signalled completion without closing its generation").into(),
             ))
         }
     }
