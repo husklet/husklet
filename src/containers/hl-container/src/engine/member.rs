@@ -141,12 +141,6 @@ impl Running for MemberProcess {
         None
     }
 
-    /// A member is captured as part of its container's freeze and can never be the subject of a capture
-    /// of its own, exactly as a started exec session cannot.
-    fn checkpointable(&self) -> bool {
-        false
-    }
-
     async fn wait(self: Arc<Self>) -> Result<ExitStatus> {
         loop {
             if let Some(exit) = self.member.exit() {

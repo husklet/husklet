@@ -12,16 +12,14 @@ use hl_engine::{
     runtime::Engine,
 };
 use hl_process::unix_descriptor::{self as descriptor, Identity, Lock, StandardDescriptor};
-use hl_process::{
-    Capture as ProcessCapture, Command as ProcessCommand, EnvironmentEntry, Outcome as ProcessOutcome,
-};
+use hl_process::{Capture as ProcessCapture, Command as ProcessCommand, EnvironmentEntry, Outcome as ProcessOutcome};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     num::NonZeroU64,
     os::fd::{AsRawFd, IntoRawFd},
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
-    sync::{atomic::AtomicBool, Arc, Condvar, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    sync::{Arc, Condvar, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
@@ -431,7 +429,9 @@ fn a_slow_but_progressing_member_is_waited_for_rather_than_refused_on_both_isas(
         let started = Instant::now();
         capture
             .capture_checkpoint_until(checkpoint_deadline())
-            .unwrap_or_else(|error| panic!("{isa:?} refused a capture over a member that was still working: {error:?}"));
+            .unwrap_or_else(|error| {
+                panic!("{isa:?} refused a capture over a member that was still working: {error:?}")
+            });
         assert_eq!(capture.wait().unwrap().guest_status, 0);
         assert!(
             started.elapsed() >= Duration::from_millis(7500),
@@ -1096,7 +1096,9 @@ fn read_checkpoint_snapshot(path: &Path) -> BTreeMap<String, Vec<u8>> {
     for _ in 0..count {
         let name_size = word(&bytes, &mut offset);
         let value_size = word(&bytes, &mut offset);
-        let name = std::str::from_utf8(&bytes[offset..offset + name_size]).unwrap().to_owned();
+        let name = std::str::from_utf8(&bytes[offset..offset + name_size])
+            .unwrap()
+            .to_owned();
         offset += name_size;
         let value = bytes[offset..offset + value_size].to_vec();
         offset += value_size;
@@ -1144,12 +1146,7 @@ impl CheckpointSink for AtomicStore {
         Ok(())
     }
 
-    fn commit_until(
-        &self,
-        owner: NonZeroU64,
-        manifest: &[u8],
-        deadline: Instant,
-    ) -> Result<(), CompositionError> {
+    fn commit_until(&self, owner: NonZeroU64, manifest: &[u8], deadline: Instant) -> Result<(), CompositionError> {
         let mut state = self.0.lock().unwrap();
         Self::validate(&state, owner, deadline)?;
         state.staging.insert("MANIFEST".into(), manifest.into());
@@ -1763,18 +1760,36 @@ impl AmbientDescriptors {
 
     fn assert_preserved(&self, phase: &str) {
         for record in &self.records {
-            assert_eq!(descriptor::identity(record.target).unwrap(), record.identity, "{phase}: fd {}", record.target);
+            assert_eq!(
+                descriptor::identity(record.target).unwrap(),
+                record.identity,
+                "{phase}: fd {}",
+                record.target
+            );
             // Prove the target itself owns the locking OFD, rather than accepting a leaked duplicate as
             // evidence: releasing through target must admit an independent OFD, then target must reacquire.
             descriptor::lock(record.target, Lock::Unlock).unwrap();
-            let probe = std::fs::OpenOptions::new().read(true).write(true).open(&record.path).unwrap();
+            let probe = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&record.path)
+                .unwrap();
             descriptor::lock(probe.as_raw_fd(), Lock::ExclusiveNonblocking).unwrap();
             descriptor::lock(probe.as_raw_fd(), Lock::Unlock).unwrap();
             descriptor::lock(record.target, Lock::ExclusiveNonblocking).unwrap();
-            let excluded = std::fs::OpenOptions::new().read(true).write(true).open(&record.path).unwrap();
+            let excluded = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&record.path)
+                .unwrap();
             let error = descriptor::lock(excluded.as_raw_fd(), Lock::ExclusiveNonblocking)
                 .expect_err("lock unexpectedly released");
-            assert_eq!(error.raw_os_error(), Some(libc::EWOULDBLOCK), "{phase}: fd {}", record.target);
+            assert_eq!(
+                error.raw_os_error(),
+                Some(libc::EWOULDBLOCK),
+                "{phase}: fd {}",
+                record.target
+            );
         }
     }
 }
@@ -1790,7 +1805,9 @@ fn assert_ambient_locks_released(paths: &[PathBuf]) {
 fn start_with_closed_standard_descriptor(engine: &Engine, descriptor: StandardDescriptor) {
     let closed = descriptor::close_standard(descriptor).expect("close standard descriptor");
     let started = engine.start();
-    closed.restore().expect("restore standard descriptor after engine start");
+    closed
+        .restore()
+        .expect("restore standard descriptor after engine start");
     started.unwrap();
 }
 
@@ -1862,7 +1879,8 @@ fn ambient_host_descriptors_do_not_shift_guest_fds_across_checkpoint_restore() {
     const CHILD: &str = "HL_AMBIENT_FD_CHECKPOINT_CHILD";
     if std::env::var_os(CHILD).is_some() {
         let fixtures = tempfile::tempdir().unwrap();
-        let ambient_directory = PathBuf::from(std::env::var_os("HL_AMBIENT_FD_DIRECTORY").expect("ambient fd directory"));
+        let ambient_directory =
+            PathBuf::from(std::env::var_os("HL_AMBIENT_FD_DIRECTORY").expect("ambient fd directory"));
         let ambient = AmbientDescriptors::inherited(&ambient_directory);
         for isa in [GuestIsa::Aarch64, GuestIsa::X86_64] {
             ambient_fd_round_trip(isa, &ambient_fd_fixture(isa, fixtures.path()), &ambient);
@@ -1873,8 +1891,7 @@ fn ambient_host_descriptors_do_not_shift_guest_fds_across_checkpoint_restore() {
      * with sibling checkpoint tests still running here. Hold this guard through spawn and bounded wait. */
     let _exclusive = exclusive_checkpoint_test();
     let ambient_directory = tempfile::tempdir().unwrap();
-    let paths = [3, 4, 17]
-        .map(|descriptor| ambient_directory.path().join(format!("ambient-{descriptor}.lock")));
+    let paths = [3, 4, 17].map(|descriptor| ambient_directory.path().join(format!("ambient-{descriptor}.lock")));
     let launcher = ambient_fd_launcher(ambient_directory.path());
     let output = tempfile::NamedTempFile::new().unwrap();
     let error = tempfile::NamedTempFile::new().unwrap();
@@ -1899,7 +1916,10 @@ fn ambient_host_descriptors_do_not_shift_guest_fds_across_checkpoint_restore() {
         if Instant::now() >= deadline {
             child.kill().unwrap();
             let _ = child.wait();
-            panic!("ambient fd checkpoint child timed out\n{}", std::fs::read_to_string(error.path()).unwrap());
+            panic!(
+                "ambient fd checkpoint child timed out\n{}",
+                std::fs::read_to_string(error.path()).unwrap()
+            );
         }
         std::thread::sleep(Duration::from_millis(20));
     };
@@ -2077,9 +2097,10 @@ fn outer_phase_us(output: &str, isa: &str, phase: &str) -> Vec<u64> {
 
 fn validate_phase_ledger_contract(output: &str) -> Result<(), String> {
     let rows = checkpoint_phase_rows(output);
-    if rows.iter().any(|row| {
-        !matches!(row.component, "native" | "control") || !matches!(row.isa, "aarch64" | "x86_64")
-    }) {
+    if rows
+        .iter()
+        .any(|row| !matches!(row.component, "native" | "control") || !matches!(row.isa, "aarch64" | "x86_64"))
+    {
         return Err("checkpoint ledger contains an unknown component or ISA".to_owned());
     }
     let capture = [
@@ -2089,7 +2110,11 @@ fn validate_phase_ledger_contract(output: &str) -> Result<(), String> {
         "manifest_publication",
         "native_reap",
     ];
-    let restore = ["restore_validation", "restore_resources_memory", "restore_process_commit"];
+    let restore = [
+        "restore_validation",
+        "restore_resources_memory",
+        "restore_process_commit",
+    ];
     let expected_native = capture
         .into_iter()
         .chain(["terminal"])
@@ -2470,7 +2495,10 @@ impl<'a> RestoreGateEngine<'a> {
                 );
             }
             if Instant::now() >= deadline {
-                panic!("{context}: guest did not publish {marker}; cleanup={}\n{output}", self.cleanup());
+                panic!(
+                    "{context}: guest did not publish {marker}; cleanup={}\n{output}",
+                    self.cleanup()
+                );
             }
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -2716,7 +2744,9 @@ fn one_rejected_process_prevents_manifest_publication_on_both_isas() {
         let release = PathBuf::from(std::env::var_os("HL_CHECKPOINT_RESTORE_RELEASE").unwrap());
         let final_release = PathBuf::from(std::env::var_os("HL_CHECKPOINT_RESTORE_FINAL_RELEASE").unwrap());
         let output = PathBuf::from(format!("{}.output", release.display()));
-        let store = Arc::new(AtomicStore::from_committed(read_checkpoint_snapshot(Path::new(&snapshot))));
+        let store = Arc::new(AtomicStore::from_committed(read_checkpoint_snapshot(Path::new(
+            &snapshot,
+        ))));
         let restore = Arc::new(
             Engine::with_checkpoint(
                 isa,
@@ -2733,7 +2763,12 @@ fn one_rejected_process_prevents_manifest_publication_on_both_isas() {
             wait_for(&output, marker);
         }
         std::fs::write(&final_release, []).unwrap();
-        assert_eq!(wait_result_bounded(&restore, "preserved generation A restore").unwrap().guest_status, 0);
+        assert_eq!(
+            wait_result_bounded(&restore, "preserved generation A restore")
+                .unwrap()
+                .guest_status,
+            0
+        );
         return;
     }
     let Some(selected) = std::env::var_os(CHILD) else {
@@ -2788,7 +2823,12 @@ fn one_rejected_process_prevents_manifest_publication_on_both_isas() {
         accepted.start().unwrap();
         wait_ready(&output);
         accepted.capture_checkpoint_until(checkpoint_deadline()).unwrap();
-        assert_eq!(wait_result_bounded(&accepted, "accepted generation A").unwrap().guest_status, 0);
+        assert_eq!(
+            wait_result_bounded(&accepted, "accepted generation A")
+                .unwrap()
+                .guest_status,
+            0
+        );
         let generation_a = store.snapshot();
         assert!(generation_a.contains_key("MANIFEST"));
 
@@ -2869,7 +2909,13 @@ fn one_rejected_process_prevents_manifest_publication_on_both_isas() {
                 "one_rejected_process_prevents_manifest_publication_on_both_isas",
                 "--nocapture",
             ])
-            .env(CHILD, match isa { GuestIsa::Aarch64 => "aarch64", GuestIsa::X86_64 => "x86_64" })
+            .env(
+                CHILD,
+                match isa {
+                    GuestIsa::Aarch64 => "aarch64",
+                    GuestIsa::X86_64 => "x86_64",
+                },
+            )
             .env(RESTORE_SNAPSHOT, &snapshot)
             .env("HL_CHECKPOINT_RESTORE_EXECUTABLE", &valid_executable)
             .env("HL_CHECKPOINT_RESTORE_RELEASE", &release)
@@ -3387,7 +3433,9 @@ fn checkpoint_phase_ledger_separates_the_fixed_wait_from_real_work() {
             .collect::<Vec<_>>();
         assert_eq!(settlements.len(), 2, "{isa} exact-topology settlement rows");
         assert!(
-            settlements.iter().all(|row| row.budget_us == 0 && row.duration_us < 100_000),
+            settlements
+                .iter()
+                .all(|row| row.budget_us == 0 && row.duration_us < 100_000),
             "{isa} did not execute the real zero-budget settlement path: {settlements:?}"
         );
     }
@@ -3531,7 +3579,10 @@ fn checkpoint_phase_ledger_separates_the_fixed_wait_from_real_work() {
         "native checkpoint/restore phases were reordered:\n{stderr}"
     );
     for terminal in native.iter().chain(&x86_native).filter(|row| row.phase == "terminal") {
-        assert_eq!(terminal.outcome, "success", "successful probe emitted failed terminal row: {terminal:?}");
+        assert_eq!(
+            terminal.outcome, "success",
+            "successful probe emitted failed terminal row: {terminal:?}"
+        );
         assert_eq!(terminal.duration_us, 0);
         assert_eq!(terminal.budget_us, 0);
     }
@@ -3541,7 +3592,10 @@ fn checkpoint_phase_ledger_separates_the_fixed_wait_from_real_work() {
         .copied()
         .collect::<Vec<_>>();
     for capture in captures.chunks_exact(capture_phases.len()) {
-        assert_ne!(capture[0].generation, 0, "native capture has no generation: {capture:?}");
+        assert_ne!(
+            capture[0].generation, 0,
+            "native capture has no generation: {capture:?}"
+        );
         assert!(
             capture.iter().all(|row| row.generation == capture[0].generation),
             "native capture phases crossed generations: {capture:?}"
@@ -3574,8 +3628,14 @@ fn checkpoint_phase_ledger_separates_the_fixed_wait_from_real_work() {
         .chain(&x86_native)
         .filter(|row| restore_phases.contains(&row.phase))
     {
-        assert_eq!(restore.budget_us, 0, "restore phase unexpectedly declared a fixed wait: {restore:?}");
-        assert!(restore.duration_us < 1_000_000, "native restore phase regressed past one second: {restore:?}");
+        assert_eq!(
+            restore.budget_us, 0,
+            "restore phase unexpectedly declared a fixed wait: {restore:?}"
+        );
+        assert!(
+            restore.duration_us < 1_000_000,
+            "native restore phase regressed past one second: {restore:?}"
+        );
     }
     let capture_generations = captures
         .chunks_exact(capture_phases.len())
@@ -3586,7 +3646,10 @@ fn checkpoint_phase_ledger_separates_the_fixed_wait_from_real_work() {
         .filter(|row| row.phase == "capture_admission")
         .map(|row| row.generation)
         .collect::<Vec<_>>();
-    assert_eq!(capture_generations, control_capture_generations, "native/control capture IDs diverged");
+    assert_eq!(
+        capture_generations, control_capture_generations,
+        "native/control capture IDs diverged"
+    );
     let restore_generations = native
         .iter()
         .filter(|row| row.phase == "restore_validation")
@@ -3597,7 +3660,10 @@ fn checkpoint_phase_ledger_separates_the_fixed_wait_from_real_work() {
         .filter(|row| row.phase == "recovery_wait")
         .map(|row| row.generation)
         .collect::<Vec<_>>();
-    assert_eq!(restore_generations, control_restore_generations, "native/control restore IDs diverged");
+    assert_eq!(
+        restore_generations, control_restore_generations,
+        "native/control restore IDs diverged"
+    );
     let x86_capture_generations = x86_captures
         .chunks_exact(capture_phases.len())
         .map(|capture| capture[0].generation)
@@ -3653,7 +3719,10 @@ fn checkpoint_phase_ledger_separates_the_fixed_wait_from_real_work() {
                 "the known fixed wait no longer dominates capture; investigate before changing the heuristic: {stderr}"
             );
         } else {
-            assert!(completion < 1_000_000, "exact-topology capture regressed past one second: {completion} us");
+            assert!(
+                completion < 1_000_000,
+                "exact-topology capture regressed past one second: {completion} us"
+            );
         }
     }
 
@@ -3701,8 +3770,8 @@ fn checkpoint_phase_ledger_separates_the_fixed_wait_from_real_work() {
 fn socket_half_close_refuses_checkpoint_after_guest_dup_and_fork_on_both_isas() {
     let compiling = fixture_compilation();
     let fixtures = tempfile::tempdir().unwrap();
-    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64]
-        .map(|isa| (isa, socket_half_close_fixture(isa, fixtures.path())));
+    let executables =
+        [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, socket_half_close_fixture(isa, fixtures.path())));
     drop(compiling);
     let _exclusive = exclusive_checkpoint_test();
     let mut accepted = Vec::new();
@@ -3763,15 +3832,18 @@ fn socket_half_close_refuses_checkpoint_after_guest_dup_and_fork_on_both_isas() 
             }
         }
     }
-    assert!(accepted.is_empty(), "accepted half-closed guest socket paths: {accepted:?}");
+    assert!(
+        accepted.is_empty(),
+        "accepted half-closed guest socket paths: {accepted:?}"
+    );
 }
 
 #[test]
 fn accepted_connected_unix_stream_survives_checkpoint_on_both_isas() {
     let compiling = fixture_compilation();
     let fixtures = tempfile::tempdir().unwrap();
-    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64]
-        .map(|isa| (isa, connected_unix_stream_fixture(isa, fixtures.path())));
+    let executables =
+        [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, connected_unix_stream_fixture(isa, fixtures.path())));
     drop(compiling);
     let _exclusive = exclusive_checkpoint_test();
 

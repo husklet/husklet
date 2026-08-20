@@ -50,11 +50,8 @@ impl Fixture {
         let total = ids.len();
         let mut states = Vec::with_capacity(total);
         for (role, id) in ids {
-            let state = match tokio::time::timeout(
-                Duration::from_millis(25),
-                self.containers.executions().inspect(&id),
-            )
-            .await
+            let state = match tokio::time::timeout(Duration::from_millis(25), self.containers.executions().inspect(&id))
+                .await
             {
                 Ok(Ok(execution)) => format!("{:?}", execution.state),
                 Ok(Err(error)) => format!("error={error}"),
@@ -178,12 +175,7 @@ impl Fixture {
         // exit state.  Observing EOF therefore does not prove that `inspect`
         // has stopped reporting `Running`; wait for the lifecycle publication
         // instead of racing it.
-        let result = bounded(
-            "PostgreSQL command exit",
-            PROBE,
-            executions.wait(&execution.id),
-        )
-        .await?;
+        let result = bounded("PostgreSQL command exit", PROBE, executions.wait(&execution.id)).await?;
         require(
             result == hl_container::ExitStatus::Code(0),
             format!(
@@ -207,11 +199,8 @@ impl Fixture {
         loop {
             attempt += 1;
             let remaining = PROBE.saturating_sub(started.elapsed());
-            let probe = tokio::time::timeout(
-                remaining.min(Duration::from_secs(1)),
-                self.exec(&readiness_command()),
-            )
-            .await;
+            let probe =
+                tokio::time::timeout(remaining.min(Duration::from_secs(1)), self.exec(&readiness_command())).await;
             let last = match probe {
                 Ok(Ok(value)) if readiness_succeeded(&value) => return Ok(()),
                 Ok(Ok(value)) => format!("unexpected readiness value {value:?}"),
