@@ -1320,6 +1320,43 @@ static void ckpt_poll(struct cpu *c) {
         // the capture must refuse for it.
         if (exit_before_join) _exit(0);
     }
+    /* Test-only, and the two shapes the rendezvous has to tell apart. Both are what the coordinator sees
+     * from the outside; neither can be approximated by anything the coordinator itself does.
+     *
+     *   SLOW: a member that takes far longer than the old fixed ~5 s tree budget to reach the point where
+     *   it commits, while genuinely working the whole time. That is what a starved member looks like on a
+     *   loaded box, and burning real CPU here is not incidental -- consumed CPU time is precisely the
+     *   signal the rendezvous now waits on, so this fixture progresses in exactly the way a descheduled
+     *   member does, only compressed into one process.
+     *
+     *   STALLED: a member that reaches this dispatcher, never registers, never commits, and consumes no
+     *   CPU at all from here on. Nothing will ever make it finish, and the capture must still refuse,
+     *   bounded, rather than wait for a member that is not coming. */
+    if (hl_option_get("HL_CKPT_TEST_PEER_SLOW_SAFEPOINT") != NULL) {
+        struct timespec started, now;
+        volatile unsigned long long spin = 0;
+        long long elapsed_ns;
+        (void)clock_gettime(CLOCK_MONOTONIC, &started);
+        do {
+            for (int i = 0; i < 100000; i++) spin += (unsigned long long)i;
+            (void)clock_gettime(CLOCK_MONOTONIC, &now);
+            elapsed_ns = (long long)(now.tv_sec - started.tv_sec) * 1000000000LL + (now.tv_nsec - started.tv_nsec);
+        } while (elapsed_ns < 8000000000LL);
+        fprintf(stderr, "[ckpt] %s reached its safepoint slowly (test hook)\n", pd);
+    }
+    if (hl_option_get("HL_CKPT_TEST_PEER_STALLS_AT_SAFEPOINT") != NULL) {
+        fprintf(stderr, "[ckpt] %s will never commit and will consume no CPU (test hook)\n", pd);
+        { /* no later kick can move it either */
+            sigset_t deaf;
+            sigemptyset(&deaf);
+            sigaddset(&deaf, THREAD_INT_SIG);
+            pthread_sigmask(SIG_BLOCK, &deaf, NULL);
+        }
+        for (;;) {
+            struct timespec forever = {3600, 0};
+            (void)nanosleep(&forever, NULL);
+        }
+    }
     int rc = ckpt_dump_self(c, pd, 1);
     uint64_t released = g_ckpt_release_state;
     // Report the GROUP, not container_pid(): an exec session's top process is guest pid 1 by g_init_hostpid

@@ -1279,10 +1279,19 @@ static int ckpt_register_ready(struct cpu **live, int count) {
 // CRASH SAFETY has two independent legs, because a member holding g_stw_reg_lock forever is unrecoverable:
 //   - the broker owns release. A dead or exited coordinator drops the capture, and a dead BROKER breaks
 //     this channel, which reads as RESUME. Release is tied to a descriptor, not to anyone's liveness poll.
-//   - a deadline. A broker that is alive but wedged cannot hold the tree: CKPT_PARK_DEADLINE_US bounds
-//     the park at the same ~5s as the whole-tree budget in ckpt_coordinate_and_exit, and expiry RESUMEs.
+//   - the ANSWER, not a clock. The park used to expire after a fixed ~5 s, chosen to match the whole-tree
+//     budget the rendezvous no longer has, and that pairing was load-bearing in the worst way: on a busy
+//     box the rendezvous legitimately takes longer than 5 s, every member's park then expired and RESUMEd
+//     itself, and the tree the coordinator was still assembling came back to life underneath it. Measured
+//     on the Linux VM at load ~19: six members committed, all six printed `released: capture abandoned` at
+//     ~5 s, and the guest resumed forking -- 607 transients enumerated and kicked over the next 55 s, none
+//     of which could ever end the rendezvous, until the embedder's own deadline expired. A member holding
+//     the freeze is the whole point of the park, so it must not decide on its own that a live capture has
+//     taken too long. A HOLD answer is proof the broker is alive AND that this capture is still running,
+//     so the park waits for as long as it keeps getting one. Every way the capture can actually die --
+//     coordinator gone, broker gone, channel broken -- fails the round trip instead, and a failed round
+//     trip reads as RESUME below, which is the leg that keeps this crash-safe without a clock.
 #define CKPT_PARK_POLL_US 2000
-#define CKPT_PARK_DEADLINE_US (5 * 1000 * 1000)
 
 static uint64_t ckpt_park_release_state(void) {
     hl_ckpt_reply reply;
@@ -1292,13 +1301,11 @@ static uint64_t ckpt_park_release_state(void) {
 }
 
 static uint64_t ckpt_park_until_released(void) {
-    for (unsigned long long waited = 0; waited < (unsigned long long)CKPT_PARK_DEADLINE_US;
-         waited += CKPT_PARK_POLL_US) {
+    for (;;) {
         uint64_t state = ckpt_park_release_state();
         if (state != HL_CKPT_RELEASE_HOLD) return state;
         usleep(CKPT_PARK_POLL_US);
     }
-    return HL_CKPT_RELEASE_RESUME;
 }
 
 /* The step that ended THIS process's own dump, set by ckpt_dump_self_locked before it returns -1.
@@ -1760,6 +1767,39 @@ done:
  * because a fork is only ever visible to a scan taken after it. */
 #define CKPT_ENUMERATION_QUIET_PASSES 2
 
+/* THE RENDEZVOUS WAITS ON PROGRESS, NOT ON A CLOCK.
+ *
+ * This loop used to run at most 500 passes of 10 ms and refuse whatever had not committed by then: a fixed
+ * ~5 s WALL budget for the whole tree to reach its safepoints. "Have I waited long enough?" is the wrong
+ * question, and the right one -- "is anyone still moving?" -- has a different answer under load. Measured:
+ * the same workspace close that passes in 7.5 s at load 8 refused at load ~16 with
+ * `participant ... never committed proc.6 (it did not reach a checkpoint safepoint)` at +4906 ms, because
+ * a member being descheduled is indistinguishable from a member being wedged when the only thing you look
+ * at is a clock. A developer with a busy machine is exactly the person who hits that, and the refusal is a
+ * workspace that will not close. Raising the constant only moves the load at which it breaks.
+ *
+ * So the loop is unbounded in wall time while the tree is PROGRESSING, and gives up only when it provably
+ * is not. Progress in a pass is any of: a new member adopted, a member's group committed or exempted, or
+ * an outstanding member's consumed host CPU time (user+system) having advanced since the previous pass.
+ * The last one is the fine-grained signal, and it is exactly the one a starved-but-running process keeps
+ * producing: CPU time is monotonic in work actually performed, so it advances however long the box makes
+ * the member wait for a core, and it does NOT advance for a member that will never reach a safepoint --
+ * one blocked forever, one that never took the kick. That keeps termination: this is a stall detector, not
+ * a deadline, and a member that never moves is still refused, by name, after a bounded window of proven
+ * inactivity. It is deliberately generous, because the cost of firing early is a false refusal and the
+ * cost of firing late is a slower failure. */
+#define CKPT_RENDEZVOUS_STALL_PASSES 500
+
+/* The other way this loop can fail to end, and the one waiting cannot fix: a tree that never stops
+ * forking. Quiescence needs a pass that adopts nobody, so a guest process that is still running and still
+ * forking keeps the rendezvous honestly busy for as long as it goes on -- every child is a real member and
+ * kicking it is the right thing to do. That is a live rendezvous, not a stalled one, so the stall detector
+ * above will never end it; it ends when the forking source freezes, which is what its own kick achieves.
+ * A source that never freezes therefore has to be refused instead, by name, after this many CONSECUTIVE
+ * passes each of which adopted somebody new. Nothing healthy forks continuously for that long after the
+ * freeze: an ordinary tree's stragglers are adopted within a pass or two of the trigger. */
+#define CKPT_RENDEZVOUS_CHURN_PASSES 500
+
 static void ckpt_coordinate_and_exit(struct cpu *c) {
     const struct ckpt_phase_ledger phases = {
         .enabled = hl_option_get("HL_CHECKPOINT_PHASE_LEDGER") != NULL,
@@ -1808,8 +1848,14 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     int ndone = 0;
     int nexempt = 0;
     int quiet = 0;
-    for (int t = 0; t < 500 && quiet < CKPT_ENUMERATION_QUIET_PASSES; t++) {
+    int stalled = 0;
+    int churning = 0;
+    /* Per known peer, the host CPU time it had consumed when it was last seen to advance. Parallel to
+     * `foll`/`completed` and grown with them. */
+    uint64_t *consumed = NULL;
+    for (unsigned long long t = 0;; t++) {
         int st;
+        int settled = 0;
         // Reap BEFORE the liveness test below, not after: an unreaped child of ours is a zombie, and
         // kill(pid, 0) succeeds on a zombie, so an exited transient child would read as still reachable
         // for as long as it stayed unreaped and would never qualify for the exemption.
@@ -1847,14 +1893,17 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
                 int grown = known_capacity == 0 ? 16 : known_capacity * 2;
                 hl_host_process_peer *peers = realloc(foll, (size_t)grown * sizeof *foll);
                 unsigned char *ledger = peers != NULL ? realloc(completed, (size_t)grown) : NULL;
+                uint64_t *progress = ledger != NULL ? realloc(consumed, (size_t)grown * sizeof *consumed) : NULL;
                 if (peers != NULL) foll = peers;
-                if (ledger == NULL)
+                if (ledger != NULL) completed = ledger;
+                if (progress == NULL)
                     ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_RESOURCES, "cannot grow the rendezvous ledger");
-                completed = ledger;
+                consumed = progress;
                 known_capacity = grown;
             }
             foll[nfoll] = scan[index];
             completed[nfoll] = 0;
+            consumed[nfoll] = 0;
             nfoll++;
             discovered = 1;
             // Freeze + dump this peer: the shared trigger generation is already advanced (the requester
@@ -1882,6 +1931,7 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
             if (ckpt_sink_group_present(sink, pd) == 1) {
                 completed[i] = 1;
                 ndone++;
+                settled = 1;
                 continue;
             }
             // Committed is checked first, so a peer that committed and then exited is counted as the
@@ -1894,6 +1944,23 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
                 completed[i] = 1;
                 ndone++;
                 nexempt++;
+                settled = 1;
+                continue;
+            }
+            /* Still outstanding: has it moved? A member that is merely starved keeps burning CPU, however
+             * slowly; one that is wedged, or that never took the kick, burns none. Read it fresh every
+             * pass -- a member that cannot be read at all (it has just died) is not progress, and it is
+             * either exempted above on the next pass or refused by name below. */
+            {
+                hl_host_process_info info;
+                uint64_t spent;
+                if (hl_host_process_read(foll[i].identity, &info)) {
+                    spent = info.user_time_ns + info.system_time_ns;
+                    if (spent > consumed[i]) {
+                        consumed[i] = spent;
+                        settled = 1;
+                    }
+                }
             }
         }
         /* Quiescent means everything known has finished AND a rescan found nothing new -- and it takes
@@ -1903,10 +1970,28 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
          * Settling on a single quiet pass is exactly the hole this loop exists to close: it would seal the
          * membership while an unfrozen guest process was still on its way to a safepoint. */
         quiet = ndone == nfoll && !discovered ? quiet + 1 : 0;
-        if (quiet < CKPT_ENUMERATION_QUIET_PASSES) usleep(10000);
+        if (quiet >= CKPT_ENUMERATION_QUIET_PASSES) break;
+        /* `discovered` and `settled` cover the coarse milestones; `settled` also carries the CPU-time
+         * advance recorded above. A pass in which none of them moved is a pass in which the whole
+         * outstanding set stood still. */
+        stalled = discovered || settled ? 0 : stalled + 1;
+        if (stalled >= CKPT_RENDEZVOUS_STALL_PASSES) break;
+        churning = discovered ? churning + 1 : 0;
+        if (churning >= CKPT_RENDEZVOUS_CHURN_PASSES) break;
+        usleep(10000);
     }
     free(scan);
+    free(consumed);
     fprintf(stderr, "[ckpt] coordinator pid=%d found %d peer(s), %d exempt\n", getpid(), nfoll, nexempt);
+    if (churning >= CKPT_RENDEZVOUS_CHURN_PASSES) {
+        char reason[HL_CKPT_STREAM_NAME_MAX];
+        snprintf(reason, sizeof reason,
+                 "the guest tree never stopped forking: a new process was adopted in every one of the last "
+                 "%d ms, so no enumeration ever found the tree quiescent and the set of members cannot be "
+                 "closed; %d peer(s) were enumerated and %d exempted",
+                 CKPT_RENDEZVOUS_CHURN_PASSES * 10, nfoll, nexempt);
+        ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_PEER_QUIESCENCE, reason);
+    }
     if (ndone != nfoll) {
         // Name every participant still outstanding at the rendezvous deadline: "the group never committed"
         // is otherwise indistinguishable from "nothing was ever asked to commit". The host is told about
@@ -1916,15 +2001,19 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
         for (int i = 0; i < nfoll; i++)
             if (!completed[i]) {
                 fprintf(stderr,
-                        "[ckpt] participant %lld never committed proc.%d (it did not reach a checkpoint "
-                        "safepoint, or its dump was refused); refusing incomplete manifest\n",
-                        (long long)foll[i].identity, ckpt_peer_gpid(foll[i].identity));
+                        "[ckpt] participant %lld never committed proc.%d and stopped making progress "
+                        "towards a checkpoint safepoint (no host CPU time consumed for %d ms); refusing "
+                        "incomplete manifest\n",
+                        (long long)foll[i].identity, ckpt_peer_gpid(foll[i].identity),
+                        CKPT_RENDEZVOUS_STALL_PASSES * 10);
                 if (!named) {
                     named = 1;
                     snprintf(reason, sizeof reason,
                              "%d of %d participants never committed their group; the first is process %lld "
-                             "(proc.%d), which did not reach a checkpoint safepoint or had its dump refused",
-                             nfoll - ndone, nfoll, (long long)foll[i].identity, ckpt_peer_gpid(foll[i].identity));
+                             "(proc.%d), which stopped making progress towards a checkpoint safepoint -- it "
+                             "consumed no host CPU time for %d ms -- or had its dump refused",
+                             nfoll - ndone, nfoll, (long long)foll[i].identity, ckpt_peer_gpid(foll[i].identity),
+                             CKPT_RENDEZVOUS_STALL_PASSES * 10);
                 }
             }
         if (!named) snprintf(reason, sizeof reason, "a participant never committed its group");

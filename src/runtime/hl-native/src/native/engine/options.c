@@ -60,6 +60,13 @@ static const hl_option_definition hl_option_definitions[] = {
     HL_INJECTION_OPTION("HL_CKPT_TEST_PEER_EXIT_AFTER_JOIN",
                        "test-only capture peer that exits after proving membership and before committing",
                        HL_OPTION_FLAG),
+    HL_INJECTION_OPTION("HL_CKPT_TEST_PEER_SLOW_SAFEPOINT",
+                       "test-only capture peer that works for far longer than the rendezvous stall window "
+                       "before committing its group",
+                       HL_OPTION_FLAG),
+    HL_INJECTION_OPTION("HL_CKPT_TEST_PEER_STALLS_AT_SAFEPOINT",
+                       "test-only capture peer that never commits its group and consumes no host CPU time",
+                       HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_CKPT_TEST_FAIL_AFTER_FORK", "test-only restore failure after rebuilding descendants",
                        HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_CKPT_TEST_FAIL_TRIGGER_REATTACH",
