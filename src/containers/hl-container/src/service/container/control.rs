@@ -278,6 +278,10 @@ impl Service {
                 .ok_or_else(|| Error::Corrupt(format!("active container {} has no owned process", container.id)))?;
             (Arc::clone(&run.process), run.output_complete.clone())
         };
+        // Read before the freeze, while every member is still running: the guest pid is the identity
+        // the image will name each sealed member by, and a released member is reaped as soon as the
+        // capture commits, taking its handle with it.
+        let identities = self.domain_member_identities(&container.id).await?;
         process.checkpoint(timeout).await?;
         let checkpoint = crate::Checkpoint {
             namespace: container.id.to_string(),
@@ -290,7 +294,7 @@ impl Service {
         };
         container.checkpoint = Some(checkpoint.clone());
         self.containers.replace(&container).await?;
-        let members = self.arm_domain_members(&container.id, &checkpoint).await?;
+        let members = self.arm_domain_members(&container.id, &checkpoint, &identities).await?;
         let output = self
             .await_output_completion(&JournalId::container(container.id.clone()), output_complete, timeout)
             .await
@@ -317,10 +321,32 @@ impl Service {
     /// This runs under `self.operations`, which [`Self::finish_exec`] also takes before writing a
     /// terminal state, so the token is armed before a released member's `_exit(0)` can be
     /// observed. That ordering is what keeps a clean release distinguishable from a crash.
+    /// The container-namespace pid each live member of this container's domain is running under.
+    ///
+    /// Taken while the members are still running, because that is the only window in which the
+    /// runtime holds a handle to ask.
+    async fn domain_member_identities(
+        &self,
+        container: &crate::ContainerId,
+    ) -> Result<std::collections::HashMap<crate::ExecId, std::num::NonZeroI32>> {
+        let live = self.exec_live.lock().await;
+        let mut identities = std::collections::HashMap::new();
+        for exec in self.execs.list().await? {
+            if &exec.container != container || !exec.state.is_active() {
+                continue;
+            }
+            if let Some(guest_pid) = live.get(&exec.id).and_then(|process| process.guest_pid()) {
+                identities.insert(exec.id, guest_pid);
+            }
+        }
+        Ok(identities)
+    }
+
     async fn arm_domain_members(
         &self,
         container: &crate::ContainerId,
         checkpoint: &crate::Checkpoint,
+        identities: &std::collections::HashMap<crate::ExecId, std::num::NonZeroI32>,
     ) -> Result<Vec<crate::ExecId>> {
         let mut sealed = Vec::new();
         for mut exec in self.execs.list().await? {
@@ -329,6 +355,7 @@ impl Service {
             }
             exec.state = crate::ExecState::Created;
             exec.checkpoint = Some(checkpoint.clone());
+            exec.guest_pid = identities.get(&exec.id).copied();
             self.execs.replace(&exec).await?;
             sealed.push(exec.id);
         }

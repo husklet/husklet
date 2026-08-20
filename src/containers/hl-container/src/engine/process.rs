@@ -107,6 +107,13 @@ impl Running for Process {
         self.domain
     }
 
+    fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
+        self.child
+            .lock()
+            .ok()
+            .and_then(|engine| engine.as_ref().and_then(|engine| engine.guest_pid()))
+    }
+
     fn checkpointable(&self) -> bool {
         self.checkpointable
     }

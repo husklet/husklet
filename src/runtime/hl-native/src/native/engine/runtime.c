@@ -42,6 +42,7 @@ struct hl_engine {
     atomic_flag lock;
     atomic_bool checkpoint_control_lock;
     hl_host_handle process;
+    hl_host_handle process_result;
     uint32_t state;
     uint32_t pending_termination;
     hl_linux_abi box;
@@ -1245,6 +1246,7 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
     }
     hl_engine_lock(engine);
     engine->process = process;
+    engine->process_result = process_result;
     if (engine->state != HL_ENGINE_DESTROYING) engine->state = HL_ENGINE_RUNNING;
     pending = engine->pending_termination;
     hl_engine_unlock(engine);
@@ -1266,6 +1268,9 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
     hl_engine_checkpoint_arena_stop(engine);
     hl_engine_lock(engine);
     engine->process = HL_HOST_HANDLE_INVALID;
+    /* Withdrawn before finish_process, which consumes the token: a reader that outlived the guest must
+       find no handle rather than a released one. */
+    engine->process_result = HL_HOST_HANDLE_INVALID;
     hl_engine_unlock(engine);
     closed = engine->host.process->close(engine->host.context, process);
     if (waited.status != HL_STATUS_OK) {
@@ -1297,6 +1302,18 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
     engine->state = HL_ENGINE_FINISHED;
     hl_engine_unlock(engine);
     return status;
+}
+
+int32_t hl_engine_guest_pid(hl_engine *engine) {
+    hl_host_handle token;
+    int32_t guest_pid = 0;
+    if (engine == NULL) return 0;
+    hl_engine_lock(engine);
+    token = engine->process_result;
+    if (token != HL_HOST_HANDLE_INVALID && engine->backend != NULL && engine->backend->process_guest_pid != NULL)
+        guest_pid = engine->backend->process_guest_pid(token);
+    hl_engine_unlock(engine);
+    return guest_pid;
 }
 
 hl_status hl_engine_request(hl_engine *engine, uint32_t request, const void *data, size_t data_size) {

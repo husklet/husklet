@@ -63,8 +63,11 @@ static int hl_engine_child_result_claim(void) {
 void hl_engine_child_result_publish(int32_t guest_status, hl_status engine_status, uint64_t detail) {
     hl_engine_child_result record = {
         0,      HL_ENGINE_CHILD_RESULT_VERSION,   guest_status, engine_status, HL_ENGINE_CHILD_RESULT_EXIT, 0,
-        detail, hl_run_linux_guest_translations()};
+        detail, hl_run_linux_guest_translations(), 0, 0};
     if (!hl_engine_child_result_claim()) return;
+    /* The identity outlives the exit it is published beside: a whole-record store would erase the
+       guest pid the parent is still entitled to read after the child is reaped. */
+    record.guest_pid = atomic_load_explicit((_Atomic int32_t *)&active_result->guest_pid, memory_order_acquire);
     memcpy(active_result, &record, sizeof(record));
     atomic_store_explicit((_Atomic uint32_t *)&active_result->magic, HL_ENGINE_CHILD_RESULT_MAGIC,
                           memory_order_release);
@@ -83,6 +86,14 @@ void hl_engine_child_result_publish_signal(int32_t guest_signal) {
     atomic_store_explicit((_Atomic uint32_t *)&active_result->magic, HL_ENGINE_CHILD_RESULT_MAGIC,
                           memory_order_release);
     atomic_store_explicit(&result_published, 2, memory_order_release);
+}
+
+/* Publishes this engine child's container-namespace pid. Called once, from the container identity
+   the guest runs under, and never from a guest fork child: a fork clears active_result, so a
+   descendant cannot overwrite the identity its launcher published. */
+void hl_engine_child_result_publish_guest_pid(int32_t guest_pid) {
+    if (active_result == NULL || guest_pid <= 0) return;
+    atomic_store_explicit((_Atomic int32_t *)&active_result->guest_pid, guest_pid, memory_order_release);
 }
 
 void hl_engine_child_result_after_fork(void) {
@@ -661,6 +672,12 @@ static int32_t hl_production_entry(void *opaque) {
 }
 #endif
 
+static int32_t hl_production_process_guest_pid(hl_host_handle token) {
+    const hl_production_result_state *state = (const hl_production_result_state *)(uintptr_t)token;
+    if (state == NULL || state->record == NULL) return 0;
+    return atomic_load_explicit((const _Atomic int32_t *)&state->record->guest_pid, memory_order_acquire);
+}
+
 static void hl_production_result_release(const hl_host_services *host, hl_host_handle token) {
     hl_production_result_state *state = (hl_production_result_state *)(uintptr_t)token;
     if (state == NULL) return;
@@ -898,7 +915,8 @@ static hl_status hl_production_finish_process(const hl_host_services *host, hl_h
 }
 
 static const hl_engine_backend backend = {HL_PRODUCTION_GUEST_ISA, hl_production_start_process,
-                                          hl_production_finish_process, hl_production_result_release};
+                                          hl_production_finish_process, hl_production_result_release,
+                                          hl_production_process_guest_pid};
 
 void hl_target_register_backend(void) {
     hl_engine_backend_register(&backend);

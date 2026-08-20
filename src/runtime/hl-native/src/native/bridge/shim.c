@@ -647,6 +647,10 @@ HL_API int32_t hl_c_backend_exit_status(const hl_c_backend *backend) {
     return hl_c_backend_exit((hl_c_backend *)backend, &result) == HL_STATUS_OK ? result.guest_status : -1;
 }
 
+HL_API int32_t hl_c_backend_guest_pid(const hl_c_backend *backend) {
+    return backend == NULL ? 0 : hl_engine_guest_pid(((hl_c_backend *)backend)->engine);
+}
+
 HL_API uint64_t hl_c_backend_exit_detail(const hl_c_backend *backend) {
     hl_engine_exit result = {.abi = HL_ENGINE_ABI, .size = sizeof(result)};
     return hl_c_backend_exit((hl_c_backend *)backend, &result) == HL_STATUS_OK ? result.detail : 0;

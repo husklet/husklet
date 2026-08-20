@@ -60,6 +60,8 @@ pub(crate) type UnixIdentityTest = unsafe extern "C" fn(c_uint, c_int, u64, *mut
 #[cfg(feature = "native-test-hooks")]
 pub(crate) type UnixIdentityCaptureTest = unsafe extern "C" fn(c_int) -> c_int;
 
+pub(crate) type GuestPid = unsafe extern "C" fn(*const Backend) -> c_int;
+
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub(crate) struct BridgeApi {
@@ -84,6 +86,7 @@ pub(crate) struct BridgeApi {
     pub(crate) exit: Option<Exit>,
     pub(crate) destroy: Option<Destroy>,
     pub(crate) checkpoint_broker_accept_authenticated: Option<AuthenticatedBrokerAccept>,
+    pub(crate) guest_pid: Option<GuestPid>,
 }
 
 #[derive(Clone, Copy)]

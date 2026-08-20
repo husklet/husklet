@@ -652,6 +652,11 @@ static int container_init(const char *rootfs) {
     // derive the run user's supplementary group set from the image rootfs (runc additionalGids), after
     // g_uid/g_gid + the overlay lowers are resolved, so getgroups(2) and /proc/self/status Groups: report it.
     if (g_rootfs) container_parse_groups();
+    // The container identity this process runs under is now decided, so publish the one number a
+    // checkpoint preserves for it. A launched member's guest pid is what the image names its group by
+    // (`proc.<guest pid>`) and what a restore re-forks it under, so it is the only identity a host can
+    // hold across a capture. Both target arms publish it; keep them in step.
+    hl_engine_child_result_publish_guest_pid(container_pid());
     return 0;
 }
 

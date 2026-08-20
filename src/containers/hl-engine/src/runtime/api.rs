@@ -266,6 +266,14 @@ impl Engine {
     pub fn checkpoint_supported(&self) -> Result<(), EngineError> {
         self.backend.checkpoint_supported()
     }
+    /// The container-namespace pid of the guest process this engine launched, once it has one.
+    ///
+    /// A whole-image checkpoint names each captured member by this number and a restore re-forks it
+    /// under the same one, so it is the only identity of a launched guest that survives a capture.
+    #[must_use]
+    pub fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
+        self.backend.guest_pid()
+    }
     pub fn capture_checkpoint(&self) -> Result<(), EngineError> {
         self.backend.capture_checkpoint()
     }

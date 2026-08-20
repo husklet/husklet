@@ -17,6 +17,9 @@ typedef struct hl_engine_backend {
     hl_status (*finish_process)(const hl_host_services *host, hl_host_handle token, const hl_host_result *waited,
                                 hl_engine_exit *result, uint64_t *translations);
     void (*release_process_result)(const hl_host_services *host, hl_host_handle token);
+    /* The container-namespace pid of the launched guest process, or 0 before the child has published
+       one. Readable for as long as the process-result token lives. */
+    int32_t (*process_guest_pid)(hl_host_handle token);
 } hl_engine_backend;
 
 void hl_engine_backend_register(const hl_engine_backend *backend);
@@ -39,6 +42,10 @@ hl_status hl_engine_create_with_borrowed_options_and_syscall_trap_and_interprete
     void *syscall_context, hl_syscall_trap_fn syscall_dispatch, const void *interpreter_image,
     size_t interpreter_size, hl_engine **out_engine);
 uint64_t hl_engine_translation_count(const hl_engine *engine);
+/* The container-namespace pid of the guest process this engine launched, or 0 while no launched
+   process has published one. Stable for the run: the value is the identity a checkpoint image names
+   the process by and a restore re-forks it under. */
+int32_t hl_engine_guest_pid(hl_engine *engine);
 hl_status hl_engine_checkpoint_configure(hl_engine *engine, int broker, int trigger);
 void hl_engine_checkpoint_fork_prepare(void);
 void hl_engine_checkpoint_fork_parent(void);

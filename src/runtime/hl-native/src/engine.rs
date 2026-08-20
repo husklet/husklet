@@ -169,6 +169,19 @@ impl Engine {
         (status == STATUS_OK).then_some(()).ok_or(status)
     }
 
+    /// The container-namespace pid of the guest process this engine launched.
+    ///
+    /// `None` until the launched process has published its container identity, and again once it has
+    /// been reaped. A checkpoint image names each captured member by exactly this number and a restore
+    /// re-forks it under the same one, so it is the only identity of a launched guest that survives a
+    /// whole-image capture.
+    #[must_use]
+    pub fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
+        // SAFETY: `self` owns a live backend. The C side reads one atomically published field of a
+        // shared mapping under the engine lock and retains nothing.
+        std::num::NonZeroI32::new(unsafe { bindings::hl_c_backend_guest_pid(self.0.as_ptr()) })
+    }
+
     #[must_use]
     pub fn exit(&self) -> Exit {
         let mut result = bindings::EngineExit {
