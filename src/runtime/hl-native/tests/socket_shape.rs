@@ -44,6 +44,38 @@ fn socket_pair(kind: i32) -> (OwnedFd, OwnedFd) {
     }
 }
 
+fn temporary_path(tag: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!("hl-shape-{}-{tag}", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    path
+}
+
+fn pathname_address(path: &std::path::Path) -> libc::sockaddr_un {
+    let bytes = path.to_string_lossy().into_owned();
+    let mut address = unsafe { std::mem::zeroed::<libc::sockaddr_un>() };
+    address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    assert!(
+        bytes.len() < address.sun_path.len(),
+        "socket path does not fit sun_path"
+    );
+    for (destination, source) in address.sun_path.iter_mut().zip(bytes.as_bytes()) {
+        *destination = *source as libc::c_char;
+    }
+    address
+}
+
+fn bind_path(descriptor: i32, path: &std::path::Path) {
+    let address = pathname_address(path);
+    let status = unsafe {
+        libc::bind(
+            descriptor,
+            std::ptr::from_ref(&address).cast(),
+            size_of::<libc::sockaddr_un>() as libc::socklen_t,
+        )
+    };
+    assert_eq!(status, 0, "bind: {}", std::io::Error::last_os_error());
+}
+
 /// Guest-visible length only; the buffer is deliberately larger than any address so a translation that
 /// over-reports its length is caught by the length rather than by a truncating copy.
 fn guest_address(isa: u32, operation: u32, descriptor: i32) -> (u32, Vec<u8>) {
@@ -76,9 +108,36 @@ fn an_unbound_unix_socket_reports_the_bare_family_on_both_isas() {
 #[test]
 fn an_accepted_socket_reports_an_unnamed_peer_on_both_isas() {
     for (isa, name) in ISAS {
-        let (left, right) = socket_pair(libc::SOCK_STREAM);
-        drop(right);
-        let (length, _) = guest_address(isa, GETPEERNAME, left.as_raw_fd());
+        // A real listener and a client that never bound a name. A socketpair end cannot stand in for
+        // this: with its peer closed, Darwin answers getpeername with EINVAL where Linux still answers.
+        let path = temporary_path(&format!("peer-{isa}"));
+        let listener = socket(libc::SOCK_STREAM);
+        bind_path(listener.as_raw_fd(), &path);
+        assert_eq!(
+            unsafe { libc::listen(listener.as_raw_fd(), 4) },
+            0,
+            "listen: {}",
+            std::io::Error::last_os_error()
+        );
+        let client = socket(libc::SOCK_STREAM);
+        let address = pathname_address(&path);
+        assert_eq!(
+            unsafe {
+                libc::connect(
+                    client.as_raw_fd(),
+                    std::ptr::from_ref(&address).cast(),
+                    size_of::<libc::sockaddr_un>() as libc::socklen_t,
+                )
+            },
+            0,
+            "connect: {}",
+            std::io::Error::last_os_error()
+        );
+        let accepted = unsafe { libc::accept(listener.as_raw_fd(), std::ptr::null_mut(), std::ptr::null_mut()) };
+        assert!(accepted >= 0, "accept: {}", std::io::Error::last_os_error());
+        let accepted = unsafe { OwnedFd::from_raw_fd(accepted) };
+        let (length, _) = guest_address(isa, GETPEERNAME, accepted.as_raw_fd());
+        let _ = std::fs::remove_file(&path);
         assert_eq!(length, 2, "{name}: an unnamed peer is the family alone");
     }
 }
@@ -88,25 +147,12 @@ fn an_accepted_socket_reports_an_unnamed_peer_on_both_isas() {
 #[test]
 fn a_bound_pathname_keeps_its_linux_length_on_both_isas() {
     for (isa, name) in ISAS {
-        let directory = std::env::temp_dir().join(format!("hl-shape-{}-{isa}", std::process::id()));
-        let _ = std::fs::remove_file(&directory);
-        let path = directory.to_string_lossy().into_owned();
+        let bound = temporary_path(&format!("bound-{isa}"));
+        let path = bound.to_string_lossy().into_owned();
         let socket = socket(libc::SOCK_STREAM);
-        let mut address = unsafe { std::mem::zeroed::<libc::sockaddr_un>() };
-        address.sun_family = libc::AF_UNIX as libc::sa_family_t;
-        for (destination, source) in address.sun_path.iter_mut().zip(path.as_bytes()) {
-            *destination = *source as libc::c_char;
-        }
-        let status = unsafe {
-            libc::bind(
-                socket.as_raw_fd(),
-                std::ptr::from_ref(&address).cast(),
-                size_of::<libc::sockaddr_un>() as libc::socklen_t,
-            )
-        };
-        assert_eq!(status, 0, "bind: {}", std::io::Error::last_os_error());
+        bind_path(socket.as_raw_fd(), &bound);
         let (length, bytes) = guest_address(isa, GETSOCKNAME, socket.as_raw_fd());
-        let _ = std::fs::remove_file(&directory);
+        let _ = std::fs::remove_file(&bound);
         assert_eq!(
             length as usize,
             2 + path.len() + 1,
