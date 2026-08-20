@@ -2118,6 +2118,84 @@ fn checkpoint_request(op: u32, generation: u32, payload: &[u8]) -> Vec<u8> {
     request
 }
 
+/// A request that carries a NUL-terminated name, which is how a refusal carries its reason.
+fn checkpoint_request_named(op: u32, generation: u32, name: &str) -> Vec<u8> {
+    let mut encoded = name.as_bytes().to_vec();
+    encoded.push(0);
+    let mut request = vec![0_u8; protocol::REQUEST_BYTES];
+    request[0..4].copy_from_slice(&protocol::MAGIC_REQUEST.to_ne_bytes());
+    request[4..8].copy_from_slice(&protocol::ABI.to_ne_bytes());
+    request[8..12].copy_from_slice(&op.to_ne_bytes());
+    request[40..44].copy_from_slice(&(encoded.len() as u32).to_ne_bytes());
+    request[44..48].copy_from_slice(&generation.to_ne_bytes());
+    request.extend_from_slice(&encoded);
+    request
+}
+
+/// A DECIDED refusal ends the capture at the decision, and says what the decision was.
+///
+/// The coordinator used to abort only its own group and `_exit(70)`. Nothing told the broker, so the
+/// remaining members parked out their hold, resumed, and held their channels open -- and the client sat
+/// on a thirty-second deadline over a decision taken in the first second, then reported an error naming
+/// none of it. The deadline was never the defect: it was being waited out for nothing.
+///
+/// This drives the whole of that: a capture with a deadline far in the future, one refusal frame, and the
+/// assertion that the capture is terminal LONG before the deadline, under a failure distinct from a
+/// breakage, with the engine's own words recoverable from the server.
+#[test]
+fn a_refusal_ends_the_capture_at_the_decision_and_keeps_the_reason() {
+    let _serial = TRANSPORT_SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (broker, transport) = hl_native::CheckpointTransport::create().expect("checkpoint transport");
+    let mut coordinator = transport.connect_for_test().expect("checkpoint channel");
+    let (channel, authority) = broker
+        .accept(Duration::from_secs(10))
+        .expect("authenticated production accept");
+    let server = Arc::new(Server::new(Arc::new(Store), Arc::new(Store)));
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let capture = server.begin_capture(9, deadline).expect("capture admission");
+    let worker = Arc::clone(&server);
+    let served = std::thread::spawn(move || worker.serve_authenticated_for_test(channel, authority));
+    while server.connections.load(Ordering::Acquire) == 0 {
+        std::thread::yield_now();
+    }
+    assert_eq!(
+        server.capture_refusal(),
+        None,
+        "a refusal was recorded before any was sent"
+    );
+
+    let reason = "guest fd 10 is a pipe -- shared pipe restore is not yet supported";
+    coordinator
+        .write_all(&checkpoint_request_named(protocol::CAPTURE_REFUSED, 9, reason))
+        .expect("refusal frame");
+    assert_eq!(read_reply(&mut coordinator).0, 0, "the refusal frame was rejected");
+
+    // Two seconds against a thirty-second deadline: the wait has to be answered by the DECISION, not by
+    // the deadline, or this returns Ok(None) and the assertion fails.
+    let settled = server
+        .wait_capture(capture, std::time::Instant::now() + Duration::from_secs(2))
+        .expect("capture wait");
+    assert_eq!(
+        settled,
+        Some(Err(crate::runtime::checkpoint::CaptureFailure::Refused)),
+        "a decided refusal did not fail the capture at the decision"
+    );
+    assert_eq!(
+        server.capture_refusal().as_deref(),
+        Some(reason),
+        "the engine's own reason did not reach the host"
+    );
+    assert!(
+        std::time::Instant::now() < deadline,
+        "the capture was still not settled at its deadline"
+    );
+    server.stop();
+    drop(coordinator);
+    served.join().expect("broker worker");
+}
+
 fn register_ready_payload(executors: &[u32]) -> Vec<u8> {
     let mut payload = Vec::with_capacity(8 + executors.len() * 4);
     payload.extend_from_slice(&(executors.len() as u32).to_ne_bytes());

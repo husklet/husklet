@@ -139,6 +139,14 @@ pub enum EngineError {
     /// refused capture as `LaunchFailed`, which reached the desktop as a bare launch-failure
     /// dialog on a workspace the user had just been typing into.
     CaptureFailed,
+    /// A checkpoint capture the engine DECIDED not to publish, having said why.
+    ///
+    /// Distinct from `CaptureFailed`, which is what a capture that broke or was abandoned reports.
+    /// A refusal is a decision with a cause the engine can name -- an unsupported descriptor, a member
+    /// that never reached a safepoint -- and the cause is available from the checkpoint control that
+    /// produced this error. Reporting the two the same way is what made every checkpoint refusal
+    /// surface as an unexplained failure thirty seconds after the decision that caused it.
+    CaptureRefused,
     /// The capture ledger was left poisoned by a panicking participant, so no capture can be
     /// admitted until the engine is rebuilt.
     CapturePoisoned,

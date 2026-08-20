@@ -90,6 +90,42 @@ static _Noreturn void ckpt_phase_exit(const struct ckpt_phase_ledger *ledger, in
     _exit(status);
 }
 
+/* Why the coordinator refused, as a value the parent can read. The reason TEXT goes to the host over the
+   channel; this is the durable, enumerable half of the same answer, carried in the child result's detail. */
+enum ckpt_refusal_reason {
+    CKPT_REFUSAL_RESOURCES = 1,        /* the coordinator could not allocate what enumeration needs */
+    CKPT_REFUSAL_PEER_ENUMERATION = 2, /* the live peer set could not be read */
+    CKPT_REFUSAL_PEER_QUIESCENCE = 3,  /* a participant never committed its group */
+    CKPT_REFUSAL_SELF_DUMP = 4,        /* the init's own dump failed */
+    CKPT_REFUSAL_PROCESS_COUNT = 5,    /* the committed group count is not the membership */
+    CKPT_REFUSAL_FOREGROUND_GROUP = 6, /* the tty foreground group is outside the restored namespace */
+    CKPT_REFUSAL_DIGEST = 7,           /* the image digest could not be taken */
+    CKPT_REFUSAL_MANIFEST = 8,         /* the manifest could not be published */
+};
+
+/* Refuse the capture, saying why, and exit.
+ *
+ * Three things happen here that a bare `ckpt_phase_exit(ledger, 70)` did not do, and the absence of all
+ * three is what made every checkpoint defect expensive:
+ *
+ *  - the reason reaches the HOST. It used to exist only as a `[ckpt] refuse:` line on the engine's stderr,
+ *    so the embedder reported HL_STATUS_CORRUPT with detail 0 -- "the coordinator died" -- and named nothing.
+ *  - the host FAILS THE CAPTURE NOW. The coordinator aborted only its own group and exited; nothing told
+ *    the broker, so peers parked, resumed, and held their channels open, and the client waited out its
+ *    entire 30s deadline over a decision taken at 0.3s. The deadline is not the problem and is not touched:
+ *    it was being waited out for nothing.
+ *  - the parent gets an enumerable status instead of a corrupt-record fallback.
+ *
+ * Best effort in this order deliberately: the stderr line is written first, so a refusal is still diagnosed
+ * when the channel is the thing that broke. */
+static _Noreturn void ckpt_coordinator_refuse(const struct ckpt_phase_ledger *ledger, enum ckpt_refusal_reason code,
+                                              const char *reason) {
+    fprintf(stderr, "[ckpt] refuse: %s\n", reason);
+    ckpt_stream_capture_refused(reason);
+    hl_engine_child_result_publish(0, HL_STATUS_NOT_SUPPORTED, (uint64_t)code);
+    ckpt_phase_exit(ledger, 70);
+}
+
 static int ckpt_fd_was_captured(const struct ckpt_fd *records, int count, int fd) {
     for (int prior = 0; prior < count; ++prior)
         if (records[prior].gfd == fd) return 1;
@@ -1424,13 +1460,18 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     size_t peer_capacity = 512;
     hl_host_process_peer *foll = malloc(peer_capacity * sizeof *foll);
     size_t observed = 0;
-    if (foll == NULL) ckpt_phase_exit(&phases, 70);
+    if (foll == NULL)
+        ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_RESOURCES, "cannot allocate the peer enumeration buffer");
     for (;;) {
-        if (!ckpt_live_process_peers(foll, peer_capacity, &observed)) ckpt_phase_exit(&phases, 70);
+        if (!ckpt_live_process_peers(foll, peer_capacity, &observed))
+            ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_PEER_ENUMERATION, "cannot enumerate the live peer set");
         if (observed <= peer_capacity) break;
-        if (observed > (size_t)INT_MAX || observed > SIZE_MAX / sizeof *foll) ckpt_phase_exit(&phases, 70);
+        if (observed > (size_t)INT_MAX || observed > SIZE_MAX / sizeof *foll)
+            ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_PEER_ENUMERATION,
+                                    "the live peer set is larger than the coordinator can address");
         hl_host_process_peer *expanded = realloc(foll, observed * sizeof *foll);
-        if (expanded == NULL) ckpt_phase_exit(&phases, 70);
+        if (expanded == NULL)
+            ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_RESOURCES, "cannot grow the peer enumeration buffer");
         foll = expanded;
         peer_capacity = observed;
     }
@@ -1450,7 +1491,8 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
                 kicked ? "interrupted" : "NOT interrupted (it cannot reach a safepoint)");
     }
     unsigned char *completed = calloc((size_t)(nfoll ? nfoll : 1), 1);
-    if (completed == NULL) ckpt_phase_exit(&phases, 70);
+    if (completed == NULL)
+        ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_RESOURCES, "cannot allocate the rendezvous ledger");
     int ndone = 0;
     for (int t = 0; t < 500 && ndone != nfoll; t++) { // one whole-tree deadline: at most ~5s total
         for (int i = 0; i < nfoll; i++) {
@@ -1470,23 +1512,34 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     }
     if (ndone != nfoll) {
         // Name every participant still outstanding at the rendezvous deadline: "the group never committed"
-        // is otherwise indistinguishable from "nothing was ever asked to commit".
+        // is otherwise indistinguishable from "nothing was ever asked to commit". The host is told about
+        // the first one by name, because a reason it cannot act on is barely better than no reason.
+        char reason[HL_CKPT_STREAM_NAME_MAX];
+        int named = 0;
         for (int i = 0; i < nfoll; i++)
-            if (!completed[i])
+            if (!completed[i]) {
                 fprintf(stderr,
                         "[ckpt] participant %lld never committed proc.%d (it did not reach a checkpoint "
                         "safepoint, or its dump was refused); refusing incomplete manifest\n",
                         (long long)foll[i].identity, ckpt_peer_gpid(foll[i].identity));
-        ckpt_phase_exit(&phases, 70);
+                if (!named) {
+                    named = 1;
+                    snprintf(reason, sizeof reason,
+                             "%d of %d participants never committed their group; the first is process %lld "
+                             "(proc.%d), which did not reach a checkpoint safepoint or had its dump refused",
+                             nfoll - ndone, nfoll, (long long)foll[i].identity, ckpt_peer_gpid(foll[i].identity));
+                }
+            }
+        if (!named) snprintf(reason, sizeof reason, "a participant never committed its group");
+        ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_PEER_QUIESCENCE, reason);
     }
     ckpt_phase_finish(&phases, "peer_quiescence", phase, 0);
 
     // Dump ourselves (the init) last.
     phase = ckpt_phase_begin(&phases);
-    if (ckpt_dump_self(c, "proc.1", 0) != 0) {
-        fprintf(stderr, "[ckpt] init dump FAILED -- checkpoint incomplete\n");
-        ckpt_phase_exit(&phases, 70);
-    }
+    if (ckpt_dump_self(c, "proc.1", 0) != 0)
+        ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_SELF_DUMP,
+                                "the container init's own dump failed; the checkpoint would be incomplete");
     ckpt_phase_finish(&phases, "serialization", phase, 0);
 
     // Publish the MANIFEST last: its presence == a complete, restorable checkpoint.
@@ -1500,9 +1553,10 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     int nproc = ckpt_sink_group_count(sink, "proc.");
     ckpt_phase_finish(&phases, "settlement", phase, 0);
     if (nproc != nfoll + 1) {
-        fprintf(stderr, "[ckpt] process-count mismatch: expected exactly %d, captured %d; refusing manifest\n",
-                nfoll + 1, nproc);
-        ckpt_phase_exit(&phases, 70);
+        char reason[HL_CKPT_STREAM_NAME_MAX];
+        snprintf(reason, sizeof reason,
+                 "process-count mismatch: expected exactly %d committed groups, captured %d", nfoll + 1, nproc);
+        ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_PROCESS_COUNT, reason);
     }
     struct ckpt_manifest man;
     phase = ckpt_phase_begin(&phases);
@@ -1523,8 +1577,8 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
             man.fg_pgid_gpid = 0;
         else if (hl_linux_pidmap_guest_checked(&g_pgidmap, (int32_t)fgh, &man.fg_pgid_gpid) != 0) {
             ckpt_ctty_close(tf);
-            fprintf(stderr, "[ckpt] foreground process group is outside restored namespace\n");
-            ckpt_phase_exit(&phases, 70);
+            ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_FOREGROUND_GROUP,
+                                    "the terminal's foreground process group is outside the restored namespace");
         } else if (!hl_linux_pidmap_is_active(&g_pgidmap) && g_init_hostpid && fgh == g_init_hostpid)
             man.fg_pgid_gpid = 1;
         if (tf >= 0 && tcgetattr(tf, &tio) == 0) {
@@ -1543,13 +1597,15 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     // The digest is asked of the sink: the server accumulated it while the bytes went past, so nothing
     // re-reads the embedder's store.
     if (ckpt_sink_digest(sink, &man.image_hash, &man.image_files, &man.image_bytes) != 0) {
-        fprintf(stderr, "[ckpt] cannot hash checkpoint image: %s\n", strerror(errno));
-        ckpt_phase_exit(&phases, 70);
+        char reason[HL_CKPT_STREAM_NAME_MAX];
+        snprintf(reason, sizeof reason, "cannot hash the checkpoint image: %s", strerror(errno));
+        ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_DIGEST, reason);
     }
     // Explicit completion: the only signal that the image is complete.
     if (ckpt_sink_commit(sink, &man, sizeof man) != 0) {
-        fprintf(stderr, "[ckpt] cannot publish checkpoint manifest: %s\n", strerror(errno));
-        ckpt_phase_exit(&phases, 70);
+        char reason[HL_CKPT_STREAM_NAME_MAX];
+        snprintf(reason, sizeof reason, "cannot publish the checkpoint manifest: %s", strerror(errno));
+        ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_MANIFEST, reason);
     }
     ckpt_phase_finish(&phases, "manifest_publication", phase, 0);
     fprintf(stderr, "[ckpt] checkpoint OK: %d process(es)\n", nproc);

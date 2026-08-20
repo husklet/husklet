@@ -91,7 +91,14 @@ typedef enum hl_ckpt_stream_op {
        reads the status the guest produced instead of inferring one from a vanished process. payload is
        [i32 status][u32 kind], kind 1 = exit code, 2 = terminating signal. Admissible in any phase from
        a connection that announced itself with MEMBER_RESTORED, and from no other. */
-    HL_CKPT_OP_MEMBER_EXITED = 23
+    HL_CKPT_OP_MEMBER_EXITED = 23,
+    /* The coordinator has DECIDED not to publish this capture, and says why. `name` is the reason,
+       the same text the engine writes to its own stderr as "[ckpt] refuse: ...". Sent immediately
+       before the coordinator exits, and it is the only thing that turns a decided refusal into a
+       host-side failure: without it the host learns nothing until its own deadline expires, so a
+       decision taken at 0.3s was reported at 30s and named none of it. Carries no image bytes and
+       requires no membership -- a process that refuses is by definition publishing nothing. */
+    HL_CKPT_OP_CAPTURE_REFUSED = 24
 } hl_ckpt_stream_op;
 
 #define HL_CKPT_MEMBER_EXIT_CODE UINT32_C(1)
