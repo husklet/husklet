@@ -147,6 +147,23 @@ pub enum EngineError {
     /// produced this error. Reporting the two the same way is what made every checkpoint refusal
     /// surface as an unexplained failure thirty seconds after the decision that caused it.
     CaptureRefused,
+    /// The launch names a writable root filesystem owned by a host user the engine cannot act as.
+    ///
+    /// The engine runs as an unprivileged host uid and materializes guest ownership in its own
+    /// owner overlay (`container/owner.h`, `HL_FILE_OWNERS`); it never acquires host privilege. A
+    /// rootfs unpacked under `sudo`, or `chown -R 0:0`ed, is therefore unwritable no matter what
+    /// the guest's `id -u` reports, and every guest write fails `EACCES` with no explanation --
+    /// `git clone` and `git checkout` are the usual first casualties. Granting the access would be
+    /// host-privilege escalation and cannot even be implemented: `chmod(2)` refuses for a non-owner
+    /// without `CAP_FOWNER`. The contract is that a rootfs is materialized under a uid the engine
+    /// can act as, exactly as rootless Docker materializes into a user namespace where the host uid
+    /// is guest 0. This refusal states it at launch instead of letting the workspace half-work.
+    RootfsNotOwnedByEngine {
+        /// The host uid that owns the writable root the launch named.
+        rootfs_uid: u32,
+        /// The host uid the engine actually runs as.
+        engine_uid: u32,
+    },
     /// The capture ledger was left poisoned by a panicking participant, so no capture can be
     /// admitted until the engine is rebuilt.
     CapturePoisoned,
