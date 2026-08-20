@@ -395,8 +395,23 @@
             src = workspaceSource;
             cargoLock.lockFile = ./Cargo.lock;
             strictDeps = true;
+            # `cargo check/clippy/test --workspace --all-targets` reaches `hl-gui-gtk` and
+            # `storybook`, which resolve gtk4, vte-gtk4 and librsvg through pkg-config. This
+            # derivation carried `buildInputs: ""`, so all three died in `gdk4-sys`'s build
+            # script with "The system library `gtk4` ... was not found" and `nix flake check`
+            # could not succeed on any system. The dev shell has carried the same six inputs on
+            # Linux and Darwin alike since bdaf05de4; keep the two lists identical, because the
+            # shell is where every lane runs this gate by hand.
             nativeBuildInputs = commonNativeInputs pkgs ++ [
               (rustFor pkgs)
+              pkgs.gobject-introspection
+              pkgs.glib
+              pkgs.gdk-pixbuf
+            ];
+            buildInputs = [
+              pkgs.gtk4
+              pkgs.librsvg
+              pkgs.vte-gtk4
             ];
             doCheck = false;
             buildPhase = ''
@@ -629,10 +644,26 @@
               export HL_SCENARIO_TARGET="$1"
               export HL_ALPINE_ARCHIVE="$2"
 
-              timeout --kill-after=30s 10m \
-                cargo test -p husklet --features runtime --lib --locked --offline \
-                runtime::domain::product_checkpoint_test::continue_later_restores_sleep_tree_in_two_fresh_domain_processes \
-                -- --exact --nocapture --test-threads=1
+              # 19693a4c9 renamed `continue_later_restores_sleep_tree_in_two_fresh_domain_
+              # processes` and did not update this line. `cargo test <filter> -- --exact`
+              # exits 0 when the filter matches nothing, so from that commit until this one
+              # both arms of this gate reported `running 0 tests ... test result: ok` and
+              # the product's Continue-later contract was covered by nothing at all.
+              # Both are red on x86_64 Linux at this tip, with the same signature: `domain
+              # worker exited before publication (exit status: 101)`. The sleep-tree one
+              # fails inside this derivation's arm64 arm while passing in the dev shell's
+              # amd64 default, and the terminal-backed one fails in both. That is a real
+              # engine defect an engine lane owns, and this gate exists to say so. Do not
+              # silence it by narrowing the filter back to a name that matches nothing.
+              for test_name in \
+                continue_later_restores_the_primary_sleep_tree_across_repeated_cycles \
+                continue_later_keeps_a_terminal_backed_pane_execution_across_repeated_cycles
+              do
+                timeout --kill-after=30s 10m \
+                  cargo test -p husklet --features runtime --lib --locked --offline \
+                  "runtime::domain::product_checkpoint_test::$test_name" \
+                  -- --exact --nocapture --test-threads=1
+              done
               run_ignored hl-container run_options process_run_options
               for test_name in \
                 launch_contracts \
