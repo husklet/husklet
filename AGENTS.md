@@ -539,6 +539,28 @@ candidate's effect, the candidate is not evidence however clean the other
 controls read. Phases with small absolute times are where this bites — a few
 hundred microseconds of drift is percent-level on a 2.6 ms phase.
 
+## A worktree on one host is invisible to the other, and git will prune it
+
+The macOS host and the Linux VM share the repository but **not** `/var/tmp`. A
+worktree registered from one host at a `/var/tmp` path does not exist as far as
+the other host is concerned, so any `git worktree` command run there — including
+the `git worktree prune` that `git worktree add` performs implicitly — treats it
+as stale and deletes its administrative directory.
+
+Two lanes lost worktrees to this on the same day. The branch ref and the commits
+survive in the shared repository, but the worktree's `HEAD`, `gitdir` and
+`commondir` are gone, which surfaces as a `nix develop` failing mid-gate or as a
+clippy error with no obvious cause — not as anything that mentions worktrees.
+
+So: **do not run `git worktree` commands on one host while another host holds a
+`/var/tmp` worktree**, and if a gate fails for a reason that makes no sense,
+check that your worktree still has its administrative directory before believing
+the error.
+
+The same asymmetry applies to killing processes by pattern. A lane matched four
+`cargo test` processes on the macOS host, killed all of them to unblock its own,
+and only one was its own. Resolve a PID and kill that PID.
+
 ## A measurement names its host, or it names nothing
 
 The engine runs on two hosts and they are not interchangeable. The same guest
