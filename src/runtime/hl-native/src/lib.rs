@@ -147,7 +147,7 @@ pub fn namespace_transaction_test(isa: u32, scenario: u32) -> Result<(), i32> {
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 #[must_use]
-pub fn x86_store_preflight_test() -> bool {
+pub fn x86_store_preflight_test() -> i32 {
     bindings::x86_store_preflight_test()
 }
 
