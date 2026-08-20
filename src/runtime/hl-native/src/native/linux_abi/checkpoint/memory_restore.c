@@ -445,6 +445,196 @@ static int ckpt_claim_exact(uint64_t address, size_t length, int protection, int
                                  offset, claimed);
 }
 
+// ---- guest-address reservation ---------------------------------------------------------------------
+//
+// A restored guest address is not negotiable: the image names it, the guest's pointers are
+// unrelocatable, and a member that cannot claim its own address fails the whole tree's commit barrier.
+// The init already protects ITS OWN addresses by restoring its RAM before the engine allocates
+// anything (ckpt_restore_tree_body). Every other member's addresses were protected by nothing.
+//
+// That gap is invisible on a host whose layout is randomized per process and certain on one whose is
+// not. Measured on x86-64 Linux under the pinned dev shell, which runs with ADDR_NO_RANDOMIZE: the
+// restoring init's own host storage -- the process-tree commit barrier at the head of it -- is placed
+// by the kernel's top-down allocator immediately below the init's restored guest mappings, which is
+// exactly where the SIBLING members' captured mappings live. gpid 2 then asked for
+// 7ffff6e1a000+b0000 and found the commit barrier in it, `[restore] exact guest-address claim failed:
+// File exists`, and the tree never reached the barrier that mapping IS. Every host allocation the
+// restore makes is in this population, including the ones libc makes on its behalf, so relocating any
+// single one of them only moves the boundary.
+//
+// So the image's addresses are reserved BEFORE the restore allocates anything of its own, from the
+// region walk `ckpt_validate_process_image` already performs over every member. A reservation is
+// PROT_NONE and is released immediately before the member that owns the address claims it, so the
+// claim itself stays MAP_FIXED_NOREPLACE and still fails closed against a mapping this restore does
+// not own. Whatever a member never claims it drops once its own memory restore is complete, so no
+// resumed guest carries a hole reserved for somebody else's image.
+struct ckpt_restore_reservation {
+    uint64_t lo;
+    uint64_t hi;
+};
+
+static struct ckpt_restore_reservation *g_restore_reserved;
+static int g_restore_reserved_capacity;
+static int g_nrestore_reserved;
+static int g_restore_reserve_applied;
+
+// Round a region out to the host granularity exactly as the claim below does, so a reservation and the
+// claim that consumes it name the same interval.
+static int ckpt_restore_reserve_window(uint64_t address, uint64_t length, uint64_t *lo, uint64_t *hi) {
+    uint64_t granularity = hl_linux_host_map_granularity();
+    if (granularity == 0 || (granularity & (granularity - 1)) != 0) return -1;
+    if (length == 0 || address > UINT64_MAX - length) return -1;
+    uint64_t low = address & ~(granularity - 1);
+    uint64_t high = address + length;
+    if (high > UINT64_MAX - (granularity - 1)) return -1;
+    high = (high + granularity - 1) & ~(granularity - 1);
+    if (high <= low) return -1;
+    *lo = low;
+    *hi = high;
+    return 0;
+}
+
+// Record one region of one member's image. Called from the validation walk, which runs before the
+// restore has allocated anything; nothing is mapped here, because the walk itself is still holding
+// image buffers whose addresses would then be reserved against their own owner.
+static void ckpt_restore_reserve_note(uint64_t address, uint64_t length) {
+    uint64_t lo, hi;
+    if (g_restore_reserve_applied || ckpt_restore_reserve_window(address, length, &lo, &hi) != 0) return;
+    if (ckpt_vector_reserve((void **)&g_restore_reserved, &g_restore_reserved_capacity, sizeof *g_restore_reserved,
+                            g_nrestore_reserved + 1) != 0)
+        return;
+    g_restore_reserved[g_nrestore_reserved].lo = lo;
+    g_restore_reserved[g_nrestore_reserved].hi = hi;
+    g_nrestore_reserved++;
+}
+
+static int ckpt_restore_reservation_order(const void *first, const void *second) {
+    const struct ckpt_restore_reservation *a = first;
+    const struct ckpt_restore_reservation *b = second;
+    if (a->lo < b->lo) return -1;
+    if (a->lo > b->lo) return 1;
+    if (a->hi < b->hi) return -1;
+    return a->hi > b->hi;
+}
+
+// Take the noted addresses. Merged first, because members share addresses wholesale (a fork child's
+// image repeats its parent's text, and every member of a container repeats the loader's), and an
+// interval already held by this restore must not be presented to the kernel a second time.
+//
+// A window the host already occupies is DROPPED rather than refused: the occupant is host storage this
+// engine mapped before the restore began, the member that wants the address will fail its own claim
+// with the same diagnostic it does today, and refusing here would turn a single unrestorable member
+// into an unrestorable tree.
+static void ckpt_restore_reserve_apply(void) {
+    if (g_restore_reserve_applied) return;
+    g_restore_reserve_applied = 1;
+    if (g_nrestore_reserved <= 0) return;
+    qsort(g_restore_reserved, (size_t)g_nrestore_reserved, sizeof *g_restore_reserved, ckpt_restore_reservation_order);
+    int merged = 0;
+    for (int index = 1; index < g_nrestore_reserved; ++index) {
+        if (g_restore_reserved[index].lo <= g_restore_reserved[merged].hi) {
+            if (g_restore_reserved[index].hi > g_restore_reserved[merged].hi)
+                g_restore_reserved[merged].hi = g_restore_reserved[index].hi;
+            continue;
+        }
+        g_restore_reserved[++merged] = g_restore_reserved[index];
+    }
+    int held = 0;
+    for (int index = 0; index <= merged; ++index) {
+        uint64_t lo = g_restore_reserved[index].lo;
+        uint64_t hi = g_restore_reserved[index].hi;
+        void *claimed = MAP_FAILED;
+        if (hi - lo > SIZE_MAX) continue;
+        if (ckpt_claim_exact(lo, (size_t)(hi - lo), PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1,
+                             0, &claimed) != 0)
+            continue;
+        g_restore_reserved[held].lo = lo;
+        g_restore_reserved[held].hi = hi;
+        held++;
+    }
+    g_nrestore_reserved = held;
+}
+
+// Hand [lo, hi) back to the kernel so the member that owns it can claim it. Only the intersection with
+// an interval this restore actually reserved is unmapped: a rounded claim window can reach into the
+// host page a neighbouring region of this same image already claimed, and that page is live restored
+// memory, not a reservation.
+static void ckpt_restore_reserve_release(uint64_t lo, uint64_t hi) {
+    if (hi <= lo) return;
+    for (int index = 0; index < g_nrestore_reserved; ++index) {
+        uint64_t entry_lo = g_restore_reserved[index].lo;
+        uint64_t entry_hi = g_restore_reserved[index].hi;
+        uint64_t overlap_lo = lo > entry_lo ? lo : entry_lo;
+        uint64_t overlap_hi = hi < entry_hi ? hi : entry_hi;
+        if (overlap_hi <= overlap_lo) continue;
+        (void)munmap((void *)(uintptr_t)overlap_lo, (size_t)(overlap_hi - overlap_lo));
+        if (overlap_lo > entry_lo && overlap_hi < entry_hi) {
+            if (ckpt_vector_reserve((void **)&g_restore_reserved, &g_restore_reserved_capacity,
+                                    sizeof *g_restore_reserved, g_nrestore_reserved + 1) != 0) {
+                // The tail cannot be tracked, so it must not be left mapped: a reservation nobody can
+                // release is a hole in every process this one forks.
+                (void)munmap((void *)(uintptr_t)overlap_hi, (size_t)(entry_hi - overlap_hi));
+                g_restore_reserved[index].hi = overlap_lo;
+                continue;
+            }
+            g_restore_reserved[index].hi = overlap_lo;
+            g_restore_reserved[g_nrestore_reserved].lo = overlap_hi;
+            g_restore_reserved[g_nrestore_reserved].hi = entry_hi;
+            g_nrestore_reserved++;
+            continue;
+        }
+        if (overlap_lo > entry_lo) {
+            g_restore_reserved[index].hi = overlap_lo;
+            continue;
+        }
+        if (overlap_hi < entry_hi) {
+            g_restore_reserved[index].lo = overlap_hi;
+            continue;
+        }
+        g_restore_reserved[index] = g_restore_reserved[--g_nrestore_reserved];
+        index--;
+    }
+}
+
+// The line between the two address populations a restored region can belong to: the deterministic guest
+// arena, which the engine places and a restore can reclaim, and the host kernel's own top-down pool,
+// which the engine does not control and a restore must never treat as arena.
+//
+// Probed rather than fixed for the reason host/linux/memory/mapping.c gives for the host code arena's
+// base -- the usable virtual range differs per host and a fixed high constant is unmappable on a
+// four-level-paging x86-64 host -- and separated from the pool by the same one terabyte, which that file
+// established as out of the kernel allocator's reach until a guest holds a terabyte of mappings. A single
+// page probe answers where the allocator is working right now; a gap below it is what makes the answer a
+// boundary rather than a sample, because the probe lands in whichever hole the pool happens to have.
+#define CKPT_RESTORE_HOST_POOL_GAP UINT64_C(0x10000000000) /* 1 TiB, host/linux/memory/mapping.c */
+
+static uint64_t ckpt_restore_host_pool_edge(void) {
+    static uint64_t edge;
+    if (edge != 0) return edge;
+    long page = sysconf(_SC_PAGESIZE);
+    if (page <= 0) return UINT64_MAX;
+    void *probe = mmap(NULL, (size_t)page, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (probe == MAP_FAILED) return UINT64_MAX;
+    uint64_t top = (uint64_t)(uintptr_t)probe;
+    (void)munmap(probe, (size_t)page);
+    if (top <= CKPT_RESTORE_HOST_POOL_GAP) return UINT64_MAX;
+    edge = top - CKPT_RESTORE_HOST_POOL_GAP;
+    return edge;
+}
+
+// Drop everything still reserved. Called once this process has forked every member that inherits the
+// reservations and has finished its own memory restore, so what remains belongs to nobody in this
+// address space.
+static void ckpt_restore_reserve_release_all(void) {
+    for (int index = 0; index < g_nrestore_reserved; ++index)
+        (void)munmap((void *)(uintptr_t)g_restore_reserved[index].lo,
+                     (size_t)(g_restore_reserved[index].hi - g_restore_reserved[index].lo));
+    g_nrestore_reserved = 0;
+    free(g_restore_reserved);
+    g_restore_reserved = NULL;
+    g_restore_reserved_capacity = 0;
+}
+
 // Resolve the next host sub-range of a region's rounded claim window.
 //
 // The host granularity can exceed the guest page size -- 16 KiB against the guest's 4 KiB on Apple
@@ -736,6 +926,14 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
             goto fail;
         }
         topology[i] = reg;
+        // Hand back the reservation this restore took over the region's claim window, immediately
+        // before the claim itself. Nothing allocates between the two, so the window cannot be taken by
+        // host storage in between, and the claim below stays MAP_FIXED_NOREPLACE.
+        {
+            uint64_t reserved_lo, reserved_hi;
+            if (ckpt_restore_reserve_window(reg.addr, reg.len, &reserved_lo, &reserved_hi) == 0)
+                ckpt_restore_reserve_release(reserved_lo, reserved_hi);
+        }
         uint64_t a = reg.addr, e = reg.addr + reg.len;
         int contained = 0;
         for (size_t j = 0; j < nmapped; j++)
@@ -840,7 +1038,24 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
             } else if (ckpt_rd_all(f, (void *)va, n) != 0)
                 goto fail;
         }
-        hl_linux_snapshot_advance(&g_ckpt_snapshot, reg.addr + reg.len);
+        // ONLY an address the deterministic arena itself could have produced may move its cursor.
+        //
+        // The arena (linux_abi/container/snapshot.h) exists so that a guest map the kernel would
+        // otherwise place lands somewhere a later restore can reclaim, and this call keeps its cursor
+        // above memory a restore has just replayed. A region the HOST kernel placed is not in the arena
+        // at all -- it is in the kernel's own top-down pool, a hundred terabytes above it -- and letting
+        // one of those move the cursor retires the arena outright: every later reserve then answers an
+        // address inside the engine's own libraries, the kernel silently relocates the request back into
+        // the top-down pool, and the next generation's guest addresses are drawn from the one region
+        // where the engine's own host storage also lives.
+        //
+        // Measured across five Continue-later cycles on x86-64 Linux: the transient `sleep` the fixture's
+        // shell re-execs each iteration took its 256 MiB brk heap from the arena on a fresh launch, and
+        // from the kernel pool on every generation after a restore -- 7fff94000000, then 7fff98000000,
+        // climbing 64 MiB per cycle until it reached a glibc thread arena the restoring worker had mapped
+        // before the restore began, which no reservation can move.
+        if (reg.addr >= HL_LINUX_SNAPSHOT_BASE && reg.addr < ckpt_restore_host_pool_edge())
+            hl_linux_snapshot_advance(&g_ckpt_snapshot, reg.addr + reg.len);
         hl_gmap_add(reg.addr, reg.len);
         hl_gmap_set_guest_length(reg.addr, reg.glen);
         // ONE verdict per region, so PROT_NONE sub-intervals of a piecewise-mprotect'd region are dropped (a

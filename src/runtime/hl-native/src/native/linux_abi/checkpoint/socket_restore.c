@@ -1248,6 +1248,9 @@ static void ckpt_restore_proc_run(int gpid) {
     ckpt_restore_commit_stage(CKPT_RESTORE_MEMORY);
     if (ckpt_restore_mem_dir(pd, &m) != 0) ckpt_restore_commit_failed();
     if (ckpt_trigger_reattach_after_restore(trigger_detached) != 0) ckpt_restore_commit_failed();
+    // This member forked its own children before the restore above and has now claimed every address it
+    // owns; what is still reserved belongs to a sibling, in a different address space.
+    ckpt_restore_reserve_release_all();
 
     ckpt_reinstall_sigacts(&m); // restore guest signal dispositions (AFTER the fork hooks reset host state)
 
@@ -1326,6 +1329,10 @@ static int ckpt_restore_tree_body(const char *rootfs, const struct ckpt_phase_le
         fprintf(stderr, "[restore] refuse: restore preflight rejected the image (policy %d)\n", recovery_policy);
         return 2;
     }
+    // Every member's addresses are now known and nothing of this restore's own is mapped yet. Take them
+    // before the first allocation, or the kernel's top-down allocator will hand the restore its own
+    // members' guest addresses for the commit barrier, the image buffers and everything after them.
+    ckpt_restore_reserve_apply();
     ckpt_phase_finish(phases, "restore_validation", phase, 0);
     phase = ckpt_phase_begin(phases);
     if (ckpt_prepare_restore_pipes() != 0) {
@@ -1473,6 +1480,9 @@ static int ckpt_restore_tree_body(const char *rootfs, const struct ckpt_phase_le
     // Every member is past the barrier, so the anonymous-shared names have no remaining opener; the
     // objects themselves stay alive for exactly as long as somebody still maps them.
     ckpt_anon_shared_unlink_all();
+    // The init forked the whole tree above, so no process is left that could still inherit a
+    // reservation, and the init's own resumed guest must not run with its siblings' addresses held.
+    ckpt_restore_reserve_release_all();
     ckpt_restore_backings_close();
     ckpt_restore_pipe_seeds_close();
     ckpt_restore_eventfd_seeds_close();
