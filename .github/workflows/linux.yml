@@ -337,7 +337,7 @@ jobs:
       # always-true `-Werror=type-limits` bound in `fork_diagnostic.c` and an
       # `ENOATTR`/`ENODATA` tautology in `exec.c`, both of which a human had to find.
       #
-      # Six are green and run here. BOTH `scan-build` attributes joined that set on
+      # Seven are green and run here. BOTH `scan-build` attributes joined that set on
       # 2026-08-20: their 14 `deadcode.DeadStores` were fixed, and the strict-GCC abort
       # that had been hiding those findings was cleared in the same day. Verified green
       # on this exact tip before being added, both arches, with the analyzer confirmed
@@ -349,23 +349,33 @@ jobs:
       # `ci.yml` never mentioned it and the macOS `nix flake check` cannot see a
       # Linux-only attribute. The gate that found two real C defects had no runner.
       #
-      # The other two are HONESTLY RED and are named rather than silenced -- delete a
-      # line the day its check passes:
-      #   alpine-compatibility          -- red since a vacuous filter was made honest.
-      #   host-windows-x86_64-gnu-smoke -- `geteuid` at `netns/loopback.c:462,509` and
-      #                                    `flock` at `:514`. Was four errors across
-      #                                    three files; the checkpoint lane's
-      #                                    `cb7d17a9d` incidentally fixed `_SC_PAGESIZE`
-      #                                    and implicit `fork`. `flock` IS implemented
-      #                                    for Windows in `toolchain/msvc-posix`, but
-      #                                    `netns.c` guards its include out on purpose,
-      #                                    so the remaining DESIGN question is `geteuid`
-      #                                    alone: what "the euid owning this identity
-      #                                    table" means on a host without euid, which
-      #                                    belongs to the netns/identity owner. Same
-      #                                    defect as `native-windows-amd64` above:
-      #                                    `cargo check` runs `build.rs`, so both
-      #                                    compile the same C.
+      # `host-windows-x86_64-gnu-smoke` JOINED THEM TOO, on 2026-08-20, and it is the
+      # one that had been red longest. A netns/identity lane made
+      # `sock_identity_directory()` refuse structurally on Windows rather than stubbing
+      # `geteuid`, then cleared two further layers behind it -- nine Rust errors in
+      # `hl-native/src/lib.rs`, and 73 in `hl-engine/src/runtime/terminal.rs` where
+      # `api.rs` carried `#[cfg(unix)]` on the module's USE and on every consumer but
+      # not on `mod terminal;` itself. Verified green here on this exact tip before
+      # being added.
+      #
+      # ONE HONEST RED REMAINS, named rather than silenced -- delete it the day it
+      # passes:
+      #   alpine-compatibility          -- red since a vacuous filter was made honest,
+      #                                    AND IT IS NOT A SEPARATE PROBLEM. Measured
+      #                                    2026-08-20: it fails at
+      #                                    `product_checkpoint_test::continue_later_
+      #                                    restores_the_primary_sleep_tree_across_
+      #                                    repeated_cycles`, which is one of the two
+      #                                    tests item 1 above already records as a real
+      #                                    engine defect on this architecture -- the
+      #                                    flake check runs exactly that pair via
+      #                                    `cargo test -p husklet --features runtime
+      #                                    --lib`. So this attribute, and the missing
+      #                                    `--features runtime` step in item 1, are ONE
+      #                                    defect seen through two gates. The lane
+      #                                    fixing it closes both, and the step in item 1
+      #                                    should land in that same commit.
+      #
       # COST, MEASURED IN CI RATHER THAN ESTIMATED. Adding both scan-build attributes
       # was predicted to take this job from 20.0 to ~27 minutes, from a 7 minute cold
       # local run. Actual: 24.1 minutes on the first CI run, which paid a one-off
@@ -373,6 +383,12 @@ jobs:
       # 20.0 before they were added. Once that closure is cached the two attributes are
       # effectively free, because `host-linux-aarch64` had already substituted the
       # aarch64 cross toolchain. There is no timeout pressure here.
+      #
+      # THAT FIGURE PREDATES `host-windows-x86_64-gnu-smoke`, which is the most
+      # expensive attribute here: a full mingw cross-compile of `hl-native`,
+      # `hl-engine` and `engine` plus the objdump import/ABI contracts, and its closure
+      # is not shared with anything else this job builds. Re-measure on the next CI run
+      # rather than assuming ~20 still holds.
       - name: Verify the Linux-only flake checks that are green
         run: >-
           nix --extra-experimental-features 'nix-command flakes' build -L --no-link
@@ -382,6 +398,7 @@ jobs:
           .#checks.x86_64-linux.host-darwin-cross-contract
           .#checks.x86_64-linux.scan-build-linux-aarch64
           .#checks.x86_64-linux.scan-build-linux-x86_64
+          .#checks.x86_64-linux.host-windows-x86_64-gnu-smoke
 
   native-linux-arm64:
     name: Native engine / ARM64
