@@ -702,6 +702,17 @@ unsafe fn hl_c_backend_errno_from_host_test(domain: c_uint, host_errno: c_int) -
     unsafe { (test_api().errno_from_host)(domain, host_errno) }
 }
 
+#[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
+unsafe fn hl_c_backend_directory_stream_private_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().directory_stream_private)(scenario) }
+}
+
+#[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
+pub(crate) fn directory_stream_private_test(scenario: u32) -> i32 {
+    // SAFETY: this feature-gated hook owns its host context and directory fixture end to end.
+    unsafe { hl_c_backend_directory_stream_private_test(scenario) }
+}
+
 #[cfg(feature = "native-test-hooks")]
 unsafe fn hl_c_backend_identity_registry_test(scenario: c_uint, iterations: c_uint) -> c_int {
     unsafe { (test_api().identity_registry)(scenario, iterations) }

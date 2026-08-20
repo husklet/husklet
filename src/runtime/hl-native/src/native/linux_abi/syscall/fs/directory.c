@@ -179,9 +179,35 @@ static void svc_fs_directory_61(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
                 break;
             }
         if (!dir) {
-            dir = fdopendir(dup(fd));
+            // The stream needs its OWN host descriptor (readdir consumes the offset, and the guest keeps
+            // using `fd`), but a bare dup() lands on the lowest free number -- inside the GUEST's descriptor
+            // band -- and is invisible to every mechanism that protects engine descriptors: exec_fd_is_engine()
+            // consults the private ledger, so close_range(3, ~0U) closes it; engine_fd_vacate() enumerates
+            // g_root_fd/signalfd/g_vols/eventfd peers but not these streams, so a guest dup2(x, N) closes it;
+            // and dup() clears FD_CLOEXEC so it also survives the emulated execve sweep and accumulates. The
+            // DIR* stays cached in g_dirs[] keyed on the guest fd either way, so the next getdents64 reads a
+            // stream whose descriptor the guest already closed: readdir() returns NULL and getdents64 returns
+            // 0 -- a silent early end-of-directory with no errno, the documented "broke glob" failure reached
+            // by a second route. Adopt it into the engine-private band like every other engine host fd.
+            int stream = dup(fd);
+            if (stream >= 0) {
+                int adopted = hl_host_process_fd_private_adopt(stream);
+                if (adopted >= 0)
+                    stream = adopted; // relocated above the private floor, ledger row added, original closed
+                else {
+                    // No room above the floor: keep the unadopted descriptor rather than failing the listing.
+                    // It is exposed to the races above, which is strictly better than -EMFILE here.
+                    errno = 0;
+                }
+            }
+            dir = stream >= 0 ? fdopendir(stream) : NULL;
             if (!dir) {
-                G_RET(c) = (uint64_t)(-errno);
+                int failure = errno; // remove/close below must not overwrite the reason
+                if (stream >= 0) {
+                    hl_host_process_fd_private_remove(stream);
+                    close(stream);
+                }
+                G_RET(c) = (uint64_t)(int64_t)(-failure);
                 break;
             }
             if (g_ndirs < 64) {
@@ -245,7 +271,10 @@ static void svc_fs_directory_61(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
             pos = telldir(dir);
         }
         G_RET(c) = einval > 0 ? (uint64_t)(int64_t)(-EINVAL) : einval < 0 ? (uint64_t)(int64_t)(-EFAULT) : (uint64_t)o;
-        if (!dir_cached) closedir(dir); // untracked (cache-full) stream: release it, else DIR* + fd leak
+        if (!dir_cached) { // untracked (cache-full) stream: release it, else DIR* + fd leak
+            hl_host_process_fd_private_remove(dirfd(dir)); // retire the ledger row before closedir frees the number
+            closedir(dir);
+        }
         break;
     }
     // readlinkat(dirfd, path, buf, bufsiz)
