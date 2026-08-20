@@ -1,5 +1,6 @@
 mod attachment;
 mod catalog;
+mod checkpoint;
 mod control;
 mod exec;
 mod filesystem;
