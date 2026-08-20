@@ -1377,6 +1377,43 @@ compatibility metadata. Do not reintroduce retained-tree CMake, Ninja,
 clang-tidy, or cppcheck command pipelines. Native C compilation is owned by
 `hl-native/build.rs`; portable source analysis is embedded in `hl-design-lint`.
 
+## A gate that cannot fail is worse than no gate
+
+Five separate gates were found reporting success while proving nothing, in a
+single day. Each had looked green for weeks or months.
+
+- A `flake.nix` gate filtered for a test that had been **renamed**. `cargo test
+  <filter> -- --exact` exits **0** when nothing matches: `running 0 tests /
+  test result: ok / 182 filtered out / exit 0`. Both arms were vacuous.
+- `src/apps/engine/tests/` holds exactly one file, gated
+  `#![cfg(all(target_os = "linux", target_arch = "aarch64"))]`. On any other
+  host the whole integration-test target compiles to zero tests and reports ok.
+- `errno_namespace.rs::linux_namespace_values_are_not_a_valid_input_on_divergent_hosts`
+  has a body of two `#[cfg]` arms, macOS and Windows. On Linux it is an empty
+  function that passes.
+- The `nix flake check` verification derivation had empty `buildInputs` while
+  the workspace had grown crates needing gtk4 through pkg-config, so it failed
+  before compiling anything -- for a week, on the step the macOS job is built
+  around.
+- Both GUI tests **skip when there is no display**, so a CI line reading
+  "88 tests run" included two that assert nothing.
+
+And the same shape in a diagnostic: `engine/target/x86_64.c` printed
+`(IBTC %s)` with `"ON"` as a string literal, while the counter's only producer
+sits behind `HL_HOST_CPU_AARCH64` -- a host with no JIT reported the feature as
+on.
+
+The rule: **a gate must be shown to fail.** Before trusting one, break the thing
+it guards and watch it redden. When a suite reports a count, check the count is
+what you expect -- a lane once ran twenty green rounds of a filter that matched
+zero tests, and another swept 626 binaries that never started because the
+harness ate its own first argument. Both caught it only because they had planted
+a control that *had* to fail, and noticed it hadn't.
+
+A skip is not a pass. If a test cannot run here, it must say so out loud: the
+harness shows captured output only for failing tests, so an unrun arm otherwise
+looks exactly like a passing one.
+
 ## Design lint
 
 `src/packages/hl-design-lint` is the repository architecture linter. Run it in
