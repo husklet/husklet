@@ -126,6 +126,117 @@ fn sleep_tree_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     output
 }
 
+/// A peer that exited before it could ever join the capture does not stall it and does not fail it.
+///
+/// The peer is enumerated and interrupted like every other participant and then exits at its safepoint
+/// without ever sending `REGISTER_READY`, which is what a transient fork child -- a shell's `sleep .05`,
+/// a short `make` job -- does whenever it loses the race. The rendezvous used to wait out the whole ~5s
+/// tree budget for it and then refuse the capture with `participant <pid> never committed proc.<pid>`.
+/// That refusal was false: the broker refuses every byte-publishing operation from a connection that has
+/// not registered, so a peer that never registered has nothing in the image to lose.
+///
+/// The process count is EXACT, so this also fails if the exemption ever dropped a peer that had committed
+/// a group: the manifest must name the init and nobody else.
+#[test]
+fn a_peer_that_exited_before_joining_does_not_stall_or_fail_the_capture_on_both_isas() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, sleep_tree_fixture(isa, fixtures.path())));
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+    for (isa, executable) in executables {
+        let temporary = tempfile::tempdir().unwrap();
+        let release = temporary.path().join("release");
+        let final_release = temporary.path().join("final-release");
+        let output = temporary.path().join("release.output");
+        let image = Arc::new(Store::default());
+        let capture = Engine::with_checkpoint(
+            isa,
+            plan(
+                &executable,
+                &release,
+                &final_release,
+                &["HL_CHECKPOINT", "HL_CKPT_TEST_PEER_EXIT_BEFORE_JOIN"],
+            ),
+            streams(true),
+            image.clone(),
+            image.clone(),
+        )
+        .unwrap();
+        capture.start().unwrap();
+        wait_for(&output, "CHILD-READY");
+        let started = Instant::now();
+        capture
+            .capture_checkpoint_until(checkpoint_deadline())
+            .unwrap_or_else(|error| panic!("{isa:?} refused a capture over a peer that had already exited: {error:?}"));
+        assert_eq!(capture.wait().unwrap().guest_status, 0);
+        // The rendezvous budget is ~5s and the old failure burned all of it before refusing, so a fix that
+        // merely made the refusal quieter still fails here.
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "{isa:?} capture took {:?}, which is the rendezvous budget being burned on a departed peer",
+            started.elapsed()
+        );
+        let stored = image.0.lock().unwrap();
+        assert!(stored.contains_key("MANIFEST"), "{isa:?} published no manifest");
+        assert_eq!(
+            stored
+                .keys()
+                .filter(|name| name.starts_with("proc.") && name.ends_with("/meta"))
+                .count(),
+            1,
+            "{isa:?} captured a process count that is not exactly the init"
+        );
+    }
+}
+
+/// The half that stops the exemption from being a loophole: a peer that PROVED membership and then died
+/// before committing its group still refuses the whole capture.
+///
+/// It registered, so the broker had already admitted its publications; its state is genuinely lost, and
+/// silently dropping it would publish a manifest that reports success while a member's state is unsaved.
+/// Liveness alone cannot tell this peer from the one above -- both are gone -- which is precisely why the
+/// discriminator is "gone AND never registered for this generation" rather than "gone".
+#[test]
+fn a_peer_that_died_after_joining_still_refuses_the_capture_on_both_isas() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, sleep_tree_fixture(isa, fixtures.path())));
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+    for (isa, executable) in executables {
+        let temporary = tempfile::tempdir().unwrap();
+        let release = temporary.path().join("release");
+        let final_release = temporary.path().join("final-release");
+        let output = temporary.path().join("release.output");
+        let image = Arc::new(Store::default());
+        let capture = Engine::with_checkpoint(
+            isa,
+            plan(
+                &executable,
+                &release,
+                &final_release,
+                &["HL_CHECKPOINT", "HL_CKPT_TEST_PEER_EXIT_AFTER_JOIN"],
+            ),
+            streams(true),
+            image.clone(),
+            image.clone(),
+        )
+        .unwrap();
+        capture.start().unwrap();
+        wait_for(&output, "CHILD-READY");
+        let refusal = capture
+            .capture_checkpoint_until(checkpoint_deadline())
+            .expect_err("a capture missing a member that had already published was reported as successful");
+        let _ = capture.wait();
+        let stored = image.0.lock().unwrap();
+        assert!(
+            !stored.contains_key("MANIFEST"),
+            "{isa:?} published a manifest for a capture missing a member: {refusal:?}"
+        );
+    }
+}
+
 fn rejected_member_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     let (compiler, name) = match isa {
         GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-rejected-member-aarch64"),

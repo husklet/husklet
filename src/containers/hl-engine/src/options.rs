@@ -158,6 +158,16 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
+        "HL_CKPT_TEST_PEER_EXIT_BEFORE_JOIN",
+        "test-only capture peer that exits before proving membership",
+        Flag
+    ),
+    internal!(
+        "HL_CKPT_TEST_PEER_EXIT_AFTER_JOIN",
+        "test-only capture peer that exits after proving membership",
+        Flag
+    ),
+    internal!(
         "HL_CKPT_TEST_FAIL_TTY_MASK",
         "test-only terminal-claim mask failure",
         Flag

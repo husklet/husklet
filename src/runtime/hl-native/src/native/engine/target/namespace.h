@@ -35,6 +35,7 @@
 #define hl_ckpt_channel_adopt HL_TARGET_LOCAL(ckpt_channel_adopt)
 #define hl_ckpt_channel_acquire HL_TARGET_LOCAL(ckpt_channel_acquire)
 #define hl_ckpt_channel_forget_for_test HL_TARGET_LOCAL(ckpt_channel_forget_for_test)
+#define hl_ckpt_channel_current_for_test HL_TARGET_LOCAL(ckpt_channel_current_for_test)
 #define hl_ckpt_channel_authenticate_peer HL_TARGET_LOCAL(ckpt_channel_authenticate_peer)
 #define hl_ckpt_channel_test_claimed_pid HL_TARGET_LOCAL(ckpt_channel_test_claimed_pid)
 #define hl_ckpt_channel_call HL_TARGET_LOCAL(ckpt_channel_call)

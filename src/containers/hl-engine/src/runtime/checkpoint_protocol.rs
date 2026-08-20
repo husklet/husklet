@@ -42,6 +42,12 @@ pub(super) const MEMBER_EXITED: u32 = 23;
 /// the same text the engine writes to its own stderr. It is what turns a decided refusal into a
 /// host-side failure at the moment of the decision rather than at the host's own deadline.
 pub(super) const CAPTURE_REFUSED: u32 = 24;
+/// Did a host process ever prove exact membership of the running capture generation? Payload is
+/// `[u64 host pid]`; the reply value is 1 when a `REGISTER_READY` record exists for that pid at this
+/// generation and 0 when none does. The coordinator asks only about a process it has already observed to
+/// be GONE, and a 0 is what tells it that process published nothing and can be dropped from the
+/// rendezvous without losing state.
+pub(super) const PARTICIPANT_REGISTERED: u32 = 25;
 
 /// What a parked member must do next. `RELEASE_WAIT` answers with exactly one of
 /// these, and it is the only thing that ends a park.

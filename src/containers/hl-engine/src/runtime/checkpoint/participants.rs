@@ -83,6 +83,18 @@ impl ParticipantLedger {
         self.identities.insert(key, id);
         Ok(id)
     }
+
+    /// Whether this host pid holds a membership record for `capture_generation`.
+    ///
+    /// Keyed on the pid alone, while `register` keys on pid plus authenticated start time. That is
+    /// deliberate and it fails CLOSED in the only direction that matters: the single caller acts on a
+    /// `false`, and a recycled pid can only turn a `false` into a `true`, which withholds the exemption
+    /// and refuses the capture. It can never invent membership that was never sealed.
+    pub(super) fn registered(&self, capture_generation: u64, pid: u64) -> bool {
+        capture_generation == self.capture_generation
+            && pid != 0
+            && self.identities.keys().any(|(identity, _, _)| *identity == pid)
+    }
 }
 
 #[cfg(test)]
@@ -125,6 +137,23 @@ mod tests {
             ledger.register(7, identity(11), &executors(&[2, 3])),
             Err(Error::Duplicate)
         );
+    }
+
+    /// The exemption query answers only about processes this ledger actually sealed, and only at the
+    /// generation it sealed them for. A `false` is what lets the coordinator drop a peer, so every way
+    /// of being wrong here has to fall on the "still a member" side.
+    #[test]
+    fn only_a_registered_process_reads_as_a_member_of_this_generation() {
+        let mut ledger = ParticipantLedger::new(7).unwrap();
+        assert!(!ledger.registered(7, 11), "an empty ledger reported a member");
+        ledger.register(7, identity(11), &executors(&[1])).unwrap();
+        assert!(ledger.registered(7, 11));
+        assert!(!ledger.registered(7, 12), "an unregistered process read as a member");
+        assert!(
+            !ledger.registered(8, 11),
+            "another generation's membership was answered"
+        );
+        assert!(!ledger.registered(7, 0), "an unauthenticated pid read as a member");
     }
 
     #[test]

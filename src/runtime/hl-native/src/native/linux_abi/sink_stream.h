@@ -49,6 +49,22 @@ static void ckpt_stream_capture_refused(const char *reason) {
     (void)ckpt_stream_call(HL_CKPT_OP_CAPTURE_REFUSED, reason, 0, 0, 0, NULL, 0, NULL, NULL, 0);
 }
 
+// Ask the broker whether `host_pid` ever proved exact membership (REGISTER_READY) of the capture
+// generation this process is running. Returns 1 registered, 0 never registered, -1 unknown.
+//
+// Only a 0 carries information the coordinator may act on, and only about a process that is ALREADY GONE:
+// a live peer can still register. -1 and 1 are the same answer to the caller -- do not drop this member --
+// which is what keeps a broker that is unreachable, poisoned, or out of scope from being read as consent.
+static int ckpt_stream_participant_registered(long long host_pid) {
+    uint64_t identity = (uint64_t)host_pid;
+    hl_ckpt_reply reply;
+    if (host_pid <= 0) return -1;
+    if (ckpt_stream_call(HL_CKPT_OP_PARTICIPANT_REGISTERED, NULL, 0, 0, 0, &identity, sizeof identity, &reply, NULL,
+                         0) != HL_CKPT_STATUS_OK)
+        return -1;
+    return reply.value != 0 ? 1 : 0;
+}
+
 static int ckpt_stream_recovery_complete(void) {
     return ckpt_stream_call(HL_CKPT_OP_RECOVERY_COMPLETE, NULL, 0, 0, 0, NULL, 0, NULL, NULL, 0) ==
                    HL_CKPT_STATUS_OK

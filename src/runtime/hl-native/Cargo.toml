@@ -56,6 +56,10 @@ name = "checkpoint_membership"
 required-features = ["native-test-hooks"]
 
 [[test]]
+name = "checkpoint_rendezvous"
+required-features = ["native-test-hooks"]
+
+[[test]]
 name = "checkpoint_election"
 required-features = ["native-test-hooks"]
 
