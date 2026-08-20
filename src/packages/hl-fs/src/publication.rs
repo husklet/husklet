@@ -390,28 +390,61 @@ mod tests {
     use crate::{CreateError, Creation, File};
     use std::io;
 
-    #[test]
-    fn rootless_publish() {
-        use std::os::unix::process::CommandExt;
+    /// The identity a root test process drops to before it exercises publication. Any account
+    /// without privilege answers the question; publication must reach `linkat` through
+    /// `/proc/self/fd` rather than through `AT_EMPTY_PATH`, which needs `CAP_DAC_READ_SEARCH`.
+    const UNPRIVILEGED: u32 = 501;
 
+    fn effective_uid() -> u32 {
         let status = std::fs::read_to_string("/proc/self/status").unwrap();
         let effective = status.lines().find(|line| line.starts_with("Uid:")).unwrap();
-        let uid = effective.split_whitespace().nth(2).unwrap().parse::<u32>().unwrap();
-        if uid == 0 {
-            let result = std::process::Command::new(std::env::current_exe().unwrap())
-                .arg("--exact")
-                .arg("publication::tests::rootless_child")
-                .arg("--nocapture")
-                .env("HL_FS_UID501_CHILD", "1")
-                .uid(501)
-                .gid(501)
-                .status()
-                .unwrap();
-            assert!(result.success());
+        effective.split_whitespace().nth(2).unwrap().parse::<u32>().unwrap()
+    }
+
+    #[test]
+    fn rootless_publish() {
+        use std::os::unix::fs::PermissionsExt as _;
+        use std::os::unix::process::CommandExt as _;
+
+        let uid = effective_uid();
+        if uid != 0 {
+            eprintln!("rootless publication exercised as effective uid {uid}");
+            rootless_child_body(uid);
             return;
         }
-        eprintln!("rootless publication exercised as effective uid {uid}");
-        rootless_child_body(uid);
+        // The child keeps no privilege, so it cannot use this process's temporary directory: the
+        // pinned shell hands every session a 0700 root-owned `TMPDIR`, and the child would fail to
+        // create anything there long before it reached the publication under test. Give it a
+        // directory of its own under the system temporary root, which every account can traverse,
+        // owned by the identity the child runs as. Removal happens here, where the privilege to
+        // remove what the child created still exists.
+        let sandbox = tempfile::Builder::new()
+            .prefix("hl-fs-rootless-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        std::fs::set_permissions(sandbox.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::os::unix::fs::chown(sandbox.path(), Some(UNPRIVILEGED), Some(UNPRIVILEGED)).unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let result = std::process::Command::new(&executable)
+            .arg("--exact")
+            .arg("publication::tests::rootless_child")
+            .arg("--nocapture")
+            .env("HL_FS_UID501_CHILD", "1")
+            .env("TMPDIR", sandbox.path())
+            .uid(UNPRIVILEGED)
+            .gid(UNPRIVILEGED)
+            .status()
+            .unwrap_or_else(|error| {
+                panic!(
+                    "run {} as uid {UNPRIVILEGED}: {error}; every directory leading to it must be \
+                     traversable by an account without privilege",
+                    executable.display()
+                )
+            });
+        assert!(
+            result.success(),
+            "publication::tests::rootless_child failed as uid {UNPRIVILEGED}"
+        );
     }
 
     fn rootless_child_body(uid: u32) {
@@ -427,11 +460,8 @@ mod tests {
         if std::env::var_os("HL_FS_UID501_CHILD").is_none() {
             return;
         }
-        let status = std::fs::read_to_string("/proc/self/status").unwrap();
-        let effective = status.lines().find(|line| line.starts_with("Uid:")).unwrap();
-        let uid = effective.split_whitespace().nth(2).unwrap().parse::<u32>().unwrap();
-        assert_eq!(uid, 501);
-        rootless_child_body(uid);
+        assert_eq!(effective_uid(), UNPRIVILEGED);
+        rootless_child_body(UNPRIVILEGED);
     }
 
     #[test]
