@@ -284,6 +284,53 @@ async fn completed_execution_can_be_removed_but_running_execution_cannot() {
     ));
 }
 
+/// The exec half of the unpublished-process rollback had no test at all: `Memory` has carried a
+/// `fail_next_exec_replace` hook for it with no caller, and gutting the rollback -- removing the
+/// `SIGKILL` that is its entire purpose -- left every one of the 253 lib tests green. The container
+/// half is covered four times over by `lifecycle.rs`; this is its exec mirror.
+#[tokio::test]
+async fn failed_exec_publication_quarantines_retry_until_the_unpublished_process_is_reaped() {
+    let storage = Arc::new(Memory::default());
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_millis(75);
+    let containers = test_containers(Arc::clone(&storage), Arc::new(runtime)).await.unwrap();
+    containers.create(spec("exec-publication-quarantine")).await.unwrap();
+    containers.start("exec-publication-quarantine").await.unwrap();
+    let execution = containers
+        .executions()
+        .create("exec-publication-quarantine", ExecSpec::new(Process::new("fake")))
+        .await
+        .unwrap();
+    storage.fail_next_exec_replace();
+
+    // The process outlives the rollback's bounded wait, so the identity is quarantined rather than
+    // released, and a second start is refused by name instead of launching a second process
+    // against the same record.
+    let Err(failure) = containers.executions().start(&execution.id).await else {
+        panic!("a failed publication must not present a live session");
+    };
+    assert!(failure.to_string().contains("reap timed out"), "{failure}");
+    let Err(quarantined) = containers.executions().start(&execution.id).await else {
+        panic!("a quarantined exec must not start a second process");
+    };
+    assert!(quarantined.to_string().contains("quarantined"), "{quarantined}");
+
+    // Nothing was published: the write that would have moved the record to `Running` is the one
+    // that failed, so the session is still the one the user created.
+    let record = containers.executions().inspect(&execution.id).await.unwrap();
+    assert!(matches!(record.state, ExecState::Created), "{:?}", record.state);
+
+    // Once the late reap settles it retires the entry it was holding, and the refusal moves on to
+    // the container's own state -- which `start_exec` checks *after* the quarantine, so reaching
+    // it at all is the proof that the quarantine was released.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let Err(released) = containers.executions().start(&execution.id).await else {
+        panic!("the parent container has exited, so no exec can start");
+    };
+    assert!(!released.to_string().contains("quarantined"), "{released}");
+    assert!(matches!(released, Error::InvalidState { .. }), "{released}");
+}
+
 #[tokio::test]
 async fn executions_are_single_use_and_keep_independent_output() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(19));
