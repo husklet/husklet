@@ -55,8 +55,19 @@ static void svc_fs_attributes_8(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
             G_RET(c) = (uint64_t)(int64_t)e;
             break;
         }
-        G_RET(c) = (uint64_t)(int64_t)guest_xattr_get(host, (const char *)a1, (void *)a2, (size_t)a3,
-                                                      nr == 9 ? XATTR_NOFOLLOW : 0);
+        {
+            // Reading a guest xattr needs host read permission on the backing inode. The virtual DAC
+            // decides first (guest root's CAP_DAC_OVERRIDE grants); only then are the host owner bits
+            // lent for the duration of the read. Without this `ls -l` on a guest `chmod 000` file warns
+            // "Permission denied" where a native root sees none.
+            hl_dac_host_grant grant;
+            int authorized = (nr == 10 ? dac_access_fd((int)a0, R_OK, 1)
+                                       : dac_access_at(-100, (const char *)a0, nr == 9, R_OK, 1)) == 0;
+            dac_host_grant_begin_path(&grant, host, HL_DAC_READ, authorized);
+            G_RET(c) = (uint64_t)(int64_t)guest_xattr_get(host, (const char *)a1, (void *)a2, (size_t)a3,
+                                                          nr == 9 ? XATTR_NOFOLLOW : 0);
+            dac_host_grant_end(&grant);
+        }
         break;
     }
     // listxattr(11)/llistxattr(12)/flistxattr(13): a0=path|fd, a1=list, a2=size
@@ -87,7 +98,15 @@ static void svc_fs_attributes_11(struct cpu *c, uint64_t nr, uint64_t a0, uint64
             G_RET(c) = (uint64_t)(int64_t)e;
             break;
         }
-        G_RET(c) = (uint64_t)(int64_t)guest_xattr_list(host, (char *)a1, (size_t)a2, nr == 12 ? XATTR_NOFOLLOW : 0);
+        {
+            hl_dac_host_grant grant;
+            int authorized = (nr == 13 ? dac_access_fd((int)a0, R_OK, 1)
+                                       : dac_access_at(-100, (const char *)a0, nr == 12, R_OK, 1)) == 0;
+            dac_host_grant_begin_path(&grant, host, HL_DAC_READ, authorized);
+            G_RET(c) =
+                (uint64_t)(int64_t)guest_xattr_list(host, (char *)a1, (size_t)a2, nr == 12 ? XATTR_NOFOLLOW : 0);
+            dac_host_grant_end(&grant);
+        }
         break;
     }
     // removexattr(14)/lremovexattr(15)/fremovexattr(16): a0=path|fd, a1=name

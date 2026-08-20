@@ -1247,6 +1247,7 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         if (open_synthetic_path(c, a0, a1, lf, mf, is_opath)) break;
         /* Descriptor magic links are reopened from the descriptor authority below.  Routing their
          * synthetic pathname through the provider first resolves a nonexistent literal /proc entry. */
+        int dac_authorized_open = 0;
         int descriptor_reopen = procfd_num_at((int)a0, (const char *)a1) >= 0;
         if (!descriptor_reopen && jail_routed_at((int)a0, (const char *)a1)) {
             // A plain O_NOFOLLOW open rejects a final symlink; O_PATH|O_NOFOLLOW names the link instead.
@@ -1264,6 +1265,7 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
                 G_RET(c) = (uint64_t)(int64_t)dac_status;
                 break;
             }
+            dac_authorized_open = 1;
         }
         if (lf & 0x40) mf |= O_CREAT;
         if (lf & 0x80) mf |= O_EXCL;
@@ -1366,9 +1368,17 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
             break;
         }
-        if (open_jailed_path(c, a0, a1, a2, a3, lf, mf, osymlink, is_opath, nf_want, openat2_intent, projected,
-                             overlay_guest))
-            break;
+        {
+            // The virtual DAC granted above; if the host owner bits still deny and the inode is ours,
+            // lend the owner bits for exactly this host open and take them back straight after.
+            hl_dac_host_grant host_grant;
+            dac_host_grant_begin(&host_grant, (int)a0, (const char *)a1, dac_open_host_access(lf, is_opath),
+                                 dac_authorized_open);
+            int handled = open_jailed_path(c, a0, a1, a2, a3, lf, mf, osymlink, is_opath, nf_want, openat2_intent,
+                                           projected, overlay_guest);
+            dac_host_grant_end(&host_grant);
+            if (handled) break;
+        }
         char pb[4200];
         // no jail
         /* openat2 containment (RESOLVE_NO_SYMLINKS/BENEATH/IN_ROOT, carried as

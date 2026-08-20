@@ -82,6 +82,14 @@ cases:
     environment: { HL_UID: "0", HL_GID: "0" }
     run: []
     expect: { exit: 0, stdout: golden/dac_denial.out }
+  - id: runtime/filesystem/dac-host-mode
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dac_host_mode.c, output: dac-host-mode, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-dac-host-mode }
+    environment: { HL_UID: "0", HL_GID: "0" }
+    run: []
+    expect: { exit: 0, stdout: golden/dac_host_mode.out }
   - id: runtime/filesystem/sticky-dir
     status: active
     compat: { class: compatibility }
