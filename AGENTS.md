@@ -664,6 +664,42 @@ its own `CARGO_TARGET_DIR` alike: the build script's `rerun-if-changed` covers e
 file under `src/native`, and it recompiles and relinks unconditionally when it runs.
 `cargo clean` is not the remedy for anything here.
 
+### `build_freshness` red on the shared tree means the tree moved, not that Cargo failed
+
+A lane merged into `/Users/x/dd/husklet`, ran `cargo test -p hl-native --all-targets`
+twice, and failed `build_freshness` both times with the same pair of fingerprints —
+then `touch build.rs` and the next run was green. It read that as
+`cargo:rerun-if-changed` not firing for `src/native`. It fires. Three things were
+measured that day and all three exonerate Cargo: the build script emits 649
+`rerun-if-changed` lines covering every directory and every file under `src/native`
+and Cargo honours all of them; the same edit-then-build cycle was reproduced on
+virtiofs (`/Users`) and on VM-local btrfs (`/var/tmp`) with identical results, with
+the target directory on either filesystem and no clock skew between them; and Cargo
+**backdates** a build script's `output` file to the start of the invocation, precisely
+so an edit made during a long script is not lost.
+
+What actually happened is in the reflog. `src/native` changed at 12:20:42, again at
+12:21:09, and again at 12:29:13 — three merges inside the lane's six-minute window.
+The gate build reads the C sources when the build script starts and the gate test
+reads them when the test runs, and `hl-native`'s build script compiles the whole
+engine in between. Any merge landing in that gap makes the two reads disagree, which
+is exactly what `build_freshness` says. The `touch build.rs` run was not a fix; it
+was the first run that happened to fall inside a quiet window.
+
+Reproduced deterministically in a detached worktree: edit a C file, start the gate,
+and edit a second C file in another directory 22 seconds in — the run fails with the
+same shape every time. Leave the tree alone during the build and the same two files
+rebuild and the gate is green, so the mechanism is the concurrent write and nothing
+else.
+
+So: **run the gate in your own worktree, and do not merge into a checkout while a
+gate is building in it.** A red `build_freshness` in a shared checkout is first
+evidence that somebody wrote to `src/native` during your build; re-run it in a
+worktree before believing anything about the build system. The build script now
+refuses this case at the moment it happens — it recomputes the fingerprint after
+linking and fails with both values if the sources moved under it — so the mixed
+artifact is never handed to a lane as a silent one.
+
 ## A control that merely seems unaffected is not a control
 
 Disable the code path in both binaries and measure that. Anything weaker is a

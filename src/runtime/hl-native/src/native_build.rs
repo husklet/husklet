@@ -214,6 +214,22 @@ fn main() {
     if sanitizer == NativeSanitizer::Leak && target.os == platform::HostOs::Linux {
         CargoDirectives::link_library(None, "lsan");
     }
+    // The tree can move while this script runs: a merge into a shared checkout, a sibling
+    // worktree edit, an editor save. The sources were read minutes ago, some were compiled
+    // before the write and some after, so the artifact mixes two source states and the
+    // fingerprint baked into it names neither. Cargo does not lose the edit — it backdates
+    // this script's `output` to the start of the invocation, so the next build reruns — but
+    // this build has already produced the mixed artifact, and the only symptom is a
+    // `build_freshness` failure that looks like a Cargo defect. Refusing here is the last
+    // point at which the real cause is still visible; the rerun after it is correct.
+    let settled = inventory::fingerprint::native_fingerprint(Path::new(NATIVE_ROOT));
+    assert!(
+        settled == fingerprint,
+        "the native C sources changed while this build script was running: they fingerprinted \
+         {fingerprint} when the build started and {settled} now. This artifact would mix both \
+         source states. Nothing is wrong with the build - re-run it, and if you are in a shared \
+         checkout that other lanes merge into, run the gate in your own worktree instead."
+    );
 }
 
 fn archive(

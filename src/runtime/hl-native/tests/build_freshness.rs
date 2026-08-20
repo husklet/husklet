@@ -26,7 +26,11 @@ fn this_executable_was_built_from_the_native_sources_now_in_the_tree() {
         current, compiled,
         "this test binary was built from native C sources fingerprinted {compiled}, but the tree \
          now holds {current}. Every C-level observation from this binary describes the earlier \
-         sources. Rebuild before trusting any measurement taken from it."
+         sources. Rebuild before trusting any measurement taken from it.\n\nThe usual cause is \
+         not a stale Cargo fingerprint: it is that `src/native` was written while this build was \
+         running - a merge into a shared checkout, or a sibling process. Re-run the gate in your \
+         own worktree with the tree held still. `cargo:rerun-if-changed` covers every file under \
+         `src/native` and has been measured to fire; touching build.rs is not the remedy."
     );
 }
 
