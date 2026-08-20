@@ -56,10 +56,33 @@ const RESET: &str = "\u{1b}[0m";
 
 /// Renders the restore outcome as words for the person who reopened the workspace.
 ///
-/// The refusal strings are carried verbatim: `Error::ExecNotReattachable` already states, by name
-/// and with its reason, why a restored member has no live session, and paraphrasing it would lose
-/// the only precise account of what happened.
+/// The terminal gets one short line per program; the refusal's full engine reason goes to the log,
+/// which is where a diagnostic of that length is actionable.
 pub(super) struct Notice;
+
+/// Shortens one refusal to a terminal-sized line and logs the full text it came from.
+///
+/// A refusal reads `execution <id>: <detail>`, and the detail repeats the same 32-hex id and then
+/// explains an engine-internal boundary the reader cannot act on. Keep a short id as a reference,
+/// keep the first clause of the reason, and drop the rest to the log.
+fn summarize(failure: &str) -> String {
+    hl_log::hl_info!(hl_log::tag::CONTAINER, "restore could not resume a program: {failure}");
+    let Some((subject, detail)) = failure.split_once(": ") else {
+        return failure.to_owned();
+    };
+    let subject = match subject.split_once(' ') {
+        Some((noun, id)) if id.len() > 8 && id.chars().all(|c| c.is_ascii_hexdigit()) => {
+            format!("{noun} {}", &id[..8])
+        }
+        _ => subject.to_owned(),
+    };
+    let clause = detail.split_once(": ").map_or(detail, |(head, _)| head);
+    let clause = clause
+        .strip_prefix("exec ")
+        .and_then(|rest| rest.split_once(' '))
+        .map_or(clause, |(_, words)| words);
+    format!("{subject}: {clause}")
+}
 
 impl Notice {
     pub(super) fn render(failures: &[String]) -> String {
@@ -72,7 +95,7 @@ impl Notice {
             "Session restored. The output above is preserved history from your last session.".to_owned(),
             counted,
         ];
-        lines.extend(failures.iter().map(|failure| format!("  \u{2022} {failure}")));
+        lines.extend(failures.iter().map(|failure| format!("  \u{2022} {}", summarize(failure))));
         lines.push("Everything else came back. Run a command again when you need it live.".to_owned());
         lines
             .into_iter()

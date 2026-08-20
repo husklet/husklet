@@ -573,7 +573,7 @@ fn docker_warning_survives_relaunch_until_the_ui_acknowledges_it() {
 }
 
 #[test]
-fn restore_notice_marks_every_line_as_husklet_output_and_keeps_the_typed_reason() {
+fn restore_notice_marks_every_line_as_husklet_output_and_shortens_the_typed_reason() {
     let root = tempfile::tempdir().unwrap();
     let mut workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);
     workspace.storage = Some(root.path().to_owned());
@@ -581,8 +581,9 @@ fn restore_notice_marks_every_line_as_husklet_output_and_keeps_the_typed_reason(
 
     summary
         .publish(&[
-            "execution 7f3a: exec 7f3a cannot be reattached after a whole-image restore: \
-             the restored member is a forked child of the container's engine process"
+            "execution 95032ffd73334c859c8bd2f1292dd438: exec 95032ffd73334c859c8bd2f1292dd438 \
+             cannot be reattached after a whole-image restore: the restored member is a forked \
+             child of the container's engine process"
                 .into(),
         ])
         .unwrap();
@@ -595,9 +596,13 @@ fn restore_notice_marks_every_line_as_husklet_output_and_keeps_the_typed_reason(
             "unmarked notice line: {line:?}"
         );
     }
-    // The typed refusal's own reason survives verbatim.
-    assert!(text.contains("cannot be reattached after a whole-image restore"));
-    assert!(text.contains("forked child of the container's engine process"));
+    // One short line: a short id used once, the refusal's first clause, no engine internals.
+    assert!(
+        text.contains("\u{2022} execution 95032ffd: cannot be reattached after a whole-image restore\n"),
+        "{text}"
+    );
+    assert_eq!(text.matches("95032ffd").count(), 1, "{text}");
+    assert!(!text.contains("forked child of the container's engine process"), "{text}");
     // Preserved scrollback is explained rather than presented as a failure report.
     assert!(text.contains("preserved history"));
     assert!(text.contains("could not be resumed as a live process"));
