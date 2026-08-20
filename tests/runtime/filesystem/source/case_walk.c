@@ -166,6 +166,19 @@ int main(void) {
     snprintf(path, sizeof path, "%s/Case", base);
     check(absent(path), "Case absent");
 
+    /* A long name is not shortened by having a capital in it. The host escape is 12 + 2n bytes, so a
+     * namespace that escaped every uppercase name refused any legal Linux name past ~121 bytes with
+     * ENAMETOOLONG while creating the same bytes in lowercase -- a file the guest is entitled to and
+     * cannot have. Nothing here collides, so nothing here needs escaping. */
+    char lengthy[200];
+    memset(lengthy, 'a', sizeof lengthy - 1);
+    lengthy[sizeof lengthy - 1] = 0;
+    lengthy[0] = 'L';
+    snprintf(path, sizeof path, "%s/%s", base, lengthy);
+    check(put(path, "lengthy") == 0, "create long name with a capital");
+    check(holds(path, "lengthy"), "read long name with a capital");
+    check(lists(base, lengthy), "readdir long name with a capital");
+
     /* Symlinks: followed by default, refused with O_NOFOLLOW, readable with readlink. */
     snprintf(path, sizeof path, "%s/Link", base);
     unlink(path);
