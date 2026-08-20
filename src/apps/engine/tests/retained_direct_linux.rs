@@ -139,12 +139,13 @@ mod linux_host {
     /// and 141 now; `yes | head -1` inside a guest bash already read 141, because a pipe the GUEST opens
     /// takes the retained descriptor path, which had the delivery all along.
     ///
-    /// The engine reports a fatally signalled guest as `_exit(128 + signo)` rather than dying by the
-    /// signal itself -- measured here as 139 for `raise(SIGSEGV)` and 143 for `raise(SIGTERM)` against a
-    /// native -11 and -15 -- so 141 is the status this boundary can express. A guest waiting on a guest
-    /// reconstructs `WIFSIGNALED` from the engine's own relay: in-guest `bash` reports
-    /// `PIPESTATUS[0]` as 141, exactly as the host shell does.
-    fn guest_stdout_is_a_pipe_with_no_reader(binary: &str, image: Vec<u8>, name: &str) -> Option<i32> {
+    /// The worker dies from the guest's own killing signal, so the answer is a `WTERMSIG`, not a code.
+    /// This used to read `Some(141)`, because the engine encoded every fatally signalled guest as
+    /// `_exit(128 + signo)` and a code was the only thing this boundary could express. 141 was never
+    /// what the kernel reports: a native writer to a reader-less pipe is waited as `WIFSIGNALED` with
+    /// `WTERMSIG == SIGPIPE`, and 141 is only how a shell renders that in `$?`. Measured on this host
+    /// with a plain fork/dup2/write/waitpid: `WIFSIGNALED sig=13`.
+    fn guest_stdout_is_a_pipe_with_no_reader(binary: &str, image: Vec<u8>, name: &str) -> (Option<i32>, Option<i32>) {
         let path = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
         fs::write(&path, image).unwrap();
         let (reader, writer) = std::io::pipe().unwrap();
@@ -156,7 +157,7 @@ mod linux_host {
             .status()
             .unwrap();
         fs::remove_file(&path).unwrap();
-        status.code()
+        (status.code(), std::os::unix::process::ExitStatusExt::signal(&status))
     }
 
     #[test]
@@ -250,9 +251,10 @@ mod linux_host {
                 static_x86_64_write_then_exit(7),
                 "hl-sigpipe-x86"
             ),
-            Some(141),
-            "an x86-64 guest whose adopted stdout has no reader must be terminated by SIGPIPE, not \
-             handed EPIPE and left running"
+            // Linux SIGPIPE. No exit code, because the worker was killed rather than having exited.
+            (None, Some(13)),
+            "an x86-64 guest whose adopted stdout has no reader must leave the worker terminated by \
+             SIGPIPE, not handed EPIPE and left running, and not encoded as an exit code"
         );
     }
 
@@ -264,9 +266,10 @@ mod linux_host {
                 static_aarch64_write_then_exit(7),
                 "hl-sigpipe-a64"
             ),
-            Some(141),
-            "an aarch64 guest whose adopted stdout has no reader must be terminated by SIGPIPE, not \
-             handed EPIPE and left running"
+            // Linux SIGPIPE. No exit code, because the worker was killed rather than having exited.
+            (None, Some(13)),
+            "an aarch64 guest whose adopted stdout has no reader must leave the worker terminated by \
+             SIGPIPE, not handed EPIPE and left running, and not encoded as an exit code"
         );
     }
 

@@ -1132,8 +1132,19 @@ typedef struct hl_host_watch_services {
 enum {
     HL_HOST_STREAM_NONBLOCK = 1u << 0,
     HL_HOST_STREAM_SOURCE_POSITIONED = 1u << 1,
-    HL_HOST_STREAM_DESTINATION_POSITIONED = 1u << 2
+    HL_HOST_STREAM_DESTINATION_POSITIONED = 1u << 2,
+    /* Unbuffered device transfer. */
+    HL_HOST_STREAM_DIRECT = 1u << 3,
+    /* The host raises its out-of-band readiness notification on the object's owner. */
+    HL_HOST_STREAM_ASYNC = 1u << 4,
+    /* Reads do not update the object's access timestamp. */
+    HL_HOST_STREAM_NOATIME = 1u << 5
 };
+
+/* The complete domain of set_status_flags. A host arms every bit it is given or arms none of them and
+ * reports why; it never reports success for a capability it does not apply. */
+#define HL_HOST_STREAM_STATUS_FLAGS                                                                                    \
+    (HL_HOST_STREAM_NONBLOCK | HL_HOST_STREAM_DIRECT | HL_HOST_STREAM_ASYNC | HL_HOST_STREAM_NOATIME)
 
 /* Opaque byte streams. move consumes exactly the bytes reported in value and never consumes bytes
  * which the destination did not accept. source_offset/destination_offset are used only with their
@@ -1146,6 +1157,9 @@ typedef struct hl_host_stream_services {
     hl_host_result (*write)(void *context, hl_host_handle stream, hl_host_const_bytes input);
     hl_host_result (*duplicate)(void *context, hl_host_handle stream);
     hl_host_result (*close)(void *context, hl_host_handle stream);
+    /* Replace the object's settable transfer flags with exactly HL_HOST_STREAM_STATUS_FLAGS & flags.
+     * All-or-nothing: a host that cannot apply one of the requested capabilities applies none and
+     * returns the reason, so a caller never records a flag the object is not carrying. */
     hl_host_result (*set_status_flags)(void *context, hl_host_handle stream, uint32_t flags);
     /* value is a HL_HOST_READY_* mask. */
     hl_host_result (*readiness)(void *context, hl_host_handle stream, uint32_t interests);

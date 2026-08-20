@@ -63,46 +63,85 @@ static hl_host_result hl_macos_stream_pipe_pair(void *context, uint32_t flags) {
     return input;
 }
 
+/*
+ * Darwin owns two of the four settable transfer capabilities. O_NONBLOCK and O_ASYNC are real fcntl
+ * status flags here and are armed on the open file description exactly as on Linux. Unbuffered transfer
+ * and access-time suppression are not: F_NOCACHE is a caching hint with neither O_DIRECT's alignment
+ * contract nor its failure mode, and Darwin has no O_NOATIME at all. Both are refused rather than
+ * recorded, so a guest is never told a flag is in force that nothing is applying.
+ *
+ * Any file handle is accepted, not only a pipe endpoint made by pipe_pair: descriptors imported from the
+ * launcher -- the guest's own stdio -- have no shared stream, and a stream-only lookup would reject the
+ * entire adopted-descriptor population. The endpoint semaphore is taken only when there is one to take.
+ */
 static hl_host_result hl_macos_stream_set_status_flags(void *context, hl_host_handle stream, uint32_t flags) {
     hl_host_macos *host = context;
     hl_macos_stream_shared *shared = NULL;
     uint32_t endpoint = 0;
     int descriptor = -1;
     int current;
-    if ((flags & ~(uint32_t)HL_HOST_STREAM_NONBLOCK) != 0) return hl_macos_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
+    uint32_t effective = 0;
+    if ((flags & ~(uint32_t)HL_HOST_STREAM_STATUS_FLAGS) != 0)
+        return hl_macos_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
+    if ((flags & (uint32_t)(HL_HOST_STREAM_DIRECT | HL_HOST_STREAM_NOATIME)) != 0)
+        return hl_macos_result(HL_STATUS_NOT_SUPPORTED, 0, 0);
     pthread_mutex_lock(&host->lock);
     hl_macos_file *file = hl_macos_file_lookup(host, stream);
-    if (file != NULL && file->stream != NULL) {
+    if (file != NULL) {
         descriptor = dup(file->descriptor);
-        shared = file->stream;
-        endpoint = file->stream_endpoint;
-        if (descriptor >= 0) (void)__atomic_add_fetch(&shared->references, 1u, __ATOMIC_ACQ_REL);
+        if (descriptor >= 0 && file->stream != NULL) {
+            shared = file->stream;
+            endpoint = file->stream_endpoint;
+            (void)__atomic_add_fetch(&shared->references, 1u, __ATOMIC_ACQ_REL);
+        }
     }
     pthread_mutex_unlock(&host->lock);
     if (descriptor < 0) return hl_macos_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
     int adopted = hl_host_process_fd_private_adopt(descriptor);
     if (adopted < 0) {
         close(descriptor);
-        hl_macos_stream_release(shared);
+        if (shared != NULL) hl_macos_stream_release(shared);
         return hl_macos_result(HL_STATUS_RESOURCE_LIMIT, 0, 0);
     }
     descriptor = adopted;
-    if (hl_macos_stream_lock(shared, endpoint) != 0) {
+    if (shared != NULL && hl_macos_stream_lock(shared, endpoint) != 0) {
         hl_host_process_fd_private_remove(descriptor);
         close(descriptor);
         hl_macos_stream_release(shared);
         return hl_macos_errno();
     }
+    int failure = 0;
     current = fcntl(descriptor, F_GETFL);
+    if (current < 0) failure = errno;
     if (current >= 0) {
-        current = (current & ~O_NONBLOCK) | ((flags & HL_HOST_STREAM_NONBLOCK) != 0 ? O_NONBLOCK : 0);
-        if (fcntl(descriptor, F_SETFL, current) != 0) current = -1;
+        int wanted = current & ~(O_NONBLOCK | O_ASYNC);
+        if ((flags & HL_HOST_STREAM_NONBLOCK) != 0) wanted |= O_NONBLOCK;
+        if ((flags & HL_HOST_STREAM_ASYNC) != 0) wanted |= O_ASYNC;
+        if (fcntl(descriptor, F_SETFL, wanted) != 0) {
+            failure = errno;
+            current = -1;
+        } else {
+            /* Report the description back rather than the request: Darwin routes O_ASYNC through the
+             * object's FIOASYNC handler, so an object without one accepts the request and still reads
+             * back clear. */
+            current = fcntl(descriptor, F_GETFL);
+            if (current < 0) {
+                effective = flags;
+                current = 0;
+            } else {
+                if ((current & O_NONBLOCK) != 0) effective |= HL_HOST_STREAM_NONBLOCK;
+                if ((current & O_ASYNC) != 0) effective |= HL_HOST_STREAM_ASYNC;
+            }
+        }
     }
-    hl_macos_stream_unlock(shared, endpoint);
+    if (shared != NULL) hl_macos_stream_unlock(shared, endpoint);
     hl_host_process_fd_private_remove(descriptor);
     close(descriptor);
-    hl_macos_stream_release(shared);
-    return current >= 0 ? hl_macos_result(HL_STATUS_OK, 0, 0) : hl_macos_errno();
+    if (shared != NULL) hl_macos_stream_release(shared);
+    if (current >= 0) return hl_macos_result(HL_STATUS_OK, effective, 0);
+    /* Report the fcntl that failed, not whatever the teardown above left in errno. */
+    errno = failure;
+    return hl_macos_errno();
 }
 
 static int hl_macos_stream_handle(hl_host_macos *host, hl_host_handle handle) {
