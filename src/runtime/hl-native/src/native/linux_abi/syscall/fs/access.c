@@ -790,6 +790,23 @@ static int open_synthetic_path(struct cpu *c, uint64_t a0, uint64_t a1, int lf, 
 static int open_jailed_resolution_error(int directory, const char *path, uint32_t intent,
                                         const hl_provider_node *projected) {
     if ((intent & HL_OPEN_CREATE) || projected != NULL) return 0;
+    /* Four-walk collapse. This probe exists because the LEGACY OVERLAY path
+     * resolver reports an over-deep or cyclic link as an absent host path and
+     * so turns Linux's ELOOP into ENOENT; the cursor owns merged-layer
+     * traversal and reports the original error. With no lower layers the
+     * resolution actually used is jail_at + the host resolve_beneath walk, and
+     * MEASURED (aarch64 and x86_64, symlink self-loop, mutual pair, and
+     * O_NOFOLLOW on a symlink): the beneath walk bounds symlink traversal
+     * itself, fails the plan, and the request falls through to
+     * openat(parent, leaf, O_NOFOLLOW), which the KERNEL answers with ELOOP.
+     * The probe is then a whole extra per-component walk whose only output is
+     * an error the real resolution already produces. Single-layer namespaces
+     * skip it; overlay namespaces keep it.
+     *
+     * Do not re-derive this from resolve_at's own symlink budget: raising that
+     * budget to 10^9 left every ELOOP case reporting ELOOP unchanged, so
+     * resolve_at is NOT the producer on this path. */
+    if (g_nlower == 0) return 0;
     hl_vfs_cursor_entry resolved;
     memset(&resolved, 0, sizeof resolved);
     int error = hl_vfs_cursor_resolve_at(directory, path, (intent & HL_OPEN_NOFOLLOW) != 0, &resolved);

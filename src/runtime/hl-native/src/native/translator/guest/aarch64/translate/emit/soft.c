@@ -34,6 +34,29 @@ static void patch_adr(uint32_t *, uint8_t *, unsigned);
 static int shadowgate(void);
 static void emit_prof_bump(void *);
 
+/*
+ * Soft-guard lowering selector.
+ *
+ * The shared resolver (below) keeps four instructions at each guest memory
+ * access and performs the interval/permission check once per class in one
+ * out-of-line body.  That is the smallest translation, but every guarded
+ * access pays a taken branch plus the resolver's own prologue, and the guest
+ * ISA's own x86 counterpart (guest/x86_64/emit.c emit_soft_guard) has always
+ * lowered the same check INLINE.  Inline is now the aarch64 default too, so
+ * both arms share one shape; the HL_SOFT_SHARED_RESOLVER environment
+ * variable restores the resolver for A/B and as a fallback.  Read straight
+ * from the environment, not from the option store: codegen is selected on the
+ * first block translated, which can be on a thread whose (thread-local) option
+ * store has not imported anything.  The choice is folded into the persistent-cache
+ * translator identity (cache/identity.c) so an arena emitted under one
+ * lowering can never be loaded under the other.
+ */
+static int a64_soft_shared_resolver(void) {
+    static int selected = -1;
+    if (selected < 0) selected = getenv("HL_SOFT_SHARED_RESOLVER") != NULL;
+    return selected;
+}
+
 static int soft_profile_sample(uint64_t pc) {
     return g_prof && ((((pc >> 2) * UINT64_C(0x9e3779b97f4a7c15)) >> 58) == 0);
 }
@@ -66,10 +89,14 @@ static void emit_a64_soft_sub_bytes(int reg, uint64_t bytes) {
         e_subi(reg, reg, (unsigned)bytes);
 }
 
+#define SOFT_BYTES_BEGIN uint8_t *soft_bytes_mark = g_cp
+#define SOFT_BYTES_END g_prof_soft_guard_bytes += (uint64_t)(g_cp - soft_bytes_mark)
+
 static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2, uint64_t bytes, uint32_t required,
                                                        uint64_t pc) {
     struct a64_soft_guard guard = {.ea = ea, .tmp = tmp, .tmp2 = tmp2, .bytes = bytes, .required = required, .pc = pc};
     int resume_ea = ea;
+    SOFT_BYTES_BEGIN;
     if (!jit_guest_soft_active()) return guard;
     guard.active = 1;
     guard.profile_sample = soft_profile_sample(pc);
@@ -82,7 +109,12 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
      * scratch: real x18 is reserved by Darwin and may be cleared asynchronously.
      * Shadow-enabled builds retain the proven inline guard below.
      */
-    guard.shared = shadowgate() < 0 && !g_tier2_build && !guard.profile_sample && resume_ea != 15;
+    guard.shared =
+        a64_soft_shared_resolver() && shadowgate() < 0 && !g_tier2_build && !guard.profile_sample && resume_ea != 15;
+    if (guard.shared)
+        g_prof_soft_shared_sites++;
+    else
+        g_prof_soft_inline_sites++;
     if (guard.shared) {
         if (ea != 16) e_movr(16, ea);
         guard.ea = 16;
@@ -126,6 +158,7 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
         guard.native = g_cp;
         e_ldr(15, CPUREG, 15 * 8);
         if (resume_ea != 16) e_movr(resume_ea, 16);
+        SOFT_BYTES_END;
         return guard;
     }
 
@@ -169,6 +202,7 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
     e_ldr(tmp, tmp2, OFF_SOFT_TLB + 16);
     emit32(0x8B000000u | ((unsigned)tmp << 16) | ((unsigned)ea << 5) | (unsigned)ea); /* add ea,ea,tmp */
     guard.native = g_cp;
+    SOFT_BYTES_END;
     return guard;
 }
 
@@ -218,6 +252,7 @@ static void emit_a64_soft_exit_site(const struct a64_soft_guard *guard) {
 
 static void emit_a64_soft_guard_end(struct a64_soft_guard *guard) {
     if (!guard->active) return;
+    SOFT_BYTES_BEGIN;
     if (guard->shared) {
         uint32_t *skip = (uint32_t *)g_cp;
         emit32(0); /* b resume */
@@ -241,6 +276,7 @@ static void emit_a64_soft_guard_end(struct a64_soft_guard *guard) {
         }
         int32_t narrow_delta = (int32_t)miss_delta;
         memcpy(guard->metadata + 8, &narrow_delta, sizeof narrow_delta);
+        SOFT_BYTES_END;
         return;
     }
     uint32_t *skip = (uint32_t *)g_cp;
@@ -256,6 +292,7 @@ static void emit_a64_soft_guard_end(struct a64_soft_guard *guard) {
             *guard->miss[i] =
                 a64_tbz_x(guard->miss_reg[i], (unsigned)guard->miss_bit[i], (miss - (uint8_t *)guard->miss[i]) / 4);
     }
+    SOFT_BYTES_END;
     // Profiling must not insert register-using code into this live-EA path.
 }
 
@@ -274,6 +311,7 @@ static void aarch64_soft_filter_refresh(struct cpu *c) {
 
 static void emit_a64_soft_stub(void) {
     if (!g_soft_stub_patch_count && !g_soft_resolver_patch_count && !g_soft_legacy_stub_patch_count) return;
+    SOFT_BYTES_BEGIN;
     if (g_soft_resolver_patch_count) {
         uint32_t *cold_miss_patches[1024];
         int cold_miss_bits[1024]; /* -1 = CBNZ x15, otherwise TBZ x15,bit */
@@ -413,6 +451,7 @@ static void emit_a64_soft_stub(void) {
         emit_blockret(9);
         e_br(9);
     }
+    SOFT_BYTES_END;
 }
 
 /* A discontinuous-view retry executes against cpu->soft_bounce.  Force one
