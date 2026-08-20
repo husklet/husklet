@@ -43,14 +43,17 @@ static void emit_prof_bump(void *);
  * access pays a taken branch plus the resolver's own prologue, and the guest
  * ISA's own x86 counterpart (guest/x86_64/emit.c emit_soft_guard) has always
  * lowered the same check INLINE.  Inline is now the aarch64 default too, so
- * both arms share one shape; HL_SOFT_SHARED_RESOLVER restores the resolver
- * for A/B and as a fallback.  The choice is folded into the persistent-cache
+ * both arms share one shape; the HL_SOFT_SHARED_RESOLVER environment
+ * variable restores the resolver for A/B and as a fallback.  Read straight
+ * from the environment, not from the option store: codegen is selected on the
+ * first block translated, which can be on a thread whose (thread-local) option
+ * store has not imported anything.  The choice is folded into the persistent-cache
  * translator identity (cache/identity.c) so an arena emitted under one
  * lowering can never be loaded under the other.
  */
 static int a64_soft_shared_resolver(void) {
     static int selected = -1;
-    if (selected < 0) selected = hl_option_get("HL_SOFT_SHARED_RESOLVER") != NULL;
+    if (selected < 0) selected = getenv("HL_SOFT_SHARED_RESOLVER") != NULL;
     return selected;
 }
 
@@ -108,6 +111,10 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
      */
     guard.shared = a64_soft_shared_resolver() && shadowgate() < 0 && !g_tier2_build && !guard.profile_sample &&
                    resume_ea != 15;
+    if (guard.shared)
+        g_prof_soft_shared_sites++;
+    else
+        g_prof_soft_inline_sites++;
     if (guard.shared) {
         if (ea != 16) e_movr(16, ea);
         guard.ea = 16;

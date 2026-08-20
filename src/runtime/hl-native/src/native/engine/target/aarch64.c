@@ -721,7 +721,7 @@ static int engine_global_init(void) {
     g_prof_soft_miss = g_prof_soft_span = 0;
     g_prof_soft_bounce_prepare = g_prof_soft_bounce_commit = 0;
     g_prof_smc_queued = g_prof_smc_commit = 0;
-    g_prof_soft_guard_bytes = 0;
+    g_prof_soft_guard_bytes = g_prof_soft_shared_sites = g_prof_soft_inline_sites = 0;
     g_no_stw_reclaim = 0;
     g_steal1617 = 1;
     g_noibslim = 0;

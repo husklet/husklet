@@ -93,8 +93,6 @@ static const hl_option_definition hl_option_definitions[] = {
     HL_INTERNAL_OPTION("HL_GUEST_ENV_EXACT", "guest exec environment suppresses engine defaults", HL_OPTION_FLAG),
     HL_DEBUG_OPTION("HL_LOG", "debug-build logging tag selector", HL_OPTION_TEXT),
     HL_DEBUG_OPTION("HL_FATAL_DIAGNOSTICS", "fatal guest register publication", HL_OPTION_FLAG),
-    HL_DEBUG_OPTION("HL_SOFT_SHARED_RESOLVER", "lower aarch64 soft-memory guards through the shared resolver",
-                    HL_OPTION_FLAG),
 };
 
 #define HL_OPTION_COUNT (sizeof hl_option_definitions / sizeof hl_option_definitions[0])
@@ -108,11 +106,6 @@ static _Thread_local int hl_default_options_ready;
 void hl_options_import_environment(hl_options *options) {
     const char *fatal = getenv("HL_FATAL_DIAGNOSTICS");
     if (fatal != NULL) (void)hl_options_set(options, "HL_FATAL_DIAGNOSTICS", fatal, 0);
-    /* Codegen A/B selector: it must be settable on a bare worker invocation,
-       which carries no launch plan, so it is imported here beside the other
-       debug-only option rather than through the plan. */
-    const char *shared_resolver = getenv("HL_SOFT_SHARED_RESOLVER");
-    if (shared_resolver != NULL) (void)hl_options_set(options, "HL_SOFT_SHARED_RESOLVER", shared_resolver, 0);
 #if defined(HL_ENABLE_LOGGING) && HL_ENABLE_LOGGING
     const char *selector = getenv("HL_LOG");
     if (selector != NULL) (void)hl_options_set(options, "HL_LOG", selector, 0);

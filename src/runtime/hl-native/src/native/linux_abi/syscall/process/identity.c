@@ -247,7 +247,7 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
                     "fwake_fast=%llu fwake_slow=%llu fwait=%llu soft_sample_shift=6 soft_sampled_sites=%llu "
                     "soft_hull_direct_sampled=%llu soft_cached_hit_sampled=%llu soft_miss=%llu soft_span=%llu "
                     "soft_bounce_prepare=%llu soft_bounce_commit=%llu smc_queued=%llu smc_commit=%llu "
-                    "soft_guard_bytes=%llu\n",
+                    "soft_guard_bytes=%llu shared_sites=%llu inline_sites=%llu\n",
                     (unsigned long long)g_prof_cross, (unsigned long long)g_prof_sys, (unsigned long long)g_prof_miss,
                     (unsigned long long)(g_prof_cross - g_prof_sys - g_prof_miss), (unsigned long long)g_prof_xlate,
                     (unsigned long long)g_lse_n, (unsigned long long)g_wx_toggles, g_dualmap, g_xlate_ns / 1e6,
@@ -257,7 +257,8 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
                     (unsigned long long)g_prof_soft_cached_sampled, (unsigned long long)g_prof_soft_miss,
                     (unsigned long long)g_prof_soft_span, (unsigned long long)g_prof_soft_bounce_prepare,
                     (unsigned long long)g_prof_soft_bounce_commit, (unsigned long long)g_prof_smc_queued,
-                    (unsigned long long)g_prof_smc_commit, (unsigned long long)g_prof_soft_guard_bytes);
+                    (unsigned long long)g_prof_smc_commit, (unsigned long long)g_prof_soft_guard_bytes, (unsigned long long)g_prof_soft_shared_sites,
+                    (unsigned long long)g_prof_soft_inline_sites);
             if (profile_size > 0) {
                 size_t bounded = (size_t)profile_size < sizeof profile ? (size_t)profile_size : sizeof profile - 1;
                 (void)hl_linux_write(g_linux_box, STDERR_FILENO, profile, bounded);

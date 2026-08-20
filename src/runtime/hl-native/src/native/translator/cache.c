@@ -782,6 +782,9 @@ static uint64_t g_prof_smc_queued, g_prof_smc_commit;
    sampled.  Defined in this shared unit so the x86 [prof] reporter -- which
    shares linux_abi/syscall/process/identity.c -- links, and stays 0 there. */
 static uint64_t g_prof_soft_guard_bytes;
+/* How many guarded sites took each lowering.  0 shared sites is the shipped
+   default; HL_SOFT_SHARED_RESOLVER moves them.  Exact, not sampled. */
+static uint64_t g_prof_soft_shared_sites, g_prof_soft_inline_sites;
 // PROF=1: dispatcher crossings / IBTC misses / translations
 // A3 §B instrumentation (PROF=1). Runtime: shadow pushes executed, predicted-return FAST hits (host
 // ret, RAS), and returns that fell through emit_shadow_ret to the IBTC fallback. Translate-time:
