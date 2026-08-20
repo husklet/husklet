@@ -14,7 +14,7 @@
 //! its own dump. That refusal took every other member's channel down with it and the whole close failed.
 //!
 //! The predicate now asks the question of the LAUNCH: `g_init_hostpid` is written once per launch by the
-//! launch top itself and inherited unchanged across fork, so "it equals getpid()" is true of a launch top
+//! launch top itself and inherited unchanged across fork, so "it equals `getpid()`" is true of a launch top
 //! and of nothing else, whatever guest pid that launch was handed.
 //!
 //! Both scenarios below use a guest pid other than 1 deliberately. A launch top holding guest pid 1 reads
