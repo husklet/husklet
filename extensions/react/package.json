@@ -1,0 +1,34 @@
+{
+  "name": "@husklet/react",
+  "version": "0.1.0",
+  "description": "Render a Husklet workspace interface with React.",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./catalogue": "./src/catalogue.json"
+  },
+  "files": [
+    "src",
+    "catalogue.json",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test 'test/*.test.js'",
+    "catalogue": "cargo run -q --manifest-path ../../Cargo.toml -p hl-gui --bin catalogue > catalogue.json",
+    "types": "npm run catalogue && node tools/types.js"
+  },
+  "dependencies": {
+    "react-reconciler": "^0.29.2"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "react": "^18.3.1"
+  }
+}

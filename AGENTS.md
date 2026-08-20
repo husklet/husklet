@@ -128,12 +128,51 @@ Run the same `cargo clippy -p husklet --all-targets --features runtime` and
 `cargo clippy -p husklet --all-targets --features gui` commands inside `nix develop`
 when you only want the application answered.
 
-What this does **not** cover, and no Linux run can: linking and running the GTK app,
-the `#[cfg(target_os = "macos")]` arms in `bin/host/{environment,pty,appearance}.rs` and
-`runtime/process.rs`, the objc2 title-bar and appearance code, and everything in
-`.github/workflows/release.yml` — bundling, code signing, notarization, the DMG. A green
-CI verification run on Linux means the application *type-checks and lints*; it does not mean it
-runs. The macOS arms are still only compiled by CI on `macos-26`.
+Linking and **running** the GTK app is no longer on the list of things Linux cannot do —
+see the next subsection. What a Linux run still does not cover: the
+`#[cfg(target_os = "macos")]` arms in `bin/host/{environment,pty,appearance}.rs` and
+`runtime/process.rs`, the objc2 title-bar and appearance code, `package/bundle.sh` (which
+refuses any host but Darwin, deliberately — there is no Linux packaging step to write), and
+everything in `.github/workflows/release.yml` — bundling, code signing, notarization, the
+DMG. The macOS arms are still only compiled by CI on `macos-26`.
+
+### Running the GTK application headless on Linux
+
+This box has no monitor and GTK exits when it cannot open a display, so for a long time the
+application could be type-checked here and never started. It starts. The Linux dev shell
+carries `xorg-server` and `xvfb-run` beside the `gtk4`/`vte-gtk4`/`librsvg` it already had,
+and the app's own `HL_TERM_SHOT` hook renders the window through GTK's snapshot pipeline
+and writes a PNG — no screen capture, no compositor, no X client tooling:
+
+```text
+nix develop -c env \
+  HL_TERM_VIEW=manager HL_TERM_SHOT=/var/tmp/manager.png HL_TERM_SHOT_MS=1500 GTK_A11Y=none \
+  xvfb-run -a -s '-screen 0 1600x1000x24' -- ./target/debug/husklet
+```
+
+`HL_TERM_VIEW` picks the surface (`manager`, `terminal`, `newws`) and the shot fires only for
+the window it names. `HL_TERM_WS=<name>` selects a workspace from `$HOME/.hl/workspaces.conf`,
+and `HL_TERM_TABS=N`, `HL_TERM_SPLIT=h|v`, `HL_TERM_TYPE=<text>`, `HL_TERM_OVERVIEW`,
+`HL_TERM_OVERVIEW_PAGE` and `HL_TERM_DEBUG_LOG=<path>` drive it further. `storybook` carries
+the same hook under `STORYBOOK_SHOT`/`STORYBOOK_SHOT_MS`. Verified on x86_64 Linux at
+ad652522d: the manager window, the New-Workspace dialog, a terminal window with three tabs,
+a vertical split and typed text queued into both panes, and all 11 storybook stories
+(291 widgets).
+
+Four things to know before you trust — or debug — this loop:
+
+- The terminal panes reach `workspace launch started` and show the "not live yet"
+  placeholder. Entering the image needs an OCI pull, which this loop does not do — so the
+  screenshot proves the toolkit, the pty spawn and the worker re-exec, not the container.
+- `GTK_A11Y=none` only silences an `org.a11y.Bus` warning on a box with no accessibility
+  bus. It is noise, not a failure.
+- `cargo test -p husklet --bins --features gui` needs **no** display at all. Do not add
+  `xvfb-run` to the test gate to "fix" something; the suite never opens one.
+- `TermConfig::default().font_family` is `Menlo`, which exists only on macOS. On Linux
+  Pango falls back and VTE takes its cell metrics from the fallback, so the grid renders
+  visibly letter-spaced until a workspace sets `font_family` to a font the host has
+  (`DejaVu Sans Mono` here). That is host-local cosmetics, not a defect — do not "fix" it
+  by changing the product default, which is correct for the host the app ships on.
 
 ### Work in your own worktree, and stage by path
 

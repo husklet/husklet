@@ -1286,6 +1286,10 @@
                 pkgs.git
                 pkgs.go
                 pkgs.nixfmt
+                # The extensions under extensions/ are JavaScript packages with
+                # their own tests; without a runtime they can only be checked on
+                # a machine that happens to have one.
+                pkgs.nodejs_22
                 pkgs.pkg-config
                 (rustFor pkgs)
               ]
@@ -1299,7 +1303,15 @@
                 ++ toolchain.compilerAliases
                 ++ lib.optionals pkgs.stdenv.isLinux toolchain.guestLibraries
                 ++ toolchain.emulators
-              );
+              )
+              # A Linux development host has no monitor, and GTK exits when it cannot open a display,
+              # so the application could be type-checked here but never started. Xvfb supplies one:
+              # `xvfb-run -a -s '-screen 0 1600x1000x24' -- husklet` runs the real GSK pipeline, and
+              # `HL_TERM_SHOT` then writes the rendered window to a PNG. See AGENTS.md.
+              ++ lib.optionals pkgs.stdenv.isLinux [
+                pkgs.xorg-server
+                pkgs.xvfb-run
+              ];
               shellHook = ''
                 export CC="${toolchain.env.CC}"
                 export CXX="${toolchain.env.CXX}"

@@ -1,4 +1,6 @@
-use super::EventId;
+//! A modal request for a decision, described independently of any toolkit.
+
+use crate::node::EventId;
 
 /// Toolkit-neutral state for a modal dialog with an ordered set of actions.
 #[derive(Clone, Debug, Eq, PartialEq)]

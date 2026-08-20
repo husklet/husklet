@@ -1,0 +1,12 @@
+# The reference extension: read the workspace's containers and draw them.
+
+name = "containers"
+display_name = "Containers"
+version = "0.1.0"
+protocol = 1
+
+# Read and draw. It never needs to change a container, so it does not ask to.
+capabilities = ["container-read", "interface"]
+
+[interface]
+tab_title = "Containers"

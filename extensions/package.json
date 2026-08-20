@@ -1,0 +1,7 @@
+{
+  "name": "@husklet/extensions",
+  "private": true,
+  "description": "The base image every extension builds from, and the extensions built on it.",
+  "workspaces": ["react", "storybook"],
+  "engines": { "node": ">=20" }
+}

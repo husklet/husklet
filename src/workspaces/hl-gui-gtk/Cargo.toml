@@ -1,0 +1,17 @@
+[package]
+name = "hl-gui-gtk"
+version = "0.1.0"
+edition = "2021"
+description = "GTK4 rendering adapter for the hl-gui component library."
+license = "MIT"
+
+[lib]
+name = "hl_gui_gtk"
+path = "src/lib.rs"
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.9", features = ["v4_10"] }
+hl-gui = { path = "../hl-gui" }
+
+[lints]
+workspace = true

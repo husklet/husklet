@@ -184,9 +184,7 @@ pub(crate) fn make_terminal_ex(
     let pid = Rc::new(Cell::new(0));
     // Register this pane (terminal + its slot + pid) so the window's close handler can freeze it into its
     // own slot, and `save_session` can record which slot each pane owns.
-    tw.panes
-        .borrow_mut()
-        .push(PaneRegistration::new(&term, slot.to_owned()));
+    Slots::new(tw).hold(&term, slot.to_owned());
     let application = application_path().to_string_lossy().into_owned();
     let workspace_key = tw.ws.key();
     // The terminal always enters the workspace worker. A host-shell override here can make a workspace
