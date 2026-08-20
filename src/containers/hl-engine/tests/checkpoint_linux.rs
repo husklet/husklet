@@ -302,9 +302,11 @@ fn a_peer_that_appeared_after_the_enumeration_is_captured_rather_than_miscounted
         capture.start().unwrap();
         wait_for(&output, "CHILD-READY");
         let started = Instant::now();
-        capture.capture_checkpoint_until(checkpoint_deadline()).unwrap_or_else(|error| {
-            panic!("{isa:?} refused a capture over a member that appeared after the enumeration: {error:?}")
-        });
+        capture
+            .capture_checkpoint_until(checkpoint_deadline())
+            .unwrap_or_else(|error| {
+                panic!("{isa:?} refused a capture over a member that appeared after the enumeration: {error:?}")
+            });
         assert_eq!(capture.wait().unwrap().guest_status, 0);
         assert!(
             started.elapsed() < Duration::from_secs(4),
