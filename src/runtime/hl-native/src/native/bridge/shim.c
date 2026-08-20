@@ -695,3 +695,13 @@ HL_API void hl_c_backend_destroy(hl_c_backend *backend) {
     free(backend);
     hl_c_backend_leak_check_verdict();
 }
+
+#ifndef HL_NATIVE_BUILD_FINGERPRINT
+#define HL_NATIVE_BUILD_FINGERPRINT unfingerprinted
+#endif
+#define HL_FINGERPRINT_TEXT_(value) #value
+#define HL_FINGERPRINT_TEXT(value) HL_FINGERPRINT_TEXT_(value)
+
+HL_API const char *hl_c_backend_build_fingerprint(void) {
+    return HL_FINGERPRINT_TEXT(HL_NATIVE_BUILD_FINGERPRINT);
+}

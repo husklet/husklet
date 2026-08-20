@@ -172,12 +172,32 @@ pub(crate) struct TestApi {
 pub enum LoadError {
     CurrentExecutable(std::io::Error),
     NotFound(Vec<PathBuf>),
-    Open { path: PathBuf, detail: String },
-    MissingBridge { path: PathBuf, detail: String },
-    AbiMismatch { expected: u32, actual: u32 },
-    TableTooSmall { minimum: usize, actual: u32 },
+    Open {
+        path: PathBuf,
+        detail: String,
+    },
+    MissingBridge {
+        path: PathBuf,
+        detail: String,
+    },
+    AbiMismatch {
+        expected: u32,
+        actual: u32,
+    },
+    TableTooSmall {
+        minimum: usize,
+        actual: u32,
+    },
     NullEntry(&'static str),
-    EngineAbi { expected: u32, actual: u32 },
+    EngineAbi {
+        expected: u32,
+        actual: u32,
+    },
+    BuildFingerprint {
+        path: PathBuf,
+        expected: &'static str,
+        actual: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -197,7 +217,7 @@ impl LoadError {
             Self::NotFound(_) => LoadKind::Missing,
             Self::Open { .. } => LoadKind::Open,
             Self::MissingBridge { .. } | Self::TableTooSmall { .. } | Self::NullEntry(_) => LoadKind::Contract,
-            Self::AbiMismatch { .. } | Self::EngineAbi { .. } => LoadKind::Abi,
+            Self::AbiMismatch { .. } | Self::EngineAbi { .. } | Self::BuildFingerprint { .. } => LoadKind::Abi,
         }
     }
 }
@@ -228,6 +248,15 @@ impl std::fmt::Display for LoadError {
                 write!(
                     formatter,
                     "native engine ABI mismatch: expected {expected}, found {actual}"
+                )
+            }
+            Self::BuildFingerprint { path, expected, actual } => {
+                write!(
+                    formatter,
+                    "stale native engine {}: it was built from C sources fingerprinted {actual}, \
+                     but this executable was built against {expected}. Rebuild, and do not trust any \
+                     measurement taken from this process",
+                    path.display()
                 )
             }
         }
@@ -303,6 +332,7 @@ fn load() -> Result<Loaded, LoadError> {
             actual,
         });
     }
+    check_fingerprint(&library, &path)?;
     #[cfg(feature = "native-test-hooks")]
     let tests = load_tests(&library, &path)?;
     Ok(Loaded {
@@ -312,6 +342,37 @@ fn load() -> Result<Loaded, LoadError> {
         #[cfg(feature = "native-test-hooks")]
         tests,
     })
+}
+
+/// Refuses a shared object compiled from C sources other than the ones this executable was
+/// built against.
+///
+/// The engine is dlopened, never linked, so a Rust artifact's bytes are unchanged by most C
+/// edits and "the binary did not change" proves nothing. Without this check a stale artifact
+/// runs the previous engine silently, and an experiment measures the tree it was meant to
+/// replace. This turns that into a load failure naming both fingerprints.
+fn check_fingerprint(library: &DynamicLibrary, path: &Path) -> Result<(), LoadError> {
+    const EXPECTED: &str = env!("HL_NATIVE_BUILD_FINGERPRINT");
+    let address = library
+        .symbol(b"hl_c_backend_build_fingerprint\0")
+        .map_err(|detail| LoadError::MissingBridge {
+            path: path.to_owned(),
+            detail,
+        })?;
+    // SAFETY: the named export is declared in the bridge header with exactly this signature.
+    let reader: unsafe extern "C" fn() -> *const c_char = unsafe { std::mem::transmute(address) };
+    // SAFETY: the export returns a static NUL-terminated string literal from the artifact's own image.
+    let actual = unsafe { std::ffi::CStr::from_ptr(reader()) };
+    let actual = String::from_utf8_lossy(actual.to_bytes()).into_owned();
+    if actual == EXPECTED {
+        Ok(())
+    } else {
+        Err(LoadError::BuildFingerprint {
+            path: path.to_owned(),
+            expected: EXPECTED,
+            actual,
+        })
+    }
 }
 
 unsafe fn read_table(address: *const BridgeHeader) -> Result<BridgeApi, LoadError> {

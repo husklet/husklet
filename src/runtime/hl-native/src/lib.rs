@@ -33,6 +33,16 @@ pub fn artifact_smoke() -> bool {
     bindings::engine_metadata_is_valid()
 }
 
+/// Reports why the private engine failed to load, if it did.
+///
+/// `artifact_smoke` answers a bool, which is the wrong shape for a build-freshness failure:
+/// the whole value of that diagnosis is the two fingerprints it names.
+#[doc(hidden)]
+#[must_use]
+pub fn artifact_load_error() -> Option<&'static LoadError> {
+    loader::path().err()
+}
+
 /// Returns the exact dynamic export contract for the Cargo-selected native library.
 #[doc(hidden)]
 #[must_use]

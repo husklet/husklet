@@ -113,6 +113,11 @@ HL_API int32_t hl_c_backend_guest_pid(const hl_c_backend *backend);
  * probes reachability without delivering. Returns 0 on delivery and -1 otherwise. */
 HL_API int32_t hl_c_backend_process_identity_signal(int32_t handle, uint64_t host_pid, int32_t signal);
 HL_API uint64_t hl_c_backend_translation_count(const hl_c_backend *backend);
+/* The content fingerprint of the C sources this artifact was compiled from. The Rust loader
+ * compares it against the value Cargo baked into the calling crate and refuses a shared object
+ * built from different sources, so a C edit that fails to reach the running process is a loud
+ * load failure rather than a silent measurement of the previous engine. */
+HL_API const char *hl_c_backend_build_fingerprint(void);
 HL_API void hl_c_backend_destroy(hl_c_backend *backend);
 
 HL_STATIC_ASSERT(sizeof(hl_c_main_image_plan) == 48, "main image plan size ABI drifted");
