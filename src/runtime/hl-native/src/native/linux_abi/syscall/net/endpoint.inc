@@ -36,6 +36,10 @@
             // of raising SIGPIPE. Benign on healthy sockets; only sockets get it, so real pipes/FIFOs
             // keep Linux's default SIGPIPE-on-write semantics.
             (void)hl_native_set_no_sigpipe(r);
+            // A Linux-sized datagram window on every AF_UNIX datagram socket (see sock_unix_dgram_buffers):
+            // the synthesized ICMP socket is one too, and a large `ping -s` payload must not hit Darwin's
+            // 2048-byte maxdgram default that Linux does not have.
+            if (virtual_icmp || ((int)a0 == AF_UNIX && (ty & 0xf) == SOCK_DGRAM)) sock_unix_dgram_buffers(r);
             // One spelling on every host: on a host whose descriptor status cannot be queried the two
             // bits live in a side record rather than in fcntl, and the caller must not have to know which.
             hl_linux_socket_apply_type_flags(r, ty);
@@ -113,6 +117,12 @@
             // fatal SIGPIPE (matches Linux EPIPE-to-guest behaviour). See case 198 for the rationale.
             (void)hl_native_set_no_sigpipe(sv[0]);
             (void)hl_native_set_no_sigpipe(sv[1]);
+            // Same Linux-sized datagram window as case 198. A SEQPACKET pair is backed by SOCK_DGRAM and
+            // raises its own buffers below; an ordinary DGRAM pair needs it for exactly the same reason.
+            if ((int)a0 == AF_UNIX && lty == SOCK_DGRAM) {
+                sock_unix_dgram_buffers(sv[0]);
+                sock_unix_dgram_buffers(sv[1]);
+            }
             if ((int)a1 & HL_LINUX_SOCK_CLOEXEC) {
                 fcntl(sv[0], F_SETFD, FD_CLOEXEC);
                 fcntl(sv[1], F_SETFD, FD_CLOEXEC);

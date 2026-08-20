@@ -1135,6 +1135,24 @@ static ssize_t cmsg_m2l(const struct msghdr *mh, uint8_t *g, size_t cap, size_t 
     for (struct cmsghdr *c = CMSG_FIRSTHDR((struct msghdr *)mh); c; c = CMSG_NXTHDR((struct msghdr *)mh, c)) {
         if (c->cmsg_len < CMSG_LEN(0)) break;
         size_t dlen = (size_t)c->cmsg_len - CMSG_LEN(0); // payload bytes (macOS hdr=12)
+        /* cmsg_len is the SENDER's record length and the two hosts disagree about whether the kernel
+         * clamps it to what it actually delivered.  Measured, three SCM_RIGHTS descriptors received into
+         * a one-descriptor control buffer: Linux reports msg_controllen=24 cmsg_len=24 and delivers the
+         * two descriptors that fit; Darwin reports msg_controllen=16 cmsg_len=24 and delivers ONE, so
+         * cmsg_len claims two descriptors that were never written.  Trusting it reads past the control
+         * buffer and hands the guest -- or close()s, on the truncation path below -- whatever integers
+         * happen to follow it.  Clamp every record to the bytes the kernel actually reported. */
+        const uint8_t *control_base = (const uint8_t *)mh->msg_control;
+        size_t record_offset = (size_t)((const uint8_t *)c - control_base);
+        size_t delivered = (size_t)mh->msg_controllen > record_offset + CMSG_LEN(0)
+                               ? (size_t)mh->msg_controllen - record_offset - CMSG_LEN(0)
+                               : 0;
+        if (dlen > delivered) {
+            if (truncp) *truncp = 1; // the record is short: the guest must see MSG_CTRUNC either way
+            dlen = delivered;
+        }
+        if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS) dlen -= dlen % sizeof(int);
+        if (dlen == 0 && c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS) break;
         if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS && dlen >= sizeof(int)) {
             int nfds = (int)(dlen / sizeof(int));
             int *fds = (int *)CMSG_DATA(c);

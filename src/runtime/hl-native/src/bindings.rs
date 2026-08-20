@@ -526,6 +526,28 @@ unsafe fn hl_x86_64_unix_identity_capture_test(fd: c_int) -> c_int {
 }
 
 #[cfg(feature = "native-test-hooks")]
+unsafe fn hl_aarch64_socket_shape_test(
+    operation: c_uint,
+    fd: c_int,
+    capacity: c_uint,
+    out: *mut u8,
+    out_length: *mut c_uint,
+) -> c_int {
+    unsafe { (test_api().aarch64_socket_shape)(operation, fd, capacity, out, out_length) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_x86_64_socket_shape_test(
+    operation: c_uint,
+    fd: c_int,
+    capacity: c_uint,
+    out: *mut u8,
+    out_length: *mut c_uint,
+) -> c_int {
+    unsafe { (test_api().x86_64_socket_shape)(operation, fd, capacity, out, out_length) }
+}
+
+#[cfg(feature = "native-test-hooks")]
 unsafe fn hl_aarch64_checkpoint_restore_claim_test(scenario: c_uint) -> c_int {
     unsafe { (test_api().aarch64_checkpoint_restore_claim)(scenario) }
 }
@@ -1105,6 +1127,19 @@ pub(crate) fn unix_identity_test(isa: u32, operation: u32, fd: i32, object: u64)
     } else {
         Err(status)
     }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn socket_shape_test(isa: u32, operation: u32, fd: i32, capacity: u32, out: &mut [u8]) -> Result<u32, i32> {
+    let mut length = u32::try_from(out.len()).unwrap_or(u32::MAX);
+    let status = unsafe {
+        match isa {
+            1 => hl_aarch64_socket_shape_test(operation, fd, capacity, out.as_mut_ptr(), &raw mut length),
+            2 => hl_x86_64_socket_shape_test(operation, fd, capacity, out.as_mut_ptr(), &raw mut length),
+            _ => return Err(libc::EINVAL),
+        }
+    };
+    if status == 0 { Ok(length) } else { Err(status) }
 }
 
 #[cfg(feature = "native-test-hooks")]
