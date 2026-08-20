@@ -1640,6 +1640,15 @@ static void reclaim_retired(void) {
 // so a later reclaim_retired() frees it once every thread has drifted off its generation.
 static int retire_current(void) {
     if (g_nretired < STW_RETIRED_MAX) {
+        /* A fork child NEVER runs in a retired arena: jit_after_fork() cache_unmap()s every entry of
+           g_retired on both the preserving and the rebuilding path, before fork_child_hooks returns and
+           long before the child's next run_block.  So the child's inherited copy of this arena is pure
+           fork cost, and on macOS the executable arena is expensive to inherit in a way plain anonymous
+           memory is not (measured: ~+0.58ms of fork() per untouched 64 MiB MAP_JIT arena, charged again
+           on EVERY subsequent fork for as long as the arena is retained).  Hand the child a hole
+           instead.  Parent-side state is untouched, which is what a peer parked mid-block in this arena
+           requires, and the child's later cache_unmap of the hole is a no-op munmap. */
+        (void)hl_arena_drop_child_inheritance(g_cache, CACHE_SZ);
         g_retired[g_nretired].handle = g_code_mapping.handle;
         g_retired[g_nretired].rw = g_cache;
         g_retired[g_nretired].rw2rx = g_rw2rx;
