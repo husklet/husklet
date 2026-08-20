@@ -145,7 +145,10 @@ static int interp_exec_branch_system(struct cpu *cpu, uint32_t insn) {
         // SIGTRAP/TRAP_BRKPT with the PC left ON it, so a handler that returns re-executes; HLT, HVC/SMC and
         // DCPS are UNDEFINED at EL0, so SIGILL.
         int signo = opc == 1 ? 5 /* SIGTRAP */ : 4 /* SIGILL */;
-        int signal_code = opc == 1 ? 1 /* TRAP_BRKPT */ : 1 /* ILL_ILLOPC */;
+        /* TRAP_BRKPT and ILL_ILLOPC are both 1, so selecting between them with a ternary is
+         * `-Werror=duplicated-branches`: two arms GCC can see are identical. The value carries
+         * both meanings and is named rather than chosen. Same shape as ENOATTR/ENODATA. */
+        int signal_code = 1; // TRAP_BRKPT when signo is SIGTRAP, ILL_ILLOPC when it is SIGILL
         cpu->pc = gpc; // the faulting instruction the guest's frame must name
         // si_addr is pcrel_base(gpc): signal_canonicalize_pc treats the frame's own pc the same way.
         interp_raise_sync_signal(cpu, signo, signal_code, pcrel_base(gpc));

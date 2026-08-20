@@ -579,6 +579,10 @@ struct ckpt_restore_process_slot {
     int guest_sid;
     _Atomic pid_t host_pid;
     _Atomic int state;
+    // The stage `state` held when this member failed. A failure overwrites `state` with FAILED, which is
+    // the one fact the reader already has from `error` and the `failed` counter -- and it destroyed the
+    // only fact that says WHERE, so the report read `stage=failed(12)` and named no stage at all.
+    _Atomic int reached;
     _Atomic int error;
 };
 
@@ -653,6 +657,8 @@ static void ckpt_restore_commit_report(int expected) {
         struct ckpt_restore_process_slot *slot = &g_restore_commit->process[index];
         pid_t host = atomic_load_explicit(&slot->host_pid, memory_order_acquire);
         int state = atomic_load_explicit(&slot->state, memory_order_acquire);
+        // A slot that never failed has reached exactly the stage it is in, so one format serves both.
+        int reached = state == CKPT_RESTORE_FAILED ? atomic_load_explicit(&slot->reached, memory_order_acquire) : state;
         int error = atomic_load_explicit(&slot->error, memory_order_acquire);
         int alive = 0;
 #if defined(WNOWAIT)
@@ -670,8 +676,9 @@ static void ckpt_restore_commit_report(int expected) {
 #else
         alive = host > 0 && (host == getpid() || kill(host, 0) == 0 || errno == EPERM);
 #endif
-        fprintf(stderr, "[restore] slot gpid=%d host=%d alive=%d stage=%s(%d) error=%d\n", slot->guest_pid, (int)host,
-                alive, ckpt_restore_state_name(state), state, error);
+        fprintf(stderr, "[restore] slot gpid=%d host=%d alive=%d stage=%s(%d) reached=%s(%d) error=%d\n",
+                slot->guest_pid, (int)host, alive, ckpt_restore_state_name(state), state,
+                ckpt_restore_state_name(reached), reached, error);
     }
     errno = report_errno;
 }
@@ -989,6 +996,10 @@ static void ckpt_restore_commit_failed(void) {
         int index = ckpt_restore_process_index(g_self_gpid);
         if (index >= 0) {
             atomic_store_explicit(&g_restore_commit->process[index].error, errno ? errno : EIO, memory_order_release);
+            // Preserve the stage before declaring the failure: this is the only writer that can still see it.
+            atomic_store_explicit(&g_restore_commit->process[index].reached,
+                                  atomic_load_explicit(&g_restore_commit->process[index].state, memory_order_acquire),
+                                  memory_order_release);
             atomic_store_explicit(&g_restore_commit->process[index].state, CKPT_RESTORE_FAILED, memory_order_release);
         }
         atomic_fetch_add_explicit(&g_restore_commit->failed, 1, memory_order_release);
