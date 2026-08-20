@@ -1160,7 +1160,10 @@ async fn committed_capture_leaves_no_sealed_domain_member_still_running() {
     );
     assert!(captured.checkpoint.is_some());
     let sealed = containers.executions().inspect(&member.id).await.unwrap();
-    assert!(sealed.checkpoint.is_some(), "domain member was not sealed by the capture");
+    assert!(
+        sealed.checkpoint.is_some(),
+        "domain member was not sealed by the capture"
+    );
     // `remove` refuses while the member is still registered as a live runtime process, so it
     // reports exactly the property under test without a test-only accessor.
     containers

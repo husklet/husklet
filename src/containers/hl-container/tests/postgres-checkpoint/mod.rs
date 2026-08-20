@@ -41,12 +41,12 @@ async fn postgres_survives_three_product_checkpoint_cycles() -> Result<(), Error
     )
     .await;
     let outcome = append_failure_diagnostics(outcome, || async {
-            let diagnostics = tokio::time::timeout(Duration::from_secs(3), fixture.failure_diagnostics())
-                .await
-                .unwrap_or_else(|_| "PostgreSQL failure diagnostics exceeded 3s".to_owned());
-            diagnostics
-        })
-        .await;
+        let diagnostics = tokio::time::timeout(Duration::from_secs(3), fixture.failure_diagnostics())
+            .await
+            .unwrap_or_else(|_| "PostgreSQL failure diagnostics exceeded 3s".to_owned());
+        diagnostics
+    })
+    .await;
     finish(outcome, fixture.cleanup().await)
 }
 
@@ -71,9 +71,7 @@ mod tests {
         assert!(!process::readiness_succeeded("0\n"));
         assert!(process::readiness_succeeded("1\n"));
         let command = process::readiness_command();
-        assert!(command.starts_with(
-            "test \"$(sed -n '1p' '/var/lib/postgresql/data/postmaster.pid')\" = 1 && exec "
-        ));
+        assert!(command.starts_with("test \"$(sed -n '1p' '/var/lib/postgresql/data/postmaster.pid')\" = 1 && exec "));
         assert!(command.contains(READINESS_SQL));
     }
 

@@ -101,14 +101,24 @@ impl Notice {
                 .map(|failure| format!("  \u{2022} {}", summarize(failure))),
         );
         lines.push("Everything else came back. Run a command again when you need it live.".to_owned());
-        lines
-            .into_iter()
-            .map(|line| format!("{NOTICE_PREFIX}{line}\n"))
-            .collect()
+        let mut notice = String::new();
+        for line in lines {
+            notice.push_str(NOTICE_PREFIX);
+            notice.push_str(&line);
+            notice.push('\n');
+        }
+        notice
     }
 
     /// The same notice, dimmed for a terminal that understands SGR styling.
     pub(super) fn for_terminal(summary: &str) -> String {
-        summary.lines().map(|line| format!("{DIM}{line}{RESET}\n")).collect()
+        let mut styled = String::new();
+        for line in summary.lines() {
+            styled.push_str(DIM);
+            styled.push_str(line);
+            styled.push_str(RESET);
+            styled.push('\n');
+        }
+        styled
     }
 }

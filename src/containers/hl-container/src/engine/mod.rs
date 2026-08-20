@@ -512,7 +512,6 @@ impl Runtime for Engine {
             }
             Some(crate::service::CheckpointRole::DomainMember) | None => None,
         };
-        let checkpointable = checkpoint.is_some();
         let engine = Arc::new(
             match (checkpoint, member) {
                 (Some(transport), _) => hl_engine::runtime::Engine::with_checkpoint(
@@ -556,8 +555,7 @@ impl Runtime for Engine {
             child: StdMutex::new(Some(engine)),
             logs: StdMutex::new(Some(receiver)),
             domain: spec.domain,
-            checkpointable,
-            domain_channel,
+            _domain_channel: domain_channel,
             members,
         }))
     }

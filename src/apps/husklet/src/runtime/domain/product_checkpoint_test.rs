@@ -372,7 +372,7 @@ async fn continue_later_restores_the_primary_sleep_tree_across_repeated_cycles()
     };
     fixture.phase(format!("load={}", observed_load()));
     let total = Instant::now();
-    let outcome = run_cycles(&mut fixture).await;
+    let outcome = run_cycles(&mut fixture);
     if let Err(error) = outcome {
         fixture.phase(format!("total_failed_ms={} error={error}", total.elapsed().as_millis()));
         fixture.preserve_failure(error.as_ref());
@@ -381,7 +381,7 @@ async fn continue_later_restores_the_primary_sleep_tree_across_repeated_cycles()
     fixture.phase(format!("total_ms={}", total.elapsed().as_millis()));
 }
 
-async fn run_cycles(fixture: &mut Fixture) -> TestResult {
+fn run_cycles(fixture: &mut Fixture) -> TestResult {
     let progress = fixture.rootfs.join("tmp/husklet-continue-progress");
     let identities = fixture.rootfs.join("tmp/husklet-continue-identities");
     let fresh = fixture.rootfs.join("tmp/husklet-continue-fresh-start");
