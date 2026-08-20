@@ -80,12 +80,7 @@ fn address(name: &[u8], abstract_name: bool) -> (libc::sockaddr_un, libc::sockle
 /// two blocks whose rationale would be the same sentence twice.
 type AddressCall = unsafe extern "C" fn(libc::c_int, *const libc::sockaddr, libc::socklen_t) -> libc::c_int;
 
-fn apply_address(
-    syscall: AddressCall,
-    descriptor: i32,
-    address: &libc::sockaddr_un,
-    length: libc::socklen_t,
-) -> i32 {
+fn apply_address(syscall: AddressCall, descriptor: i32, address: &libc::sockaddr_un, length: libc::socklen_t) -> i32 {
     // SAFETY: `address` is borrowed for the whole call and both syscalls copy out of it rather than
     // retaining it, so nothing outlives the borrow. `length` is the value `address()` computed for THAT
     // struct and is never larger than it, so the kernel's copy cannot run past the object. `descriptor`
@@ -192,12 +187,7 @@ fn identity(isa: u32, operation: u32, descriptor: i32, object: u64) -> (u64, u64
         .unwrap_or_else(|status| panic!("ISA {isa} identity operation {operation} failed at {status}"))
 }
 
-fn reciprocal_connection(
-    isa: u32,
-    listener: &UnixListener,
-    address: &libc::sockaddr_un,
-    length: libc::socklen_t,
-) {
+fn reciprocal_connection(isa: u32, listener: &UnixListener, address: &libc::sockaddr_un, length: libc::socklen_t) {
     let client = socket();
     let client_object = 0x1000_0000_0000_0000_u64 | u64::from(isa);
     let (local, reserved_peer, hidden) = identity(isa, PREPARE, client.as_raw_fd(), client_object);
