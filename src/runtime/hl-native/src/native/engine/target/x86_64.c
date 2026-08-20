@@ -856,6 +856,32 @@ static int soft_tlb_miss(struct cpu *c) {
         c->soft_last = last;
     }
     c->soft_page = address & ~UINT64_C(4095);
+    /*
+     * Every soft-TLB entry is a standing grant: once published, the emitted
+     * guard serves EVERY later access inside [soft_page, soft_last) inline,
+     * with no further C.  Both branches above reach this one point, so it is
+     * where the whole-engine invariant belongs -- no entry authorises a byte
+     * the accessibility ledger refuses -- rather than in each branch that
+     * happens to widen the grant.  aarch64 holds the same invariant in
+     * aarch64_soft_tlb_install (translate/trace.c).  It matters because on a
+     * host whose granule is wider than the guest page the ledger is the ONLY
+     * record that a 4 KiB munmap happened: the containing host page stays
+     * mapped to keep a live neighbour, so the view table, host_range_mapped
+     * and the store preflight all answer "present".  Clamp the grant to the
+     * accessible prefix; fault when the access itself does not fit inside it.
+     */
+    if (c->soft_last > c->soft_page) {
+        uint64_t granted = c->soft_last - c->soft_page;
+        uint64_t accessible = gna_prefix(c->soft_page, granted);
+        if (accessible < granted) {
+            uint64_t limit = c->soft_page + accessible;
+            if (limit <= address || width > limit - address) {
+                c->fault_addr = limit > address ? limit : address;
+                return raise_guest_data_map_fault(c);
+            }
+            c->soft_last = limit;
+        }
+    }
     c->soft_snapshot = snapshot != NULL ? (uint64_t)(uintptr_t)snapshot : 1;
     /* Publish the same entry the single-entry cache held into the slot for the
        accessed page.  The emitted guard's page tag makes the slot self-

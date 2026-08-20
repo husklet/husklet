@@ -83,6 +83,7 @@ static void jit_guest_soft_restore_deactivate(void);
 static void jit_guest_soft_deactivate(void);
 static int jit_guest_soft_active(void);
 static int gna_hit(uint64_t address, uint64_t length);
+static uint64_t gna_prefix(uint64_t address, uint64_t length);
 static void gna_filter(uint64_t *first, uint64_t *last);
 
 hl_status hl_run_linux_guest_status(void) {
