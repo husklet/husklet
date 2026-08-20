@@ -72,7 +72,10 @@ impl Guest {
     /// # Errors
     /// Returns why no connection arrived.
     pub fn accept(&self) -> Result<UnixStream, Fault> {
-        let (stream, _) = self.listener.accept().map_err(|error| Fault::Socket(error.to_string()))?;
+        let (stream, _) = self
+            .listener
+            .accept()
+            .map_err(|error| Fault::Socket(error.to_string()))?;
         Ok(stream)
     }
 

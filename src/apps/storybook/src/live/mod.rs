@@ -6,17 +6,17 @@
 
 use std::os::unix::net::UnixStream;
 
-use hl_gui::{Renderer, Tree};
-use hl_gui_gtk::Surface as Widgets;
 use hl_extension::port::ContainerSummary;
 use hl_extension::{
     Authority, Capability, ChannelId, ExtensionName, Frame, Grant, Kind, Limits, Reply, Request, Session, Transit,
     Welcome, Wire, WorkspaceInfo, PROTOCOL,
 };
+use hl_gui::{Renderer, Tree};
+use hl_gui_gtk::Surface as Widgets;
 
 mod host;
-mod producer;
 mod process;
+mod producer;
 
 use host::Workspace;
 
