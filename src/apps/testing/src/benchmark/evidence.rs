@@ -379,45 +379,60 @@ fn host_quiet(max_load: f64, box_path: &Path, lock_held: bool) -> Result<bool, E
     {
         busy |= process_name_prefix_count("hl_engine-")? != 0;
     }
-    let allowed_holders = u64::from(lock_held);
-    Ok(!busy && load <= max_load && box_lock_holder_count(box_path)? == allowed_holders)
+    Ok(!busy && load <= max_load && box_lock_occupancy_matches(box_path, lock_held)?)
 }
 
-#[cfg(target_os = "linux")]
-fn box_lock_holder_count(path: &Path) -> Result<u64, Error> {
-    use std::os::unix::fs::MetadataExt as _;
-
-    let target = fs::metadata(path)?;
-    let device = target.dev();
-    count_lock_records(
-        &fs::read_to_string("/proc/locks")?,
-        rustix::fs::major(device),
-        rustix::fs::minor(device),
-        target.ino(),
-    )
-}
-
-#[cfg(target_os = "linux")]
-fn count_lock_records(records: &str, major: u32, minor: u32, inode: u64) -> Result<u64, Error> {
-    let mut count = 0;
-    for line in records.lines() {
-        let fields = line.split_ascii_whitespace().collect::<Vec<_>>();
-        // A record prefixed by `->` is a waiter chained beneath the lock that
-        // blocks it, not another holder. Counting waiters makes a compliant
-        // builder waiting on our exclusive lock look like competing load.
-        if fields.get(1).is_some_and(|field| *field == "->") {
-            continue;
+/// Answers whether the box lock is occupied exactly as this lane expects: by
+/// nobody before it acquires, and by itself alone once it has.
+///
+/// The answer comes from the lock, not from `/proc/locks`. That table cannot
+/// support the question, in three independently measured ways. It is a seq_file
+/// over a per-CPU list enumerated by ordinal position, and reading it takes six
+/// to ten `read` calls, each of which re-enters the list at an ordinal; a lock
+/// inserted or removed ahead of that ordinal shifts every later record, so a
+/// lock held for the entire read is silently skipped. Measured on this box
+/// against a lock that never moved, 2000 observations per configuration: 48,
+/// 245, 610 and 627 misses, and also 0 -- the rate depends on where the
+/// observed record falls in an order nothing here controls, which is why no
+/// bounded test can summon it. A single-call read is atomic but stops at one
+/// page, 4062 bytes of a 12097-byte table, trading skipping for truncation.
+/// And the table lists lock families that cannot contend at all: an OFD lock
+/// on the box file prints a record against the same device and inode while a
+/// second description takes `LOCK_EX` straight through it.
+///
+/// A `flock` attempt on an independent open file description asks the question
+/// the harness actually needs answered -- can this box be taken right now -- in
+/// one kernel operation, and it reaches the lock the same way an acquiring lane
+/// does. That also makes it notice the one documented way to break the box
+/// protocol: if the lockfile is unlinked and recreated while this lane holds it,
+/// the probe opens the replacement inode, acquires, and reports the mismatch
+/// instead of certifying a box this lane no longer owns.
+fn box_lock_occupancy_matches(path: &Path, held_by_this_lane: bool) -> Result<bool, Error> {
+    let probe = open_lock(path)?;
+    // An exclusive hold already excludes every other holder, so what is worth
+    // confirming is that the hold is real and still reached through this name:
+    // a shared acquisition on an independent description must be refused.
+    // Named through `fs2` on both arms: `File` has inherent `try_lock_shared`
+    // and `unlock` of its own, and letting the two arms resolve to different
+    // owners is how this pair stops type-checking.
+    let attempt = if held_by_this_lane {
+        fs2::FileExt::try_lock_shared(&probe)
+    } else {
+        fs2::FileExt::try_lock_exclusive(&probe)
+    };
+    match attempt {
+        Ok(()) => {
+            // Release on the descriptor rather than on close. A `flock` lives on
+            // the open file description, so a sibling thread's `fork` between the
+            // probe and its close keeps the probe's own lock registered until the
+            // child execs -- measured at 1.0% of closes in a process spawning
+            // children, and never without one.
+            fs2::FileExt::unlock(&probe)?;
+            Ok(!held_by_this_lane)
         }
-        let Some(device) = fields.iter().copied().find(|field| field.matches(':').count() == 2) else {
-            return Err("/proc/locks record omitted its device and inode".into());
-        };
-        let mut fields = device.split(':');
-        let observed_major = u32::from_str_radix(fields.next().ok_or("lock device omitted major")?, 16)?;
-        let observed_minor = u32::from_str_radix(fields.next().ok_or("lock device omitted minor")?, 16)?;
-        let observed_inode = fields.next().ok_or("lock device omitted inode")?.parse::<u64>()?;
-        count += u64::from((observed_major, observed_minor, observed_inode) == (major, minor, inode));
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(held_by_this_lane),
+        Err(error) => Err(format!("cannot probe {}: {error}", path.display()).into()),
     }
-    Ok(count)
 }
 
 #[cfg(target_os = "linux")]
@@ -439,11 +454,6 @@ fn process_name_prefix_count(prefix: &str) -> Result<u64, Error> {
         }
     }
     Ok(count)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn box_lock_holder_count(_path: &Path) -> Result<u64, Error> {
-    Err("box-lock holder counting requires Linux procfs".into())
 }
 
 #[cfg(test)]
@@ -573,32 +583,68 @@ mod tests {
         assert!(started.elapsed() < Duration::from_millis(300));
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
-    fn holder_count_observes_locks_not_merely_open_descriptors() {
+    fn box_occupancy_separates_an_open_descriptor_from_a_lock() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("box");
         let held = super::open_lock(&path).unwrap();
-        assert_eq!(super::box_lock_holder_count(&path).unwrap(), 0);
+        assert!(super::box_lock_occupancy_matches(&path, false).unwrap());
         fs2::FileExt::lock_shared(&held).unwrap();
-        assert_eq!(super::box_lock_holder_count(&path).unwrap(), 1);
-        drop(held);
-        assert_eq!(super::box_lock_holder_count(&path).unwrap(), 0);
+        assert!(!super::box_lock_occupancy_matches(&path, false).unwrap());
+        // Released on the descriptor, not by closing it. A `flock` belongs to the
+        // open file description, so any sibling thread that forks while this one
+        // holds the lock keeps it registered until the child execs; measured at
+        // 1.0% of closes in a process spawning children, and 0 of 4000 without.
+        fs2::FileExt::unlock(&held).unwrap();
+        assert!(super::box_lock_occupancy_matches(&path, false).unwrap());
+    }
+
+    #[test]
+    fn box_occupancy_refuses_a_hold_that_does_not_exclude_others() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("box");
+        let held = super::open_lock(&path).unwrap();
+        // A shared hold occupies the box lock exactly as an exclusive hold does,
+        // and a count of holders cannot tell the two apart. A lane that acquired
+        // shared would be certified as the box's sole occupant while every
+        // builder on the machine remains free to join it -- which is the
+        // measurement running through someone else's build.
+        fs2::FileExt::lock_shared(&held).unwrap();
+        assert!(!super::box_lock_occupancy_matches(&path, true).unwrap());
+        fs2::FileExt::unlock(&held).unwrap();
+        fs2::FileExt::lock_exclusive(&held).unwrap();
+        assert!(super::box_lock_occupancy_matches(&path, true).unwrap());
     }
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn proc_lock_parser_matches_device_and_inode_exactly() {
-        let records = concat!(
-            "1: FLOCK ADVISORY WRITE 12 00:2a:99 0 EOF\n",
-            "2: POSIX ADVISORY READ 13 00:2a:100 0 EOF\n",
-            "3: FLOCK ADVISORY READ 14 01:2a:99 0 EOF\n",
-            "3: -> FLOCK ADVISORY WRITE 15 00:2a:99 0 EOF\n",
-        );
-        assert_eq!(super::count_lock_records(records, 0, 0x2a, 99).unwrap(), 1);
-        assert_eq!(super::count_lock_records(records, 0, 0x2a, 100).unwrap(), 1);
-        assert_eq!(super::count_lock_records(records, 2, 0x2a, 99).unwrap(), 0);
-        assert!(super::count_lock_records("1: FLOCK ADVISORY WRITE 12 missing 0 EOF\n", 0, 0, 0).is_err());
+    fn box_occupancy_ignores_a_lock_family_that_cannot_contend() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("box");
+        let stranger = super::open_lock(&path).unwrap();
+        // An open-file-description lock is listed in `/proc/locks` against the
+        // same device and inode as the box lock, and `flock` acquires straight
+        // through it. Counting records would report a holder that blocks nobody.
+        rustix::fs::fcntl_lock(&stranger, rustix::fs::FlockOperation::NonBlockingLockExclusive).unwrap();
+        assert!(super::box_lock_occupancy_matches(&path, false).unwrap());
+        let held = super::open_lock(&path).unwrap();
+        fs2::FileExt::try_lock_exclusive(&held).unwrap();
+        assert!(!super::box_lock_occupancy_matches(&path, false).unwrap());
+    }
+
+    #[test]
+    fn box_occupancy_reports_a_lockfile_replaced_beneath_the_lane() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("box");
+        let held = super::open_lock(&path).unwrap();
+        fs2::FileExt::lock_exclusive(&held).unwrap();
+        assert!(super::box_lock_occupancy_matches(&path, true).unwrap());
+        // Deleting the path releases nothing, so the lane still holds the lock --
+        // on an inode the name no longer reaches. Every later lane acquires the
+        // replacement immediately and both believe they own the box.
+        std::fs::remove_file(&path).unwrap();
+        drop(super::open_lock(&path).unwrap());
+        assert!(!super::box_lock_occupancy_matches(&path, true).unwrap());
     }
 
     #[test]

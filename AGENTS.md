@@ -92,6 +92,22 @@ So run the gate **after** merging, not only before, and run it on the tip you
 are about to push. A `cargo check --workspace --all-targets` is a minute and
 catches this whole class.
 
+**Push the SHA you gated, not the branch name.** On a `main` that nine lanes
+merge into continuously, "the tip you are about to push" moves while you are
+gating it. A lane gated `653e2595b`, watched nine arms go green over twenty
+minutes, ran `git push origin main`, and shipped `0c84f1909` -- two sibling
+merges had landed in the gap, the second carrying four ungated C files. Nothing
+warned it; `git push` reports the range it sent, which is the first and only
+place the extra commits appear, and by then they are on the remote.
+
+    git push origin <gated-sha>:main
+
+pushes exactly what was verified and **fails** if the remote has moved past it,
+which is the outcome you want -- it turns a silent widening of the push into a
+non-fast-forward you must go and look at. Re-read `git rev-parse main` right
+before pushing if you use the branch name anyway, and compare it to the commit
+you gated.
+
 `--bins` is not optional. `cargo test --workspace --lib` alone runs **no** test
 in a crate that has no library target, and `testing` is bin-only: `cargo test -p
 testing --lib` answers `no library targets found in package testing`, silently
