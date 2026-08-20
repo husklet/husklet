@@ -983,6 +983,11 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
     load_program(argv[0], &lm, &li, &jump, &at_base, &have_interp, image_plan);
     // try to restore the arena from the persistent cache.
     if (g_pcache) {
+        /* Persistence boundary: arm and latch the ledger before anything is
+           restored or translated, so every block this run persists carries
+           guards and no later mapping activation can rotate the arena out
+           from under a restored one. See hl_guest_bus_arm_latched. */
+        jit_guest_bus_arm_latched();
         g_pc_entry = jump;
         int hit = pcache_load(jump); // graceful MISS on any stale/corrupt/truncated cache -> translate fresh
         if (g_coldprof) fprintf(stderr, "[pcache] %s reloc=%d\n", hit ? "HIT" : "MISS", g_nreloc);

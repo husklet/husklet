@@ -79,6 +79,11 @@ void jit_guest_bus_bind(hl_guest_bus_query query, int active, uint64_t generatio
     hl_target_bus_bind(&g_target_bus, query, active, generation);
 }
 
+void jit_guest_bus_arm_latched(void) {
+    if (g_target_bus.guest.ops == NULL) hl_target_bus_init(&g_target_bus, &bus_ops, NULL);
+    hl_target_bus_arm_latched(&g_target_bus);
+}
+
 int jit_guest_bus_active(void) {
     return hl_target_bus_active(&g_target_bus);
 }

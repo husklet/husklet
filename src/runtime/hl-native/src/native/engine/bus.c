@@ -68,6 +68,44 @@ void hl_guest_bus_changed(hl_guest_bus *b, uint64_t g, int active) {
     atomic_store_explicit(&b->latched, 1, memory_order_release);
 }
 
+/* The persistence boundary.  A run that PRODUCES a persistent translated-code
+   image, or one that CONSUMES one, arms the ledger and latches it before the
+   guest entry point is reached, for the whole life of the process.
+
+   Two properties are being bought, and both are about the 0 -> 1 edge rather
+   than about guards.
+
+   Every persisted block carries guards.  A saved arena outlives the process
+   that wrote it, so the ledger state it was translated under is not knowable
+   by the process that restores it.  Arming the producer makes "guarded" an
+   invariant of the file format instead of a property of one run's mapping
+   history.
+
+   No later activation edge exists to rotate on.  `hl_guest_bus_changed` only
+   invokes `activate` on a 0 -> 1 transition, so a bus that is already armed
+   absorbs every later arm without a stop-the-world flush, and the latch
+   absorbs every disarm.  Without this, `ld.so`'s first past-EOF library
+   mapping arms the bus AFTER `pcache_load` has restored, and the resulting
+   rotation discards the entire restored arena -- a warm cache that costs its
+   load time and returns nothing.
+
+   This is not a weakening.  It is the same state the bus already enters, for
+   the rest of the process, whenever an activation flush fails or no
+   invalidation callback is installed; the safety argument above this function
+   calls it "exactly the old behaviour".  Arming early can only add guards to
+   blocks that would otherwise have had none, and a guard is a runtime query
+   against the live ledger, so a guarded block is correct under either ledger
+   state.  It costs the disarmed-translation fast path and the codegen
+   specializations that decline to run while armed; that is the trade the
+   caller opts into by asking for a persistent cache.
+
+   Order matters: latch first, so a disarm racing in from a mapping teardown is
+   suppressed rather than landing between the two stores. */
+void hl_guest_bus_arm_latched(hl_guest_bus *b) {
+    atomic_store_explicit(&b->latched, 1, memory_order_release);
+    hl_guest_bus_changed(b, BUS_GENERATION(atomic_load_explicit(&b->state, memory_order_acquire)), 1);
+}
+
 void hl_guest_bus_bind(hl_guest_bus *b, hl_guest_bus_query q, int a, uint64_t g) {
     b->query = q;
     hl_guest_bus_changed(b, g, a);

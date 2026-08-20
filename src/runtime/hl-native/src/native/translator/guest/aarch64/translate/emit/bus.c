@@ -63,6 +63,13 @@ static void emit_a64_bus_guard_saved(uint64_t bytes, uint64_t pc) {
     memcpy(g_cp, &pc, sizeof(pc));
     g_cp += sizeof(pc);
     uint8_t *resume_slot = g_cp;
+    /* The stub reloads this slot and branches through it, so it is an absolute
+       pointer into the live RX alias of THIS arena. A persisted arena is
+       restored at a different RX base, so record it: without this the shared
+       stub branches into the writing process's address space the first time a
+       restored guard takes its slow path -- which is EVERY guard once the
+       ledger is armed. */
+    pcache_record_bus_resume(resume_slot);
     g_cp += sizeof(uint64_t);
     uint8_t *resume_fast = g_cp;
     uint64_t resume_rx = (uint64_t)J_RX(resume_fast);

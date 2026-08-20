@@ -355,6 +355,11 @@ static void pcache_relocate(uint64_t saved_block_return) {
 // truncation, short read, or allocation failure it returns 0 (graceful MISS -> caller translates fresh).
 static int pcache_load(uint64_t entry_jump) {
     if (g_force_base_failed) return 0; // #210: fixed-base map fell back -> live layout != file's baked base
+    // Every persisted block was translated under an armed ledger, so it carries memory guards; a restored
+    // arena is only sound in a process whose ledger is armed and latched for good. The launch path does
+    // that before it gets here -- refuse rather than restore guarded code into a bus that can still take a
+    // 0 -> 1 edge and rotate it away, or a disarmed one whose later arm would have nothing to invalidate.
+    if (!jit_guest_bus_active()) return 0;
     char path[1024];
     if (!pcache_file(path, sizeof path)) return 0;
     void *image = NULL;
@@ -493,6 +498,7 @@ static void pcache_save(void) {
     if (!g_pcache || hl_identity_digest_empty(&g_pc_binid) || g_cp == g_cache) return;
     if (g_force_base_failed) return; // #210: mixed-base arena (a fixed-VA image map fell back) -> not revivable
     if (g_pcache_poison) return;     // arena has un-recorded baked host pointers -> not safely relocatable
+    if (!jit_guest_bus_active()) return; // unguarded blocks must never reach a file that outlives this process
     // NEVER save from a fork child. jit_after_fork rebuilt a FRESH EMPTY arena in the child, but
     // the g_reloc table (and binid/entry identity) survived the fork -- a child save would persist the
     // PARENT's reloc offsets against the child's re-translated arena, and the next load's relocation pass
