@@ -213,6 +213,7 @@ static int gbus_add(uint64_t lo, uint64_t hi) {
     (void)pthread_once(&g_bus_atfork_once, gbus_atfork_install);
     gbus_lock();
     (void)gbus_clear_locked(lo, hi);
+    (void)gbus_parked_clear_locked(lo, hi); // a fresh arm supersedes any parked coverage here
     int ok = g_ngbus < GNA_MAX;
     if (ok)
         g_gbus[g_ngbus++] = (struct guest_bus_range){lo, hi};
@@ -232,7 +233,92 @@ static void gbus_clear(uint64_t lo, uint64_t hi) {
     if (hi <= lo) return;
     gbus_lock();
     int changed = gbus_clear_locked(lo, hi);
+    /* The range is genuinely gone (unmapped, replaced, or grown back into the
+       file), so parked coverage must go with it: a later mapping reusing this
+       address must never resurrect the old past-EOF verdict. */
+    (void)gbus_parked_clear_locked(lo, hi);
     if (changed && g_ngbus == 0 && !g_bus_fail_closed) gbus_page_reset_locked();
+    if (changed) gbus_filter_rebuild_locked();
+    uint64_t generation = changed ? atomic_fetch_add_explicit(&g_bus_generation, 1, memory_order_release) + 1
+                                  : atomic_load_explicit(&g_bus_generation, memory_order_relaxed);
+    int active = g_ngbus != 0 || g_bus_fail_closed || g_bus_prepares != 0;
+    if (changed)
+        atomic_store_explicit(&g_bus_filter_force, g_bus_prepares != 0 ? 3 : (active ? 1 : 0), memory_order_release);
+    gbus_unlock();
+    if (changed) gbus_notify(generation, active);
+}
+
+/* mprotect(PROT_NONE): the guest cannot reach these bytes at all, and Linux
+   classifies a touch as a permission fault long before it consults the page
+   cache, so no SIGBUS can be raised here.  Move the ledger's coverage of
+   [lo,hi) aside instead of arming the translated guard for it.  Purely a
+   relaxation of the live set, so it needs no prepare/STW -- exactly like
+   gbus_clear. */
+static void gbus_park(uint64_t lo, uint64_t hi) {
+    if (hi <= lo) return;
+    gbus_lock();
+    int changed = 0;
+    for (int index = 0; index < g_ngbus; ++index) {
+        uint64_t base = g_gbus[index].lo, end = g_gbus[index].hi;
+        if (lo >= end || hi <= base) continue;
+        gbus_parked_append_locked(base > lo ? base : lo, end < hi ? end : hi);
+        changed = 1;
+    }
+    if (changed) {
+        (void)gbus_clear_locked(lo, hi);
+        if (g_ngbus == 0 && !g_bus_fail_closed) gbus_page_reset_locked();
+        gbus_filter_rebuild_locked();
+    }
+    uint64_t generation = changed ? atomic_fetch_add_explicit(&g_bus_generation, 1, memory_order_release) + 1
+                                  : atomic_load_explicit(&g_bus_generation, memory_order_relaxed);
+    int active = g_ngbus != 0 || g_bus_fail_closed || g_bus_prepares != 0;
+    if (changed)
+        atomic_store_explicit(&g_bus_filter_force, g_bus_prepares != 0 ? 3 : (active ? 1 : 0), memory_order_release);
+    gbus_unlock();
+    if (changed) gbus_notify(generation, active);
+}
+
+static int gbus_parked_overlap(uint64_t lo, uint64_t hi) {
+    if (hi <= lo) return 0;
+    gbus_lock();
+    int found = 0;
+    for (int index = 0; index < g_ngbus_parked; ++index)
+        if (lo < g_gbus_parked[index].hi && hi > g_gbus_parked[index].lo) {
+            found = 1;
+            break;
+        }
+    gbus_unlock();
+    return found;
+}
+
+/* mprotect back to an accessible protection restores the SIGBUS contract for
+   the still-past-EOF bytes: move the parked coverage of [lo,hi) back into the
+   live ledger.  This ARMS the guard, so the caller wraps it in the same
+   prepare/STW transaction a mapping that arms the ledger uses. */
+static void gbus_unpark(uint64_t lo, uint64_t hi) {
+    if (hi <= lo) return;
+    gbus_lock();
+    int changed = 0;
+    for (int index = 0; index < g_ngbus_parked;) {
+        uint64_t base = g_gbus_parked[index].lo, end = g_gbus_parked[index].hi;
+        if (lo >= end || hi <= base) {
+            index++;
+            continue;
+        }
+        uint64_t first = base > lo ? base : lo, last = end < hi ? end : hi;
+        /* Removing the intersection can split entry `index` and move entries
+           behind it, so rescan from the start; each pass strictly shrinks the
+           parked coverage of [lo,hi), so this terminates. */
+        (void)gbus_parked_clear_locked(first, last);
+        (void)gbus_clear_locked(first, last);
+        if (g_ngbus < GNA_MAX)
+            g_gbus[g_ngbus++] = (struct guest_bus_range){first, last};
+        else
+            g_bus_fail_closed = 1;
+        gbus_page_mark_locked(first, last);
+        changed = 1;
+        index = 0;
+    }
     if (changed) gbus_filter_rebuild_locked();
     uint64_t generation = changed ? atomic_fetch_add_explicit(&g_bus_generation, 1, memory_order_release) + 1
                                   : atomic_load_explicit(&g_bus_generation, memory_order_relaxed);
@@ -665,6 +751,7 @@ static void gna_reset(void) {
     gbus_lock();
     int changed = g_ngbus != 0 || g_bus_fail_closed || g_bus_prepares != 0;
     atomic_store_explicit(&g_ngbus, 0, memory_order_release);
+    g_ngbus_parked = 0;
     g_bus_fail_closed = 0;
     g_bus_prepares = 0;
     gbus_page_reset_locked();

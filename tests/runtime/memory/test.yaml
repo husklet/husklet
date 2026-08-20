@@ -237,6 +237,14 @@ cases:
     artifact: { destination: /opt/husklet/memory/file-eof-bus }
     run: []
     expect: { exit: 0, stdout: golden/eof_bus.out }
+  - id: runtime/memory/protnone-eof-bus
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/protnone_bus.c, output: protnone-eof-bus, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/protnone-eof-bus }
+    run: []
+    expect: { exit: 0, stdout: golden/protnone_bus.out }
   - id: runtime/memory/truncate-eof-bus
     targets: [arm64, amd64]
     status: active
