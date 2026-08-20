@@ -481,11 +481,20 @@ static int jail_open_plan(int dirfd, const char *raw, uint32_t intent, uint32_t 
              hl_case_path(case_root, case_absolute, case_physical, sizeof case_physical) != 0 ||
              strcmp(case_physical + 1, relative) != 0))
             route_root = HL_HOST_HANDLE_INVALID;
+        /* Equal spellings are not enough on their own, exactly as the paragraph above says: the host
+         * resolver splices a symlink's target itself, and that target is a guest name this namespace
+         * never projected, so it lands on whichever cased sibling the volume folds it onto -- `Link ->
+         * CaseFile` read `casefile`. Refuse a symlink here and let the per-component walk, which
+         * resplices a target through `hl_case_component`, keep the answer it already has. An ordinary
+         * image tree resolves without a symlink and keeps the collapse. */
+        uint32_t route_policy = policy | HL_HOST_RESOLVE_NO_SYMLINKS;
+#else
+        uint32_t route_policy = policy;
 #endif
         if (route_root != HL_HOST_HANDLE_INVALID &&
             g_host_services->file
-                    ->resolve_beneath(g_host_services->context, route_root, relative, strlen(relative), policy,
-                                      &resolved)
+                    ->resolve_beneath(g_host_services->context, route_root, relative, strlen(relative),
+                                      route_policy, &resolved)
                     .status == HL_STATUS_OK) {
             plan->directory = resolved.parent;
             plan->target = resolved.target;
