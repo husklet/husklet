@@ -1,7 +1,7 @@
 use super::{
-    CLAIM, COMMIT, CaptureFailure, CapturePhase, GROUP_BEGIN, GROUP_COMMIT, MEMBER_EXITED, MEMBER_RESTORED,
-    OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, REGISTER_READY, RELEASE_EXIT,
-    RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply, Request, Server,
+    CAPTURE_REFUSED, CLAIM, COMMIT, CaptureFailure, CapturePhase, GROUP_BEGIN, GROUP_COMMIT, MEMBER_EXITED,
+    MEMBER_RESTORED, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, REGISTER_READY,
+    RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply, Request, Server,
     participants::{ExecutorId, ProcessIdentity},
 };
 use std::{
@@ -49,16 +49,24 @@ impl Server {
     }
 
     pub(super) fn fail(&self, message: String) {
+        self.fail_as(message, CaptureFailure::Failed);
+    }
+
+    /// Fail whatever capture or recovery is running, under a named failure.
+    ///
+    /// Separated from `fail` so a DECIDED refusal is not reported as a breakage: the two reach the
+    /// caller as different errors, and only the refusal has a reason to quote.
+    pub(super) fn fail_as(&self, message: String, failure: CaptureFailure) {
         hl_log::hl_error!(hl_log::tag::CHECKPOINT, "{message}");
         let phase = self.capture_lock().ok().map(|capture| capture.phase);
         match phase {
             Some(CapturePhase::Active { id, .. }) => {
-                if self.finish_failed(id, CaptureFailure::Failed).is_err() {
+                if self.finish_failed(id, failure).is_err() {
                     self.interrupt_channels();
                 }
             }
             Some(CapturePhase::Recovery { id, .. }) => {
-                if self.fail_recovery(id, CaptureFailure::Failed).is_err() {
+                if self.fail_recovery(id, failure).is_err() {
                     self.interrupt_channels();
                 }
             }
@@ -175,6 +183,28 @@ impl Server {
                     return;
                 }
                 continue;
+            }
+            if request.op == CAPTURE_REFUSED {
+                // A DECIDED failure, not a stalled one. The coordinator has already made up its mind and
+                // is about to exit; without this the broker learned nothing, the peers parked out their
+                // hold and resumed holding their channels open, and the client waited its whole deadline
+                // over a decision taken seconds earlier -- then reported an error naming none of it.
+                //
+                // Answered before the membership and scope checks for the same reason RELEASE_WAIT is:
+                // a process that refuses publishes nothing, so requiring it to have proven membership
+                // first would drop exactly the refusals taken before registration.
+                let reason = if name.is_empty() {
+                    "the engine refused the capture without naming a reason".to_owned()
+                } else {
+                    name.clone()
+                };
+                self.record_refusal(reason.clone());
+                let _ = Reply::ok().write(&mut channel);
+                self.fail_as(
+                    format!("checkpoint capture refused by the engine: {reason}"),
+                    CaptureFailure::Refused,
+                );
+                return;
             }
             if request.op == MEMBER_RESTORED {
                 // Scope-checked like every other publication: only a restore may name a restored

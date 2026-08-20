@@ -72,6 +72,10 @@ name = "checkpoint_pipe_capture"
 required-features = ["native-test-hooks"]
 
 [[test]]
+name = "checkpoint_stdio_alias"
+required-features = ["native-test-hooks"]
+
+[[test]]
 name = "checkpoint_socket_halfclose"
 required-features = ["native-test-hooks"]
 

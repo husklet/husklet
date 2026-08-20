@@ -41,6 +41,14 @@ static int ckpt_stream_call(uint32_t op, const char *name, uint64_t stream, uint
     return reply->status;
 }
 
+// Tell the host that this capture has been REFUSED, and by what. Best effort and never load-bearing for
+// correctness: the refusal itself is already decided and the coordinator exits regardless. What it buys is
+// that the host fails the capture on the decision rather than on its own deadline, and can name the reason.
+static void ckpt_stream_capture_refused(const char *reason) {
+    if (reason == NULL || reason[0] == 0) reason = "the coordinator refused the capture";
+    (void)ckpt_stream_call(HL_CKPT_OP_CAPTURE_REFUSED, reason, 0, 0, 0, NULL, 0, NULL, NULL, 0);
+}
+
 static int ckpt_stream_recovery_complete(void) {
     return ckpt_stream_call(HL_CKPT_OP_RECOVERY_COMPLETE, NULL, 0, 0, 0, NULL, 0, NULL, NULL, 0) ==
                    HL_CKPT_STATUS_OK

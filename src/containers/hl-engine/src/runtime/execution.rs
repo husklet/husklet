@@ -457,7 +457,7 @@ impl CheckpointControl {
             Ok(result) => {
                 self.phases.finish(capture, "completion_wait", completion);
                 self.phases.terminal(capture, u32::from(result.is_err()));
-                result.map_err(|failure| Self::capture_failure_with_exit(engine, failure))
+                result.map_err(|failure| self.capture_failure_reported(engine, failure))
             }
             Err(failure) => {
                 self.phases.terminal(capture, 1);
@@ -491,8 +491,29 @@ impl CheckpointControl {
             super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
             super::checkpoint::CaptureFailure::Unfinalized => EngineError::CheckpointGenerationUnfinalized,
             super::checkpoint::CaptureFailure::Failed => EngineError::CaptureFailed,
+            super::checkpoint::CaptureFailure::Refused => EngineError::CaptureRefused,
             super::checkpoint::CaptureFailure::Poisoned => EngineError::CapturePoisoned,
         }
+    }
+
+    /// The error a failed capture reaches the caller as, having first said what the engine said.
+    ///
+    /// A refusal is a DECISION the engine already explained, and the explanation is the whole value of
+    /// it. Sending one through the exit-status probe below would replace that explanation with a bare
+    /// `CheckpointExited`, which is exactly how a named cause used to become an anonymous one on the
+    /// way out of the engine.
+    fn capture_failure_reported(
+        &self,
+        engine: &hl_native::Engine,
+        failure: super::checkpoint::CaptureFailure,
+    ) -> EngineError {
+        if failure == super::checkpoint::CaptureFailure::Refused {
+            if let Some(reason) = self.server.capture_refusal() {
+                hl_log::hl_error!(hl_log::tag::CHECKPOINT, "checkpoint refused by the engine: {reason}");
+            }
+            return EngineError::CaptureRefused;
+        }
+        Self::capture_failure_with_exit(engine, failure)
     }
 
     fn capture_failure_with_exit(

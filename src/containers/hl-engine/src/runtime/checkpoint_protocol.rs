@@ -38,6 +38,10 @@ pub(super) const MEMBER_RESTORED: u32 = 22;
 /// A restored member reports its own guest exit status on its way out. Payload is
 /// `[i32 status][u32 kind]`.
 pub(super) const MEMBER_EXITED: u32 = 23;
+/// The coordinator has DECIDED not to publish this capture, and says why: the name is the reason,
+/// the same text the engine writes to its own stderr. It is what turns a decided refusal into a
+/// host-side failure at the moment of the decision rather than at the host's own deadline.
+pub(super) const CAPTURE_REFUSED: u32 = 24;
 
 /// What a parked member must do next. `RELEASE_WAIT` answers with exactly one of
 /// these, and it is the only thing that ends a park.

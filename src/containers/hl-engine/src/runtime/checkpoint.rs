@@ -30,10 +30,10 @@ mod test;
 mod transaction;
 use participants::ParticipantLedger;
 use protocol::{
-    CLAIM, COMMIT, DIGEST, GROUP_ABORT, GROUP_BEGIN, GROUP_COMMIT, GROUP_COUNT, GROUP_PRESENT, MEMBER_EXITED,
-    MEMBER_RESTORED, OBJECT_ABORT, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT,
-    PAYLOAD_MAX, RECOVERY_COMPLETE, REGISTER_READY, RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT,
-    REQUEST_BYTES, Reply, Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, STATUS_ALREADY, UNCLAIM,
+    CAPTURE_REFUSED, CLAIM, COMMIT, DIGEST, GROUP_ABORT, GROUP_BEGIN, GROUP_COMMIT, GROUP_COUNT, GROUP_PRESENT,
+    MEMBER_EXITED, MEMBER_RESTORED, OBJECT_ABORT, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE,
+    OBJECT_WRITE_AT, PAYLOAD_MAX, RECOVERY_COMPLETE, REGISTER_READY, RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME,
+    RELEASE_WAIT, REQUEST_BYTES, Reply, Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, STATUS_ALREADY, UNCLAIM,
 };
 
 const HASH_BASIS: u64 = 14_695_981_039_346_656_037;
@@ -61,6 +61,10 @@ struct State {
 pub(crate) enum CaptureFailure {
     Deadline,
     Failed,
+    /// The engine decided not to publish this capture and said why. Distinct from `Failed` because it
+    /// is a decision with a recoverable reason (`Server::capture_refusal`) rather than a breakage, and
+    /// because it is reported at the moment of the decision rather than at a deadline.
+    Refused,
     Poisoned,
     Busy,
     /// The generation the byte store offered for recovery is not finalized, so
@@ -141,6 +145,12 @@ pub(crate) struct Server {
     /// running, which is when a host begins needing to reach into it.
     members: Arc<members::RestoredMembers>,
     participants: Mutex<Option<ParticipantLedger>>,
+    /// Why the engine refused the last capture, in its own words.
+    ///
+    /// A refusal used to exist only as a `[ckpt] refuse:` line on the engine's stderr, so every
+    /// host-side report of a failed capture named the failure and not the cause. The coordinator now
+    /// sends the reason before it exits, and this is where it is held for the report.
+    refusal: Mutex<Option<String>>,
     committed: AtomicBool,
     running: AtomicBool,
     connections: AtomicUsize,
@@ -169,6 +179,7 @@ impl Server {
             recovery_connections: Mutex::new(HashMap::new()),
             members: Arc::new(members::RestoredMembers::default()),
             participants: Mutex::new(None),
+            refusal: Mutex::new(None),
             committed: AtomicBool::new(false),
             running: AtomicBool::new(true),
             connections: AtomicUsize::new(0),
@@ -176,6 +187,20 @@ impl Server {
             dispatches: AtomicUsize::new(0),
             #[cfg(test)]
             accepts: AtomicUsize::new(0),
+        }
+    }
+
+    /// Why the engine refused the last capture, in the coordinator's own words, or `None` when no
+    /// refusal was reported for it.
+    #[must_use]
+    pub(crate) fn capture_refusal(&self) -> Option<String> {
+        self.refusal.lock().ok().and_then(|reason| reason.clone())
+    }
+
+    /// Record a refusal reason the coordinator reported, replacing whatever the previous capture left.
+    pub(super) fn record_refusal(&self, reason: String) {
+        if let Ok(mut held) = self.refusal.lock() {
+            *held = Some(reason);
         }
     }
 

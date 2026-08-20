@@ -90,6 +90,42 @@ static _Noreturn void ckpt_phase_exit(const struct ckpt_phase_ledger *ledger, in
     _exit(status);
 }
 
+/* Why the coordinator refused, as a value the parent can read. The reason TEXT goes to the host over the
+   channel; this is the durable, enumerable half of the same answer, carried in the child result's detail. */
+enum ckpt_refusal_reason {
+    CKPT_REFUSAL_RESOURCES = 1,        /* the coordinator could not allocate what enumeration needs */
+    CKPT_REFUSAL_PEER_ENUMERATION = 2, /* the live peer set could not be read */
+    CKPT_REFUSAL_PEER_QUIESCENCE = 3,  /* a participant never committed its group */
+    CKPT_REFUSAL_SELF_DUMP = 4,        /* the init's own dump failed */
+    CKPT_REFUSAL_PROCESS_COUNT = 5,    /* the committed group count is not the membership */
+    CKPT_REFUSAL_FOREGROUND_GROUP = 6, /* the tty foreground group is outside the restored namespace */
+    CKPT_REFUSAL_DIGEST = 7,           /* the image digest could not be taken */
+    CKPT_REFUSAL_MANIFEST = 8,         /* the manifest could not be published */
+};
+
+/* Refuse the capture, saying why, and exit.
+ *
+ * Three things happen here that a bare `ckpt_phase_exit(ledger, 70)` did not do, and the absence of all
+ * three is what made every checkpoint defect expensive:
+ *
+ *  - the reason reaches the HOST. It used to exist only as a `[ckpt] refuse:` line on the engine's stderr,
+ *    so the embedder reported HL_STATUS_CORRUPT with detail 0 -- "the coordinator died" -- and named nothing.
+ *  - the host FAILS THE CAPTURE NOW. The coordinator aborted only its own group and exited; nothing told
+ *    the broker, so peers parked, resumed, and held their channels open, and the client waited out its
+ *    entire 30s deadline over a decision taken at 0.3s. The deadline is not the problem and is not touched:
+ *    it was being waited out for nothing.
+ *  - the parent gets an enumerable status instead of a corrupt-record fallback.
+ *
+ * Best effort in this order deliberately: the stderr line is written first, so a refusal is still diagnosed
+ * when the channel is the thing that broke. */
+static _Noreturn void ckpt_coordinator_refuse(const struct ckpt_phase_ledger *ledger, enum ckpt_refusal_reason code,
+                                              const char *reason) {
+    fprintf(stderr, "[ckpt] refuse: %s\n", reason);
+    ckpt_stream_capture_refused(reason);
+    hl_engine_child_result_publish(0, HL_STATUS_NOT_SUPPORTED, (uint64_t)code);
+    ckpt_phase_exit(ledger, 70);
+}
+
 static int ckpt_fd_was_captured(const struct ckpt_fd *records, int count, int fd) {
     for (int prior = 0; prior < count; ++prior)
         if (records[prior].gfd == fd) return 1;
@@ -189,6 +225,29 @@ HL_API int HL_TARGET_LOCAL(unix_identity_capture_test)(int fd) {
 }
 #endif
 
+/* Which launch-time standard descriptor, if any, `snapshot` names the same OPEN FILE DESCRIPTION as.
+ *
+ * The runtime around this engine owns stdin/stdout/stderr, and a restored engine is handed a fresh bridge
+ * for them. A guest that duplicates one of those descriptors elsewhere holds the SAME object, not a
+ * guest-created pipe: busybox ash's savefd moves the stdout it is about to redirect to the first free
+ * descriptor at or above 10 for the duration of `printf x >> file`, so a capture landing inside that
+ * window sees the runtime's own stdout pipe at fd 10. Keying the stdio exemption on the descriptor
+ * NUMBER refused those captures outright, which is why the refusal was intermittent and load-correlated.
+ *
+ * Identity is the open file description, so this exempts nothing a guest created: a pipe the guest opened
+ * has an OFD of its own and is still refused.
+ *
+ * Returns the standard descriptor number, or -1 when `snapshot` names a distinct object. */
+static int ckpt_stdio_alias(const hl_linux_fd_snapshot *snapshot, int fd) {
+    if (snapshot == NULL || fd <= STDERR_FILENO || snapshot->ofd == 0 || g_linux_box == NULL) return -1;
+    for (int standard = STDIN_FILENO; standard <= STDERR_FILENO; standard++) {
+        hl_linux_fd_snapshot known;
+        if (hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)standard, &known) != HL_STATUS_OK) continue;
+        if (known.ofd != 0 && known.ofd == snapshot->ofd) return standard;
+    }
+    return -1;
+}
+
 static int ckpt_capture_typed_fd(struct ckpt_fd *records, int *count, int fd) {
     hl_linux_fd_snapshot snapshot;
     if (g_linux_box == NULL || hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)fd, &snapshot) != HL_STATUS_OK)
@@ -229,9 +288,19 @@ static int ckpt_capture_typed_fd(struct ckpt_fd *records, int *count, int fd) {
         /* Launch-time stdio is owned by the runtime around this engine.  A restored engine receives a
          * fresh stdin/stdout/stderr bridge, just as it receives a fresh pty; rebuilding those descriptors
          * as an isolated guest pipe would disconnect logs and eventually block the guest. */
-        if (fd >= 0 && fd <= 2) {
+        if (fd >= 0 && fd <= STDERR_FILENO) {
             r.kind = CKF_TTY;
             r.offset = 0;
+            records[(*count)++] = r;
+            return CKPT_FD_CAPTURED;
+        }
+        int alias = ckpt_stdio_alias(&snapshot, fd);
+        if (alias >= 0) {
+            /* Restored as a duplicate of the standard descriptor whose open file description it shares,
+             * so the guest's own save/restore of that descriptor still names the runtime's bridge. */
+            r.kind = CKF_TTY;
+            r.offset = 0;
+            r.auxiliary |= CKFA_STDIO_ALIAS | ((uint64_t)alias << CKFA_STDIO_ALIAS_SHIFT);
             records[(*count)++] = r;
             return CKPT_FD_CAPTURED;
         }
@@ -290,6 +359,133 @@ static int ckpt_capture_typed_fd(struct ckpt_fd *records, int *count, int fd) {
     records[(*count)++] = r;
     return CKPT_FD_CAPTURED;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+#include "../../bridge/host.h"
+
+// ------------------------------------------- stdio aliasing under capture: behavioral fixture
+//
+// Drives the REAL ckpt_capture_typed_fd against a REAL guest descriptor table built over REAL kernel
+// pipes, in the exact shape the intermittent close failure had: the runtime's own stdout pipe reachable
+// at a high guest descriptor because the guest duplicated it there.
+//
+// busybox ash's savefd moves the stdout it is about to redirect to the first free descriptor at or above
+// 10 for the duration of `printf x >> file`. A capture landing in that window used to refuse the whole
+// checkpoint with "guest fd 10 is a pipe", because the stdio exemption tested the descriptor NUMBER.
+// Scenario 0 is that capture. Scenario 1 is the half that stops the fix from being a widening: a pipe
+// the GUEST created, at a descriptor of its own, is still refused -- it prints the refusal, which is the
+// expected output of that scenario and not a fixture failure.
+struct ckpt_stdio_alias_test_box {
+    hl_linux_abi box;
+    hl_linux_fd_entry *fds;
+    hl_linux_ofd_entry *ofds;
+    hl_native_host *host;
+    hl_host_services services;
+};
+
+static int ckpt_stdio_alias_test_install(struct ckpt_stdio_alias_test_box *fixture, int native_fd, int guest_fd,
+                                         uint32_t status_flags) {
+    hl_host_result imported = hl_c_bridge_host_import_file((hl_c_bridge_host *)fixture->host, native_fd,
+                                                           (status_flags & O_ACCMODE) == O_RDONLY
+                                                               ? HL_HOST_FILE_READ
+                                                               : HL_HOST_FILE_WRITE);
+    if (imported.status != HL_STATUS_OK) return -1;
+    if (hl_linux_fd_install_at(&fixture->box, (hl_linux_fd)guest_fd, imported.value, status_flags, 0) !=
+        HL_STATUS_OK) {
+        (void)fixture->services.file->close(fixture->services.context, imported.value);
+        return -1;
+    }
+    return 0;
+}
+
+HL_API int HL_TARGET_LOCAL(checkpoint_stdio_alias_capture_test)(uint32_t scenario) {
+    if (scenario > 1) return -22;
+    struct ckpt_stdio_alias_test_box fixture;
+    memset(&fixture, 0, sizeof fixture);
+    hl_linux_abi *saved_box = g_linux_box;
+    int runtime_stdio[2] = {-1, -1};
+    int guest_pipe[2] = {-1, -1};
+    int verdict = 99;
+
+    if (hl_native_host_create(&fixture.host, &fixture.services) != HL_STATUS_OK) return 10;
+    fixture.fds = calloc(HL_LINUX_FD_LIMIT, sizeof(*fixture.fds));
+    fixture.ofds = calloc(HL_LINUX_OFD_LIMIT, sizeof(*fixture.ofds));
+    if (fixture.fds == NULL || fixture.ofds == NULL ||
+        hl_linux_abi_init(&fixture.box, &fixture.services, fixture.fds, HL_LINUX_FD_LIMIT, fixture.ofds,
+                          HL_LINUX_OFD_LIMIT) != HL_STATUS_OK) {
+        verdict = 11;
+        goto release;
+    }
+    g_linux_box = &fixture.box;
+    if (pipe(runtime_stdio) != 0 || pipe(guest_pipe) != 0) {
+        verdict = 12;
+        goto release;
+    }
+    // The runtime's own stdio bridge: a pipe, exactly as hl-container hands one to a headless launch.
+    if (ckpt_stdio_alias_test_install(&fixture, runtime_stdio[0], 0, O_RDONLY) != 0 ||
+        ckpt_stdio_alias_test_install(&fixture, runtime_stdio[1], 1, O_WRONLY) != 0 ||
+        ckpt_stdio_alias_test_install(&fixture, runtime_stdio[1], 2, O_WRONLY) != 0) {
+        verdict = 13;
+        goto release;
+    }
+    // savefd: dup guest fd 1 upward until it lands at 10, then drop the rungs. Every one of these shares
+    // fd 1's OPEN FILE DESCRIPTION; fd 2 above holds an independent one over the same kernel pipe, so a
+    // fix keying on the pipe object rather than on the description would not satisfy this fixture.
+    for (int rung = 3; rung <= 10; ++rung) {
+        hl_linux_fd landed = 0;
+        if (hl_linux_fd_dup(&fixture.box, 1, 0, &landed) != HL_STATUS_OK || (int)landed != rung) {
+            verdict = 14;
+            goto release;
+        }
+    }
+    for (int rung = 3; rung < 10; ++rung)
+        (void)hl_linux_fd_close(&fixture.box, (hl_linux_fd)rung, NULL);
+    // A pipe the guest itself created, at a descriptor of its own.
+    if (ckpt_stdio_alias_test_install(&fixture, guest_pipe[1], 11, O_WRONLY) != 0) {
+        verdict = 15;
+        goto release;
+    }
+
+    struct ckpt_fd records[4];
+    memset(records, 0, sizeof records);
+    int count = 0;
+    if (scenario == 0) {
+        if (ckpt_capture_typed_fd(records, &count, 10) != CKPT_FD_CAPTURED || count != 1) {
+            verdict = 20;
+            goto release;
+        }
+        if (records[0].gfd != 10 || records[0].kind != CKF_TTY) {
+            verdict = 21;
+            goto release;
+        }
+        if ((records[0].auxiliary & CKFA_STDIO_ALIAS) == 0 ||
+            (int)((records[0].auxiliary >> CKFA_STDIO_ALIAS_SHIFT) & CKFA_STDIO_ALIAS_MASK) != 1) {
+            verdict = 22;
+            goto release;
+        }
+        verdict = 0;
+    } else {
+        if (ckpt_capture_typed_fd(records, &count, 11) != CKPT_FD_CAPTURE_ERROR || count != 0) {
+            verdict = 30;
+            goto release;
+        }
+        verdict = 0;
+    }
+
+release:
+    for (int fd = 0; fd <= 11; ++fd) (void)hl_linux_fd_close(&fixture.box, (hl_linux_fd)fd, NULL);
+    g_linux_box = saved_box;
+    (void)hl_linux_abi_destroy(&fixture.box);
+    free(fixture.fds);
+    free(fixture.ofds);
+    hl_native_host_destroy(fixture.host);
+    for (int index = 0; index < 2; ++index) {
+        if (runtime_stdio[index] >= 0) (void)close(runtime_stdio[index]);
+        if (guest_pipe[index] >= 0) (void)close(guest_pipe[index]);
+    }
+    return verdict;
+}
+#endif
 
 static int ckpt_capture_native_fd(struct ckpt_fd *records, int *count, const struct fdvis_view *view) {
     int fd = view->guest_fd;
@@ -1264,13 +1460,18 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     size_t peer_capacity = 512;
     hl_host_process_peer *foll = malloc(peer_capacity * sizeof *foll);
     size_t observed = 0;
-    if (foll == NULL) ckpt_phase_exit(&phases, 70);
+    if (foll == NULL)
+        ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_RESOURCES, "cannot allocate the peer enumeration buffer");
     for (;;) {
-        if (!ckpt_live_process_peers(foll, peer_capacity, &observed)) ckpt_phase_exit(&phases, 70);
+        if (!ckpt_live_process_peers(foll, peer_capacity, &observed))
+            ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_PEER_ENUMERATION, "cannot enumerate the live peer set");
         if (observed <= peer_capacity) break;
-        if (observed > (size_t)INT_MAX || observed > SIZE_MAX / sizeof *foll) ckpt_phase_exit(&phases, 70);
+        if (observed > (size_t)INT_MAX || observed > SIZE_MAX / sizeof *foll)
+            ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_PEER_ENUMERATION,
+                                    "the live peer set is larger than the coordinator can address");
         hl_host_process_peer *expanded = realloc(foll, observed * sizeof *foll);
-        if (expanded == NULL) ckpt_phase_exit(&phases, 70);
+        if (expanded == NULL)
+            ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_RESOURCES, "cannot grow the peer enumeration buffer");
         foll = expanded;
         peer_capacity = observed;
     }
@@ -1290,7 +1491,8 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
                 kicked ? "interrupted" : "NOT interrupted (it cannot reach a safepoint)");
     }
     unsigned char *completed = calloc((size_t)(nfoll ? nfoll : 1), 1);
-    if (completed == NULL) ckpt_phase_exit(&phases, 70);
+    if (completed == NULL)
+        ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_RESOURCES, "cannot allocate the rendezvous ledger");
     int ndone = 0;
     for (int t = 0; t < 500 && ndone != nfoll; t++) { // one whole-tree deadline: at most ~5s total
         for (int i = 0; i < nfoll; i++) {
@@ -1310,23 +1512,34 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     }
     if (ndone != nfoll) {
         // Name every participant still outstanding at the rendezvous deadline: "the group never committed"
-        // is otherwise indistinguishable from "nothing was ever asked to commit".
+        // is otherwise indistinguishable from "nothing was ever asked to commit". The host is told about
+        // the first one by name, because a reason it cannot act on is barely better than no reason.
+        char reason[HL_CKPT_STREAM_NAME_MAX];
+        int named = 0;
         for (int i = 0; i < nfoll; i++)
-            if (!completed[i])
+            if (!completed[i]) {
                 fprintf(stderr,
                         "[ckpt] participant %lld never committed proc.%d (it did not reach a checkpoint "
                         "safepoint, or its dump was refused); refusing incomplete manifest\n",
                         (long long)foll[i].identity, ckpt_peer_gpid(foll[i].identity));
-        ckpt_phase_exit(&phases, 70);
+                if (!named) {
+                    named = 1;
+                    snprintf(reason, sizeof reason,
+                             "%d of %d participants never committed their group; the first is process %lld "
+                             "(proc.%d), which did not reach a checkpoint safepoint or had its dump refused",
+                             nfoll - ndone, nfoll, (long long)foll[i].identity, ckpt_peer_gpid(foll[i].identity));
+                }
+            }
+        if (!named) snprintf(reason, sizeof reason, "a participant never committed its group");
+        ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_PEER_QUIESCENCE, reason);
     }
     ckpt_phase_finish(&phases, "peer_quiescence", phase, 0);
 
     // Dump ourselves (the init) last.
     phase = ckpt_phase_begin(&phases);
-    if (ckpt_dump_self(c, "proc.1", 0) != 0) {
-        fprintf(stderr, "[ckpt] init dump FAILED -- checkpoint incomplete\n");
-        ckpt_phase_exit(&phases, 70);
-    }
+    if (ckpt_dump_self(c, "proc.1", 0) != 0)
+        ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_SELF_DUMP,
+                                "the container init's own dump failed; the checkpoint would be incomplete");
     ckpt_phase_finish(&phases, "serialization", phase, 0);
 
     // Publish the MANIFEST last: its presence == a complete, restorable checkpoint.
@@ -1340,9 +1553,10 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     int nproc = ckpt_sink_group_count(sink, "proc.");
     ckpt_phase_finish(&phases, "settlement", phase, 0);
     if (nproc != nfoll + 1) {
-        fprintf(stderr, "[ckpt] process-count mismatch: expected exactly %d, captured %d; refusing manifest\n",
-                nfoll + 1, nproc);
-        ckpt_phase_exit(&phases, 70);
+        char reason[HL_CKPT_STREAM_NAME_MAX];
+        snprintf(reason, sizeof reason,
+                 "process-count mismatch: expected exactly %d committed groups, captured %d", nfoll + 1, nproc);
+        ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_PROCESS_COUNT, reason);
     }
     struct ckpt_manifest man;
     phase = ckpt_phase_begin(&phases);
@@ -1363,8 +1577,8 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
             man.fg_pgid_gpid = 0;
         else if (hl_linux_pidmap_guest_checked(&g_pgidmap, (int32_t)fgh, &man.fg_pgid_gpid) != 0) {
             ckpt_ctty_close(tf);
-            fprintf(stderr, "[ckpt] foreground process group is outside restored namespace\n");
-            ckpt_phase_exit(&phases, 70);
+            ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_FOREGROUND_GROUP,
+                                    "the terminal's foreground process group is outside the restored namespace");
         } else if (!hl_linux_pidmap_is_active(&g_pgidmap) && g_init_hostpid && fgh == g_init_hostpid)
             man.fg_pgid_gpid = 1;
         if (tf >= 0 && tcgetattr(tf, &tio) == 0) {
@@ -1383,13 +1597,15 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     // The digest is asked of the sink: the server accumulated it while the bytes went past, so nothing
     // re-reads the embedder's store.
     if (ckpt_sink_digest(sink, &man.image_hash, &man.image_files, &man.image_bytes) != 0) {
-        fprintf(stderr, "[ckpt] cannot hash checkpoint image: %s\n", strerror(errno));
-        ckpt_phase_exit(&phases, 70);
+        char reason[HL_CKPT_STREAM_NAME_MAX];
+        snprintf(reason, sizeof reason, "cannot hash the checkpoint image: %s", strerror(errno));
+        ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_DIGEST, reason);
     }
     // Explicit completion: the only signal that the image is complete.
     if (ckpt_sink_commit(sink, &man, sizeof man) != 0) {
-        fprintf(stderr, "[ckpt] cannot publish checkpoint manifest: %s\n", strerror(errno));
-        ckpt_phase_exit(&phases, 70);
+        char reason[HL_CKPT_STREAM_NAME_MAX];
+        snprintf(reason, sizeof reason, "cannot publish the checkpoint manifest: %s", strerror(errno));
+        ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_MANIFEST, reason);
     }
     ckpt_phase_finish(&phases, "manifest_publication", phase, 0);
     fprintf(stderr, "[ckpt] checkpoint OK: %d process(es)\n", nproc);

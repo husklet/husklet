@@ -97,6 +97,12 @@ struct ckpt_cpu_header {
 #define CKF_SIGNALFD 12   // signalfd OFD mask plus unread wake-byte queue
 #define CKF_DEVICE 13     // path-backed character/block device; reconnect to current host device
 #define CKFA_DIRECTORY UINT64_C(1)
+/* A CKF_TTY record that duplicates one of the launch-time standard descriptors rather than the
+   controlling terminal. Bits 2..3 name which standard descriptor (0, 1 or 2) it duplicates. Restore
+   rebuilds it from the fresh stdio bridge the restore fork already holds instead of from the ctty. */
+#define CKFA_STDIO_ALIAS UINT64_C(2)
+#define CKFA_STDIO_ALIAS_SHIFT 2
+#define CKFA_STDIO_ALIAS_MASK UINT64_C(3)
 
 // Wire values of HL_CHECKPOINT_POLICY (HL_ENGINE_CHECKPOINT_*). Zero means the caller asked for nothing.
 enum ckpt_recovery_policy {
