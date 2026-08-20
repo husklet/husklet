@@ -189,6 +189,29 @@ HL_API int HL_TARGET_LOCAL(unix_identity_capture_test)(int fd) {
 }
 #endif
 
+/* Which launch-time standard descriptor, if any, `snapshot` names the same OPEN FILE DESCRIPTION as.
+ *
+ * The runtime around this engine owns stdin/stdout/stderr, and a restored engine is handed a fresh bridge
+ * for them. A guest that duplicates one of those descriptors elsewhere holds the SAME object, not a
+ * guest-created pipe: busybox ash's savefd moves the stdout it is about to redirect to the first free
+ * descriptor at or above 10 for the duration of `printf x >> file`, so a capture landing inside that
+ * window sees the runtime's own stdout pipe at fd 10. Keying the stdio exemption on the descriptor
+ * NUMBER refused those captures outright, which is why the refusal was intermittent and load-correlated.
+ *
+ * Identity is the open file description, so this exempts nothing a guest created: a pipe the guest opened
+ * has an OFD of its own and is still refused.
+ *
+ * Returns the standard descriptor number, or -1 when `snapshot` names a distinct object. */
+static int ckpt_stdio_alias(const hl_linux_fd_snapshot *snapshot, int fd) {
+    if (snapshot == NULL || fd <= STDERR_FILENO || snapshot->ofd == 0 || g_linux_box == NULL) return -1;
+    for (int standard = STDIN_FILENO; standard <= STDERR_FILENO; standard++) {
+        hl_linux_fd_snapshot known;
+        if (hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)standard, &known) != HL_STATUS_OK) continue;
+        if (known.ofd != 0 && known.ofd == snapshot->ofd) return standard;
+    }
+    return -1;
+}
+
 static int ckpt_capture_typed_fd(struct ckpt_fd *records, int *count, int fd) {
     hl_linux_fd_snapshot snapshot;
     if (g_linux_box == NULL || hl_linux_fd_snapshot_get(g_linux_box, (hl_linux_fd)fd, &snapshot) != HL_STATUS_OK)
@@ -229,9 +252,19 @@ static int ckpt_capture_typed_fd(struct ckpt_fd *records, int *count, int fd) {
         /* Launch-time stdio is owned by the runtime around this engine.  A restored engine receives a
          * fresh stdin/stdout/stderr bridge, just as it receives a fresh pty; rebuilding those descriptors
          * as an isolated guest pipe would disconnect logs and eventually block the guest. */
-        if (fd >= 0 && fd <= 2) {
+        if (fd >= 0 && fd <= STDERR_FILENO) {
             r.kind = CKF_TTY;
             r.offset = 0;
+            records[(*count)++] = r;
+            return CKPT_FD_CAPTURED;
+        }
+        int alias = ckpt_stdio_alias(&snapshot, fd);
+        if (alias >= 0) {
+            /* Restored as a duplicate of the standard descriptor whose open file description it shares,
+             * so the guest's own save/restore of that descriptor still names the runtime's bridge. */
+            r.kind = CKF_TTY;
+            r.offset = 0;
+            r.auxiliary |= CKFA_STDIO_ALIAS | ((uint64_t)alias << CKFA_STDIO_ALIAS_SHIFT);
             records[(*count)++] = r;
             return CKPT_FD_CAPTURED;
         }
@@ -290,6 +323,133 @@ static int ckpt_capture_typed_fd(struct ckpt_fd *records, int *count, int fd) {
     records[(*count)++] = r;
     return CKPT_FD_CAPTURED;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+#include "../../bridge/host.h"
+
+// ------------------------------------------- stdio aliasing under capture: behavioral fixture
+//
+// Drives the REAL ckpt_capture_typed_fd against a REAL guest descriptor table built over REAL kernel
+// pipes, in the exact shape the intermittent close failure had: the runtime's own stdout pipe reachable
+// at a high guest descriptor because the guest duplicated it there.
+//
+// busybox ash's savefd moves the stdout it is about to redirect to the first free descriptor at or above
+// 10 for the duration of `printf x >> file`. A capture landing in that window used to refuse the whole
+// checkpoint with "guest fd 10 is a pipe", because the stdio exemption tested the descriptor NUMBER.
+// Scenario 0 is that capture. Scenario 1 is the half that stops the fix from being a widening: a pipe
+// the GUEST created, at a descriptor of its own, is still refused -- it prints the refusal, which is the
+// expected output of that scenario and not a fixture failure.
+struct ckpt_stdio_alias_test_box {
+    hl_linux_abi box;
+    hl_linux_fd_entry *fds;
+    hl_linux_ofd_entry *ofds;
+    hl_native_host *host;
+    hl_host_services services;
+};
+
+static int ckpt_stdio_alias_test_install(struct ckpt_stdio_alias_test_box *fixture, int native_fd, int guest_fd,
+                                         uint32_t status_flags) {
+    hl_host_result imported = hl_c_bridge_host_import_file((hl_c_bridge_host *)fixture->host, native_fd,
+                                                           (status_flags & O_ACCMODE) == O_RDONLY
+                                                               ? HL_HOST_FILE_READ
+                                                               : HL_HOST_FILE_WRITE);
+    if (imported.status != HL_STATUS_OK) return -1;
+    if (hl_linux_fd_install_at(&fixture->box, (hl_linux_fd)guest_fd, imported.value, status_flags, 0) !=
+        HL_STATUS_OK) {
+        (void)fixture->services.file->close(fixture->services.context, imported.value);
+        return -1;
+    }
+    return 0;
+}
+
+HL_API int HL_TARGET_LOCAL(checkpoint_stdio_alias_capture_test)(uint32_t scenario) {
+    if (scenario > 1) return -22;
+    struct ckpt_stdio_alias_test_box fixture;
+    memset(&fixture, 0, sizeof fixture);
+    hl_linux_abi *saved_box = g_linux_box;
+    int runtime_stdio[2] = {-1, -1};
+    int guest_pipe[2] = {-1, -1};
+    int verdict = 99;
+
+    if (hl_native_host_create(&fixture.host, &fixture.services) != HL_STATUS_OK) return 10;
+    fixture.fds = calloc(HL_LINUX_FD_LIMIT, sizeof(*fixture.fds));
+    fixture.ofds = calloc(HL_LINUX_OFD_LIMIT, sizeof(*fixture.ofds));
+    if (fixture.fds == NULL || fixture.ofds == NULL ||
+        hl_linux_abi_init(&fixture.box, &fixture.services, fixture.fds, HL_LINUX_FD_LIMIT, fixture.ofds,
+                          HL_LINUX_OFD_LIMIT) != HL_STATUS_OK) {
+        verdict = 11;
+        goto release;
+    }
+    g_linux_box = &fixture.box;
+    if (pipe(runtime_stdio) != 0 || pipe(guest_pipe) != 0) {
+        verdict = 12;
+        goto release;
+    }
+    // The runtime's own stdio bridge: a pipe, exactly as hl-container hands one to a headless launch.
+    if (ckpt_stdio_alias_test_install(&fixture, runtime_stdio[0], 0, O_RDONLY) != 0 ||
+        ckpt_stdio_alias_test_install(&fixture, runtime_stdio[1], 1, O_WRONLY) != 0 ||
+        ckpt_stdio_alias_test_install(&fixture, runtime_stdio[1], 2, O_WRONLY) != 0) {
+        verdict = 13;
+        goto release;
+    }
+    // savefd: dup guest fd 1 upward until it lands at 10, then drop the rungs. Every one of these shares
+    // fd 1's OPEN FILE DESCRIPTION; fd 2 above holds an independent one over the same kernel pipe, so a
+    // fix keying on the pipe object rather than on the description would not satisfy this fixture.
+    for (int rung = 3; rung <= 10; ++rung) {
+        hl_linux_fd landed = 0;
+        if (hl_linux_fd_dup(&fixture.box, 1, 0, &landed) != HL_STATUS_OK || (int)landed != rung) {
+            verdict = 14;
+            goto release;
+        }
+    }
+    for (int rung = 3; rung < 10; ++rung)
+        (void)hl_linux_fd_close(&fixture.box, (hl_linux_fd)rung, NULL);
+    // A pipe the guest itself created, at a descriptor of its own.
+    if (ckpt_stdio_alias_test_install(&fixture, guest_pipe[1], 11, O_WRONLY) != 0) {
+        verdict = 15;
+        goto release;
+    }
+
+    struct ckpt_fd records[4];
+    memset(records, 0, sizeof records);
+    int count = 0;
+    if (scenario == 0) {
+        if (ckpt_capture_typed_fd(records, &count, 10) != CKPT_FD_CAPTURED || count != 1) {
+            verdict = 20;
+            goto release;
+        }
+        if (records[0].gfd != 10 || records[0].kind != CKF_TTY) {
+            verdict = 21;
+            goto release;
+        }
+        if ((records[0].auxiliary & CKFA_STDIO_ALIAS) == 0 ||
+            (int)((records[0].auxiliary >> CKFA_STDIO_ALIAS_SHIFT) & CKFA_STDIO_ALIAS_MASK) != 1) {
+            verdict = 22;
+            goto release;
+        }
+        verdict = 0;
+    } else {
+        if (ckpt_capture_typed_fd(records, &count, 11) != CKPT_FD_CAPTURE_ERROR || count != 0) {
+            verdict = 30;
+            goto release;
+        }
+        verdict = 0;
+    }
+
+release:
+    for (int fd = 0; fd <= 11; ++fd) (void)hl_linux_fd_close(&fixture.box, (hl_linux_fd)fd, NULL);
+    g_linux_box = saved_box;
+    (void)hl_linux_abi_destroy(&fixture.box);
+    free(fixture.fds);
+    free(fixture.ofds);
+    hl_native_host_destroy(fixture.host);
+    for (int index = 0; index < 2; ++index) {
+        if (runtime_stdio[index] >= 0) (void)close(runtime_stdio[index]);
+        if (guest_pipe[index] >= 0) (void)close(guest_pipe[index]);
+    }
+    return verdict;
+}
+#endif
 
 static int ckpt_capture_native_fd(struct ckpt_fd *records, int *count, const struct fdvis_view *view) {
     int fd = view->guest_fd;

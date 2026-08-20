@@ -550,6 +550,16 @@ unsafe fn hl_x86_64_checkpoint_pipe_capture_test(scenario: c_uint) -> c_int {
 }
 
 #[cfg(feature = "native-test-hooks")]
+unsafe fn hl_aarch64_checkpoint_stdio_alias_capture_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().aarch64_checkpoint_stdio_alias_capture)(scenario) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_x86_64_checkpoint_stdio_alias_capture_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().x86_64_checkpoint_stdio_alias_capture)(scenario) }
+}
+
+#[cfg(feature = "native-test-hooks")]
 unsafe fn hl_aarch64_checkpoint_socket_halfclose_test(scenario: c_uint) -> c_int {
     unsafe { (test_api().aarch64_checkpoint_socket_halfclose)(scenario) }
 }
@@ -839,6 +849,21 @@ pub(crate) fn checkpoint_pipe_capture_test(isa: u32, scenario: u32) -> Result<()
         match isa {
             1 => hl_aarch64_checkpoint_pipe_capture_test(scenario),
             2 => hl_x86_64_checkpoint_pipe_capture_test(scenario),
+            _ => return Err(-22),
+        }
+    };
+    if status == 0 { Ok(()) } else { Err(status) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn checkpoint_stdio_alias_capture_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    // SAFETY: the feature-gated hook builds its own host services, descriptor tables and kernel pipes,
+    // swaps the process-wide guest box for the duration of the call, restores it, releases everything it
+    // created, borrows no caller memory, and returns a scalar status.
+    let status = unsafe {
+        match isa {
+            1 => hl_aarch64_checkpoint_stdio_alias_capture_test(scenario),
+            2 => hl_x86_64_checkpoint_stdio_alias_capture_test(scenario),
             _ => return Err(-22),
         }
     };

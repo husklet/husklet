@@ -233,6 +233,18 @@ pub fn checkpoint_pipe_capture_test(isa: u32, scenario: u32) -> Result<(), i32> 
     bindings::checkpoint_pipe_capture_test(isa, scenario)
 }
 
+/// Exercise the stdio-alias decision under capture: that a guest descriptor sharing an open file
+/// description with the runtime's own stdin/stdout/stderr is captured as stdio rather than refused as a
+/// shared pipe, and that a pipe the guest created is still refused.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn checkpoint_stdio_alias_capture_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    // The hook swaps the process-wide guest descriptor table for the duration of the call.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    bindings::checkpoint_stdio_alias_capture_test(isa, scenario)
+}
+
 /// Exercise socket half-close across the checkpoint: that capture records the direction each endpoint
 /// closed, that a drain reading end-of-stream from a peer that is still open does not record it as closed,
 /// that a half-closed endpoint is admissible, and that the replay reproduces the kernel state measured on

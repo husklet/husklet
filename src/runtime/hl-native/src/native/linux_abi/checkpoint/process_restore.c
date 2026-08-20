@@ -413,6 +413,15 @@ static int ckpt_restore_saved_ofd(const struct ckpt_fd *record) {
 }
 
 static int ckpt_restore_tty_fd(const struct ckpt_fd *record) {
+    if (record->gfd > STDERR_FILENO && (record->auxiliary & CKFA_STDIO_ALIAS) != 0) {
+        /* A duplicate of one of the launch-time standard descriptors, not of the controlling terminal.
+           The restore fork already holds the fresh stdio bridge on that descriptor, so the alias is
+           rebuilt from it -- a container whose stdio is a runtime pipe has no ctty to rebuild it from. */
+        int standard = (int)((record->auxiliary >> CKFA_STDIO_ALIAS_SHIFT) & CKFA_STDIO_ALIAS_MASK);
+        if (dup2(standard, record->gfd) < 0) return -1;
+        if (record->descriptor_flags & FD_CLOEXEC) fcntl(record->gfd, F_SETFD, FD_CLOEXEC);
+        return 0;
+    }
     if (record->gfd > 2) {
         int ctty = ckpt_ctty_open();
         if (ctty >= 0 && record->gfd != ctty && dup2(ctty, record->gfd) >= 0 && (record->flags & FD_CLOEXEC))
