@@ -107,16 +107,25 @@
               done
               exec ${lib.escapeShellArg (ccFor guest)} $static_search "$@"
             '';
+          # The guest sqlite the compatibility guests link against cannot be cross-built from a Darwin
+          # builder: its `tcl` dependency's configure misdetects the build host and compiles
+          # `tclUnixTime.c` against `mach/mach_time.h`, which no Linux sysroot carries. So the alias
+          # forwards sqlite's include and library paths only where sqlite exists; every guest that
+          # does not link it -- `hl-native`'s `engine::tests` re-exec pair among them -- builds on
+          # both hosts through the same `<isa>-linux-gnu-gcc` spelling.
           compilerAliasFor =
             guest:
             let
               guestPkgs = pkgsFor guest;
+              sqliteFlags = lib.optionals pkgs.stdenv.isLinux [
+                "-isystem ${lib.escapeShellArg "${guestPkgs.sqlite.dev}/include"}"
+                "-L${lib.escapeShellArg "${guestPkgs.sqlite.out}/lib"}"
+              ];
             in
             pkgs.writeShellScriptBin "${guest.isa}-linux-gnu-gcc" ''
               exec ${lib.escapeShellArg (ccFor guest)} \
-                -isystem ${lib.escapeShellArg "${guestPkgs.sqlite.dev}/include"} \
                 -L${lib.escapeShellArg "${guestPkgs.glibc.static}/lib"} \
-                -L${lib.escapeShellArg "${guestPkgs.sqlite.out}/lib"} "$@"
+                ${lib.concatStringsSep " " sqliteFlags} "$@"
             '';
         in
         rec {
@@ -1283,10 +1292,12 @@
               ++ lib.optionals toolchain.canBuildGuests (
                 toolchain.crossCompilers
                 ++ toolchain.rustStaticLinkers
-                ++ lib.optionals pkgs.stdenv.isLinux (
-                  toolchain.compilerAliases
-                  ++ toolchain.guestLibraries
-                )
+                # The `<isa>-linux-gnu-gcc` aliases were Linux-only, so every test that builds a guest
+                # by that spelling -- `hl-native`'s `engine::tests` re-exec pair among them -- hard
+                # failed on the Darwin shell even though the cross compilers themselves were already
+                # in it. macOS is the host the product ships on; those tests must run there.
+                ++ toolchain.compilerAliases
+                ++ lib.optionals pkgs.stdenv.isLinux toolchain.guestLibraries
                 ++ toolchain.emulators
               );
               shellHook = ''
