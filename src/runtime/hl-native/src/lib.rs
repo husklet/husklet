@@ -12,7 +12,7 @@ mod checkpoint;
 mod engine;
 mod loader;
 mod provider;
-#[cfg(feature = "native-test-hooks")]
+#[cfg(any(feature = "native-test-hooks", windows))]
 mod test_hook;
 
 #[cfg(test)]
@@ -25,7 +25,7 @@ pub use loader::{LoadError, LoadKind};
 #[cfg(unix)]
 pub use provider::artifact_lifecycle_smoke;
 pub use provider::leak_check_nonvacuity;
-#[cfg(feature = "native-test-hooks")]
+#[cfg(any(feature = "native-test-hooks", windows))]
 pub use test_hook::*;
 
 /// Verifies that the dynamically loaded private engine exposes the ABI this Rust wrapper expects.
