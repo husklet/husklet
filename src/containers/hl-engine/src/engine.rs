@@ -176,6 +176,7 @@ impl EngineError {
     /// A checkpoint preflight polls until its deadline, which turns a permanent refusal into a
     /// full-timeout stall reported as an opaque preflight failure. A permanent refusal must be
     /// surfaced on the first observation instead.
+    #[must_use]
     pub fn is_permanent_refusal(self) -> bool {
         matches!(
             self,
