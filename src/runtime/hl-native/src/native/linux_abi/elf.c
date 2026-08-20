@@ -756,7 +756,15 @@ static void load_elf(const char *path, struct loaded *out, const struct main_pla
         exit(1);
     }
     uint8_t *f = image.bytes;
-    out->identity = hl_identity_image_digest(image.bytes, image.size);
+    // The image digest is the persistent translation cache's key and NOTHING else reads it: the only
+    // consumer is pcache_exec_reload, which returns immediately when the cache is off. Computing it
+    // unconditionally hashes the WHOLE image with software SHA-256 on every load, which is ~3.1 ms of the
+    // 13.5 ms fixed per-process exec cost for a 712 KB static guest and scales with image size. Key it on
+    // the same g_pcache the consumer keys on, so a cache-on run is byte-identical and a cache-off run
+    // stops producing a value no one will read. An empty digest is exactly what hl_identity_digest_empty
+    // already denotes.
+    out->identity = g_pcache ? hl_identity_image_digest(image.bytes, image.size)
+                             : (hl_identity_digest){0};
     hl_linux_elf64_layout layout;
     if (hl_linux_elf64_validate(&image, 0xB7, &layout) != 0) {
         hl_linux_image_release(&image);
