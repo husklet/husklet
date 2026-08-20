@@ -88,11 +88,23 @@ int hl_host_process_read(int64_t pid, hl_host_process_info *info);
 
 /* Resolve only a process's start-time identity token, writing it to start_time_ns and returning
  * non-zero on success. Equivalent to hl_host_process_read()'s start_time_ns field, but the calling
- * process's own token is memoized: it is immutable for the process's lifetime and the memo is keyed on
- * the pid it was taken under, so a fork invalidates it automatically. Peer pids are always observed
+ * process's own token is memoized: it is immutable for the process's lifetime and the memo is retired by
+ * a fork epoch, so a forked child re-reads rather than answering with its parent's token. Peer pids are always observed
  * fresh, because a remembered start time for a recycled peer pid would defeat the very reuse check the
  * token exists to perform. */
 int hl_host_process_start_time_ns(int64_t pid, uint64_t *start_time_ns);
+
+/* This process's own pid paired with its own start-time token, in one call and -- after the first --
+ * with no host syscall at all. Both fields come from a memo retired by a fork epoch that a
+ * pthread_atfork() child handler bumps, so a forked child never reports its parent's identity. Use
+ * this instead of getpid() + hl_host_process_start_time_ns(getpid(), ...) wherever the caller wants
+ * its OWN identity; it is the pair every engine-private descriptor row and fdvis owner stamp is keyed
+ * on. Returns non-zero on success. */
+int hl_host_process_self_identity(int64_t *pid, uint64_t *start_time_ns);
+
+/* Retire the self-identity memo. Registered as a pthread_atfork() child handler, and called again
+ * explicitly from the engine's own post-fork child hook. Async-signal-safe: one relaxed increment. */
+void hl_host_process_identity_after_fork(void);
 
 /* Capture real host limits and topology below guest ABI emulation. */
 int hl_host_process_resource_read(hl_host_process_resource_snapshot *snapshot);

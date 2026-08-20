@@ -733,6 +733,26 @@ static uint64_t fdvis_process_token(int pid) {
     return hl_host_process_start_time_ns(pid, &start_time_ns) ? start_time_ns : 0;
 }
 
+/* This process's own (pid, start-time token) pair. Every fdvis operation on a descriptor this process
+ * owns needs both, and resolving them as getpid() + fdvis_process_token(getpid()) cost two host calls
+ * per lock acquisition and per publish/close -- 13 of the 68 getpid() the engine issued per guest
+ * open(). hl_host_process_self_identity() serves both from a memo retired by a fork epoch, so the pair
+ * is still this process's own after any fork. PEER pids keep going through fdvis_process_token(), which
+ * never memoizes: a remembered start time on a recycled peer pid is precisely the stale ownership the
+ * owner_start_ns stamp exists to reject. */
+static int fdvis_self(int *pid, uint64_t *token) {
+    int64_t self = 0;
+    uint64_t start = 0;
+    if (!hl_host_process_self_identity(&self, &start)) {
+        *pid = (int)getpid();
+        *token = fdvis_process_token(*pid);
+        return *token != 0;
+    }
+    *pid = (int)self;
+    *token = start;
+    return 1;
+}
+
 static uint64_t fdvis_identity(int pid, uint64_t start_ns) {
     uint32_t fingerprint = (uint32_t)start_ns ^ (uint32_t)(start_ns >> 32);
     return ((uint64_t)(uint32_t)pid << 32) | fingerprint;
@@ -798,8 +818,10 @@ static struct fdvis_slot *fdvis_find(uint64_t key, uint64_t owner_start_ns, int 
 }
 
 static void fdvis_lock(void) {
-    int me = (int)getpid();
-    uint64_t mine = fdvis_identity(me, fdvis_process_token(me));
+    int me = 0;
+    uint64_t me_token = 0;
+    (void)fdvis_self(&me, &me_token);
+    uint64_t mine = fdvis_identity(me, me_token);
     for (unsigned spin = 0;; ++spin) {
         uint64_t expected = 0;
         if (atomic_compare_exchange_weak_explicit(&g_fdvis_control->owner, &expected, mine, memory_order_acquire,
@@ -880,8 +902,9 @@ static int proc_fdvis_reserve(struct fdvis_reservation *reservation) {
 }
 
 static int proc_fdvis_reserve_at(int guest_fd, struct fdvis_reservation *reservation) {
-    int pid = (int)getpid();
-    uint64_t owner_start = fdvis_process_token(pid);
+    int pid = 0;
+    uint64_t owner_start = 0;
+    (void)fdvis_self(&pid, &owner_start);
     if (!reservation) return -EINVAL;
     memset(reservation, 0, sizeof *reservation);
     if (!g_fdvis || !g_fdvis_control) return -ENOSPC;
@@ -920,8 +943,9 @@ static void proc_fdvis_reservation_cancel(struct fdvis_reservation *reservation)
 
 static void proc_fdvis_reservation_publish(struct fdvis_reservation *reservation, int guest_fd, uint32_t kind,
                                            uint64_t device, uint64_t object) {
-    int pid = (int)getpid();
-    uint64_t owner_start = fdvis_process_token(pid);
+    int pid = 0;
+    uint64_t owner_start = 0;
+    (void)fdvis_self(&pid, &owner_start);
     fdvis_lock();
     struct fdvis_slot *slot = fdvis_find(fdvis_key(pid, guest_fd), owner_start, 0);
     struct fdvis_slot *reserved = &g_fdvis[reservation->slot];
@@ -944,8 +968,9 @@ static void proc_fdvis_reservation_publish(struct fdvis_reservation *reservation
 }
 
 static int proc_fdvis_publish(int guest_fd, uint32_t kind, uint64_t device, uint64_t object) {
-    int pid = (int)getpid();
-    uint64_t owner_start = fdvis_process_token(pid);
+    int pid = 0;
+    uint64_t owner_start = 0;
+    (void)fdvis_self(&pid, &owner_start);
     if (guest_fd < 0 || guest_fd >= HL_NFD) return -EBADF;
     if (!g_fdvis_control) return -ENOSPC;
     fdvis_lock();
@@ -969,11 +994,11 @@ static int proc_fdvis_publish(int guest_fd, uint32_t kind, uint64_t device, uint
 }
 
 static void proc_fdvis_publish_path(int guest_fd) {
-    int pid = (int)getpid();
-    uint64_t owner_start;
+    int pid = 0;
+    uint64_t owner_start = 0;
     struct fdvis_slot *slot;
     if (guest_fd < 0 || guest_fd >= HL_NFD || !g_fdvis_control) return;
-    owner_start = fdvis_process_token(pid);
+    (void)fdvis_self(&pid, &owner_start);
     fdvis_lock();
     slot = fdvis_find(fdvis_key(pid, guest_fd), owner_start, 0);
     if (slot) {
@@ -992,7 +1017,10 @@ static int proc_fdvis_publish_native_fd(int guest_fd) {
 
 static int proc_fdvis_publish_pipe_pair(int first, int second) {
     uint64_t sequence = atomic_fetch_add_explicit(&g_pipe_identity_next, 1, memory_order_relaxed);
-    uint64_t identity = fdvis_identity((int)getpid(), fdvis_process_token((int)getpid())) ^ sequence;
+    int self_pid = 0;
+    uint64_t self_token = 0;
+    (void)fdvis_self(&self_pid, &self_token);
+    uint64_t identity = fdvis_identity(self_pid, self_token) ^ sequence;
     if (identity == 0) identity = sequence ? sequence : 1;
     if (first < 0 || first >= HL_NFD || second < 0 || second >= HL_NFD) return -EINVAL;
     if (proc_fdvis_publish(first, HL_HOST_FD_PIPE, 1, identity) != 0) return -ENOSPC;
@@ -1008,8 +1036,9 @@ static int proc_fdvis_publish_pipe_pair(int first, int second) {
 static void proc_fdvis_close(int guest_fd) {
     if (!g_fdvis_control) return;
     fdvis_lock();
-    int pid = (int)getpid();
-    uint64_t owner_start = fdvis_process_token(pid);
+    int pid = 0;
+    uint64_t owner_start = 0;
+    (void)fdvis_self(&pid, &owner_start);
     struct fdvis_slot *slot = fdvis_find(fdvis_key(pid, guest_fd), owner_start, 0);
     if (slot) memset(slot, 0, sizeof *slot);
     struct fdpath_slot *path = fdpath_find(fdvis_key(pid, guest_fd), owner_start, 0);

@@ -172,8 +172,9 @@ static uint64_t hl_private_cell(int fd, uint32_t references) {
 }
 
 static void hl_private_cleanup(void) {
-    int64_t pid = (int64_t)getpid();
-    uint64_t start = hl_private_process_start(pid);
+    int64_t pid = 0;
+    uint64_t start = 0;
+    (void)hl_host_process_self_identity(&pid, &start);
     for (unsigned index = 0; index < HL_PRIVATE_PROCESSES; ++index) {
         hl_private_process *process = &hl_private[index];
         if (atomic_load_explicit(&process->state, memory_order_acquire) != HL_PRIVATE_LIVE ||
@@ -211,8 +212,9 @@ __attribute__((constructor)) static void hl_private_constructor(void) {
 #endif
 
 static int hl_private_add_unlocked(int fd) {
-    int64_t pid = (int64_t)getpid();
-    uint64_t start = hl_private_process_start(pid);
+    int64_t pid = 0;
+    uint64_t start = 0;
+    (void)hl_host_process_self_identity(&pid, &start);
     if (hl_private_pid != pid || hl_private_start != start) {
         hl_private_pid = pid;
         hl_private_start = start;
@@ -266,7 +268,31 @@ int hl_host_process_fd_private_add(int fd) {
     return result;
 }
 
-int hl_host_process_fd_private_floor(void) {
+/* The private-descriptor floor is derived from the host RLIMIT_NOFILE soft limit (and, on Darwin, from
+ * kern.maxfilesperproc). hl_host_process_fd_private_adopt() calls it once per adopted descriptor, which
+ * made getrlimit 15 of the 20 the engine issued per guest open() on Linux and 20 of 20 on macOS.
+ *
+ * The host limit is provably immutable from inside this process: the guest's limits are emulated end to
+ * end in g_limits (linux_abi/container/state.c), linux_abi/host_proc.h refuses setrlimit/prlimit
+ * outright so that layer cannot even name the host call, and the only setrlimit() call site in the tree
+ * is RLIMIT_CORE in checkpoint/socket_restore.c. Limits are also inherited across fork(), so the value
+ * is correct in a child too -- but the cache is keyed on the self identity pair anyway, so a child
+ * re-derives once and can never inherit a floor stamped by a process that is not it.
+ *
+ * What that reasoning does NOT cover is an EXTERNAL prlimit(2) aimed at this process, which is the one
+ * way the soft limit can drop under us. Only a DROP is harmful -- a raised limit merely leaves the
+ * private band lower than it could be, and F_DUPFD_CLOEXEC to a lower floor still succeeds. So adopt
+ * treats a failed relocation as a reason to discard the cache and re-derive once, which restores the
+ * per-descriptor observation exactly where its absence could change an answer, and nowhere else. */
+static _Atomic int hl_private_floor_value;
+static _Atomic int64_t hl_private_floor_pid;
+static _Atomic uint64_t hl_private_floor_start;
+
+static void hl_private_floor_forget(void) {
+    atomic_store_explicit(&hl_private_floor_pid, 0, memory_order_release);
+}
+
+static int hl_private_floor_derive(void) {
     struct rlimit limit;
     if (getrlimit(RLIMIT_NOFILE, &limit) != 0) return -errno;
 #if defined(__APPLE__)
@@ -311,6 +337,22 @@ int hl_host_process_fd_private_floor(void) {
     return (int)guest;
 }
 
+int hl_host_process_fd_private_floor(void) {
+    int64_t pid = 0;
+    uint64_t start = 0;
+    int floor;
+    if (!hl_host_process_self_identity(&pid, &start) || pid <= 0) return hl_private_floor_derive();
+    if (atomic_load_explicit(&hl_private_floor_pid, memory_order_acquire) == pid &&
+        atomic_load_explicit(&hl_private_floor_start, memory_order_acquire) == start)
+        return atomic_load_explicit(&hl_private_floor_value, memory_order_acquire);
+    floor = hl_private_floor_derive();
+    if (floor < 0) return floor;
+    atomic_store_explicit(&hl_private_floor_value, floor, memory_order_release);
+    atomic_store_explicit(&hl_private_floor_start, start, memory_order_release);
+    atomic_store_explicit(&hl_private_floor_pid, pid, memory_order_release);
+    return floor;
+}
+
 uint32_t hl_engine_guest_fd_limit(void) {
     // The guest-visible fd ceiling (RLIMIT_NOFILE, /proc/self/limits) must be STABLE across hosts --
     // HL_LINUX_FD_LIMIT-capped, derived only from the host RLIMIT_NOFILE -- so goldens match on every runner.
@@ -334,7 +376,22 @@ int hl_host_process_fd_private_adopt(int fd) {
     int floor = hl_host_process_fd_private_floor();
     if (floor < 0) return floor;
     int relocated = fd >= floor ? fd : fcntl(fd, F_DUPFD_CLOEXEC, floor);
-    if (relocated < 0) return -errno;
+    if (relocated < 0) {
+        /* The floor is cached, so a relocation failure is the one moment worth paying a fresh getrlimit
+         * for: an external prlimit(2) that lowered the soft limit under us leaves the cached floor above
+         * the new ceiling and every adopt would fail forever otherwise. Re-derive and retry exactly once;
+         * a floor that did not move means the failure was the descriptor's, not the limit's. */
+        int saved = errno;
+        hl_private_floor_forget();
+        int refreshed = hl_host_process_fd_private_floor();
+        if (refreshed < 0 || refreshed == floor) {
+            errno = saved;
+            return -saved;
+        }
+        floor = refreshed;
+        relocated = fd >= floor ? fd : fcntl(fd, F_DUPFD_CLOEXEC, floor);
+        if (relocated < 0) return -errno;
+    }
     int status = hl_host_process_fd_private_add(relocated);
     if (status != 0) {
         if (relocated != fd) close(relocated);
@@ -478,8 +535,9 @@ int hl_host_process_fd_private_plan_child(const hl_host_process_fd_private_plan 
 }
 
 static void hl_private_remove_unlocked(int fd) {
-    int64_t pid = (int64_t)getpid();
-    uint64_t start = hl_private_process_start(pid);
+    int64_t pid = 0;
+    uint64_t start = 0;
+    (void)hl_host_process_self_identity(&pid, &start);
     if (!hl_private || fd < 0) return;
     for (unsigned record = 0; record < HL_PRIVATE_PROCESSES; ++record) {
         hl_private_process *process = &hl_private[record];
@@ -534,13 +592,16 @@ int hl_host_process_fd_private_is(int64_t pid, uint64_t start_ns, int fd) {
 }
 
 int hl_host_process_fd_private_current(int fd) {
-    int64_t pid = (int64_t)getpid();
-    return hl_host_process_fd_private_is(pid, hl_private_process_start(pid), fd);
+    int64_t pid = 0;
+    uint64_t start = 0;
+    (void)hl_host_process_self_identity(&pid, &start);
+    return hl_host_process_fd_private_is(pid, start, fd);
 }
 
 size_t hl_host_process_fd_private_count_current(void) {
-    int64_t pid = (int64_t)getpid();
-    uint64_t start = hl_private_process_start(pid);
+    int64_t pid = 0;
+    uint64_t start = 0;
+    (void)hl_host_process_self_identity(&pid, &start);
     size_t count = 0;
     if (!hl_private) return 0;
     for (unsigned record = 0; record < HL_PRIVATE_PROCESSES; ++record) {
@@ -556,8 +617,9 @@ size_t hl_host_process_fd_private_count_current(void) {
 }
 
 int hl_host_process_fd_private_fork_prepare(void) {
-    int64_t pid = (int64_t)getpid();
-    uint64_t start = hl_private_process_start(pid);
+    int64_t pid = 0;
+    uint64_t start = 0;
+    (void)hl_host_process_self_identity(&pid, &start);
     if (pthread_mutex_lock(&hl_private_fork_lock) != 0) return -EDEADLK;
     atomic_store_explicit(&hl_private_fork_owner, pthread_self(), memory_order_relaxed);
     atomic_store_explicit(&hl_private_fork_armed, 1, memory_order_relaxed);
@@ -618,8 +680,9 @@ int hl_host_process_fd_private_fork_prepare(void) {
 int hl_host_process_fd_private_fork_complete(int child) {
     int result = 0;
     if (child) {
-        hl_private_pid = (int64_t)getpid();
-        hl_private_start = hl_private_process_start(hl_private_pid);
+        hl_private_pid = 0;
+        hl_private_start = 0;
+        (void)hl_host_process_self_identity(&hl_private_pid, &hl_private_start);
         for (size_t index = 0; index < hl_private_fork_count; ++index) {
             int fd = (int)((uint32_t)(hl_private_fork_cells[index] >> 32) - 1u);
             uint32_t references = (uint32_t)hl_private_fork_cells[index];
