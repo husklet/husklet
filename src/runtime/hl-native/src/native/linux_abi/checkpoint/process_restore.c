@@ -456,9 +456,22 @@ static int ckpt_restore_tty_fd(const struct ckpt_fd *record) {
     }
     if (record->gfd > 2) {
         int ctty = ckpt_ctty_open();
-        if (ctty >= 0 && record->gfd != ctty && dup2(ctty, record->gfd) >= 0 && (record->flags & FD_CLOEXEC))
-            fcntl(record->gfd, F_SETFD, FD_CLOEXEC);
-        ckpt_ctty_close(ctty);
+        int bound = ctty >= 0;
+        if (ctty >= 0 && record->gfd != ctty) {
+            bound = dup2(ctty, record->gfd) >= 0;
+            if (bound && (record->flags & FD_CLOEXEC)) fcntl(record->gfd, F_SETFD, FD_CLOEXEC);
+            ckpt_ctty_close(ctty);
+        }
+        /* The guest held a terminal open at this descriptor and must still hold ONE there. A restored
+           member has no controlling terminal of its own -- nothing performs TIOCSCTTY on the terminal the
+           host creates for it -- so ckpt_ctty_open answers ENOTTY, and the descriptor was then left
+           closed, silently, by a function that reported success. busybox ash keeps its job-control
+           terminal on exactly such a descriptor (an fcntl(F_DUPFD, 10) duplicate of /dev/tty): the
+           restored interactive shell's first ioctl on it returned EBADF, ash read that as the end of its
+           input, and the pane's shell exited 0 the instant it was resumed. Fall back to this member's own
+           standard input, which ckpt_restore_bind_member_stdio has already pointed at its terminal -- the
+           same "keep what this member was given" rule that fds 0..2 follow. */
+        if (!bound && dup2(STDIN_FILENO, record->gfd) < 0) return -1;
     }
     if (record->descriptor_flags & FD_CLOEXEC) fcntl(record->gfd, F_SETFD, FD_CLOEXEC);
     return 0;

@@ -715,6 +715,16 @@ static int svc_fcntl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             fd_carry_sock(r, (int)a0);
             fd_carry_virt(r, (int)a0, &fdvis); // eventfd/timerfd share the same object across a dup
         }
+        /* A duplicate is a NEW guest descriptor and has to be announced as one, exactly as dup(2) and
+           dup3(2) are announced by the dispatcher's descriptor-allocating switch. fd_carry_virt above
+           publishes only an emulated pipe's shared identity, so every other kind -- a terminal, a file,
+           a device -- was created on the host and never entered the descriptor-visibility registry.
+           /proc/<pid>/fd then omitted it, and the checkpoint's descriptor scan, which enumerates that
+           same registry, left it out of the image: busybox ash keeps its job-control terminal on the
+           fcntl(F_DUPFD, 10) duplicate of /dev/tty, so a restored interactive shell found fd 10 EBADF,
+           read that as end of input and exited immediately. */
+        if (r >= 0 && (lcmd == 0 || lcmd == 1030) && r < HL_NFD && g_pipe_identity[r] == 0)
+            (void)proc_fdvis_publish_native_fd(r);
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
     fcntl_done:
         break;

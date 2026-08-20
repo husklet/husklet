@@ -80,6 +80,34 @@ int hl_x86_legacy_is_dup2(void) {
     return g_x86_dup2_compat;
 }
 
+/* Entry snapshot of the syscall registers this file rewrites IN PLACE.
+ *
+ * Normalization is destructive and is NOT idempotent: it consumes the guest's own argument registers to
+ * build the canonical form. Anything that re-executes the same `syscall` instruction therefore runs it a
+ * second time over an already-rewritten register file. Two things do exactly that -- an SA_RESTART
+ * transparent restart, and a checkpoint continuation resuming a call the capture interrupted -- and the
+ * damage is silent: x86 poll(fds, nfds, -1) normalizes its infinite timeout to a NULL timespec by writing
+ * rdx = 0, and a second pass reads that 0 as "zero milliseconds" and synthesizes a zero-length wait. A
+ * restored interactive shell's blocking poll then returned 0 immediately, which busybox reads as the end
+ * of its input, so the pane's shell exited the instant it was resumed.
+ *
+ * Per-thread and one-shot, the same shape as the fork snapshot below: taken on every normalized syscall,
+ * consumed only by a restart that actually happens. */
+static __thread uint64_t g_x86_argsave[7];
+static __thread int g_x86_argsave_on;
+
+void hl_x86_legacy_restore_restart(struct cpu *c) {
+    if (!g_x86_argsave_on) return;
+    c->r[0] = g_x86_argsave[0];
+    c->r[7] = g_x86_argsave[1];
+    c->r[6] = g_x86_argsave[2];
+    c->r[2] = g_x86_argsave[3];
+    c->r[10] = g_x86_argsave[4];
+    c->r[8] = g_x86_argsave[5];
+    c->r[9] = g_x86_argsave[6];
+    g_x86_argsave_on = 0;
+}
+
 void hl_x86_legacy_restore_fork(struct cpu *c) {
     if (!g_x86_forksave_on) return;
     c->r[7] = g_x86_forksave[0];
@@ -236,6 +264,14 @@ static int x86_arch_prctl(struct cpu *c, const hl_x86_legacy_context *context) {
 
 int hl_x86_legacy_normalize(struct cpu *c, const hl_x86_legacy_context *context) {
     uint64_t *r = c->r;
+    g_x86_argsave[0] = r[0];
+    g_x86_argsave[1] = r[7];
+    g_x86_argsave[2] = r[6];
+    g_x86_argsave[3] = r[2];
+    g_x86_argsave[4] = r[10];
+    g_x86_argsave[5] = r[8];
+    g_x86_argsave[6] = r[9];
+    g_x86_argsave_on = 1;
     g_x86_dup2_compat = (r[0] == 33); // legacy dup2 -> canonical dup3; cleared for every other syscall
     int path_result = x86_normalize_path(r);
     if (path_result != X86_LEGACY_UNHANDLED) return path_result;

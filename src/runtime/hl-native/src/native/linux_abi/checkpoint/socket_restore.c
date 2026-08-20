@@ -1305,7 +1305,7 @@ static void ckpt_restore_proc_run(int gpid) {
     (void)ckpt_stream_member_restored(gpid);
     ckpt_restore_commit_wait();
     run_guest(&c);
-    ckpt_stream_member_exited(c.exit_code, HL_CKPT_MEMBER_EXIT_CODE);
+    ckpt_restored_member_exit_code(c.exit_code);
     _exit(c.exit_code);
 }
 

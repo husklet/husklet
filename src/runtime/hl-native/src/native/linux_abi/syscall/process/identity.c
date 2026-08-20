@@ -197,6 +197,10 @@ static int svc_proc_51(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
     return 1;
 }
 
+/* Defined by the checkpoint domain (linux_abi/sink_stream.h), which this translation unit includes after
+   the syscall layer. Silent for every process that is not a restored member of a checkpoint image. */
+static void ckpt_restored_member_exit_code(int status);
+
 static void process_last_thread_exit(int status) {
     launch_reg_terminate_peers();
     socket_ref_process_exit();
@@ -207,6 +211,11 @@ static void process_last_thread_exit(int status) {
     poslk_on_exit();
     sysv_on_exit();
     hl_engine_child_result_publish(status, HL_STATUS_OK, 0);
+    /* A restored member is not a child of the host that holds it, so its status cannot be reaped -- it has
+       to be reported. This is the process-scoped exit hook both guest exit paths share, which is why the
+       report belongs here: exit_group(2) reaches the host _exit straight from the syscall and never returns
+       through the restore driver that used to own the only call. */
+    ckpt_restored_member_exit_code(status);
 }
 
 static int svc_proc_93(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {

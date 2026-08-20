@@ -671,7 +671,15 @@ static int bound_mapping_fork_complete(hl_linux_watch_fork_plan *plan, int child
 #include "ptrace.c" // bug real ptrace tracer/tracee coordination (uses helpers above + G_* macros)
 #include "binding.c"
 
+#ifndef G_RESTART_PRESERVE
+#define G_RESTART_PRESERVE(c) ((void)0)
+#endif
+
 static void syscall_restart_architectural_state(struct cpu *c, uint64_t argument_zero, uint64_t number_register) {
+    // A guest whose legacy syscalls are rewritten in place must re-execute from the arguments it issued,
+    // not from the canonical form the last pass left behind: normalization is destructive and running it
+    // twice over one call produces a different syscall. Inert where the guest is already canonical.
+    G_RESTART_PRESERVE(c);
     G_A0(c) = argument_zero;
 #if defined(HL_GUEST_SIGACTION_HAS_RESTORER)
     G_PC(c) -= 2;
@@ -792,6 +800,19 @@ static void service(struct cpu *c) {
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
+/* The raw guest number of a wait-forever poll, and what it must still be after one round trip through
+ * normalization and a restart. x86 issues legacy poll(2) (7) and the frontend rewrites it to ppoll (271,
+ * canonical 73) with a NULL timespec; aarch64 has only ppoll (73) and normalization leaves it alone. */
+#if defined(HL_GUEST_SIGACTION_HAS_RESTORER)
+#define HL_RESTART_POLL_NUMBER UINT64_C(7) /* x86 legacy poll(fds, nfds, timeout_ms) */
+#define HL_RESTART_POLL_FOREVER UINT64_MAX /* -1 milliseconds */
+#define HL_RESTART_POLL_NORMALIZED UINT64_C(0) /* ppoll's NULL timespec */
+#else
+#define HL_RESTART_POLL_NUMBER UINT64_C(73)        /* aarch64 issues ppoll directly */
+#define HL_RESTART_POLL_FOREVER UINT64_C(0)        /* a NULL timespec already */
+#define HL_RESTART_POLL_NORMALIZED UINT64_C(0)     /* ...and normalization must not touch it */
+#endif
+
 HL_API int HL_TARGET_LOCAL(checkpoint_restart_register_test)(void) {
     struct cpu cpu = {0};
     const uint64_t argument = UINT64_C(0x123456789abcdef0);
@@ -807,6 +828,29 @@ HL_API int HL_TARGET_LOCAL(checkpoint_restart_register_test)(void) {
 #else
     if (G_PC(&cpu) != pc) return 3;
 #endif
+    /* A syscall the frontend rewrites in place must re-execute from the arguments the GUEST issued.
+     *
+     * x86 poll(fds, nfds, -1) is the case that decides it: normalization spends the guest's third argument
+     * register to express "no timeout" as a NULL timespec, so a second pass over the register file it left
+     * behind reads that zero as "zero milliseconds" and builds a zero-length wait instead. Both restart
+     * paths run exactly that second pass -- an SA_RESTART handler return, and a checkpoint continuation
+     * resuming the call the capture interrupted -- and the guest is never told: its infinite poll simply
+     * returns 0. Where the guest ISA is already canonical the normalization is inert and the same
+     * assertions hold trivially, which is the contract this arm pins there. */
+    memset(&cpu, 0, sizeof cpu);
+    G_A0(&cpu) = UINT64_C(0x4000); /* the pollfd array */
+    G_A1(&cpu) = 1;                /* one descriptor */
+    G_A2(&cpu) = HL_RESTART_POLL_FOREVER;
+#if defined(HL_GUEST_SIGACTION_HAS_RESTORER)
+    G_RET(&cpu) = HL_RESTART_POLL_NUMBER; /* rax carries the number this guest issued */
+#endif
+    const uint64_t entry_argument = G_A0(&cpu);
+    const uint64_t entry_number = G_RET(&cpu);
+    if (G_NORMALIZE(&cpu)) return 4;
+    if (G_A0(&cpu) != UINT64_C(0x4000) || G_A1(&cpu) != 1 || G_A2(&cpu) != HL_RESTART_POLL_NORMALIZED) return 5;
+    syscall_restart_architectural_state(&cpu, entry_argument, entry_number);
+    if (G_NORMALIZE(&cpu)) return 6;
+    if (G_A0(&cpu) != UINT64_C(0x4000) || G_A1(&cpu) != 1 || G_A2(&cpu) != HL_RESTART_POLL_NORMALIZED) return 7;
     return 0;
 }
 #endif
