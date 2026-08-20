@@ -12,13 +12,34 @@ fn current_host_errno_values_map_to_linux_guest_numbers() {
     }
 }
 
+/// The `domain 0` arm selects THIS host's table, so a Linux errno number is not a valid input to it
+/// on a host whose namespace diverges: Darwin 11 is `EDEADLK` (Linux 35), not the `EAGAIN` the
+/// number looks like, and UCRT 40 is `ENOSYS` (Linux 38), not `ELOOP`. On Linux the same claim is
+/// its mirror image -- the identity arm must leave both numbers untouched, which is what separates
+/// "selected the identity" from "fell through to one of the other two tables".
+///
+/// The body was two `#[cfg]` arms, macOS and Windows, and nothing else. On Linux -- the host this
+/// is developed on now -- it was an empty function that reported `ok`. `cfg!` keeps every arm
+/// compiled and leaves something to assert on every host, and an unclassified host fails loudly
+/// rather than passing: `errno.c`'s own `#else` sends it to the Darwin table by default, which is a
+/// decision nobody has made deliberately.
 #[test]
-fn linux_namespace_values_are_not_a_valid_input_on_divergent_hosts() {
-    #[cfg(target_os = "macos")]
-    assert_ne!(hl_native::linux_errno_from_host(0, 11), 11);
-
-    #[cfg(target_os = "windows")]
-    assert_ne!(hl_native::linux_errno_from_host(0, 40), 40);
+fn the_build_host_arm_selects_this_host_table_rather_than_the_linux_identity() {
+    let darwin_probe = hl_native::linux_errno_from_host(0, 11);
+    let ucrt_probe = hl_native::linux_errno_from_host(0, 40);
+    assert!(
+        if cfg!(target_os = "linux") {
+            (darwin_probe, ucrt_probe) == (11, 40)
+        } else if cfg!(target_os = "macos") {
+            darwin_probe == 35
+        } else if cfg!(target_os = "windows") {
+            ucrt_probe == 38
+        } else {
+            false
+        },
+        "build-host arm on {} translated Linux 11 to {darwin_probe} and Linux 40 to {ucrt_probe}",
+        std::env::consts::OS
+    );
 }
 
 #[test]

@@ -5,7 +5,12 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#if defined(__APPLE__)
+/* Host CSPRNG, split exactly as `engine/arena.c` splits it. The bare `#else` this
+   replaces sent Windows to <sys/random.h>, which does not exist there. */
+#if defined(_WIN32)
+#include <windows.h>
+#include <bcrypt.h>
+#elif defined(__APPLE__)
 #include <stdlib.h>
 #else
 #include <sys/random.h>
@@ -41,7 +46,11 @@ static inline int hl_socket_identity_nonce_new(uint64_t *high, uint64_t *low) {
     if (!high || !low) return -1;
     uint64_t words[2] = {0, 0};
     do {
-#if defined(__APPLE__)
+#if defined(_WIN32)
+        if (BCryptGenRandom(NULL, (PUCHAR)words, (ULONG)sizeof words,
+                            BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0)
+            return -1;
+#elif defined(__APPLE__)
         arc4random_buf(words, sizeof words);
 #else
         size_t offset = 0;

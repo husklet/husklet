@@ -556,6 +556,7 @@ dependencies = [
  "hl-engine",
  "hl-log",
  "hl-native",
+ "libc",
  "serde_json",
  "sha2",
 ]

@@ -144,6 +144,12 @@ pub fn namespace_transaction_test(isa: u32, scenario: u32) -> Result<(), i32> {
     bindings::namespace_transaction_test(isa, scenario)
 }
 
+/// Reports whether the emitted direct-store guards preflight their exact span.
+///
+/// Returns `0` when every emitted guard preflights the span it stores, `1` when
+/// one does not, and `4` when the host has no emitters to inspect -- the
+/// lowerings this reads emit ARM64 and are compiled only on an AArch64 host.
+/// `4` is deliberately not `0`: a clean zero would claim a scan that never ran.
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 #[must_use]
@@ -202,9 +208,28 @@ pub fn checkpoint_continuation_contract_test(isa: u32) -> Result<(), i32> {
     bindings::checkpoint_continuation_contract_test(isa)
 }
 
+/// Serializes the restore hooks that mutate this process's own address space.
+///
+/// `hl_gmap_add`, `hl_gmap_reset` and `hl_gmap_unmap_range` share one process-wide guest-mapping table
+/// across both guest-ISA namespaces -- `linux_abi/container/vfs/gmap.c` is a single translation unit, not
+/// a per-target one -- and the entries it releases name host pages it then unmaps. Two of these hooks on
+/// two libtest threads therefore tear each other's mappings down: measured on `x86_64` Linux as an
+/// intermittent SIGSEGV in the test binary, roughly one run in three. The scenarios are unchanged; only
+/// their concurrency is.
+#[cfg(feature = "native-test-hooks")]
+static GUEST_MAPPING_REGISTRY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(feature = "native-test-hooks")]
+fn guest_mapping_registry() -> std::sync::MutexGuard<'static, ()> {
+    GUEST_MAPPING_REGISTRY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 pub fn checkpoint_restore_claim_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    let _registry = guest_mapping_registry();
     bindings::checkpoint_restore_claim_test(isa, scenario)
 }
 
@@ -222,6 +247,7 @@ pub fn checkpoint_restore_slice_test(isa: u32, scenario: u32) -> Result<(), i32>
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 pub fn checkpoint_gmap_release_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    let _registry = guest_mapping_registry();
     bindings::checkpoint_gmap_release_test(isa, scenario)
 }
 
@@ -353,6 +379,7 @@ pub fn checkpoint_ipc_admission_test(isa: u32, scenario: u32) -> Result<(), i32>
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 pub fn checkpoint_restore_rollback_test(isa: u32) -> Result<(), i32> {
+    let _registry = guest_mapping_registry();
     bindings::checkpoint_restore_rollback_test(isa)
 }
 

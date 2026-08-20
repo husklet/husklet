@@ -600,7 +600,31 @@ The same asymmetry applies to killing processes by pattern. A lane matched four
 `cargo test` processes on the macOS host, killed all of them to unblock its own,
 and only one was its own. Resolve a PID and kill that PID.
 
+## A worktree under a home directory cannot be tested without privilege
+
+`/root` is `0700`, so a test that drops privilege cannot traverse to anything
+built inside it. Two lanes hit this on the same day: `rootless_publish` re-execs
+its own test binary as an unprivileged account and failed with EACCES until the
+binary was copied elsewhere, and a lane that wanted to certify a gate as a
+non-root user could not, because doing so would have meant loosening the mode on
+a directory three other lanes were working in.
+
+Put worktrees under **`/srv/worktrees/<name>`**, which is `0755`, when the work
+may need running without privilege. `CARGO_TARGET_DIR` under `/var/tmp` is
+already fine -- that path is `1777`.
+
+This matters beyond convenience. CI runs unprivileged, and several suites here
+(`pid_namespace`, `namespace_transaction`, `unix_identity`, `seccomp_vm`) can
+behave differently for an account that is not root; this box additionally sets
+`kernel.apparmor_restrict_unprivileged_userns=1`. A gate certified only as root
+is evidence about root, and should say so.
+
 ## Running on the other host is one wrapper away
+
+**On the x86_64 Linux box this wrapper does not exist** -- `which mac` finds
+nothing and no macOS host is reachable from it, so the paragraph below describes
+the macOS/Linux pair as it was and not what you can run today. For ARM64 work
+here, read "The ARM64 JIT is compiled out on this box" instead.
 
 `mac bash -lc '...'` runs a command on the macOS host. A lane investigating a
 defect that only exists on Darwin reported "I could not run on macOS" and handed
@@ -618,6 +642,147 @@ the load average instead and say so.
 command substitution: its background watchdog `sleep` holds the pipe open, so
 the substitution waits out the full duration. It cost one lane a ten-minute
 sweep and left three orphaned `sleep` processes behind.
+
+## The ARM64 JIT is compiled out on this box; two ways to get a host that runs it
+
+The translator emits ARM64 machine code, and `src/native/host/cpu.h` gates every
+part of it on `HL_HOST_CPU_AARCH64`. On this x86_64 Linux box that macro is never
+defined, so `engine/target/aarch64.c:240` takes the other fork — "an AArch64 host
+takes the same-ISA transliterating JIT below; any other takes interp.c" — and
+`dispatch.c:177` replaces `run_block` with an `abort()` stub. Both guests still
+run, correctly and to completion, entirely interpreted. Measured, not inferred:
+the 18 `x86_64/lower/*.c` lowering units are compiled **0 times** in an x86_64
+build and 18 times in an aarch64 one, and the engine `.so` carries **0** `e_*`
+emitter bodies here against **80** there.
+
+So on this host the ~120 emitters, the `run_block`/`block_return` trampolines,
+W^X publication, chaining, IBTC, the provenance map and guard faults have no test
+that can fail. **Running an aarch64 *guest* here does not touch any of them** —
+the engine interprets it.
+
+**KVM cannot close this.** KVM virtualizes, it does not translate, so it only ever
+accelerates a same-architecture guest. This is not a runtime refusal you can argue
+with: `qemu-system-aarch64 -accel help` on this box prints exactly one line,
+`tcg`, while `qemu-system-x86_64 -accel help` prints `tcg mshv nitro kvm`. The
+loaded module is `kvm_amd`. Any claim of KVM-accelerated aarch64 here is false.
+
+What remains is emulation, in two forms, and they answer different questions.
+
+### Fast: cross-compile here, run under `qemu-user`
+
+The flake devshell already exports `CC_aarch64_unknown_linux_gnu`,
+`CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER` and `AARCH64_LINUX_CC`, and on an
+x86_64 Linux host it also carries `qemu-user`. So an aarch64 build of the engine —
+JIT included — is one `--target` away and runs in place:
+
+```text
+nix develop -c cargo test -p hl-native --features native-test-hooks \
+  --target aarch64-unknown-linux-gnu --test reserved_register --no-run
+nix develop -c qemu-aarch64 target/aarch64-unknown-linux-gnu/debug/deps/reserved_register-*
+```
+
+The cross build takes about as long as the native one (62 s against 56 s for the
+same target set, 32 threads) because the compile is native; only the run is
+emulated. Use this for anything that is a property of the *emitted code* — the
+emitters, the encoders, the scans — and reach for it before declaring an ARM64
+question unanswerable on this box.
+
+It reaches further than the emitters. The whole engine cross-builds and both
+guests run to completion through it here -- `qemu-aarch64 hl-aarch64` and
+`qemu-aarch64 hl-x86_64` on the same static fixtures the x86 engine runs -- so
+translation, publication and dispatch survive being themselves translated.
+
+Its limit is that `qemu-aarch64` is itself a translator. Guest self-modifying code,
+`ic ivau`, the RWX/RX alias, real memory ordering and signal delivery into
+translated frames are all reinterpreted by QEMU, so a JIT-versus-host interaction
+that passes here has been tested against QEMU's model of ARM64, not against ARM64.
+
+### Complete: the persistent aarch64 VM under TCG
+
+`/srv/vm/aarch64` holds an Ubuntu 24.04 arm64 cloud image running a real aarch64
+kernel and userland under `qemu-system-aarch64` with TCG, 8 vCPU, 32 GiB RAM and
+a 250 GiB disk. Nix, flakes and the repository's own `nix develop` work in it.
+
+```text
+/srv/vm/aarch64/run.sh              # start (idempotent; refuses a second instance)
+/srv/vm/aarch64/vmssh               # interactive shell in the VM
+/srv/vm/aarch64/vmssh 'uname -m'    # or one command
+/srv/vm/aarch64/stop.sh             # graceful poweroff, then TERM/KILL on the recorded pid
+```
+
+`vmssh` is plain `ssh` to `127.0.0.1:2222` with the key at `/srv/vm/aarch64/id_vm`,
+so `scp -i /srv/vm/aarch64/id_vm -P 2222 root@127.0.0.1:...` moves files. The
+serial console is `/srv/vm/aarch64/serial.log` and the QEMU pid is in
+`/srv/vm/aarch64/vm.pid` — the VM is the only thing on this box you should ever
+kill by that pid, never by pattern.
+
+Getting the tree in is a tar, not a clone: `/var` and `/srv` are not shared with
+the guest, and a `git worktree` registered on one side is invisible to the other
+exactly as the macOS/Linux pair used to be.
+
+```text
+git archive --format=tar --prefix=husklet/ HEAD -o /var/tmp/husklet-src.tar
+scp -i /srv/vm/aarch64/id_vm -P 2222 /var/tmp/husklet-src.tar root@127.0.0.1:/root/
+/srv/vm/aarch64/vmssh 'mkdir -p /root/src && tar -xf /root/husklet-src.tar -C /root/src'
+# then, inside: git init && git add -A && git commit  -- nix develop reads tracked files
+```
+
+Boot is about a minute. `nix develop` cost 350 s the first time and is then warm;
+everything substituted from `cache.nixos.org` and nothing built from source.
+Set `CARGO_TARGET_DIR=/root/target` — the VM disk is local and fast; do not put a
+target directory on any shared path.
+
+Budget for the build before you start one. A cold
+`cargo test -p hl-native --features native-test-hooks --test reserved_register`
+takes **17m46s** in the VM against 56 s here — and the bulk of it is a *single*
+`cc1`, because `hl-cc` uses `cc` without its `parallel` feature, so the engine's
+~116 translation units compile one at a time and `engine/target/aarch64.c`, the
+unity TU carrying the whole JIT, is minutes of it by itself. More vCPU would not
+help that phase; this is why the VM is capped at 8 and should stay there.
+
+### The tripwire: 0 means the JIT is live, 4 means you have proved nothing
+
+`hl_aarch64_reserved_register_test` and `hl_x86_64_reserved_register_test` emit real
+code and scan it, so they answer only where the emitters exist. Off an aarch64 host
+they return the sentinel **4**, "not applicable"; on one they must return **0**.
+`cargo test -p hl-native --features native-test-hooks --test reserved_register`
+asserts whichever of the two its own `target_arch` implies, so **the fixture is
+green on x86_64 while testing nothing**. If you are certifying JIT work, read the
+number, not the pass:
+
+```text
+/srv/vm/aarch64/vmssh 'cd /root/src/husklet && nix develop . --command \
+  cargo test -p hl-native --features native-test-hooks --test reserved_register'
+```
+
+A green run on this x86 box is a green run of the sentinel. To read the numbers
+rather than the assertion, call the two exports directly — the engine `.so`
+exports both under `native-test-hooks`:
+
+```text
+cc -o verdict verdict.c -L"$out" -Wl,-rpath,"$out" -lhl_native_engine
+```
+
+Measured on the VM at 6fde34d36: `hl_aarch64_reserved_register_test = 0` and
+`hl_x86_64_reserved_register_test = 0`, against `4` and `4` from the x86_64
+engine `.so` built from the same tree.
+
+### Never take a timing here
+
+TCG is a software translator and the VM is 8 vCPU of it. Every duration measured
+inside the VM, and every duration measured under `qemu-aarch64`, is a measurement
+of QEMU. Numbers from either are not comparable to the Mac's figures, to this
+box's x86 figures, or to each other. If a number from an emulated aarch64 host
+must be reported at all, label it emulated in the same sentence.
+
+### What neither closes
+
+CI still has no aarch64 job that runs the JIT. The `macos-26` job builds
+`checks.aarch64-darwin.host-darwin-aarch64-native` and runs one ABI test; the job
+that runs `cargo test -p hl-native --all-targets --features native-test-hooks` is
+`ubuntu-24.04`, where both hooks return 4. A `runs-on: ubuntu-24.04-arm` job
+running that one command is the smallest change that would make a reserved-register
+regression fail a pull request.
 
 ## A measurement names its host, or it names nothing
 
@@ -1357,6 +1522,81 @@ format, design lint, lint cases, workspace and documentation tests, and checked
 compatibility metadata. Do not reintroduce retained-tree CMake, Ninja,
 clang-tidy, or cppcheck command pipelines. Native C compilation is owned by
 `hl-native/build.rs`; portable source analysis is embedded in `hl-design-lint`.
+
+## A gate that cannot fail is worse than no gate
+
+Five separate gates were found reporting success while proving nothing, in a
+single day. Each had looked green for weeks or months.
+
+- A `flake.nix` gate filtered for a test that had been **renamed**. `cargo test
+  <filter> -- --exact` exits **0** when nothing matches: `running 0 tests /
+  test result: ok / 182 filtered out / exit 0`. Both arms were vacuous.
+- `src/apps/engine/tests/` holds exactly one file, gated
+  `#![cfg(all(target_os = "linux", target_arch = "aarch64"))]`. On any other
+  host the whole integration-test target compiles to zero tests and reports ok.
+- `errno_namespace.rs::linux_namespace_values_are_not_a_valid_input_on_divergent_hosts`
+  has a body of two `#[cfg]` arms, macOS and Windows. On Linux it is an empty
+  function that passes.
+- The `nix flake check` verification derivation had empty `buildInputs` while
+  the workspace had grown crates needing gtk4 through pkg-config, so it failed
+  before compiling anything -- for a week, on the step the macOS job is built
+  around.
+- Both GUI tests **skip when there is no display**, so a CI line reading
+  "88 tests run" included two that assert nothing.
+
+And the same shape in a diagnostic: `engine/target/x86_64.c` printed
+`(IBTC %s)` with `"ON"` as a string literal, while the counter's only producer
+sits behind `HL_HOST_CPU_AARCH64` -- a host with no JIT reported the feature as
+on.
+
+The rule: **a gate must be shown to fail.** Before trusting one, break the thing
+it guards and watch it redden. When a suite reports a count, check the count is
+what you expect -- a lane once ran twenty green rounds of a filter that matched
+zero tests, and another swept 626 binaries that never started because the
+harness ate its own first argument. Both caught it only because they had planted
+a control that *had* to fail, and noticed it hadn't.
+
+A skip is not a pass. If a test cannot run here, it must say so out loud: the
+harness shows captured output only for failing tests, so an unrun arm otherwise
+looks exactly like a passing one.
+
+### The gate that reported nothing, and was read as if it had
+
+The five above proved nothing while saying `ok`. This one said nothing at all,
+which is harder to notice because there is no green line to disbelieve.
+
+Measured 2026-08-20: the **fifteen most recent CI runs on `main` had all ended
+`cancelled`** -- not one `success`, not one `failure`, going back through the
+whole working day. `ci.yml` and `smoke.yml` carried `cancel-in-progress: true`,
+nine lanes were merging into `main` roughly every ten minutes, and the workflow
+needs about forty-five. Every run was killed by the next push. **No commit on
+`main` had ever reached a verdict.**
+
+Nobody had disabled anything, nothing was `#[ignore]`d, and every job was
+correctly written. The branch simply had no test signal, and it looked from the
+outside like a branch whose CI was running. When the cancellation was removed
+and one run was allowed to finish, **five real reds surfaced at once** -- the
+Windows MSVC surface, the macOS `nix flake check`, the macOS public C/C++ ABI
+contracts, and all four legs of a `Real-image smoke` workflow nobody was even
+tracking. Along with a genuine success on the new Linux job, which had also been
+invisible.
+
+The durable rules:
+
+- **`cancel-in-progress: true` is wrong on an integration branch whenever the
+  merge interval is shorter than the workflow duration.** It is right on pull
+  requests, where a new head commit genuinely supersedes the one under test. On
+  `main` it is a race the branch always loses. GitHub's queue is bounded at one
+  without it -- a newly queued run cancels the previously *pending* run in the
+  same group -- so declining to cancel does not pile up runners.
+- **Read the distribution of conclusions, not the latest one.** A single
+  `cancelled` is routine and means nothing. Fifteen in a row is a dead gate, and
+  the two are indistinguishable if you only ever look at the most recent run.
+  `conclusion` is the field to count; a run that is `completed` is not
+  necessarily a run that decided anything.
+- A gate can fail to produce evidence for reasons that have nothing to do with
+  the code it tests. Ask what the last *verdict* was and when, not whether CI is
+  configured.
 
 ## Design lint
 

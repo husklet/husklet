@@ -1006,16 +1006,28 @@ fn owned_native_headers_are_self_contained() {
     fs::create_dir_all(&scratch).expect("header probe directory");
     let probe = scratch.join("probe.c");
     let compiler = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+    // `lower/primitives.h` refuses to be compiled into the engine off an AArch64 host, because the
+    // emitters it declares are defined only there and the failure would otherwise surface as an
+    // on-demand archive member with unresolved symbols. That hazard is a link-time one and this probe
+    // never links, so it takes the escape hatch the header names for exactly this case. The hatch
+    // suppresses the `#error` and nothing else: preprocessing any lowering header under
+    // `HL_X86_LOWER_STANDALONE` yields the identical token stream an AArch64 host sees, so a genuine
+    // portability break in the declarations still reddens here.
+    let lowering = guest.join("lower");
     for header in owned {
         let relative = header.strip_prefix(&native).expect("owned native header");
         fs::write(&probe, format!("#include \"{}\"\n", relative.display())).expect("header probe source");
-        let result = Command::new(&compiler)
-            .args([
-                "-std=c11",
-                "-D_GNU_SOURCE",
-                "-Werror=implicit-function-declaration",
-                "-fsyntax-only",
-            ])
+        let mut command = Command::new(&compiler);
+        command.args([
+            "-std=c11",
+            "-D_GNU_SOURCE",
+            "-Werror=implicit-function-declaration",
+            "-fsyntax-only",
+        ]);
+        if header.starts_with(&lowering) {
+            command.arg("-DHL_X86_LOWER_STANDALONE");
+        }
+        let result = command
             .arg(format!("-I{}", guest.display()))
             .arg(format!("-I{}", native.display()))
             .arg(format!("-I{}", native.join("include").display()))
