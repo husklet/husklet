@@ -122,8 +122,7 @@ impl NotYetLive {
     const RESET: &'static str = "\u{1b}[0m";
 
     /// What becomes of a keystroke typed while the pane is not live. True of both openings.
-    const QUEUED: &'static str =
-        "Anything you type now is queued by the terminal and runs when the shell starts.";
+    const QUEUED: &'static str = "Anything you type now is queued by the terminal and runs when the shell starts.";
 
     fn notice(restoring: bool) -> String {
         let prefix = hl::runtime::domain::RESTORE_NOTICE_PREFIX;

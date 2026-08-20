@@ -125,10 +125,7 @@ impl CloseRequest {
 
     /// The sentence written to the log. One line, so a multi-line engine refusal stays greppable.
     fn failure_line(error: &std::io::Error) -> String {
-        format!(
-            "could not close workspace: {}",
-            error.to_string().replace('\n', " | ")
-        )
+        format!("could not close workspace: {}", error.to_string().replace('\n', " | "))
     }
 }
 

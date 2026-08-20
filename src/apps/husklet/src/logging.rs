@@ -83,7 +83,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("husklet.log");
         std::fs::write(&path, "earlier line\n").unwrap();
-        let file = std::fs::OpenOptions::new().create(true).append(true).open(&path).unwrap();
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap();
         let journal = Journal(std::sync::Mutex::new(file));
 
         journal.write_line("could not close workspace: guest fd 10 is a pipe\n");
