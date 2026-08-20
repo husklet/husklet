@@ -330,3 +330,63 @@ void hl_host_macos_destroy(hl_host_macos *host) {
     free(host->processes);
     free(host);
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+/* Test-only export: assert the invariant the guest depends on -- the directory stream that
+ * hl_macos_file_read_directory() opens behind a file handle is an ENGINE descriptor, so it must live in
+ * the engine-private band and carry a private-ledger row. Without that row it sits on the lowest free
+ * number inside the guest's own descriptor band, where the guest's close_range(3, ~0U) (exec_fd_is_engine
+ * consults the ledger) and dup2(x, N) (engine_fd_vacate does not enumerate these streams) close it out
+ * from under the cached DIR*: the listing then ends early or fails EINVAL with no guest-visible cause.
+ *
+ * scenario 0: after one read_directory, the stream descriptor is private AND at or above the private floor.
+ * scenario 1: closing the handle retires the ledger row, so a repeated open/list/close loop neither leaks
+ *             descriptors nor leaves stale rows behind.
+ * Returns 0 on success, a negative errno-shaped code on a harness failure, and a positive code naming the
+ * violated invariant. */
+HL_API int32_t hl_c_backend_directory_stream_private_test(uint32_t scenario);
+HL_API int32_t hl_c_backend_directory_stream_private_test(uint32_t scenario) {
+    hl_host_macos *host = NULL;
+    hl_host_services services;
+    hl_host_result opened;
+    hl_host_file_entry entries[8];
+    const char *path = "/usr/lib";
+    int32_t verdict = 0;
+    unsigned rounds = scenario == 1 ? 64u : 1u;
+    size_t baseline;
+    if (scenario > 1) return -EINVAL;
+    memset(&services, 0, sizeof services);
+    if (hl_host_macos_create(&host, &services) != HL_STATUS_OK) return -ENOMEM;
+    baseline = hl_host_process_fd_private_count_current();
+    for (unsigned round = 0; round < rounds && verdict == 0; ++round) {
+        opened = hl_macos_file_open(host, HL_HOST_HANDLE_CWD, path, strlen(path),
+                                    HL_HOST_FILE_READ | HL_HOST_FILE_DIRECTORY, 0, 0);
+        if (opened.status != HL_STATUS_OK) {
+            verdict = -EIO;
+            break;
+        }
+        hl_host_result listed = hl_macos_file_read_directory(host, opened.value, entries, 8, 512);
+        if (listed.status != HL_STATUS_OK) {
+            verdict = -EIO;
+        } else {
+            int stream_fd = -1;
+            int floor = hl_host_process_fd_private_floor();
+            pthread_mutex_lock(&host->lock);
+            hl_macos_file *entry = hl_macos_file_lookup(host, opened.value);
+            if (entry != NULL && entry->directory != NULL) stream_fd = dirfd(entry->directory);
+            pthread_mutex_unlock(&host->lock);
+            if (stream_fd < 0)
+                verdict = 1; /* no stream was opened at all -- the fixture is wrong, not the invariant */
+            else if (!hl_host_process_fd_private_current(stream_fd))
+                verdict = 2; /* the stream descriptor carries no private-ledger row */
+            else if (floor >= 0 && stream_fd < floor)
+                verdict = 3; /* the stream descriptor still sits inside the guest's band */
+        }
+        (void)hl_macos_file_close(host, opened.value);
+    }
+    if (verdict == 0 && scenario == 1 && hl_host_process_fd_private_count_current() != baseline)
+        verdict = 4; /* closing the handle did not retire the stream's ledger row */
+    hl_host_macos_destroy(host);
+    return verdict;
+}
+#endif

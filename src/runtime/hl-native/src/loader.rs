@@ -171,6 +171,8 @@ pub(crate) struct TestApi {
     pub(crate) aarch64_socket_shape: SocketShapeTest,
     pub(crate) x86_64_socket_shape: SocketShapeTest,
     pub(crate) errno_from_host: unsafe extern "C" fn(c_uint, c_int) -> c_int,
+    #[cfg(target_os = "macos")]
+    pub(crate) directory_stream_private: unsafe extern "C" fn(c_uint) -> c_int,
     pub(crate) identity_registry: unsafe extern "C" fn(c_uint, c_uint) -> c_int,
     pub(crate) private_fork_lock: unsafe extern "C" fn(c_uint) -> c_int,
     pub(crate) process_identity_token: unsafe extern "C" fn(c_uint) -> c_int,
@@ -504,6 +506,11 @@ fn load_tests(library: &DynamicLibrary, path: &Path) -> Result<TestApi, LoadErro
         errno_from_host: symbol!(
             "hl_c_backend_errno_from_host_test",
             unsafe extern "C" fn(c_uint, c_int) -> c_int
+        ),
+        #[cfg(target_os = "macos")]
+        directory_stream_private: symbol!(
+            "hl_c_backend_directory_stream_private_test",
+            unsafe extern "C" fn(c_uint) -> c_int
         ),
         identity_registry: symbol!(
             "hl_c_backend_identity_registry_test",

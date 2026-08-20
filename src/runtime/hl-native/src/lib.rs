@@ -182,6 +182,13 @@ pub fn linux_errno_from_host(domain: u32, host_errno: i32) -> i32 {
     bindings::linux_errno_from_host(domain, host_errno)
 }
 
+/// Checks that the macOS host's directory streams live in the engine-private descriptor band.
+#[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
+#[doc(hidden)]
+pub fn directory_stream_private_test(scenario: u32) -> i32 {
+    bindings::directory_stream_private_test(scenario)
+}
+
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 pub fn signal_errno_frame_test(isa: u32, domain: u32, redirect: bool, nr: u64, raw: i64) -> Result<(i64, i64), i32> {

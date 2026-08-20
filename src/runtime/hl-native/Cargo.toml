@@ -33,6 +33,10 @@ name = "bound_vector_io"
 required-features = ["native-test-hooks"]
 
 [[test]]
+name = "directory_stream_private"
+required-features = ["native-test-hooks"]
+
+[[test]]
 name = "reserved_register"
 required-features = ["native-test-hooks"]
 
