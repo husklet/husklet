@@ -47,6 +47,25 @@ static uint32_t a64_tbz_x(int reg, unsigned bit, int64_t words) {
            (unsigned)reg;
 }
 
+/* ubfx Xd,Xn,#12,#SOFT_TLB_INDEX_BITS -- the guest page index of an EA. */
+static void emit_a64_soft_tlb_index(int destination, int address) {
+    emit32(0xD3400000u | (12u << 16) | ((12u + SOFT_TLB_INDEX_BITS - 1u) << 10) | ((unsigned)address << 5) |
+           (unsigned)destination);
+}
+
+/* add Xd,Xcpu,Xindex,lsl #5 -- the entry base for OFF_SOFT_TLB-relative loads. */
+static void emit_a64_soft_tlb_entry(int destination, int index) {
+    emit32(0x8B000000u | ((unsigned)index << 16) | (5u << 10) | ((unsigned)CPUREG << 5) | (unsigned)destination);
+}
+
+/* sub Xd,Xd,#bytes without touching NZCV; bytes may be 4096, past imm12. */
+static void emit_a64_soft_sub_bytes(int reg, uint64_t bytes) {
+    if (bytes == 4096)
+        emit32(0xD1400000u | (1u << 10) | ((unsigned)reg << 5) | (unsigned)reg);
+    else
+        e_subi(reg, reg, (unsigned)bytes);
+}
+
 static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2, uint64_t bytes, uint32_t required,
                                                        uint64_t pc) {
     struct a64_soft_guard guard = {.ea = ea, .tmp = tmp, .tmp2 = tmp2, .bytes = bytes, .required = required, .pc = pc};
@@ -112,26 +131,29 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
 
     /* Width-independent cached interval hit, using sign bits of non-setting
        subtracts. Linux userspace canonical addresses are below 2^63, so an
-       unsigned underflow is exactly the high-bit test here. */
-    e_ldr(tmp, CPUREG, OFF_SOFT_PAGE); /* inclusive first */
-    emit32(0xCB000000u | ((unsigned)tmp << 16) | ((unsigned)ea << 5) | (unsigned)tmp2);
-    emit32(0xD37FFC00u | ((unsigned)tmp2 << 5) | (unsigned)tmp2); /* lsr tmp2,tmp2,#63 */
+       unsigned underflow is exactly the high-bit test here.  tmp2 holds the
+       direct-mapped entry base for the whole sequence; tmp is the scratch. */
+    emit_a64_soft_tlb_index(tmp, ea);
+    emit_a64_soft_tlb_entry(tmp2, tmp);
+
+    e_ldr(tmp, tmp2, OFF_SOFT_TLB + 0); /* inclusive first */
+    emit32(0xCB000000u | ((unsigned)tmp << 16) | ((unsigned)ea << 5) | (unsigned)tmp);
+    emit32(0xD37FFC00u | ((unsigned)tmp << 5) | (unsigned)tmp); /* lsr tmp,tmp,#63 */
     guard.miss[guard.nmiss++] = (uint32_t *)g_cp;
     guard.miss_bit[guard.nmiss - 1] = -1;
-    guard.miss_reg[guard.nmiss - 1] = tmp2;
+    guard.miss_reg[guard.nmiss - 1] = tmp;
     emit32(0);
 
-    e_ldr(tmp, CPUREG, OFF_SOFT_LIMIT); /* exclusive end */
-    e_movconst(tmp2, bytes);
-    emit32(0x8B000000u | ((unsigned)tmp2 << 16) | ((unsigned)ea << 5) | (unsigned)tmp2);
-    emit32(0xCB000000u | ((unsigned)tmp2 << 16) | ((unsigned)tmp << 5) | (unsigned)tmp2);
-    emit32(0xD37FFC00u | ((unsigned)tmp2 << 5) | (unsigned)tmp2);
+    e_ldr(tmp, tmp2, OFF_SOFT_TLB + 8);                                               /* exclusive end */
+    emit32(0xCB000000u | ((unsigned)ea << 16) | ((unsigned)tmp << 5) | (unsigned)tmp); /* sub tmp,tmp,ea */
+    emit_a64_soft_sub_bytes(tmp, bytes);
+    emit32(0xD37FFC00u | ((unsigned)tmp << 5) | (unsigned)tmp);
     guard.miss[guard.nmiss++] = (uint32_t *)g_cp;
     guard.miss_bit[guard.nmiss - 1] = -1;
-    guard.miss_reg[guard.nmiss - 1] = tmp2;
+    guard.miss_reg[guard.nmiss - 1] = tmp;
     emit32(0);
 
-    e_ldr(tmp, CPUREG, OFF_SOFT_PROTECTION);
+    e_ldr(tmp, tmp2, OFF_SOFT_TLB + 24);
     if (required & HL_LOGICAL_VMA_READ) {
         guard.miss[guard.nmiss++] = (uint32_t *)g_cp;
         guard.miss_bit[guard.nmiss - 1] = 0;
@@ -144,7 +166,7 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
         guard.miss_reg[guard.nmiss - 1] = tmp;
         emit32(0); /* tbz tmp,#1,miss */
     }
-    e_ldr(tmp, CPUREG, OFF_SOFT_DELTA);
+    e_ldr(tmp, tmp2, OFF_SOFT_TLB + 16);
     emit32(0x8B000000u | ((unsigned)tmp << 16) | ((unsigned)ea << 5) | (unsigned)ea); /* add ea,ea,tmp */
     guard.native = g_cp;
     return guard;
@@ -279,8 +301,16 @@ static void emit_a64_soft_stub(void) {
             }
 
             /* x16 = guest EA, x17 = immutable site metadata. x15 was saved by
-               the site and is safe scratch; x18 must never be used on Darwin. */
-            e_ldr(15, CPUREG, OFF_SOFT_PAGE);
+               the site and is safe scratch; x18 must never be used on Darwin.
+               The direct-mapped entry base needs a SECOND scratch, so guest
+               x14 is spilled to its own register slot across the probe and
+               restored on both the hit and the miss exit -- exactly the
+               discipline the site already applies to x15. */
+            e_str(14, CPUREG, 14 * 8);
+            emit_a64_soft_tlb_index(15, 16);
+            emit_a64_soft_tlb_entry(14, 15);
+
+            e_ldr(15, 14, OFF_SOFT_TLB + 0);
             emit32(0xCB000000u | (15u << 16) | (16u << 5) | 15u);
             emit32(0xD37FFC00u | (15u << 5) | 15u);
             assert(cold_miss_count < sizeof cold_miss_patches / sizeof cold_miss_patches[0]);
@@ -288,7 +318,7 @@ static void emit_a64_soft_stub(void) {
             cold_miss_bits[cold_miss_count++] = -1;
             emit32(0);
 
-            e_ldr(15, CPUREG, OFF_SOFT_LIMIT);
+            e_ldr(15, 14, OFF_SOFT_TLB + 8);
             if (bytes == 4096)
                 emit32(0xD1400000u | (1u << 10) | (15u << 5) | 15u);
             else
@@ -300,7 +330,7 @@ static void emit_a64_soft_stub(void) {
             cold_miss_bits[cold_miss_count++] = -1;
             emit32(0);
 
-            e_ldr(15, CPUREG, OFF_SOFT_PROTECTION);
+            e_ldr(15, 14, OFF_SOFT_TLB + 24);
             if (required & HL_LOGICAL_VMA_READ) {
                 assert(cold_miss_count < sizeof cold_miss_patches / sizeof cold_miss_patches[0]);
                 cold_miss_patches[cold_miss_count] = (uint32_t *)g_cp;
@@ -313,12 +343,14 @@ static void emit_a64_soft_stub(void) {
                 cold_miss_bits[cold_miss_count++] = 1;
                 emit32(0); /* tbz x15,#WRITE,miss */
             }
-            e_ldr(15, CPUREG, OFF_SOFT_DELTA);
+            e_ldr(15, 14, OFF_SOFT_TLB + 16);
             emit32(0x8B000000u | (15u << 16) | (16u << 5) | 16u);
+            e_ldr(14, CPUREG, 14 * 8);
             e_addi(17, 17, 16);
             e_br(17);
         }
         uint8_t *resolver_miss = g_cp;
+        e_ldr(14, CPUREG, 14 * 8);
         for (unsigned i = 0; i < cold_miss_count; ++i) {
             uint32_t *patch = cold_miss_patches[i];
             int64_t displacement = (resolver_miss - (uint8_t *)patch) / 4;

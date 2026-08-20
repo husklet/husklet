@@ -97,3 +97,7 @@ name = "arena_sidecar"
 [[test]]
 name = "macos_process_identity"
 required-features = ["native-test-hooks"]
+
+[[test]]
+name = "terminal_termios"
+required-features = ["native-test-hooks"]

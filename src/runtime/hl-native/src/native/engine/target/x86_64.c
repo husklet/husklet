@@ -775,6 +775,21 @@ static int soft_tlb_miss(struct cpu *c) {
             c->fault_addr = address;
             return raise_guest_data_map_fault(c);
         }
+        /* gna is the architectural accessibility ledger, and on a host whose
+           granule is wider than the guest page it is the ONLY record that a
+           4 KiB munmap happened: the containing host page stays mapped to keep
+           an adjacent live guest page alive, so host_range_mapped and the
+           store preflight both answer "present".  Consult it before the
+           identity fallback grants read/write/exec over the whole page, or a
+           guest that unmapped a page can still reach it.  aarch64's miss
+           handler already opens with the same test (translate/trace.c). */
+        {
+            uint64_t accessible = gna_prefix(address, width);
+            if (accessible < width) {
+                c->fault_addr = address + accessible;
+                return raise_guest_data_map_fault(c);
+            }
+        }
         if (required & HL_LOGICAL_VMA_WRITE) {
             size_t writable = x86_store_writable_prefix((uintptr_t)nonpie_fold(address), (size_t)width);
             if (writable < width) {
@@ -827,6 +842,17 @@ static int soft_tlb_miss(struct cpu *c) {
     }
     c->soft_page = address & ~UINT64_C(4095);
     c->soft_snapshot = snapshot != NULL ? (uint64_t)(uintptr_t)snapshot : 1;
+    /* Publish the same entry the single-entry cache held into the slot for the
+       accessed page.  The emitted guard's page tag makes the slot self-
+       validating, so a direct-mapped array carries no validity the scalars did
+       not already carry -- only more of it at once. */
+    {
+        struct hl_soft_tlb_entry *entry = SOFT_TLB_SLOT(c, address);
+        entry->page = c->soft_page;
+        entry->last = c->soft_last;
+        entry->delta = c->soft_delta;
+        entry->protection = c->soft_protection;
+    }
     c->reason = R_BRANCH;
     return 0;
 }

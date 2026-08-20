@@ -228,3 +228,203 @@ int main(void) {
     assert!(run.success(), "cursor probe failed with {run}");
     fs::remove_dir_all(scratch).expect("remove cursor probe directory");
 }
+
+/// Overlay layer semantics the cursor walk owns: a `.wh.NAME` whiteout in a higher layer hides NAME in
+/// every lower layer, a `.wh..wh..opq` marker cuts the lower layers out of a merged directory, and an
+/// entry present only in a lower layer is still found. The walk skips both marker probes when there is
+/// no layer below the one being examined -- this test pins that the skip never reaches a case where a
+/// layer below exists, and that the probe descriptions the walk retains are all handed back.
+#[test]
+fn layer_markers_decide_visibility_and_hand_back_every_handle() {
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let native = package.join("src/native");
+    let scratch = std::env::temp_dir().join(format!("hl-native-cursor-layers-{}", std::process::id()));
+    fs::create_dir_all(&scratch).expect("layer probe directory");
+    let source = scratch.join("cursor_layers.c");
+    let executable = scratch.join("cursor_layers");
+    fs::write(
+        &source,
+        r#"
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <stdatomic.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include "hl/host_services.h"
+
+#define HL_LINUX_VFS_LOWER_CAPACITY 1
+#define HL_NFD 16
+#define HANDLES 32
+
+/* Two layers. 1 = the writable UPPER root, 2 = the read-only LOWER root. Entries are a flat
+   (parent, name) -> (handle, type) table so the fixture spells the on-disk overlay wire names
+   (`.wh.NAME`, `.wh..wh..opq`) exactly as the real image layers carry them. */
+struct entry { hl_host_handle parent; const char *name; hl_host_handle child; int type; };
+static const struct entry entries[] = {
+    /* upper */
+    {1, "kept",          10, HL_HOST_FILE_TYPE_DIRECTORY},
+    {1, ".wh.gone",      11, HL_HOST_FILE_TYPE_REGULAR},   /* whiteout hiding the lower "gone" */
+    {1, "opq",           12, HL_HOST_FILE_TYPE_DIRECTORY},
+    {12, ".wh..wh..opq", 13, HL_HOST_FILE_TYPE_REGULAR},   /* opaque marker on the upper "opq" */
+    {1, "shadow",        14, HL_HOST_FILE_TYPE_DIRECTORY},
+    /* lower */
+    {2, "gone",          20, HL_HOST_FILE_TYPE_DIRECTORY},
+    {2, "onlylower",     21, HL_HOST_FILE_TYPE_DIRECTORY},
+    {2, "opq",           22, HL_HOST_FILE_TYPE_DIRECTORY},
+    {2, "shadow",        23, HL_HOST_FILE_TYPE_DIRECTORY},
+};
+
+static int references[HANDLES];
+
+static hl_host_result result(int32_t status, uint64_t value) {
+    return (hl_host_result){.status = status, .value = value};
+}
+
+static hl_host_result clone_file(void *context, hl_host_handle handle) {
+    (void)context;
+    if (handle >= HANDLES) return result(HL_STATUS_INVALID_ARGUMENT, 0);
+    references[handle]++;
+    return result(HL_STATUS_OK, handle);
+}
+
+static hl_host_result close_file(void *context, hl_host_handle handle) {
+    (void)context;
+    if (handle >= HANDLES || references[handle] == 0) return result(HL_STATUS_INVALID_ARGUMENT, 0);
+    references[handle]--;
+    return result(HL_STATUS_OK, 0);
+}
+
+static int entry_type(hl_host_handle handle) {
+    for (size_t index = 0; index < sizeof entries / sizeof entries[0]; index++)
+        if (entries[index].child == handle) return entries[index].type;
+    return HL_HOST_FILE_TYPE_DIRECTORY; /* the two roots */
+}
+
+static hl_host_result open_relative(void *context, hl_host_handle directory, const char *path, size_t size,
+                                    uint32_t access, uint32_t creation, uint32_t permissions) {
+    (void)context; (void)creation; (void)permissions;
+    if (size == 1 && path[0] == '.') {
+        references[directory]++;
+        return result(HL_STATUS_OK, directory);
+    }
+    for (size_t index = 0; index < sizeof entries / sizeof entries[0]; index++) {
+        if (entries[index].parent != directory) continue;
+        if (strlen(entries[index].name) != size || memcmp(entries[index].name, path, size)) continue;
+        if ((access & HL_HOST_FILE_DIRECTORY) && entries[index].type != HL_HOST_FILE_TYPE_DIRECTORY)
+            return result(HL_STATUS_NOT_DIRECTORY, 0);
+        references[entries[index].child]++;
+        return result(HL_STATUS_OK, entries[index].child);
+    }
+    return result(HL_STATUS_NOT_FOUND, 0);
+}
+
+static hl_host_result metadata(void *context, hl_host_handle handle, hl_host_file_metadata *output) {
+    (void)context;
+    memset(output, 0, sizeof *output);
+    output->stable_device = 7;
+    output->stable_object = handle;
+    output->permissions = 0755;
+    output->type = entry_type(handle);
+    return result(HL_STATUS_OK, 0);
+}
+
+static const hl_host_file_services files = {
+    .abi = HL_HOST_FILE_ABI, .size = sizeof files, .open_relative = open_relative, .metadata = metadata,
+    .close = close_file, .clone_for_fork = clone_file,
+};
+static const hl_host_services services = {
+    .abi = HL_HOST_SERVICES_ABI, .size = sizeof services, .file = &files,
+};
+
+#include "linux_abi/container/vfs/cursor.c"
+
+static hl_vfs_cursor_authority authority_for(hl_host_handle handle) {
+    references[handle]++;
+    hl_vfs_cursor_authority authority = {
+        .kind = HL_VFS_CURSOR_AUTHORITY_HOST,
+        .value.host = {.handle = handle, .services = &services},
+    };
+    return authority;
+}
+
+static int leaked(void) {
+    for (size_t handle = 0; handle < HANDLES; handle++)
+        if (references[handle] != 0) return (int)handle;
+    return -1;
+}
+
+int main(void) {
+    hl_vfs_cursor_authority upper = authority_for(1);
+    hl_vfs_cursor_authority lower = authority_for(2);
+    hl_vfs_cursor root;
+    if (hl_vfs_cursor_root_authorities(&upper, &lower, 1, &root) != 0 || root.count != 2) return 1;
+    hl_vfs_cursor_authority_close(&upper);
+    hl_vfs_cursor_authority_close(&lower);
+
+    hl_vfs_cursor_entry entry;
+    /* A lower-only entry is still visible through the union. */
+    if (hl_vfs_cursor_lookup(&root, "onlylower", &entry) != 0 || entry.kind != HL_VFS_CURSOR_DIRECTORY ||
+        entry.directory.count != 1 || entry.directory.layers[0].value.host.handle != 21) return 2;
+    hl_vfs_cursor_entry_release(&entry);
+
+    /* `.wh.gone` in the upper hides the lower "gone" entirely. */
+    if (hl_vfs_cursor_lookup(&root, "gone", &entry) != -ENOENT) return 3;
+
+    /* `.wh..wh..opq` inside the upper "opq" cuts the lower layer out of the merged directory. */
+    if (hl_vfs_cursor_lookup(&root, "opq", &entry) != 0 || entry.kind != HL_VFS_CURSOR_DIRECTORY ||
+        !entry.directory.opaque_cut || entry.directory.count != 1) return 4;
+    hl_vfs_cursor_entry_release(&entry);
+
+    /* Without an opaque marker the same shape merges both layers. */
+    if (hl_vfs_cursor_lookup(&root, "shadow", &entry) != 0 || entry.kind != HL_VFS_CURSOR_DIRECTORY ||
+        entry.directory.opaque_cut || entry.directory.count != 2 ||
+        entry.directory.layers[0].value.host.handle != 14 ||
+        entry.directory.layers[1].value.host.handle != 23) return 5;
+    hl_vfs_cursor_entry_release(&entry);
+
+    /* An entry present only in the upper resolves there and merges nothing. */
+    if (hl_vfs_cursor_lookup(&root, "kept", &entry) != 0 || entry.kind != HL_VFS_CURSOR_DIRECTORY ||
+        entry.directory.count != 1) return 6;
+    hl_vfs_cursor_entry_release(&entry);
+
+    if (hl_vfs_cursor_lookup(&root, "absent", &entry) != -ENOENT) return 7;
+    hl_vfs_cursor_release(&root);
+
+    /* With the lower layer removed, a whiteout still reports absence -- and the walk must not have
+       leaked the probe description it retains on the way. */
+    hl_vfs_cursor_authority alone = authority_for(1);
+    hl_vfs_cursor single;
+    if (hl_vfs_cursor_root_authorities(&alone, NULL, 0, &single) != 0 || single.count != 1) return 8;
+    hl_vfs_cursor_authority_close(&alone);
+    if (hl_vfs_cursor_lookup(&single, "gone", &entry) != -ENOENT) return 9;
+    if (hl_vfs_cursor_lookup(&single, "opq", &entry) != 0 || entry.kind != HL_VFS_CURSOR_DIRECTORY ||
+        entry.directory.count != 1) return 10;
+    hl_vfs_cursor_entry_release(&entry);
+    hl_vfs_cursor_release(&single);
+
+    int handle = leaked();
+    if (handle >= 0) return 11;
+    return 0;
+}
+"#,
+    )
+    .expect("layer probe source");
+    let compile = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()))
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function"])
+        .arg(format!("-I{}", native.display()))
+        .arg(format!("-I{}", native.join("include").display()))
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("layer probe compiler");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let run = Command::new(&executable).status().expect("layer probe execution");
+    assert!(run.success(), "layer probe failed with {run}");
+    fs::remove_dir_all(scratch).expect("remove layer probe directory");
+}

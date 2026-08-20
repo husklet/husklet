@@ -440,6 +440,8 @@ test_no_argument!(
     hl_aarch64_checkpoint_restore_rollback_test,
     aarch64_checkpoint_restore_rollback
 );
+test_no_argument!(hl_aarch64_terminal_termios_store_test, aarch64_terminal_termios_store);
+test_no_argument!(hl_x86_64_terminal_termios_store_test, x86_64_terminal_termios_store);
 test_no_argument!(
     hl_x86_64_checkpoint_restore_rollback_test,
     x86_64_checkpoint_restore_rollback
@@ -969,6 +971,18 @@ pub(crate) fn checkpoint_restore_rollback_test(isa: u32) -> Result<(), i32> {
         match isa {
             1 => hl_aarch64_checkpoint_restore_rollback_test(),
             2 => hl_x86_64_checkpoint_restore_rollback_test(),
+            _ => return Err(-22),
+        }
+    };
+    if status == 0 { Ok(()) } else { Err(status) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn terminal_termios_store_test(isa: u32) -> Result<(), i32> {
+    let status = unsafe {
+        match isa {
+            1 => hl_aarch64_terminal_termios_store_test(),
+            2 => hl_x86_64_terminal_termios_store_test(),
             _ => return Err(-22),
         }
     };

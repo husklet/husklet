@@ -118,7 +118,15 @@ typedef enum hl_ckpt_stream_op {
        member gets an ordinary OK carrying no descriptor and keeps the container's own bridge: a member
        whose stdio the host cannot produce must inherit the previous behaviour, never a descriptor
        belonging to a different session. */
-    HL_CKPT_OP_MEMBER_STDIO = 26
+    HL_CKPT_OP_MEMBER_STDIO = 26,
+    /* Close membership for this capture and answer how many processes proved it. No payload; reply.value
+       is the sealed member count. This is the ONE instant at which the set of processes the manifest must
+       contain is fixed, and it exists because the coordinator's own enumeration cannot fix it: a tree
+       forks and exits across the instant a scan is taken, so the scan can both miss a process the image
+       contains and name one it does not. After the seal REGISTER_READY is refused, so no fork and no exit
+       can straddle the count. Any status other than OK means the count is unknown, and an unknown count
+       refuses the capture -- it is never read as a number. */
+    HL_CKPT_OP_SEAL_MEMBERSHIP = 27
 } hl_ckpt_stream_op;
 
 #define HL_CKPT_MEMBER_EXIT_CODE UINT32_C(1)

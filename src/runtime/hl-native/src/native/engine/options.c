@@ -52,6 +52,14 @@ static const hl_option_definition hl_option_definitions[] = {
     HL_INTERNAL_OPTION("HL_CKPT_TEST_FAIL_TRIGGER_REATTACH",
                        "test-only restored checkpoint trigger reattachment failure", HL_OPTION_FLAG),
     HL_INTERNAL_OPTION("HL_CKPT_TEST_FAIL_TTY_MASK", "test-only terminal-claim mask failure", HL_OPTION_FLAG),
+    HL_INTERNAL_OPTION("HL_CKPT_TEST_PEER_FORGOTTEN_AFTER_KICK",
+                       "test-only capture peer that is kicked and then dropped from the coordinator's enumeration, "
+                       "so only the broker knows it is a member",
+                       HL_OPTION_FLAG),
+    HL_INTERNAL_OPTION("HL_CKPT_TEST_PEER_HIDDEN_FROM_ENUMERATION",
+                       "test-only capture peer withheld from the coordinator's first enumeration, exactly as a "
+                       "process forked immediately after the scan is",
+                       HL_OPTION_FLAG),
     HL_LAUNCH_OPTION("HL_CHECKPOINT_POLICY", "checkpoint incompatible-resource recovery policy", HL_OPTION_INTEGER),
     HL_LAUNCH_OPTION("HL_CPUS", "guest-visible CPU quota", HL_OPTION_INTEGER),
     HL_LAUNCH_OPTION("HL_C_DIAGNOSTICS", "report retained C translation and dispatch phase counters at launch exit",

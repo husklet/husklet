@@ -52,6 +52,12 @@ pub(super) const PARTICIPANT_REGISTERED: u32 = 25;
 /// this runs before `MEMBER_RESTORED` can announce anything. Payload is `[u32 guest pid][u32 zero]`. The
 /// reply carries one descriptor over `SCM_RIGHTS`, or none when the host registered no terminal.
 pub(super) const MEMBER_STDIO: u32 = 26;
+/// The coordinator closes membership for this capture and asks how many processes proved it. No
+/// payload; the reply value is the sealed member count. It is the single instant at which the set of
+/// processes the manifest must contain is fixed, and after it `REGISTER_READY` is refused -- so no fork
+/// and no exit can straddle the count. Gated like a publishing op: only a process that itself proved
+/// membership may seal.
+pub(super) const SEAL_MEMBERSHIP: u32 = 27;
 
 /// What a parked member must do next. `RELEASE_WAIT` answers with exactly one of
 /// these, and it is the only thing that ends a park.

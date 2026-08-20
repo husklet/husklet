@@ -115,6 +115,7 @@ static uint64_t g_prevpc, g_curpc;
 #define G_DISPATCH_SOFTSPAN(c)                                                                                         \
     if ((c)->reason == R_SOFTSPAN) {                                                                                   \
         (c)->soft_snapshot = 0;                                                                                        \
+        SOFT_TLB_INVALIDATE_ALL(c);                                                                                    \
         (c)->rip = nonpie_unfold((c)->rip);                                                                            \
         (c)->reason = R_BRANCH;                                                                                        \
         continue;                                                                                                      \

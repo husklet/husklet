@@ -136,6 +136,16 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
+        "HL_CKPT_TEST_PEER_FORGOTTEN_AFTER_KICK",
+        "test-only capture peer dropped from the coordinator's enumeration after it is kicked",
+        Flag
+    ),
+    internal!(
+        "HL_CKPT_TEST_PEER_HIDDEN_FROM_ENUMERATION",
+        "test-only capture peer withheld from the coordinator's first enumeration",
+        Flag
+    ),
+    internal!(
         "HL_CKPT_TEST_FAIL_TTY_MASK",
         "test-only terminal-claim mask failure",
         Flag

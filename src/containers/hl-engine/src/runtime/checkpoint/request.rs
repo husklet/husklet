@@ -1,8 +1,8 @@
 use super::{
     CLAIM, COMMIT, CapturePhase, DIGEST, GROUP_ABORT, GROUP_BEGIN, GROUP_COMMIT, GROUP_COUNT, GROUP_PRESENT,
     MutationAdmission, OBJECT_ABORT, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, Object,
-    PARTICIPANT_REGISTERED, PAYLOAD_MAX, RECOVERY_COMPLETE, Reply, Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE,
-    STATUS_ALREADY, Server, UNCLAIM,
+    PARTICIPANT_REGISTERED, PAYLOAD_MAX, RECOVERY_COMPLETE, Reply, Request, SEAL_MEMBERSHIP, SOURCE_LIST, SOURCE_READ,
+    SOURCE_SIZE, STATUS_ALREADY, Server, UNCLAIM,
 };
 
 impl Server {
@@ -39,6 +39,7 @@ impl Server {
             SOURCE_READ => self.source_read(name, request),
             RECOVERY_COMPLETE => self.complete_recovery(),
             PARTICIPANT_REGISTERED => self.participant_registered(request, payload),
+            SEAL_MEMBERSHIP => self.seal_membership(request),
             _ => Reply::error(),
         }
     }
@@ -70,6 +71,28 @@ impl Server {
             return Reply::error();
         }
         Reply::value(u64::from(ledger.registered(u64::from(request.generation), host_pid)))
+    }
+
+    /// Closes membership for this capture and answers the exact number of processes that proved it.
+    ///
+    /// The manifest's expected process set is fixed HERE and nowhere else. Enumeration in the
+    /// coordinator is a point-in-time scan of a tree that forks and exits across the instant it is
+    /// taken, so it can name a set the image does not have and miss one the image does; the ledger
+    /// names the processes that actually registered, and sealing it stops the set moving while the
+    /// coordinator counts committed groups against it.
+    ///
+    /// Every failure is an ERROR reply, never a count: the coordinator publishes a manifest only on an
+    /// exact match, so an unreadable ledger must refuse the capture rather than be read as a number.
+    fn seal_membership(&self, request: &Request) -> Reply {
+        let Ok(mut participants) = self.participants.lock() else {
+            return Reply::error();
+        };
+        let Some(ledger) = participants.as_mut() else {
+            return Reply::error();
+        };
+        ledger
+            .seal(u64::from(request.generation))
+            .map_or_else(|_| Reply::error(), Reply::value)
     }
 
     fn begin_object(&self, key: (u64, u64), name: &str) -> Reply {

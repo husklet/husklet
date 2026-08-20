@@ -3,4 +3,5 @@
 #include "binding/poll.c"
 #include "binding/transfer.c"
 #include "binding/route_special.c"
+#include "binding/terminal_termios.c"
 #include "binding/route_bound.c"
