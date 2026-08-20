@@ -472,12 +472,12 @@ int lower_flag_register_transfer(struct insn *instruction) {
         e_movconst(20, 1);
         e_rrr(A_EOR, 17, 17, 20, 0, 0); // stored borrow-C = !CF
         e_lsl_i(17, 17, 29, 0);
-        emit32(0x53061800u | (16 << 5) | 18); // ZF
-        e_lsl_i(18, 18, 30, 0);
-        e_rrr(A_ORR, 17, 17, 18, 0, 0);
-        emit32(0x53071C00u | (16 << 5) | 18); // SF
-        e_lsl_i(18, 18, 31, 0);
-        e_rrr(A_ORR, 17, 17, 18, 0, 0);
+        emit32(0x53061800u | (16 << 5) | 27); // ZF
+        e_lsl_i(27, 27, 30, 0);
+        e_rrr(A_ORR, 17, 17, 27, 0, 0);
+        emit32(0x53071C00u | (16 << 5) | 27); // SF
+        e_lsl_i(27, 27, 31, 0);
+        e_rrr(A_ORR, 17, 17, 27, 0, 0);
         e_str(17, 28, OFF_NZCV);
         emit32(0xD51B4200u | 17);
         emit32(0x53020800u | (16 << 5) | 19); // PF
@@ -492,20 +492,20 @@ int lower_flag_register_transfer(struct insn *instruction) {
         e_ldr(16, 28, OFF_NZCV);
         emit32(0x53000000u | (31 << 16) | (31 << 10) | (16 << 5) | 17);
         e_lsl_i(17, 17, 7, 0);
-        emit32(0x53000000u | (30 << 16) | (30 << 10) | (16 << 5) | 18);
-        e_lsl_i(18, 18, 6, 0);
-        e_rrr(A_ORR, 17, 17, 18, 0, 0);
-        emit32(0x53000000u | (29 << 16) | (29 << 10) | (16 << 5) | 18);
+        emit32(0x53000000u | (30 << 16) | (30 << 10) | (16 << 5) | 27);
+        e_lsl_i(27, 27, 6, 0);
+        e_rrr(A_ORR, 17, 17, 27, 0, 0);
+        emit32(0x53000000u | (29 << 16) | (29 << 10) | (16 << 5) | 27);
         e_movconst(19, 1);
-        e_rrr(A_EOR, 18, 18, 19, 0, 0);
-        e_rrr(A_ORR, 17, 17, 18, 0, 0);
-        e_movconst(18, 2);
-        e_rrr(A_ORR, 17, 17, 18, 0, 0);
-        e_pf_compute(18);
-        e_rrr(A_ORR, 17, 17, 18, 0, 2);
-        e_ldr(18, 28, OFF_AF);
-        emit32(0x53000000u | (4 << 16) | (4 << 10) | (18 << 5) | 18);
-        e_rrr(A_ORR, 17, 17, 18, 0, 4);
+        e_rrr(A_EOR, 27, 27, 19, 0, 0);
+        e_rrr(A_ORR, 17, 17, 27, 0, 0);
+        e_movconst(27, 2);
+        e_rrr(A_ORR, 17, 17, 27, 0, 0);
+        e_pf_compute(27);
+        e_rrr(A_ORR, 17, 17, 27, 0, 2);
+        e_ldr(27, 28, OFF_AF);
+        emit32(0x53000000u | (4 << 16) | (4 << 10) | (27 << 5) | 27);
+        e_rrr(A_ORR, 17, 17, 27, 0, 4);
         e_bfi(RAX, 17, 8, 8, 1);
         return TX_NEXT;
     }
@@ -520,22 +520,22 @@ int lower_flag_stack_control(struct insn *instruction, uint64_t guest_pc) {
         if (hl_x86_legacy_flags_pending()) flags_materialize();
         e_ldr(16, 28, OFF_NZCV);
         e_movconst(17, 0x202u);
-        e_ldr(18, 28, OFF_DF);
-        e_rrr(A_ORR, 17, 17, 18, 0, 10);
-        emit32(0x53000000u | (29 << 16) | (29 << 10) | (16 << 5) | 18);
+        e_ldr(27, 28, OFF_DF);
+        e_rrr(A_ORR, 17, 17, 27, 0, 10);
+        emit32(0x53000000u | (29 << 16) | (29 << 10) | (16 << 5) | 27);
         e_movconst(19, 1);
-        e_rrr(A_EOR, 18, 18, 19, 0, 0);
-        e_rrr(A_ORR, 17, 17, 18, 0, 0);
-        e_bit_move(17, 16, 30, 6, 18);
-        e_bit_move(17, 16, 31, 7, 18);
-        e_bit_move(17, 16, 28, 11, 18);
-        e_pf_compute(18);
-        e_rrr(A_ORR, 17, 17, 18, 0, 2);
-        e_ldr(18, 28, OFF_AF);
-        emit32(0x53000000u | (4 << 16) | (4 << 10) | (18 << 5) | 18);
-        e_rrr(A_ORR, 17, 17, 18, 0, 4);
-        e_ldr(18, 28, OFF_ID);
-        e_rrr(A_ORR, 17, 17, 18, 0, 21);
+        e_rrr(A_EOR, 27, 27, 19, 0, 0);
+        e_rrr(A_ORR, 17, 17, 27, 0, 0);
+        e_bit_move(17, 16, 30, 6, 27);
+        e_bit_move(17, 16, 31, 7, 27);
+        e_bit_move(17, 16, 28, 11, 27);
+        e_pf_compute(27);
+        e_rrr(A_ORR, 17, 17, 27, 0, 2);
+        e_ldr(27, 28, OFF_AF);
+        emit32(0x53000000u | (4 << 16) | (4 << 10) | (27 << 5) | 27);
+        e_rrr(A_ORR, 17, 17, 27, 0, 4);
+        e_ldr(27, 28, OFF_ID);
+        e_rrr(A_ORR, 17, 17, 27, 0, 21);
         if (emit_soft_memory_active() || emit_displaced_stack_active()) {
             e_mov_rr(20, 17, 1);
             e_subi(17, RSP, 8, 1);

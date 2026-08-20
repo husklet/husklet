@@ -1079,7 +1079,7 @@ void emit_memory_guard(int address_register, uint64_t size, uint64_t rip, uint32
     e_ldr(9, 9, 0);
     e_shv(S_LSRV, 9, 9, 17, 1);
     uint32_t *filter_miss = (uint32_t *)g_cp;
-    emit32(0); /* tbz x18,#0,resume */
+    emit32(0); /* tbz x9,#0,resume-filter-miss */
     uint8_t *slow = g_cp;
     *force_slow = 0x37000000u | (1u << 19) | (((uint32_t)((slow - (uint8_t *)force_slow) / 4) & 0x3FFFu) << 5) | 16u;
     e_ldr(9, 28, OFF_BUS_SCRATCH);

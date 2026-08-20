@@ -8,3 +8,12 @@
 fn emitted_code_never_holds_a_live_value_in_the_reserved_register() {
     assert_eq!(hl_native::aarch64_reserved_register_test(), 0);
 }
+
+/// The x86-64 guest arm parks x86 condition codes in host scratch, so a zeroed
+/// reserved register rewrites guest flags with no fault at all. A `0` answer
+/// also proves every flag lowering in the fixture emitted code and that the
+/// witness instructions the scan is built around are present.
+#[test]
+fn emitted_x86_flag_lowerings_never_name_the_reserved_register() {
+    assert_eq!(hl_native::x86_reserved_register_test(), 0);
+}

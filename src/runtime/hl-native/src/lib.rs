@@ -163,6 +163,18 @@ pub fn aarch64_reserved_register_test() -> i32 {
     bindings::aarch64_reserved_register_test()
 }
 
+/// Reports whether emitted x86-64 guest code keeps a live value in host `x18`.
+///
+/// Returns `0` when the flag lowerings name no reserved register, `1` when one
+/// of them does, `2` when a sub-fixture emitted nothing, and `3` when the
+/// witness instructions the scan is built around are absent (a vacuous pass).
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+#[must_use]
+pub fn x86_reserved_register_test() -> i32 {
+    bindings::x86_reserved_register_test()
+}
+
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 #[must_use]

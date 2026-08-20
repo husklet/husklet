@@ -34,7 +34,10 @@ static int g_test_store_preflight_calls;
 // Register model (the win from x86 having only 16 GPRs, see DESIGN.md §4):
 //   guest  rax rcx rdx rbx rsp rbp rsi rdi  r8..r15
 //   host    x0  x1  x2  x3  x4  x5  x6  x7  x8..x15   (guest reg# == host reg#)
-//   cpu ptr : x28 (PINNED for the whole block)   scratch : x16,x17   forbidden: x18
+//   cpu ptr : x28 (PINNED for the whole block)   scratch : x16,x17 + the trampoline-preserved x19..x27
+//   forbidden: x18 -- Darwin reserves the platform register and clears it asynchronously between two
+//   arbitrary instructions, so a value parked there is lost with no fault. hl_x86_64_reserved_register_test
+//   decodes the emitted words of every lowering that once used it and fails if any names x18 again.
 //   flags   : ARM nzcv saved/restored to cpu->nzcv (exact for cmp/test->jcc, §9)
 //
 // Status: BOOTSTRAP. Implements enough to run a freestanding write+exit guest and a
@@ -443,8 +446,8 @@ static const hl_x86_address_emitter address_emitter = {
     address_patch_cbnz};
 
 static hl_x86_address_state address_state(void) {
-    return (hl_x86_address_state){NULL,   &address_emitter, g_nonpie_lo, g_nonpie_hi,          g_nonpie_bias,
-                                  OFF_FS, OFF_GS,           1,            jit_guest_bus_active()};
+    return (hl_x86_address_state){NULL,   &address_emitter, g_nonpie_lo, g_nonpie_hi,           g_nonpie_bias,
+                                  OFF_FS, OFF_GS,           1,           jit_guest_bus_active()};
 }
 
 void emit_ea_core(struct insn *insn, uint64_t next, int bias) {
@@ -946,6 +949,148 @@ HL_API int hl_x86_64_store_preflight_test(void) {
     g_sigact[11].handler = saved_handler;
     return valid ? 0 : 1;
 }
+#endif
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+/*
+ * Host x18 is reserved by Darwin and cleared asynchronously between two
+ * arbitrary instructions, so emitted code may never keep a live value there.
+ * The x86_64 register model at the top of this file has always said
+ * "forbidden: x18", yet seven lowerings named it anyway: PUSHF/POPF/LAHF/SAHF,
+ * emit_restore_rflags, both rotate flag folds, PTEST and the dynamic-direction
+ * string descriptor.  None of them crash the way the aarch64 soft-TLB guard
+ * did -- every one of them parks a *flag* value there, so a zeroed x18 rewrote
+ * the guest's condition codes silently and the guest took the wrong branch.
+ *
+ * Emit those lowerings into a local buffer and decode the register fields of
+ * every GPR-class word back: no emitted instruction may name x18 as a source,
+ * destination, base or index.  Vector registers are unaffected (v18 is not the
+ * platform register), so the classifier below deliberately admits only the
+ * integer instruction classes this backend emits.
+ *
+ * Returns 0 clean, 1 when a word names the reserved register, 2 when a
+ * sub-fixture emitted nothing, and 3 when the witness instructions the scan is
+ * built around are missing -- so a pass can never come from an empty buffer.
+ */
+#define HL_X86_RESERVED_GPR 18
+
+static int x86_reserved_gpr_word(uint32_t word) {
+    int rd = (int)(word & 31u), rn = (int)((word >> 5) & 31u), rm = (int)((word >> 16) & 31u);
+    int ra = (int)((word >> 10) & 31u);
+    int reserved = HL_X86_RESERVED_GPR;
+#define HL_X86_ANY2 (rd == reserved || rn == reserved)
+#define HL_X86_ANY3 (HL_X86_ANY2 || rm == reserved)
+    if ((word & 0xFFFFFFE0u) == 0xD53B4200u || (word & 0xFFFFFFE0u) == 0xD51B4200u) return rd == reserved;
+    if ((word & 0x3F000000u) == 0x39000000u) return HL_X86_ANY2;                   /* ldr/str, unsigned offset */
+    if ((word & 0x3F000000u) == 0x38000000u) return HL_X86_ANY3;                   /* ldr/str, register/indexed */
+    if ((word & 0x3E000000u) == 0x28000000u) return HL_X86_ANY2 || ra == reserved; /* ldp/stp */
+    if ((word & 0x1F000000u) == 0x0A000000u) return HL_X86_ANY3;                   /* logical, shifted register */
+    if ((word & 0x1F000000u) == 0x0B000000u) return HL_X86_ANY3;                   /* add/sub, shifted/extended */
+    if ((word & 0x1F800000u) == 0x11000000u) return HL_X86_ANY2;                   /* add/sub, immediate */
+    if ((word & 0x1F800000u) == 0x12000000u) return HL_X86_ANY2;                   /* logical, immediate */
+    if ((word & 0x1F800000u) == 0x12800000u) return rd == reserved;                /* movz/movk/movn */
+    if ((word & 0x1F800000u) == 0x13000000u) return HL_X86_ANY2;                   /* sbfm/bfm/ubfm */
+    if ((word & 0x1F800000u) == 0x13800000u) return HL_X86_ANY3;                   /* extr */
+    if ((word & 0x1FE00000u) == 0x1A400000u) return HL_X86_ANY3;                   /* ccmp/ccmn register */
+    if ((word & 0x1FE00000u) == 0x1A800000u) return HL_X86_ANY3;                   /* csel/csinc/csinv/csneg */
+    if ((word & 0x1FE00000u) == 0x1AC00000u) return HL_X86_ANY3;                   /* udiv/lslv/lsrv/asrv/rorv */
+    if ((word & 0x1F000000u) == 0x1B000000u) return HL_X86_ANY3 || ra == reserved; /* madd/msub */
+    if ((word & 0x7E000000u) == 0x34000000u) return rd == reserved;                /* cbz/cbnz */
+    if ((word & 0x7E000000u) == 0x36000000u) return rd == reserved;                /* tbz/tbnz */
+    if ((word & 0x9FE0FC00u) == 0x0E003C00u) return rd == reserved;                /* umov: vector -> GPR */
+    if ((word & 0xFFFFFC1Fu) == 0xD61F0000u) return rn == reserved;                /* br/blr */
+    return 0;
+#undef HL_X86_ANY3
+#undef HL_X86_ANY2
+}
+
+/* Recognized-class words carry the scan; count them so a buffer of nothing but
+   vector spill words cannot read as a clean integer scan. */
+static int x86_reserved_gpr_classified(uint32_t word) {
+    return (word & 0x3F000000u) == 0x39000000u || (word & 0x1F000000u) == 0x0A000000u ||
+           (word & 0x1F000000u) == 0x0B000000u || (word & 0x1F800000u) == 0x12800000u ||
+           (word & 0x1F800000u) == 0x13000000u;
+}
+
+HL_API int hl_x86_64_reserved_register_test(void) {
+    static uint32_t code[8192];
+    memset(code, 0, sizeof code);
+    uint8_t *saved_cp = g_cp;
+    enum hl_x86_direction saved_direction = hl_x86_legacy_direction();
+    g_cp = (uint8_t *)code;
+
+    size_t mark = 0, emitted = 0;
+    int empty = 0;
+#define HL_X86_FIXTURE(expression)                                                                                     \
+    do {                                                                                                               \
+        mark = (size_t)((uint32_t *)g_cp - code);                                                                      \
+        (void)(expression);                                                                                            \
+        emitted = (size_t)((uint32_t *)g_cp - code);                                                                   \
+        if (emitted <= mark) empty = 1;                                                                                \
+    } while (0)
+
+    struct insn insn;
+    memset(&insn, 0, sizeof insn);
+    insn.len = 1;
+    insn.opsize = 8;
+    insn.op = 0x9E; /* SAHF */
+    HL_X86_FIXTURE(lower_flag_register_transfer(&insn));
+    insn.op = 0x9F; /* LAHF */
+    HL_X86_FIXTURE(lower_flag_register_transfer(&insn));
+    insn.op = 0x9C; /* PUSHFQ */
+    HL_X86_FIXTURE(lower_flag_stack_control(&insn, UINT64_C(0x401000)));
+    insn.op = 0x9D; /* POPFQ -> emit_restore_rflags */
+    HL_X86_FIXTURE(lower_flag_stack_control(&insn, UINT64_C(0x401000)));
+    HL_X86_FIXTURE(e_rot_flags_const(16, 0, 64, 1));
+    HL_X86_FIXTURE(e_rot_flags_cl(16, 1, 64));
+
+    hl_x86_crypto_state crypto = {0, 0, 1};
+    memset(&insn, 0, sizeof insn);
+    insn.len = 4;
+    insn.two = 1;
+    insn.map3 = 2;
+    insn.p66 = 1;
+    insn.opsize = 8;
+    insn.op = 0x17; /* PTEST xmm1, xmm2 */
+    insn.reg = 1;
+    insn.rm_reg = 2;
+    HL_X86_FIXTURE(hl_x86_lower_crypto(&insn, UINT64_C(0x401010), &crypto));
+
+    hl_x86_repstr_state repstr = {HL_X86_DIRECTION_DYNAMIC, 1};
+    memset(&insn, 0, sizeof insn);
+    insn.len = 1;
+    insn.opsize = 8;
+    insn.op = 0xA7; /* CMPSQ, dynamic direction -> the cpu->df descriptor fold */
+    HL_X86_FIXTURE(hl_x86_lower_repstr(&insn, UINT64_C(0x401020), &repstr));
+#undef HL_X86_FIXTURE
+
+    size_t count = (size_t)((uint32_t *)g_cp - code);
+    g_cp = saved_cp;
+    hl_x86_legacy_direction_set(saved_direction);
+    hl_x86_integer_reset_flags();
+    if (empty || count < 64u || count > sizeof code / sizeof code[0]) return 2;
+
+    /* Witnesses: the exact instructions the reserved register used to appear in.
+       Without them a clean scan would say nothing about these lowerings. */
+    int nzcv_writes = 0, pf_stores = 0, id_stores = 0, df_loads = 0, vector_to_gpr = 0, classified = 0;
+    for (size_t index = 0; index < count; ++index) {
+        uint32_t word = code[index];
+        if ((word & 0xFFFFFFE0u) == 0xD51B4200u) nzcv_writes++;
+        if ((word & 0xFFFFFFE0u) == (0xF9000000u | (((unsigned)OFF_PF / 8u) << 10) | (28u << 5))) pf_stores++;
+        if ((word & 0xFFFFFFE0u) == (0xF9000000u | (((unsigned)OFF_ID / 8u) << 10) | (28u << 5))) id_stores++;
+        if ((word & 0xFFFFFFE0u) == (0xF9400000u | (((unsigned)OFF_DF / 8u) << 10) | (28u << 5))) df_loads++;
+        if ((word & 0x9FE0FC00u) == 0x0E003C00u) vector_to_gpr++;
+        if (x86_reserved_gpr_classified(word)) classified++;
+    }
+    if (nzcv_writes < 4 || pf_stores < 2 || id_stores < 1 || df_loads < 2 || vector_to_gpr < 2 || classified < 60)
+        return 3;
+
+    for (size_t index = 0; index < count; ++index)
+        if (x86_reserved_gpr_word(code[index])) return 1;
+    return 0;
+}
+
+#undef HL_X86_RESERVED_GPR
 #endif
 
 static int x86_signal_cache_contains(void *context, uint64_t pc) {
@@ -1555,8 +1700,8 @@ int hl_run_linux_guest(const hl_host_services *host, hl_linux_abi *box, const ch
         sb_argv[sb_argc++] = (char *)argv[i];
     sb_argv[sb_argc] = NULL;
     const char *sb_finalhost;
-    int sb_new =
-        resolve_shebang_chain(sb_argv, sb_argc, HL_MAXARGV, sb_prog_host, sb_store, sb_fhb, sizeof sb_fhb, &sb_finalhost);
+    int sb_new = resolve_shebang_chain(sb_argv, sb_argc, HL_MAXARGV, sb_prog_host, sb_store, sb_fhb, sizeof sb_fhb,
+                                       &sb_finalhost);
     if (sb_new < 0) {
         fprintf(stderr, "hl-engine: too many nested #! interpreters (ELOOP): %s\n", argv[0]);
         return hl_vfs_cursor_state_finish(40); // ELOOP

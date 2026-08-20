@@ -437,6 +437,11 @@ unsafe fn hl_aarch64_reserved_register_test() -> c_int {
 }
 
 #[cfg(feature = "native-test-hooks")]
+unsafe fn hl_x86_64_reserved_register_test() -> c_int {
+    unsafe { (test_api().x86_64_reserved_register)() }
+}
+
+#[cfg(feature = "native-test-hooks")]
 unsafe fn hl_aarch64_signal_errno_frame_test(
     domain: c_uint,
     redirect: c_uint,
@@ -822,6 +827,12 @@ pub(crate) fn x86_store_preflight_test() -> bool {
 pub(crate) fn aarch64_reserved_register_test() -> i32 {
     // SAFETY: the feature-gated hook owns its local emitter buffer and restores every global it moves.
     unsafe { hl_aarch64_reserved_register_test() }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn x86_reserved_register_test() -> i32 {
+    // SAFETY: the feature-gated hook owns its local emitter buffer and restores every global it moves.
+    unsafe { hl_x86_64_reserved_register_test() }
 }
 
 #[cfg(feature = "native-test-hooks")]
