@@ -108,6 +108,11 @@ static _Thread_local int hl_default_options_ready;
 void hl_options_import_environment(hl_options *options) {
     const char *fatal = getenv("HL_FATAL_DIAGNOSTICS");
     if (fatal != NULL) (void)hl_options_set(options, "HL_FATAL_DIAGNOSTICS", fatal, 0);
+    /* Codegen A/B selector: it must be settable on a bare worker invocation,
+       which carries no launch plan, so it is imported here beside the other
+       debug-only option rather than through the plan. */
+    const char *shared_resolver = getenv("HL_SOFT_SHARED_RESOLVER");
+    if (shared_resolver != NULL) (void)hl_options_set(options, "HL_SOFT_SHARED_RESOLVER", shared_resolver, 0);
 #if defined(HL_ENABLE_LOGGING) && HL_ENABLE_LOGGING
     const char *selector = getenv("HL_LOG");
     if (selector != NULL) (void)hl_options_set(options, "HL_LOG", selector, 0);

@@ -775,6 +775,13 @@ static uint64_t g_prof_miss, g_prof_sys, g_lse_n;
 static uint64_t g_prof_soft_hull_sampled, g_prof_soft_cached_sampled, g_prof_soft_sites_sampled;
 static uint64_t g_prof_soft_miss, g_prof_soft_span, g_prof_soft_bounce_prepare, g_prof_soft_bounce_commit;
 static uint64_t g_prof_smc_queued, g_prof_smc_commit;
+/* Translated bytes the aarch64 soft-memory lowering costs, summed over every
+   guarded site, its miss lowering and the shared bodies.  This is the arena
+   pressure the guard adds, which is the axis on which the inline and
+   shared-resolver lowerings trade against each other; it is exact, not
+   sampled.  Defined in this shared unit so the x86 [prof] reporter -- which
+   shares linux_abi/syscall/process/identity.c -- links, and stays 0 there. */
+static uint64_t g_prof_soft_guard_bytes;
 // PROF=1: dispatcher crossings / IBTC misses / translations
 // A3 §B instrumentation (PROF=1). Runtime: shadow pushes executed, predicted-return FAST hits (host
 // ret, RAS), and returns that fell through emit_shadow_ret to the IBTC fallback. Translate-time:
