@@ -13,6 +13,11 @@ const FORBID_REMOTE_ENV: &str = "HL_TEST_FORBID_REMOTE_IMAGES";
 const CHILD_TEST: &str = "runtime::domain::product_checkpoint_test::product_checkpoint_domain_worker";
 const PHASE: Duration = Duration::from_secs(45);
 const START: Duration = Duration::from_secs(180);
+/// Close/reopen cycles driven against one workspace.
+///
+/// A single cycle passes on a tree where repeated cycling does not: the defect the user reported
+/// only appears on iteration, so one cycle measures nothing about it.
+const CYCLES: usize = 5;
 const SCRIPT: &str = "\
 guard=/tmp/husklet-continue-started; \
 if test -e \"$guard\"; then echo FRESH_START_FORBIDDEN > /tmp/husklet-continue-fresh-start; exit 97; fi; \
@@ -303,8 +308,15 @@ fn product_checkpoint_domain_worker() {
     crate::runtime::worker::Worker::domain(&name.to_string_lossy()).expect("serve product checkpoint domain");
 }
 
+/// Covers the workspace **primary** process only: the `sleep` tree here belongs to the container's
+/// own spec process, which the container's whole-image checkpoint restores.
+///
+/// It does **not** cover an execution session. A terminal pane runs as an exec, and an exec is
+/// restored by `Executions::restore_checkpoints`, which this fixture never enters because it
+/// creates no exec. A `sleep` typed into a pane therefore travels a path this test does not touch,
+/// which is why the test is green while the product loses it.
 #[tokio::test]
-async fn continue_later_restores_sleep_tree_in_two_fresh_domain_processes() {
+async fn continue_later_restores_the_primary_sleep_tree_across_repeated_cycles() {
     if std::env::var_os("HL_ALPINE_ARCHIVE").is_none() {
         assert!(
             std::env::var_os("HL_PRODUCT_CHECKPOINT_REQUIRED").is_none(),
@@ -341,7 +353,7 @@ async fn run_cycles(fixture: &mut Fixture) -> TestResult {
         4,
         "fixture did not publish init plus three sleep identities"
     );
-    for cycle in 1..=2 {
+    for cycle in 1..=CYCLES {
         let _old_tree = fixture.close_continue(cycle, &mut domain)?;
         let stopped = std::fs::metadata(&progress)?.len();
         std::thread::sleep(Duration::from_millis(150));
@@ -481,4 +493,272 @@ fn wait_processes_gone(processes: &BTreeSet<u32>, timeout: Duration) -> TestResu
         }
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+// ---------------------------------------------------------------------------
+// Terminal-backed exec journey
+// ---------------------------------------------------------------------------
+
+/// Close/reopen cycles driven against one **terminal-backed execution session**.
+///
+/// The fixture above covers the container's own spec process. A terminal pane is not that: it is an
+/// exec created with `tty: true` and a `console_size`, and it is restored by a different path. Every
+/// exec in the container suite is pipe-backed and this file's other journey creates no exec at all,
+/// so nothing else in the repository drives the sequence a user drives -- open, run a command at the
+/// pane's prompt, Continue later, reopen -- and nothing else enters the exec reattach path.
+const EXEC_MARKER: &str = "while :; do printf x >> /tmp/husklet-journey-progress; sleep .05; done &\n";
+/// The interactive shell a pane runs, minus the product's shell selection.
+const EXEC_SHELL: &str = "cd /root; exec /bin/sh -i";
+/// Fewer cycles than the primary journey: each one carries a whole-image capture plus an exec.
+const EXEC_CYCLES: usize = 3;
+
+/// What a reopened workspace was able to do with the pane's persisted execution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Resumption {
+    /// The execution came back running and the pane reattached to it.
+    Reattached,
+    /// The execution came back but the domain refused to hand it over. The pane must say so.
+    Refused,
+    /// The execution record did not survive the capture at all. Production answers a 404 by
+    /// creating a second shell, which is what makes a lost command look like a live prompt.
+    Discarded,
+}
+
+struct ExecJourney {
+    socket: PathBuf,
+    client: hl_client::Client,
+    execution: String,
+    config: hl_client::model::ExecConfig,
+    start: hl_client::model::ExecStart,
+    attach: hl_client::model::ExecAttach,
+}
+
+impl ExecJourney {
+    /// Builds the exec exactly as `runtime::execution::launch` does for a pane.
+    async fn create(socket: PathBuf) -> TestResult<Self> {
+        use hl_client::model::{Attachment, ExecAttach, ExecConfig, ExecStart};
+
+        let client = context("connect workspace domain", hl_client::Client::unix(socket.clone()))?;
+        context(
+            "start workspace container for the pane execution",
+            match client.containers().start(CONTAINER).await {
+                Err(hl_client::Error::Docker { status, .. }) if matches!(status.as_u16(), 304 | 409) => Ok(()),
+                other => other,
+            },
+        )?;
+        let console = Some([24, 80]);
+        let config = ExecConfig {
+            attach: Attachment {
+                stdin: true,
+                stdout: true,
+                stderr: true,
+            },
+            tty: true,
+            env: Some(vec!["HOME=/root".to_owned()]),
+            command: vec!["/bin/sh".into(), "-c".into(), EXEC_SHELL.into()],
+            user: "0:0".into(),
+            working_dir: "/root".into(),
+            ..ExecConfig::default()
+        };
+        let start = ExecStart {
+            tty: true,
+            kill_on_disconnect: true,
+            console_size: console,
+            ..ExecStart::default()
+        };
+        let attach = ExecAttach {
+            tty: true,
+            kill_on_disconnect: true,
+            console_size: console,
+        };
+        let created = context(
+            "create terminal-backed pane execution",
+            client.executions().create(CONTAINER, &config).await,
+        )?;
+        Ok(Self {
+            socket,
+            client,
+            execution: created.id,
+            config,
+            start,
+            attach,
+        })
+    }
+
+    /// Starts the pane's shell and types the long-running command a user types at its prompt.
+    async fn open_and_type(&self) -> TestResult<hl_client::api::TerminalOutput> {
+        let session = context(
+            "start terminal-backed pane execution",
+            self.client.executions().start(&self.execution, &self.start).await,
+        )?;
+        let (mut input, output) = context("split pane execution terminal", session.into_terminal())?;
+        context(
+            "type the pane's long-running command",
+            input.write(EXEC_MARKER.as_bytes()).await,
+        )?;
+        Ok(output)
+    }
+
+    /// Resumes the pane's execution exactly as a reopened workspace does: a running execution is
+    /// reattached, and a refusal is reported rather than replaced by a second shell.
+    ///
+    /// This lane never relaunches a restored execution. A `Refused` outcome is a finding to report,
+    /// not a state to paper over by creating a new one.
+    async fn resume(&mut self) -> TestResult<(Resumption, Option<hl_client::api::TerminalOutput>)> {
+        // A reopened workspace is served by a **new** domain process, so a pane connects afresh --
+        // the previous connection belongs to a domain that has already gone away.
+        self.client = context(
+            "reconnect reopened workspace domain",
+            hl_client::Client::unix(self.socket.clone()),
+        )?;
+        context(
+            "start workspace container after reopen",
+            match self.client.containers().start(CONTAINER).await {
+                Err(hl_client::Error::Docker { status, .. }) if matches!(status.as_u16(), 304 | 409) => Ok(()),
+                other => other,
+            },
+        )?;
+        let inspection = match self.client.executions().inspect(&self.execution).await {
+            Ok(inspection) => inspection,
+            Err(hl_client::Error::Docker { status, .. }) if status.as_u16() == 404 => {
+                return Ok((Resumption::Discarded, None))
+            }
+            Err(error) => return Err(format!("inspect the persisted pane execution after reopen: {error}").into()),
+        };
+        if !inspection.running {
+            return Ok((Resumption::Refused, None));
+        }
+        match self.client.executions().attach(&self.execution, &self.attach).await {
+            Ok(session) => {
+                let (_input, output) = context("split reattached pane terminal", session.into_terminal())?;
+                Ok((Resumption::Reattached, Some(output)))
+            }
+            Err(error) => {
+                eprintln!("product-checkpoint exec reattach refused: {error}");
+                Ok((Resumption::Refused, None))
+            }
+        }
+    }
+
+    /// The pane's persisted execution identity must never be silently replaced.
+    fn identity(&self) -> &str {
+        &self.execution
+    }
+
+    fn configured_command(&self) -> &[String] {
+        &self.config.command
+    }
+}
+
+/// Drives open -> exec -> Continue later -> reopen, N times, against a terminal-backed pane.
+#[tokio::test]
+async fn continue_later_keeps_a_terminal_backed_pane_execution_across_repeated_cycles() {
+    // Opt-in, because it currently reproduces a live product defect owned elsewhere: a pane's
+    // terminal-backed execution does not survive the capture, and the reopened workspace answers
+    // its own 404 by creating a second shell. Run it with
+    //   HL_PRODUCT_EXEC_JOURNEY=1 cargo test -p husklet --lib --features runtime -- --exact \
+    //     runtime::domain::product_checkpoint_test::continue_later_keeps_a_terminal_backed_pane_execution_across_repeated_cycles --nocapture
+    if std::env::var_os("HL_PRODUCT_EXEC_JOURNEY").is_none() {
+        eprintln!(
+            "product-checkpoint exec journey skipped: set HL_PRODUCT_EXEC_JOURNEY=1 to drive \
+             open -> exec -> Continue later -> reopen"
+        );
+        return;
+    }
+    if std::env::var_os("HL_ALPINE_ARCHIVE").is_none() {
+        assert!(
+            std::env::var_os("HL_PRODUCT_CHECKPOINT_REQUIRED").is_none(),
+            "normal product checkpoint gate requires HL_ALPINE_ARCHIVE"
+        );
+        eprintln!("product-checkpoint exec journey skipped: HL_ALPINE_ARCHIVE is not available on this host");
+        return;
+    }
+    let mut fixture = match Fixture::create().await {
+        Ok(fixture) => fixture,
+        Err(error) => panic!("create product checkpoint fixture: {error}"),
+    };
+    let total = Instant::now();
+    let outcome = run_exec_cycles(&mut fixture).await;
+    if let Err(error) = outcome {
+        fixture.phase(format!(
+            "exec total_failed_ms={} error={error}",
+            total.elapsed().as_millis()
+        ));
+        fixture.preserve_failure(error.as_ref());
+        panic!("product Continue-later exec journey failed: {error}");
+    }
+    fixture.phase(format!("exec total_ms={}", total.elapsed().as_millis()));
+}
+
+async fn run_exec_cycles(fixture: &mut Fixture) -> TestResult {
+    let progress = fixture.rootfs.join("tmp/husklet-journey-progress");
+    let _ = std::fs::remove_file(&progress);
+
+    let mut domain = fixture.spawn_domain(0)?;
+    let mut journey = ExecJourney::create(fixture.domain.socket()).await?;
+    let identity = journey.identity().to_owned();
+    let command = journey.configured_command().to_vec();
+    let mut attachment = Some(journey.open_and_type().await?);
+    wait_for_growth(&progress, 0, PHASE)?;
+    fixture.phase(format!("exec cycle=0 execution={identity} typed"));
+
+    for cycle in 1..=EXEC_CYCLES {
+        // The application closes pane attachments only after the capture is requested, so hold the
+        // terminal across the close exactly as a pane does and release it afterwards.
+        let old_tree = fixture.close_continue(cycle, &mut domain)?;
+        drop(attachment.take());
+        let stopped = std::fs::metadata(&progress)?.len();
+        std::thread::sleep(Duration::from_millis(150));
+        if std::fs::metadata(&progress)?.len() != stopped {
+            return Err("the pane's command progressed after the old domain lease was released".into());
+        }
+        domain = fixture.spawn_domain(cycle)?;
+        domain.known.extend(old_tree);
+
+        let (resumption, output) = journey.resume().await?;
+        fixture.phase(format!("exec cycle={cycle} resumption={resumption:?}"));
+        // Whatever the domain decides, it must decide it about the *same* execution: a pane that
+        // silently acquired a second shell is the defect the user reported.
+        assert_eq!(
+            journey.identity(),
+            identity,
+            "the pane's persisted execution identity must survive a Continue-later cycle"
+        );
+        assert_eq!(
+            journey.configured_command(),
+            command.as_slice(),
+            "the resumed execution must be the terminal-backed shell the pane created"
+        );
+        match resumption {
+            Resumption::Reattached => {
+                attachment = output;
+                wait_for_growth(&progress, stopped, PHASE)?;
+            }
+            Resumption::Refused => {
+                return Err(format!(
+                    "cycle {cycle}: the domain refused to resume the pane's terminal-backed execution \
+                     {identity}; the pane must report that refusal rather than open a second shell"
+                )
+                .into());
+            }
+            Resumption::Discarded => {
+                return Err(format!(
+                    "cycle {cycle}: the pane's terminal-backed execution {identity} no longer exists after \
+                     the Continue-later capture (404). The command typed at the pane's prompt is gone, and \
+                     the product answers a 404 by creating a second shell -- which is why a lost session \
+                     presents to the user as a working prompt"
+                )
+                .into());
+            }
+        }
+    }
+
+    let final_tree = process_tree(domain.id())?;
+    domain.known.extend(final_tree.iter().copied());
+    drop(attachment.take());
+    fixture.domain.close_handover(Close::Kill, || Ok(()))?;
+    wait_child(&mut domain, PHASE)?;
+    wait_processes_gone(&final_tree, PHASE)?;
+    domain.armed = false;
+    Ok(())
 }

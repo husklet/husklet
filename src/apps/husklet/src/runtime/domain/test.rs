@@ -523,6 +523,7 @@ async fn auxiliary_restore_failure_does_not_abort_later_restore_or_domain_servin
                     Ok(vec![("pane-2", "terminal endpoint unavailable")])
                 }
             },
+            |_id| async { Ok(()) },
         )
         .await?;
         serving.borrow_mut().push("serve".into());
@@ -602,7 +603,10 @@ fn restore_notice_marks_every_line_as_husklet_output_and_shortens_the_typed_reas
         "{text}"
     );
     assert_eq!(text.matches("95032ffd").count(), 1, "{text}");
-    assert!(!text.contains("forked child of the container's engine process"), "{text}");
+    assert!(
+        !text.contains("forked child of the container's engine process"),
+        "{text}"
+    );
     // Preserved scrollback is explained rather than presented as a failure report.
     assert!(text.contains("preserved history"));
     assert!(text.contains("could not be resumed as a live process"));
@@ -622,4 +626,76 @@ fn restore_notice_counts_more_than_one_unresumable_process() {
     let text = summary.read().unwrap().unwrap();
 
     assert!(text.contains("2 programs could not be resumed"), "{text}");
+}
+
+/// The user's reported journey, at the record layer: one workspace closed with Continue later and
+/// reopened, over and over. Each reopen refuses to reattach the pane's execution, and each reopen
+/// then creates a fresh pane execution which is checkpointed by the next close.
+///
+/// Every cycle must report exactly the one program it could not resume. Before the refused record
+/// was discarded, cycle N reported N of them, because nothing in the workspace's life removes a
+/// `Created` execution that owns a checkpoint.
+#[tokio::test]
+async fn repeated_continue_later_cycles_report_one_refusal_each_and_never_accumulate() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    // The durable execution records of one workspace, keyed by id, surviving every cycle.
+    let records: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    let mut reported = Vec::new();
+
+    for cycle in 1..=10 {
+        // The pane execution checkpointed by the previous close is the record awaiting restore.
+        let awaiting = records.borrow().clone();
+        let discarded = Rc::clone(&records);
+        let failures: Vec<String> = Runtime::restore_independently(
+            std::iter::empty::<(String, String)>(),
+            |_id: String| async { Ok::<(), String>(()) },
+            move || async move {
+                Ok(awaiting
+                    .into_iter()
+                    .map(|id| (id, "the restored member exposes no live handle".to_owned()))
+                    .collect::<Vec<_>>())
+            },
+            move |id: String| {
+                let discarded = Rc::clone(&discarded);
+                async move {
+                    discarded.borrow_mut().retain(|existing| existing != &id);
+                    Ok::<(), String>(())
+                }
+            },
+        )
+        .await
+        .expect("restore reports independent failures rather than aborting");
+        reported.push(failures.len());
+        // Reopening the workspace opens one pane, whose execution the next close checkpoints.
+        records.borrow_mut().push(format!("pane-{cycle}"));
+    }
+
+    assert_eq!(
+        reported,
+        [0, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        "each reopen must report only the execution that this cycle could not resume"
+    );
+    assert_eq!(
+        records.borrow().len(),
+        1,
+        "a refused execution record must not survive the restore that reported it"
+    );
+}
+
+/// A refusal is the line the reader acts on; a failure to discard the refused record must not
+/// replace it, duplicate it, or abort the restore of anything else.
+#[tokio::test]
+async fn a_discard_failure_neither_hides_nor_duplicates_the_refusal_it_follows() {
+    let failures: Vec<String> = Runtime::restore_independently(
+        std::iter::empty::<(String, String)>(),
+        |_id: String| async { Ok::<(), String>(()) },
+        || async { Ok(vec![("pane-1".to_owned(), "no live handle".to_owned())]) },
+        |_id: String| async { Err::<(), String>("record storage is read-only".to_owned()) },
+    )
+    .await
+    .expect("a discard failure is diagnostic, not a repository error");
+
+    assert_eq!(failures, ["execution pane-1: no live handle"]);
 }

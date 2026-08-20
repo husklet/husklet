@@ -101,6 +101,29 @@ impl std::fmt::Display for ChildStatus {
     }
 }
 
+/// The state a pane is in between being drawn and its shell accepting a keystroke.
+///
+/// Nothing here changes launch control flow. It exists because a pane that has replayed history is
+/// visually indistinguishable from a live shell, which is what let a Ctrl-C typed at a replayed
+/// prompt look like a shell that had died.
+struct NotYetLive;
+
+impl NotYetLive {
+    /// Dim styling, matching the reopen notice, applied only where it is written to a terminal.
+    const DIM: &'static str = "\u{1b}[2m";
+    const RESET: &'static str = "\u{1b}[0m";
+
+    fn notice(restoring: bool) -> String {
+        let prefix = hl::runtime::domain::RESTORE_NOTICE_PREFIX;
+        let words = if restoring {
+            "Restoring this workspace. The output above is history from your last session; this pane is not live yet and keystrokes are not delivered to a shell."
+        } else {
+            "Starting this workspace. This pane is not live yet and keystrokes are not delivered to a shell."
+        };
+        format!("\r\n{}{prefix}{words}{}\r\n", Self::DIM, Self::RESET)
+    }
+}
+
 /// Builds a terminal for one persisted layout slot.
 pub(crate) fn make_terminal_ex(
     tw: &Rc<TermWin>,
@@ -186,6 +209,12 @@ pub(crate) fn make_terminal_ex(
     if !replay.is_empty() {
         term.feed(&replay);
     }
+    // Replayed scrollback ends in the prompt the previous session left behind, and that prompt does
+    // not accept input: the worker below has not started a shell yet, and on a reopened workspace it
+    // will not for as long as the restore takes. Say so, in the same attributed voice the restore
+    // summary uses, so "restoring" is legible as a state distinct from "ready". The notice carries
+    // the notice prefix, so it is filtered out of the scrollback this pane persists.
+    term.feed(NotYetLive::notice(!replay.is_empty()).as_bytes());
     // NOTE: we deliberately do NOT use VTE's spawn_async — on macOS it fork()s inside the multithreaded
     // GTK process and does non-async-signal-safe work before exec, which crashes the child before it
     // runs (every command "exits 11"). Instead spawn via posix_spawn (async-safe) onto a PTY we own.
@@ -207,7 +236,30 @@ pub(crate) const URL_REGEX: &str = r"(?:https?://|www\.)[^\s<>\x22'`{}|\\^\[\]]+
 
 #[cfg(test)]
 mod child_status_tests {
-    use super::ChildStatus;
+    use super::{ChildStatus, NotYetLive};
+
+    #[test]
+    fn a_pane_that_is_not_live_yet_says_so_in_husklets_own_attributed_voice() {
+        let prefix = hl::runtime::domain::RESTORE_NOTICE_PREFIX;
+        let restoring = NotYetLive::notice(true);
+        let starting = NotYetLive::notice(false);
+
+        for notice in [&restoring, &starting] {
+            assert!(notice.contains(prefix), "the notice must be attributed to Husklet");
+            assert!(
+                notice.contains("not live yet"),
+                "the notice must name the state, not merely decorate it"
+            );
+            // Persistence drops any line carrying the prefix, so the notice describes one launch
+            // and can never be replayed as though it were guest output.
+            assert!(
+                super::HistorySnapshot::persistent(notice).trim().is_empty(),
+                "the notice must never be persisted as scrollback"
+            );
+        }
+        assert!(restoring.contains("history from your last session"));
+        assert!(!starting.contains("history from your last session"));
+    }
     use std::cell::Cell;
 
     #[test]
