@@ -217,10 +217,13 @@ int hl_host_process_fd_read(int64_t pid, int32_t descriptor, hl_host_process_fd 
     char link[96];
     char target[PATH_MAX + 1];
     ssize_t length;
-    hl_host_process_info process;
+    uint64_t start_time_ns;
     if (entry == NULL || path_size == NULL || pid <= 0 || descriptor < 0 || (path_capacity != 0 && path == NULL))
         return 0;
-    if (!hl_host_process_read(pid, &process)) return 0;
+    /* Only the privacy classification below needs anything from the process, and it needs only the
+     * identity token. Reading the whole /proc/<pid>/stat record here cost a file open, read and field
+     * parse for EVERY inspected descriptor. */
+    if (!hl_host_process_start_time_ns(pid, &start_time_ns)) return 0;
     snprintf(link, sizeof link, "/proc/%lld/fd/%d", (long long)pid, descriptor);
     length = readlink(link, target, sizeof target - 1);
     if (length < 0) return 0;
@@ -228,7 +231,7 @@ int hl_host_process_fd_read(int64_t pid, int32_t descriptor, hl_host_process_fd 
     entry->descriptor = descriptor;
     entry->kind = hl_linux_fd_kind(target);
     entry->flags =
-        hl_host_process_fd_private_is(pid, process.start_time_ns, descriptor) ? HL_HOST_PROCESS_FD_ENGINE_PRIVATE : 0;
+        hl_host_process_fd_private_is(pid, start_time_ns, descriptor) ? HL_HOST_PROCESS_FD_ENGINE_PRIVATE : 0;
     entry->reserved = 0;
     entry->stable_device = 0;
     entry->stable_object = 0;
@@ -251,9 +254,9 @@ int hl_host_process_fds(int64_t pid, hl_host_process_fd *entries, size_t capacit
     DIR *directory;
     struct dirent *item;
     size_t total = 0;
-    hl_host_process_info process;
+    uint64_t start_time_ns;
     if (count == NULL || pid <= 0 || (capacity != 0 && entries == NULL)) return 0;
-    if (!hl_host_process_read(pid, &process)) return 0;
+    if (!hl_host_process_start_time_ns(pid, &start_time_ns)) return 0;
     snprintf(path, sizeof path, "/proc/%lld/fd", (long long)pid);
     directory = opendir(path);
     if (directory == NULL) return 0;
@@ -267,7 +270,7 @@ int hl_host_process_fds(int64_t pid, hl_host_process_fd *entries, size_t capacit
             if (total < capacity) {
                 entries[total].descriptor = (int32_t)descriptor;
                 entries[total].kind = HL_HOST_FD_OTHER;
-                entries[total].flags = hl_host_process_fd_private_is(pid, process.start_time_ns, (int)descriptor)
+                entries[total].flags = hl_host_process_fd_private_is(pid, start_time_ns, (int)descriptor)
                                            ? HL_HOST_PROCESS_FD_ENGINE_PRIVATE
                                            : 0;
                 entries[total].reserved = 0;
@@ -287,14 +290,14 @@ int hl_host_process_fds_collect(int64_t pid, hl_host_process_fd **entries, size_
     char path[64];
     DIR *directory;
     struct dirent *item;
-    hl_host_process_info process;
+    uint64_t start_time_ns;
     hl_host_process_fd *listing = NULL;
     size_t capacity = 0;
     size_t total = 0;
     if (entries == NULL || count == NULL || pid <= 0) return 0;
     *entries = NULL;
     *count = 0;
-    if (!hl_host_process_read(pid, &process)) return 0;
+    if (!hl_host_process_start_time_ns(pid, &start_time_ns)) return 0;
     snprintf(path, sizeof path, "/proc/%lld/fd", (long long)pid);
     directory = opendir(path);
     if (directory == NULL) return 0;
@@ -324,7 +327,7 @@ int hl_host_process_fds_collect(int64_t pid, hl_host_process_fd **entries, size_
             }
             listing[total].descriptor = (int32_t)descriptor;
             listing[total].kind = HL_HOST_FD_OTHER;
-            listing[total].flags = hl_host_process_fd_private_is(pid, process.start_time_ns, (int)descriptor)
+            listing[total].flags = hl_host_process_fd_private_is(pid, start_time_ns, (int)descriptor)
                                        ? HL_HOST_PROCESS_FD_ENGINE_PRIVATE
                                        : 0;
             listing[total].reserved = 0;

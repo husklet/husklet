@@ -353,7 +353,6 @@ static void proc_reg_key(char *out, size_t n) {
    NOT a domain -- a guest setsid(2) would move a process between fallback keys. */
 static int hl_linux_container_process_domain_member(int32_t host_pid) {
     char dir[80], path[144], text[32];
-    hl_host_process_info process;
     if (host_pid <= 0 || !proc_reg_domain_key(dir, sizeof dir)) return 0;
     snprintf(path, sizeof path, "%s/b%d", dir, (int)host_pid);
     int descriptor = open(path, O_RDONLY | O_CLOEXEC);
@@ -367,11 +366,12 @@ static int hl_linux_container_process_domain_member(int32_t host_pid) {
     text[count] = 0;
     errno = 0;
     char *end;
+    uint64_t start_time_ns;
     unsigned long long recorded = strtoull(text, &end, 10);
     if (errno != 0 || end == text || (*end != '\n' && *end != 0) || recorded == 0) return 0;
     // A live process whose start time still matches the record. Both halves are load-bearing: without
     // the start time a recycled host pid would inherit a departed member's place in the freeze.
-    return hl_host_process_read((int)host_pid, &process) && process.start_time_ns == recorded;
+    return hl_host_process_start_time_ns(host_pid, &start_time_ns) && start_time_ns == recorded;
 }
 
 /*
@@ -395,10 +395,11 @@ static char g_launch_reg_birth_file[160];
 
 static void launch_reg_publish(int hostpid, int remember) {
     char dir[80], birth[32], path[160];
-    hl_host_process_info process;
-    if (hostpid <= 0 || !launch_reg_key(dir, sizeof dir) || !hl_host_process_read(hostpid, &process)) return;
+    uint64_t start_time_ns;
+    if (hostpid <= 0 || !launch_reg_key(dir, sizeof dir) || !hl_host_process_start_time_ns(hostpid, &start_time_ns))
+        return;
     hl_compat_mkdir(dir, 0777);
-    int size = snprintf(birth, sizeof birth, "%llu\n", (unsigned long long)process.start_time_ns);
+    int size = snprintf(birth, sizeof birth, "%llu\n", (unsigned long long)start_time_ns);
     snprintf(path, sizeof path, "%s/b%d", dir, hostpid);
     if (size > 0 && hl_host_file_store(&g_jit_services, path, 0600, birth, (size_t)size) == 0 && remember)
         snprintf(g_launch_reg_birth_file, sizeof g_launch_reg_birth_file, "%s", path);
@@ -433,7 +434,7 @@ static void launch_reg_terminate_peers(void) {
             char text[32];
             long raw;
             uint64_t expected;
-            hl_host_process_info process;
+            uint64_t start_time_ns;
             if (entry->d_name[0] != 'b' || entry->d_name[1] < '1' || entry->d_name[1] > '9') continue;
             errno = 0;
             raw = strtol(entry->d_name + 1, &end, 10);
@@ -458,7 +459,7 @@ static void launch_reg_terminate_peers(void) {
             char *birth_end;
             expected = strtoull(text, &birth_end, 10);
             if (errno != 0 || birth_end == text || (*birth_end != '\n' && *birth_end != 0) || expected == 0 ||
-                !hl_host_process_read(raw, &process) || process.start_time_ns != expected) {
+                !hl_host_process_start_time_ns(raw, &start_time_ns) || start_time_ns != expected) {
                 (void)unlink(path);
                 continue;
             }
@@ -509,10 +510,10 @@ static void proc_reg_unlink(void) {
 // teardown scan and the container process-domain membership predicate below compare it against the live
 // process. `remember` optionally receives the written path so the publisher can unlink its own record.
 static void proc_reg_birth_publish(const char *dir, int hostpid, char *remember, size_t remember_size) {
-    hl_host_process_info process;
+    uint64_t start_time_ns;
     char birth[32], path[144];
-    if (hostpid <= 0 || !hl_host_process_read(hostpid, &process)) return;
-    int size = snprintf(birth, sizeof birth, "%llu\n", (unsigned long long)process.start_time_ns);
+    if (hostpid <= 0 || !hl_host_process_start_time_ns(hostpid, &start_time_ns)) return;
+    int size = snprintf(birth, sizeof birth, "%llu\n", (unsigned long long)start_time_ns);
     snprintf(path, sizeof path, "%s/b%d", dir, hostpid);
     if (size > 0 && hl_host_file_store(&g_jit_services, path, 0600, birth, (size_t)size) == 0 && remember)
         snprintf(remember, remember_size, "%s", path);

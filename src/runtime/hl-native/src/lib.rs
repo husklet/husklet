@@ -113,6 +113,12 @@ pub fn private_fork_lock_test(scenario: u32) -> Result<(), i32> {
     bindings::private_fork_lock_test(scenario)
 }
 
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn process_identity_token_test(scenario: u32) -> Result<(), i32> {
+    bindings::process_identity_token_test(scenario)
+}
+
 #[cfg(any(feature = "native-test-hooks", windows))]
 #[doc(hidden)]
 pub fn identity_registry_test(scenario: u32, iterations: u32) -> Result<(), i32> {
