@@ -111,6 +111,9 @@ pub(super) struct FakeRuntime {
     pub(super) resizes: Arc<std::sync::Mutex<Vec<crate::Size>>>,
     pub(super) health: std::sync::Mutex<Option<(Duration, std::collections::VecDeque<ExitStatus>)>>,
     delayed_logs: std::sync::Mutex<std::collections::VecDeque<DelayedLog>>,
+    /// Every member session any launch was asked to revive, so a test can address the process a
+    /// reattachment seated and prove it is that one and not a replacement.
+    pub(super) members: std::sync::Mutex<Vec<Arc<FakeMemberProcess>>>,
 }
 
 impl FakeRuntime {
@@ -148,6 +151,7 @@ impl FakeRuntime {
             resizes: Arc::new(std::sync::Mutex::new(Vec::new())),
             health: std::sync::Mutex::new(None),
             delayed_logs: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            members: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -192,6 +196,102 @@ struct FakeProcess {
     /// Stands in for the guest identity a real launch publishes. Derived from the launch identifier
     /// so every fake launch has a distinct, predictable one.
     guest_pid: Option<std::num::NonZeroI32>,
+    /// The sessions of the members this launch was asked to revive, one per terminal the service
+    /// pre-created for it. A launch that restores nothing has none, which is what keeps a freshly
+    /// started container from ever answering as a resumed one.
+    members: Vec<Arc<FakeMemberProcess>>,
+}
+
+/// One restored member of a fake launch, owned the way a started process is.
+///
+/// It exists only because the launch was given a terminal for that member before it started -- the same
+/// pairing the production adapter requires -- so a test cannot accidentally get a resumable session out
+/// of a launch that restored nothing.
+pub(super) struct FakeMemberProcess {
+    id: u64,
+    guest_pid: std::num::NonZeroI32,
+    domain: hl_engine::Domain,
+    result: ExitStatus,
+    exited: tokio::sync::watch::Sender<bool>,
+    logs: std::sync::Mutex<Option<crate::service::LogReceiver>>,
+    output: crate::service::LogSender,
+    signals: Arc<std::sync::Mutex<Vec<Signal>>>,
+    resizes: Arc<std::sync::Mutex<Vec<crate::Size>>>,
+    /// Everything typed at this member's terminal, so a test can prove a pane's input reaches the
+    /// member's own session rather than the container's shared bridge.
+    typed: Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+}
+
+impl FakeMemberProcess {
+    pub(super) fn typed(&self) -> Vec<Vec<u8>> {
+        self.typed.lock().unwrap().clone()
+    }
+
+    pub(super) fn guest_pid(&self) -> std::num::NonZeroI32 {
+        self.guest_pid
+    }
+
+    /// Emits one line on this member's own terminal.
+    pub(super) async fn say(&self, bytes: &[u8]) {
+        self.output
+            .send(crate::LogChunk {
+                stream: crate::Stream::Stdout,
+                bytes: bytes.to_vec(),
+            })
+            .await
+            .expect("member output receiver closed");
+    }
+}
+
+#[async_trait]
+impl Running for FakeMemberProcess {
+    fn id(&self) -> u64 {
+        self.id
+    }
+    fn domain(&self) -> hl_engine::Domain {
+        self.domain
+    }
+    fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
+        Some(self.guest_pid)
+    }
+    fn restored_member(&self, _guest_pid: std::num::NonZeroI32) -> Option<hl_engine::runtime::RestoredMember> {
+        None
+    }
+    fn checkpointable(&self) -> bool {
+        false
+    }
+    async fn wait(self: Arc<Self>) -> Result<ExitStatus> {
+        let mut exited = self.exited.subscribe();
+        while !*exited.borrow() {
+            if exited.changed().await.is_err() {
+                break;
+            }
+        }
+        Ok(self.result)
+    }
+    async fn signal(&self, signal: Signal) -> Result<()> {
+        self.signals.lock().unwrap().push(signal);
+        if signal == Signal::KILL {
+            self.exited.send_replace(true);
+        }
+        Ok(())
+    }
+    async fn pause(&self) -> Result<()> {
+        Ok(())
+    }
+    async fn resume(&self) -> Result<()> {
+        Ok(())
+    }
+    async fn checkpoint(&self, _timeout: Duration) -> Result<()> {
+        Err(Error::Runtime("a restored member holds no image of its own".into()))
+    }
+    async fn resize(&self, size: crate::Size) -> Result<()> {
+        self.resizes.lock().unwrap().push(size);
+        Ok(())
+    }
+    fn take_logs(&self) -> Option<crate::service::LogReceiver> {
+        self.logs.lock().unwrap().take()
+    }
 }
 
 #[async_trait]
@@ -213,6 +313,12 @@ impl Running for FakeProcess {
     }
     fn checkpointable(&self) -> bool {
         self.checkpoint_armed
+    }
+    fn member_process(&self, guest_pid: std::num::NonZeroI32) -> Option<Arc<dyn Running>> {
+        self.members
+            .iter()
+            .find(|member| member.guest_pid == guest_pid)
+            .map(|member| Arc::clone(member) as Arc<dyn Running>)
     }
     async fn wait(self: Arc<Self>) -> Result<ExitStatus> {
         self.waits.fetch_add(1, Ordering::SeqCst);
@@ -394,8 +500,39 @@ impl Runtime for FakeRuntime {
                 .as_ref()
                 .map(|role| matches!(role, crate::service::CheckpointRole::Coordinator(_))),
         );
+        let members = launch
+            .member_terminals
+            .into_iter()
+            .map(|member| {
+                let (output, receiver) = crate::service::log_channel();
+                let typed = Arc::new(std::sync::Mutex::new(Vec::new()));
+                if let Some(mut input) = member.input {
+                    let typed = Arc::clone(&typed);
+                    tokio::spawn(async move {
+                        while let Some(bytes) = input.recv().await {
+                            typed.lock().unwrap().push(bytes);
+                        }
+                    });
+                }
+                let (exited, _) = tokio::sync::watch::channel(false);
+                Arc::new(FakeMemberProcess {
+                    id: self.next.fetch_add(1, Ordering::SeqCst),
+                    guest_pid: member.guest_pid,
+                    domain,
+                    result: ExitStatus::Code(0),
+                    exited,
+                    logs: std::sync::Mutex::new(Some(receiver)),
+                    output,
+                    signals: Arc::clone(&self.signals),
+                    resizes: Arc::clone(&self.resizes),
+                    typed,
+                })
+            })
+            .collect::<Vec<_>>();
+        self.members.lock().unwrap().extend(members.iter().map(Arc::clone));
         Ok(Arc::new(FakeProcess {
             id,
+            members,
             delay,
             result,
             fail_wait: self.fail_wait.load(Ordering::SeqCst),

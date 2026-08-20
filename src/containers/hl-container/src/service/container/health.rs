@@ -75,6 +75,8 @@ impl Service {
                 networks,
                 publish: Vec::new(),
                 input: None,
+                // A healthcheck launch restores nothing, so it revives no members.
+                member_terminals: Vec::new(),
                 terminal: None,
                 domain: Some(domain),
                 domain_owner: false,

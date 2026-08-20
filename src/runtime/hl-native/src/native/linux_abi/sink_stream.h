@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static uint64_t g_ckpt_stream_next_id = 1;
 
@@ -90,6 +91,36 @@ static int ckpt_stream_member_restored(int guest_pid) {
                    HL_CKPT_STATUS_OK
                ? 0
                : -1;
+}
+
+// Ask the broker for the terminal this member's captured session was attached to.
+//
+// Sent from inside the descriptor restore, which runs BEFORE the identity is hydrated -- so it cannot ride
+// the MEMBER_RESTORED announcement and carries the guest pid itself. `g_self_gpid` is adopted at the top of
+// ckpt_restore_proc_run, long before any descriptor is rebuilt, so it already holds this member's own
+// captured name here.
+//
+// Returns the received descriptor, or -1 when the host registered no terminal for this member and when the
+// transport failed. Both are the same answer to the caller: keep the descriptor the restore would otherwise
+// have produced. Never returns a descriptor belonging to another session -- the server answers only for the
+// guest pid it was asked about, and hands each registration out once.
+static int ckpt_stream_member_stdio(int guest_pid) {
+    hl_ckpt_request request = {0};
+    hl_ckpt_reply reply;
+    unsigned char payload[8] = {0};
+    uint32_t encoded = (uint32_t)guest_pid;
+    int descriptor = -1;
+    if (guest_pid <= 0) return -1;
+    memcpy(payload, &encoded, sizeof encoded);
+    request.op = HL_CKPT_OP_MEMBER_STDIO;
+    request.length = (uint64_t)sizeof payload;
+    request.generation = ckpt_request_generation();
+    if (hl_ckpt_channel_call_receive_descriptor(&request, payload, &reply, &descriptor) != 0) return -1;
+    if (reply.status != HL_CKPT_STATUS_OK && descriptor >= 0) {
+        (void)close(descriptor);
+        return -1;
+    }
+    return reply.status == HL_CKPT_STATUS_OK ? descriptor : -1;
 }
 
 // Report this restored member's own guest exit status on its way out.

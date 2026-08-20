@@ -55,6 +55,15 @@ int hl_ckpt_channel_call(hl_ckpt_request *request, const char *name, const void 
     return -1;
 }
 
+int hl_ckpt_channel_call_receive_descriptor(hl_ckpt_request *request, const void *payload, hl_ckpt_reply *reply,
+                                            int *out_descriptor) {
+    (void)request;
+    (void)payload;
+    (void)reply;
+    if (out_descriptor != NULL) *out_descriptor = -1;
+    return -1;
+}
+
 void hl_ckpt_trigger_publish(int descriptor) {
     (void)descriptor;
 }
@@ -290,6 +299,36 @@ int hl_ckpt_channel_call(hl_ckpt_request *request, const char *name, const void 
     if (reply->magic != HL_CKPT_STREAM_MAGIC_REPLY || reply->abi != HL_CKPT_STREAM_ABI) return -1;
     if (reply->length > capacity || reply->length > HL_CKPT_STREAM_PAYLOAD_MAX) return -1;
     if (reply->length != 0 && checkpoint_read_all(descriptor, out, (size_t)reply->length) != 0) return -1;
+    return 0;
+}
+
+int hl_ckpt_channel_call_receive_descriptor(hl_ckpt_request *request, const void *payload, hl_ckpt_reply *reply,
+                                            int *out_descriptor) {
+    int descriptor = hl_ckpt_channel_acquire();
+    int received[8];
+    int count = 0;
+    int read_bytes;
+    if (out_descriptor == NULL) return -1;
+    *out_descriptor = -1;
+    if (descriptor < 0 || request->length > HL_CKPT_STREAM_PAYLOAD_MAX) return -1;
+    request->magic = HL_CKPT_STREAM_MAGIC_REQUEST;
+    request->abi = HL_CKPT_STREAM_ABI;
+    request->name_size = 0;
+    if (checkpoint_write_all(descriptor, request, sizeof *request) != 0) return -1;
+    if (payload != NULL && request->length != 0 &&
+        checkpoint_write_all(descriptor, payload, (size_t)request->length) != 0)
+        return -1;
+    /* recvmsg, not read: the rights are attached to the message carrying the header, and a read() that
+     * takes the header drops them irrecoverably. The server sends the header in one sendmsg and appends
+     * no payload, so one receive is the whole reply. */
+    read_bytes = hl_fork_wire_receive_descriptors(descriptor, reply, sizeof *reply, received, &count);
+    if (read_bytes != (int)sizeof *reply || reply->magic != HL_CKPT_STREAM_MAGIC_REPLY ||
+        reply->abi != HL_CKPT_STREAM_ABI || reply->length != 0 || count > 1) {
+        while (count > 0)
+            (void)close(received[--count]);
+        return -1;
+    }
+    if (count == 1) *out_descriptor = received[0];
     return 0;
 }
 

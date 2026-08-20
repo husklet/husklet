@@ -651,3 +651,109 @@ async fn restoring_a_sealed_member_refuses_by_name_instead_of_relaunching_its_co
         "a refused restore consumed the member's token"
     );
 }
+
+/// A sealed, terminal-backed member comes back as the SAME process, seated on its own terminal.
+///
+/// This is the whole point of the refusal above having been a refusal rather than a relaunch. The pane's
+/// `sleep 10000` is not restarted: the session that reappears is the process the restore re-forked, and
+/// the terminal it is seated on is the one the launch created for it before the restore began -- which is
+/// why a pane can type into it and read from it at all.
+#[tokio::test]
+async fn restoring_a_sealed_terminal_backed_member_seats_the_restored_process_instead_of_a_new_one() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("member-reattach-parent")).await.unwrap();
+    containers.start("member-reattach-parent").await.unwrap();
+    let size = Size::new(24, 80).unwrap();
+    let process = Process::new("/bin/sleep")
+        .args(["10000"])
+        .console(Console::default().terminal(size));
+    let exec = containers
+        .executions()
+        .create(
+            "member-reattach-parent",
+            ExecSpec::new(process).streams(crate::Streams {
+                stdin: true,
+                stdout: true,
+                stderr: true,
+            }),
+        )
+        .await
+        .unwrap();
+    let session = containers.executions().start(&exec.id).await.unwrap();
+    drop(session);
+    containers
+        .checkpoint("member-reattach-parent", Duration::from_secs(5))
+        .await
+        .unwrap();
+    let sealed = containers.executions().inspect(&exec.id).await.unwrap();
+    let guest_pid = sealed
+        .guest_pid
+        .expect("capture recorded no guest identity for the member");
+    assert!(sealed.checkpoint.is_some(), "capture did not seal the member");
+
+    // The restore. Every sealed member's terminal has to be created inside this call, before the guest
+    // starts, because a restoring member asks for it from inside its own descriptor restore.
+    let launches_before = runtime.programs.lock().unwrap().len();
+    let starts_before = containers.service.exec_start_attempts();
+    containers.start("member-reattach-parent").await.unwrap();
+    let failures = containers.executions().restore_checkpoints().await.unwrap();
+
+    assert!(failures.is_empty(), "a restored member was refused: {failures:?}");
+    assert_eq!(
+        runtime.programs.lock().unwrap().len(),
+        launches_before + 1,
+        "the restore launched something other than the container itself"
+    );
+    assert_eq!(
+        containers.service.exec_start_attempts(),
+        starts_before,
+        "restore reached start_exec, which would have run the pane's command a second time"
+    );
+    let member = {
+        let members = runtime.members.lock().unwrap();
+        assert_eq!(members.len(), 1, "the launch was given the wrong number of terminals");
+        Arc::clone(&members[0])
+    };
+    assert_eq!(
+        member.guest_pid(),
+        guest_pid,
+        "the terminal was created for a member the record never named"
+    );
+
+    let reattached = containers.executions().inspect(&exec.id).await.unwrap();
+    let ExecState::Running { process_id, .. } = reattached.state else {
+        panic!("a reattached member is not running: {:?}", reattached.state);
+    };
+    assert_eq!(
+        process_id,
+        member.id(),
+        "the seated session is not the restored member's own process"
+    );
+    assert_eq!(reattached.checkpoint, None, "a reattached member kept its sealed token");
+
+    // Attaching is what a pane does, and it must reach THIS member: its output arrives on the terminal
+    // the launch created for it, and what the pane types goes back to the same place.
+    let mut attachment = containers.executions().attach(&exec.id, None).await.unwrap();
+    member.say(b"still-sleeping\n").await;
+    let entry = tokio::time::timeout(Duration::from_secs(5), attachment.next())
+        .await
+        .expect("the restored member produced no output")
+        .expect("attachment ended")
+        .unwrap();
+    assert_eq!(entry.bytes, b"still-sleeping\n");
+    attachment.write(b"typed\n").await.unwrap();
+    for _ in 0..200 {
+        if !member.typed().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(
+        member.typed(),
+        vec![b"typed\n".to_vec()],
+        "a pane's input did not reach the restored member's own terminal"
+    );
+}

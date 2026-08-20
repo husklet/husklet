@@ -324,6 +324,22 @@ impl GuestMachine for ProductionMachine {
             .map(crate::runtime::RestoredMember::new)
     }
 
+    #[cfg(unix)]
+    fn provide_member_terminal(
+        &self,
+        guest_pid: std::num::NonZeroI32,
+        terminal: std::os::fd::OwnedFd,
+    ) -> Result<(), EngineError> {
+        let checkpoint = self.checkpoint.as_ref().ok_or(EngineError::Unsupported)?;
+        checkpoint
+            .server
+            .register_member_terminal(guest_pid, terminal)
+            .map_err(|reason| {
+                hl_log::hl_error!(hl_log::tag::CHECKPOINT, "member terminal registration failed: {reason}");
+                EngineError::Unsupported
+            })
+    }
+
     fn checkpoint_supported(&self) -> Result<(), EngineError> {
         if let Some(refusal) = checkpoint_sandbox_refusal(&self.plan.options) {
             return Err(refusal);

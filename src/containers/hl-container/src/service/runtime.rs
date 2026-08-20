@@ -66,6 +66,13 @@ pub(crate) struct ProcessConfig {
     pub(crate) networks: Vec<NetworkConfig>,
     pub(crate) publish: Vec<crate::Publication>,
     pub(crate) input: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
+    /// One terminal to create for each sealed member this launch is about to restore.
+    ///
+    /// Empty for every launch that is not a restore. A restoring member asks for its terminal from
+    /// inside its own descriptor restore, which happens while this call is still in progress, so these
+    /// have to be created and registered before the guest starts -- there is no later moment at which a
+    /// pane could supply one.
+    pub(crate) member_terminals: Vec<MemberTerminal>,
     // Runtime ports receive these launch semantics even though the built-in engine adapter does not
     // consume them yet; substitute runtimes verify their propagation.
     #[cfg_attr(not(test), allow(dead_code))]
@@ -73,6 +80,29 @@ pub(crate) struct ProcessConfig {
     pub(crate) domain: Option<hl_engine::Domain>,
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) domain_owner: bool,
+}
+
+/// The terminal one sealed member will reattach to, as the launch asks for it.
+///
+/// The pty itself is created by the runtime adapter, because only it knows whether the launch can carry
+/// per-member descriptors at all. What the service supplies is the member's durable name, the size its
+/// session was sealed at, and the input stream a pane will type into.
+pub(crate) struct MemberTerminal {
+    /// The guest pid the sealed record kept, which the image names this member by and the restore
+    /// re-forks it under.
+    pub(crate) guest_pid: std::num::NonZeroI32,
+    pub(crate) size: Size,
+    pub(crate) input: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
+}
+
+impl std::fmt::Debug for MemberTerminal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MemberTerminal")
+            .field("guest_pid", &self.guest_pid)
+            .field("size", &self.size)
+            .finish_non_exhaustive()
+    }
 }
 
 /// How a launch participates in its process domain's checkpoint.
@@ -124,6 +154,15 @@ pub(crate) trait Running: Send + Sync {
     /// gets `None` must refuse, because the only alternative to attaching to the restored process is
     /// running the user's command a second time.
     fn restored_member(&self, guest_pid: std::num::NonZeroI32) -> Option<hl_engine::runtime::RestoredMember>;
+    /// The restored member named by `guest_pid`, as an independently ownable process.
+    ///
+    /// Present only when this launch both restored that member and was given a terminal for it before
+    /// it started, because those are exactly the two things a session needs to be resumed rather than
+    /// relaunched: the process the user left running, and I/O to reach it through. `None` otherwise, and
+    /// a caller that gets `None` must refuse rather than start the command a second time.
+    fn member_process(&self, _guest_pid: std::num::NonZeroI32) -> Option<Arc<dyn Running>> {
+        None
+    }
     async fn wait(self: Arc<Self>) -> Result<ExitStatus>;
     async fn signal(&self, signal: Signal) -> Result<()>;
     async fn pause(&self) -> Result<()>;

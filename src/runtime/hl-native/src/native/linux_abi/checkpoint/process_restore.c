@@ -412,11 +412,43 @@ static int ckpt_restore_saved_ofd(const struct ckpt_fd *record) {
     return proc_fdvis_publish_native_fd(record->gfd) == 0 ? 1 : -1;
 }
 
+/* Bind guest fds 0, 1 and 2 to the terminal the host created for THIS member.
+ *
+ * A whole-image restore re-forks every captured process out of one launch, and `checkpoint/image.c` records
+ * a captured session's guest fds 0..2 as CKF_TTY so the restore rebinds them to a live terminal. Without a
+ * per-member terminal that could only ever be the restoring engine's own bridge -- one bridge for a tree of
+ * many -- which is why a host holding one member individually still had no I/O to seat a pane on.
+ *
+ * A member the host registered no terminal for reads -1 and keeps the inherited bridge, exactly as before
+ * this existed. Requested once per restored process: the request is what consumes the registration. */
+static void ckpt_restore_bind_member_stdio(void) {
+    int terminal = ckpt_stream_member_stdio(g_self_gpid);
+    if (terminal < 0) return;
+    for (int gfd = 0; gfd <= 2; gfd++) {
+        /* Release the BOUND stdio object first, and only then rebind the descriptor.
+         *
+         * The engine's launch-time stdio is not the host descriptor sitting at guest fd 0: it is a host
+         * object imported at engine construction and installed at that guest fd, and every guest read and
+         * write resolves through it (`bound_snapshot`). A re-forked member inherits the CONTAINER engine's
+         * three, so a dup2 alone moved the member's own host descriptors and left the guest still reading
+         * and writing the container's bridge -- measured: the pane's shell reached EOF on the container's
+         * stdin and exited silently while the engine's own stderr went to the new terminal. Closing the
+         * bound object makes the guest descriptor resolve to the raw one again, which is the terminal
+         * installed on the next line. */
+        if (g_linux_box != NULL) (void)hl_linux_close(g_linux_box, (hl_linux_fd)gfd);
+        if (terminal != gfd) (void)dup2(terminal, gfd);
+    }
+    if (terminal > 2) (void)close(terminal);
+}
+
 static int ckpt_restore_tty_fd(const struct ckpt_fd *record) {
     if (record->gfd > STDERR_FILENO && (record->auxiliary & CKFA_STDIO_ALIAS) != 0) {
         /* A duplicate of one of the launch-time standard descriptors, not of the controlling terminal.
-           The restore fork already holds the fresh stdio bridge on that descriptor, so the alias is
-           rebuilt from it -- a container whose stdio is a runtime pipe has no ctty to rebuild it from. */
+           The restore fork already holds that descriptor -- either the container's inherited stdio bridge,
+           or, once ckpt_restore_bind_member_stdio has run, this member's OWN terminal. Rebuilding the alias
+           from the descriptor rather than from a remembered identity is what keeps the alias and fd 0/1/2
+           pointing at one open file description in both cases; a container whose stdio is a runtime pipe
+           has no ctty to rebuild it from at all. */
         int standard = (int)((record->auxiliary >> CKFA_STDIO_ALIAS_SHIFT) & CKFA_STDIO_ALIAS_MASK);
         if (dup2(standard, record->gfd) < 0) return -1;
         if (record->descriptor_flags & FD_CLOEXEC) fcntl(record->gfd, F_SETFD, FD_CLOEXEC);
@@ -586,6 +618,12 @@ static int ckpt_restore_fds_dir(const char *procdir) {
     ckpt_source_fclose(f);
     ckpt_fd_terminate_all(records, (size_t)count);
     ckpt_restore_reset_inherited_fds(records, count);
+    /* BEFORE the record loop, not inside it. Two records depend on fds 0..2 already naming this member's own
+       terminal: its own CKF_TTY records, and any CKFA_STDIO_ALIAS duplicate the guest made of one of them,
+       which is rebuilt with dup2 from the standard descriptor and would otherwise capture whatever was
+       inherited. Binding once up front gives both one open file description, and a later record that
+       genuinely owns fd 0, 1 or 2 -- a redirect from a file, say -- still overwrites it in record order. */
+    ckpt_restore_bind_member_stdio();
     for (int index = 0; index < count; ++index)
         if (ckpt_restore_fd_record(procdir, records, count, index) != 0) {
             free(records);

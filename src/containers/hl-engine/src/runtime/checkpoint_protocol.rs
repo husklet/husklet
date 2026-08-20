@@ -48,6 +48,10 @@ pub(super) const CAPTURE_REFUSED: u32 = 24;
 /// be GONE, and a 0 is what tells it that process published nothing and can be dropped from the
 /// rendezvous without losing state.
 pub(super) const PARTICIPANT_REGISTERED: u32 = 25;
+/// A restoring member asks for the terminal the host created for it, naming itself by guest pid because
+/// this runs before `MEMBER_RESTORED` can announce anything. Payload is `[u32 guest pid][u32 zero]`. The
+/// reply carries one descriptor over `SCM_RIGHTS`, or none when the host registered no terminal.
+pub(super) const MEMBER_STDIO: u32 = 26;
 
 /// What a parked member must do next. `RELEASE_WAIT` answers with exactly one of
 /// these, and it is the only thing that ends a park.
@@ -139,14 +143,21 @@ impl Reply {
         }
     }
 
-    pub(super) fn write(&self, channel: &mut impl Write) -> std::io::Result<()> {
+    /// The fixed reply header. Separated from [`Self::write`] because the descriptor-passing reply has to
+    /// hand the same bytes to `sendmsg` rather than to `write_all`: `SCM_RIGHTS` travels attached to one
+    /// message, so the header and the rights cannot be sent by two different calls.
+    pub(super) fn header(&self) -> [u8; REPLY_BYTES] {
         let mut header = [0_u8; REPLY_BYTES];
         header[0..4].copy_from_slice(&MAGIC_REPLY.to_ne_bytes());
         header[4..8].copy_from_slice(&ABI.to_ne_bytes());
         header[8..12].copy_from_slice(&self.status.to_ne_bytes());
         header[16..24].copy_from_slice(&self.value.to_ne_bytes());
         header[24..32].copy_from_slice(&(self.payload.len() as u64).to_ne_bytes());
-        channel.write_all(&header)?;
+        header
+    }
+
+    pub(super) fn write(&self, channel: &mut impl Write) -> std::io::Result<()> {
+        channel.write_all(&self.header())?;
         channel.write_all(&self.payload)?;
         channel.flush()
     }

@@ -43,6 +43,16 @@ int hl_ckpt_channel_current_for_test(void);
 int hl_ckpt_channel_call(hl_ckpt_request *request, const char *name, const void *payload, hl_ckpt_reply *reply,
                          void *out, size_t capacity);
 
+/* One round trip whose reply may carry a descriptor over SCM_RIGHTS. The request is framed exactly as
+ * hl_ckpt_channel_call frames it; only the reply is read with recvmsg, because a plain read() would take
+ * the header and DISCARD the rights attached to it. The reply carries no payload.
+ *
+ * `*out_descriptor` is set to the received descriptor, or left at -1 when the server answered without one
+ * -- which is an ordinary answer, not a failure, and is how the server declines a request it has nothing
+ * registered for. Returns 0 when a well-formed reply arrived and -1 on a transport or framing failure. */
+int hl_ckpt_channel_call_receive_descriptor(hl_ckpt_request *request, const void *payload, hl_ckpt_reply *reply,
+                                            int *out_descriptor);
+
 /* The checkpoint TRIGGER is a 4-byte generation counter shared by every engine process and bumped by the
  * embedder to request a capture. ckpt_poll reads it at every safepoint, so it has to be a plain memory load;
  * it cannot be a message. It is an anonymous shared mapping whose descriptor activation hands to the engine

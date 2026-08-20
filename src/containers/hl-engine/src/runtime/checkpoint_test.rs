@@ -2403,6 +2403,98 @@ fn member_exited_payload(status: i32, kind: u32) -> Vec<u8> {
     payload
 }
 
+/// A restoring member is handed the terminal the host created for it, and no other member's.
+///
+/// This is the leg that turns a reachable member into an attachable one. `checkpoint/image.c` records a
+/// captured session's guest fds 0..2 as `CKF_TTY`, so before this the restore could only rebind them to the
+/// restoring engine's single bridge -- one bridge for a tree of many -- and a host holding the member still
+/// had no I/O to seat a pane on. The request runs inside the descriptor restore, which is why it names its
+/// own guest pid instead of riding the announcement that comes later.
+#[test]
+fn a_restoring_member_receives_the_terminal_the_host_registered_for_it() {
+    use std::io::Read as _;
+    use std::io::Write as _;
+    use std::os::fd::{AsFd as _, OwnedFd};
+
+    let _serial = TRANSPORT_SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (broker, transport) = hl_native::CheckpointTransport::create().expect("checkpoint transport");
+    let mut member = transport.connect_for_test().expect("checkpoint channel");
+    let (channel, authority) = broker
+        .accept(Duration::from_secs(10))
+        .expect("authenticated production accept");
+    let server = Arc::new(Server::new(Arc::new(Store), Arc::new(Store)));
+    let guest_pid = std::num::NonZeroI32::new(4242).expect("guest pid");
+    let other_pid = std::num::NonZeroI32::new(4243).expect("guest pid");
+    // The stand-in for the pty the host creates per sealed member: the far end is what a pane would read.
+    let (terminal, mut pane) = std::os::unix::net::UnixStream::pair().expect("member terminal");
+    server
+        .register_member_terminal(guest_pid, OwnedFd::from(terminal))
+        .expect("terminal registration");
+    server
+        .begin_recovery(1, std::time::Instant::now() + Duration::from_secs(30))
+        .expect("recovery admission");
+    let worker = Arc::clone(&server);
+    let served = std::thread::spawn(move || worker.serve_authenticated_for_test(channel, authority));
+    while server.connections.load(Ordering::Acquire) == 0 {
+        std::thread::yield_now();
+    }
+
+    // A member the host registered nothing for is answered without a descriptor, and keeps whatever the
+    // restore already gave it. That is every non-interactive member of the tree.
+    member
+        .write_all(&checkpoint_request(
+            protocol::MEMBER_STDIO,
+            0,
+            &member_restored_payload(other_pid.get()),
+        ))
+        .expect("unregistered member stdio request");
+    let mut header = [0_u8; 32];
+    let (read, unregistered) = super::member_stdio::receive_with_descriptor(&member, &mut header);
+    assert_eq!(read, 32, "the unregistered member got no well-formed reply");
+    assert!(
+        unregistered.is_none(),
+        "an unregistered member was handed a terminal belonging to another session"
+    );
+
+    member
+        .write_all(&checkpoint_request(
+            protocol::MEMBER_STDIO,
+            0,
+            &member_restored_payload(guest_pid.get()),
+        ))
+        .expect("member stdio request");
+    let (read, received) = super::member_stdio::receive_with_descriptor(&member, &mut header);
+    assert_eq!(read, 32, "the registered member got no well-formed reply");
+    let mut received = std::fs::File::from(received.expect("the registered member received its terminal"));
+
+    // The decisive property: it is THE registered terminal, not merely a descriptor. What the member
+    // writes has to come out of the end the host kept.
+    received.write_all(b"restored").expect("member writes to its terminal");
+    let mut seen = [0_u8; 8];
+    pane.read_exact(&mut seen).expect("the host end reads the member");
+    assert_eq!(&seen, b"restored");
+
+    // Handed out once: a second request for the same member finds nothing, so one terminal can never be
+    // shared between two processes claiming the same name.
+    member
+        .write_all(&checkpoint_request(
+            protocol::MEMBER_STDIO,
+            0,
+            &member_restored_payload(guest_pid.get()),
+        ))
+        .expect("repeat member stdio request");
+    let (read, repeated) = super::member_stdio::receive_with_descriptor(&member, &mut header);
+    assert_eq!(read, 32);
+    assert!(repeated.is_none(), "one terminal was handed to two members");
+
+    let _ = pane.as_fd();
+    server.stop();
+    drop(member);
+    served.join().expect("broker worker");
+}
+
 /// A restored member becomes individually reachable by the guest pid its image names it by, and the
 /// capability it is reached through is the authenticated peer of its own channel.
 ///
@@ -2485,7 +2577,9 @@ fn a_restored_member_is_reachable_by_the_guest_pid_its_image_names_it_by() {
 /// is a process claiming to be something no restore re-forked.
 #[test]
 fn an_announcement_outside_a_running_restore_installs_no_member() {
-    let _serial = TRANSPORT_SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _serial = TRANSPORT_SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (broker, transport) = hl_native::CheckpointTransport::create().expect("checkpoint transport");
     let mut member = transport.connect_for_test().expect("checkpoint channel");
     let (channel, authority) = broker
@@ -2507,7 +2601,11 @@ fn an_announcement_outside_a_running_restore_installs_no_member() {
         ))
         .expect("member announcement");
 
-    assert_eq!(read_reply(&mut member).0, -1, "an announcement outside a restore was admitted");
+    assert_eq!(
+        read_reply(&mut member).0,
+        -1,
+        "an announcement outside a restore was admitted"
+    );
     assert!(
         server.restored_member(guest_pid).is_none(),
         "an announcement outside a restore installed a member capability"

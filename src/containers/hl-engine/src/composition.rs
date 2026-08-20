@@ -273,6 +273,20 @@ pub trait GuestMachine: Send + Sync {
     fn restored_member(&self, _guest_pid: std::num::NonZeroI32) -> Option<crate::runtime::RestoredMember> {
         None
     }
+    /// Registers the terminal one sealed member will reattach to when this machine restores it.
+    ///
+    /// Must be called before [`Self::start`]. A restoring member asks for its terminal from inside its
+    /// own descriptor restore, so a registration that arrives after the start is an answer to a question
+    /// that has already been answered without it -- and the member spends the rest of its life on the
+    /// container's single bridge.
+    #[cfg(unix)]
+    fn provide_member_terminal(
+        &self,
+        _guest_pid: std::num::NonZeroI32,
+        _terminal: std::os::fd::OwnedFd,
+    ) -> Result<(), EngineError> {
+        Err(EngineError::Unsupported)
+    }
     /// The domain freeze channel this machine owns, if it is the coordinator.
     #[cfg(unix)]
     fn checkpoint_channel(&self) -> Option<CheckpointChannel> {
@@ -361,6 +375,15 @@ impl<M: GuestMachine> MachineLauncher<M> {
     }
 
     #[cfg(unix)]
+    fn provide_member_terminal(
+        &self,
+        guest_pid: std::num::NonZeroI32,
+        terminal: std::os::fd::OwnedFd,
+    ) -> Result<(), EngineError> {
+        self.machine.provide_member_terminal(guest_pid, terminal)
+    }
+
+    #[cfg(unix)]
     fn checkpoint_channel(&self) -> Option<CheckpointChannel> {
         self.machine.checkpoint_channel()
     }
@@ -436,6 +459,20 @@ impl<M: GuestMachine + 'static, W: Workspace> EngineBackend<M, W> {
     #[must_use]
     pub fn restored_member(&self, guest_pid: std::num::NonZeroI32) -> Option<crate::runtime::RestoredMember> {
         self.engine.launcher().restored_member(guest_pid)
+    }
+
+    /// Registers the terminal one sealed member will reattach to, before this engine starts its restore.
+    ///
+    /// # Errors
+    /// Returns [`EngineError::Unsupported`] when this engine coordinates no checkpoint, so a caller that
+    /// believes it has provided per-member I/O cannot be silently wrong about it.
+    #[cfg(unix)]
+    pub fn provide_member_terminal(
+        &self,
+        guest_pid: std::num::NonZeroI32,
+        terminal: std::os::fd::OwnedFd,
+    ) -> Result<(), EngineError> {
+        self.engine.launcher().provide_member_terminal(guest_pid, terminal)
     }
 
     pub fn capture_checkpoint(&self) -> Result<(), EngineError> {
