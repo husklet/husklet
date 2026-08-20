@@ -430,6 +430,7 @@ mod tests {
 
     /// Open descriptors in this process, as a count rather than a set: the tests below reason about how
     /// many references one announcement leaves behind, not about which numbers they landed on.
+    #[cfg(feature = "native-test-hooks")]
     fn open_descriptor_count() -> usize {
         let directory = if cfg!(target_os = "linux") {
             "/proc/self/fd"
