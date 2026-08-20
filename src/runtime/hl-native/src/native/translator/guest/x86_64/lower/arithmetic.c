@@ -100,18 +100,18 @@ void e_mul_oc_narrow(int prod, int k, int w) {
 // for a 1-bit rotate: ROL -> OF = MSB(result) XOR CF; ROR -> OF = MSB XOR (bit width-2). For any other
 // count OF is undefined and left unchanged. `res` holds the rotated value in its low `width` bits. We
 // rewrite only stored-C (bit29 = NOT CF, the borrow convention) and V (bit28 = OF), preserving N/Z and the
-// PF/AF lanes. `cnt` is the (already masked, nonzero) immediate count -> OF written iff cnt==1. Scratch x18..x23.
+// PF/AF lanes. `cnt` is the (already masked, nonzero) immediate count -> OF written iff cnt==1. Scratch x19..x23 plus x27 (host x18 is reserved on Darwin).
 void e_rot_flags_const(int res, int k, int width, int cnt) {
     int wsf = width == 64;
-    e_ldr(18, 28, OFF_NZCV);
+    e_ldr(27, 28, OFF_NZCV);
     e_lsr_i(20, res, k == 1 ? width - 1 : 0, wsf);
     e_movconst(21, 1);
     e_rrr(A_AND, 20, 20, 21, 0, 0); // x20 = x86 CF (0/1)
     e_movconst(21, 1u << 29);
-    e_rrr(A_BIC, 18, 18, 21, 1, 0); // clear stored C
+    e_rrr(A_BIC, 27, 27, 21, 1, 0); // clear stored C
     e_movconst(21, 1);
     e_rrr(A_EOR, 22, 20, 21, 0, 0);  // x22 = NOT CF
-    e_rrr(A_ORR, 18, 18, 22, 1, 29); // stored C = (NOT CF) << 29
+    e_rrr(A_ORR, 27, 27, 22, 1, 29); // stored C = (NOT CF) << 29
     if (cnt == 1) {
         e_lsr_i(22, res, width - 1, wsf);
         e_movconst(21, 1);
@@ -123,16 +123,16 @@ void e_rot_flags_const(int res, int k, int width, int cnt) {
             e_mov_rr(23, 20, 0);        // x23 = CF
         e_rrr(A_EOR, 22, 22, 23, 0, 0); // x22 = OF
         e_movconst(21, 1u << 28);
-        e_rrr(A_BIC, 18, 18, 21, 1, 0);  // clear V
-        e_rrr(A_ORR, 18, 18, 22, 1, 28); // V = OF
+        e_rrr(A_BIC, 27, 27, 21, 1, 0);  // clear V
+        e_rrr(A_ORR, 27, 27, 22, 1, 28); // V = OF
     }
-    e_str(18, 28, OFF_NZCV);
-    emit32(0xD51B4200u | 18); // msr nzcv, x18 (sync live flags)
+    e_str(27, 28, OFF_NZCV);
+    emit32(0xD51B4200u | 27); // msr nzcv, x27 (sync live flags)
 }
 
 // ROL/ROR by CL: like e_rot_flags_const but the count is runtime (n = CL & (width-1)). When n==0 x86
 // changes NO flags, so keep the old NZCV; otherwise set CF (and OF via the 1-bit formula -- for n>1 OF is
-// x86-undefined, so emitting that legal value is fine). Reads CL (RCX); scratch x18..x25.
+// x86-undefined, so emitting that legal value is fine). Reads CL (RCX); scratch x19..x25 plus x27 (host x18 is reserved on Darwin).
 void e_rot_flags_cl(int res, int k, int width) {
     int wsf = width == 64;
     // "flags affected?" is decided by the 5-bit (0x1f) / 6-bit (0x3f, REX.W) masked count -- NOT the
@@ -142,11 +142,11 @@ void e_rot_flags_cl(int res, int k, int width) {
     // for width 32/64 this is width-1 (unchanged), so only byte/word behavior moves.
     e_movconst(19, (width == 64) ? 63 : 31);
     e_rrr(A_ANDS, 24, RCX, 19, wsf, 0); // x24 = n = CL & cmask (x86 5/6-bit); Z = (n == 0) -> flags unchanged
-    e_ldr(18, 28, OFF_NZCV);            // old NZCV (kept when n == 0)
+    e_ldr(27, 28, OFF_NZCV);            // old NZCV (kept when n == 0)
     e_lsr_i(20, res, k == 1 ? width - 1 : 0, wsf);
     e_movconst(21, 1);
     e_rrr(A_AND, 20, 20, 21, 0, 0); // x20 = CF
-    e_mov_rr(25, 18, 1);            // candidate = copy of old NZCV
+    e_mov_rr(25, 27, 1);            // candidate = copy of old NZCV
     e_movconst(21, 1u << 29);
     e_rrr(A_BIC, 25, 25, 21, 1, 0); // clear stored C
     e_movconst(21, 1);
@@ -164,10 +164,10 @@ void e_rot_flags_cl(int res, int k, int width) {
     e_movconst(21, 1u << 28);
     e_rrr(A_BIC, 25, 25, 21, 1, 0);  // clear V
     e_rrr(A_ORR, 25, 25, 22, 1, 28); // V = OF
-    // all ops since the ANDS are flag-free, so its Z survives: n==0 -> keep old (x18), else candidate (x25).
-    e_csel(18, 18, 25, 0 /*EQ*/, 1);
-    e_str(18, 28, OFF_NZCV);
-    emit32(0xD51B4200u | 18); // msr nzcv, x18 (sync live flags)
+    // all ops since the ANDS are flag-free, so its Z survives: n==0 -> keep old (x27), else candidate (x25).
+    e_csel(27, 27, 25, 0 /*EQ*/, 1);
+    e_str(27, 28, OFF_NZCV);
+    emit32(0xD51B4200u | 27); // msr nzcv, x27 (sync live flags)
 }
 
 // Set x86 OF (= ARM V, bit28) of the stored NZCV to the 0/1 in `ofreg` (read-modify-write; the prior flag

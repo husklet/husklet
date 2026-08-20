@@ -349,24 +349,24 @@ static void emit_sigill(uint64_t pc) {
 // cannot silently restore a smaller flag set than POPFQ.
 void emit_restore_rflags(int src) {
     e_movconst(17, 0);
-    e_bit_move(17, src, 6, 30, 18);                                // ZF(bit6) -> NZCV.Z(30)
-    e_bit_move(17, src, 7, 31, 18);                                // SF(bit7) -> NZCV.N(31)
-    e_bit_move(17, src, 11, 28, 18);                               // OF(bit11) -> NZCV.V(28)
-    emit32(0x53000000u | (0 << 16) | (0 << 10) | (src << 5) | 18); // ubfx w18,wSrc,#0,#1 (CF)
+    e_bit_move(17, src, 6, 30, 27);                                // ZF(bit6) -> NZCV.Z(30)
+    e_bit_move(17, src, 7, 31, 27);                                // SF(bit7) -> NZCV.N(31)
+    e_bit_move(17, src, 11, 28, 27);                               // OF(bit11) -> NZCV.V(28)
+    emit32(0x53000000u | (0 << 16) | (0 << 10) | (src << 5) | 27); // ubfx w27,wSrc,#0,#1 (CF)
     e_movconst(19, 1);
-    e_rrr(A_EOR, 18, 18, 19, 0, 0);  // stored borrow-C = NOT x86 CF
-    e_rrr(A_ORR, 17, 17, 18, 0, 29); // -> NZCV.C(29)
+    e_rrr(A_EOR, 27, 27, 19, 0, 0);  // stored borrow-C = NOT x86 CF
+    e_rrr(A_ORR, 17, 17, 27, 0, 29); // -> NZCV.C(29)
     e_str(17, 28, OFF_NZCV);
     emit32(0xD51B4200u | 17);                                      // msr nzcv, x17
-    emit32(0x53000000u | (2 << 16) | (2 << 10) | (src << 5) | 18); // ubfx w18,wSrc,#2,#1 (PF)
+    emit32(0x53000000u | (2 << 16) | (2 << 10) | (src << 5) | 27); // ubfx w27,wSrc,#2,#1 (PF)
     e_movconst(19, 1);
-    e_rrr(A_EOR, 18, 18, 19, 0, 0); // PF source byte = NOT PF (consumer computes even parity)
-    e_str(18, 28, OFF_PF);
+    e_rrr(A_EOR, 27, 27, 19, 0, 0); // PF source byte = NOT PF (consumer computes even parity)
+    e_str(27, 28, OFF_PF);
     e_af_save(src);                                                  // cpu->af keeps the source's bit 4
-    emit32(0x53000000u | (21 << 16) | (21 << 10) | (src << 5) | 18); // ID
-    e_str(18, 28, OFF_ID);
-    emit32(0x53000000u | (10 << 16) | (10 << 10) | (src << 5) | 18); // DF
-    e_str(18, 28, OFF_DF);
+    emit32(0x53000000u | (21 << 16) | (21 << 10) | (src << 5) | 27); // ID
+    e_str(27, 28, OFF_ID);
+    emit32(0x53000000u | (10 << 16) | (10 << 10) | (src << 5) | 27); // DF
+    e_str(27, 28, OFF_DF);
     g_df = HL_X86_DIRECTION_DYNAMIC;
     hl_x86_integer_reset_flags();
 }
