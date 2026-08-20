@@ -649,10 +649,12 @@
               # exits 0 when the filter matches nothing, so from that commit until this one
               # both arms of this gate reported `running 0 tests ... test result: ok` and
               # the product's Continue-later contract was covered by nothing at all.
-              # Both survivors are red on x86_64 today -- the domain worker exits 101 before
-              # publication and the restore slot reports stage=failed(12) error=17 (EEXIST).
-              # That is a real engine defect an engine lane owns; this gate is supposed to
-              # say so. Do not silence it by narrowing the filter again.
+              # Both are red on x86_64 Linux at this tip, with the same signature: `domain
+              # worker exited before publication (exit status: 101)`. The sleep-tree one
+              # fails inside this derivation's arm64 arm while passing in the dev shell's
+              # amd64 default, and the terminal-backed one fails in both. That is a real
+              # engine defect an engine lane owns, and this gate exists to say so. Do not
+              # silence it by narrowing the filter back to a name that matches nothing.
               for test_name in \
                 continue_later_restores_the_primary_sleep_tree_across_repeated_cycles \
                 continue_later_keeps_a_terminal_backed_pane_execution_across_repeated_cycles
