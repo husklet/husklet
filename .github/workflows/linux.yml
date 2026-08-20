@@ -351,7 +351,21 @@ jobs:
       #
       # The other two are HONESTLY RED and are named rather than silenced -- delete a
       # line the day its check passes:
-      #   alpine-compatibility          -- red since a vacuous filter was made honest.
+      #   alpine-compatibility          -- red since a vacuous filter was made honest,
+      #                                    AND IT IS NOT A SEPARATE PROBLEM. Measured
+      #                                    2026-08-20: it fails at
+      #                                    `product_checkpoint_test::continue_later_
+      #                                    restores_the_primary_sleep_tree_across_
+      #                                    repeated_cycles`, which is one of the two
+      #                                    tests item 1 above already records as a real
+      #                                    engine defect on this architecture -- the
+      #                                    flake check runs exactly that pair via
+      #                                    `cargo test -p husklet --features runtime
+      #                                    --lib`. So this attribute, and the missing
+      #                                    `--features runtime` step in item 1, are ONE
+      #                                    defect seen through two gates. The lane
+      #                                    fixing it closes both, and the step in item 1
+      #                                    should land in that same commit.
       #   host-windows-x86_64-gnu-smoke -- `geteuid` at `netns/loopback.c:462,509` and
       #                                    `flock` at `:514`. Was four errors across
       #                                    three files; the checkpoint lane's
