@@ -16,27 +16,44 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Storage for one `SCM_RIGHTS` control message, aligned for `libc::cmsghdr`.
+///
+/// `CMSG_FIRSTHDR` reinterprets `msg_control` as a `cmsghdr` and `recvmsg` writes a
+/// header through that pointer, so the region must satisfy the header's alignment.
+/// `Vec<u8>` only promises alignment 1 — whatever the allocator happens to return is
+/// not a guarantee the type carries — so the region is backed by `u64`, whose
+/// alignment is at least `cmsghdr`'s on every supported target. The returned length
+/// is the exact `CMSG_SPACE` byte count, not the rounded-up word count.
+fn control_storage() -> (Vec<u64>, usize) {
+    // SAFETY: CMSG_SPACE is pure arithmetic for this fixed payload size.
+    let bytes = unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as u32) } as usize;
+    (vec![0_u64; bytes.div_ceil(mem::size_of::<u64>())], bytes)
+}
+
 fn send_descriptor(socket: RawFd, descriptor: RawFd) {
     let mut byte = 1_u8;
     let mut iov = libc::iovec {
         iov_base: (&raw mut byte).cast(),
         iov_len: 1,
     };
-    // SAFETY: CMSG_SPACE is pure arithmetic for this fixed payload size.
-    let mut control = vec![0_u8; unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as u32) } as usize];
+    let (mut control, control_len) = control_storage();
+    // SAFETY: msghdr is a plain C aggregate for which an all-zero value is valid.
     let mut message: libc::msghdr = unsafe { mem::zeroed() };
     message.msg_iov = &raw mut iov;
     message.msg_iovlen = 1;
     message.msg_control = control.as_mut_ptr().cast();
-    message.msg_controllen = control.len().try_into().expect("control length fits socklen_t");
-    // SAFETY: message owns a correctly sized and aligned control region for one descriptor.
+    message.msg_controllen = control_len.try_into().expect("control length fits socklen_t");
+    // SAFETY: message owns a control region sized by CMSG_SPACE and aligned for cmsghdr,
+    // so CMSG_FIRSTHDR yields one writable header. The descriptor is copied byte-wise
+    // rather than through a `*mut RawFd`, because CMSG_DATA's offset carries no
+    // alignment guarantee of its own.
     unsafe {
-        let header = libc::CMSG_FIRSTHDR(&message);
+        let header = libc::CMSG_FIRSTHDR(&raw const message);
         (*header).cmsg_level = libc::SOL_SOCKET;
         (*header).cmsg_type = libc::SCM_RIGHTS;
         (*header).cmsg_len = libc::CMSG_LEN(mem::size_of::<RawFd>() as u32);
-        libc::CMSG_DATA(header).cast::<RawFd>().write(descriptor);
-        assert_eq!(libc::sendmsg(socket, &message, 0), 1);
+        libc::CMSG_DATA(header).copy_from_nonoverlapping(descriptor.to_ne_bytes().as_ptr(), mem::size_of::<RawFd>());
+        assert_eq!(libc::sendmsg(socket, &raw const message, 0), 1);
     }
 }
 
@@ -46,21 +63,26 @@ fn receive_descriptor(socket: RawFd) -> RawFd {
         iov_base: (&raw mut byte).cast(),
         iov_len: 1,
     };
-    // SAFETY: CMSG_SPACE is pure arithmetic for this fixed payload size.
-    let mut control = vec![0_u8; unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as u32) } as usize];
+    let (mut control, control_len) = control_storage();
+    // SAFETY: msghdr is a plain C aggregate for which an all-zero value is valid.
     let mut message: libc::msghdr = unsafe { mem::zeroed() };
     message.msg_iov = &raw mut iov;
     message.msg_iovlen = 1;
     message.msg_control = control.as_mut_ptr().cast();
-    message.msg_controllen = control.len().try_into().expect("control length fits socklen_t");
-    // SAFETY: all message buffers are writable for their declared lengths.
+    message.msg_controllen = control_len.try_into().expect("control length fits socklen_t");
+    // SAFETY: all message buffers are writable for their declared lengths, and the
+    // control region is aligned for the cmsghdr the kernel writes into it. The
+    // descriptor is copied byte-wise rather than loaded through a `*mut RawFd`,
+    // because CMSG_DATA's offset carries no alignment guarantee of its own.
     unsafe {
         assert_eq!(libc::recvmsg(socket, &raw mut message, 0), 1);
-        let header = libc::CMSG_FIRSTHDR(&message);
+        let header = libc::CMSG_FIRSTHDR(&raw const message);
         assert!(!header.is_null());
         assert_eq!((*header).cmsg_level, libc::SOL_SOCKET);
         assert_eq!((*header).cmsg_type, libc::SCM_RIGHTS);
-        libc::CMSG_DATA(header).cast::<RawFd>().read()
+        let mut descriptor = [0_u8; mem::size_of::<RawFd>()];
+        libc::CMSG_DATA(header).copy_to_nonoverlapping(descriptor.as_mut_ptr(), descriptor.len());
+        RawFd::from_ne_bytes(descriptor)
     }
 }
 

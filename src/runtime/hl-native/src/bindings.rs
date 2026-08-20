@@ -742,7 +742,10 @@ pub(super) unsafe fn hl_c_backend_host_process_force_test(pid: c_int) -> c_int {
     unsafe { (test_api().host_process_force)(pid) }
 }
 
-#[cfg(all(test, feature = "native-test-hooks", unix))]
+// Only `a_peer_that_leads_its_own_session_is_still_enumerated_as_a_peer` calls this, and that
+// test is Linux-only because it reads the coordinator's /proc view; the C hook exists on both
+// hosts, so the cfg tracks the caller rather than the symbol.
+#[cfg(all(test, feature = "native-test-hooks", target_os = "linux"))]
 pub(super) unsafe fn hl_c_backend_host_process_peer_enumerated_test(pid: c_int) -> c_int {
     unsafe { (test_api().host_process_peer_enumerated)(pid) }
 }
