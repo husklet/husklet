@@ -538,14 +538,24 @@ static int checkpoint_anonymous_descriptor(void) {
 #if defined(__linux__)
     return memfd_create("hl-checkpoint-trigger", MFD_CLOEXEC);
 #else
-    /* macOS has no memfd. A POSIX shared segment unlinked immediately after creation is the same thing:
-     * the name is gone before anything else can observe it, and the descriptor keeps the object alive. */
-    char name[64];
-    int descriptor;
-    snprintf(name, sizeof name, "/hl-ckpt-%d-%u", (int)getpid(), (unsigned)clock());
-    descriptor = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
+    /* macOS has no memfd. An ORDINARY file unlinked immediately after creation is the closest thing: the
+     * name is gone before anything else can observe it and the descriptor keeps the object alive, exactly
+     * as an unlinked POSIX shared segment would -- but unlike a shared segment it is a real inode, and this
+     * object carries the container's identity registry, whose one-time seeding and whose every allocation
+     * are serialized by a POSIX record lock on that inode. Measured on macOS 26.3 (Darwin 25.3.0, arm64):
+     * fcntl(F_SETLKW) on a shm_open() descriptor fails EBADF, while the same call on an unlinked mkstemp()
+     * descriptor succeeds. Under the shared segment the lock failed, prepare_shared_descriptor failed with
+     * it, and each launch quietly fell back to a private registry that re-issued guest 1, 2, 3, 4. */
+    char path[] = "/tmp/hl-ckpt-trigger-XXXXXX";
+    int descriptor = mkstemp(path);
+    int flags;
     if (descriptor < 0) return -1;
-    (void)shm_unlink(name);
+    (void)unlink(path);
+    flags = fcntl(descriptor, F_GETFD);
+    if (flags < 0 || fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC) != 0) {
+        (void)close(descriptor);
+        return -1;
+    }
     return descriptor;
 #endif
 }
@@ -565,7 +575,7 @@ int hl_ckpt_trigger_create(hl_activation_descriptor *out_descriptor, void **out_
      * set of processes that must agree on one pid namespace; a per-launch registry gave each of them guest
      * pid 1 and then the same 2, 3, 4. The trigger word keeps offset 0 and its own four-byte mapping. */
     if (ftruncate(descriptor,
-                  (off_t)(HL_LINUX_IDENTITY_REGISTRY_OFFSET + (uint64_t)HL_LINUX_IDENTITY_REGISTRY_BYTES)) != 0) {
+                  (off_t)(hl_linux_identity_registry_offset() + (uint64_t)HL_LINUX_IDENTITY_REGISTRY_BYTES)) != 0) {
         (void)close(descriptor);
         return -1;
     }

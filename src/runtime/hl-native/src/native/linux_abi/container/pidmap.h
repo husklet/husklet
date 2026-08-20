@@ -18,8 +18,17 @@
  * bytes); the identity registry lives one page in, in a region reserved for it. The reservation is a fixed
  * size rather than sizeof(storage) so the file's layout is not a private detail of pidmap.c; the static
  * assertion beside the storage definition keeps the two honest. */
-#define HL_LINUX_IDENTITY_REGISTRY_OFFSET 4096u
+#define HL_LINUX_IDENTITY_REGISTRY_MINIMUM_OFFSET 4096u
 #define HL_LINUX_IDENTITY_REGISTRY_BYTES (1u << 21)
+
+/* The byte offset the registry region actually starts at: the reservation above, rounded UP to the host's
+ * mmap allocation granularity. mmap rejects an unaligned offset with EINVAL, and the two hosts disagree on
+ * that granularity -- Linux pages this tree at 4096, macOS on Apple silicon at 16384. A hard 4096 mapped on
+ * Linux and failed on macOS, and it failed SILENTLY: the launch fell back to a process-local registry, so
+ * every launch of one container allocated guest 1, 2, 3, 4 over again and two live processes claimed the
+ * same `proc.<guest pid>` image group. Every user of the shared object -- the ftruncate that sizes it and
+ * the mmap that maps it -- must ask this function rather than reading the reservation macro. */
+uint64_t hl_linux_identity_registry_offset(void);
 
 typedef struct hl_linux_pidmap_entry {
     int32_t guest;

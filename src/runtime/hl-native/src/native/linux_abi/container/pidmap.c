@@ -144,6 +144,22 @@ static int registry_file(void) {
 #endif
 }
 
+// The reserved offset rounded up to the host's mmap allocation granularity. Every launch of one container
+// runs on one host and therefore computes one value, which is what lets them agree on where the region is.
+uint64_t hl_linux_identity_registry_offset(void) {
+#if defined(_WIN32)
+    return HL_LINUX_IDENTITY_REGISTRY_MINIMUM_OFFSET;
+#else
+    long granularity = sysconf(_SC_PAGESIZE);
+    // A host that cannot report its page size still has one; the reservation is the only honest floor, and
+    // mmap will say EINVAL rather than map something misaligned.
+    if (granularity <= 0) return HL_LINUX_IDENTITY_REGISTRY_MINIMUM_OFFSET;
+    uint64_t page = (uint64_t)granularity;
+    uint64_t reserved = HL_LINUX_IDENTITY_REGISTRY_MINIMUM_OFFSET;
+    return ((reserved + page - 1) / page) * page;
+#endif
+}
+
 // The container-wide region, mapped from the descriptor every launch inherits. NOT zeroed here: a second
 // launch is adopting a live namespace, and the region's one-time seeding happens under the file lock in
 // registry_prepare_storage_locked.
@@ -153,7 +169,7 @@ static hl_linux_identity_registry_storage *registry_storage_shared(int descripto
     return NULL;
 #else
     void *memory = mmap(NULL, sizeof(hl_linux_identity_registry_storage), PROT_READ | PROT_WRITE, MAP_SHARED,
-                        descriptor, (off_t)HL_LINUX_IDENTITY_REGISTRY_OFFSET);
+                        descriptor, (off_t)hl_linux_identity_registry_offset());
     return memory == MAP_FAILED ? NULL : memory;
 #endif
 }

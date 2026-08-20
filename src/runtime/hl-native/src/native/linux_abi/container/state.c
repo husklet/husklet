@@ -346,12 +346,20 @@ static int container_identity_descriptor(void) {
     return hl_ckpt_trigger_descriptor();
 }
 
+// A launch that HAS the container's shared identity object must use it, and must fail if it cannot.
+//
+// The fallback below is for the one launch that owns no such object -- a bare engine run, which is alone in
+// its namespace by construction and can allocate privately without any other process being able to collide
+// with it. Extending that fallback to a launch which HAS the object but failed to map or lock it is what
+// turned a host incompatibility into a silent identity collision: on macOS the mmap and the record lock both
+// failed, every launch of one container fell back to a private registry, and the spec tree and each exec
+// session all issued guest 1, 2, 3, 4. Two live processes then named one `proc.<guest pid>` image group and
+// the capture -- correctly -- refused. There is no safe private answer once a container object exists.
 static int ckpt_restore_identity_prepare_shared(void) {
     int descriptor = container_identity_descriptor();
-    if (descriptor >= 0 && hl_linux_identity_registry_prepare_shared_descriptor(&g_identity_registry, descriptor,
-                                                                                &g_pidmap, &g_pgidmap,
-                                                                                &g_sidmap) == 0)
-        return 0;
+    if (descriptor >= 0)
+        return hl_linux_identity_registry_prepare_shared_descriptor(&g_identity_registry, descriptor, &g_pidmap,
+                                                                    &g_pgidmap, &g_sidmap);
     return hl_linux_identity_registry_prepare(&g_identity_registry, &g_pidmap, &g_pgidmap, &g_sidmap);
 }
 
@@ -440,7 +448,6 @@ static int proc_self_guest_ppid(int self_gpid) {
     return (g_init_hostpid && parent == g_init_hostpid) ? 1 : parent;
 }
 
-
 #if defined(HL_NATIVE_TEST_HOOKS)
 // ------------------------------------------------------- pid namespace: behavioral fixture
 //
@@ -456,6 +463,7 @@ static int pid_namespace_scenario(uint32_t scenario) {
     g_init_hostpid = (int)getpid();
     g_hostpid_cache = 0;
     if (container_pid_namespace_begin() != 0) return -1;
+
     if (container_pid() != 1) return -1;                          // the launch top is the namespace init
     if (proc_self_guest_ppid(container_pid()) != 0) return -1;    // and it has no parent inside it
     if (guest_pid_from_host((int)getpid()) != 1) return -1;
@@ -565,17 +573,22 @@ static int pid_namespace_launch(int object, int writer) {
     return pid_namespace_descend(writer, 2);
 }
 
+// The object is the one hl_ckpt_trigger_create mints for a real container, NOT a stand-in the fixture
+// makes for itself. That distinction is the whole assertion: an earlier version of this fixture created its
+// own unlinked mkstemp() file, which is a real inode on every host and therefore supports a page-aligned
+// mmap and a POSIX record lock everywhere -- so it passed on macOS while production, whose object was an
+// unlinked shm_open() segment mapped at a hard 4096, could do NEITHER there and quietly gave every launch a
+// private registry. A fixture that provides its own better object cannot see a defect in the real one.
 static int pid_namespace_launches_share_one_namespace(void) {
     enum { LAUNCHES = 2, PER_LAUNCH = 3, EXPECTED = LAUNCHES * PER_LAUNCH };
-    char path[] = "/tmp/husklet-pidmap-fixture-XXXXXX";
-    int object = mkstemp(path);
-    if (object < 0) return -1;
-    (void)unlink(path);
-    int failed = ftruncate(object, (off_t)(HL_LINUX_IDENTITY_REGISTRY_OFFSET +
-                                           (uint64_t)HL_LINUX_IDENTITY_REGISTRY_BYTES)) != 0;
+    hl_activation_descriptor trigger = HL_ACTIVATION_DESCRIPTOR_NONE;
+    void *mapping = NULL;
+    if (hl_ckpt_trigger_create(&trigger, &mapping) != 0) return -1;
+    int object = (int)trigger;
+    int failed = 0;
     int channel[2];
-    if (failed || pipe(channel) != 0) {
-        (void)close(object);
+    if (pipe(channel) != 0) {
+        hl_ckpt_trigger_destroy(mapping, trigger);
         return -1;
     }
     pid_t launches[LAUNCHES];
@@ -617,7 +630,7 @@ static int pid_namespace_launches_share_one_namespace(void) {
         while (waitpid(launches[index], &status, 0) < 0 && errno == EINTR) {}
         if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) failed = 1;
     }
-    (void)close(object);
+    hl_ckpt_trigger_destroy(mapping, trigger);
     if (failed || count != EXPECTED) return -1;
     int inits = 0;
     for (size_t left = 0; left < count; ++left) {
