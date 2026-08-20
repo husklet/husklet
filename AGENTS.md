@@ -539,6 +539,28 @@ candidate's effect, the candidate is not evidence however clean the other
 controls read. Phases with small absolute times are where this bites — a few
 hundred microseconds of drift is percent-level on a 2.6 ms phase.
 
+## A measurement names its host, or it names nothing
+
+The engine runs on two hosts and they are not interchangeable. The same guest
+binary doing the same pure-CPU work measured **58x slower under the engine on
+the macOS host than under the same engine on the Linux VM** — on the same
+physical Mac, so the silicon is identical. `apt-get update` is 7.5 s on the
+Linux host and ~119 s on the macOS host. The penalty is code-shape specific:
+branchy, pointer-chasing, memory-touching code explodes, while straight-line
+NEON reads 3.4x and a large file write reads 2.0x.
+
+This went unnoticed for a long time because the head-to-head that exposed it was
+taken on macOS while essentially every attribution in the perf record — per-exec
+cost, the fd-scan work, `gencaches`, the floor benchmark — was taken on the Linux
+VM. Those numbers were not wrong; they described a host on which the dominant
+user-facing defect is absent.
+
+So: **state the host with every number you report**, and treat a result from one
+host as silent about the other. When a user-facing complaint is about the macOS
+app, a Linux measurement cannot confirm or refute it. Reach for the Linux VM when
+you want a fast iteration loop, and re-confirm on macOS before you believe a
+ratio describes what the user feels.
+
 ## A C change reaching the binary is a separate claim, and it has its own check
 
 The engine is **dlopened, never linked**. `libhl_native_engine.so` is built by
