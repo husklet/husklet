@@ -239,6 +239,18 @@ pub fn checkpoint_rendezvous_test(isa: u32, scenario: u32) -> Result<(), i32> {
     bindings::checkpoint_rendezvous_test(isa, scenario)
 }
 
+/// Exercise which LAUNCH a capturing process belongs to: that a container `exec` session's top process is
+/// recognised as a domain root by the launch that created it rather than by the guest pid it was handed,
+/// and that an ordinary forked descendant of that same launch is still not one.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn checkpoint_launch_identity_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    // The hook writes and restores process-wide container identity statics.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    bindings::checkpoint_launch_identity_test(isa, scenario)
+}
+
 /// Exercise capture membership: whether the coordinator's peer filter admits a container `exec` session --
 /// a SIBLING of guest pid 1 -- and refuses a live process of the same executable that belongs to another
 /// container's process domain or to none.
