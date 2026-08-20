@@ -3,7 +3,9 @@ use std::{collections::BTreeSet, fs, path::Path};
 use tree_sitter::Node;
 
 use super::{parse, source_files, suppression};
-use crate::{CInterfacePolicy, Finding, LintError, Location, Result, Review, Severity, rule::Rule, source::Workspace};
+use crate::{
+    Budget, CInterfacePolicy, Finding, LintError, Location, Result, Review, Severity, rule::Rule, source::Workspace,
+};
 
 const RULE: &str = "c-interface-breadth";
 
@@ -96,6 +98,11 @@ fn finding(path: &Path, line: usize, count: usize, maximum: usize) -> Finding {
     );
     finding.message = format!("C header exposes {count} function declarations; the configured maximum is {maximum}");
     finding.help = "split unrelated operations into cohesive headers with narrow ownership".into();
+    finding.budget = Some(Budget {
+        unit: "declaration",
+        measured: count,
+        limit: maximum,
+    });
     let mut review = Review::error();
     review.metadata = vec![
         ("functions".into(), count.to_string()),

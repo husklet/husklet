@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     LintError, Result,
-    model::{Finding, Related, Review, Severity},
+    model::{Budget, Finding, Related, Review, Severity},
     policy::{DependencyPolicy, LayerPolicy},
     rule::Rule,
     source::Workspace,
@@ -298,6 +298,11 @@ impl Graph {
             targets.len(),
         );
         finding.help = "remove dependencies, invert narrow capabilities, or change the repository-owned package budget after architectural review".into();
+        finding.budget = Some(Budget {
+            unit: "dependency",
+            measured: targets.len(),
+            limit: maximum,
+        });
         let mut review = Review::error();
         review.metadata.extend([
             ("Maximum local dependencies".into(), maximum.to_string()),

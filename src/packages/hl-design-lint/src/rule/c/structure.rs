@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, fs, path::Path};
 use tree_sitter::Node;
 
 use super::{parse, source_files, suppression};
-use crate::{Finding, LintError, Location, Result, Review, Severity, rule::Rule, source::Workspace};
+use crate::{Budget, Finding, LintError, Location, Result, Review, Severity, rule::Rule, source::Workspace};
 
 const FILE_LINES: usize = 1_500;
 const FUNCTION_LINES: usize = 200;
@@ -134,10 +134,10 @@ fn effective_lines(text: &str, start: usize, end: usize) -> usize {
 }
 
 fn metric(path: &Path, line: usize, column: usize, subject: &str, value: usize, limit: usize) -> Finding {
-    let rule = match subject {
-        "file length" => "c-file-length",
-        "function length" => "c-function-length",
-        "function nesting" => "c-maximum-nesting",
+    let (rule, unit) = match subject {
+        "file length" => ("c-file-length", "line"),
+        "function length" => ("c-function-length", "line"),
+        "function nesting" => ("c-maximum-nesting", "level"),
         _ => unreachable!("closed C structure metric"),
     };
     let mut finding = Finding::error(
@@ -152,6 +152,11 @@ fn metric(path: &Path, line: usize, column: usize, subject: &str, value: usize, 
     );
     finding.message = format!("C {subject} is {value}; the review threshold is {limit}");
     finding.help = "split cohesive state and behavior behind a named C module boundary".into();
+    finding.budget = Some(Budget {
+        unit,
+        measured: value,
+        limit,
+    });
     let mut review = Review::error();
     review.metadata = vec![("value".into(), value.to_string()), ("limit".into(), limit.to_string())];
     review.questions = vec!["Which independent responsibility can move behind a narrow header?".into()];

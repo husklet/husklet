@@ -62,7 +62,7 @@ impl<Output: Write> Reporter for Diagnostic<Output> {
 
     fn finish(&mut self, summaries: &[Summary]) -> Result<()> {
         for summary in summaries {
-            writeln!(
+            write!(
                 self.output,
                 "{}: {} {}(s)",
                 summary.rule,
@@ -70,6 +70,11 @@ impl<Output: Write> Reporter for Diagnostic<Output> {
                 summary.severity.as_str()
             )
             .map_err(|error| LintError::report("diagnostic summary", error))?;
+            for budget in &summary.budgets {
+                write!(self.output, ", {} {}(s) over budget", budget.excess(), budget.unit)
+                    .map_err(|error| LintError::report("diagnostic summary", error))?;
+            }
+            writeln!(self.output).map_err(|error| LintError::report("diagnostic summary", error))?;
         }
         Ok(())
     }
