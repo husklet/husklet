@@ -21,8 +21,7 @@ static uint64_t pcache_engine_id(void) {
     uint64_t modes = (uint64_t)(g_guestfold != 0) | ((uint64_t)(g_steal1617 != 0) << 1) |
                      ((uint64_t)(g_noibslim != 0) << 2) | ((uint64_t)(g_mtibtc != 0) << 3) |
                      ((uint64_t)(g_no_stw_reclaim != 0) << 4) | ((uint64_t)(g_prof != 0) << 5) |
-                     ((uint64_t)(a64_soft_shared_resolver() != 0) << 6) |
-                     ((uint64_t)(uint32_t)g_fwdskip << 32);
+                     ((uint64_t)(a64_soft_shared_resolver() != 0) << 6) | ((uint64_t)(uint32_t)g_fwdskip << 32);
     return hl_identity_configuration(build, 1, 1, modes);
 }
 
@@ -31,8 +30,7 @@ static hl_identity_digest pcache_translator_identity(void) {
     uint64_t modes = (uint64_t)(g_guestfold != 0) | ((uint64_t)(g_steal1617 != 0) << 1) |
                      ((uint64_t)(g_noibslim != 0) << 2) | ((uint64_t)(g_mtibtc != 0) << 3) |
                      ((uint64_t)(g_no_stw_reclaim != 0) << 4) | ((uint64_t)(g_prof != 0) << 5) |
-                     ((uint64_t)(a64_soft_shared_resolver() != 0) << 6) |
-                     ((uint64_t)(uint32_t)g_fwdskip << 32);
+                     ((uint64_t)(a64_soft_shared_resolver() != 0) << 6) | ((uint64_t)(uint32_t)g_fwdskip << 32);
     return hl_identity_engine_digest(tag, sizeof tag - 1, PC_TRANSLATOR_ABI, 1, HL_HOST_CPU_ISA, modes);
 }
 

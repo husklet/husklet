@@ -109,8 +109,8 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
      * scratch: real x18 is reserved by Darwin and may be cleared asynchronously.
      * Shadow-enabled builds retain the proven inline guard below.
      */
-    guard.shared = a64_soft_shared_resolver() && shadowgate() < 0 && !g_tier2_build && !guard.profile_sample &&
-                   resume_ea != 15;
+    guard.shared =
+        a64_soft_shared_resolver() && shadowgate() < 0 && !g_tier2_build && !guard.profile_sample && resume_ea != 15;
     if (guard.shared)
         g_prof_soft_shared_sites++;
     else
