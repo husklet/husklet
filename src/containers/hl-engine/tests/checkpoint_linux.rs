@@ -385,6 +385,134 @@ fn a_registered_member_the_enumeration_never_saw_still_refuses_the_capture_on_bo
     }
 }
 
+/// A member that is slow but is still working is waited for, however long the box makes it take.
+///
+/// THE RENDEZVOUS USED TO ASK THE WRONG QUESTION. It ran at most 500 passes of 10 ms and refused whatever
+/// had not committed by then -- a fixed ~5 s wall budget for every enumerated guest process to reach a
+/// safepoint. Under load that budget is not a property of the tree at all: the same workspace close that
+/// passes in 7.5 s at load 8 refused at load ~16 with `participant ... never committed proc.6 (it did not
+/// reach a checkpoint safepoint)`, because a descheduled member and a wedged member are the same thing to
+/// a clock. `HL_CKPT_TEST_PEER_SLOW_SAFEPOINT` makes that deterministic: the member works, burning real
+/// CPU, for eight seconds -- well past the old budget -- and then commits normally.
+///
+/// The assertions are deliberately both-sided. The capture must SUCCEED, which the old fixed budget cannot
+/// do, and it must contain EXACTLY the init and its child, so a "fix" that waits longer and then publishes
+/// a manifest without the slow member fails here rather than passing quietly. The elapsed lower bound
+/// pins that the wait really happened over the old budget rather than the fixture having gone soft.
+#[test]
+fn a_slow_but_progressing_member_is_waited_for_rather_than_refused_on_both_isas() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executables =
+        [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, blocked_tree_fixture(isa, fixtures.path())));
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+    for (isa, executable) in executables {
+        let temporary = tempfile::tempdir().unwrap();
+        let release = temporary.path().join("release");
+        let final_release = temporary.path().join("final-release");
+        let output = temporary.path().join("release.output");
+        let image = Arc::new(Store::default());
+        let capture = Engine::with_checkpoint(
+            isa,
+            plan(
+                &executable,
+                &release,
+                &final_release,
+                &["HL_CHECKPOINT", "HL_CKPT_TEST_PEER_SLOW_SAFEPOINT"],
+            ),
+            streams(true),
+            image.clone(),
+            image.clone(),
+        )
+        .unwrap();
+        capture.start().unwrap();
+        wait_for(&output, "CHILD-READY");
+        let started = Instant::now();
+        capture
+            .capture_checkpoint_until(checkpoint_deadline())
+            .unwrap_or_else(|error| panic!("{isa:?} refused a capture over a member that was still working: {error:?}"));
+        assert_eq!(capture.wait().unwrap().guest_status, 0);
+        assert!(
+            started.elapsed() >= Duration::from_millis(7500),
+            "{isa:?} capture finished in {:?}, so the slow member never made the rendezvous wait past the \
+             old fixed budget and this fixture proves nothing",
+            started.elapsed()
+        );
+        let stored = image.0.lock().unwrap();
+        assert!(stored.contains_key("MANIFEST"), "{isa:?} published no manifest");
+        assert_eq!(
+            stored
+                .keys()
+                .filter(|name| name.starts_with("proc.") && name.ends_with("/meta"))
+                .count(),
+            2,
+            "{isa:?} waited for the slow member and then published a manifest without it"
+        );
+    }
+}
+
+/// A member that will never reach a safepoint is still refused, bounded, and named for what it did.
+///
+/// The other half of waiting on progress instead of on a clock: waiting forever for a member that is not
+/// coming is a workspace close that hangs, which is not an improvement on one that fails.
+/// `HL_CKPT_TEST_PEER_STALLS_AT_SAFEPOINT` is that member exactly -- alive, so it is never exempted as a
+/// departed transient, deaf to any further kick, never registering, never committing, and consuming no
+/// host CPU time from that point on. The stall window is the only thing that can end this capture, so this
+/// test fails by HANGING if the rendezvous ever loses its give-up condition, and the upper bound below is
+/// what converts that hang into a failure.
+///
+/// No manifest may be published: the member's state is unsaved, and this design treats a successful close
+/// over an image that has lost state as strictly worse than a failed close.
+#[test]
+fn a_member_that_never_reaches_a_safepoint_still_refuses_the_capture_on_both_isas() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executables =
+        [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, blocked_tree_fixture(isa, fixtures.path())));
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+    for (isa, executable) in executables {
+        let temporary = tempfile::tempdir().unwrap();
+        let release = temporary.path().join("release");
+        let final_release = temporary.path().join("final-release");
+        let output = temporary.path().join("release.output");
+        let image = Arc::new(Store::default());
+        let capture = Engine::with_checkpoint(
+            isa,
+            plan(
+                &executable,
+                &release,
+                &final_release,
+                &["HL_CHECKPOINT", "HL_CKPT_TEST_PEER_STALLS_AT_SAFEPOINT"],
+            ),
+            streams(true),
+            image.clone(),
+            image.clone(),
+        )
+        .unwrap();
+        capture.start().unwrap();
+        wait_for(&output, "CHILD-READY");
+        let started = Instant::now();
+        let refusal = capture
+            .capture_checkpoint_until(checkpoint_deadline())
+            .expect_err("a capture whose member never reached a safepoint was reported as successful");
+        let elapsed = started.elapsed();
+        let cleanup = format!("stop={:?}", capture.stop(StopRequest::Force));
+        let _ = capture.wait();
+        assert!(
+            elapsed < Duration::from_secs(25),
+            "{isa:?} took {elapsed:?} to refuse a member that never moves, which is the embedder's deadline \
+             expiring rather than the rendezvous deciding: {refusal:?} ({cleanup})"
+        );
+        let stored = image.0.lock().unwrap();
+        assert!(
+            !stored.contains_key("MANIFEST"),
+            "{isa:?} published a manifest for a capture whose member never committed: {refusal:?}"
+        );
+    }
+}
+
 fn rejected_member_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
     let (compiler, name) = match isa {
         GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-rejected-member-aarch64"),

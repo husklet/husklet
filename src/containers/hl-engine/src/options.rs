@@ -136,6 +136,16 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
+        "HL_CKPT_TEST_PEER_SLOW_SAFEPOINT",
+        "test-only capture peer that works far longer than the rendezvous stall window before committing",
+        Flag
+    ),
+    internal!(
+        "HL_CKPT_TEST_PEER_STALLS_AT_SAFEPOINT",
+        "test-only capture peer that never commits and consumes no host CPU time",
+        Flag
+    ),
+    internal!(
         "HL_CKPT_TEST_PEER_FORGOTTEN_AFTER_KICK",
         "test-only capture peer dropped from the coordinator's enumeration after it is kicked",
         Flag
