@@ -10,8 +10,42 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+/* An access that BEGINS in a live page and RUNS INTO the hole must fault too.
+ * The host page is still mapped underneath (macOS 16 KiB granule), so nothing
+ * but the software ledger can refuse it; on native Linux the page is genuinely
+ * gone and the same transcript falls out of the hardware, which is what makes
+ * this a portable oracle.  Both directions (live->hole across the low edge and
+ * hole->live across the high edge) and several widths, as a load and a store. */
+#define CROSS_LOAD(label, address, type, warm)                                    \
+    do {                                                                    \
+        caught = 0;                                                         \
+        if (warm) sink += *(const volatile unsigned char *)(warm); /* warm the start page's guard entry */ \
+        if (sigsetjmp(jump, 1) == 0) {                                      \
+            type value;                                                     \
+            memcpy(&value, (const void *)(address), sizeof value);          \
+            sink += (unsigned long long)value;                              \
+            printf(label "=NOFAULT\n");                                     \
+        } else {                                                            \
+            printf(label "=FAULT\n");                                       \
+        }                                                                   \
+    } while (0)
+
+#define CROSS_STORE(label, address, type, warm)                                   \
+    do {                                                                    \
+        caught = 0;                                                         \
+        if (warm) sink += *(const volatile unsigned char *)(warm); /* warm the start page's guard entry */ \
+        if (sigsetjmp(jump, 1) == 0) {                                      \
+            type value = (type)0x5a5a5a5a5a5a5a5aULL;                       \
+            memcpy((void *)(address), &value, sizeof value);                \
+            printf(label "=NOFAULT\n");                                     \
+        } else {                                                            \
+            printf(label "=FAULT\n");                                       \
+        }                                                                   \
+    } while (0)
+
 static sigjmp_buf jump;
 static volatile int caught;
+static volatile unsigned long long sink;
 static void on_segv(int signal_number) {
     (void)signal_number;
     caught = 1;
@@ -82,6 +116,21 @@ int main(void) {
     } else {
         printf("hole_write=FAULT\n");
     }
+    /* live -> hole: the access starts in page 0 and ends inside the hole. */
+    CROSS_LOAD("low_load2", p + PAGE - 1, unsigned short, p);
+    CROSS_LOAD("low_load4", p + PAGE - 2, unsigned int, p);
+    CROSS_LOAD("low_load8", p + PAGE - 4, unsigned long long, p);
+    CROSS_STORE("low_store2", p + PAGE - 1, unsigned short, p);
+    CROSS_STORE("low_store4", p + PAGE - 2, unsigned int, p);
+    CROSS_STORE("low_store8", p + PAGE - 4, unsigned long long, p);
+    /* hole -> live: the access starts inside the hole and ends in page 2. */
+    CROSS_LOAD("high_load2", p + 2 * PAGE - 1, unsigned short, NULL);
+    CROSS_LOAD("high_load4", p + 2 * PAGE - 2, unsigned int, NULL);
+    CROSS_LOAD("high_load8", p + 2 * PAGE - 4, unsigned long long, NULL);
+    CROSS_STORE("high_store2", p + 2 * PAGE - 1, unsigned short, NULL);
+    CROSS_STORE("high_store4", p + 2 * PAGE - 2, unsigned int, NULL);
+    CROSS_STORE("high_store8", p + 2 * PAGE - 4, unsigned long long, NULL);
+
     /* A page above the hole is still live after the faults. */
     printf("after=%u\n", (unsigned)p[3 * PAGE + 5]);
     return 0;

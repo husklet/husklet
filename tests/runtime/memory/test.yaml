@@ -1173,8 +1173,14 @@ cases:
     # engine keeps the backing mapped and enforces the hole in software with
     # the soft-memory guard. This pins what that guard must preserve: the
     # surviving pages keep their bytes across many-page blocks and unaligned
-    # cross-page widths, and BOTH a read and a write of the unmapped page
-    # still raise SIGSEGV. Native Linux (4 KiB pages, where the host honours
+    # cross-page widths, BOTH a read and a write of the unmapped page still
+    # raise SIGSEGV, and so does an access that merely CROSSES the boundary --
+    # 2/4/8-byte unaligned loads and stores over the low edge (starting in a
+    # live page and running into the hole) and over the high edge (starting in
+    # the hole and running into a live page). The crossing case reaches the
+    # guard's span path, which grants one host delta for the whole access and
+    # therefore has to consult the accessibility ledger itself.
+    # Native Linux (4 KiB pages, where the host honours
     # the unmap directly) produces the same transcript, which is what makes
     # it a portable oracle for the emulated case.
     build: { source: source/coarse_page_hole.c, output: coarse-page-hole, flags: ["-static","-O2","-std=gnu11"] }
