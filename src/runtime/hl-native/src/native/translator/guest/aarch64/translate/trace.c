@@ -135,6 +135,9 @@ static int aarch64_soft_span_copy(struct cpu *c, int to_guest, int copy_bytes) {
         if (resolved < 0) return 0;
         if (!resolved) {
             size_t page_left = 4096u - (size_t)(cursor & 4095u);
+            /* Retained backing under a coarse host page is not accessibility:
+               the ledger owns that answer, and the host says "mapped" here. */
+            if (gna_hit(cursor, 1)) return 0;
             if (!hl_host_range_mapped((uintptr_t)cursor, 1)) return 0;
             host = (void *)(uintptr_t)cursor;
             contiguous = page_left;
@@ -206,6 +209,17 @@ static int aarch64_soft_bounce_commit(struct cpu *c) {
 
 static int aarch64_soft_tlb_span(struct cpu *c) {
     if (c->soft_bytes == 0 || c->soft_ea > UINT64_MAX - c->soft_bytes) return 0;
+    /*
+     * The emitted guard reaches this path directly, WITHOUT passing through
+     * aarch64_soft_tlb_miss: an access whose start page is cached but whose
+     * end runs past the entry's limit branches straight to R_SOFTSPAN.  So the
+     * miss handler's gna test does not cover it, and the loop below would
+     * happily grant one delta over a range whose tail is a 4 KiB logical hole
+     * inside a still-mapped host page -- a guest reading or writing memory it
+     * has unmapped.  Ask the accessibility ledger for the WHOLE access first,
+     * exactly as the miss handler does for its own.
+     */
+    if (gna_hit(c->soft_ea, c->soft_bytes)) return 0;
     uint64_t cursor = c->soft_ea, last = cursor + c->soft_bytes, delta = 0;
     int have_delta = 0;
     while (cursor < last) {

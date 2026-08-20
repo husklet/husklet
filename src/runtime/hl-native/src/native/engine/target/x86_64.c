@@ -757,6 +757,21 @@ static int soft_tlb_miss(struct cpu *c) {
                 c->reason = R_SOFTSPAN;
                 return 0;
             }
+            /* Extending the entry past the view's own guest_last grants one
+               delta over addresses no view covers.  On a host whose granule is
+               wider than the guest page that tail can be a 4 KiB logical hole
+               whose backing is deliberately still mapped, so neither the view
+               table nor the host can refuse it -- only gna records the unmap.
+               The identity branch below already opens with this test; the
+               cross-boundary case has to pay it too, or a guest can read and
+               write a page it has unmapped. */
+            {
+                uint64_t accessible = gna_prefix(address, width);
+                if (accessible < width) {
+                    c->fault_addr = address + accessible;
+                    return raise_guest_data_map_fault(c);
+                }
+            }
             last = end;
 #else
             c->reason = R_SOFTSPAN;
