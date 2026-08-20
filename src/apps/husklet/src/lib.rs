@@ -8,4 +8,7 @@ pub mod paths;
 mod ffi;
 
 #[cfg(feature = "runtime")]
+pub mod extension;
+
+#[cfg(feature = "runtime")]
 pub mod runtime;

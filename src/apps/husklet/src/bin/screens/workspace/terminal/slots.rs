@@ -28,6 +28,11 @@ impl<'a> Slots<'a> {
         saved.to_owned()
     }
 
+    /// Register a pane holding a shell under its layout slot.
+    pub(crate) fn hold(&self, terminal: &vte4::Terminal, slot: String) {
+        self.0.panes.borrow_mut().push(PaneRegistration::new(terminal, slot));
+    }
+
     /// Find the layout slot registered for `term` (pruning dead registry entries as it scans).
     pub(crate) fn of(&self, term: &vte4::Terminal) -> Option<String> {
         let tw = self.0;
@@ -60,5 +65,42 @@ impl<'a> Slots<'a> {
         for t in &terms {
             self.discard(t);
         }
+        for pane in Panes::under(self.0, child) {
+            // A closing tab hands any interface it held back to its own page.
+            Surface::retire(self.0, &pane.widget);
+            self.release(&pane.widget);
+        }
+    }
+
+    /// Register a pane holding one extension's interface.
+    pub(crate) fn enrol(&self, widget: &gtk::Widget, slot: String, extension: String) {
+        self.0
+            .surfaces
+            .borrow_mut()
+            .push(SurfaceRegistration::new(widget, slot, extension));
+    }
+
+    /// The slot and the extension registered for a surface pane, if it is one
+    /// (pruning dead registry entries as it scans).
+    pub(crate) fn surface(&self, widget: &gtk::Widget) -> Option<(String, String)> {
+        let mut found = None;
+        self.0.surfaces.borrow_mut().retain(|pane| match pane.widget.upgrade() {
+            Some(held) if &held == widget => {
+                found = Some((pane.slot.clone(), pane.extension.clone()));
+                true
+            }
+            Some(_) => true,
+            None => false, // prune a dead pane
+        });
+        found
+    }
+
+    /// A surface pane that closed is dropped from the live registry.
+    pub(crate) fn release(&self, widget: &gtk::Widget) {
+        self.0.surfaces.borrow_mut().retain(|pane| match pane.widget.upgrade() {
+            Some(held) if &held == widget => false,
+            Some(_) => true,
+            None => false, // prune dead entries while we're here
+        });
     }
 }

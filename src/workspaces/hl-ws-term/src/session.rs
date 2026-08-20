@@ -29,10 +29,13 @@ impl SplitDir {
     }
 }
 
-/// A node in a tab's pane tree: either a terminal leaf or a binary split.
+/// A node in a tab's pane tree: a terminal leaf, a leaf an extension draws
+/// into, or a binary split.
 #[derive(Clone, PartialEq, Debug)]
 pub enum PaneNode {
     Leaf(Pane),
+    /// A leaf holding an extension's interface instead of a shell.
+    Surface(SurfacePane),
     Split {
         dir: SplitDir,
         ratio: f64,
@@ -52,6 +55,20 @@ pub struct Pane {
     pub slot: Option<String>,
 }
 
+/// A pane an extension renders its interface into.
+///
+/// Only the identity is persisted, never the drawing: an interface is a stream
+/// of reconciliation frames from a running extension, and a picture of one is
+/// not something this layer can hold or replay. What is restored is therefore
+/// the pane's place in the layout and the name of what belongs in it.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct SurfacePane {
+    /// The extension whose interface belongs in this pane.
+    pub extension: String,
+    /// Stable per-pane layout identity persisted across close and reopen.
+    pub slot: Option<String>,
+}
+
 impl PaneNode {
     #[must_use]
     pub fn leaf() -> PaneNode {
@@ -67,6 +84,8 @@ impl PaneNode {
     fn collect<'a>(&'a self, out: &mut Vec<&'a Pane>) {
         match self {
             PaneNode::Leaf(p) => out.push(p),
+            // A surface holds no shell and therefore no scrollback file.
+            PaneNode::Surface(_) => {}
             PaneNode::Split { a, b, .. } => {
                 a.collect(out);
                 b.collect(out);
@@ -81,6 +100,12 @@ impl PaneNode {
                 out.push_str(&Layout::escape(pane.cwd.as_deref().unwrap_or("-")));
                 out.push(' ');
                 out.push_str(&Layout::escape(pane.history_file.as_deref().unwrap_or("-")));
+                out.push(' ');
+                out.push_str(&Layout::escape(pane.slot.as_deref().unwrap_or("-")));
+            }
+            Self::Surface(pane) => {
+                out.push_str("surface ");
+                out.push_str(&Layout::escape(&pane.extension));
                 out.push(' ');
                 out.push_str(&Layout::escape(pane.slot.as_deref().unwrap_or("-")));
             }
@@ -289,6 +314,18 @@ impl<'a> Layout<'a> {
                     history_file,
                     slot,
                 }))
+            }
+            "surface" => {
+                let extension = Self::value(
+                    self.next()
+                        .ok_or_else(|| Layout::invalid("surface is missing its extension"))?,
+                )
+                .ok_or_else(|| Layout::invalid("surface is missing its extension"))?;
+                let slot = Self::value(
+                    self.next()
+                        .ok_or_else(|| Layout::invalid("surface is missing its slot"))?,
+                );
+                Ok(PaneNode::Surface(SurfacePane { extension, slot }))
             }
             direction @ ("hsplit" | "vsplit") => {
                 let dir = if direction == "hsplit" {

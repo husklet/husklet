@@ -31,7 +31,17 @@ package = "hl-native"
 maximum = 1
 
 [documentation]
-allowed = ["AGENTS.md", "README.md", "lint/examples/negative.md", "lint/examples/positive.md", "todo.md"]
+allowed = [
+    "AGENTS.md",
+    "README.md",
+    "lint/examples/negative.md",
+    "lint/examples/positive.md",
+    "todo.md",
+    # An extension package is published on its own; its readme is how anyone
+    # depending on it learns the interface.
+    "extensions/react/README.md",
+    "extensions/storybook/README.md",
+]
 examples = ["lint/examples/negative.md", "lint/examples/positive.md"]
 
 [unsafe_boundary]
@@ -73,7 +83,7 @@ tool_suffixes = ["-test", "-tests", "-tool", "-tools"]
 destination_domain = "src/apps"
 
 [source]
-ignored_directories = [".codegraph", ".git", "target", "vendor", "lint"]
+ignored_directories = [".codegraph", ".git", "target", "vendor", "lint", "node_modules"]
 ignored_markers = [".hl-external-corpus", ".hl-generated-artifacts"]
 self_packages = ["hl-design-lint"]
 foreign_source_directories = ["native", "schema"]

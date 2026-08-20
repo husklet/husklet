@@ -28,7 +28,7 @@ use vte4::TerminalExtManual;
 use hl::config::{TerminalPreferences, VpnConfig, WorkspaceConfig, WorkspaceStore};
 use hl_ws::{Arch, Mount};
 use hl_ws_term::config::{CursorShape, TermConfig};
-use hl_ws_term::session::{self, Pane, PaneNode, Session, SessionTab, SplitDir};
+use hl_ws_term::session::{self, Pane, PaneNode, Session, SessionTab, SplitDir, SurfacePane};
 
 mod components;
 mod gtk_adapter;

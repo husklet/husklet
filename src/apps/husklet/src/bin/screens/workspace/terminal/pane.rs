@@ -36,6 +36,12 @@ impl PaneWidget {
                 pids.push(pid);
                 (term.clone().upcast(), Some(term))
             }
+            PaneNode::Surface(pane) => {
+                // Reuse the pane's saved slot so an extension addressing its own
+                // pane still finds it after a restart.
+                let slot = Slots::new(tw).adopt(pane.slot.as_deref());
+                (Surface::build(tw, &pane.extension, slot), None)
+            }
             PaneNode::Split { dir, ratio, a, b } => {
                 let orient = if *dir == SplitDir::Horizontal {
                     gtk::Orientation::Horizontal
@@ -138,11 +144,15 @@ impl<'a> Tabs<'a> {
 
     pub(crate) fn overview(&self) {
         let tw = self.window;
-        let dash = Overview::new(&tw.ws, tw.overview_page).view();
+        let dash = Overview::new(&tw.ws, tw.overview_page).within(tw).view();
         self.add(&tw.ws.name, Some("◧"), &dash, false);
     }
 
-    pub(crate) fn terminal(&self) {
+    /// Opens a shell tab and hands back its identity.
+    ///
+    /// The identity is returned rather than dropped because an extension that
+    /// asked for a tab has to be told which one it got.
+    pub(crate) fn terminal(&self) -> String {
         let tw = self.window;
         let n = tw.shell_no.get() + 1;
         tw.shell_no.set(n);
@@ -159,8 +169,9 @@ impl<'a> Tabs<'a> {
         let (term, pid) = make_terminal_ex(tw, cwd, None, &Slots::new(tw).allocate());
         paneroot.append(&term);
         let name = self.add(&format!("shell {n}"), None, &paneroot, true);
-        tw.pids.borrow_mut().entry(name).or_default().push(pid);
+        tw.pids.borrow_mut().entry(name.clone()).or_default().push(pid);
         term.grab_focus();
+        name
     }
 }
 
@@ -303,7 +314,9 @@ impl<'a> PaneView<'a> {
     pub(crate) fn split(&self, orient: gtk::Orientation) {
         let tw = self.window;
         let old = self.terminal.clone();
-        let Some(parent) = old.parent() else { return };
+        if old.parent().is_none() {
+            return;
+        }
         let page = Page::of(tw, old.upcast_ref::<gtk::Widget>()).map(|page| page.name);
         // OSC-7: split panes inherit the source pane's cwd. A fresh split gets a fresh slot; never restores.
         let split_cwd = old
@@ -313,70 +326,112 @@ impl<'a> PaneView<'a> {
         if let Some(name) = &page {
             tw.pids.borrow_mut().entry(name.clone()).or_default().push(pid);
         }
-        let paned = gtk::Paned::new(orient);
-        paned.set_resize_start_child(true);
-        paned.set_resize_end_child(true);
-        paned.set_hexpand(true);
-        paned.set_vexpand(true);
-
-        if let Some(bx) = parent.downcast_ref::<gtk::Box>() {
-            bx.remove(&old);
-            paned.set_start_child(Some(&old));
-            paned.set_end_child(Some(&new));
-            bx.append(&paned);
-        } else if let Some(pp) = parent.downcast_ref::<gtk::Paned>() {
-            let is_start = pp.start_child().as_ref() == Some(old.upcast_ref::<gtk::Widget>());
-            if is_start {
-                pp.set_start_child(gtk::Widget::NONE);
-            } else {
-                pp.set_end_child(gtk::Widget::NONE);
-            }
-            paned.set_start_child(Some(&old));
-            paned.set_end_child(Some(&new));
-            if is_start {
-                pp.set_start_child(Some(&paned));
-            } else {
-                pp.set_end_child(Some(&paned));
-            }
-        } else {
-            return;
+        if PaneSplit::insert(old.upcast_ref::<gtk::Widget>(), orient, new.upcast_ref::<gtk::Widget>()) {
+            new.grab_focus();
         }
-        new.grab_focus();
     }
 
     /// A shell exited → close its pane. If it's in a split, collapse the split (keep the sibling);
     /// otherwise close the whole tab.
     pub(crate) fn close(&self) {
         let tw = self.window;
-        let term = &self.terminal;
         // Window teardown owns registry cleanup while it terminates worker processes.
         if tw.closing.get() {
             return;
         }
         // The shell exited (or a split is collapsing), so this pane is gone from the live registry.
-        Slots::new(tw).discard(term);
-        let Some(parent) = term.parent() else { return };
-        if let Some(paned) = parent.downcast_ref::<gtk::Paned>() {
-            let is_start = paned.start_child().as_ref() == Some(term.upcast_ref::<gtk::Widget>());
-            let sibling = if is_start {
-                paned.end_child()
-            } else {
-                paned.start_child()
-            };
-            let Some(sibling) = sibling else {
-                if let Some(page) = Page::of(tw, term.upcast_ref()) {
-                    page.close();
-                }
-                return;
-            };
-            paned.set_start_child(gtk::Widget::NONE);
-            paned.set_end_child(gtk::Widget::NONE);
-            let Some(pparent) = paned.parent() else {
-                return;
-            };
-            PaneReplacement::replace(&pparent, paned, &sibling);
-            sibling.grab_focus();
-        } else if let Some(page) = Page::of(tw, term.upcast_ref()) {
+        Slots::new(tw).discard(&self.terminal);
+        PaneClosure::remove(tw, self.terminal.upcast_ref::<gtk::Widget>());
+    }
+}
+
+/// Putting a new pane beside an existing one.
+pub(crate) struct PaneSplit;
+
+impl PaneSplit {
+    /// Divides `old` in place, with `new` in the half that appeared.
+    ///
+    /// Takes widgets rather than terminals because the half a pane is divided
+    /// into may hold an extension's interface instead of a shell, and the shape
+    /// of the split is the same either way. Answers whether it happened: a pane
+    /// whose parent is neither a box nor a split is not laid out by this window.
+    pub(crate) fn insert(old: &gtk::Widget, orientation: gtk::Orientation, new: &gtk::Widget) -> bool {
+        let Some(parent) = old.parent() else { return false };
+        let paned = gtk::Paned::new(orientation);
+        paned.set_resize_start_child(true);
+        paned.set_resize_end_child(true);
+        paned.set_hexpand(true);
+        paned.set_vexpand(true);
+        if let Some(container) = parent.downcast_ref::<gtk::Box>() {
+            container.remove(old);
+            Self::fill(&paned, old, new);
+            container.append(&paned);
+            return true;
+        }
+        let Some(outer) = parent.downcast_ref::<gtk::Paned>() else {
+            return false;
+        };
+        Self::nest(outer, &paned, old, new);
+        true
+    }
+
+    /// The two halves of a fresh split.
+    fn fill(paned: &gtk::Paned, old: &gtk::Widget, new: &gtk::Widget) {
+        paned.set_start_child(Some(old));
+        paned.set_end_child(Some(new));
+    }
+
+    /// Puts a fresh split where `old` sat inside the split that already held it.
+    fn nest(outer: &gtk::Paned, paned: &gtk::Paned, old: &gtk::Widget, new: &gtk::Widget) {
+        let is_start = outer.start_child().as_ref() == Some(old);
+        if is_start {
+            outer.set_start_child(gtk::Widget::NONE);
+        } else {
+            outer.set_end_child(gtk::Widget::NONE);
+        }
+        Self::fill(paned, old, new);
+        if is_start {
+            outer.set_start_child(Some(paned));
+        } else {
+            outer.set_end_child(Some(paned));
+        }
+    }
+}
+
+/// Taking one pane out of the layout, whatever it held.
+pub(crate) struct PaneClosure;
+
+impl PaneClosure {
+    /// Removes one pane: collapse its split onto the sibling, or close the tab
+    /// when it was the tab's only pane. Registry cleanup is the caller's,
+    /// because a terminal and a surface are forgotten from different places.
+    pub(crate) fn remove(window: &Rc<TermWin>, pane: &gtk::Widget) {
+        let Some(parent) = pane.parent() else { return };
+        let Some(paned) = parent.downcast_ref::<gtk::Paned>() else {
+            Self::page(window, pane);
+            return;
+        };
+        let is_start = paned.start_child().as_ref() == Some(pane);
+        let sibling = if is_start {
+            paned.end_child()
+        } else {
+            paned.start_child()
+        };
+        let Some(sibling) = sibling else {
+            Self::page(window, pane);
+            return;
+        };
+        paned.set_start_child(gtk::Widget::NONE);
+        paned.set_end_child(gtk::Widget::NONE);
+        let Some(outer) = paned.parent() else { return };
+        PaneReplacement::replace(&outer, paned, &sibling);
+        sibling.grab_focus();
+    }
+
+    /// Closing the last pane of a tab is closing the tab, which is what closing
+    /// that pane by hand already does.
+    fn page(window: &Rc<TermWin>, pane: &gtk::Widget) {
+        if let Some(page) = Page::of(window, pane) {
             page.close();
         }
     }

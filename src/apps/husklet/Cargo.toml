@@ -26,11 +26,13 @@ hl-ws = { path = "../../workspaces/hl-ws" }
 hl-log = { path = "../../packages/hl-log" }
 
 hl-ws-term = { path = "../../workspaces/hl-ws-term", optional = true }
+hl-extension = { path = "../../workspaces/hl-extension", optional = true }
 hl-container = { path = "../../containers/hl-container", default-features = false, optional = true }
 hl-daemon = { path = "../../containers/hl-daemon", optional = true }
 hl-client = { path = "../../containers/hl-client", optional = true }
 hl-images = { path = "../../containers/hl-images", optional = true }
 hl-gui = { path = "../../workspaces/hl-gui", optional = true }
+hl-gui-gtk = { path = "../../workspaces/hl-gui-gtk", optional = true }
 libc = { version = "0.2", optional = true }
 fs2 = { workspace = true, optional = true }
 tokio = { version = "1", features = ["fs", "rt-multi-thread", "macros", "signal"], optional = true }
@@ -60,6 +62,10 @@ default = []
 profile = ["hl-log/release-verbose"]
 runtime = [
     "dep:hl-ws-term",
+    # The extension protocol describes interfaces in `hl-gui` types, so hosting a
+    # conversation needs the toolkit-neutral model even with no window open.
+    "dep:hl-gui",
+    "dep:hl-extension",
     "dep:hl-container",
     "dep:hl-daemon",
     "dep:hl-client",
@@ -74,6 +80,7 @@ runtime = [
 gui = [
     "runtime",
     "dep:hl-gui",
+    "dep:hl-gui-gtk",
     "dep:gtk",
     "dep:vte4",
     "dep:serde",
