@@ -1228,6 +1228,91 @@ mod tests {
         drop(bridge);
     }
 
+    /// A restored member's terminal runs the HOST discipline, deliberately.
+    ///
+    /// It is the terminal a reattached pane is seated on after a Continue-later restore, so on macOS
+    /// it still destroys a canonical line of 1025 bytes or more -- the defect
+    /// [`a_pasted_canonical_line_reaches_the_guest_at_every_length`] exists to prevent. This pins the
+    /// fallback so that flipping it to [`InputDiscipline::Linux`] is a decision somebody has to make
+    /// against the reason in [`MemberTerminal::open`], rather than a one-word edit that reads like an
+    /// improvement and leaves a re-forked member's shell stuck in canonical mode.
+    #[test]
+    fn a_restored_member_terminal_falls_back_to_the_host_discipline() {
+        let port = Arc::new(Port::default());
+        let terminal = Terminal::new(port, 24, 80).unwrap();
+        let (member, slave) = super::MemberTerminal::open(terminal).expect("member terminal");
+        assert_eq!(
+            member.discipline(),
+            InputDiscipline::Host,
+            "a restored member's terminal must keep the host discipline while the guest's termios \
+             store does not cross the restore fork"
+        );
+        drop(slave);
+        drop(member);
+    }
+
+    /// The engine's per-terminal termios store does not cross a fork, which is why the discipline
+    /// above cannot be the Linux one.
+    ///
+    /// A whole-image restore re-forks every captured process, so a restored member runs in a process
+    /// of its own with a private copy of the engine's statics. Its guest's `TCSETS` is recorded
+    /// there. This is the measurement, not the assumption: a child records a different image for the
+    /// SAME terminal device -- same `dev`/`ino`, which is all the store keys on -- and the parent
+    /// must still read back its own.
+    ///
+    /// The entry is what is asserted, not the generation counter: that counter is one number for
+    /// every terminal in the process, so a sibling test adopting its own pty moves it and an
+    /// assertion on it fails under `cargo test` while passing when run alone. It did.
+    #[test]
+    fn the_guest_termios_store_does_not_cross_the_restore_fork() {
+        if let Some(error) = hl_native::artifact_load_error() {
+            eprintln!("termios store fork check skipped: the engine is unavailable: {error}");
+            return;
+        }
+        let (master, slave) = super::open_pair((24, 80)).expect("pty pair");
+        let mut parent_image = [0_u8; 36];
+        if hl_native::terminal_termios_capture(slave.as_raw_fd(), &mut parent_image).is_none() {
+            panic!("capture the host termios of a fresh pty");
+        }
+        // A bit no fresh pty carries, so the two images cannot be confused for one another.
+        parent_image[16] = 0x5a;
+        hl_native::terminal_termios_adopt(slave.as_raw_fd(), &parent_image).expect("adopt in the parent");
+
+        let mut child_image = parent_image;
+        child_image[16] = 0xa5;
+        // SAFETY: the child performs one FFI call and `_exit`s. It allocates nothing, takes no Rust
+        // lock, and never returns into the test harness, so no lock this process held at fork time
+        // is ever acquired in it.
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0, "fork a stand-in for a restored member");
+        if child == 0 {
+            let recorded = hl_native::terminal_termios_adopt(slave.as_raw_fd(), &child_image).is_some();
+            // SAFETY: `_exit` performs no cleanup, which is the point.
+            unsafe { libc::_exit(i32::from(!recorded)) };
+        }
+        let mut status = 0;
+        // SAFETY: `status` is writable and `child` is this process's child.
+        assert!(unsafe { libc::waitpid(child, &raw mut status, 0) } == child);
+        assert_eq!(
+            libc::WEXITSTATUS(status),
+            0,
+            "the child could not record a guest termios of its own"
+        );
+
+        let mut seen = [0_u8; 36];
+        assert!(
+            hl_native::terminal_termios(slave.as_raw_fd(), &mut seen).is_some(),
+            "the parent lost its own entry"
+        );
+        assert_eq!(
+            seen, parent_image,
+            "a re-forked member's guest termios reached this process's store, so the pump could \
+             follow it and MemberTerminal could run the Linux discipline"
+        );
+        drop(master);
+        drop(slave);
+    }
+
     struct SaturatingPort {
         closed: AtomicBool,
         enabled: AtomicBool,
@@ -1334,15 +1419,35 @@ impl MemberTerminal {
     /// # Errors
     /// Returns [`CompositionError::RuntimeConstruction`] when the pty or its pumps cannot be created.
     pub fn open(terminal: Arc<Terminal>) -> Result<(Self, OwnedFd), CompositionError> {
-        // Explicitly the host discipline. The Linux one needs the slave descriptor for the guest's
-        // termios and for end-of-file, and this pty's slave is handed to the member's own process --
-        // keeping a copy here would hold the master open past the member's exit and turn an
-        // end-of-file into a hang, which is a worse defect than the canonical-length one. A restored
-        // member therefore still runs the host discipline, and on macOS still loses a canonical line
-        // over 1024 bytes.
+        // Explicitly the host discipline, and the reason is not the one this comment used to give.
+        //
+        // The lifetime objection -- that keeping a copy of the slave here would hold the master open
+        // past the member's exit and turn an end-of-file into a hang -- is real but solvable: the
+        // session that owns this terminal already observes the member's exit on its own poll, so it
+        // could drop the discipline's copy at that moment and let the master see its end-of-file.
+        //
+        // What is NOT solvable from this side is where the guest's termios lives. A restored member
+        // is a re-forked process of its own, and the engine's per-terminal termios store is a plain
+        // static inside the dlopened engine, so the fork gives the member a private copy: its
+        // `TCSETS` bumps ITS generation, never this process's, and
+        // `the_guest_termios_store_does_not_cross_the_restore_fork` pins exactly that. A discipline
+        // running here would therefore be frozen at the image the pty was opened with and would keep
+        // canonicalising a line for a shell that had asked for `-icanon` -- every keystroke withheld
+        // until Enter, no per-key echo, arrow keys and editors dead. That is far worse than losing a
+        // line over 1024 bytes, so a restored member keeps the host discipline until the store the
+        // guest writes to is one both processes can read. On macOS it therefore still loses a
+        // canonical line over 1024 bytes, and `a_restored_member_terminal_falls_back_to_the_host_discipline`
+        // keeps that fallback deliberate rather than accidental.
         let mut bridge = NativeTerminalBridge::attach(Arc::clone(&terminal), InputDiscipline::Host)?;
         let slave = bridge.take_slave().ok_or(CompositionError::RuntimeConstruction)?;
         Ok((Self { bridge, terminal }, slave))
+    }
+
+    /// Which discipline this member's terminal actually runs. See [`Self::open`] for why it is the
+    /// host's.
+    #[cfg(test)]
+    pub(super) fn discipline(&self) -> InputDiscipline {
+        self.bridge.discipline()
     }
 
     /// Resizes this member's terminal, never its container's.
