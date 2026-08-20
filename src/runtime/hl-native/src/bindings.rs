@@ -302,6 +302,31 @@ pub(super) fn hl_c_backend_terminal_termios(native_fd: c_int, out: &mut [u8; 36]
         })
 }
 
+/// The host's own termios for `native_fd`, as a Linux image.
+pub(super) fn hl_c_backend_terminal_termios_capture(native_fd: c_int, out: &mut [u8; 36]) -> bool {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.terminal_termios_capture)
+        .is_some_and(|function| {
+            // SAFETY: `out` is a live 36-byte buffer for the duration of the call, which is exactly
+            // the width the bridge documents; the descriptor is borrowed and C retains neither.
+            unsafe { function(native_fd, out.as_mut_ptr()) == 1 }
+        })
+}
+
+/// Records `image` as the guest view of `native_fd` against the host projection as it stands now.
+pub(super) fn hl_c_backend_terminal_termios_adopt(native_fd: c_int, image: &[u8; 36]) -> bool {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.terminal_termios_adopt)
+        .is_some_and(|function| {
+            // SAFETY: `image` is a live 36-byte buffer for the duration of the call, which is exactly
+            // the width the bridge documents; the descriptor is borrowed and C copies rather than
+            // retains.
+            unsafe { function(native_fd, image.as_ptr()) == 1 }
+        })
+}
+
 pub(super) unsafe fn hl_c_backend_destroy(backend: *mut Backend) {
     if let Some(function) = crate::loader::api().ok().and_then(|api| api.destroy) {
         unsafe { function(backend) };

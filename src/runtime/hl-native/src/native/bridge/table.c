@@ -27,6 +27,8 @@ static const hl_c_bridge_api HL_C_BRIDGE_API = {
     .process_identity_signal = hl_c_backend_process_identity_signal,
     .terminal_termios_generation = hl_c_backend_terminal_termios_generation,
     .terminal_termios = hl_c_backend_terminal_termios,
+    .terminal_termios_capture = hl_c_backend_terminal_termios_capture,
+    .terminal_termios_adopt = hl_c_backend_terminal_termios_adopt,
 };
 
 const hl_c_bridge_api *hl_c_bridge_api_v1(void) {

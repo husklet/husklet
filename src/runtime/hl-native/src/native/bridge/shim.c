@@ -365,20 +365,57 @@ extern int HL_BRIDGE_CKPT(interrupt_signal)(void);
  * engine, but which of the two holds an entry follows the guest's ISA. Both are asked, in a fixed
  * order, and the first hit answers -- the stores are keyed by terminal identity, so a terminal that is
  * in both would carry the same image anyway. */
-extern uint64_t hl_aarch64_terminal_termios_generation(void);
 extern uint64_t hl_x86_64_terminal_termios_generation(void);
-extern int hl_aarch64_terminal_termios_image(int32_t native_fd, uint8_t *out);
 extern int hl_x86_64_terminal_termios_image(int32_t native_fd, uint8_t *out);
+extern int hl_x86_64_terminal_termios_capture(int32_t native_fd, uint8_t *out);
+extern int hl_x86_64_terminal_termios_adopt(int32_t native_fd, const uint8_t *image);
+#if !defined(HL_BUILD_TARGET_X86_64_ONLY)
+extern uint64_t hl_aarch64_terminal_termios_generation(void);
+extern int hl_aarch64_terminal_termios_image(int32_t native_fd, uint8_t *out);
+extern int hl_aarch64_terminal_termios_capture(int32_t native_fd, uint8_t *out);
+extern int hl_aarch64_terminal_termios_adopt(int32_t native_fd, const uint8_t *image);
+#endif
 
 HL_API uint64_t hl_c_backend_terminal_termios_generation(void) {
     /* A sum, not a max: either store advancing must move the total, and both only ever increase. */
+#if defined(HL_BUILD_TARGET_X86_64_ONLY)
+    return hl_x86_64_terminal_termios_generation();
+#else
     return hl_aarch64_terminal_termios_generation() + hl_x86_64_terminal_termios_generation();
+#endif
 }
 
 HL_API int32_t hl_c_backend_terminal_termios(int32_t native_fd, uint8_t *out) {
     if (out == NULL) return 0;
+#if !defined(HL_BUILD_TARGET_X86_64_ONLY)
     if (hl_aarch64_terminal_termios_image(native_fd, out)) return 1;
+#endif
     return hl_x86_64_terminal_termios_image(native_fd, out) ? 1 : 0;
+}
+
+/* The host's own termios as a Linux image. The two per-ISA translation units compile the identical
+ * host read, so either arm answers for any terminal; the aarch64 arm is asked first only to keep the
+ * order the accessors above use, and the x86_64 arm is the fallback that also serves an x86-only
+ * build. */
+HL_API int32_t hl_c_backend_terminal_termios_capture(int32_t native_fd, uint8_t *out) {
+    if (out == NULL) return 0;
+#if !defined(HL_BUILD_TARGET_X86_64_ONLY)
+    if (hl_aarch64_terminal_termios_capture(native_fd, out)) return 1;
+#endif
+    return hl_x86_64_terminal_termios_capture(native_fd, out) ? 1 : 0;
+}
+
+/* Adopt a guest image against the host projection as it stands now, in every store this build has.
+ * Both are written rather than the first that succeeds: which store a terminal's entry lives in
+ * follows the guest ISA, which the pump does not know and must not have to. */
+HL_API int32_t hl_c_backend_terminal_termios_adopt(int32_t native_fd, const uint8_t *image) {
+    int32_t adopted = 0;
+    if (image == NULL) return 0;
+#if !defined(HL_BUILD_TARGET_X86_64_ONLY)
+    if (hl_aarch64_terminal_termios_adopt(native_fd, image)) adopted = 1;
+#endif
+    if (hl_x86_64_terminal_termios_adopt(native_fd, image)) adopted = 1;
+    return adopted;
 }
 
 HL_API int32_t hl_c_backend_checkpoint_interrupt_signal(uint32_t isa) {

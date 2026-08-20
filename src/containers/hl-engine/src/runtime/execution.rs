@@ -13,7 +13,7 @@ use super::checkpoint::Server;
 #[cfg(unix)]
 use super::terminal::NativeOutputBridge;
 #[cfg(unix)]
-use super::terminal::NativeTerminalBridge;
+use super::terminal::{InputDiscipline, NativeTerminalBridge};
 
 const REQUEST_INTERRUPT: u32 = 1;
 const REQUEST_FORCE_STOP: u32 = 2;
@@ -112,7 +112,7 @@ impl RuntimeFactory for ProductionFactory {
             .services
             .streams
             .terminal()
-            .map(NativeTerminalBridge::attach)
+            .map(|terminal| NativeTerminalBridge::attach(terminal, InputDiscipline::Linux))
             .transpose()?;
         #[cfg(unix)]
         let output = if terminal.is_none() {

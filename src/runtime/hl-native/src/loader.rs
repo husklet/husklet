@@ -66,6 +66,7 @@ pub(crate) type GuestPid = unsafe extern "C" fn(*const Backend) -> c_int;
 pub(crate) type ProcessIdentitySignal = unsafe extern "C" fn(c_int, u64, c_int) -> c_int;
 pub(crate) type TerminalTermiosGeneration = unsafe extern "C" fn() -> u64;
 pub(crate) type TerminalTermios = unsafe extern "C" fn(c_int, *mut u8) -> c_int;
+pub(crate) type TerminalTermiosAdopt = unsafe extern "C" fn(c_int, *const u8) -> c_int;
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -95,6 +96,8 @@ pub(crate) struct BridgeApi {
     pub(crate) process_identity_signal: Option<ProcessIdentitySignal>,
     pub(crate) terminal_termios_generation: Option<TerminalTermiosGeneration>,
     pub(crate) terminal_termios: Option<TerminalTermios>,
+    pub(crate) terminal_termios_capture: Option<TerminalTermios>,
+    pub(crate) terminal_termios_adopt: Option<TerminalTermiosAdopt>,
 }
 
 #[derive(Clone, Copy)]

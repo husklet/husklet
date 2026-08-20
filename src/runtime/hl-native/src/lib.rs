@@ -438,6 +438,30 @@ pub fn terminal_termios(descriptor: std::os::fd::RawFd, image: &mut [u8; 36]) ->
     bindings::hl_c_backend_terminal_termios(descriptor, image).then_some(())
 }
 
+/// The host terminal's own `struct termios`, as the Linux image the guest ABI uses.
+///
+/// A pump that is about to make the host diverge from the guest -- putting the slave in raw mode so a
+/// Linux line discipline can run over a channel that applies backpressure instead of flushing at
+/// `MAX_CANON` -- reads this first, so it can record what the guest would otherwise have observed.
+///
+/// Returns `None`, leaving `image` untouched, when the descriptor is not a terminal.
+#[must_use]
+pub fn terminal_termios_capture(descriptor: std::os::fd::RawFd, image: &mut [u8; 36]) -> Option<()> {
+    bindings::hl_c_backend_terminal_termios_capture(descriptor, image).then_some(())
+}
+
+/// Records `image` as the guest's view of `descriptor`, paired with the host projection as it stands.
+///
+/// This is how the engine's terminal pump keeps the guest's own `TCGETS` answering with what the
+/// guest installed after the pump has deliberately put the host slave in raw mode. Without it the
+/// guest would read back the raw mode the pump imposed and stop line-editing.
+///
+/// Returns `None` when the host termios could not be read, in which case nothing was recorded.
+#[must_use]
+pub fn terminal_termios_adopt(descriptor: std::os::fd::RawFd, image: &[u8; 36]) -> Option<()> {
+    bindings::hl_c_backend_terminal_termios_adopt(descriptor, image).then_some(())
+}
+
 /// Delivers one signal to the exact process incarnation an authenticated peer capability names.
 ///
 /// `handle` is that capability and `host_pid` the identity it authenticated. Delivery is refused

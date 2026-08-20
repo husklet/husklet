@@ -48,6 +48,8 @@ typedef struct hl_c_bridge_api {
     int32_t (*process_identity_signal)(int32_t handle, uint64_t host_pid, int32_t signal);
     uint64_t (*terminal_termios_generation)(void);
     int32_t (*terminal_termios)(int32_t native_fd, uint8_t *out);
+    int32_t (*terminal_termios_capture)(int32_t native_fd, uint8_t *out);
+    int32_t (*terminal_termios_adopt)(int32_t native_fd, const uint8_t *image);
 } hl_c_bridge_api;
 
 HL_EXTERN_C_BEGIN
@@ -127,6 +129,8 @@ HL_API int32_t hl_c_backend_process_identity_signal(int32_t handle, uint64_t hos
  * per-keystroke path avoids paying for a lookup it does not need. */
 HL_API uint64_t hl_c_backend_terminal_termios_generation(void);
 HL_API int32_t hl_c_backend_terminal_termios(int32_t native_fd, uint8_t *out);
+HL_API int32_t hl_c_backend_terminal_termios_capture(int32_t native_fd, uint8_t *out);
+HL_API int32_t hl_c_backend_terminal_termios_adopt(int32_t native_fd, const uint8_t *image);
 HL_API uint64_t hl_c_backend_translation_count(const hl_c_backend *backend);
 /* The content fingerprint of the C sources this artifact was compiled from. The Rust loader
  * compares it against the value Cargo baked into the calling crate and refuses a shared object

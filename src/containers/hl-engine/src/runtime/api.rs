@@ -18,6 +18,7 @@ mod member;
 pub use member::{MemberExit, RestoredMember};
 
 #[cfg(unix)]
+mod line_discipline;
 mod terminal;
 #[cfg(unix)]
 pub use terminal::MemberTerminal;
