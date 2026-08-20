@@ -94,15 +94,25 @@ static int ckpt_stream_recovery_complete(void) {
 //
 // A refusal is not fatal to the restore. The tree is already correct; only the host's ability to reach
 // this member individually is lost, and the host refuses to reattach rather than inventing one.
+// The pid that announced itself as a restored member, so the exit report below is sent by that member and
+// by nobody else: an unannounced connection reporting an exit is refused by the broker.
+//
+// A pid rather than a flag, because a member forks. A restored shell that spawns `sleep` every 50 ms gives
+// each child an inherited copy of this variable, and each child then reported an exit on a channel that had
+// announced nothing -- one broker refusal per child, forever. Comparing against the live pid makes the
+// announcement die with the process that made it, which is what it describes.
+static pid_t g_ckpt_member_announced;
+
 static int ckpt_stream_member_restored(int guest_pid) {
     unsigned char payload[8] = {0};
     uint32_t encoded = (uint32_t)guest_pid;
     if (guest_pid <= 0) return -1;
     memcpy(payload, &encoded, sizeof encoded);
-    return ckpt_stream_call(HL_CKPT_OP_MEMBER_RESTORED, NULL, 0, 0, 0, payload, sizeof payload, NULL, NULL, 0) ==
-                   HL_CKPT_STATUS_OK
-               ? 0
-               : -1;
+    if (ckpt_stream_call(HL_CKPT_OP_MEMBER_RESTORED, NULL, 0, 0, 0, payload, sizeof payload, NULL, NULL, 0) !=
+        HL_CKPT_STATUS_OK)
+        return -1;
+    g_ckpt_member_announced = getpid();
+    return 0;
 }
 
 // Ask the broker for the terminal this member's captured session was attached to.
@@ -146,6 +156,24 @@ static void ckpt_stream_member_exited(int status, uint32_t kind) {
     memcpy(payload, &encoded, sizeof encoded);
     memcpy(payload + 4, &kind, sizeof kind);
     (void)ckpt_stream_call(HL_CKPT_OP_MEMBER_EXITED, NULL, 0, 0, 0, payload, sizeof payload, NULL, NULL, 0);
+}
+
+// Report this restored member's exit STATUS from whichever exit path the process actually takes.
+//
+// The report used to sit on exactly one path -- the return from run_guest at the bottom of
+// ckpt_restore_proc_run -- and the ordinary way a Linux process ends does not go through it: exit_group(2)
+// reaches the host _exit directly from the syscall, so a member that exited cleanly reported nothing and the
+// host described a plain exit(0) as `Unreported`, which it renders as a fault of unknown cause. Called from
+// the process-scoped last-thread exit hook as well, which both exit paths share; the once-only guard keeps
+// the first status published when a path reaches both.
+//
+// Silent for a process that never announced itself: only a member has a member's exit to report.
+static void ckpt_restored_member_exit_code(int status) {
+    static pid_t reported;
+    pid_t self = getpid();
+    if (g_ckpt_member_announced != self || reported == self) return;
+    reported = self;
+    ckpt_stream_member_exited(status, HL_CKPT_MEMBER_EXIT_CODE);
 }
 
 static void ckpt_sink_stream_name(struct ckpt_sink *sink, const char *group, const char *name, char *out, size_t size) {

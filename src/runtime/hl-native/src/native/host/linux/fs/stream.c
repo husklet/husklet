@@ -22,12 +22,19 @@ static hl_host_result hl_linux_stream_pipe_pair(void *context, uint32_t flags) {
     return input;
 }
 
+/* Every settable transfer flag is a property of the open file description, so a duplicate of the
+ * descriptor is the correct place to set them and the change is seen by every descriptor sharing it.
+ * Imported stdio -- the descriptors a launcher hands the guest -- is registered HL_LINUX_HANDLE_FILE,
+ * exactly as hl_linux_pollable_descriptor found; a stream-only lookup here would reject the whole
+ * adopted-descriptor population and this operation would compile and do nothing. */
 static hl_host_result hl_linux_stream_set_status_flags(void *context, hl_host_handle stream, uint32_t flags) {
     hl_host_linux *host = context;
-    int descriptor, current;
-    if ((flags & ~(uint32_t)HL_HOST_STREAM_NONBLOCK) != 0) return hl_linux_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
+    int descriptor, current, wanted;
+    const int settable = O_NONBLOCK | O_DIRECT | O_ASYNC | O_NOATIME;
+    if ((flags & ~(uint32_t)HL_HOST_STREAM_STATUS_FLAGS) != 0)
+        return hl_linux_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
     pthread_mutex_lock(&host->lock);
-    descriptor = hl_linux_descriptor(host, stream, HL_LINUX_HANDLE_STREAM, HL_LINUX_HANDLE_STREAM);
+    descriptor = hl_linux_descriptor(host, stream, HL_LINUX_HANDLE_STREAM, HL_LINUX_HANDLE_FILE);
     if (descriptor >= 0) descriptor = fcntl(descriptor, F_DUPFD_CLOEXEC, 0);
     pthread_mutex_unlock(&host->lock);
     if (descriptor < 0) return hl_linux_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
@@ -37,11 +44,32 @@ static hl_host_result hl_linux_stream_set_status_flags(void *context, hl_host_ha
         close(descriptor);
         return error;
     }
-    current = (current & ~O_NONBLOCK) | ((flags & HL_HOST_STREAM_NONBLOCK) != 0 ? O_NONBLOCK : 0);
-    hl_host_result result =
-        fcntl(descriptor, F_SETFL, current) == 0 ? hl_linux_result(HL_STATUS_OK, 0, 0) : hl_linux_errno_result();
+    /* Read-modify-write only the flags this operation owns: O_APPEND stays as the object carries it,
+     * because the appending write endpoint is the file service's own and a positioned write through an
+     * O_APPEND description would silently ignore its offset. */
+    wanted = current & ~settable;
+    if ((flags & HL_HOST_STREAM_NONBLOCK) != 0) wanted |= O_NONBLOCK;
+    if ((flags & HL_HOST_STREAM_DIRECT) != 0) wanted |= O_DIRECT;
+    if ((flags & HL_HOST_STREAM_ASYNC) != 0) wanted |= O_ASYNC;
+    if ((flags & HL_HOST_STREAM_NOATIME) != 0) wanted |= O_NOATIME;
+    if (fcntl(descriptor, F_SETFL, wanted) != 0) {
+        hl_host_result error = hl_linux_errno_result();
+        close(descriptor);
+        return error;
+    }
+    /* Read the description back rather than echoing the request. O_ASYNC is not part of the kernel's
+     * settable mask: fasync_helper stores it, so an object with no fasync handler -- a regular file, a
+     * character device -- accepts the request and still reports the flag clear. Anything that echoed the
+     * request would report a notification nobody is going to raise. */
+    current = fcntl(descriptor, F_GETFL);
     close(descriptor);
-    return result;
+    if (current < 0) return hl_linux_result(HL_STATUS_OK, (uint64_t)(flags & HL_HOST_STREAM_STATUS_FLAGS), 0);
+    uint32_t effective = 0;
+    if ((current & O_NONBLOCK) != 0) effective |= HL_HOST_STREAM_NONBLOCK;
+    if ((current & O_DIRECT) != 0) effective |= HL_HOST_STREAM_DIRECT;
+    if ((current & O_ASYNC) != 0) effective |= HL_HOST_STREAM_ASYNC;
+    if ((current & O_NOATIME) != 0) effective |= HL_HOST_STREAM_NOATIME;
+    return hl_linux_result(HL_STATUS_OK, effective, 0);
 }
 
 static int hl_linux_stream_descriptor(hl_host_linux *host, hl_host_handle stream) {

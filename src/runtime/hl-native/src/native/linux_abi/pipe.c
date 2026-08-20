@@ -53,10 +53,13 @@ static int64_t pipe_status(void *opaque, hl_linux_file_status *status) {
     return 0;
 }
 
-static int64_t pipe_set_status_flags(void *opaque, uint32_t flags) {
+static int64_t pipe_set_status_flags(void *opaque, uint32_t flags, uint32_t *effective) {
     pipe_object *object = opaque;
-    uint32_t host_flags = (flags & HL_LINUX_O_NONBLOCK) != 0 ? HL_HOST_STREAM_NONBLOCK : 0;
-    return pipe_error(object->host->stream->set_status_flags(object->host->context, object->stream, host_flags));
+    uint32_t host_flags = hl_linux_host_stream_flags(flags);
+    hl_host_result result = object->host->stream->set_status_flags(object->host->context, object->stream, host_flags);
+    if (result.status == HL_STATUS_OK && effective != NULL)
+        *effective = hl_linux_status_flags_from_host_stream((uint32_t)result.value);
+    return pipe_error(result);
 }
 
 /* POLLERR and POLLHUP are OUTPUT-ONLY conditions: poll(2) and epoll(7) report

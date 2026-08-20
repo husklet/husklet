@@ -87,7 +87,9 @@ static int64_t eventfd_status(void *opaque, hl_linux_file_status *status) {
     return 0;
 }
 
-static int64_t eventfd_set_status_flags(void *opaque, uint32_t flags) {
+/* A counter carries no unbuffered-transfer, out-of-band-notification or access-time behaviour, so
+ * O_DIRECT/O_ASYNC/O_NOATIME are reported clear however the guest asked for them. */
+static int64_t eventfd_set_status_flags(void *opaque, uint32_t flags, uint32_t *effective) {
     eventfd_object *object = opaque;
     hl_host_result current = object->host->counter->get_flags(object->host->context, object->counter);
     uint32_t host_flags;
@@ -96,6 +98,7 @@ static int64_t eventfd_set_status_flags(void *opaque, uint32_t flags) {
     host_flags = (uint32_t)current.value & HL_HOST_COUNTER_SEMAPHORE;
     if ((flags & HL_LINUX_O_NONBLOCK) != 0) host_flags |= HL_HOST_COUNTER_NONBLOCK;
     result = object->host->counter->set_flags(object->host->context, object->counter, host_flags);
+    if (result.status == HL_STATUS_OK && effective != NULL) *effective = flags & HL_LINUX_O_NONBLOCK;
     return eventfd_error((hl_status)result.status);
 }
 

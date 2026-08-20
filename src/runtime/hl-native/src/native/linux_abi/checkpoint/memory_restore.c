@@ -806,8 +806,32 @@ HL_API int HL_TARGET_LOCAL(checkpoint_gmap_release_test)(uint32_t scenario) {
      * scenario 1 carries the rounding itself. */
     uint64_t offset = grain > HL_LINUX_GUEST_PAGE_SIZE ? HL_LINUX_GUEST_PAGE_SIZE : 0;
     size_t span = (size_t)(offset != 0 ? grain * 2u : grain);
-    void *host = mmap(NULL, span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (host == MAP_FAILED) return 21;
+    /* Take the probe range from a fixed band, never from the kernel's own choice.
+     *
+     * The sequence under test opens a hole on purpose -- release the host pages, then claim exactly those
+     * pages back -- and a range the allocator picked sits at the top of this process's free area, which is
+     * exactly where it places the NEXT mmap(NULL) any thread issues. Measured on x86_64 Linux with a peer
+     * thread asking for an address inside the window: it is handed the freed range 197 times in 200 from an
+     * allocator-chosen probe and 0 times in 200 from a fixed band the top-down search does not reach. This
+     * is a test binary with several threads mapping at once, so the allocator-chosen form failed for a
+     * reason that has nothing to do with the teardown it measures -- and retrying could not help, because
+     * every attempt re-opened the same hole in the same place. The production sequence runs in a
+     * just-forked restorer that has one thread and no peer to lose the range to. */
+    static const uint64_t probe_band[] = {UINT64_C(0x5c000000000), UINT64_C(0x5c400000000),
+                                          UINT64_C(0x5c800000000), UINT64_C(0x5cc00000000)};
+    void *host = MAP_FAILED;
+    for (size_t index = 0; index < sizeof probe_band / sizeof probe_band[0]; ++index) {
+        void *want = (void *)(uintptr_t)probe_band[index];
+        void *attempt = mmap(want, span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (attempt == want) {
+            host = attempt;
+            break;
+        }
+        if (attempt != MAP_FAILED) (void)munmap(attempt, span);
+    }
+    /* Distinct from 22: no band was free, so this run measured nothing about the teardown and must not be
+     * reported as its refusal. */
+    if (host == MAP_FAILED) return 24;
     uint64_t base = (uint64_t)(uintptr_t)host;
     hl_gmap_add(base + offset, grain);
     hl_gmap_reset();

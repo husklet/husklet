@@ -104,26 +104,58 @@ int64_t hl_linux_fcntl(hl_linux_abi *linux_abi, hl_linux_fd fd, int32_t command,
     case HL_LINUX_F_GETFL: argument = ofd_entry->status_flags; break;
     case HL_LINUX_F_SETFL: {
         hl_linux_ofd_entry *ofd = &linux_abi->ofds[fd_entry->ofd];
-        // F_SETFL settable status flags: Linux lets a caller toggle O_APPEND, O_NONBLOCK and O_DIRECT (and
-        // O_ASYNC/O_NOATIME) on an open description; accmode + creation flags are fixed. O_DIRECT was
-        // previously dropped from the mask, so a F_SETFL(O_DIRECT) reported success yet F_GETFL never showed
-        // it -- an inconsistent round-trip. Keep it so the get reflects the set (fcntl-cmds direct.consistent).
-        uint32_t flags = (ofd_entry->status_flags & HL_LINUX_O_ACCMODE) |
-                         ((uint32_t)argument & (HL_LINUX_O_APPEND | HL_LINUX_O_NONBLOCK | HL_LINUX_O_DIRECT));
+        // Linux replaces exactly the settable status flags and preserves everything else, so the access
+        // mode, O_LARGEFILE and O_PATH survive a set (fs/fcntl.c setfl). Masking down to the access mode
+        // instead had erased them.
+        uint32_t requested = (ofd_entry->status_flags & ~(uint32_t)HL_LINUX_O_SETFL) |
+                             ((uint32_t)argument & (uint32_t)HL_LINUX_O_SETFL);
+        // The engine records only what the object is actually carrying. A host that arms fewer flags than
+        // it was given reports the difference, and a host that cannot arm them at all reports why -- so
+        // F_GETFL never answers with a capability nothing is applying.
+        uint32_t effective = requested & (uint32_t)HL_LINUX_O_SETFL_HOST;
         if (ofd->object_ops != NULL && ofd->object_ops->set_status_flags != NULL) {
             int64_t result;
             ofd->active_operations++;
             hl_linux_unlock(linux_abi);
             hl_linux_ofd_lock(linux_abi, ofd);
-            result = ofd->object_ops->set_status_flags(ofd->object_context, flags);
+            result = ofd->object_ops->set_status_flags(ofd->object_context, requested, &effective);
             hl_linux_lock(linux_abi);
-            if (result == 0) ofd->status_flags = flags;
+            if (result == 0)
+                ofd->status_flags = (requested & ~(uint32_t)HL_LINUX_O_SETFL_HOST) |
+                                    (effective & (uint32_t)HL_LINUX_O_SETFL_HOST);
             ofd->active_operations--;
             hl_linux_unlock(linux_abi);
             hl_linux_ofd_unlock(linux_abi, ofd);
             return result;
         }
-        ofd->status_flags = flags;
+        // A descriptor backed by a host handle -- every adopted stdio descriptor and every guest open --
+        // reaches the real open file description through the stream seam. Without this the whole command
+        // was a shadow write: F_SETFL(O_NONBLOCK) on an inherited descriptor was reported by F_GETFL and
+        // the following read still blocked, and F_SETFL(O_DIRECT) on a device that rejects it invented a
+        // success the kernel does not give.
+        if (ofd->host_handle != HL_HOST_HANDLE_INVALID) {
+            const hl_host_stream_services *streams = hl_linux_streams(linux_abi);
+            hl_host_result result;
+            if (streams == NULL) {
+                hl_linux_unlock(linux_abi);
+                return -HL_LINUX_ENOSYS;
+            }
+            ofd->active_operations++;
+            hl_linux_unlock(linux_abi);
+            hl_linux_ofd_lock(linux_abi, ofd);
+            result = streams->set_status_flags(linux_abi->host->context, ofd->host_handle,
+                                               hl_linux_host_stream_flags(requested));
+            hl_linux_lock(linux_abi);
+            if (result.status == HL_STATUS_OK)
+                ofd->status_flags = (requested & ~(uint32_t)HL_LINUX_O_SETFL_HOST) |
+                                    (hl_linux_status_flags_from_host_stream((uint32_t)result.value) &
+                                     (uint32_t)HL_LINUX_O_SETFL_HOST);
+            ofd->active_operations--;
+            hl_linux_unlock(linux_abi);
+            hl_linux_ofd_unlock(linux_abi, ofd);
+            return result.status == HL_STATUS_OK ? 0 : hl_linux_error((hl_status)result.status);
+        }
+        ofd->status_flags = requested;
         argument = 0;
         break;
     }

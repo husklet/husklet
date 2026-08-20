@@ -4,8 +4,8 @@
 //! Public lifecycle acceptance contracts against a pinned Alpine root filesystem.
 
 use hl_container::{
-    Check, Config, ContainerSpec, Containers, ExitStatus, Guest, HealthStatus, Healthcheck, Isolation, Process,
-    Sandbox, Signal,
+    Check, Config, Console, ContainerSpec, Containers, ExitStatus, Guest, HealthStatus, Healthcheck, Isolation,
+    Process, Sandbox, Signal, Size,
 };
 use std::{future::Future, path::Path, time::Duration};
 
@@ -33,6 +33,32 @@ async fn hangup_reaches_the_guest_signal_handler() -> Result<(), Error> {
         let logs = fixture.containers.logs(name).await?;
         require(status == ExitStatus::Code(0), "HUP handler exit status mismatch")?;
         require(contains(&logs.stdout, b"GOT_HUP"), "HUP trap output missing")
+    })
+    .await;
+    finish(outcome, cleanup(&fixture.containers, name).await)
+}
+
+#[tokio::test]
+#[ignore = "requires HL_ALPINE_ARCHIVE"]
+async fn a_descriptor_duplicated_with_fcntl_is_visible_in_proc_self_fd() -> Result<(), Error> {
+    let _process = LIFECYCLE_PROCESS.lock().await;
+    let fixture = bounded("fcntl duplicate fixture", Fixture::new()).await?;
+    let name = "lifecycle-fcntl-duplicate";
+    let outcome = bounded("fcntl duplicate lifecycle", async {
+        // An interactive shell moves its job-control terminal to a descriptor of its own with
+        // fcntl(F_DUPFD, 10). The glob is expanded by that same shell, so it reports its OWN descriptor
+        // table -- a child would not, because the duplicate is close-on-exec.
+        let process = Process::new("/bin/sh")
+            .args(["-i", "-c", "echo FDS $(echo /proc/self/fd/*)"])
+            .console(Console::default().terminal(Size::new(24, 80)?));
+        fixture.containers.create(fixture.spec(name, process)).await?;
+        fixture.containers.start(name).await?;
+        fixture.wait_for_output(name, b"FDS ").await?;
+        let logs = fixture.containers.logs(name).await?;
+        require(
+            contains(&logs.stdout, b"/proc/self/fd/10"),
+            "the shell's fcntl(F_DUPFD) duplicate is missing from its own /proc/<pid>/fd",
+        )
     })
     .await;
     finish(outcome, cleanup(&fixture.containers, name).await)

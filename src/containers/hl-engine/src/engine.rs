@@ -58,6 +58,41 @@ impl EngineExit {
             ExitKind::Fault | ExitKind::EngineError => 125,
         }
     }
+
+    /// Leave this process the way the guest left, and never return.
+    ///
+    /// A guest killed by a fatal signal has to reach whatever launched the worker as a process that
+    /// died from that signal. `_exit(128 + signo)` loses the only distinction `wait(2)` draws:
+    /// `WIFSIGNALED` is false, `WTERMSIG` is unavailable and no core is written, so a shell running
+    /// a crashing program cannot tell the crash from a program that chose to exit 139. Every other
+    /// outcome keeps [`Self::process_status`].
+    pub fn exit_process(self) -> ! {
+        #[cfg(target_os = "linux")]
+        if matches!(self.kind, ExitKind::Signal) && (1..=64).contains(&self.guest_status) {
+            // A Linux guest's signal numbers are this host's signal numbers, so the termination is
+            // reproducible exactly. It is not elsewhere: Windows has no process-killed-by-signal
+            // status at all, and Darwin numbers SIGBUS, SIGUSR1 and SIGUSR2 differently -- the
+            // table that knows the difference is the C personality's sig_l2m, not this crate. Those
+            // hosts keep the 128 + signo encoding rather than raise a signal that means something
+            // else.
+            #[allow(unsafe_code)]
+            // SAFETY: three libc calls that touch only this process's own signal disposition and
+            // mask, immediately before it terminates. No Rust value is borrowed across them, the
+            // zeroed sigset is owned by this frame and fully initialised by `sigemptyset` before
+            // use, nothing observes the disposition afterwards, and `raise` neither allocates nor
+            // unwinds.
+            unsafe {
+                let mut pending: libc::sigset_t = std::mem::zeroed();
+                libc::sigemptyset(&raw mut pending);
+                libc::sigaddset(&raw mut pending, self.guest_status);
+                libc::signal(self.guest_status, libc::SIG_DFL);
+                libc::pthread_sigmask(libc::SIG_UNBLOCK, &raw const pending, std::ptr::null_mut());
+                libc::raise(self.guest_status);
+            }
+            // Reached only when the signal's default action did not terminate this process.
+        }
+        std::process::exit(self.process_status())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

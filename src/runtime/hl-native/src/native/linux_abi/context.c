@@ -22,6 +22,7 @@ static uint64_t hl_linux_new_ofd_token(void) {
 static hl_status hl_linux_fd_get_unlocked(const hl_linux_abi *linux_abi, hl_linux_fd fd,
                                           const hl_linux_fd_entry **fd_entry, const hl_linux_ofd_entry **ofd_entry);
 static const hl_host_file_services *hl_linux_files(const hl_linux_abi *linux_abi);
+static const hl_host_stream_services *hl_linux_streams(const hl_linux_abi *linux_abi);
 static hl_status hl_linux_ofd_finalize(hl_linux_abi *linux_abi, hl_linux_ofd_entry *ofd_entry,
                                        hl_host_handle *final_handle);
 
@@ -148,6 +149,15 @@ static const hl_host_file_services *hl_linux_files(const hl_linux_abi *linux_abi
         host->file->abi != HL_HOST_FILE_ABI || host->file->size < sizeof(*host->file))
         return NULL;
     return host->file;
+}
+
+static const hl_host_stream_services *hl_linux_streams(const hl_linux_abi *linux_abi) {
+    const hl_host_services *host = linux_abi == NULL ? NULL : linux_abi->host;
+    if (host == NULL || (host->capabilities & HL_HOST_CAP_STREAM) == 0 || host->stream == NULL ||
+        host->stream->abi != HL_HOST_STREAM_ABI || host->stream->size < sizeof(*host->stream) ||
+        host->stream->set_status_flags == NULL)
+        return NULL;
+    return host->stream;
 }
 
 int64_t hl_linux_map_file(hl_linux_abi *linux_abi, hl_linux_fd fd, uint64_t address, uint64_t offset, uint64_t size,

@@ -1,25 +1,29 @@
 // hl/linux_abi/container -- network namespace implementation assembled from cohesive capability fragments.
-/* WHY THIS INCLUDE IS GUARDED AND WHY WINDOWS IS STILL RED BEHIND IT.
+/* WHY THIS INCLUDE IS NO LONGER GUARDED.
  *
  * netns/loopback.c's identity-ticket arena is POSIX-shaped in three ways at once:
  * geteuid() ownership validation, flock() exclusion around first-time sizing, and a
- * MAP_SHARED mmap of a file in the engine-owned identity directory. Only the middle
- * one has a Windows answer -- toolchain/msvc-posix implements flock() over a
- * whole-range LockFileEx, see the header for what that does and does not preserve.
- * geteuid() has no declaration and no implementation for this target, so the
- * x86_64-pc-windows-msvc build fails to compile loopback.c at the ownership checks
- * (loopback.c:462 and :509) whatever happens to this line.
+ * MAP_SHARED mmap of a file in the engine-owned identity directory. This line used to
+ * be wrapped in #if !defined(_WIN32) so a Windows build would fail loudly on flock
+ * rather than quietly adopt LockFileEx byte-range semantics for a mechanism 8ee364a5c
+ * hardened against a guest-forgeable identity. That guard was standing in for a
+ * decision nobody had taken.
  *
- * Dropping the guard would therefore trade a compile error naming flock for none at
- * all while leaving the geteuid errors, AND would silently adopt LockFileEx semantics
- * for a security-relevant mechanism 8ee364a5c deliberately hardened. Deciding what
- * "the euid that owns this identity table" means on a host with no euid is a design
- * decision for the netns/identity owner, not a portability edit, so the guard stays
- * and the Windows job stays honestly red until that owner answers it.
+ * The decision is now taken, in sock_identity_directory(): a host with no euid cannot
+ * host the engine-private identity namespace, so Windows refuses the capability whole
+ * and the callers fail closed on the NULL that refusal already produced. Because that
+ * gate is structural and sits before sock_identity_ticket_arena_attach() opens
+ * anything, the flock() call site below is unreachable on Windows -- nothing there
+ * adopts LockFileEx semantics for the identity table, because nothing there reaches
+ * the identity table.
+ *
+ * So the guard has no job left, and keeping it would leave a compile error standing in
+ * for an answered question. toolchain/msvc-posix/include/sys/file.h carries the
+ * declaration and toolchain/msvc-posix/compatibility.c the definition (whole-range
+ * LockFileEx/UnlockFileEx); linux_abi/host_fd.h already defines LOCK_SH/EX/NB/UN with
+ * the same values on this host, so the include adds the declaration and nothing else.
  */
-#if !defined(_WIN32)
 #include <sys/file.h> // flock: serializes first-time sizing of the shared identity-ticket table
-#endif
 
 #include "netns/unix_compat.c"
 #include "netns/ancillary.c"

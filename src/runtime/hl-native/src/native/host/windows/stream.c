@@ -450,16 +450,27 @@ static hl_host_result hl_windows_stream_close(void *context, hl_host_handle stre
     return hl_windows_result(HL_STATUS_OK, 0, 0);
 }
 
+/*
+ * Windows owns exactly one of these capabilities. Non-blocking transfer is this backend's own emulation:
+ * the stream object answers readiness from its quota/available counters, so clearing or setting the bit
+ * really does change how the next transfer behaves. Unbuffered transfer, out-of-band owner notification
+ * and access-time suppression have no Windows equivalent on a pipe, a console or a file handle, and a
+ * handle that was inherited from the launcher cannot have its blocking mode changed after the fact
+ * either. Both are refused rather than recorded: a caller that is told a flag is in force will report it
+ * through F_GETFL, and a flag reported without a mechanism behind it is worse than a refusal.
+ */
 static hl_host_result hl_windows_stream_set_status_flags(void *context, hl_host_handle stream, uint32_t flags) {
     hl_windows_stream_object *object;
-    if ((flags & ~(uint32_t)HL_HOST_STREAM_NONBLOCK) != 0) return hl_windows_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
+    if ((flags & ~(uint32_t)HL_HOST_STREAM_STATUS_FLAGS) != 0)
+        return hl_windows_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
+    if ((flags & ~(uint32_t)HL_HOST_STREAM_NONBLOCK) != 0) return hl_windows_result(HL_STATUS_NOT_SUPPORTED, 0, 0);
     object = hl_windows_stream_acquire(context, stream);
-    if (object == NULL) return hl_windows_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
+    if (object == NULL) return hl_windows_result(HL_STATUS_NOT_SUPPORTED, 0, 0);
     EnterCriticalSection(&object->lock);
     object->flags = flags;
     LeaveCriticalSection(&object->lock);
     hl_windows_stream_object_release(object);
-    return hl_windows_result(HL_STATUS_OK, 0, 0);
+    return hl_windows_result(HL_STATUS_OK, (uint64_t)(flags & HL_HOST_STREAM_NONBLOCK), 0);
 }
 
 static hl_host_result hl_windows_stream_readiness(void *context, hl_host_handle stream, uint32_t interests) {
