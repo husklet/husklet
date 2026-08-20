@@ -113,8 +113,26 @@ int main(void) {
 fn a_registry_teardown_releases_the_host_pages_a_guest_range_occupies_on_both_isas() {
     for isa in [1, 2] {
         for scenario in [0, 1] {
-            hl_native::checkpoint_gmap_release_test(isa, scenario)
-                .unwrap_or_else(|status| panic!("ISA {isa} gmap release scenario {scenario} failed at {status}"));
+            claim_the_released_pages(isa, scenario);
         }
     }
+}
+
+/// `22` is the hook's "the exact reclaim was refused with `EEXIST`" verdict, and scenario 0 reaches it two
+/// ways. Either the teardown released nothing -- the defect this fixture exists to catch, which is a
+/// property of the host's page granularity and so fails every attempt -- or another thread in this test
+/// binary mmapped into the hole between the release and the reclaim, which has nothing to do with the
+/// teardown. The second was measured here at ~5% of runs on x86_64 Linux, with `/proc/self/maps` showing a
+/// foreign two-page anonymous mapping straddling the freed page. Each call takes a fresh host mapping, so
+/// repeating separates them: a teardown that genuinely failed to release is refused every time.
+fn claim_the_released_pages(isa: u32, scenario: u32) {
+    let mut refused = 0;
+    for _ in 0..8 {
+        match hl_native::checkpoint_gmap_release_test(isa, scenario) {
+            Ok(()) => return,
+            Err(22) => refused += 1,
+            Err(status) => panic!("ISA {isa} gmap release scenario {scenario} failed at {status}"),
+        }
+    }
+    panic!("ISA {isa} gmap release scenario {scenario} was refused the released pages {refused} times running");
 }
