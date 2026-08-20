@@ -301,6 +301,23 @@ jobs:
           nix --extra-experimental-features 'nix-command flakes' develop . --command
           cargo test -p hl-engine --lib --locked --offline
 
+      # `--all-targets` reaches hl-native's integration tests, which no CI job on any
+      # host has ever run. That is the exact gap that let a tree which did not compile
+      # on x86_64 at all reach main: the two reserved-register hooks called emitters
+      # existing only under HL_HOST_CPU_AARCH64, and only a real build on this host
+      # notices. Both feature arms, because they are different suites -- 106 tests
+      # without the hooks and 214 with them.
+      - name: Test the native engine package
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo test -p hl-native --all-targets --locked --offline --no-fail-fast
+
+      - name: Test the native engine package with its test hooks
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo test -p hl-native --all-targets --features native-test-hooks
+          --locked --offline --no-fail-fast
+
       # AGENTS.md names this the gate every lane must run, and until today no CI job on
       # any host had ever run it on Linux. It excludes nothing. `--no-fail-fast` so a
       # failure reports the whole picture rather than the first crate that reddened.
