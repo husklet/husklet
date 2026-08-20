@@ -441,6 +441,25 @@ pub fn unix_identity_capture_test(isa: u32, fd: i32) -> Result<(), i32> {
     bindings::unix_identity_capture_test(isa, fd)
 }
 
+/// Adopts the liveness capability a macOS identity hook minted, or reports why the host refused.
+///
+/// Both hooks below answer with a `kqueue` descriptor they opened themselves and registered on
+/// `EVFILT_PROC`, or with -1 and `errno`. The adoption is the same on both paths and lives here once so
+/// it carries one rationale rather than two copies of the same one.
+#[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
+#[allow(unsafe_code)]
+fn adopt_identity_capability(capability: i32) -> std::io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    if capability < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: a non-negative answer is a descriptor `hl_host_process_identity_open` obtained from
+    // `kqueue()` and has already set `FD_CLOEXEC` on; it hands the only reference to this caller and
+    // retains none, and it closes the descriptor itself on every path that returns -1. So this process
+    // is the sole owner and `OwnedFd` closes it exactly once.
+    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(capability) })
+}
+
 #[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
 #[doc(hidden)]
 #[allow(unsafe_code)]
@@ -449,10 +468,15 @@ pub fn checkpoint_process_identity_open_test(
     expected_birth: u64,
     expected_generation: u64,
 ) -> std::io::Result<(std::os::fd::OwnedFd, u64, u64)> {
-    use std::os::fd::FromRawFd;
     let mut birth = 0;
     let mut generation = 0;
-    let descriptor = unsafe {
+    // SAFETY: the hook is a resolved export of the loaded engine taking two out-parameters. `birth` and
+    // `generation` are live locals for the whole call, written only through these exclusive pointers and
+    // read only after it returns; the C sets them to zero before it can fail, so no path leaves them
+    // uninitialised. `pid` names a process this caller does not own, which is why the hook fences the
+    // answer to `expected_birth`/`expected_generation` rather than trusting the number. It is C to its
+    // depth and cannot unwind.
+    let capability = unsafe {
         bindings::hl_c_backend_checkpoint_process_identity_open_test(
             pid,
             expected_birth,
@@ -461,14 +485,7 @@ pub fn checkpoint_process_identity_open_test(
             &raw mut generation,
         )
     };
-    if descriptor < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok((
-        unsafe { std::os::fd::OwnedFd::from_raw_fd(descriptor) },
-        birth,
-        generation,
-    ))
+    Ok((adopt_identity_capability(capability)?, birth, generation))
 }
 
 #[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
@@ -478,10 +495,14 @@ pub fn checkpoint_peer_identity_open_test(
     descriptor: std::os::fd::RawFd,
     claimed_pid: u64,
 ) -> std::io::Result<(std::os::fd::OwnedFd, u64, u64, u64)> {
-    use std::os::fd::FromRawFd;
     let mut pid = 0;
     let mut birth = 0;
     let mut generation = 0;
+    // SAFETY: three live locals behind three exclusive out-pointers, zeroed by the C before any failure
+    // path, as above. What differs here is `descriptor`: the hook reads `LOCAL_PEERTOKEN` off it twice,
+    // around the mint, so the caller must keep that socket open across the call -- it is a `RawFd`
+    // borrowed from an owner the caller still holds, never one this function may close. The hook closes
+    // the capability itself if the token moved between the two reads.
     let capability = unsafe {
         bindings::hl_c_backend_checkpoint_peer_identity_open_test(
             descriptor,
@@ -491,15 +512,7 @@ pub fn checkpoint_peer_identity_open_test(
             &raw mut generation,
         )
     };
-    if capability < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok((
-        unsafe { std::os::fd::OwnedFd::from_raw_fd(capability) },
-        pid,
-        birth,
-        generation,
-    ))
+    Ok((adopt_identity_capability(capability)?, pid, birth, generation))
 }
 
 /// How many times any terminal's guest-authored termios has been installed.
@@ -513,6 +526,19 @@ pub fn terminal_termios_generation() -> u64 {
     bindings::hl_c_backend_terminal_termios_generation()
 }
 
+// Not offered on Windows: every function below is a descriptor capability, and the C side already
+// answers this question the same way -- `hl_c_backend_process_identity_signal`'s `#else` arm refuses
+// outright, because a pidfd (Linux) and a `NOTE_EXIT` kqueue watch (macOS) are the only two things
+// that name one process INCARNATION rather than a reusable pid, and Windows has neither in a
+// descriptor. A process HANDLE is the Windows object with that property, but it is a HANDLE and not
+// an fd: it cannot be polled with `poll(2)`, it does not fit `RawFd`'s contract, and pretending
+// otherwise would put a number that is not a descriptor through a descriptor API.
+//
+// Widening the signatures to `c_int` to make them compile everywhere was rejected for the same
+// reason: it would drop the descriptor typing on Linux and macOS -- the platforms where these run --
+// to accommodate a host that cannot supply the object at all. So the capability is absent on Windows
+// rather than present and weaker, and a Windows consumer gets a name resolution error at the call
+// site instead of a value it must not trust.
 /// The guest's own view of the terminal `descriptor` names, as a Linux `struct termios` image.
 ///
 /// Answers from the engine's record of what the guest last installed, not from the host terminal.
@@ -521,6 +547,7 @@ pub fn terminal_termios_generation() -> u64 {
 /// guest believes `ICANON`, `c_cc` and the echo flags to be, and the host no longer carries that.
 ///
 /// Returns `None`, leaving `image` untouched, when no guest has configured this terminal.
+#[cfg(unix)]
 #[must_use]
 pub fn terminal_termios(descriptor: std::os::fd::RawFd, image: &mut [u8; 36]) -> Option<()> {
     bindings::hl_c_backend_terminal_termios(descriptor, image).then_some(())
@@ -533,6 +560,7 @@ pub fn terminal_termios(descriptor: std::os::fd::RawFd, image: &mut [u8; 36]) ->
 /// `MAX_CANON` -- reads this first, so it can record what the guest would otherwise have observed.
 ///
 /// Returns `None`, leaving `image` untouched, when the descriptor is not a terminal.
+#[cfg(unix)]
 #[must_use]
 pub fn terminal_termios_capture(descriptor: std::os::fd::RawFd, image: &mut [u8; 36]) -> Option<()> {
     bindings::hl_c_backend_terminal_termios_capture(descriptor, image).then_some(())
@@ -545,6 +573,7 @@ pub fn terminal_termios_capture(descriptor: std::os::fd::RawFd, image: &mut [u8;
 /// guest would read back the raw mode the pump imposed and stop line-editing.
 ///
 /// Returns `None` when the host termios could not be read, in which case nothing was recorded.
+#[cfg(unix)]
 #[must_use]
 pub fn terminal_termios_adopt(descriptor: std::os::fd::RawFd, image: &[u8; 36]) -> Option<()> {
     bindings::hl_c_backend_terminal_termios_adopt(descriptor, image).then_some(())
@@ -560,6 +589,7 @@ pub fn terminal_termios_adopt(descriptor: std::os::fd::RawFd, image: &[u8; 36]) 
 /// # Errors
 /// Returns `Err(())` when the incarnation has exited, the capability is not one this host can signal
 /// through, or the host refused delivery.
+#[cfg(unix)]
 pub fn process_identity_signal(handle: std::os::fd::RawFd, host_pid: u64, signal: i32) -> Result<(), ()> {
     if bindings::hl_c_backend_process_identity_signal(handle, host_pid, signal) == 0 {
         Ok(())
@@ -572,6 +602,7 @@ pub fn process_identity_signal(handle: std::os::fd::RawFd, host_pid: u64, signal
 ///
 /// The capability becomes readable when its incarnation exits, so this answers about that exact
 /// process and never about a later one that inherited its pid.
+#[cfg(unix)]
 #[allow(unsafe_code)]
 #[must_use]
 pub fn process_identity_live(handle: std::os::fd::BorrowedFd<'_>) -> bool {
