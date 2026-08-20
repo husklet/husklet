@@ -645,30 +645,8 @@ static int hl_case_path(const char *root, const char *guest, char *physical, siz
         char requested[256], selected[768] = "";
         memcpy(requested, cursor, size);
         requested[size] = 0;
-        int collision = 0;
-        DIR *entries = opendir(directory);
-        if (entries != NULL) {
-            struct dirent *entry;
-            while ((entry = readdir(entries)) != NULL) {
-                char decoded[256];
-                const char *visible =
-                    hl_case_name_decode(entry->d_name, decoded, sizeof decoded) ? decoded : entry->d_name;
-                if (strcmp(visible, requested) == 0) {
-                    snprintf(selected, sizeof selected, "%s", entry->d_name);
-                    break;
-                }
-                if (strcasecmp(visible, requested) == 0) collision = 1;
-            }
-            closedir(entries);
-        }
-        if (!selected[0]) {
-            if (collision || hl_case_name_requires_encoding(requested)) {
-                int error = hl_case_name_encode(requested, selected, sizeof selected);
-                if (error != 0) return error;
-            } else {
-                snprintf(selected, sizeof selected, "%s", requested);
-            }
-        }
+        int error = hl_case_name(-1, directory, requested, selected, sizeof selected);
+        if (error != 0) return error;
         size_t selected_size = strlen(selected);
         if (used + selected_size + 2 > capacity) return -ENAMETOOLONG;
         physical[used++] = '/';
