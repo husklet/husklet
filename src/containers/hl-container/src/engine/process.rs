@@ -29,6 +29,9 @@ pub(super) struct Process {
     pub(super) checkpointable: bool,
     /// Publishes this process's freeze channel to its domain for as long as it runs.
     pub(super) domain_channel: Option<super::DomainChannelEntry>,
+    /// The sessions of the members this launch restored, each holding the terminal created for it before
+    /// the restore started. Empty for every launch that restored nothing.
+    pub(super) members: Vec<Arc<super::member::MemberSession>>,
 }
 
 impl Process {
@@ -123,6 +126,24 @@ impl Running for Process {
 
     fn checkpointable(&self) -> bool {
         self.checkpointable
+    }
+
+    fn member_process(&self, guest_pid: std::num::NonZeroI32) -> Option<Arc<dyn Running>> {
+        // Both halves, or nothing. The session is the terminal this launch created for that member before
+        // it started; the member is the process the restore actually announced under that guest pid. A
+        // launch that started fresh has neither, and a member the host prepared no terminal for has only
+        // one -- and half of the pair is not a resumable session, it is a refusal.
+        let session = self
+            .members
+            .iter()
+            .find(|session| session.guest_pid() == guest_pid)
+            .map(Arc::clone)?;
+        let member = self.restored_member(guest_pid)?;
+        Some(Arc::new(super::member::MemberProcess::new(
+            self.domain,
+            session,
+            member,
+        )))
     }
 
     async fn wait(self: Arc<Self>) -> Result<ExitStatus> {
@@ -259,6 +280,7 @@ mod tests {
 
     fn reaped() -> Arc<Process> {
         Arc::new(Process {
+            members: Vec::new(),
             id: 1,
             child: Mutex::new(None),
             logs: Mutex::new(None),

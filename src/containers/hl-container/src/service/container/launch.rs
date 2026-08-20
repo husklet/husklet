@@ -2,7 +2,7 @@ use super::{
     Arc, Container, ContainerState, Error, Io, JournalId, NetworkConfig, Notify, ProcessConfig, Result, Run, Running,
     Service, Signal, now_ms,
 };
-use crate::service::CheckpointConfig;
+use crate::service::{CheckpointConfig, MemberTerminal};
 
 impl Service {
     pub(super) async fn process_domain(&self, container: &crate::ContainerId) -> Result<hl_engine::Domain> {
@@ -12,6 +12,43 @@ impl Service {
             .get(container)
             .map(|run| run.process.domain())
             .ok_or_else(|| crate::Error::Corrupt(format!("running container {container} has no live process domain")))
+    }
+
+    /// Prepares the terminal each sealed member of this container's restore will reattach to.
+    ///
+    /// The producer has to run here, before the launch, and that is not a convenience: a restoring member
+    /// asks for its terminal from inside its own descriptor restore, which happens while `Runtime::start`
+    /// is still executing. There is no later moment -- a pane attaches minutes afterwards, and by then the
+    /// member has already bound whatever descriptors it could find.
+    ///
+    /// One is prepared per sealed record that names a guest pid AND was a terminal-backed session, which
+    /// is every pane. A record missing either is left alone: it keeps the honest refusal it already gets
+    /// rather than being seated on a terminal nothing captured.
+    ///
+    /// The `Io` created here is the one [`Self::reattach_exec`](crate::service::Service::reattach_exec)
+    /// will hand a pane, so it is registered under the exec's journal exactly as a started session's is.
+    async fn prepare_member_terminals(&self, container: &Container) -> Result<Vec<MemberTerminal>> {
+        let mut prepared = Vec::new();
+        for exec in self.execs.list().await? {
+            if exec.container != container.id
+                || exec.checkpoint.is_none()
+                || !matches!(exec.state, crate::ExecState::Created)
+            {
+                continue;
+            }
+            let (Some(guest_pid), Some(size)) = (exec.guest_pid, exec.spec.process.console.terminal) else {
+                continue;
+            };
+            let journal = JournalId::exec(exec.id.clone());
+            let live_at = self.logs.cursor(&journal).await?;
+            let io = self.new_exec_io(&exec, live_at).await?;
+            prepared.push(MemberTerminal {
+                guest_pid,
+                size,
+                input: io.take_input().await?,
+            });
+        }
+        Ok(prepared)
     }
 
     pub(crate) async fn start(self: &Arc<Self>, reference: &str) -> Result<()> {
@@ -62,6 +99,14 @@ impl Service {
             .checkpoint
             .as_ref()
             .map_or_else(|| container.id.to_string(), |checkpoint| checkpoint.namespace.clone());
+        // Every sealed member this restore is about to revive needs its terminal to exist BEFORE the
+        // guest starts: the member asks for it from inside its own descriptor restore. Prepared here,
+        // with the launch, because this is the last moment at which it is still possible.
+        let member_terminals = if container.checkpoint.is_some() {
+            self.prepare_member_terminals(&container).await?
+        } else {
+            Vec::new()
+        };
         let checkpoint = Some(crate::service::CheckpointRole::Coordinator(CheckpointConfig {
             image: self
                 .checkpoints
@@ -91,6 +136,7 @@ impl Service {
                 publish: container.spec.publish.clone(),
                 input,
                 terminal: container.spec.process.console.terminal,
+                member_terminals,
                 domain: None,
                 domain_owner: true,
             })

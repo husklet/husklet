@@ -145,6 +145,8 @@ impl Service {
                 networks,
                 publish: Vec::new(),
                 input,
+                // An exec launch starts one process and restores nothing, so it revives no members.
+                member_terminals: Vec::new(),
                 terminal: exec.spec.process.console.terminal,
                 domain,
                 domain_owner: false,
@@ -333,32 +335,29 @@ impl Service {
 
     /// Reattaches one restored domain member instead of relaunching its command.
     ///
-    /// Restore is whole-image: `ckpt_restore_tree_body` forks every captured group out of the
-    /// single `containers.start(...)` launch that owns the container's image. A revived exec
-    /// session is therefore a forked child of the *container's* engine process, and hl-container
-    /// holds nothing that names it:
+    /// Restore is whole-image: `ckpt_restore_tree_body` forks every captured group out of the single
+    /// `containers.start(...)` launch that owns the container's image, so a revived exec session is a
+    /// forked child of the *container's* engine process rather than the subject of a launch of its own.
+    /// Presenting one as a live session needs two things that a whole-image restore does not produce by
+    /// itself, and this refuses unless it has both:
     ///
-    /// * the [`Running`](crate::service::Running) boundary yields exactly one handle per
-    ///   `Runtime::start`, and the restore performs one such call for all groups, so no
-    ///   per-member handle exists to install in `exec_live`;
-    /// * membership is sealed on the capture-scoped `REGISTER_READY` channel, which carries a
-    ///   host process identity and an executor inventory and no exec identity at all -- and it is
-    ///   admitted only while a capture is `Active`, so a restored tree registers nothing. The
-    ///   member's own identity is no longer missing: [`Exec::guest_pid`](crate::Exec::guest_pid)
-    ///   records, before the freeze, the container-namespace pid the image names the member by and
-    ///   the restore re-forks it under. What is still missing is a way to *reach* that pid: the
-    ///   restored container's engine exposes no per-guest-process wait, signal, or query;
-    /// * a member's launch-time stdio is not recoverable either. `checkpoint/image.c` records
-    ///   guest fds 0..2 as `CKF_TTY` precisely so a restored engine rebinds them to *its own*
-    ///   stdin/stdout/stderr bridge -- which, after a whole-image restore, is the container's
-    ///   single bridge. There is no per-member descriptor for an `Io` to own, so the entry
-    ///   [`Self::attach_exec`] requires cannot be rebuilt from the restored member.
+    /// * the process. [`Exec::guest_pid`](crate::Exec::guest_pid) records, before the freeze, the
+    ///   container-namespace pid the image names the member by and the restore re-forks it under, and the
+    ///   member announces itself under that number as it comes back. The capability the host holds it by
+    ///   is the authenticated peer of the member's own channel, so it names the incarnation rather than
+    ///   the number and can never be satisfied by whatever inherited the pid.
+    /// * its I/O. `checkpoint/image.c` records guest fds 0..2 as `CKF_TTY`, which without a per-member
+    ///   terminal could only be rebound to the container's single bridge -- and a session whose input goes
+    ///   to a bridge shared with its container is not the session the user left. The terminal is created
+    ///   for each sealed member at launch, before the restore starts, because the member asks for it from
+    ///   inside its own descriptor restore.
     ///
-    /// Relaunching through [`Self::start_exec`] would run the session's original command again:
-    /// a second, fresh process presented as the restored one. This refuses instead, by name.
+    /// A member missing either keeps the refusal it already had, by name. What is never done is relaunch:
+    /// [`Self::start_exec`] would run the session's original command a second time and present the result
+    /// as the restored one, which restarts a `sleep`'s clock and runs a non-idempotent command twice.
     pub(crate) async fn reattach_exec(self: &Arc<Self>, id: &ExecId) -> Result<()> {
         let _guard = self.operations.lock().await;
-        let exec = self.inspect_exec(id).await?;
+        let mut exec = self.inspect_exec(id).await?;
         if !matches!(exec.state, ExecState::Created) || exec.checkpoint.is_none() {
             return Err(Error::InvalidExecState {
                 id: exec.id,
@@ -366,36 +365,78 @@ impl Service {
                 expected: "a sealed domain member awaiting restore",
             });
         }
-        let Some(member) = self.restored_member(&exec).await else {
+        let Some(container) = ({
+            let live = self.live.lock().await;
+            live.get(&exec.container).map(|run| Arc::clone(&run.process))
+        }) else {
             return Err(Error::ExecNotReattachable {
                 id: exec.id,
                 reason: MEMBER_HANDLE_GAP,
             });
         };
-        // The member is reachable and is the process the user left running -- never a replacement for
-        // it. What is still missing is its I/O: a restored member's guest fds 0..2 were rebound to the
-        // container's own bridge, so there is no channel for a pane to attach to. Refuse, rather than
-        // present a live-looking session whose input goes nowhere.
-        let _ = member;
-        Err(Error::ExecNotReattachable {
-            id: exec.id,
-            reason: MEMBER_STDIO_GAP,
-        })
-    }
-
-    /// The restored process this sealed record names, if the restore announced it.
-    ///
-    /// Both halves must agree: the record must carry the guest pid it was sealed under, and the
-    /// container's live launch must be one that restored and announced that member. A fresh start of
-    /// the same container announces nothing, which is what keeps a crash-recovered container from
-    /// being read as a resumed one.
-    async fn restored_member(&self, exec: &Exec) -> Option<hl_engine::runtime::RestoredMember> {
-        let guest_pid = exec.guest_pid?;
-        let process = {
-            let live = self.live.lock().await;
-            Arc::clone(&live.get(&exec.container)?.process)
+        let Some(guest_pid) = exec.guest_pid else {
+            return Err(Error::ExecNotReattachable {
+                id: exec.id,
+                reason: MEMBER_HANDLE_GAP,
+            });
         };
-        process.restored_member(guest_pid)
+        let journal = JournalId::exec(exec.id.clone());
+        let Some(process) = container.member_process(guest_pid) else {
+            // Which half is missing decides which refusal is true, and both remain true refusals: a
+            // member the restore never announced is unreachable, and one whose terminal this launch did
+            // not create has nothing for a pane to attach to.
+            let reason = if container.restored_member(guest_pid).is_some() {
+                MEMBER_STDIO_GAP
+            } else {
+                MEMBER_HANDLE_GAP
+            };
+            return Err(Error::ExecNotReattachable { id: exec.id, reason });
+        };
+        let Some(io) = self.io.lock().await.get(&journal).cloned() else {
+            return Err(Error::ExecNotReattachable {
+                id: exec.id,
+                reason: MEMBER_STDIO_GAP,
+            });
+        };
+        let process_id = process.id();
+        let started_at_ms = now_ms();
+        exec.state = ExecState::Running {
+            process_id,
+            started_at_ms,
+        };
+        exec.checkpoint = None;
+        self.execs.replace(&exec).await?;
+        self.exec_live
+            .lock()
+            .await
+            .insert(exec.id.clone(), Arc::clone(&process));
+        let (output_complete, output_completion) = tokio::sync::watch::channel(false);
+        self.exec_output_complete
+            .lock()
+            .await
+            .insert(exec.id.clone(), output_completion);
+        self.failures.lock().await.remove(&journal);
+        let service = Arc::clone(self);
+        let exec_id = exec.id;
+        let owner_service = Arc::clone(&service);
+        let owner_journal = journal.clone();
+        let owner = tokio::spawn(async move { owner_service.own(process, owner_journal, io, output_complete).await });
+        let output_owner = Arc::new(super::OutputOwner {
+            abort: owner.abort_handle(),
+        });
+        self.output_owners
+            .lock()
+            .await
+            .insert(journal.clone(), Arc::clone(&output_owner));
+        tokio::spawn(async move {
+            let result = owner
+                .await
+                .map_err(|error| Error::Runtime(format!("restored member output owner failed: {error}")))
+                .and_then(std::convert::identity);
+            service.retire_output_owner(&journal, &output_owner).await;
+            service.finish_exec(exec_id, process_id, started_at_ms, result).await;
+        });
+        Ok(())
     }
 
     pub(crate) async fn attach_exec(
@@ -602,7 +643,7 @@ impl Service {
         self.execs.remove(id).await
     }
 
-    async fn new_exec_io(&self, exec: &Exec, start_cursor: u64) -> Result<Arc<Io>> {
+    pub(super) async fn new_exec_io(&self, exec: &Exec, start_cursor: u64) -> Result<Arc<Io>> {
         let mut values = self.io.lock().await;
         let id = JournalId::exec(exec.id.clone());
         let generation = self.next_io_generation()?;

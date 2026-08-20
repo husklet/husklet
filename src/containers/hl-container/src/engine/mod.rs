@@ -12,8 +12,10 @@ use std::{
 const CHECKPOINT_OBJECT: &str = "rust/image";
 const CHECKPOINT_MANIFEST_MAGIC: &[u8; 8] = b"HLRUST01";
 
+mod member;
 mod process;
 mod spec;
+use member::MemberSession;
 use process::Process;
 use spec::Spec;
 
@@ -536,6 +538,15 @@ impl Runtime for Engine {
                 identity,
             }
         });
+        // Before `start`, because start IS the restore: a member asks for its terminal from inside its own
+        // descriptor restore, so a registration made afterwards answers nothing. Registering by value is
+        // deliberate -- the slave descriptor is moved into the engine here, so a launch that dropped this
+        // step would not compile rather than quietly restore a tree with no per-member I/O.
+        let members = config
+            .member_terminals
+            .drain(..)
+            .map(|member| MemberSession::open(&engine, member).map(Arc::new))
+            .collect::<Result<Vec<_>>>()?;
         engine
             .start()
             .map_err(|error| Error::Runtime(format!("engine start: {error:?}")))?;
@@ -547,6 +558,7 @@ impl Runtime for Engine {
             domain: spec.domain,
             checkpointable,
             domain_channel,
+            members,
         }))
     }
 }
@@ -699,6 +711,7 @@ mod tests {
 
     fn launch() -> ProcessConfig {
         ProcessConfig {
+            member_terminals: Vec::new(),
             network_namespace: "container-test".to_owned(),
             rootfs: "/rootfs".into(),
             overlay: None,
