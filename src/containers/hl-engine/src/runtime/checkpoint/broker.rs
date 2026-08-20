@@ -26,26 +26,7 @@ impl Server {
         let server = Arc::clone(server);
         std::thread::Builder::new()
             .name("hl-checkpoint-broker".into())
-            .spawn(move || {
-                let mut workers = Vec::new();
-                while server.running.load(Ordering::Acquire) {
-                    let Some((channel, peer)) = broker.accept(std::time::Duration::from_millis(50)) else {
-                        continue;
-                    };
-                    let accepted = AcceptedChannel::new(Arc::clone(&server));
-                    let worker = Arc::clone(&server);
-                    match std::thread::Builder::new()
-                        .name("hl-checkpoint-channel".into())
-                        .spawn(move || worker.serve_accepted(channel, Some(peer), accepted))
-                    {
-                        Ok(worker) => workers.push(worker),
-                        Err(error) => server.fail(format!("checkpoint channel worker construction failed: {error}")),
-                    }
-                }
-                for worker in workers {
-                    let _ = worker.join();
-                }
-            })
+            .spawn(move || accept_channels(&server, &broker))
             .expect("checkpoint broker thread construction")
     }
 
@@ -297,6 +278,30 @@ impl Server {
 /// Operations that publish or complete capture state. A process that has not
 /// proven exact membership may still rendezvous (`GROUP_PRESENT`/`GROUP_COUNT`)
 /// and may still abort, because the coordinator does both before its own dump.
+/// Serves every channel the broker accepts on its own thread, until the server stops running.
+///
+/// Joins the channel threads before returning, so the broker thread outlives every worker it made.
+fn accept_channels(server: &Arc<Server>, broker: &hl_native::CheckpointBroker) {
+    let mut workers = Vec::new();
+    while server.running.load(Ordering::Acquire) {
+        let Some((channel, peer)) = broker.accept(std::time::Duration::from_millis(50)) else {
+            continue;
+        };
+        let accepted = AcceptedChannel::new(Arc::clone(server));
+        let worker = Arc::clone(server);
+        match std::thread::Builder::new()
+            .name("hl-checkpoint-channel".into())
+            .spawn(move || worker.serve_accepted(channel, Some(peer), accepted))
+        {
+            Ok(worker) => workers.push(worker),
+            Err(error) => server.fail(format!("checkpoint channel worker construction failed: {error}")),
+        }
+    }
+    for worker in workers {
+        let _ = worker.join();
+    }
+}
+
 fn publishes_capture_bytes(op: u32) -> bool {
     matches!(
         op,

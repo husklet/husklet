@@ -94,20 +94,10 @@ pub fn close_standard(descriptor: StandardDescriptor) -> io::Result<ClosedStanda
     // values. The guard owns the temporary vacancy and restores it before release.
     if unsafe { libc::close(target) } < 0 {
         let close_error = io::Error::last_os_error();
-        if close_error.raw_os_error() == Some(libc::EINTR) {
-            // POSIX leaves descriptor state unspecified after EINTR. Under the
-            // documented serialization contract the slot cannot be reused here,
-            // so F_GETFD distinguishes an already-completed close from a live slot.
-            match get_flags(target) {
-                Err(error) if error.raw_os_error() == Some(libc::EBADF) => {}
-                Ok(_) => return Err(close_error),
-                Err(_) => {
-                    replace(saved.as_raw_fd(), target)?;
-                    set_flags(target, flags)?;
-                    return Err(close_error);
-                }
-            }
-        } else {
+        if close_error.raw_os_error() != Some(libc::EINTR) {
+            return Err(close_error);
+        }
+        if !closed_after_interruption(target, saved.as_raw_fd(), flags)? {
             return Err(close_error);
         }
     }
@@ -155,6 +145,26 @@ pub fn lock(descriptor: RawFd, operation: Lock) -> io::Result<()> {
         Err(io::Error::last_os_error())
     } else {
         Ok(())
+    }
+}
+
+/// Reports whether an interrupted `close` had already vacated the slot, restoring it when it had not.
+///
+/// POSIX leaves descriptor state unspecified after EINTR. Under the documented serialization
+/// contract the slot cannot be reused here, so F_GETFD distinguishes an already-completed close
+/// from a live slot.
+///
+/// # Errors
+/// Returns an operating-system error when a live slot cannot be restored from `saved`.
+fn closed_after_interruption(target: RawFd, saved: RawFd, flags: i32) -> io::Result<bool> {
+    match get_flags(target) {
+        Err(error) if error.raw_os_error() == Some(libc::EBADF) => Ok(true),
+        Ok(_) => Ok(false),
+        Err(_) => {
+            replace(saved, target)?;
+            set_flags(target, flags)?;
+            Ok(false)
+        }
     }
 }
 

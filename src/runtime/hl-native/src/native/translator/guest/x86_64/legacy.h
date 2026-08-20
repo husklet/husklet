@@ -24,6 +24,8 @@ typedef struct hl_x86_legacy_context {
 
 int hl_x86_legacy_normalize(struct cpu *cpu, const hl_x86_legacy_context *context);
 void hl_x86_legacy_restore_fork(struct cpu *cpu);
+/* Undo the in-place normalization of the syscall about to be re-executed at the same instruction. */
+void hl_x86_legacy_restore_restart(struct cpu *cpu);
 // Nonzero when the syscall most recently normalized on this thread was the legacy dup2(2).
 int hl_x86_legacy_is_dup2(void);
 

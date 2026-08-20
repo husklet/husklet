@@ -245,35 +245,7 @@ impl Service {
             }
             Err(_) => {
                 cleanup.push(format!("reap timed out after {:?}", unpublished_reap_timeout()));
-                let service = Arc::downgrade(self);
-                let cleanup_id = id.clone();
-                let cleanup_task = tokio::spawn(async move {
-                    let result = wait.await;
-                    let Some(service) = service.upgrade() else {
-                        return;
-                    };
-                    let _guard = service.operations.lock().await;
-                    match result {
-                        Ok(Ok(_)) => {}
-                        Ok(Err(error)) => {
-                            service
-                                .poison_launch_cleanup(
-                                    cleanup_id.clone(),
-                                    format!("unpublished process reap failed: {error}"),
-                                )
-                                .await;
-                        }
-                        Err(error) => {
-                            service
-                                .poison_launch_cleanup(
-                                    cleanup_id.clone(),
-                                    format!("unpublished reap task failed: {error}"),
-                                )
-                                .await;
-                        }
-                    }
-                    service.launch_cleanups.lock().await.remove(&cleanup_id);
-                });
+                let cleanup_task = tokio::spawn(settle_late_reap(Arc::downgrade(self), id.clone(), wait));
                 self.launch_cleanups
                     .lock()
                     .await
@@ -338,4 +310,34 @@ fn unpublished_reap_timeout() -> std::time::Duration {
 #[cfg(not(test))]
 fn unpublished_reap_timeout() -> std::time::Duration {
     std::time::Duration::from_secs(5)
+}
+
+/// Records the outcome of an unpublished process whose reap outlived the rollback that started it.
+///
+/// The rollback could wait no longer, so this runs detached and reports through the service's
+/// poison ledger instead. A service that has been dropped has nobody left to report to.
+async fn settle_late_reap<T>(
+    service: std::sync::Weak<Service>,
+    id: crate::ContainerId,
+    wait: tokio::task::JoinHandle<Result<T>>,
+) {
+    let result = wait.await;
+    let Some(service) = service.upgrade() else {
+        return;
+    };
+    let _guard = service.operations.lock().await;
+    match result {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => {
+            service
+                .poison_launch_cleanup(id.clone(), format!("unpublished process reap failed: {error}"))
+                .await;
+        }
+        Err(error) => {
+            service
+                .poison_launch_cleanup(id.clone(), format!("unpublished reap task failed: {error}"))
+                .await;
+        }
+    }
+    service.launch_cleanups.lock().await.remove(&id);
 }
