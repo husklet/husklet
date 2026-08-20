@@ -97,6 +97,64 @@ mod linux_host {
         bytes
     }
 
+    /// `write(1, <the mapped image>, 16)` followed by `exit_group(7)`. The exit is reached only when the
+    /// write returns instead of terminating the guest, so the status tells the two apart with no output
+    /// to parse: 141 means SIGPIPE was delivered and took its default action, 7 means the write came
+    /// back and the guest ran on.
+    fn static_x86_64_write_then_exit(status: u32) -> Vec<u8> {
+        let mut bytes = static_x86_64(231, status);
+        let mut entry = vec![0xb8_u8, 1, 0, 0, 0, 0xbf, 1, 0, 0, 0, 0x48, 0xbe];
+        entry.extend_from_slice(&LINK_BASE.to_le_bytes());
+        entry.extend_from_slice(&[0xba, 16, 0, 0, 0, 0x0f, 0x05]);
+        let exit = bytes[ENTRY_OFFSET..ENTRY_OFFSET + 12].to_vec();
+        bytes[ENTRY_OFFSET..ENTRY_OFFSET + entry.len()].copy_from_slice(&entry);
+        bytes[ENTRY_OFFSET + entry.len()..ENTRY_OFFSET + entry.len() + exit.len()].copy_from_slice(&exit);
+        bytes
+    }
+
+    fn static_aarch64_write_then_exit(status: u32) -> Vec<u8> {
+        let mut bytes = static_aarch64(94, status);
+        let exit = bytes[ENTRY_OFFSET..ENTRY_OFFSET + 16].to_vec();
+        // movz x0, #1; movz x1, #<LINK_BASE >> 16>, lsl 16; movz x2, #16; movz x8, #64; svc #0.
+        for (index, word) in [0xd280_0020_u32, 0xd2a0_0801, 0xd280_0202, 0xd280_0808, 0xd400_0001]
+            .into_iter()
+            .enumerate()
+        {
+            put_u32(&mut bytes, ENTRY_OFFSET + index * 4, word);
+        }
+        bytes[ENTRY_OFFSET + 20..ENTRY_OFFSET + 20 + exit.len()].copy_from_slice(&exit);
+        bytes
+    }
+
+    /// A pipe whose read end is already closed, handed to the guest as descriptor 1. Linux answers the
+    /// write with EPIPE *and* raises SIGPIPE on the writing thread, whose default action terminates the
+    /// writer -- that is what stops `cmd | head` once `head` has taken its line. The engine returned the
+    /// EPIPE and raised nothing whenever the descriptor was an ADOPTED one, so `make --version | head -1`
+    /// reported a write error and ran to completion, and `yes | head -1` never stopped writing. Measured
+    /// on this host: the writer of `make --version | head -1` exits 1 under the old engine, 141 natively
+    /// and 141 now; `yes | head -1` inside a guest bash already read 141, because a pipe the GUEST opens
+    /// takes the retained descriptor path, which had the delivery all along.
+    ///
+    /// The engine reports a fatally signalled guest as `_exit(128 + signo)` rather than dying by the
+    /// signal itself -- measured here as 139 for `raise(SIGSEGV)` and 143 for `raise(SIGTERM)` against a
+    /// native -11 and -15 -- so 141 is the status this boundary can express. A guest waiting on a guest
+    /// reconstructs `WIFSIGNALED` from the engine's own relay: in-guest `bash` reports
+    /// `PIPESTATUS[0]` as 141, exactly as the host shell does.
+    fn guest_stdout_is_a_pipe_with_no_reader(binary: &str, image: Vec<u8>, name: &str) -> Option<i32> {
+        let path = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+        fs::write(&path, image).unwrap();
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let status = Command::new(binary)
+            .arg(&path)
+            .stdout(writer)
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        fs::remove_file(&path).unwrap();
+        status.code()
+    }
+
     #[test]
     fn direct_aarch64_worker_defaults_to_retained_c() {
         let path = std::env::temp_dir().join(format!("hl-retained-direct-{}", std::process::id()));
@@ -176,6 +234,58 @@ mod linux_host {
                 output.status.code(),
                 Some(expected),
                 "aarch64 guest exit_group({status:#x}) must be waited as {expected}, as the host kernel does; \
+                 stderr={}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    #[test]
+    fn an_x86_64_guest_writing_to_an_adopted_pipe_with_no_reader_is_terminated_by_sigpipe() {
+        assert_eq!(
+            guest_stdout_is_a_pipe_with_no_reader(
+                env!("CARGO_BIN_EXE_hl-x86_64"),
+                static_x86_64_write_then_exit(7),
+                "hl-sigpipe-x86"
+            ),
+            Some(141),
+            "an x86-64 guest whose adopted stdout has no reader must be terminated by SIGPIPE, not \
+             handed EPIPE and left running"
+        );
+    }
+
+    #[test]
+    fn an_aarch64_guest_writing_to_an_adopted_pipe_with_no_reader_is_terminated_by_sigpipe() {
+        assert_eq!(
+            guest_stdout_is_a_pipe_with_no_reader(
+                env!("CARGO_BIN_EXE_hl-aarch64"),
+                static_aarch64_write_then_exit(7),
+                "hl-sigpipe-a64"
+            ),
+            Some(141),
+            "an aarch64 guest whose adopted stdout has no reader must be terminated by SIGPIPE, not \
+             handed EPIPE and left running"
+        );
+    }
+
+    /// The control the SIGPIPE cases need: the same two images, the same adopted descriptor 1, but a
+    /// writable one. The write returns, `exit_group(7)` is reached, and the runner reports 7. Without
+    /// this row a fix that terminated every writer -- or an assertion that only ever saw 141 -- would
+    /// read exactly as green.
+    #[test]
+    fn the_same_guests_reach_their_exit_when_the_adopted_descriptor_accepts_the_write() {
+        for (binary, image, name) in [
+            (env!("CARGO_BIN_EXE_hl-x86_64"), static_x86_64_write_then_exit(7), "hl-sigpipe-ok-x86"),
+            (env!("CARGO_BIN_EXE_hl-aarch64"), static_aarch64_write_then_exit(7), "hl-sigpipe-ok-a64"),
+        ] {
+            let path = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+            fs::write(&path, image).unwrap();
+            let output = Command::new(binary).arg(&path).output().unwrap();
+            fs::remove_file(&path).unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(7),
+                "{name}: a write an adopted descriptor accepts must return and let the guest exit; \
                  stderr={}",
                 String::from_utf8_lossy(&output.stderr)
             );
