@@ -973,6 +973,39 @@
               -DHL_TRANSLIT_DEFAULT=0 -D_GNU_SOURCE -DHL_EMBEDDED_BUILD=1 \
               -DHL_TARGET_NAMESPACE=${architecture} \
               -fsyntax-only src/runtime/hl-native/src/native/engine/target/${architecture}.c
+            # WHAT THIS CHECK COVERS ON aarch64, AND WHY IT IS NARROWER THAN IT LOOKS.
+            #
+            # The `aarch64` attribute selects the aarch64 cross `cc` above, so the
+            # -fsyntax-only pass really does compile the JIT arm. scan-build does NOT:
+            # it substitutes its own NATIVE clang with the same argv, no `-target`
+            # survives, so `__aarch64__` is undefined, `host/cpu.h` sets
+            # HL_HOST_CPU_X86_64 and `engine/target/aarch64.c` takes its INTERPRETER
+            # arm. The ~120 `e_*` emitters, the stubs, `translate.c` and `cache.c` are
+            # analysed by neither attribute. That is why every dead-store finding this
+            # check has ever produced was in `interp/`.
+            #
+            # SO: THE aarch64 ATTRIBUTE ANALYSES THE INTERPRETER ARM ONLY. A known-narrow
+            # gate that says so is fine; one that looks broad and is not, is not.
+            #
+            # `--analyzer-target=aarch64-unknown-linux-gnu` DOES NOT FIX THIS -- measured
+            # 2026-08-20, twice, and both shapes are worse than the status quo:
+            #   - Flag alone: the analyzer keeps the NATIVE glibc headers, dies on
+            #     `gnu/stubs.h: 'gnu/stubs-32.h' file not found`, and reports
+            #     `1 error generated. / 0 bugs found.` WITH EXIT 0. Analyses nothing,
+            #     says green. The assertion below exists because of this run.
+            #   - Flag plus the cross libc on `-isystem`: it gets further and then fails
+            #     with `use of undeclared identifier 'REG_RIP'` at
+            #     `host/native_context.h:85`, which is inside
+            #     `#elif defined(__linux__) && defined(HL_HOST_CPU_X86_64)`. The analyzer
+            #     preprocessed as x86_64 while reading aarch64 libc headers -- a
+            #     translation unit that is neither arm.
+            # The flag sets the ANALYSIS TRIPLE, not the preprocessor macros that select
+            # the code, and those macros are the entire mechanism. A real fix has to make
+            # the analyzer genuinely target aarch64, headers and macros together.
+            #
+            # The JIT findings are DELIBERATELY UNSIZED. Nothing has ever analysed that
+            # code, and an estimate would be a number nobody measured.
+            set +e
             timeout 10m scan-build --status-bugs -o reports \
               ${lib.escapeShellArg compiler} \
               -O2 -fPIC -g -fno-omit-frame-pointer -std=c11 \
@@ -984,10 +1017,38 @@
               -DHL_TRANSLIT_DEFAULT=0 -D_GNU_SOURCE -DHL_EMBEDDED_BUILD=1 \
               -DHL_TARGET_NAMESPACE=${architecture} \
               -c src/runtime/hl-native/src/native/engine/target/${architecture}.c \
-              -o engine.o
+              -o engine.o 2>&1 | tee scan-build.log
+            scan_status=''${PIPESTATUS[0]}
+            set -e
+            test "$scan_status" -eq 0
+
+            # `--status-bugs` ANSWERS ONE QUESTION AND IT IS NOT THE ONE THIS GATE NEEDS.
+            # It exits non-zero when the analyzer FINDS BUGS, and zero otherwise -- which
+            # includes the case where the analyzer parsed nothing and had no opportunity
+            # to find any. Measured 2026-08-20 while trying `--analyzer-target` below: the
+            # run emitted `1 error generated.`, then `0 bugs found.`, and EXITED 0. The
+            # derivation would have gone green over an analysis that never happened.
+            #
+            # So assert the two things an exit code cannot say: that the analyzer ran to
+            # completion, and that it compiled the translation unit rather than dying in
+            # it. Both hold on today's baseline -- this arch emits no analyzer errors --
+            # so this is armed, not aspirational.
+            grep -q 'Analysis run complete' scan-build.log || {
+              printf '%s\n' 'scan-build did not report a completed analysis run' >&2
+              exit 1
+            }
+            if grep -qE '[0-9]+ (error|fatal error)s? generated\.' scan-build.log; then
+              printf '%s\n' 'the analyzer emitted errors, so a clean bug count proves nothing' >&2
+              grep -E 'error:|[0-9]+ errors? generated\.' scan-build.log >&2
+              exit 1
+            fi
             mkdir -p "$out"
             printf '%s\n' \
-              ${lib.escapeShellArg "scan-build --status-bugs and strict C declaration/type/range/return diagnostics passed for the ${architecture} Linux unity translation unit"} \
+              ${lib.escapeShellArg (
+                "scan-build --status-bugs and strict C declaration/type/range/return diagnostics passed for the ${architecture} Linux unity translation unit"
+                + lib.optionalString (architecture == "aarch64")
+                  "; the analyzer covered the INTERPRETER arm only -- scan-build's substituted native clang leaves __aarch64__ undefined, so the JIT emitters were compiled by the -fsyntax-only pass but not analysed"
+              )} \
               > "$out/evidence"
           '';
 
