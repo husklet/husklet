@@ -41,6 +41,20 @@
             int logical_protect_failed = 0;
             hl_logical_vma_plan *logical_protect_plan = NULL;
             uint64_t folded_alias_a0 = nonpie_unfold(physical_a0);
+            uint64_t alias_glo = folded_alias_a0 & ~(uint64_t)0xfff;
+            uint64_t alias_ghi = (folded_alias_a0 + a1 + 0xfff) & ~(uint64_t)0xfff;
+            /* Restoring an accessible protection re-arms any past-EOF coverage parked by a PROT_NONE below,
+               before anything can reach the range again -- and before the logical-VMA transition lock is
+               taken, because gbus_prepare() takes that same non-recursive lock. Arming needs the same
+               prepare/STW transaction a mapping that arms the ledger uses. Inert (one filtered scan under
+               the ledger lock) unless this range was actually parked. */
+            if ((int)a2 != PROT_NONE &&
+                (gbus_parked_overlap(glo, ghi) || (alias_glo != glo && gbus_parked_overlap(alias_glo, alias_ghi)))) {
+                gbus_prepare();
+                gbus_unpark(glo, ghi);
+                if (alias_glo != glo) gbus_unpark(alias_glo, alias_ghi);
+                gbus_prepare_release();
+            }
             if (jit_guest_soft_active() || physical_a0 != a0) {
                 gbus_mapping_transition_lock();
                 logical_protect_locked = 1;
@@ -156,17 +170,21 @@
                fallible host operation succeeded.  Otherwise a failed
                mprotect would return an error while leaving syscall uaccess
                and write-fault classification at the rejected protection. */
-            if ((int)a2 == PROT_NONE)
+            if ((int)a2 == PROT_NONE) {
                 gna_add(glo, ghi);
-            else
+                if (alias_glo != glo) gna_add(alias_glo, alias_ghi);
+                /* The guest can no longer reach these bytes, and Linux answers a touch on a PROT_NONE page
+                   with a permission fault, never with SIGBUS. Park the past-EOF ledger's coverage so the
+                   translated BUS guard is not armed for the life of the process: ld.so PROT_NONEs the
+                   inter-segment hole of every shared library it maps, and that hole is the past-EOF tail of
+                   the whole-span reservation ld.so mapped first, so without this EVERY dynamically linked
+                   guest armed the ledger during startup and never disarmed it. The park is reversible --
+                   restoring an accessible protection (above) restores the SIGBUS contract. */
+                gbus_park(glo, ghi);
+                if (alias_glo != glo) gbus_park(alias_glo, alias_ghi);
+            } else {
                 gna_clear(glo, ghi);
-            uint64_t alias_glo = folded_alias_a0 & ~(uint64_t)0xfff;
-            uint64_t alias_ghi = (folded_alias_a0 + a1 + 0xfff) & ~(uint64_t)0xfff;
-            if (alias_glo != glo) {
-                if ((int)a2 == PROT_NONE)
-                    gna_add(alias_glo, alias_ghi);
-                else
-                    gna_clear(alias_glo, alias_ghi);
+                if (alias_glo != glo) gna_clear(alias_glo, alias_ghi);
             }
             if ((int)a2 != PROT_NONE && !((int)a2 & PROT_WRITE)) {
                 gro_add(glo, ghi);
