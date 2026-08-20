@@ -241,9 +241,13 @@ impl CheckpointTransport {
     /// child. That wedged three lanes for hours before it was named.
     ///
     /// This path allocates nothing, takes no lock, and runs no destructor: a
-    /// `socketpair`, one `sendmsg` carrying the peer end, and a `close`. The
-    /// returned descriptor is the caller's to close; on failure it returns -1
-    /// with `errno` set.
+    /// `socketpair` and one `sendmsg` carrying the peer end. It returns
+    /// `(channel, announced)`: the caller's channel, and this process's own
+    /// reference to the end the broker will read. Both are the caller's to
+    /// close, and `announced` must stay open until the broker has answered a
+    /// request on the channel -- `checkpoint_channel_receipt_release` in
+    /// `engine/checkpoint_channel.c` records what dropping it early costs. On
+    /// failure it returns `(-1, -1)` with `errno` set.
     ///
     /// The 16-byte announcement is `hl_ckpt_hello` from
     /// `include/hl/checkpoint_stream.h`. The duplication is deliberate and
@@ -258,7 +262,7 @@ impl CheckpointTransport {
     #[cfg(feature = "native-test-hooks")]
     #[doc(hidden)]
     #[must_use]
-    pub unsafe fn connect_in_forked_child_for_test(&self) -> i32 {
+    pub unsafe fn connect_in_forked_child_for_test(&self) -> (i32, i32) {
         const MAGIC_HELLO: u32 = 0x484b_4348;
         const STREAM_ABI: u32 = 2;
         let mut hello = [0_u8; 16];
@@ -267,7 +271,7 @@ impl CheckpointTransport {
         let mut pair = [-1_i32; 2];
         // SAFETY: pair names writable storage for two new descriptors.
         if unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, pair.as_mut_ptr()) } != 0 {
-            return -1;
+            return (-1, -1);
         }
         // SAFETY: getpid takes no argument and cannot fail.
         let pid = u64::try_from(unsafe { libc::getpid() }).unwrap_or(0);
@@ -296,14 +300,14 @@ impl CheckpointTransport {
             message.msg_controllen = libc::CMSG_SPACE(size_of::<i32>() as _) as _;
             libc::sendmsg(self.broker_child.as_raw_fd(), &raw const message, 0)
         };
-        // SAFETY: the broker owns its copy of the peer end once the message is queued.
-        unsafe { libc::close(pair[1]) };
         if sent != hello.len() as isize {
-            // SAFETY: this end is uniquely owned here and is never returned.
+            // SAFETY: neither end is returned on this path.
             unsafe { libc::close(pair[0]) };
-            return -1;
+            // SAFETY: neither end is returned on this path.
+            unsafe { libc::close(pair[1]) };
+            return (-1, -1);
         }
-        pair[0]
+        (pair[0], pair[1])
     }
 
     pub(crate) fn configure(&self, backend: *mut crate::bindings::Backend) -> i32 {
@@ -422,6 +426,130 @@ mod tests {
                     .is_ok_and(|metadata| metadata.dev() == expected.dev() && metadata.ino() == expected.ino())
             })
             .collect()
+    }
+
+    /// Open descriptors in this process, as a count rather than a set: the tests below reason about how
+    /// many references one announcement leaves behind, not about which numbers they landed on.
+    fn open_descriptor_count() -> usize {
+        let directory = if cfg!(target_os = "linux") {
+            "/proc/self/fd"
+        } else {
+            "/dev/fd"
+        };
+        std::fs::read_dir(directory).expect("descriptor directory").count()
+    }
+
+    /// The announcing side must still reference the broker end of its channel after the hello is sent,
+    /// and must drop that reference once the broker has answered.
+    ///
+    /// Counted rather than inspected, because the reference is engine-private and has no accessor: each
+    /// announcement releases the previous one's reference and takes two of its own, so from a process
+    /// that has never announced the table grows 2, 3, 4. Dropping the reference at send time reads 1, 2,
+    /// 3; never releasing it reads 2, 4, 6. Run in a fresh child for the same reason the registry test
+    /// is: the count is only readable from a process whose announcement history is known.
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn an_announcement_holds_the_broker_end_until_the_broker_answers() {
+        const CHILD: &str = "HL_NATIVE_CHECKPOINT_ANNOUNCEMENT_REFERENCE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+                .args([
+                    "--exact",
+                    "checkpoint::tests::an_announcement_holds_the_broker_end_until_the_broker_answers",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .expect("spawn announcement reference child");
+            assert!(
+                output.status.success(),
+                "announcement reference child failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let _adoption = ADOPTION.lock().expect("checkpoint adoption lock");
+        let (_broker, transport) = CheckpointTransport::create().expect("checkpoint transport");
+        let base = open_descriptor_count();
+        let first = transport.connect_for_test().expect("first announcement");
+        assert_eq!(
+            open_descriptor_count() - base,
+            2,
+            "an announcement must keep its own reference to the broker end while it is in flight"
+        );
+        let second = transport.connect_for_test().expect("second announcement");
+        assert_eq!(
+            open_descriptor_count() - base,
+            3,
+            "the previous announcement's reference must be released, not leaked"
+        );
+        let third = transport.connect_for_test().expect("third announcement");
+        assert_eq!(
+            open_descriptor_count() - base,
+            4,
+            "every announcement releases exactly one reference and takes two"
+        );
+        drop((first, second, third));
+    }
+
+    /// A channel the broker accepted must answer its first request.
+    ///
+    /// This is the user-visible defect. A restoring member announces itself and reads `proc.<gpid>/meta`
+    /// in the same breath, and an announcement whose broker end was collected while it was in flight
+    /// reads EOF instead -- "read the broker's reply: this channel ended before one arrived" -- with the
+    /// member alive, its request already written, and the socket still connected. Measured on macOS 26.3
+    /// (Darwin 25.3.0, arm64) at 5 in 40,000 announcements before this was fixed. A Linux host cannot
+    /// express it, so the loop is a control there rather than a probe, which is why the round count
+    /// differs by host.
+    ///
+    /// Run in a fresh child: it announces tens of thousands of channels, and the engine-global channel
+    /// cache those announcements leave behind is not state the rest of this suite should inherit.
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn an_accepted_channel_answers_its_first_request() {
+        use std::io::{Read as _, Write as _};
+
+        const CHILD: &str = "HL_NATIVE_CHECKPOINT_FIRST_REQUEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+                .args([
+                    "--exact",
+                    "checkpoint::tests::an_accepted_channel_answers_its_first_request",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .expect("spawn first-request child");
+            assert!(
+                output.status.success(),
+                "first-request child failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let _adoption = ADOPTION.lock().expect("checkpoint adoption lock");
+        let (broker, transport) = CheckpointTransport::create().expect("checkpoint transport");
+        let rounds = if cfg!(target_os = "macos") { 20_000 } else { 2_000 };
+        for round in 0..rounds {
+            let mut announced = transport.connect_for_test().expect("announce a channel");
+            announced.write_all(&[9_u8; 32]).expect("write the first request");
+            let (channel, peer) = broker
+                .accept(Duration::from_secs(5))
+                .unwrap_or_else(|| panic!("round {round}: the broker never accepted the announcement"));
+            let mut request = [0_u8; 32];
+            peer.read_exact(&channel, &mut request).unwrap_or_else(|error| {
+                panic!("round {round}: the accepted channel ended before its first request arrived: {error}")
+            });
+            assert_eq!(request, [9_u8; 32]);
+            let mut writable = &channel;
+            writable.write_all(&[0_u8; 16]).expect("answer the request");
+            let mut reply = [0_u8; 16];
+            announced.read_exact(&mut reply).expect("read the answer");
+        }
     }
 
     #[test]

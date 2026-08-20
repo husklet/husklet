@@ -39,7 +39,9 @@ fn production_broker_revokes_relayed_channel_when_authenticated_child_exits() {
         }
         // SAFETY: this is a fork child of a multi-threaded binary, so the channel must be
         // announced without taking any lock the fork may have copied in a held state.
-        let channel = unsafe { transport.connect_in_forked_child_for_test() };
+        // `_announced` stays open for the child's whole life: it is this process's reference to the
+        // broker end, and dropping it while the hello is in flight can get the socket collected.
+        let (channel, _announced) = unsafe { transport.connect_in_forked_child_for_test() };
         // SAFETY: no Rust destructors are run after fork.
         if channel < 0 {
             unsafe { libc::_exit(90) }
@@ -2883,7 +2885,9 @@ fn two_members_stay_stopped_and_alive_across_one_shared_object_capture_and_then_
             let events = events[index][1];
             // SAFETY: this is a fork child of a multi-threaded binary, so the channel must be
             // announced without taking any lock the fork may have copied in a held state.
-            let channel = unsafe { transport.connect_in_forked_child_for_test() };
+            // `_announced` stays open for the child's whole life: it is this process's reference to the
+            // broker end, and dropping it while the hello is in flight can get the socket collected.
+            let (channel, _announced) = unsafe { transport.connect_in_forked_child_for_test() };
             // SAFETY: no Rust destructors are run after fork.
             if channel < 0 {
                 unsafe { libc::_exit(90) }

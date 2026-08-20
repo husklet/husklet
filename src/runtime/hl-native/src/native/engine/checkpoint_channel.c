@@ -141,6 +141,11 @@ static int checkpoint_broker = -1;
 static int checkpoint_trigger = -1;
 static int checkpoint_channel = -1;
 static long checkpoint_channel_owner; /* getpid() that created `checkpoint_channel` */
+/* This process's own reference to the broker end of its channel: the SAME socket the broker will read,
+ * held here from the moment the hello is sent until the broker answers. See
+ * checkpoint_channel_receipt_release. */
+static int checkpoint_channel_receipt = -1;
+static long checkpoint_channel_receipt_owner;
 /* The step at which this process's last round trip failed, and the errno it failed with. Diagnostic
  * only; see the header. */
 static char checkpoint_channel_failure[192];
@@ -167,6 +172,7 @@ int hl_ckpt_channel_owns_descriptor(int descriptor) {
     int floor = hl_host_process_fd_private_floor();
     if (descriptor < 0 || floor < 0 || descriptor < floor) return 0;
     if (descriptor == checkpoint_broker || descriptor == checkpoint_trigger) return 1;
+    if (descriptor == checkpoint_channel_receipt && checkpoint_channel_receipt_owner == (long)getpid()) return 1;
     return descriptor == checkpoint_channel && checkpoint_channel_owner == (long)getpid();
 }
 
@@ -182,7 +188,34 @@ int hl_ckpt_channel_owns_descriptor(int descriptor) {
  * A fresh connection is not a way around any gate: the broker admits a connection to publish capture bytes
  * only after REGISTER_READY on that connection (broker.rs `publishes_capture_bytes`), so a reconnecting
  * process starts unregistered and can publish nothing it had not already proven. */
+
+/* Releases this process's own reference to the broker end of its channel.
+ *
+ * A descriptor sent over a unix socket is IN FLIGHT until the receiver takes it out of the message, and
+ * while it is in flight the kernel accounts for it separately from every file table. On Darwin the
+ * unix-domain rights collector may then treat a socket whose only remaining reference is that in-flight
+ * message as unreachable and flush its receive state: the connection survives -- LOCAL_PEERPID still
+ * names the announcing process and the peer link is intact -- but the broker end reads EOF forever, so
+ * the announcing process gets no answer to its FIRST request and reports "read the broker's reply: this
+ * channel ended before one arrived". A restoring member announces and reads proc.<gpid>/meta in the same
+ * breath, which is why the restore is where it surfaced. Measured on macOS 26.3 (Darwin 25.3.0, arm64):
+ * 5 flushed channels in 40,000 announcements with this reference dropped at send time, 0 in 20,000 with
+ * it held to the first reply, and 0 in 20,000 on a socketpair that was never passed as a right at all.
+ *
+ * Holding our own reference for the whole flight keeps the socket reachable from a real file table,
+ * which is the property the collector reasons about. It costs one descriptor for one round trip and
+ * nothing after, and it cannot leave a channel un-EOFed: process death closes this reference exactly as
+ * it closes every other one. */
+static void checkpoint_channel_receipt_release(void) {
+    if (checkpoint_channel_receipt < 0) return;
+    hl_host_process_fd_private_remove(checkpoint_channel_receipt);
+    (void)close(checkpoint_channel_receipt);
+    checkpoint_channel_receipt = -1;
+    checkpoint_channel_receipt_owner = 0;
+}
+
 static void checkpoint_channel_poison(void) {
+    checkpoint_channel_receipt_release();
     if (checkpoint_channel < 0) return;
     hl_host_process_fd_private_remove(checkpoint_channel);
     (void)close(checkpoint_channel);
@@ -201,6 +234,7 @@ void hl_ckpt_channel_test_claimed_pid(uint64_t claimed_pid) { checkpoint_test_cl
  * closes it -- so a second call would return an already-closed number and the caller would close it
  * twice. Forgetting rather than closing is what keeps ownership with the caller who already has it. */
 void hl_ckpt_channel_forget_for_test(void) {
+    checkpoint_channel_receipt_release();
     checkpoint_channel = -1;
     checkpoint_channel_owner = 0;
 }
@@ -251,6 +285,7 @@ int hl_ckpt_channel_adopt(const char *broker, const char *trigger) {
         checkpoint_private_descriptor_close(trigger_descriptor);
         return -1;
     }
+    checkpoint_channel_receipt_release();
     checkpoint_private_descriptor_close(checkpoint_channel);
     checkpoint_channel = -1;
     checkpoint_channel_owner = 0;
@@ -303,6 +338,10 @@ int hl_ckpt_channel_acquire(void) {
     hl_ckpt_hello hello;
     int pair[2];
     if (checkpoint_broker < 0) return checkpoint_channel_failed("find a published checkpoint broker");
+    /* Inherited across fork() like the channel below, and dropped for the same reason: it belongs to the
+     * parent's announcement, and this process is about to make its own. */
+    if (checkpoint_channel_receipt >= 0 && checkpoint_channel_receipt_owner != (long)getpid())
+        checkpoint_channel_receipt_release();
     if (checkpoint_channel >= 0) {
         if (checkpoint_channel_owner == (long)getpid()) return checkpoint_channel;
         /* Inherited across fork(). Drop the parent's channel rather than sharing it: two processes issuing
@@ -322,7 +361,17 @@ int hl_ckpt_channel_acquire(void) {
         (void)close(pair[1]);
         return checkpoint_channel_failed("announce its channel to the broker");
     }
-    (void)close(pair[1]);
+    /* NOT closed here: see checkpoint_channel_receipt_release. The broker end must stay referenced by a
+     * real file table for as long as it is in flight, or the collector may flush it. */
+    {
+        int retained = hl_host_process_fd_private_adopt(pair[1]);
+        if (retained < 0) {
+            (void)close(pair[1]);
+        } else {
+            checkpoint_channel_receipt = retained;
+            checkpoint_channel_receipt_owner = (long)getpid();
+        }
+    }
     /* The channel is engine control state, not a guest socket. Move it into the private descriptor range so
      * the checkpoint writer's own descriptor scan never mistakes it for something the guest owns -- the
      * coordinator opens its channel BEFORE it dumps itself. */
@@ -367,6 +416,7 @@ int hl_ckpt_channel_call(hl_ckpt_request *request, const char *name, const void 
         checkpoint_channel_poison();
         return checkpoint_channel_failed("read the broker's reply: this channel ended before one arrived");
     }
+    checkpoint_channel_receipt_release(); /* answered, so the broker holds its own reference now */
     if (reply->magic != HL_CKPT_STREAM_MAGIC_REPLY || reply->abi != HL_CKPT_STREAM_ABI) {
         checkpoint_channel_poison();
         return checkpoint_channel_failed("recognize the broker's reply framing");
@@ -408,6 +458,7 @@ int hl_ckpt_channel_call_receive_descriptor(hl_ckpt_request *request, const void
             (void)close(received[--count]);
         return -1;
     }
+    checkpoint_channel_receipt_release(); /* answered, so the broker holds its own reference now */
     if (count == 1) *out_descriptor = received[0];
     return 0;
 }
