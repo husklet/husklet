@@ -7,6 +7,7 @@ use std::cell::RefCell;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -22,32 +23,35 @@ use super::{directory, settings, Catalogue, Inspection, Shared, Shelf, Surfaces}
 /// own page from the settings page beside it.
 const SURFACE: &str = "hl-test-surface";
 
-/// Every scenario runs inside one test.
+/// Every scenario runs inside one test, on the binary's toolkit thread.
 ///
-/// GTK may only be initialized from a single thread and the libtest harness
-/// gives every `#[test]` its own, so a second GTK test in the same binary
-/// either panics or silently skips. One test running the scenarios in sequence
-/// is the only shape in which all of them actually run.
+/// GTK belongs to whichever thread entered it and libtest gives every `#[test]`
+/// its own, so the scenarios are handed to `test_support`, which owns the one
+/// thread in this process that entered GTK. Entering it here instead is what
+/// used to make this test either SIGSEGV on a display-less host or panic beside
+/// the extension-page test on a host with a display; `test_support` documents
+/// both mechanisms.
 #[test]
 fn a_workspaces_extensions_are_on_its_sidebar_and_hear_what_is_clicked() {
-    if gtk::init().is_err() {
+    let ran = crate::test_support::on_the_toolkit_thread(|| {
+        the_sidebar_lists_exactly_what_the_workspace_recorded();
+        selecting_an_extension_shows_the_surface_it_draws();
+        the_settings_page_says_where_an_extension_stands();
+        the_settings_actions_drive_the_installation();
+        removing_an_extension_takes_its_pages_with_it();
+        an_image_is_read_before_anybody_is_asked();
+        a_declined_image_records_nothing();
+        a_click_on_a_rendered_button_reaches_the_extension();
+        panes::reading_a_pane_hands_back_what_was_written_to_it();
+        panes::a_pane_read_never_answers_with_more_than_it_was_allowed();
+        panes::dividing_a_pane_produces_a_slot_that_can_be_addressed();
+        panes::closing_a_pane_by_slot_removes_that_one_and_leaves_the_rest();
+        panes::a_pane_can_hold_an_extensions_interface_beside_a_shell();
+        panes::a_restored_surface_without_its_extension_is_frozen_rather_than_a_shell();
+    });
+    if !ran {
         eprintln!("skipped: no display connection, so the extension shelf cannot be rendered");
-        return;
     }
-    the_sidebar_lists_exactly_what_the_workspace_recorded();
-    selecting_an_extension_shows_the_surface_it_draws();
-    the_settings_page_says_where_an_extension_stands();
-    the_settings_actions_drive_the_installation();
-    removing_an_extension_takes_its_pages_with_it();
-    an_image_is_read_before_anybody_is_asked();
-    a_declined_image_records_nothing();
-    a_click_on_a_rendered_button_reaches_the_extension();
-    panes::reading_a_pane_hands_back_what_was_written_to_it();
-    panes::a_pane_read_never_answers_with_more_than_it_was_allowed();
-    panes::dividing_a_pane_produces_a_slot_that_can_be_addressed();
-    panes::closing_a_pane_by_slot_removes_that_one_and_leaves_the_rest();
-    panes::a_pane_can_hold_an_extensions_interface_beside_a_shell();
-    panes::a_restored_surface_without_its_extension_is_frozen_rather_than_a_shell();
 }
 
 /// One shell, one roster, and the shelf between them.
@@ -346,6 +350,7 @@ type Heard = Arc<Mutex<Vec<String>>>;
 struct Bench {
     socket: std::path::PathBuf,
     heard: Heard,
+    greeted: Arc<AtomicBool>,
     peers: Mutex<Vec<std::thread::JoinHandle<()>>>,
 }
 
@@ -377,10 +382,11 @@ impl hl::extension::Supply for Bench {
     fn ensure(&self, _plan: &hl::extension::Plan) -> Result<(), String> {
         let socket = self.socket.clone();
         let heard = Arc::clone(&self.heard);
+        let greeted = Arc::clone(&self.greeted);
         self.peers
             .lock()
             .expect("peers")
-            .push(std::thread::spawn(move || listen(&socket, &heard)));
+            .push(std::thread::spawn(move || listen(&socket, &heard, &greeted)));
         Ok(())
     }
 
@@ -405,7 +411,7 @@ impl hl::extension::Supply for Bench {
 
 /// The fake extension: connect, handshake, then write down every interaction
 /// the host sends.
-fn listen(socket: &Path, heard: &Heard) {
+fn listen(socket: &Path, heard: &Heard, greeted: &AtomicBool) {
     let Some(stream) = connect(socket) else {
         return;
     };
@@ -413,6 +419,7 @@ fn listen(socket: &Path, heard: &Heard) {
     if shake(&mut wire).is_err() {
         return;
     }
+    greeted.store(true, Ordering::Release);
     while let Ok(frame) = wire.receive() {
         let Ok(said) = serde_json::from_slice::<serde_json::Value>(&frame.payload) else {
             continue;
@@ -455,10 +462,12 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let socket = temporary.path().join("run/extension.sock");
     let heard: Heard = Arc::default();
+    let greeted = Arc::new(AtomicBool::new(false));
     let host = Rc::new(hl::extension::Host::open(
         Bench {
             socket,
             heard: Arc::clone(&heard),
+            greeted: Arc::clone(&greeted),
             peers: Mutex::new(Vec::new()),
         },
         Box::new(|_| ()),
@@ -467,6 +476,16 @@ fn a_click_on_a_rendered_button_reaches_the_extension() {
         until(|| host.standing() == hl::extension::Standing::Duty),
         "the extension connected, got {:?}",
         host.standing()
+    );
+    // `Duty` is set when the socket is bound, which is earlier than a
+    // connection: an interaction handed over before one is accepted is written
+    // to nobody and dropped, because the host's writing end is still empty. The
+    // host takes that end before it greets, so an extension that has read the
+    // welcome is one the host can already speak to -- which is what a click has
+    // to wait for, rather than for the standing.
+    assert!(
+        until(|| greeted.load(Ordering::Acquire)),
+        "the extension read the host's welcome"
     );
 
     let (post, deliveries) = channel();
