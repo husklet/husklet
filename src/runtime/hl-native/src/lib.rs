@@ -441,6 +441,25 @@ pub fn unix_identity_capture_test(isa: u32, fd: i32) -> Result<(), i32> {
     bindings::unix_identity_capture_test(isa, fd)
 }
 
+/// Adopts the liveness capability a macOS identity hook minted, or reports why the host refused.
+///
+/// Both hooks below answer with a `kqueue` descriptor they opened themselves and registered on
+/// `EVFILT_PROC`, or with -1 and `errno`. The adoption is the same on both paths and lives here once so
+/// it carries one rationale rather than two copies of the same one.
+#[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
+#[allow(unsafe_code)]
+fn adopt_identity_capability(capability: i32) -> std::io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    if capability < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: a non-negative answer is a descriptor `hl_host_process_identity_open` obtained from
+    // `kqueue()` and has already set `FD_CLOEXEC` on; it hands the only reference to this caller and
+    // retains none, and it closes the descriptor itself on every path that returns -1. So this process
+    // is the sole owner and `OwnedFd` closes it exactly once.
+    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(capability) })
+}
+
 #[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
 #[doc(hidden)]
 #[allow(unsafe_code)]
@@ -449,10 +468,15 @@ pub fn checkpoint_process_identity_open_test(
     expected_birth: u64,
     expected_generation: u64,
 ) -> std::io::Result<(std::os::fd::OwnedFd, u64, u64)> {
-    use std::os::fd::FromRawFd;
     let mut birth = 0;
     let mut generation = 0;
-    let descriptor = unsafe {
+    // SAFETY: the hook is a resolved export of the loaded engine taking two out-parameters. `birth` and
+    // `generation` are live locals for the whole call, written only through these exclusive pointers and
+    // read only after it returns; the C sets them to zero before it can fail, so no path leaves them
+    // uninitialised. `pid` names a process this caller does not own, which is why the hook fences the
+    // answer to `expected_birth`/`expected_generation` rather than trusting the number. It is C to its
+    // depth and cannot unwind.
+    let capability = unsafe {
         bindings::hl_c_backend_checkpoint_process_identity_open_test(
             pid,
             expected_birth,
@@ -461,14 +485,7 @@ pub fn checkpoint_process_identity_open_test(
             &raw mut generation,
         )
     };
-    if descriptor < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok((
-        unsafe { std::os::fd::OwnedFd::from_raw_fd(descriptor) },
-        birth,
-        generation,
-    ))
+    Ok((adopt_identity_capability(capability)?, birth, generation))
 }
 
 #[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
@@ -478,10 +495,14 @@ pub fn checkpoint_peer_identity_open_test(
     descriptor: std::os::fd::RawFd,
     claimed_pid: u64,
 ) -> std::io::Result<(std::os::fd::OwnedFd, u64, u64, u64)> {
-    use std::os::fd::FromRawFd;
     let mut pid = 0;
     let mut birth = 0;
     let mut generation = 0;
+    // SAFETY: three live locals behind three exclusive out-pointers, zeroed by the C before any failure
+    // path, as above. What differs here is `descriptor`: the hook reads `LOCAL_PEERTOKEN` off it twice,
+    // around the mint, so the caller must keep that socket open across the call -- it is a `RawFd`
+    // borrowed from an owner the caller still holds, never one this function may close. The hook closes
+    // the capability itself if the token moved between the two reads.
     let capability = unsafe {
         bindings::hl_c_backend_checkpoint_peer_identity_open_test(
             descriptor,
@@ -491,15 +512,7 @@ pub fn checkpoint_peer_identity_open_test(
             &raw mut generation,
         )
     };
-    if capability < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok((
-        unsafe { std::os::fd::OwnedFd::from_raw_fd(capability) },
-        pid,
-        birth,
-        generation,
-    ))
+    Ok((adopt_identity_capability(capability)?, pid, birth, generation))
 }
 
 /// How many times any terminal's guest-authored termios has been installed.

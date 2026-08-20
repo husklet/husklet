@@ -14,10 +14,16 @@
 //!
 //! Both ISA arms of every hook are exercised: the aarch64 and `x86_64` engines are separate translation
 //! units of the same C, so a fix present in one and missing in the other is a real shape here.
+//!
+//! The raw calls that remain are the ones whose exact arguments ARE the measurement: the socket that was
+//! never bound, the `sockaddr_un` handed to `bind(2)` at its full struct length, and the control region
+//! whose `cmsg_len` deliberately over-claims. Everything that merely carries bytes between two ends of
+//! this process uses the safe `std` socket types.
 
 #![allow(unsafe_code)]
 
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
 
 const GETSOCKNAME: u32 = 0;
 const GETPEERNAME: u32 = 1;
@@ -26,21 +32,17 @@ const DATAGRAM_BUFFERS: u32 = 3;
 
 const ISAS: [(u32, &str); 2] = [(1, "aarch64"), (2, "x86_64")];
 
-fn socket(kind: i32) -> OwnedFd {
-    let descriptor = unsafe { libc::socket(libc::AF_UNIX, kind, 0) };
-    assert!(descriptor >= 0, "socket: {}", std::io::Error::last_os_error());
-    unsafe { OwnedFd::from_raw_fd(descriptor) }
-}
-
-fn socket_pair(kind: i32) -> (OwnedFd, OwnedFd) {
-    let mut descriptors = [-1; 2];
-    let status = unsafe { libc::socketpair(libc::AF_UNIX, kind, 0, descriptors.as_mut_ptr()) };
-    assert_eq!(status, 0, "socketpair: {}", std::io::Error::last_os_error());
+/// An `AF_UNIX` stream socket carrying no name at all, which no `std` type can produce: `UnixListener`
+/// and `UnixStream` mint their socket and name it in the same call, and an unnamed socket is precisely
+/// the first row of the table above.
+fn stream_socket() -> OwnedFd {
+    // SAFETY: `socket(2)` reads no caller memory, and it returns either a descriptor this process is the
+    // sole owner of or -1, which the assertion rejects before the value reaches `from_raw_fd`. Nothing
+    // else in this file holds that integer, so handing it to `OwnedFd` makes the close exactly once.
     unsafe {
-        (
-            OwnedFd::from_raw_fd(descriptors[0]),
-            OwnedFd::from_raw_fd(descriptors[1]),
-        )
+        let descriptor = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
+        assert!(descriptor >= 0, "socket: {}", std::io::Error::last_os_error());
+        OwnedFd::from_raw_fd(descriptor)
     }
 }
 
@@ -51,9 +53,13 @@ fn temporary_path(tag: &str) -> std::path::PathBuf {
 }
 
 fn pathname_address(path: &std::path::Path) -> libc::sockaddr_un {
-    let bytes = path.to_string_lossy().into_owned();
+    // SAFETY: `sockaddr_un` is a C aggregate of an integer family, an integer array, and -- on Darwin
+    // only -- a `sun_len` byte. It has no niche, no pointer, and no field whose zero value is invalid,
+    // so all-zero is a valid inhabitant. It is zeroed rather than written field by field for exactly the
+    // reason this file exists: the two hosts do not agree on which fields there are.
     let mut address = unsafe { std::mem::zeroed::<libc::sockaddr_un>() };
     address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    let bytes = path.to_string_lossy().into_owned();
     assert!(
         bytes.len() < address.sun_path.len(),
         "socket path does not fit sun_path"
@@ -64,8 +70,15 @@ fn pathname_address(path: &std::path::Path) -> libc::sockaddr_un {
     address
 }
 
+/// Binds at the FULL `sockaddr_un` length rather than the `offsetof(sun_path) + strlen + 1` that
+/// `UnixListener::bind` passes. The third row of the table is a statement about what each host reports
+/// back for a name bound this way, so the length going in is part of the measurement and is not std's
+/// to choose.
 fn bind_path(descriptor: i32, path: &std::path::Path) {
     let address = pathname_address(path);
+    // SAFETY: `address` is a live local for the whole call and the kernel copies out of it rather than
+    // retaining it; the length passed is `size_of` that same object, so the copy cannot run past it.
+    // `descriptor` is borrowed from an `OwnedFd` the caller keeps, so it cannot have been closed.
     let status = unsafe {
         libc::bind(
             descriptor,
@@ -92,7 +105,7 @@ fn guest_address(isa: u32, operation: u32, descriptor: i32) -> (u32, Vec<u8>) {
 #[test]
 fn an_unbound_unix_socket_reports_the_bare_family_on_both_isas() {
     for (isa, name) in ISAS {
-        let socket = socket(libc::SOCK_STREAM);
+        let socket = stream_socket();
         let (length, bytes) = guest_address(isa, GETSOCKNAME, socket.as_raw_fd());
         assert_eq!(length, 2, "{name}: an unnamed local address is the family alone");
         assert_eq!(
@@ -110,32 +123,12 @@ fn an_accepted_socket_reports_an_unnamed_peer_on_both_isas() {
     for (isa, name) in ISAS {
         // A real listener and a client that never bound a name. A socketpair end cannot stand in for
         // this: with its peer closed, Darwin answers getpeername with EINVAL where Linux still answers.
+        // `UnixStream::connect` binds no name -- Linux autobinds a connecting stream socket only under
+        // SO_PASSCRED -- so the accepted end's peer is as anonymous as a hand-rolled socket's would be.
         let path = temporary_path(&format!("peer-{isa}"));
-        let listener = socket(libc::SOCK_STREAM);
-        bind_path(listener.as_raw_fd(), &path);
-        assert_eq!(
-            unsafe { libc::listen(listener.as_raw_fd(), 4) },
-            0,
-            "listen: {}",
-            std::io::Error::last_os_error()
-        );
-        let client = socket(libc::SOCK_STREAM);
-        let address = pathname_address(&path);
-        assert_eq!(
-            unsafe {
-                libc::connect(
-                    client.as_raw_fd(),
-                    std::ptr::from_ref(&address).cast(),
-                    size_of::<libc::sockaddr_un>() as libc::socklen_t,
-                )
-            },
-            0,
-            "connect: {}",
-            std::io::Error::last_os_error()
-        );
-        let accepted = unsafe { libc::accept(listener.as_raw_fd(), std::ptr::null_mut(), std::ptr::null_mut()) };
-        assert!(accepted >= 0, "accept: {}", std::io::Error::last_os_error());
-        let accepted = unsafe { OwnedFd::from_raw_fd(accepted) };
+        let listener = UnixListener::bind(&path).expect("listener");
+        let _client = UnixStream::connect(&path).expect("connect");
+        let (accepted, _) = listener.accept().expect("accept");
         let (length, _) = guest_address(isa, GETPEERNAME, accepted.as_raw_fd());
         let _ = std::fs::remove_file(&path);
         assert_eq!(length, 2, "{name}: an unnamed peer is the family alone");
@@ -149,7 +142,7 @@ fn a_bound_pathname_keeps_its_linux_length_on_both_isas() {
     for (isa, name) in ISAS {
         let bound = temporary_path(&format!("bound-{isa}"));
         let path = bound.to_string_lossy().into_owned();
-        let socket = socket(libc::SOCK_STREAM);
+        let socket = stream_socket();
         bind_path(socket.as_raw_fd(), &bound);
         let (length, bytes) = guest_address(isa, GETSOCKNAME, socket.as_raw_fd());
         let _ = std::fs::remove_file(&bound);
@@ -173,28 +166,43 @@ fn a_bound_pathname_keeps_its_linux_length_on_both_isas() {
 #[test]
 fn a_truncated_scm_rights_record_publishes_only_delivered_descriptors_on_both_isas() {
     for (isa, name) in ISAS {
-        let (sender, receiver) = socket_pair(libc::SOCK_STREAM);
+        let (sender, receiver) = UnixStream::pair().expect("socketpair");
+        // Any three live descriptors; what is sent matters, what they point at does not.
         let carried: Vec<OwnedFd> = (0..3)
-            .map(|_| {
-                let descriptor = unsafe { libc::dup(0) };
-                assert!(descriptor >= 0, "dup: {}", std::io::Error::last_os_error());
-                unsafe { OwnedFd::from_raw_fd(descriptor) }
-            })
+            .map(|_| std::io::stdin().as_fd().try_clone_to_owned().expect("dup stdin"))
             .collect();
         let raw: Vec<i32> = carried.iter().map(AsRawFd::as_raw_fd).collect();
-        let space = unsafe { libc::CMSG_SPACE(3 * size_of::<i32>() as u32) } as usize;
+        // SAFETY: both `CMSG_SPACE` calls are pure arithmetic over the host's `cmsghdr` alignment -- they
+        // dereference nothing and are `unsafe` only because libc declares the whole `CMSG_*` family that
+        // way. The second value is the ONE-descriptor host buffer that makes the two kernels disagree,
+        // and it is computed here, beside the three-descriptor size, so the pair reads as the contrast
+        // it is.
+        let (space, capacity) = unsafe {
+            (
+                libc::CMSG_SPACE(3 * size_of::<i32>() as u32) as usize,
+                libc::CMSG_SPACE(size_of::<i32>() as u32),
+            )
+        };
         let mut control = vec![0_u8; space];
         let mut payload = *b"z";
-        let mut vector = libc::iovec {
-            iov_base: payload.as_mut_ptr().cast(),
-            iov_len: 1,
-        };
-        let mut message = unsafe { std::mem::zeroed::<libc::msghdr>() };
-        message.msg_iov = &raw mut vector;
-        message.msg_iovlen = 1;
-        message.msg_control = control.as_mut_ptr().cast();
-        message.msg_controllen = space as _;
+        // SAFETY: the control region is assembled by hand because a `cmsg_len` that over-claims its own
+        // record is the defect under test, and no safe API can express one (`send_vectored_with_ancillary`
+        // is unstable and would refuse it anyway). `control`, `payload` and `vector` are locals that
+        // outlive the `sendmsg` inside this block; `CMSG_FIRSTHDR` returns a pointer into `control`,
+        // which `CMSG_SPACE(3 * 4)` sized to hold that record, so the header stores and the
+        // `copy_nonoverlapping` of 12 bytes stay inside the allocation even though `cmsg_len` lies about
+        // it. Nothing here can unwind past the block: the only panic is the trailing assertion, after the
+        // last raw call.
         unsafe {
+            let mut vector = libc::iovec {
+                iov_base: payload.as_mut_ptr().cast(),
+                iov_len: 1,
+            };
+            let mut message = std::mem::zeroed::<libc::msghdr>();
+            message.msg_iov = &raw mut vector;
+            message.msg_iovlen = 1;
+            message.msg_control = control.as_mut_ptr().cast();
+            message.msg_controllen = space as _;
             let header = libc::CMSG_FIRSTHDR(&raw const message);
             (*header).cmsg_level = libc::SOL_SOCKET;
             (*header).cmsg_type = libc::SCM_RIGHTS;
@@ -208,9 +216,6 @@ fn a_truncated_scm_rights_record_publishes_only_delivered_descriptors_on_both_is
                 std::io::Error::last_os_error()
             );
         }
-        // A host control buffer with room for exactly one descriptor: the shape that makes the two
-        // kernels disagree.
-        let capacity = unsafe { libc::CMSG_SPACE(size_of::<i32>() as u32) };
         let mut out = vec![0_u8; 256];
         let written = hl_native::socket_shape_test(isa, RECVMSG, receiver.as_raw_fd(), capacity, &mut out)
             .unwrap_or_else(|status| panic!("{name}: recvmsg translation failed with errno {status}"));
@@ -226,11 +231,19 @@ fn a_truncated_scm_rights_record_publishes_only_delivered_descriptors_on_both_is
         for index in 0..published {
             let start = 16 + index * size_of::<i32>();
             let descriptor = i32::from_ne_bytes(out[start..start + 4].try_into().expect("descriptor"));
-            assert!(
-                unsafe { libc::fcntl(descriptor, libc::F_GETFD) } != -1,
-                "{name}: descriptor {descriptor} published to the guest was never delivered by the kernel"
-            );
-            delivered.push(unsafe { OwnedFd::from_raw_fd(descriptor) });
+            // SAFETY: `descriptor` is an integer the ENGINE published to the guest, so this is the one
+            // place that must not assume it names anything: `F_GETFD` asks the kernel whether it is open
+            // in this process at all, and that is the assertion the whole test exists for. Only a
+            // descriptor that answered is adopted, and only once -- the kernel just installed it into
+            // this process by `SCM_RIGHTS` and nothing else holds it, so `OwnedFd` is its sole owner.
+            let adopted = unsafe {
+                assert!(
+                    libc::fcntl(descriptor, libc::F_GETFD) != -1,
+                    "{name}: descriptor {descriptor} published to the guest was never delivered by the kernel"
+                );
+                OwnedFd::from_raw_fd(descriptor)
+            };
+            delivered.push(adopted);
         }
         assert!(
             published >= 1,
@@ -249,19 +262,16 @@ fn a_truncated_scm_rights_record_publishes_only_delivered_descriptors_on_both_is
 #[test]
 fn an_unix_datagram_socket_carries_a_linux_sized_message_on_both_isas() {
     for (isa, name) in ISAS {
-        let (sender, receiver) = socket_pair(libc::SOCK_DGRAM);
+        let (sender, receiver) = UnixDatagram::pair().expect("datagram socketpair");
         let mut discard = vec![0_u8; 1];
         let status = hl_native::socket_shape_test(isa, DATAGRAM_BUFFERS, sender.as_raw_fd(), 0, &mut discard);
         assert_eq!(status, Ok(0), "{name}: the datagram buffer policy must apply");
         let status = hl_native::socket_shape_test(isa, DATAGRAM_BUFFERS, receiver.as_raw_fd(), 0, &mut discard);
         assert_eq!(status, Ok(0), "{name}: the datagram buffer policy must apply");
         let message = vec![0_u8; 8192];
-        let sent = unsafe { libc::send(sender.as_raw_fd(), message.as_ptr().cast(), message.len(), 0) };
-        assert_eq!(
-            sent,
-            message.len() as isize,
-            "{name}: an 8KiB AF_UNIX datagram must send: {}",
-            std::io::Error::last_os_error()
-        );
+        let sent = sender
+            .send(&message)
+            .unwrap_or_else(|error| panic!("{name}: an 8KiB AF_UNIX datagram must send: {error}"));
+        assert_eq!(sent, message.len(), "{name}: the whole datagram must go in one send");
     }
 }
