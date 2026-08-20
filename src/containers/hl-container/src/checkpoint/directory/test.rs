@@ -82,10 +82,15 @@ fn expired_owner_is_reclaimed_and_stale_token_is_fenced() {
     let temporary = tempfile::tempdir().unwrap();
     let images = DirectoryImages::open(temporary.path()).unwrap();
     let image = images.open("reclaim").unwrap();
-    let lease = std::time::Instant::now() + std::time::Duration::from_millis(2);
+    // `begin_until` uses its deadline as the transaction lease, so the lease must also cover the
+    // capture writes made under it. A durable `put_until` costs 4-9ms on APFS against 26-275us on
+    // Linux, so a two-millisecond lease asserted a filesystem latency, not a fencing property.
+    let lease = std::time::Instant::now() + std::time::Duration::from_millis(250);
     let stale = image.begin_until(lease).unwrap();
     image.put_until(stale, "stale", b"old", lease).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(5));
+    while std::time::Instant::now() <= lease {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let current = image.begin_until(deadline).unwrap();
