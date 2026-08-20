@@ -892,6 +892,24 @@ static int bound_route_duplication(struct cpu *c, uint64_t nr, uint64_t a0, uint
             result = hl_linux_fcntl(g_linux_box, source.fd, (int32_t)a1, a2);
             if (result >= 0 && (result & HL_LINUX_O_DIRECT)) // map the canonical bit back to the guest arch bit
                 result = (result & ~(int64_t)HL_LINUX_O_DIRECT) | (int64_t)(uint64_t)G_O_DIRECT;
+#if defined(__linux__) && G_O_LARGEFILE
+            // Linux forces O_LARGEFILE onto every description opened through the open family on a 64-bit
+            // architecture and leaves it clear on a pipe or a socket, which are not opened that way -- a
+            // bound stdout on /dev/null reads 0100001 natively and a bound stdout on a pipe reads 01.
+            // The descriptor table does not record how a description it adopted was created, so ask the
+            // description rather than invent a rule: a blanket OR would report the bit on pipes too.
+            if (result >= 0) {
+                int native_fd = -1;
+                int borrowed = bound_attachment_borrow((int)source.fd, &native_fd);
+                if (borrowed >= 0) {
+                    int host_flags = fcntl(native_fd, F_GETFL);
+                    // The kernel's own O_LARGEFILE value; glibc defines the name as 0 on a 64-bit target.
+                    if (host_flags >= 0 && (host_flags & 00100000) != 0)
+                        result |= (int64_t)(uint64_t)G_O_LARGEFILE;
+                    if (borrowed == 1) bound_attachment_release(native_fd);
+                }
+            }
+#endif
         } else if ((int32_t)a1 == HL_LINUX_F_GETFD || (int32_t)a1 == HL_LINUX_F_SETFD) {
             // Descriptor flags (FD_CLOEXEC) live in the virtual descriptor table, not the backing host fd.
             result = hl_linux_fcntl(g_linux_box, source.fd, (int32_t)a1, a2);

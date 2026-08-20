@@ -124,7 +124,12 @@ impl Worker {
                 status = status
             );
         }
-        std::process::exit(status);
+        match result {
+            // A guest that died from a signal leaves this worker dead from the same signal, so the
+            // launcher's wait(2) reports the crash it actually was.
+            Ok(exit) => exit.exit_process(),
+            Err(_) => std::process::exit(status),
+        }
     }
 }
 
