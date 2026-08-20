@@ -157,7 +157,15 @@ const char *hl_ckpt_channel_failure(void) {
 }
 
 int hl_ckpt_channel_owns_descriptor(int descriptor) {
-    if (descriptor < 0) return 0;
+    /* Bounded to the engine-private band, and that bound is load-bearing rather than defensive. These
+     * three statics are plain numbers: a restore re-forks a member and hands the guest its captured
+     * descriptor table, so a number one of them still names can legitimately BE a guest descriptor in
+     * the new process. Claiming ownership of it would make the guest's own close_range and its
+     * exec CLOEXEC sweep skip a real guest fd -- which stopped a restored process tree from making
+     * progress at all. Nothing the transport owns is ever below the private floor, so the band excludes
+     * every guest number by construction while still covering the fork window this answer exists for. */
+    int floor = hl_host_process_fd_private_floor();
+    if (descriptor < 0 || floor < 0 || descriptor < floor) return 0;
     if (descriptor == checkpoint_broker || descriptor == checkpoint_trigger) return 1;
     return descriptor == checkpoint_channel && checkpoint_channel_owner == (long)getpid();
 }
