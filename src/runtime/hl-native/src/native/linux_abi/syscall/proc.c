@@ -364,6 +364,10 @@ static void fork_child_hooks(struct cpu *c) {
                                  // wipefork/dontfork_apply_child below, which mutate the registry in this child
     ts_after_fork();             // drop the inherited task-state slot cache so the child re-claims its own
     container_pid_after_fork();  // child has a new host pid -> drop the cached getpid() so it re-reads its own
+    hl_host_process_identity_after_fork(); // retire the self (pid, start-time) memo the private-fd registry
+                                 // rows and the fdvis owner stamps are keyed on. pthread_atfork already
+                                 // does this; the explicit call keeps the child's identity correct even
+                                 // for a future child that arrives without running atfork handlers
     poslk_after_fork();          // re-cache pid; child inherits NONE of the parent's fcntl record locks
     flock_broker_after_fork();   // flock ownership is OFD-scoped and IS inherited across fork
     proc_reg_after_fork();       // publish the fork child in /proc and stop it inheriting the parent's registry path
