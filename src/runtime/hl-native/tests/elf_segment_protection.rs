@@ -24,7 +24,9 @@ const PROBE: &str = r#"
 #define PAGE 4096u
 #define BASE UINT64_C(0x400000)
 
-static uint64_t applied[PAGES + 8];      /* protection recorded per page index */
+static size_t g_host_page = PAGE;
+
+static uint64_t applied[PAGES + 16];      /* protection recorded per page index */
 static unsigned calls;                   /* host protect() invocations */
 
 static hl_host_result record(void *context, hl_host_handle mapping, uint64_t offset, uint64_t size, uint32_t flags) {
@@ -36,7 +38,7 @@ static hl_host_result record(void *context, hl_host_handle mapping, uint64_t off
     ++calls;
     for (uint64_t at = 0; at < size; at += PAGE) {
         uint64_t index = (offset + at) / PAGE;
-        if (index < PAGES + 8) applied[index] = (uint64_t)flags + 1u;
+        if (index < PAGES + 16) applied[index] = (uint64_t)flags + 1u;
     }
     return ok;
 }
@@ -52,7 +54,7 @@ static void gro_add(uint64_t lo, uint64_t hi) { (void)lo; (void)hi; }
 static void gro_clear(uint64_t lo, uint64_t hi) { (void)lo; (void)hi; }
 static void gnx_add(uint64_t lo, uint64_t hi) { (void)lo; (void)hi; }
 static void gnx_clear(uint64_t lo, uint64_t hi) { (void)lo; (void)hi; }
-size_t hl_host_page_size(void) { return PAGE; }
+size_t hl_host_page_size(void) { return g_host_page; }
 
 #include "linux_abi/elf_protect.h"
 
@@ -61,7 +63,7 @@ size_t hl_host_page_size(void) { return PAGE; }
 static void put32(uint8_t *p, uint32_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24); }
 static void put64(uint8_t *p, uint64_t v) { put32(p, (uint32_t)v); put32(p + 4, (uint32_t)(v >> 32)); }
 
-static uint8_t phdr[3 * 56];
+static uint8_t phdr[4 * 56];
 static void segment(int index, uint32_t flags, uint64_t vaddr, uint64_t memsz) {
     uint8_t *e = phdr + (size_t)index * 56;
     put32(e, 1);          /* PT_LOAD */
@@ -70,21 +72,26 @@ static void segment(int index, uint32_t flags, uint64_t vaddr, uint64_t memsz) {
     put64(e + 40, memsz); /* p_memsz */
 }
 
-int main(void) {
-    memory_services.protect = record;
-    services.memory = &memory_services;
+static void reset(void) {
+    memset(applied, 0, sizeof applied);
+    calls = 0;
+}
+
+/* A run of adjacent equally protected host pages is one call. */
+static int contiguous_run_is_one_call(void) {
     hl_host_memory_mapping mapping;
     memset(&mapping, 0, sizeof mapping);
     mapping.address = BASE;
+    g_host_page = PAGE;
+    reset();
 
-    segment(0, 4, BASE, PAGE);                             /* PF_R      1 page  */
-    segment(1, 5, BASE + PAGE, (uint64_t)253 * PAGE);      /* PF_R|PF_X 253 pages */
-    segment(2, 6, BASE + (uint64_t)254 * PAGE, PAGE);      /* PF_R|PF_W 1 page  */
-
+    segment(0, 4, BASE, PAGE);                        /* PF_R      1 page   */
+    segment(1, 5, BASE + PAGE, (uint64_t)253 * PAGE); /* PF_R|PF_X 253 pages */
+    segment(2, 6, BASE + (uint64_t)254 * PAGE, PAGE); /* PF_R|PF_W 1 page   */
     hl_elf_protect_segments(&mapping, phdr, 3, 56, 0);
 
     /* The last host page of the image hull is excluded by the walk's own `last` bound, so the
-     * writable tail is not reached; 254 pages are protected by 2 calls. */
+     * writable tail is not reached; 254 pages are protected by 2 runs. */
     if (calls > 4) { fprintf(stderr, "protect calls=%u, expected one per contiguous run\n", calls); return 1; }
     if (calls == 0) { fprintf(stderr, "the walk applied no protection at all\n"); return 2; }
 
@@ -101,6 +108,44 @@ int main(void) {
         return 6;
     }
     return 0;
+}
+
+/* A host page larger than the guest's is the Apple-Silicon shape: one 16 KiB host page can union
+ * several 4 KiB PT_LOADs, so consecutive pages of a SINGLE segment can resolve to different flags.
+ * A run must break there. Nothing on a 4 KiB host can reach this, which is why the fixture owns
+ * hl_host_page_size rather than asking the host for it. */
+static int a_flags_change_inside_one_segment_breaks_the_run(void) {
+    hl_host_memory_mapping mapping;
+    memset(&mapping, 0, sizeof mapping);
+    mapping.address = BASE;
+    g_host_page = 4u * PAGE;
+    reset();
+
+    segment(0, 4, BASE, 4u * (4u * PAGE));  /* PF_R over four 16 KiB host pages   */
+    segment(1, 5, BASE + 4u * PAGE, PAGE);  /* PF_R|PF_X on one 4 KiB guest page  */
+    segment(2, 4, BASE, 4u * (4u * PAGE));  /* padding entry: identical to seg 0  */
+    hl_elf_protect_segments(&mapping, phdr, 2, 56, 0);
+
+    for (unsigned host = 0; host < 4; host++) {
+        uint64_t recorded = applied[host * 4u];
+        if (recorded == 0) { fprintf(stderr, "host page %u left unprotected\n", host); return 10; }
+        uint32_t flags = (uint32_t)(recorded - 1u);
+        int wants_execute = host == 1;
+        if (!!(flags & HL_HOST_MEMORY_EXECUTE) != wants_execute) {
+            fprintf(stderr, "host page %u execute=%d, wanted %d -- a run spanned a flags change\n", host,
+                    !!(flags & HL_HOST_MEMORY_EXECUTE), wants_execute);
+            return 11;
+        }
+    }
+    return 0;
+}
+
+int main(void) {
+    memory_services.protect = record;
+    services.memory = &memory_services;
+    int verdict = contiguous_run_is_one_call();
+    if (verdict != 0) return verdict;
+    return a_flags_change_inside_one_segment_breaks_the_run();
 }
 "#;
 
