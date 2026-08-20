@@ -16,7 +16,7 @@
 
 #include "case_escape.h" // hl_case_name_decode: the reverse direction, shared with every presentation site
 
-#include <dirent.h>
+#include "../../host_dirent.h" // <dirent.h>, or the Linux dirent shape where the host structure has no d_type
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>

@@ -13,7 +13,11 @@
 
 #include <fcntl.h>
 #include <errno.h>
+/* `poll` has exactly one caller here, the __APPLE__ arm of
+   `hl_c_backend_process_identity_signal`. Windows ships no <poll.h>. */
+#if defined(__APPLE__)
 #include <poll.h>
+#endif
 #include <stdbool.h>
 #include <signal.h>
 #include <stdatomic.h>

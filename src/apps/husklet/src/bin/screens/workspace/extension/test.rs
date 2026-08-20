@@ -79,23 +79,25 @@ fn panel(title: &str) -> Element {
         .child(Element::button("Restart", EventId::new("restart")).key("restart"))
 }
 
-/// Every scenario runs inside one test.
+/// Every scenario runs inside one test, on the binary's toolkit thread.
 ///
-/// GTK may only be initialized from a single thread and the libtest harness
-/// gives every `#[test]` its own, so a second GTK test in the same binary
-/// either panics or silently skips. One test running the scenarios in sequence
-/// is the only shape in which all of them actually run.
+/// GTK belongs to whichever thread entered it and libtest gives every `#[test]`
+/// its own, so the scenarios are handed to `test_support`, which owns the one
+/// thread in this process that entered GTK. This test and the extension-shelf
+/// test both need that thread, and entering GTK in their own is what used to
+/// leave whichever ran second either panicking or skipped.
 #[test]
 fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
-    if gtk::init().is_err() {
+    let ran = crate::test_support::on_the_toolkit_thread(|| {
+        a_queued_frame_puts_widgets_on_the_page();
+        an_identical_frame_changes_nothing();
+        a_burst_beyond_the_tick_bound_stays_queued();
+        a_stopped_extension_keeps_its_widgets_and_says_so();
+        a_rendered_button_reaches_the_sink();
+    });
+    if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
-        return;
     }
-    a_queued_frame_puts_widgets_on_the_page();
-    an_identical_frame_changes_nothing();
-    a_burst_beyond_the_tick_bound_stays_queued();
-    a_stopped_extension_keeps_its_widgets_and_says_so();
-    a_rendered_button_reaches_the_sink();
 }
 
 fn a_queued_frame_puts_widgets_on_the_page() {

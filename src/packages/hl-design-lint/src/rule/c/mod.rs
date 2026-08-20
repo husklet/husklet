@@ -32,7 +32,7 @@ fn parse(path: &Path, source: &str) -> Result<Tree> {
         &normalize_directives_inside_parentheses(&normalize_named_registers(&normalize_va_arg_types(
             &normalize_offsetof_designators(&normalize_computed_goto(&normalize_gnu_attributes(
                 &normalize_atomic_specifiers(&normalize_function_pointer_annotations(&normalize_complex_macro(
-                    &source.replace("_Thread_local", "             "),
+                    &normalize_macro_body_comments(&source.replace("_Thread_local", "             ")),
                 ))),
             ))),
         ))),
@@ -130,6 +130,106 @@ impl ParenthesisScan {
             }
         }
     }
+}
+
+/// Erases comments inside a continued `#define` so its body stays one preprocessor token.
+///
+/// The preprocessor replaces a comment with whitespace before it forms the macro body, but
+/// the grammar ends the `preproc_arg` token at the comment instead. Every later line of the
+/// definition then parses as ordinary top-level C, so an unfinished `do { ... } while (0)`
+/// runs on and swallows whatever declaration follows the macro -- which is reported against
+/// the declaration, far from the comment that caused it. Erasing the comment in place, at
+/// the same offset and the same length, restores the body the grammar is meant to see.
+fn normalize_macro_body_comments(source: &str) -> String {
+    let mut normalized = source.as_bytes().to_vec();
+    let mut offset = 0;
+    let mut body = MacroBodyScan::default();
+    for line in source.split_inclusive('\n') {
+        body.advance(line.trim_end_matches(['\r', '\n']), offset, &mut normalized);
+        offset += line.len();
+    }
+    String::from_utf8(normalized).expect("normalization preserves UTF-8")
+}
+
+/// Running lexical state of the macro-body comment scan.
+#[derive(Default)]
+struct MacroBodyScan {
+    inside: bool,
+    block_comment: bool,
+}
+
+impl MacroBodyScan {
+    /// Erases comment bytes on one line, entering and leaving a continued definition.
+    fn advance(&mut self, line: &str, offset: usize, normalized: &mut [u8]) {
+        let continued = line.trim_end().ends_with('\\');
+        if !self.inside {
+            self.inside = continued && line.trim_start().starts_with("#define");
+            if !self.inside {
+                return;
+            }
+        }
+        self.erase(line, offset, normalized);
+        if !continued {
+            self.inside = false;
+            self.block_comment = false;
+        }
+    }
+
+    fn erase(&mut self, line: &str, offset: usize, normalized: &mut [u8]) {
+        let bytes = line.as_bytes();
+        let mut start = 0;
+        let mut index = 0;
+        while index < bytes.len() {
+            if self.block_comment {
+                if bytes[index] == b'*' && bytes.get(index + 1) == Some(&b'/') {
+                    index += 2;
+                    self.block_comment = false;
+                    normalized[offset + start..offset + index].fill(b' ');
+                    continue;
+                }
+                index += 1;
+                continue;
+            }
+            match bytes[index] {
+                b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                    start = index;
+                    self.block_comment = true;
+                    index += 2;
+                }
+                // A line comment would swallow the continuation marker with the rest of the
+                // line, so the marker is kept and the definition still reaches its last line.
+                b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                    let stop = line.trim_end();
+                    let stop = if stop.ends_with('\\') {
+                        stop.len() - 1
+                    } else {
+                        bytes.len()
+                    };
+                    normalized[offset + index..offset + stop.max(index)].fill(b' ');
+                    return;
+                }
+                b'"' | b'\'' => index = literal_end(bytes, index),
+                _ => index += 1,
+            }
+        }
+        if self.block_comment {
+            normalized[offset + start..offset + bytes.len()].fill(b' ');
+        }
+    }
+}
+
+/// Returns the offset just past a string or character literal opened at `index`.
+fn literal_end(bytes: &[u8], index: usize) -> usize {
+    let quote = bytes[index];
+    let mut cursor = index + 1;
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'\\' => cursor += 2,
+            byte if byte == quote => return cursor + 1,
+            _ => cursor += 1,
+        }
+    }
+    cursor
 }
 
 fn normalize_declared_macro_lines(original: &str, source: &str) -> String {
@@ -584,7 +684,15 @@ fn identifier(token: &str) -> bool {
 
 fn macro_continuation(node: tree_sitter::Node<'_>, source: &str) -> bool {
     let lines = source.lines().collect::<Vec<_>>();
-    let mut row = node.start_position().row;
+    // A token the grammar reports as missing sits at the position it should have
+    // occupied, which for an unterminated construct is one row past the last line.
+    let Some(mut row) = lines
+        .len()
+        .checked_sub(1)
+        .map(|last| node.start_position().row.min(last))
+    else {
+        return false;
+    };
     let mut first = true;
     loop {
         let line = lines[row].trim_end();
@@ -768,6 +876,33 @@ mod test {
     fn an_apostrophe_inside_a_comment_does_not_capture_the_parenthesis_scan() {
         let source = "/* the caller doesn't own (this) */\n#ifndef GUARD_H\n#define GUARD_H\nint f(void);\n#endif\n";
         assert!(parse(Path::new("guard.h"), source).is_ok());
+    }
+
+    #[test]
+    fn a_comment_inside_a_continued_definition_does_not_leak_the_body() {
+        let source = "#define WARM(address, warm)                                  \\\n\
+                      \x20   do {                                                     \\\n\
+                      \x20       caught = 0;                                          \\\n\
+                      \x20       if (warm) sink += *(const char *)(warm); /* warm */  \\\n\
+                      \x20       touch(address);                                      \\\n\
+                      \x20   } while (0)\n\n\
+                      /* A note between the definition and the declaration that\n\
+                      \x20* runs on to a second line. */\n\
+                      static unsigned long long load(const volatile void *address) {\n\
+                      \x20   return 0;\n\
+                      }\n";
+        parse(Path::new("coarse.c"), source).unwrap();
+    }
+
+    #[test]
+    fn a_definition_continued_past_the_last_line_has_no_position_off_the_end() {
+        let source = "#define DISPATCH(context) \\\n\
+                      \x20   step(context); \\\n\
+                      \x20   /* the note runs on \\\n\
+                      \x20    * to a second line */ \\\n\
+                      \x20   if ((context)->ready) { \\\n\
+                      \x20   } \\\n";
+        assert!(parse(Path::new("dispatch.h"), source).is_ok());
     }
 
     #[test]

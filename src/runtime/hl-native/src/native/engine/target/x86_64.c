@@ -1618,13 +1618,25 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
     // remain available through the canonical [prof] report emitted by the exit path; normal launches
     // must not synthesize a guest stderr line merely because an inline clock call happened.
     if (g_prof && g_profile_output_owner) {
-        char profile[256];
+        // The IBTC is a JIT structure and this diagnostic must name the mode it actually ran in.
+        // `g_ibtc_fill` has exactly one producer -- the G_IBTC_FILL seam in
+        // translator/guest/x86_64/dispatch.h -- and that header is included only under
+        // HL_HOST_CPU_AARCH64; any other host takes interp_dispatch.h, which has no IBTC at all.
+        // A hardcoded "ON" therefore reported a feature this build does not contain, beside a
+        // counter that can only ever read 0. Say "absent" instead, exactly as
+        // hl_x86_64_store_preflight_test answers "not applicable" rather than a clean zero.
+#if defined(HL_HOST_CPU_AARCH64)
+        const char *ibtc_mode = "ON";
+#else
+        const char *ibtc_mode = "absent: interpreter host";
+#endif
+        char profile[320];
         int profile_size = snprintf(profile, sizeof profile,
                                     "[prof] dispatcher crossings=%llu translations=%llu\n"
                                     "[prof] dispatcher round-trips=%llu  IBTC fills=%llu  (IBTC %s)\n",
                                     (unsigned long long)g_dispatch_profile.crossings,
                                     (unsigned long long)g_dispatch_profile.translations, (unsigned long long)g_disp_n,
-                                    (unsigned long long)g_ibtc_fill, "ON");
+                                    (unsigned long long)g_ibtc_fill, ibtc_mode);
         if (profile_size > 0) {
             size_t bounded = (size_t)profile_size < sizeof profile ? (size_t)profile_size : sizeof profile - 1u;
             (void)hl_linux_write(g_linux_box, STDERR_FILENO, profile, bounded);

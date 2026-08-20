@@ -1,6 +1,20 @@
-#![cfg(all(feature = "native-test-hooks", target_os = "macos"))]
+#![cfg(feature = "native-test-hooks")]
 #![allow(unsafe_code)]
 
+//! The process- and peer-identity capabilities these cases exercise belong to the macOS host
+//! adapter: a kqueue `EVFILT_PROC` registration bound to a pid's birth time and generation, and the
+//! `SCM_RIGHTS` peer capability minted from the creator's identity. Linux has neither mechanism and
+//! none of the `checkpoint_*_identity_open_test` hooks resolve there, so there is nothing here for
+//! this host to run.
+//!
+//! The gate was `#![cfg(all(..., target_os = "macos"))]` at FILE scope, so on a Linux host the
+//! whole target compiled to zero tests and reported `test result: ok`. 0bb190fa4 aligned this
+//! file's `SCM_RIGHTS` control region from a Linux box with no host on which any of it ran. The
+//! gate is now per item so the file can still say what it left uncovered -- and per item rather
+//! than around a `mod`, because two of these cases re-exec the test binary with `--exact
+//! <test name>` and a module would silently rename the filter's target.
+
+#[cfg(target_os = "macos")]
 use std::{
     env,
     io::{Read, Write},
@@ -24,12 +38,14 @@ use std::{
 /// not a guarantee the type carries — so the region is backed by `u64`, whose
 /// alignment is at least `cmsghdr`'s on every supported target. The returned length
 /// is the exact `CMSG_SPACE` byte count, not the rounded-up word count.
+#[cfg(target_os = "macos")]
 fn control_storage() -> (Vec<u64>, usize) {
     // SAFETY: CMSG_SPACE is pure arithmetic for this fixed payload size.
     let bytes = unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as u32) } as usize;
     (vec![0_u64; bytes.div_ceil(mem::size_of::<u64>())], bytes)
 }
 
+#[cfg(target_os = "macos")]
 fn send_descriptor(socket: RawFd, descriptor: RawFd) {
     let mut byte = 1_u8;
     let mut iov = libc::iovec {
@@ -57,6 +73,7 @@ fn send_descriptor(socket: RawFd, descriptor: RawFd) {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn receive_descriptor(socket: RawFd) -> RawFd {
     let mut byte = 0_u8;
     let mut iov = libc::iovec {
@@ -86,6 +103,7 @@ fn receive_descriptor(socket: RawFd) -> RawFd {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn sleeping_child() -> Child {
     Command::new("/bin/sleep")
         .arg("30")
@@ -96,6 +114,7 @@ fn sleeping_child() -> Child {
         .expect("spawn child")
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn capability_is_bound_to_birth_and_generation_and_signals_exit() {
     let mut child = sleeping_child();
@@ -128,6 +147,7 @@ fn capability_is_bound_to_birth_and_generation_and_signals_exit() {
     assert!(hl_native::checkpoint_process_identity_open_test(pid, birth, generation).is_err());
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn exec_child_process() {
     if env::var_os("HL_MACOS_PEER_EXEC_TEST").is_none() {
@@ -139,6 +159,7 @@ fn exec_child_process() {
     panic!("exec failed: {error}");
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn capability_signals_exec_before_pid_can_be_reused() {
     let mut child = Command::new(env::current_exe().expect("current test executable"))
@@ -170,6 +191,7 @@ fn capability_signals_exec_before_pid_can_be_reused() {
     child.wait().expect("reap exec child");
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn scm_child_process() {
     let Ok(raw) = env::var("HL_MACOS_PEER_TEST_BROKER") else {
@@ -183,6 +205,7 @@ fn scm_child_process() {
     let _ = retained.read(&mut release);
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn scm_rights_peer_capability_uses_creator_identity_and_survives_disappearance() {
     let (parent_broker, child_broker) = UnixDatagram::pair().expect("broker pair");
@@ -219,4 +242,21 @@ fn scm_rights_peer_capability_uses_creator_identity_and_survives_disappearance()
     assert_eq!(unsafe { libc::poll(&raw mut event, 1, 5_000) }, 1);
     assert_ne!(event.revents & libc::POLLIN, 0);
     assert!(hl_native::checkpoint_peer_identity_open_test(channel.as_raw_fd(), child_pid).is_err());
+}
+
+/// A file gated out at file scope is indistinguishable in the harness output from one whose tests
+/// all passed, so say which coverage this host does not have. The notice goes to the real stderr
+/// descriptor rather than through `eprintln!`, because libtest captures Rust-level output and
+/// prints it only for a FAILING test -- the same reason `hl-native`'s `guest_compiler_present`
+/// skip notice writes to descriptor 2.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn macos_process_and_peer_identity_are_uncovered_on_this_host() {
+    let notice = "SKIP macos_process_identity: 3 cases left UNCOVERED -- kqueue EVFILT_PROC birth/\
+                  generation binding and the SCM_RIGHTS peer capability exist only on Darwin.\n";
+    // SAFETY: a write of a `'static` initialized buffer to the process's stderr descriptor. It
+    // borrows nothing beyond the call, and a short or failed write is not an error worth acting on.
+    unsafe {
+        libc::write(2, notice.as_ptr().cast(), notice.len());
+    }
 }
