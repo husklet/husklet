@@ -179,6 +179,29 @@ HL_API int HL_TARGET_LOCAL(terminal_termios_image)(int32_t native_fd, uint8_t *o
     return found;
 }
 
+/* Read the host's own termios for `native_fd` as a Linux image, so a caller outside this translation
+ * unit can record what the host held before it deliberately changed it. Returns 0 on failure. */
+HL_API int HL_TARGET_LOCAL(terminal_termios_capture)(int32_t native_fd, uint8_t *out) {
+    if (out == NULL) return 0;
+    return terminal_termios_host_image((int)native_fd, out) == 0 ? 1 : 0;
+}
+
+/* Adopt `image` as the guest view of `native_fd`, paired with the host projection as it stands now.
+ *
+ * This is the engine terminal pump's entry. The pump puts the host slave in raw mode so the Linux
+ * line discipline can run over a channel that applies backpressure instead of flushing at
+ * `MAX_CANON`, which makes the host disagree with the guest on purpose and would otherwise read as a
+ * stale entry to `terminal_termios_recall`. Re-pairing the guest image with the raw projection is
+ * what keeps the guest's own TCGETS answering with what the guest installed rather than with the raw
+ * mode the pump imposed. Returns 0 when the host termios could not be read, in which case nothing is
+ * recorded and the terminal keeps whatever view it already had. */
+HL_API int HL_TARGET_LOCAL(terminal_termios_adopt)(int32_t native_fd, const uint8_t *image) {
+    uint8_t host_image[TERMINAL_TERMIOS_IMAGE];
+    if (image == NULL || terminal_termios_host_image((int)native_fd, host_image) != 0) return 0;
+    terminal_termios_remember((int)native_fd, image, host_image);
+    return 1;
+}
+
 /* Install `image` as the guest view of the terminal `fd` names, so a caller outside this translation
  * unit can then read it back through the bridge and check the whole path. The host projection is
  * recorded as the image itself, which is what a Linux host produces anyway. */
