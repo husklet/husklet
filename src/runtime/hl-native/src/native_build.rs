@@ -13,6 +13,7 @@ mod platform;
 use platform::{GuestIsa, HostTarget};
 
 const NATIVE_ROOT: &str = "src/native";
+const NATIVE_FINGERPRINT: &str = "HL_NATIVE_BUILD_FINGERPRINT";
 const NATIVE_TEST_HOOKS: EnvFlag = EnvFlag::new("CARGO_FEATURE_NATIVE_TEST_HOOKS");
 const NATIVE_COMPILE_CHECK: EnvFlag = EnvFlag::new("HL_NATIVE_COMPILE_CHECK");
 const C_SANITIZER: EnvKey<NativeSanitizer> = EnvKey::new("HL_C_SANITIZER", NativeSanitizer::parse);
@@ -47,13 +48,18 @@ fn main() {
     CargoDirectives::cfg("host_os", environment.target_os.as_str());
     CargoDirectives::cfg("host_arch", environment.target_arch.as_str());
     inventory::sources::emit_rerun_inputs(Path::new(NATIVE_ROOT));
+    // Every native source contributes to this value. It is compiled into the artifact and
+    // exported as `cargo:rustc-env`, so a C edit invalidates the crate's own Cargo fingerprint
+    // and the loader can refuse a shared object built from different sources than the caller.
+    let fingerprint = inventory::fingerprint::native_fingerprint(Path::new(NATIVE_ROOT));
+    CargoDirectives::rustc_environment(NATIVE_FINGERPRINT, &fingerprint);
     let plan = target.build_plan();
 
     let tools = TargetTools::resolve(&environment.target_os, &environment.target_environment)
         .unwrap_or_else(|| panic!("no C tool plan for {}", environment.target.as_str()));
     let toolchain = Toolchain::discover(&environment).unwrap_or_else(|error| panic!("{error}"));
     let compiler = CCompiler::new(&environment, &toolchain, tools.compiler);
-    let mut shim_definitions = Vec::new();
+    let mut shim_definitions = vec![Definition::value(NATIVE_FINGERPRINT, &fingerprint)];
     add_test_hooks(&mut shim_definitions, test_hooks);
     if plan.guests == [GuestIsa::X86_64] {
         shim_definitions.push(Definition::value("HL_BUILD_TARGET_X86_64_ONLY", "1"));
@@ -309,6 +315,7 @@ fn emit_build_inputs(target_triple: &str) {
 fn emit_planned_target(environment: &BuildEnvironment) {
     let filename = artifact::filename(environment.target_os.as_str());
     CargoDirectives::cfg("supported", 0);
+    CargoDirectives::rustc_environment(NATIVE_FINGERPRINT, "unbuilt");
     CargoDirectives::rustc_environment("HL_NATIVE_LIBRARY_NAME", filename);
     CargoDirectives::rustc_environment("HL_NATIVE_LIBRARY_PATH", filename);
     CargoDirectives::warning(format!(

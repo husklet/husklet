@@ -14,7 +14,8 @@ Sections 13–340 are process rules, and almost every one exists because it cost
 real work. If you are about to **measure** anything, the ones that have voided
 results are "Balance the arm order", "A control that merely seems unaffected is
 not a control", "`bench --results` is a resumable ledger", "Identical source does
-not mean an identical binary", and "Reading a profile". If you are about to
+not mean an identical binary", "A C change reaching the binary is a separate
+claim, and it has its own check", and "Reading a profile". If you are about to
 **commit**, they are "What green means" and its four subsections. Everything from
 "Mission" onward is durable architecture and changes rarely.
 
@@ -537,6 +538,68 @@ ratio a phase can show for no reason at all. If the null arm's spread covers the
 candidate's effect, the candidate is not evidence however clean the other
 controls read. Phases with small absolute times are where this bites — a few
 hundred microseconds of drift is percent-level on a 2.6 ms phase.
+
+## A C change reaching the binary is a separate claim, and it has its own check
+
+The engine is **dlopened, never linked**. `libhl_native_engine.so` is built by
+`hl-native`'s build script into its Cargo `OUT_DIR`, and the process loads it at
+runtime: on Linux the worker does not contain the engine and does not list it in
+`ldd`. Three consequences, each of which has cost a lane real work:
+
+- **A Rust binary's sha256 is unchanged by almost every C edit.** That is the
+  designed behaviour, not a symptom. A lane read four byte-identical test-binary
+  hashes across base, a patched tree, a reverted tree and a forced relink, and
+  concluded its C never reached the build. The hashes proved nothing either way.
+- **Copying the test binary does not snapshot the engine.** The same lane saved
+  `bin/base`, `bin/fixed` and `bin/fixed2`; all three are one file by sha256 and
+  all three resolve to the single mutable `.so` in the target directory — the one
+  the *last* build wrote. Arms cannot be separated that way. To hold an arm, copy
+  the `.so` too, or give each arm its own `CARGO_TARGET_DIR`.
+- **The stale `.so` is real and has fired repeatedly.** A `.so` built into one
+  `build/hl-native-<hash>/out` while a binary loads another — a different feature
+  set, a different target directory, or a copy taken at another moment — runs the
+  previous engine silently.
+
+### What is and is not sufficient evidence
+
+Insufficient, all three demonstrated:
+
+- The **static archive** changing, or containing the new symbol. `libhl_c_backend_target_aarch64.a`
+  grew and carried the new symbol in exactly the run that was later believed stale.
+- **`strings` on the `.so`.** It answers what is on disk, not what the process mapped.
+- The **Rust binary's hash**, in either direction — see above.
+
+A **runtime `fprintf` probe** is sound only if you first prove the line you are
+comparing against actually prints. The lane's decisive check was an unconditional
+`fprintf` added beside the existing `[ckpt] coordinator pid=` line; the new line
+did not appear, and that was read as proof of staleness. Neither line appears in
+any of the twenty logs it preserved, because `ckpt_coordinate_and_exit` is not on
+that test's path at all. The check compared an absent line to an absent baseline.
+If you use a runtime probe, put it somewhere whose output you have already seen.
+
+### The check to run
+
+`cargo test -p hl-native --test build_freshness`
+
+It recomputes a content fingerprint over every file under `src/native` and compares
+it to the value Cargo baked into the running executable, and it loads the engine so
+the loader's own comparison runs. They diverge exactly when the executable predates
+the tree. The same value is compiled into the `.so` and exported as
+`hl_c_backend_build_fingerprint`; the loader refuses a shared object whose value
+disagrees and names both fingerprints, so a stale artifact is a load failure rather
+than a quiet measurement of the previous engine.
+
+Because the fingerprint is a `cargo:rustc-env`, a C edit now also invalidates the
+Cargo fingerprint of every Rust artifact built against `hl-native`. Downstream
+binaries are rebuilt and their hashes do change — the byte-identical reading that
+started this is gone. That is a deliberate cost: a C-only edit now recompiles the
+Rust crates above `hl-native` as well, which on this workspace is about two minutes
+rather than forty seconds. It buys the property that a saved binary is an arm.
+
+Incremental builds themselves are sound, in the shared tree and in a worktree with
+its own `CARGO_TARGET_DIR` alike: the build script's `rerun-if-changed` covers every
+file under `src/native`, and it recompiles and relinks unconditionally when it runs.
+`cargo clean` is not the remedy for anything here.
 
 ## A control that merely seems unaffected is not a control
 

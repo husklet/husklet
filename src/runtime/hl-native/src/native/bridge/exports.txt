@@ -1,3 +1,4 @@
+hl_c_backend_build_fingerprint
 hl_c_backend_checkpoint_adopt
 hl_c_backend_checkpoint_broker_accept
 hl_c_backend_checkpoint_broker_pair
