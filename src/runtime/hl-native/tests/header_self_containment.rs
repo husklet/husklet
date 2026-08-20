@@ -997,6 +997,7 @@ fn owned_native_headers_are_self_contained() {
                 | "translator/guest/x86_64/interp_dispatch.h"
                 | "linux_abi/elf_protect.h"
                 | "linux_abi/guest_stat.h"
+                | "linux_abi/signal_scan.h"
                 | "linux_abi/syscall/nonpie_args.h"
                 | "linux_abi/syscall/sysv_state.h"
         )
