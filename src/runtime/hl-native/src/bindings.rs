@@ -1196,6 +1196,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn unsupported_provider_descriptor_is_consumed_after_output_is_cleared() {
+        const PARKED_DESCRIPTOR: c_int = 900;
         let mut descriptors = [-1; 2];
         // SAFETY: the array has room for both descriptors produced by pipe.
         assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);
@@ -1217,7 +1218,6 @@ mod tests {
         // `F_DUPFD` with a high minimum answers the right question: it never clobbers an occupied
         // slot, and because allocation is lowest-free the parked number cannot be reissued to a
         // sibling thread unless the whole table below it fills, which no test here approaches.
-        const PARKED_DESCRIPTOR: c_int = 900;
         // SAFETY: both descriptors are owned here; `F_DUPFD` returns a fresh number at or above the
         // minimum without disturbing whatever occupies it.
         let parked = unsafe { libc::fcntl(descriptors[0], libc::F_DUPFD, PARKED_DESCRIPTOR) };
