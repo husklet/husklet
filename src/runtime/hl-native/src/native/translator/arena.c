@@ -1,6 +1,10 @@
 #include "arena.h"
 
 #include <string.h>
+#if defined(__APPLE__)
+#include <mach/vm_inherit.h> // VM_INHERIT_NONE; <sys/mman.h> alone does not declare it under -std=c11
+#include <sys/mman.h>
+#endif
 
 int hl_arena_reserve(const hl_host_services *services, uint64_t size, uint64_t alignment, int dual_alias,
                      hl_host_code_mapping *mapping) {
@@ -31,6 +35,19 @@ int hl_arena_repair(const hl_host_services *services, hl_emit_state *state, int 
         state->dual_alias = dual_alias;
     }
     return 0;
+}
+
+int hl_arena_drop_child_inheritance(void *base, uint64_t size) {
+#if defined(__APPLE__)
+    /* minherit(2) rewrites the inheritance attribute of the caller's own VM entries.  VM_INHERIT_NONE
+       means "leave a hole here in the child"; the parent's mapping, its protection and its contents are
+       untouched, so a peer parked mid-block in this process keeps executing out of the arena. */
+    return base != NULL && size != 0 && size <= SIZE_MAX && minherit(base, (size_t)size, VM_INHERIT_NONE) == 0;
+#else
+    (void)base;
+    (void)size;
+    return 0;
+#endif
 }
 
 void hl_arena_release(const hl_host_services *services, hl_host_handle handle) {
