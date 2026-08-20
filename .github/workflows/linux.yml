@@ -1,4 +1,4 @@
-name: Linux AMD64
+name: Linux
 
 on:
   push:
@@ -30,8 +30,9 @@ permissions:
 # is fixed. Making all of `ci.yml` per-SHA would therefore be affordable now and
 # possibly not immediately after the fix we most want to land.
 #
-# So only the Linux job is split out. It runs on `ubuntu-24.04`, where concurrency
-# is not the scarce resource, and it is the job most likely to catch a regression --
+# So only the Linux jobs are split out. They run on `ubuntu-24.04` and
+# `ubuntu-24.04-arm`, where concurrency is not the scarce resource, and they are the
+# jobs most likely to catch a regression --
 # it carries the workspace tests, both `hl-native` feature arms, every Clippy
 # surface and the GUI binaries. macOS and Windows stay in `ci.yml` and keep
 # collapsing.
@@ -47,7 +48,7 @@ concurrency:
 
 jobs:
   workspace-linux-amd64:
-    name: Workspace quality and tests
+    name: Workspace quality and tests / AMD64
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -266,8 +267,13 @@ jobs:
       # host has ever run. That is the exact gap that let a tree which did not compile
       # on x86_64 at all reach main: the two reserved-register hooks called emitters
       # existing only under HL_HOST_CPU_AARCH64, and only a real build on this host
-      # notices. Both feature arms, because they are different suites -- 106 tests
-      # without the hooks and 214 with them.
+      # notices. Both feature arms, because they are different suites -- re-measured on
+      # this host at 622befa08, 108 tests without the hooks and 224 with them.
+      #
+      # The hooks arm is green HERE while proving nothing about the JIT: see the
+      # `native-linux-arm64` job below, which exists because `reserved_register`'s two
+      # assertions answer the not-applicable sentinel 4 on x86 and only reach a real
+      # verdict on an aarch64 host.
       - name: Test the native engine package
         run: >-
           nix --extra-experimental-features 'nix-command flakes' develop . --command
@@ -313,3 +319,112 @@ jobs:
           .#checks.x86_64-linux.host-linux-x86_64
           .#checks.x86_64-linux.installed-product
           .#checks.x86_64-linux.host-darwin-cross-contract
+
+  native-linux-arm64:
+    name: Native engine / ARM64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+    # WHY A SECOND ARCHITECTURE FOR ONE COMMAND.
+    #
+    # `cargo test -p hl-native --all-targets --features native-test-hooks` already runs
+    # in the AMD64 job above, and it is GREEN THERE WITHOUT TESTING ANYTHING that this
+    # job exists to test. `tests/reserved_register.rs` says so in its own source: both
+    # hooks emit real code and scan it, so they are answerable only where the emitters
+    # are compiled -- an AArch64 host. Off it they return `4`, "not applicable", and the
+    # fixture asserts `4` rather than compiling itself out, so the exports still have to
+    # resolve. `0` is the verdict that means the emitters were compiled in AND scanned.
+    #
+    # A GREEN FIXTURE ON x86 IS A SENTINEL, NOT A RESULT. Only an aarch64 host can turn
+    # that assertion into evidence, and until this job existed no runner anywhere was
+    # one: this workflow and `ci.yml`'s Windows job are x86, and the `macos-26` job
+    # builds `checks.aarch64-darwin.host-darwin-aarch64-native` and runs a single ABI
+    # test. So the ~120 `e_*` emitters, W^X publication, block chaining, IBTC and the
+    # provenance map had no CI coverage on any host, and the two reserved-register
+    # defects fixed on 2026-08-20 would have regressed silently.
+    #
+    # Measured here rather than inherited, on x86_64 at 622befa08: `reserved_register`'s
+    # two tests RUN and PASS, and they pass BY ASSERTING 4 -- which is the whole problem
+    # this job exists to fix, stated as a number. The suite is 224 tests with the hooks
+    # against 108 without.
+    #
+    # The aarch64 VM lane measured 217 against 107 on a real ARM64 kernel, at 6fde34d36.
+    # DO NOT SUBTRACT THOSE FROM THESE: they are different commits, and the x86 pair has
+    # a 116-test delta of its own, so the two arms each gate tests the other does not.
+    # The claim this job rests on is not a count difference, it is that two specific
+    # assertions can only reach their meaningful verdict on an aarch64 host.
+    #
+    # The lane corroborated that the JIT is genuinely live there three independent ways --
+    # the 18 lowering translation units compile 0 times on x86 and 18 on aarch64 (read
+    # out of DWARF by source path), the shared object carries 80 `e_*` emitter bodies
+    # there and 0 here, and a live guest holds two 64 MiB `/memfd:hl-code` W^X mappings
+    # that disassemble as ARM64 translated-block prologues, against zero such mappings
+    # on x86.
+    #
+    # `ubuntu-24.04-arm` is a NATIVE arm64 runner, not emulation, so this should cost
+    # roughly what the equivalent x86 work costs. If it ever reddens, the fixture is
+    # reporting something real about the JIT -- read it, do not paper over it.
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Require an ARM64 Linux host
+        # Not ceremony: if this ever runs on x86 the hooks answer `4`, the fixture passes,
+        # and the job reports success while covering exactly nothing -- which is the state
+        # this job was added to end. Fail loudly instead.
+        run: |
+          set -euo pipefail
+          architecture="$(uname -m)"
+          test "$architecture" = aarch64 || {
+            echo "Husklet's ARM64 lane requires an aarch64 host, got: $architecture" >&2
+            echo "On any other architecture the reserved-register hooks return the" >&2
+            echo "not-applicable sentinel 4 and this job would prove nothing." >&2
+            exit 1
+          }
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@786fff0690178f1234e4e1fe9b536e94f5433196 # v20
+        with:
+          diagnostic-endpoint: ""
+
+      # `runner.arch` is part of both keys, so this entry cannot collide with the AMD64
+      # job's despite the identical shape.
+      - name: Cache the Nix development environment
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
+          gc-max-store-size-linux: 6G
+          purge: true
+          purge-primary-key: never
+          purge-prefixes: nix-${{ runner.os }}-${{ runner.arch }}-
+          purge-created: 604800
+
+      # A DISTINCT `shared-key` from the AMD64 job. Its entry holds x86_64 object files
+      # and restoring those here would at best waste the download and at worst hand this
+      # build artifacts it cannot link.
+      - name: Cache the Cargo registry and dependency build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        with:
+          shared-key: husklet-linux-arm64-ci
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Size the build to the runner
+        run: echo "CARGO_BUILD_JOBS=$(nproc)" >> "$GITHUB_ENV"
+
+      - name: Fetch locked application dependencies
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo fetch --locked
+
+      # The `--features native-test-hooks` arm is the whole point; the arm without them
+      # is already covered on AMD64 and adds nothing here.
+      - name: Test the native engine package with its test hooks
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo test -p hl-native --all-targets --features native-test-hooks
+          --locked --offline --no-fail-fast
