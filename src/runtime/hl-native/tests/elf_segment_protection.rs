@@ -169,7 +169,9 @@ fn segment_protection_asks_the_host_once_per_contiguous_run() {
         .status()
         .expect("compile segment protection probe");
     assert!(built.success(), "segment protection probe did not compile");
-    let ran = Command::new(&executable).status().expect("run segment protection probe");
+    let ran = Command::new(&executable)
+        .status()
+        .expect("run segment protection probe");
     assert!(ran.success(), "segment protection probe failed with {ran}");
     fs::remove_dir_all(scratch).expect("remove segment protection probe directory");
 }
