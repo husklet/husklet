@@ -1232,3 +1232,50 @@ async fn a_wedged_exec_member_names_itself_in_the_capture_timeout() {
     );
     let _ = release.send(());
 }
+
+/// Three wedged members must not cost three timeouts. `close_handover` gives the whole capture a
+/// fixed budget, so a capture whose own wait scales with the member count is abandoned by its
+/// caller before it can report which journal was late -- the user then sees a bare handover
+/// failure instead of the attributed message above. The waits share one deadline.
+#[tokio::test]
+async fn a_capture_bounds_every_member_wait_by_one_shared_deadline() {
+    const BUDGET: Duration = Duration::from_millis(200);
+    let runtime = Arc::new(FakeRuntime::new(ExitStatus::Code(0)));
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("member-budget")).await.unwrap();
+    containers.start("member-budget").await.unwrap();
+    let mut releases = Vec::new();
+    let mut wedged = Vec::new();
+    for index in 0..3 {
+        let (waiting, release) = runtime.delay_next_log(format!("before-{index}\n"), format!("after-{index}\n"));
+        releases.push(release);
+        let execution = containers
+            .executions()
+            .create("member-budget", ExecSpec::new(Process::new("fake")))
+            .await
+            .unwrap();
+        let session = containers.executions().start(&execution.id).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), waiting)
+            .await
+            .expect("exec member did not reach the injected wedge")
+            .unwrap();
+        wedged.push((execution.id, session));
+    }
+
+    let started = std::time::Instant::now();
+    let error = containers.checkpoint_all(BUDGET).await.unwrap_err();
+    let elapsed = started.elapsed();
+
+    assert!(
+        wedged.iter().any(|(id, _)| error.to_string()
+            == format!("runtime failed: timed out waiting for exec session {id} process output ownership to close")),
+        "capture failure did not name a wedged member: {error}"
+    );
+    assert!(
+        elapsed < BUDGET * 2,
+        "three wedged members spent {elapsed:?} against a {BUDGET:?} capture budget"
+    );
+    for release in releases {
+        let _ = release.send(());
+    }
+}
