@@ -17,6 +17,11 @@ pub use member::{MemberExit, RestoredMember};
 
 #[cfg(unix)]
 mod line_discipline;
+/* `terminal` is a POSIX pty pump: it is built on std::os::fd, on the #[cfg(unix)] `line_discipline`
+ * module above, and on libc, which this crate declares only under [target.'cfg(unix)'.dependencies].
+ * Its re-export below and every consumer in execution.rs already carry #[cfg(unix)]; the declaration
+ * did not, so a Windows build reached the module and produced 73 errors inside it. */
+#[cfg(unix)]
 mod terminal;
 #[cfg(unix)]
 pub use terminal::MemberTerminal;

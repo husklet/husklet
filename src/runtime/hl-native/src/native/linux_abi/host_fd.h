@@ -935,6 +935,31 @@ static inline uid_t getuid(void) {
     return (uid_t)-1;
 }
 
+/*
+ * geteuid() answers a narrower question than getuid() and it is the one this
+ * tree actually asks: every Windows-reachable caller compares it against a
+ * stat'ed st_uid to decide "is this filesystem object mine?".  There are two,
+ * and both are ownership validators guarding something security-relevant --
+ * netns/loopback.c's engine-private identity-ticket table and syscall/fs.c's
+ * DAC grant.  The refusal value is what makes both of them fail CLOSED: the
+ * UCRT's struct stat reports st_uid 0 for every object, so returning 0 would
+ * make every object on the host validate as ours, which is the fake getuid()
+ * above already refuses to tell.  (uid_t)-1 is the POSIX "no such user" value
+ * and no st_uid equals it, so the comparison is unequal and each validator
+ * takes its deny branch.
+ *
+ * It is a REFUSAL and not a SHAPE: no Win32 call can be substituted here,
+ * because the process's identity is a SID in its token and the object's is a
+ * SID in its security descriptor, neither of which fits in a uid_t and neither
+ * of which the CRT publishes.  A call site that needs the real question
+ * answered must ask it in the backend against those SIDs -- and must say what
+ * it is doing, because a SID comparison is not this comparison.
+ */
+static inline uid_t geteuid(void) {
+    errno = ENOSYS;
+    return (uid_t)-1;
+}
+
 static inline gid_t getgid(void) {
     errno = ENOSYS;
     return (gid_t)-1;

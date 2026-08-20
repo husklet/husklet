@@ -337,15 +337,32 @@ jobs:
       # always-true `-Werror=type-limits` bound in `fork_diagnostic.c` and an
       # `ENOATTR`/`ENODATA` tautology in `exec.c`, both of which a human had to find.
       #
-      # Four are green and run here. The other four are HONESTLY RED and are named
-      # rather than silenced -- delete a line the day its check passes:
+      # Six are green and run here. BOTH `scan-build` attributes joined that set on
+      # 2026-08-20: their 14 `deadcode.DeadStores` were fixed, and the strict-GCC abort
+      # that had been hiding those findings was cleared in the same day. Verified green
+      # on this exact tip before being added, both arches, with the analyzer confirmed
+      # to have completed a run rather than merely exited 0 -- see the assertion in
+      # `flake.nix`, which exists because a misconfigured analyzer reported
+      # `1 error generated. / 0 bugs found.` AND EXIT 0.
+      #
+      # NOTE WHAT THIS MEANS: until this line, `scan-build` ran in NO CI JOB ANYWHERE.
+      # `ci.yml` never mentioned it and the macOS `nix flake check` cannot see a
+      # Linux-only attribute. The gate that found two real C defects had no runner.
+      #
+      # The other two are HONESTLY RED and are named rather than silenced -- delete a
+      # line the day its check passes:
       #   alpine-compatibility          -- red since a vacuous filter was made honest.
-      #   scan-build-linux-aarch64      -- 14 `deadcode.DeadStores`, 11 of them in the
-      #   scan-build-linux-x86_64          aarch64 decode helpers. Only visible at all
-      #                                    since the strict-GCC abort in front of them
-      #                                    was cleared; `--status-bugs` fails on any.
-      #   host-windows-x86_64-gnu-smoke -- `_SC_PAGESIZE` undeclared and implicit
-      #                                    `fork`/`geteuid`/`flock` under mingw. Same
+      #   host-windows-x86_64-gnu-smoke -- `geteuid` at `netns/loopback.c:462,509` and
+      #                                    `flock` at `:514`. Was four errors across
+      #                                    three files; the checkpoint lane's
+      #                                    `cb7d17a9d` incidentally fixed `_SC_PAGESIZE`
+      #                                    and implicit `fork`. `flock` IS implemented
+      #                                    for Windows in `toolchain/msvc-posix`, but
+      #                                    `netns.c` guards its include out on purpose,
+      #                                    so the remaining DESIGN question is `geteuid`
+      #                                    alone: what "the euid owning this identity
+      #                                    table" means on a host without euid, which
+      #                                    belongs to the netns/identity owner. Same
       #                                    defect as `native-windows-amd64` above:
       #                                    `cargo check` runs `build.rs`, so both
       #                                    compile the same C.
@@ -356,6 +373,8 @@ jobs:
           .#checks.x86_64-linux.host-linux-x86_64
           .#checks.x86_64-linux.installed-product
           .#checks.x86_64-linux.host-darwin-cross-contract
+          .#checks.x86_64-linux.scan-build-linux-aarch64
+          .#checks.x86_64-linux.scan-build-linux-x86_64
 
   native-linux-arm64:
     name: Native engine / ARM64
