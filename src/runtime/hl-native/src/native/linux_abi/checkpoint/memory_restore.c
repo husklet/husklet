@@ -1410,9 +1410,8 @@ static int ckpt_anon_shared_leftover_test(void) {
     char fresh_name[CKPT_ANON_SHARED_NAME_MAX];
     ckpt_anon_shared_name(object_id, fresh_name);
     int verdict = 0;
-    if (strcmp(fresh_name, stale_name) == 0) verdict = 33; // a recycled id must not spell a recycled name
-    int fresh = verdict == 0 ? ckpt_restore_anon_shared_seed(object_id, size) : -1;
-    if (verdict == 0 && fresh < 0) verdict = 34; // a leftover must not be able to FAIL the restore either
+    int fresh = ckpt_restore_anon_shared_seed(object_id, size);
+    if (fresh < 0) verdict = 34; // a leftover must not be able to FAIL the restore either
     unsigned char *fresh_map = fresh >= 0 ? (unsigned char *)mmap(NULL, (size_t)size, PROT_READ | PROT_WRITE,
                                                                  MAP_SHARED, fresh, 0)
                                           : (unsigned char *)MAP_FAILED;
@@ -1425,6 +1424,9 @@ static int ckpt_anon_shared_leftover_test(void) {
             }
     }
     if (fresh_map != MAP_FAILED) munmap(fresh_map, (size_t)size);
+    // Checked AFTER the bytes, deliberately: the content is the guarantee and the name is the
+    // mechanism, so a regression reports the wrong memory rather than the spelling that caused it.
+    if (verdict == 0 && strcmp(fresh_name, stale_name) == 0) verdict = 33;
     ckpt_restore_backings_close();
     ckpt_anon_shared_unlink_all();
     shm_unlink(stale_name);
