@@ -424,8 +424,20 @@ static int ckpt_restore_saved_ofd(const struct ckpt_fd *record) {
 static void ckpt_restore_bind_member_stdio(void) {
     int terminal = ckpt_stream_member_stdio(g_self_gpid);
     if (terminal < 0) return;
-    for (int gfd = 0; gfd <= 2; gfd++)
+    for (int gfd = 0; gfd <= 2; gfd++) {
+        /* Release the BOUND stdio object first, and only then rebind the descriptor.
+         *
+         * The engine's launch-time stdio is not the host descriptor sitting at guest fd 0: it is a host
+         * object imported at engine construction and installed at that guest fd, and every guest read and
+         * write resolves through it (`bound_snapshot`). A re-forked member inherits the CONTAINER engine's
+         * three, so a dup2 alone moved the member's own host descriptors and left the guest still reading
+         * and writing the container's bridge -- measured: the pane's shell reached EOF on the container's
+         * stdin and exited silently while the engine's own stderr went to the new terminal. Closing the
+         * bound object makes the guest descriptor resolve to the raw one again, which is the terminal
+         * installed on the next line. */
+        if (g_linux_box != NULL) (void)hl_linux_close(g_linux_box, (hl_linux_fd)gfd);
         if (terminal != gfd) (void)dup2(terminal, gfd);
+    }
     if (terminal > 2) (void)close(terminal);
 }
 
