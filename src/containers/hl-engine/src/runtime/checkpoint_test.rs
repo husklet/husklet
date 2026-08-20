@@ -2268,6 +2268,45 @@ fn a_restored_member_is_reachable_by_the_guest_pid_its_image_names_it_by() {
     served.join().expect("broker worker");
 }
 
+/// Only a running restore may name a restored member.
+///
+/// The capability an announcement installs is a reach into a live process, so it must come from the
+/// one event that genuinely produces members. An authenticated channel announcing outside a recovery
+/// is a process claiming to be something no restore re-forked.
+#[test]
+fn an_announcement_outside_a_running_restore_installs_no_member() {
+    let _serial = TRANSPORT_SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (broker, transport) = hl_native::CheckpointTransport::create().expect("checkpoint transport");
+    let mut member = transport.connect_for_test().expect("checkpoint channel");
+    let (channel, authority) = broker
+        .accept(Duration::from_secs(10))
+        .expect("authenticated production accept");
+    let server = Arc::new(Server::new(Arc::new(Store), Arc::new(Store)));
+    let worker = Arc::clone(&server);
+    let served = std::thread::spawn(move || worker.serve_authenticated_for_test(channel, authority));
+    while server.connections.load(Ordering::Acquire) == 0 {
+        std::thread::yield_now();
+    }
+    let guest_pid = std::num::NonZeroI32::new(31).expect("guest pid");
+
+    member
+        .write_all(&checkpoint_request(
+            protocol::MEMBER_RESTORED,
+            0,
+            &member_restored_payload(guest_pid.get()),
+        ))
+        .expect("member announcement");
+
+    assert_eq!(read_reply(&mut member).0, -1, "an announcement outside a restore was admitted");
+    assert!(
+        server.restored_member(guest_pid).is_none(),
+        "an announcement outside a restore installed a member capability"
+    );
+    server.stop();
+    drop(member);
+    served.join().expect("broker worker");
+}
+
 /// A member stays reachable after the connection that announced it is gone.
 ///
 /// The announcement is a one-shot event on a channel the restore tears down; reachability has to

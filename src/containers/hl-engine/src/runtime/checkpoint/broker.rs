@@ -177,7 +177,19 @@ impl Server {
                 continue;
             }
             if request.op == MEMBER_RESTORED {
-                let announced = self.member_restored(&mut connection, &payload);
+                // Scope-checked like every other publication: only a restore may name a restored
+                // member, so an announcement outside a running recovery is refused rather than
+                // installing a capability nothing produced.
+                let announced = if self.request_in_scope(connection.id, &request, &name) {
+                    self.member_restored(&mut connection, &payload)
+                } else {
+                    hl_log::hl_error!(
+                        hl_log::tag::CHECKPOINT,
+                        "restored member announcement refused for process {}: no restore is in scope",
+                        connection.id
+                    );
+                    Err(())
+                };
                 let reply = announced.map_or_else(|()| Reply::error(), |()| Reply::value(1));
                 let _ = reply.write(&mut channel);
                 continue;
