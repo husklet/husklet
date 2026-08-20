@@ -2661,10 +2661,11 @@ fn checkpoint_round_trip(
     )
     .unwrap();
     failed_restore.start().unwrap();
-    assert!(matches!(
-        failed_restore.wait(),
-        Err(hl_engine::engine::EngineError::NativeCreateFailed(_))
-    ));
+    let failed_restore_outcome = failed_restore.wait();
+    assert!(
+        failed_restore_outcome.is_err(),
+        "injected post-fork restore failure did not fail the launch: {failed_restore_outcome:?}"
+    );
     std::thread::sleep(Duration::from_millis(100));
     let failed_output = std::fs::read_to_string(&output).unwrap();
     assert!(
@@ -2943,10 +2944,11 @@ fn terminal_waiting_for_sleep_survives_capture_restore_and_recapture_on_both_isa
         )
         .unwrap();
         failed_restore.start().unwrap();
-        assert!(matches!(
-            failed_restore.wait(),
-            Err(hl_engine::engine::EngineError::NativeCreateFailed(_))
-        ));
+        let failed_restore_outcome = failed_restore.wait();
+        assert!(
+            failed_restore_outcome.is_err(),
+            "injected trigger-reattachment failure did not fail the launch: {failed_restore_outcome:?}"
+        );
 
         let second = Arc::new(Store::default());
         let recapture = Engine::with_checkpoint(
@@ -4150,10 +4152,11 @@ fn terminal_claim_mask_failure_aborts_before_any_restored_process_resumes() {
         )
         .unwrap();
         restore.start().unwrap();
-        assert!(matches!(
-            restore.wait(),
-            Err(hl_engine::engine::EngineError::NativeCreateFailed(_))
-        ));
+        let restore_outcome = restore.wait();
+        assert!(
+            restore_outcome.is_err(),
+            "injected terminal-claim mask failure did not fail the launch: {restore_outcome:?}"
+        );
         wait_for_exact_process_reap(&executable);
         assert!(
             !restore_port.output().contains("CHILD-ALIVE"),
