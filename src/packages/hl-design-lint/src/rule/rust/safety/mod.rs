@@ -1,7 +1,7 @@
-use proc_macro2::{Span, TokenTree};
+use proc_macro2::{Delimiter, Span, TokenStream, TokenTree};
 use syn::{
-    Attribute, Expr, ExprUnsafe, ImplItemFn, ItemFn, ItemImpl, ItemMod, ItemTrait, Macro, Token, TraitItemFn,
-    punctuated::Punctuated, spanned::Spanned, visit::Visit,
+    Attribute, Expr, ExprUnsafe, ImplItemFn, ItemFn, ItemImpl, ItemMacro, ItemMod, ItemTrait, Macro, Token,
+    TraitItemFn, punctuated::Punctuated, spanned::Spanned, visit::Visit,
 };
 
 use crate::{
@@ -103,15 +103,16 @@ impl Syntax<'_> {
     }
 
     /// A macro argument shares its caller's line, so the rationale window cannot be read there; the
-    /// boundary rule still applies.
-    fn report_missing_rationale(&mut self, expression: &ExprUnsafe) {
-        if !self.allowed() || self.macro_depth != 0 || rationale(self.source, expression.span()) {
+    /// boundary rule still applies. A `macro_rules!` body is ordinary source text with its own
+    /// lines, so it is read here rather than exempted.
+    fn report_missing_rationale(&mut self, span: Span) {
+        if !self.allowed() || self.macro_depth != 0 || rationale(self.source, span) {
             return;
         }
         let mut finding = Finding::error(
             "unsafe-boundary",
             "unsafe block without SAFETY rationale",
-            self.source.location(expression.span()),
+            self.source.location(span),
         );
         finding.message =
             "an allowed unsafe block must have a nearby `SAFETY:` comment explaining its validity assumptions".into();
@@ -119,9 +120,52 @@ impl Syntax<'_> {
             "place a concrete `// SAFETY: ...` rationale immediately before or at the start of the unsafe block".into();
         self.findings.push(finding);
     }
+
+    /// Reports `unsafe` inside a `macro_rules!` body, which `syn` exposes only as tokens.
+    ///
+    /// A definition is not a comma-separated expression list, so the expression walk below cannot
+    /// reach it and every `unsafe` written inside a declarative macro was invisible to this rule.
+    /// That made the rule evadable in exactly the direction a lane is tempted to go: collapsing
+    /// repeated unsafe trampolines into a macro removed the findings without adding one word of
+    /// rationale. An `unsafe` directly followed by a braced group is a block and owes a `SAFETY:`
+    /// comment; any other `unsafe` introduces an item and owes only the boundary.
+    fn report_definition_tokens(&mut self, tokens: &TokenStream) {
+        let mut trees = tokens.clone().into_iter().peekable();
+        while let Some(tree) = trees.next() {
+            match tree {
+                TokenTree::Ident(ident) if ident == "unsafe" => {
+                    let block = matches!(trees.peek(), Some(TokenTree::Group(group))
+                        if group.delimiter() == Delimiter::Brace);
+                    let (subject, construct) = if block {
+                        ("unsafe block in a macro definition", "an unsafe block")
+                    } else {
+                        ("unsafe item in a macro definition", "an unsafe item")
+                    };
+                    self.report(ident.span(), subject.into(), construct);
+                    if block {
+                        self.report_missing_rationale(ident.span());
+                    }
+                }
+                TokenTree::Group(group) => self.report_definition_tokens(&group.stream()),
+                TokenTree::Ident(_) | TokenTree::Punct(_) | TokenTree::Literal(_) => {}
+            }
+        }
+    }
 }
 
 impl<'ast> Visit<'ast> for Syntax<'_> {
+    /// `macro_rules!` reaches this rule as an opaque item; every other item macro keeps the
+    /// default walk so an invocation is still read as expressions.
+    fn visit_item_macro(&mut self, item: &'ast ItemMacro) {
+        let allow = self.enter(&item.attrs);
+        if item.ident.is_some() && item.mac.path.is_ident("macro_rules") {
+            self.report_definition_tokens(&item.mac.tokens);
+        } else {
+            syn::visit::visit_item_macro(self, item);
+        }
+        self.allow_depth -= allow;
+    }
+
     fn visit_item_mod(&mut self, module: &'ast ItemMod) {
         let ffi = self.module_owner && self.module_names.iter().any(|name| module.ident == name);
         self.ffi_depth += usize::from(ffi);
@@ -145,7 +189,7 @@ impl<'ast> Visit<'ast> for Syntax<'_> {
     fn visit_expr_unsafe(&mut self, expression: &'ast ExprUnsafe) {
         let allow = self.enter(&expression.attrs);
         self.report(expression.unsafe_token.span, "unsafe block".into(), "an unsafe block");
-        self.report_missing_rationale(expression);
+        self.report_missing_rationale(expression.span());
         syn::visit::visit_expr_unsafe(self, expression);
         self.allow_depth -= allow;
     }
