@@ -16,6 +16,12 @@ static void pcache_relocate(uint64_t saved_rx) {
         case RK_IBTC: v = (uint64_t)g_ibtc; break;
         case RK_T2CNT: v = (uint64_t)&g_t2cnt[slot]; break;
         case RK_BUSFAULT: v = (uint64_t)jit_guest_bus_fault; break;
+        case RK_BUSRESUME: {
+            // Resume target is the instruction immediately after the literal, in the live RX alias.
+            uint64_t resume = (uint64_t)J_RX(g_cache) + off + 8;
+            memcpy(g_cache + off, &resume, sizeof resume);
+            continue;
+        }
         case RK_ICSITE:
             // Zero the guard target literal (+0): a zeroed target makes the site's equality guard miss so
             // the dispatcher re-resolves + refills. Under the x16/x17 steal the +8 slot (Lb) is not a stale
@@ -51,9 +57,13 @@ static void pcache_relocate(uint64_t saved_rx) {
 // the literal pair), so the whole window must be inside the restored arena and naturally aligned.
 static int pc_reloc_ok(hl_reloc r, uint64_t arena_used) {
     int kind = r.info & 0xff, slot = (r.info >> 16) & 0xffff;
-    uint64_t width = kind == RK_GUEST_ADRP ? 4 : 16;
+    // The guard metadata block is instruction-aligned, so the resume literal is only 4-aligned; both
+    // sides go through memcpy.
+    uint64_t width = kind == RK_GUEST_ADRP ? 4 : kind == RK_BUSRESUME ? 8 : 16;
     if (!pc_window_contains(arena_used, r.off, width, kind == RK_ICSITE ? 8 : 4)) return 0;
     if (kind == RK_ICSITE) return 1;
+    // The resume target is off+8 and the stub branches to it, so it must also land inside the arena.
+    if (kind == RK_BUSRESUME) return pc_window_contains(arena_used, r.off + 8, 4, 4);
     if (((r.info >> 8) & 0xff) > 30) return 0; // rd must be a real GPR (we never bake into sp/xzr)
     if (kind == RK_T2CNT) return slot < T2_MAX;
     return kind == RK_BLOCKRET || kind == RK_IBTC || kind == RK_BUSFAULT || kind == RK_GUEST_ADRP;
@@ -82,6 +92,7 @@ static int pc_guest_adrp_ok(hl_reloc r, const uint8_t *arena, uint64_t saved_rx)
 // and the exit-time save atomically replaces the bad file).
 static int pcache_load(uint64_t entry_jump) {
     if (!g_pcache || hl_identity_digest_empty(&g_pc_binid) || g_force_base_failed) return 0;
+    // Every persisted block was translated under an armed ledger, so it carries memory guards; a restored
     // Every persisted block was translated under an armed ledger, so it carries memory guards; a restored
     // arena is only sound in a process whose ledger is armed and latched for good. The launch path does
     // that before it gets here -- refuse rather than restore guarded code into a bus that can still take a

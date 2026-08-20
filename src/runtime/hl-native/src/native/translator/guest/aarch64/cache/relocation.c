@@ -57,6 +57,12 @@ static void emit_t2cntptr(int rd, int slot) {
     }
 }
 
+// The BUS-guard resume literal holds J_RX(slot + 8) -- entirely derived from the slot's own arena
+// offset, so the loader recomputes it against the live RX base with no saved-base arithmetic.
+static void pcache_record_bus_resume(uint8_t *slot) {
+    if (g_pcache) pc_reloc_add((uint32_t)(slot - g_cache), RK_BUSRESUME, 0, 0);
+}
+
 static void emit_busfaultptr(int rd) {
     if (g_pcache) {
         pc_reloc_add((uint32_t)(g_cp - g_cache), RK_BUSFAULT, (uint8_t)rd, 0);
