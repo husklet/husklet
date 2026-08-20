@@ -52,3 +52,49 @@ fn the_membership_hook_rejects_unknown_scenarios() {
         assert_eq!(hl_native::checkpoint_membership_test(isa, 3), Err(-22));
     }
 }
+
+/// A member's exit report hangs off the process-scoped exit hook, not off the dispatcher's return.
+///
+/// A restored member is not a child of the host that holds it, so nothing can reap it: the only way its
+/// status reaches the host is the report it sends over its own checkpoint channel on the way out. That
+/// report used to be sent from exactly one place, the return from `run_guest` at the bottom of
+/// `ckpt_restore_proc_run` -- and the ordinary way a Linux process ends does not go through it, because
+/// `exit_group(2)` reaches the host `_exit` straight from the syscall handler. Measured on the product
+/// Continue-later journey: a restored `/bin/sh -i` that exited 0 was recorded as
+/// `Fault { status: -1, reason: Unknown }`, which is what the host correctly says about a member killed
+/// outright, so a session that simply finished was indistinguishable from one that was destroyed.
+///
+/// This is a source contract rather than a behavioral one because the behavior needs a live restored
+/// member to observe, and what it pins is the placement: the report is reachable from the exit path both
+/// `exit(2)` and `exit_group(2)` share, and the send is still guarded to a process that announced itself.
+#[test]
+fn a_restored_member_reports_its_exit_from_the_shared_process_exit_hook() {
+    let native = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/native");
+    let identity = std::fs::read_to_string(native.join("linux_abi/syscall/process/identity.c"))
+        .expect("read the process identity syscalls");
+    let hook = identity
+        .split_once("static void process_last_thread_exit(int status) {")
+        .expect("process_last_thread_exit is the shared process-scoped exit hook")
+        .1
+        .split_once("\n}")
+        .expect("process_last_thread_exit has a body")
+        .0;
+    assert!(
+        hook.contains("ckpt_restored_member_exit_code(status)"),
+        "the shared process exit hook no longer reports a restored member's status: {hook}"
+    );
+    assert!(
+        identity.contains("case 94:"),
+        "exit_group is no longer served from the file that carries the exit hook"
+    );
+
+    let stream = std::fs::read_to_string(native.join("linux_abi/sink_stream.h")).expect("read the checkpoint stream");
+    assert!(
+        stream.contains("if (!g_ckpt_member_announced || reported) return;"),
+        "the member exit report is no longer guarded to one report from an announced member"
+    );
+    assert!(
+        stream.contains("g_ckpt_member_announced = 1;"),
+        "nothing marks this process as an announced member, so the report can never be sent"
+    );
+}
