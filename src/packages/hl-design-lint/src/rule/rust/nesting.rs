@@ -3,7 +3,7 @@ use syn::{Expr, ImplItemFn, ItemFn, ItemMod, spanned::Spanned, visit::Visit};
 
 use crate::{
     Result,
-    model::{Finding, Severity},
+    model::{Budget, Finding, Severity},
     rule::Rule,
     source::{Source, Workspace, requires_test},
 };
@@ -63,6 +63,11 @@ impl Functions<'_> {
             depth.maximum, depth.construct,
         );
         finding.help = "use early returns, extract receiver behavior, or model the nested state".to_owned();
+        finding.budget = Some(Budget {
+            unit: "level",
+            measured: depth.maximum,
+            limit: MAXIMUM_NESTING,
+        });
         finding.related.push(crate::model::Related {
             label: "function".to_owned(),
             location: self.source.location(span),

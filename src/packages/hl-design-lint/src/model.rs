@@ -20,6 +20,35 @@ impl Severity {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// A quantity a rule measured against the largest value it accepts.
+///
+/// The count of findings a rule reports is not monotone in what the rule is about: a file taken
+/// from 604 to 617 lines crosses the same single limit before and after. The measured quantity is,
+/// so a rule that compares one against a limit carries both and lets the roll-up total the excess.
+pub struct Budget {
+    /// Singular noun for what is counted, such as `line` or `level`.
+    pub unit: &'static str,
+    /// Quantity the rule measured.
+    pub measured: usize,
+    /// Largest quantity the rule accepts.
+    pub limit: usize,
+}
+
+impl Budget {
+    /// Returns how far the measurement exceeds the limit.
+    #[must_use]
+    pub fn excess(self) -> usize {
+        self.measured.saturating_sub(self.limit)
+    }
+
+    /// Adds another measurement of the same unit, keeping the total excess of both.
+    fn total(&mut self, other: Self) {
+        self.measured = self.measured.saturating_add(other.measured);
+        self.limit = self.limit.saturating_add(other.limit);
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Source location and its exact excerpt.
 pub struct Location {
@@ -96,6 +125,8 @@ pub struct Finding {
     pub related: Vec<Related>,
     /// Optional persistent review case.
     pub review: Option<Review>,
+    /// Quantity and limit this finding compared, when the rule measures one.
+    pub budget: Option<Budget>,
 }
 
 impl Finding {
@@ -119,6 +150,7 @@ impl Finding {
             location,
             related: Vec::new(),
             review: None,
+            budget: None,
         }
     }
 
@@ -133,7 +165,7 @@ impl Finding {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-/// Active finding count for one completed rule.
+/// Active finding count for one completed rule, beside how far its measurements overshoot.
 pub struct Summary {
     /// Stable rule identifier.
     pub rule: &'static str,
@@ -141,4 +173,27 @@ pub struct Summary {
     pub severity: Severity,
     /// Number of active violations.
     pub findings: usize,
+    /// One totalled budget per unit the rule's active violations measured.
+    pub budgets: Vec<Budget>,
+}
+
+impl Summary {
+    /// Totals one rule's completed findings, keeping the excess each measured unit carries.
+    #[must_use]
+    pub fn new(rule: &'static str, severity: Severity, findings: &[Finding]) -> Self {
+        let active = || findings.iter().filter(|finding| finding.is_violation());
+        let mut budgets: Vec<Budget> = Vec::new();
+        for budget in active().filter_map(|finding| finding.budget) {
+            match budgets.iter_mut().find(|total| total.unit == budget.unit) {
+                Some(total) => total.total(budget),
+                None => budgets.push(budget),
+            }
+        }
+        Self {
+            rule,
+            severity,
+            findings: active().count(),
+            budgets,
+        }
+    }
 }

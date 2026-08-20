@@ -13,6 +13,10 @@ fn reports_headers_beyond_the_configured_interface_limit() {
         1
     );
     assert!(findings[0].message.contains("3 function declarations"));
+    assert_eq!(
+        findings[0].budget.map(|budget| (budget.unit, budget.excess())),
+        Some(("declaration", 1))
+    );
 }
 
 #[test]

@@ -571,13 +571,8 @@ static int signal_deliverable(const struct cpu *cpu, int signal) {
     return 1;
 }
 
-static int signal_deliverable_for_cpu(const struct cpu *cpu) {
-    for (int signal = 64; signal >= 1; --signal) {
-        if (!signal_deliverable(cpu, signal)) continue;
-        return 1;
-    }
-    return 0;
-}
+// The dispatcher's poll, stated as a fragment so the probe fixture can count what it asks.
+#include "signal_scan.h"
 
 // --- signalfd open-file-description (OFD) pool ---------------------------------------------------------
 // Linux signalfd(2) creates an INDEPENDENT descriptor: each has its own signal mask and its own delivery
