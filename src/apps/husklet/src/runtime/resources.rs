@@ -440,22 +440,55 @@ mod tests {
         }
         command.start_session();
         let child = command.spawn().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + helper_budget();
         while !ready.exists() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(ready.exists(), "daemon helper did not publish readiness");
         let descendant = descendant.then(|| {
-            std::fs::read_to_string(descendant_path)
-                .unwrap()
-                .parse::<u32>()
-                .unwrap()
+            // Readiness and the descendant's identity are two writes, and only the first is the
+            // signal. Read the one that is actually being waited for rather than assuming the other
+            // landed with it: under load the file exists with no digits in it yet.
+            loop {
+                if let Ok(text) = std::fs::read_to_string(&descendant_path) {
+                    if let Ok(pid) = text.trim().parse::<u32>() {
+                        return pid;
+                    }
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "daemon helper did not publish its descendant identity"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
         });
         (child, descendant)
     }
 
+    /// How long a helper that must be spawned, linked and run to its first write may take.
+    ///
+    /// This is a fresh copy of the whole test executable, so it competes with every other test in
+    /// the run and with every other lane on the box. A fixed two seconds is a measurement of the
+    /// machine, not of the behaviour under test, and it is the machine that moves.
+    fn helper_budget() -> std::time::Duration {
+        std::time::Duration::from_secs(2) * observed_load()
+    }
+
+    /// The whole part of the one-minute load average plus one, clamped, or 1 where the host does not
+    /// publish one. Parsed textually: the value is a multiplier for a deadline, not a measurement.
+    fn observed_load() -> u32 {
+        let Ok(text) = std::fs::read_to_string("/proc/loadavg") else {
+            return 1;
+        };
+        text.split_ascii_whitespace()
+            .next()
+            .and_then(|value| value.split('.').next())
+            .and_then(|whole| whole.parse::<u32>().ok())
+            .map_or(1, |load| load.saturating_add(1).clamp(1, 32))
+    }
+
     fn assert_process_reaped(process: u32) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + helper_budget();
         while std::time::Instant::now() < deadline {
             if !std::process::Command::new("/bin/kill")
                 .args(["-0", &process.to_string()])

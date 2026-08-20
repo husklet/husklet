@@ -19,6 +19,15 @@ pub enum CompositionError {
     MissingCheckpointSource,
     /// Native execution does not yet own a PTY/stdio bridge for the requested terminal.
     UnsupportedTerminal,
+    /// The private engine could not be loaded, so a capability that is the engine's -- the guest line
+    /// discipline, guest termios -- cannot be provided.
+    ///
+    /// This is refused rather than degraded on purpose. The host line discipline is a *working*
+    /// fallback, so an absent engine used to present as a terminal that merely behaved differently:
+    /// a release test binary that could not find the engine ran the host discipline and reported
+    /// success. An absent engine is a load failure and must read as one, exactly as a mismatched
+    /// engine already does.
+    EngineUnavailable,
     RuntimeConstruction,
     TransactionBusy,
     DeadlineExceeded,

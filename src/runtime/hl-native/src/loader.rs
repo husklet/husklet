@@ -602,17 +602,37 @@ fn candidates() -> Result<Vec<PathBuf>, LoadError> {
 #[cfg(any(not(debug_assertions), test))]
 fn release_candidates(executable: &Path) -> Result<Vec<PathBuf>, LoadError> {
     let directory = executable.parent().ok_or_else(|| LoadError::NotFound(Vec::new()))?;
+    let mut candidates = installed_candidates(directory);
+    // A `--release` **test** binary lives in the Cargo target directory, which carries none of the
+    // installed layouts above: `deps/`, `../lib/` and `../Frameworks/` are all absent, so the engine
+    // was simply not found and every test that needs one ran against whatever fallback its subject
+    // had. That cost a lane a complete measurement table. The build path is baked in at compile time
+    // by `hl-native`'s build script -- it is not an ambient search, and it cannot be redirected by
+    // the environment -- and it is consulted last, so an installed engine always wins where one
+    // exists. On a user's machine the directory does not exist and this candidate simply misses.
+    let build = PathBuf::from(env!("HL_NATIVE_LIBRARY_PATH"));
+    // A planned-but-unbuilt target bakes the bare filename here, which would be resolved against the
+    // working directory. That *would* be an ambient search, so only an absolute path is admitted.
+    if build.is_absolute() {
+        candidates.push(build);
+    }
+    Ok(candidates)
+}
+
+/// The installed layouts, in the order the packaged application must resolve them.
+#[cfg(any(not(debug_assertions), test))]
+fn installed_candidates(directory: &Path) -> Vec<PathBuf> {
     let name = env!("HL_NATIVE_LIBRARY_NAME");
     #[cfg(target_os = "macos")]
-    return Ok(vec![
+    return vec![
         directory.join("../Frameworks").join(name),
         directory.join("../lib").join(name),
         directory.join(name),
-    ]);
+    ];
     #[cfg(target_os = "windows")]
-    return Ok(vec![directory.join(name)]);
+    return vec![directory.join(name)];
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    Ok(vec![directory.join("../lib").join(name), directory.join(name)])
+    vec![directory.join("../lib").join(name), directory.join(name)]
 }
 
 struct DynamicLibrary(*mut c_void);
@@ -779,9 +799,10 @@ mod tests {
     fn release_locations_are_executable_relative_and_ignore_ambient_search() {
         let executable = Path::new("/opt/husklet/bin/husklet");
         let paths = release_candidates(executable).unwrap();
+        let installed = installed_candidates(executable.parent().unwrap());
         #[cfg(target_os = "macos")]
         assert_eq!(
-            paths,
+            installed,
             [
                 PathBuf::from("/opt/husklet/bin/../Frameworks/libhl_native_engine.dylib"),
                 PathBuf::from("/opt/husklet/bin/../lib/libhl_native_engine.dylib"),
@@ -789,14 +810,47 @@ mod tests {
             ]
         );
         #[cfg(target_os = "windows")]
-        assert_eq!(paths, [PathBuf::from("/opt/husklet/bin/hl_native_engine.dll")]);
+        assert_eq!(installed, [PathBuf::from("/opt/husklet/bin/hl_native_engine.dll")]);
         #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
         assert_eq!(
-            paths,
+            installed,
             [
                 PathBuf::from("/opt/husklet/bin/../lib/libhl_native_engine.so"),
                 PathBuf::from("/opt/husklet/bin/libhl_native_engine.so"),
             ]
+        );
+        // The installed layouts still come first and in the same order: a packaged application must
+        // never prefer a build directory that happens to survive beside it.
+        assert_eq!(paths[..installed.len()], installed[..]);
+        // Every candidate is absolute, so none of them is resolved against the working directory.
+        assert!(paths.iter().all(|path| path.is_absolute()), "{paths:?}");
+    }
+
+    /// A `--release` test binary is the one caller with no installed layout anywhere above it, and
+    /// before this it found no engine at all: `NotFound`, and every test that needed the engine ran
+    /// against its subject's fallback while reporting nothing.
+    #[test]
+    fn a_release_test_binary_resolves_the_engine_its_own_build_produced() {
+        let built = Path::new(env!("HL_NATIVE_LIBRARY_PATH"));
+        assert!(
+            built.is_absolute(),
+            "this target builds an engine, so its path must be absolute: {built:?}"
+        );
+        let executable = built
+            .parent()
+            .and_then(Path::parent)
+            .expect("the built engine has a containing directory")
+            .join("deps")
+            .join("hl_native-0123456789abcdef");
+        let paths = release_candidates(&executable).unwrap();
+        assert!(
+            paths.contains(&built.to_path_buf()),
+            "a release test binary must reach the engine this build produced: {paths:?}"
+        );
+        assert_eq!(
+            paths.last().map(PathBuf::as_path),
+            Some(built),
+            "the build path is a last resort, never a preference: {paths:?}"
         );
     }
 }

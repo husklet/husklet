@@ -309,7 +309,7 @@ impl NativeTerminalBridge {
         // `tcgetpgrp`, and none of the pumps' duplicates outlive a failure here.
         let guest = match discipline {
             InputDiscipline::Host => None,
-            InputDiscipline::Linux => GuestDiscipline::adopt(&slave, &master),
+            InputDiscipline::Linux => Some(GuestDiscipline::adopt(&slave, &master)?),
         };
         let control = Arc::new(NativeTerminalControl { master });
         terminal.attach(control)?;
@@ -618,21 +618,31 @@ struct GuestDiscipline {
 }
 
 impl GuestDiscipline {
-    /// Puts the slave in raw mode and takes over the discipline, or answers `None` and leaves the
-    /// terminal exactly as it was.
-    fn adopt(slave: &OwnedFd, master: &OwnedFd) -> Option<Arc<Self>> {
-        let slave = duplicate_owned(slave)?;
-        let master = duplicate_owned(master)?;
+    /// Puts the slave in raw mode and takes over the discipline, or fails and leaves the terminal
+    /// exactly as it was.
+    ///
+    /// Every step here needs the engine: the cooked image, the re-pairing, and the store the guest's
+    /// own `TCGETS` reads back all live in it. So an engine that did not load is reported as
+    /// [`CompositionError::EngineUnavailable`], naming the loader's reason, instead of leaving the
+    /// caller with the host discipline and no way to tell.
+    fn adopt(slave: &OwnedFd, master: &OwnedFd) -> Result<Arc<Self>, CompositionError> {
+        if let Some(error) = hl_native::artifact_load_error() {
+            eprintln!("[terminal] refuse: the guest line discipline needs the private engine: {error}");
+            return Err(CompositionError::EngineUnavailable);
+        }
+        let missing = || CompositionError::RuntimeConstruction;
+        let slave = duplicate_owned(slave).ok_or_else(missing)?;
+        let master = duplicate_owned(master).ok_or_else(missing)?;
         // What the guest would have seen had nothing changed: a freshly opened pty's cooked termios.
         // It is captured before the slave goes raw, because afterwards the host no longer holds it.
         let mut image = [0_u8; 36];
-        hl_native::terminal_termios_capture(slave.as_raw_fd(), &mut image)?;
-        let original = attributes(&slave)?;
-        make_raw(&slave)?;
+        hl_native::terminal_termios_capture(slave.as_raw_fd(), &mut image).ok_or_else(missing)?;
+        let original = attributes(&slave).ok_or_else(missing)?;
+        make_raw(&slave).ok_or_else(missing)?;
         // Re-pair that cooked image with the raw projection the host now holds, so the guest's own
         // TCGETS keeps answering with a cooked terminal instead of the raw mode imposed here.
-        hl_native::terminal_termios_adopt(slave.as_raw_fd(), &image)?;
-        Some(Arc::new(Self {
+        hl_native::terminal_termios_adopt(slave.as_raw_fd(), &image).ok_or_else(missing)?;
+        Ok(Arc::new(Self {
             slave,
             master,
             original,

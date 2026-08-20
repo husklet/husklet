@@ -1223,9 +1223,43 @@ mod tests {
         };
         assert_eq!(status, STATUS_NOT_SUPPORTED);
         assert!(output.is_null());
-        // SAFETY: fcntl retains no pointer and must report that create consumed the descriptor.
-        assert_eq!(unsafe { libc::fcntl(descriptors[0], libc::F_GETFD) }, -1);
-        assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EBADF));
+        // Consumption is proved from the *pipe*, not from the descriptor number. `fcntl(F_GETFD)` on
+        // the number answers about whatever that slot holds now, and the slot is process-wide: any
+        // sibling test thread that opens a file between the call above and this line can be handed
+        // exactly that number, and the check then reads a live descriptor and passes. The read end
+        // being gone is the property, and a write to the other end reports it -- EPIPE when create
+        // closed it, a successful write when it leaked it -- whoever else holds the number by then.
+        // SAFETY: an all-zero `sigset_t` is a valid empty set on every platform this builds for, and
+        // both are overwritten by `sigemptyset`/`pthread_sigmask` before they are read.
+        let mut previous: libc::sigset_t = unsafe { std::mem::zeroed() };
+        // SAFETY: as above.
+        let mut blocked: libc::sigset_t = unsafe { std::mem::zeroed() };
+        // SAFETY: both sets are owned local storage. The mask is per-thread, so no sibling test's
+        // SIGPIPE disposition is touched, and it is restored below.
+        unsafe {
+            libc::sigemptyset(&raw mut blocked);
+            libc::sigaddset(&raw mut blocked, libc::SIGPIPE);
+            libc::pthread_sigmask(libc::SIG_BLOCK, &raw const blocked, &raw mut previous);
+        }
+        // SAFETY: the write end is still owned here and one byte of local storage is readable.
+        let written = unsafe { libc::write(descriptors[1], [0_u8].as_ptr().cast(), 1) };
+        let error = std::io::Error::last_os_error().raw_os_error();
+        // SAFETY: drains the SIGPIPE this thread queued for itself, then restores its own mask.
+        unsafe {
+            // SAFETY: an all-zero `sigset_t` is valid and `sigpending` overwrites it before it is read.
+            let mut pending: libc::sigset_t = std::mem::zeroed();
+            libc::sigpending(&raw mut pending);
+            if libc::sigismember(&raw const pending, libc::SIGPIPE) == 1 {
+                let immediate = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+                libc::sigtimedwait(&raw const blocked, std::ptr::null_mut(), &raw const immediate);
+            }
+            libc::pthread_sigmask(libc::SIG_SETMASK, &raw const previous, std::ptr::null_mut());
+        }
+        assert_eq!(
+            (written, error),
+            (-1, Some(libc::EPIPE)),
+            "create must consume the provider descriptor it rejected, closing the pipe's read end"
+        );
         // SAFETY: the write end remains owned by this test.
         assert_eq!(unsafe { libc::close(descriptors[1]) }, 0);
     }

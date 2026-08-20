@@ -13,6 +13,29 @@ const FORBID_REMOTE_ENV: &str = "HL_TEST_FORBID_REMOTE_IMAGES";
 const CHILD_TEST: &str = "runtime::domain::product_checkpoint_test::product_checkpoint_domain_worker";
 const PHASE: Duration = Duration::from_secs(45);
 const START: Duration = Duration::from_secs(180);
+
+/// The whole part of the one-minute load average plus one, clamped, or 1 where the host does not
+/// publish one. Parsed textually: it multiplies a deadline, it is not a measurement.
+fn observed_load() -> u32 {
+    let Ok(text) = std::fs::read_to_string("/proc/loadavg") else {
+        return 1;
+    };
+    text.split_ascii_whitespace()
+        .next()
+        .and_then(|value| value.split('.').next())
+        .and_then(|whole| whole.parse::<u32>().ok())
+        .map_or(1, |load| load.saturating_add(1).clamp(1, 16))
+}
+
+/// A budget for one phase of a journey, widened by the load the host is actually under.
+///
+/// Every wait these journeys perform is on a real signal -- a socket that accepts, a child that
+/// exits, a file that grows -- so a longer budget cannot make a failing assertion pass; it can only
+/// stop a still-progressing one being cut off because eighteen other tests were running. A fixed
+/// budget measures the machine, and the machine is the part that moves.
+fn budget(base: Duration) -> Duration {
+    base * observed_load()
+}
 /// Close/reopen cycles driven against one workspace.
 ///
 /// A single cycle passes on a tree where repeated cycling does not: the defect the user reported
@@ -225,7 +248,7 @@ impl Fixture {
             child,
             armed: true,
         };
-        self.wait_domain(&mut child, START)?;
+        self.wait_domain(&mut child, budget(START))?;
         self.phase(format!("cycle={cycle} start_ms={}", started.elapsed().as_millis()));
         child.known.extend(process_tree(child.id())?);
         Ok(child)
@@ -261,13 +284,27 @@ impl Fixture {
         child.known.extend(old_tree.iter().copied());
         let started = Instant::now();
         if let Err(error) = self.domain.close_handover(Close::Continue, || Ok(())) {
+            let load = observed_load();
             self.phase(format!(
-                "cycle={cycle} close_failed_ms={} error={error}",
+                "cycle={cycle} close_failed_ms={} load={load} error={error}",
                 started.elapsed().as_millis()
             ));
+            // A refused capture under load is not a flake in this file and cannot be fixed here.
+            // The engine's checkpoint coordinator gives the whole peer rendezvous a fixed wall
+            // budget -- 500 passes of a 10 ms poll, `linux_abi/checkpoint/image.c` -- and refuses
+            // the capture if any enumerated guest process has not reached a safepoint by then.
+            // Starve the box and one of them will not. Say so, rather than leaving the next reader
+            // to rediscover it from the domain log.
+            if error.to_string().contains("CaptureRefused") {
+                self.phase(format!(
+                    "cycle={cycle} capture refused at load {load}: a participant did not reach a                      checkpoint safepoint inside the coordinator's fixed rendezvous budget. This is                      the engine's budget, not a deadline this test controls; see the domain worker                      log for the participant it named"
+                ));
+            }
             return Err(error.into());
         }
-        if let Err(error) = wait_child(child, PHASE).and_then(|()| wait_processes_gone(&old_tree, PHASE)) {
+        if let Err(error) =
+            wait_child(child, budget(PHASE)).and_then(|()| wait_processes_gone(&old_tree, budget(PHASE)))
+        {
             self.phase(format!(
                 "cycle={cycle} reap_failed_ms={} error={error}",
                 started.elapsed().as_millis()
@@ -333,6 +370,7 @@ async fn continue_later_restores_the_primary_sleep_tree_across_repeated_cycles()
         Ok(fixture) => fixture,
         Err(error) => panic!("create product checkpoint fixture: {error}"),
     };
+    fixture.phase(format!("load={}", observed_load()));
     let total = Instant::now();
     let outcome = run_cycles(&mut fixture).await;
     if let Err(error) = outcome {
@@ -350,7 +388,7 @@ async fn run_cycles(fixture: &mut Fixture) -> TestResult {
     let failure = fixture.rootfs.join("tmp/husklet-continue-failure");
 
     let mut domain = fixture.spawn_domain(0)?;
-    wait_for_growth(&progress, 0, PHASE)?;
+    wait_for_growth(&progress, 0, budget(PHASE))?;
     let expected = read_guest_identities(&identities)?;
     assert_eq!(
         expected.len(),
@@ -365,7 +403,7 @@ async fn run_cycles(fixture: &mut Fixture) -> TestResult {
             return Err("guest progressed after the old domain lease was released".into());
         }
         domain = fixture.spawn_domain(cycle)?;
-        wait_for_growth(&progress, stopped, PHASE)?;
+        wait_for_growth(&progress, stopped, budget(PHASE))?;
         if fresh.exists() {
             return Err("restore silently fresh-started the primary process".into());
         }
@@ -382,8 +420,8 @@ async fn run_cycles(fixture: &mut Fixture) -> TestResult {
     let final_tree = process_tree(domain.id())?;
     domain.known.extend(final_tree.iter().copied());
     fixture.domain.close_handover(Close::Kill, || Ok(()))?;
-    wait_child(&mut domain, PHASE)?;
-    wait_processes_gone(&final_tree, PHASE)?;
+    wait_child(&mut domain, budget(PHASE))?;
+    wait_processes_gone(&final_tree, budget(PHASE))?;
     domain.armed = false;
     Ok(())
 }
@@ -672,6 +710,7 @@ async fn continue_later_keeps_a_terminal_backed_pane_execution_across_repeated_c
         Ok(fixture) => fixture,
         Err(error) => panic!("create product checkpoint fixture: {error}"),
     };
+    fixture.phase(format!("exec load={}", observed_load()));
     let total = Instant::now();
     let outcome = run_exec_cycles(&mut fixture).await;
     if let Err(error) = outcome {
@@ -694,7 +733,7 @@ async fn run_exec_cycles(fixture: &mut Fixture) -> TestResult {
     let identity = journey.identity().to_owned();
     let command = journey.configured_command().to_vec();
     let mut attachment = Some(journey.open_and_type().await?);
-    wait_for_growth(&progress, 0, PHASE)?;
+    wait_for_growth(&progress, 0, budget(PHASE))?;
     fixture.phase(format!("exec cycle=0 execution={identity} typed"));
 
     for cycle in 1..=EXEC_CYCLES {
@@ -727,7 +766,7 @@ async fn run_exec_cycles(fixture: &mut Fixture) -> TestResult {
         match resumption {
             Resumption::Reattached => {
                 attachment = output;
-                wait_for_growth(&progress, stopped, PHASE)?;
+                wait_for_growth(&progress, stopped, budget(PHASE))?;
             }
             Resumption::Refused => {
                 return Err(format!(
@@ -752,8 +791,8 @@ async fn run_exec_cycles(fixture: &mut Fixture) -> TestResult {
     domain.known.extend(final_tree.iter().copied());
     drop(attachment.take());
     fixture.domain.close_handover(Close::Kill, || Ok(()))?;
-    wait_child(&mut domain, PHASE)?;
-    wait_processes_gone(&final_tree, PHASE)?;
+    wait_child(&mut domain, budget(PHASE))?;
+    wait_processes_gone(&final_tree, budget(PHASE))?;
     domain.armed = false;
     Ok(())
 }
