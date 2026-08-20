@@ -82,6 +82,11 @@ static int pc_guest_adrp_ok(hl_reloc r, const uint8_t *arena, uint64_t saved_rx)
 // and the exit-time save atomically replaces the bad file).
 static int pcache_load(uint64_t entry_jump) {
     if (!g_pcache || hl_identity_digest_empty(&g_pc_binid) || g_force_base_failed) return 0;
+    // Every persisted block was translated under an armed ledger, so it carries memory guards; a restored
+    // arena is only sound in a process whose ledger is armed and latched for good. The launch path does
+    // that before it gets here -- refuse rather than restore guarded code into a bus that can still take a
+    // 0 -> 1 edge and rotate it away, or a disarmed one whose later arm would have nothing to invalidate.
+    if (!jit_guest_bus_active()) return 0;
     uint64_t t0 = g_coldprof ? now_ns() : 0;
     char path[1024];
     if (!pcache_file(path, sizeof path)) return 0;
@@ -301,6 +306,7 @@ static int pcache_load(uint64_t entry_jump) {
 static void pcache_save(void) {
     if (!g_pcache || hl_identity_digest_empty(&g_pc_binid) || g_cp == g_cache) return;
     if (g_pcache_poison || g_pcache_loaded || g_pcache_forked || g_force_base_failed || smc_seen()) return;
+    if (!jit_guest_bus_active()) return; // unguarded blocks must never reach a file that outlives this process
     uint64_t t0 = g_coldprof ? now_ns() : 0;
     char path[1024];
     if (!pcache_file(path, sizeof path)) return;
