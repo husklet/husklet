@@ -903,6 +903,12 @@ static int soft_tlb_miss(struct cpu *c) {
 
 #if defined(HL_NATIVE_TEST_HOOKS)
 HL_API int hl_x86_64_store_preflight_test(void) {
+#if !defined(HL_HOST_CPU_AARCH64)
+    /* Emitters exist only on the JIT path, which this backend builds for an
+     * aarch64 host. Report "not applicable" rather than a clean zero, which
+     * would claim a property nothing checked. */
+    return 4;
+#else
     uint32_t code[256] = {0};
     uint8_t *saved_cp = g_cp;
     int saved_recorded = g_address_recorded;
@@ -948,6 +954,7 @@ HL_API int hl_x86_64_store_preflight_test(void) {
     g_test_store_preflight_active = 0;
     g_sigact[11].handler = saved_handler;
     return valid ? 0 : 1;
+#endif
 }
 #endif
 
@@ -1013,6 +1020,9 @@ static int x86_reserved_gpr_classified(uint32_t word) {
 }
 
 HL_API int hl_x86_64_reserved_register_test(void) {
+#if !defined(HL_HOST_CPU_AARCH64)
+    return 4; /* no emitted code on a host without the JIT; see above */
+#else
     static uint32_t code[8192];
     memset(code, 0, sizeof code);
     uint8_t *saved_cp = g_cp;
@@ -1088,6 +1098,7 @@ HL_API int hl_x86_64_reserved_register_test(void) {
     for (size_t index = 0; index < count; ++index)
         if (x86_reserved_gpr_word(code[index])) return 1;
     return 0;
+#endif
 }
 
 #undef HL_X86_RESERVED_GPR

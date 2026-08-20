@@ -1029,6 +1029,7 @@ uint64_t hl_run_linux_guest_translations(void) {
  * fields back: no emitted instruction may name x18 as a base, destination, or
  * MRS/MSR operand. Returns zero when the emitted code is clean.
  */
+#if defined(HL_HOST_CPU_AARCH64) && !defined(HL_A64_INTERPRETER_SMOKE)
 static int hl_aarch64_reserved_register_scan(const uint32_t *words, size_t count) {
     for (size_t index = 0; index < count; ++index) {
         uint32_t word = words[index];
@@ -1042,8 +1043,16 @@ static int hl_aarch64_reserved_register_scan(const uint32_t *words, size_t count
     }
     return 0;
 }
+#endif
 
 HL_API int hl_aarch64_reserved_register_test(void) {
+#if !(defined(HL_HOST_CPU_AARCH64) && !defined(HL_A64_INTERPRETER_SMOKE))
+    /* The emitters this reads exist only on the JIT path. A host that runs the
+     * aarch64 guest through the interpreter has no emitted code to scan, so the
+     * honest answer is "not applicable" -- never a clean zero, which would claim
+     * a property nothing checked. */
+    return 4;
+#else
     uint32_t code[512];
     memset(code, 0, sizeof code);
     uint8_t *saved_cp = g_cp;
@@ -1079,5 +1088,6 @@ HL_API int hl_aarch64_reserved_register_test(void) {
             soft_tlb_loads++;
     if (soft_tlb_loads < 4) return 3;
     return hl_aarch64_reserved_register_scan(code, emitted) ? 1 : 0;
+#endif
 }
 #endif
