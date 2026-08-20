@@ -98,8 +98,11 @@ static int exec_image_capabilities(int descriptor, hl_exec_file_capabilities *ca
     const char *name = "user.hl.guest.security.capability";
     ssize_t length = hl_native_fgetxattr(descriptor, name, bytes, sizeof bytes, 0, 0);
     if (length < 0) {
+        /* glibc defines ENOATTR *as* ENODATA, so testing both is `-Werror=logical-op`:
+         * two operands the compiler can see are identical. Darwin keeps them distinct
+         * (ENOATTR 93, ENODATA 96), so the second test still has to exist there. */
         if (errno == ENODATA
-#ifdef ENOATTR
+#if defined(ENOATTR) && ENOATTR != ENODATA
             || errno == ENOATTR
 #endif
         )
