@@ -37,6 +37,40 @@ static uint64_t hl_elf_ph64(const uint8_t *p) {
     return (uint64_t)hl_elf_ph32(p) | ((uint64_t)hl_elf_ph32(p + 4) << 32);
 }
 
+// One protection change over [address, address + length), retrying only the transient out-of-memory the
+// host reports when it cannot split a VM entry under pressure. Returns non-zero when the host accepted it.
+static int hl_elf_protect_span(const hl_host_memory_mapping *mapping, uint64_t address, uint64_t length,
+                               uint32_t flags) {
+    if (mapping != NULL) {
+        uint32_t protection = HL_HOST_MEMORY_READ | ((flags & 2) ? HL_HOST_MEMORY_WRITE : 0) |
+                              ((flags & 1) ? HL_HOST_MEMORY_EXECUTE : 0);
+        const hl_host_services *host = effective_host_services();
+        for (int t = 0;; t++) {
+            hl_host_result r =
+                host->memory->protect(host->context, mapping->handle, address - mapping->address, length, protection);
+            if (r.status == HL_STATUS_OK) return 1;
+            if (r.status != HL_STATUS_OUT_OF_MEMORY || t >= HL_ELF_PROTECT_RETRIES) return 0;
+            usleep(2000u << t);
+        }
+    }
+    {
+        int protection = PROT_READ | ((flags & 2) ? PROT_WRITE : 0) | ((flags & 1) ? PROT_EXEC : 0);
+        return mprotect((void *)(uintptr_t)address, (size_t)length, protection) == 0;
+    }
+}
+
+// Apply one coalesced run. A refusal of the whole run falls back to the page-at-a-time form it replaced,
+// so a host that can tighten some pages of a span and not others still tightens exactly those pages --
+// the loader's protection contract is best-effort per page and coalescing must not narrow it.
+static void hl_elf_protect_run(const hl_host_memory_mapping *mapping, uint64_t address, uint64_t length,
+                               uint32_t flags, size_t host_page) {
+    if (length == 0 || flags == 0) return;
+    if (hl_elf_protect_span(mapping, address, length, flags)) return;
+    if (length == (uint64_t)host_page) return; /* a one-page run has no narrower form to retry */
+    for (uint64_t page = address; page < address + length; page += host_page)
+        (void)hl_elf_protect_span(mapping, page, (uint64_t)host_page, flags);
+}
+
 // `phdr` is the program-header table (file or mapped copy -- identical bytes), `bias` the amount the
 // image was displaced from its link address. `mapping` is the image's host mapping; pass NULL to change
 // the protection with mprotect(2) directly.
@@ -60,6 +94,9 @@ static void hl_elf_protect_segments(const hl_host_memory_mapping *mapping, const
         // Walk segment coverage rather than the image hull: sparse PT_LOAD addresses must not turn their
         // unmapped gap into work or protection calls. The earliest intersecting segment owns each host page;
         // the inner scan still unions every segment sharing that page.
+        uint64_t run_start = 0;
+        uint64_t run_length = 0;
+        uint32_t run_flags = 0;
         for (int owner = 0; owner < phnum; ++owner) {
             const uint8_t *owner_ph = phdr + (size_t)owner * (size_t)phent;
             if (hl_elf_ph32(owner_ph) != 1) continue;
@@ -83,34 +120,40 @@ static void hl_elf_protect_segments(const hl_host_memory_mapping *mapping, const
                         break;
                     }
                 }
-                if (already_visited) continue;
                 uint32_t flags = 0;
-                for (int i = 0; i < phnum; i++) {
-                    const uint8_t *ph = phdr + (size_t)i * (size_t)phent;
-                    if (hl_elf_ph32(ph) != 1) continue;
-                    uint64_t v = hl_elf_ph64(ph + 16), msz = hl_elf_ph64(ph + 40);
-                    uint64_t s = (v + bias) & ~UINT64_C(0xFFF);
-                    uint64_t e = (v + bias + msz + UINT64_C(0xFFF)) & ~UINT64_C(0xFFF);
-                    if (e > page && s < page + host_page) flags |= hl_elf_ph32(ph + 4);
-                }
-                if (flags == 0) continue;
-                if (mapping != NULL) {
-                    uint32_t protection = HL_HOST_MEMORY_READ | ((flags & 2) ? HL_HOST_MEMORY_WRITE : 0) |
-                                          ((flags & 1) ? HL_HOST_MEMORY_EXECUTE : 0);
-                    const hl_host_services *host = effective_host_services();
-                    for (int t = 0;; t++) {
-                        hl_host_result r = host->memory->protect(host->context, mapping->handle,
-                                                                 page - mapping->address, host_page, protection);
-                        if (r.status == HL_STATUS_OK || r.status != HL_STATUS_OUT_OF_MEMORY ||
-                            t >= HL_ELF_PROTECT_RETRIES)
-                            break;
-                        usleep(2000u << t);
+                if (!already_visited) {
+                    for (int i = 0; i < phnum; i++) {
+                        const uint8_t *ph = phdr + (size_t)i * (size_t)phent;
+                        if (hl_elf_ph32(ph) != 1) continue;
+                        uint64_t v = hl_elf_ph64(ph + 16), msz = hl_elf_ph64(ph + 40);
+                        uint64_t s = (v + bias) & ~UINT64_C(0xFFF);
+                        uint64_t e = (v + bias + msz + UINT64_C(0xFFF)) & ~UINT64_C(0xFFF);
+                        if (e > page && s < page + host_page) flags |= hl_elf_ph32(ph + 4);
                     }
+                }
+                /* A protection change is per-range, not per-page, on every supported host, and a run of
+                 * adjacent host pages that resolved to the SAME PT_LOAD flags is exactly such a range.
+                 * Emitting it page by page asked the host kernel once per page for an answer one call
+                 * covers: a statically linked x86-64 guest carries ~255 executable pages, so a single
+                 * fork+exec issued ~181 mprotect(2) calls where three suffice -- 36.6% of the 494
+                 * host syscalls this engine spends per guest spawn (measured, naa0245, x86_64 Linux).
+                 * Defer each page into the open run and flush when the run cannot grow. */
+                if (run_length != 0 && (flags != run_flags || page != run_start + run_length))
+                    hl_elf_protect_run(mapping, run_start, run_length, run_flags, host_page);
+                if (flags == 0) {
+                    run_length = 0;
+                    continue;
+                }
+                if (run_length != 0 && flags == run_flags && page == run_start + run_length) {
+                    run_length += host_page;
                 } else {
-                    int protection = PROT_READ | ((flags & 2) ? PROT_WRITE : 0) | ((flags & 1) ? PROT_EXEC : 0);
-                    (void)mprotect((void *)(uintptr_t)page, host_page, protection);
+                    run_start = page;
+                    run_length = host_page;
+                    run_flags = flags;
                 }
             }
+            if (run_length != 0) hl_elf_protect_run(mapping, run_start, run_length, run_flags, host_page);
+            run_length = 0;
         }
     }
     for (int i = 0; i < phnum; i++) {
