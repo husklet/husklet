@@ -832,9 +832,9 @@ pub(crate) fn fdvis_path_publication_test(isa: u32, scenario: u32) -> bool {
 }
 
 #[cfg(feature = "native-test-hooks")]
-pub(crate) fn x86_store_preflight_test() -> bool {
+pub(crate) fn x86_store_preflight_test() -> i32 {
     // SAFETY: the feature-gated hook owns its local emitter and CPU fixtures.
-    unsafe { hl_x86_64_store_preflight_test() == 0 }
+    unsafe { hl_x86_64_store_preflight_test() }
 }
 
 #[cfg(feature = "native-test-hooks")]
