@@ -134,9 +134,18 @@ impl Runtime {
             crate::runtime::checkpoint::WorkspaceCheckpoints::open(&workspace_root).map_err(io::Error::other)?,
         );
         let root = workspace_root.join("containers");
-        // The engine's AArch64 persistent translation cache currently corrupts dynamic
-        // interpreter/exec relocations on a warm load. Keep execution correct until the engine
-        // regression is fixed; this is application-selected policy, not a container workaround.
+        // The persistent translation cache stays unselected here, and `Config::translation_cache`
+        // is the one switch that would select it. Two reasons, in order.
+        //
+        // The recorded warm-load corruption had a concrete cause and it is now fixed: the AArch64
+        // BUS guard baked an absolute arena pointer that nothing relocated, so a restored guard
+        // branched into the writing process on its first slow path (RK_BUSRESUME, PC_VERSION 14).
+        // That was one cause found by one lane on one host; it is not proof there is no second.
+        //
+        // Selecting the cache also pins the guest image and interpreter at fixed VAs
+        // (PC_IMG_BASE / PC_INTERP_BASE), which is a large guest address-layout change. Turning it
+        // on is a measurement, not a comment, and it needs macOS warm-run evidence first.
+        // This is application-selected policy, not a container workaround.
         let containers = Containers::builder(Config::new(&root))
             .images(images)
             .checkpoints(checkpoints)
