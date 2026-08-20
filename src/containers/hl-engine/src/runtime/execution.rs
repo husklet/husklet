@@ -63,7 +63,9 @@ fn refuse_unownable_root(plan: &crate::launcher::plan::RuntimePlan) -> Result<()
     use std::os::unix::fs::MetadataExt;
     let Some(root) = writable_root(plan) else { return Ok(()) };
     let path = std::path::Path::new(std::ffi::OsStr::from_bytes(root));
-    let Ok(metadata) = std::fs::metadata(path) else { return Ok(()) };
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return Ok(());
+    };
     // SAFETY: `geteuid` takes no arguments, reads no caller memory, and is documented never to fail.
     let engine_uid = unsafe { libc::geteuid() };
     let rootfs_uid = metadata.uid();
@@ -79,10 +81,7 @@ fn refuse_unownable_root(plan: &crate::launcher::plan::RuntimePlan) -> Result<()
         path.display(),
         path.display()
     );
-    Err(EngineError::RootfsNotOwnedByEngine {
-        rootfs_uid,
-        engine_uid,
-    })
+    Err(EngineError::RootfsNotOwnedByEngine { rootfs_uid, engine_uid })
 }
 
 pub(crate) struct ProductionMachine {
@@ -1141,8 +1140,14 @@ mod rootfs_ownership_tests {
     /// it would take away a shape that works.
     #[test]
     fn a_read_only_launch_over_the_same_root_is_still_admitted() {
-        assert_eq!(writable_root(&plan(Some(host_root_owned()), &[("HL_ROOTFS_RO", "1")])), None);
-        assert_eq!(refuse_unownable_root(&plan(Some(host_root_owned()), &[("HL_ROOTFS_RO", "1")])), Ok(()));
+        assert_eq!(
+            writable_root(&plan(Some(host_root_owned()), &[("HL_ROOTFS_RO", "1")])),
+            None
+        );
+        assert_eq!(
+            refuse_unownable_root(&plan(Some(host_root_owned()), &[("HL_ROOTFS_RO", "1")])),
+            Ok(())
+        );
     }
 
     /// With an overlay the lower layers are read-only by construction and every write lands in the
@@ -1151,10 +1156,7 @@ mod rootfs_ownership_tests {
     fn an_overlay_is_judged_by_its_upper_layer_not_by_a_root_owned_lower() {
         let directory = tempfile::tempdir().unwrap();
         let upper = directory.path().to_str().unwrap();
-        let over_root = plan(
-            Some(host_root_owned()),
-            &[("HL_OVERLAY_UPPER", upper)],
-        );
+        let over_root = plan(Some(host_root_owned()), &[("HL_OVERLAY_UPPER", upper)]);
         assert_eq!(writable_root(&over_root), Some(upper.as_bytes()));
         assert_eq!(refuse_unownable_root(&over_root), Ok(()));
     }

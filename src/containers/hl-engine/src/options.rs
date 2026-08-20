@@ -371,8 +371,7 @@ mod tests {
                 }
             }
         }
-        let native = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../runtime/hl-native/src/native");
+        let native = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runtime/hl-native/src/native");
         let mut sources = Vec::new();
         walk(&native, &mut sources);
         assert!(sources.len() > 50, "scanned only {} native sources", sources.len());
@@ -385,7 +384,9 @@ mod tests {
         let mut names = Vec::new();
         for source in native_sources() {
             for fragment in source.split("hl_option_get(\"").skip(1) {
-                let Some((name, _)) = fragment.split_once('"') else { continue };
+                let Some((name, _)) = fragment.split_once('"') else {
+                    continue;
+                };
                 if name.starts_with("HL_CKPT_TEST_") && !names.iter().any(|held| held == name) {
                     names.push(name.to_owned());
                 }
@@ -446,7 +447,10 @@ mod tests {
                 macro_name.ends_with("HL_INJECTION"),
                 "{name} is registered as {}_OPTION, so hl_options_clone would copy it into every \
                  derived option set instead of scoping it to the launch that armed it",
-                macro_name.rsplit(|character: char| character.is_whitespace()).next().unwrap_or("")
+                macro_name
+                    .rsplit(|character: char| character.is_whitespace())
+                    .next()
+                    .unwrap_or("")
             );
             let _ = entry;
         }

@@ -74,7 +74,9 @@ int main(void) {
         .output()
         .expect("injection scope probe compiler");
     assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
-    let run = Command::new(&executable).status().expect("injection scope probe execution");
+    let run = Command::new(&executable)
+        .status()
+        .expect("injection scope probe execution");
     assert!(
         run.success(),
         "injection scope probe failed with {run}; the exit code is the numbered check in probe.c"
