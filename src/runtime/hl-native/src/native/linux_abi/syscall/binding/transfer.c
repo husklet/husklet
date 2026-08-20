@@ -389,6 +389,17 @@ static int bound_socket_route(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t 
     default: return 0;
     }
     (void)a3;
+    /* Linux raises SIGPIPE on the writing thread when a write finds a pipe or socket with no reader, in
+       addition to returning EPIPE, and its default action terminates the writer -- which is what stops the
+       left-hand side of `cmd | head`. The retained descriptor path does this in svc_write_host and
+       svc_writev. A BOUND descriptor is the same guest write reaching the typed hl_linux_write instead,
+       and an ADOPTED stdin/stdout/stderr is always bound, so every pipeline whose writer was handed its
+       stdout by the launcher got EPIPE and no signal: `make --version | head -1` reported a write error
+       and ran to completion where Linux kills it. Raise it on the same disposition-aware path the
+       retained route uses -- SIG_IGN or blocked leaves the EPIPE alone standing, a handler runs and the
+       guest still gets EPIPE, SIG_DFL terminates the writer -- and only for the operations that
+       generate it. Idempotent with the host's own SIGPIPE for the same write: one non-realtime bit. */
+    if (svc_sigpipe_generating_write(nr)) svc_sigpipe_on_epipe(c, result);
     G_RET(c) = (uint64_t)result;
     return 1;
 }

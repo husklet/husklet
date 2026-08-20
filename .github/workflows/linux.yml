@@ -23,6 +23,16 @@ permissions:
 # you learn `main` is red, not which commit reddened it. With nine lanes merging,
 # that is the difference between a lane fixing its own break and someone bisecting.
 #
+# THAT PAID FOR ITSELF WITHIN AN HOUR OF LANDING, and the example is worth keeping.
+# This workflow ran on 84d39c956 (pass), 71ca5e976 (FAIL at `Test every workspace
+# library and binary`) and 7b18c96cd (pass). The diff between the passing 84d39c956
+# and the failing 71ca5e976 is `.github/workflows/linux.yml` AND NOTHING ELSE -- a
+# file `cargo test` never reads. Byte-identical code across a pass and a fail is
+# PROOF of flakiness rather than suspicion of it.
+# Under the collapsing scheme one of those two runs would not have existed, and this
+# would have read as "Linux went red somewhere across a range of lane merges" -- a
+# bisect through other people's work for a defect that does not exist.
+#
 # Grouping per commit fixes attribution but costs a concurrent runner per push, and
 # the constraint is macOS: GitHub allows 5 concurrent macOS runners. Today the macOS
 # jobs are short (8.4 and 5.7 minutes) and per-SHA grouping would fit -- but the 5.7
@@ -288,10 +298,37 @@ jobs:
       # AGENTS.md names this the gate every lane must run, and until today no CI job on
       # any host had ever run it on Linux. It excludes nothing. `--no-fail-fast` so a
       # failure reports the whole picture rather than the first crate that reddened.
+      # ON FAILURE THIS STEP NAMES THE TESTS. A job log needs admin rights to download,
+      # so to anyone without them a failure here is the annotation `Process completed
+      # with exit code 101` and nothing else. That happened on 71ca5e976: a real
+      # intermittent failure whose test could not be identified at all, and which then
+      # did not reproduce in 3 of 3 local rounds at `taskset -c 0-3`. An intermittent
+      # failure you cannot name is one you cannot route to an owner.
       - name: Test every workspace library and binary
-        run: >-
-          nix --extra-experimental-features 'nix-command flakes' develop . --command
-          cargo test --workspace --lib --bins --locked --offline --no-fail-fast
+        run: |
+          set -o pipefail
+          status=0
+          nix --extra-experimental-features 'nix-command flakes' develop . --command \
+            cargo test --workspace --lib --bins --locked --offline --no-fail-fast \
+            2>&1 | tee "$RUNNER_TEMP/workspace-tests.log" || status=$?
+          if [ "$status" -ne 0 ]; then
+            failed="$(grep -E '^test .+ \.\.\. FAILED$' "$RUNNER_TEMP/workspace-tests.log" \
+              | sed -e 's/^test //' -e 's/ \.\.\. FAILED$//' || true)"
+            if [ -n "$failed" ]; then
+              printf 'FAILED TESTS:\n%s\n' "$failed"
+              diagnostic="$failed"
+              diagnostic="${diagnostic//'%'/'%25'}"
+              diagnostic="${diagnostic//$'\r'/'%0D'}"
+              diagnostic="${diagnostic//$'\n'/'%0A'}"
+              echo "::error title=Workspace test failures::$diagnostic"
+            else
+              # Deliberately distinguished: no named test means this was not an assertion
+              # -- a build error, a panic outside a test body, or a killed process -- and
+              # that is a different investigation.
+              echo "::error title=Workspace tests failed with no named test::cargo exited $status but no line matched '^test ... FAILED', so this is not a failing assertion. Look for a build error, a panic outside a test body, or a killed process."
+            fi
+          fi
+          exit "$status"
 
       # THE EIGHT LINUX-ONLY FLAKE CHECKS HAD NO RUNNER ANYWHERE. They are
       # `lib.optionalAttrs pkgs.stdenv.isLinux` in `flake.nix`, so the macOS job's

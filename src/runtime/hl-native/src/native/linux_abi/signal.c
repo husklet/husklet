@@ -1197,6 +1197,23 @@ static void svc_sigpipe_on_epipe(struct cpu *c, int64_t ret) {
     if (c && ret == -(int64_t)EPIPE) raise_guest_signal(c, 13); // Linux SIGPIPE
 }
 
+// Which syscalls generate SIGPIPE. It is a property of the operation, not of the errno: a pipe or socket
+// write with no reader raises it (pipe_write/sk_stream_error -> send_sig(SIGPIPE)), while an EPIPE
+// surfaced by anything else -- an ioctl, a close, a metadata query -- is an ordinary error and must stay
+// silent. The plain write family is listed and the send family is not, because send*(2) carries
+// MSG_NOSIGNAL and so has to decide per call inside its own handler.
+static int svc_sigpipe_generating_write(uint64_t nr) {
+    switch (nr) {
+    case 64:  // write
+    case 66:  // writev
+    case 68:  // pwrite64
+    case 70:  // pwritev
+    case 287: // pwritev2
+        return 1;
+    default: return 0;
+    }
+}
+
 // A synchronous CPU fault (SIGSEGV/SIGBUS) taken inside translated code is the GUEST's own fault. If the
 // guest installed a handler for it, reconstruct the guest register state from the host fault context,
 // synthesize the Linux siginfo (si_addr = the guest fault address), queue the signal, and steer the host
