@@ -55,6 +55,7 @@ pub(crate) type ScenarioTest = unsafe extern "C" fn(c_uint) -> c_int;
 pub(crate) type SignalFrameTest = unsafe extern "C" fn(c_uint, c_uint, u64, i64, *mut i64, *mut i64) -> c_int;
 #[cfg(feature = "native-test-hooks")]
 pub(crate) type NoArgumentTest = unsafe extern "C" fn() -> c_int;
+#[cfg(feature = "native-test-hooks")]
 pub(crate) type TermiosInstallTest = unsafe extern "C" fn(c_int, *const u8);
 #[cfg(feature = "native-test-hooks")]
 pub(crate) type UnixIdentityTest = unsafe extern "C" fn(c_uint, c_int, u64, *mut u64, *mut u64, *mut c_uint) -> c_int;
