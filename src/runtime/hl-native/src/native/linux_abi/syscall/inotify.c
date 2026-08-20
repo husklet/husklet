@@ -60,10 +60,14 @@ static char *bound_inotify_snapshot(bound_inotify_provider *provider, const char
             break;
         }
         for (index = 0; index < (uint32_t)read.value; ++index) {
-            size_t name_size = entries[index].name_size;
+            // The snapshot is differenced to produce IN_CREATE/IN_DELETE names, so it must hold the
+            // guest's spelling of each entry, not the host's case escape.
+            char decoded[256];
+            const char *visible = hl_case_visible(entries[index].name, decoded, sizeof decoded);
+            size_t name_size = strlen(visible);
             char *grown;
-            if ((name_size == 1 && entries[index].name[0] == '.') ||
-                (name_size == 2 && entries[index].name[0] == '.' && entries[index].name[1] == '.'))
+            if ((name_size == 1 && visible[0] == '.') ||
+                (name_size == 2 && visible[0] == '.' && visible[1] == '.'))
                 continue;
             if (size > SIZE_MAX - name_size - 2u) {
                 read.status = HL_STATUS_OUT_OF_MEMORY;
@@ -79,7 +83,7 @@ static char *bound_inotify_snapshot(bound_inotify_provider *provider, const char
                 }
                 snapshot = grown;
             }
-            memcpy(snapshot + size, entries[index].name, name_size);
+            memcpy(snapshot + size, visible, name_size);
             size += name_size;
             snapshot[size++] = '\n';
             snapshot[size] = 0;

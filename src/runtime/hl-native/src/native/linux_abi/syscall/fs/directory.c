@@ -204,7 +204,14 @@ static void svc_fs_directory_61(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
         long pos = telldir(dir);
         int einval = 0;
         while ((de = readdir(dir))) {
-            size_t nl = strlen(de->d_name), lr = (19 + nl + 1 + 7) & ~7ull;
+            // Present the guest's own name. On a case-folding host the namespace stores a
+            // case-colliding component escaped, and a listing that emitted the stored spelling would
+            // hand `ls` a hex blob and make glob-then-open read a name that is not the name. The
+            // escape is a total, deterministic function of the guest bytes, so the reverse is a pure
+            // decode of this entry -- no lookup, and nothing re-resolved by string.
+            char decoded[256];
+            const char *name = hl_case_visible(de->d_name, decoded, sizeof decoded);
+            size_t nl = strlen(name), lr = (19 + nl + 1 + 7) & ~7ull;
             if (o + lr > (size_t)a2) {
                 seekdir(dir, pos);
                 // Linux getdents64: a result buffer too small to hold even the first pending entry
@@ -227,7 +234,7 @@ static void svc_fs_directory_61(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
             *(uint64_t *)(ld + 8) = o + lr;
             *(uint16_t *)(ld + 16) = (uint16_t)lr;
             *(ld + 18) = de->d_type;
-            memcpy(ld + 19, de->d_name, nl);
+            memcpy(ld + 19, name, nl);
             ld[19 + nl] = 0;
             if (guest_copy_to(a1 + o, record, lr) != (ssize_t)lr) {
                 seekdir(dir, pos);

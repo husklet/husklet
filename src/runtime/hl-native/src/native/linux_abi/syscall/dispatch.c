@@ -20,6 +20,7 @@ int g_rwx_guest;
 #include "../host_sysv.h"
 #include "../host_sysv.h"
 #include "../host_dirent.h" // <dirent.h>, or the Linux dirent shape where the host structure has no d_type
+#include "../container/vfs/case_escape.h" // a stored entry is presented to the guest under its own name, not the case escape
 #include <stdlib.h>
 #include "../host_proc.h" // times(2): CPU accounting (struct tms is layout-compatible with Linux)
 #include "../guest_sync.h"
