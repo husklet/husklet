@@ -170,7 +170,13 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             }
         }
         if (pid == 0) {
-            if (hl_linux_pidmap_is_active(&g_pidmap)) g_self_gpid = guest_child_pid;
+            if (hl_linux_pidmap_is_active(&g_pidmap)) {
+                g_self_gpid = guest_child_pid;
+                // The child's parent is THIS process, not the one recorded for it. Clearing the inherited
+                // value sends getppid() back through the live map (identity.c), which is both correct here
+                // and correct after the parent is reaped and the host reparents us out of the container.
+                g_self_gppid = -1;
+            }
             guest_fs_after_fork(share_fs);
             // clone(child_stack): Linux resumes the child on the supplied stack regardless of CLONE_VM.
             // glibc seeds its clone trampoline (fn ptr + arg) there before the syscall. Restricting this to
@@ -449,7 +455,13 @@ static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // path caches / kqueues / fork-unsafe locks). clone3 historically lacked the W^X re-assert and the
         // DIR*-cache drop the clone site had; the shared helper closes that drift.
         if (pid == 0) {
-            if (hl_linux_pidmap_is_active(&g_pidmap)) g_self_gpid = guest_child_pid;
+            if (hl_linux_pidmap_is_active(&g_pidmap)) {
+                g_self_gpid = guest_child_pid;
+                // The child's parent is THIS process, not the one recorded for it. Clearing the inherited
+                // value sends getppid() back through the live map (identity.c), which is both correct here
+                // and correct after the parent is reaped and the host reparents us out of the container.
+                g_self_gppid = -1;
+            }
             guest_fs_after_fork(share_fs);
             if ((flags & 0x100) && ca[5]) G_SP(c) = ca[5] + ca[6];
             fork_child_hooks(c);

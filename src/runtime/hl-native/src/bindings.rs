@@ -520,6 +520,16 @@ unsafe fn hl_x86_64_checkpoint_membership_test(scenario: c_uint) -> c_int {
 }
 
 #[cfg(feature = "native-test-hooks")]
+unsafe fn hl_aarch64_pid_namespace_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().aarch64_pid_namespace)(scenario) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_x86_64_pid_namespace_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().x86_64_pid_namespace)(scenario) }
+}
+
+#[cfg(feature = "native-test-hooks")]
 unsafe fn hl_aarch64_checkpoint_identity_test(scenario: c_uint) -> c_int {
     unsafe { (test_api().aarch64_checkpoint_identity)(scenario) }
 }
@@ -791,6 +801,21 @@ pub(crate) fn checkpoint_anon_shared_test(isa: u32, scenario: u32) -> Result<(),
         match isa {
             1 => hl_aarch64_checkpoint_anon_shared_test(scenario),
             2 => hl_x86_64_checkpoint_anon_shared_test(scenario),
+            _ => return Err(-22),
+        }
+    };
+    if status == 0 { Ok(()) } else { Err(status) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn pid_namespace_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    // SAFETY: the feature-gated hook runs the scenario in a forked, setsid child it reaps, so the
+    // process-wide container identity state it seeds never reaches this process. It borrows no caller
+    // memory and returns a scalar.
+    let status = unsafe {
+        match isa {
+            1 => hl_aarch64_pid_namespace_test(scenario),
+            2 => hl_x86_64_pid_namespace_test(scenario),
             _ => return Err(-22),
         }
     };

@@ -81,7 +81,8 @@ static int cgroup_procs_text(char *buf, size_t n, int with_threads) {
             if (host <= 0) continue;
             if (host != me && kill(host, 0) != 0 && errno == ESRCH) continue; // stale registry entry
             if (host == me) have_self = 1;
-            int gp = (g_init_hostpid && host == g_init_hostpid) ? 1 : host;
+            int gp = guest_pid_from_host(host);
+            if (gp <= 0) continue;
             o += snprintf(buf + o, n - (size_t)o, "%d\n", gp);
         }
         closedir(d);
@@ -403,17 +404,20 @@ static int proc_stat_pid_text(char *b, size_t n, int gp, int host) {
         else if (host_pid_member_checked(pi.ppid_host, &hp))
             ppid = hp;
     }
-    int pgrp = ok ? (pi.pgid_host == g_init_hostpid ? 1 : pi.pgid_host) : gp;
+    int pgrp = ok ? guest_pgid_from_host(pi.pgid_host) : gp;
+    if (pgrp <= 0) pgrp = gp;
     // Field 6 (session): the peer's real host session id (init's session -> guest 1), NOT its own pid. The
     // old code printed gp (the pid), so getsid() and /proc/<pid>/stat disagreed for a normal child.
     int hsid = (int)getsid(host);
-    int psess = (hsid > 0) ? ((g_init_hostpid && hsid == g_init_hostpid) ? 1 : hsid) : gp;
+    int psess = guest_sid_from_host(hsid);
+    if (psess <= 0) psess = gp;
     int tty_device = 0;
     if (ok && pi.tty_host > 0)
         tty_device = (int)hl_linux_device_make(hl_host_device_major((uint64_t)pi.tty_host),
                                                hl_host_device_minor((uint64_t)pi.tty_host));
     int foreground_group = ok ? pi.tpgid_host : -1;
-    if (g_init_hostpid && foreground_group == g_init_hostpid) foreground_group = 1;
+    if (foreground_group > 0) foreground_group = guest_pgid_from_host(foreground_group);
+    if (foreground_group == 0) foreground_group = -1;
     long hz = sysconf(_SC_CLK_TCK);
     if (hz <= 0) hz = 100;
     unsigned long pgsz = (unsigned long)hl_linux_host_page_size();
@@ -759,7 +763,8 @@ static int proc_root_dir_open(void) {
                 if (path_join(rp, sizeof rp, dir, e->d_name) == 0) unlink(rp);
                 continue;
             }
-            int guest = (g_init_hostpid && host == g_init_hostpid) ? 1 : host;
+            int guest = guest_pid_from_host(host);
+            if (guest <= 0) continue;
             char p[96];
             snprintf(p, sizeof p, "%s/%d", tmpl, guest);
             hl_compat_mkdir(p, 0555); // a real (empty) subdir: getdents reports DT_DIR, and htop opens /proc/<pid>

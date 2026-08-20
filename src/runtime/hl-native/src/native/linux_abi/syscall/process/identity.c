@@ -347,16 +347,9 @@ static int svc_proc_173(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     case 173:
         // getppid (init's parent is 0 in the ns). A restored process reports its recorded guest parent
         // (g_self_gppid), since its live host parent differs after the tree was re-forked.
-        if (g_self_gppid >= 0)
-            G_RET(c) = (uint64_t)g_self_gppid;
-        else if (container_pid() == 1)
-            // A PID-namespace init has no parent inside its namespace. Keep this equal to the PPid
-            // rendered by /proc/self/{stat,status}; exposing the outer engine worker would leak host identity.
-            G_RET(c) = 0;
-        else {
-            pid_t parent = getppid();
-            G_RET(c) = (uint64_t)((g_init_hostpid && parent == g_init_hostpid) ? 1 : parent);
-        }
+        // A PID-namespace init has no parent inside its namespace. proc_self_guest_ppid is the single
+        // owner of this answer, shared with the /proc/self/{stat,status} rendering (state.c).
+        G_RET(c) = (uint64_t)proc_self_guest_ppid(container_pid());
         break;
     // getuid/geteuid -> container uid (0=root by default), reflecting any runtime drop (apt -> _apt).
     default: return 0;

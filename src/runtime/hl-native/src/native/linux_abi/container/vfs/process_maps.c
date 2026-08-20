@@ -1034,7 +1034,7 @@ static int proc_status_text(char *b, size_t n) {
     char comm[16];
     proc_comm(comm, sizeof comm);
     int pid = container_pid();
-    int ppid = pid == 1 ? 0 : (int)getppid();
+    int ppid = proc_self_guest_ppid(pid);
     unsigned long long vm_rss, vm_vsize;
     self_vm_status_bytes(&vm_rss, &vm_vsize);
     unsigned long rss = (unsigned long)(vm_rss / 1024);
@@ -1089,7 +1089,8 @@ static void proc_self_terminal_identity(int *tty_device, int *foreground_group) 
         uint32_t device = hl_linux_device_make(hl_host_device_major((uint64_t)status.st_rdev),
                                                hl_host_device_minor((uint64_t)status.st_rdev));
         *tty_device = (int)device;
-        *foreground_group = (g_init_hostpid && foreground == g_init_hostpid) ? 1 : (int)foreground;
+        *foreground_group = guest_pgid_from_host((int)foreground);
+        if (*foreground_group == 0) *foreground_group = -1;
         return;
     }
 }
@@ -1098,13 +1099,15 @@ static int proc_stat_text(char *b, size_t n) {
     char comm[16];
     proc_comm(comm, sizeof comm);
     int pid = container_pid();
-    int ppid = pid == 1 ? 0 : (int)getppid();
+    int ppid = proc_self_guest_ppid(pid);
     // Fields 5 (pgrp) and 6 (session) must match the guest's getpgrp()/getsid() -- for a forked child those
     // are its real host process group / session (init's real group/session mapped to guest 1), NOT the
     // child's own pid. The old code printed pid,pid, so a supervisor reconstructed a wrong process tree.
     int hpgrp = (int)getpgid(0), hsid = (int)getsid(0);
-    int gpgrp = (g_init_hostpid && hpgrp == g_init_hostpid) ? 1 : hpgrp;
-    int gsid = (g_init_hostpid && hsid == g_init_hostpid) ? 1 : hsid;
+    int gpgrp = guest_pgid_from_host(hpgrp);
+    int gsid = guest_sid_from_host(hsid);
+    if (gpgrp <= 0) gpgrp = pid;
+    if (gsid <= 0) gsid = pid;
     int tty_device, foreground_group;
     proc_self_terminal_identity(&tty_device, &foreground_group);
     unsigned long pgsz = (unsigned long)hl_linux_host_page_size();
