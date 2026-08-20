@@ -57,6 +57,15 @@ static int fork_diagnostic_pids_total(void) {
     return total > 0 ? total : 1;
 }
 
+/* `count` elements of `element` bytes, saturating at SIZE_MAX rather than wrapping.
+ * Taking `count` as `size_t` is the point, not a convenience: written inline against
+ * a `uint32_t` count the bound is always true on a 64-bit host, which is exactly the
+ * `-Werror=type-limits` that kept `scan-build-linux-aarch64` and `-x86_64` red. The
+ * `size_t` sites alongside them never fired, which is why only two of the five did. */
+static size_t fork_diagnostic_bytes(size_t count, size_t element) {
+    return count <= SIZE_MAX / element ? count * element : SIZE_MAX;
+}
+
 static void fork_diagnostic_emit(struct cpu *c, uint64_t nr, uint64_t flags, const char *stage, int failure,
                                  int pids_total, const bound_fork_state *state) {
     if (hl_option_get("HL_C_DIAGNOSTICS") == NULL) return;
@@ -80,22 +89,14 @@ static void fork_diagnostic_emit(struct cpu *c, uint64_t nr, uint64_t flags, con
     const char *snapshot_stage = state != NULL && state->diagnostic_stage != NULL ? state->diagnostic_stage : "none";
     uint32_t ofd_watermark = g_linux_box != NULL ? g_linux_box->ofd_watermark : 0;
     uint32_t reserved_fds = g_linux_box != NULL ? g_linux_box->reserved_fds : 0;
-    size_t ofd_bytes = ofd_count <= SIZE_MAX / sizeof(hl_linux_fork_record)
-                           ? (size_t)ofd_count * sizeof(hl_linux_fork_record)
-                           : SIZE_MAX;
-    size_t watch_bytes = watch_count <= SIZE_MAX / sizeof(hl_linux_watch_fork_record)
-                             ? watch_count * sizeof(hl_linux_watch_fork_record)
-                             : SIZE_MAX;
-    size_t fdvis_bytes = state != NULL && fdvis_count <= SIZE_MAX / sizeof(*state->fdvis_plan.entries)
-                             ? fdvis_count * sizeof(*state->fdvis_plan.entries)
-                             : SIZE_MAX;
-    size_t ofd_capacity_bytes = state != NULL && state->plan.capacity <= SIZE_MAX / sizeof(hl_linux_fork_record)
-                                    ? (size_t)state->plan.capacity * sizeof(hl_linux_fork_record)
-                                    : SIZE_MAX;
+    size_t ofd_bytes = fork_diagnostic_bytes(ofd_count, sizeof(hl_linux_fork_record));
+    size_t watch_bytes = fork_diagnostic_bytes(watch_count, sizeof(hl_linux_watch_fork_record));
+    size_t fdvis_bytes =
+        state != NULL ? fork_diagnostic_bytes(fdvis_count, sizeof(*state->fdvis_plan.entries)) : SIZE_MAX;
+    size_t ofd_capacity_bytes =
+        state != NULL ? fork_diagnostic_bytes(state->plan.capacity, sizeof(hl_linux_fork_record)) : SIZE_MAX;
     size_t watch_capacity = state != NULL ? state->watch_plan.capacity : 0;
-    size_t watch_capacity_bytes = watch_capacity <= SIZE_MAX / sizeof(hl_linux_watch_fork_record)
-                                      ? watch_capacity * sizeof(hl_linux_watch_fork_record)
-                                      : SIZE_MAX;
+    size_t watch_capacity_bytes = fork_diagnostic_bytes(watch_capacity, sizeof(hl_linux_watch_fork_record));
     char line[1536];
     int length = snprintf(
         line, sizeof line,

@@ -144,6 +144,9 @@ static struct {
     FILE *file;
 } g_ckpt_source_open[CKPT_SOURCE_OPEN_MAX];
 
+// Bytes moved per read/write while materializing one image object into its temporary file.
+#define CKPT_SOURCE_CHUNK ((size_t)(64u * 1024u))
+
 // Open an image object for reading. Mirrors fopen(name, "rb") over the materialised bytes.
 static FILE *ckpt_source_fopen(const char *name) {
     struct ckpt_source *source = ckpt_source_current();
@@ -151,24 +154,34 @@ static FILE *ckpt_source_fopen(const char *name) {
     if (!source) return NULL;
     size = source->ops->size(source, name);
     if (size < 0) return NULL;
-    void *bytes = malloc((size_t)size == 0 ? 1 : (size_t)size);
-    if (!bytes) return NULL;
-    if (size != 0 && source->ops->read(source, name, 0, bytes, (size_t)size) != size) {
-        free(bytes);
-        return NULL;
-    }
+    // Copied in bounded chunks, never materialized whole. An image object is as large as the guest memory
+    // it carries -- hundreds of megabytes for a 256 MiB brk heap -- and a single allocation that size is
+    // host storage the restore places on the guest's own addresses, which is the one thing a restore must
+    // never do (host/linux/memory/mapping.c). The chunk is fixed, so the peak is a property of this
+    // function rather than of the image.
+    char *chunk = malloc(CKPT_SOURCE_CHUNK);
+    if (!chunk) return NULL;
     FILE *file = tmpfile();
     if (!file) {
-        free(bytes);
+        free(chunk);
         return NULL;
     }
-    if ((size != 0 && fwrite(bytes, 1, (size_t)size, file) != (size_t)size) || fflush(file) != 0 ||
-        fseek(file, 0, SEEK_SET) != 0) {
+    for (int64_t offset = 0; offset < size;) {
+        int64_t remaining = size - offset;
+        size_t want = remaining < (int64_t)CKPT_SOURCE_CHUNK ? (size_t)remaining : CKPT_SOURCE_CHUNK;
+        if (source->ops->read(source, name, (uint64_t)offset, chunk, want) != (int64_t)want ||
+            fwrite(chunk, 1, want, file) != want) {
+            fclose(file);
+            free(chunk);
+            return NULL;
+        }
+        offset += (int64_t)want;
+    }
+    free(chunk);
+    if (fflush(file) != 0 || fseek(file, 0, SEEK_SET) != 0) {
         fclose(file);
-        free(bytes);
         return NULL;
     }
-    free(bytes);
     for (int index = 0; index < CKPT_SOURCE_OPEN_MAX; ++index)
         if (g_ckpt_source_open[index].file == NULL) {
             g_ckpt_source_open[index].file = file;

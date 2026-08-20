@@ -1593,10 +1593,15 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
 // common execution tail, including calibration and diagnostic output, so standalone
 // behavior is byte-identical.
 static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t jump, uint64_t at_base) {
+    // checkpoint/restore: place the brk heap in the deterministic high arena (0 hint => normal NULL
+    // placement), exactly as the aarch64 arm does. It must be RESERVED from the arena rather than named by
+    // a literal: the arena is a bump cursor, so an address it did not issue is an address it will issue
+    // again, and the kernel answers a hint it cannot honor by placing the mapping in its own top-down pool
+    // -- where the restoring engine's own host storage lives.
     uint64_t heap;
-    uint64_t heap_address = hl_option_get("HL_CHECKPOINT") ? UINT64_C(0x0000050000000000) : 0;
-    if (hl_gmap_map_anonymous(heap_address, 256u << 20, HL_HOST_MEMORY_READ | HL_HOST_MEMORY_WRITE,
-                              HL_HOST_MEMORY_PRIVATE, &heap) != HL_STATUS_OK)
+    if (hl_gmap_map_anonymous(hl_linux_snapshot_reserve(&g_ckpt_snapshot, 256u << 20), 256u << 20,
+                              HL_HOST_MEMORY_READ | HL_HOST_MEMORY_WRITE, HL_HOST_MEMORY_PRIVATE,
+                              &heap) != HL_STATUS_OK)
         return 70;
     brk_lo = brk_cur = heap;
     brk_hi = brk_lo + (256u << 20);
@@ -1618,13 +1623,25 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
     // remain available through the canonical [prof] report emitted by the exit path; normal launches
     // must not synthesize a guest stderr line merely because an inline clock call happened.
     if (g_prof && g_profile_output_owner) {
-        char profile[256];
+        // The IBTC is a JIT structure and this diagnostic must name the mode it actually ran in.
+        // `g_ibtc_fill` has exactly one producer -- the G_IBTC_FILL seam in
+        // translator/guest/x86_64/dispatch.h -- and that header is included only under
+        // HL_HOST_CPU_AARCH64; any other host takes interp_dispatch.h, which has no IBTC at all.
+        // A hardcoded "ON" therefore reported a feature this build does not contain, beside a
+        // counter that can only ever read 0. Say "absent" instead, exactly as
+        // hl_x86_64_store_preflight_test answers "not applicable" rather than a clean zero.
+#if defined(HL_HOST_CPU_AARCH64)
+        const char *ibtc_mode = "ON";
+#else
+        const char *ibtc_mode = "absent: interpreter host";
+#endif
+        char profile[320];
         int profile_size = snprintf(profile, sizeof profile,
                                     "[prof] dispatcher crossings=%llu translations=%llu\n"
                                     "[prof] dispatcher round-trips=%llu  IBTC fills=%llu  (IBTC %s)\n",
                                     (unsigned long long)g_dispatch_profile.crossings,
                                     (unsigned long long)g_dispatch_profile.translations, (unsigned long long)g_disp_n,
-                                    (unsigned long long)g_ibtc_fill, "ON");
+                                    (unsigned long long)g_ibtc_fill, ibtc_mode);
         if (profile_size > 0) {
             size_t bounded = (size_t)profile_size < sizeof profile ? (size_t)profile_size : sizeof profile - 1u;
             (void)hl_linux_write(g_linux_box, STDERR_FILENO, profile, bounded);
