@@ -1412,7 +1412,7 @@ done:
 // of it, and report through the exit status.
 HL_API int HL_TARGET_LOCAL(checkpoint_identity_test)(uint32_t scenario) {
     if (scenario > 1) return -22;
-    pid_t child = fork();
+    pid_t child = hl_host_process_clone_current();
     if (child < 0) return -1;
     if (child == 0) {
         if (setsid() < 0) _exit(2);

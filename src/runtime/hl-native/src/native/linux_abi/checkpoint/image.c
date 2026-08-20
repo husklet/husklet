@@ -1723,7 +1723,7 @@ static void ckpt_exemption_responder(hl_activation_descriptor broker, long long 
 
 // A process that has already exited AND been reaped, so kill(pid, 0) is ESRCH rather than a zombie's 0.
 static int ckpt_exemption_departed_peer(void) {
-    pid_t gone = fork();
+    pid_t gone = hl_host_process_clone_current();
     if (gone < 0) return -1;
     if (gone == 0) _exit(0);
     int status = 0;
@@ -1732,7 +1732,7 @@ static int ckpt_exemption_departed_peer(void) {
 }
 
 static int ckpt_exemption_living_peer(void) {
-    pid_t alive = fork();
+    pid_t alive = hl_host_process_clone_current();
     if (alive < 0) return -1;
     if (alive == 0) { // async-signal-safe only: forked out of a multi-threaded caller
         struct timespec span = {30, 0};
@@ -1756,7 +1756,7 @@ HL_API int HL_TARGET_LOCAL(checkpoint_rendezvous_test)(uint32_t scenario) {
         hl_ckpt_channel_publish(-1); // no broker: the round trip fails and the answer is unknown
     } else {
         if (hl_ckpt_broker_pair(&parent, &child) != 0) goto done;
-        responder = fork();
+        responder = hl_host_process_clone_current();
         if (responder < 0) goto done;
         if (responder == 0) ckpt_exemption_responder(parent, peer, scenario == 2 ? 1 : 0);
         hl_ckpt_channel_publish((int)child);
