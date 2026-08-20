@@ -1089,6 +1089,8 @@ static int container_init(const char *rootfs) {
     // returned the real host pid, and bash's setpgid(0,1)/tcsetpgrp targeted host pid 1 (launchd) -> the
     // foreground command got SIGTTOU/SIGTTIN-stopped ("[N]+ Stopped  ls") instead of running.
     if (rootfs) g_init_hostpid = getpid();
+    // Every guest process gets a namespace-local pid, not only the init (state.c).
+    if (rootfs && container_pid_namespace_begin() != 0) return -1;
     // Cross-process cgroup accounting: a fresh shared slot table for this container init is inherited
     // by every guest fork (see state.c).
     if (rootfs) acct_container_reset(effective_host_services());

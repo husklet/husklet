@@ -1030,11 +1030,13 @@ static void cpus_allowed_strs(char *mask, size_t mn, char *list, size_t ln) {
         snprintf(list, ln, "0-%d", nc - 1);
 }
 
+static long host_btime(void); // process_directories.c, compiled after this fragment
+
 static int proc_status_text(char *b, size_t n) {
     char comm[16];
     proc_comm(comm, sizeof comm);
     int pid = container_pid();
-    int ppid = pid == 1 ? 0 : (int)getppid();
+    int ppid = proc_self_guest_ppid(pid);
     unsigned long long vm_rss, vm_vsize;
     self_vm_status_bytes(&vm_rss, &vm_vsize);
     unsigned long rss = (unsigned long)(vm_rss / 1024);
@@ -1089,7 +1091,8 @@ static void proc_self_terminal_identity(int *tty_device, int *foreground_group) 
         uint32_t device = hl_linux_device_make(hl_host_device_major((uint64_t)status.st_rdev),
                                                hl_host_device_minor((uint64_t)status.st_rdev));
         *tty_device = (int)device;
-        *foreground_group = (g_init_hostpid && foreground == g_init_hostpid) ? 1 : (int)foreground;
+        *foreground_group = guest_pgid_from_host((int)foreground);
+        if (*foreground_group == 0) *foreground_group = -1;
         return;
     }
 }
@@ -1098,13 +1101,15 @@ static int proc_stat_text(char *b, size_t n) {
     char comm[16];
     proc_comm(comm, sizeof comm);
     int pid = container_pid();
-    int ppid = pid == 1 ? 0 : (int)getppid();
+    int ppid = proc_self_guest_ppid(pid);
     // Fields 5 (pgrp) and 6 (session) must match the guest's getpgrp()/getsid() -- for a forked child those
     // are its real host process group / session (init's real group/session mapped to guest 1), NOT the
     // child's own pid. The old code printed pid,pid, so a supervisor reconstructed a wrong process tree.
     int hpgrp = (int)getpgid(0), hsid = (int)getsid(0);
-    int gpgrp = (g_init_hostpid && hpgrp == g_init_hostpid) ? 1 : hpgrp;
-    int gsid = (g_init_hostpid && hsid == g_init_hostpid) ? 1 : hsid;
+    int gpgrp = guest_pgid_from_host(hpgrp);
+    int gsid = guest_sid_from_host(hsid);
+    if (gpgrp <= 0) gpgrp = pid;
+    if (gsid <= 0) gsid = pid;
     int tty_device, foreground_group;
     proc_self_terminal_identity(&tty_device, &foreground_group);
     unsigned long pgsz = (unsigned long)hl_linux_host_page_size();
@@ -1117,10 +1122,22 @@ static int proc_stat_text(char *b, size_t n) {
     // one, so a reader indexing by position got the wrong column for all of them.
     uint64_t sc, ec, sd, ed;
     maps_code_data_bounds(&sc, &ec, &sd, &ed);
+    // Field 22 (starttime, ticks since boot) was the literal 100 -- one second after boot -- so `ps` printed
+    // a START of the boot DATE for a process seconds old, beside a correct clock time for the sibling the
+    // PEER rendering answered, which computes it. Same boot-relative conversion as that path: a host start
+    // time is host metadata and reaches the guest converted or not at all.
+    long hz = sysconf(_SC_CLK_TCK);
+    if (hz <= 0) hz = 100;
+    hl_host_process_info self_info;
+    unsigned long long start_ticks = 0;
+    if (hl_host_process_read((int)getpid(), &self_info) && self_info.start_time_seconds != 0) {
+        long long since = (long long)self_info.start_time_seconds - host_btime();
+        if (since > 0) start_ticks = (unsigned long long)since * (unsigned long long)hz;
+    }
     return snprintf(b, n,
-                    "%d (%s) R %d %d %d %d %d 4194560 0 0 0 0 0 0 0 0 20 0 1 0 100 %lu %lu 18446744073709551615 "
+                    "%d (%s) R %d %d %d %d %d 4194560 0 0 0 0 0 0 0 0 20 0 1 0 %llu %lu %lu 18446744073709551615 "
                     "%llu %llu 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0 %llu %llu %llu 0 0 0 0 0\n",
-                    pid, comm, ppid, gpgrp, gsid, tty_device, foreground_group, vsize, rss_pg,
+                    pid, comm, ppid, gpgrp, gsid, tty_device, foreground_group, start_ticks, vsize, rss_pg,
                     (unsigned long long)sc, (unsigned long long)ec, (unsigned long long)sd, (unsigned long long)ed,
                     (unsigned long long)brk_lo);
 }

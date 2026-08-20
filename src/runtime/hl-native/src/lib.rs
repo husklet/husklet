@@ -192,6 +192,18 @@ pub fn checkpoint_anon_shared_test(isa: u32, scenario: u32) -> Result<(), i32> {
     bindings::checkpoint_anon_shared_test(isa, scenario)
 }
 
+/// Exercise the container PID namespace: the launch top is guest pid 1 with no parent inside the
+/// namespace, a forked child gets the next namespace-local pid rather than its host pid, and a host
+/// process that is not a container member has no guest rendering at all.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn pid_namespace_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    // The hook seeds the process-wide container identity state in a forked child.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    bindings::pid_namespace_test(isa, scenario)
+}
+
 /// Exercise coordinator election: with one trigger word and one broker serving a whole process domain,
 /// exactly one process may coordinate and every other must commit a group of its own under the name the
 /// coordinator waits for.

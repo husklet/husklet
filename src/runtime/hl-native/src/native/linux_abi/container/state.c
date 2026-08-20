@@ -343,6 +343,173 @@ static __attribute__((unused)) void ckpt_restore_identity_activate(void) {
     hl_linux_pidmap_activate(&g_sidmap);
 }
 
+// ---- normal-launch PID namespace ------------------------------------------------------------------------
+// A container is a PID namespace, so every guest process -- not only the init -- must carry a namespace-local
+// identity. Before this the engine virtualized ONLY the init (g_init_hostpid <-> 1) and passed every child's
+// HOST pid straight through: `sh -c 'sh -c "echo \$\$"'` printed 1 then 2171607, /proc listed `1` beside
+// `1867410`, and /proc/self/status named a PPid with no guest existence. That is host placement leaking into
+// guest-visible runtime metadata, which the mission forbids.
+//
+// The mapping machinery this needs already exists for checkpoint restore, which keeps guest pids stable
+// across a re-fork; the only thing restore-specific about it was WHEN it was turned on. Seeding it at
+// container init makes every consumer's already-written active branch the normal path, and every fork then
+// allocates the next small guest pid through hl_linux_pidmap_allocate_guest (clone.c).
+//
+// The group and session maps are seeded from the init's REAL host pgid/sid rather than from its pid. The
+// inactive path folded only `host == g_init_hostpid` to 1 and leaked the raw host value otherwise, so an
+// engine launched into a shell's process group already reported a host pgid to the guest.
+static int container_pid_namespace_begin(void) {
+    if (hl_linux_pidmap_is_active(&g_pidmap)) return 0; // a restore hydrates and activates its own namespace
+    if (ckpt_restore_identity_prepare_shared() != 0) return -1;
+    int host_pid = (int)getpid();
+    int host_pgid = (int)getpgrp();
+    int host_sid = (int)getsid(0);
+    if (host_pgid <= 0) host_pgid = host_pid;
+    if (host_sid <= 0) host_sid = host_pgid;
+    const hl_linux_pidmap_update seed[3] = {
+        {.map = &g_pidmap, .guest = 1, .host = host_pid},
+        {.map = &g_pgidmap, .guest = 1, .host = host_pgid},
+        {.map = &g_sidmap, .guest = 1, .host = host_sid},
+    };
+    if (hl_linux_identity_registry_add(seed, 3) != 0) return -1;
+    ckpt_restore_identity_activate();
+    g_self_gpid = 1;
+    g_self_gppid = 0; // a PID-namespace init has no parent inside its namespace
+    return 0;
+}
+
+// Host -> namespace-local translation for the /proc, /sys and cgroup synthesis, which renders identities it
+// read from HOST process metadata. Returns 0 for a host identity with no guest existence; a caller rendering
+// a field that cannot be absent (a parent) substitutes 1, exactly as Linux reparents an orphan to init.
+// The inactive arm is the pre-namespace fold, kept so a bare (rootfs-less) run is unchanged.
+static int guest_pid_from_host(int host) {
+    int guest;
+    if (host <= 0) return 0;
+    if (hl_linux_pidmap_is_active(&g_pidmap))
+        return hl_linux_pidmap_guest_checked(&g_pidmap, host, &guest) == 0 ? guest : 0;
+    return (g_init_hostpid && host == g_init_hostpid) ? 1 : host;
+}
+
+// This process's namespace-local parent. Shared by getppid(2) and the /proc/self/{stat,status} rendering so
+// the two can never disagree -- they did: status reported a host PPid naming a process with no guest
+// existence while getppid() reported the folded value.
+static int proc_self_guest_ppid(int self_gpid) {
+    if (g_self_gppid >= 0) return g_self_gppid;
+    if (self_gpid == 1) return 0;
+    int parent = (int)getppid();
+    if (hl_linux_pidmap_is_active(&g_pidmap)) {
+        int guest;
+        // A miss means the host reparented us out of the container after our parent was reaped, which the
+        // guest must see as Linux's orphan reparent to init.
+        return hl_linux_pidmap_guest_checked(&g_pidmap, parent, &guest) == 0 ? guest : 1;
+    }
+    return (g_init_hostpid && parent == g_init_hostpid) ? 1 : parent;
+}
+
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+// ------------------------------------------------------- pid namespace: behavioral fixture
+//
+// Drives the REAL container_pid_namespace_begin, the REAL allocate/publish pair that clone.c runs across a
+// fork, and the REAL translations the /proc synthesis renders with. The defect it pins: only the init was
+// virtualized, so `sh -c 'sh -c "echo $$"'` printed 1 then a HOST pid, /proc listed a host-shaped entry
+// beside `1`, and /proc/self/status named a PPid with no guest existence.
+//
+// Scenario 1 is the closed direction, and it is what stops the fix from being "render everything": a host
+// process that is NOT a container member must have no guest rendering at all, so a host pid can never
+// reach the guest through the /proc, cgroup or peer-identity paths.
+static int pid_namespace_scenario(uint32_t scenario) {
+    g_init_hostpid = (int)getpid();
+    g_hostpid_cache = 0;
+    if (container_pid_namespace_begin() != 0) return -1;
+    if (container_pid() != 1) return -1;                          // the launch top is the namespace init
+    if (proc_self_guest_ppid(container_pid()) != 0) return -1;    // and it has no parent inside it
+    if (guest_pid_from_host((int)getpid()) != 1) return -1;
+
+    if (scenario == 1) {
+        // The fixture's own parent is the test binary: live, related, and outside the container.
+        int outsider = (int)getppid();
+        return outsider > 0 && guest_pid_from_host(outsider) == 0 ? 0 : -1;
+    }
+
+    int guest_child = (int)hl_linux_pidmap_allocate_guest(&g_pidmap);
+    // Namespace-local: the second process in the namespace, not a host pid. A host pid would be six or
+    // seven digits here, which is exactly what the guest used to print.
+    if (guest_child != 2) return -1;
+    pid_t child = fork();
+    if (child < 0) return -1;
+    if (child == 0) {
+        if (restore_process_identity_publish(guest_child, (int)getpid()) != guest_child) _exit(3);
+        g_self_gpid = guest_child; // the two lines clone.c runs in the child
+        g_self_gppid = -1;
+        g_hostpid_cache = 0;
+        if (container_pid() != guest_child) _exit(4);                      // getpid() is guest-local
+        if (proc_self_guest_ppid(container_pid()) != 1) _exit(5);          // PPid names the init, not a host pid
+        if (guest_pid_from_host((int)getpid()) != guest_child) _exit(6);   // /proc renders it the same way
+        // A grandchild, because a CHILD of the init cannot separate the namespace from the old
+        // init-only fold: both answer 1 for its parent. A grandchild's parent is an ordinary guest
+        // process, which the fold could only render as a host pid.
+        int guest_grandchild = (int)hl_linux_pidmap_allocate_guest(&g_pidmap);
+        if (guest_grandchild != guest_child + 1) _exit(7);
+        pid_t grandchild = fork();
+        if (grandchild < 0) _exit(8);
+        if (grandchild == 0) {
+            if (restore_process_identity_publish(guest_grandchild, (int)getpid()) != guest_grandchild) _exit(9);
+            g_self_gpid = guest_grandchild;
+            g_self_gppid = -1;
+            g_hostpid_cache = 0;
+            if (container_pid() != guest_grandchild) _exit(10);
+            // The whole defect in one assertion: its parent is a process the guest can see.
+            if (proc_self_guest_ppid(container_pid()) != guest_child) _exit(11);
+            _exit(0);
+        }
+        int grandchild_status = 0;
+        while (waitpid(grandchild, &grandchild_status, 0) < 0 && errno == EINTR) {}
+        if (!WIFEXITED(grandchild_status) || WEXITSTATUS(grandchild_status) != 0) _exit(12);
+        _exit(0);
+    }
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) return -1;
+    // The parent's view of the child agrees with the child's view of itself, and the child's HOST pid is
+    // not a thing the guest can see.
+    if (guest_pid_from_host((int)child) != guest_child) return -1;
+    return 0;
+}
+
+// A container init leads its own host session and process group; a test binary's process does not. Run the
+// scenario in a forked child that has called setsid(), which is the launch shape rather than an imitation
+// of it, and report through the exit status.
+HL_API int HL_TARGET_LOCAL(pid_namespace_test)(uint32_t scenario) {
+    if (scenario > 1) return -22;
+    pid_t child = fork();
+    if (child < 0) return -1;
+    if (child == 0) {
+        if (setsid() < 0) _exit(2);
+        _exit(pid_namespace_scenario(scenario) == 0 ? 0 : 1);
+    }
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
+}
+#endif
+
+static int guest_pgid_from_host(int host) {
+    int guest;
+    if (host <= 0) return 0;
+    if (hl_linux_pidmap_is_active(&g_pgidmap))
+        return hl_linux_pidmap_guest_checked(&g_pgidmap, host, &guest) == 0 ? guest : 0;
+    return (g_init_hostpid && host == g_init_hostpid) ? 1 : host;
+}
+
+static int guest_sid_from_host(int host) {
+    int guest;
+    if (host <= 0) return 0;
+    if (hl_linux_pidmap_is_active(&g_sidmap))
+        return hl_linux_pidmap_guest_checked(&g_sidmap, host, &guest) == 0 ? guest : 0;
+    return (g_init_hostpid && host == g_init_hostpid) ? 1 : host;
+}
+
 // HL_NET_ISOLATE makes the guest loopback-only: no
 // eth0 is presented in the interface model (netlink RTM_GETLINK/GETADDR/GETROUTE dumps + SIOCGIFCONF in
 // netns.c, and /proc/net/dev·route + /sys/class/net in vfs.c), matching docker's `none` network (only lo).
