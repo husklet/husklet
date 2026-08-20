@@ -366,10 +366,36 @@ impl Service {
                 expected: "a sealed domain member awaiting restore",
             });
         }
+        let Some(member) = self.restored_member(&exec).await else {
+            return Err(Error::ExecNotReattachable {
+                id: exec.id,
+                reason: MEMBER_HANDLE_GAP,
+            });
+        };
+        // The member is reachable and is the process the user left running -- never a replacement for
+        // it. What is still missing is its I/O: a restored member's guest fds 0..2 were rebound to the
+        // container's own bridge, so there is no channel for a pane to attach to. Refuse, rather than
+        // present a live-looking session whose input goes nowhere.
+        let _ = member;
         Err(Error::ExecNotReattachable {
             id: exec.id,
-            reason: MEMBER_HANDLE_GAP,
+            reason: MEMBER_STDIO_GAP,
         })
+    }
+
+    /// The restored process this sealed record names, if the restore announced it.
+    ///
+    /// Both halves must agree: the record must carry the guest pid it was sealed under, and the
+    /// container's live launch must be one that restored and announced that member. A fresh start of
+    /// the same container announces nothing, which is what keeps a crash-recovered container from
+    /// being read as a resumed one.
+    async fn restored_member(&self, exec: &Exec) -> Option<hl_engine::runtime::RestoredMember> {
+        let guest_pid = exec.guest_pid?;
+        let process = {
+            let live = self.live.lock().await;
+            Arc::clone(&live.get(&exec.container)?.process)
+        };
+        process.restored_member(guest_pid)
     }
 
     pub(crate) async fn attach_exec(
@@ -616,6 +642,12 @@ impl Service {
 const MEMBER_HANDLE_GAP: &str = "the restored member is a forked child of the container's engine \
 process; the runtime boundary exposes no handle for it and its launch-time stdio was rebound to \
 the container's own bridge, so there is no live I/O to attach";
+
+/// Why a member the restore DID announce still cannot be presented as a live session. The handle
+/// exists and names the right process; only its I/O is missing.
+const MEMBER_STDIO_GAP: &str = "the restored member is reachable, but its launch-time stdio was \
+rebound to the container's own bridge at capture time, so it has no channel of its own for a \
+terminal to attach to";
 
 #[cfg(test)]
 fn unpublished_reap_timeout() -> std::time::Duration {

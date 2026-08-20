@@ -32,6 +32,12 @@ pub(super) const SOURCE_READ: u32 = 18;
 pub(super) const RECOVERY_COMPLETE: u32 = 19;
 pub(super) const REGISTER_READY: u32 = 20;
 pub(super) const RELEASE_WAIT: u32 = 21;
+/// A restored process announces which captured member it is, on the channel the broker has already
+/// authenticated it on. Payload is `[u32 guest pid][u32 zero]`.
+pub(super) const MEMBER_RESTORED: u32 = 22;
+/// A restored member reports its own guest exit status on its way out. Payload is
+/// `[i32 status][u32 kind]`.
+pub(super) const MEMBER_EXITED: u32 = 23;
 
 /// What a parked member must do next. `RELEASE_WAIT` answers with exactly one of
 /// these, and it is the only thing that ends a park.

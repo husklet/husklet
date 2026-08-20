@@ -24,6 +24,7 @@ static const hl_c_bridge_api HL_C_BRIDGE_API = {
     .destroy = hl_c_backend_destroy,
     .checkpoint_broker_accept_authenticated = hl_c_backend_checkpoint_broker_accept_authenticated,
     .guest_pid = hl_c_backend_guest_pid,
+    .process_identity_signal = hl_c_backend_process_identity_signal,
 };
 
 const hl_c_bridge_api *hl_c_bridge_api_v1(void) {

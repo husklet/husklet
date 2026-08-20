@@ -73,6 +73,16 @@ impl AuthenticatedCheckpointPeer {
         Ok(())
     }
 
+    /// The authenticated capability on this exact process incarnation.
+    ///
+    /// Exposed so a holder can retain it past the connection that carried it: the capability, not the
+    /// pid, is what makes a later reach at this process safe against pid reuse.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn process_capability(&self) -> &std::os::fd::OwnedFd {
+        &self.process_handle
+    }
+
     /// Returns false once this exact process incarnation exited or exec'd.
     #[doc(hidden)]
     pub fn is_live(&self) -> std::io::Result<bool> {
@@ -189,7 +199,6 @@ mod peer_tests {
         assert_eq!(pid, 0);
         assert_eq!(birth, 0);
     }
-
 }
 
 /// Broker child and shared generation trigger installed into a native engine.

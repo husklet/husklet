@@ -32,6 +32,7 @@ int hl_ckpt_channel_acquire(void);
 int hl_ckpt_channel_authenticate_peer(int descriptor, uint64_t claimed_pid, uint64_t *authenticated_pid);
 #if defined(HL_NATIVE_TEST_HOOKS)
 void hl_ckpt_channel_test_claimed_pid(uint64_t claimed_pid);
+void hl_ckpt_channel_forget_for_test(void);
 #endif
 
 /* One round trip. `name` (or NULL) is sent NUL-terminated; `payload` is `request->length` bytes. Reply

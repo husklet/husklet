@@ -329,6 +329,49 @@ pub fn checkpoint_peer_identity_open_test(
     ))
 }
 
+/// Delivers one signal to the exact process incarnation an authenticated peer capability names.
+///
+/// `handle` is that capability and `host_pid` the identity it authenticated. Delivery is refused
+/// rather than retargeted once the incarnation is gone, which is what separates this from a `kill(2)`
+/// on a remembered pid: the number can be reused, the capability cannot. Signal 0 probes reachability
+/// without delivering.
+///
+/// # Errors
+/// Returns `Err(())` when the incarnation has exited, the capability is not one this host can signal
+/// through, or the host refused delivery.
+pub fn process_identity_signal(handle: std::os::fd::RawFd, host_pid: u64, signal: i32) -> Result<(), ()> {
+    if bindings::hl_c_backend_process_identity_signal(handle, host_pid, signal) == 0 {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+/// Whether the process incarnation an authenticated capability names is still running.
+///
+/// The capability becomes readable when its incarnation exits, so this answers about that exact
+/// process and never about a later one that inherited its pid.
+#[allow(unsafe_code)]
+#[must_use]
+pub fn process_identity_live(handle: std::os::fd::BorrowedFd<'_>) -> bool {
+    use std::os::fd::AsRawFd;
+    let mut waiting = libc::pollfd {
+        fd: handle.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    loop {
+        // SAFETY: one writable poll record over a descriptor borrowed for the duration of the call.
+        let ready = unsafe { libc::poll(&raw mut waiting, 1, 0) };
+        if ready >= 0 {
+            return ready == 0 && waiting.revents == 0;
+        }
+        if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+            return false;
+        }
+    }
+}
+
 #[cfg(all(feature = "native-test-hooks", target_os = "macos"))]
 #[doc(hidden)]
 pub fn checkpoint_process_authority_test(pid: i32) -> std::io::Result<AuthenticatedCheckpointPeer> {

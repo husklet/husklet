@@ -316,6 +316,14 @@ impl GuestMachine for ProductionMachine {
         self.current().ok().and_then(|engine| engine.guest_pid())
     }
 
+    #[cfg(unix)]
+    fn restored_member(&self, guest_pid: std::num::NonZeroI32) -> Option<crate::runtime::RestoredMember> {
+        self.checkpoint
+            .as_ref()
+            .and_then(|checkpoint| checkpoint.server.restored_member(guest_pid))
+            .map(crate::runtime::RestoredMember::new)
+    }
+
     fn checkpoint_supported(&self) -> Result<(), EngineError> {
         if let Some(refusal) = checkpoint_sandbox_refusal(&self.plan.options) {
             return Err(refusal);

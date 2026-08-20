@@ -124,6 +124,18 @@ static long checkpoint_channel_owner; /* getpid() that created `checkpoint_chann
 #if defined(HL_NATIVE_TEST_HOOKS)
 static uint64_t checkpoint_test_claimed_pid;
 void hl_ckpt_channel_test_claimed_pid(uint64_t claimed_pid) { checkpoint_test_claimed_pid = claimed_pid; }
+
+/* Forgets this process's cached channel WITHOUT closing it.
+ *
+ * hl_ckpt_channel_acquire caches one channel per process and returns the same descriptor forever
+ * after, which is right for the engine: a process has exactly one channel for its whole life. The
+ * test hook that mints channels does not want that -- it hands each descriptor to its caller, who
+ * closes it -- so a second call would return an already-closed number and the caller would close it
+ * twice. Forgetting rather than closing is what keeps ownership with the caller who already has it. */
+void hl_ckpt_channel_forget_for_test(void) {
+    checkpoint_channel = -1;
+    checkpoint_channel_owner = 0;
+}
 #endif
 
 void hl_ckpt_channel_publish(int broker) {

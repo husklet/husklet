@@ -1,7 +1,7 @@
 use super::{
-    BTreeMap, COMMIT, CaptureFailure, CapturePhase, DIGEST, HASH_BASIS, HASH_PRIME, MutationAdmission, OBJECT_ABORT,
-    OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, Object, Ordering, RECOVERY_COMPLETE,
-    Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, Server,
+    BTreeMap, COMMIT, CaptureFailure, CapturePhase, DIGEST, HASH_BASIS, HASH_PRIME, MEMBER_RESTORED, MutationAdmission,
+    OBJECT_ABORT, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, Object, Ordering,
+    RECOVERY_COMPLETE, Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, Server,
 };
 
 impl Server {
@@ -256,6 +256,7 @@ impl Server {
                     && std::time::Instant::now() < deadline
                     && (matches!(request.op, SOURCE_LIST | SOURCE_SIZE | SOURCE_READ | DIGEST)
                         || request.op == RECOVERY_COMPLETE
+                        || request.op == MEMBER_RESTORED
                         || self.recovery_object_request(connection, request, name))
             }
             CapturePhase::Complete | CapturePhase::Aborting { .. } | CapturePhase::RecoveryFinished { .. } => false,

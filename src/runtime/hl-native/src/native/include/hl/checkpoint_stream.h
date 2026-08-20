@@ -80,8 +80,22 @@ typedef enum hl_ckpt_stream_op {
        Read-only and never a mutation, so a parked member cannot hold the manifest publication
        behind it. A transport failure (the broker died) is read as RESUME by the member: release is
        tied to the broker's descriptor, so a dead coordinator cannot leave the tree frozen. */
-    HL_CKPT_OP_RELEASE_WAIT = 21
+    HL_CKPT_OP_RELEASE_WAIT = 21,
+    /* A restored process announces itself. Sent once by every process a whole-image restore re-forks,
+       after its identity is hydrated and before it reaches the commit barrier, so the broker learns
+       which guest pid the connection it already authenticated belongs to. payload is
+       [u32 guest pid][u32 zero]. The connection's authenticated peer capability is what the host then
+       holds the member by: the guest pid is the durable name, the capability is the reach. */
+    HL_CKPT_OP_MEMBER_RESTORED = 22,
+    /* A restored member reports its own guest exit status on its way out, so a host holding the member
+       reads the status the guest produced instead of inferring one from a vanished process. payload is
+       [i32 status][u32 kind], kind 1 = exit code, 2 = terminating signal. Admissible in any phase from
+       a connection that announced itself with MEMBER_RESTORED, and from no other. */
+    HL_CKPT_OP_MEMBER_EXITED = 23
 } hl_ckpt_stream_op;
+
+#define HL_CKPT_MEMBER_EXIT_CODE UINT32_C(1)
+#define HL_CKPT_MEMBER_EXIT_SIGNAL UINT32_C(2)
 
 #define HL_CKPT_RELEASE_HOLD UINT64_C(0)
 #define HL_CKPT_RELEASE_EXIT UINT64_C(1)

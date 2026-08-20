@@ -115,6 +115,15 @@ pub(crate) trait Running: Send + Sync {
     /// capture. It is `None` before the guest has entered its container identity and again once the
     /// process has been reaped, so a caller that needs it durably reads it while the guest runs.
     fn guest_pid(&self) -> Option<std::num::NonZeroI32>;
+    /// One member of the process tree this launch restored, named by the guest pid a sealed record
+    /// kept for it.
+    ///
+    /// This is the per-member handle a whole-image restore otherwise leaves unreachable: the restore
+    /// produces one launch for a tree of many, and this addresses one process inside it. `None` for a
+    /// launch that started fresh, and for a guest pid the restore did not announce -- and a caller that
+    /// gets `None` must refuse, because the only alternative to attaching to the restored process is
+    /// running the user's command a second time.
+    fn restored_member(&self, guest_pid: std::num::NonZeroI32) -> Option<hl_engine::runtime::RestoredMember>;
     async fn wait(self: Arc<Self>) -> Result<ExitStatus>;
     async fn signal(&self, signal: Signal) -> Result<()>;
     async fn pause(&self) -> Result<()>;

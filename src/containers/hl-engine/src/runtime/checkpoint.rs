@@ -17,6 +17,7 @@ use std::{
 
 pub mod authority;
 mod broker;
+pub(super) mod members;
 mod participants;
 #[path = "checkpoint_protocol.rs"]
 mod protocol;
@@ -29,10 +30,10 @@ mod test;
 mod transaction;
 use participants::ParticipantLedger;
 use protocol::{
-    CLAIM, COMMIT, DIGEST, GROUP_ABORT, GROUP_BEGIN, GROUP_COMMIT, GROUP_COUNT, GROUP_PRESENT, OBJECT_ABORT,
-    OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, PAYLOAD_MAX, RECOVERY_COMPLETE,
-    REGISTER_READY, RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply, Request,
-    SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, STATUS_ALREADY, UNCLAIM,
+    CLAIM, COMMIT, DIGEST, GROUP_ABORT, GROUP_BEGIN, GROUP_COMMIT, GROUP_COUNT, GROUP_PRESENT, MEMBER_EXITED,
+    MEMBER_RESTORED, OBJECT_ABORT, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT,
+    PAYLOAD_MAX, RECOVERY_COMPLETE, REGISTER_READY, RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT,
+    REQUEST_BYTES, Reply, Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, STATUS_ALREADY, UNCLAIM,
 };
 
 const HASH_BASIS: u64 = 14_695_981_039_346_656_037;
@@ -135,6 +136,10 @@ pub(crate) struct Server {
     capture_changed: Condvar,
     channels: Mutex<HashMap<i32, Arc<UnixStream>>>,
     recovery_connections: Mutex<HashMap<u64, u64>>,
+    /// Members of the restored tree that have announced themselves, keyed on the guest pid the image
+    /// names each of them by. Outlives the recovery scope: recovery ends exactly when the tree starts
+    /// running, which is when a host begins needing to reach into it.
+    members: Arc<members::RestoredMembers>,
     participants: Mutex<Option<ParticipantLedger>>,
     committed: AtomicBool,
     running: AtomicBool,
@@ -162,6 +167,7 @@ impl Server {
             capture_changed: Condvar::new(),
             channels: Mutex::new(HashMap::new()),
             recovery_connections: Mutex::new(HashMap::new()),
+            members: Arc::new(members::RestoredMembers::default()),
             participants: Mutex::new(None),
             committed: AtomicBool::new(false),
             running: AtomicBool::new(true),
@@ -171,6 +177,16 @@ impl Server {
             #[cfg(test)]
             accepts: AtomicUsize::new(0),
         }
+    }
+
+    /// One member of the restored tree, by the guest pid its image names it by.
+    ///
+    /// `None` for a guest pid no restore announced, which includes every guest pid when this domain
+    /// was started fresh rather than restored. The member is addressable for as long as its process
+    /// incarnation lives, and reports its own exit afterwards.
+    #[must_use]
+    pub(crate) fn restored_member(&self, guest_pid: std::num::NonZeroI32) -> Option<Arc<members::RestoredMember>> {
+        self.members.get(guest_pid)
     }
 
     /// Blocks until at least `count` checkpoint channels have ever been accepted.
@@ -230,6 +246,9 @@ impl Server {
         // must never admit a process into this one.
         *self.participants.lock().map_err(|_| CaptureFailure::Poisoned)? =
             Some(ParticipantLedger::new(id).map_err(|_| CaptureFailure::Poisoned)?);
+        // The announced members are the processes this capture is about to freeze and retire. Holding
+        // them past it would hand a caller a capability on a process the image has replaced.
+        self.members.clear();
         capture.phase = CapturePhase::Active { id, deadline };
         capture.mutations = 0;
         capture.recovery_report_published = false;
