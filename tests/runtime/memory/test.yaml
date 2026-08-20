@@ -1180,6 +1180,12 @@ cases:
     # the hole and running into a live page). The crossing case reaches the
     # guard's span path, which grants one host delta for the whole access and
     # therefore has to consult the accessibility ledger itself.
+    # The C crossing cases do not by themselves pin an ARCHITECTURAL crossing
+    # access -- gcc lowers the 8-byte constant store as two 4-byte stores, one
+    # of which lands wholly inside the hole -- so edge_* spell a single 8-byte
+    # instruction in assembly, and warmed_* unmap a page that already left a
+    # guard entry behind, because a published soft-TLB entry is a standing
+    # grant the emitted guard serves inline with no further C.
     # Native Linux (4 KiB pages, where the host honours
     # the unmap directly) produces the same transcript, which is what makes
     # it a portable oracle for the emulated case.

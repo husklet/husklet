@@ -60,9 +60,36 @@ static void aarch64_smc_copyout(uint64_t first, uint64_t last) {
  * it after that page's first miss; the emitted interval test rejects a slot
  * whose occupant does not cover the access, which is what makes an untagged
  * direct-mapped array sound.
+ *
+ * Every soft-TLB entry is a standing grant: once published, the emitted guard
+ * serves EVERY later access inside [first,last) inline, with no further C.  So
+ * this is the one place that can hold the whole-engine invariant -- no entry
+ * authorises a byte the accessibility ledger refuses -- and it holds it for
+ * paths that reach it by different exits (miss, span, bounce) and would
+ * otherwise each need their own test.  On a host whose granule is wider than
+ * the guest page the ledger is the ONLY record that a 4 KiB munmap happened:
+ * the containing host page stays mapped to keep a live neighbour, so the view
+ * table and the host both answer "present".  Clamp the grant to the accessible
+ * prefix, and refuse outright when the access being retried does not fit
+ * inside it.  Returns 1 when the entry is published, 0 for a guest fault.
  */
-static void aarch64_soft_tlb_install(struct cpu *c, uint64_t first, uint64_t last, uint64_t delta,
-                                     uint64_t protection) {
+static int aarch64_soft_tlb_install(struct cpu *c, uint64_t first, uint64_t last, uint64_t delta,
+                                    uint64_t protection) {
+    if (last > first && c->soft_ea >= first && c->soft_ea < last) {
+        /* Measure the accessible prefix from the ACCESSED page, not from the
+           view's start: a hole earlier in a wide view must narrow the grant,
+           never refuse an access that lies above it. */
+        uint64_t base = c->soft_ea & ~UINT64_C(4095);
+        if (base < first) base = first;
+        uint64_t accessible = gna_prefix(base, last - base);
+        if (accessible < last - base) {
+            uint64_t limit = base + accessible;
+            uint64_t bytes = c->soft_bytes ? c->soft_bytes : 1;
+            if (limit <= c->soft_ea || bytes > limit - c->soft_ea) return 0;
+            first = base;
+            last = limit;
+        }
+    }
     c->soft_page = first;
     c->soft_limit = last;
     c->soft_delta = delta;
@@ -72,6 +99,7 @@ static void aarch64_soft_tlb_install(struct cpu *c, uint64_t first, uint64_t las
     entry->limit = last;
     entry->delta = delta;
     entry->protection = protection;
+    return 1;
 }
 
 /* Return 1 to retry the instruction, 0 for a guest protection fault. */
@@ -113,7 +141,8 @@ static int aarch64_soft_tlb_miss(struct cpu *c) {
         c->reason = R_SOFTSPAN;
         return 1;
     }
-    aarch64_soft_tlb_install(c, first, last, resolved ? (uint64_t)(uintptr_t)host - c->soft_ea : 0, protection);
+    if (!aarch64_soft_tlb_install(c, first, last, resolved ? (uint64_t)(uintptr_t)host - c->soft_ea : 0, protection))
+        return 0;
     c->reason = R_BRANCH;
     return 1;
 }
@@ -172,6 +201,12 @@ static int aarch64_soft_prepare_bounce(struct cpu *c) {
     int write = (c->soft_required & HL_LOGICAL_VMA_WRITE) != 0;
     if (!aarch64_soft_span_copy(c, write, 0)) return 0; /* validate every span first */
     if (!write && !aarch64_soft_span_copy(c, 0, 1)) return 0;
+    /* Publish the bounce entry BEFORE host signals are blocked: the install can
+       refuse (the ledger owns accessibility, not the retained backing), and a
+       refusal before the block needs no unwind. */
+    if (!aarch64_soft_tlb_install(c, c->soft_ea, c->soft_ea + c->soft_bytes,
+                                  (uint64_t)(uintptr_t)c->soft_bounce - c->soft_ea, c->soft_required))
+        return 0;
     /*
      * No asynchronous signal may observe the architectural store after it
      * changed the bounce but before scatter.  This is a cold discontinuous
@@ -185,8 +220,6 @@ static int aarch64_soft_prepare_bounce(struct cpu *c) {
     if (pthread_sigmask(SIG_BLOCK, &all, (sigset_t *)(void *)c->soft_bounce_host_mask) != 0) return 0;
     c->soft_bounce_write = (uint64_t)write;
     c->soft_bounce_pending = 1;
-    aarch64_soft_tlb_install(c, c->soft_ea, c->soft_ea + c->soft_bytes,
-                             (uint64_t)(uintptr_t)c->soft_bounce - c->soft_ea, c->soft_required);
     c->reason = R_BRANCH;
     if (g_prof) g_prof_soft_bounce_prepare++;
     return 1;
@@ -237,7 +270,7 @@ static int aarch64_soft_tlb_span(struct cpu *c) {
         if (step == 0) return 0;
         cursor += step;
     }
-    aarch64_soft_tlb_install(c, c->soft_ea, c->soft_ea + c->soft_bytes, delta, c->soft_required);
+    if (!aarch64_soft_tlb_install(c, c->soft_ea, c->soft_ea + c->soft_bytes, delta, c->soft_required)) return 0;
     c->reason = R_BRANCH;
     return 1;
 }

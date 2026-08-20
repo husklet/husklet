@@ -43,6 +43,45 @@
         }                                                                   \
     } while (0)
 
+
+/* The compiler is free to lower an 8-byte constant store as two 4-byte stores
+ * (gcc does exactly that for the repeated-byte pattern above), so the C cases
+ * do not by themselves pin a single ARCHITECTURAL access that crosses the
+ * boundary -- the shape the guard's span/bounce paths exist for.  Spell those
+ * in assembly so the width in the instruction is the width the guard sees. */
+static unsigned long long cross_load8(const volatile void *address) {
+    unsigned long long value;
+#if defined(__aarch64__)
+    __asm__ __volatile__("ldr %x0,[%1]" : "=r"(value) : "r"(address) : "memory");
+#elif defined(__x86_64__)
+    __asm__ __volatile__("movq (%1),%0" : "=r"(value) : "r"(address) : "memory");
+#else
+    memcpy(&value, (const void *)address, sizeof value);
+#endif
+    return value;
+}
+
+static void cross_store8(volatile void *address, unsigned long long value) {
+#if defined(__aarch64__)
+    __asm__ __volatile__("str %x0,[%1]" : : "r"(value), "r"(address) : "memory");
+#elif defined(__x86_64__)
+    __asm__ __volatile__("movq %0,(%1)" : : "r"(value), "r"(address) : "memory");
+#else
+    memcpy((void *)address, &value, sizeof value);
+#endif
+}
+
+#define ONE_INSTRUCTION(label, body)                                                    \
+    do {                                                                                \
+        caught = 0;                                                                     \
+        if (sigsetjmp(jump, 1) == 0) {                                                  \
+            body;                                                                       \
+            printf(label "=NOFAULT\n");                                                 \
+        } else {                                                                        \
+            printf(label "=FAULT\n");                                                   \
+        }                                                                               \
+    } while (0)
+
 static sigjmp_buf jump;
 static volatile int caught;
 static volatile unsigned long long sink;
@@ -130,6 +169,28 @@ int main(void) {
     CROSS_STORE("high_store2", p + 2 * PAGE - 1, unsigned short, NULL);
     CROSS_STORE("high_store4", p + 2 * PAGE - 2, unsigned int, NULL);
     CROSS_STORE("high_store8", p + 2 * PAGE - 4, unsigned long long, NULL);
+
+    /* One instruction, eight bytes, straddling the edge: the guard's span path
+       sees the whole width at once and grants ONE host delta for it, so the
+       ledger has to be consulted for the complete access. */
+    sink += *(const volatile unsigned char *)p;
+    ONE_INSTRUCTION("edge_load8", sink += cross_load8(p + PAGE - 4));
+    sink += *(const volatile unsigned char *)p;
+    ONE_INSTRUCTION("edge_store8", cross_store8(p + PAGE - 4, 0x0102030405060708ULL));
+    sink += *(const volatile unsigned char *)(p + 2 * PAGE);
+    ONE_INSTRUCTION("edge_high_load8", sink += cross_load8(p + 2 * PAGE - 4));
+    sink += *(const volatile unsigned char *)(p + 2 * PAGE);
+    ONE_INSTRUCTION("edge_high_store8", cross_store8(p + 2 * PAGE - 4, 0x0102030405060708ULL));
+
+    /* A page that was LIVE long enough to leave a guard entry behind, then
+       unmapped sub-host-page: the standing grant must not outlive the unmap. */
+    sink += *(const volatile unsigned char *)(p + 5 * PAGE + 8);
+    p[5 * PAGE + 8] = 3;
+    if (munmap(p + 5 * PAGE, PAGE) != 0) { printf("munmap of the warmed page failed\n"); return 1; }
+    ONE_INSTRUCTION("warmed_read", sink += *(const volatile unsigned char *)(p + 5 * PAGE + 8));
+    ONE_INSTRUCTION("warmed_write", p[5 * PAGE + 8] = 4);
+    ONE_INSTRUCTION("warmed_load8", sink += cross_load8(p + 5 * PAGE + 8));
+    ONE_INSTRUCTION("warmed_store8", cross_store8(p + 5 * PAGE + 8, 0x0102030405060708ULL));
 
     /* A page above the hole is still live after the faults. */
     printf("after=%u\n", (unsigned)p[3 * PAGE + 5]);
