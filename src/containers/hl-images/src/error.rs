@@ -42,10 +42,14 @@ pub enum Error {
     /// refused for an arm64 daemon reported `no manifest for platform linux/amd64`, which reads as
     /// the exact opposite of what happened and cost a lane an investigation into a missing amd64
     /// manifest that was never missing.
+    ///
+    /// `available` is boxed because a bare `Option<Platform>` makes this the largest variant in the
+    /// enum at 144 bytes, which is over `clippy::result_large_err`'s threshold and would widen every
+    /// `Result` in the crate to carry it.
     #[error("no manifest for platform {requested}{}", available.as_ref().map_or_else(String::new, |available| format!("; the image is {available}")))]
     UnsupportedPlatform {
         requested: crate::Platform,
-        available: Option<crate::Platform>,
+        available: Option<Box<crate::Platform>>,
     },
     #[error("malformed OCI document: {0}")]
     MalformedOci(String),

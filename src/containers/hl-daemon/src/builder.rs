@@ -188,7 +188,7 @@ impl Builder {
         {
             return Err(hl_images::Error::UnsupportedPlatform {
                 requested: requested.clone(),
-                available: Some(self.platform.clone()),
+                available: Some(Box::new(self.platform.clone())),
             }
             .into());
         }

@@ -81,7 +81,11 @@ impl ConfigDocument {
         }
         Err(Error::UnsupportedPlatform {
             requested: wanted.clone(),
-            available: Some(Platform::new(self.os.clone(), self.architecture.clone(), None)),
+            available: Some(Box::new(Platform::new(
+                self.os.clone(),
+                self.architecture.clone(),
+                None,
+            ))),
         })
     }
 }
