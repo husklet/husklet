@@ -33,4 +33,7 @@ name = "hl-x86_64"
 path = "src/bin/x86.rs"
 
 [dev-dependencies]
+# The integration-test target writes its host skip notice straight to descriptor 2, because
+# libtest prints captured output only for a failing test.
+libc = "0.2"
 serde_json.workspace = true
