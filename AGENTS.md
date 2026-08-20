@@ -1048,6 +1048,48 @@ produced both failure modes:
 So a profile row justifies investigating a symbol. Only a mutation justifies
 believing the cost can be recovered.
 
+### A serializing instruction collects the skid of everything ahead of it
+
+The two failure modes above are about a *symbol*. This one is about a single
+instruction, and it is the reason a `perf annotate` row can be enormous and worth
+nothing.
+
+`run_guest()` makes two `seq_cst` stores per dispatcher crossing -- `cpu->irq = 0`
+(`engine/dispatch.c`) and `in_translated = 1` (`translator/cache.c`) -- and both
+compile to `xchg` on x86. Measured 2026-08-20 on `naa0245` with the JIT-less
+x86_64 engine, `perf record -e cycles:u` over a guest fork+exec put `run_guest` at
+17.0% self-time with **80.5% of its samples on the instruction after the first
+`xchg`** and 13.6% on the instruction after the second: 13.6% and 2.3% of all user
+cycles, in two instructions.
+
+None of it came back. A candidate that skips the first store whenever `irq` is
+already clear -- the common case, and a change the instruction counters confirm
+reaches the binary, +21.5k instructions per spawn on a static x86_64 guest and
++63.6k on aarch64, exactly the load and branch it adds -- measured 1.0371 on
+aarch64 in a twelve-round balanced ABBA, a **3.7% regression**. A second build of
+the *same candidate source* measured 0.9868 on the same arm in the same run. The
+two builds' per-round ranges do not overlap: [1.0276, 1.0432] against
+[0.9825, 0.9929]. A variant with both stores weakened read 0.9908.
+
+Two durable things:
+
+- **`xchg` drains the store buffer, so it retires slowly and the sampled PC skids
+  onto the instruction after it.** What the row measures is the queue in front of
+  the barrier, not the barrier. A store nobody was waiting on can therefore carry
+  a double-digit share of a profile and cost nothing.
+- **One null arm is not the noise floor.** Base-versus-base read 1.0016
+  [0.9912, 1.0142] in the same run and would have certified a 3.7% verdict as
+  real. Layout noise is a property of the *pair* of binaries, so a candidate needs
+  a second build of its own source before its ratio means anything -- the same
+  reason "Identical source does not mean an identical binary" exists, one step
+  further on.
+
+The count that explains the whole thing: a spawn retires 112M user instructions in
+~21,500 crossings, so a crossing is ~5,200 instructions and one locked store
+cannot be a percent of it. On a host **with** the JIT a crossing is one translated
+guest basic block, tens of instructions, and the same two stores are a different
+question that no measurement on this box can answer.
+
 Time the mechanism before sizing a fix for it. The native/host operand round trip
 was assumed to cost about a microsecond and to dominate sqlite; measured, it is
 105ns and 0.35% of the phase, so an entire direction was worth a tenth of a
@@ -1543,6 +1585,35 @@ cross a C boundary.
 
 Every hot-path migration compares against a pinned C baseline. Nested engine
 benchmarks measure compounding overhead.
+
+### `g_threaded` is not "is anything else running"
+
+`g_threaded` is set by the clone service and means **the guest has more than one
+guest thread**. The dispatcher guards its lock, its safepoint and its generation
+publication with it, which is correct for those, because each one's counterparty
+is another `run_guest()`. It is the wrong guard for anything whose counterparty is
+a *host* thread, and the engine creates several of those with the guest still
+single-threaded:
+
+- `hl_checkpoint_control_main` (`engine/lifecycle.c`) and `checkpoint_relay_main`
+  (`linux_abi/thread/lifecycle.c`) both store `cpu->irq = 1` on every registered
+  executor, from their own thread.
+- `gtimer_loop` (`linux_abi/syscall/time.c`), the POSIX-timer drain thread, reaches
+  `thread_target_signal_info()` for a `SIGEV_THREAD_ID` expiry, which publishes
+  `tpending` and then stores `cpu->irq = 1`.
+- `bound_watch_waiter` (`linux_abi/syscall/binding/watch.c`) calls
+  `hl_linux_bus_transition_begin()`, which is the *quiescing* side of
+  `stw_before_translated()`'s `in_translated` handshake. It is started by an
+  ordinary file-backed `mmap` on a host advertising `HL_HOST_CAP_WATCH`, which is
+  both Linux and macOS.
+
+So "the dispatcher already guards other work with `g_threaded`" is not an argument
+for guarding a handshake with it. Ask who the *reader* is: a signal handler is not
+a thread and needs only a compiler barrier, a `fork`ed child shares no memory with
+its parent, but a host service thread is a genuine second core and `g_threaded`
+says nothing about it. The translator already learned the same lesson from the
+other side -- `g_shared_obs` exists because `g_threaded`, being per-process, says
+nothing about a peer *process* on a `MAP_SHARED` region.
 
 ## Application boundaries
 
