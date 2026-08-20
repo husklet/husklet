@@ -1113,6 +1113,9 @@ static int ckpt_validate_process_image(const struct ckpt_proc *process, struct c
             ckpt_source_fclose(pages);
             return -1;
         }
+        // The only walk over every member's regions that runs before the restore allocates anything of
+        // its own, which is the whole window in which the image's addresses can still be taken.
+        ckpt_restore_reserve_note(region.addr, region.len);
         for (uint64_t page = 0; page < region.npages; ++page) {
             uint64_t address;
             if (ckpt_rd_all(pages, &address, sizeof address) != 0 || address < region.addr ||
