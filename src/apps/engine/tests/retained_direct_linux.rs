@@ -34,7 +34,7 @@ mod linux_host {
         bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
     }
 
-    fn static_aarch64(status: u16) -> Vec<u8> {
+    fn static_aarch64(syscall_number: u16, status: u32) -> Vec<u8> {
         let mut bytes = vec![0_u8; 4096];
         bytes[..4].copy_from_slice(b"\x7fELF");
         bytes[4] = 2;
@@ -56,13 +56,17 @@ mod linux_host {
         put_u64(&mut bytes, 96, image_length);
         put_u64(&mut bytes, 104, image_length);
         put_u64(&mut bytes, 112, 4096);
-        put_u32(&mut bytes, ENTRY_OFFSET, 0xd280_0000 | u32::from(status) << 5);
-        put_u32(&mut bytes, ENTRY_OFFSET + 4, 0xd280_0ba8);
-        put_u32(&mut bytes, ENTRY_OFFSET + 8, 0xd400_0001);
+        // movz x0, #<status low 16>; movk x0, #<status high 16>, lsl 16; movz x8, #<nr>; svc #0.
+        // The status is assembled in two halves so a fixture can hand the guest a value the kernel
+        // must truncate, which a single `movz` of 16 bits could not express.
+        put_u32(&mut bytes, ENTRY_OFFSET, 0xd280_0000 | (status & 0xffff) << 5);
+        put_u32(&mut bytes, ENTRY_OFFSET + 4, 0xf2a0_0000 | (status >> 16) << 5);
+        put_u32(&mut bytes, ENTRY_OFFSET + 8, 0xd280_0008 | u32::from(syscall_number) << 5);
+        put_u32(&mut bytes, ENTRY_OFFSET + 12, 0xd400_0001);
         bytes
     }
 
-    fn static_x86_64(status: u8) -> Vec<u8> {
+    fn static_x86_64(syscall_number: u32, status: u32) -> Vec<u8> {
         let mut bytes = vec![0_u8; 4096];
         bytes[..4].copy_from_slice(b"\x7fELF");
         bytes[4] = 2;
@@ -84,9 +88,11 @@ mod linux_host {
         put_u64(&mut bytes, 96, image_length);
         put_u64(&mut bytes, 104, image_length);
         put_u64(&mut bytes, 112, 4096);
-        bytes[ENTRY_OFFSET..ENTRY_OFFSET + 5].copy_from_slice(&[0xb8, 60, 0, 0, 0]);
+        // mov eax, <nr>; mov edi, <status>; syscall.
+        bytes[ENTRY_OFFSET] = 0xb8;
+        bytes[ENTRY_OFFSET + 1..ENTRY_OFFSET + 5].copy_from_slice(&syscall_number.to_le_bytes());
         bytes[ENTRY_OFFSET + 5] = 0xbf;
-        bytes[ENTRY_OFFSET + 6..ENTRY_OFFSET + 10].copy_from_slice(&u32::from(status).to_le_bytes());
+        bytes[ENTRY_OFFSET + 6..ENTRY_OFFSET + 10].copy_from_slice(&status.to_le_bytes());
         bytes[ENTRY_OFFSET + 10..ENTRY_OFFSET + 12].copy_from_slice(&[0x0f, 0x05]);
         bytes
     }
@@ -94,7 +100,7 @@ mod linux_host {
     #[test]
     fn direct_aarch64_worker_defaults_to_retained_c() {
         let path = std::env::temp_dir().join(format!("hl-retained-direct-{}", std::process::id()));
-        fs::write(&path, static_aarch64(42)).unwrap();
+        fs::write(&path, static_aarch64(93, 42)).unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_hl-aarch64"))
             .arg(&path)
             .output()
@@ -108,7 +114,7 @@ mod linux_host {
     #[test]
     fn direct_x86_64_worker_defaults_to_retained_c() {
         let path = std::env::temp_dir().join(format!("hl-retained-direct-x86-{}", std::process::id()));
-        fs::write(&path, static_x86_64(43)).unwrap();
+        fs::write(&path, static_x86_64(60, 43)).unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_hl-x86_64"))
             .arg(&path)
             .output()
@@ -117,6 +123,63 @@ mod linux_host {
         assert_eq!(output.status.code(), Some(43));
         assert!(output.stdout.is_empty());
         assert!(output.stderr.is_empty());
+    }
+
+    /// Linux does not preserve an `exit_group` status: `do_group_exit` stores `(status & 0xff) << 8`,
+    /// so a waiter observes the low eight bits and nothing else. Measured on this host's kernel with a
+    /// glibc `exit(n)` -- which issues `exit_group` -- `exit(-1)` is waited as 255, `exit(-2)` as 254,
+    /// `exit(300)` as 44 and `exit(256)` as 0. The engine published the raw status instead, so the
+    /// parent's consistency check found a record saying 0xffffffff beside a wait saying 255, rejected
+    /// the pair as `HL_STATUS_CORRUPT`, and the runner reported 125 for every status outside 0..=255.
+    /// `exit(255)` was unaffected, which is why the defect looked rare.
+    ///
+    /// 200 is the control: it is inside the range, so it reads 200 both before and after the fix. A
+    /// truncation applied too widely -- or an assertion that merely accepts whatever the engine says --
+    /// cannot pass the four out-of-range rows and this one at the same time.
+    fn exit_group_status_rows() -> [(u32, i32); 5] {
+        [(0xffff_ffff, 255), (0xffff_fffe, 254), (300, 44), (256, 0), (200, 200)]
+    }
+
+    #[test]
+    fn an_x86_64_guest_exit_group_status_is_reported_as_the_kernel_truncates_it() {
+        for (status, expected) in exit_group_status_rows() {
+            let path = std::env::temp_dir()
+                .join(format!("hl-exit-group-x86-{status}-{}", std::process::id()));
+            fs::write(&path, static_x86_64(231, status)).unwrap();
+            let output = Command::new(env!("CARGO_BIN_EXE_hl-x86_64"))
+                .arg(&path)
+                .output()
+                .unwrap();
+            fs::remove_file(&path).unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(expected),
+                "x86-64 guest exit_group({status:#x}) must be waited as {expected}, as the host kernel does; \
+                 stderr={}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    #[test]
+    fn an_aarch64_guest_exit_group_status_is_reported_as_the_kernel_truncates_it() {
+        for (status, expected) in exit_group_status_rows() {
+            let path = std::env::temp_dir()
+                .join(format!("hl-exit-group-a64-{status}-{}", std::process::id()));
+            fs::write(&path, static_aarch64(94, status)).unwrap();
+            let output = Command::new(env!("CARGO_BIN_EXE_hl-aarch64"))
+                .arg(&path)
+                .output()
+                .unwrap();
+            fs::remove_file(&path).unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(expected),
+                "aarch64 guest exit_group({status:#x}) must be waited as {expected}, as the host kernel does; \
+                 stderr={}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 
     #[test]
