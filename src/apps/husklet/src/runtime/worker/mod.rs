@@ -90,6 +90,10 @@ impl Worker {
             std::process::exit(Status::WORKSPACE_MISSING);
         };
         let (columns, rows) = terminal::size().unwrap_or((80, 24));
+        // The inherited PTY is still cooked here, so its line discipline would turn a Ctrl-C into a
+        // fatal SIGINT for this worker -- reported by the pane as `workspace session ended
+        // (signal 2)`. Hold the tty's terminating signals until `TerminalSession` owns raw mode.
+        let interrupts = crate::ffi::InterruptMask::block();
         let mut terminal = match crate::runtime::execution::launch(&workspace, columns, rows, cwd, slot) {
             Ok(terminal) => terminal,
             Err(error) => {
@@ -104,7 +108,7 @@ impl Worker {
             Err(error) => eprintln!("workspace restore summary unavailable: {error}"),
         }
         diagnostics.record("workspace launch started");
-        let status = TerminalSession::run(&mut *terminal);
+        let status = TerminalSession::run(&mut *terminal, interrupts);
         diagnostics.record(format_args!("workspace terminal exited: {status}"));
         std::process::exit(ProcessStatus::from_engine(status).0);
     }

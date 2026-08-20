@@ -2,7 +2,7 @@
 #![allow(unsafe_code)]
 
 use super::{on_winch, Ordering, WINCH};
-use crate::ffi::RawMode;
+use crate::ffi::{InterruptMask, RawMode};
 use std::io::Write;
 
 /// Establishes the terminal contract inherited by an engine-backed session.
@@ -141,12 +141,18 @@ pub(super) struct TerminalSession<'a> {
 const OUTPUT_DRAIN_BUDGET: usize = 256 * 1024;
 
 impl<'a> TerminalSession<'a> {
-    pub(super) fn run(pty: &'a mut dyn hl_ws_term::PtyBackend) -> i32 {
-        Self::new(pty).drive()
+    pub(super) fn run(pty: &'a mut dyn hl_ws_term::PtyBackend, interrupts: InterruptMask) -> i32 {
+        Self::new(pty, Some(interrupts)).drive()
     }
 
-    fn new(pty: &'a mut dyn hl_ws_term::PtyBackend) -> Self {
+    fn new(pty: &'a mut dyn hl_ws_term::PtyBackend, interrupts: Option<InterruptMask>) -> Self {
         let raw = RawMode::enter(libc::STDIN_FILENO);
+        // Raw mode is in effect: the line discipline no longer raises a signal, and Ctrl-C reaches
+        // the guest as the 0x03 byte the relay forwards. Restore the inherited mask here so the
+        // launch window is the only interval in which interrupts are held.
+        if let Some(interrupts) = interrupts {
+            interrupts.release();
+        }
         Self::install_resize_handler();
         let last_size = size();
         if let Some((columns, rows)) = last_size {
@@ -367,7 +373,7 @@ mod open_files_tests {
     #[test]
     fn terminal_transport_errors_end_the_relay() {
         let mut backend = FailingBackend;
-        let mut terminal = TerminalSession::new(&mut backend);
+        let mut terminal = TerminalSession::new(&mut backend, None);
 
         let error = terminal.drain_output().unwrap_err();
 
@@ -386,6 +392,22 @@ mod open_files_tests {
         super::drain_output_to(&mut backend, &mut buffer, &mut io::sink()).unwrap();
 
         assert_eq!(backend.reads, expected_reads);
+    }
+
+    /// The session half of the contract: once raw mode is in effect a Ctrl-C is data, and the
+    /// relay must forward that byte to the guest exactly as it does today.
+    #[test]
+    fn interrupts_typed_after_raw_mode_reach_the_guest_as_the_interrupt_byte() {
+        let mut backend = BackpressuredBackend {
+            reject_next: false,
+            writes: Vec::new(),
+        };
+        let mut pending = Some(vec![0x03]);
+
+        assert!(!super::flush_pending_input(&mut backend, &mut pending).unwrap());
+
+        assert!(pending.is_none());
+        assert_eq!(backend.writes, [vec![0x03]]);
     }
 
     #[test]
