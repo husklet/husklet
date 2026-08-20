@@ -446,6 +446,26 @@ static int pid_namespace_scenario(uint32_t scenario) {
         if (container_pid() != guest_child) _exit(4);                      // getpid() is guest-local
         if (proc_self_guest_ppid(container_pid()) != 1) _exit(5);          // PPid names the init, not a host pid
         if (guest_pid_from_host((int)getpid()) != guest_child) _exit(6);   // /proc renders it the same way
+        // A grandchild, because a CHILD of the init cannot separate the namespace from the old
+        // init-only fold: both answer 1 for its parent. A grandchild's parent is an ordinary guest
+        // process, which the fold could only render as a host pid.
+        int guest_grandchild = (int)hl_linux_pidmap_allocate_guest(&g_pidmap);
+        if (guest_grandchild != guest_child + 1) _exit(7);
+        pid_t grandchild = fork();
+        if (grandchild < 0) _exit(8);
+        if (grandchild == 0) {
+            if (restore_process_identity_publish(guest_grandchild, (int)getpid()) != guest_grandchild) _exit(9);
+            g_self_gpid = guest_grandchild;
+            g_self_gppid = -1;
+            g_hostpid_cache = 0;
+            if (container_pid() != guest_grandchild) _exit(10);
+            // The whole defect in one assertion: its parent is a process the guest can see.
+            if (proc_self_guest_ppid(container_pid()) != guest_child) _exit(11);
+            _exit(0);
+        }
+        int grandchild_status = 0;
+        while (waitpid(grandchild, &grandchild_status, 0) < 0 && errno == EINTR) {}
+        if (!WIFEXITED(grandchild_status) || WEXITSTATUS(grandchild_status) != 0) _exit(12);
         _exit(0);
     }
     int status = 0;
