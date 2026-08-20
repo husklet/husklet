@@ -59,11 +59,11 @@ jobs:
           native_directory="$(dirname "$library")"
           xcrun clang -std=c11 -Wall -Wextra -Werror \
             -Isrc/runtime/hl-native/src/native/include \
-            tests/native/host-abi/unix.c -L"$native_directory" \
+            src/runtime/hl-native/tests/host-abi/unix.c -L"$native_directory" \
             -lhl_native_engine -o "$RUNNER_TEMP/hl-public-abi-c"
           xcrun clang++ -std=c++20 -Wall -Wextra -Werror \
             -Isrc/runtime/hl-native/src/native/include \
-            tests/native/host-abi/unix.cpp -L"$native_directory" \
+            src/runtime/hl-native/tests/host-abi/unix.cpp -L"$native_directory" \
             -lhl_native_engine -o "$RUNNER_TEMP/hl-public-abi-cxx"
           DYLD_LIBRARY_PATH="$native_directory" "$RUNNER_TEMP/hl-public-abi-c"
           DYLD_LIBRARY_PATH="$native_directory" "$RUNNER_TEMP/hl-public-abi-cxx"
@@ -120,11 +120,11 @@ jobs:
         run: |
           cl.exe /nologo /std:c11 /W4 /WX /c /DHL_SHARED /DHL_ABI_COMPILE_CONTRACT `
             /Isrc/runtime/hl-native/src/native/include `
-            tests/native/host-abi/windows.c `
+            src/runtime/hl-native/tests/host-abi/windows.c `
             /Fo:$env:RUNNER_TEMP\hl-public-abi-c.obj
           cl.exe /nologo /std:c++20 /EHsc /W4 /WX /c /DHL_SHARED `
             /Isrc/runtime/hl-native/src/native/include `
-            tests/native/host-abi/windows.cpp `
+            src/runtime/hl-native/tests/host-abi/windows.cpp `
             /Fo:$env:RUNNER_TEMP\hl-public-abi-cxx.obj
 
       - name: Link and execute the public ABI fixture
@@ -132,12 +132,12 @@ jobs:
         run: |
           cl.exe /nologo /std:c11 /LD /DHL_ABI_FIXTURE_EXPORT `
             /Isrc/runtime/hl-native/src/native/include `
-            tests/native/host-abi/windows.c `
+            src/runtime/hl-native/tests/host-abi/windows.c `
             /Fe:$env:RUNNER_TEMP\hl-abi-fixture.dll `
             /link /IMPLIB:$env:RUNNER_TEMP\hl-abi-fixture.lib
           cl.exe /nologo /std:c11 `
             /Isrc/runtime/hl-native/src/native/include `
-            tests/native/host-abi/windows.c `
+            src/runtime/hl-native/tests/host-abi/windows.c `
             $env:RUNNER_TEMP\hl-abi-fixture.lib `
             /Fe:$env:RUNNER_TEMP\hl-abi-smoke.exe
           & "$env:RUNNER_TEMP\hl-abi-smoke.exe"
@@ -286,6 +286,21 @@ jobs:
       #      `..::stop_wait_failure_attempts_rollback_before_returning` sabotages a
       #      directory with chmod, which `CAP_DAC_OVERRIDE` walks straight through, so it
       #      passes only because a GitHub runner is not root.
+      #   2. `hl-gui/tests/wire.rs` holds 8 tests behind `#![cfg(feature = "wire")]`,
+      #      which is not a default feature: `cargo test -p hl-gui --test wire` reports
+      #      `running 0 tests ... ok`. They are reachable only through workspace feature
+      #      unification under `--workspace --all-targets`, which no step here runs, so
+      #      they are covered by nothing. Not yet claimed by any lane.
+      #   3. THE REVERSE GAP, and it belongs to the macOS job rather than this one:
+      #      `hl-engine/tests/checkpoint_linux.rs` is `#![cfg(target_os = "linux")]` and
+      #      ~4,400 lines. `nix flake check` on macos-26 is the only job that runs
+      #      integration tests at all, and on that host this suite compiles to zero --
+      #      as do `kevent_changelist_echo.rs` and the Linux-gated cases in
+      #      `restore_collision.rs`, `unix_identity.rs` and `header_self_containment.rs`.
+      #      So the one job that runs integration tests is the one host where the
+      #      largest integration suite is gated out. Both halves look covered; neither
+      #      is. Fixing it means running them HERE, which needs a Linux `flake check`
+      #      path this job does not yet have.
       # ---------------------------------------------------------------------------
 
       # THIS STEP EXCLUDES NOTHING. All 88 tests run.
@@ -314,6 +329,28 @@ jobs:
           nix --extra-experimental-features 'nix-command flakes' develop . --command
           cargo test -p hl-engine --lib --locked --offline
 
+      # `src/apps/engine/tests/retained_direct_linux.rs` had never executed on any host
+      # in this project's history, for two independent reasons: no runner is both Linux
+      # AND aarch64 (this job is ubuntu-24.04, the aarch64 job is macos-26), and the only
+      # job running any integration test at all is `nix flake check` on macos-26. The
+      # arch gate has since been measured unnecessary and dropped and the target runs 4
+      # tests -- but `cargo check --workspace --all-targets` only COMPILES them and
+      # `cargo test --workspace --lib --bins` excludes `tests/` entirely, so the fix
+      # stayed invisible. This step is what runs them.
+      - name: Test the engine application's integration targets
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo test -p engine --tests --locked --offline
+
+      # `husklet`'s library test `config::terminal_tests` is `#[cfg(all(test, feature =
+      # "gui"))]` IN THE LIB, and falls exactly between this job's other two husklet
+      # gates: the `--lib` gates use `runtime`, which does not imply `gui`, and the `gui`
+      # gate is `--bins`. It ran in no gate command and no CI job on any host.
+      - name: Test the GUI application library
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo test -p husklet --lib --features gui --locked --offline
+
       # `--all-targets` reaches hl-native's integration tests, which no CI job on any
       # host has ever run. That is the exact gap that let a tree which did not compile
       # on x86_64 at all reach main: the two reserved-register hooks called emitters
@@ -338,6 +375,33 @@ jobs:
         run: >-
           nix --extra-experimental-features 'nix-command flakes' develop . --command
           cargo test --workspace --lib --bins --locked --offline --no-fail-fast
+
+      # THE EIGHT LINUX-ONLY FLAKE CHECKS HAD NO RUNNER ANYWHERE. They are
+      # `lib.optionalAttrs pkgs.stdenv.isLinux` in `flake.nix`, so the macOS job's
+      # `nix flake check` cannot see them, and this job runs cargo commands rather than
+      # the flake. That is how two real C defects went unreported for months: an
+      # always-true `-Werror=type-limits` bound in `fork_diagnostic.c` and an
+      # `ENOATTR`/`ENODATA` tautology in `exec.c`, both of which a human had to find.
+      #
+      # Four are green and run here. The other four are HONESTLY RED and are named
+      # rather than silenced -- delete a line the day its check passes:
+      #   alpine-compatibility          -- red since a vacuous filter was made honest.
+      #   scan-build-linux-aarch64      -- 14 `deadcode.DeadStores`, 11 of them in the
+      #   scan-build-linux-x86_64          aarch64 decode helpers. Only visible at all
+      #                                    since the strict-GCC abort in front of them
+      #                                    was cleared; `--status-bugs` fails on any.
+      #   host-windows-x86_64-gnu-smoke -- `_SC_PAGESIZE` undeclared and implicit
+      #                                    `fork`/`geteuid`/`flock` under mingw. Same
+      #                                    defect as `native-windows-amd64` above:
+      #                                    `cargo check` runs `build.rs`, so both
+      #                                    compile the same C.
+      - name: Verify the Linux-only flake checks that are green
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' build -L --no-link
+          .#checks.x86_64-linux.host-linux-aarch64
+          .#checks.x86_64-linux.host-linux-x86_64
+          .#checks.x86_64-linux.installed-product
+          .#checks.x86_64-linux.host-darwin-cross-contract
 
   workspace:
     name: Workspace quality and tests

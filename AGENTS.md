@@ -1414,6 +1414,44 @@ A skip is not a pass. If a test cannot run here, it must say so out loud: the
 harness shows captured output only for failing tests, so an unrun arm otherwise
 looks exactly like a passing one.
 
+### The gate that reported nothing, and was read as if it had
+
+The five above proved nothing while saying `ok`. This one said nothing at all,
+which is harder to notice because there is no green line to disbelieve.
+
+Measured 2026-08-20: the **fifteen most recent CI runs on `main` had all ended
+`cancelled`** -- not one `success`, not one `failure`, going back through the
+whole working day. `ci.yml` and `smoke.yml` carried `cancel-in-progress: true`,
+nine lanes were merging into `main` roughly every ten minutes, and the workflow
+needs about forty-five. Every run was killed by the next push. **No commit on
+`main` had ever reached a verdict.**
+
+Nobody had disabled anything, nothing was `#[ignore]`d, and every job was
+correctly written. The branch simply had no test signal, and it looked from the
+outside like a branch whose CI was running. When the cancellation was removed
+and one run was allowed to finish, **five real reds surfaced at once** -- the
+Windows MSVC surface, the macOS `nix flake check`, the macOS public C/C++ ABI
+contracts, and all four legs of a `Real-image smoke` workflow nobody was even
+tracking. Along with a genuine success on the new Linux job, which had also been
+invisible.
+
+The durable rules:
+
+- **`cancel-in-progress: true` is wrong on an integration branch whenever the
+  merge interval is shorter than the workflow duration.** It is right on pull
+  requests, where a new head commit genuinely supersedes the one under test. On
+  `main` it is a race the branch always loses. GitHub's queue is bounded at one
+  without it -- a newly queued run cancels the previously *pending* run in the
+  same group -- so declining to cancel does not pile up runners.
+- **Read the distribution of conclusions, not the latest one.** A single
+  `cancelled` is routine and means nothing. Fifteen in a row is a dead gate, and
+  the two are indistinguishable if you only ever look at the most recent run.
+  `conclusion` is the field to count; a run that is `completed` is not
+  necessarily a run that decided anything.
+- A gate can fail to produce evidence for reasons that have nothing to do with
+  the code it tests. Ask what the last *verdict* was and when, not whether CI is
+  configured.
+
 ## Design lint
 
 `src/packages/hl-design-lint` is the repository architecture linter. Run it in
