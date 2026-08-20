@@ -155,6 +155,59 @@ impl Runtime {
         Ok((containers, platform))
     }
 
+    /// Brings a reusable container's published signatures up to date.
+    ///
+    /// A runtime signature that no longer matches means the saved memory image and any live
+    /// executions belong to a runtime this build cannot resume, so both are discarded first.
+    /// Answers whether a usable checkpoint survives.
+    async fn republish_signatures(
+        containers: &Containers,
+        labels: &std::collections::BTreeMap<String, String>,
+        checkpointed: bool,
+        signature: &str,
+        configuration_signature: &str,
+        runtime_signature: &str,
+    ) -> io::Result<bool> {
+        let stored = labels.get(SIGNATURE).map(String::as_str);
+        let stored_configuration = labels.get(CONFIGURATION_SIGNATURE).map(String::as_str);
+        let stored_runtime = labels.get(RUNTIME_SIGNATURE).map(String::as_str);
+        let mut checkpointed = checkpointed;
+        let runtime_reusable =
+            stored_runtime == Some(runtime_signature) || (stored_runtime.is_none() && stored == Some(signature));
+        if !runtime_reusable {
+            containers
+                .discard_checkpoint(CONTAINER)
+                .await
+                .map_err(io::Error::other)?;
+            checkpointed = false;
+            let executions = containers.executions();
+            for execution in executions.list().await.map_err(io::Error::other)? {
+                executions.remove(&execution.id).await.map_err(io::Error::other)?;
+            }
+        }
+        if stored_configuration != Some(configuration_signature) {
+            containers
+                .set_label(CONTAINER, CONFIGURATION_SIGNATURE, configuration_signature)
+                .await
+                .map_err(io::Error::other)?;
+        }
+        if stored != Some(signature) {
+            containers
+                .set_label(CONTAINER, SIGNATURE, signature)
+                .await
+                .map_err(io::Error::other)?;
+        }
+        // Publish runtime compatibility last: a crash before this point retries checkpoint and
+        // execution cleanup rather than trusting a partial migration.
+        if stored_runtime != Some(runtime_signature) {
+            containers
+                .set_label(CONTAINER, RUNTIME_SIGNATURE, runtime_signature)
+                .await
+                .map_err(io::Error::other)?;
+        }
+        Ok(checkpointed)
+    }
+
     pub(super) async fn ensure_container(
         containers: &Containers,
         workspace: &WorkspaceConfig,
@@ -168,7 +221,6 @@ impl Runtime {
                 let mut checkpointed = container.checkpoint.is_some();
                 let stored = container.spec.labels.get(SIGNATURE);
                 let stored_configuration = container.spec.labels.get(CONFIGURATION_SIGNATURE);
-                let stored_runtime = container.spec.labels.get(RUNTIME_SIGNATURE);
                 let session = crate::runtime::session::Session::from_labels(&container.spec.labels);
                 let reusable = session.is_ok()
                     && match stored_configuration {
@@ -177,39 +229,15 @@ impl Runtime {
                         None => configuration.legacy_container_compatible(&container.spec)?,
                     };
                 if reusable {
-                    let runtime_reusable = stored_runtime == Some(&runtime_signature)
-                        || (stored_runtime.is_none() && stored == Some(&signature));
-                    if !runtime_reusable {
-                        containers
-                            .discard_checkpoint(CONTAINER)
-                            .await
-                            .map_err(io::Error::other)?;
-                        checkpointed = false;
-                        let executions = containers.executions();
-                        for execution in executions.list().await.map_err(io::Error::other)? {
-                            executions.remove(&execution.id).await.map_err(io::Error::other)?;
-                        }
-                    }
-                    if stored_configuration != Some(&configuration_signature) {
-                        containers
-                            .set_label(CONTAINER, CONFIGURATION_SIGNATURE, &configuration_signature)
-                            .await
-                            .map_err(io::Error::other)?;
-                    }
-                    if stored != Some(&signature) {
-                        containers
-                            .set_label(CONTAINER, SIGNATURE, &signature)
-                            .await
-                            .map_err(io::Error::other)?;
-                    }
-                    // Publish runtime compatibility last: a crash before this point retries
-                    // checkpoint and execution cleanup rather than trusting a partial migration.
-                    if stored_runtime != Some(&runtime_signature) {
-                        containers
-                            .set_label(CONTAINER, RUNTIME_SIGNATURE, &runtime_signature)
-                            .await
-                            .map_err(io::Error::other)?;
-                    }
+                    checkpointed = Self::republish_signatures(
+                        containers,
+                        &container.spec.labels,
+                        checkpointed,
+                        &signature,
+                        &configuration_signature,
+                        &runtime_signature,
+                    )
+                    .await?;
                 }
                 if reusable {
                     return if container.state.is_active() {

@@ -430,6 +430,16 @@ impl Service {
         failure.map_or(Ok(()), Err)
     }
 
+    /// The id of a container whose checkpoint is present even though its capture reported failure.
+    ///
+    /// A container that exited holding a checkpoint was captured, so the rollback below must still
+    /// restart it; the error described what happened after the capture, not the capture itself.
+    async fn captured_by_exit(&self, reference: &str) -> Option<crate::ContainerId> {
+        let container = self.resolve(reference).await.ok()?;
+        (container.checkpoint.is_some() && matches!(container.state, ContainerState::Exited { .. }))
+            .then_some(container.id)
+    }
+
     pub(crate) async fn checkpoint_all(self: &Arc<Self>, timeout: Duration) -> Result<()> {
         let _guard = self.operations.lock().await;
         #[cfg(test)]
@@ -460,15 +470,8 @@ impl Service {
                 Ok(Some(id)) => captured.push(id),
                 Ok(None) | Err(Error::NotFound(_)) => {}
                 Err(error) => {
-                    if let Ok(container) = self.resolve(container_id.as_str()).await
-                        && container.checkpoint.is_some()
-                        && matches!(container.state, ContainerState::Exited { .. })
-                    {
-                        captured.push(container.id);
-                    }
-                    if failure.is_none() {
-                        failure = Some(error);
-                    }
+                    captured.extend(self.captured_by_exit(container_id.as_str()).await);
+                    failure = failure.or(Some(error));
                 }
             }
         }

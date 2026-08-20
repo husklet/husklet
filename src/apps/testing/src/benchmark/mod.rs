@@ -4,6 +4,7 @@ mod calibration;
 mod definition;
 mod evidence;
 mod floor;
+mod identity;
 mod ledger;
 mod options;
 mod schedule;
@@ -37,7 +38,7 @@ pub(crate) use floor::Options as FloorOptions;
 pub(crate) use stage::Options as StageOptions;
 
 pub(crate) fn hash(options: HashOptions) -> Result<(), Error> {
-    println!("{}", definition::artifact_identity(&options.path)?);
+    println!("{}", identity::artifact_identity(&options.path)?);
     Ok(())
 }
 

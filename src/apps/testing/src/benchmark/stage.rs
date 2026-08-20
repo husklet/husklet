@@ -1,7 +1,8 @@
 use super::definition::{
     Arm, ArmSupport, Artifact, BuildReceipt, CAMPAIGN_SCHEMA, Campaign, GuestPath, Layout as CampaignLayout, Profile,
-    Workload, artifact_identity,
+    Workload,
 };
+use super::identity::artifact_identity;
 use crate::{
     platform::{HostProcess, ProcessCapture},
     suite::Error,

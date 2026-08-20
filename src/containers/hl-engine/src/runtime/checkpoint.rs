@@ -470,6 +470,33 @@ impl Server {
         }
     }
 
+    /// Waits for a running recovery to change phase, failing it when its deadline passes first.
+    ///
+    /// Answers the reacquired guard either way, so the caller re-reads the phase from the top.
+    fn await_recovery_change<'a>(
+        &'a self,
+        capture: std::sync::MutexGuard<'a, CaptureState>,
+        id: u64,
+        deadline: std::time::Instant,
+    ) -> Result<std::sync::MutexGuard<'a, CaptureState>, CaptureFailure> {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            drop(capture);
+            self.fail_recovery(id, CaptureFailure::Deadline)?;
+            return self.capture_lock();
+        }
+        let (next, timeout) = self
+            .capture_changed
+            .wait_timeout(capture, deadline.saturating_duration_since(now))
+            .map_err(|_| CaptureFailure::Poisoned)?;
+        if !timeout.timed_out() {
+            return Ok(next);
+        }
+        drop(next);
+        self.fail_recovery(id, CaptureFailure::Deadline)?;
+        self.capture_lock()
+    }
+
     pub(crate) fn wait_recovery(&self, id: u64) -> Result<(), CaptureFailure> {
         let mut capture = self.capture_lock()?;
         loop {
@@ -480,23 +507,7 @@ impl Server {
             }
             match capture.phase {
                 CapturePhase::Recovery { id: active, deadline } if active == id => {
-                    let now = std::time::Instant::now();
-                    if now >= deadline {
-                        drop(capture);
-                        self.fail_recovery(id, CaptureFailure::Deadline)?;
-                        capture = self.capture_lock()?;
-                        continue;
-                    }
-                    let (next, timeout) = self
-                        .capture_changed
-                        .wait_timeout(capture, deadline.saturating_duration_since(now))
-                        .map_err(|_| CaptureFailure::Poisoned)?;
-                    capture = next;
-                    if timeout.timed_out() {
-                        drop(capture);
-                        self.fail_recovery(id, CaptureFailure::Deadline)?;
-                        capture = self.capture_lock()?;
-                    }
+                    capture = self.await_recovery_change(capture, id, deadline)?;
                 }
                 CapturePhase::Aborting { id: active } if active == id => {
                     capture = self

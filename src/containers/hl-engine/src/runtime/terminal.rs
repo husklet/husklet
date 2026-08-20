@@ -512,6 +512,26 @@ fn write_master(master: &mut File, bytes: &[u8], stop: &AtomicBool) -> std::io::
     Ok(())
 }
 
+/// Tops up a short read once, so one guest write does not reach the display in two pieces.
+///
+/// The sleep is what makes it worth trying: the writer is a guest that has just been scheduled out,
+/// and a full buffer means there was never a gap to top up.
+fn top_up_batch(master: &mut File, bytes: &mut [u8; 16 * 1024], count: usize) -> usize {
+    let mut count = count;
+    if count >= bytes.len() {
+        return count;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(1));
+    while count < bytes.len() {
+        match master.read(&mut bytes[count..]) {
+            Ok(read) if read > 0 => count += read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            _ => break,
+        }
+    }
+    count
+}
+
 fn spawn_output(
     port: Arc<dyn TerminalPort>,
     stop: Arc<AtomicBool>,
@@ -557,18 +577,7 @@ fn spawn_output(
                     Err(_) => break,
                 };
                 drop(active);
-                if count < bytes.len() {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                    while count < bytes.len() {
-                        match master.read(&mut bytes[count..]) {
-                            Ok(0) => break,
-                            Ok(read) => count += read,
-                            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-                            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                            Err(_) => break,
-                        }
-                    }
-                }
+                count = top_up_batch(&mut master, &mut bytes, count);
                 // A raw host slave post-processes nothing, so `OPOST` is applied here or every
                 // guest newline reaches the display without its carriage return.
                 let written = match guest.as_ref() {
