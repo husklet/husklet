@@ -206,11 +206,23 @@ jobs:
       #      unprivileged uid and seeing them pass -- but isolation is the exact
       #      condition under which this test passes, so the check selected for the
       #      answer I expected. A green isolated run is no evidence here.
-      #      RE-ADD BOTH STEPS THE DAY THAT TEST IS ORDER-INDEPENDENT. Everything else
-      #      in both arms is green: 179 of 181 pass unprivileged, and the second
+      #      RE-ADD BOTH STEPS THE DAY THAT TEST IS ORDER-INDEPENDENT. The second
       #      historical suspect, `..::stop_wait_failure_attempts_rollback_before_
       #      returning`, passes unprivileged -- it only fails as root, where
       #      `CAP_DAC_OVERRIDE` walks through its chmod sabotage.
+      #      I FIRST WROTE "179 of 181 pass unprivileged" HERE FROM ONE SAMPLE. A second
+      #      sample disagrees, so the honest figure is a range and a caveat:
+      #        179/1  in  46.59s  (lock not requested)
+      #        177/3  in 135.48s  (exclusive lock REQUESTED AND NOT GRANTED, 300s cap)
+      #      The two extra failures in the second are
+      #      `product_checkpoint_test::continue_later_*`, which are timing-sensitive --
+      #      and that run took 2.91x as long for a suite whose load average barely moved
+      #      (2.44 -> 3.41). Elapsed time is the contention signal here; the load number
+      #      is not, which is why this job's sibling measurements now record both.
+      #      SO: `daemon_crash_before_acknowledgement...` fails in EVERY unprivileged
+      #      full-suite run and is the durable blocker. Whether the two checkpoint tests
+      #      pass unprivileged on a QUIET box is NOT ESTABLISHED -- neither sample had
+      #      the box, and this lane never obtained it.
       #   2. `hl-gui/tests/wire.rs` holds 8 tests behind `#![cfg(feature = "wire")]`,
       #      which is not a default feature: `cargo test -p hl-gui --test wire` reports
       #      `running 0 tests ... ok`. They are reachable only through workspace feature
