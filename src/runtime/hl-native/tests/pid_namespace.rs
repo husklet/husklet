@@ -30,3 +30,17 @@ fn a_host_process_outside_the_container_has_no_guest_pid() {
             .unwrap_or_else(|status| panic!("ISA {isa} rendered a non-member host pid to the guest: {status}"));
     }
 }
+
+/// A container is one PID namespace served by several engine launches: the spec tree's top process, and one
+/// more for every exec session. Each launch prepared a registry private to itself, so each seeded guest 1
+/// for its own top and then allocated the same 2, 3, 4 for its forks -- two live processes in one container
+/// answering one guest pid. That is also the name a capture files an image group under (`proc.<guest pid>`),
+/// so two members claimed one group, the second `GROUP_BEGIN` collided, and the whole capture was refused:
+/// `proc.3` duplicated in six of six recorded runs of the Continue-later journey.
+#[test]
+fn two_launches_of_one_container_never_issue_the_same_guest_pid() {
+    for isa in [1, 2] {
+        hl_native::pid_namespace_test(isa, 2)
+            .unwrap_or_else(|status| panic!("ISA {isa} gave two live container processes one guest pid: {status}"));
+    }
+}

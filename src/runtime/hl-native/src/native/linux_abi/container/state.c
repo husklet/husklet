@@ -7,6 +7,9 @@
 #include "../../host/system.h"
 #include "key.h"
 #include "pidmap.h"
+// The container-wide identity registry rides the one shared object every launch of a container already
+// inherits (see container_identity_descriptor below).
+#include "../../engine/checkpoint_channel.h"
 #include "ports.h"
 #include "snapshot.h"
 
@@ -323,7 +326,32 @@ static int restore_process_identity_add(int guest, int host) {
     return hl_linux_pidmap_add(&g_pidmap, guest, host);
 }
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+// Lets the pid-namespace fixture stand two launches on one container object without an engine, driving the
+// real preparation, the real join and the real allocate/publish pair rather than an imitation of them.
+static int g_identity_descriptor_for_test = -1;
+#endif
+
+// The descriptor whose shared region holds THIS CONTAINER's identity registry, or -1 when this launch has
+// none and must fall back to a private one.
+//
+// The checkpoint trigger is that object: it is created once per container by the embedder and inherited by
+// the spec tree's launch and by every exec session's launch alike -- which is exactly the set of processes
+// that must agree on one pid namespace. A bare (embedder-less) run has no trigger and is a single launch,
+// so a private registry is the whole namespace there and nothing is shared with anyone.
+static int container_identity_descriptor(void) {
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (g_identity_descriptor_for_test >= 0) return g_identity_descriptor_for_test;
+#endif
+    return hl_ckpt_trigger_descriptor();
+}
+
 static int ckpt_restore_identity_prepare_shared(void) {
+    int descriptor = container_identity_descriptor();
+    if (descriptor >= 0 && hl_linux_identity_registry_prepare_shared_descriptor(&g_identity_registry, descriptor,
+                                                                                &g_pidmap, &g_pgidmap,
+                                                                                &g_sidmap) == 0)
+        return 0;
     return hl_linux_identity_registry_prepare(&g_identity_registry, &g_pidmap, &g_pgidmap, &g_sidmap);
 }
 
@@ -366,15 +394,21 @@ static int container_pid_namespace_begin(void) {
     int host_sid = (int)getsid(0);
     if (host_pgid <= 0) host_pgid = host_pid;
     if (host_sid <= 0) host_sid = host_pgid;
-    const hl_linux_pidmap_update seed[3] = {
-        {.map = &g_pidmap, .guest = 1, .host = host_pid},
-        {.map = &g_pgidmap, .guest = 1, .host = host_pgid},
-        {.map = &g_sidmap, .guest = 1, .host = host_sid},
-    };
-    if (hl_linux_identity_registry_add(seed, 3) != 0) return -1;
+    // NOT an unconditional seed of guest 1. A container is served by several engine launches -- the spec
+    // tree's and one per exec session -- and only the first of them is the namespace init; a launch that
+    // claimed guest 1 for itself gave the container a second process called 1 and, one fork later, a second
+    // process called 2, 3, 4. Two live processes then answered the same guest pid, which is also the name a
+    // capture files an image group under, so two of them claimed one group and the capture was refused.
+    // Docker answers this the same way: `docker exec` runs at an ordinary namespace pid, not at 1.
+    int guest_parent = 0;
+    int guest = (int)hl_linux_identity_registry_join(&g_pidmap, &g_pgidmap, &g_sidmap, host_pid, host_pgid, host_sid,
+                                                     &guest_parent);
+    if (guest <= 0) return -1;
     ckpt_restore_identity_activate();
-    g_self_gpid = 1;
-    g_self_gppid = 0; // a PID-namespace init has no parent inside its namespace
+    g_self_gpid = guest;
+    // A PID-namespace init has no parent inside its namespace; an exec session's host parent is the
+    // container daemon, which has no guest existence, so the guest sees Linux's reparent to init.
+    g_self_gppid = guest_parent;
     return 0;
 }
 
@@ -477,16 +511,137 @@ static int pid_namespace_scenario(uint32_t scenario) {
     return 0;
 }
 
+// ------------------------------------------------------- pid namespace: uniqueness across launches
+//
+// A container is ONE namespace served by SEVERAL engine launches -- the spec tree's, and one per exec
+// session, each forked out of the container daemon rather than out of the init. The registry was private
+// to a launch, so every launch seeded guest 1 for itself and then allocated the same 2, 3, 4 for its forks.
+// Two live processes in one container therefore answered the same guest pid, and since a capture files a
+// process's image under `proc.<guest pid>`, two of them claimed one image group: the second GROUP_BEGIN
+// collided, that member aborted, and the whole capture failed. Measured 6/6 with proc.3 duplicated.
+//
+// Depth three per launch, not one: a launch top on its own cannot separate the two designs, because the
+// duplicate a private registry produces is guest 1 in both -- and 1 is also what the pre-namespace fold
+// answered. The forks are what make the collision the product hit (proc.3, never proc.1) reachable here.
+static int pid_namespace_descend(int writer, int depth) {
+    if (depth <= 0) return 0;
+    int guest_child = (int)hl_linux_pidmap_allocate_guest(&g_pidmap);
+    if (guest_child <= 0) return -1;
+    pid_t child = fork();
+    if (child < 0) return -1;
+    if (child == 0) {
+        // The two lines clone.c runs in a fork child, and nothing else.
+        int published = restore_process_identity_publish(guest_child, (int)getpid()) == guest_child;
+        g_self_gpid = guest_child;
+        g_self_gppid = -1;
+        g_hostpid_cache = 0;
+        int reported = container_pid();
+        if (!published || reported != guest_child ||
+            write(writer, &reported, sizeof reported) != (ssize_t)sizeof reported)
+            _exit(3);
+        _exit(pid_namespace_descend(writer, depth - 1) == 0 ? 0 : 4);
+    }
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
+}
+
+// One engine launch entering the container `object` names: the real preparation, the real join, the real
+// allocate/publish pair. It reports the guest pid of every process it creates, itself included.
+static int pid_namespace_launch(int object, int writer) {
+    memset(&g_pidmap, 0, sizeof g_pidmap);
+    memset(&g_pgidmap, 0, sizeof g_pgidmap);
+    memset(&g_sidmap, 0, sizeof g_sidmap);
+    memset(&g_identity_registry, 0, sizeof g_identity_registry);
+    g_identity_registry.lock_fd = -1;
+    g_identity_descriptor_for_test = object;
+    g_self_gpid = 0;
+    g_self_gppid = -1;
+    g_hostpid_cache = 0;
+    g_init_hostpid = (int)getpid(); // every launch's top records itself, which is what made them all "1"
+    if (container_pid_namespace_begin() != 0) return -1;
+    int top = container_pid();
+    if (top <= 0 || write(writer, &top, sizeof top) != (ssize_t)sizeof top) return -1;
+    return pid_namespace_descend(writer, 2);
+}
+
+static int pid_namespace_launches_share_one_namespace(void) {
+    enum { LAUNCHES = 2, PER_LAUNCH = 3, EXPECTED = LAUNCHES * PER_LAUNCH };
+    char path[] = "/tmp/husklet-pidmap-fixture-XXXXXX";
+    int object = mkstemp(path);
+    if (object < 0) return -1;
+    (void)unlink(path);
+    int failed = ftruncate(object, (off_t)(HL_LINUX_IDENTITY_REGISTRY_OFFSET +
+                                           (uint64_t)HL_LINUX_IDENTITY_REGISTRY_BYTES)) != 0;
+    int channel[2];
+    if (failed || pipe(channel) != 0) {
+        (void)close(object);
+        return -1;
+    }
+    pid_t launches[LAUNCHES];
+    for (int index = 0; index < LAUNCHES; ++index) {
+        pid_t launch = fork();
+        if (launch < 0) {
+            launches[index] = -1;
+            failed = 1;
+            break;
+        }
+        if (launch == 0) {
+            (void)close(channel[0]);
+            (void)setsid(); // a launch top leads its own host session, exactly as the engine's does
+            _exit(pid_namespace_launch(object, channel[1]) == 0 ? 0 : 1);
+        }
+        launches[index] = launch;
+    }
+    (void)close(channel[1]);
+    int seen[EXPECTED];
+    size_t count = 0;
+    while (count < EXPECTED) {
+        ssize_t taken = read(channel[0], &seen[count], sizeof seen[count]);
+        if (taken == 0) break;
+        if (taken < 0) {
+            if (errno == EINTR) continue;
+            failed = 1;
+            break;
+        }
+        if (taken != (ssize_t)sizeof seen[count]) {
+            failed = 1;
+            break;
+        }
+        ++count;
+    }
+    (void)close(channel[0]);
+    for (int index = 0; index < LAUNCHES; ++index) {
+        if (launches[index] <= 0) continue;
+        int status = 0;
+        while (waitpid(launches[index], &status, 0) < 0 && errno == EINTR) {}
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) failed = 1;
+    }
+    (void)close(object);
+    if (failed || count != EXPECTED) return -1;
+    int inits = 0;
+    for (size_t left = 0; left < count; ++left) {
+        if (seen[left] <= 0) return -1;
+        if (seen[left] == 1) ++inits;
+        // THE INVARIANT: two live processes of one container never answer the same guest pid.
+        for (size_t right = left + 1; right < count; ++right)
+            if (seen[left] == seen[right]) return -1;
+    }
+    // And exactly one of them is the namespace init: an exec session gets an ordinary pid, not a second 1.
+    return inits == 1 ? 0 : -1;
+}
+
 // A container init leads its own host session and process group; a test binary's process does not. Run the
 // scenario in a forked child that has called setsid(), which is the launch shape rather than an imitation
 // of it, and report through the exit status.
 HL_API int HL_TARGET_LOCAL(pid_namespace_test)(uint32_t scenario) {
-    if (scenario > 1) return -22;
+    if (scenario > 2) return -22;
     pid_t child = fork();
     if (child < 0) return -1;
     if (child == 0) {
         if (setsid() < 0) _exit(2);
-        _exit(pid_namespace_scenario(scenario) == 0 ? 0 : 1);
+        int outcome = scenario == 2 ? pid_namespace_launches_share_one_namespace() : pid_namespace_scenario(scenario);
+        _exit(outcome == 0 ? 0 : 1);
     }
     int status = 0;
     while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}

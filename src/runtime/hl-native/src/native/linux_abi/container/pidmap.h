@@ -6,6 +6,21 @@
 
 #define HL_LINUX_PIDMAP_CAPACITY 4096
 
+/* A container is ONE pid namespace, but it is served by SEVERAL engine launches: the spec tree's top
+ * process and one more for every exec session, each a separate host process forked out of the container
+ * daemon rather than out of the init. A per-launch registry therefore hands every launch guest 1 and then
+ * allocates 2, 3, 4 ... independently, so two live processes in one container answer the same guest pid --
+ * and since a capture files each process's image under `proc.<guest pid>`, two of them claimed one image
+ * group and the whole capture was refused.
+ *
+ * The registry is consequently placed in the one shared object every launch of a container already
+ * inherits: the checkpoint trigger. Its generation word keeps offset 0 (ckpt_poll maps exactly those four
+ * bytes); the identity registry lives one page in, in a region reserved for it. The reservation is a fixed
+ * size rather than sizeof(storage) so the file's layout is not a private detail of pidmap.c; the static
+ * assertion beside the storage definition keeps the two honest. */
+#define HL_LINUX_IDENTITY_REGISTRY_OFFSET 4096u
+#define HL_LINUX_IDENTITY_REGISTRY_BYTES (1u << 21)
+
 typedef struct hl_linux_pidmap_entry {
     int32_t guest;
     int32_t host;
@@ -37,6 +52,21 @@ void hl_linux_pidmap_init(hl_linux_pidmap *map);
 int hl_linux_pidmap_prepare_shared(hl_linux_pidmap *map);
 int hl_linux_identity_registry_prepare(hl_linux_identity_registry *registry, hl_linux_pidmap *pid,
                                        hl_linux_pidmap *pgid, hl_linux_pidmap *sid);
+/* Prepare the registry over a descriptor shared by every engine launch of one container (the checkpoint
+ * trigger). `descriptor` is duplicated, so the caller keeps ownership of the one it passed. The first
+ * launch to arrive initializes the region under the same file lock every writer takes; the rest adopt it. */
+int hl_linux_identity_registry_prepare_shared_descriptor(hl_linux_identity_registry *registry, int descriptor,
+                                                         hl_linux_pidmap *pid, hl_linux_pidmap *pgid,
+                                                         hl_linux_pidmap *sid);
+/* Enter this launch into the container's namespace and return ITS OWN guest pid, publishing the process,
+ * group and session identities in one transaction. The first launch to arrive is the namespace init and
+ * takes guest 1 with no parent inside the namespace (`*out_guest_parent` = 0); every later launch is an
+ * exec session, which Linux gives an ordinary namespace pid whose parent lies outside the namespace, so it
+ * takes the next free guest pid and reports init as its parent. Idempotent for a host process already
+ * published. Returns -1 on failure. */
+int32_t hl_linux_identity_registry_join(hl_linux_pidmap *pid, hl_linux_pidmap *pgid, hl_linux_pidmap *sid,
+                                        int32_t host_process, int32_t host_group, int32_t host_session,
+                                        int32_t *out_guest_parent);
 int hl_linux_identity_registry_add(const hl_linux_pidmap_update *updates, size_t count);
 uint64_t hl_linux_identity_registry_commit_word(const hl_linux_identity_registry *registry);
 int hl_linux_identity_registry_setsid(hl_linux_pidmap *pid, hl_linux_pidmap *pgid, hl_linux_pidmap *sid, int32_t guest,

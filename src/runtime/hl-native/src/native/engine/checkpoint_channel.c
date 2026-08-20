@@ -4,6 +4,8 @@
 
 #include "checkpoint_channel.h"
 
+#include "../linux_abi/container/pidmap.h" /* the identity registry's reserved region in the trigger object */
+
 /* The checkpoint transport is not a protocol that happens to use POSIX; it IS four POSIX mechanisms.
  * The broker is an AF_UNIX socketpair, engine processes announce themselves by passing a live descriptor
  * over SCM_RIGHTS, the per-process channel is re-created after fork() because a shared stream socket would
@@ -480,7 +482,12 @@ int hl_ckpt_trigger_create(hl_activation_descriptor *out_descriptor, void **out_
     hl_host_private_init();
     descriptor = hl_host_process_fd_private_adopt(checkpoint_anonymous_descriptor());
     if (descriptor < 0) return -1;
-    if (ftruncate(descriptor, (off_t)sizeof(uint32_t)) != 0) {
+    /* The same object also carries this container's identity registry, one page in. It is the one shared
+     * mapping the spec tree's launch and every exec session's launch all inherit, which is precisely the
+     * set of processes that must agree on one pid namespace; a per-launch registry gave each of them guest
+     * pid 1 and then the same 2, 3, 4. The trigger word keeps offset 0 and its own four-byte mapping. */
+    if (ftruncate(descriptor,
+                  (off_t)(HL_LINUX_IDENTITY_REGISTRY_OFFSET + (uint64_t)HL_LINUX_IDENTITY_REGISTRY_BYTES)) != 0) {
         (void)close(descriptor);
         return -1;
     }

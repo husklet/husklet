@@ -53,6 +53,10 @@ typedef struct hl_linux_identity_journal_entry {
 } hl_linux_identity_journal_entry;
 
 struct hl_linux_identity_registry_storage {
+    // Set exactly once, by the first launch to map a shared region, under the registry's file lock. A
+    // second launch of the same container maps a region another launch has already seeded, and must adopt
+    // it rather than reset next_guest and hand out identities that are already live.
+    atomic_uint prepared;
     // generation << 1 | active bank. This is the sole publication point for every map.
     atomic_ullong commit_word;
     atomic_uint active;
@@ -68,6 +72,13 @@ struct hl_linux_identity_registry_storage {
     atomic_uint poisoned;
     hl_linux_pidmap_storage map[PIDMAP_KINDS];
 };
+
+_Static_assert(sizeof(struct hl_linux_identity_registry_storage) <= HL_LINUX_IDENTITY_REGISTRY_BYTES,
+               "the identity registry must fit the region reserved for it in the shared container object");
+
+// Not a version: an arbitrary non-zero word, so a region that is merely zeroed (a fresh ftruncate) is
+// never mistaken for one that has been seeded.
+#define PIDMAP_PREPARED_WORD 0x9d1d5eedu
 
 static pthread_mutex_t g_pidmap_thread_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_once_t g_pidmap_atfork_once = PTHREAD_ONCE_INIT;
@@ -133,6 +144,20 @@ static int registry_file(void) {
 #endif
 }
 
+// The container-wide region, mapped from the descriptor every launch inherits. NOT zeroed here: a second
+// launch is adopting a live namespace, and the region's one-time seeding happens under the file lock in
+// registry_prepare_storage_locked.
+static hl_linux_identity_registry_storage *registry_storage_shared(int descriptor) {
+#if defined(_WIN32)
+    (void)descriptor;
+    return NULL;
+#else
+    void *memory = mmap(NULL, sizeof(hl_linux_identity_registry_storage), PROT_READ | PROT_WRITE, MAP_SHARED,
+                        descriptor, (off_t)HL_LINUX_IDENTITY_REGISTRY_OFFSET);
+    return memory == MAP_FAILED ? NULL : memory;
+#endif
+}
+
 static hl_linux_identity_registry_storage *registry_storage(void) {
 #if defined(_WIN32)
     // Windows has no forked guest process tree and checkpoint requests fail closed.
@@ -148,6 +173,7 @@ static hl_linux_identity_registry_storage *registry_storage(void) {
     hl_linux_identity_registry_storage *storage = memory;
     for (uint32_t kind = 0; kind < PIDMAP_KINDS; ++kind)
         atomic_init(&storage->map[kind].next_guest, 1);
+    atomic_init(&storage->prepared, PIDMAP_PREPARED_WORD);
     return storage;
 }
 
@@ -286,6 +312,15 @@ static int map_find_guest(const hl_linux_pidmap_storage *map, unsigned bank, int
     return -1;
 }
 
+static int32_t registry_guest_for_host(const hl_linux_pidmap *map, unsigned bank, int32_t host) {
+    for (uint32_t index = 0; index < HL_LINUX_PIDMAP_CAPACITY; ++index) {
+        int32_t current_guest, current_host;
+        if (slot_snapshot(&map->storage->bank[bank][index], &current_guest, &current_host) && current_host == host)
+            return current_guest;
+    }
+    return -1;
+}
+
 static int map_find_empty(const hl_linux_pidmap_storage *map, unsigned bank) {
     for (uint32_t index = 0; index < HL_LINUX_PIDMAP_CAPACITY; ++index)
         if (atomic_load_explicit(&map->bank[bank][index].identity, memory_order_acquire) == 0) return (int)index;
@@ -368,6 +403,21 @@ void hl_linux_pidmap_init(hl_linux_pidmap *map) {
     if (map != NULL) memset(map, 0, sizeof *map);
 }
 
+// Bind the three maps to one storage region. Shared by the private and the container-wide preparation so
+// the two cannot drift in how a map reaches its registry.
+static void registry_bind(hl_linux_identity_registry *registry, hl_linux_identity_registry_storage *storage,
+                          int descriptor, hl_linux_pidmap *pid, hl_linux_pidmap *pgid, hl_linux_pidmap *sid) {
+    hl_linux_pidmap *maps[PIDMAP_KINDS] = {pid, pgid, sid};
+    registry->storage = storage;
+    registry->lock_fd = descriptor;
+    for (uint32_t kind = 0; kind < PIDMAP_KINDS; ++kind) {
+        registry->map[kind] = maps[kind];
+        maps[kind]->storage = &storage->map[kind];
+        maps[kind]->registry = registry;
+        maps[kind]->kind = kind;
+    }
+}
+
 int hl_linux_identity_registry_prepare(hl_linux_identity_registry *registry, hl_linux_pidmap *pid,
                                        hl_linux_pidmap *pgid, hl_linux_pidmap *sid) {
     if (registry == NULL || pid == NULL || pgid == NULL || sid == NULL) {
@@ -383,16 +433,138 @@ int hl_linux_identity_registry_prepare(hl_linux_identity_registry *registry, hl_
         errno = saved;
         return -1;
     }
-    registry->storage = storage;
-    registry->lock_fd = descriptor;
-    hl_linux_pidmap *maps[PIDMAP_KINDS] = {pid, pgid, sid};
-    for (uint32_t kind = 0; kind < PIDMAP_KINDS; ++kind) {
-        registry->map[kind] = maps[kind];
-        maps[kind]->storage = &storage->map[kind];
-        maps[kind]->registry = registry;
-        maps[kind]->kind = kind;
-    }
+    registry_bind(registry, storage, descriptor, pid, pgid, sid);
     return 0;
+}
+
+int hl_linux_identity_registry_prepare_shared_descriptor(hl_linux_identity_registry *registry, int descriptor,
+                                                         hl_linux_pidmap *pid, hl_linux_pidmap *pgid,
+                                                         hl_linux_pidmap *sid) {
+#if defined(_WIN32)
+    (void)registry;
+    (void)descriptor;
+    (void)pid;
+    (void)pgid;
+    (void)sid;
+    errno = ENOSYS;
+    return -1;
+#else
+    if (registry == NULL || pid == NULL || pgid == NULL || sid == NULL || descriptor < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    // The record lock must live on the SHARED inode -- that is the whole point, since it is what serializes
+    // two launches -- but on a descriptor of our own, because the caller keeps its own.
+    int owned = fcntl(descriptor, F_DUPFD_CLOEXEC, 3);
+    if (owned < 0) return -1;
+    int adopted = hl_host_process_fd_private_adopt(owned);
+    if (adopted < 0) {
+        int saved = -adopted;
+        (void)close(owned);
+        errno = saved;
+        return -1;
+    }
+    hl_linux_identity_registry_storage *storage = registry_storage_shared(adopted);
+    if (storage == NULL) {
+        int saved = errno;
+        hl_host_process_fd_private_remove(adopted);
+        (void)close(adopted);
+        errno = saved;
+        return -1;
+    }
+    registry_bind(registry, storage, adopted, pid, pgid, sid);
+    if (registry_lock(registry) != 0) {
+        int saved = errno;
+        registry_storage_release(storage);
+        hl_host_process_fd_private_remove(adopted);
+        (void)close(adopted);
+        memset(registry, 0, sizeof *registry);
+        registry->lock_fd = -1;
+        errno = saved;
+        return -1;
+    }
+    if (atomic_load_explicit(&storage->prepared, memory_order_acquire) != PIDMAP_PREPARED_WORD) {
+        for (uint32_t kind = 0; kind < PIDMAP_KINDS; ++kind)
+            atomic_store_explicit(&storage->map[kind].next_guest, 1, memory_order_relaxed);
+        atomic_store_explicit(&storage->prepared, PIDMAP_PREPARED_WORD, memory_order_release);
+    }
+    registry_unlock(registry);
+    return 0;
+#endif
+}
+
+// One transaction, because the three identities are one fact about this launch: a reader that saw the pid
+// published and the session not yet would render a process with no session.
+int32_t hl_linux_identity_registry_join(hl_linux_pidmap *pid, hl_linux_pidmap *pgid, hl_linux_pidmap *sid,
+                                        int32_t host_process, int32_t host_group, int32_t host_session,
+                                        int32_t *out_guest_parent) {
+    if (pid == NULL || pgid == NULL || sid == NULL || host_process <= 0 || host_group <= 0 || host_session <= 0)
+        return -1;
+    hl_linux_identity_registry *owner = pid->registry;
+    if (owner == NULL || pgid->registry != owner || sid->registry != owner) return -1;
+    if (registry_lock(owner) != 0) return -1;
+    if (registry_recover_locked(owner) != 0 ||
+        atomic_load_explicit(&owner->storage->poisoned, memory_order_acquire) != 0) {
+        registry_unlock(owner);
+        errno = EIO;
+        return -1;
+    }
+    uint64_t word = atomic_load_explicit(&owner->storage->commit_word, memory_order_acquire);
+    unsigned bank = (unsigned)(word & 1u);
+    int32_t guest_process = registry_guest_for_host(pid, bank, host_process);
+    int32_t guest_parent;
+    if (guest_process > 0) {
+        // Already a member. Answering the published value keeps this idempotent for a caller that arrives
+        // twice, and never mints a second identity for one host process.
+        guest_parent = guest_process == 1 ? 0 : 1;
+        registry_unlock(owner);
+        if (out_guest_parent != NULL) *out_guest_parent = guest_parent;
+        return guest_process;
+    }
+    int init_present = map_find_guest(pid->storage, bank, 1) >= 0;
+    if (!init_present) {
+        guest_process = 1;
+        guest_parent = 0;
+    } else {
+        guest_process = atomic_fetch_add_explicit(&pid->storage->next_guest, 1, memory_order_relaxed);
+        // An exec session is forked out of the container daemon, so its host parent has no existence
+        // inside the namespace -- exactly Linux's orphan, which init adopts.
+        guest_parent = 1;
+    }
+    if (guest_process <= 1 && init_present) {
+        registry_unlock(owner);
+        errno = ENOSPC;
+        return -1;
+    }
+    // A process that leads its own group or session names that group or session with its own pid, and the
+    // guest must see the same identity relationship rather than two unrelated numbers.
+    int32_t guest_group = registry_guest_for_host(pgid, bank, host_group);
+    if (guest_group <= 0)
+        guest_group = host_group == host_process ? guest_process
+                                                 : atomic_fetch_add_explicit(&pgid->storage->next_guest, 1,
+                                                                             memory_order_relaxed);
+    int32_t guest_session = registry_guest_for_host(sid, bank, host_session);
+    if (guest_session <= 0)
+        guest_session = host_session == host_process
+                            ? guest_process
+                            : (host_session == host_group
+                                   ? guest_group
+                                   : atomic_fetch_add_explicit(&sid->storage->next_guest, 1, memory_order_relaxed));
+    if (guest_group <= 0 || guest_session <= 0) {
+        registry_unlock(owner);
+        errno = ENOSPC;
+        return -1;
+    }
+    const hl_linux_pidmap_update updates[PIDMAP_KINDS] = {
+        {.map = pid, .guest = guest_process, .host = host_process},
+        {.map = pgid, .guest = guest_group, .host = host_group},
+        {.map = sid, .guest = guest_session, .host = host_session},
+    };
+    int result = registry_apply_locked(owner, updates, PIDMAP_KINDS);
+    registry_unlock(owner);
+    if (result != 0) return -1;
+    if (out_guest_parent != NULL) *out_guest_parent = guest_parent;
+    return guest_process;
 }
 
 int hl_linux_pidmap_prepare_shared(hl_linux_pidmap *map) {
