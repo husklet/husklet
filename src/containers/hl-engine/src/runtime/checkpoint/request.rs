@@ -12,9 +12,10 @@ impl Server {
         if !self.request_in_scope(id, request, name) {
             hl_log::hl_debug!(
                 hl_log::tag::CHECKPOINT,
-                "checkpoint request rejected: op={} generation={} name={name:?}",
+                "checkpoint request rejected: process={id} op={} generation={} name={name:?} phase={:?}",
                 request.op,
-                request.generation
+                request.generation,
+                self.capture_lock().ok().map(|capture| capture.phase)
             );
             return Reply::error();
         }
@@ -25,9 +26,9 @@ impl Server {
             OBJECT_TELL => self.tell_object(key),
             OBJECT_FINISH => self.finish_object(key),
             OBJECT_ABORT => self.abort_object(key),
-            GROUP_BEGIN => self.begin_group(name),
+            GROUP_BEGIN => self.begin_group(id, name),
             GROUP_COMMIT => self.commit_group(name),
-            GROUP_ABORT => self.abort_group(name),
+            GROUP_ABORT => self.abort_group(id, name),
             CLAIM => self.local_mutation(|| self.claim(name)),
             UNCLAIM => self.unclaim(name),
             GROUP_PRESENT => self.group_present(name),
@@ -154,12 +155,25 @@ impl Server {
         })
     }
 
-    fn begin_group(&self, name: &str) -> Reply {
+    /// Opens one member's image group.
+    ///
+    /// A group name is one process's image, so two live processes cannot share one. The collision is
+    /// refused -- the second writer would otherwise overwrite the first process's staged image -- and it
+    /// is NAMED, because the member that loses the collision answers a bare error by aborting its group,
+    /// which fails the whole capture. Without this line the only surviving evidence is whatever the
+    /// cascade happens to reach last, which is why a duplicate group presented as an unrelated
+    /// registration failure in a process forked seconds later.
+    fn begin_group(&self, id: u64, name: &str) -> Reply {
         self.local_mutation(|| {
             let Ok(mut state) = self.state.lock() else {
                 return Reply::error();
             };
             if state.staged.insert(name.into(), Vec::new()).is_some() {
+                hl_log::hl_error!(
+                    hl_log::tag::CHECKPOINT,
+                    "checkpoint capture: process {id} opened image group {name:?}, which another live \
+                     process has already opened; one group is one process's image and cannot be shared"
+                );
                 Reply::error()
             } else {
                 Reply::ok()
@@ -167,7 +181,7 @@ impl Server {
         })
     }
 
-    fn abort_group(&self, name: &str) -> Reply {
+    fn abort_group(&self, id: u64, name: &str) -> Reply {
         // A native process emits GROUP_ABORT only after its process image has
         // been refused.  That is a failure of the whole process-tree image,
         // not recoverable cleanup of one member: a manifest containing every
@@ -185,6 +199,17 @@ impl Server {
                 .open
                 .retain(|_, object| object.name.split_once('/').is_none_or(|(group, _)| group != name));
         }
+        // This is the instant the capture fails, and until this line it failed ANONYMOUSLY: the phase
+        // went to `Finished { result: Err(Failed) }` with nothing recorded anywhere, so every other
+        // member's in-flight publication was refused as out of scope and each of them aborted in turn.
+        // The surviving diagnosis was then whichever symptom the cascade reached last -- observed as a
+        // `REGISTER_READY` refusal in a process forked long after the real refusal. Name the member and
+        // the group that decided it, at the decision.
+        hl_log::hl_error!(
+            hl_log::tag::CHECKPOINT,
+            "checkpoint capture failed: process {id} aborted image group {name:?} because its own \
+             process image was refused; the whole process-tree image is unrestorable without it"
+        );
         if admission.finish(Err(super::CaptureFailure::Failed)).is_err() {
             self.interrupt_channels();
         }

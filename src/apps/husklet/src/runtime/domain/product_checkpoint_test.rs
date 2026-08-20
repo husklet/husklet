@@ -305,6 +305,10 @@ fn product_checkpoint_domain_worker() {
     let Some(name) = std::env::var_os(CHILD_ENV) else {
         return;
     };
+    // The signed application configures logging at its composition boundary; this worker is spawned
+    // directly, so without this every broker-side refusal reason is dropped and the harness shows only
+    // the engine's own stderr. A capture that refuses must be able to say why.
+    crate::logging::configure();
     crate::runtime::worker::Worker::domain(&name.to_string_lossy()).expect("serve product checkpoint domain");
 }
 

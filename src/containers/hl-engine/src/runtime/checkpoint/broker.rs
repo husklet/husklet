@@ -361,7 +361,16 @@ impl Server {
         payload: &[u8],
     ) -> Result<u64, ()> {
         match self.register_ready_reason(connection, request, encoded_name, payload) {
-            Ok(member) => Ok(member),
+            Ok(member) => {
+                hl_log::hl_debug!(
+                    hl_log::tag::CHECKPOINT,
+                    "checkpoint REGISTER_READY admitted process {} as member {} (generation {})",
+                    connection.id,
+                    member,
+                    request.generation
+                );
+                Ok(member)
+            }
             Err(reason) => {
                 hl_log::hl_error!(
                     hl_log::tag::CHECKPOINT,
