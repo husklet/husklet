@@ -9,8 +9,6 @@ pub(crate) use execution::{ProductionFactory, ProductionMachine};
 
 #[cfg(unix)]
 mod checkpoint;
-#[cfg(unix)]
-pub use checkpoint::authority::CheckpointAuthorityHandle;
 
 #[cfg(unix)]
 mod member;

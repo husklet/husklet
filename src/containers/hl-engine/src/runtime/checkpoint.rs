@@ -15,7 +15,7 @@ use std::{
     },
 };
 
-pub mod authority;
+mod authority;
 mod broker;
 pub(super) mod member_stdio;
 pub(super) mod members;
