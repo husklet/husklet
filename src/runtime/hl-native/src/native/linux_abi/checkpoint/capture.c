@@ -44,6 +44,8 @@
 //     pages  : [struct ckpt_region][region's non-zero pages: {u64 va}{pagesz bytes}] ...  (sparse)
 //     cpu    : the whole per-thread struct cpu (host-transient fields zeroed on restore)
 //     fds    : n_fds * struct ckpt_fd (TTY | FILE by host path + seek offset + open flags)
+//     reaped : struct ckpt_reaped_header + n_reaped * struct ckpt_reaped_child -- the exit statuses of this
+//              process's children that the FREEZE consumed, so restore can hand them back (see below)
 //
 // Trigger: HL_CHECKPOINT arms capture and maps the inherited trigger descriptor in every forked guest
 // process. Advancing its generation and sending the reserved host interrupt to init checkpoints the whole
@@ -66,7 +68,7 @@
 
 #define CKPT_MAGIC UINT64_C(0x373054504b434c48)          // "HLCKPT07" (LE) -- per-process meta
 #define CKPT_MANIFEST_MAGIC UINT64_C(0x3730304e414d4c48) // "HLMAN007" (LE) -- workspace manifest
-#define CKPT_VERSION 7                                   // v7 records a member's container process domain edge
+#define CKPT_VERSION 8                                   // v8 carries the child exit statuses the freeze reaped
 #define CKPT_ARCH_X86_64 1
 #define CKPT_ARCH_AARCH64 2
 #define CKPT_CPU_MAGIC UINT64_C(0x31305550434c4848) // "HHLCPU01" (LE)
@@ -154,11 +156,46 @@ struct ckpt_manifest {
     uint8_t tty_cc[32];
 };
 
+/* A CHILD EXIT STATUS THE CAPTURE ITSELF DESTROYED.
+ *
+ * The rendezvous reaps with waitpid(-1, WNOHANG) from inside the container init -- which IS a guest process
+ * -- and a guest process's kernel zombie IS the pending-status state: there is no engine-side table behind
+ * it. So every status that reap collects for a child the guest had not yet waited for is state the capture
+ * deleted. Measured: a `/bin/sh` loop running `sleep .05` spends most of its life blocked in wait4 for a
+ * transient child, the freeze lands while that child is a zombie, the coordinator reaps it, the child never
+ * registers and is exempted, and the image is published with `checkpoint OK` one process short. The restored
+ * shell resumes straight back into wait4 for a pid that no longer exists -- 725 s of `State: S`,
+ * `wchan=do_wait`, zero CPU, and nothing logged anywhere. A hang, out of a capture that reported success.
+ *
+ * The status therefore travels in the image and the restore re-synthesizes a real corpse carrying it, under
+ * the same guest pid, as a child of the same parent -- so the parent's wait4 completes exactly as it would
+ * have. `status` is the RAW HOST status word, because syscall/process/wait.c applies its host->Linux
+ * translation to whatever the host hands back and the synthesized corpse is produced on the same host: the
+ * round trip is closed at the same place the live one is. */
+struct ckpt_reaped_child {
+    int32_t gpid;   // the child's guest pid, which is what the parent's wait4 must report
+    int32_t status; // raw host wait status, as waitpid wrote it
+};
+
+#define CKPT_REAPED_MAGIC UINT64_C(0x484c524541503031) // "HLREAP01"
+// A guest that had this many unreaped children at the freeze is not a shape this mechanism was built for,
+// and an unbounded count is an unbounded allocation driven by image bytes.
+#define CKPT_REAPED_MAX 4096
+
+struct ckpt_reaped_header {
+    uint64_t magic;
+    uint64_t count;
+};
+
 struct ckpt_meta {
     uint64_t magic, version, arch;
     hl_identity_digest engine_identity;
     uint64_t cpu_sz, pagesz;
     uint64_t n_regions, n_threads, n_fds;
+    // Child exit statuses this process's capture consumed, carried in the group's "reaped" object. The count
+    // lives in the meta rather than only in that object so a restore KNOWS to expect it: an absent or short
+    // object is then an image error, not a silently empty set.
+    uint64_t n_reaped;
     uint64_t brk_lo, brk_cur, brk_hi;
     uint64_t nonpie_lo, nonpie_hi, nonpie_bias;
     uint64_t stack_lo, stack_hi;

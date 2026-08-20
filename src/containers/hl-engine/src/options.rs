@@ -151,6 +151,11 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     internal!(
+        "HL_CKPT_TEST_REAPED_UNNAMEABLE",
+        "test-only capture whose reap destroys an unnameable child exit status",
+        Flag
+    ),
+    internal!(
         "HL_CKPT_TEST_PEER_HIDDEN_FROM_ENUMERATION",
         "test-only capture peer withheld from the coordinator's first enumeration",
         Flag
