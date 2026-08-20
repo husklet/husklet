@@ -1030,6 +1030,8 @@ static void cpus_allowed_strs(char *mask, size_t mn, char *list, size_t ln) {
         snprintf(list, ln, "0-%d", nc - 1);
 }
 
+static long host_btime(void); // process_directories.c, compiled after this fragment
+
 static int proc_status_text(char *b, size_t n) {
     char comm[16];
     proc_comm(comm, sizeof comm);
@@ -1120,10 +1122,22 @@ static int proc_stat_text(char *b, size_t n) {
     // one, so a reader indexing by position got the wrong column for all of them.
     uint64_t sc, ec, sd, ed;
     maps_code_data_bounds(&sc, &ec, &sd, &ed);
+    // Field 22 (starttime, ticks since boot) was the literal 100 -- one second after boot -- so `ps` printed
+    // a START of the boot DATE for a process seconds old, beside a correct clock time for the sibling the
+    // PEER rendering answered, which computes it. Same boot-relative conversion as that path: a host start
+    // time is host metadata and reaches the guest converted or not at all.
+    long hz = sysconf(_SC_CLK_TCK);
+    if (hz <= 0) hz = 100;
+    hl_host_process_info self_info;
+    unsigned long long start_ticks = 0;
+    if (hl_host_process_read((int)getpid(), &self_info) && self_info.start_time_seconds != 0) {
+        long long since = (long long)self_info.start_time_seconds - host_btime();
+        if (since > 0) start_ticks = (unsigned long long)since * (unsigned long long)hz;
+    }
     return snprintf(b, n,
-                    "%d (%s) R %d %d %d %d %d 4194560 0 0 0 0 0 0 0 0 20 0 1 0 100 %lu %lu 18446744073709551615 "
+                    "%d (%s) R %d %d %d %d %d 4194560 0 0 0 0 0 0 0 0 20 0 1 0 %llu %lu %lu 18446744073709551615 "
                     "%llu %llu 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0 %llu %llu %llu 0 0 0 0 0\n",
-                    pid, comm, ppid, gpgrp, gsid, tty_device, foreground_group, vsize, rss_pg,
+                    pid, comm, ppid, gpgrp, gsid, tty_device, foreground_group, start_ticks, vsize, rss_pg,
                     (unsigned long long)sc, (unsigned long long)ec, (unsigned long long)sd, (unsigned long long)ed,
                     (unsigned long long)brk_lo);
 }
