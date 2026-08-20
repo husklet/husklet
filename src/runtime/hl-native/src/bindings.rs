@@ -1199,6 +1199,32 @@ mod tests {
         let mut descriptors = [-1; 2];
         // SAFETY: the array has room for both descriptors produced by pipe.
         assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);
+        // Consumption is a property of *this* process's descriptor table, and it is read back from a
+        // parked descriptor number rather than from the pipe. Two weaker proofs have already been
+        // tried here and both are unsound:
+        //
+        //   * `fcntl(F_GETFD)` on the number `pipe` handed out. The kernel hands out the lowest free
+        //     number, so a sibling test thread that opens anything between the call below and the
+        //     check can be given exactly that number back, and the check then reads a live descriptor
+        //     and passes.
+        //   * writing to the other end of the pipe and demanding `EPIPE`. That asks whether *any*
+        //     process still holds the read end, which is a strictly weaker question. Measured on
+        //     macOS: with `armed_running_guest_reaches_checkpoint_broker` running concurrently, the
+        //     write succeeds while `fcntl` on the parked number answers `EBADF` -- create had
+        //     consumed our copy, and a child forked by the engine under test was holding an inherited
+        //     one. The pipe cannot distinguish that from a leak.
+        //
+        // `F_DUPFD` with a high minimum answers the right question: it never clobbers an occupied
+        // slot, and because allocation is lowest-free the parked number cannot be reissued to a
+        // sibling thread unless the whole table below it fills, which no test here approaches.
+        const PARKED_DESCRIPTOR: c_int = 900;
+        // SAFETY: both descriptors are owned here; `F_DUPFD` returns a fresh number at or above the
+        // minimum without disturbing whatever occupies it.
+        let parked = unsafe { libc::fcntl(descriptors[0], libc::F_DUPFD, PARKED_DESCRIPTOR) };
+        assert!(parked >= PARKED_DESCRIPTOR, "parking the provider descriptor failed");
+        // SAFETY: the original read end is owned here and is replaced by the parked duplicate.
+        assert_eq!(unsafe { libc::close(descriptors[0]) }, 0);
+        descriptors[0] = parked;
         let mut output = ptr::dangling_mut::<Backend>();
         // SAFETY: output is writable. Provider rejection happens before the deliberately invalid image inputs
         // are inspected, and ownership of descriptors[0] transfers to this call.
@@ -1223,47 +1249,13 @@ mod tests {
         };
         assert_eq!(status, STATUS_NOT_SUPPORTED);
         assert!(output.is_null());
-        // Consumption is proved from the *pipe*, not from the descriptor number. `fcntl(F_GETFD)` on
-        // the number answers about whatever that slot holds now, and the slot is process-wide: any
-        // sibling test thread that opens a file between the call above and this line can be handed
-        // exactly that number, and the check then reads a live descriptor and passes. The read end
-        // being gone is the property, and a write to the other end reports it -- EPIPE when create
-        // closed it, a successful write when it leaked it -- whoever else holds the number by then.
-        // SAFETY: an all-zero `sigset_t` is a valid empty set on every platform this builds for, and
-        // both are overwritten by `sigemptyset`/`pthread_sigmask` before they are read.
-        let mut previous: libc::sigset_t = unsafe { std::mem::zeroed() };
-        // SAFETY: as above.
-        let mut blocked: libc::sigset_t = unsafe { std::mem::zeroed() };
-        // SAFETY: both sets are owned local storage. The mask is per-thread, so no sibling test's
-        // SIGPIPE disposition is touched, and it is restored below.
-        unsafe {
-            libc::sigemptyset(&raw mut blocked);
-            libc::sigaddset(&raw mut blocked, libc::SIGPIPE);
-            libc::pthread_sigmask(libc::SIG_BLOCK, &raw const blocked, &raw mut previous);
-        }
-        // SAFETY: the write end is still owned here and one byte of local storage is readable.
-        let written = unsafe { libc::write(descriptors[1], [0_u8].as_ptr().cast(), 1) };
+        // SAFETY: reads the flags of the parked number, which this test no longer owns.
+        let flags = unsafe { libc::fcntl(parked, libc::F_GETFD) };
         let error = std::io::Error::last_os_error().raw_os_error();
-        // SAFETY: drains the SIGPIPE this thread queued for itself, then restores its own mask.
-        unsafe {
-            // SAFETY: an all-zero `sigset_t` is valid and `sigpending` overwrites it before it is read.
-            let mut pending: libc::sigset_t = std::mem::zeroed();
-            libc::sigpending(&raw mut pending);
-            if libc::sigismember(&raw const pending, libc::SIGPIPE) == 1 {
-                // `sigwait`, not `sigtimedwait`, which Darwin does not provide. The `write`
-                // above queued SIGPIPE to *this* thread and `sigpending` has just confirmed it
-                // is still pending on it, so no other thread can accept it first and `sigwait`
-                // returns immediately -- the same non-blocking drain the zero timeout
-                // expressed, on both hosts.
-                let mut drained: libc::c_int = 0;
-                libc::sigwait(&raw const blocked, &raw mut drained);
-            }
-            libc::pthread_sigmask(libc::SIG_SETMASK, &raw const previous, std::ptr::null_mut());
-        }
         assert_eq!(
-            (written, error),
-            (-1, Some(libc::EPIPE)),
-            "create must consume the provider descriptor it rejected, closing the pipe's read end"
+            (flags, error),
+            (-1, Some(libc::EBADF)),
+            "create must consume the provider descriptor it rejected"
         );
         // SAFETY: the write end remains owned by this test.
         assert_eq!(unsafe { libc::close(descriptors[1]) }, 0);
