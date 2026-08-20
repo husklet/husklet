@@ -9,9 +9,20 @@ on:
 permissions:
   contents: read
 
+# WHY `main` DOES NOT CANCEL ITSELF. Measured 2026-08-20: the fifteen most recent
+# runs on this branch had all ended `cancelled` -- not one `success`, not one
+# `failure`. Lanes merge into `main` every ~10 minutes and this workflow needs ~45,
+# so `cancel-in-progress: true` meant every run was killed by the next push and no
+# commit on `main` had ever reached a verdict. That is the most expensive shape of
+# green there is: a CI signal that cannot report anything at all.
+# Pull requests keep the cancelling behaviour, where a new head commit genuinely
+# supersedes the one being tested. On `main` GitHub queues instead, and the queue is
+# bounded at one by its own rule -- a newly queued run cancels the previously
+# PENDING run in the same group -- so pushes arriving during a run collapse to a
+# single follow-up rather than piling up runners.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   native-macos-arm64:
