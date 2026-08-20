@@ -98,7 +98,15 @@ typedef enum hl_ckpt_stream_op {
        host-side failure: without it the host learns nothing until its own deadline expires, so a
        decision taken at 0.3s was reported at 30s and named none of it. Carries no image bytes and
        requires no membership -- a process that refuses is by definition publishing nothing. */
-    HL_CKPT_OP_CAPTURE_REFUSED = 24
+    HL_CKPT_OP_CAPTURE_REFUSED = 24,
+    /* Did this host process ever prove exact membership of the running capture generation?
+       payload is [u64 host pid]; reply.value is 1 when that pid holds a REGISTER_READY record for the
+       generation named in the request, and 0 when it holds none. Read-only, and the ONLY thing the
+       coordinator may conclude from a 0 is that the process published nothing: the broker refuses every
+       byte-publishing op from a connection that has not registered, so "never registered" is exactly
+       "contributed no bytes to this image". Any status other than OK means the answer is unknown, and
+       an unknown answer is treated as "registered" -- the coordinator never drops a member on a guess. */
+    HL_CKPT_OP_PARTICIPANT_REGISTERED = 25
 } hl_ckpt_stream_op;
 
 #define HL_CKPT_MEMBER_EXIT_CODE UINT32_C(1)

@@ -1,8 +1,8 @@
 use super::{
     CLAIM, COMMIT, CapturePhase, DIGEST, GROUP_ABORT, GROUP_BEGIN, GROUP_COMMIT, GROUP_COUNT, GROUP_PRESENT,
     MutationAdmission, OBJECT_ABORT, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, Object,
-    PAYLOAD_MAX, RECOVERY_COMPLETE, Reply, Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, STATUS_ALREADY, Server,
-    UNCLAIM,
+    PARTICIPANT_REGISTERED, PAYLOAD_MAX, RECOVERY_COMPLETE, Reply, Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE,
+    STATUS_ALREADY, Server, UNCLAIM,
 };
 
 impl Server {
@@ -38,8 +38,38 @@ impl Server {
             SOURCE_SIZE => self.source_size(name),
             SOURCE_READ => self.source_read(name, request),
             RECOVERY_COMPLETE => self.complete_recovery(),
+            PARTICIPANT_REGISTERED => self.participant_registered(request, payload),
             _ => Reply::error(),
         }
+    }
+
+    /// Answers whether one host process ever proved exact membership of this capture.
+    ///
+    /// Read-only, and it publishes nothing, so it is dispatched like the other rendezvous queries rather
+    /// than behind the `REGISTER_READY` gate: the coordinator asks it before its own registration. It is
+    /// still scope-checked by `request_in_scope`, which admits it only while a capture is `Active` or
+    /// `Publishing` at exactly the generation named in the request -- there is no ledger to consult
+    /// outside one, and answering `0` outside one would be an exemption granted by a broker that had
+    /// sealed no membership at all.
+    ///
+    /// Every failure is an ERROR reply rather than a `0`: the caller reads a non-OK status as "unknown",
+    /// which withholds the exemption. A poisoned lock, a missing ledger, or a malformed frame must never
+    /// be readable as "that process was never a member".
+    fn participant_registered(&self, request: &Request, payload: &[u8]) -> Reply {
+        let Ok(bytes) = <[u8; 8]>::try_from(payload) else {
+            return Reply::error();
+        };
+        let host_pid = u64::from_ne_bytes(bytes);
+        let Ok(participants) = self.participants.lock() else {
+            return Reply::error();
+        };
+        let Some(ledger) = participants.as_ref() else {
+            return Reply::error();
+        };
+        if host_pid == 0 {
+            return Reply::error();
+        }
+        Reply::value(u64::from(ledger.registered(u64::from(request.generation), host_pid)))
     }
 
     fn begin_object(&self, key: (u64, u64), name: &str) -> Reply {

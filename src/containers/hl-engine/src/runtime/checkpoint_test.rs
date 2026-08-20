@@ -2257,6 +2257,138 @@ fn register_ready_admits_one_authenticated_process_exactly_once() {
     served.join().expect("broker worker");
 }
 
+fn participant_query_payload(host_pid: u64) -> Vec<u8> {
+    host_pid.to_ne_bytes().to_vec()
+}
+
+/// The query the coordinator's rendezvous exemption rests on: has this host process ever proved exact
+/// membership of the running capture?
+///
+/// It exists because the coordinator cannot otherwise tell a transient fork child that exited before it
+/// could join the capture -- which published nothing, and must not hold the whole tree's deadline -- from
+/// a member that registered, published objects, and was killed before committing its group -- whose state
+/// IS lost, and which must still refuse the capture. Liveness answers neither; only the broker knows.
+///
+/// The answer is sound because it is the exact complement of `publishes_capture_bytes`: an unregistered
+/// connection is refused every byte-publishing operation, so `0` here means "contributed nothing".
+#[test]
+fn the_participant_query_names_only_processes_that_registered_for_this_capture() {
+    let _serial = TRANSPORT_SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (broker, transport) = hl_native::CheckpointTransport::create().expect("checkpoint transport");
+    let mut member = transport.connect_for_test().expect("checkpoint channel");
+    let (channel, authority) = broker
+        .accept(Duration::from_secs(10))
+        .expect("authenticated production accept");
+    let host_pid = authority.host_pid;
+    let server = Arc::new(Server::new(Arc::new(Store), Arc::new(Store)));
+    let worker = Arc::clone(&server);
+    let served = std::thread::spawn(move || worker.serve_authenticated_for_test(channel, authority));
+    while server.connections.load(Ordering::Acquire) == 0 {
+        std::thread::yield_now();
+    }
+
+    // Outside a capture there is no sealed membership to read, so the query is refused rather than
+    // answered `0`. A `0` from an idle broker would exempt every peer of a capture nobody started.
+    member
+        .write_all(&checkpoint_request(
+            protocol::PARTICIPANT_REGISTERED,
+            0,
+            &participant_query_payload(host_pid),
+        ))
+        .expect("query before capture");
+    assert_eq!(
+        read_reply(&mut member).0,
+        -1,
+        "an idle broker answered a membership query"
+    );
+
+    server
+        .begin_capture(9, std::time::Instant::now() + Duration::from_secs(30))
+        .expect("capture admission");
+
+    // Enumerated but not yet registered: the honest answer is "no record", and it is what makes the
+    // exemption safe only in combination with the coordinator's own liveness test.
+    member
+        .write_all(&checkpoint_request(
+            protocol::PARTICIPANT_REGISTERED,
+            9,
+            &participant_query_payload(host_pid),
+        ))
+        .expect("query before registration");
+    assert_eq!(
+        read_reply(&mut member),
+        (0, 0),
+        "an unregistered process was reported as a member"
+    );
+
+    member
+        .write_all(&checkpoint_request(
+            protocol::REGISTER_READY,
+            9,
+            &register_ready_payload(&[301]),
+        ))
+        .expect("member registration");
+    assert_eq!(read_reply(&mut member).0, 0, "authenticated member was refused");
+
+    member
+        .write_all(&checkpoint_request(
+            protocol::PARTICIPANT_REGISTERED,
+            9,
+            &participant_query_payload(host_pid),
+        ))
+        .expect("query after registration");
+    assert_eq!(
+        read_reply(&mut member),
+        (0, 1),
+        "a registered member was not reported as one; the coordinator would have dropped it"
+    );
+
+    // Membership is per process, not per capture: another pid in the same capture still reads as absent.
+    member
+        .write_all(&checkpoint_request(
+            protocol::PARTICIPANT_REGISTERED,
+            9,
+            &participant_query_payload(host_pid + 1),
+        ))
+        .expect("query for another process");
+    assert_eq!(
+        read_reply(&mut member),
+        (0, 0),
+        "an unrelated process inherited another process's membership"
+    );
+
+    // A query naming a generation this broker is not sealing is out of scope and refused, so a stale or
+    // hostile coordinator cannot read one capture's membership out of another's.
+    member
+        .write_all(&checkpoint_request(
+            protocol::PARTICIPANT_REGISTERED,
+            8,
+            &participant_query_payload(host_pid),
+        ))
+        .expect("query at another generation");
+    assert_eq!(
+        read_reply(&mut member).0,
+        -1,
+        "a membership query outside the sealed generation was answered"
+    );
+
+    // A frame that does not name exactly one process is an error, never a `0`.
+    member
+        .write_all(&checkpoint_request(protocol::PARTICIPANT_REGISTERED, 9, &[0_u8; 4]))
+        .expect("malformed query");
+    assert_eq!(
+        read_reply(&mut member).0,
+        -1,
+        "a malformed membership query was answered"
+    );
+
+    server.stop();
+    drop(member);
+    served.join().expect("broker worker");
+}
+
 fn member_restored_payload(guest_pid: i32) -> Vec<u8> {
     let mut payload = Vec::with_capacity(8);
     payload.extend_from_slice(&guest_pid.to_ne_bytes());

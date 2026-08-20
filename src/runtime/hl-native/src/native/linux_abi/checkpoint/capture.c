@@ -1301,6 +1301,25 @@ static void ckpt_poll(struct cpu *c) {
     // so every member is simultaneously stopped AND ALIVE for the entire capture -- which is the only state
     // in which "both owners of this shared object were frozen when it was captured" is a provable fact
     // rather than an inference from group membership. Only the coordinator's release ends the freeze.
+    // Test-only, and the ONLY deterministic way to produce the shape that made closing a healthy
+    // workspace fail intermittently: a peer the coordinator has already enumerated and interrupted, which
+    // then exits on its own before it can join the capture. A real transient fork child (`sleep .05` in a
+    // shell, a short `make` job) does exactly this, but only when it happens to lose the race, which is
+    // why the original evidence was a 42%-under-load rig rather than a test.
+    // Both peer-exit fixtures below have to be ENUMERATED before they die, or they exercise nothing: a
+    // peer the coordinator never saw is never waited for. The coordinator kicks every participant it
+    // enumerated, so waiting here for that kick is the edge that puts this process in the peer set. The
+    // sleep is a ceiling rather than the mechanism -- the kick interrupts it -- and it is far inside the
+    // whole-tree rendezvous budget.
+    int exit_before_join = hl_option_get("HL_CKPT_TEST_PEER_EXIT_BEFORE_JOIN") != NULL;
+    if (exit_before_join || hl_option_get("HL_CKPT_TEST_PEER_EXIT_AFTER_JOIN") != NULL) {
+        struct timespec ceiling = {1, 0};
+        (void)nanosleep(&ceiling, NULL);
+        // Exiting HERE is a peer that never sent REGISTER_READY and therefore published nothing. The
+        // other option exits inside ckpt_dump_self, after the registration round trip: same corpse, and
+        // the capture must refuse for it.
+        if (exit_before_join) _exit(0);
+    }
     int rc = ckpt_dump_self(c, pd, 1);
     uint64_t released = g_ckpt_release_state;
     // Report the GROUP, not container_pid(): an exec session's top process is guest pid 1 by g_init_hostpid

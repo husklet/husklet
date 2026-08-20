@@ -510,6 +510,16 @@ unsafe fn hl_x86_64_checkpoint_anon_shared_test(scenario: c_uint) -> c_int {
 }
 
 #[cfg(feature = "native-test-hooks")]
+unsafe fn hl_aarch64_checkpoint_rendezvous_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().aarch64_checkpoint_rendezvous)(scenario) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_x86_64_checkpoint_rendezvous_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().x86_64_checkpoint_rendezvous)(scenario) }
+}
+
+#[cfg(feature = "native-test-hooks")]
 unsafe fn hl_aarch64_checkpoint_membership_test(scenario: c_uint) -> c_int {
     unsafe { (test_api().aarch64_checkpoint_membership)(scenario) }
 }
@@ -819,6 +829,21 @@ pub(crate) fn checkpoint_election_test(isa: u32, scenario: u32) -> Result<(), i3
         match isa {
             1 => hl_aarch64_checkpoint_election_test(scenario),
             2 => hl_x86_64_checkpoint_election_test(scenario),
+            _ => return Err(-22),
+        }
+    };
+    if status == 0 { Ok(()) } else { Err(status) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn checkpoint_rendezvous_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    // SAFETY: the feature-gated hook forks its own peer and its own responder, owns every descriptor it
+    // opens and closes them, restores the process-wide checkpoint broker descriptor it swapped, reaps
+    // every child it created, and returns a scalar status. It borrows no caller memory.
+    let status = unsafe {
+        match isa {
+            1 => hl_aarch64_checkpoint_rendezvous_test(scenario),
+            2 => hl_x86_64_checkpoint_rendezvous_test(scenario),
             _ => return Err(-22),
         }
     };

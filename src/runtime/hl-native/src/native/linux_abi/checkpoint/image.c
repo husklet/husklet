@@ -1237,6 +1237,11 @@ static int ckpt_dump_self(struct cpu *c, const char *procdir, int park) {
         atomic_store_explicit(&g_ckpt_barrier_active, 0, memory_order_release);
         return -1;
     }
+    // Test-only, and the mirror of HL_CKPT_TEST_PEER_EXIT_BEFORE_JOIN: a member that PROVED membership
+    // and then died before committing its group. It published objects, so its state is genuinely lost,
+    // and the rendezvous exemption must not cover it -- the capture has to refuse. Placed after the
+    // registration round trip and gated on `park` so only a peer, never the coordinator, can take it.
+    if (park && hl_option_get("HL_CKPT_TEST_PEER_EXIT_AFTER_JOIN") != NULL) _exit(0);
     /* CPU images contain engine pointers to immutable seccomp filter nodes.
        Restoring those addresses would either remove the sandbox or dereference
        stale host memory. Until the filter bytecode is part of the checkpoint
@@ -1446,6 +1451,152 @@ static int ckpt_live_process_peers(hl_host_process_peer *peers, size_t capacity,
     return 1;
 }
 
+/* A peer that vanished before it could ever contribute, and can therefore be dropped from the rendezvous
+   without losing any state.
+ *
+ * THE PROBLEM. `ckpt_live_process_peers` enumerates the tree at one instant. An ordinary guest tree churns
+ * across that instant -- a shell's `sleep .05`, a `make` job, any fork that lives tens of milliseconds --
+ * so a process can be enumerated, interrupted, and then simply exit on its own before it ever reaches a
+ * checkpoint safepoint. The rendezvous loop below waits for that peer's group to be committed, it never
+ * will be, and a capture of a perfectly healthy tree burns the whole ~5s budget and then refuses. That is
+ * one of the observed intermittent close failures, and it is a false refusal: nothing was lost.
+ *
+ * WHY LIVENESS ALONE IS THE WRONG DISCRIMINATOR, and why this was deliberately not fixed as a one-liner.
+ * "The peer is gone" is also true of a member that registered, published half its objects, and was then
+ * killed mid-dump. Dropping THAT peer would publish a manifest whose process count is short one member
+ * whose state the user expects back -- a silently incomplete checkpoint, which is strictly worse than a
+ * failed close. Liveness cannot tell the two apart.
+ *
+ * THE DISCRIMINATOR IS "GONE AND NEVER REGISTERED FOR THIS GENERATION", and it is exact rather than
+ * heuristic, because it is the complement of the broker's own publication gate: `publishes_capture_bytes`
+ * (hl-engine checkpoint/broker.rs) refuses OBJECT_BEGIN/WRITE/FINISH, GROUP_BEGIN/COMMIT, CLAIM and COMMIT
+ * from any connection that has not been admitted by REGISTER_READY for the running generation. So a
+ * process that never registered has, by construction, zero bytes in this image and zero half-written
+ * groups: there is nothing of it to lose. A process that DID register is not exempt here under any
+ * circumstance, and the rendezvous still refuses the capture on its behalf.
+ *
+ * THE ORDER IS LOAD-BEARING AND FAIL-CLOSED. Liveness is tested FIRST and registration second. Once the
+ * process is dead its registration record can no longer change, and REGISTER_READY is a synchronous round
+ * trip taken while the process is stopped with its thread registry held -- so a dead peer that registered
+ * has already been recorded, and a dead peer that reads as unregistered never was. Asking the broker first
+ * would leave a window in which a live peer registers after answering 0. Every answer other than a
+ * definite "no record" -- a broken channel, a poisoned ledger, a generation out of scope -- counts as
+ * registered and does not exempt anyone. */
+static int ckpt_peer_never_contributed(long long identity) {
+    if (identity <= 0 || identity > INT_MAX) return 0;
+    if (kill((pid_t)identity, 0) == 0 || errno != ESRCH) return 0; /* still reachable: it can still commit */
+    return ckpt_stream_participant_registered(identity) == 0;
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+// ------------------------------------------------- rendezvous exemption: behavioral fixture
+//
+// Drives the REAL ckpt_peer_never_contributed -- including the real PARTICIPANT_REGISTERED round trip over
+// a real checkpoint channel -- against a REAL host process, once for each of the four answers the
+// coordinator can get. The fix is only correct if BOTH halves hold, so both are scenarios here:
+//
+//   0  the peer is ALIVE and the broker would say "never registered"  -> NOT exempt
+//      Liveness is checked first and alone is never the discriminator; a peer that has not registered yet
+//      is a peer that still can.
+//   1  the peer is GONE and the broker says "never registered"        -> EXEMPT
+//      This is the transient `sleep .05` fork child: it published nothing, so nothing is lost.
+//   2  the peer is GONE and the broker says "registered"              -> NOT exempt
+//      This is a member killed after it published objects and before it committed its group. Its state IS
+//      lost, and the capture must still refuse rather than quietly publish a manifest without it.
+//   3  the peer is GONE and the broker cannot be reached              -> NOT exempt
+//      An unknown answer is not consent. No exemption is ever granted on a guess.
+//
+// The responder refuses any request that is not PARTICIPANT_REGISTERED naming exactly the peer under test,
+// so scenarios 1 and 2 cannot pass by never asking.
+static void ckpt_exemption_responder(hl_activation_descriptor broker, long long expected, uint64_t answer) {
+    uint64_t announced = 0;
+    hl_activation_descriptor channel = hl_ckpt_broker_accept(broker, 500, &announced);
+    if (channel == HL_ACTIVATION_DESCRIPTOR_NONE) _exit(0);
+    hl_ckpt_request request;
+    hl_ckpt_reply reply;
+    uint64_t named = 0;
+    memset(&reply, 0, sizeof reply);
+    reply.magic = HL_CKPT_STREAM_MAGIC_REPLY;
+    reply.abi = HL_CKPT_STREAM_ABI;
+    reply.status = HL_CKPT_STATUS_ERROR;
+    if (read((int)channel, &request, sizeof request) == (ssize_t)sizeof request &&
+        request.magic == HL_CKPT_STREAM_MAGIC_REQUEST && request.abi == HL_CKPT_STREAM_ABI &&
+        request.op == HL_CKPT_OP_PARTICIPANT_REGISTERED && request.name_size == 0 &&
+        request.length == sizeof named && read((int)channel, &named, sizeof named) == (ssize_t)sizeof named &&
+        named == (uint64_t)expected) {
+        reply.status = HL_CKPT_STATUS_OK;
+        reply.value = answer;
+    }
+    (void)write((int)channel, &reply, sizeof reply);
+    _exit(0);
+}
+
+// A process that has already exited AND been reaped, so kill(pid, 0) is ESRCH rather than a zombie's 0.
+static int ckpt_exemption_departed_peer(void) {
+    pid_t gone = fork();
+    if (gone < 0) return -1;
+    if (gone == 0) _exit(0);
+    int status = 0;
+    while (waitpid(gone, &status, 0) < 0 && errno == EINTR) {}
+    return (int)gone;
+}
+
+static int ckpt_exemption_living_peer(void) {
+    pid_t alive = fork();
+    if (alive < 0) return -1;
+    if (alive == 0) { // async-signal-safe only: forked out of a multi-threaded caller
+        struct timespec span = {30, 0};
+        (void)nanosleep(&span, NULL);
+        _exit(0);
+    }
+    return (int)alive;
+}
+
+HL_API int HL_TARGET_LOCAL(checkpoint_rendezvous_test)(uint32_t scenario) {
+    if (scenario > 3) return -22;
+    int saved_broker = hl_ckpt_channel_broker();
+    hl_activation_descriptor parent = HL_ACTIVATION_DESCRIPTOR_NONE;
+    hl_activation_descriptor child = HL_ACTIVATION_DESCRIPTOR_NONE;
+    pid_t responder = -1;
+    int verdict = -1;
+    int peer = scenario == 0 ? ckpt_exemption_living_peer() : ckpt_exemption_departed_peer();
+    if (peer <= 0) return -1;
+    hl_ckpt_channel_forget_for_test();
+    if (scenario == 3) {
+        hl_ckpt_channel_publish(-1); // no broker: the round trip fails and the answer is unknown
+    } else {
+        if (hl_ckpt_broker_pair(&parent, &child) != 0) goto done;
+        responder = fork();
+        if (responder < 0) goto done;
+        if (responder == 0) ckpt_exemption_responder(parent, peer, scenario == 2 ? 1 : 0);
+        hl_ckpt_channel_publish((int)child);
+    }
+    verdict = ckpt_peer_never_contributed(peer) == (scenario == 1) ? 0 : -1;
+done:
+    {
+        // Reclaim the channel the predicate's round trip created, if it made one at all. Read with the
+        // non-minting accessor deliberately: `hl_ckpt_channel_acquire` would OPEN a connection on the
+        // scenarios where the code under test correctly never sent a request.
+        int channel = hl_ckpt_channel_current_for_test();
+        hl_ckpt_channel_forget_for_test();
+        if (channel >= 0) (void)close(channel);
+    }
+    hl_ckpt_channel_publish(saved_broker);
+    if (responder > 0) {
+        int status = 0;
+        while (waitpid(responder, &status, 0) < 0 && errno == EINTR) {}
+    }
+    if (parent != HL_ACTIVATION_DESCRIPTOR_NONE) (void)close((int)parent);
+    if (child != HL_ACTIVATION_DESCRIPTOR_NONE) (void)close((int)child);
+    if (scenario == 0) {
+        (void)kill((pid_t)peer, SIGKILL);
+        int status = 0;
+        while (waitpid((pid_t)peer, &status, 0) < 0 && errno == EINTR) {}
+    }
+    return verdict;
+}
+#endif
+
 static void ckpt_coordinate_and_exit(struct cpu *c) {
     const struct ckpt_phase_ledger phases = {
         .enabled = hl_option_get("HL_CHECKPOINT_PHASE_LEDGER") != NULL,
@@ -1494,7 +1645,13 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     if (completed == NULL)
         ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_RESOURCES, "cannot allocate the rendezvous ledger");
     int ndone = 0;
+    int nexempt = 0;
     for (int t = 0; t < 500 && ndone != nfoll; t++) { // one whole-tree deadline: at most ~5s total
+        int st;
+        // Reap BEFORE the liveness test below, not after: an unreaped child of ours is a zombie, and
+        // kill(pid, 0) succeeds on a zombie, so an exited transient child would read as still reachable
+        // for as long as it stayed unreaped and would never qualify for the exemption.
+        while (waitpid(-1, &st, WNOHANG) > 0) {}
         for (int i = 0; i < nfoll; i++) {
             if (completed[i]) continue;
             char pd[64];
@@ -1504,10 +1661,20 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
             if (ckpt_sink_group_present(sink, pd) == 1) {
                 completed[i] = 1;
                 ndone++;
+                continue;
+            }
+            // Committed is checked first, so a peer that committed and then exited is counted as the
+            // member it is rather than exempted as a transient.
+            if (ckpt_peer_never_contributed(foll[i].identity)) {
+                fprintf(stderr,
+                        "[ckpt] participant %lld exited before joining the capture (no REGISTER_READY for "
+                        "generation %u, so it published nothing); not waiting for proc.%d\n",
+                        (long long)foll[i].identity, phases.generation, ckpt_peer_gpid(foll[i].identity));
+                completed[i] = 1;
+                ndone++;
+                nexempt++;
             }
         }
-        int st;
-        while (waitpid(-1, &st, WNOHANG) > 0) {} // reap so a peer zombie doesn't linger
         if (ndone != nfoll) usleep(10000);
     }
     if (ndone != nfoll) {
@@ -1552,10 +1719,15 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     phase = ckpt_phase_begin(&phases);
     int nproc = ckpt_sink_group_count(sink, "proc.");
     ckpt_phase_finish(&phases, "settlement", phase, 0);
-    if (nproc != nfoll + 1) {
+    // Still EXACT, and still a refusal in either direction. An exempted peer contributed no group, so it
+    // is subtracted from the expected count rather than tolerated by a `<`: if any peer this coordinator
+    // exempted turns out to have committed a group after all, the count is high and the manifest is
+    // refused, which is the check that stops the exemption from ever hiding a member.
+    if (nproc != nfoll - nexempt + 1) {
         char reason[HL_CKPT_STREAM_NAME_MAX];
         snprintf(reason, sizeof reason,
-                 "process-count mismatch: expected exactly %d committed groups, captured %d", nfoll + 1, nproc);
+                 "process-count mismatch: expected exactly %d committed groups, captured %d",
+                 nfoll - nexempt + 1, nproc);
         ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_PROCESS_COUNT, reason);
     }
     struct ckpt_manifest man;

@@ -136,6 +136,13 @@ void hl_ckpt_channel_forget_for_test(void) {
     checkpoint_channel = -1;
     checkpoint_channel_owner = 0;
 }
+
+/* This process's cached channel, or -1 when it has none. Unlike hl_ckpt_channel_acquire it never MINTS
+ * one, which is what a test's cleanup path needs: a fixture that reclaims its channel through `acquire`
+ * silently opens a fresh connection on the paths where the code under test never sent a request. */
+int hl_ckpt_channel_current_for_test(void) {
+    return checkpoint_channel_owner == (long)getpid() ? checkpoint_channel : -1;
+}
 #endif
 
 void hl_ckpt_channel_publish(int broker) {

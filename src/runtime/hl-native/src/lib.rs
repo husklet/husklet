@@ -210,6 +210,17 @@ pub fn checkpoint_election_test(isa: u32, scenario: u32) -> Result<(), i32> {
     bindings::checkpoint_election_test(isa, scenario)
 }
 
+/// Exercise the rendezvous exemption: whether the coordinator drops a peer that vanished before it could
+/// contribute anything, and whether it still refuses for a peer that registered and then died.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn checkpoint_rendezvous_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    // The hook forks and swaps the process-wide checkpoint broker descriptor.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    bindings::checkpoint_rendezvous_test(isa, scenario)
+}
+
 /// Exercise capture membership: whether the coordinator's peer filter admits a container `exec` session --
 /// a SIBLING of guest pid 1 -- and refuses a live process of the same executable that belongs to another
 /// container's process domain or to none.
