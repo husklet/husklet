@@ -138,11 +138,21 @@ static int dac_authorize_cursor_search(const hl_vfs_cursor *directory, void *con
     return status != 0 ? status : -hl_dac_authorize_access(&snapshot, credentials, HL_DAC_EXECUTE);
 }
 
+// Drop the trailing slashes Linux ignores on a create target ("mkdir foo/" names foo, not a child of
+// foo). Without this the leaf search below splits at the trailing '/', so the parent is taken to be the
+// not-yet-existing target itself and every create spelled with a trailing slash is refused -ENOENT --
+// which is exactly how `git clone` fails, git init spelling ".git/branches/" with the slash.
+static void dac_strip_trailing_slashes(char *path) {
+    size_t length = strlen(path);
+    while (length > 1 && path[length - 1] == '/') path[--length] = '\0';
+}
+
 static int dac_snapshot_parent_at(int directory, const char *raw, hl_dac_snapshot *snapshot) {
     char guest[4200], host[4300], path[4200];
     const char *resolved;
     if (g_rootfs) {
         abs_guest(directory, raw, guest, sizeof guest);
+        dac_strip_trailing_slashes(guest);
         char *leaf = strrchr(guest, '/');
         if (leaf == guest)
             guest[1] = '\0';
@@ -163,6 +173,7 @@ static int dac_snapshot_parent_at(int directory, const char *raw, hl_dac_snapsho
             if (path_copy(path, sizeof path, resolved) != 0) return -ENAMETOOLONG;
             resolved = path;
         }
+        dac_strip_trailing_slashes(path);
         char *leaf = strrchr((char *)resolved, '/');
         if (leaf == resolved)
             leaf[1] = '\0';
@@ -250,6 +261,72 @@ static int dac_create_at(int directory, const char *raw) {
     hl_dac_credentials credentials = dac_credentials_current(groups);
     int status = dac_snapshot_parent_at(directory, raw, &snapshot);
     return status != 0 ? status : -hl_dac_authorize_create(&snapshot, &credentials);
+}
+
+// Host-mode grant for a request the VIRTUAL DAC has already authorized.
+//
+// The container's DAC is virtual by design (container/dac_policy.h): guest ids, guest modes and the
+// guest capability set decide, and the host tree is merely storage owned by the engine's own unprivileged
+// uid. Guest root therefore holds CAP_DAC_OVERRIDE and hl_dac_authorize_* grants -- and then the host
+// open() of the same file consults the host mode bits and returns EACCES, so an authorized guest root
+// could not read its own `chmod 000` file. That host denial is not a sandbox boundary: the engine's uid
+// OWNS the inode and may chmod it at will, so refusing is a fidelity bug and nothing else.
+//
+// So: once the guest side has GRANTED, widen the owner bits of the host inode for the duration of the
+// host operation and restore them immediately afterwards. Deliberately narrow:
+//   * only when the guest authorization already returned 0 -- the virtual DAC stays the deciding layer;
+//   * only for an inode whose st_uid IS the engine's effective uid. A denial on a file we do not own is
+//     a real host denial (chmod would fail too) and must survive; escalating it would be host-privilege
+//     escalation, which is why a rootfs unpacked as host root stays a provisioning contract, not a fix;
+//   * only the owner bits actually needed, restored to the exact saved mode, so the guest-visible mode
+//     (which is read from these same host bits) is unchanged outside the window.
+typedef struct {
+    char path[4300];
+    mode_t saved;
+    int active;
+} hl_dac_host_grant;
+
+static void dac_host_grant_begin_path(hl_dac_host_grant *grant, const char *host, unsigned wanted, int authorized) {
+    grant->active = 0;
+    if (!authorized || wanted == 0 || !g_rootfs || host == NULL || host[0] == 0) return;
+    if (path_copy(grant->path, sizeof grant->path, host) != 0) return;
+    struct stat status;
+    if (stat(grant->path, &status) != 0) return;
+    if (!S_ISREG(status.st_mode) && !S_ISDIR(status.st_mode)) return;
+    if ((uint32_t)status.st_uid != (uint32_t)geteuid()) return; // not ours -> the host denial is real
+    mode_t needed = 0;
+    if (wanted & HL_DAC_READ) needed |= S_IRUSR;
+    if (wanted & HL_DAC_WRITE) needed |= S_IWUSR;
+    if (wanted & HL_DAC_EXECUTE) needed |= S_IXUSR;
+    mode_t saved = status.st_mode & 07777;
+    if ((saved & needed) == needed) return; // host already permits -> no window at all
+    if (chmod(grant->path, saved | needed) != 0) return;
+    grant->saved = saved;
+    grant->active = 1;
+}
+
+static void dac_host_grant_end(hl_dac_host_grant *grant) {
+    if (!grant->active) return;
+    grant->active = 0;
+    (void)chmod(grant->path, grant->saved);
+}
+
+static void dac_host_grant_begin(hl_dac_host_grant *grant, int directory, const char *raw, unsigned wanted,
+                                 int authorized) {
+    grant->active = 0;
+    if (!authorized || wanted == 0 || !g_rootfs || raw == NULL) return;
+    char guest[4200], host[4300];
+    abs_guest(directory, raw, guest, sizeof guest);
+    if (!overlay_resolve(guest, host, sizeof host, 0)) return;
+    dac_host_grant_begin_path(grant, host, wanted, authorized);
+}
+
+// The owner bits an open(2) with these Linux flags needs from the host inode.
+static unsigned dac_open_host_access(int flags, int path_only) {
+    if (path_only) return 0;
+    unsigned wanted = (flags & 3) == 0 ? HL_DAC_READ : (flags & 3) == 1 ? HL_DAC_WRITE : HL_DAC_READ | HL_DAC_WRITE;
+    if ((flags & 0x200) != 0) wanted |= HL_DAC_WRITE; // O_TRUNC
+    return wanted;
 }
 
 static int dac_open_at(int directory, const char *raw, int flags, int path_only) {

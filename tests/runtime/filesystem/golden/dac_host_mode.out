@@ -1,0 +1,1 @@
+dac-host-mode root-read=1 root-write=1 xattr-nodata=1 mode=0000 readonly=0444 slash=1 dropped=1 child-denied=1 child-open=1
