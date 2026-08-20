@@ -365,8 +365,14 @@ fn retained_direct_worker_cases_are_uncovered_on_this_host() {
                   UNCOVERED on this host -- its four retained-C direct-worker cases need Linux.\n";
     // SAFETY: a write of a `'static` initialized buffer to the process's stderr descriptor. It
     // borrows nothing beyond the call, and a short or failed write is not an error worth acting on.
+    //
+    // The count is `as _` rather than `notice.len()` because this arm names every non-Linux host,
+    // Windows included, where `libc::write` takes `c_uint` and not `size_t`. Spelled `len()` the
+    // arm was narrower than its own `#[cfg]` and `cargo check -p engine --all-targets` for
+    // `x86_64-pc-windows-gnu` failed E0308 -- a target CI's mingw job never builds, because it
+    // runs `cargo build` and so compiles no test target.
     #[allow(unsafe_code)]
     unsafe {
-        libc::write(2, notice.as_ptr().cast(), notice.len());
+        libc::write(2, notice.as_ptr().cast(), notice.len() as _);
     }
 }
