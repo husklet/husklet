@@ -70,7 +70,7 @@ impl<Output: Write> Reporter for Markdown<Output> {
     fn finish(&mut self, summaries: &[Summary]) -> Result<()> {
         writeln!(self.output, "## Summary\n").map_err(|error| LintError::report("Markdown summary", error))?;
         for summary in summaries {
-            writeln!(
+            write!(
                 self.output,
                 "- `{}`: {} {}(s)",
                 summary.rule,
@@ -78,6 +78,11 @@ impl<Output: Write> Reporter for Markdown<Output> {
                 summary.severity.as_str()
             )
             .map_err(|error| LintError::report("Markdown summary", error))?;
+            for budget in &summary.budgets {
+                write!(self.output, ", {} {}(s) over budget", budget.excess(), budget.unit)
+                    .map_err(|error| LintError::report("Markdown summary", error))?;
+            }
+            writeln!(self.output).map_err(|error| LintError::report("Markdown summary", error))?;
         }
         Ok(())
     }

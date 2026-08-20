@@ -158,22 +158,44 @@ static void ckpt_stream_member_exited(int status, uint32_t kind) {
     (void)ckpt_stream_call(HL_CKPT_OP_MEMBER_EXITED, NULL, 0, 0, 0, payload, sizeof payload, NULL, NULL, 0);
 }
 
-// Report this restored member's exit STATUS from whichever exit path the process actually takes.
+// Report how this restored member ended, from whichever exit path the process actually takes.
 //
 // The report used to sit on exactly one path -- the return from run_guest at the bottom of
-// ckpt_restore_proc_run -- and the ordinary way a Linux process ends does not go through it: exit_group(2)
-// reaches the host _exit directly from the syscall, so a member that exited cleanly reported nothing and the
-// host described a plain exit(0) as `Unreported`, which it renders as a fault of unknown cause. Called from
-// the process-scoped last-thread exit hook as well, which both exit paths share; the once-only guard keeps
-// the first status published when a path reaches both.
+// ckpt_restore_proc_run -- and none of the three ways a Linux process actually ends goes through it.
+// exit_group(2) reaches the host _exit directly from the syscall, so a member that exited cleanly reported
+// nothing; a fatal-default signal reaches the host _exit from guest_group_fatal in linux_abi/signal.c, so a
+// member the engine watched die reported nothing either. Both were rendered by the host as `Unreported`,
+// which it draws as a fault of unknown cause -- the same record it correctly gives a member killed before it
+// could report anything. A member that exited 0 and a member killed by SIGSEGV were the same record.
 //
-// Silent for a process that never announced itself: only a member has a member's exit to report.
-static void ckpt_restored_member_exit_code(int status) {
+// So there are two reports and one guard. The guard is once-only per process, so the first outcome a
+// process publishes is the one the host keeps: a path that reaches both (run_guest returning after the
+// syscall handler already reported) cannot overwrite the earlier, more specific answer.
+//
+// Silent for a process that never announced itself: only a member has a member's exit to report. That is
+// also what keeps the fatal-signal call from minting a channel inside a signal handler -- a process with no
+// announcement returns before the transport is touched.
+static void ckpt_restored_member_exit(int status, uint32_t kind) {
     static pid_t reported;
     pid_t self = getpid();
     if (g_ckpt_member_announced != self || reported == self) return;
     reported = self;
-    ckpt_stream_member_exited(status, HL_CKPT_MEMBER_EXIT_CODE);
+    ckpt_stream_member_exited(status, kind);
+}
+
+// The clean-exit report: the guest's own exit status, from the process-scoped last-thread exit hook that
+// exit(2) and exit_group(2) share.
+static void ckpt_restored_member_exit_code(int status) {
+    ckpt_restored_member_exit(status, HL_CKPT_MEMBER_EXIT_CODE);
+}
+
+// The signal report: the Linux signal number that terminated the guest, from guest_group_fatal -- the one
+// choke point every fatal-default disposition passes through (an unhandled CPU fault, a fatal signal with no
+// handler, a seccomp KILL action, an integer divide fault). It carries the SIGNAL, never 128+signal: the
+// host renders `Signal(11)`, and a member that merely exited with code 139 must stay distinguishable from
+// one the kernel killed.
+static void ckpt_restored_member_exit_signal(int signal) {
+    ckpt_restored_member_exit(signal, HL_CKPT_MEMBER_EXIT_SIGNAL);
 }
 
 static void ckpt_sink_stream_name(struct ckpt_sink *sink, const char *group, const char *name, char *out, size_t size) {

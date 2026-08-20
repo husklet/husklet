@@ -5026,3 +5026,205 @@ fn a_capture_that_cannot_preserve_a_status_it_destroyed_refuses_on_both_isas() {
         );
     }
 }
+
+fn member_exit_fixture(isa: GuestIsa, directory: &Path) -> PathBuf {
+    let (compiler, name) = match isa {
+        GuestIsa::Aarch64 => ("aarch64-linux-gnu-gcc", "checkpoint-member-exit-aarch64"),
+        GuestIsa::X86_64 => ("x86_64-linux-gnu-gcc", "checkpoint-member-exit-x86_64"),
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint/member_exit.c");
+    let output = directory.join(name);
+    let status = std::process::Command::new(compiler)
+        .args(["-static", "-O2", "-o"])
+        .arg(&output)
+        .arg(source)
+        .status()
+        .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
+    assert!(status.success(), "{compiler} failed with {status}");
+    output
+}
+
+fn member_exit_plan(executable: &Path, mode: &str, directory: &Path, restore: bool) -> RuntimePlan {
+    let mut options = Options::default();
+    options
+        .set(if restore { "HL_RESTORE" } else { "HL_CHECKPOINT" }, "1", true)
+        .unwrap();
+    RuntimePlan {
+        rootfs: None,
+        executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+        arguments: [
+            executable.as_os_str().as_encoded_bytes().to_vec(),
+            mode.as_bytes().to_vec(),
+            directory.as_os_str().as_encoded_bytes().to_vec(),
+        ]
+        .into(),
+        environment: Vec::new(),
+        result_path: None,
+        options,
+    }
+}
+
+/// Capture a parent and one parked child, restore them, release the child into `mode`, and read back
+/// what the HOST was told about that member -- plus what the restored parent's own `waitpid` saw.
+///
+/// The member's record is read while the restored tree is still running, because that is when a host
+/// needs it: the fixture's parent parks on `finish` until this function has its answer.
+fn restored_member_outcome(
+    isa: GuestIsa,
+    executable: &Path,
+    mode: &str,
+) -> (Option<hl_engine::runtime::MemberExit>, String) {
+    let temporary = tempfile::tempdir().unwrap();
+    let directory = temporary.path();
+    let ready = directory.join("ready");
+    let parent_ready = directory.join("parent-ready");
+    let release = directory.join("release");
+    let result = directory.join("result");
+    let member = directory.join("member");
+    let finish = directory.join("finish");
+    let store = Arc::new(Store::default());
+
+    let capture = Engine::with_checkpoint(
+        isa,
+        member_exit_plan(executable, mode, directory, false),
+        StandardStreams::default(),
+        store.clone(),
+        store.clone(),
+    )
+    .unwrap();
+    capture.start().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !(ready.exists() && parent_ready.exists()) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(
+        ready.exists() && parent_ready.exists(),
+        "{isa:?}/{mode} fixture never parked both processes"
+    );
+    // Both markers are published just BEFORE the syscall each process parks in, so the last few
+    // instructions before the park are still ahead of them. Settle before freezing the tree.
+    std::thread::sleep(Duration::from_millis(50));
+    capture
+        .capture_checkpoint_until(checkpoint_deadline())
+        .unwrap_or_else(|error| panic!("{isa:?}/{mode} refused the capture: {error:?}"));
+    assert_eq!(capture.wait().unwrap().guest_status, 0);
+
+    let guest_pid = std::fs::read_to_string(&member)
+        .unwrap_or_else(|error| panic!("{isa:?}/{mode} published no member pid: {error}"))
+        .trim()
+        .parse::<i32>()
+        .unwrap_or_else(|error| panic!("{isa:?}/{mode} published an unreadable member pid: {error}"));
+    let guest_pid = std::num::NonZeroI32::new(guest_pid).expect("a guest pid is never zero");
+
+    let restore = Engine::with_checkpoint(
+        isa,
+        member_exit_plan(executable, mode, directory, true),
+        StandardStreams::default(),
+        store.clone(),
+        store,
+    )
+    .unwrap();
+    restore.start().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let handle = loop {
+        if let Some(handle) = restore.restored_member(guest_pid) {
+            break handle;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{isa:?}/{mode} restore never announced member {guest_pid}"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    };
+
+    std::fs::write(&release, []).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut reported = handle.exit();
+    while Instant::now() < deadline {
+        reported = handle.exit();
+        // `Unreported` is what a member gone WITHOUT a report reads as, so it is not an answer yet:
+        // hold until a real record arrives or the deadline decides there is not going to be one.
+        if reported.is_some_and(|exit| exit != hl_engine::runtime::MemberExit::Unreported) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    // The parent writes its own reaping evidence only after the child is gone, so it is necessarily
+    // later than the member report and needs its own wait rather than a read taken at the same instant.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut observed = String::new();
+    while Instant::now() < deadline {
+        observed = std::fs::read_to_string(&result).unwrap_or_default();
+        if observed.ends_with('\n') {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    std::fs::write(&finish, []).unwrap();
+    assert_eq!(restore.wait().unwrap().guest_status, 0);
+    (reported, observed)
+}
+
+/// A restored member killed by a fatal guest signal reports the SIGNAL, not silence.
+///
+/// The report a restored member sends on its way out is the only thing that can tell the host how it
+/// ended -- the member is not a child of the host, so nothing reaps it. That report used to be reachable
+/// only from paths a fatal signal does not take: `guest_group_fatal` reaches the host `_exit` straight from
+/// `linux_abi/signal.c`, so a member the engine WATCHED take a SIGSEGV vanished having said nothing, and
+/// the host recorded `Unreported` -- which `hl-container` renders as `Fault { status: -1, reason: Unknown }`.
+///
+/// That is the same record a member killed before it could report anything gets, and correctly so. The
+/// defect was that the two were indistinguishable: a session that crashed and a session that was destroyed
+/// from outside produced identical evidence.
+///
+/// The assertion is on the record the host holds, read over the checkpoint channel from the live restored
+/// tree, not on any engine-internal field. The parent's own `waitpid` reconstruction is asserted beside it
+/// because the two are independent mechanisms -- the shared signal-exit relay and the member report -- and
+/// a fix to either that did not fix the other would be visible here.
+#[test]
+fn a_restored_member_killed_by_a_guest_signal_reports_that_signal_on_both_isas() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, member_exit_fixture(isa, fixtures.path())));
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+
+    for (isa, executable) in executables {
+        let (reported, observed) = restored_member_outcome(isa, &executable, "signal");
+        assert_eq!(
+            reported,
+            Some(hl_engine::runtime::MemberExit::Signal(11)),
+            "{isa:?} lost the signal that killed a restored member (the guest saw: {observed:?})"
+        );
+        assert_eq!(
+            observed, "signaled=1 signo=11 exited=0 code=0\n",
+            "{isa:?} restored parent did not reap a signalled child"
+        );
+    }
+}
+
+/// A restored member that exits cleanly reports its CODE, and is therefore never confused with the one
+/// above. This is the other half of the same distinction and it exercises the other exit path entirely:
+/// `exit_group(2)` reaches the host `_exit` from the syscall handler, and reports through the shared
+/// process-scoped exit hook rather than through the signal path.
+#[test]
+fn a_restored_member_that_exits_cleanly_reports_its_code_on_both_isas() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executables = [GuestIsa::Aarch64, GuestIsa::X86_64].map(|isa| (isa, member_exit_fixture(isa, fixtures.path())));
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+
+    for (isa, executable) in executables {
+        let (reported, observed) = restored_member_outcome(isa, &executable, "code");
+        assert_eq!(
+            reported,
+            Some(hl_engine::runtime::MemberExit::Code(37)),
+            "{isa:?} lost the status a restored member exited with (the guest saw: {observed:?})"
+        );
+        assert_eq!(
+            observed, "signaled=0 signo=0 exited=1 code=37\n",
+            "{isa:?} restored parent did not reap a cleanly exited child"
+        );
+    }
+}

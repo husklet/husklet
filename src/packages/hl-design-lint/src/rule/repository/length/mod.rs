@@ -3,11 +3,13 @@ use syn::{spanned::Spanned, visit::Visit};
 
 use crate::{
     Result,
-    model::{Finding, Review, Severity},
+    model::{Budget, Finding, Review, Severity},
     rule::Rule,
     rule::support::syntax::{item_attributes, test_only},
     source::Workspace,
 };
+
+const MAXIMUM_LINES: usize = 500;
 
 /// Rejects Rust files whose size obscures cohesive ownership boundaries.
 pub struct FileLength;
@@ -36,7 +38,7 @@ impl Rule for FileLength {
             }
             .visit_file(&source.syntax);
             let lines = (1..=physical).filter(|line| !excluded[*line]).count();
-            if lines <= 500 {
+            if lines <= MAXIMUM_LINES {
                 continue;
             }
             let span = source
@@ -51,11 +53,16 @@ impl Rule for FileLength {
                 .unwrap_or("source file")
                 .to_owned();
             let mut finding = Finding::error(self.id(), subject, source.location(span));
-            finding.message = format!("Rust source contains {lines} lines; the maximum is 500");
+            finding.message = format!("Rust source contains {lines} lines; the maximum is {MAXIMUM_LINES}");
             finding.help = "split by cohesive entity, component, screen region, adapter, or service; do not use include! or arbitrary numbered fragments".to_owned();
+            finding.budget = Some(Budget {
+                unit: "line",
+                measured: lines,
+                limit: MAXIMUM_LINES,
+            });
             let mut review = Review::error();
             review.metadata.push(("lines".to_owned(), lines.to_string()));
-            review.metadata.push(("limit".to_owned(), "500".to_owned()));
+            review.metadata.push(("limit".to_owned(), MAXIMUM_LINES.to_string()));
             review.questions = vec![
                 "Which independent responsibilities are mixed in this file?".to_owned(),
                 "Does each extracted module have a precise domain name and dependency direction?".to_owned(),
