@@ -120,6 +120,29 @@ impl Termios {
     fn matches(self, index: usize, byte: u8) -> bool {
         self.character(index) == Some(byte)
     }
+
+    /// Apply `OPOST` to output, appending to `out`. A raw host slave no longer translates anything,
+    /// so `\n` would reach the display without its carriage return and every line would stair-step.
+    ///
+    /// It appends to a caller-owned buffer rather than answering a fresh `Vec` because both callers
+    /// already own their destination: the echo path writes into the batch's echo buffer, and the
+    /// output pump reuses one buffer across batches. Answering a `Vec` made this a per-keystroke
+    /// allocation on every newline echoed.
+    pub(super) fn write_output(self, bytes: &[u8], out: &mut Vec<u8>) {
+        if !self.has_output(output_flag::OPOST) {
+            out.extend_from_slice(bytes);
+            return;
+        }
+        out.reserve(bytes.len());
+        for &byte in bytes {
+            match byte {
+                b'\n' if self.has_output(output_flag::ONLCR) => out.extend_from_slice(b"\r\n"),
+                b'\n' if self.has_output(output_flag::ONLRET) => out.push(b'\r'),
+                b'\r' if self.has_output(output_flag::OCRNL) => out.push(b'\n'),
+                other => out.push(other),
+            }
+        }
+    }
 }
 
 /// A signal the discipline decided to raise. Delivery is the pump's job: the host pty knows the
@@ -148,6 +171,22 @@ pub(super) struct Effect {
     pub(super) flush_input: bool,
     /// `IXON` asked output to stop (`Some(true)`) or resume (`Some(false)`).
     pub(super) output_stopped: Option<bool>,
+}
+
+impl Effect {
+    /// Empty the effect while keeping every buffer's capacity.
+    ///
+    /// One effect is owned by the input pump and reused for the life of the terminal, so after the
+    /// first batch a keystroke allocates nothing at all. It used to allocate one `Vec` per non-empty
+    /// field per batch, and then a second one to copy that field into the pump's own effect.
+    pub(super) fn clear(&mut self) {
+        self.to_guest.clear();
+        self.echo.clear();
+        self.signals.clear();
+        self.end_of_file = false;
+        self.flush_input = false;
+        self.output_stopped = None;
+    }
 }
 
 /// The discipline's own state: the line being edited and the flow-control and quoting latches.
@@ -192,13 +231,17 @@ impl LineDiscipline {
         self.widths.clear();
     }
 
-    /// Feed a batch of input bytes through the discipline.
-    pub(super) fn receive(&mut self, bytes: &[u8]) -> Effect {
-        let mut effect = Effect::default();
+    /// Feed a batch of input bytes through the discipline, appending what they produced to `effect`.
+    pub(super) fn receive(&mut self, bytes: &[u8], effect: &mut Effect) {
         for &byte in bytes {
-            self.receive_one(byte, &mut effect);
+            self.receive_one(byte, effect);
         }
-        effect
+    }
+
+    /// The termios the discipline is currently running, so the output pump can post-process a batch
+    /// without holding the discipline's lock across the work.
+    pub(super) fn termios(&self) -> Termios {
+        self.termios
     }
 
     fn receive_one(&mut self, byte: u8, effect: &mut Effect) {
@@ -368,7 +411,7 @@ impl LineDiscipline {
         }
         let termios = self.termios;
         if termios.has_local(local_flag::ECHO) || (terminator == b'\n' && termios.has_local(local_flag::ECHONL)) {
-            effect.echo.extend_from_slice(&self.output_bytes(&[terminator]));
+            termios.write_output(&[terminator], &mut effect.echo);
         }
         self.column = 0;
         self.line.push(terminator);
@@ -408,7 +451,7 @@ impl LineDiscipline {
         self.reset_line();
         self.column = 0;
         if termios.has_local(local_flag::ECHO) && termios.has_local(local_flag::ECHOK) {
-            effect.echo.extend_from_slice(&self.output_bytes(b"\n"));
+            termios.write_output(b"\n", &mut effect.echo);
         }
     }
 
@@ -416,14 +459,12 @@ impl LineDiscipline {
         if !self.termios.has_local(local_flag::ECHO) {
             return;
         }
-        effect.echo.extend_from_slice(&self.output_bytes(b"\n"));
+        self.termios.write_output(b"\n", &mut effect.echo);
         self.column = 0;
         let line = std::mem::take(&mut self.line);
         let widths = std::mem::take(&mut self.widths);
         for &byte in &line {
-            let mut discard = Effect::default();
-            self.echo_byte(byte, &mut discard);
-            effect.echo.extend_from_slice(&discard.echo);
+            self.echo_byte(byte, effect);
         }
         self.line = line;
         self.widths = widths;
@@ -456,7 +497,7 @@ impl LineDiscipline {
         let width = self.width_of(value);
         match value {
             b'\n' | b'\r' => {
-                effect.echo.extend_from_slice(&self.output_bytes(&[value]));
+                termios.write_output(&[value], &mut effect.echo);
                 self.column = 0;
             }
             b'\t' => {
@@ -503,25 +544,6 @@ impl LineDiscipline {
     pub(super) fn end_of_file_character(&self) -> Option<u8> {
         self.termios.character(control_character::VEOF)
     }
-
-    /// Apply `OPOST` to guest output. A raw host slave no longer translates anything, so `\n` would
-    /// reach the display without its carriage return and every line would stair-step.
-    pub(super) fn output_bytes(&self, bytes: &[u8]) -> Vec<u8> {
-        let termios = self.termios;
-        if !termios.has_output(output_flag::OPOST) {
-            return bytes.to_vec();
-        }
-        let mut out = Vec::with_capacity(bytes.len());
-        for &byte in bytes {
-            match byte {
-                b'\n' if termios.has_output(output_flag::ONLCR) => out.extend_from_slice(b"\r\n"),
-                b'\n' if termios.has_output(output_flag::ONLRET) => out.push(b'\r'),
-                b'\r' if termios.has_output(output_flag::OCRNL) => out.push(b'\n'),
-                other => out.push(other),
-            }
-        }
-        out
-    }
 }
 
 #[cfg(test)]
@@ -566,7 +588,39 @@ mod tests {
     }
 
     fn feed(discipline: &mut LineDiscipline, bytes: &[u8]) -> Effect {
-        discipline.receive(bytes)
+        let mut effect = Effect::default();
+        discipline.receive(bytes, &mut effect);
+        effect
+    }
+
+    /// Per-batch cost of the discipline itself, with no pty and no threads: the pump's own loop,
+    /// two batches a keystroke, reported as nanoseconds per batch over `ROUNDS` rounds.
+    #[test]
+    #[ignore = "a cost measurement, not an assertion"]
+    fn discipline_batch_cost() {
+        const BATCHES: usize = 200_000;
+        const ROUNDS: usize = 9;
+        let mut discipline = LineDiscipline::new(cooked());
+        let mut rounds = Vec::new();
+        for _ in 0..ROUNDS {
+            let start = std::time::Instant::now();
+            let mut effect = Effect::default();
+            for _ in 0..BATCHES {
+                effect.clear();
+                discipline.receive(b"a", &mut effect);
+                effect.clear();
+                discipline.receive(&[0x7f], &mut effect);
+            }
+            rounds.push(start.elapsed().as_nanos() as f64 / (BATCHES * 2) as f64);
+        }
+        rounds.sort_by(f64::total_cmp);
+        println!("batch_cost min={:.1}ns median={:.1}ns", rounds[0], rounds[ROUNDS / 2]);
+    }
+
+    fn post_processed(discipline: &LineDiscipline, bytes: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        discipline.termios().write_output(bytes, &mut out);
+        out
     }
 
     // ---- the defect this module exists to fix -------------------------------------------------
@@ -947,13 +1001,13 @@ mod tests {
     #[test]
     fn opost_and_onlcr_add_the_carriage_return_a_raw_slave_no_longer_supplies() {
         let discipline = LineDiscipline::new(cooked());
-        assert_eq!(discipline.output_bytes(b"one\ntwo\n"), b"one\r\ntwo\r\n");
+        assert_eq!(post_processed(&discipline, b"one\ntwo\n"), b"one\r\ntwo\r\n");
     }
 
     #[test]
     fn clearing_opost_passes_output_through_untouched() {
         let discipline = LineDiscipline::new(Termios { output: 0, ..cooked() });
-        assert_eq!(discipline.output_bytes(b"one\ntwo"), b"one\ntwo");
+        assert_eq!(post_processed(&discipline, b"one\ntwo"), b"one\ntwo");
     }
 
     #[test]
@@ -962,7 +1016,7 @@ mod tests {
             output: OPOST | OCRNL,
             ..cooked()
         });
-        assert_eq!(discipline.output_bytes(b"a\rb"), b"a\nb");
+        assert_eq!(post_processed(&discipline, b"a\rb"), b"a\nb");
     }
 
     // ---- the termios image -----------------------------------------------------------------------
