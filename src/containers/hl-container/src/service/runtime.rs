@@ -136,7 +136,6 @@ impl std::fmt::Debug for CheckpointConfig {
 pub(crate) trait Running: Send + Sync {
     fn id(&self) -> u64;
     fn domain(&self) -> hl_engine::Domain;
-    fn checkpointable(&self) -> bool;
     /// The container-namespace pid of the guest process this launch is running, once the guest has
     /// published one.
     ///

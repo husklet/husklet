@@ -231,20 +231,19 @@ impl Runtime {
         let images = containers.images().map_err(io::Error::other)?;
         let reference: Reference = workspace.image.parse().map_err(io::Error::other)?;
         let platform = Self::platform(workspace.arch);
-        let image = match images.resolve(&reference).map_err(io::Error::other)? {
-            Some(image) => image,
-            None => {
-                #[cfg(test)]
-                if std::env::var_os("HL_TEST_FORBID_REMOTE_IMAGES").is_some() {
-                    return Err(io::Error::other(format!(
-                        "remote image resolution was reached for {reference}; the seeded workspace container was not reusable"
-                    )));
-                }
-                images
-                    .pull(&Registry::new(Auth::Anonymous), reference, &platform)
-                    .await
-                    .map_err(io::Error::other)?
+        let image = if let Some(image) = images.resolve(&reference).map_err(io::Error::other)? {
+            image
+        } else {
+            #[cfg(test)]
+            if std::env::var_os("HL_TEST_FORBID_REMOTE_IMAGES").is_some() {
+                return Err(io::Error::other(format!(
+                    "remote image resolution was reached for {reference}; the seeded workspace container was not reusable"
+                )));
             }
+            images
+                .pull(&Registry::new(Auth::Anonymous), reference, &platform)
+                .await
+                .map_err(io::Error::other)?
         };
         let unpacked = images.unpack(&image, &platform).map_err(io::Error::other)?;
         let session = crate::runtime::session::Session::select(&images, &unpacked)?;
@@ -346,7 +345,7 @@ impl Runtime {
             });
         Self::restore_independently(
             targets,
-            |id| async move { containers.start(&id).await.map(|_| ()) },
+            |id| async move { containers.start(&id).await },
             || async { containers.executions().restore_checkpoints().await },
             |id| async move { containers.executions().remove(&id).await },
         )

@@ -27,9 +27,9 @@ impl TryFrom<&ProcessConfig> for Spec {
         Self::flag(
             &mut options,
             "HL_RESTORE",
-            launch.checkpoint.as_ref().is_some_and(|role| {
-                matches!(role, crate::service::CheckpointRole::Coordinator(checkpoint) if checkpoint.restore)
-            }),
+            launch.checkpoint.as_ref().is_some_and(
+                |role| matches!(role, crate::service::CheckpointRole::Coordinator(checkpoint) if checkpoint.restore),
+            ),
         )?;
 
         let guest_program = Self::guest_program(launch);

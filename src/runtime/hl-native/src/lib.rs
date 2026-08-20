@@ -151,6 +151,18 @@ pub fn x86_store_preflight_test() -> bool {
     bindings::x86_store_preflight_test()
 }
 
+/// Reports whether emitted aarch64 code keeps a live value in host `x18`.
+///
+/// Returns `0` when the emitted guard and guest-base fold name no reserved
+/// register, `1` when one of them does, and `2`/`3` when the fixture emitted
+/// nothing to inspect (a vacuous pass).
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+#[must_use]
+pub fn aarch64_reserved_register_test() -> i32 {
+    bindings::aarch64_reserved_register_test()
+}
+
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 #[must_use]

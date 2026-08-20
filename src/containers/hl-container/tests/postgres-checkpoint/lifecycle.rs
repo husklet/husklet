@@ -269,9 +269,7 @@ impl Fixture {
         .collect::<std::collections::BTreeSet<_>>();
         require(
             current_namespaces.len() == 1 && current_namespaces.contains(&container_token.namespace),
-            format!(
-                "cycle {cycle}: domain member tokens did not name the container image: {current_namespaces:?}"
-            ),
+            format!("cycle {cycle}: domain member tokens did not name the container image: {current_namespaces:?}"),
         )?;
         require(
             captured.generation == before_generation,

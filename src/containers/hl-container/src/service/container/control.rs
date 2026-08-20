@@ -369,7 +369,7 @@ impl Service {
     /// runtime bookkeeping.
     ///
     /// A committed capture releases every member to exit and is the container's stop, so the
-    /// caller's next act is a restore into the SAME network namespace, SysV control block and
+    /// caller's next act is a restore into the SAME network namespace, `SysV` control block and
     /// filesystem generation. Declaring the container `Exited` while a member of the previous
     /// generation is still executing would let those two trees overlap: the restored processes
     /// would find the original container's live IPC control block instead of publishing their

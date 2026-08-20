@@ -26,9 +26,12 @@ pub(super) struct Process {
     pub(super) child: Mutex<Option<Arc<hl_engine::runtime::Engine>>>,
     pub(super) logs: Mutex<Option<crate::service::LogReceiver>>,
     pub(super) domain: hl_engine::Domain,
-    pub(super) checkpointable: bool,
-    /// Publishes this process's freeze channel to its domain for as long as it runs.
-    pub(super) domain_channel: Option<super::DomainChannelEntry>,
+    /// Publishes this process's freeze channel to its domain for exactly as long as this process
+    /// runs. Held, never read: the registration lives in `DomainChannelEntry`'s `Drop`, so dropping
+    /// the field is what withdraws the channel, and a member that outlived its coordinator would
+    /// otherwise join a broker nobody is listening on. The leading underscore is the field's whole
+    /// contract -- there is no reader and there must not be one.
+    pub(super) _domain_channel: Option<super::DomainChannelEntry>,
     /// The sessions of the members this launch restored, each holding the terminal created for it before
     /// the restore started. Empty for every launch that restored nothing.
     pub(super) members: Vec<Arc<super::member::MemberSession>>,
@@ -122,10 +125,6 @@ impl Running for Process {
             .lock()
             .ok()
             .and_then(|engine| engine.as_ref().and_then(|engine| engine.restored_member(guest_pid)))
-    }
-
-    fn checkpointable(&self) -> bool {
-        self.checkpointable
     }
 
     fn member_process(&self, guest_pid: std::num::NonZeroI32) -> Option<Arc<dyn Running>> {
@@ -285,8 +284,7 @@ mod tests {
             child: Mutex::new(None),
             logs: Mutex::new(None),
             domain: hl_engine::Domain::new().unwrap(),
-            checkpointable: false,
-            domain_channel: None,
+            _domain_channel: None,
         })
     }
 

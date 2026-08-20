@@ -134,6 +134,17 @@ struct cpu {
     // (which republishes cpu->V). A plain R_SYSCALL exit reads this: 0 -> slim GPR-only spill, else FULL.
     // Appended after the baked-offset fields so the emitted-code offsets above are unaffected.
     uint64_t vdirty;
+    /*
+     * NZCV save slot for the non-PIE guest-base fold.  The fold must compare
+     * the effective address against the image window without disturbing the
+     * guest's condition flags, and the only engine-private host registers in
+     * this ABI (x16/x17) are already carrying the address and the constant.
+     * The obvious third register, host x18, is unusable: Darwin reserves it
+     * and clears it asynchronously between any two instructions, so a flag
+     * value parked there returns as zero and silently rewrites the guest's
+     * condition codes.  Park the flags in the CPU record instead.
+     */
+    uint64_t nzcv_fold;
     /* Synchronous translated-memory SIGBUS handoff; consumed only by dispatcher reason R_BUS. */
     uint64_t fault_addr;
     uint64_t bus_ea;
@@ -298,6 +309,7 @@ static int is_stolen(int r) {
 #define R_SOFTMISS 8
 #define R_SOFTSPAN 9
 #define R_SOFTCOMMIT 10
+#define OFF_NZCV_FOLD ((int)offsetof(struct cpu, nzcv_fold))
 #define OFF_FAULT_ADDR ((int)offsetof(struct cpu, fault_addr))
 #define OFF_BUS_EA ((int)offsetof(struct cpu, bus_ea))
 #define OFF_BUS_FILTER ((int)offsetof(struct cpu, bus_filter))

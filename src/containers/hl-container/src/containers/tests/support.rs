@@ -257,9 +257,6 @@ impl Running for FakeMemberProcess {
     fn restored_member(&self, _guest_pid: std::num::NonZeroI32) -> Option<hl_engine::runtime::RestoredMember> {
         None
     }
-    fn checkpointable(&self) -> bool {
-        false
-    }
     async fn wait(self: Arc<Self>) -> Result<ExitStatus> {
         let mut exited = self.exited.subscribe();
         while !*exited.borrow() {
@@ -310,9 +307,6 @@ impl Running for FakeProcess {
         // A fake launch restores nothing, so it announces no member. Every test that needs a reachable
         // member drives the real broker.
         None
-    }
-    fn checkpointable(&self) -> bool {
-        self.checkpoint_armed
     }
     fn member_process(&self, guest_pid: std::num::NonZeroI32) -> Option<Arc<dyn Running>> {
         self.members
