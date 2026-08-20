@@ -46,6 +46,14 @@ jobs:
           primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
 
+      # This job carries no Cargo cache, so `CARGO_HOME` is empty when it starts and the
+      # `--offline` step below cannot resolve a single dependency without this. Measured on
+      # x86_64 with an empty `CARGO_HOME`: `error: no matching package named sha2 found`.
+      - name: Fetch locked dependencies
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo fetch --locked
+
       - name: Verify Linux native shared-library reproducibility
         timeout-minutes: 10
         run: >-
@@ -127,9 +135,18 @@ jobs:
           restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Cache Cargo build products
-        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: husklet-release
+
+      # `Swatinem/rust-cache` restores nothing on a cache miss -- a new `shared-key`, an
+      # evicted entry, or the first release after a `Cargo.lock` change -- and the step below
+      # is `--offline`. Without this fetch it fails at dependency resolution rather than at
+      # the property it is meant to prove.
+      - name: Fetch locked dependencies
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo fetch --locked
 
       # This expensive package gate intentionally stays out of the default test suite.
       # Releases must prove that two independent OUT_DIR trees produce the same dylib.
@@ -185,6 +202,12 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
+          # SC2016: the single quotes are the point. `$PWD` and `$RELEASE_VERSION` must be
+          # expanded by the inner `bash` inside the dev shell, not by this runner shell --
+          # `$PWD` because `nix develop` is what establishes the directory the bundle is
+          # built in, and `$RELEASE_VERSION` because it reaches the inner shell through the
+          # step's own `env:` block.
+          # shellcheck disable=SC2016
           nix --extra-experimental-features 'nix-command flakes' develop . --command \
             bash -euo pipefail -c '
               export CARGO_TARGET_DIR="$PWD/target-macos"

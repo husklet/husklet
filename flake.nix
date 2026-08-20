@@ -395,8 +395,23 @@
             src = workspaceSource;
             cargoLock.lockFile = ./Cargo.lock;
             strictDeps = true;
+            # `cargo check/clippy/test --workspace --all-targets` reaches `hl-gui-gtk` and
+            # `storybook`, which resolve gtk4, vte-gtk4 and librsvg through pkg-config. This
+            # derivation carried `buildInputs: ""`, so all three died in `gdk4-sys`'s build
+            # script with "The system library `gtk4` ... was not found" and `nix flake check`
+            # could not succeed on any system. The dev shell has carried the same six inputs on
+            # Linux and Darwin alike since bdaf05de4; keep the two lists identical, because the
+            # shell is where every lane runs this gate by hand.
             nativeBuildInputs = commonNativeInputs pkgs ++ [
               (rustFor pkgs)
+              pkgs.gobject-introspection
+              pkgs.glib
+              pkgs.gdk-pixbuf
+            ];
+            buildInputs = [
+              pkgs.gtk4
+              pkgs.librsvg
+              pkgs.vte-gtk4
             ];
             doCheck = false;
             buildPhase = ''
