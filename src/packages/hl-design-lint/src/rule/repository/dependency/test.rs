@@ -202,6 +202,10 @@ fn package_budget_counts_distinct_local_targets_across_dependency_kinds() {
     let values = findings(&root, policy);
     assert_eq!(values.len(), 1);
     assert!(values[0].message.contains("exceeding its configured maximum of 1"));
+    assert_eq!(
+        values[0].budget.map(|budget| (budget.unit, budget.excess())),
+        Some(("dependency", 1))
+    );
     fs::remove_dir_all(root).unwrap();
 }
 

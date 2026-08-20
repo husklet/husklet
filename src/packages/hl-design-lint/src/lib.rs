@@ -15,7 +15,7 @@ mod source;
 use std::path::PathBuf;
 
 pub use error::{LintError, Result};
-pub use model::{Finding, Location, Related, Review, ReviewState, Severity, Summary};
+pub use model::{Budget, Finding, Location, Related, Review, ReviewState, Severity, Summary};
 pub use policy::{
     BoundaryPolicy, CAllocationPolicy, CInterfacePolicy, CResultPolicy, CSafetyPolicy, CTestOnlyStatePolicy,
     DependencyPolicy, DocumentationPolicy, LayerPolicy, OwnershipPolicy, PackageDependencyBudget, Policy, SourcePolicy,
@@ -144,11 +144,7 @@ impl Linter {
             for finding in &findings {
                 reporter.finding(finding)?;
             }
-            summaries.push(Summary {
-                rule: rule.id(),
-                severity,
-                findings: findings.iter().filter(|finding| finding.is_violation()).count(),
-            });
+            summaries.push(Summary::new(rule.id(), severity, &findings));
         }
         reporter.finish(&summaries)?;
         Ok(summaries)
@@ -891,5 +887,107 @@ const PROSE: &str = "mod misc {}";
             ]
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Renders one completed run through the diagnostic reporter and returns its summary line for
+    /// `rule`, which is the roll-up a lane reads to decide whether its work moved anything.
+    fn summary_line(rule: &str, name: &str, source: &str) -> String {
+        let root = temporary("summary");
+        let path = root.join("src").join(name);
+        fs::write(&path, source).unwrap();
+        let mut reporter = Diagnostic::new(Vec::new());
+        Linter::standard().run([path], &mut reporter).unwrap();
+        let rendered = String::from_utf8(reporter.into_inner()).unwrap();
+        fs::remove_dir_all(root).unwrap();
+        let prefix = format!("{rule}: ");
+        rendered
+            .lines()
+            .find(|line| line.starts_with(&prefix))
+            .unwrap_or_else(|| panic!("{rule} has no summary line in:\n{rendered}"))
+            .to_owned()
+    }
+
+    fn rust_source_of(lines: usize) -> String {
+        use std::fmt::Write;
+
+        (0..lines).fold(String::new(), |mut source, index| {
+            writeln!(source, "fn measured_{index}() {{}}").unwrap();
+            source
+        })
+    }
+
+    #[test]
+    fn a_file_one_line_past_the_limit_reports_one_line_of_excess() {
+        assert_eq!(
+            summary_line("file-length", "lib.rs", &rust_source_of(501)),
+            "file-length: 1 error(s), 1 line(s) over budget"
+        );
+    }
+
+    #[test]
+    fn a_file_far_past_the_limit_reports_its_whole_excess() {
+        assert_eq!(
+            summary_line("file-length", "lib.rs", &rust_source_of(800)),
+            "file-length: 1 error(s), 300 line(s) over budget"
+        );
+    }
+
+    #[test]
+    fn two_oversized_files_total_their_excess_rather_than_counting_crossings() {
+        let root = temporary("file-length-total");
+        for (name, lines) in [("lib.rs", 501), ("second.rs", 800)] {
+            fs::write(root.join("src").join(name), rust_source_of(lines)).unwrap();
+        }
+        let mut reporter = Diagnostic::new(Vec::new());
+        Linter::standard().run([root.join("src")], &mut reporter).unwrap();
+        let rendered = String::from_utf8(reporter.into_inner()).unwrap();
+        fs::remove_dir_all(root).unwrap();
+        assert!(
+            rendered.contains("file-length: 2 error(s), 301 line(s) over budget"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn nesting_reports_the_levels_beyond_the_maximum() {
+        assert_eq!(
+            summary_line(
+                "maximum-nesting",
+                "lib.rs",
+                "fn walk(rows: &[u8]) {\n    for row in rows {\n        for column in rows {\n            for cell in rows {\n                for other in rows {\n                    println!(\"{row}{column}{cell}{other}\");\n                }\n            }\n        }\n    }\n}\n"
+            ),
+            "maximum-nesting: 1 error(s), 2 level(s) over budget"
+        );
+    }
+
+    #[test]
+    fn c_structure_totals_length_and_depth_under_their_own_units() {
+        let mut source = String::from("int oversized(int x) {\n");
+        for _ in 0..7 {
+            source.push_str("  if (x) {\n");
+        }
+        for _ in 0..190 {
+            source.push_str("    x += 1;\n");
+        }
+        for _ in 0..7 {
+            source.push_str("  }\n");
+        }
+        source.push_str("  return x;\n}\n");
+        assert_eq!(
+            summary_line("c-source-structure", "oversized.c", &source),
+            "c-source-structure: 2 error(s), 7 line(s) over budget, 1 level(s) over budget"
+        );
+    }
+
+    #[test]
+    fn a_rule_that_measures_nothing_keeps_its_bare_count() {
+        assert_eq!(
+            summary_line(
+                "environment-variable-access",
+                "lib.rs",
+                "fn sample() { let _ = std::env::var(\"X\"); }\n"
+            ),
+            "environment-variable-access: 1 error(s)"
+        );
     }
 }
