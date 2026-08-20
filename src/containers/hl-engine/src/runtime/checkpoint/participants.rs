@@ -32,6 +32,10 @@ pub(super) enum Error {
     Conflict,
     /// This exact process identity is already a member of this capture.
     Duplicate,
+    /// Membership was sealed before this registration arrived. The coordinator seals only once every
+    /// live guest process is frozen, so a registration after the seal describes a process the capture
+    /// cannot prove it froze; admitting it would put unfrozen state in the image.
+    Sealed,
 }
 
 /// Retains exactly what a second registration must be checked against: nothing
@@ -41,6 +45,8 @@ pub(super) struct ParticipantLedger {
     capture_generation: u64,
     identities: BTreeMap<(u64, u64, u64), MemberId>,
     next_member: u64,
+    /// The member count at the instant membership was sealed, once it has been.
+    sealed: Option<u64>,
 }
 
 impl ParticipantLedger {
@@ -52,6 +58,7 @@ impl ParticipantLedger {
             capture_generation,
             identities: BTreeMap::new(),
             next_member: 1,
+            sealed: None,
         })
     }
 
@@ -66,6 +73,9 @@ impl ParticipantLedger {
         identity: ProcessIdentity,
         executors: &BTreeSet<ExecutorId>,
     ) -> Result<MemberId, Error> {
+        if self.sealed.is_some() {
+            return Err(Error::Sealed);
+        }
         if capture_generation != self.capture_generation
             || identity.pid == 0
             || identity.birth == 0
@@ -82,6 +92,26 @@ impl ParticipantLedger {
         self.next_member = self.next_member.checked_add(1).ok_or(Error::Conflict)?;
         self.identities.insert(key, id);
         Ok(id)
+    }
+
+    /// Closes membership and answers how many processes this capture sealed.
+    ///
+    /// This is the single point the manifest's expected process set is fixed at, and it is the whole
+    /// reason the count can be exact. The coordinator calls it only after every live guest process has
+    /// either committed its group or been proven gone-and-never-registered, and after its own dump has
+    /// registered it -- so at the seal no unfrozen guest process remains that could still fork or
+    /// register. A later registration is refused rather than admitted, because the capture cannot prove
+    /// it froze that process; the member reads the refusal and refuses its own dump instead of
+    /// publishing bytes into an image that is already being counted.
+    ///
+    /// Idempotent: a repeated seal answers the same count rather than failing, so a retried round trip
+    /// cannot turn a sound capture into a refusal.
+    pub(super) fn seal(&mut self, capture_generation: u64) -> Result<u64, Error> {
+        if capture_generation != self.capture_generation {
+            return Err(Error::Conflict);
+        }
+        let count = self.identities.len() as u64;
+        Ok(*self.sealed.get_or_insert(count))
     }
 
     /// Whether this host pid holds a membership record for `capture_generation`.
@@ -154,6 +184,49 @@ mod tests {
             "another generation's membership was answered"
         );
         assert!(!ledger.registered(7, 0), "an unauthenticated pid read as a member");
+    }
+
+    /// The seal is what makes the manifest's expected process set exact. It answers the count of
+    /// processes that proved membership -- not what anyone enumerated -- and it does so at one instant
+    /// that no later registration can move.
+    #[test]
+    fn sealing_answers_the_exact_number_of_processes_that_proved_membership() {
+        let mut ledger = ParticipantLedger::new(7).unwrap();
+        ledger.register(7, identity(11), &executors(&[1])).unwrap();
+        ledger.register(7, identity(12), &executors(&[1, 2])).unwrap();
+        assert_eq!(ledger.seal(7), Ok(2));
+    }
+
+    /// A retried round trip must not be able to turn a sound capture into a refusal, so the seal is
+    /// idempotent rather than a one-shot.
+    #[test]
+    fn a_repeated_seal_answers_the_same_count() {
+        let mut ledger = ParticipantLedger::new(7).unwrap();
+        ledger.register(7, identity(11), &executors(&[1])).unwrap();
+        assert_eq!(ledger.seal(7), Ok(1));
+        assert_eq!(ledger.seal(7), Ok(1));
+    }
+
+    #[test]
+    fn another_generation_cannot_seal_this_captures_membership() {
+        let mut ledger = ParticipantLedger::new(7).unwrap();
+        assert_eq!(ledger.seal(8), Err(Error::Conflict));
+    }
+
+    /// The direction that stops silent loss: once the count is fixed, a process that registers late is
+    /// refused rather than quietly added to an image whose manifest has already been counted. The
+    /// refusal is what makes the member refuse its own dump instead of publishing unfrozen state.
+    #[test]
+    fn a_registration_after_the_seal_is_refused_and_does_not_move_the_count() {
+        let mut ledger = ParticipantLedger::new(7).unwrap();
+        ledger.register(7, identity(11), &executors(&[1])).unwrap();
+        assert_eq!(ledger.seal(7), Ok(1));
+        assert_eq!(ledger.register(7, identity(12), &executors(&[1])), Err(Error::Sealed));
+        assert_eq!(ledger.seal(7), Ok(1));
+        assert!(
+            !ledger.registered(7, 12),
+            "a process refused at the seal was recorded as a member anyway"
+        );
     }
 
     #[test]

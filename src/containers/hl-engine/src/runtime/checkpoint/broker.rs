@@ -1,7 +1,8 @@
 use super::{
     CAPTURE_REFUSED, CLAIM, COMMIT, CaptureFailure, CapturePhase, GROUP_BEGIN, GROUP_COMMIT, MEMBER_EXITED,
     MEMBER_RESTORED, MEMBER_STDIO, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT,
-    REGISTER_READY, RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply, Request, Server,
+    REGISTER_READY, RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply, Request,
+    SEAL_MEMBERSHIP, Server,
     participants::{ExecutorId, ProcessIdentity},
 };
 use std::{
@@ -308,6 +309,7 @@ fn publishes_capture_bytes(op: u32) -> bool {
             | GROUP_COMMIT
             | CLAIM
             | COMMIT
+            | SEAL_MEMBERSHIP
     )
 }
 
@@ -468,6 +470,9 @@ impl Server {
             .map_err(|error| match error {
                 super::participants::Error::Duplicate => "this process identity is already a member",
                 super::participants::Error::Conflict => "registration conflicts with the sealed capture",
+                super::participants::Error::Sealed => {
+                    "membership was already sealed: this process was not frozen by the capture"
+                }
             })?;
         connection.registered = Some(generation);
         Ok(member.0)

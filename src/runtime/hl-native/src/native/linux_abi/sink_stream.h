@@ -66,6 +66,18 @@ static int ckpt_stream_participant_registered(long long host_pid) {
     return reply.value != 0 ? 1 : 0;
 }
 
+// Close this capture's membership and read back the exact number of processes that proved it. Returns 0
+// with *count set, or -1 when the broker could not answer -- and an unanswered seal must refuse the
+// capture, because the alternative is publishing a manifest whose expected process set nobody fixed.
+static int ckpt_stream_seal_membership(uint64_t *count) {
+    hl_ckpt_reply reply;
+    if (count == NULL) return -1;
+    if (ckpt_stream_call(HL_CKPT_OP_SEAL_MEMBERSHIP, NULL, 0, 0, 0, NULL, 0, &reply, NULL, 0) != HL_CKPT_STATUS_OK)
+        return -1;
+    *count = reply.value;
+    return 0;
+}
+
 static int ckpt_stream_recovery_complete(void) {
     return ckpt_stream_call(HL_CKPT_OP_RECOVERY_COMPLETE, NULL, 0, 0, 0, NULL, 0, NULL, NULL, 0) ==
                    HL_CKPT_STATUS_OK
