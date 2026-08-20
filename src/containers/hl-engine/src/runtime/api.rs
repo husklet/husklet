@@ -19,6 +19,8 @@ pub use member::{MemberExit, RestoredMember};
 
 #[cfg(unix)]
 mod terminal;
+#[cfg(unix)]
+pub use terminal::MemberTerminal;
 
 use crate::activation::GuestIsa;
 use crate::composition::{CompositionError, EngineBackend, RuntimeServices};
@@ -289,6 +291,23 @@ impl Engine {
     #[must_use]
     pub fn restored_member(&self, guest_pid: std::num::NonZeroI32) -> Option<crate::runtime::RestoredMember> {
         self.backend.restored_member(guest_pid)
+    }
+    /// Registers the terminal one sealed member will reattach to when this engine restores it.
+    ///
+    /// The producer of a restored member's I/O is necessarily the host, and necessarily earlier than any
+    /// attachment: the member asks for its terminal during its own descriptor restore, long before a pane
+    /// exists to ask on its behalf. So this must be called before [`Self::start`], once per member whose
+    /// session the host intends to be able to reattach.
+    ///
+    /// # Errors
+    /// Returns [`EngineError::Unsupported`] when this engine coordinates no checkpoint.
+    #[cfg(unix)]
+    pub fn provide_member_terminal(
+        &self,
+        guest_pid: std::num::NonZeroI32,
+        terminal: std::os::fd::OwnedFd,
+    ) -> Result<(), EngineError> {
+        self.backend.provide_member_terminal(guest_pid, terminal)
     }
     pub fn capture_checkpoint(&self) -> Result<(), EngineError> {
         self.backend.capture_checkpoint()

@@ -1,7 +1,7 @@
 use super::{
-    BTreeMap, COMMIT, CaptureFailure, CapturePhase, DIGEST, HASH_BASIS, HASH_PRIME, MEMBER_RESTORED, MutationAdmission,
-    OBJECT_ABORT, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, Object, Ordering,
-    RECOVERY_COMPLETE, Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, Server,
+    BTreeMap, COMMIT, CaptureFailure, CapturePhase, DIGEST, HASH_BASIS, HASH_PRIME, MEMBER_RESTORED, MEMBER_STDIO,
+    MutationAdmission, OBJECT_ABORT, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, Object,
+    Ordering, RECOVERY_COMPLETE, Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE, Server,
 };
 
 impl Server {
@@ -257,6 +257,10 @@ impl Server {
                     && (matches!(request.op, SOURCE_LIST | SOURCE_SIZE | SOURCE_READ | DIGEST)
                         || request.op == RECOVERY_COMPLETE
                         || request.op == MEMBER_RESTORED
+                        // The terminal request runs EARLIER than the announcement, inside the member's
+                        // descriptor restore, and is admitted on the same terms: only a running restore
+                        // may claim a member's pre-created terminal.
+                        || request.op == MEMBER_STDIO
                         || self.recovery_object_request(connection, request, name))
             }
             CapturePhase::Complete | CapturePhase::Aborting { .. } | CapturePhase::RecoveryFinished { .. } => false,

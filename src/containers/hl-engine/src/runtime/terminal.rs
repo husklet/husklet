@@ -264,7 +264,10 @@ impl TerminalAttachment for NativeTerminalControl {
 }
 
 pub(super) struct NativeTerminalBridge {
-    slave: OwnedFd,
+    /// `None` once the slave has been taken for a restored member: that member's engine process receives
+    /// the descriptor over `SCM_RIGHTS` and owns it from then on, and the host keeping a second copy would
+    /// hold the master open past the member's exit and turn an end-of-file into a hang.
+    slave: Option<OwnedFd>,
     monitor: File,
     stop: Arc<AtomicBool>,
     in_flight: Arc<Mutex<usize>>,
@@ -301,7 +304,7 @@ impl NativeTerminalBridge {
             }
         };
         Ok(Self {
-            slave,
+            slave: Some(slave),
             monitor,
             stop,
             in_flight,
@@ -312,7 +315,16 @@ impl NativeTerminalBridge {
     }
 
     pub(super) fn standard_fds(&self) -> [i32; 3] {
-        [self.slave.as_raw_fd(); 3]
+        [self.slave.as_ref().expect("engine-bound terminal slave").as_raw_fd(); 3]
+    }
+
+    /// Takes the slave end, transferring it to the caller.
+    ///
+    /// Used for a restored member's terminal, whose slave is handed to the member's own process rather
+    /// than bound as this engine's standard descriptors. A bridge whose slave has been taken must not be
+    /// asked for [`Self::standard_fds`].
+    pub(super) fn take_slave(&mut self) -> Option<OwnedFd> {
+        self.slave.take()
     }
 
     pub(super) fn flush(&self) {
@@ -849,5 +861,51 @@ mod tests {
         completed
             .recv_timeout(Duration::from_secs(1))
             .expect("PTY bridge drop remained blocked behind a full master buffer");
+    }
+}
+
+/// The terminal one restored member reattaches to.
+///
+/// A whole-image restore rebinds every member's captured guest fds 0..2 to a live terminal, and until a
+/// per-member terminal existed that could only be the restoring engine's own bridge -- one bridge for a
+/// tree of many. This is the producer for a single member: an ordinary pty whose master end this host
+/// pumps to and from the port it was built with, and whose slave end is handed to the member's process
+/// during its descriptor restore.
+///
+/// It must be created BEFORE the container starts, because the member asks for it from inside that
+/// restore, long before any pane exists to ask on its behalf.
+#[cfg(unix)]
+pub struct MemberTerminal {
+    bridge: NativeTerminalBridge,
+    terminal: Arc<Terminal>,
+}
+
+#[cfg(unix)]
+impl MemberTerminal {
+    /// Opens the pty and starts its pumps, yielding the slave end to register with the engine.
+    ///
+    /// The slave is returned rather than retained: the member owns it once the engine hands it over, and a
+    /// copy kept here would hold the master open past the member's exit, turning an end-of-file into a
+    /// hang for whoever is reading the session.
+    ///
+    /// # Errors
+    /// Returns [`CompositionError::RuntimeConstruction`] when the pty or its pumps cannot be created.
+    pub fn open(terminal: Arc<Terminal>) -> Result<(Self, OwnedFd), CompositionError> {
+        let mut bridge = NativeTerminalBridge::attach(Arc::clone(&terminal))?;
+        let slave = bridge.take_slave().ok_or(CompositionError::RuntimeConstruction)?;
+        Ok((Self { bridge, terminal }, slave))
+    }
+
+    /// Resizes this member's terminal, never its container's.
+    ///
+    /// # Errors
+    /// Returns [`CompositionError`] when the size is empty or the pty refuses the change.
+    pub fn resize(&self, rows: u16, columns: u16) -> Result<(), CompositionError> {
+        self.terminal.resize(rows, columns)
+    }
+
+    /// Waits for output already produced to reach the port, as the engine's own bridge does at exit.
+    pub fn flush(&self) {
+        self.bridge.flush();
     }
 }

@@ -1,6 +1,6 @@
 use super::{
     CAPTURE_REFUSED, CLAIM, COMMIT, CaptureFailure, CapturePhase, GROUP_BEGIN, GROUP_COMMIT, MEMBER_EXITED,
-    MEMBER_RESTORED, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, REGISTER_READY,
+    MEMBER_RESTORED, MEMBER_STDIO, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, REGISTER_READY,
     RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply, Request, Server,
     participants::{ExecutorId, ProcessIdentity},
 };
@@ -224,6 +224,28 @@ impl Server {
                 let _ = reply.write(&mut channel);
                 continue;
             }
+            if request.op == MEMBER_STDIO {
+                // The member is asking, from inside its own descriptor restore, for the terminal the host
+                // created for it before starting this restore. Scope-checked exactly like the announcement
+                // that follows it: only a running restore may claim a member's terminal.
+                //
+                // A member with no registration is answered OK and no descriptor. That is not a failure --
+                // it is every member the host did not seal an interactive session for -- and it leaves the
+                // restore with the descriptors it would have had anyway.
+                let terminal = self
+                    .request_in_scope(connection.id, &request, &name)
+                    .then(|| self.member_terminal(&payload))
+                    .flatten();
+                let header = Reply::ok().header();
+                let sent = match terminal {
+                    Some(terminal) => super::member_stdio::send_with_descriptor(channel, &header, terminal.as_raw_fd()),
+                    None => Reply::ok().write(&mut channel),
+                };
+                if sent.is_err() {
+                    return;
+                }
+                continue;
+            }
             if request.op == MEMBER_EXITED {
                 // Answered without a membership or scope check for the same reason RELEASE_WAIT is:
                 // the sender proved which member it is when it announced itself, and it is reporting
@@ -386,6 +408,21 @@ impl Server {
             .try_clone()
             .map_err(|_| "cannot retain the authenticated peer capability")?;
         self.members.announce(connection.id, guest_pid, peer.host_pid, process)
+    }
+
+    /// The terminal registered for the member this request names, if the host registered one.
+    ///
+    /// The guest pid is read from the request rather than from the connection because this arrives BEFORE
+    /// `MEMBER_RESTORED`: the descriptor restore runs before the identity is hydrated, so the connection is
+    /// authenticated but not yet attributed to a member. The registry is what bounds the answer -- a pid the
+    /// host never registered a terminal for reads `None`, so a member cannot name its way to another
+    /// session's terminal.
+    fn member_terminal(&self, payload: &[u8]) -> Option<std::os::fd::OwnedFd> {
+        if payload.len() != 8 || payload[4..8] != [0; 4] {
+            return None;
+        }
+        let guest_pid = i32::from_ne_bytes(payload[0..4].try_into().ok()?);
+        self.member_terminals.take(std::num::NonZeroI32::new(guest_pid)?)
     }
 
     fn register_ready_reason(

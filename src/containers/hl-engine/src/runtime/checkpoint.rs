@@ -17,6 +17,7 @@ use std::{
 
 pub mod authority;
 mod broker;
+pub(super) mod member_stdio;
 pub(super) mod members;
 mod participants;
 #[path = "checkpoint_protocol.rs"]
@@ -31,10 +32,10 @@ mod transaction;
 use participants::ParticipantLedger;
 use protocol::{
     CAPTURE_REFUSED, CLAIM, COMMIT, DIGEST, GROUP_ABORT, GROUP_BEGIN, GROUP_COMMIT, GROUP_COUNT, GROUP_PRESENT,
-    MEMBER_EXITED, MEMBER_RESTORED, OBJECT_ABORT, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE,
-    OBJECT_WRITE_AT, PARTICIPANT_REGISTERED, PAYLOAD_MAX, RECOVERY_COMPLETE, REGISTER_READY, RELEASE_EXIT,
-    RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply, Request, SOURCE_LIST, SOURCE_READ, SOURCE_SIZE,
-    STATUS_ALREADY, UNCLAIM,
+    MEMBER_EXITED, MEMBER_RESTORED, MEMBER_STDIO, OBJECT_ABORT, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL,
+    OBJECT_WRITE, OBJECT_WRITE_AT, PARTICIPANT_REGISTERED, PAYLOAD_MAX, RECOVERY_COMPLETE, REGISTER_READY,
+    RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply, Request, SOURCE_LIST,
+    SOURCE_READ, SOURCE_SIZE, STATUS_ALREADY, UNCLAIM,
 };
 
 const HASH_BASIS: u64 = 14_695_981_039_346_656_037;
@@ -145,6 +146,10 @@ pub(crate) struct Server {
     /// names each of them by. Outlives the recovery scope: recovery ends exactly when the tree starts
     /// running, which is when a host begins needing to reach into it.
     members: Arc<members::RestoredMembers>,
+    /// The terminal the host pre-created for each member it is about to revive, keyed on the same guest
+    /// pid. Registered before the restore starts, because a member asks for it from inside its own
+    /// descriptor restore.
+    member_terminals: Arc<member_stdio::MemberTerminals>,
     participants: Mutex<Option<ParticipantLedger>>,
     /// Why the engine refused the last capture, in its own words.
     ///
@@ -179,6 +184,7 @@ impl Server {
             channels: Mutex::new(HashMap::new()),
             recovery_connections: Mutex::new(HashMap::new()),
             members: Arc::new(members::RestoredMembers::default()),
+            member_terminals: Arc::new(member_stdio::MemberTerminals::default()),
             participants: Mutex::new(None),
             refusal: Mutex::new(None),
             committed: AtomicBool::new(false),
@@ -213,6 +219,19 @@ impl Server {
     #[must_use]
     pub(crate) fn restored_member(&self, guest_pid: std::num::NonZeroI32) -> Option<Arc<members::RestoredMember>> {
         self.members.get(guest_pid)
+    }
+
+    /// Registers the terminal one sealed member will reattach to when the restore revives it.
+    ///
+    /// Must be called before the restore starts. The member asks for this from inside its descriptor
+    /// restore, which is the first thing that runs after its memory is back, and an unanswered member
+    /// keeps the container's single bridge for the rest of its life.
+    pub(crate) fn register_member_terminal(
+        &self,
+        guest_pid: std::num::NonZeroI32,
+        terminal: std::os::fd::OwnedFd,
+    ) -> Result<(), &'static str> {
+        self.member_terminals.register(guest_pid, terminal)
     }
 
     /// Blocks until at least `count` checkpoint channels have ever been accepted.
@@ -275,6 +294,9 @@ impl Server {
         // The announced members are the processes this capture is about to freeze and retire. Holding
         // them past it would hand a caller a capability on a process the image has replaced.
         self.members.clear();
+        // Same reasoning for the terminals: an unclaimed registration names a member of the tree this
+        // capture is sealing, and the next restore registers its own.
+        self.member_terminals.clear();
         capture.phase = CapturePhase::Active { id, deadline };
         capture.mutations = 0;
         capture.recovery_report_published = false;

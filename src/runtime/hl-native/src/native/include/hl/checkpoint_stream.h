@@ -106,7 +106,19 @@ typedef enum hl_ckpt_stream_op {
        byte-publishing op from a connection that has not registered, so "never registered" is exactly
        "contributed no bytes to this image". Any status other than OK means the answer is unknown, and
        an unknown answer is treated as "registered" -- the coordinator never drops a member on a guess. */
-    HL_CKPT_OP_PARTICIPANT_REGISTERED = 25
+    HL_CKPT_OP_PARTICIPANT_REGISTERED = 25,
+    /* A restoring process asks for the terminal its captured session was attached to. Sent from inside
+       the descriptor restore, which runs BEFORE the identity is hydrated and therefore before
+       MEMBER_RESTORED can announce anything, so this request carries the guest pid itself:
+       payload is [u32 guest pid][u32 zero]. The reply carries ONE descriptor over SCM_RIGHTS -- the
+       slave end of a pty the host created for exactly this member before it started the restore -- and
+       the member duplicates it onto guest fds 0, 1 and 2.
+
+       Answered with a descriptor only for a guest pid the host pre-registered a terminal for. Every other
+       member gets an ordinary OK carrying no descriptor and keeps the container's own bridge: a member
+       whose stdio the host cannot produce must inherit the previous behaviour, never a descriptor
+       belonging to a different session. */
+    HL_CKPT_OP_MEMBER_STDIO = 26
 } hl_ckpt_stream_op;
 
 #define HL_CKPT_MEMBER_EXIT_CODE UINT32_C(1)

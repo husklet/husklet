@@ -39,6 +39,7 @@
 #define hl_ckpt_channel_authenticate_peer HL_TARGET_LOCAL(ckpt_channel_authenticate_peer)
 #define hl_ckpt_channel_test_claimed_pid HL_TARGET_LOCAL(ckpt_channel_test_claimed_pid)
 #define hl_ckpt_channel_call HL_TARGET_LOCAL(ckpt_channel_call)
+#define hl_ckpt_channel_call_receive_descriptor HL_TARGET_LOCAL(ckpt_channel_call_receive_descriptor)
 #define hl_ckpt_channel_broker HL_TARGET_LOCAL(ckpt_channel_broker)
 #define hl_ckpt_channel_publish HL_TARGET_LOCAL(ckpt_channel_publish)
 #define hl_ckpt_trigger_descriptor HL_TARGET_LOCAL(ckpt_trigger_descriptor)
