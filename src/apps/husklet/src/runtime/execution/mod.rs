@@ -151,37 +151,41 @@ pub fn launch(
     let previous = pane.as_ref().map(PaneExecution::id).transpose()?.flatten();
     let mut restored_running = false;
     let mut restoring = false;
-    let mut execution = if let Some(id) = previous {
-        match runtime.block_on(client.executions().inspect(&id)) {
-            Ok(inspection) => {
-                match PersistedAction::for_running(inspection.running) {
-                    PersistedAction::Attach => restored_running = true,
-                    PersistedAction::Restore => restoring = true,
-                }
-                id
-            }
-            Err(hl_client::Error::Docker { status, .. }) if status.as_u16() == 404 => {
-                if let Some(pane) = &pane {
-                    let _ = pane.clear(&id);
-                }
-                let created = runtime
-                    .block_on(client.executions().create("workspace", &config))
-                    .map_err(LauncherError::io)?;
-                if let Some(pane) = &pane {
-                    pane.save(&created.id)?;
-                }
-                created.id
-            }
+    // What the workspace still has of what this pane remembered. `Some(running)` is the record; `None`
+    // is a 404, which for a remembered id always means something the pane had is gone.
+    let remembered = match &previous {
+        Some(id) => match runtime.block_on(client.executions().inspect(id)) {
+            Ok(inspection) => Some(Some(inspection.running)),
+            Err(hl_client::Error::Docker { status, .. }) if status.as_u16() == 404 => Some(None),
             Err(error) => return Err(LauncherError::io(error)),
+        },
+        None => None,
+    };
+    let mut execution = match PaneStart::resolve(previous.as_deref(), remembered.flatten()) {
+        PaneStart::Remembered(action, id) => {
+            match action {
+                PersistedAction::Attach => restored_running = true,
+                PersistedAction::Restore => restoring = true,
+            }
+            id
         }
-    } else {
-        let created = runtime
-            .block_on(client.executions().create("workspace", &config))
-            .map_err(LauncherError::io)?;
-        if let Some(pane) = &pane {
-            pane.save(&created.id)?;
+        start @ (PaneStart::Fresh | PaneStart::Replaced(_)) => {
+            // A replacement must announce itself before the shell that replaces it is seated. Opening
+            // a shell is the only way to leave the reader a usable terminal, but a fresh prompt painted
+            // over replayed scrollback with no word about the command that was running is
+            // indistinguishable from the session having survived.
+            restore_failure = start.notice();
+            if let (Some(pane), Some(id)) = (&pane, &previous) {
+                let _ = pane.clear(id);
+            }
+            let created = runtime
+                .block_on(client.executions().create("workspace", &config))
+                .map_err(LauncherError::io)?;
+            if let Some(pane) = &pane {
+                pane.save(&created.id)?;
+            }
+            created.id
         }
-        created.id
     };
     let mut attached = None;
     if restored_running {
@@ -254,9 +258,9 @@ pub fn launch(
                         session
                     } else {
                         execution = created.id;
-                        restore_failure = Some(format!(
-                            "workspace restore incomplete: terminal {slot:?} could not resume its running command: {error}; opened a new shell\r\n"
-                        ));
+                        restore_failure = Some(notice_line(&format!(
+                            "Terminal {slot:?} could not resume its running command ({error}). This is a new shell."
+                        )));
                         runtime
                             .block_on(client.executions().start(&execution, &start))
                             .map_err(LauncherError::io)?
@@ -432,6 +436,57 @@ impl WorkspaceContainer {
     }
 }
 
+/// One line of Husklet's own words for the pane, carrying the prefix that attributes it to Husklet and
+/// keeps it out of the scrollback a later restore replays.
+///
+/// Without the prefix the line is ordinary output: the terminal persists it, the next restore replays
+/// it as history, and a reader is told about a loss that happened one session ago as though it had just
+/// happened now.
+fn notice_line(message: &str) -> String {
+    format!("{}{message}\r\n", crate::runtime::domain::RESTORE_NOTICE_PREFIX)
+}
+
+/// Where a pane starts, decided from what it remembered and what the workspace still has of it.
+///
+/// The distinction the reader depends on is between the last two: a pane that remembered NOTHING is
+/// being opened fresh and owes no explanation, because no command was lost -- none was ever running
+/// here. A pane that remembered an id and cannot find it HAS lost something, whatever the reason and
+/// whether or not anything else reported it, and seating a new shell in its place without a word is
+/// the one response that misrepresents what happened. Both paths open a shell; only one is honest in
+/// silence, and the pane can always tell them apart, because it either saved an id or it did not.
+#[derive(Debug, Eq, PartialEq)]
+enum PaneStart {
+    /// No id was remembered. Nothing to resume and nothing to report.
+    Fresh,
+    /// The remembered execution is still known to the workspace.
+    Remembered(PersistedAction, String),
+    /// The remembered execution is gone. The words the replacement owes its reader.
+    Replaced(String),
+}
+
+impl PaneStart {
+    /// `previous` is the id this pane saved, and `running` the state of that record -- or `None` when
+    /// the workspace no longer has the record at all. A pane that saved no id cannot have lost one,
+    /// which is the whole distinction.
+    fn resolve(previous: Option<&str>, running: Option<bool>) -> Self {
+        match (previous, running) {
+            (Some(id), Some(running)) => Self::Remembered(PersistedAction::for_running(running), id.to_owned()),
+            (Some(id), None) => Self::Replaced(notice_line(&format!(
+                "The program this terminal was running is gone: its session {id} no longer exists in \
+                 this workspace. This is a new shell, and it has no memory of what was running here."
+            ))),
+            (None, _) => Self::Fresh,
+        }
+    }
+
+    fn notice(self) -> Option<String> {
+        match self {
+            Self::Replaced(notice) => Some(notice),
+            Self::Fresh | Self::Remembered(..) => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod pane_execution_tests {
     use super::{terminal_identity, PaneExecution, PersistedAction};
@@ -456,6 +511,54 @@ mod pane_execution_tests {
             PersistedAction::Restore
         );
         assert_eq!(PersistedAction::after_failed_attach(None), PersistedAction::Restore);
+    }
+
+    /// A pane that replaces a remembered execution must say so, and must say it in Husklet's own voice.
+    ///
+    /// The lie this prevents is specific: the workspace restores, the scrollback is replayed, a new
+    /// shell is seated at the bottom of it, and the reader sees their own prompt exactly where they left
+    /// it -- with no indication that the `sleep 10000` they started is gone. Silence there is not a
+    /// missing nicety; it is the product asserting that nothing was lost.
+    #[test]
+    fn replacing_a_remembered_execution_tells_the_reader_it_is_a_new_shell() {
+        let start = super::PaneStart::resolve(Some("exec-42"), None);
+        let notice = start.notice().expect("a replaced pane owes its reader an explanation");
+
+        assert!(
+            notice.starts_with(crate::runtime::domain::RESTORE_NOTICE_PREFIX),
+            "a replacement notice must be attributed to Husklet so the terminal keeps it out of \
+             persisted scrollback and never replays it as the reader's own output: {notice:?}"
+        );
+        assert!(
+            notice.contains("exec-42"),
+            "the notice must name the session that was lost: {notice:?}"
+        );
+        assert!(
+            notice.contains("new shell"),
+            "the notice must say the shell in front of the reader is not the one they left: {notice:?}"
+        );
+        assert!(
+            notice.ends_with("\r\n"),
+            "a pane notice terminates a terminal line: {notice:?}"
+        );
+        assert_eq!(
+            super::PaneStart::resolve(None, None).notice(),
+            None,
+            "a pane opening fresh lost nothing and must not claim it did"
+        );
+        assert_eq!(
+            super::PaneStart::resolve(Some("exec-42"), Some(true)).notice(),
+            None,
+            "a pane whose remembered execution is still there is resuming, not replacing"
+        );
+        assert_eq!(
+            super::PaneStart::resolve(Some("exec-42"), Some(true)),
+            super::PaneStart::Remembered(super::PersistedAction::Attach, "exec-42".to_owned())
+        );
+        assert_eq!(
+            super::PaneStart::resolve(Some("exec-42"), Some(false)),
+            super::PaneStart::Remembered(super::PersistedAction::Restore, "exec-42".to_owned())
+        );
     }
 
     #[test]
