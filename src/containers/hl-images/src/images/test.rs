@@ -211,6 +211,48 @@ fn config_platform_must_match_the_selected_guest() {
 }
 
 #[test]
+fn platform_refusal_names_the_requested_platform_before_the_image_s_own() {
+    let config: ConfigDocument = serde_json::from_value(serde_json::json!({
+        "architecture": "amd64",
+        "os": "linux",
+        "rootfs": { "type": "layers", "diff_ids": [] }
+    }))
+    .unwrap();
+    // The requested platform comes first, because a single-platform image refused for a daemon on
+    // another architecture used to report only the image's own -- `no manifest for platform
+    // linux/amd64` for an amd64 image, which reads as though amd64 were the platform missing.
+    assert_eq!(
+        config
+            .require_platform(&Platform::linux_arm64())
+            .unwrap_err()
+            .to_string(),
+        "no manifest for platform linux/arm64; the image is linux/amd64"
+    );
+    let index: IndexDocument = serde_json::from_value(serde_json::json!({
+        "schemaVersion": 2,
+        "manifests": [{
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "digest": format!("sha256:{}", "1".repeat(64)),
+            "size": 1,
+            "platform": {"os": "linux", "architecture": "arm64"}
+        }]
+    }))
+    .unwrap();
+    // An index carries many platforms, so there is no single "the image is" to name.
+    assert_eq!(
+        index.select_platform(&Platform::linux_amd64()).unwrap_err().to_string(),
+        "no manifest for platform linux/amd64"
+    );
+    assert_eq!(
+        index
+            .select_platform(&Platform::new("linux", "riscv64", Some("v1".into())))
+            .unwrap_err()
+            .to_string(),
+        "no manifest for platform linux/riscv64/v1"
+    );
+}
+
+#[test]
 fn platform_selection_honors_requested_variant() {
     let index: IndexDocument = serde_json::from_value(serde_json::json!({
         "schemaVersion": 2,

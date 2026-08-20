@@ -53,7 +53,7 @@ async fn observability_client_reports_a_live_process_and_resource_sample() {
     )
     .unwrap();
     let socket = root.path().join("live-observe.sock");
-    let daemon = TestDaemon::start(containers, &socket).await;
+    let daemon = TestDaemon::start_runnable(containers, &socket).await;
     let client = &daemon.client;
     let created = client
         .containers()

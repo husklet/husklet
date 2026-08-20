@@ -220,9 +220,8 @@ fn summaries_skip_other_platforms_without_hiding_identity_failures() {
         |target| {
             if target.digest().to_string().ends_with('2') {
                 return Err(hl_images::Error::UnsupportedPlatform {
-                    os: "linux".into(),
-                    architecture: "amd64".into(),
-                    variant: String::new(),
+                    requested: hl_images::Platform::linux_amd64(),
+                    available: None,
                 });
             }
             Ok(target.digest().to_string())
@@ -230,9 +229,8 @@ fn summaries_skip_other_platforms_without_hiding_identity_failures() {
         |target| {
             if target.digest().to_string().ends_with('3') {
                 return Err(hl_images::Error::UnsupportedPlatform {
-                    os: "linux".into(),
-                    architecture: "amd64".into(),
-                    variant: String::new(),
+                    requested: hl_images::Platform::linux_amd64(),
+                    available: None,
                 });
             }
             Ok(BTreeMap::new())

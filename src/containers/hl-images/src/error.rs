@@ -29,11 +29,27 @@ pub enum Error {
     /// wrong. Construct with [`Error::registry`], which bounds it.
     #[error("registry operation failed: {message}{}", body.as_ref().map_or_else(String::new, |body| format!("; registry said: {body}")))]
     Registry { message: String, body: Option<String> },
-    #[error("no manifest for platform {os}/{architecture}{variant}")]
+    /// No manifest in an image satisfies the requested platform.
+    ///
+    /// `requested` is what the caller asked for. `available` names what the image carries instead,
+    /// and is present only where the image names exactly one platform -- a Docker save archive or a
+    /// bare OCI manifest -- because an index that simply has no matching entry has no single answer
+    /// to give.
+    ///
+    /// Both halves are load-bearing. This variant used to be constructed from the *image's* platform
+    /// at the single-platform site and from the *requested* platform at the index site, so the same
+    /// sentence meant opposite things depending on which one produced it. An amd64-only fixture
+    /// refused for an arm64 daemon reported `no manifest for platform linux/amd64`, which reads as
+    /// the exact opposite of what happened and cost a lane an investigation into a missing amd64
+    /// manifest that was never missing.
+    ///
+    /// `available` is boxed because a bare `Option<Platform>` makes this the largest variant in the
+    /// enum at 144 bytes, which is over `clippy::result_large_err`'s threshold and would widen every
+    /// `Result` in the crate to carry it.
+    #[error("no manifest for platform {requested}{}", available.as_ref().map_or_else(String::new, |available| format!("; the image is {available}")))]
     UnsupportedPlatform {
-        os: String,
-        architecture: String,
-        variant: String,
+        requested: crate::Platform,
+        available: Option<Box<crate::Platform>>,
     },
     #[error("malformed OCI document: {0}")]
     MalformedOci(String),

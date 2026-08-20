@@ -38,8 +38,17 @@ pub(super) struct TestDaemon {
 
 impl TestDaemon {
     pub(super) async fn start(containers: Containers, socket: &std::path::Path) -> Self {
+        Self::serve(Daemon::new(containers), socket).await
+    }
+
+    /// Serve images produced by [`runnable_archive`], on the platform their layer is built for.
+    pub(super) async fn start_runnable(containers: Containers, socket: &std::path::Path) -> Self {
+        Self::serve(runnable_daemon(containers), socket).await
+    }
+
+    async fn serve(daemon: Daemon, socket: &std::path::Path) -> Self {
         let (stop, stopped) = oneshot::channel();
-        let task = tokio::spawn(Daemon::new(containers).server(socket).serve_with_shutdown(async move {
+        let task = tokio::spawn(daemon.server(socket).serve_with_shutdown(async move {
             let _ = stopped.await;
         }));
         wait_for_socket(socket).await;
@@ -140,6 +149,38 @@ pub(super) fn dockerfile_context(source: &[u8]) -> Vec<u8> {
     context
 }
 
+/// The platform the executable fixtures are built for.
+///
+/// [`runnable_archive`] wraps the pinned Alpine minirootfs named by `HL_ALPINE_ARCHIVE`, whose
+/// binaries exist for exactly one architecture, so the image configuration, the daemon that
+/// resolves it and the guest that executes it must all name that one. The archive is selected by
+/// `flake.nix` from the host system, and [`Daemon::new`] defaults to `linux/arm64` on every host,
+/// so the two agreed silently while development happened on an arm64 Mac and disagree here. Naming
+/// the platform once and configuring the daemon from it is what keeps them together.
+///
+/// # Panics
+/// Panics when `HL_ALPINE_ARCHIVE` is unset or does not name a recognised architecture. Guessing an
+/// architecture from an unrecognised name is what produced an arm64-only corpus in the first place:
+/// the previous form fell back to `arm64` for anything that did not spell `x86_64`.
+pub(super) fn runnable_platform() -> Platform {
+    let source = std::env::var_os("HL_ALPINE_ARCHIVE")
+        .map(std::path::PathBuf::from)
+        .expect("HL_ALPINE_ARCHIVE must name the pinned Alpine minirootfs");
+    let name = source.to_string_lossy().into_owned();
+    if name.contains("x86_64") || name.contains("amd64") {
+        Platform::linux_amd64()
+    } else if name.contains("aarch64") || name.contains("arm64") {
+        Platform::linux_arm64()
+    } else {
+        panic!("HL_ALPINE_ARCHIVE {name:?} does not name an architecture this corpus can execute");
+    }
+}
+
+/// A daemon that resolves and executes images produced by [`runnable_archive`].
+pub(super) fn runnable_daemon(containers: Containers) -> Daemon {
+    Daemon::new(containers).platform(runnable_platform())
+}
+
 pub(super) fn runnable_archive() -> Vec<u8> {
     let source = std::env::var_os("HL_ALPINE_ARCHIVE")
         .map(std::path::PathBuf::from)
@@ -149,13 +190,8 @@ pub(super) fn runnable_archive() -> Vec<u8> {
     flate2::read::GzDecoder::new(&compressed[..])
         .read_to_end(&mut layer)
         .unwrap();
-    let architecture = if source.to_string_lossy().contains("x86_64") {
-        "amd64"
-    } else {
-        "arm64"
-    };
     let config = serde_json::to_vec(&serde_json::json!({
-        "architecture": architecture,
+        "architecture": runnable_platform().architecture,
         "os": "linux",
         "config": {"Cmd": ["/bin/sh"], "WorkingDir": "/"},
         "rootfs": {
