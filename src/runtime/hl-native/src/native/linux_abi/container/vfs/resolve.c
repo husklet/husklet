@@ -462,6 +462,26 @@ static int jail_open_plan(int dirfd, const char *raw, uint32_t intent, uint32_t 
         while (*relative == '/')
             relative++;
         if (!*relative) relative = ".";
+#ifdef __APPLE__
+        /* The host resolver walks the guest's own spelling. On a case-folding volume that spelling
+         * can land on a differently-cased sibling, and it cannot see the escape form this namespace
+         * stores an uppercase name under -- a non-creating open of `Foo` returned `foo`'s contents
+         * whenever a raw `foo` existed. Projecting the path would not be enough either, because a
+         * symlink target spliced in mid-walk is a guest name too and is never projected. So take the
+         * collapse only where the physical spelling of the whole path IS the guest spelling;
+         * anywhere the namespace escapes or re-cases a component, the per-component native walk
+         * above already holds the correct answer and keeps it. An ordinary image tree is entirely in
+         * the first case. */
+        char case_absolute[8400], case_physical[8400];
+        const char *case_root =
+            volume >= 0 ? (g_vols[volume].isfile ? NULL : g_vols[volume].hcanon) : g_rootfs_canon;
+        if (strcmp(relative, ".") != 0 &&
+            (case_root == NULL || case_root[0] == 0 ||
+             snprintf(case_absolute, sizeof case_absolute, "/%s", relative) >= (int)sizeof case_absolute ||
+             hl_case_path(case_root, case_absolute, case_physical, sizeof case_physical) != 0 ||
+             strcmp(case_physical + 1, relative) != 0))
+            route_root = HL_HOST_HANDLE_INVALID;
+#endif
         if (route_root != HL_HOST_HANDLE_INVALID &&
             g_host_services->file
                     ->resolve_beneath(g_host_services->context, route_root, relative, strlen(relative), policy,
