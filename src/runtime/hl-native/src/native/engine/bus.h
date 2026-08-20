@@ -15,8 +15,11 @@ typedef struct hl_guest_bus {
     hl_guest_bus_query query;
     const hl_guest_bus_ops *ops;
     void *context;
-    _Atomic uint64_t generation;
-    _Atomic int enabled;
+    /* generation<<1 | active, advanced as one word: see hl_guest_bus_changed. */
+    _Atomic uint64_t state;
+    /* Set once the bus can no longer prove it is able to invalidate code
+       translated while disarmed; the bus then stays armed for good. */
+    _Atomic int latched;
 } hl_guest_bus;
 
 void hl_guest_bus_init(hl_guest_bus *, const hl_guest_bus_ops *, void *);
