@@ -42,11 +42,19 @@ static int hl_case_name_encode(const char *guest, char *physical, size_t capacit
     return 0;
 }
 
+// A name that MUST be escaped whatever the directory holds. Only one name is: a guest name already
+// spelled like an escape. Escaping it keeps the forward direction total, which is what makes
+// `hl_case_name_decode` unambiguous -- a physical entry is an engine escape exactly when it decodes.
+//
+// A name is NOT escaped merely for carrying an uppercase letter. That blanket rule stored every
+// `Makefile`, `README` and `Dockerfile` as a hex blob on the host even in an empty directory, so a
+// host process -- an editor, a backup, the other side of a bound volume -- saw a name the guest had
+// never chosen. Worse, it was data loss: the escape is `12 + 2n` bytes, so any legal Linux name
+// longer than 121 bytes was refused with ENAMETOOLONG for containing one capital, while the same
+// name in lowercase was created. Case collision is a property of the directory, so `hl_case_name`
+// and `hl_case_scan` ask the volume for it and escape only the component that actually collides.
 static int hl_case_name_requires_encoding(const char *name) {
-    if (strncmp(name, HL_CASE_NAME_PREFIX, sizeof(HL_CASE_NAME_PREFIX) - 1) == 0) return 1;
-    for (; *name; ++name)
-        if (*name >= 'A' && *name <= 'Z') return 1;
-    return 0;
+    return strncmp(name, HL_CASE_NAME_PREFIX, sizeof(HL_CASE_NAME_PREFIX) - 1) == 0;
 }
 
 static int hl_case_store(char *physical, size_t capacity, const char *name) {
