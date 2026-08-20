@@ -143,9 +143,8 @@ impl Builder {
             ("linux", "arm64") => Ok(Guest::Aarch64),
             ("linux", "amd64") => Ok(Guest::X86_64),
             _ => Err(hl_images::Error::UnsupportedPlatform {
-                os: self.platform.os.clone(),
-                architecture: self.platform.architecture.clone(),
-                variant: self.platform.variant.clone().unwrap_or_default(),
+                requested: self.platform.clone(),
+                available: None,
             }
             .into()),
         }

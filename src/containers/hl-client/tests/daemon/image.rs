@@ -339,7 +339,7 @@ async fn build_accepts_an_existing_named_network_and_rejects_a_missing_one() {
         .await
         .unwrap();
     let socket = root.path().join("run/docker.sock");
-    let daemon = TestDaemon::start(containers, &socket).await;
+    let daemon = TestDaemon::start_runnable(containers, &socket).await;
     let client = &daemon.client;
     let context = || {
         std::io::Cursor::new(dockerfile_context(

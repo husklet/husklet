@@ -187,9 +187,8 @@ impl Builder {
             .find(|platform| *platform != &self.platform)
         {
             return Err(hl_images::Error::UnsupportedPlatform {
-                os: requested.os.clone(),
-                architecture: requested.architecture.clone(),
-                variant: requested.variant.clone().unwrap_or_default(),
+                requested: requested.clone(),
+                available: Some(Box::new(self.platform.clone())),
             }
             .into());
         }

@@ -15,7 +15,7 @@ async fn container_inspect_size_accounts_executed_rootfs_writes() {
     let task = tokio::spawn({
         let socket = socket.clone();
         async move {
-            Daemon::new(containers)
+            runnable_daemon(containers)
                 .server(&socket)
                 .serve_with_shutdown(async {
                     let _ = stopped.await;
@@ -114,7 +114,7 @@ async fn image_list_shared_size_accounts_executed_child_layers() {
     let task = tokio::spawn({
         let socket = socket.clone();
         async move {
-            Daemon::new(containers)
+            runnable_daemon(containers)
                 .server(&socket)
                 .serve_with_shutdown(async {
                     let _ = stopped.await;
@@ -182,7 +182,7 @@ async fn explicit_rw_local_bind_volume_persists_executed_writes() {
     let task = tokio::spawn({
         let socket = socket.clone();
         async move {
-            Daemon::new(containers)
+            runnable_daemon(containers)
                 .server(&socket)
                 .serve_with_shutdown(async {
                     let _ = stopped.await;
@@ -251,7 +251,7 @@ async fn legacy_host_config_tmpfs_executes_and_is_reclaimed() {
     let task = tokio::spawn({
         let socket = socket.clone();
         async move {
-            Daemon::new(containers)
+            runnable_daemon(containers)
                 .server(&socket)
                 .serve_with_shutdown(async {
                     let _ = stopped.await;

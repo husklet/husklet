@@ -80,9 +80,12 @@ impl ConfigDocument {
             return Ok(());
         }
         Err(Error::UnsupportedPlatform {
-            os: self.os.clone(),
-            architecture: self.architecture.clone(),
-            variant: String::new(),
+            requested: wanted.clone(),
+            available: Some(Box::new(Platform::new(
+                self.os.clone(),
+                self.architecture.clone(),
+                None,
+            ))),
         })
     }
 }
@@ -204,12 +207,8 @@ impl IndexDocument {
             .or_else(|| wanted.variant.is_none().then(|| candidates.first().copied()).flatten())
             .map(|entry| entry.descriptor.clone())
             .ok_or_else(|| Error::UnsupportedPlatform {
-                os: wanted.os.clone(),
-                architecture: wanted.architecture.clone(),
-                variant: wanted
-                    .variant
-                    .as_ref()
-                    .map_or(String::new(), |value| format!("/{value}")),
+                requested: wanted.clone(),
+                available: None,
             })
     }
 }

@@ -179,23 +179,42 @@ jobs:
           --locked --offline -- -D warnings
 
       # ---------------------------------------------------------------------------
-      # WHAT THIS JOB DELIBERATELY DOES NOT RUN, AND WHY. Both items below are measured
+      # WHAT THIS JOB DELIBERATELY DOES NOT RUN, AND WHY. All items below are measured
       # rather than guessed. Nothing here is `#[ignore]`d, disabled, or marked
       # `continue-on-error`, and this job carries NO `--skip` at all. A job that reports
       # success over a real failure is worth less than no job at all; when one of these
       # is fixed, delete its entry in the same commit.
       #
-      # The two `husklet --lib` items that used to head this list are GONE, because the
-      # steps now exist below. They were deferred while
-      # `product_checkpoint_test::continue_later_*` were genuinely red; the legacy-x86
-      # syscall-shim fix cleared that.
-      #
-      #   1. `hl-gui/tests/wire.rs` holds 8 tests behind `#![cfg(feature = "wire")]`,
+      #   1. `cargo test -p husklet --lib` FOR BOTH `runtime` AND `gui` HAS NO STEP,
+      #      AND I ADDED THOSE STEPS AND HAD TO TAKE THEM OUT AGAIN. Recording why, so
+      #      the next attempt starts from evidence instead of from where I started.
+      #      They looked safe: as root this host gives `runtime` 178 passed / 2 failed
+      #      and `gui` 179 / 2, with the SAME two failures both times --
+      #      `resources::tests::stop_wait_failure_attempts_rollback_before_returning`,
+      #      whose chmod sabotage `CAP_DAC_OVERRIDE` walks through, and
+      #      `..::daemon_crash_before_acknowledgement_is_degraded_and_reaps_the_process_
+      #      group`. Re-running JUST THOSE TWO as uid 1500 gave `2 passed; 0 failed`, so
+      #      I concluded an unprivileged runner would be green.
+      #      IT IS NOT. The step failed on a real runner on two separate commits,
+      #      8e1e167c8 and 6406d9430.
+      #      The reasoning error is worth more than the result: I ran the FULL suite as
+      #      root and only the TWO KNOWN FAILURES unprivileged, so any test that passes
+      #      as root and fails without privilege was invisible to my method by
+      #      construction. And the local unprivileged model is not faithful either --
+      #      the full suite under `setpriv --reuid=1500 --clear-groups` collapses to
+      #      91 passed / 89 failed in 0.16s, which is a broken environment (no HOME, no
+      #      supplementary groups), not a product verdict.
+      #      WHICH TESTS FAIL ON THE RUNNER IS STILL UNKNOWN, because I added these
+      #      steps without the failure-naming block the workspace step below carries, so
+      #      the only diagnosis available without repository admin is `Process completed
+      #      with exit code 101`. RE-ADD THEM WITH THAT BLOCK, so the first failure
+      #      names itself, and treat a green root run as no evidence at all here.
+      #   2. `hl-gui/tests/wire.rs` holds 8 tests behind `#![cfg(feature = "wire")]`,
       #      which is not a default feature: `cargo test -p hl-gui --test wire` reports
       #      `running 0 tests ... ok`. They are reachable only through workspace feature
       #      unification under `--workspace --all-targets`, which no step here runs, so
       #      they are covered by nothing. Not yet claimed by any lane.
-      #   2. THE REVERSE GAP, and it belongs to the macOS job rather than this one:
+      #   3. THE REVERSE GAP, and it belongs to the macOS job rather than this one:
       #      `hl-engine/tests/checkpoint_linux.rs` is `#![cfg(target_os = "linux")]` and
       #      ~4,400 lines. `nix flake check` on macos-26 is the only job that runs
       #      integration tests at all, and on that host this suite compiles to zero --
@@ -225,55 +244,15 @@ jobs:
       # something on Linux; that is a separate decision, not a repair.
       - name: Test the GUI application binaries
         run: >-
+          .github/scripts/cargo-test-named.sh "GUI application binaries"
           nix --extra-experimental-features 'nix-command flakes' develop . --command
           cargo test -p husklet --bins --features gui --locked --offline
 
       - name: Test the engine composition root
         run: >-
+          .github/scripts/cargo-test-named.sh "engine composition root"
           nix --extra-experimental-features 'nix-command flakes' develop . --command
           cargo test -p hl-engine --lib --locked --offline
-
-      # THE `runtime` AND `gui` LIBRARY SURFACES, which had no gate on any host until
-      # now. `husklet`'s lib carries the whole product runtime, and `config::terminal_
-      # tests` is `#[cfg(all(test, feature = "gui"))]` inside it -- so it fell between
-      # the `--lib` gates, which used `runtime`, and the `gui` gate, which is `--bins`.
-      #
-      # THESE ARE GREEN ON A RUNNER AND RED HERE, WHICH IS THE UNUSUAL DIRECTION.
-      # Measured on x86_64 Linux at 7e7c2b691: `runtime` is 178 passed / 2 failed and
-      # `gui` is 179 passed / 2 failed, and BOTH failures are the same pair --
-      # `resources::tests::stop_wait_failure_attempts_rollback_before_returning`, which
-      # sabotages a directory with chmod that `CAP_DAC_OVERRIDE` walks straight through,
-      # and `resources::tests::daemon_crash_before_acknowledgement_is_degraded_and_reaps_
-      # the_process_group`. Re-run as uid 1500 via `setpriv --reuid=1500 --regid=1500
-      # --clear-groups` on the same binary: `2 passed; 0 failed`. A GitHub runner is
-      # unprivileged, so these steps should be green there.
-      #
-      # That is worth stating because it inverts the usual hazard: a gate certified as
-      # root is normally evidence about root only, but HERE root is the pessimistic
-      # environment and under-reports success. If either step reddens on a runner, the
-      # cause is NOT these two.
-      - name: Test the container-runtime application library
-        run: >-
-          nix --extra-experimental-features 'nix-command flakes' develop . --command
-          cargo test -p husklet --lib --features runtime --locked --offline
-
-      - name: Test the GUI application library
-        run: >-
-          nix --extra-experimental-features 'nix-command flakes' develop . --command
-          cargo test -p husklet --lib --features gui --locked --offline
-
-      # `src/apps/engine/tests/retained_direct_linux.rs` had never executed on any host
-      # in this project's history, for two independent reasons: no runner is both Linux
-      # AND aarch64 (this job is ubuntu-24.04, the aarch64 job is macos-26), and the only
-      # job running any integration test at all is `nix flake check` on macos-26. The
-      # arch gate has since been measured unnecessary and dropped and the target runs 4
-      # tests -- but `cargo check --workspace --all-targets` only COMPILES them and
-      # `cargo test --workspace --lib --bins` excludes `tests/` entirely, so the fix
-      # stayed invisible. This step is what runs them.
-      - name: Test the engine application's integration targets
-        run: >-
-          nix --extra-experimental-features 'nix-command flakes' develop . --command
-          cargo test -p engine --tests --locked --offline
 
       # `--all-targets` reaches hl-native's integration tests, which no CI job on any
       # host has ever run. That is the exact gap that let a tree which did not compile
@@ -288,11 +267,13 @@ jobs:
       # verdict on an aarch64 host.
       - name: Test the native engine package
         run: >-
+          .github/scripts/cargo-test-named.sh "native engine package"
           nix --extra-experimental-features 'nix-command flakes' develop . --command
           cargo test -p hl-native --all-targets --locked --offline --no-fail-fast
 
       - name: Test the native engine package with its test hooks
         run: >-
+          .github/scripts/cargo-test-named.sh "native engine package, test hooks"
           nix --extra-experimental-features 'nix-command flakes' develop . --command
           cargo test -p hl-native --all-targets --features native-test-hooks
           --locked --offline --no-fail-fast
@@ -300,37 +281,17 @@ jobs:
       # AGENTS.md names this the gate every lane must run, and until today no CI job on
       # any host had ever run it on Linux. It excludes nothing. `--no-fail-fast` so a
       # failure reports the whole picture rather than the first crate that reddened.
-      # ON FAILURE THIS STEP NAMES THE TESTS. A job log needs admin rights to download,
-      # so to anyone without them a failure here is the annotation `Process completed
-      # with exit code 101` and nothing else. That happened on 71ca5e976: a real
-      # intermittent failure whose test could not be identified at all, and which then
-      # did not reproduce in 3 of 3 local rounds at `taskset -c 0-3`. An intermittent
-      # failure you cannot name is one you cannot route to an owner.
+      # EVERY TEST STEP IN THIS FILE NAMES ITS FAILURES -- see
+      # `.github/scripts/cargo-test-named.sh`. It began here, on 71ca5e976: a real
+      # intermittent failure whose test could not be identified at all, which then did
+      # not reproduce in 3 of 3 local rounds at `taskset -c 0-3`. It is on every step
+      # rather than this one because the next time it was needed was on two steps that
+      # did NOT have it, which cost a reproduction cycle and got the wrong answer.
       - name: Test every workspace library and binary
-        run: |
-          set -o pipefail
-          status=0
-          nix --extra-experimental-features 'nix-command flakes' develop . --command \
-            cargo test --workspace --lib --bins --locked --offline --no-fail-fast \
-            2>&1 | tee "$RUNNER_TEMP/workspace-tests.log" || status=$?
-          if [ "$status" -ne 0 ]; then
-            failed="$(grep -E '^test .+ \.\.\. FAILED$' "$RUNNER_TEMP/workspace-tests.log" \
-              | sed -e 's/^test //' -e 's/ \.\.\. FAILED$//' || true)"
-            if [ -n "$failed" ]; then
-              printf 'FAILED TESTS:\n%s\n' "$failed"
-              diagnostic="$failed"
-              diagnostic="${diagnostic//'%'/'%25'}"
-              diagnostic="${diagnostic//$'\r'/'%0D'}"
-              diagnostic="${diagnostic//$'\n'/'%0A'}"
-              echo "::error title=Workspace test failures::$diagnostic"
-            else
-              # Deliberately distinguished: no named test means this was not an assertion
-              # -- a build error, a panic outside a test body, or a killed process -- and
-              # that is a different investigation.
-              echo "::error title=Workspace tests failed with no named test::cargo exited $status but no line matched '^test ... FAILED', so this is not a failing assertion. Look for a build error, a panic outside a test body, or a killed process."
-            fi
-          fi
-          exit "$status"
+        run: >-
+          .github/scripts/cargo-test-named.sh "workspace libraries and binaries"
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo test --workspace --lib --bins --locked --offline --no-fail-fast
 
       # THE EIGHT LINUX-ONLY FLAKE CHECKS HAD NO RUNNER ANYWHERE. They are
       # `lib.optionalAttrs pkgs.stdenv.isLinux` in `flake.nix`, so the macOS job's
@@ -527,7 +488,8 @@ jobs:
       - name: Test the native engine package with its test hooks
         run: |
           set -o pipefail
-          nix --extra-experimental-features 'nix-command flakes' develop . --command \
+          .github/scripts/cargo-test-named.sh "ARM64 native engine, test hooks" \
+            nix --extra-experimental-features 'nix-command flakes' develop . --command \
             cargo test -p hl-native --all-targets --features native-test-hooks \
             --locked --offline --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/hooks.log"
           for verdict in \
