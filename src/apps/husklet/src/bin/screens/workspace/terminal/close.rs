@@ -224,6 +224,43 @@ mod tests {
         }
     }
 
+    /// The Continue mirror of [`domain_error_still_reaps_the_exact_workspace_launcher`].
+    ///
+    /// A capture that reports failure is the observed production case -- `close.result` carrying
+    /// `runtime failed: ...` -- and the daemon stops on the shutdown request regardless of what the
+    /// capture reported. The launcher workers must therefore be reaped on this path too, and the
+    /// close must still surface the failure to the user.
+    #[cfg(unix)]
+    #[test]
+    fn continue_error_still_reaps_the_exact_workspace_launcher() {
+        let workspace = WorkspaceConfig::new(
+            format!("close-continue-error-reap-{}", std::process::id()),
+            "ubuntu",
+            hl_ws::Arch::Arm64,
+        );
+        let key = workspace.key();
+        let mut child = hup_resistant_launcher(&key);
+        let completed = result();
+        CloseRequest::spawn_close_with(workspace, CloseChoice::Continue, &completed, move |_, disposition| {
+            assert_eq!(disposition, hl::runtime::domain::Close::Continue);
+            Processes::close_workspace(&key)?;
+            Err(std::io::Error::other("runtime failed: capture timed out"))
+        });
+        assert_eq!(
+            wait(&completed).unwrap_err().to_string(),
+            "runtime failed: capture timed out"
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while child.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if child.try_wait().unwrap().is_none() {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("a failed continue stranded its HUP-resistant launcher");
+        }
+    }
+
     #[test]
     fn close_choices_map_to_their_domain_dispositions() {
         assert_eq!(

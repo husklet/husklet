@@ -228,7 +228,6 @@ impl Domain {
     pub fn close_handover(&self, choice: Close, close_attachments: impl FnOnce() -> io::Result<()>) -> io::Result<()> {
         std::fs::create_dir_all(&self.directory)?;
         Self::handover_with(
-            choice,
             || Lease::acquire_wait(&self.directory.join("startup.lock"), HANDOVER),
             || match std::os::unix::net::UnixStream::connect(self.socket()) {
                 Ok(connection) => match choice {
@@ -252,8 +251,16 @@ impl Domain {
         )
     }
 
+    /// Runs the close request, then reaps the owning attachments, then waits for the domain lease,
+    /// and reports the first failure among them.
+    ///
+    /// Every stage runs even when an earlier one fails, for both close choices. A `Continue` whose
+    /// checkpoint reports failure used to return before `close_attachments`, on the assumption that
+    /// a rejected capture leaves the domain intact. It does not: the daemon services a shutdown
+    /// request and stops regardless of what the capture reported -- observed on a user's machine as
+    /// `server stopping` 51 ms after a capture timeout -- so returning early stranded the pane
+    /// launcher workers on a domain that was already going away.
     fn handover_with<G>(
-        choice: Close,
         acquire_startup: impl FnOnce() -> io::Result<G>,
         request: impl FnOnce() -> io::Result<()>,
         close_attachments: impl FnOnce() -> io::Result<()>,
@@ -261,12 +268,6 @@ impl Domain {
     ) -> io::Result<()> {
         let _startup = acquire_startup()?;
         let request = request();
-        let request = if choice == Close::Continue {
-            request?;
-            Ok(())
-        } else {
-            request
-        };
         let attachments = close_attachments();
         let settled = wait_domain();
         request.and(attachments).and(settled)

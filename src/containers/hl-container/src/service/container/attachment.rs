@@ -166,19 +166,19 @@ impl Service {
             }
             let _ = completion.changed().await;
             return Err(Error::Runtime(
-                "timed out waiting for process output ownership to close".into(),
+                format!("timed out waiting for {id} process output ownership to close").into(),
             ));
         }
         if completion.has_changed().is_err() && !*completion.borrow() {
             return Err(Error::Runtime(
-                "process output owner exited without closing its generation".into(),
+                format!("{id} process output owner exited without closing its generation").into(),
             ));
         }
         if *completion.borrow() {
             Ok(())
         } else {
             Err(Error::Runtime(
-                "process output owner signalled completion without closing its generation".into(),
+                format!("{id} process output owner signalled completion without closing its generation").into(),
             ))
         }
     }

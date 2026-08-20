@@ -460,12 +460,16 @@ async fn checkpoint_all_aborts_a_wedged_output_owner_before_rollback() {
     let launches = runtime.programs.lock().unwrap().len();
 
     let error = containers.checkpoint_all(Duration::from_millis(10)).await.unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("timed out waiting for process output ownership")
-    );
+    // The failure names the journal it was waiting on: a capture waits on the container's own
+    // worker and on every sealed exec member, and an unattributed message cannot say which.
     let restored = containers.inspect("wedged-output-owner").await.unwrap();
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "runtime failed: timed out waiting for container {} process output ownership to close",
+            restored.id
+        )
+    );
     assert!(matches!(restored.state, ContainerState::Running { .. }));
     assert!(restored.checkpoint.is_none());
     assert_eq!(runtime.programs.lock().unwrap().len(), launches + 1);
@@ -1193,4 +1197,38 @@ async fn an_already_exited_container_answers_not_running_immediately_and_next_ex
         .await
         .is_err()
     );
+}
+
+/// A capture waits on the container's own output worker and then on every sealed exec member, and
+/// both waits raise the same class of failure. The message must name the journal that ran out of
+/// time: a user's `close.result` carrying an unattributed timeout cannot say whether the container
+/// or one of its exec sessions was the one that never released.
+#[tokio::test]
+async fn a_wedged_exec_member_names_itself_in_the_capture_timeout() {
+    let runtime = Arc::new(FakeRuntime::new(ExitStatus::Code(0)));
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("member-attribution")).await.unwrap();
+    containers.start("member-attribution").await.unwrap();
+    let (waiting, release) = runtime.delay_next_log(b"member-before\n", b"member-after\n");
+    let execution = containers
+        .executions()
+        .create("member-attribution", ExecSpec::new(Process::new("fake")))
+        .await
+        .unwrap();
+    let _session = containers.executions().start(&execution.id).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), waiting)
+        .await
+        .expect("exec member did not reach the injected wedge")
+        .unwrap();
+
+    let error = containers.checkpoint_all(Duration::from_millis(50)).await.unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "runtime failed: timed out waiting for exec session {} process output ownership to close",
+            execution.id
+        )
+    );
+    let _ = release.send(());
 }

@@ -319,11 +319,10 @@ fn a_socket_no_domain_owns_is_cleared_for_the_replacement() {
 }
 
 #[test]
-fn failed_continue_keeps_attachments_and_skips_domain_wait() {
+fn failed_continue_still_closes_attachments_and_waits_for_the_domain() {
     let attachments = std::cell::Cell::new(false);
     let waited = std::cell::Cell::new(false);
     let error = Domain::handover_with(
-        Close::Continue,
         || Ok(()),
         || Err(io::Error::other("checkpoint rejected")),
         || {
@@ -337,8 +336,11 @@ fn failed_continue_keeps_attachments_and_skips_domain_wait() {
     )
     .unwrap_err();
     assert_eq!(error.to_string(), "checkpoint rejected");
-    assert!(!attachments.get());
-    assert!(!waited.get());
+    assert!(
+        attachments.get(),
+        "a failed continue stranded its pane launcher workers"
+    );
+    assert!(waited.get(), "a failed continue skipped the domain lease wait");
 }
 
 #[test]
@@ -354,7 +356,6 @@ fn handover_holds_startup_ownership_until_attachments_and_domain_are_closed() {
     let domain_in_thread = domain.clone();
     let closing = std::thread::spawn(move || {
         let result = Domain::handover_with(
-            Close::Kill,
             || Lease::acquire_wait(&startup_in_thread, std::time::Duration::from_secs(1)),
             || Ok(()),
             || {
