@@ -1173,6 +1173,16 @@ static void ckpt_restore_proc_run(int gpid); // fwd
 // Re-fork every child of `gpid` (per the checkpoint ppid table); each child restores its own subtree and
 // resumes. Records the checkpoint-gpid -> live-hostpid mapping so this process's guest pids resolve.
 static void ckpt_fork_children(int gpid, struct cpu *parent) {
+    /* The guest signal-death relay is a MAP_SHARED page that a dying child writes and its reaping parent
+       reads, and it only works when both sides mapped the SAME page -- which means it must exist before the
+       fork that separates them. Every guest fork/clone site creates it for exactly that reason, and this is
+       a fork site too: a restore rebuilds the tree with its own host clone and never went through one. So a
+       restored parent's wait4 found no record for a child killed by a fatal signal and fell back to
+       WIFEXITED(128+signo): the guest could not tell a child killed by SIGSEGV from one that called
+       exit(139). Measured on this fixture -- the same tree reports `signaled=1 signo=11` on a plain run and
+       reported `exited=1 code=139` after a restore. Idempotent, so the recursive re-fork of a grandchild
+       inherits the page the root created rather than minting a second one. */
+    sigexit_init();
     for (int i = 0; i < g_nrprocs; i++) {
         if (!g_rprocs[i].viable || ckpt_restore_parent_gpid(&g_rprocs[i]) != gpid || g_rprocs[i].gpid == gpid)
             continue;

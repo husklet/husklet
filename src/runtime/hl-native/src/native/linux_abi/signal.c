@@ -825,6 +825,10 @@ static void sig_diag_sync_reraise(int sig, int ls, siginfo_t *si, void *ucv);
 static void sig_diag_raise_default(struct cpu *c, int sig);
 static int deliver_guest_fault(int hostsig, siginfo_t *si, void *ucv);
 
+/* Defined by the checkpoint domain (linux_abi/sink_stream.h), which the per-target unity TU includes after
+   this one. Silent for every process that is not a restored member of a checkpoint image. */
+static void ckpt_restored_member_exit_signal(int signal);
+
 static _Noreturn void guest_group_fatal(struct cpu *c, int sig) {
     sig_diag_raise_default(c, sig);
     if (container_pid() != 1) {
@@ -832,6 +836,13 @@ static _Noreturn void guest_group_fatal(struct cpu *c, int sig) {
         sigexit_record(sig, core);
     }
     hl_engine_child_result_publish_signal(sig);
+    /* A restored member is not a child of the host that holds it, so its death cannot be reaped -- it has to
+       be reported, and this is the only exit path a fatal guest signal takes. Without it the host saw the
+       process vanish having said nothing, which is exactly what it sees when a member is killed before it
+       can speak, and it drew both as Fault{-1, 0, Unknown}: a guest that raised SIGSEGV and a guest that
+       exited 0 produced identical records. Sent before _exit for the same reason the status is published
+       above -- after it there is no process left to send anything. */
+    ckpt_restored_member_exit_signal(sig);
     _exit(128 + sig);
 }
 
