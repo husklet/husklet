@@ -682,9 +682,9 @@ static int interp_x87_memory_arith(struct cpu *cpu, struct insn *insn, uint64_t 
 
 static int interp_step_x87_memory(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     uint8_t op = insn->op;
-    // Neither the /digit nor the ST(i) selector is REX-extended: x87 has eight slots.
+    // Neither the /digit nor the ST(i) selector is REX-extended: x87 has eight slots -- and this is the
+    // mod != 3 half of the box, so modrm.rm is address encoding that interp_ea() consumes, never an ST(i).
     int reg = insn->reg & 7;
-    int rm = insn->rm & 7;
     interp_x87_arm(cpu);
 
     {

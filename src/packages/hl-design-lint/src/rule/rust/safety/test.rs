@@ -268,3 +268,74 @@ fn marker_needs_reason() {
     );
     assert_eq!(values.len(), 1);
 }
+
+#[test]
+fn reads_unsafe_inside_a_declarative_macro_body() {
+    let values = ordinary(
+        r"
+macro_rules! trampoline {
+    ($name:ident, $field:ident) => {
+        fn $name() -> i32 {
+            unsafe { (table().$field)() }
+        }
+    };
+}
+",
+    );
+    assert_eq!(values.len(), 1, "a macro body must not hide unsafe from the boundary");
+    assert_eq!(values[0].subject, "unsafe block in a macro definition");
+}
+
+#[test]
+fn a_declarative_macro_body_owes_the_same_rationale() {
+    let undocumented = findings(
+        "native-kernel",
+        "runtime",
+        "src/native/execution.rs",
+        r"
+macro_rules! trampoline {
+    ($name:ident, $field:ident) => {
+        fn $name() -> i32 {
+            unsafe { (table().$field)() }
+        }
+    };
+}
+",
+    );
+    assert_eq!(undocumented.len(), 1);
+    assert_eq!(undocumented[0].subject, "unsafe block without SAFETY rationale");
+
+    let documented = findings(
+        "native-kernel",
+        "runtime",
+        "src/native/execution.rs",
+        r"
+macro_rules! trampoline {
+    ($name:ident, $field:ident) => {
+        fn $name() -> i32 {
+            // SAFETY: the table entry is a resolved engine export with this signature.
+            unsafe { (table().$field)() }
+        }
+    };
+}
+",
+    );
+    assert!(documented.is_empty(), "a rationale inside the body must count");
+}
+
+#[test]
+fn a_declarative_macro_item_owes_the_boundary_but_not_a_rationale() {
+    let allowed = findings(
+        "native-kernel",
+        "runtime",
+        "src/native/execution.rs",
+        "macro_rules! export {\n    ($name:ident) => {\n        unsafe extern \"C\" fn $name() -> i32 { 0 }\n    };\n}\n",
+    );
+    assert!(allowed.is_empty(), "an unsafe item carries no SAFETY requirement");
+
+    let outside = ordinary(
+        "macro_rules! export {\n    ($name:ident) => {\n        unsafe extern \"C\" fn $name() -> i32 { 0 }\n    };\n}\n",
+    );
+    assert_eq!(outside.len(), 1);
+    assert_eq!(outside[0].subject, "unsafe item in a macro definition");
+}

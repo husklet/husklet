@@ -140,3 +140,71 @@ fn local_state_that_is_not_file_scope_is_not_tracked() {
     )]);
     assert!(result.is_empty(), "{result:#?}");
 }
+
+#[test]
+fn a_production_writer_that_only_takes_the_address_is_a_writer() {
+    let result = findings(&[
+        (
+            "table.c",
+            "\
+static struct entry *g_table;
+static int g_capacity;
+void reserve(void **storage, int *capacity);
+void scan(void) { reserve((void **)&g_table, &g_capacity); }
+#if defined(HL_NATIVE_TEST_HOOKS)
+void arm(void) { g_table = 0; }
+#endif
+",
+        ),
+        (
+            "read.c",
+            "extern struct entry *g_table;\nint use(void) { if (!g_table) { return -1; } return 0; }\n",
+        ),
+    ]);
+    assert!(
+        result.is_empty(),
+        "handing a callee the address of state writes it: {result:#?}"
+    );
+}
+
+#[test]
+fn a_production_write_through_a_subscript_and_member_is_a_writer() {
+    let result = findings(&[
+        (
+            "table.c",
+            "\
+static struct entry g_table[8];
+void fill(int index) { g_table[index].viable = 1; }
+#if defined(HL_NATIVE_TEST_HOOKS)
+void arm(void) { g_table[0].viable = 0; }
+#endif
+",
+        ),
+        (
+            "read.c",
+            "extern struct entry g_table[8];\nint use(void) { if (!g_table[0].viable) { return -1; } return 0; }\n",
+        ),
+    ]);
+    assert!(
+        result.is_empty(),
+        "an element member assignment writes the state it names: {result:#?}"
+    );
+}
+
+#[test]
+fn a_reader_no_production_call_site_reaches_is_not_a_production_predicate() {
+    let result = findings(&[(
+        "resolve.c",
+        "\
+static int g_state;
+static int resolve(void) { if (g_state) { return g_state; } g_state = 1; return g_state; }
+#if defined(HL_NATIVE_TEST_HOOKS)
+void arm(void) { (void)resolve(); }
+#endif
+",
+    )]);
+    assert!(
+        result.is_empty(),
+        "an unreachable reader leaves no production branch to be wrong: {result:#?}"
+    );
+}

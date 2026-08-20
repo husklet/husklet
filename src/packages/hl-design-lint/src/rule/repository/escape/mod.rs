@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
 };
@@ -51,10 +52,27 @@ impl Rule for Repository {
         }
         files.sort();
         files.dedup();
+        let test_lines = workspace
+            .sources()
+            .iter()
+            .map(|source| {
+                (
+                    source.path.clone(),
+                    crate::rule::support::syntax::test_only_lines(source),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
         let mut findings = Vec::new();
         for file in files {
             let text = fs::read_to_string(&file).map_err(|error| LintError::io("read", &file, error))?;
+            let excluded = test_lines.get(&file);
             for (index, line) in text.lines().enumerate() {
+                // A `#[cfg(test)]` item is not part of any shipped artifact, and a differential
+                // test that reads the authoritative owner's source to pin the two against each
+                // other is the ownership rule being enforced rather than escaped.
+                if excluded.is_some_and(|lines| lines.get(index + 1) == Some(&true)) {
+                    continue;
+                }
                 findings.extend(line_findings(self.id(), &file, index + 1, line));
             }
         }

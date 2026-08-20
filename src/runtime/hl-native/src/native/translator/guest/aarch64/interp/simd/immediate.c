@@ -1,8 +1,9 @@
 static int interp_simd_immediate(struct cpu *cpu, uint32_t insn, uint32_t decode, unsigned scalar, unsigned q,
                                  unsigned u) {
     uint64_t gpc = cpu->pc;
-    int rd = (int)(insn & 31), rn = (int)((insn >> 5) & 31), rm = (int)((insn >> 16) & 31);
-    // AdvSIMD modified immediate
+    int rd = (int)(insn & 31);
+    // AdvSIMD modified immediate: Vd and an immediate, nothing else. Bits[18:16] are abc and bits[9:5]
+    // are defgh -- the two halves of imm8 -- so neither field is Rm or Rn however much it looks like one.
     // Must precede shift-by-immediate: same box, separated only by immh (22:19).
     if ((decode & 0x9FF80400u) == 0x0F000400u) {
         unsigned op = (insn >> 29) & 1, cmode = (insn >> 12) & 0xFu, o2 = (insn >> 11) & 1;
