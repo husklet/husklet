@@ -561,6 +561,25 @@ The same asymmetry applies to killing processes by pattern. A lane matched four
 `cargo test` processes on the macOS host, killed all of them to unblock its own,
 and only one was its own. Resolve a PID and kill that PID.
 
+## Running on the other host is one wrapper away
+
+`mac bash -lc '...'` runs a command on the macOS host. A lane investigating a
+defect that only exists on Darwin reported "I could not run on macOS" and handed
+over a source-reasoned hypothesis it had never executed; another lane ran the
+same investigation with the wrapper and settled it. If a defect is host-specific,
+an investigation on the other host cannot conclude it -- reach for the wrapper
+before declaring the measurement impossible.
+
+Two asymmetries to carry with it. `/Users/x/dd` is shared at the same path on
+both hosts; `/var/tmp` is not, and each host's copy is its own. And macOS has no
+`flock(1)`, so the fd 8/9 box lock is a Linux-only protocol -- on macOS, record
+the load average instead and say so.
+
+`/Users/x/.local/bin/timeout`, the macOS GNU-timeout shim, hangs any `$(...)`
+command substitution: its background watchdog `sleep` holds the pipe open, so
+the substitution waits out the full duration. It cost one lane a ten-minute
+sweep and left three orphaned `sleep` processes behind.
+
 ## A measurement names its host, or it names nothing
 
 The engine runs on two hosts and they are not interchangeable. The same guest
