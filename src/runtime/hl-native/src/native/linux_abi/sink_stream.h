@@ -94,9 +94,14 @@ static int ckpt_stream_recovery_complete(void) {
 //
 // A refusal is not fatal to the restore. The tree is already correct; only the host's ability to reach
 // this member individually is lost, and the host refuses to reattach rather than inventing one.
-// Set once this process has announced itself as a restored member, so the exit report below is sent by a
-// member and by nobody else: an unannounced connection reporting an exit is refused by the broker.
-static int g_ckpt_member_announced;
+// The pid that announced itself as a restored member, so the exit report below is sent by that member and
+// by nobody else: an unannounced connection reporting an exit is refused by the broker.
+//
+// A pid rather than a flag, because a member forks. A restored shell that spawns `sleep` every 50 ms gives
+// each child an inherited copy of this variable, and each child then reported an exit on a channel that had
+// announced nothing -- one broker refusal per child, forever. Comparing against the live pid makes the
+// announcement die with the process that made it, which is what it describes.
+static pid_t g_ckpt_member_announced;
 
 static int ckpt_stream_member_restored(int guest_pid) {
     unsigned char payload[8] = {0};
@@ -106,7 +111,7 @@ static int ckpt_stream_member_restored(int guest_pid) {
     if (ckpt_stream_call(HL_CKPT_OP_MEMBER_RESTORED, NULL, 0, 0, 0, payload, sizeof payload, NULL, NULL, 0) !=
         HL_CKPT_STATUS_OK)
         return -1;
-    g_ckpt_member_announced = 1;
+    g_ckpt_member_announced = getpid();
     return 0;
 }
 
@@ -164,9 +169,10 @@ static void ckpt_stream_member_exited(int status, uint32_t kind) {
 //
 // Silent for a process that never announced itself: only a member has a member's exit to report.
 static void ckpt_restored_member_exit_code(int status) {
-    static int reported;
-    if (!g_ckpt_member_announced || reported) return;
-    reported = 1;
+    static pid_t reported;
+    pid_t self = getpid();
+    if (g_ckpt_member_announced != self || reported == self) return;
+    reported = self;
     ckpt_stream_member_exited(status, HL_CKPT_MEMBER_EXIT_CODE);
 }
 

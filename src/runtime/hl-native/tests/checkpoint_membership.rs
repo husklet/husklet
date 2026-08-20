@@ -90,11 +90,11 @@ fn a_restored_member_reports_its_exit_from_the_shared_process_exit_hook() {
 
     let stream = std::fs::read_to_string(native.join("linux_abi/sink_stream.h")).expect("read the checkpoint stream");
     assert!(
-        stream.contains("if (!g_ckpt_member_announced || reported) return;"),
-        "the member exit report is no longer guarded to one report from an announced member"
+        stream.contains("if (g_ckpt_member_announced != self || reported == self) return;"),
+        "the member exit report is no longer guarded to one report from the process that announced it"
     );
     assert!(
-        stream.contains("g_ckpt_member_announced = 1;"),
-        "nothing marks this process as an announced member, so the report can never be sent"
+        stream.contains("g_ckpt_member_announced = getpid();"),
+        "the announcement no longer names the process that made it, so a forked child inherits it"
     );
 }
