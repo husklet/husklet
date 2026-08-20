@@ -176,6 +176,7 @@ pub(crate) struct TestApi {
     pub(crate) identity_registry: unsafe extern "C" fn(c_uint, c_uint) -> c_int,
     pub(crate) private_fork_lock: unsafe extern "C" fn(c_uint) -> c_int,
     pub(crate) process_identity_token: unsafe extern "C" fn(c_uint) -> c_int,
+    pub(crate) setfl_append_write: unsafe extern "C" fn(c_uint) -> c_int,
     #[allow(dead_code)]
     pub(crate) checkpoint_peer_authenticate: unsafe extern "C" fn(c_int, u64, *mut u64, *mut u64) -> c_int,
     pub(crate) checkpoint_channel_connect: unsafe extern "C" fn(c_int) -> c_int,
@@ -522,6 +523,10 @@ fn load_tests(library: &DynamicLibrary, path: &Path) -> Result<TestApi, LoadErro
         ),
         process_identity_token: symbol!(
             "hl_c_backend_process_identity_token_test",
+            unsafe extern "C" fn(c_uint) -> c_int
+        ),
+        setfl_append_write: symbol!(
+            "hl_c_backend_setfl_append_write_test",
             unsafe extern "C" fn(c_uint) -> c_int
         ),
         checkpoint_peer_authenticate: symbol!(

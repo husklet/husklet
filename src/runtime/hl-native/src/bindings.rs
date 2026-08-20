@@ -728,6 +728,11 @@ unsafe fn hl_c_backend_process_identity_token_test(scenario: c_uint) -> c_int {
     unsafe { (test_api().process_identity_token)(scenario) }
 }
 
+#[cfg(feature = "native-test-hooks")]
+unsafe fn hl_c_backend_setfl_append_write_test(scenario: c_uint) -> c_int {
+    unsafe { (test_api().setfl_append_write)(scenario) }
+}
+
 #[cfg(all(test, feature = "native-test-hooks"))]
 pub(super) unsafe fn hl_c_backend_checkpoint_test_prune_foreign_descriptors() -> c_uint {
     unsafe { (test_api().checkpoint_test_prune_foreign_descriptors)() }
@@ -788,6 +793,14 @@ pub(crate) fn identity_registry_test(scenario: u32, iterations: u32) -> Result<(
     // SAFETY: the feature-gated native hook owns its private shared registry and child processes. Inputs are
     // scalar scenario controls, and the hook returns only after every child has been reaped.
     let status = unsafe { hl_c_backend_identity_registry_test(scenario, iterations) };
+    if status == 0 { Ok(()) } else { Err(status) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn setfl_append_write_test(scenario: u32) -> Result<(), i32> {
+    // SAFETY: the feature-gated native hook owns the descriptor table, the host services and the kernel
+    // objects it builds, and releases all of them before returning. Its input is a scalar scenario selector.
+    let status = unsafe { hl_c_backend_setfl_append_write_test(scenario) };
     if status == 0 { Ok(()) } else { Err(status) }
 }
 

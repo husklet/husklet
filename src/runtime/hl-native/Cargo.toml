@@ -53,6 +53,10 @@ name = "process_identity_token"
 required-features = ["native-test-hooks"]
 
 [[test]]
+name = "setfl_append_write"
+required-features = ["native-test-hooks"]
+
+[[test]]
 name = "identity_registry"
 
 [[test]]

@@ -505,25 +505,122 @@ static hl_host_result hl_linux_file_seek(void *context, hl_host_handle file, int
     return result < 0 ? hl_linux_errno_result() : hl_linux_result(HL_STATUS_OK, (uint64_t)result, 0);
 }
 
-static hl_host_result hl_linux_file_append(void *context, hl_host_handle file, hl_host_const_bytes input) {
-    hl_host_linux *host = context;
+/*
+ * The descriptor an appending write must issue on, established on demand.
+ *
+ * O_APPEND belongs to the open file description and a guest may turn it on long after the open:
+ * fcntl(F_SETFL) is exactly that, and descriptors 0, 1 and 2 are adopted with whatever flags the
+ * launching process left on them. The open paths above can only establish an appending view for a
+ * description that ALREADY carried O_APPEND, so a later F_SETFL(O_APPEND) reached an entry whose
+ * appending descriptor was still -1 and the write failed EINVAL -- which is why `make --version`
+ * through a pipe reported "write error: stdout". Linux never fails that write.
+ *
+ * What Linux does depends on the object, and so does this:
+ *
+ *   - a regular or block object has a position, so appending is real behaviour and needs a second
+ *     description opened O_APPEND through the /proc/self/fd magic link -- the same indirection
+ *     hl_linux_file_open uses, and the same identity check afterwards;
+ *   - every other object -- pipe, socket, character device, terminal -- has no position, so the
+ *     kernel accepts O_APPEND and ignores it. An ordinary write on this description already IS the
+ *     appending write, and a duplicate of the descriptor is that write while keeping one ownership
+ *     rule for the field: the handle owns it and close() closes it.
+ *
+ * Returns the descriptor to write on. On failure returns -1 with errno set, or -1 and errno 0 when
+ * the handle itself does not name a live file.
+ */
+static int hl_linux_file_append_descriptor(hl_host_linux *host, hl_host_handle file) {
     uint32_t low = (uint32_t)file;
     hl_linux_handle_entry *entry;
+    struct stat primary_status;
     int descriptor;
-    ssize_t count;
-    if (input.size != 0 && input.data == NULL) return hl_linux_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
+    int established;
+    int adopted;
     pthread_mutex_lock(&host->lock);
     if (low == 0 || low - 1u >= host->handle_capacity) {
         pthread_mutex_unlock(&host->lock);
-        return hl_linux_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
+        errno = 0;
+        return -1;
     }
     entry = &host->handles[low - 1u];
-    descriptor = entry->generation == (uint32_t)(file >> 32) && entry->kind == HL_LINUX_HANDLE_FILE
-                     ? entry->wake_descriptor
-                     : -1;
+    if (entry->generation != (uint32_t)(file >> 32) || entry->kind != HL_LINUX_HANDLE_FILE) {
+        pthread_mutex_unlock(&host->lock);
+        errno = 0;
+        return -1;
+    }
+    if (entry->wake_descriptor >= 0) {
+        int ready = entry->wake_descriptor;
+        pthread_mutex_unlock(&host->lock);
+        return ready;
+    }
+    descriptor = entry->descriptor;
     pthread_mutex_unlock(&host->lock);
-    if (descriptor < 0) return hl_linux_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
-    /* The descriptor was opened O_APPEND: this write is atomic with every other O_APPEND write. */
+    if (descriptor < 0) {
+        errno = 0;
+        return -1;
+    }
+    if (fstat(descriptor, &primary_status) != 0) return -1;
+    if (S_ISREG(primary_status.st_mode) || S_ISBLK(primary_status.st_mode)) {
+        char descriptor_path[64];
+        struct stat append_status;
+        int flags = fcntl(descriptor, F_GETFL);
+        int length = snprintf(descriptor_path, sizeof(descriptor_path), "/proc/self/fd/%d", descriptor);
+        if (flags < 0) return -1;
+        if (length < 0 || (size_t)length >= sizeof(descriptor_path)) {
+            errno = ENAMETOOLONG;
+            return -1;
+        }
+        established = open(descriptor_path, (flags & O_ACCMODE) | O_APPEND | O_CLOEXEC, 0);
+        if (established < 0) return -1;
+        if (fstat(established, &append_status) != 0 || append_status.st_dev != primary_status.st_dev ||
+            append_status.st_ino != primary_status.st_ino) {
+            close(established);
+            errno = EINVAL;
+            return -1;
+        }
+    } else {
+        established = fcntl(descriptor, F_DUPFD_CLOEXEC, 0);
+        if (established < 0) return -1;
+    }
+    adopted = hl_host_process_fd_private_adopt(established);
+    if (adopted < 0) {
+        close(established);
+        errno = EMFILE;
+        return -1;
+    }
+    established = adopted;
+    pthread_mutex_lock(&host->lock);
+    /* The table may have been grown while this thread was opening, so re-derive the entry. */
+    entry = low - 1u < host->handle_capacity ? &host->handles[low - 1u] : NULL;
+    if (entry == NULL || entry->generation != (uint32_t)(file >> 32) || entry->kind != HL_LINUX_HANDLE_FILE) {
+        pthread_mutex_unlock(&host->lock);
+        hl_host_process_fd_private_remove(established);
+        close(established);
+        errno = 0;
+        return -1;
+    }
+    if (entry->wake_descriptor >= 0) {
+        /* Another thread established one first; its descriptor is the one the handle owns. */
+        int ready = entry->wake_descriptor;
+        pthread_mutex_unlock(&host->lock);
+        hl_host_process_fd_private_remove(established);
+        close(established);
+        return ready;
+    }
+    entry->wake_descriptor = established;
+    pthread_mutex_unlock(&host->lock);
+    return established;
+}
+
+static hl_host_result hl_linux_file_append(void *context, hl_host_handle file, hl_host_const_bytes input) {
+    hl_host_linux *host = context;
+    int descriptor;
+    ssize_t count;
+    if (input.size != 0 && input.data == NULL) return hl_linux_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
+    errno = 0;
+    descriptor = hl_linux_file_append_descriptor(host, file);
+    if (descriptor < 0) return errno == 0 ? hl_linux_result(HL_STATUS_INVALID_ARGUMENT, 0, 0) : hl_linux_errno_result();
+    /* The descriptor carries O_APPEND wherever the object has a position: this write is atomic with
+     * every other append on the object. */
     count = write(descriptor, input.data, input.size);
     if (count < 0) return hl_linux_errno_result();
     return hl_linux_result(HL_STATUS_OK, (uint64_t)count, 0);
@@ -536,15 +633,16 @@ static hl_host_result hl_linux_file_vector(void *context, hl_host_handle file, c
     int descriptor;
     ssize_t transferred;
     uint32_t index;
-    pthread_mutex_lock(&host->lock);
-    descriptor = hl_linux_descriptor(host, file, HL_LINUX_HANDLE_FILE, HL_LINUX_HANDLE_SHARED_MEMORY);
-    if (operation == 4 && (uint32_t)file != 0 && (uint32_t)file - 1u < host->handle_capacity) {
-        hl_linux_handle_entry *entry = &host->handles[(uint32_t)file - 1u];
-        descriptor = entry->generation == (uint32_t)(file >> 32) && entry->kind == HL_LINUX_HANDLE_FILE
-                         ? entry->wake_descriptor
-                         : -1;
+    if (operation == 4) {
+        /* Appending vector write: the same on-demand appending descriptor hl_linux_file_append issues on. */
+        errno = 0;
+        descriptor = hl_linux_file_append_descriptor(host, file);
+        if (descriptor < 0 && errno != 0) return hl_linux_errno_result();
+    } else {
+        pthread_mutex_lock(&host->lock);
+        descriptor = hl_linux_descriptor(host, file, HL_LINUX_HANDLE_FILE, HL_LINUX_HANDLE_SHARED_MEMORY);
+        pthread_mutex_unlock(&host->lock);
     }
-    pthread_mutex_unlock(&host->lock);
     if ((count != 0 && vectors == NULL) || count > HL_HOST_FILE_IOV_MAX || descriptor < 0 ||
         ((operation == 2 || operation == 3) && offset > INT64_MAX))
         return hl_linux_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);

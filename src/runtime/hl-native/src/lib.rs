@@ -119,6 +119,13 @@ pub fn process_identity_token_test(scenario: u32) -> Result<(), i32> {
     bindings::process_identity_token_test(scenario)
 }
 
+/// Drives `F_SETFL(O_APPEND)` on an adopted descriptor followed by a write, in the C engine.
+#[cfg(all(unix, feature = "native-test-hooks"))]
+#[doc(hidden)]
+pub fn setfl_append_write_test(scenario: u32) -> Result<(), i32> {
+    bindings::setfl_append_write_test(scenario)
+}
+
 #[cfg(any(feature = "native-test-hooks", windows))]
 #[doc(hidden)]
 pub fn identity_registry_test(scenario: u32, iterations: u32) -> Result<(), i32> {
