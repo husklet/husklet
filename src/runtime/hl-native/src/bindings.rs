@@ -283,6 +283,25 @@ pub(super) fn hl_c_backend_process_identity_signal(handle: c_int, host_pid: u64,
         })
 }
 
+pub(super) fn hl_c_backend_terminal_termios_generation() -> u64 {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.terminal_termios_generation)
+        // SAFETY: the call takes no arguments and reads one counter.
+        .map_or(0, |function| unsafe { function() })
+}
+
+pub(super) fn hl_c_backend_terminal_termios(native_fd: c_int, out: &mut [u8; 36]) -> bool {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.terminal_termios)
+        .is_some_and(|function| {
+            // SAFETY: `out` is a live 36-byte buffer for the duration of the call, which is exactly
+            // the width the bridge documents; the descriptor is borrowed and C retains neither.
+            unsafe { function(native_fd, out.as_mut_ptr()) == 1 }
+        })
+}
+
 pub(super) unsafe fn hl_c_backend_destroy(backend: *mut Backend) {
     if let Some(function) = crate::loader::api().ok().and_then(|api| api.destroy) {
         unsafe { function(backend) };
@@ -975,6 +994,12 @@ pub(crate) fn checkpoint_restore_rollback_test(isa: u32) -> Result<(), i32> {
         }
     };
     if status == 0 { Ok(()) } else { Err(status) }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn terminal_termios_install_test(fd: c_int, image: &[u8; 36]) {
+    // SAFETY: `image` is a live 36-byte buffer for the call and C copies it before returning.
+    unsafe { (test_api().aarch64_terminal_termios_install)(fd, image.as_ptr()) }
 }
 
 #[cfg(feature = "native-test-hooks")]

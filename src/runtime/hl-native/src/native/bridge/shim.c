@@ -360,6 +360,27 @@ HL_API int32_t hl_c_backend_checkpoint_adopt(uint32_t isa, int32_t broker, int32
 
 extern int HL_BRIDGE_CKPT(interrupt_signal)(void);
 
+/* The engine-owned per-terminal termios is `static` inside a per-guest-ISA namespaced translation
+ * unit, so there are genuinely two stores and neither is authoritative on its own: a process runs one
+ * engine, but which of the two holds an entry follows the guest's ISA. Both are asked, in a fixed
+ * order, and the first hit answers -- the stores are keyed by terminal identity, so a terminal that is
+ * in both would carry the same image anyway. */
+extern uint64_t hl_aarch64_terminal_termios_generation(void);
+extern uint64_t hl_x86_64_terminal_termios_generation(void);
+extern int hl_aarch64_terminal_termios_image(int32_t native_fd, uint8_t *out);
+extern int hl_x86_64_terminal_termios_image(int32_t native_fd, uint8_t *out);
+
+HL_API uint64_t hl_c_backend_terminal_termios_generation(void) {
+    /* A sum, not a max: either store advancing must move the total, and both only ever increase. */
+    return hl_aarch64_terminal_termios_generation() + hl_x86_64_terminal_termios_generation();
+}
+
+HL_API int32_t hl_c_backend_terminal_termios(int32_t native_fd, uint8_t *out) {
+    if (out == NULL) return 0;
+    if (hl_aarch64_terminal_termios_image(native_fd, out)) return 1;
+    return hl_x86_64_terminal_termios_image(native_fd, out) ? 1 : 0;
+}
+
 HL_API int32_t hl_c_backend_checkpoint_interrupt_signal(uint32_t isa) {
 #if defined(HL_BUILD_TARGET_X86_64_ONLY)
     return isa == 2 ? HL_BRIDGE_CKPT(interrupt_signal)() : -1;

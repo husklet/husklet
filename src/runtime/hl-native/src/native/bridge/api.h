@@ -46,6 +46,8 @@ typedef struct hl_c_bridge_api {
                                                        uint64_t *host_generation, int32_t *process_handle);
     int32_t (*guest_pid)(const hl_c_backend *backend);
     int32_t (*process_identity_signal)(int32_t handle, uint64_t host_pid, int32_t signal);
+    uint64_t (*terminal_termios_generation)(void);
+    int32_t (*terminal_termios)(int32_t native_fd, uint8_t *out);
 } hl_c_bridge_api;
 
 HL_EXTERN_C_BEGIN
@@ -112,6 +114,19 @@ HL_API int32_t hl_c_backend_guest_pid(const hl_c_backend *backend);
  * what makes this safe against pid reuse, which a bare kill(2) on a remembered pid is not. Signal 0
  * probes reachability without delivering. Returns 0 on delivery and -1 otherwise. */
 HL_API int32_t hl_c_backend_process_identity_signal(int32_t handle, uint64_t host_pid, int32_t signal);
+/* The guest's own view of a terminal's termios, for the engine's terminal pump.
+ *
+ * `hl_c_backend_terminal_termios` copies 36 bytes -- one Linux `struct termios` -- describing the
+ * image the guest last installed on the terminal `native_fd` names, and returns 1, or returns 0 and
+ * writes nothing when no guest has configured it. It answers from the engine's own record rather than
+ * from the host, which is what lets a pump put the host slave in raw mode and still know what the
+ * guest believes ICANON, the c_cc array and the echo flags to be.
+ *
+ * `hl_c_backend_terminal_termios_generation` counts installs across every terminal. It only
+ * increases, and a reader that sees it unchanged may keep the image it last read -- which is how a
+ * per-keystroke path avoids paying for a lookup it does not need. */
+HL_API uint64_t hl_c_backend_terminal_termios_generation(void);
+HL_API int32_t hl_c_backend_terminal_termios(int32_t native_fd, uint8_t *out);
 HL_API uint64_t hl_c_backend_translation_count(const hl_c_backend *backend);
 /* The content fingerprint of the C sources this artifact was compiled from. The Rust loader
  * compares it against the value Cargo baked into the calling crate and refuses a shared object

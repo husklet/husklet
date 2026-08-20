@@ -307,6 +307,16 @@ pub fn checkpoint_restore_rollback_test(isa: u32) -> Result<(), i32> {
 ///
 /// The store is process-wide within each guest-ISA namespace, so the check
 /// serializes against itself.
+/// Install `image` as the guest view of `descriptor` in the aarch64 store, so a test can then read
+/// it back through the bridge and check the whole path rather than only the C side of it.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn terminal_termios_install_test(descriptor: std::os::fd::RawFd, image: &[u8; 36]) {
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    bindings::terminal_termios_install_test(descriptor, image);
+}
+
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 pub fn terminal_termios_store_test(isa: u32) -> Result<(), i32> {
@@ -390,6 +400,30 @@ pub fn checkpoint_peer_identity_open_test(
         birth,
         generation,
     ))
+}
+
+/// How many times any terminal's guest-authored termios has been installed.
+///
+/// The count only increases, so a reader that sees it unchanged may keep the image it last read.
+/// That is the point: a terminal pump can check this on every wakeup for the price of one relaxed
+/// load and consult [`terminal_termios`] only when it moves, instead of paying for a lookup per
+/// keystroke.
+#[must_use]
+pub fn terminal_termios_generation() -> u64 {
+    bindings::hl_c_backend_terminal_termios_generation()
+}
+
+/// The guest's own view of the terminal `descriptor` names, as a Linux `struct termios` image.
+///
+/// Answers from the engine's record of what the guest last installed, not from the host terminal.
+/// A pump that puts the host slave in raw mode -- so a Linux line discipline can run over a channel
+/// that applies backpressure instead of flushing at `MAX_CANON` -- still needs to know what the
+/// guest believes `ICANON`, `c_cc` and the echo flags to be, and the host no longer carries that.
+///
+/// Returns `None`, leaving `image` untouched, when no guest has configured this terminal.
+#[must_use]
+pub fn terminal_termios(descriptor: std::os::fd::RawFd, image: &mut [u8; 36]) -> Option<()> {
+    bindings::hl_c_backend_terminal_termios(descriptor, image).then_some(())
 }
 
 /// Delivers one signal to the exact process incarnation an authenticated peer capability names.

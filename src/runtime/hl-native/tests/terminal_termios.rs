@@ -1,3 +1,4 @@
+use std::os::fd::AsRawFd;
 use std::{fs, path::Path};
 
 /// The engine, not the host line discipline, owns a guest terminal's termios.
@@ -90,5 +91,66 @@ fn the_host_termios_translation_cannot_carry_every_linux_flag() {
             .count(),
         2,
         "TCSETS{{,W,F}} and TCSETS2{{,W2,F2}} must both record the image the guest installed"
+    );
+}
+
+/// The engine's terminal pump reaches the guest's termios through the bridge table, not through the
+/// host terminal, because once the pump puts the host slave in raw mode the host no longer carries
+/// what the guest asked for.
+///
+/// The store is keyed by terminal identity via `fstat`, so a pipe stands in for a terminal and this
+/// runs without a pty on any host. The C-side store test has already installed images by the time
+/// this runs in the same binary, so the generation is expected to be non-zero and to move.
+#[test]
+fn the_bridge_answers_a_terminal_image_and_a_generation_that_only_moves_on_an_install() {
+    let before = hl_native::terminal_termios_generation();
+    for isa in [1, 2] {
+        hl_native::terminal_termios_store_test(isa).expect("install images through the store");
+    }
+    let after = hl_native::terminal_termios_generation();
+    assert!(
+        after > before,
+        "installing an image must advance the generation ({before} -> {after})"
+    );
+    // Reading it again without installing anything must not move it: that invariant is what lets a
+    // per-keystroke path skip the lookup.
+    assert_eq!(
+        after,
+        hl_native::terminal_termios_generation(),
+        "the generation moved without an install"
+    );
+
+    // An unconfigured terminal reports nothing and leaves the buffer alone.
+    let mut image = [0xab_u8; 36];
+    let (reader, _writer) = std::io::pipe().expect("create a probe pipe");
+    assert!(
+        hl_native::terminal_termios(reader.as_raw_fd(), &mut image).is_none(),
+        "an unconfigured terminal must not answer with someone else's image"
+    );
+    assert_eq!(image, [0xab_u8; 36], "a miss must leave the buffer untouched");
+
+    // Install a distinctive image and read it back through the bridge. This is the path a pump
+    // takes, and it carries the flags a raw host slave cannot: ECHOCTL and ECHOKE in c_lflag, and
+    // ICANON, which is the one the discipline turns on the guest's behalf.
+    let mut installed = [0_u8; 36];
+    installed[12] = 0x3b; // ISIG|ICANON|ECHO|ECHOE|ECHOK
+    installed[13] = 0x0a; // ECHOCTL 0x200 | ECHOKE 0x800
+    installed[17 + 4] = 0x04; // c_cc[VEOF]
+    installed[17 + 2] = 0x7f; // c_cc[VERASE]
+    hl_native::terminal_termios_install_test(reader.as_raw_fd(), &installed);
+    let mut read_back = [0_u8; 36];
+    assert!(
+        hl_native::terminal_termios(reader.as_raw_fd(), &mut read_back).is_some(),
+        "the bridge must find the image that was just installed"
+    );
+    assert_eq!(
+        read_back, installed,
+        "the bridge must answer with the guest's own image, byte for byte"
+    );
+
+    // And installing advanced the generation, so a pump watching it learns to re-read.
+    assert!(
+        hl_native::terminal_termios_generation() > after,
+        "installing an image must advance the generation a pump watches"
     );
 }
