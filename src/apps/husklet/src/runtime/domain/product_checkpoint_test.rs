@@ -13,6 +13,11 @@ const FORBID_REMOTE_ENV: &str = "HL_TEST_FORBID_REMOTE_IMAGES";
 const CHILD_TEST: &str = "runtime::domain::product_checkpoint_test::product_checkpoint_domain_worker";
 const PHASE: Duration = Duration::from_secs(45);
 const START: Duration = Duration::from_secs(180);
+/// Close/reopen cycles driven against one workspace.
+///
+/// A single cycle passes on a tree where repeated cycling does not: the defect the user reported
+/// only appears on iteration, so one cycle measures nothing about it.
+const CYCLES: usize = 5;
 const SCRIPT: &str = "\
 guard=/tmp/husklet-continue-started; \
 if test -e \"$guard\"; then echo FRESH_START_FORBIDDEN > /tmp/husklet-continue-fresh-start; exit 97; fi; \
@@ -303,8 +308,15 @@ fn product_checkpoint_domain_worker() {
     crate::runtime::worker::Worker::domain(&name.to_string_lossy()).expect("serve product checkpoint domain");
 }
 
+/// Covers the workspace **primary** process only: the `sleep` tree here belongs to the container's
+/// own spec process, which the container's whole-image checkpoint restores.
+///
+/// It does **not** cover an execution session. A terminal pane runs as an exec, and an exec is
+/// restored by `Executions::restore_checkpoints`, which this fixture never enters because it
+/// creates no exec. A `sleep` typed into a pane therefore travels a path this test does not touch,
+/// which is why the test is green while the product loses it.
 #[tokio::test]
-async fn continue_later_restores_sleep_tree_in_two_fresh_domain_processes() {
+async fn continue_later_restores_the_primary_sleep_tree_across_repeated_cycles() {
     if std::env::var_os("HL_ALPINE_ARCHIVE").is_none() {
         assert!(
             std::env::var_os("HL_PRODUCT_CHECKPOINT_REQUIRED").is_none(),
@@ -341,7 +353,7 @@ async fn run_cycles(fixture: &mut Fixture) -> TestResult {
         4,
         "fixture did not publish init plus three sleep identities"
     );
-    for cycle in 1..=2 {
+    for cycle in 1..=CYCLES {
         let _old_tree = fixture.close_continue(cycle, &mut domain)?;
         let stopped = std::fs::metadata(&progress)?.len();
         std::thread::sleep(Duration::from_millis(150));
