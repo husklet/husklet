@@ -18,4 +18,16 @@ hup_pollin                   rc=1 hup=1
 blocking_eintr               rc=-1 eintr=1 handled=1
 select_idle                  rc=0 set=0
 select_ready                 rc=1 set=1
+bound_setup                  armed=1
+bound_idle_t0                rc=0 revents=0
+bound_events0                rc=0 revents=0
+bound_with_negative          rc=0 r0=0 r1=0
+bound_idle_timeout60         rc=0 revents=0 slept=1
+bound_mixed_idle             rc=0 r0=0 r1=0
+bound_mixed_pipe_ready       rc=1 r0=0 r1=0x1
+bound_with_closed            rc=1 r0=0x20 r1=0
+bound_ready                  rc=1 pollin=1
+bound_select_idle            rc=0 set=0
+bound_select_timeout60       rc=0 slept=1
+bound_blocking_eintr         rc=-1 eintr=1 handled=1 prompt=1
 done

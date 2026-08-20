@@ -82,6 +82,30 @@ static uint64_t bound_deadline(const struct timespec *timeout) {
     return delta > UINT64_MAX - now ? UINT64_MAX : now + delta;
 }
 
+/* A host wait over a native array in which every slot is masked (-1) can only sleep: poll(2)
+ * has nothing to observe. On Darwin that sleep is not free -- poll(2) costs ~7us of XNU work
+ * whenever it reports nothing ready (measured: 7.38us for a single fd == -1), and the typed
+ * poll paths below tick once per millisecond, so a blocking wait paid it on every tick. Sleep
+ * directly instead. EINTR is preserved exactly: nanosleep reports it the same way poll(2) did,
+ * so the caller's svc_poll_retry/signal handling is unchanged and a signal still ends the wait. */
+static int bound_host_wait(struct pollfd *fds, nfds_t count, int wait_ms) {
+    nfds_t index;
+    for (index = 0; index < count; ++index)
+        if (fds[index].fd >= 0) {
+#if defined(__linux__)
+            return poll(fds, count, wait_ms);
+#else
+            return poll_host_wait(fds, count, wait_ms);
+#endif
+        }
+    for (index = 0; index < count; ++index) fds[index].revents = 0;
+    if (wait_ms > 0) {
+        struct timespec request = {wait_ms / 1000, (long)(wait_ms % 1000) * 1000000L};
+        if (nanosleep(&request, NULL) != 0) return -1; /* errno == EINTR: the caller retries as before */
+    }
+    return 0;
+}
+
 /* Poll native descriptors from a private copy: typed guest slots are never host descriptors. */
 static int64_t bound_ppoll(struct cpu *c, uint64_t address, uint64_t count, uint64_t timeout_address,
                            uint64_t mask_address) {
@@ -152,7 +176,7 @@ static int64_t bound_ppoll(struct cpu *c, uint64_t address, uint64_t count, uint
             break;
         }
         if (object_ready == 0 && deadline != 0 && now < deadline) wait_ms = 1;
-        native_ready = poll(native, (nfds_t)count, wait_ms);
+        native_ready = bound_host_wait(native, (nfds_t)count, wait_ms);
         if (native_ready < 0) {
             if (svc_poll_retry(c)) continue;
             result = -errno;
@@ -286,7 +310,8 @@ static int64_t bound_pselect(struct cpu *c, uint64_t count_value, uint64_t read_
             result = object_ready;
             break;
         }
-        native_ready = poll(native, count, object_ready == 0 && deadline != 0 && now < deadline ? 1 : 0);
+        native_ready =
+            bound_host_wait(native, count, object_ready == 0 && deadline != 0 && now < deadline ? 1 : 0);
         if (native_ready < 0) {
             if (svc_poll_retry(c)) continue;
             result = -errno;
