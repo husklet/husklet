@@ -64,9 +64,11 @@ fn the_membership_hook_rejects_unknown_scenarios() {
 /// `Fault { status: -1, reason: Unknown }`, which is what the host correctly says about a member killed
 /// outright, so a session that simply finished was indistinguishable from one that was destroyed.
 ///
-/// This is a source contract rather than a behavioral one because the behavior needs a live restored
-/// member to observe, and what it pins is the placement: the report is reachable from the exit path both
-/// `exit(2)` and `exit_group(2)` share, and the send is still guarded to a process that announced itself.
+/// This pins the PLACEMENT: the report is reachable from the exit path both `exit(2)` and `exit_group(2)`
+/// share, and the send is still guarded to a process that announced itself. The behavior itself is asserted
+/// against a live restored member by `hl-engine`'s
+/// `a_restored_member_that_exits_cleanly_reports_its_code_on_both_isas`, alongside the signal half of the
+/// same distinction -- so this file no longer stands in for an observation nobody was making.
 #[test]
 fn a_restored_member_reports_its_exit_from_the_shared_process_exit_hook() {
     let native = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/native");
