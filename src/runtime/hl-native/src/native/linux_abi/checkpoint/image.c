@@ -1597,6 +1597,11 @@ done:
 }
 #endif
 
+/* Consecutive rescans that must find nothing new, with every known peer finished, before the tree counts
+ * as quiescent. Two rather than one, because the first pass is quiet before anything has been adopted and
+ * because a fork is only ever visible to a scan taken after it. */
+#define CKPT_ENUMERATION_QUIET_PASSES 2
+
 static void ckpt_coordinate_and_exit(struct cpu *c) {
     const struct ckpt_phase_ledger phases = {
         .enabled = hl_option_get("HL_CHECKPOINT_PHASE_LEDGER") != NULL,
@@ -1608,50 +1613,93 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     uint64_t phase = ckpt_phase_begin(&phases);
     struct ckpt_sink *sink = ckpt_sink_current();
 
-    size_t peer_capacity = 512;
-    hl_host_process_peer *foll = malloc(peer_capacity * sizeof *foll);
+    /* THE MEMBER SET IS NOT A SNAPSHOT. `ckpt_live_process_peers` reads the tree at one instant, and an
+     * ordinary guest tree forks and exits across that instant -- a shell's `while :; do ...; sleep .05;
+     * done`, a `make` job, any transient child. A process forked immediately AFTER the scan is a real
+     * guest process with real state: it reaches its own safepoint, observes the trigger generation, proves
+     * membership and commits its group. Counting it against a set fixed before it existed is what produced
+     * `process-count mismatch: expected exactly N committed groups, captured N+1` on a perfectly healthy
+     * close. The mirror of the same hole is worse: a process the scan MISSED that never commits is a
+     * member whose state is unsaved, and a count derived from the scan reports `checkpoint OK` anyway.
+     *
+     * So enumeration is demoted to what it can actually do -- find processes that need KICKING to a
+     * safepoint -- and it is repeated. Every rendezvous pass rescans and adopts whatever appeared since
+     * the last one, because a process that has already frozen cannot fork: each pass that finds nothing
+     * new is a pass in which the unfrozen set was empty. The set the MANIFEST is checked against comes
+     * from the broker instead (see the seal below), which is the only party that observes membership
+     * rather than inferring it. */
+    size_t scan_capacity = 512;
+    hl_host_process_peer *scan = malloc(scan_capacity * sizeof *scan);
     size_t observed = 0;
-    if (foll == NULL)
+    hl_host_process_peer *foll = NULL;
+    unsigned char *completed = NULL;
+    int nfoll = 0;
+    int known_capacity = 0;
+    if (scan == NULL)
         ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_RESOURCES, "cannot allocate the peer enumeration buffer");
-    for (;;) {
-        if (!ckpt_live_process_peers(foll, peer_capacity, &observed))
-            ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_PEER_ENUMERATION, "cannot enumerate the live peer set");
-        if (observed <= peer_capacity) break;
-        if (observed > (size_t)INT_MAX || observed > SIZE_MAX / sizeof *foll)
-            ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_PEER_ENUMERATION,
-                                    "the live peer set is larger than the coordinator can address");
-        hl_host_process_peer *expanded = realloc(foll, observed * sizeof *foll);
-        if (expanded == NULL)
-            ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_RESOURCES, "cannot grow the peer enumeration buffer");
-        foll = expanded;
-        peer_capacity = observed;
-    }
-    int nfoll = (int)observed;
-    int members = 0;
-    for (int i = 0; i < nfoll; i++)
-        if (ckpt_capture_member(foll[i].identity, getpid())) foll[members++] = foll[i];
-    nfoll = members;
-    fprintf(stderr, "[ckpt] coordinator pid=%d found %d peer(s)\n", getpid(), nfoll);
-
-    // Freeze + dump every peer: the shared trigger generation is already advanced (the requester bumped it),
-    // so KICK each peer with the guest-proof THREAD_INT_SIG to bounce it out of a blocked syscall / chained
-    // in-cache loop to its safepoint, where ckpt_poll sees the new generation and dumps proc.<gpid> + _exit()s.
-    for (int i = 0; i < nfoll; i++) {
-        int kicked = hl_host_process_interrupt(foll[i]);
-        fprintf(stderr, "[ckpt] participant %lld %s\n", (long long)foll[i].identity,
-                kicked ? "interrupted" : "NOT interrupted (it cannot reach a safepoint)");
-    }
-    unsigned char *completed = calloc((size_t)(nfoll ? nfoll : 1), 1);
-    if (completed == NULL)
-        ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_RESOURCES, "cannot allocate the rendezvous ledger");
+    /* Test-only, and it models the fork-after-enumeration race exactly rather than approximating it: one
+     * live member is withheld from the FIRST scan only, which is indistinguishable to everything
+     * downstream from a process that came into existence one instruction after that scan returned. */
+    int hide_one = hl_option_get("HL_CKPT_TEST_PEER_HIDDEN_FROM_ENUMERATION") != NULL;
     int ndone = 0;
     int nexempt = 0;
-    for (int t = 0; t < 500 && ndone != nfoll; t++) { // one whole-tree deadline: at most ~5s total
+    int quiet = 0;
+    for (int t = 0; t < 500 && quiet < CKPT_ENUMERATION_QUIET_PASSES; t++) {
         int st;
         // Reap BEFORE the liveness test below, not after: an unreaped child of ours is a zombie, and
         // kill(pid, 0) succeeds on a zombie, so an exited transient child would read as still reachable
         // for as long as it stayed unreaped and would never qualify for the exemption.
         while (waitpid(-1, &st, WNOHANG) > 0) {}
+        // Rescan and adopt. A peer discovered here is kicked exactly as one found by the first scan is;
+        // nothing else distinguishes them, because nothing else should.
+        int discovered = 0;
+        for (;;) {
+            if (!ckpt_live_process_peers(scan, scan_capacity, &observed))
+                ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_PEER_ENUMERATION, "cannot enumerate the live peer set");
+            if (observed <= scan_capacity) break;
+            if (observed > (size_t)INT_MAX || observed > SIZE_MAX / sizeof *scan)
+                ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_PEER_ENUMERATION,
+                                        "the live peer set is larger than the coordinator can address");
+            hl_host_process_peer *expanded = realloc(scan, observed * sizeof *scan);
+            if (expanded == NULL)
+                ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_RESOURCES, "cannot grow the peer enumeration buffer");
+            scan = expanded;
+            scan_capacity = observed;
+        }
+        for (size_t index = 0; index < observed; index++) {
+            if (!ckpt_capture_member(scan[index].identity, getpid())) continue;
+            int already = 0;
+            for (int i = 0; i < nfoll; i++)
+                if (foll[i].identity == scan[index].identity) already = 1;
+            if (already) continue;
+            if (hide_one) { // withheld from this first scan only; the next pass adopts it
+                hide_one = 0;
+                fprintf(stderr, "[ckpt] participant %lld withheld from the first enumeration (test hook)\n",
+                        (long long)scan[index].identity);
+                continue;
+            }
+            if (nfoll == known_capacity) {
+                int grown = known_capacity == 0 ? 16 : known_capacity * 2;
+                hl_host_process_peer *peers = realloc(foll, (size_t)grown * sizeof *foll);
+                unsigned char *ledger = peers != NULL ? realloc(completed, (size_t)grown) : NULL;
+                if (peers != NULL) foll = peers;
+                if (ledger == NULL)
+                    ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_RESOURCES, "cannot grow the rendezvous ledger");
+                completed = ledger;
+                known_capacity = grown;
+            }
+            foll[nfoll] = scan[index];
+            completed[nfoll] = 0;
+            nfoll++;
+            discovered = 1;
+            // Freeze + dump this peer: the shared trigger generation is already advanced (the requester
+            // bumped it), so KICK it with the guest-proof THREAD_INT_SIG to bounce it out of a blocked
+            // syscall / chained in-cache loop to its safepoint, where ckpt_poll sees the new generation and
+            // dumps proc.<gpid> + _exit()s.
+            int kicked = hl_host_process_interrupt(scan[index]);
+            fprintf(stderr, "[ckpt] participant %lld %s\n", (long long)scan[index].identity,
+                    kicked ? "interrupted" : "NOT interrupted (it cannot reach a safepoint)");
+        }
         for (int i = 0; i < nfoll; i++) {
             if (completed[i]) continue;
             char pd[64];
@@ -1675,8 +1723,17 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
                 nexempt++;
             }
         }
-        if (ndone != nfoll) usleep(10000);
+        /* Quiescent means everything known has finished AND a rescan found nothing new -- and it takes
+         * CKPT_ENUMERATION_QUIET_PASSES consecutive such passes, never one. One is not enough because the
+         * very first pass is trivially quiet before anything has been adopted, and because a process
+         * forked microseconds before the scan that missed it is discovered by the NEXT scan, not that one.
+         * Settling on a single quiet pass is exactly the hole this loop exists to close: it would seal the
+         * membership while an unfrozen guest process was still on its way to a safepoint. */
+        quiet = ndone == nfoll && !discovered ? quiet + 1 : 0;
+        if (quiet < CKPT_ENUMERATION_QUIET_PASSES) usleep(10000);
     }
+    free(scan);
+    fprintf(stderr, "[ckpt] coordinator pid=%d found %d peer(s), %d exempt\n", getpid(), nfoll, nexempt);
     if (ndone != nfoll) {
         // Name every participant still outstanding at the rendezvous deadline: "the group never committed"
         // is otherwise indistinguishable from "nothing was ever asked to commit". The host is told about
@@ -1710,24 +1767,37 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     ckpt_phase_finish(&phases, "serialization", phase, 0);
 
     // Publish the MANIFEST last: its presence == a complete, restorable checkpoint.
-    // EXACT, not a lower bound. This used to sit behind a fixed two-second quiescence window whose only job
-    // was to hope that a descendant which raced the peer snapshot had finished assembling its group by the
-    // time we counted; the count was then compared with `<` because the window could not actually prove
-    // anything. Both are gone. Membership is sealed on the broker side by REGISTER_READY, and no member
-    // leaves its freeze until the manifest commits, so the set cannot grow or shrink between the rendezvous
-    // and the count. A mismatch in EITHER direction is now a real defect and refuses the manifest.
+    //
+    // SEAL FIRST, THEN COUNT, AND COUNT AGAINST THE SEAL. The expected process set is fixed at exactly one
+    // instant, here, and it comes from the broker's REGISTER_READY ledger rather than from anything this
+    // process enumerated. That matters in both directions, and both have been observed in production:
+    //
+    //   - a process forked after the coordinator's scan is a genuine member that commits a genuine group.
+    //     Measured against an enumeration it postdates it reads as a surplus group and refuses a healthy
+    //     close; measured against the ledger it registered in, it is simply one of the members.
+    //   - a process the coordinator never enumerated, or enumerated and lost, that DID register is a
+    //     member whose state is unsaved. An enumeration-derived count cannot see it at all -- that is the
+    //     shape that published `checkpoint OK: 1 process(es)` with a registered member missing. A sealed
+    //     count is higher than the committed groups and refuses.
+    //
+    // The seal runs after this coordinator's own dump, so every member including the init is in the ledger,
+    // and after the rendezvous, so no unfrozen guest process remains that could still fork or register. A
+    // registration arriving after it is refused by the broker rather than admitted, and the late member
+    // refuses its own dump instead of publishing into an image that is already being counted.
     phase = ckpt_phase_begin(&phases);
+    uint64_t sealed = 0;
+    if (ckpt_stream_seal_membership(&sealed) != 0)
+        ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_PROCESS_COUNT,
+                                "the broker could not seal this capture's membership, so the set of processes the "
+                                "manifest must contain is unknown");
     int nproc = ckpt_sink_group_count(sink, "proc.");
     ckpt_phase_finish(&phases, "settlement", phase, 0);
-    // Still EXACT, and still a refusal in either direction. An exempted peer contributed no group, so it
-    // is subtracted from the expected count rather than tolerated by a `<`: if any peer this coordinator
-    // exempted turns out to have committed a group after all, the count is high and the manifest is
-    // refused, which is the check that stops the exemption from ever hiding a member.
-    if (nproc != nfoll - nexempt + 1) {
+    if (nproc < 0 || sealed > (uint64_t)INT_MAX || nproc != (int)sealed) {
         char reason[HL_CKPT_STREAM_NAME_MAX];
         snprintf(reason, sizeof reason,
-                 "process-count mismatch: expected exactly %d committed groups, captured %d",
-                 nfoll - nexempt + 1, nproc);
+                 "process-count mismatch: %llu process(es) proved membership of this capture and exactly that "
+                 "many groups must be committed, but %d were; %d peer(s) were enumerated and %d exempted",
+                 (unsigned long long)sealed, nproc, nfoll, nexempt);
         ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_PROCESS_COUNT, reason);
     }
     struct ckpt_manifest man;
