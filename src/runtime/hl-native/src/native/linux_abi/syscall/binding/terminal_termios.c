@@ -25,6 +25,7 @@
  */
 
 #include <pthread.h>
+#include <stdatomic.h>
 #include <sys/stat.h>
 
 #define TERMINAL_TERMIOS_IMAGE 36
@@ -42,6 +43,10 @@ typedef struct {
 static terminal_termios_entry g_terminal_termios[TERMINAL_TERMIOS_CAPACITY];
 static pthread_mutex_t g_terminal_termios_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t g_terminal_termios_stamp;
+/* Bumped on every remember. The engine's terminal pump reads this once per wakeup to decide whether
+ * its cached termios is still current, so the common case -- a keystroke arriving with the guest's
+ * termios unchanged -- costs one relaxed load and no lock, no fstat and no tcgetattr. */
+static _Atomic uint64_t g_terminal_termios_generation;
 
 static int terminal_termios_identity(int native_fd, dev_t *device, ino_t *inode) {
     struct stat status;
@@ -104,6 +109,7 @@ static void terminal_termios_remember(int native_fd, const uint8_t *image, const
     }
     chosen->used = 1;
     chosen->stamp = ++g_terminal_termios_stamp;
+    atomic_fetch_add_explicit(&g_terminal_termios_generation, 1, memory_order_release);
     chosen->device = device;
     chosen->inode = inode;
     memcpy(chosen->image, image, TERMINAL_TERMIOS_IMAGE);
@@ -141,6 +147,43 @@ static void terminal_termios_apply_recall(int native_fd, uint8_t *argument) {
     uint8_t recalled[TERMINAL_TERMIOS_IMAGE];
     if (terminal_termios_recall(native_fd, argument, recalled))
         memcpy(argument, recalled, TERMINAL_TERMIOS_IMAGE);
+}
+
+/* How many times any terminal's guest image has been installed. A reader that sees an unchanged value
+ * may keep whatever image it last read. */
+HL_API uint64_t HL_TARGET_LOCAL(terminal_termios_generation)(void) {
+    return atomic_load_explicit(&g_terminal_termios_generation, memory_order_acquire);
+}
+
+/* The guest-authored image for the terminal `native_fd` names, or 0 when this ISA's store has none.
+ *
+ * Unlike `terminal_termios_recall` this does NOT require the host to still hold the projection that
+ * installing the image produced. The engine's terminal pump is the one party that deliberately makes
+ * the host diverge -- it puts the host slave in raw mode so the Linux line discipline can run over a
+ * channel that does not flush -- so for it a mismatch is the expected state rather than evidence of a
+ * stale entry. Every other caller wants `terminal_termios_recall` and its guard. */
+HL_API int HL_TARGET_LOCAL(terminal_termios_image)(int32_t native_fd, uint8_t *out) {
+    dev_t device;
+    ino_t inode;
+    if (out == NULL || !terminal_termios_identity((int)native_fd, &device, &inode)) return 0;
+    int found = 0;
+    pthread_mutex_lock(&g_terminal_termios_lock);
+    for (int index = 0; index < TERMINAL_TERMIOS_CAPACITY; ++index) {
+        terminal_termios_entry *entry = &g_terminal_termios[index];
+        if (!entry->used || entry->device != device || entry->inode != inode) continue;
+        memcpy(out, entry->image, TERMINAL_TERMIOS_IMAGE);
+        found = 1;
+        break;
+    }
+    pthread_mutex_unlock(&g_terminal_termios_lock);
+    return found;
+}
+
+/* Install `image` as the guest view of the terminal `fd` names, so a caller outside this translation
+ * unit can then read it back through the bridge and check the whole path. The host projection is
+ * recorded as the image itself, which is what a Linux host produces anyway. */
+HL_API void HL_TARGET_LOCAL(terminal_termios_install_test)(int32_t fd, const uint8_t *image) {
+    terminal_termios_remember((int)fd, image, image);
 }
 
 /* Exercise the store without a terminal. Identity comes from fstat, so any pair

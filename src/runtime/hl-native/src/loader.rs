@@ -55,6 +55,7 @@ pub(crate) type ScenarioTest = unsafe extern "C" fn(c_uint) -> c_int;
 pub(crate) type SignalFrameTest = unsafe extern "C" fn(c_uint, c_uint, u64, i64, *mut i64, *mut i64) -> c_int;
 #[cfg(feature = "native-test-hooks")]
 pub(crate) type NoArgumentTest = unsafe extern "C" fn() -> c_int;
+pub(crate) type TermiosInstallTest = unsafe extern "C" fn(c_int, *const u8);
 #[cfg(feature = "native-test-hooks")]
 pub(crate) type UnixIdentityTest = unsafe extern "C" fn(c_uint, c_int, u64, *mut u64, *mut u64, *mut c_uint) -> c_int;
 #[cfg(feature = "native-test-hooks")]
@@ -62,6 +63,8 @@ pub(crate) type UnixIdentityCaptureTest = unsafe extern "C" fn(c_int) -> c_int;
 
 pub(crate) type GuestPid = unsafe extern "C" fn(*const Backend) -> c_int;
 pub(crate) type ProcessIdentitySignal = unsafe extern "C" fn(c_int, u64, c_int) -> c_int;
+pub(crate) type TerminalTermiosGeneration = unsafe extern "C" fn() -> u64;
+pub(crate) type TerminalTermios = unsafe extern "C" fn(c_int, *mut u8) -> c_int;
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -89,6 +92,8 @@ pub(crate) struct BridgeApi {
     pub(crate) checkpoint_broker_accept_authenticated: Option<AuthenticatedBrokerAccept>,
     pub(crate) guest_pid: Option<GuestPid>,
     pub(crate) process_identity_signal: Option<ProcessIdentitySignal>,
+    pub(crate) terminal_termios_generation: Option<TerminalTermiosGeneration>,
+    pub(crate) terminal_termios: Option<TerminalTermios>,
 }
 
 #[derive(Clone, Copy)]
@@ -146,6 +151,7 @@ pub(crate) struct TestApi {
     pub(crate) x86_64_checkpoint_restore_rollback: NoArgumentTest,
     pub(crate) aarch64_terminal_termios_store: NoArgumentTest,
     pub(crate) x86_64_terminal_termios_store: NoArgumentTest,
+    pub(crate) aarch64_terminal_termios_install: TermiosInstallTest,
     pub(crate) aarch64_unix_identity: UnixIdentityTest,
     pub(crate) x86_64_unix_identity: UnixIdentityTest,
     pub(crate) aarch64_unix_identity_capture: UnixIdentityCaptureTest,
@@ -468,6 +474,7 @@ fn load_tests(library: &DynamicLibrary, path: &Path) -> Result<TestApi, LoadErro
         x86_64_checkpoint_restore_rollback: symbol!("hl_x86_64_checkpoint_restore_rollback_test", NoArgumentTest),
         aarch64_terminal_termios_store: symbol!("hl_aarch64_terminal_termios_store_test", NoArgumentTest),
         x86_64_terminal_termios_store: symbol!("hl_x86_64_terminal_termios_store_test", NoArgumentTest),
+        aarch64_terminal_termios_install: symbol!("hl_aarch64_terminal_termios_install_test", TermiosInstallTest),
         aarch64_unix_identity: symbol!("hl_aarch64_unix_identity_test", UnixIdentityTest),
         x86_64_unix_identity: symbol!("hl_x86_64_unix_identity_test", UnixIdentityTest),
         aarch64_unix_identity_capture: symbol!("hl_aarch64_unix_identity_capture_test", UnixIdentityCaptureTest),
