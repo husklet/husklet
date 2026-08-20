@@ -42,6 +42,7 @@
 #define hl_ckpt_channel_call_receive_descriptor HL_TARGET_LOCAL(ckpt_channel_call_receive_descriptor)
 #define hl_ckpt_channel_broker HL_TARGET_LOCAL(ckpt_channel_broker)
 #define hl_ckpt_channel_failure HL_TARGET_LOCAL(ckpt_channel_failure)
+#define hl_ckpt_channel_owns_descriptor HL_TARGET_LOCAL(ckpt_channel_owns_descriptor)
 #define hl_ckpt_channel_publish HL_TARGET_LOCAL(ckpt_channel_publish)
 #define hl_ckpt_trigger_descriptor HL_TARGET_LOCAL(ckpt_trigger_descriptor)
 #define hl_ckpt_trigger_publish HL_TARGET_LOCAL(ckpt_trigger_publish)

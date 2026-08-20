@@ -29,6 +29,11 @@ int hl_ckpt_channel_broker(void) {
     return -1;
 }
 
+int hl_ckpt_channel_owns_descriptor(int descriptor) {
+    (void)descriptor;
+    return 0;
+}
+
 const char *hl_ckpt_channel_failure(void) {
     return "reach a checkpoint broker: this host has no checkpoint transport";
 }
@@ -149,6 +154,12 @@ static int checkpoint_channel_failed(const char *step) {
 
 const char *hl_ckpt_channel_failure(void) {
     return checkpoint_channel_failure[0] != 0 ? checkpoint_channel_failure : NULL;
+}
+
+int hl_ckpt_channel_owns_descriptor(int descriptor) {
+    if (descriptor < 0) return 0;
+    if (descriptor == checkpoint_broker || descriptor == checkpoint_trigger) return 1;
+    return descriptor == checkpoint_channel && checkpoint_channel_owner == (long)getpid();
 }
 
 /* Forgets a channel whose round trip failed, so the NEXT call mints a fresh one.

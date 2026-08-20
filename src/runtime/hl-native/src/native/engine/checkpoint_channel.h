@@ -49,6 +49,24 @@ int hl_ckpt_channel_current_for_test(void);
  * and changes no control flow. */
 const char *hl_ckpt_channel_failure(void);
 
+/* Whether `descriptor` is one this process's checkpoint transport owns: the broker, the trigger, or this
+ * process's channel.
+ *
+ * The engine already refuses to close its own descriptors on the guest's behalf, and it decides which
+ * they are from the engine-private ledger (hl_host_process_fd_private_current). That ledger is keyed by
+ * (pid, start time), so a fork CHILD owns no rows until hl_host_process_fd_private_fork_complete has
+ * replayed the parent's -- and a child that reaches a guest close_range() before, or without, that replay
+ * reads its inherited transport descriptors as ordinary guest fds and closes them. glibc sanitizes the
+ * descriptor table with close_range(3, ~0U) in every posix_spawn child, so an ordinary shell running
+ * `sleep .05` produces one such child every time; the loss is invisible until a capture catches one of
+ * them alive, whereupon its REGISTER_READY dies at sendmsg with EBADF, that member refuses its own dump,
+ * and the whole close is refused for a healthy tree.
+ *
+ * These three descriptors are held in this file's own statics, so ownership can be answered here without
+ * consulting anything a fork may not have rebuilt yet. Answering it from the owner rather than from a
+ * derived index is what makes the answer independent of when the ledger is repopulated. */
+int hl_ckpt_channel_owns_descriptor(int descriptor);
+
 int hl_ckpt_channel_call(hl_ckpt_request *request, const char *name, const void *payload, hl_ckpt_reply *reply,
                          void *out, size_t capacity);
 
