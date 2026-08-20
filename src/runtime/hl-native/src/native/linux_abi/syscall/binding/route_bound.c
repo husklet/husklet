@@ -720,8 +720,13 @@ static int bound_route_directory(struct cpu *c, uint64_t nr, uint64_t a0, uint64
         size_t used = 0;
         result = 0;
         for (uint32_t index = 0; index < (uint32_t)read.value; ++index) {
-            size_t record_size = (19u + entries[index].name_size + 1u + 7u) & ~(size_t)7u;
-            if (entries[index].name_size > 255 || record_size > byte_capacity - used) {
+            // Same presentation rule as the ordinary getdents64 path: a stored case escape is the
+            // engine's spelling, never the guest's, so decode it before it reaches the guest buffer.
+            char decoded[256];
+            const char *name = hl_case_visible(entries[index].name, decoded, sizeof decoded);
+            size_t name_size = strlen(name);
+            size_t record_size = (19u + name_size + 1u + 7u) & ~(size_t)7u;
+            if (name_size > 255 || record_size > byte_capacity - used) {
                 result = -EIO;
                 break;
             }
@@ -731,7 +736,7 @@ static int bound_route_directory(struct cpu *c, uint64_t nr, uint64_t a0, uint64
             *(uint64_t *)(record + 8) = entries[index].next_offset;
             *(uint16_t *)(record + 16) = (uint16_t)record_size;
             record[18] = (uint8_t)entries[index].type;
-            memcpy(record + 19, entries[index].name, entries[index].name_size);
+            memcpy(record + 19, name, name_size);
             used += record_size;
         }
         if (result == 0 && guest_copy_to(a1, output, used) != (ssize_t)used)

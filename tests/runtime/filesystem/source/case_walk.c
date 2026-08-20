@@ -8,17 +8,11 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 static int failures;
-
-/* A directory listing still shows the host escape form for a name the namespace escaped:
- * getdents outside the overlay path does not decode it. That defect predates this test and is
- * reported rather than counted, so the counted assertions stay a usable gate. */
-static void known(int ok, const char *label) {
-    if (!ok) fprintf(stderr, "KNOWN %s\n", label);
-}
 
 static void check(int ok, const char *label) {
     if (!ok) {
@@ -65,6 +59,37 @@ static int lists(const char *directory, const char *name) {
         if (strcmp(entry->d_name, name) == 0) seen = 1;
     closedir(entries);
     return seen;
+}
+
+/* Any entry whose name begins with `prefix`. */
+static int lists_prefix(const char *directory, const char *prefix) {
+    DIR *entries = opendir(directory);
+    if (!entries) return 0;
+    struct dirent *entry;
+    int seen = 0;
+    size_t size = strlen(prefix);
+    while ((entry = readdir(entries)))
+        if (strncmp(entry->d_name, prefix, size) == 0) seen = 1;
+    closedir(entries);
+    return seen;
+}
+
+/* The single listed entry that folds onto `folded` but is not spelled `folded`, copied out for the
+ * caller to open. Zero unless exactly one such entry exists. */
+static int single_match(const char *directory, const char *folded, char *out, size_t capacity) {
+    DIR *entries = opendir(directory);
+    if (!entries) return 0;
+    struct dirent *entry;
+    int found = 0;
+    out[0] = 0;
+    while ((entry = readdir(entries))) {
+        if (strcasecmp(entry->d_name, folded) != 0 || strcmp(entry->d_name, folded) == 0) continue;
+        found++;
+        snprintf(out, capacity, "%s", entry->d_name);
+    }
+    closedir(entries);
+    if (found != 1) out[0] = 0;
+    return found == 1;
 }
 
 int main(void) {
@@ -114,9 +139,32 @@ int main(void) {
 
     /* readdir reports the guest names, never a host escape form. */
     check(lists(base, "casefile"), "readdir casefile");
-    known(lists(base, "CaseFile"), "readdir CaseFile");
-    known(lists(base, "Solo"), "readdir Solo");
+    check(lists(base, "CaseFile"), "readdir CaseFile");
+    check(lists(base, "Solo"), "readdir Solo");
     check(!lists(base, "solo"), "readdir no solo");
+    check(!lists_prefix(base, ".hl-case-v1-"), "readdir shows no escape form");
+
+    /* A name obtained FROM a listing must open, and open the file the listing was describing.
+     * This is the property a shell glob, `find -exec` and a build system all depend on: a name that
+     * lists as X but only opens as Y breaks them silently. Nothing here spells "CaseFile" itself --
+     * the name under test is the one readdir produced. */
+    char listed[256];
+    check(single_match(base, "casefile", listed, sizeof listed), "listing offers a CaseFile-cased name");
+    if (listed[0]) {
+        snprintf(path, sizeof path, "%s/%s", base, listed);
+        check(holds(path, "MIXED"), "open the name the listing gave");
+    }
+
+    /* A guest is entitled to create a file whose own name looks like the escape form. The namespace
+     * escapes such a name on the way in, so it is not the engine's escape of anything, and it must
+     * list and open as itself -- decoding must not run twice. */
+    snprintf(path, sizeof path, "%s/.hl-case-v1-43617365", base);
+    check(put(path, "guest-chosen") == 0, "create escape-shaped name");
+    check(lists(base, ".hl-case-v1-43617365"), "readdir escape-shaped name");
+    check(holds(path, "guest-chosen"), "read escape-shaped name");
+    check(!lists(base, "Case"), "escape-shaped name is not decoded");
+    snprintf(path, sizeof path, "%s/Case", base);
+    check(absent(path), "Case absent");
 
     /* Symlinks: followed by default, refused with O_NOFOLLOW, readable with readlink. */
     snprintf(path, sizeof path, "%s/Link", base);
