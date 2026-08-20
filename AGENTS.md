@@ -477,6 +477,30 @@ any other name runs unseen for its entire measurement and every other lane
 reads the box as free. If you copy the driver, keep the basename `testing`
 (`bin/testing` is fine — `-x` matches the name, not the path).
 
+**So ask the kernel what is burning CPU, not what anything is called.** Every
+occupancy check in this section is name-based or lock-based, and both miss the
+same case: a process that is neither named `testing` nor holding the lock.
+Measured 2026-08-20 — an orphaned `testing-d3f9382`, a renamed driver under a
+deleted target directory, ran at **399% CPU for 4.9 hours**, reparented to init
+after its lane exited. `pgrep -cx testing` read **0** against it for the whole
+period. Four fully-consumed cores were invisible to every check anybody ran, and
+every timing taken on this box during those hours was measured against them.
+
+    ps -eo pid,pcpu,etimes,args --sort=-pcpu | \
+      awk 'NR>1 && $2>50 && $3>600 {print}'
+
+Anything above 50% CPU for more than ten minutes that you cannot account for is
+your answer, whatever it is called and whether or not it took the lock. Run it
+before a measurement, not after one disappoints you.
+
+**Record elapsed time beside every result; it catches what the load average
+cannot.** A load figure averages over an eighteen-core box and absorbs four busy
+cores without looking alarming — `6.6` was recorded during those hours and read
+as ordinary. What gave the orphan away was a test that takes 12.4 seconds taking
+**405**. A runtime thirty times its own baseline is unambiguous where a load
+number is deniable, so a result recorded without its elapsed time cannot be
+audited for contention afterwards.
+
 **`pkill -x` kills other lanes' shared tooling.** Cancelling your own build with
 `pkill -x flock` matches every lane queued on the box lock, not just yours: one
 lane lost nineteen minutes of queueing that way. The name you are killing is
