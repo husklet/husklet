@@ -4,6 +4,7 @@ use std::ffi::OsStr;
 use std::mem::{offset_of, size_of};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
+use std::time::{Duration, Instant};
 
 const PREPARE: u32 = 0;
 const IDENTIFY: u32 = 1;
@@ -77,6 +78,105 @@ fn accept(listener: i32) -> OwnedFd {
     let descriptor = unsafe { libc::accept(listener, std::ptr::null_mut(), std::ptr::null_mut()) };
     assert!(descriptor >= 0, "accept: {}", std::io::Error::last_os_error());
     unsafe { OwnedFd::from_raw_fd(descriptor) }
+}
+
+/// The wait for a connection from ANOTHER PROCESS is bounded, and it is bounded here rather than by
+/// polling first and then calling a blocking `accept`: a `poll` that times out and falls through into
+/// `accept` is unbounded again, which is how a previous test in this repository turned a red into an
+/// infinite gate. A connector that dies before it dials -- which is exactly what a broken identity
+/// assertion in the child looks like -- must fail this test with a message, not hang the whole
+/// `cargo test -p hl-native --all-targets` run forever.
+const CONNECTOR_DEADLINE: Duration = Duration::from_secs(20);
+
+fn accept_within(listener: i32, deadline: Duration) -> Result<OwnedFd, String> {
+    let previous = unsafe { libc::fcntl(listener, libc::F_GETFL) };
+    assert!(previous >= 0, "F_GETFL: {}", std::io::Error::last_os_error());
+    assert_eq!(
+        unsafe { libc::fcntl(listener, libc::F_SETFL, previous | libc::O_NONBLOCK) },
+        0,
+        "F_SETFL: {}",
+        std::io::Error::last_os_error()
+    );
+    let expiry = Instant::now() + deadline;
+    let outcome = loop {
+        let descriptor = unsafe { libc::accept(listener, std::ptr::null_mut(), std::ptr::null_mut()) };
+        if descriptor >= 0 {
+            break Ok(unsafe { OwnedFd::from_raw_fd(descriptor) });
+        }
+        let error = std::io::Error::last_os_error();
+        let raw = error.raw_os_error();
+        if raw != Some(libc::EAGAIN) && raw != Some(libc::EWOULDBLOCK) && raw != Some(libc::EINTR) {
+            break Err(format!("accept: {error}"));
+        }
+        let remaining = expiry.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break Err(format!("no connection arrived within {deadline:?}"));
+        }
+        let mut poll = libc::pollfd {
+            fd: listener,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let milliseconds = i32::try_from(remaining.as_millis().max(1)).unwrap_or(i32::MAX);
+        unsafe { libc::poll(&raw mut poll, 1, milliseconds) };
+    };
+    // The listener is handed back in the state it was found in whether or not a connection arrived.
+    unsafe { libc::fcntl(listener, libc::F_SETFL, previous) };
+    outcome
+}
+
+/// A connector child whose stdout the parent must drain and whose exit the parent must reap on EVERY
+/// path. Leaving it to `Child`'s drop closes the read end of its stdout pipe while the child is still
+/// printing, and the child then dies of `failed printing to stdout: Broken pipe` -- destroying the
+/// diagnostic that says why the parent's own assertion failed. Observed on both connectors here.
+struct Connector(Option<std::process::Child>);
+
+impl Connector {
+    fn spawn(mut command: std::process::Command) -> Self {
+        Self(Some(
+            command
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .expect("spawn the connector process"),
+        ))
+    }
+
+    /// Waits up to `deadline` for the child to exit, kills it if it does not, and then reads everything
+    /// it printed. The wait is bounded for the same reason the accept is: a child that never exits must
+    /// fail this test, not suspend the gate. `None` for the status means it had to be killed.
+    fn finish(&mut self, deadline: Duration) -> (Option<std::process::ExitStatus>, String) {
+        let Some(mut child) = self.0.take() else {
+            return (None, String::new());
+        };
+        let expiry = Instant::now() + deadline;
+        let mut status = None;
+        loop {
+            match child.try_wait() {
+                Ok(Some(exit)) => {
+                    status = Some(exit);
+                    break;
+                }
+                Ok(None) => {}
+                Err(_) => break,
+            }
+            if Instant::now() >= expiry {
+                let _ = child.kill();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let stdout = child.wait_with_output().map_or_else(
+            |error| format!("<connector output unavailable: {error}>"),
+            |output| String::from_utf8_lossy(&output.stdout).into_owned(),
+        );
+        (status, stdout)
+    }
+}
+
+impl Drop for Connector {
+    fn drop(&mut self) {
+        let _ = self.finish(Duration::ZERO);
+    }
 }
 
 fn identity(isa: u32, operation: u32, descriptor: i32, object: u64) -> (u64, u64, u32) {
@@ -524,7 +624,8 @@ fn an_honest_cross_process_connection_carries_reciprocal_identity_on_both_isas()
         bind(listener.as_raw_fd(), &listener_address, listener_length);
         assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 4) }, 0);
 
-        let connector = std::process::Command::new(std::env::current_exe().unwrap())
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
             .args([
                 "--exact",
                 "cross_process_identity_connector",
@@ -532,14 +633,31 @@ fn an_honest_cross_process_connection_carries_reciprocal_identity_on_both_isas()
                 "--nocapture",
             ])
             .env(CROSS_PROCESS_SOCKET, &path)
-            .env(CROSS_PROCESS_ISA, isa.to_string())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .expect("spawn the connector process");
+            .env(CROSS_PROCESS_ISA, isa.to_string());
+        let mut connector = Connector::spawn(command);
 
-        let accepted = accept(listener.as_raw_fd());
+        let accepted = match accept_within(listener.as_raw_fd(), CONNECTOR_DEADLINE) {
+            Ok(accepted) => accepted,
+            Err(reason) => {
+                let (status, stdout) = connector.finish(Duration::ZERO);
+                panic!("ISA {isa} connector never dialled ({reason}); it exited {status:?}:\n{stdout}");
+            }
+        };
         let allocated = 0x7a00_0000_0000_0000_u64 | u64::from(isa);
         let (local, peer, hidden) = identity(isa, IDENTIFY, accepted.as_raw_fd(), allocated);
+
+        let byte = [0x5a_u8];
+        assert_eq!(
+            unsafe { libc::write(accepted.as_raw_fd(), byte.as_ptr().cast(), byte.len()) },
+            1
+        );
+        // Drained and reaped BEFORE the first assertion that can panic, so the connector's own output
+        // survives to explain a failure instead of being cut off by the parent's dropped pipe.
+        let (status, stdout) = connector.finish(CONNECTOR_DEADLINE);
+        assert!(
+            status.is_some_and(|status| status.success()),
+            "ISA {isa} connector exited {status:?}:\n{stdout}"
+        );
         assert_eq!(
             peer, CROSS_PROCESS_CLIENT_OBJECT,
             "ISA {isa} accepted socket has no cross-process peer identity"
@@ -553,22 +671,10 @@ fn an_honest_cross_process_connection_carries_reciprocal_identity_on_both_isas()
             PEER_HIDDEN | RECIPROCITY_REQUIRED,
             "ISA {isa} peer identity is not hidden"
         );
-
-        let byte = [0x5a_u8];
-        assert_eq!(
-            unsafe { libc::write(accepted.as_raw_fd(), byte.as_ptr().cast(), byte.len()) },
-            1
-        );
-        let output = connector.wait_with_output().expect("connector exit");
-        assert!(
-            output.status.success(),
-            "connector failed: {}",
-            String::from_utf8_lossy(&output.stdout)
-        );
-        let reported = String::from_utf8_lossy(&output.stdout)
+        let reported = stdout
             .lines()
             .find_map(|line| line.strip_prefix("collected-peer=").map(str::to_owned))
-            .expect("connector reported its collected peer");
+            .unwrap_or_else(|| panic!("ISA {isa} connector reported no collected peer:\n{stdout}"));
         assert_eq!(
             format!("{local:016x}"),
             reported,
@@ -633,16 +739,33 @@ fn an_accepted_socket_encodes_its_own_owners_pid_on_both_isas() {
         bind(listener.as_raw_fd(), &listener_address, listener_length);
         assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 4) }, 0);
 
-        let connector = std::process::Command::new(std::env::current_exe().unwrap())
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
             .args(["--exact", "owner_pid_identity_connector", "--ignored", "--nocapture"])
             .env(OWNER_PID_SOCKET, &path)
-            .env(CROSS_PROCESS_ISA, isa.to_string())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .expect("spawn the connector process");
+            .env(CROSS_PROCESS_ISA, isa.to_string());
+        let mut connector = Connector::spawn(command);
 
-        let accepted = accept(listener.as_raw_fd());
+        let accepted = match accept_within(listener.as_raw_fd(), CONNECTOR_DEADLINE) {
+            Ok(accepted) => accepted,
+            Err(reason) => {
+                let (status, stdout) = connector.finish(Duration::ZERO);
+                panic!("ISA {isa} connector never dialled ({reason}); it exited {status:?}:\n{stdout}");
+            }
+        };
         let (local, peer, hidden) = identity(isa, IDENTIFY_MINTED, accepted.as_raw_fd(), 0);
+
+        let byte = [0x5a_u8];
+        assert_eq!(
+            unsafe { libc::write(accepted.as_raw_fd(), byte.as_ptr().cast(), byte.len()) },
+            1
+        );
+        // Drained and reaped before the first assertion that can panic; see `Connector`.
+        let (status, stdout) = connector.finish(CONNECTOR_DEADLINE);
+        assert!(
+            status.is_some_and(|status| status.success()),
+            "ISA {isa} connector exited {status:?}:\n{stdout}"
+        );
         assert_eq!(
             hidden,
             PEER_HIDDEN | RECIPROCITY_REQUIRED,
@@ -658,15 +781,6 @@ fn an_accepted_socket_encodes_its_own_owners_pid_on_both_isas() {
             peer >> 32,
             "ISA {isa} both endpoint ids encode the same owner ({local:016x}/{peer:016x})"
         );
-
-        let byte = [0x5a_u8];
-        assert_eq!(
-            unsafe { libc::write(accepted.as_raw_fd(), byte.as_ptr().cast(), byte.len()) },
-            1
-        );
-        let output = connector.wait_with_output().expect("connector exit");
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        assert!(output.status.success(), "connector failed: {stdout}");
         let reported = |key: &str| {
             stdout
                 .lines()
