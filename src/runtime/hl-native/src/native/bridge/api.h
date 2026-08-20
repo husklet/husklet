@@ -45,6 +45,7 @@ typedef struct hl_c_bridge_api {
                                                        uint64_t *host_pid, uint64_t *host_birth,
                                                        uint64_t *host_generation, int32_t *process_handle);
     int32_t (*guest_pid)(const hl_c_backend *backend);
+    int32_t (*process_identity_signal)(int32_t handle, uint64_t host_pid, int32_t signal);
 } hl_c_bridge_api;
 
 HL_EXTERN_C_BEGIN
@@ -104,6 +105,13 @@ HL_API uint64_t hl_c_backend_exit_detail(const hl_c_backend *backend);
  * member by exactly this number and a restore re-forks it under the same one, so it is the identity a
  * host may hold across a capture. */
 HL_API int32_t hl_c_backend_guest_pid(const hl_c_backend *backend);
+/* Delivers one signal to the exact process incarnation an authenticated peer capability names.
+ *
+ * `handle` is the capability an authenticated broker accept produced and `host_pid` the identity it
+ * authenticated. Delivery is refused, not retargeted, once that incarnation is gone: the capability is
+ * what makes this safe against pid reuse, which a bare kill(2) on a remembered pid is not. Signal 0
+ * probes reachability without delivering. Returns 0 on delivery and -1 otherwise. */
+HL_API int32_t hl_c_backend_process_identity_signal(int32_t handle, uint64_t host_pid, int32_t signal);
 HL_API uint64_t hl_c_backend_translation_count(const hl_c_backend *backend);
 HL_API void hl_c_backend_destroy(hl_c_backend *backend);
 

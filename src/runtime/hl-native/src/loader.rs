@@ -61,6 +61,7 @@ pub(crate) type UnixIdentityTest = unsafe extern "C" fn(c_uint, c_int, u64, *mut
 pub(crate) type UnixIdentityCaptureTest = unsafe extern "C" fn(c_int) -> c_int;
 
 pub(crate) type GuestPid = unsafe extern "C" fn(*const Backend) -> c_int;
+pub(crate) type ProcessIdentitySignal = unsafe extern "C" fn(c_int, u64, c_int) -> c_int;
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -87,6 +88,7 @@ pub(crate) struct BridgeApi {
     pub(crate) destroy: Option<Destroy>,
     pub(crate) checkpoint_broker_accept_authenticated: Option<AuthenticatedBrokerAccept>,
     pub(crate) guest_pid: Option<GuestPid>,
+    pub(crate) process_identity_signal: Option<ProcessIdentitySignal>,
 }
 
 #[derive(Clone, Copy)]

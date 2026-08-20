@@ -16,6 +16,7 @@ hl_c_backend_exit_kind
 hl_c_backend_exit_status
 hl_c_backend_guest_pid
 hl_c_backend_leak_check_nonvacuity
+hl_c_backend_process_identity_signal
 hl_c_backend_request
 hl_c_backend_run
 hl_c_backend_translation_count

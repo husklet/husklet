@@ -147,6 +147,7 @@ extern int HL_BRIDGE_CKPT(channel_authenticate_peer)(int, uint64_t, uint64_t *);
 #if defined(HL_NATIVE_TEST_HOOKS)
 extern void HL_BRIDGE_CKPT(channel_publish)(int);
 extern int HL_BRIDGE_CKPT(channel_acquire)(void);
+extern void HL_BRIDGE_CKPT(channel_forget_for_test)(void);
 #endif
 extern int HL_BRIDGE_CKPT(trigger_create)(hl_activation_descriptor *, void **);
 extern uint32_t HL_BRIDGE_CKPT(trigger_bump)(void *);
@@ -255,6 +256,9 @@ HL_API int32_t hl_c_backend_checkpoint_channel_connect_test(int32_t broker_child
         return -1;
     }
     HL_BRIDGE_CKPT(channel_publish)(broker_child);
+    /* Each call mints a channel the caller then owns and closes, so the per-process cache must not
+       hand the next caller the descriptor the previous one already closed. */
+    HL_BRIDGE_CKPT(channel_forget_for_test)();
     return HL_BRIDGE_CKPT(channel_acquire)();
 }
 #else
@@ -645,6 +649,29 @@ HL_API uint32_t hl_c_backend_exit_kind(const hl_c_backend *backend) {
 HL_API int32_t hl_c_backend_exit_status(const hl_c_backend *backend) {
     hl_engine_exit result = {.abi = HL_ENGINE_ABI, .size = sizeof(result)};
     return hl_c_backend_exit((hl_c_backend *)backend, &result) == HL_STATUS_OK ? result.guest_status : -1;
+}
+
+HL_API int32_t hl_c_backend_process_identity_signal(int32_t handle, uint64_t host_pid, int32_t signal) {
+    if (handle < 0 || host_pid == 0 || host_pid > INT64_MAX || signal < 0 || signal > 64) return -1;
+#if defined(__linux__)
+    /* The pidfd names one incarnation, so the kernel itself refuses a reused pid. */
+    return syscall(SYS_pidfd_send_signal, handle, signal, NULL, 0) == 0 ? 0 : -1;
+#elif defined(__APPLE__)
+    {
+        /* No pidfd: the capability is a NOTE_EXIT watch, so a readable handle means this incarnation
+           is already gone and the pid may belong to someone else. Refuse rather than retarget. */
+        struct pollfd waiting = {.fd = handle, .events = POLLIN, .revents = 0};
+        int ready;
+        do {
+            ready = poll(&waiting, 1, 0);
+        } while (ready < 0 && errno == EINTR);
+        if (ready != 0 || waiting.revents != 0) return -1;
+        return kill((pid_t)host_pid, signal) == 0 ? 0 : -1;
+    }
+#else
+    (void)signal;
+    return -1;
+#endif
 }
 
 HL_API int32_t hl_c_backend_guest_pid(const hl_c_backend *backend) {

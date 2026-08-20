@@ -114,6 +114,13 @@ impl Running for Process {
             .and_then(|engine| engine.as_ref().and_then(|engine| engine.guest_pid()))
     }
 
+    fn restored_member(&self, guest_pid: std::num::NonZeroI32) -> Option<hl_engine::runtime::RestoredMember> {
+        self.child
+            .lock()
+            .ok()
+            .and_then(|engine| engine.as_ref().and_then(|engine| engine.restored_member(guest_pid)))
+    }
+
     fn checkpointable(&self) -> bool {
         self.checkpointable
     }

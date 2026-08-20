@@ -48,6 +48,39 @@ static int ckpt_stream_recovery_complete(void) {
                : -1;
 }
 
+// Announce this restored process to the broker under the guest pid the image named it by.
+//
+// The connection this rides on is the process's OWN channel (hl_ckpt_channel_acquire re-creates one per
+// process after every fork), so the broker has already authenticated the caller: this call supplies the
+// only thing that authentication cannot, which is which captured member the live process IS. Sent after
+// the identity is hydrated and before the commit barrier, so it lands inside the recovery scope.
+//
+// A refusal is not fatal to the restore. The tree is already correct; only the host's ability to reach
+// this member individually is lost, and the host refuses to reattach rather than inventing one.
+static int ckpt_stream_member_restored(int guest_pid) {
+    unsigned char payload[8] = {0};
+    uint32_t encoded = (uint32_t)guest_pid;
+    if (guest_pid <= 0) return -1;
+    memcpy(payload, &encoded, sizeof encoded);
+    return ckpt_stream_call(HL_CKPT_OP_MEMBER_RESTORED, NULL, 0, 0, 0, payload, sizeof payload, NULL, NULL, 0) ==
+                   HL_CKPT_STATUS_OK
+               ? 0
+               : -1;
+}
+
+// Report this restored member's own guest exit status on its way out.
+//
+// A host holding the member sees the process vanish either way; this is what lets it report the status the
+// guest actually produced instead of "gone, cause unknown". Best effort by construction: a member killed
+// outright never runs this, which is exactly the case the host must still describe honestly.
+static void ckpt_stream_member_exited(int status, uint32_t kind) {
+    unsigned char payload[8] = {0};
+    int32_t encoded = (int32_t)status;
+    memcpy(payload, &encoded, sizeof encoded);
+    memcpy(payload + 4, &kind, sizeof kind);
+    (void)ckpt_stream_call(HL_CKPT_OP_MEMBER_EXITED, NULL, 0, 0, 0, payload, sizeof payload, NULL, NULL, 0);
+}
+
 static void ckpt_sink_stream_name(struct ckpt_sink *sink, const char *group, const char *name, char *out, size_t size) {
     (void)sink;
     if (group)

@@ -13,6 +13,11 @@ mod checkpoint;
 pub use checkpoint::authority::CheckpointAuthorityHandle;
 
 #[cfg(unix)]
+mod member;
+#[cfg(unix)]
+pub use member::{MemberExit, RestoredMember};
+
+#[cfg(unix)]
 mod terminal;
 
 use crate::activation::GuestIsa;
@@ -273,6 +278,17 @@ impl Engine {
     #[must_use]
     pub fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
         self.backend.guest_pid()
+    }
+    /// One member of the process tree this engine restored, by the guest pid its image names it by.
+    ///
+    /// This is how a host reaches a process a whole-image restore re-forked: the restore produces one
+    /// engine handle for a tree of many, and this addresses one of them. `None` for an engine that
+    /// started fresh, and for any guest pid the restore did not announce -- in which case a caller
+    /// must refuse to present the member as live rather than start a replacement for it.
+    #[cfg(unix)]
+    #[must_use]
+    pub fn restored_member(&self, guest_pid: std::num::NonZeroI32) -> Option<crate::runtime::RestoredMember> {
+        self.backend.restored_member(guest_pid)
     }
     pub fn capture_checkpoint(&self) -> Result<(), EngineError> {
         self.backend.capture_checkpoint()

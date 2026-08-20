@@ -656,7 +656,7 @@ static int container_init(const char *rootfs) {
     // checkpoint preserves for it. A launched member's guest pid is what the image names its group by
     // (`proc.<guest pid>`) and what a restore re-forks it under, so it is the only identity a host can
     // hold across a capture. Both target arms publish it; keep them in step.
-    hl_engine_child_result_publish_guest_pid(container_pid());
+    hl_engine_child_result_publish_guest_pid(ckpt_image_self_gpid());
     return 0;
 }
 

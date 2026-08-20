@@ -1242,6 +1242,21 @@ static void ckpt_self_group(char *out, size_t size) {
     snprintf(out, size, "proc.%d", ckpt_self_gpid());
 }
 
+// The guest pid THIS launch's own image group is filed under, decided the same way the capture decides
+// it and available before the guest starts.
+//
+// Two different answers, because two different namers: a non-coordinating member commits
+// ckpt_self_group, so its identity is ckpt_self_gpid (its host pid on a fresh launch, its mapped guest
+// pid on a restored one); the container init's group is named "proc.1" by the COORDINATOR instead, and
+// container_pid() would report 1 for both -- which is precisely the fold that once filed three exec
+// sessions as proc.1.
+//
+// The host reads this to learn which member a sealed exec record names, so it has to be the image's
+// answer and not the launch's opinion of itself.
+static int ckpt_image_self_gpid(void) {
+    return ckpt_process_coordinates() ? 1 : ckpt_self_gpid();
+}
+
 // The guest pid a member's image is filed under, read back from the group name the coordinator and the
 // member agreed on. THE GROUP NAME IS THE AUTHORITY: it is the only identity both sides of the rendezvous
 // have already committed to, so deriving the meta's self_gpid from anything else -- container_pid(),

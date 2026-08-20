@@ -1,7 +1,7 @@
 use super::{
-    CLAIM, COMMIT, CaptureFailure, CapturePhase, GROUP_BEGIN, GROUP_COMMIT, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL,
-    OBJECT_WRITE, OBJECT_WRITE_AT, REGISTER_READY, RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT,
-    REQUEST_BYTES, Reply, Request, Server,
+    CLAIM, COMMIT, CaptureFailure, CapturePhase, GROUP_BEGIN, GROUP_COMMIT, MEMBER_EXITED, MEMBER_RESTORED,
+    OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, REGISTER_READY, RELEASE_EXIT,
+    RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply, Request, Server,
     participants::{ExecutorId, ProcessIdentity},
 };
 use std::{
@@ -176,6 +176,40 @@ impl Server {
                 }
                 continue;
             }
+            if request.op == MEMBER_RESTORED {
+                // Scope-checked like every other publication: only a restore may name a restored
+                // member, so an announcement outside a running recovery is refused rather than
+                // installing a capability nothing produced.
+                let announced = if self.request_in_scope(connection.id, &request, &name) {
+                    self.member_restored(&mut connection, &payload)
+                } else {
+                    hl_log::hl_error!(
+                        hl_log::tag::CHECKPOINT,
+                        "restored member announcement refused for process {}: no restore is in scope",
+                        connection.id
+                    );
+                    Err(())
+                };
+                let reply = announced.map_or_else(|()| Reply::error(), |()| Reply::value(1));
+                let _ = reply.write(&mut channel);
+                continue;
+            }
+            if request.op == MEMBER_EXITED {
+                // Answered without a membership or scope check for the same reason RELEASE_WAIT is:
+                // the sender proved which member it is when it announced itself, and it is reporting
+                // its own exit on its way out of a tree no capture is sealing.
+                let reported = self.members.report_exit(connection.id, &payload);
+                if let Err(reason) = reported {
+                    hl_log::hl_error!(
+                        hl_log::tag::CHECKPOINT,
+                        "restored member exit report refused for process {}: {reason}",
+                        connection.id
+                    );
+                }
+                let reply = if reported.is_ok() { Reply::ok() } else { Reply::error() };
+                let _ = reply.write(&mut channel);
+                continue;
+            }
             if request.op == REGISTER_READY {
                 let member = self.register_ready(&mut connection, &request, &encoded_name, &payload);
                 let reply = member.map_or_else(|()| Reply::error(), Reply::value);
@@ -247,10 +281,7 @@ impl Server {
                 }
             }
             CapturePhase::Publishing { id } if id == generation => RELEASE_HOLD,
-            CapturePhase::Finished {
-                id,
-                result: Ok(()),
-            } if id == generation => RELEASE_EXIT,
+            CapturePhase::Finished { id, result: Ok(()) } if id == generation => RELEASE_EXIT,
             CapturePhase::Complete if self.committed.load(Ordering::Acquire) => RELEASE_EXIT,
             _ => RELEASE_RESUME,
         }
@@ -287,6 +318,44 @@ impl Server {
                 Err(())
             }
         }
+    }
+
+    /// Installs the connection's process as one addressable member of the restored tree.
+    ///
+    /// The guest pid comes from the member because only the member knows which captured image it was
+    /// re-forked from; everything else comes from the authenticated peer, because a self-reported host
+    /// identity would let any connection claim any member.
+    fn member_restored(&self, connection: &mut Connection<'_>, payload: &[u8]) -> Result<(), ()> {
+        let announced = self.member_restored_reason(connection, payload);
+        if let Err(reason) = announced {
+            hl_log::hl_error!(
+                hl_log::tag::CHECKPOINT,
+                "restored member announcement refused for process {}: {reason}",
+                connection.id
+            );
+            return Err(());
+        }
+        Ok(())
+    }
+
+    fn member_restored_reason(&self, connection: &mut Connection<'_>, payload: &[u8]) -> Result<(), &'static str> {
+        if payload.len() != 8 || payload[4..8] != [0; 4] {
+            return Err("malformed member announcement frame");
+        }
+        let guest_pid = i32::from_ne_bytes(payload[0..4].try_into().map_err(|_| "short guest pid")?);
+        let guest_pid = std::num::NonZeroI32::new(guest_pid).ok_or("member announced no guest pid")?;
+        if guest_pid.get() < 0 {
+            return Err("member announced a guest pid that is not a process identity");
+        }
+        let peer = connection.peer.as_ref().ok_or("channel has no authenticated peer")?;
+        // A duplicate of the authenticated capability, so the registry outlives the connection that
+        // carried it: the member stays reachable after the restore scope closes, which is the whole
+        // point of holding it.
+        let process = peer
+            .process_capability()
+            .try_clone()
+            .map_err(|_| "cannot retain the authenticated peer capability")?;
+        self.members.announce(connection.id, guest_pid, peer.host_pid, process)
     }
 
     fn register_ready_reason(

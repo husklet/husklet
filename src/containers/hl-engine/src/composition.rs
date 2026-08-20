@@ -264,6 +264,15 @@ pub trait GuestMachine: Send + Sync {
     fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
         None
     }
+    /// One member of the tree this machine restored, by the guest pid its image names it by.
+    ///
+    /// `None` for a machine that started fresh, and for a guest pid no restore announced. A member
+    /// that is present can be asked whether it is still the same live process, signalled, and read for
+    /// the exit it reported -- it is never relaunched, because a relaunch is a different process.
+    #[cfg(unix)]
+    fn restored_member(&self, _guest_pid: std::num::NonZeroI32) -> Option<crate::runtime::RestoredMember> {
+        None
+    }
     /// The domain freeze channel this machine owns, if it is the coordinator.
     #[cfg(unix)]
     fn checkpoint_channel(&self) -> Option<CheckpointChannel> {
@@ -347,6 +356,11 @@ impl<M: GuestMachine> MachineLauncher<M> {
     }
 
     #[cfg(unix)]
+    fn restored_member(&self, guest_pid: std::num::NonZeroI32) -> Option<crate::runtime::RestoredMember> {
+        self.machine.restored_member(guest_pid)
+    }
+
+    #[cfg(unix)]
     fn checkpoint_channel(&self) -> Option<CheckpointChannel> {
         self.machine.checkpoint_channel()
     }
@@ -415,6 +429,13 @@ impl<M: GuestMachine + 'static, W: Workspace> EngineBackend<M, W> {
     #[must_use]
     pub fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
         self.engine.launcher().guest_pid()
+    }
+
+    /// One member of the tree this engine restored, by the guest pid its image names it by.
+    #[cfg(unix)]
+    #[must_use]
+    pub fn restored_member(&self, guest_pid: std::num::NonZeroI32) -> Option<crate::runtime::RestoredMember> {
+        self.engine.launcher().restored_member(guest_pid)
     }
 
     pub fn capture_checkpoint(&self) -> Result<(), EngineError> {

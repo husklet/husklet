@@ -1185,8 +1185,13 @@ static void ckpt_restore_proc_run(int gpid) {
                                           * process leaked its signalfd seed
                                           * reader+writer pair for its lifetime */
     ckpt_restore_socket_seeds_close();
+    // Announced before the commit barrier, so it lands inside the broker's recovery scope. A refusal
+    // costs this member its individual reachability from the host and nothing else: the restore is
+    // already correct, and a host that cannot reach a member refuses to reattach it.
+    (void)ckpt_stream_member_restored(gpid);
     ckpt_restore_commit_wait();
     run_guest(&c);
+    ckpt_stream_member_exited(c.exit_code, HL_CKPT_MEMBER_EXIT_CODE);
     _exit(c.exit_code);
 }
 

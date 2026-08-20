@@ -2098,6 +2098,15 @@ fn capture_completion_wait_expires_at_the_deadline_instead_of_re_interrupting_fo
     assert_eq!(outcome, Err(CaptureFailure::Deadline));
 }
 
+/// Serializes every test that mints a real checkpoint transport.
+///
+/// These tests authenticate this process against its own channel, and their broker worker threads own
+/// descriptors. Two such tests overlapping -- or one outliving its test body -- lets a worker close a
+/// descriptor number a later test has already reused, which aborts the whole binary on an IO-safety
+/// violation rather than failing a test. So the lock is shared by all of them, and each joins its
+/// worker before returning.
+static TRANSPORT_SERIAL: Mutex<()> = Mutex::new(());
+
 fn checkpoint_request(op: u32, generation: u32, payload: &[u8]) -> Vec<u8> {
     let mut request = vec![0_u8; protocol::REQUEST_BYTES];
     request[0..4].copy_from_slice(&protocol::MAGIC_REQUEST.to_ne_bytes());
@@ -2138,8 +2147,9 @@ fn read_reply(channel: &mut UnixStream) -> (i32, u64) {
 /// thread held at fork time.
 #[test]
 fn register_ready_admits_one_authenticated_process_exactly_once() {
-    static SERIAL: Mutex<()> = Mutex::new(());
-    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _serial = TRANSPORT_SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (broker, transport) = hl_native::CheckpointTransport::create().expect("checkpoint transport");
     let mut member = transport.connect_for_test().expect("checkpoint channel");
     let (channel, authority) = broker
@@ -2148,7 +2158,7 @@ fn register_ready_admits_one_authenticated_process_exactly_once() {
     assert_eq!(authority.host_pid, u64::from(std::process::id()));
     let server = Arc::new(Server::new(Arc::new(Store), Arc::new(Store)));
     let worker = Arc::clone(&server);
-    std::thread::spawn(move || worker.serve_authenticated_for_test(channel, authority));
+    let served = std::thread::spawn(move || worker.serve_authenticated_for_test(channel, authority));
     while server.connections.load(Ordering::Acquire) == 0 {
         std::thread::yield_now();
     }
@@ -2165,6 +2175,190 @@ fn register_ready_admits_one_authenticated_process_exactly_once() {
     member.write_all(&registration).expect("duplicate registration");
     assert_eq!(read_reply(&mut member).0, -1, "one process registered twice");
     server.stop();
+    drop(member);
+    served.join().expect("broker worker");
+}
+
+fn member_restored_payload(guest_pid: i32) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(8);
+    payload.extend_from_slice(&guest_pid.to_ne_bytes());
+    payload.extend_from_slice(&0_u32.to_ne_bytes());
+    payload
+}
+
+fn member_exited_payload(status: i32, kind: u32) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(8);
+    payload.extend_from_slice(&status.to_ne_bytes());
+    payload.extend_from_slice(&kind.to_ne_bytes());
+    payload
+}
+
+/// A restored member becomes individually reachable by the guest pid its image names it by, and the
+/// capability it is reached through is the authenticated peer of its own channel.
+///
+/// This is what a whole-image restore otherwise cannot offer: one launch produces a tree, and without
+/// this the host can only address the tree. Reaching one member is the difference between attaching a
+/// pane to the process the user left running and starting their command a second time.
+#[test]
+fn a_restored_member_is_reachable_by_the_guest_pid_its_image_names_it_by() {
+    let _serial = TRANSPORT_SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (broker, transport) = hl_native::CheckpointTransport::create().expect("checkpoint transport");
+    let mut member = transport.connect_for_test().expect("checkpoint channel");
+    let (channel, authority) = broker
+        .accept(Duration::from_secs(10))
+        .expect("authenticated production accept");
+    let host_pid = authority.host_pid;
+    let server = Arc::new(Server::new(Arc::new(Store), Arc::new(Store)));
+    let guest_pid = std::num::NonZeroI32::new(4242).expect("guest pid");
+    assert!(
+        server.restored_member(guest_pid).is_none(),
+        "a member was reachable before any restore announced it"
+    );
+    // Recovery is entered before the member's channel is served, exactly as a restore does it: the
+    // channel binds to the running recovery as it is accepted, which is what lets a restored member
+    // address the broker with the restore's own generation.
+    server
+        .begin_recovery(1, std::time::Instant::now() + Duration::from_secs(30))
+        .expect("recovery admission");
+    let worker = Arc::clone(&server);
+    let served = std::thread::spawn(move || worker.serve_authenticated_for_test(channel, authority));
+    while server.connections.load(Ordering::Acquire) == 0 {
+        std::thread::yield_now();
+    }
+
+    member
+        .write_all(&checkpoint_request(
+            protocol::MEMBER_RESTORED,
+            0,
+            &member_restored_payload(guest_pid.get()),
+        ))
+        .expect("member announcement");
+    assert_eq!(read_reply(&mut member).0, 0, "an authenticated member was refused");
+
+    let restored = server
+        .restored_member(guest_pid)
+        .expect("announced member is reachable");
+    assert_eq!(restored.guest_pid(), guest_pid);
+    assert!(restored.is_live(), "the announcing process is live");
+    assert_eq!(restored.exit(), None, "a live member has not exited");
+    // Signal 0 proves the capability reaches this exact incarnation without disturbing it.
+    assert!(
+        restored.signal(0).is_ok(),
+        "the member capability cannot reach its process"
+    );
+
+    member
+        .write_all(&checkpoint_request(
+            protocol::MEMBER_EXITED,
+            0,
+            &member_exited_payload(7, 1),
+        ))
+        .expect("member exit report");
+    assert_eq!(read_reply(&mut member).0, 0, "a member could not report its own exit");
+    assert_eq!(
+        server.restored_member(guest_pid).expect("member").exit(),
+        Some(crate::runtime::MemberExit::Code(7)),
+        "the reported exit status was not the one the member produced"
+    );
+    assert_eq!(host_pid, u64::from(std::process::id()));
+    server.stop();
+    drop(member);
+    served.join().expect("broker worker");
+}
+
+/// Only a running restore may name a restored member.
+///
+/// The capability an announcement installs is a reach into a live process, so it must come from the
+/// one event that genuinely produces members. An authenticated channel announcing outside a recovery
+/// is a process claiming to be something no restore re-forked.
+#[test]
+fn an_announcement_outside_a_running_restore_installs_no_member() {
+    let _serial = TRANSPORT_SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (broker, transport) = hl_native::CheckpointTransport::create().expect("checkpoint transport");
+    let mut member = transport.connect_for_test().expect("checkpoint channel");
+    let (channel, authority) = broker
+        .accept(Duration::from_secs(10))
+        .expect("authenticated production accept");
+    let server = Arc::new(Server::new(Arc::new(Store), Arc::new(Store)));
+    let worker = Arc::clone(&server);
+    let served = std::thread::spawn(move || worker.serve_authenticated_for_test(channel, authority));
+    while server.connections.load(Ordering::Acquire) == 0 {
+        std::thread::yield_now();
+    }
+    let guest_pid = std::num::NonZeroI32::new(31).expect("guest pid");
+
+    member
+        .write_all(&checkpoint_request(
+            protocol::MEMBER_RESTORED,
+            0,
+            &member_restored_payload(guest_pid.get()),
+        ))
+        .expect("member announcement");
+
+    assert_eq!(read_reply(&mut member).0, -1, "an announcement outside a restore was admitted");
+    assert!(
+        server.restored_member(guest_pid).is_none(),
+        "an announcement outside a restore installed a member capability"
+    );
+    server.stop();
+    drop(member);
+    served.join().expect("broker worker");
+}
+
+/// A member stays reachable after the connection that announced it is gone.
+///
+/// The announcement is a one-shot event on a channel the restore tears down; reachability has to
+/// outlive it, because a host reattaches long after the restore has finished. The registry therefore
+/// holds its own duplicate of the authenticated capability rather than borrowing the connection's.
+#[test]
+fn a_restored_member_outlives_the_connection_that_announced_it() {
+    let _serial = TRANSPORT_SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (broker, transport) = hl_native::CheckpointTransport::create().expect("checkpoint transport");
+    let mut member = transport.connect_for_test().expect("checkpoint channel");
+    let (channel, authority) = broker
+        .accept(Duration::from_secs(10))
+        .expect("authenticated production accept");
+    let server = Arc::new(Server::new(Arc::new(Store), Arc::new(Store)));
+    let guest_pid = std::num::NonZeroI32::new(909).expect("guest pid");
+    server
+        .begin_recovery(1, std::time::Instant::now() + Duration::from_secs(30))
+        .expect("recovery admission");
+    let worker = Arc::clone(&server);
+    let served = std::thread::spawn(move || worker.serve_authenticated_for_test(channel, authority));
+    while server.connections.load(Ordering::Acquire) == 0 {
+        std::thread::yield_now();
+    }
+    member
+        .write_all(&checkpoint_request(
+            protocol::MEMBER_RESTORED,
+            0,
+            &member_restored_payload(guest_pid.get()),
+        ))
+        .expect("member announcement");
+    assert_eq!(read_reply(&mut member).0, 0);
+    assert!(server.restored_member(guest_pid).is_some());
+    // Settling the restore drops every channel it was serving. The member must stay reachable across
+    // that, because the registry holds its own duplicate of the authenticated capability: reachability
+    // is a property of the process, not of the connection that announced it.
+    server
+        .fail_recovery(1, CaptureFailure::Failed)
+        .expect("recovery settlement");
+    assert!(
+        server.restored_member(guest_pid).is_some(),
+        "the member stopped being reachable when the connection that announced it closed"
+    );
+
+    assert!(
+        server.restored_member(guest_pid).expect("member").is_live(),
+        "the retained capability no longer names the live announcing process"
+    );
+    server.stop();
+    drop(member);
+    served.join().expect("broker worker");
 }
 
 /// Membership is proven, never assumed: a channel carrying no authenticated
@@ -2736,4 +2930,29 @@ fn one_socket_object_owned_by_two_members_leaves_no_generation() {
         Err(CaptureFailure::Failed)
     );
     assert_eq!(store.snapshot().0, [("MANIFEST".into(), b"prior".to_vec())]);
+}
+/// Each minted test channel is a live channel of its own, however many are minted in one process.
+///
+/// The engine caches one channel per process on purpose -- a guest process has exactly one for its
+/// whole life -- and the minting hook has to opt out of that cache, because it hands each descriptor
+/// to a caller who closes it. Without that, the second channel minted in a test binary was the first
+/// one's already-closed descriptor: the accept below never completed, and closing it a second time
+/// aborted the whole run on an IO-safety violation, which reads as some unrelated test failing.
+#[test]
+fn every_minted_test_channel_is_a_live_channel_of_its_own() {
+    let _serial = TRANSPORT_SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for round in 0..2 {
+        let (broker, transport) = hl_native::CheckpointTransport::create().expect("checkpoint transport");
+        let member = transport.connect_for_test().expect("checkpoint channel");
+        let (channel, authority) = broker
+            .accept(Duration::from_secs(10))
+            .unwrap_or_else(|| panic!("channel {round} was never accepted"));
+        assert_eq!(authority.host_pid, u64::from(std::process::id()));
+        drop(channel);
+        drop(member);
+        drop(transport);
+        drop(broker);
+    }
 }

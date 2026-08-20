@@ -273,6 +273,16 @@ pub(super) unsafe fn hl_c_backend_guest_pid(backend: *const Backend) -> c_int {
         .map_or(0, |function| unsafe { function(backend) })
 }
 
+pub(super) fn hl_c_backend_process_identity_signal(handle: c_int, host_pid: u64, signal: c_int) -> c_int {
+    crate::loader::api()
+        .ok()
+        .and_then(|api| api.process_identity_signal)
+        .map_or(-1, |function| {
+            // SAFETY: the descriptor is borrowed for the call and C retains nothing.
+            unsafe { function(handle, host_pid, signal) }
+        })
+}
+
 pub(super) unsafe fn hl_c_backend_destroy(backend: *mut Backend) {
     if let Some(function) = crate::loader::api().ok().and_then(|api| api.destroy) {
         unsafe { function(backend) };

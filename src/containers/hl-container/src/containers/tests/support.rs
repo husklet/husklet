@@ -206,6 +206,11 @@ impl Running for FakeProcess {
     fn guest_pid(&self) -> Option<std::num::NonZeroI32> {
         self.guest_pid
     }
+    fn restored_member(&self, _guest_pid: std::num::NonZeroI32) -> Option<hl_engine::runtime::RestoredMember> {
+        // A fake launch restores nothing, so it announces no member. Every test that needs a reachable
+        // member drives the real broker.
+        None
+    }
     fn checkpointable(&self) -> bool {
         self.checkpoint_armed
     }
