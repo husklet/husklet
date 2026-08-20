@@ -93,6 +93,8 @@ static const hl_option_definition hl_option_definitions[] = {
     HL_INTERNAL_OPTION("HL_GUEST_ENV_EXACT", "guest exec environment suppresses engine defaults", HL_OPTION_FLAG),
     HL_DEBUG_OPTION("HL_LOG", "debug-build logging tag selector", HL_OPTION_TEXT),
     HL_DEBUG_OPTION("HL_FATAL_DIAGNOSTICS", "fatal guest register publication", HL_OPTION_FLAG),
+    HL_DEBUG_OPTION("HL_SOFT_SHARED_RESOLVER", "lower aarch64 soft-memory guards through the shared resolver",
+                    HL_OPTION_FLAG),
 };
 
 #define HL_OPTION_COUNT (sizeof hl_option_definitions / sizeof hl_option_definitions[0])

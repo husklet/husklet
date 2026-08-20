@@ -34,6 +34,26 @@ static void patch_adr(uint32_t *, uint8_t *, unsigned);
 static int shadowgate(void);
 static void emit_prof_bump(void *);
 
+/*
+ * Soft-guard lowering selector.
+ *
+ * The shared resolver (below) keeps four instructions at each guest memory
+ * access and performs the interval/permission check once per class in one
+ * out-of-line body.  That is the smallest translation, but every guarded
+ * access pays a taken branch plus the resolver's own prologue, and the guest
+ * ISA's own x86 counterpart (guest/x86_64/emit.c emit_soft_guard) has always
+ * lowered the same check INLINE.  Inline is now the aarch64 default too, so
+ * both arms share one shape; HL_SOFT_SHARED_RESOLVER restores the resolver
+ * for A/B and as a fallback.  The choice is folded into the persistent-cache
+ * translator identity (cache/identity.c) so an arena emitted under one
+ * lowering can never be loaded under the other.
+ */
+static int a64_soft_shared_resolver(void) {
+    static int selected = -1;
+    if (selected < 0) selected = hl_option_get("HL_SOFT_SHARED_RESOLVER") != NULL;
+    return selected;
+}
+
 static int soft_profile_sample(uint64_t pc) {
     return g_prof && ((((pc >> 2) * UINT64_C(0x9e3779b97f4a7c15)) >> 58) == 0);
 }
@@ -82,7 +102,8 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
      * scratch: real x18 is reserved by Darwin and may be cleared asynchronously.
      * Shadow-enabled builds retain the proven inline guard below.
      */
-    guard.shared = shadowgate() < 0 && !g_tier2_build && !guard.profile_sample && resume_ea != 15;
+    guard.shared = a64_soft_shared_resolver() && shadowgate() < 0 && !g_tier2_build && !guard.profile_sample &&
+                   resume_ea != 15;
     if (guard.shared) {
         if (ea != 16) e_movr(16, ea);
         guard.ea = 16;
