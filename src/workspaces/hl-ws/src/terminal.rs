@@ -11,7 +11,7 @@ use std::io;
 ///
 /// A pseudo-terminal master is a different object on each host and the two are not
 /// interchangeable: on Unix it is the file descriptor `openpty(3)` returns, which a
-/// `poll(2)` set can carry directly; on Windows a ConPTY hands back the read end of its
+/// `poll(2)` set can carry directly; on Windows a `ConPTY` hands back the read end of its
 /// output pipe as a `HANDLE`, which is waited on with `WaitForMultipleObjects`. The
 /// standard library spells each under its own `std::os` subtree and offers no portable
 /// name for either, so this names both rather than inventing a third.
