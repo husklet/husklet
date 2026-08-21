@@ -839,6 +839,20 @@ mod tests {
             !fdvis_path_publication_test(1, 7),
             "scenario 7 forks; the Windows arm must refuse rather than report a pass"
         );
+        // Scenario 8 stages the double-fork shape: a lock holder killed inside its critical section and
+        // deliberately left uncollected, while a second child asks for the same lock. It carries its own
+        // deadline, so an engine that can only reclaim from a COLLECTED owner fails here rather than
+        // spinning a core forever the way a guest does. Same host split as scenario 7.
+        #[cfg(not(windows))]
+        {
+            assert!(fdvis_path_publication_test(1, 8), "arm64 scenario 8");
+            assert!(fdvis_path_publication_test(2, 8), "x86 scenario 8");
+        }
+        #[cfg(windows)]
+        assert!(
+            !fdvis_path_publication_test(1, 8),
+            "scenario 8 forks; the Windows arm must refuse rather than report a pass"
+        );
     }
 
     #[test]
