@@ -12,7 +12,12 @@ struct fdvis_slot {
     uint64_t generation;
     uint64_t owner_start_ns;
     uint32_t kind;
-    uint32_t reserved;
+    /* Who holds this slot's RESERVATION, or 0. Set only while key == UINT64_MAX, and it is what makes an
+       abandoned reservation reclaimable: the marker overwrites the key, so the pid the sweeps decode from
+       the high 32 bits is -1 and every one of them skipped the slot forever. This field was declared as
+       `reserved` padding and never read or written anywhere in the tree, so carrying it costs nothing --
+       the struct is the same 48 bytes and the shared table is still 6 MiB. */
+    int32_t reserver_pid;
     uint64_t device;
     uint64_t object;
 };
@@ -34,6 +39,8 @@ static struct fdvis_control *g_fdvis_control;
 static int g_fdvis_fork_parent;
 static uint64_t fdvis_key(int pid, int fd);
 static void fdpath_sweep_stale_locked(void);
+static void fdvis_sweep_stale_locked(void);
+static int fdvis_self(int *pid, uint64_t *token);
 #if defined(HL_NATIVE_TEST_HOOKS)
 static int fdvis_after_fork_rollback_test(void);
 static int fdvis_stalled_parent_test(void);
@@ -125,7 +132,60 @@ static int fdpath_restore_locked(uint64_t key, uint64_t owner_start_ns, const ch
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
+/* Scenarios 8-10: can an abandoned RESERVATION be reclaimed?
+ *
+ * A reservation overwrites the key with UINT64_MAX, so the owner both sweeps decode from the high 32
+ * bits is (int)0xFFFFFFFF == -1 and their `owner <= 0` guard skipped the slot on every pass. Nothing in
+ * the tree could reclaim one, so a process that died between proc_fdvis_reserve() and its publish or
+ * cancel leaked the slot for the lifetime of the shared table. These run on private tables and fabricate
+ * the state directly -- no fork -- because the property under test is the sweep's decision, not a race.
+ *
+ * 10 is the one that keeps this change from breaking the fork path: reclamation is opt-in on
+ * reserver_pid being set, so a reservation from before this commit, or any slot whose holder is not
+ * recorded, is still left strictly alone. */
+static int fdvis_reservation_sweep_test(uint32_t scenario) {
+    struct fdvis_slot *slots = calloc(FDVIS_N, sizeof *slots);
+    struct fdpath_slot *paths = calloc(FDPATH_N, sizeof *paths);
+    if (!slots || !paths) {
+        free(slots);
+        free(paths);
+        return 0;
+    }
+    struct fdvis_slot *saved_slots = g_fdvis;
+    struct fdpath_slot *saved_paths = g_fdpaths;
+    g_fdvis = slots;
+    g_fdpaths = paths;
+    slots[0].key = UINT64_MAX;
+    int verdict = 0;
+    if (scenario == 8) {
+        /* A pid the kernel cannot be holding: hl_host_process_read() fails, so the owner is gone. */
+        slots[0].reserver_pid = 2147483647;
+        slots[0].owner_start_ns = 1;
+        fdvis_sweep_stale_locked();
+        verdict = slots[0].key == 0;
+    } else if (scenario == 9) {
+        int pid = 0;
+        uint64_t owner_start = 0;
+        (void)fdvis_self(&pid, &owner_start);
+        slots[0].reserver_pid = pid;
+        slots[0].owner_start_ns = owner_start;
+        fdvis_sweep_stale_locked();
+        verdict = slots[0].key == UINT64_MAX; /* we are alive: our own reservation must survive */
+    } else {
+        slots[0].reserver_pid = 0; /* holder not recorded -- e.g. an in-flight fork plan */
+        slots[0].owner_start_ns = 1;
+        fdvis_sweep_stale_locked();
+        verdict = slots[0].key == UINT64_MAX;
+    }
+    g_fdvis = saved_slots;
+    g_fdpaths = saved_paths;
+    free(slots);
+    free(paths);
+    return verdict;
+}
+
 HL_API int HL_TARGET_LOCAL(fdvis_path_publication_test)(uint32_t scenario) {
+    if (scenario >= 8 && scenario <= 10) return fdvis_reservation_sweep_test(scenario);
     struct fdpath_slot *paths = calloc(FDPATH_N, sizeof *paths);
     struct fdpath_slot *saved_paths = g_fdpaths;
     const int descriptor = HL_NFD - 1;
@@ -391,32 +451,71 @@ static void fdvis_unlock(void) {
     atomic_store_explicit(&g_fdvis_control->owner, 0, memory_order_release);
 }
 
+/* A slot's owner is gone if it cannot be read, if the pid has been reissued to somebody else, or if the
+   task is a corpse. The third case is the one this used to miss: comparing start times alone answers
+   "does this owner still exist?", and a zombie exists -- Linux keeps /proc/<pid>/stat, start time
+   included, until its parent waits -- so a killed owner's rows survived every sweep until something
+   reaped it, which in the double-fork shape is nobody. fdvis_owner_is_gone() asks "can this owner still
+   run?" instead, which is the predicate the lock word was just moved onto for the same reason.
+
+   The per-owner memo matters more now, not less: the answer costs a /proc/<pid>/stat read rather than a
+   start-time lookup, and these tables are swept whole. Slots for one owner are not adjacent, so the memo
+   is keyed on the last owner asked about rather than a run. */
 static void fdpath_sweep_stale_locked(void) {
-    int previous_owner = 0;
-    uint64_t previous_start = 0;
+    int memo_owner = 0;
+    uint64_t memo_start = 0;
+    int memo_gone = 0;
     for (unsigned index = 0; index < FDPATH_N; ++index) {
         struct fdpath_slot *slot = &g_fdpaths[index];
+        /* UINT64_MAX is a TOMBSTONE in this table, not a reservation -- fdpath_delete_locked() writes it
+           so fdpath_find()'s early exit can keep walking past a deleted entry. The fdvis table spells a
+           reservation with the same value; they are different meanings and the two must not be merged. */
         int owner = slot->key == UINT64_MAX ? 0 : (int)(uint32_t)(slot->key >> 32);
         if (owner <= 0) continue;
-        uint64_t live_start;
-        if (owner == previous_owner) {
-            live_start = previous_start;
+        int gone;
+        if (owner == memo_owner && slot->owner_start_ns == memo_start) {
+            gone = memo_gone;
         } else {
-            live_start = fdvis_process_token(owner);
-            previous_owner = owner;
-            previous_start = live_start;
+            gone = fdvis_owner_is_gone(owner, fdvis_identity(owner, slot->owner_start_ns));
+            memo_owner = owner;
+            memo_start = slot->owner_start_ns;
+            memo_gone = gone;
         }
-        if (live_start == 0 || live_start != slot->owner_start_ns) fdpath_delete_locked(slot);
+        if (gone) fdpath_delete_locked(slot);
     }
 }
 
 static void fdvis_sweep_stale_locked(void) {
+    int memo_owner = 0;
+    uint64_t memo_start = 0;
+    int memo_gone = 0;
     for (unsigned index = 0; index < FDVIS_N; ++index) {
         struct fdvis_slot *slot = &g_fdvis[index];
-        int owner = (int)(uint32_t)(slot->key >> 32);
-        if (owner <= 0) continue;
-        uint64_t live_start = fdvis_process_token(owner);
-        if (live_start == 0 || live_start != slot->owner_start_ns) memset(slot, 0, sizeof *slot);
+        int owner;
+        if (slot->key == UINT64_MAX) {
+            /* A reservation. Until reserver_pid existed nothing could reclaim one: the marker replaces
+               the key, so the owner decoded from the high 32 bits is (int)0xFFFFFFFF == -1 and the
+               `owner <= 0` guard below skipped it on every pass. A process that died between
+               proc_fdvis_reserve() and its publish or cancel therefore leaked the slot permanently.
+               Reclaim it here, on exactly the same "can the owner still run?" test as a published slot.
+               reserver_pid is 0 for a reservation taken by proc_fdvis_fork_prepare() before this commit
+               and for any slot that has never been reserved, and a 0 pid is left alone. */
+            owner = slot->reserver_pid;
+            if (owner <= 0) continue;
+        } else {
+            owner = (int)(uint32_t)(slot->key >> 32);
+            if (owner <= 0) continue;
+        }
+        int gone;
+        if (owner == memo_owner && slot->owner_start_ns == memo_start) {
+            gone = memo_gone;
+        } else {
+            gone = fdvis_owner_is_gone(owner, fdvis_identity(owner, slot->owner_start_ns));
+            memo_owner = owner;
+            memo_start = slot->owner_start_ns;
+            memo_gone = gone;
+        }
+        if (gone) memset(slot, 0, sizeof *slot);
     }
     fdpath_sweep_stale_locked();
 }
@@ -428,6 +527,9 @@ struct fdvis_reservation {
 };
 
 static int proc_fdvis_reserve(struct fdvis_reservation *reservation) {
+    int pid = 0;
+    uint64_t owner_start = 0;
+    (void)fdvis_self(&pid, &owner_start);
     if (!reservation) return -EINVAL;
     memset(reservation, 0, sizeof *reservation);
     if (!g_fdvis || !g_fdvis_control) return -ENOSPC;
@@ -436,6 +538,9 @@ static int proc_fdvis_reserve(struct fdvis_reservation *reservation) {
         for (unsigned index = 0; index < FDVIS_N; ++index) {
             if (g_fdvis[index].key != 0) continue;
             g_fdvis[index].key = UINT64_MAX;
+            /* Name the holder so an abandoned reservation is reclaimable; see fdvis_sweep_stale_locked. */
+            g_fdvis[index].reserver_pid = pid;
+            g_fdvis[index].owner_start_ns = owner_start;
             reservation->slot = index;
             reservation->active = 1;
             reservation->new_slot = 1;
@@ -467,6 +572,9 @@ static int proc_fdvis_reserve_at(int guest_fd, struct fdvis_reservation *reserva
         for (unsigned index = 0; index < FDVIS_N; ++index) {
             if (g_fdvis[index].key != 0) continue;
             g_fdvis[index].key = UINT64_MAX;
+            /* Name the holder so an abandoned reservation is reclaimable; see fdvis_sweep_stale_locked. */
+            g_fdvis[index].reserver_pid = pid;
+            g_fdvis[index].owner_start_ns = owner_start;
             reservation->slot = index;
             reservation->active = 1;
             reservation->new_slot = 1;
@@ -692,13 +800,18 @@ static int proc_fdvis_fork_prepare(struct fdvis_fork_plan *plan) {
             ++count;
             continue;
         }
-        uint64_t live_start = fdvis_process_token(owner);
-        if (live_start == 0 || live_start != slot->owner_start_ns) memset(slot, 0, sizeof *slot);
+        /* Corpse-aware, for the reason on fdpath_sweep_stale_locked: a zombie owner still answers with
+           the start time it published, so comparing tokens retained its slots until somebody reaped it. */
+        if (fdvis_owner_is_gone(owner, fdvis_identity(owner, slot->owner_start_ns))) memset(slot, 0, sizeof *slot);
     }
     fdpath_sweep_stale_locked();
     for (unsigned index = 0; index < FDVIS_N && reserved < count; ++index) {
         if (g_fdvis[index].key != 0) continue;
         g_fdvis[index].key = UINT64_MAX;
+        /* These reservations leak exactly as the single-slot ones did if this process dies before
+           proc_fdvis_fork_cancel() or the child's publish. Name the holder so the sweep can reclaim them. */
+        g_fdvis[index].reserver_pid = g_fdvis_fork_parent;
+        g_fdvis[index].owner_start_ns = g_fdvis_fork_parent_start;
         entries[reserved++].slot = index;
     }
     if (reserved != count) {

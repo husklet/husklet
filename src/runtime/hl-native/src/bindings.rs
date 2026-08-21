@@ -311,6 +311,15 @@ mod tests {
             assert!(fdvis_path_publication_test(1, scenario), "arm64 scenario {scenario}");
             assert!(fdvis_path_publication_test(2, scenario), "x86 scenario {scenario}");
         }
+        // 8: an abandoned reservation whose holder is gone is reclaimed -- until reserver_pid existed
+        // nothing in the tree could reclaim one, because the UINT64_MAX marker decodes to owner -1 and
+        // both sweeps skip a non-positive owner. 9: our own live reservation survives a sweep.
+        // 10: a reservation with no recorded holder is left alone, which is what keeps an in-flight
+        // proc_fdvis_fork_prepare() plan from being stolen out from under the fork.
+        for scenario in [8, 9, 10] {
+            assert!(fdvis_path_publication_test(1, scenario), "arm64 reservation scenario {scenario}");
+            assert!(fdvis_path_publication_test(2, scenario), "x86 reservation scenario {scenario}");
+        }
         // Scenario 7's second half forks and rendezvouses through a MAP_SHARED page, which the
         // Windows arm of path_runtime.c refuses. Naming the host here rather than dropping the
         // scenario keeps the refusal visible: the C hook returns 0 there, so this assertion would
