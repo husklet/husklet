@@ -43,15 +43,46 @@ pub trait Source: Send + Sync {
 
 pub type BlobStream = Pin<Box<dyn Stream<Item = Result<Bytes>> + Send + 'static>>;
 
+/// Whether a registry is reached over TLS or over plain HTTP.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Transport {
+    Tls,
+    Plain,
+}
+
 pub struct Registry {
-    client: Client,
+    /// Built on first use, never at construction.
+    ///
+    /// Constructing an HTTP client loads the host's CA store, and `reqwest::Client::new()` --
+    /// which both `oci_client::Client::default()` and `oci_client::Client::new` reach -- answers a
+    /// host that has none by **panicking**:
+    ///
+    /// ```text
+    /// Client::new(): reqwest::Error { kind: Builder,
+    ///   source: General("No CA certificates were loaded from the system") }
+    /// ```
+    ///
+    /// A `Registry` is constructed eagerly by things that will never fetch: `hl_daemon::Daemon::new`
+    /// builds one before the daemon serves its socket, whether or not any image is ever pulled. So
+    /// an eager client turned "this host has no CA store" into a startup panic for the whole
+    /// daemon -- fatal in a Nix build sandbox, which sets `SSL_CERT_FILE=/no-cert-file.crt`, and
+    /// fatal in a distroless or scratch container image, neither of which ships `ca-certificates`.
+    /// Deferring it means only an operation that genuinely needs the network pays, and it pays with
+    /// [`Error::RegistryClient`] rather than a panic from inside somebody else's crate.
+    ///
+    /// The cell caches the client rather than rebuilding per call because it owns the bearer-token
+    /// cache and the per-registry auth store, which a pull relies on across its manifest and blob
+    /// requests.
+    client: std::sync::OnceLock<Client>,
+    transport: Transport,
     auth: Auth,
 }
 impl Registry {
     #[must_use]
     pub fn new(auth: Auth) -> Self {
         Self {
-            client: Client::default(),
+            client: std::sync::OnceLock::new(),
+            transport: Transport::Tls,
             auth,
         }
     }
@@ -59,14 +90,57 @@ impl Registry {
     /// Creates a registry client that permits plain HTTP for explicit insecure/local registries.
     #[must_use]
     pub fn insecure(auth: Auth) -> Self {
-        let config = oci_client::client::ClientConfig {
-            protocol: oci_client::client::ClientProtocol::Http,
-            ..Default::default()
-        };
         Self {
-            client: Client::new(config),
+            client: std::sync::OnceLock::new(),
+            transport: Transport::Plain,
             auth,
         }
+    }
+
+    /// The registry's HTTP client, built on the first operation that needs one.
+    ///
+    /// # Errors
+    /// Returns [`Error::RegistryClient`] when the host cannot supply what a client needs -- in
+    /// practice a missing CA store.
+    fn client(&self) -> Result<&Client> {
+        if let Some(client) = self.client.get() {
+            return Ok(client);
+        }
+        let client = Self::connect(self.transport)?;
+        // A concurrent first fetch may have won the race; either client is equivalent, and the
+        // loser's is dropped rather than replacing a client whose token cache is already warm.
+        Ok(self.client.get_or_init(|| client))
+    }
+
+    fn connect(transport: Transport) -> Result<Client> {
+        let config = oci_client::client::ClientConfig {
+            protocol: match transport {
+                Transport::Tls => oci_client::client::ClientProtocol::Https,
+                Transport::Plain => oci_client::client::ClientProtocol::Http,
+            },
+            ..Default::default()
+        };
+        // `Client::new` swallows this failure and falls back to `Client::default()`, which panics
+        // for the same reason; `try_from` is the only construction path that reports it.
+        Client::try_from(config).map_err(|error| Error::RegistryClient {
+            reason: Self::because(&error),
+        })
+    }
+
+    /// The whole `source` chain of a client-construction failure, joined.
+    ///
+    /// `OciDistributionError` and `reqwest::Error` both display as bare category words -- the
+    /// missing CA store arrives as `builder error` -- and the sentence an operator can act on is
+    /// two links down.
+    fn because(error: &dyn std::error::Error) -> String {
+        let mut reason = error.to_string();
+        let mut source = error.source();
+        while let Some(inner) = source {
+            reason.push_str(": ");
+            reason.push_str(&inner.to_string());
+            source = inner.source();
+        }
+        reason
     }
 
     /// Stream an image's config and layers, then publish its manifest under `target`.
@@ -83,7 +157,7 @@ impl Registry {
             let digest: Digest = descriptor.digest().to_string().parse()?;
             Self::verify(content.path(&digest), descriptor).await?;
             let stream = Self::stream(content.path(&digest)).await?;
-            self.client
+            self.client()?
                 .push_blob_stream(&remote, stream, descriptor.digest().to_string().as_str())
                 .await
                 .map_err(Self::error)?;
@@ -94,7 +168,7 @@ impl Registry {
             .to_string()
             .parse()
             .map_err(|error| Error::MalformedOci(format!("invalid manifest media type: {error}")))?;
-        self.client
+        self.client()?
             .push_manifest_raw(&remote, manifest, media)
             .await
             .map_err(Self::error)?;
@@ -118,7 +192,7 @@ impl Registry {
         remote: &oci_client::Reference,
         operation: oci_client::RegistryOperation,
     ) -> Result<()> {
-        self.client
+        self.client()?
             .auth(remote, &self.auth.registry(), operation)
             .await
             .map(drop)
@@ -234,7 +308,7 @@ impl Source for Registry {
         let remote = reference.remote()?;
         self.authorize(&remote).await?;
         let (bytes, digest) = self
-            .client
+            .client()?
             .pull_manifest_raw(&remote, &self.auth.registry(), MANIFEST_MEDIA_TYPES)
             .await
             .map_err(Self::error)?;
@@ -254,7 +328,7 @@ impl Source for Registry {
             .map_err(|error| Error::InvalidReference(format!("{error}")))?;
             self.authorize(&pinned).await?;
             let (bytes, digest) = self
-                .client
+                .client()?
                 .pull_manifest_raw(&pinned, &self.auth.registry(), MANIFEST_MEDIA_TYPES)
                 .await
                 .map_err(Self::error)?;
@@ -270,7 +344,7 @@ impl Source for Registry {
         self.authorize(&remote).await?;
         let digest = descriptor.digest().to_string();
         let stream = self
-            .client
+            .client()?
             .pull_blob_stream(&remote, digest.as_str())
             .await
             .map_err(Self::error)?;
@@ -284,6 +358,53 @@ mod tests {
     use crate::{Descriptor, Digest, Error};
     use futures_util::StreamExt as _;
     use oci_client::secrets::RegistryAuth;
+
+    /// A registry that has not been asked for anything has built no HTTP client.
+    ///
+    /// Building one loads the host CA store and panics where there is none, and `Registry::new` is
+    /// reached by callers that will never fetch -- `hl_daemon::Daemon::new` builds one before the
+    /// daemon serves its socket. The deployment shape this protects is pinned by
+    /// `hl-daemon/tests/absent_ca_store.rs`; this pins the property that test rests on.
+    #[test]
+    fn a_registry_builds_no_client_until_an_operation_needs_one() {
+        assert!(Registry::new(Auth::Anonymous).client.get().is_none());
+        assert!(Registry::insecure(Auth::Anonymous).client.get().is_none());
+    }
+
+    /// The words that tell an operator what is wrong are not in the outermost error.
+    ///
+    /// `OciDistributionError` displays a client-construction failure as `builder error` and
+    /// `reqwest::Error` as `builder error` again; `No CA certificates were loaded from the system`
+    /// is two `source` links down, so a reason that keeps only the head diagnoses nothing.
+    #[test]
+    fn a_construction_failure_carries_its_whole_source_chain() {
+        #[derive(Debug)]
+        struct Layer(&'static str, Option<Box<Layer>>);
+        impl std::fmt::Display for Layer {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str(self.0)
+            }
+        }
+        impl std::error::Error for Layer {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                self.1
+                    .as_deref()
+                    .map(|inner| inner as &(dyn std::error::Error + 'static))
+            }
+        }
+
+        let error = Layer(
+            "builder error",
+            Some(Box::new(Layer(
+                "unexpected error: No CA certificates were loaded from the system",
+                None,
+            ))),
+        );
+        assert_eq!(
+            Registry::because(&error),
+            "builder error: unexpected error: No CA certificates were loaded from the system"
+        );
+    }
 
     #[test]
     fn registry_authentication_is_typed_and_does_not_mutate_unrelated_headers() {
