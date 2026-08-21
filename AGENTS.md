@@ -1856,6 +1856,41 @@ A skip is not a pass. If a test cannot run here, it must say so out loud: the
 harness shows captured output only for failing tests, so an unrun arm otherwise
 looks exactly like a passing one.
 
+**Count the summary line, not the `FAILED` lines.** `grep -c '\.\.\. FAILED'`
+is not a failure count. A test that re-execs itself has a child that prints its
+own `... FAILED` line into the same stream, so the grep reads **5** where
+`test result:` reads **4**. That phantom was carried in this file and quoted into
+a dozen lane briefs as "five pre-existing failures" until someone ran the suite
+three times and read the summary. `test result: FAILED. 34 passed; 4 failed; 5
+ignored` is the number; anything you derive by grepping the transcript is a
+guess that happens to be usually right.
+
+### "Architecture-dependent" is a claim, and it needs the other architecture
+
+Four `checkpoint_linux.rs` failures were carried for weeks as "aarch64-flavoured"
+-- written on Apple silicon, failing on x86_64, therefore presumed to be about
+the ISA. Nobody had ever run them on aarch64, because after the move to this
+x86_64 box there was no aarch64 host to run them on.
+
+Run on a real aarch64 guest with the JIT live -- 89 emitter bodies present in the
+loaded `.so` against **0** on x86_64 -- **all four reproduce with byte-identical
+panic text and identical store key sets.** They are not architecture-dependent;
+they are broken everywhere. A second, cheaper control agrees: flipping the
+fixture's ISA order to put x86_64 first reproduces all four on the *x86_64* guest
+on this host, no VM required.
+
+One of the four was then found to be unsatisfiable rather than merely failing --
+it asserted that a refused capture leaves no socket queue behind, while handing
+the engine a `Store` whose `abort_until` is `Ok(())`. **No engine behaviour could
+have made it pass.** A test nobody can satisfy is indistinguishable, from the
+outside, from a product defect nobody has fixed.
+
+The rule: a failure is only "specific to X" once it has been run somewhere that
+is not X. Until then "aarch64-flavoured" is a hypothesis wearing a label, and it
+will keep four real bugs parked behind a plausible excuse. Look for the cheap
+control first -- an ISA order flip found this in minutes; the VM only confirmed
+it.
+
 ### The gate that reported nothing, and was read as if it had
 
 The five above proved nothing while saying `ok`. This one said nothing at all,
