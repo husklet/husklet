@@ -343,12 +343,22 @@ Enter the pinned shell with `nix develop` before running `cargo clippy` or
 `cargo fmt`. Two lanes have now reported the E0514 as a mysterious failure of
 their own change.
 
-### A real Docker is reachable — use `sudo -n docker`
+### Docker is NOT reachable on this host
 
-Several lanes have reported "no live baseline available" and fallen back to the
-documented API. The socket is `root:docker` and our uid is not in the group, so
-an unprivileged probe genuinely is denied — but **`sudo -n docker` works**, and
-Docker 29.1.3 is running on this box.
+**Corrected 2026-08-21.** This section used to say `sudo -n docker` works and
+Docker 29.1.3 is running. That was true of the macOS machine the project was
+developed on until 2026-08-20. On `naa0245`, the x86_64 Linux box, **Docker is
+not installed at all**: no `docker` binary, no `dockerd` binary, no socket, and
+`systemctl is-active docker` answers `inactive`. Verify before you rely on it
+rather than trusting either version of this paragraph.
+
+An end-to-end lane found this after being sent to it by these instructions. Any
+lane told to measure the real daemon as an oracle **cannot**, and must say so
+instead of quietly substituting the documentation.
+
+The findings below were measured against the real Docker on the macOS host and
+remain valid as observations of Docker's behaviour. They are **history, not
+something you can reproduce here.**
 
 That matters because Docker's documentation is thinner than its behavior. Probing
 it directly produced findings no spec would have given: `"TERM "` with trailing
@@ -1174,6 +1184,39 @@ worktree before believing anything about the build system. The build script now
 refuses this case at the moment it happens — it recomputes the fingerprint after
 linking and fails with both values if the sources moved under it — so the mixed
 artifact is never handed to a lane as a silent one.
+
+## A mechanism number and a workload number are different claims
+
+A lane bounded a scan and a `/proc/<pid>/fdinfo` listing went from 43.1 billion
+user instructions to 177 million -- **243x**. That figure was then repeated as
+though the product had got 243 times faster at something. It had not. It is the
+cost of the *mechanism*: what that path costs when you run it and nothing else.
+
+What a developer feels is the *workload* number -- the same fix measured inside a
+real program, where the mechanism is one component among many and is diluted by
+everything around it. On this host the surrounding guest code carries roughly
+1,000x of interpretation, so a 243x mechanism win can show up end-to-end as
+almost nothing.
+
+**Both numbers are true and neither substitutes for the other.** A diluted
+end-to-end result is not a failure to reproduce the mechanism result; it is the
+second half of the finding, and the ratio between them tells you how much of its
+time a real workload actually spends on that path. Report both, and say which
+each one is. A mechanism number quoted as a product improvement is the most
+flattering way there is to be wrong.
+
+## Say what you expect before you measure it
+
+The lane that drew the distinction above also wrote down, *before building its
+probe*, that it expected the end-to-end figure to come in far under 243x and
+why. Stated in advance that is a prediction and the measurement can refute it.
+Stated afterwards, the identical sentence is a rationalisation, and nothing in
+the result can tell the two apart -- including for the person who wrote it.
+
+This costs one sentence and it is worth taking every time a result could be
+argued either way. It also protects a *surprising* result: a number you
+predicted and got is evidence, where the same number produced by a lane that
+would have explained any outcome is not.
 
 ## A control that merely seems unaffected is not a control
 
