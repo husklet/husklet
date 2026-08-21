@@ -110,11 +110,16 @@ fn a_receipt_that_cannot_be_produced_says_why() {
     assert_eq!(output.status.code(), Some(125));
 }
 
-/// The stock-image case, end to end through the shipped binary: a rootfs whose `/bin/sh` is an
-/// **absolute** symbolic link, which is what every real distribution image carries.
+/// An engine refusal is announced with its reason, the same as a refusal this worker makes itself.
+///
+/// This case does **not** prove the absolute symlink was resolved inside the image -- measured: it
+/// stays green when the resolver is replaced by `rootfs.join(entry)`, because both spellings end
+/// in an engine refusal and the sentence is the same. `retained_direct_linux`'s
+/// `an_absolute_guest_symlink_resolves_to_the_image_copy` runs a real guest and reads its exit
+/// status, which is what tells the two apart.
 #[cfg(unix)]
 #[test]
-fn an_absolute_guest_symlink_is_resolved_inside_the_rootfs() {
+fn an_engine_refusal_is_announced_with_its_reason() {
     use std::os::unix::fs::{PermissionsExt as _, symlink};
 
     let root = tempfile::tempdir().expect("temporary rootfs");

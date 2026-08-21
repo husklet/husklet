@@ -323,6 +323,55 @@ mod linux_host {
         assert_eq!(receipt["engine_sha256"], expected);
     }
 
+    /// A stock distribution image ships `/bin/sh` as an **absolute** symbolic link -- Alpine's is
+    /// `-> /bin/busybox` -- and `RuntimePlan::executable_host` is a path the *host* opens. Joining
+    /// the rootfs to the guest entry looks like the conversion between the two and is not: the host
+    /// resolves the link against the host root, so a stock rootfs could not run its own shell and
+    /// the only thing the user saw was `NativeCreateFailed(1)` behind `RUST_BACKTRACE`.
+    ///
+    /// This runs a real guest, so the exit status is the evidence: the link's target exists only
+    /// inside the image, and 43 can only come from the image copy. A worker that resolved against
+    /// the host root cannot reach it, because the host has no `/bin/hl-entry-fixture`. The direct
+    /// row is the control -- it takes no symlink at all, so a regression in the plumbing rather
+    /// than in the resolution shows up as both rows failing.
+    #[test]
+    fn an_absolute_guest_symlink_resolves_to_the_image_copy() {
+        let root = std::env::temp_dir().join(format!("hl-entry-rootfs-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("bin")).unwrap();
+        let image = root.join("bin/hl-entry-fixture");
+        fs::write(&image, static_x86_64(231, 43)).unwrap();
+        fs::set_permissions(&image, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        assert!(
+            !std::path::Path::new("/bin/hl-entry-fixture").exists(),
+            "the fixture name must not exist on the host, or this case cannot tell the two roots apart"
+        );
+        std::os::unix::fs::symlink("/bin/hl-entry-fixture", root.join("bin/sh")).unwrap();
+
+        let direct = Command::new(env!("CARGO_BIN_EXE_hl-x86_64"))
+            .args(["--rootfs", root.to_str().unwrap(), "bin/hl-entry-fixture"])
+            .output()
+            .unwrap();
+        let through_link = Command::new(env!("CARGO_BIN_EXE_hl-x86_64"))
+            .args(["--rootfs", root.to_str().unwrap(), "bin/sh"])
+            .output()
+            .unwrap();
+        fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(
+            direct.status.code(),
+            Some(43),
+            "control: {}",
+            String::from_utf8_lossy(&direct.stderr)
+        );
+        assert_eq!(
+            through_link.status.code(),
+            Some(43),
+            "an absolute guest symlink was resolved against the host root: {}",
+            String::from_utf8_lossy(&through_link.stderr)
+        );
+    }
+
     #[test]
     fn receipt_accepts_both_guests_and_rejects_retired_selector_arguments() {
         let aarch64 = env!("CARGO_BIN_EXE_hl-aarch64");

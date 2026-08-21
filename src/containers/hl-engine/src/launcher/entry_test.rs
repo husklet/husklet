@@ -82,20 +82,28 @@ fn relative_image_symlink_resolves_from_its_guest_parent() {
 }
 
 /// A chain of links resolves, and it is the bound -- not the shape of the chain -- that stops a
-/// loop. `LINK_LIMIT` follows one link per pass, so a chain one link shorter than the bound must
-/// still resolve; clamping the bound below the chain length is what makes this case red.
+/// loop. `LINK_LIMIT` follows one link per pass, so the deepest resolvable chain is one link
+/// shorter than the bound.
+///
+/// `CHAIN` is a literal on purpose. Written as `GuestPath::LINK_LIMIT - 1` this case was
+/// **vacuous**: clamping the constant to 39 shortened the fixture by exactly one link too, and the
+/// case stayed green through the mutation it exists to catch. A test whose fixture is derived from
+/// the constant under test cannot fail when that constant moves. The equality below is what turns a
+/// deliberate change to the bound into a test to update rather than into nothing at all.
 #[test]
 fn a_link_chain_resolves_up_to_the_bound_and_a_loop_does_not() {
+    const CHAIN: usize = 39;
+    assert_eq!(GuestPath::LINK_LIMIT, CHAIN + 1);
+
     let root = scratch("chain");
     plant(&root, "/bin/busybox");
-    let depth = GuestPath::LINK_LIMIT - 1;
     symlink("/bin/busybox", root.join("bin/link-0")).unwrap();
-    for step in 1..depth {
+    for step in 1..CHAIN {
         symlink(format!("/bin/link-{}", step - 1), root.join(format!("bin/link-{step}"))).unwrap();
     }
     assert_eq!(
         GuestPath::host_executable(
-            Path::new(&format!("/bin/link-{}", depth - 1)),
+            Path::new(&format!("/bin/link-{}", CHAIN - 1)),
             std::slice::from_ref(&root)
         ),
         Some(root.join("bin/busybox"))
