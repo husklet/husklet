@@ -198,21 +198,67 @@ nix develop -c env \
 `HL_TERM_VIEW` picks the surface (`manager`, `terminal`, `newws`) and the shot fires only for
 the window it names. `HL_TERM_WS=<name>` selects a workspace from `$HOME/.hl/workspaces.conf`,
 and `HL_TERM_TABS=N`, `HL_TERM_SPLIT=h|v`, `HL_TERM_TYPE=<text>`, `HL_TERM_OVERVIEW`,
-`HL_TERM_OVERVIEW_PAGE` and `HL_TERM_DEBUG_LOG=<path>` drive it further. `storybook` carries
-the same hook under `STORYBOOK_SHOT`/`STORYBOOK_SHOT_MS`. Verified on x86_64 Linux at
-ad652522d: the manager window, the New-Workspace dialog, a terminal window with three tabs,
-a vertical split and typed text queued into both panes, and all 11 storybook stories
-(291 widgets).
+`HL_TERM_OVERVIEW_PAGE` and `HL_TERM_DEBUG_LOG=<path>` drive it further.
 
-Four things to know before you trust — or debug — this loop:
+A screenshot proves a window produced pixels. It cannot say which glyphs they are, cannot
+send a keystroke *while something is already running*, and cannot resize anything — so
+three further hooks carry the loop the rest of the way:
 
-- The terminal panes reach `workspace launch started` and show the "not live yet"
-  placeholder. Entering the image needs an OCI pull, which this loop does not do — so the
-  screenshot proves the toolkit, the pty spawn and the worker re-exec, not the container.
+- `HL_TERM_TEXT=<path>` writes what every pane is showing, as text, beside the PNG. This
+  is the assertable artefact: a screenshot needs a human or an OCR pass, a grid extraction
+  can be grepped for the output of a command the run typed.
+- `HL_TERM_SCRIPT=<ms>:<bytes>` chunks, separated by **ASCII RS (0x1e)**, write each
+  payload into a pane's tty at its own offset from launch, verbatim and with no newline
+  appended. A control byte is spelled by putting the control byte in the variable, which
+  is how a Ctrl-C is delivered mid-command. The separator is not printable because every
+  printable candidate — `|` above all — is something a real command line contains.
+- `HL_TERM_RESIZE=<ms>:<width>x<height>` resizes the **window**, in pixels. Do not
+  "simplify" this to `set_size` on the panes: a pane is `hexpand`/`vexpand`, the next
+  allocation overwrites the grid, and the guest goes on reporting the old geometry while
+  the hook reports success. That was measured here before it was fixed.
+
+`storybook` carries the same hook under `STORYBOOK_SHOT`/`STORYBOOK_SHOT_MS`.
+Verified on x86_64 Linux at ad652522d: the manager window, the New-Workspace dialog,
+a terminal window with three tabs, a vertical split and typed text queued into both
+panes, and all 11 storybook stories (291 widgets).
+
+Six things to know before you trust — or debug — this loop:
+
+- The terminal panes **do** enter the image, and the loop reaches a live shell. The
+  earlier note here said an OCI pull was out of reach and the screenshot therefore proved
+  only the toolkit; that was true of a run with no workspace configured. Write one into
+  `$HOME/.hl/workspaces.conf` (`name`/`image`/`arch`, three lines) and the pane's worker
+  starts the per-workspace domain, pulls the image and attaches a container exec:
+  measured 2026-08-21 on `naa0245` at 2b2cd63cf, ~20 s from launch to a prompt on the
+  first run including the pull of `alpine:3.20`, ~5 s once the domain is warm. Point
+  `HOME` at a scratch directory — `~/.hl` is shared with every other lane's tests.
 - `GTK_A11Y=none` only silences an `org.a11y.Bus` warning on a box with no accessibility
   bus. It is noise, not a failure.
-- `cargo test -p husklet --bins --features gui` needs **no** display at all. Do not add
-  `xvfb-run` to the test gate to "fix" something; the suite never opens one.
+- **The guest's terminal echoes every typed line twice, and this is not the toolkit.**
+  Measured 2026-08-21 at 2b2cd63cf against a live `alpine:3.20` workspace: every command
+  line appears once as busybox `ash`'s line editor draws it and again after the newline,
+  and each prompt carries a visible `^[[N;5R` — VTE's answer to the `ESC[6n` the editor
+  sends, echoed back as though it had been typed. The host pty is not the culprit;
+  `stty -a -F /dev/pts/N` on the live pane reports `-isig -icanon -echo`. The same
+  busybox binary, extracted from the same image layer and run under `chroot` on this
+  host's own kernel through a real pty, echoes each line exactly **once**. And the
+  guest's own termios is not simply ignored: `stty -echo` inside the container is
+  read back as `-echo` and the *second* copy stops. What is not honoured is the
+  raw-mode `tcsetattr` a line editor performs immediately before the read it is about
+  to do — which is what every interactive shell does on every prompt. It belongs to the
+  engine's line discipline, not to `hl-gui-gtk` or the `husklet` bins.
+- `cargo test -p husklet --bins --features gui` needs no display **to run**, and two of
+  its tests need one **to mean anything**. Measured 2026-08-21 on this box, both ways:
+  **`running 88 tests` / `88 passed` in both**, and only the display-less run prints
+  `skipped: no display connection`. The count cannot tell them apart, which is why this
+  has survived — `test_support::on_the_toolkit_thread` answers `false`, both callers say
+  they skipped, and between them 19 scenarios do not execute. Under
+  `xvfb-run -a -s '-screen 0 1600x1000x24' -- cargo test …` the skip lines are gone and
+  all 88 pass. Proven non-vacuous by planting a false assertion in one of those
+  scenarios: **87 passed / 1 failed under `xvfb-run`, 88 passed without a display.**
+  Wrapping the CI step is a decision for whoever owns the workflow, not a repair to make
+  silently — but do not read that step's green as covering the extension page or the
+  extension shelf until it is.
 - `TermConfig::default().font_family` is `Menlo`, which exists only on macOS. On Linux
   Pango falls back and VTE takes its cell metrics from the fallback, so the grid renders
   visibly letter-spaced until a workspace sets `font_family` to a font the host has
@@ -524,6 +570,48 @@ after writing the `pgrep -f` self-match warning into this file. Resolve the PID
 first and kill that, or match the process name with `pkill -x`. It is the same
 hazard as `pgrep -f` with the opposite consequence: there the loop never
 clears, here it fires on itself.
+
+**Stop writing pattern kills. Use this instead.** The two warnings above have
+been read and then violated **five times in one day** -- by five different
+lanes, each of which had read this file. Damage so far: one lane's own shell
+killed twice, a process belonging to a different lane killed by an `argv[0]`
+match, and a sibling's `cargo check --workspace --all-targets` killed mid-run.
+A prohibition that gets violated by everyone who reads it is a bad
+prohibition, so here is the recipe. Copy it.
+
+```sh
+# 1. Collect candidate pids WITHOUT matching your own command line.
+#    /proc/<pid>/cmdline is NUL-separated; your own shell is excluded by pid.
+me=$$
+for p in /proc/[0-9]*; do
+  pid=${p#/proc/}
+  [ "$pid" = "$me" ] && continue
+  tr '\0' ' ' < "$p/cmdline" 2>/dev/null | grep -q 'YOUR-UNIQUE-TOKEN' && echo "$pid"
+done > /tmp/victims.$$
+
+# 2. LOOK at them before killing anything.
+while read -r pid; do
+  printf '%s\t%s\n' "$pid" "$(tr '\0' ' ' < /proc/$pid/cmdline)"
+done < /tmp/victims.$$
+
+# 3. Kill the explicit list, never the pattern.
+xargs -r kill -TERM < /tmp/victims.$$
+```
+
+Better still, **do not search at all**: start anything long under `setsid` and
+record the pid or process-group id when you start it, then `kill -TERM -$pgid`.
+A process group you created cannot contain anyone else's work.
+
+Three rules that survive every variation of this mistake:
+
+- **`YOUR-UNIQUE-TOKEN` must be unique to you** -- your worktree path or a
+  string you invented. `cargo`, `rustc`, `flock`, `sleep`, `bash`, and any
+  binary name are shared with fifteen other lanes.
+- **Print the list before you kill it.** Every incident today would have been
+  caught by looking. It costs one command.
+- **A path in your own argv is still a match.** A lane's `perf record` was
+  matched by a sibling purely because the fixture path appeared on its command
+  line. Reading the full cmdline in step 2 is what catches this.
 
 **Long measurements must outlive the turn that starts them.** Background jobs
 are reaped when a turn pauses: one lane lost a nine-minute arm at the eight
@@ -1899,6 +1987,26 @@ A skip is not a pass. If a test cannot run here, it must say so out loud: the
 harness shows captured output only for failing tests, so an unrun arm otherwise
 looks exactly like a passing one.
 
+**Run `-p hl-engine --tests` with `< /dev/null`, always.** The checkpoint tests
+use `StandardStreams::default()`, which hands **the caller's own stdin** straight
+to the guest. An agent shell's stdin is typically a socket
+(`/proc/self/fd/0 -> socket:[...]`), and the engine refuses it outright:
+
+```
+typed guest fd 0 is a socket -- socket restore is not yet supported
+```
+
+A lane sampling a flaky test got **8/8 failures on both base and tip**, read it
+as its fix having no effect, and nearly reported that. Re-run with `< /dev/null`
+the same test passes and the real signal appears -- 3/8 on base, 0/8 on tip.
+
+The general fact is worse than the workaround: **every `-p hl-engine --tests`
+result in this repository is conditional on what stdin the caller happened to
+have.** Two lanes comparing results from differently-invoked shells are not
+comparing the same thing, and the failure is total rather than marginal, so it
+masquerades as "my change broke everything" or "my change fixed nothing". Redirect
+stdin, and say that you did.
+
 **When the thing you are varying is the environment, run the test binary
 directly.** A lane probing whether a test survives without a CA store got `ok`
 from `nix develop -c env ... cargo test`, and `0 passed; 1 failed` -- four times
@@ -1909,6 +2017,44 @@ configuring: it re-execs, it can re-resolve features, and it does not promise to
 hand your environment to the test unchanged. The direct run is the trustworthy
 one, and the lane caught this only because it re-ran a result it found
 surprising rather than reporting the first answer.
+
+**State your counting convention, every time.** A reference count is ambiguous
+between `passed` and `passed + ignored`, and the difference is silent. Briefs
+circulated on this box carried `hl-native --all-targets` as **112**
+(passed+ignored) and `hl-daemon --all-targets` as **250** (passed-only) *in the
+same list*, so two lanes reported "discrepancies" that were not discrepancies
+and one real move -- `hl-container --lib` 257 to 258 -- nearly got lost among
+them. Write `109p / 3i`, not `112`.
+
+**And read the parent's result line, not the first one.** Suites here re-exec
+probe children, and a child prints its own `test result:` into the same stream:
+
+```
+test result: FAILED. 0 passed; 1 failed; ...; 42 filtered out   <- probe child
+test result: FAILED. 34 passed; 4 failed; ...;  0 filtered out   <- the parent
+```
+
+A probe child always runs `--exact`, so it always reports a **non-zero**
+`filtered out`; the parent's line is the one reading **`0 filtered out`**.
+Discriminate on that mechanically rather than by position. Summing every line
+inflates both passes and failures -- it is what produced the phantom "five
+`checkpoint_linux` failures" that was quoted into a dozen briefs before anyone
+re-ran the suite.
+
+**A single run of a suite with a flaky member is not a count.** Two suites here
+are known to have them, and neither announces it:
+
+- `-p hl-engine --tests` -- a stable core plus at least two intermittent
+  members. `arm64_cross_process_shared_futex` measured **3/8**;
+  `inherited_pipe_ofd` **1/8**, and that one flips on `origin/main` itself.
+- `-p husklet --lib --features runtime` -- besides the documented root-only
+  `stop_wait_failure_attempts_rollback_before_returning`, the
+  `product_checkpoint_test` group has intermittent members;
+  `continue_later_restores_the_primary_sleep_tree_across_repeated_cycles`
+  measured **1/3 on `main`**.
+
+At 3/8, a single run lands anywhere from zero to two failures and a green run
+proves nothing. **Three runs a side is the floor**, and say how many you took.
 
 **Count the summary line, not the `FAILED` lines.** `grep -c '\.\.\. FAILED'`
 is not a failure count. A test that re-execs itself has a child that prints its
