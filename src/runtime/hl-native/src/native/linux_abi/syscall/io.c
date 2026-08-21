@@ -51,6 +51,15 @@ static int eventfd_peer_owner(int fd) {
     return -1;
 }
 
+// Before deleting this: its negative answer is redundant with the engine-private descriptor ledger
+// EVERYWHERE EXCEPT /proc/<pid>/fdinfo. exec_fd_is_engine() consults hl_host_process_fd_private_current()
+// first, and an eventfd's hidden peer is registered there, so the two behavioural probes that look like
+// they cover this function -- a /proc/self/fd listing, and a guest running close_range() above an eventfd
+// and then using it -- both stay GREEN when this returns a constant 0. Measured, not reasoned: a mutation
+// that defeats the answer reddens only proc_fdinfo_dir_open()'s listing (process_registry.c), which
+// filters on eventfd_hidden_peer_fd() alone and never asks the ledger. Until that listing was found this
+// function had no probe anyone could make fail. So it is load-bearing for exactly one caller, and any
+// removal has to move fdinfo onto the ledger first.
 static int eventfd_peer_is_engine_fd(int fd) {
     return eventfd_peer_owner(fd) >= 0;
 }
