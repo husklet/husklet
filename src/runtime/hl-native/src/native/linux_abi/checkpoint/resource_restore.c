@@ -476,7 +476,10 @@ static int ckpt_restore_right_prepare(const struct ckpt_fd *record) {
     int adopted = hl_host_process_fd_private_adopt(fd);
     if (adopted < 0) {
         close(fd);
-        return fprintf(stderr, "[restore] queued right adopt failed: %s\n", strerror(errno)), -1;
+        // `adopt` RETURNS a negated errno; it does not set one. Reading `errno` here was reading an
+        // unrelated syscall's leftovers -- container/netns/unix_compat.c already handles the same call
+        // correctly, one negation away.
+        return fprintf(stderr, "[restore] queued right adopt failed: %s\n", strerror(-adopted)), -1;
     }
     if (record->kind == CKF_MEMFD) {
         g_memfd_is[adopted] = 1;
