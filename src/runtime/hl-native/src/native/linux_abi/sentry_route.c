@@ -134,6 +134,57 @@ static int sentry_route_wait(struct cpu *c, uint64_t nr) {
     return 1;
 }
 
+// waitid(95) reaps a guest child worker exactly as wait4(260) does, and until this lane existed the
+// sentry never heard about it: waitid is not in the forwarded table and had no route here, so
+// service_local collected the host zombie -- freeing the pid the child's virtual descriptor table is
+// keyed on -- while the table itself stayed filed under that number. Measured on x86_64 Linux: a guest
+// that kills a child and collects it with waitid runs out of sentry process slots after 63 rounds with
+// at most one child alive at a time, and a fork landing on a reissued pid is then refused -EEXIST, an
+// errno clone(2) cannot return. The guards mirror the wait4 lane: never block on the sentry (a real host
+// child of the owner that is not a guest child), never surface its pid, and release on termination.
+//
+// Linux waitid: a0 idtype (P_ALL 0 / P_PID 1 / P_PGID 2 / P_PIDFD 3), a1 id, a2 siginfo, a3 options,
+// a4 rusage. WSTOPPED(2) and WCONTINUED(8) hold the same bit values as wait4's WUNTRACED/WCONTINUED, so
+// the "did this reap a corpse or report a stop" test is the same one.
+static int sentry_route_waitid(struct cpu *c, uint64_t nr) {
+    if (nr != 95) return 0;
+    uint64_t idtype = G_A0(c);
+    uint64_t infop = G_A2(c);
+    uint64_t options = G_A3(c);
+    if ((idtype == 0 || idtype == 2) && atomic_load(&g_guest_children) <= 0) {
+        G_RET(c) = (uint64_t)(int64_t)(-ECHILD);
+        return 1;
+    }
+    service_local(c);
+    if ((int64_t)G_RET(c) < 0) return 1;
+    // WNOWAIT reports a child without consuming it, so the pid stays pinned and the table must stay.
+    if (options & 0x01000000u) return 1;
+    // The reaped child's guest pid comes from the siginfo the call just filled (Linux si_pid is at
+    // offset 16, si_code at 8); a caller that asked for no siginfo is answered from its own arguments.
+    int64_t reaped = 0;
+    int terminated = (options & (2u | 8u)) == 0;
+    if (infop) {
+        uint8_t siginfo[128];
+        if (guest_copy_from(siginfo, infop, sizeof siginfo) != (ssize_t)sizeof siginfo) return 1;
+        reaped = *(const int *)(siginfo + 16);
+        int code = *(const int *)(siginfo + 8);
+        terminated = code == CLD_EXITED || code == CLD_KILLED || code == CLD_DUMPED;
+    } else if (idtype == 1) {
+        reaped = (int64_t)(int)G_A1(c);
+    }
+    if (reaped <= 0) return 1;
+    pid_t host = sentry_host_pid(reaped);
+    if (g_sentry_pid && host == g_sentry_pid) {
+        G_RET(c) = (uint64_t)(int64_t)(-ECHILD);
+        return 1;
+    }
+    if (terminated) {
+        sentry_ctl_op(SENTRY_OP_REAP, (uint64_t)(uint32_t)host, 0);
+        atomic_fetch_sub(&g_guest_children, 1);
+    }
+    return 1;
+}
+
 static int sentry_route_clone(struct cpu *c, uint64_t nr) {
     if (nr != 220 && nr != 435) return 0;
     fork_diagnostic_route previous_route =
@@ -1170,6 +1221,9 @@ static void syscall_route(struct cpu *c) {
     // so a blocking wait-any with no GUEST children would hang on it -> short-circuit to -ECHILD; and never
     // surface the sentry's own pid to the guest. A specific-pid wait passes straight through.
     if (sentry_route_wait(c, nr)) return;
+    // waitid(95): the same reap, through the other syscall. See sentry_route_waitid -- without this lane
+    // a guest that collects its children with waitid leaves their descriptor tables behind.
+    if (sentry_route_waitid(c, nr)) return;
     // file-backed mmap(222): the mapping must live in the WORKER (memory authority) but the fd is
     // sentry-owned and invalid here. Borrow the real fd over this lane's control socket (SCM_RIGHTS), map
     // it locally with the borrowed number, then drop it -- so the worker holds the real fd only for the
