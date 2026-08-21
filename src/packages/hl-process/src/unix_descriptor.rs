@@ -162,7 +162,7 @@ pub fn lock(descriptor: RawFd, operation: Lock) -> io::Result<()> {
 /// Reports whether an interrupted `close` had already vacated the slot, restoring it when it had not.
 ///
 /// POSIX leaves descriptor state unspecified after EINTR. Under the documented serialization
-/// contract the slot cannot be reused here, so F_GETFD distinguishes an already-completed close
+/// contract the slot cannot be reused here, so `F_GETFD` distinguishes an already-completed close
 /// from a live slot.
 ///
 /// # Errors
