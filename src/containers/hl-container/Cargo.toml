@@ -16,7 +16,6 @@ hl-engine = { path = "../hl-engine", default-features = false }
 hl-fs = { path = "../../packages/hl-fs" }
 hl-images = { version = "0.1.0", path = "../hl-images" }
 hl-log = { path = "../../packages/hl-log" }
-nix = { version = "0.30", features = ["dir", "fs", "signal"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tar.workspace = true
@@ -24,6 +23,16 @@ tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "process", "rt", "sync", "time"] }
 uuid = { workspace = true, features = ["v4"] }
+
+# MEASURED, because this crate's own `checkpoint/directory.rs` used to record the opposite:
+# `nix` 0.30.1 DOES build for `x86_64-pc-windows-gnu`. Every one of its modules is gated on
+# `target_os`, so it builds to an empty crate there and `nix::sys` / `nix::unistd` simply do not
+# resolve. A plain `[dependencies]` entry therefore costs a Windows dependency edge that can never
+# carry an item, and hides the platform statement from anyone reading the manifest. Declared here
+# instead: `dir`, `fs` and `signal` are `openat`/`fstatat`/`renameat`/`kill`, which is a POSIX
+# surface and nothing else.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.30", features = ["dir", "fs", "signal"] }
 
 [dev-dependencies]
 flate2.workspace = true
