@@ -1331,12 +1331,15 @@ struct record {
     char name[];
 };
 
+/* An exit status is 8 bits, so each failing step gets a 48-wide band and clamps its errno into it. */
+static int reported(int base) { return base + (errno < 47 ? errno : 47); }
+
 int main(void) {
     int mount = open("/work", O_RDONLY | O_DIRECTORY);
-    if (mount < 0) return 10 + (errno & 0x3f);
+    if (mount < 0) return reported(10);
     char buffer[8192];
     long used = syscall(SYS_getdents64, mount, buffer, sizeof buffer);
-    if (used < 0) return 80 + (errno & 0x3f);
+    if (used < 0) return reported(60);
     int alpha = 0, nested = 0;
     for (long at = 0; at + 19 <= used;) {
         struct record *entry = (struct record *)(buffer + at);
@@ -1349,9 +1352,9 @@ int main(void) {
     if (!nested) return 5;
     /* A directory that exists only in the host source, never in the image placeholder. */
     int child = open("/work/nested", O_RDONLY | O_DIRECTORY);
-    if (child < 0) return 150 + (errno & 0x3f);
+    if (child < 0) return reported(110);
     long child_used = syscall(SYS_getdents64, child, buffer, sizeof buffer);
-    if (child_used < 0) return 220 + (errno & 0x3f);
+    if (child_used < 0) return reported(160);
     for (long at = 0; at + 19 <= child_used;) {
         struct record *entry = (struct record *)(buffer + at);
         if (entry->size < 24) return 6;
@@ -1370,12 +1373,12 @@ int main(void) {
                 4 => "the mount listed without `alpha.txt`".to_owned(),
                 5 => "the mount listed without `nested`".to_owned(),
                 7 => "`/work/nested` listed without `deep.txt`".to_owned(),
-                10..=73 => format!("openat(\"/work\", O_DIRECTORY) failed with errno {}", status - 10),
-                80..=143 => format!("getdents64 on the mount failed with errno {}", status - 80),
-                150..=213 => {
-                    format!("openat(\"/work/nested\", O_DIRECTORY) failed with errno {}", status - 150)
+                10..=57 => format!("openat(\"/work\", O_DIRECTORY) failed with errno {}", status - 10),
+                60..=107 => format!("getdents64 on the mount failed with errno {}", status - 60),
+                110..=157 => {
+                    format!("openat(\"/work/nested\", O_DIRECTORY) failed with errno {}", status - 110)
                 }
-                220..=283 => format!("getdents64 on `/work/nested` failed with errno {}", status - 220),
+                160..=207 => format!("getdents64 on `/work/nested` failed with errno {}", status - 160),
                 other => format!("the guest exited {other}"),
             }
         }
