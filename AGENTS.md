@@ -1348,7 +1348,37 @@ argued either way. It also protects a *surprising* result: a number you
 predicted and got is evidence, where the same number produced by a lane that
 would have explained any outcome is not.
 
-### You cannot measure the syscall half on this host
+#### A ratio has an operating point; report the shape
+
+The same fix, the same arms, the same fixture, measured at two descriptor
+counts:
+
+```
+N=64     21.484e9 -> 4.209e6   =  5,104x
+N=8192   21.811e9 -> 0.418e9   =     52x
+```
+
+**Two orders of magnitude apart, and both are true.** A third figure, 243x, is
+also true of the same change measured on a different fixture. None of them is
+the answer, because a ratio is a property of the operating point, not of the
+change.
+
+The shape is the finding. Before, a 128x increase in open descriptors cost
+**2% more** -- flat, because the cost tracked a fixed bound. After, it costs
+**99x more** -- linear, because the bound is gone and the population walk
+underneath it has emerged. **Flat becoming sloped is a change of kind**, and it
+is far harder to produce by accident than a change of magnitude.
+
+The strongest confirmation was not the size of the win at all: after the fix the
+guest slope (x99.25) matches the native slope (x98.55) to **0.7%**. The engine's
+cost now tracks the descriptor population the way the kernel's does. That is not
+"cheaper" -- it is the right complexity class, and it is the claim worth making.
+
+So: measure at two operating points at least, quote both, and lead with the
+exponent rather than the ratio. A single ratio with no N attached invites the
+reader to assume it holds everywhere, and here it would be wrong by 100x.
+
+## You cannot measure the syscall half on this host
 
 **An end-to-end workload measurement on this x86_64 box cannot validate a
 spawn-path or syscall-path optimisation. It will read as zero.** This is
