@@ -1,7 +1,9 @@
 #![allow(unsafe_code)]
 
+#[cfg(unix)]
+use std::ffi::c_int;
 use std::{
-    ffi::{c_char, c_int, c_void},
+    ffi::{c_char, c_void},
     path::Path,
 };
 
