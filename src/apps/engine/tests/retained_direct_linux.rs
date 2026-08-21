@@ -348,7 +348,13 @@ mod linux_host {
             .unwrap();
         assert_eq!(unsupported_guest.status.code(), Some(125));
         assert!(unsupported_guest.stdout.is_empty());
-        assert!(unsupported_guest.stderr.is_empty());
+        // This used to assert stderr was *empty*, pinning the silence rather than the refusal: a
+        // receipt that could not be produced was one indistinguishable exit 125 for six different
+        // causes. The name of the ISA the caller asked for is the whole diagnostic.
+        assert_eq!(
+            String::from_utf8_lossy(&unsupported_guest.stderr).trim_end(),
+            "hl-engine: unknown guest ISA \"riscv64\""
+        );
     }
 }
 
