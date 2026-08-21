@@ -571,6 +571,48 @@ first and kill that, or match the process name with `pkill -x`. It is the same
 hazard as `pgrep -f` with the opposite consequence: there the loop never
 clears, here it fires on itself.
 
+**Stop writing pattern kills. Use this instead.** The two warnings above have
+been read and then violated **five times in one day** -- by five different
+lanes, each of which had read this file. Damage so far: one lane's own shell
+killed twice, a process belonging to a different lane killed by an `argv[0]`
+match, and a sibling's `cargo check --workspace --all-targets` killed mid-run.
+A prohibition that gets violated by everyone who reads it is a bad
+prohibition, so here is the recipe. Copy it.
+
+```sh
+# 1. Collect candidate pids WITHOUT matching your own command line.
+#    /proc/<pid>/cmdline is NUL-separated; your own shell is excluded by pid.
+me=$$
+for p in /proc/[0-9]*; do
+  pid=${p#/proc/}
+  [ "$pid" = "$me" ] && continue
+  tr '\0' ' ' < "$p/cmdline" 2>/dev/null | grep -q 'YOUR-UNIQUE-TOKEN' && echo "$pid"
+done > /tmp/victims.$$
+
+# 2. LOOK at them before killing anything.
+while read -r pid; do
+  printf '%s\t%s\n' "$pid" "$(tr '\0' ' ' < /proc/$pid/cmdline)"
+done < /tmp/victims.$$
+
+# 3. Kill the explicit list, never the pattern.
+xargs -r kill -TERM < /tmp/victims.$$
+```
+
+Better still, **do not search at all**: start anything long under `setsid` and
+record the pid or process-group id when you start it, then `kill -TERM -$pgid`.
+A process group you created cannot contain anyone else's work.
+
+Three rules that survive every variation of this mistake:
+
+- **`YOUR-UNIQUE-TOKEN` must be unique to you** -- your worktree path or a
+  string you invented. `cargo`, `rustc`, `flock`, `sleep`, `bash`, and any
+  binary name are shared with fifteen other lanes.
+- **Print the list before you kill it.** Every incident today would have been
+  caught by looking. It costs one command.
+- **A path in your own argv is still a match.** A lane's `perf record` was
+  matched by a sibling purely because the fixture path appeared on its command
+  line. Reading the full cmdline in step 2 is what catches this.
+
 **Long measurements must outlive the turn that starts them.** Background jobs
 are reaped when a turn pauses: one lane lost a nine-minute arm at the eight
 minute mark with no results file ever written. Start anything longer than a
