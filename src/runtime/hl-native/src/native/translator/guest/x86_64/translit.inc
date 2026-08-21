@@ -115,7 +115,9 @@ static void translit_flags_out(struct cpu *cpu, uint64_t flags) {
 #define HL_TRANSLIT_DEFAULT 0
 #endif
 
-static int translit_selected = -1;
+#if defined(__linux__) && defined(HL_HOST_CPU_X86_64)
+static int translit_selected = -1; // inside the gate: off a Linux/x86-64 host it would be an unused static
+#endif
 
 static int translit_enabled(void) {
 #if defined(__linux__) && defined(HL_HOST_CPU_X86_64)
