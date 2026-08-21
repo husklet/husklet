@@ -50,14 +50,34 @@ impl StandardStreamPort for CapturedOutput {
 
 /// Builds one fixture position-independent and statically linked.
 fn fixture(directory: &Path, name: &str) -> PathBuf {
+    let output = build(directory, name, "-static-pie");
+    assert!(
+        elf_is_position_independent(&output),
+        "{name} is not ET_DYN: translit_image_ok() declines a non-PIE image outright, so a non-PIE \
+         fixture would compare the interpreter against itself"
+    );
+    output
+}
+
+/// Builds one fixture as a non-PIE `ET_EXEC`, which is the shape the image refusal is about.
+fn displaced_fixture(directory: &Path, name: &str) -> PathBuf {
+    let output = build(directory, name, "-static");
+    assert!(
+        !elf_is_position_independent(&output),
+        "{name} is not ET_EXEC, so it does not exercise the non-PIE image refusal at all"
+    );
+    output
+}
+
+fn build(directory: &Path, name: &str, linkage: &str) -> PathBuf {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/translit")
         .join(format!("{name}.c"));
-    let output = directory.join(name);
+    let output = directory.join(format!("{name}{linkage}"));
     let compiler = "x86_64-linux-gnu-gcc";
     let status = std::process::Command::new(compiler)
         .args([
-            "-static-pie",
+            linkage,
             "-O2",
             "-fno-optimize-sibling-calls",
             "-z",
@@ -70,11 +90,6 @@ fn fixture(directory: &Path, name: &str) -> PathBuf {
         .status()
         .unwrap_or_else(|error| panic!("cannot run {compiler}: {error}"));
     assert!(status.success(), "{compiler} failed on {name} with {status}");
-    assert!(
-        elf_is_position_independent(&output),
-        "{name} is not ET_DYN: translit_image_ok() declines a non-PIE image outright, so a non-PIE \
-         fixture would compare the interpreter against itself"
-    );
     output
 }
 
@@ -173,4 +188,35 @@ fn threads_fork_and_exec_agree_with_the_interpreter() {
 #[test]
 fn operand_and_terminator_coverage_agrees_with_the_interpreter() {
     agrees("misc");
+}
+
+/// The image refusal, which is the one part of `translit.inc` that must fire rather than work.
+///
+/// A non-PIE `ET_EXEC` is mapped at a storage bias whenever the loader could not place it at its link
+/// address, and every baked pointer in it then has two names. Verbatim copying can express neither
+/// direction of that fold, so `translit_image_ok()` answers false for the whole image and the block runs
+/// on the interpreter, which already implements both. Selecting the backend must therefore be a no-op
+/// here rather than a miscompile: with the `g_nonpie_lo == 0` clamp removed, the same guests take a
+/// SIGSEGV inside the engine.
+#[test]
+fn a_non_position_independent_image_is_refused_rather_than_transliterated() {
+    let work = TempDir::new().unwrap();
+    for name in ["flags", "misc", "sigs"] {
+        let executable = displaced_fixture(work.path(), name);
+        let (interpreted, interpreted_status) = run(&executable, "0");
+        let (selected, selected_status) = run(&executable, "1");
+        assert_eq!(
+            interpreted_status, 0,
+            "{name}: the non-PIE fixture did not run under the interpreter"
+        );
+        assert_eq!(
+            selected_status, interpreted_status,
+            "{name}: selecting the transliterator changed the exit status of a refused image"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&interpreted),
+            String::from_utf8_lossy(&selected),
+            "{name}: selecting the transliterator changed the output of a refused image"
+        );
+    }
 }
