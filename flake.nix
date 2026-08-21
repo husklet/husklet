@@ -1272,6 +1272,13 @@
             # first pair of files produced for this gate differed ONLY in the order of
             # `engine` and `extension`, which would have been a spurious red.
             #
+            # WHEN THIS REDDENS ON A TARGET YOU ADDED, that is the gate working: read the
+            # `diff`, confirm the new target belongs in the Windows census, and update the
+            # number below. Do NOT widen the pipeline to make the count float, which would
+            # return this arm to reading nothing. It reddened FOR REAL within minutes of
+            # being written: `imported_path_guard.rs` arrived on `main` from the chmod
+            # EFAULT lane and took `hl-native` from 48 to 49, unplanted.
+            #
             # WHAT THIS WHOLE ATTRIBUTE IS AND IS NOT. Every claim here is COMPILE AND LINK
             # evidence. Three DLLs and a PE32+ executable are produced and inspected, and
             # NOT ONE INSTRUCTION HAS RUN -- there is no Windows host in this build. Whether
@@ -1301,7 +1308,7 @@
 1 hl-fs
 8 hl-gui
 2 hl-log
-48 hl-native
+49 hl-native
 1 hl-process
 1 hl-rpc
 1 hl-ws
