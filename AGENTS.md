@@ -297,12 +297,22 @@ Enter the pinned shell with `nix develop` before running `cargo clippy` or
 `cargo fmt`. Two lanes have now reported the E0514 as a mysterious failure of
 their own change.
 
-### A real Docker is reachable — use `sudo -n docker`
+### Docker is NOT reachable on this host
 
-Several lanes have reported "no live baseline available" and fallen back to the
-documented API. The socket is `root:docker` and our uid is not in the group, so
-an unprivileged probe genuinely is denied — but **`sudo -n docker` works**, and
-Docker 29.1.3 is running on this box.
+**Corrected 2026-08-21.** This section used to say `sudo -n docker` works and
+Docker 29.1.3 is running. That was true of the macOS machine the project was
+developed on until 2026-08-20. On `naa0245`, the x86_64 Linux box, **Docker is
+not installed at all**: no `docker` binary, no `dockerd` binary, no socket, and
+`systemctl is-active docker` answers `inactive`. Verify before you rely on it
+rather than trusting either version of this paragraph.
+
+An end-to-end lane found this after being sent to it by these instructions. Any
+lane told to measure the real daemon as an oracle **cannot**, and must say so
+instead of quietly substituting the documentation.
+
+The findings below were measured against the real Docker on the macOS host and
+remain valid as observations of Docker's behaviour. They are **history, not
+something you can reproduce here.**
 
 That matters because Docker's documentation is thinner than its behavior. Probing
 it directly produced findings no spec would have given: `"TERM "` with trailing
