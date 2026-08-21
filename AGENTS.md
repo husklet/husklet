@@ -420,6 +420,38 @@ Use `pgrep -ax testing` when you need the rows as well as the count.
 
 ### The box lock: exclusive to measure, shared to build
 
+**`exec 8>file` truncates the file and rewrites its mtime, so a probe that uses
+it destroys the evidence it is probing.** A lane checking whether the box-wanted
+marker was held wrote `(exec 8>/var/tmp/husklet-box.wanted; flock -n -x 8)`.
+That redirection is `O_WRONLY|O_CREAT|O_TRUNC`: it **creates the marker if it is
+absent** and **moves its mtime to now** every time you look. So "does the marker
+exist" can never fail after the first probe, and "is its mtime recent" reads the
+timestamp of your own check. Measured:
+
+```
+before probe:      mtime=12:04:06
+after  8>  probe:  mtime=12:04:46   <-- the probe moved it
+after  8<> probe:  mtime=12:04:46   <-- unchanged
+```
+
+**Use `8<>`** -- `O_RDWR|O_CREAT`, no truncate. `flock` works on it regardless of
+access mode. And read the mtime **before** taking the lock, not after. Treat the
+announce as held if *either* a lock is held *or* the file exists with a recent
+mtime; one test alone can be defeated by a stale file or by a holder that keeps
+no lock.
+
+This is `pgrep -f` matching its own argv, one level down: a check that runs,
+returns a confident answer, and has already invalidated its own input. When a
+probe writes anything at all, ask what it wrote over.
+
+**Do not edit a shell script whose interpreter is stopped inside it.** Bash reads
+a script incrementally by byte offset, so editing a running (or `SIGSTOP`ped)
+script changes what it reads next and it resumes mid-garbage. If a parked runner
+needs a fix, park the fix too: land it after the run completes, or write a new
+file and have the resumer exec that.
+
+
+
 **Sampling cannot hold a window; take the lock.** A 120-second all-clear says
 nothing about minute three, and a lane lost a measurement to a sibling's gate
 that started after its window opened. Widening what the sample sees does not
