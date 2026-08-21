@@ -31,6 +31,18 @@ pub(crate) enum BuildError {
     Copy(String),
     #[error("remote ADD request failed: {0}")]
     Remote(#[from] reqwest::Error),
+    /// The HTTP client a remote `ADD` needs could not be built at all.
+    ///
+    /// Same host condition as [`hl_images::Error::RegistryClient`] and the same fix: building a
+    /// client loads the host's CA store, and a distroless image or a Nix build sandbox has none.
+    /// It is separate from [`BuildError::Remote`] because nothing was requested -- and because
+    /// `reqwest::Error` displays this as the bare words `builder error`, so the sentence an
+    /// operator can act on has to be assembled from the source chain and said here.
+    #[error(
+        "cannot build the HTTP client a remote ADD source needs: {reason}; install a system CA \
+         store (the `ca-certificates` package) or point SSL_CERT_FILE at a CA bundle"
+    )]
+    RemoteClient { reason: String },
 }
 
 /// Classic Dockerfile build service over the container and OCI primitives.

@@ -46,11 +46,20 @@ static void eventfd_drain_readiness(int rfd, int signalled) {
 
 static int eventfd_peer_owner(int fd) {
     if (fd < 0) return -1;
-    for (int i = 0; i < HL_NFD; i++)
+    for (int i = 0; i < g_eventfd_peer_bound; i++)
         if (g_eventfd_peer[i] == fd + 1) return i;
     return -1;
 }
 
+// Before deleting this: its negative answer is redundant with the engine-private descriptor ledger
+// EVERYWHERE EXCEPT /proc/<pid>/fdinfo. exec_fd_is_engine() consults hl_host_process_fd_private_current()
+// first, and an eventfd's hidden peer is registered there, so the two behavioural probes that look like
+// they cover this function -- a /proc/self/fd listing, and a guest running close_range() above an eventfd
+// and then using it -- both stay GREEN when this returns a constant 0. Measured, not reasoned: a mutation
+// that defeats the answer reddens only proc_fdinfo_dir_open()'s listing (process_registry.c), which
+// filters on eventfd_hidden_peer_fd() alone and never asks the ledger. Until that listing was found this
+// function had no probe anyone could make fail. So it is load-bearing for exactly one caller, and any
+// removal has to move fdinfo onto the ledger first.
 static int eventfd_peer_is_engine_fd(int fd) {
     return eventfd_peer_owner(fd) >= 0;
 }
@@ -77,7 +86,7 @@ static void eventfd_peer_vacate(int fd) {
     int hi = fcntl(fd, F_DUPFD, 1 << 20);
     if (hi < 0) hi = fcntl(fd, F_DUPFD, 64);
     if (hi >= 0 && hi != fd) {
-        g_eventfd_peer[owner] = hi + 1;
+        eventfd_peer_bind(owner, hi + 1);
         close(fd);
     }
 }
@@ -127,7 +136,7 @@ static void fd_carry_virt(int newfd, int oldfd, struct fdvis_reservation *reserv
     // eventfd: share the peer write end + counter slot; bump the slot refcount so closing either alias does
     // not tear the shared object down until the last one closes (see fd_reset_emul / g_eventfd_refs).
     if (g_eventfd_peer[oldfd]) {
-        g_eventfd_peer[newfd] = g_eventfd_peer[oldfd];
+        eventfd_peer_bind(newfd, g_eventfd_peer[oldfd]);
         g_eventfd_cslot[newfd] = g_eventfd_cslot[oldfd];
         g_eventfd_sema[newfd] = g_eventfd_sema[oldfd];
         g_eventfd_gnb[newfd] = g_eventfd_gnb[oldfd]; // carry the guest blocking/non-blocking intent
@@ -386,7 +395,7 @@ static void engine_fd_vacate_range(unsigned first, unsigned last) {
     for (int i = 0; i < HL_SFD_MAX; i++) // signalfd write ends (engine-private)
         if (g_sfd[i].refs > 0 && g_sfd[i].wr >= 0 && (unsigned)g_sfd[i].wr >= first && (unsigned)g_sfd[i].wr <= last)
             engine_fd_vacate(g_sfd[i].wr);
-    for (int i = 0; i < HL_NFD; i++) {
+    for (int i = 0; i < g_eventfd_peer_bound; i++) {
         int p = g_eventfd_peer[i] - 1;
         if (p >= 0 && (unsigned)p >= first && (unsigned)p <= last) eventfd_peer_vacate(p);
     }
