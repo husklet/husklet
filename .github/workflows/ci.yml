@@ -168,6 +168,26 @@ jobs:
           primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
 
+      # THIS STEP IS A FAST FAILURE TODAY, and what it is failing at is not what it
+      # will fail at next. The verification derivation stops at `hl-design-lint`
+      # (38 findings at this tip), so everything after that line in `flake.nix` has
+      # NEVER RUN ON ANY MACOS RUNNER: `cargo check`/`clippy --workspace -D warnings`,
+      # `cargo test --workspace --all-targets`, the `-p husklet --features runtime`
+      # tests, and the doc tests. Nor have the two Clippy steps below this one, which
+      # never get reached. When the design-lint count reaches 0 this job does not go
+      # green -- it starts, for the first time, and reports whatever is behind it.
+      #
+      # ONE OF THOSE IS ALREADY KNOWN AND MEASURED, so nobody has to rediscover it:
+      # `cargo test --workspace --all-targets` runs
+      # `builder::tests::remote::remote_add_fetches_validates_and_keeps_archives_opaque`,
+      # which builds a `reqwest` client to fetch a Dockerfile `ADD <url>` over plain
+      # HTTP from a localhost server. Building the client loads the host CA store even
+      # though the fetch is not TLS, and every Nix sandbox sets
+      # `SSL_CERT_FILE=/no-cert-file.crt`. Measured on x86_64 Linux at 9941b08fb, test
+      # binary invoked directly with that variable: `0 passed; 1 failed`, panicking on
+      # the `unwrap` at `builder/tests/remote.rs:50`. It is pre-existing and belongs to
+      # the crate, not here -- do NOT fix it by exporting a CA bundle into the
+      # derivation, which is the workaround just removed from `alpine-compatibility`.
       - name: Verify the pinned workspace
         run: >-
           nix --extra-experimental-features 'nix-command flakes'
