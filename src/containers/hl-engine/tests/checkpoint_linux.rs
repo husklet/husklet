@@ -1521,6 +1521,15 @@ fn shared_process_tree(engine: &Arc<Engine>, output: &Path) -> SharedProcessTree
 /// any bound, so the number only has to exceed the ordinary cost of a reparent-and-reap.
 const REAP_SETTLE: Duration = Duration::from_secs(5);
 
+/// How long the transient-zombie arm of the gate below holds its zombie once the settle has been
+/// entered.
+///
+/// Deliberately far shorter than `REAP_SETTLE` and far longer than a real reparent-and-reap. Both
+/// margins are load-bearing: the first is what lets a clamped settle stay a control rather than become a
+/// fixture artefact, and the second is what stops a slow host resolving the transient before the settle
+/// is even entered -- which would pass while proving nothing at all.
+const TRANSIENT_ZOMBIE_WINDOW: Duration = Duration::from_millis(300);
+
 /// Wait for the shared fixture's two worker identities to disappear, and say exactly what is left if
 /// they do not.
 ///
@@ -1644,25 +1653,32 @@ fn wait_for_shared_child_reap_result_settles_a_transient_zombie_and_still_catche
         "the leak was refused after {waited:?}, short of the settle: the settle is not being served"
     );
 
-    // Arm 2 -- a transient `Z`, and NOT a leak. The shell backgrounds a short sleep, prints its pid,
-    // then `exec`s a longer one: the process keeps its pid and stops being a shell, so nothing waits on
-    // the background child. The grandchild is therefore observably `Z` under a live parent, and when
-    // that parent exits it reparents to init, which reaps it in the ordinary course of events. This is
-    // the shape the engine produces at teardown and the shape the old check called a leak.
+    // Arm 2 -- a transient `Z`, and NOT a leak. The shell backgrounds a very short sleep, prints its
+    // pid, then `exec`s `cat`: the process keeps its pid and stops being a shell, so nothing waits on the
+    // background child. The grandchild is therefore observably `Z` under a live parent -- exactly the
+    // state the old first-sighting check refused on sight -- and when that parent exits it reparents to
+    // init, which reaps it in the ordinary course of events.
+    //
+    // The parent exits on stdin EOF rather than after a fixed sleep, so the transient window is measured
+    // from the moment this test starts the settle rather than from process spawn. That matters twice: a
+    // slow host cannot let the transient resolve before the settle is even entered (which would pass
+    // while proving nothing), and the window stays short enough that a clamped settle is still a
+    // meaningful control rather than a fixture artefact.
     let mut parent = std::process::Command::new("sh")
         .arg("-c")
-        .arg("sleep 0.15 & echo $! ; exec sleep 1.5")
+        .arg("sleep 0.05 & echo $! ; exec cat")
+        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("spawn the transient-zombie arm");
+    let mut announcement = parent.stdout.take().expect("transient arm stdout");
     let announced = {
         use std::io::Read as _;
         let mut text = String::new();
-        let mut stdout = parent.stdout.take().expect("transient arm stdout");
         let deadline = Instant::now() + Duration::from_secs(10);
         while !text.contains('\n') {
             let mut byte = [0u8; 1];
-            match stdout.read(&mut byte) {
+            match announcement.read(&mut byte) {
                 Ok(0) => break,
                 Ok(_) => text.push(char::from(byte[0])),
                 Err(error) => panic!("transient arm announcement failed: {error}"),
@@ -1683,13 +1699,22 @@ fn wait_for_shared_child_reap_result_settles_a_transient_zombie_and_still_catche
         root: spawned_process_identity(parent.id(), "transient-zombie arm"),
         child: spawned_process_identity(grandchild, "transient-zombie arm"),
     };
+    wait_for_process_state(grandchild, 'Z', "transient-zombie arm");
+    // Hold the zombie for a fixed interval AFTER the settle is entered, then close the parent's stdin so
+    // it exits and the grandchild reparents to init.
+    let stdin = parent.stdin.take().expect("transient arm stdin");
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(TRANSIENT_ZOMBIE_WINDOW);
+        drop(stdin);
+    });
     // The parent is OUR child, so somebody has to wait on it -- otherwise it becomes a leak of its own
     // and this arm would fail for a reason that has nothing to do with the grandchild.
     let reaper = std::thread::spawn(move || parent.wait().expect("reap the transient-zombie arm's parent"));
-    wait_for_process_state(grandchild, 'Z', "transient-zombie arm");
     wait_for_shared_child_reap_result(transient_tree).unwrap_or_else(|error| {
         panic!("a transient zombie on a child about to be reparented to init is not a leak: {error}")
     });
+    release.join().unwrap();
+    drop(announcement);
     reaper.join().unwrap();
 }
 
