@@ -571,6 +571,48 @@ first and kill that, or match the process name with `pkill -x`. It is the same
 hazard as `pgrep -f` with the opposite consequence: there the loop never
 clears, here it fires on itself.
 
+**Stop writing pattern kills. Use this instead.** The two warnings above have
+been read and then violated **five times in one day** -- by five different
+lanes, each of which had read this file. Damage so far: one lane's own shell
+killed twice, a process belonging to a different lane killed by an `argv[0]`
+match, and a sibling's `cargo check --workspace --all-targets` killed mid-run.
+A prohibition that gets violated by everyone who reads it is a bad
+prohibition, so here is the recipe. Copy it.
+
+```sh
+# 1. Collect candidate pids WITHOUT matching your own command line.
+#    /proc/<pid>/cmdline is NUL-separated; your own shell is excluded by pid.
+me=$$
+for p in /proc/[0-9]*; do
+  pid=${p#/proc/}
+  [ "$pid" = "$me" ] && continue
+  tr '\0' ' ' < "$p/cmdline" 2>/dev/null | grep -q 'YOUR-UNIQUE-TOKEN' && echo "$pid"
+done > /tmp/victims.$$
+
+# 2. LOOK at them before killing anything.
+while read -r pid; do
+  printf '%s\t%s\n' "$pid" "$(tr '\0' ' ' < /proc/$pid/cmdline)"
+done < /tmp/victims.$$
+
+# 3. Kill the explicit list, never the pattern.
+xargs -r kill -TERM < /tmp/victims.$$
+```
+
+Better still, **do not search at all**: start anything long under `setsid` and
+record the pid or process-group id when you start it, then `kill -TERM -$pgid`.
+A process group you created cannot contain anyone else's work.
+
+Three rules that survive every variation of this mistake:
+
+- **`YOUR-UNIQUE-TOKEN` must be unique to you** -- your worktree path or a
+  string you invented. `cargo`, `rustc`, `flock`, `sleep`, `bash`, and any
+  binary name are shared with fifteen other lanes.
+- **Print the list before you kill it.** Every incident today would have been
+  caught by looking. It costs one command.
+- **A path in your own argv is still a match.** A lane's `perf record` was
+  matched by a sibling purely because the fixture path appeared on its command
+  line. Reading the full cmdline in step 2 is what catches this.
+
 **Long measurements must outlive the turn that starts them.** Background jobs
 are reaped when a turn pauses: one lane lost a nine-minute arm at the eight
 minute mark with no results file ever written. Start anything longer than a
@@ -1217,6 +1259,87 @@ This costs one sentence and it is worth taking every time a result could be
 argued either way. It also protects a *surprising* result: a number you
 predicted and got is evidence, where the same number produced by a lane that
 would have explained any outcome is not.
+
+## You cannot measure the syscall half on this host
+
+**An end-to-end workload measurement on this x86_64 box cannot validate a
+spawn-path or syscall-path optimisation. It will read as zero.** This is
+arithmetic, not pessimism, and it was established by a measurement designed to
+find the opposite.
+
+A lane fitted `host_instructions ~ D*guest_instructions + S*syscalls` across nine
+completed workloads, engine-startup floor subtracted. The fit **failed**:
+`R^2 = 0.064`, slope **-524,000** host instructions per guest syscall. A negative
+per-syscall cost is unphysical, so the correlation is absent. Workloads do not
+sort by syscall density; they sort very nearly backwards -- the densest
+(`spawn300`, 258 syscalls per million guest instructions) expands **977x**, the
+sparsest (`cc1`, 3.6) expands **1256x**.
+
+**The model is not wrong. It is unidentifiable here**, and the arithmetic says by
+how much. Take the aarch64 lane's measured `S = 3,135` host instructions per
+guest syscall against this host's measured `D = 1,169`:
+
+- densest workload: `3,135 x 258.2e-6` = **0.069%** of D
+- sparsest workload: `3,135 x 3.6e-6` = **0.001%** of D
+
+Between-workload scatter in expansion is 873-1504, about +-25%. So the largest
+possible syscall contribution is **0.28% of the noise -- roughly 370x below it.**
+The syscall term is not small on this host; it is **invisible**.
+
+On aarch64 with the JIT live, `D` collapses 434 -> 1.29 and the same
+~3,135-per-syscall term becomes the dominant cost. **The two components only
+become separable once the JIT removes the first one.**
+
+What follows for anyone optimising a syscall, descriptor or spawn path here:
+
+- **Validate on the mechanism, with counters.** `perf stat -e instructions` over
+  the path itself, with a null arm and a mechanism-derived control. That is how
+  the fdinfo and eventfd work was validated, and it was the right call.
+- **Or validate on aarch64 with the JIT live.** The cross-build takes ~70 s on
+  this box; the persistent VM is for things needing a real kernel.
+- **Do not ask for an end-to-end x86 confirmation of such a change**, and do not
+  read a flat end-to-end result as evidence the change did nothing. Asking for
+  that evidence is asking for a number that cannot exist.
+
+This is the counterpart to the mechanism-versus-workload rule above: there, both
+numbers are real and mean different things. Here, one of them **cannot be
+measured at all** on this host, and saying so is the honest report.
+
+## The table is the unit of iteration and the unit of capacity
+
+Four independent instances were found in a single day, by four lanes that were
+not looking for the same thing:
+
+| site | scans | population it should have scanned |
+|---|---|---|
+| `fdvis_find` | 131,072 slots on every miss | live entries |
+| `proc_fdinfo_dir_open` | 65,536 fd numbers per listing | open descriptors |
+| `jit_instruction_map_lookup` | 262,144 entries per guest fault | the faulting block |
+| the interpreter block index | ~900 hash-scattered pages per spawn | resident blocks |
+
+Two more share the shape without the cost: `g_fdpath[HL_NFD]` is indexed
+directly and `hl_fdcache_evict_path` keys on the table rather than the open set.
+
+The unifying statement is not "four arrays are too big". It is that **cost
+tracks the bound rather than the population, and exhaustion is a cliff rather
+than a slope.** Both halves bite:
+
+- **Cost.** A `/proc/<pid>/fdinfo` listing measured **flat in N** -- 906.9 ms at
+  64 open descriptors against 946.0 ms at 8,192, a ratio of **1.043**. Opening
+  128x more descriptors cost 4% more, because the scan is over the fixed table.
+  That flatness is the signature; look for it before assuming a cost is
+  proportional to work.
+- **Exhaustion.** `g_gbus` is capped at `GNA_MAX = 512`, and on overflow sets a
+  flag that makes every address in the process fault **permanently** -- the guest
+  dies `SIGBUS` at 512 live past-EOF mappings where the host is clean at 700. Its
+  sibling `g_gna` fails *open* on the same overflow. Neither degrades; one bricks
+  the guest and the other stops protecting it.
+
+When you meet a fixed-size table here, ask both questions. **Does a miss cost
+`N` or cost one?** And **what happens at `N+1` -- does it decline, or does it
+change behaviour for everything?** A bound that declines the operation it cannot
+record is defensible. A bound that silently changes a global answer is a defect
+waiting for a busy day.
 
 ## A control that merely seems unaffected is not a control
 
@@ -2024,6 +2147,44 @@ configuring: it re-execs, it can re-resolve features, and it does not promise to
 hand your environment to the test unchanged. The direct run is the trustworthy
 one, and the lane caught this only because it re-ran a result it found
 surprising rather than reporting the first answer.
+
+**State your counting convention, every time.** A reference count is ambiguous
+between `passed` and `passed + ignored`, and the difference is silent. Briefs
+circulated on this box carried `hl-native --all-targets` as **112**
+(passed+ignored) and `hl-daemon --all-targets` as **250** (passed-only) *in the
+same list*, so two lanes reported "discrepancies" that were not discrepancies
+and one real move -- `hl-container --lib` 257 to 258 -- nearly got lost among
+them. Write `109p / 3i`, not `112`.
+
+**And read the parent's result line, not the first one.** Suites here re-exec
+probe children, and a child prints its own `test result:` into the same stream:
+
+```
+test result: FAILED. 0 passed; 1 failed; ...; 42 filtered out   <- probe child
+test result: FAILED. 34 passed; 4 failed; ...;  0 filtered out   <- the parent
+```
+
+A probe child always runs `--exact`, so it always reports a **non-zero**
+`filtered out`; the parent's line is the one reading **`0 filtered out`**.
+Discriminate on that mechanically rather than by position. Summing every line
+inflates both passes and failures -- it is what produced the phantom "five
+`checkpoint_linux` failures" that was quoted into a dozen briefs before anyone
+re-ran the suite.
+
+**A single run of a suite with a flaky member is not a count.** Two suites here
+are known to have them, and neither announces it:
+
+- `-p hl-engine --tests` -- a stable core plus at least two intermittent
+  members. `arm64_cross_process_shared_futex` measured **3/8**;
+  `inherited_pipe_ofd` **1/8**, and that one flips on `origin/main` itself.
+- `-p husklet --lib --features runtime` -- besides the documented root-only
+  `stop_wait_failure_attempts_rollback_before_returning`, the
+  `product_checkpoint_test` group has intermittent members;
+  `continue_later_restores_the_primary_sleep_tree_across_repeated_cycles`
+  measured **1/3 on `main`**.
+
+At 3/8, a single run lands anywhere from zero to two failures and a green run
+proves nothing. **Three runs a side is the floor**, and say how many you took.
 
 **Count the summary line, not the `FAILED` lines.** `grep -c '\.\.\. FAILED'`
 is not a failure count. A test that re-execs itself has a child that prints its

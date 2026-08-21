@@ -158,18 +158,22 @@ static void svc_fs_access_53(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
     case 452: {
         // A pathname pointer outside the accessible address space -> EFAULT (kernel getname
         // copy_from_user), before the dirfd/target is examined (LTP fchmodat02 "invalid address").
-        // guest_bad_ptr catches the PROT_NONE tst_get_bad_addr page; the reads below (jail/atpath) would
-        // otherwise consume garbage from hl's force-mapped shadow of that page and mis-report the error.
+        // That verdict is reached in svc_fs (fs.c), which imports the pathname through guest_copy_string
+        // -> guest_span -> host_range_mapped, so the PROT_NONE tst_get_bad_addr page still faults; see the
+        // note below the flag screen for why it must NOT be re-derived from a1 here.
         // fchmodat2 (452) additionally rejects unknown flag bits with EINVAL (AT_SYMLINK_NOFOLLOW|
         // AT_EMPTY_PATH only); glibc screens fchmodat(53)'s flags in userspace so 53's a3 is never trusted.
         if (nr == 452 && (a3 & ~((uint64_t)0x100 | 0x1000))) {
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
         }
-        if (!a1 || guest_bad_ptr((uintptr_t)a1, 1)) {
-            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
-            break;
-        }
+        /* No guest-pointer guard here: svc_fs (fs.c) imported this pathname operand into engine
+         * storage with guest_copy_string BEFORE dispatch, and returned the guest's own -EFAULT
+         * (NULL or inaccessible source) / -ENAMETOOLONG there, against the GUEST address and the
+         * same PROT_NONE ledger.  What arrives here is an engine C-stack buffer, so re-probing it
+         * asks the guest ledger about ENGINE memory -- and g_gna does cover engine storage (a
+         * released guest range is re-added by munmap and the host allocator later places the
+         * engine's own thread stacks there), which turned valid calls into -EFAULT.  */
         // fchmodat2(fd, "", mode, AT_EMPTY_PATH) changes the inode named by fd.  Coreutils uses this
         // descriptor form while preserving metadata on an atomic replacement, including dpkg's
         // `cp -p` of lower-image configuration files.  Keep it on the same virtual-mode transaction
@@ -450,7 +454,7 @@ static void svc_fs_access_437(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t 
          * BENEATH and IN_ROOT must also refuse symlink escapes; the resolver has
          * no per-link escape check, so the whole walk is confined to no-symlink
          * resolution (fail-closed) when either containment flag is set. */
-        if ((resolve & 0x08ULL /*RESOLVE_BENEATH*/) && !guest_bad_ptr(a1, 1) && *(const char *)a1 == '/') {
+        if ((resolve & 0x08ULL /*RESOLVE_BENEATH*/) && *(const char *)a1 == '/') {
             G_RET(c) = (uint64_t)(int64_t)(-EXDEV);
             break;
         }
@@ -1228,7 +1232,7 @@ static void svc_fs_access_56(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         // openat/openat2 never give an empty pathname AT_EMPTY_PATH semantics,
         // including for O_PATH. Resolving "" through atpath() instead folded the
         // dirfd itself into the host path and opened it successfully.
-        if (a1 && !guest_bad_ptr(a1, 1) && !*(const char *)a1) {
+        if (a1 && !*(const char *)a1) {
             G_RET(c) = (uint64_t)(int64_t)(-ENOENT);
             break;
         }
