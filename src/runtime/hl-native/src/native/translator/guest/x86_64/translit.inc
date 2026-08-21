@@ -96,14 +96,35 @@ static void translit_flags_out(struct cpu *cpu, uint64_t flags) {
 
 // ---- the switch
 //
-// HL_TRANSLIT selects the same-ISA backend at build time.
+// HL_TRANSLIT selects the same-ISA backend. HL_TRANSLIT_DEFAULT is the build-time default; the
+// HL_TRANSLIT launch option (engine/options.c) overrides it per launch, so one binary can be gated in
+// both states -- a compile-time-only switch makes "with the transliterator" and "without it" two
+// different binaries, and two binaries are never a differential test of one.
+//
+// Resolved ONCE, on the first call, and cached: translit_image_ok() runs on every block entry and
+// hl_option_get is a linear scan of the registry. The first call is hl_x86_init's SA_ONSTACK decision
+// (engine/target/x86_64.c), which is after the launch store is bound and before any guest code runs, so
+// the cache can never be filled from an unbound store. An exec re-enters init in a fresh process image.
+//
+// The environment fallback exists because the standalone engine workers (hl-x86_64/hl-aarch64) build
+// their option store from a RuntimePlan, and an explicit store never imports the host environment
+// (engine/runtime.c: `if (source_options == NULL) hl_options_import_environment`). Without it the option
+// is unreachable from the command line and the backend has no way to be exercised outside a Rust
+// embedder. Same lazy self-contained shape as HL_SOFT_SHARED_RESOLVER in the aarch64 translator.
 #ifndef HL_TRANSLIT_DEFAULT
 #define HL_TRANSLIT_DEFAULT 0
 #endif
 
+static int translit_selected = -1;
+
 static int translit_enabled(void) {
 #if defined(__linux__) && defined(HL_HOST_CPU_X86_64)
-    return HL_TRANSLIT_DEFAULT;
+    if (translit_selected < 0) {
+        const char *value = hl_option_get("HL_TRANSLIT");
+        if (value == NULL) value = getenv("HL_TRANSLIT");
+        translit_selected = value != NULL ? (value[0] != '0' && value[0] != 0) : HL_TRANSLIT_DEFAULT;
+    }
+    return translit_selected;
 #else
     return 0;
 #endif
