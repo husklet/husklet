@@ -1513,9 +1513,36 @@ fn shared_process_tree(engine: &Arc<Engine>, output: &Path) -> SharedProcessTree
     processes
 }
 
+/// How long a departed worker gets to finish departing before its remains count as leaked.
+///
+/// This is the bound that makes the check a property rather than a race; see
+/// `wait_for_shared_child_reap_result`. Its exact value is not load-bearing -- the test that gates that
+/// function passes with it clamped to a fifth of this -- and that is the point: a leak is still there at
+/// any bound, so the number only has to exceed the ordinary cost of a reparent-and-reap.
+const REAP_SETTLE: Duration = Duration::from_secs(5);
+
+/// Wait for the shared fixture's two worker identities to disappear, and say exactly what is left if
+/// they do not.
+///
+/// **A `Z` is not a leak.** When the root worker exits before its child, the child is reparented to init
+/// and is `Z` for precisely as long as it takes init to get round to waiting on it -- microseconds on
+/// this host, milliseconds on a slow one. This function used to return `Err` on the FIRST sighting of
+/// `Z`, with no grace at all, on processes it reported in the same breath as `parent: 1`. That graded
+/// the test by how fast the host is: intermittent here, deterministic on a ~9x slower aarch64 VM, and
+/// on neither host able to tell "leaked" from "not reaped in the microsecond I looked".
+///
+/// A real descriptor or process leak is not a race. The corpse is still there a second later and a
+/// minute later, because nothing is going to wait on it. So the property is PERSISTENCE, and the settle
+/// is what measures it: the loop runs to the bound and only then classifies what survived. The
+/// zombie diagnosis is kept, because "still `Z` after five seconds" and "still running after five
+/// seconds" are different defects and the reader needs to know which -- and so is the parent, because a
+/// corpse still owed to a live supervisor is a different defect from one owed to init.
+///
+/// `wait_for_shared_child_reap_result_settles_a_transient_zombie_and_still_catches_a_leak` is the gate
+/// on all of that; it constructs both cases directly and does not depend on host speed.
 fn wait_for_shared_child_reap_result(processes: SharedProcessTree) -> Result<(), String> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
+    let deadline = Instant::now() + REAP_SETTLE;
+    let survivors = loop {
         revalidate_process_identity(processes.harness);
         let live = [processes.root, processes.child]
             .into_iter()
@@ -1526,14 +1553,144 @@ fn wait_for_shared_child_reap_result(processes: SharedProcessTree) -> Result<(),
         if live.is_empty() {
             return Ok(());
         }
-        if let Some((actual, _)) = live.iter().find(|(_, state)| *state == 'Z') {
-            return Err(format!("guest worker became an unreaped zombie: {actual:?}"));
-        }
         if Instant::now() >= deadline {
-            return Err(format!("guest worker identities did not disappear: {live:?}"));
+            break live;
         }
         std::thread::sleep(Duration::from_millis(10));
+    };
+    let zombies = survivors
+        .iter()
+        .filter(|(_, state)| *state == 'Z')
+        .map(|(actual, _)| *actual)
+        .collect::<Vec<_>>();
+    if !zombies.is_empty() {
+        return Err(format!(
+            "guest worker is still an unreaped zombie {REAP_SETTLE:?} after the engine exited: {zombies:?}"
+        ));
     }
+    Err(format!(
+        "guest worker identities did not disappear within {REAP_SETTLE:?}: {survivors:?}"
+    ))
+}
+
+fn observed_process_state(pid: u32) -> Option<char> {
+    process_identity(pid).map(|(_, state)| state)
+}
+
+fn wait_for_process_state(pid: u32, state: char, context: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while observed_process_state(pid) != Some(state) {
+        assert!(
+            Instant::now() < deadline,
+            "{context}: pid {pid} never reached state {state}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn spawned_process_identity(pid: u32, context: &str) -> ProcessIdentity {
+    process_identity(pid)
+        .unwrap_or_else(|| panic!("{context}: pid {pid} vanished before it could be identified"))
+        .0
+}
+
+/// The gate on the settle above: a transient `Z` is tolerated, a persistent one is still caught.
+///
+/// Both cases are built here rather than provoked through the engine, because the engine's own timing is
+/// exactly what must not decide the verdict. Neither depends on host speed. The transient zombie is held
+/// as a zombie for a fixed interval by construction -- a grandchild that exits while its parent is still
+/// alive, which is precisely the state the old first-sighting check refused on sight -- and the leaked
+/// one is never waited on at all, so it is `Z` for as long as anybody cares to look.
+///
+/// A grace period added carelessly turns a flaky test into a vacuous one. The leak arm is what stops
+/// that: it asserts the settle still ends in a refusal, that the refusal names the zombie rather than
+/// folding it into a generic timeout, and that the function really spent the settle instead of returning
+/// early for some unrelated reason.
+#[test]
+fn wait_for_shared_child_reap_result_settles_a_transient_zombie_and_still_catches_a_leak() {
+    let _exclusive = exclusive_checkpoint_test();
+    let harness = verified_process_identity(std::process::id()).expect("stable harness identity");
+
+    // Arm 1 -- a real leak. Two children exit and nothing ever waits on them. `std::process::Child`
+    // deliberately does not reap on drop, so these stay zombies owed to a LIVE parent for as long as
+    // this process runs. That is what a leaked worker looks like, and no settle may forgive it.
+    let mut leaked = ["0.05", "0.05"].map(|delay| {
+        std::process::Command::new("sleep")
+            .arg(delay)
+            .spawn()
+            .expect("spawn a child for the leaked-zombie arm")
+    });
+    let leaked_tree = SharedProcessTree {
+        harness,
+        root: spawned_process_identity(leaked[0].id(), "leaked-zombie arm"),
+        child: spawned_process_identity(leaked[1].id(), "leaked-zombie arm"),
+    };
+    for child in &leaked {
+        wait_for_process_state(child.id(), 'Z', "leaked-zombie arm");
+    }
+    let started = Instant::now();
+    let refusal = wait_for_shared_child_reap_result(leaked_tree)
+        .expect_err("a zombie nobody will ever wait on is a leak and must be refused");
+    let waited = started.elapsed();
+    for child in &mut leaked {
+        child.wait().expect("reap the leaked-zombie arm");
+    }
+    assert!(
+        refusal.contains("unreaped zombie"),
+        "a persistent zombie must be named as one, not folded into a generic timeout: {refusal}"
+    );
+    assert!(
+        waited >= REAP_SETTLE,
+        "the leak was refused after {waited:?}, short of the settle: the settle is not being served"
+    );
+
+    // Arm 2 -- a transient `Z`, and NOT a leak. The shell backgrounds a short sleep, prints its pid,
+    // then `exec`s a longer one: the process keeps its pid and stops being a shell, so nothing waits on
+    // the background child. The grandchild is therefore observably `Z` under a live parent, and when
+    // that parent exits it reparents to init, which reaps it in the ordinary course of events. This is
+    // the shape the engine produces at teardown and the shape the old check called a leak.
+    let mut parent = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("sleep 0.15 & echo $! ; exec sleep 1.5")
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn the transient-zombie arm");
+    let announced = {
+        use std::io::Read as _;
+        let mut text = String::new();
+        let mut stdout = parent.stdout.take().expect("transient arm stdout");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !text.contains('\n') {
+            let mut byte = [0u8; 1];
+            match stdout.read(&mut byte) {
+                Ok(0) => break,
+                Ok(_) => text.push(char::from(byte[0])),
+                Err(error) => panic!("transient arm announcement failed: {error}"),
+            }
+            assert!(
+                Instant::now() < deadline,
+                "transient arm never announced its grandchild"
+            );
+        }
+        text
+    };
+    let grandchild = announced
+        .trim()
+        .parse::<u32>()
+        .unwrap_or_else(|error| panic!("transient arm announced {announced:?}, not a pid: {error}"));
+    let transient_tree = SharedProcessTree {
+        harness,
+        root: spawned_process_identity(parent.id(), "transient-zombie arm"),
+        child: spawned_process_identity(grandchild, "transient-zombie arm"),
+    };
+    // The parent is OUR child, so somebody has to wait on it -- otherwise it becomes a leak of its own
+    // and this arm would fail for a reason that has nothing to do with the grandchild.
+    let reaper = std::thread::spawn(move || parent.wait().expect("reap the transient-zombie arm's parent"));
+    wait_for_process_state(grandchild, 'Z', "transient-zombie arm");
+    wait_for_shared_child_reap_result(transient_tree).unwrap_or_else(|error| {
+        panic!("a transient zombie on a child about to be reparented to init is not a leak: {error}")
+    });
+    reaper.join().unwrap();
 }
 
 fn wait_for_exact_process_reap(executable: &Path) {
@@ -3410,7 +3567,11 @@ fn probe_child_stderr(test: &str, timeout: Duration, extra_environment: &[(&[u8]
     )
     .unwrap();
     let stderr = std::fs::read_to_string(stderr_path).unwrap();
-    assert_eq!(outcome, ProcessOutcome::Exited(Some(0)), "probe child {test} failed:\n{stderr}");
+    assert_eq!(
+        outcome,
+        ProcessOutcome::Exited(Some(0)),
+        "probe child {test} failed:\n{stderr}"
+    );
     stderr
 }
 
