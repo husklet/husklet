@@ -51,6 +51,21 @@ pub enum Error {
         requested: crate::Platform,
         available: Option<Box<crate::Platform>>,
     },
+    /// The HTTP client a remote registry needs could not be built at all.
+    ///
+    /// This is not a failure to reach a registry; nothing has been sent. `reqwest` loads the host's
+    /// CA store when it builds a client, and a host that has none -- a Nix build sandbox, which sets
+    /// `SSL_CERT_FILE=/no-cert-file.crt`, or a distroless/scratch container image without
+    /// `ca-certificates` -- cannot produce one. `reason` carries the transport's own words, which
+    /// name the CA store; the rest of the sentence is here because an operator reading
+    /// `No CA certificates were loaded from the system` still has to be told that installing one is
+    /// the fix and that nothing else about Husklet needs it.
+    #[error(
+        "cannot build the HTTP client a remote registry needs: {reason}; install a system CA store \
+         (the `ca-certificates` package) or point SSL_CERT_FILE at a CA bundle -- Husklet needs one \
+         only to fetch an image from a registry"
+    )]
+    RegistryClient { reason: String },
     #[error("malformed OCI document: {0}")]
     MalformedOci(String),
     #[error("layer DiffID mismatch: expected {expected}, got {actual}")]
