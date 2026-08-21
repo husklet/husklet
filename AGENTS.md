@@ -1945,6 +1945,26 @@ A skip is not a pass. If a test cannot run here, it must say so out loud: the
 harness shows captured output only for failing tests, so an unrun arm otherwise
 looks exactly like a passing one.
 
+**Run `-p hl-engine --tests` with `< /dev/null`, always.** The checkpoint tests
+use `StandardStreams::default()`, which hands **the caller's own stdin** straight
+to the guest. An agent shell's stdin is typically a socket
+(`/proc/self/fd/0 -> socket:[...]`), and the engine refuses it outright:
+
+```
+typed guest fd 0 is a socket -- socket restore is not yet supported
+```
+
+A lane sampling a flaky test got **8/8 failures on both base and tip**, read it
+as its fix having no effect, and nearly reported that. Re-run with `< /dev/null`
+the same test passes and the real signal appears -- 3/8 on base, 0/8 on tip.
+
+The general fact is worse than the workaround: **every `-p hl-engine --tests`
+result in this repository is conditional on what stdin the caller happened to
+have.** Two lanes comparing results from differently-invoked shells are not
+comparing the same thing, and the failure is total rather than marginal, so it
+masquerades as "my change broke everything" or "my change fixed nothing". Redirect
+stdin, and say that you did.
+
 **When the thing you are varying is the environment, run the test binary
 directly.** A lane probing whether a test survives without a CA store got `ok`
 from `nix develop -c env ... cargo test`, and `0 passed; 1 failed` -- four times
