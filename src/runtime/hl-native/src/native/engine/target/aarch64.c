@@ -1090,4 +1090,10 @@ HL_API int hl_aarch64_reserved_register_test(void) {
     return hl_aarch64_reserved_register_scan(code, emitted) ? 1 : 0;
 #endif
 }
+/* See hl_linux_imported_path_guard_probe (linux_abi/syscall/fs.c): the pathname operand a handler
+   receives has already been imported into engine storage, so the guest PROT_NONE ledger must not be
+   consulted about it.  Both target TUs export the probe because both compile that syscall layer. */
+HL_API int hl_aarch64_imported_path_guard_test(void) {
+    return hl_linux_imported_path_guard_probe();
+}
 #endif
