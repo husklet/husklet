@@ -9,6 +9,7 @@ mod bindings;
 mod build_support;
 #[cfg(unix)]
 mod checkpoint;
+mod dynamic_library;
 mod engine;
 mod loader;
 mod provider;

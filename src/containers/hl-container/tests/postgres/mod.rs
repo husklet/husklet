@@ -82,18 +82,12 @@ mod tests {
         let command = process::readiness_command_with(&postmaster.to_string_lossy(), "printf reached");
         let guard = directory.path().join("postmaster-guard.sh");
         std::fs::write(&guard, &command).unwrap();
-        let rejected = std::process::Command::new("/bin/sh")
-            .arg(&guard)
-            .output()
-            .unwrap();
+        let rejected = std::process::Command::new("/bin/sh").arg(&guard).output().unwrap();
         assert!(!rejected.status.success());
         assert!(rejected.stdout.is_empty());
 
         std::fs::write(&postmaster, "1\n").unwrap();
-        let accepted = std::process::Command::new("/bin/sh")
-            .arg(&guard)
-            .output()
-            .unwrap();
+        let accepted = std::process::Command::new("/bin/sh").arg(&guard).output().unwrap();
         assert!(accepted.status.success());
         assert_eq!(accepted.stdout, b"reached");
     }
