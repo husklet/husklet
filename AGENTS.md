@@ -374,6 +374,24 @@ Enter the pinned shell with `nix develop` before running `cargo clippy` or
 `cargo fmt`. Two lanes have now reported the E0514 as a mysterious failure of
 their own change.
 
+### Re-read this file before you quote it
+
+A lane reported that this file still claimed Docker was reachable. The claim was
+already corrected, **in that lane's own worktree** -- it was not behind. It had
+read the file once, two hours earlier, and quoted the memory.
+
+This file takes roughly **thirty commits a day**. A section you read an hour ago
+may have been rewritten since, and the version in your head is the one you will
+argue from. **Re-read the paragraph before you cite it**, and say when you read
+it if the point turns on what the file says.
+
+Checking `git log -- AGENTS.md` is the weaker habit and would not have caught
+this, because the tree was current -- only the reader was stale.
+
+The finding underneath was still real and independently arrived at, which is the
+usual shape: the observation is right and the "the docs say otherwise" half has
+aged out. Report the observation; verify the citation.
+
 ### Docker is NOT reachable on this host
 
 **Corrected 2026-08-21.** This section used to say `sudo -n docker` works and
