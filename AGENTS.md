@@ -10,14 +10,16 @@ workspaces, terminal, and desktop application. Do not add GPU, graphics translat
 surface, compositor, CUDA, OpenGL, Vulkan, or Wayland implementation back into this
 repository. Never edit `../engine` while studying it.
 
-Sections 13–340 are process rules, and almost every one exists because it cost
-real work. If you are about to **measure** anything, the ones that have voided
-results are "Balance the arm order", "A control that merely seems unaffected is
-not a control", "`bench --results` is a resumable ledger", "Identical source does
-not mean an identical binary", "A C change reaching the binary is a separate
-claim, and it has its own check", and "Reading a profile". If you are about to
-**commit**, they are "What green means" and its four subsections. Everything from
-"Mission" onward is durable architecture and changes rarely.
+Everything before "Mission" is process rules, and almost every one exists because
+it cost real work. If you are about to **measure** anything, or to **count** what
+a suite reported, read "Counting and measurement" — it absorbs the seven sections
+that used to carry this scattered, among them "Balance the arm order", "A control
+that merely seems unaffected is not a control", "`bench --results` is a resumable
+ledger", "Identical source does not mean an identical binary" and "Reading a
+profile". "A C change reaching the binary is a separate claim, and it has its own
+check" stayed separate and belongs beside them. If you are about to **commit**,
+read "What green means" and its subsections. Everything from "Mission" onward is
+durable architecture and changes rarely.
 
 **A counter governed by the policy cannot decide the policy.** A lane proposed
 replacing a flip budget with a threshold on `direct_declined`, and the counters
@@ -92,13 +94,21 @@ So run the gate **after** merging, not only before, and run it on the tip you
 are about to push. A `cargo check --workspace --all-targets` is a minute and
 catches this whole class.
 
-**Push the SHA you gated, not the branch name.** On a `main` that nine lanes
-merge into continuously, "the tip you are about to push" moves while you are
-gating it. A lane gated `653e2595b`, watched nine arms go green over twenty
-minutes, ran `git push origin main`, and shipped `0c84f1909` -- two sibling
-merges had landed in the gap, the second carrying four ungated C files. Nothing
-warned it; `git push` reports the range it sent, which is the first and only
-place the extra commits appear, and by then they are on the remote.
+**Green on the pre-merge commit is not green on what you push.** Six proven arms
+on your own SHA are evidence about your change in isolation. The thing you push
+is the merge, and the merge is precisely where a conflict with the other lanes'
+week would first appear. Re-run every arm on the merged tip, including the ones
+you already have.
+
+### Push the SHA you gated, not the branch name
+
+On a `main` that nine lanes merge into continuously, "the tip you are about to
+push" moves while you are gating it. A lane gated `653e2595b`, watched nine
+arms go green over twenty minutes, ran `git push origin main`, and shipped
+`0c84f1909` -- two sibling merges had landed in the gap, the second carrying
+four ungated C files. Nothing warned it; `git push` reports the range it sent,
+which is the first and only place the extra commits appear, and by then they
+are on the remote.
 
     git push origin <gated-sha>:main
 
@@ -108,11 +118,12 @@ non-fast-forward you must go and look at. Re-read `git rev-parse main` right
 before pushing if you use the branch name anyway, and compare it to the commit
 you gated.
 
-**Gate the diff, not the repository -- but only under a mechanical rule.** The
-full gate is about twenty minutes, and on a `main` that moves every ten a lane
-can spend three of them in a row proving things its diff could not have broken.
-One lane ran `cargo test --workspace --lib --bins` three times because a YAML
-comment changed. The rule that earns the saving without losing anything:
+### Gate the diff, not the repository, under a mechanical rule
+
+The full gate is about twenty minutes, and on a `main` that moves every ten a
+lane can spend three of them in a row proving things its diff could not have
+broken. One lane ran `cargo test --workspace --lib --bins` three times because
+a YAML comment changed. The rule that earns the saving without losing anything:
 
 - **Workflow-only means `git diff --name-only <base>..<tip>` touches nothing
   outside `.github/`.** Not "mostly workflow", not "workflow plus one comment".
@@ -129,13 +140,16 @@ that the step passes, and that claim needs the step run somewhere.** Verify the
 thing you are adding on the exact tip you are adding it to. What you may skip is
 re-running the suites the diff cannot reach.
 
-**Ask of every check whether anything runs it.** A gate nobody invokes cannot
-fail, and that is indistinguishable from a gate that passes. `scan-build` found
-two real C defects here and ran in **no CI job on any host** -- `ci.yml` never
-named it, and a `lib.optionalAttrs pkgs.stdenv.isLinux` attribute is invisible
-to the macOS `nix flake check`. It was found only because a lane asked whether
-an assertion *it had just written* would ever be exercised. Ask that of anything
-you add, on the day you add it.
+### Ask of every check whether anything runs it
+
+A gate nobody invokes cannot fail, and that is indistinguishable from a gate
+that passes. `scan-build` found two real C defects here and ran in **no CI job
+on any host** -- `ci.yml` never named it, and a `lib.optionalAttrs
+pkgs.stdenv.isLinux` attribute is invisible to the macOS `nix flake check`. It
+was found only because a lane asked whether an assertion *it had just written*
+would ever be exercised. Ask that of anything you add, on the day you add it.
+
+### What `--bins` and `--all-targets` do not reach
 
 `--bins` is not optional. `cargo test --workspace --lib` alone runs **no** test
 in a crate that has no library target, and `testing` is bin-only: `cargo test -p
@@ -143,7 +157,7 @@ testing --lib` answers `no library targets found in package testing`, silently
 in a workspace-wide run. Every assertion in `testing`'s benchmark and syscall
 audit gates was invisible to the command this file told everyone to run.
 
-`--all-targets` does not run a required-features test either
+**`--all-targets` does not run a required-features test either.**
 
 `cargo test -p hl-native --all-targets` reports green while running **zero** of the
 tests in a target declared `required-features = ["native-test-hooks"]`. Cargo skips
@@ -157,7 +171,7 @@ configuration that hides the writer is also the one whose tests do not run by
 default. Add `--features native-test-hooks` as a second invocation when you touch
 anything behind that flag, and say which of the two you ran.
 
-### `--all-targets` does not reach the application
+**And `--all-targets` does not reach the application.**
 
 `src/apps/husklet` declares `[[bin]] husklet` with `required-features = ["gui"]`, and its
 `runtime` feature is off by default. Cargo **skips a target whose required features are
@@ -330,6 +344,14 @@ the first is enough. So verification is a separate job from implementation, and
 the verifier re-derives rather than inherits — including non-vacuity, which is
 cheap to redo and is the check most likely to have gone stale.
 
+A commit may be called stable or buildable only after verification from that exact
+committed tree. A passing build in a dirty shared worktree is not evidence for
+`HEAD`: uncommitted companion schema, match, generated, test, or composition edits
+may be supplying the successful build. Before handing a revision to another lane
+or starting an authoritative corpus run, verify it in a clean detached worktree
+or equivalent clean checkout and record the tested commit. Do not continue shape-
+changing edits until the dependent verification has captured a coherent commit.
+
 ### Clippy and rustfmt only work through the pinned shell
 
 `cargo clippy` invoked directly fails on `hl-native`'s build script with
@@ -371,6 +393,8 @@ you could not.
 
 ## Checking whether the box is busy
 
+### Name-based checks, and how they read zero on a busy box
+
 Use `pgrep -cx testing`, which matches the exact process name. Every
 pattern-matching form is wrong in one direction or the other:
 
@@ -385,26 +409,7 @@ pattern-matching form is wrong in one direction or the other:
 
 Use `pgrep -ax testing` when you need the rows as well as the count.
 
-**One guest is not enough for anything keyed on a guest address.** With the
-native write-reservation gate off entirely — same engine binary, same options,
-same source — base malloc measured 1,008,823 us on the sqlite guest and
-7,031,876 us on the sqlite-free one, reproduced by a second lane at 7.32x with
-every other phase between 0.98 and 1.02.
-
-The cause is not the guest binary as such. `allow_direct` is computed per
-admission, and whether an entry pc qualifies for direct authority is a property
-of the guest's code layout. When admissions alternate, `memory_mode` alternates
-with them, and because `hl_native_cache_epoch_matches` folds `memory_mode` into
-a **cache-wide** identity, every alternation discards the whole translation
-cache: 1,642 epoch and 1,652 direct resets on the slow guest against 38 and 37
-on the fast one, all with `mapping`, `instr` and `identity` unchanged. Removing
-the flip takes that phase from 441,906 us to 61,710 us.
-
-So a guest can put the engine into a pathological state that has nothing to do
-with the phase's own work, and running the phase alone hides it completely —
-in isolation both guests measure ~960,000 us. Measure on at least two guests,
-run the full sequence rather than one phase, and report **every** phase: a
-withdrawn table listed six and omitted a 1.37 string regression in its own data.
+### The box lock: exclusive to measure, shared to build
 
 **Sampling cannot hold a window; take the lock.** A 120-second all-clear says
 nothing about minute three, and a lane lost a measurement to a sibling's gate
@@ -456,6 +461,8 @@ Announce intent before requesting, so builders can yield:
 
     # builder, before taking flock -s
     while ! (exec 8>/var/tmp/husklet-box.wanted; flock -n -x 8); do sleep 5; done
+
+### Announcing intent, and what the lock cannot do
 
 **Announce before you request, or the announcement is retroactive.** Take fd 8
 *then* fd 9. A lane that queued its exclusive request first and announced
@@ -513,6 +520,8 @@ compliance problem. A builder that forgets the lock is indistinguishable from
 one that holds it, so **a granted lock is not proof the box is quiet.** Keep
 the name-matched check *behind* the lock, not instead of it.
 
+### What the name checks miss, and asking the kernel instead
+
 **`testing` is not the only thing that loads the box, and the others are the
 ones we generate constantly.** A `cargo test -p hl-engine` test binary is named
 `hl_engine-<hash>`, which `-x testing` cannot match and `-cf "release/testing"`
@@ -556,6 +565,8 @@ as ordinary. What gave the orphan away was a test that takes 12.4 seconds taking
 **405**. A runtime thirty times its own baseline is unambiguous where a load
 number is deniable, so a result recorded without its elapsed time cannot be
 audited for contention afterwards.
+
+### Killing your own processes and nobody else's
 
 **`pkill -x` kills other lanes' shared tooling.** Cancelling your own build with
 `pkill -x flock` matches every lane queued on the box lock, not just yours: one
@@ -613,6 +624,12 @@ Three rules that survive every variation of this mistake:
   matched by a sibling purely because the fixture path appeared on its command
   line. Reading the full cmdline in step 2 is what catches this.
 
+**The hazard is not local to this box.** A lane matched four `cargo test`
+processes on the macOS host, killed all of them to unblock its own, and only one
+was its own. Resolve a PID and kill that PID.
+
+### Long jobs, and the arms whose verdicts go missing
+
 **Long measurements must outlive the turn that starts them.** Background jobs
 are reaped when a turn pauses: one lane lost a nine-minute arm at the eight
 minute mark with no results file ever written. Start anything longer than a
@@ -637,11 +654,7 @@ and waited on a process that had been dead for minutes. Check the runner's pid i
 alive before you attribute silence to slowness, and re-run any arm whose verdict
 line is missing rather than inferring one.
 
-**Green on the pre-merge commit is not green on what you push.** Six proven arms
-on your own SHA are evidence about your change in isolation. The thing you push
-is the merge, and the merge is precisely where a conflict with the other lanes'
-week would first appear. Re-run every arm on the merged tip, including the ones
-you already have.
+### A single sample is not a window
 
 **A single zero does not mean the box is free.** A measuring lane runs a
 *series* of invocations with brief gaps between them, so a point-in-time
@@ -807,53 +820,6 @@ in that crate to a cfg name that is never set, build with
 prove it was really selected. That technique is sound for cfg-graph consistency
 and blind to libc and ABI differences; say which you proved.
 
-## Balance the arm order, or measure a 4% lie
-
-Running base first and candidate second in every round puts a uniform **+4% on
-the candidate** on this box. It was caught because the inflation appeared on
-`compute`, `branch`, `intdiv` and `atomics` — phases the change under test could
-not touch. Alternating (base/cand then cand/base) collapsed those four to 1.003,
-0.998, 0.997 and 1.000.
-
-Interleaving alone is not enough; the *order within each pair* must alternate.
-A fixed order survives every other precaution — pinning, minima, per-arm `ok=`
-verification — and none of them detect it.
-
-The damage is not uniform, so it can invent or hide a specific verdict: `file`
-read 1.039 under fixed order and 1.006 balanced, which is the difference between
-a disqualifying regression and parity.
-
-Include at least one phase the change provably cannot affect, and check it reads
-1.000. If it does not, the harness is lying and nothing else in the table is
-evidence.
-
-## `bench --results` is a resumable ledger; never reuse a path
-
-`bench` keys a resumable ledger on `--results`. Point two runs at the same path
-and the second **replays the cached rows instead of measuring**, then prints a
-clean `PASS`. There is no warning and the table looks perfect.
-
-So give every run a unique results path. A lane reusing one across arms would
-produce a plausible A/B table in which one arm was never executed.
-
-Two related harness facts worth knowing before you build your own repeat loop:
-each case already runs `repetitions: 3` and reports `min_us`/`median`/`p90` per
-phase, so take `min_us` and minimise across your rounds on top of it. And the
-guest is built by the harness per arm from the same `main.c`, so both arms share
-a source but not necessarily a binary — see below.
-
-## Identical source does not mean an identical binary
-
-Two builds of **byte-identical source**, same tip, same toolchain, worktree paths
-of equal length, differed by **152 bytes and a different sha256**. A candidate
-build differed from base by 3,520.
-
-That is why a base-versus-base null arm is not ceremony: it measures how much
-ratio a phase can show for no reason at all. If the null arm's spread covers the
-candidate's effect, the candidate is not evidence however clean the other
-controls read. Phases with small absolute times are where this bites — a few
-hundred microseconds of drift is percent-level on a 2.6 ms phase.
-
 ## A worktree on one host is invisible to the other, and git will prune it
 
 The macOS host and the Linux VM share the repository but **not** `/var/tmp`. A
@@ -871,10 +837,6 @@ So: **do not run `git worktree` commands on one host while another host holds a
 `/var/tmp` worktree**, and if a gate fails for a reason that makes no sense,
 check that your worktree still has its administrative directory before believing
 the error.
-
-The same asymmetry applies to killing processes by pattern. A lane matched four
-`cargo test` processes on the macOS host, killed all of them to unblock its own,
-and only one was its own. Resolve a PID and kill that PID.
 
 ## A worktree under a home directory cannot be tested without privilege
 
@@ -1107,7 +1069,102 @@ that runs `cargo test -p hl-native --all-targets --features native-test-hooks` i
 running that one command is the smallest change that would make a reserved-register
 regression fail a pull request.
 
-## A measurement names its host, or it names nothing
+## Counting and measurement
+
+Counting what a suite reported and taking a number are one discipline. Both fail
+silently, both fail in the direction that flatters the person measuring, and both
+have voided real results here. The first six subsections are about reading what a
+run reports; the rest are about producing a number somebody else can trust.
+
+These were seven separate sections until they were gathered here, because a lane
+hitting a counting problem had to guess which of the seven to open.
+
+### State your counting convention, every time
+
+A reference count is ambiguous between `passed` and `passed + ignored`, and the
+difference is silent. Briefs circulated on this box carried `hl-native
+--all-targets` as **112** (passed+ignored) and `hl-daemon --all-targets` as
+**250** (passed-only) *in the same list*, so two lanes reported "discrepancies"
+that were not discrepancies and one real move -- `hl-container --lib` 257 to
+258 -- nearly got lost among them. Write `109p / 3i`, not `112`.
+
+### Read the parent's result line, not the first one
+
+Suites here re-exec probe children, and a child prints its own `test result:`
+into the same stream:
+
+```
+test result: FAILED. 0 passed; 1 failed; ...; 42 filtered out   <- probe child
+test result: FAILED. 34 passed; 4 failed; ...;  0 filtered out   <- the parent
+```
+
+A probe child always runs `--exact`, so it always reports a **non-zero**
+`filtered out`; the parent's line is the one reading **`0 filtered out`**.
+Discriminate on that mechanically rather than by position. Summing every line
+inflates both passes and failures -- it is what produced the phantom "five
+`checkpoint_linux` failures" that was quoted into a dozen briefs before anyone
+re-ran the suite.
+
+### Count the summary line, not the `FAILED` lines
+
+`grep -c '\.\.\. FAILED'` is not a failure count. A test that re-execs itself has
+a child that prints its own `... FAILED` line into the same stream, so the grep
+reads **5** where `test result:` reads **4**. That phantom was carried in this
+file and quoted into a dozen lane briefs as "five pre-existing failures" until
+someone ran the suite three times and read the summary. `test result: FAILED. 34
+passed; 4 failed; 5 ignored` is the number; anything you derive by grepping the
+transcript is a guess that happens to be usually right.
+
+### A single run of a suite with a flaky member is not a count
+
+Two suites here are known to have flaky members, and neither announces it:
+
+- `-p hl-engine --tests` -- a stable core plus at least two intermittent
+  members. `arm64_cross_process_shared_futex` measured **3/8**;
+  `inherited_pipe_ofd` **1/8**, and that one flips on `origin/main` itself.
+- `-p husklet --lib --features runtime` -- besides the documented root-only
+  `stop_wait_failure_attempts_rollback_before_returning`, the
+  `product_checkpoint_test` group has intermittent members;
+  `continue_later_restores_the_primary_sleep_tree_across_repeated_cycles`
+  measured **1/3 on `main`**.
+
+At 3/8, a single run lands anywhere from zero to two failures and a green run
+proves nothing. **Three runs a side is the floor**, and say how many you took.
+
+### `-p hl-engine --tests` inherits the caller's stdin
+
+The checkpoint tests use `StandardStreams::default()`, which hands **the caller's
+own stdin** straight to the guest. An agent shell's stdin is typically a socket
+(`/proc/self/fd/0 -> socket:[...]`), and the engine refuses it outright:
+
+```
+typed guest fd 0 is a socket -- socket restore is not yet supported
+```
+
+A lane sampling a flaky test got **8/8 failures on both base and tip**, read it
+as its fix having no effect, and nearly reported that. Re-run with `< /dev/null`
+the same test passes and the real signal appears -- 3/8 on base, 0/8 on tip.
+
+The general fact is worse than the workaround: **every `-p hl-engine --tests`
+result in this repository is conditional on what stdin the caller happened to
+have.** Two lanes comparing results from differently-invoked shells are not
+comparing the same thing, and the failure is total rather than marginal, so it
+masquerades as "my change broke everything" or "my change fixed nothing". Redirect
+stdin, and say that you did.
+
+### Vary the environment against the test binary, not the `cargo` wrapper
+
+A lane probing whether a test survives without a CA store got `ok` from `nix
+develop -c env ... cargo test`, and `0 passed; 1 failed` -- four times out of
+four, in two working directories -- from the same test's binary invoked
+directly. Two spellings of one command disagreed and only one was true. A `cargo
+test` wrapper stands between you and the process you believe you are
+configuring: it re-execs, it can re-resolve features, and it does not promise to
+hand your environment to the test unchanged. The direct run is the trustworthy
+one, and the lane caught this only because it re-ran a result it found
+surprising rather than reporting the first answer.
+
+### A measurement names its host, or it names nothing
 
 The engine runs on two hosts and they are not interchangeable. The same guest
 binary doing the same pure-CPU work measured **58x slower under the engine on
@@ -1128,6 +1185,247 @@ host as silent about the other. When a user-facing complaint is about the macOS
 app, a Linux measurement cannot confirm or refute it. Reach for the Linux VM when
 you want a fast iteration loop, and re-confirm on macOS before you believe a
 ratio describes what the user feels.
+
+### One guest is not enough for anything keyed on a guest address
+
+With the native write-reservation gate off entirely — same engine binary, same
+options, same source — base malloc measured 1,008,823 us on the sqlite guest
+and 7,031,876 us on the sqlite-free one, reproduced by a second lane at 7.32x
+with every other phase between 0.98 and 1.02.
+
+The cause is not the guest binary as such. `allow_direct` is computed per
+admission, and whether an entry pc qualifies for direct authority is a property
+of the guest's code layout. When admissions alternate, `memory_mode` alternates
+with them, and because `hl_native_cache_epoch_matches` folds `memory_mode` into
+a **cache-wide** identity, every alternation discards the whole translation
+cache: 1,642 epoch and 1,652 direct resets on the slow guest against 38 and 37
+on the fast one, all with `mapping`, `instr` and `identity` unchanged. Removing
+the flip takes that phase from 441,906 us to 61,710 us.
+
+So a guest can put the engine into a pathological state that has nothing to do
+with the phase's own work, and running the phase alone hides it completely —
+in isolation both guests measure ~960,000 us. Measure on at least two guests,
+run the full sequence rather than one phase, and report **every** phase: a
+withdrawn table listed six and omitted a 1.37 string regression in its own data.
+
+### Balance the arm order, or measure a 4% lie
+
+Running base first and candidate second in every round puts a uniform **+4% on
+the candidate** on this box. It was caught because the inflation appeared on
+`compute`, `branch`, `intdiv` and `atomics` — phases the change under test could
+not touch. Alternating (base/cand then cand/base) collapsed those four to 1.003,
+0.998, 0.997 and 1.000.
+
+Interleaving alone is not enough; the *order within each pair* must alternate.
+A fixed order survives every other precaution — pinning, minima, per-arm `ok=`
+verification — and none of them detect it.
+
+The damage is not uniform, so it can invent or hide a specific verdict: `file`
+read 1.039 under fixed order and 1.006 balanced, which is the difference between
+a disqualifying regression and parity.
+
+Include at least one phase the change provably cannot affect, and check it reads
+1.000. If it does not, the harness is lying and nothing else in the table is
+evidence.
+
+### `bench --results` is a resumable ledger; never reuse a path
+
+`bench` keys a resumable ledger on `--results`. Point two runs at the same path
+and the second **replays the cached rows instead of measuring**, then prints a
+clean `PASS`. There is no warning and the table looks perfect.
+
+So give every run a unique results path. A lane reusing one across arms would
+produce a plausible A/B table in which one arm was never executed.
+
+Two related harness facts worth knowing before you build your own repeat loop:
+each case already runs `repetitions: 3` and reports `min_us`/`median`/`p90` per
+phase, so take `min_us` and minimise across your rounds on top of it. And the
+guest is built by the harness per arm from the same `main.c`, so both arms share
+a source but not necessarily a binary — see below.
+
+### Identical source does not mean an identical binary
+
+Two builds of **byte-identical source**, same tip, same toolchain, worktree paths
+of equal length, differed by **152 bytes and a different sha256**. A candidate
+build differed from base by 3,520.
+
+That is why a base-versus-base null arm is not ceremony: it measures how much
+ratio a phase can show for no reason at all. If the null arm's spread covers the
+candidate's effect, the candidate is not evidence however clean the other
+controls read. Phases with small absolute times are where this bites — a few
+hundred microseconds of drift is percent-level on a 2.6 ms phase.
+
+### A control that merely seems unaffected is not a control
+
+Disable the code path in both binaries and measure that. Anything weaker is a
+guess about which phases are unrelated, and the guess has already been wrong.
+
+A suppression change was rejected on a 5.8% `syscall` regression. With native
+execution disabled in **both** builds — so the changed code is unreachable and
+the two must measure identically — `syscall` still read **1.057**, the worst
+phase in the control, and 13 of 17 phases favoured base. Systematic, not random:
+the candidate's engine is simply laid out differently, and `syscall` runs the
+most engine host-side code per guest instruction, so layout shows there first.
+Corrected, the algorithm's own cost was **1.012**. The change was killed for
+~5% of binary layout.
+
+`compute` and `branch` read 1.003 and 0.998 in the same balanced runs and would
+have waved the change through. They looked like controls and were not — they
+were merely phases the change did not reach, which says nothing about what else
+differs between two binaries.
+
+Where disabling the path is impossible, a base-versus-base null arm is the
+accepted substitute and must read 1.000. A control derived from the mechanism is
+better still: one lane used `compute` at 250 probes against 366,696 on `syscall`,
+having first shown the cost scales with probes.
+
+### A mechanism number and a workload number are different claims
+
+A lane bounded a scan and a `/proc/<pid>/fdinfo` listing went from 43.1 billion
+user instructions to 177 million -- **243x**. That figure was then repeated as
+though the product had got 243 times faster at something. It had not. It is the
+cost of the *mechanism*: what that path costs when you run it and nothing else.
+
+What a developer feels is the *workload* number -- the same fix measured inside a
+real program, where the mechanism is one component among many and is diluted by
+everything around it. On this host the surrounding guest code carries roughly
+1,000x of interpretation, so a 243x mechanism win can show up end-to-end as
+almost nothing.
+
+**Both numbers are true and neither substitutes for the other.** A diluted
+end-to-end result is not a failure to reproduce the mechanism result; it is the
+second half of the finding, and the ratio between them tells you how much of its
+time a real workload actually spends on that path. Report both, and say which
+each one is. A mechanism number quoted as a product improvement is the most
+flattering way there is to be wrong.
+
+### Say what you expect before you measure it
+
+The lane that drew the distinction above also wrote down, *before building its
+probe*, that it expected the end-to-end figure to come in far under 243x and
+why. Stated in advance that is a prediction and the measurement can refute it.
+Stated afterwards, the identical sentence is a rationalisation, and nothing in
+the result can tell the two apart -- including for the person who wrote it.
+
+This costs one sentence and it is worth taking every time a result could be
+argued either way. It also protects a *surprising* result: a number you
+predicted and got is evidence, where the same number produced by a lane that
+would have explained any outcome is not.
+
+### You cannot measure the syscall half on this host
+
+**An end-to-end workload measurement on this x86_64 box cannot validate a
+spawn-path or syscall-path optimisation. It will read as zero.** This is
+arithmetic, not pessimism, and it was established by a measurement designed to
+find the opposite.
+
+A lane fitted `host_instructions ~ D*guest_instructions + S*syscalls` across nine
+completed workloads, engine-startup floor subtracted. The fit **failed**:
+`R^2 = 0.064`, slope **-524,000** host instructions per guest syscall. A negative
+per-syscall cost is unphysical, so the correlation is absent. Workloads do not
+sort by syscall density; they sort very nearly backwards -- the densest
+(`spawn300`, 258 syscalls per million guest instructions) expands **977x**, the
+sparsest (`cc1`, 3.6) expands **1256x**.
+
+**The model is not wrong. It is unidentifiable here**, and the arithmetic says by
+how much. Take the aarch64 lane's measured `S = 3,135` host instructions per
+guest syscall against this host's measured `D = 1,169`:
+
+- densest workload: `3,135 x 258.2e-6` = **0.069%** of D
+- sparsest workload: `3,135 x 3.6e-6` = **0.001%** of D
+
+Between-workload scatter in expansion is 873-1504, about +-25%. So the largest
+possible syscall contribution is **0.28% of the noise -- roughly 370x below it.**
+The syscall term is not small on this host; it is **invisible**.
+
+On aarch64 with the JIT live, `D` collapses 434 -> 1.29 and the same
+~3,135-per-syscall term becomes the dominant cost. **The two components only
+become separable once the JIT removes the first one.**
+
+What follows for anyone optimising a syscall, descriptor or spawn path here:
+
+- **Validate on the mechanism, with counters.** `perf stat -e instructions` over
+  the path itself, with a null arm and a mechanism-derived control. That is how
+  the fdinfo and eventfd work was validated, and it was the right call.
+- **Or validate on aarch64 with the JIT live.** The cross-build takes ~70 s on
+  this box; the persistent VM is for things needing a real kernel.
+- **Do not ask for an end-to-end x86 confirmation of such a change**, and do not
+  read a flat end-to-end result as evidence the change did nothing. Asking for
+  that evidence is asking for a number that cannot exist.
+
+This is the counterpart to the mechanism-versus-workload rule above: there, both
+numbers are real and mean different things. Here, one of them **cannot be
+measured at all** on this host, and saying so is the honest report.
+
+### Reading a profile
+
+High self-time and removable cost are independent properties, and this engine has
+produced both failure modes:
+
+- **Misattributed self-time.** `with_execution_memory` compiles to 4032 bytes
+  because the guest-slice closure is inlined wholesale into it, so its row credits
+  work done by its callees. Disassemble before believing a row; a function whose
+  body should be twenty instructions and measures a thousand is reporting someone
+  else's cost.
+- **Real self-time that is still free to keep.** `ReservationEpochs::invalidate_at`
+  is a genuine 112-byte function and its row is honestly its own, but deleting it
+  along with all 5.17 billion of its atomics changed nothing measurable, because
+  the `ldadd` discards its result and retires without blocking anything.
+
+So a profile row justifies investigating a symbol. Only a mutation justifies
+believing the cost can be recovered.
+
+### A serializing instruction collects the skid of everything ahead of it
+
+The two failure modes above are about a *symbol*. This one is about a single
+instruction, and it is the reason a `perf annotate` row can be enormous and worth
+nothing.
+
+`run_guest()` makes two `seq_cst` stores per dispatcher crossing -- `cpu->irq = 0`
+(`engine/dispatch.c`) and `in_translated = 1` (`translator/cache.c`) -- and both
+compile to `xchg` on x86. Measured 2026-08-20 on `naa0245` with the JIT-less
+x86_64 engine, `perf record -e cycles:u` over a guest fork+exec put `run_guest` at
+17.0% self-time with **80.5% of its samples on the instruction after the first
+`xchg`** and 13.6% on the instruction after the second: 13.6% and 2.3% of all user
+cycles, in two instructions.
+
+None of it came back. A candidate that skips the first store whenever `irq` is
+already clear -- the common case, and a change the instruction counters confirm
+reaches the binary, +21.5k instructions per spawn on a static x86_64 guest and
++63.6k on aarch64, exactly the load and branch it adds -- measured 1.0371 on
+aarch64 in a twelve-round balanced ABBA, a **3.7% regression**. A second build of
+the *same candidate source* measured 0.9868 on the same arm in the same run. The
+two builds' per-round ranges do not overlap: [1.0276, 1.0432] against
+[0.9825, 0.9929]. A variant with both stores weakened read 0.9908.
+
+Two durable things:
+
+- **`xchg` drains the store buffer, so it retires slowly and the sampled PC skids
+  onto the instruction after it.** What the row measures is the queue in front of
+  the barrier, not the barrier. A store nobody was waiting on can therefore carry
+  a double-digit share of a profile and cost nothing.
+- **One null arm is not the noise floor.** Base-versus-base read 1.0016
+  [0.9912, 1.0142] in the same run and would have certified a 3.7% verdict as
+  real. Layout noise is a property of the *pair* of binaries, so a candidate needs
+  a second build of its own source before its ratio means anything -- the same
+  reason "Identical source does not mean an identical binary" exists, one step
+  further on.
+
+The count that explains the whole thing: a spawn retires 112M user instructions in
+~21,500 crossings, so a crossing is ~5,200 instructions and one locked store
+cannot be a percent of it. On a host **with** the JIT a crossing is one translated
+guest basic block, tens of instructions, and the same two stores are a different
+question that no measurement on this box can answer.
+
+Time the mechanism before sizing a fix for it. The native/host operand round trip
+was assumed to cost about a microsecond and to dominate sqlite; measured, it is
+105ns and 0.35% of the phase, so an entire direction was worth a tenth of a
+percent. A count is not a cost until you have multiplied it by a measured one.
+
+Counters are comparable within a build and not across builds. Adding
+instrumentation changes inlining, which changes translation admission: two builds
+of the same source reported 892,141 and 1,593,713 for the same counter. Compare a
+counter only against itself in the same binary.
 
 ## A C change reaching the binary is a separate claim, and it has its own check
 
@@ -1227,84 +1525,6 @@ refuses this case at the moment it happens — it recomputes the fingerprint aft
 linking and fails with both values if the sources moved under it — so the mixed
 artifact is never handed to a lane as a silent one.
 
-## A mechanism number and a workload number are different claims
-
-A lane bounded a scan and a `/proc/<pid>/fdinfo` listing went from 43.1 billion
-user instructions to 177 million -- **243x**. That figure was then repeated as
-though the product had got 243 times faster at something. It had not. It is the
-cost of the *mechanism*: what that path costs when you run it and nothing else.
-
-What a developer feels is the *workload* number -- the same fix measured inside a
-real program, where the mechanism is one component among many and is diluted by
-everything around it. On this host the surrounding guest code carries roughly
-1,000x of interpretation, so a 243x mechanism win can show up end-to-end as
-almost nothing.
-
-**Both numbers are true and neither substitutes for the other.** A diluted
-end-to-end result is not a failure to reproduce the mechanism result; it is the
-second half of the finding, and the ratio between them tells you how much of its
-time a real workload actually spends on that path. Report both, and say which
-each one is. A mechanism number quoted as a product improvement is the most
-flattering way there is to be wrong.
-
-## Say what you expect before you measure it
-
-The lane that drew the distinction above also wrote down, *before building its
-probe*, that it expected the end-to-end figure to come in far under 243x and
-why. Stated in advance that is a prediction and the measurement can refute it.
-Stated afterwards, the identical sentence is a rationalisation, and nothing in
-the result can tell the two apart -- including for the person who wrote it.
-
-This costs one sentence and it is worth taking every time a result could be
-argued either way. It also protects a *surprising* result: a number you
-predicted and got is evidence, where the same number produced by a lane that
-would have explained any outcome is not.
-
-## You cannot measure the syscall half on this host
-
-**An end-to-end workload measurement on this x86_64 box cannot validate a
-spawn-path or syscall-path optimisation. It will read as zero.** This is
-arithmetic, not pessimism, and it was established by a measurement designed to
-find the opposite.
-
-A lane fitted `host_instructions ~ D*guest_instructions + S*syscalls` across nine
-completed workloads, engine-startup floor subtracted. The fit **failed**:
-`R^2 = 0.064`, slope **-524,000** host instructions per guest syscall. A negative
-per-syscall cost is unphysical, so the correlation is absent. Workloads do not
-sort by syscall density; they sort very nearly backwards -- the densest
-(`spawn300`, 258 syscalls per million guest instructions) expands **977x**, the
-sparsest (`cc1`, 3.6) expands **1256x**.
-
-**The model is not wrong. It is unidentifiable here**, and the arithmetic says by
-how much. Take the aarch64 lane's measured `S = 3,135` host instructions per
-guest syscall against this host's measured `D = 1,169`:
-
-- densest workload: `3,135 x 258.2e-6` = **0.069%** of D
-- sparsest workload: `3,135 x 3.6e-6` = **0.001%** of D
-
-Between-workload scatter in expansion is 873-1504, about +-25%. So the largest
-possible syscall contribution is **0.28% of the noise -- roughly 370x below it.**
-The syscall term is not small on this host; it is **invisible**.
-
-On aarch64 with the JIT live, `D` collapses 434 -> 1.29 and the same
-~3,135-per-syscall term becomes the dominant cost. **The two components only
-become separable once the JIT removes the first one.**
-
-What follows for anyone optimising a syscall, descriptor or spawn path here:
-
-- **Validate on the mechanism, with counters.** `perf stat -e instructions` over
-  the path itself, with a null arm and a mechanism-derived control. That is how
-  the fdinfo and eventfd work was validated, and it was the right call.
-- **Or validate on aarch64 with the JIT live.** The cross-build takes ~70 s on
-  this box; the persistent VM is for things needing a real kernel.
-- **Do not ask for an end-to-end x86 confirmation of such a change**, and do not
-  read a flat end-to-end result as evidence the change did nothing. Asking for
-  that evidence is asking for a number that cannot exist.
-
-This is the counterpart to the mechanism-versus-workload rule above: there, both
-numbers are real and mean different things. Here, one of them **cannot be
-measured at all** on this host, and saying so is the honest report.
-
 ## The table is the unit of iteration and the unit of capacity
 
 Four independent instances were found in a single day, by four lanes that were
@@ -1340,100 +1560,6 @@ When you meet a fixed-size table here, ask both questions. **Does a miss cost
 change behaviour for everything?** A bound that declines the operation it cannot
 record is defensible. A bound that silently changes a global answer is a defect
 waiting for a busy day.
-
-## A control that merely seems unaffected is not a control
-
-Disable the code path in both binaries and measure that. Anything weaker is a
-guess about which phases are unrelated, and the guess has already been wrong.
-
-A suppression change was rejected on a 5.8% `syscall` regression. With native
-execution disabled in **both** builds — so the changed code is unreachable and
-the two must measure identically — `syscall` still read **1.057**, the worst
-phase in the control, and 13 of 17 phases favoured base. Systematic, not random:
-the candidate's engine is simply laid out differently, and `syscall` runs the
-most engine host-side code per guest instruction, so layout shows there first.
-Corrected, the algorithm's own cost was **1.012**. The change was killed for
-~5% of binary layout.
-
-`compute` and `branch` read 1.003 and 0.998 in the same balanced runs and would
-have waved the change through. They looked like controls and were not — they
-were merely phases the change did not reach, which says nothing about what else
-differs between two binaries.
-
-Where disabling the path is impossible, a base-versus-base null arm is the
-accepted substitute and must read 1.000. A control derived from the mechanism is
-better still: one lane used `compute` at 250 probes against 366,696 on `syscall`,
-having first shown the cost scales with probes.
-
-## Reading a profile
-
-High self-time and removable cost are independent properties, and this engine has
-produced both failure modes:
-
-- **Misattributed self-time.** `with_execution_memory` compiles to 4032 bytes
-  because the guest-slice closure is inlined wholesale into it, so its row credits
-  work done by its callees. Disassemble before believing a row; a function whose
-  body should be twenty instructions and measures a thousand is reporting someone
-  else's cost.
-- **Real self-time that is still free to keep.** `ReservationEpochs::invalidate_at`
-  is a genuine 112-byte function and its row is honestly its own, but deleting it
-  along with all 5.17 billion of its atomics changed nothing measurable, because
-  the `ldadd` discards its result and retires without blocking anything.
-
-So a profile row justifies investigating a symbol. Only a mutation justifies
-believing the cost can be recovered.
-
-### A serializing instruction collects the skid of everything ahead of it
-
-The two failure modes above are about a *symbol*. This one is about a single
-instruction, and it is the reason a `perf annotate` row can be enormous and worth
-nothing.
-
-`run_guest()` makes two `seq_cst` stores per dispatcher crossing -- `cpu->irq = 0`
-(`engine/dispatch.c`) and `in_translated = 1` (`translator/cache.c`) -- and both
-compile to `xchg` on x86. Measured 2026-08-20 on `naa0245` with the JIT-less
-x86_64 engine, `perf record -e cycles:u` over a guest fork+exec put `run_guest` at
-17.0% self-time with **80.5% of its samples on the instruction after the first
-`xchg`** and 13.6% on the instruction after the second: 13.6% and 2.3% of all user
-cycles, in two instructions.
-
-None of it came back. A candidate that skips the first store whenever `irq` is
-already clear -- the common case, and a change the instruction counters confirm
-reaches the binary, +21.5k instructions per spawn on a static x86_64 guest and
-+63.6k on aarch64, exactly the load and branch it adds -- measured 1.0371 on
-aarch64 in a twelve-round balanced ABBA, a **3.7% regression**. A second build of
-the *same candidate source* measured 0.9868 on the same arm in the same run. The
-two builds' per-round ranges do not overlap: [1.0276, 1.0432] against
-[0.9825, 0.9929]. A variant with both stores weakened read 0.9908.
-
-Two durable things:
-
-- **`xchg` drains the store buffer, so it retires slowly and the sampled PC skids
-  onto the instruction after it.** What the row measures is the queue in front of
-  the barrier, not the barrier. A store nobody was waiting on can therefore carry
-  a double-digit share of a profile and cost nothing.
-- **One null arm is not the noise floor.** Base-versus-base read 1.0016
-  [0.9912, 1.0142] in the same run and would have certified a 3.7% verdict as
-  real. Layout noise is a property of the *pair* of binaries, so a candidate needs
-  a second build of its own source before its ratio means anything -- the same
-  reason "Identical source does not mean an identical binary" exists, one step
-  further on.
-
-The count that explains the whole thing: a spawn retires 112M user instructions in
-~21,500 crossings, so a crossing is ~5,200 instructions and one locked store
-cannot be a percent of it. On a host **with** the JIT a crossing is one translated
-guest basic block, tens of instructions, and the same two stores are a different
-question that no measurement on this box can answer.
-
-Time the mechanism before sizing a fix for it. The native/host operand round trip
-was assumed to cost about a microsecond and to dominate sqlite; measured, it is
-105ns and 0.35% of the phase, so an entire direction was worth a tenth of a
-percent. A count is not a cost until you have multiplied it by a measured one.
-
-Counters are comparable within a build and not across builds. Adding
-instrumentation changes inlining, which changes translation admission: two builds
-of the same source reported 892,141 and 1,593,713 for the same counter. Compare a
-counter only against itself in the same binary.
 
 ## Time-to-evidence and agent utilization
 
@@ -1510,14 +1636,6 @@ several lanes.
 
 Retained-C diagnostics remain real and are requested with `HL_C_DIAGNOSTICS`, which is
 the one launch effect `Execution::Native` still carries.
-
-A commit may be called stable or buildable only after verification from that exact
-committed tree. A passing build in a dirty shared worktree is not evidence for
-`HEAD`: uncommitted companion schema, match, generated, test, or composition edits
-may be supplying the successful build. Before handing a revision to another lane
-or starting an authoritative corpus run, verify it in a clean detached worktree
-or equivalent clean checkout and record the tested commit. Do not continue shape-
-changing edits until the dependent verification has captured a coherent commit.
 
 ## Mission
 
@@ -2068,83 +2186,11 @@ A skip is not a pass. If a test cannot run here, it must say so out loud: the
 harness shows captured output only for failing tests, so an unrun arm otherwise
 looks exactly like a passing one.
 
-**Run `-p hl-engine --tests` with `< /dev/null`, always.** The checkpoint tests
-use `StandardStreams::default()`, which hands **the caller's own stdin** straight
-to the guest. An agent shell's stdin is typically a socket
-(`/proc/self/fd/0 -> socket:[...]`), and the engine refuses it outright:
-
-```
-typed guest fd 0 is a socket -- socket restore is not yet supported
-```
-
-A lane sampling a flaky test got **8/8 failures on both base and tip**, read it
-as its fix having no effect, and nearly reported that. Re-run with `< /dev/null`
-the same test passes and the real signal appears -- 3/8 on base, 0/8 on tip.
-
-The general fact is worse than the workaround: **every `-p hl-engine --tests`
-result in this repository is conditional on what stdin the caller happened to
-have.** Two lanes comparing results from differently-invoked shells are not
-comparing the same thing, and the failure is total rather than marginal, so it
-masquerades as "my change broke everything" or "my change fixed nothing". Redirect
-stdin, and say that you did.
-
-**When the thing you are varying is the environment, run the test binary
-directly.** A lane probing whether a test survives without a CA store got `ok`
-from `nix develop -c env ... cargo test`, and `0 passed; 1 failed` -- four times
-out of four, in two working directories -- from the same test's binary invoked
-directly. Two spellings of one command disagreed and only one was true. A
-`cargo test` wrapper stands between you and the process you believe you are
-configuring: it re-execs, it can re-resolve features, and it does not promise to
-hand your environment to the test unchanged. The direct run is the trustworthy
-one, and the lane caught this only because it re-ran a result it found
-surprising rather than reporting the first answer.
-
-**State your counting convention, every time.** A reference count is ambiguous
-between `passed` and `passed + ignored`, and the difference is silent. Briefs
-circulated on this box carried `hl-native --all-targets` as **112**
-(passed+ignored) and `hl-daemon --all-targets` as **250** (passed-only) *in the
-same list*, so two lanes reported "discrepancies" that were not discrepancies
-and one real move -- `hl-container --lib` 257 to 258 -- nearly got lost among
-them. Write `109p / 3i`, not `112`.
-
-**And read the parent's result line, not the first one.** Suites here re-exec
-probe children, and a child prints its own `test result:` into the same stream:
-
-```
-test result: FAILED. 0 passed; 1 failed; ...; 42 filtered out   <- probe child
-test result: FAILED. 34 passed; 4 failed; ...;  0 filtered out   <- the parent
-```
-
-A probe child always runs `--exact`, so it always reports a **non-zero**
-`filtered out`; the parent's line is the one reading **`0 filtered out`**.
-Discriminate on that mechanically rather than by position. Summing every line
-inflates both passes and failures -- it is what produced the phantom "five
-`checkpoint_linux` failures" that was quoted into a dozen briefs before anyone
-re-ran the suite.
-
-**A single run of a suite with a flaky member is not a count.** Two suites here
-are known to have them, and neither announces it:
-
-- `-p hl-engine --tests` -- a stable core plus at least two intermittent
-  members. `arm64_cross_process_shared_futex` measured **3/8**;
-  `inherited_pipe_ofd` **1/8**, and that one flips on `origin/main` itself.
-- `-p husklet --lib --features runtime` -- besides the documented root-only
-  `stop_wait_failure_attempts_rollback_before_returning`, the
-  `product_checkpoint_test` group has intermittent members;
-  `continue_later_restores_the_primary_sleep_tree_across_repeated_cycles`
-  measured **1/3 on `main`**.
-
-At 3/8, a single run lands anywhere from zero to two failures and a green run
-proves nothing. **Three runs a side is the floor**, and say how many you took.
-
-**Count the summary line, not the `FAILED` lines.** `grep -c '\.\.\. FAILED'`
-is not a failure count. A test that re-execs itself has a child that prints its
-own `... FAILED` line into the same stream, so the grep reads **5** where
-`test result:` reads **4**. That phantom was carried in this file and quoted into
-a dozen lane briefs as "five pre-existing failures" until someone ran the suite
-three times and read the summary. `test result: FAILED. 34 passed; 4 failed; 5
-ignored` is the number; anything you derive by grepping the transcript is a
-guess that happens to be usually right.
+Counting a suite's result correctly -- the passed-versus-passed-plus-ignored
+convention, which `test result:` line is the parent's, why `grep -c FAILED`
+over-counts, how many runs a suite with a flaky member needs, and the stdin a
+`-p hl-engine --tests` run inherits -- is its own subject. See **Counting and
+measurement**.
 
 ### "Architecture-dependent" is a claim, and it needs the other architecture
 
