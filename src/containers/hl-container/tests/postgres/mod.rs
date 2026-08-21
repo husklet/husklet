@@ -1,4 +1,4 @@
-//! PostgreSQL checkpoint acceptance fixture and lifecycle assertions.
+//! `PostgreSQL` checkpoint acceptance fixture and lifecycle assertions.
 
 mod fixture;
 mod lifecycle;
@@ -34,17 +34,16 @@ const POSTGRES_ARM64_DIGEST: &str = "sha256:738d1359df5aa0b6d50a9071e989c49fdd39
 #[ignore = "requires HL_POSTGRES_ROOTFS_ARCHIVE containing a pinned postgres:16-alpine rootfs"]
 async fn postgres_survives_three_product_checkpoint_cycles() -> Result<(), Error> {
     let fixture = Fixture::new().await?;
-    let outcome = bounded(
+    let outcome = Box::pin(bounded(
         "complete PostgreSQL acceptance",
         Duration::from_secs(420),
         fixture.run(),
-    )
+    ))
     .await;
     let outcome = append_failure_diagnostics(outcome, || async {
-        let diagnostics = tokio::time::timeout(Duration::from_secs(3), fixture.failure_diagnostics())
+        tokio::time::timeout(Duration::from_secs(3), fixture.failure_diagnostics())
             .await
-            .unwrap_or_else(|_| "PostgreSQL failure diagnostics exceeded 3s".to_owned());
-        diagnostics
+            .unwrap_or_else(|_| "PostgreSQL failure diagnostics exceeded 3s".to_owned())
     })
     .await;
     finish(outcome, fixture.cleanup().await)

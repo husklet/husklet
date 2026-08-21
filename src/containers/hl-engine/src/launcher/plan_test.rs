@@ -94,3 +94,120 @@ fn formats_publish_and() {
     assert_eq!(plan.options.get("HL_LOWER"), Some("/base\n/app"));
     assert_eq!(plan.options.get("HL_PUBLISH"), Some("8080:80,127.0.0.1:8443:443"));
 }
+
+/// Host ownership of the plan's writable root, which decides whether a launch can write at all.
+#[cfg(unix)]
+mod rootfs_ownership {
+    use crate::engine::EngineError;
+    use crate::launcher::plan::RuntimePlan;
+    use crate::options::Options;
+
+    fn plan(rootfs: Option<&str>, options: &[(&str, &str)]) -> RuntimePlan {
+        let mut set = Options::default();
+        for (name, value) in options {
+            set.set(name, value, true).unwrap();
+        }
+        RuntimePlan {
+            rootfs: rootfs.map(|path| path.as_bytes().to_vec()),
+            executable_host: None,
+            arguments: Vec::new(),
+            environment: Vec::new(),
+            result_path: None,
+            options: set,
+        }
+    }
+
+    /// `/` is owned by host root on every host this runs on, so for an engine that is not root it is
+    /// the portable stand-in for a rootfs unpacked under `sudo` -- and it needs no privilege to set
+    /// up. It says nothing when the suite itself runs as root, which is the case the test below
+    /// covers separately.
+    fn host_root_owned() -> &'static str {
+        "/"
+    }
+
+    /// `refuse_unownable_root` has two acceptance branches and one refusal, and which of them a run
+    /// exercises is decided by the identity the suite happens to have. The root arm used to be a
+    /// bare `return;`, so on a host that runs the suite as uid 0 -- as this repository's Linux box
+    /// does -- the case asserted nothing and reported `ok`, and `engine_uid == 0` had no coverage on
+    /// any host. Assert the branch this identity actually reaches instead of leaving the run empty.
+    ///
+    /// `/` cannot express the root arm, because root owns it and the `rootfs_uid == engine_uid` arm
+    /// would answer first. The fixture therefore hands a directory to another uid, so only
+    /// `engine_uid == 0` can account for the acceptance.
+    #[test]
+    #[allow(unsafe_code)]
+    fn a_writable_root_owned_by_another_host_user_refuses_a_launch_that_is_not_root() {
+        use std::os::unix::fs::MetadataExt as _;
+        // SAFETY: `geteuid` takes no arguments and cannot fail.
+        let engine_uid = unsafe { libc::geteuid() };
+        if engine_uid != 0 {
+            assert_eq!(
+                plan(Some(host_root_owned()), &[]).refuse_unownable_root(),
+                Err(EngineError::RootfsNotOwnedByEngine {
+                    rootfs_uid: 0,
+                    engine_uid,
+                })
+            );
+            return;
+        }
+        const FOREIGN_UID: u32 = 65_534;
+        let directory = tempfile::tempdir().unwrap();
+        std::os::unix::fs::chown(directory.path(), Some(FOREIGN_UID), None).unwrap();
+        assert_eq!(
+            std::fs::metadata(directory.path()).unwrap().uid(),
+            FOREIGN_UID,
+            "the fixture root must belong to another uid or the acceptance proves nothing"
+        );
+        assert_eq!(
+            plan(Some(directory.path().to_str().unwrap()), &[]).refuse_unownable_root(),
+            Ok(()),
+            "host root writes through every owner, so no ownership refusal may fire for uid 0"
+        );
+    }
+
+    /// The kinder-to-refuse judgement stops exactly where the workspace stops being broken. A
+    /// read-only launch writes nothing, so a root-owned tree serves it perfectly well and refusing
+    /// it would take away a shape that works.
+    #[test]
+    fn a_read_only_launch_over_the_same_root_is_still_admitted() {
+        assert_eq!(
+            plan(Some(host_root_owned()), &[("HL_ROOTFS_RO", "1")]).writable_root(),
+            None
+        );
+        assert_eq!(
+            plan(Some(host_root_owned()), &[("HL_ROOTFS_RO", "1")]).refuse_unownable_root(),
+            Ok(())
+        );
+    }
+
+    /// With an overlay the lower layers are read-only by construction and every write lands in the
+    /// upper, so the upper is the only ownership that decides whether the workspace works.
+    #[test]
+    fn an_overlay_is_judged_by_its_upper_layer_not_by_a_root_owned_lower() {
+        let directory = tempfile::tempdir().unwrap();
+        let upper = directory.path().to_str().unwrap();
+        let over_root = plan(Some(host_root_owned()), &[("HL_OVERLAY_UPPER", upper)]);
+        assert_eq!(over_root.writable_root(), Some(upper.as_bytes()));
+        assert_eq!(over_root.refuse_unownable_root(), Ok(()));
+    }
+
+    #[test]
+    fn a_root_the_engine_owns_and_a_launch_without_one_are_both_admitted() {
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(
+            plan(Some(directory.path().to_str().unwrap()), &[]).refuse_unownable_root(),
+            Ok(())
+        );
+        assert_eq!(plan(None, &[]).refuse_unownable_root(), Ok(()));
+    }
+
+    /// A rootfs that is not there is the existing launch path's error to report, and an ownership
+    /// cause for a missing directory would be a worse diagnostic than the one it replaced.
+    #[test]
+    fn a_missing_root_is_left_to_the_launch_path_that_already_owns_it() {
+        assert_eq!(
+            plan(Some("/var/tmp/husklet-no-such-rootfs-6f21"), &[]).refuse_unownable_root(),
+            Ok(())
+        );
+    }
+}

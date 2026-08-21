@@ -1758,7 +1758,7 @@ impl AmbientDescriptors {
                 AmbientDescriptor {
                     target,
                     path,
-                    identity: descriptor::identity(target).unwrap(),
+                    identity: Identity::of(target).unwrap(),
                 }
             })
             .collect();
@@ -1770,7 +1770,7 @@ impl AmbientDescriptors {
     fn assert_preserved(&self, phase: &str) {
         for record in &self.records {
             assert_eq!(
-                descriptor::identity(record.target).unwrap(),
+                Identity::of(record.target).unwrap(),
                 record.identity,
                 "{phase}: fd {}",
                 record.target
@@ -1812,7 +1812,7 @@ fn assert_ambient_locks_released(paths: &[PathBuf]) {
 }
 
 fn start_with_closed_standard_descriptor(engine: &Engine, descriptor: StandardDescriptor) {
-    let closed = descriptor::close_standard(descriptor).expect("close standard descriptor");
+    let closed = descriptor.close().expect("close standard descriptor");
     let started = engine.start();
     closed
         .restore()

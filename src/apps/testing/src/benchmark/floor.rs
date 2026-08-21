@@ -18,13 +18,12 @@
 //!   hashing them proves nothing.
 
 use super::{evidence::Measurement, identity::artifact_identity};
-use crate::suite::Error;
+use crate::{platform::HostProcess, suite::Error};
 use clap::Args;
 use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 /// Arms are ordered base-first; the schedule rotates and reverses them per round.
@@ -82,7 +81,7 @@ pub(crate) struct Options {
     /// image, which the static driver does not, so the exec path does strictly more work for it.
     #[arg(long)]
     dynamic_victim: Option<String>,
-    /// Static guest driver built from `tests/bench/floor/main.c`.
+    /// Static guest driver built from `tests/bench/floor.c`.
     #[arg(long)]
     guest: PathBuf,
     /// Directory used as the guest root. The driver is staged at `bin/floor` inside it.
@@ -256,7 +255,7 @@ fn phases(options: &Options) -> Vec<(&'static str, Vec<String>)> {
 fn measure(arm: Arm, options: &Options, arguments: &[String]) -> Result<u64, Error> {
     let mut command = match arm {
         Arm::Native => {
-            let mut command = Command::new(options.rootfs.join("bin/floor"));
+            let mut command = HostProcess::standard(options.rootfs.join("bin/floor"));
             command.args(arguments);
             command
         }
@@ -269,7 +268,7 @@ fn measure(arm: Arm, options: &Options, arguments: &[String]) -> Result<u64, Err
             } else {
                 &options.engine
             };
-            let mut command = Command::new(worker);
+            let mut command = HostProcess::standard(worker);
             command
                 .arg("--rootfs")
                 .arg(&options.rootfs)
