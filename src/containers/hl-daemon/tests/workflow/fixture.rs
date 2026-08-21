@@ -1,5 +1,7 @@
 //! Deterministic executable image fixtures shared by workflow tests.
 
+use hl_container::Guest;
+use hl_images::Platform;
 use sha2::{Digest, Sha256};
 use std::{
     env,
@@ -12,6 +14,39 @@ use std::{
 type Error = Box<dyn std::error::Error>;
 
 pub(crate) const IMAGE: &str = "workflow/alpine:test";
+
+/// The guest architecture the pinned minirootfs actually contains.
+///
+/// Every workflow here executes the archive named by `HL_ALPINE_ARCHIVE`, and the flake
+/// pins a different one per host: `alpine-minirootfs-*-aarch64` in the Darwin dev shell,
+/// `*-x86_64` on x86_64 Linux. Nothing downstream infers it -- `Guest::default()` is
+/// `Aarch64` and `Daemon::new` starts at `Platform::linux_arm64()` -- so the fixture that
+/// chooses the rootfs is the only place that knows, and it must say so to both.
+///
+/// # Panics
+/// Panics when `HL_ALPINE_ARCHIVE` is unset or does not name a recognised architecture.
+/// Guessing is what hid this: the previous form fell back to `arm64` for every name that
+/// did not spell `x86_64`, which agreed with both defaults on an arm64 Mac and agreed with
+/// neither once the host became x86_64 Linux.
+pub(crate) fn platform() -> Platform {
+    let source = env::var_os("HL_ALPINE_ARCHIVE")
+        .map(PathBuf::from)
+        .expect("HL_ALPINE_ARCHIVE must name the pinned Alpine minirootfs");
+    let name = source.to_string_lossy().into_owned();
+    if name.contains("x86_64") || name.contains("amd64") {
+        Platform::linux_amd64()
+    } else if name.contains("aarch64") || name.contains("arm64") {
+        Platform::linux_arm64()
+    } else {
+        panic!("HL_ALPINE_ARCHIVE {name:?} does not name an architecture this workflow can execute");
+    }
+}
+
+/// The engine guest ISA that matches [`platform`], for the headless workflows that build a
+/// [`hl_container::ContainerSpec`] directly and therefore never pass through image resolution.
+pub(crate) fn guest() -> Guest {
+    Guest::for_platform(&platform()).expect("the pinned minirootfs names a supported guest ISA")
+}
 
 /// Wrap the pinned Alpine minirootfs as a Docker save archive accepted by the
 /// daemon's real image-load endpoint. The minirootfs itself is the OCI layer.
@@ -26,13 +61,8 @@ pub(crate) fn alpine(work: &Path) -> Result<PathBuf, Error> {
     for byte in Sha256::digest(&layer) {
         write!(digest, "{byte:02x}")?;
     }
-    let architecture = if source.to_string_lossy().contains("x86_64") {
-        "amd64"
-    } else {
-        "arm64"
-    };
     let config = serde_json::to_vec(&serde_json::json!({
-        "architecture": architecture,
+        "architecture": platform().architecture,
         "os": "linux",
         "config": {"Cmd": ["/bin/sh"], "WorkingDir": "/"},
         "rootfs": {"type": "layers", "diff_ids": [digest]}

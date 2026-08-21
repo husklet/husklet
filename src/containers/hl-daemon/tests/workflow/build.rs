@@ -25,6 +25,7 @@ pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
     let (shutdown, stopped) = oneshot::channel();
     let server = tokio::spawn(
         Daemon::new(containers.clone())
+            .platform(fixture::platform())
             .server(&socket)
             .serve_with_shutdown(async move {
                 let _ = stopped.await;
