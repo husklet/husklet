@@ -7,6 +7,21 @@ use tokio::io::AsyncWriteExt as _;
 
 const LIMIT: u64 = 256 * 1024 * 1024;
 
+/// The whole `source` chain of an error, joined.
+///
+/// `reqwest::Error` displays a client-construction failure as `builder error`;
+/// `No CA certificates were loaded from the system` is one link down.
+fn because(error: &dyn std::error::Error) -> String {
+    let mut reason = error.to_string();
+    let mut source = error.source();
+    while let Some(inner) = source {
+        reason.push_str(": ");
+        reason.push_str(&inner.to_string());
+        source = inner.source();
+    }
+    reason
+}
+
 #[derive(Debug)]
 pub(super) struct RemoteSources {
     _directory: tempfile::TempDir,
@@ -27,7 +42,10 @@ impl RemoteSources {
             .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::limited(5))
-            .build()?;
+            .build()
+            .map_err(|error| BuildError::RemoteClient {
+                reason: because(&error),
+            })?;
         let mut files = std::collections::BTreeMap::new();
         let remotes = recipe
             .stages
