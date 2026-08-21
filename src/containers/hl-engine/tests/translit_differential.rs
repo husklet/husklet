@@ -33,19 +33,49 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
-/// Collects everything the guest writes to its standard streams, in order.
+/// Collects the guest's two standard streams separately: standard output is the answer being compared,
+/// and standard error carries the engine's `[prof]` report, which is where the backend says whether it
+/// ran.
 #[derive(Default)]
 struct CapturedOutput {
-    bytes: Mutex<Vec<u8>>,
+    out: Mutex<Vec<u8>>,
+    err: Mutex<Vec<u8>>,
 }
 
 impl StandardStreamPort for CapturedOutput {
-    fn write(&self, _: StandardStream, input: &[u8]) -> std::io::Result<usize> {
-        self.bytes.lock().unwrap().extend_from_slice(input);
+    fn write(&self, stream: StandardStream, input: &[u8]) -> std::io::Result<usize> {
+        match stream {
+            StandardStream::Stdout => self.out.lock().unwrap().extend_from_slice(input),
+            StandardStream::Stderr => self.err.lock().unwrap().extend_from_slice(input),
+        }
         Ok(input.len())
     }
 
     fn close(&self) {}
+}
+
+/// What the engine reported about the same-ISA backend for one run.
+struct Backend {
+    line: String,
+    entries: u64,
+}
+
+/// Parses the `[prof] translit: ...` line the exit report emits under `HL_C_DIAGNOSTICS`.
+fn backend(stderr: &[u8]) -> Backend {
+    let text = String::from_utf8_lossy(stderr);
+    let line = text
+        .lines()
+        .find(|line| line.starts_with("[prof] translit:"))
+        .unwrap_or_else(|| {
+            panic!("the exit report carried no translit line; HL_C_DIAGNOSTICS produced:\n{text}");
+        })
+        .to_owned();
+    let entries = line
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("entries="))
+        .and_then(|value| value.trim_end_matches(')').parse().ok())
+        .unwrap_or(0);
+    Backend { line, entries }
 }
 
 /// Builds one fixture position-independent and statically linked.
@@ -101,11 +131,14 @@ fn elf_is_position_independent(path: &Path) -> bool {
     header[..4] == [0x7f, b'E', b'L', b'F'] && u16::from_le_bytes([header[16], header[17]]) == 3
 }
 
-/// One guest run with the backend explicitly selected. Answers (stdout, exit status).
-fn run(executable: &Path, translit: &str) -> (Vec<u8>, i32) {
+/// One guest run with the backend explicitly selected -- through the LAUNCH OPTION, never through the
+/// environment, so this gate does not depend on `translit_enabled()`'s command-line fallback existing.
+/// Answers (stdout, exit status, what the backend reported about itself).
+fn run(executable: &Path, translit: &str) -> (Vec<u8>, i32, Backend) {
     let captured = Arc::new(CapturedOutput::default());
     let mut options = Options::default();
     options.set("HL_TRANSLIT", translit, true).expect("HL_TRANSLIT");
+    options.set("HL_C_DIAGNOSTICS", "1", true).expect("HL_C_DIAGNOSTICS");
     let plan = RuntimePlan {
         rootfs: None,
         executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
@@ -119,16 +152,31 @@ fn run(executable: &Path, translit: &str) -> (Vec<u8>, i32) {
     engine.start().expect("start");
     let exit = engine.wait().expect("wait");
     engine.destroy().expect("destroy");
-    let bytes = captured.bytes.lock().unwrap().clone();
-    (bytes, exit.guest_status)
+    let out = captured.out.lock().unwrap().clone();
+    let report = backend(&captured.err.lock().unwrap());
+    (out, exit.guest_status, report)
 }
 
 /// The whole contract: the backend selection must not be observable in the guest's output.
 fn agrees(name: &str) {
     let work = TempDir::new().unwrap();
     let executable = fixture(work.path(), name);
-    let (interpreted, interpreted_status) = run(&executable, "0");
-    let (transliterated, transliterated_status) = run(&executable, "1");
+    let (interpreted, interpreted_status, interpreted_backend) = run(&executable, "0");
+    let (transliterated, transliterated_status, transliterated_backend) = run(&executable, "1");
+    // The counter, not the option. Setting HL_TRANSLIT proves the launch asked for the backend; only
+    // `entries` proves a block of this guest actually ran as emitted host code. Without it every case
+    // in this file would pass against a build in which the backend never engaged -- which is the state
+    // this repository was in for the whole life of the file under test.
+    assert_eq!(
+        interpreted_backend.line, "[prof] translit: not selected",
+        "{name}: the interpreter arm reported {}",
+        interpreted_backend.line
+    );
+    assert!(
+        transliterated_backend.entries > 0,
+        "{name}: the transliterator arm entered no emitted block -- {}",
+        transliterated_backend.line
+    );
     assert_eq!(
         interpreted_status, transliterated_status,
         "{name}: exit status differs between the interpreter and the transliterator"
@@ -190,6 +238,43 @@ fn operand_and_terminator_coverage_agrees_with_the_interpreter() {
     agrees("operands");
 }
 
+/// The other refusal, and the one that decides whether this backend is worth anything to a developer.
+///
+/// A single anonymous `PROT_EXEC` mapping latches `g_rwx_guest`, and nothing clears it -- not a later
+/// `mprotect`, not `execve`. Every JIT-hosting guest takes that mapping within milliseconds of starting,
+/// so a JVM, V8, .NET or LuaJIT workload runs entirely interpreted with the option on and nothing says
+/// so. This case exists to keep that fact attached to a number rather than to a memory: it asserts the
+/// refusal is reported, that it is the executable-mapping one and not the image one, and that the
+/// answer is unchanged either way.
+#[test]
+fn an_executable_guest_mapping_refuses_the_backend_for_the_rest_of_the_process() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path(), "executable_mapping");
+    let (interpreted, interpreted_status, _) = run(&executable, "0");
+    let (selected, selected_status, selected_backend) = run(&executable, "1");
+    assert!(
+        selected_backend
+            .line
+            .contains("declined, guest executable mapping or shared alias observed"),
+        "an anonymous PROT_EXEC mapping no longer refuses the backend -- {}",
+        selected_backend.line
+    );
+    assert!(
+        selected_backend.entries > 0,
+        "the run before the mapping should still have entered emitted code -- {}",
+        selected_backend.line
+    );
+    assert_eq!(
+        interpreted_status, selected_status,
+        "the refusal changed the exit status"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&interpreted),
+        String::from_utf8_lossy(&selected),
+        "the refusal changed the answer"
+    );
+}
+
 /// The image refusal, which is the one part of `translit.inc` that must fire rather than work.
 ///
 /// A non-PIE `ET_EXEC` is mapped at a storage bias whenever the loader could not place it at its link
@@ -203,11 +288,24 @@ fn a_non_position_independent_image_is_refused_rather_than_transliterated() {
     let work = TempDir::new().unwrap();
     for name in ["flags", "operands", "sigs"] {
         let executable = displaced_fixture(work.path(), name);
-        let (interpreted, interpreted_status) = run(&executable, "0");
-        let (selected, selected_status) = run(&executable, "1");
+        let (interpreted, interpreted_status, _) = run(&executable, "0");
+        let (selected, selected_status, selected_backend) = run(&executable, "1");
         assert_eq!(
             interpreted_status, 0,
             "{name}: the non-PIE fixture did not run under the interpreter"
+        );
+        // Named, not merely absent: the refusal has to be the IMAGE predicate, not a filter that
+        // happened to admit nothing, and an operator has no other way to tell the two apart.
+        assert!(
+            selected_backend
+                .line
+                .contains("declined, non-PIE image at a storage bias"),
+            "{name}: the backend did not report the non-PIE image refusal -- {}",
+            selected_backend.line
+        );
+        assert_eq!(
+            selected_backend.entries, 0,
+            "{name}: a refused image still entered emitted code"
         );
         assert_eq!(
             selected_status, interpreted_status,

@@ -268,6 +268,16 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
                     (unsigned long long)g_prof_soft_bounce_commit, (unsigned long long)g_prof_smc_queued,
                     (unsigned long long)g_prof_smc_commit, (unsigned long long)g_prof_soft_guard_bytes, (unsigned long long)g_prof_soft_shared_sites,
                     (unsigned long long)g_prof_soft_inline_sites);
+            // The same-ISA transliterator (translator/guest/x86_64/translit.inc), and -- when it produced
+            // nothing -- which of its two SILENT refusals fired: a non-PIE image at a storage bias, or a
+            // guest that took an executable mapping. Both are permanent for the process and neither is
+            // visible anywhere else, so without this an operator can only tell "transliterated" from
+            // "refused" by timing the run. The hook exists on every host; off a Linux x86-64 one it says
+            // so rather than printing a counter that can only read zero.
+            if (profile_size > 0 && (size_t)profile_size < sizeof profile) {
+                int translit_size = translit_report(profile + profile_size, sizeof profile - (size_t)profile_size);
+                if (translit_size > 0) profile_size += translit_size;
+            }
             if (profile_size > 0) {
                 size_t bounded = (size_t)profile_size < sizeof profile ? (size_t)profile_size : sizeof profile - 1;
                 (void)hl_linux_write(g_linux_box, STDERR_FILENO, profile, bounded);
