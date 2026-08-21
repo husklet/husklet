@@ -44,6 +44,10 @@ impl ApiError {
             | hl_images::Error::Registry { .. }
             | hl_images::Error::UnsupportedPlatform { .. }
             | hl_images::Error::LayerFilesystem { .. }
+            // The host cannot build a registry client at all -- in practice it has no CA store.
+            // That is this host's misconfiguration and not anything the request asked for, so it is
+            // a 500 with the CA store named in the message rather than a 400 blaming the caller.
+            | hl_images::Error::RegistryClient { .. }
             | hl_images::Error::Io { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         };
         drop(error);
