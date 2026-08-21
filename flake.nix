@@ -1161,7 +1161,7 @@
               -Isrc/runtime/hl-native/src/native \
               -Isrc/runtime/hl-native/src/native/include \
               -Isrc/runtime/hl-native/src/native/bridge \
-              src/runtime/hl-native/tests/bridge-abi/windows.c "$import" \
+              src/runtime/hl-native/tests/windows_bridge_abi.c "$import" \
               -o checkpoint-bridge-contract.exe
             ${windows.stdenv.cc.targetPrefix}objdump -f checkpoint-bridge-contract.exe \
               | grep -F 'file format pei-x86-64' >/dev/null

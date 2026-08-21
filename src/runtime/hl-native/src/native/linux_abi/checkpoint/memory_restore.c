@@ -193,7 +193,7 @@ static int ckpt_restore_backing_seed(const char *procdir, uint64_t object_id, ui
 // file and get a private copy -- the same defect, moved.
 //
 // So the object is republished by NAME under the CURRENT restore generation, exactly as SysV segments
-// are (ipc_lock_state.c): whichever member arrives first creates it, every other member opens the same
+// are (ipc_state.c): whichever member arrives first creates it, every other member opens the same
 // name, and all of them map it MAP_SHARED at their captured address. Fork order stops mattering.
 //
 // THE NAME IS A PURE FUNCTION OF (restore generation, object id), AND THE GENERATION IS THE POINT.

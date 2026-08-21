@@ -80,8 +80,10 @@ mod tests {
         let postmaster = directory.path().join("postmaster.pid");
         std::fs::write(&postmaster, "1508937\n").unwrap();
         let command = process::readiness_command_with(&postmaster.to_string_lossy(), "printf reached");
+        let guard = directory.path().join("postmaster-guard.sh");
+        std::fs::write(&guard, &command).unwrap();
         let rejected = std::process::Command::new("/bin/sh")
-            .args(["-c", &command])
+            .arg(&guard)
             .output()
             .unwrap();
         assert!(!rejected.status.success());
@@ -89,7 +91,7 @@ mod tests {
 
         std::fs::write(&postmaster, "1\n").unwrap();
         let accepted = std::process::Command::new("/bin/sh")
-            .args(["-c", &command])
+            .arg(&guard)
             .output()
             .unwrap();
         assert!(accepted.status.success());
