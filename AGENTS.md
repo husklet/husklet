@@ -1260,6 +1260,42 @@ argued either way. It also protects a *surprising* result: a number you
 predicted and got is evidence, where the same number produced by a lane that
 would have explained any outcome is not.
 
+## The table is the unit of iteration and the unit of capacity
+
+Four independent instances were found in a single day, by four lanes that were
+not looking for the same thing:
+
+| site | scans | population it should have scanned |
+|---|---|---|
+| `fdvis_find` | 131,072 slots on every miss | live entries |
+| `proc_fdinfo_dir_open` | 65,536 fd numbers per listing | open descriptors |
+| `jit_instruction_map_lookup` | 262,144 entries per guest fault | the faulting block |
+| the interpreter block index | ~900 hash-scattered pages per spawn | resident blocks |
+
+Two more share the shape without the cost: `g_fdpath[HL_NFD]` is indexed
+directly and `hl_fdcache_evict_path` keys on the table rather than the open set.
+
+The unifying statement is not "four arrays are too big". It is that **cost
+tracks the bound rather than the population, and exhaustion is a cliff rather
+than a slope.** Both halves bite:
+
+- **Cost.** A `/proc/<pid>/fdinfo` listing measured **flat in N** -- 906.9 ms at
+  64 open descriptors against 946.0 ms at 8,192, a ratio of **1.043**. Opening
+  128x more descriptors cost 4% more, because the scan is over the fixed table.
+  That flatness is the signature; look for it before assuming a cost is
+  proportional to work.
+- **Exhaustion.** `g_gbus` is capped at `GNA_MAX = 512`, and on overflow sets a
+  flag that makes every address in the process fault **permanently** -- the guest
+  dies `SIGBUS` at 512 live past-EOF mappings where the host is clean at 700. Its
+  sibling `g_gna` fails *open* on the same overflow. Neither degrades; one bricks
+  the guest and the other stops protecting it.
+
+When you meet a fixed-size table here, ask both questions. **Does a miss cost
+`N` or cost one?** And **what happens at `N+1` -- does it decline, or does it
+change behaviour for everything?** A bound that declines the operation it cannot
+record is defensible. A bound that silently changes a global answer is a defect
+waiting for a busy day.
+
 ## A control that merely seems unaffected is not a control
 
 Disable the code path in both binaries and measure that. Anything weaker is a
