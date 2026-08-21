@@ -1292,7 +1292,13 @@ async fn a_capture_bounds_every_member_wait_by_one_shared_deadline() {
 async fn a_drained_container_stream_implies_a_published_exit() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_millis(30);
-    let containers = service(Arc::new(runtime)).await;
+    let root = tempfile::TempDir::new().unwrap();
+    let containers = test_containers(
+        Arc::new(Disk::open(root.path().to_owned()).await.unwrap()),
+        Arc::new(runtime),
+    )
+    .await
+    .unwrap();
     containers.create(spec("drain-published")).await.unwrap();
     let mut session = containers.attach("drain-published").await.unwrap();
     containers.start("drain-published").await.unwrap();

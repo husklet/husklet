@@ -819,7 +819,17 @@ async fn restoring_a_sealed_terminal_backed_member_seats_the_restored_process_in
 async fn a_drained_execution_stream_implies_a_published_exit() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_millis(30);
-    let containers = service(Arc::new(runtime)).await;
+    // Durable storage on purpose. The ordering this pins is structural and holds for any store, but
+    // an in-memory one publishes inside a single scheduler hop, which is narrow enough that the
+    // wrong order still wins the race most of the time -- the same reason the defect survived on a
+    // host slow enough to hide it. `Disk` is what production uses and what the daemon measured.
+    let root = tempfile::TempDir::new().unwrap();
+    let containers = test_containers(
+        Arc::new(Disk::open(root.path().to_owned()).await.unwrap()),
+        Arc::new(runtime),
+    )
+    .await
+    .unwrap();
     containers.create(spec("exec-drain-parent")).await.unwrap();
     containers.start("exec-drain-parent").await.unwrap();
     let execution = containers
