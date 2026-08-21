@@ -282,14 +282,43 @@ jobs:
       # `taskset -c 0-3` 20/20 SIGSEGV before, 20/20 green after; `--test-threads` 1, 2,
       # 4, 8 and 16 all green at four CPUs.
       #
-      # This suite opens no display. Do not wrap it in `xvfb-run` to "fix" anything --
-      # but be aware that without one the two GTK tests SKIP, so their assertions do not
-      # run here. Running this step under `xvfb-run` is what would make them mean
-      # something on Linux; that is a separate decision, not a repair.
+      # THE COUNT WAS THE DISGUISE. This step reported `88 passed` with a display and
+      # `88 passed` without one -- identical, so nothing in CI could tell which it had.
+      # Without a display two tests print `skipped: no display connection` and return,
+      # and between them they hold 19 scenarios (14 in the extensions shelf test, 5 in
+      # the extension page test) that had never executed on Linux. "88 passed" reads as
+      # coverage; it was 88 passed and 19 unrun.
+      #
+      # PROVED VACUOUS BY EXPERIMENT, not argued. Planting a false assertion in
+      # `a_queued_frame_puts_widgets_on_the_page` and running the same suite both ways:
+      # no display `88 passed` exit 0; under `xvfb-run` `87 passed; 1 failed` exit 101,
+      # naming `an_extension_page_renders_what_is_queued_and_survives_the_extension`.
+      # Restored, `xvfb-run` returns to `88 passed`. The differing outcomes are what
+      # prove the display reached the test, so the wrapper did not eat it.
+      # Confirmed against the test binary directly as well, which is the spelling
+      # AGENTS.md requires when the thing being varied is the environment: run headless
+      # it announces 2 skips, under `xvfb-run` it announces 0.
+      #
+      # The wrap is free -- all 88 pass under `xvfb-run` today, so this turns 19 dead
+      # scenarios live and changes nothing else. `xvfb-run` and `Xvfb` come from the
+      # devshell, so it must sit inside `nix develop`, after `--command`.
+      #
+      # The earlier note here said "this suite opens no display, do not wrap it in
+      # xvfb-run to fix anything". That was right that wrapping repairs no defect, and
+      # it is superseded: wrapping is not a repair, it is the difference between
+      # running these assertions and only counting them.
+      #
+      # STILL UNCOVERED, and a bigger instance of the same shape: five files under
+      # `src/workspaces/hl-gui-gtk/tests/` skip the same way, and no step in this
+      # workflow RUNS them -- `cargo check --workspace --all-targets` compiles without
+      # running, and `cargo test --workspace --lib --bins` excludes integration targets.
+      # The only runner is `cargo test --workspace --all-targets` inside the macOS
+      # `nix flake check`, which is a fast failure at design-lint. Not claimed here.
       - name: Test the GUI application binaries
         run: >-
           .github/scripts/cargo-test-named.sh "GUI application binaries"
           nix --extra-experimental-features 'nix-command flakes' develop . --command
+          xvfb-run -a -s '-screen 0 1600x1000x24'
           cargo test -p husklet --bins --features gui --locked --offline
 
       - name: Test the engine composition root
