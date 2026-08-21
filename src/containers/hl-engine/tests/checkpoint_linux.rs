@@ -3378,23 +3378,24 @@ fn checkpoint_phase_ledger_probe() {
     eprint!("{ledger}");
 }
 
-fn phase_probe_output(test: &str, timeout: Duration) -> String {
+/// Run one `#[ignore]`d test of this binary in a subprocess and return everything it wrote to stderr.
+///
+/// The engine worker is a grandchild of that subprocess and inherits its stderr, so this is how a
+/// diagnostic the engine writes -- a refusal, a phase ledger -- becomes an assertable value. It is the
+/// only honest way to gate one: the message is produced by C running in another process, and a unit test
+/// over a formatting helper in this crate would pass while the real path printed something else entirely.
+fn probe_child_stderr(test: &str, timeout: Duration, extra_environment: &[(&[u8], &Path)]) -> String {
     let capture = tempfile::tempdir().unwrap();
     let stdout = capture.path().join("stdout");
     let stderr_path = capture.path().join("stderr");
-    let ledger_path = capture.path().join("ledger");
     let mut command = ProcessCommand::new(std::env::current_exe().unwrap());
     command.args(["--exact", test, "--ignored", "--nocapture", "--test-threads=1"]);
     let mut environment = std::env::vars_os()
         .map(|(name, value)| EnvironmentEntry::new(name.as_encoded_bytes(), value.as_encoded_bytes()).unwrap())
         .collect::<Vec<_>>();
-    environment.push(
-        EnvironmentEntry::new(
-            b"HL_CHECKPOINT_PHASE_LEDGER_PATH",
-            ledger_path.as_os_str().as_encoded_bytes(),
-        )
-        .unwrap(),
-    );
+    for (name, value) in extra_environment {
+        environment.push(EnvironmentEntry::new(name, value.as_os_str().as_encoded_bytes()).unwrap());
+    }
     command.exact_environment(environment).unwrap();
     let outcome = hl_process::run(
         &command,
@@ -3409,12 +3410,18 @@ fn phase_probe_output(test: &str, timeout: Duration) -> String {
     )
     .unwrap();
     let stderr = std::fs::read_to_string(stderr_path).unwrap();
-    assert_eq!(
-        outcome,
-        ProcessOutcome::Exited(Some(0)),
-        "phase-ledger child {test} failed:\n{stderr}"
-    );
+    assert_eq!(outcome, ProcessOutcome::Exited(Some(0)), "probe child {test} failed:\n{stderr}");
     stderr
+}
+
+fn phase_probe_output(test: &str, timeout: Duration) -> String {
+    let ledger = tempfile::tempdir().unwrap();
+    let ledger_path = ledger.path().join("ledger");
+    probe_child_stderr(
+        test,
+        timeout,
+        &[(b"HL_CHECKPOINT_PHASE_LEDGER_PATH", ledger_path.as_path())],
+    )
 }
 
 #[test]
@@ -3835,6 +3842,76 @@ fn socket_half_close_refuses_checkpoint_after_guest_dup_and_fork_on_both_isas() 
     assert!(
         accepted.is_empty(),
         "accepted half-closed guest socket paths: {accepted:?}"
+    );
+}
+
+/// Provoke a REAL socket-topology refusal, in a process whose stderr the gate below captures.
+///
+/// Deliberately asserts nothing about what the image contains: its whole job is to make the coordinator
+/// reach `ckpt_sink_commit` and be refused, and to exit 0 having done so.
+#[test]
+#[ignore = "subprocess target for the checkpoint refusal-diagnostic gate"]
+fn socket_topology_refusal_probe_child() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executable = socket_half_close_fixture(GuestIsa::X86_64, fixtures.path());
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+    let directory = tempfile::tempdir().unwrap();
+    let ready = directory.path().join("ready");
+    let store = Arc::new(Store::default());
+    let capture = Arc::new(
+        Engine::with_checkpoint(
+            GuestIsa::X86_64,
+            socket_half_close_plan(&executable, &ready, "dup"),
+            streams(false),
+            store.clone(),
+            store.clone(),
+        )
+        .unwrap(),
+    );
+    capture.start().unwrap();
+    wait_for(&ready, "READY dup");
+    assert!(
+        capture.capture_checkpoint_until(checkpoint_deadline()).is_err(),
+        "the half-closed socket topology was admitted, so this probe provoked no refusal at all"
+    );
+    let _ = wait_result_bounded(&capture, "half-closed socket checkpoint refusal");
+}
+
+/// A refusal must name what actually refused it.
+///
+/// `ckpt_sink_commit` and `ckpt_sink_digest` fail from a checkpoint-stream protocol status and set no
+/// `errno` at any point, yet both call sites in `checkpoint/image.c` printed `strerror(errno)`. That
+/// picks up whatever unrelated syscall last set it, and what is left there is the `ENOTTY` from the
+/// manifest's own `tcgetattr` on a non-tty about twenty lines earlier. Every socket-topology checkpoint
+/// refusal in this repository therefore read
+///
+/// ```text
+/// [ckpt] refuse: cannot publish the checkpoint manifest: Inappropriate ioctl for device
+/// ```
+///
+/// -- a message pointing the reader at a terminal, for a failure that never touched one. It is what made
+/// the `socket_half_close` failure unreadable for weeks.
+///
+/// The gate runs in a subprocess and reads the engine's real stderr, because that is the only place the
+/// defect exists: a unit test over a formatting helper passes with the bug present.
+#[test]
+fn checkpoint_manifest_refusal_names_the_protocol_status_rather_than_a_stale_errno() {
+    let _exclusive = exclusive_checkpoint_test();
+    let stderr = probe_child_stderr("socket_topology_refusal_probe_child", Duration::from_secs(180), &[]);
+    let refusal = stderr
+        .lines()
+        .find(|line| line.contains("cannot publish the checkpoint manifest"))
+        .unwrap_or_else(|| panic!("the probe provoked no manifest refusal at all:\n{stderr}"));
+    assert!(
+        !refusal.contains("Inappropriate ioctl for device"),
+        "the manifest refusal reports the stale ENOTTY of an unrelated tcgetattr: {refusal}"
+    );
+    assert!(
+        refusal.contains("checkpoint-stream status") || refusal.contains("this channel ended before one arrived"),
+        "the manifest refusal names neither of the two things that can actually refuse it -- a host status \
+         or a transport that never delivered the request: {refusal}"
     );
 }
 
