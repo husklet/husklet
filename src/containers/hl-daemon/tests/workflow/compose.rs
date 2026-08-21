@@ -33,6 +33,7 @@ pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
                     .args(["-c", "printf 'api-marker:%s\\n' \"$COMPOSE_VALUE\"; exec sleep 60"])
                     .env("COMPOSE_VALUE", &interpolated),
             )
+            .guest(super::fixture::guest())
             .mount(Mount::volume_read_write("hlcompose_shared", "/shared"))
             .name("hlcompose-api-1")
             .label("com.docker.compose.project", "hlcompose")
@@ -53,6 +54,7 @@ pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
                     "echo worker-marker > /shared/worker.txt; echo worker-marker; exec sleep 60",
                 ]),
             )
+            .guest(super::fixture::guest())
             .mount(Mount::volume_read_write("hlcompose_shared", "/shared"))
             .name("hlcompose-worker-1")
             .label("com.docker.compose.project", "hlcompose")
@@ -207,6 +209,7 @@ pub(crate) async fn multinet(containers: &Containers) -> Result<(), Error> {
     containers
         .create(
             ContainerSpec::from_directory(&app_root, Process::new("/bin/sh").args(["-c", "exec sleep 60"]))
+                .guest(super::fixture::guest())
                 .name("hlmnet-app-1")
                 .isolation(networked()),
         )
@@ -217,6 +220,7 @@ pub(crate) async fn multinet(containers: &Containers) -> Result<(), Error> {
                 &front_root,
                 Process::new("/bin/sh").args(["-c", "printf 'FRONT\\n' | nc -l -p 9200"]),
             )
+            .guest(super::fixture::guest())
             .name("hlmnet-front-1")
             .isolation(networked()),
         )
@@ -227,6 +231,7 @@ pub(crate) async fn multinet(containers: &Containers) -> Result<(), Error> {
                 &back_root,
                 Process::new("/bin/sh").args(["-c", "printf 'BACK\\n' | nc -l -p 9201"]),
             )
+            .guest(super::fixture::guest())
             .name("hlmnet-back-1")
             .isolation(networked()),
         )

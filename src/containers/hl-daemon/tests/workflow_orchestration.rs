@@ -26,9 +26,19 @@ async fn containers(work: &TempDir) -> Result<Containers, Error> {
         .await?)
 }
 
-/// Currently RED, and deliberately left so: the builder's `RUN` step fails with
-/// `Construction(Start)` (guest launch) while the sibling workflows start real
-/// containers from the same fixture, so the defect is in the daemon build path.
+/// Still RED, but not for the reason this comment used to give. That reading was taken
+/// on an arm64 Mac, where `Daemon::new`'s hardcoded `Platform::linux_arm64()` happened to
+/// match the arm64 minirootfs the Darwin dev shell pins; on x86_64 Linux the same default
+/// refused the amd64 fixture at the door with `no manifest for platform linux/arm64`, and
+/// no build step ran at all. With the platform taken from the fixture, both `RUN` builds
+/// complete and their containers produce their expected bytes.
+///
+/// What remains is one step further in: `build::advanced` builds `workflow/advanced:test`
+/// (`USER nobody`, `SHELL ["/bin/sh","-eu","-c"]`, `ENTRYPOINT ["/bin/sh","-c"]`), the
+/// image, its labels and its history all verify, the container is created and started --
+/// and `wait` never returns. `Timeout` here is the client's own 30s request budget, not a
+/// daemon answer. That is a non-root guest lifecycle question for `hl-container`, not a
+/// fixture one.
 #[tokio::test(flavor = "multi_thread")]
 async fn docker_build() -> Result<(), Error> {
     if unavailable() {

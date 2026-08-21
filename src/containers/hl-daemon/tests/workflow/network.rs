@@ -35,6 +35,7 @@ pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
                     "printf 'ready\\n'; printf 'bridge-ok\\n' | nc -l -p 8080; printf 'bridge-ok\\n' | nc -l -p 8081",
                 ]),
             )
+            .guest(fixture::guest())
             .name("net-srv")
             .isolation(networked()),
         )
@@ -42,6 +43,7 @@ pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
     containers
         .create(
             ContainerSpec::from_directory(&client_root, Process::new("/bin/sh").args(["-c", "exit 0"]))
+                .guest(fixture::guest())
                 .name("net-cli")
                 .isolation(networked()),
         )
@@ -57,6 +59,7 @@ pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
                 &client_root,
                 Process::new("/bin/sh").args(["-c", &format!("nc net-srv 8080; nc {address} 8081")]),
             )
+            .guest(fixture::guest())
             .name("net-cli")
             .isolation(networked()),
         )
@@ -77,6 +80,7 @@ pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
     containers
         .create(
             ContainerSpec::from_directory(&other_root, Process::new("/bin/sh"))
+                .guest(fixture::guest())
                 .name("net-other")
                 .isolation(networked()),
         )
