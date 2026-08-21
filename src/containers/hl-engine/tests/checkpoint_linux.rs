@@ -919,6 +919,19 @@ struct TestTerminal {
     changed: Condvar,
 }
 
+// Every lock below tolerates poisoning, and that is load-bearing rather than tidy.
+//
+// A test double whose `lock().unwrap()` panics inside a `Drop` running during another
+// panic's unwind produces a NON-UNWINDING panic, which aborts the whole test binary:
+// no `test result:` line is printed at all, every later test is skipped, and the run
+// exits 134 with nothing to read. Measured on `main` at a8da3e963 -- a ten-second
+// terminal wait timed out, its panic poisoned the terminal mutex, and the engine's
+// teardown then called `TerminalPort::close`, which took that mutex and unwrapped it.
+// One flaky timeout therefore destroyed the count for the entire suite.
+//
+// A poisoned mutex in a double means "some other test thread panicked", which is
+// exactly the situation in which the surviving diagnostic matters most. Taking the
+// data anyway is always better here than converting one red test into no result.
 #[derive(Default)]
 struct CapturedOutput {
     bytes: Mutex<Vec<u8>>,
@@ -928,7 +941,7 @@ struct CapturedOutput {
 impl CapturedOutput {
     fn wait(&self, marker: &str) {
         let deadline = Instant::now() + Duration::from_secs(10);
-        let mut bytes = self.bytes.lock().unwrap();
+        let mut bytes = self.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         while !bytes.windows(marker.len()).any(|window| window == marker.as_bytes()) {
             let remaining = deadline.saturating_duration_since(Instant::now());
             assert!(
@@ -936,24 +949,28 @@ impl CapturedOutput {
                 "standard output did not contain {marker:?}:\n{}",
                 String::from_utf8_lossy(&bytes)
             );
-            let (next, timeout) = self.changed.wait_timeout(bytes, remaining).unwrap();
-            bytes = next;
-            assert!(
-                !timeout.timed_out(),
-                "standard output did not contain {marker:?}:\n{}",
-                String::from_utf8_lossy(&bytes)
-            );
+            // Re-check the predicate rather than the timeout flag. A wait that times out
+            // in the same instant the marker arrives has the marker; the deadline is
+            // enforced by `remaining.is_zero()` above, on the next turn of the loop.
+            bytes = self
+                .changed
+                .wait_timeout(bytes, remaining)
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
         }
     }
 
     fn text(&self) -> String {
-        String::from_utf8_lossy(&self.bytes.lock().unwrap()).into_owned()
+        String::from_utf8_lossy(&self.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).into_owned()
     }
 }
 
 impl StandardStreamPort for CapturedOutput {
     fn write(&self, _: StandardStream, input: &[u8]) -> std::io::Result<usize> {
-        self.bytes.lock().unwrap().extend_from_slice(input);
+        self.bytes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend_from_slice(input);
         self.changed.notify_all();
         Ok(input.len())
     }
@@ -965,14 +982,14 @@ impl StandardStreamPort for CapturedOutput {
 
 impl TestTerminal {
     fn input(&self, bytes: &[u8]) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.input.extend(bytes);
         self.changed.notify_all();
     }
 
     fn wait_output(&self, marker: &[u8]) {
         let deadline = Instant::now() + Duration::from_secs(10);
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         while !state.output.windows(marker.len()).any(|window| window == marker) {
             assert!(
                 !state.closed,
@@ -987,27 +1004,35 @@ impl TestTerminal {
                 String::from_utf8_lossy(marker),
                 String::from_utf8_lossy(&state.output)
             );
-            let (next, timeout) = self.changed.wait_timeout(state, remaining).unwrap();
-            state = next;
-            assert!(
-                !timeout.timed_out(),
-                "terminal did not produce {:?}:\n{}",
-                String::from_utf8_lossy(marker),
-                String::from_utf8_lossy(&state.output)
-            );
+            // As in CapturedOutput::wait -- re-check the predicate, not the flag.
+            state = self
+                .changed
+                .wait_timeout(state, remaining)
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
         }
     }
 
     fn output(&self) -> String {
-        String::from_utf8_lossy(&self.state.lock().unwrap().output).into_owned()
+        String::from_utf8_lossy(
+            &self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .output,
+        )
+        .into_owned()
     }
 }
 
 impl TerminalPort for TestTerminal {
     fn read(&self, output: &mut [u8]) -> std::io::Result<usize> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         while state.input.is_empty() && !state.closed {
-            state = self.changed.wait(state).unwrap();
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         if state.closed {
             return Ok(0);
@@ -1020,7 +1045,7 @@ impl TerminalPort for TestTerminal {
     }
 
     fn write(&self, input: &[u8]) -> std::io::Result<usize> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.closed {
             return Err(std::io::ErrorKind::BrokenPipe.into());
         }
@@ -1030,7 +1055,7 @@ impl TerminalPort for TestTerminal {
     }
 
     fn close(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.closed = true;
         self.changed.notify_all();
     }
@@ -1059,7 +1084,11 @@ impl AtomicStore {
     }
 
     fn snapshot(&self) -> BTreeMap<String, Vec<u8>> {
-        self.0.lock().unwrap().committed.clone()
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .committed
+            .clone()
     }
 
     /// Every object the sink still holds: staged under an open transaction as
@@ -1067,7 +1096,7 @@ impl AtomicStore {
     /// invisible in `snapshot` alone -- nothing was committed either way -- so
     /// an assertion about a rejected generation has to read this instead.
     fn retained(&self) -> Vec<String> {
-        let state = self.0.lock().unwrap();
+        let state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.staging.keys().chain(state.committed.keys()).cloned().collect()
     }
 
@@ -1123,7 +1152,7 @@ impl CheckpointSink for AtomicStore {
     }
 
     fn begin_until(&self, deadline: Instant) -> Result<NonZeroU64, CompositionError> {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.owner.is_some() || Instant::now() >= deadline {
             return Err(CompositionError::TransactionBusy);
         }
@@ -1141,14 +1170,14 @@ impl CheckpointSink for AtomicStore {
         bytes: &[u8],
         deadline: Instant,
     ) -> Result<(), CompositionError> {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::validate(&state, owner, deadline)?;
         state.staging.insert(name.into(), bytes.into());
         Ok(())
     }
 
     fn abort_until(&self, owner: NonZeroU64, deadline: Instant) -> Result<(), CompositionError> {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::validate(&state, owner, deadline)?;
         state.staging.clear();
         state.owner = None;
@@ -1156,7 +1185,7 @@ impl CheckpointSink for AtomicStore {
     }
 
     fn commit_until(&self, owner: NonZeroU64, manifest: &[u8], deadline: Instant) -> Result<(), CompositionError> {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::validate(&state, owner, deadline)?;
         state.staging.insert("MANIFEST".into(), manifest.into());
         state.committed = std::mem::take(&mut state.staging);
@@ -1181,7 +1210,14 @@ impl CheckpointSource for AtomicStore {
     }
 
     fn list(&self) -> Result<Vec<String>, CompositionError> {
-        Ok(self.0.lock().unwrap().committed.keys().cloned().collect())
+        Ok(self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .committed
+            .keys()
+            .cloned()
+            .collect())
     }
 
     fn get_until(&self, name: &str, deadline: Instant) -> Result<Vec<u8>, CompositionError> {
@@ -1205,9 +1241,12 @@ struct TestTerminalPort {
 
 impl TerminalPort for TestTerminalPort {
     fn read(&self, _: &mut [u8]) -> std::io::Result<usize> {
-        let mut closed = self.closed.lock().unwrap();
+        let mut closed = self.closed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         while !*closed {
-            closed = self.changed.wait(closed).unwrap();
+            closed = self
+                .changed
+                .wait(closed)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         Ok(0)
     }
@@ -1217,7 +1256,7 @@ impl TerminalPort for TestTerminalPort {
     }
 
     fn close(&self) {
-        *self.closed.lock().unwrap() = true;
+        *self.closed.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
         self.changed.notify_all();
     }
 }
@@ -4040,6 +4079,47 @@ fn socket_half_close_refuses_checkpoint_after_guest_dup_and_fork_on_both_isas() 
     assert!(
         accepted.is_empty(),
         "accepted half-closed guest socket paths: {accepted:?}"
+    );
+}
+
+/// A poisoned test double must still answer, because the alternative is no result at all.
+///
+/// When a test fails, its panic poisons every mutex it held. The engine's teardown then runs
+/// inside `Drop` **while that panic is unwinding**, and a `lock().unwrap()` there is a panic in a
+/// destructor -- which Rust makes non-unwinding, so it `abort()`s the process. The whole binary
+/// dies: no `test result:` line, every later test skipped, exit 134.
+///
+/// Observed on `main` at a8da3e963, run 3 of 3: a ten-second terminal wait timed out in
+/// `identities_created_after_restore_survive_recapture_on_both_isas`, and `TerminalPort::close`
+/// unwrapped the mutex that panic had just poisoned. One flaky timeout destroyed the count for
+/// the entire suite -- and a suite that reports nothing is harder to notice than one that
+/// reports a wrong number.
+///
+/// This gate poisons the lock the same way and requires every entry point to keep working.
+#[test]
+fn a_poisoned_terminal_double_still_answers_instead_of_aborting_the_suite() {
+    let terminal = Arc::new(TestTerminal::default());
+    let poisoner = Arc::clone(&terminal);
+    let panicked = std::thread::spawn(move || {
+        let _held = poisoner.state.lock().unwrap();
+        panic!("deliberate: poison the terminal state exactly as a failing assertion does");
+    })
+    .join();
+    assert!(panicked.is_err(), "the poisoning thread was supposed to panic");
+    assert!(
+        terminal.state.is_poisoned(),
+        "the fixture did not actually poison the lock, so this gate would pass for free"
+    );
+
+    // Every one of these is reached from teardown. On the unfixed double each panics, and the
+    // one inside `Drop` takes the process with it.
+    terminal.input(b"i");
+    assert_eq!(terminal.write(b"still answering").unwrap(), 15);
+    terminal.close();
+    assert!(
+        terminal.output().contains("still answering"),
+        "a poisoned double lost the output a failing test needs to read: {}",
+        terminal.output()
     );
 }
 
