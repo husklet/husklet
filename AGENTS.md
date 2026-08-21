@@ -2018,6 +2018,44 @@ hand your environment to the test unchanged. The direct run is the trustworthy
 one, and the lane caught this only because it re-ran a result it found
 surprising rather than reporting the first answer.
 
+**State your counting convention, every time.** A reference count is ambiguous
+between `passed` and `passed + ignored`, and the difference is silent. Briefs
+circulated on this box carried `hl-native --all-targets` as **112**
+(passed+ignored) and `hl-daemon --all-targets` as **250** (passed-only) *in the
+same list*, so two lanes reported "discrepancies" that were not discrepancies
+and one real move -- `hl-container --lib` 257 to 258 -- nearly got lost among
+them. Write `109p / 3i`, not `112`.
+
+**And read the parent's result line, not the first one.** Suites here re-exec
+probe children, and a child prints its own `test result:` into the same stream:
+
+```
+test result: FAILED. 0 passed; 1 failed; ...; 42 filtered out   <- probe child
+test result: FAILED. 34 passed; 4 failed; ...;  0 filtered out   <- the parent
+```
+
+A probe child always runs `--exact`, so it always reports a **non-zero**
+`filtered out`; the parent's line is the one reading **`0 filtered out`**.
+Discriminate on that mechanically rather than by position. Summing every line
+inflates both passes and failures -- it is what produced the phantom "five
+`checkpoint_linux` failures" that was quoted into a dozen briefs before anyone
+re-ran the suite.
+
+**A single run of a suite with a flaky member is not a count.** Two suites here
+are known to have them, and neither announces it:
+
+- `-p hl-engine --tests` -- a stable core plus at least two intermittent
+  members. `arm64_cross_process_shared_futex` measured **3/8**;
+  `inherited_pipe_ofd` **1/8**, and that one flips on `origin/main` itself.
+- `-p husklet --lib --features runtime` -- besides the documented root-only
+  `stop_wait_failure_attempts_rollback_before_returning`, the
+  `product_checkpoint_test` group has intermittent members;
+  `continue_later_restores_the_primary_sleep_tree_across_repeated_cycles`
+  measured **1/3 on `main`**.
+
+At 3/8, a single run lands anywhere from zero to two failures and a green run
+proves nothing. **Three runs a side is the floor**, and say how many you took.
+
 **Count the summary line, not the `FAILED` lines.** `grep -c '\.\.\. FAILED'`
 is not a failure count. A test that re-execs itself has a child that prints its
 own `... FAILED` line into the same stream, so the grep reads **5** where
