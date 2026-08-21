@@ -212,7 +212,7 @@ static int ckpt_restore_eventfd_fd(const struct ckpt_fd *record) {
     if (fcntl(fd, F_SETFD, (record->descriptor_flags & FD_CLOEXEC) ? FD_CLOEXEC : 0) != 0) return -1;
     int live_flags = fcntl(fd, F_GETFL);
     if (live_flags < 0 || fcntl(fd, F_SETFL, live_flags | O_NONBLOCK) != 0) return -1;
-    g_eventfd_peer[fd] = object->writer + 1;
+    eventfd_peer_bind(fd, object->writer + 1);
     g_eventfd_cslot[fd] = object->slot + 1;
     g_eventfd_sema[fd] = object->semaphore;
     eventfd_guest_nb_set(fd, object->guest_nonblock);

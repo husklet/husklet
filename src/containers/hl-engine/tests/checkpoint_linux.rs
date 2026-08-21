@@ -1062,6 +1062,15 @@ impl AtomicStore {
         self.0.lock().unwrap().committed.clone()
     }
 
+    /// Every object the sink still holds: staged under an open transaction as
+    /// well as committed. A refusal that never discharged its transaction is
+    /// invisible in `snapshot` alone -- nothing was committed either way -- so
+    /// an assertion about a rejected generation has to read this instead.
+    fn retained(&self) -> Vec<String> {
+        let state = self.0.lock().unwrap();
+        state.staging.keys().chain(state.committed.keys()).cloned().collect()
+    }
+
     fn validate(state: &AtomicStoreState, owner: NonZeroU64, deadline: Instant) -> Result<(), CompositionError> {
         if state.owner == Some(owner) && Instant::now() < deadline {
             Ok(())
@@ -3972,7 +3981,7 @@ fn socket_half_close_refuses_checkpoint_after_guest_dup_and_fork_on_both_isas() 
     for (isa, executable) in executables {
         let clean_directory = tempfile::tempdir().unwrap();
         let clean_ready = clean_directory.path().join("ready");
-        let clean_store = Arc::new(Store::default());
+        let clean_store = Arc::new(AtomicStore::default());
         let clean = Arc::new(
             Engine::with_checkpoint(
                 isa,
@@ -3989,12 +3998,12 @@ fn socket_half_close_refuses_checkpoint_after_guest_dup_and_fork_on_both_isas() 
             .capture_checkpoint_until(checkpoint_deadline())
             .unwrap_or_else(|error| panic!("{isa:?} rejected the clean socketpair control: {error:?}"));
         assert_eq!(wait_bounded(&clean, "clean socketpair capture").guest_status, 0);
-        assert!(clean_store.0.lock().unwrap().contains_key("MANIFEST"));
+        assert!(clean_store.snapshot().contains_key("MANIFEST"));
 
         for mode in ["dup", "fork"] {
             let directory = tempfile::tempdir().unwrap();
             let ready = directory.path().join("ready");
-            let store = Arc::new(Store::default());
+            let store = Arc::new(AtomicStore::default());
             let capture = Arc::new(
                 Engine::with_checkpoint(
                     isa,
@@ -4009,16 +4018,19 @@ fn socket_half_close_refuses_checkpoint_after_guest_dup_and_fork_on_both_isas() 
             wait_for(&ready, &format!("READY {mode}"));
             let rejected = capture.capture_checkpoint_until(checkpoint_deadline()).is_err();
             let _ = wait_result_bounded(&capture, "half-closed socket checkpoint refusal");
-            let snapshot = store.0.lock().unwrap();
+            // Read what the sink still HOLDS, not what it committed. The socket
+            // queue is written long before the refusal is decided, so the only
+            // thing that removes it is the refusal discharging its transaction;
+            // a committed-only assertion is true whether or not that happened.
+            let retained = store.retained();
             if rejected {
                 assert!(
-                    !snapshot.contains_key("MANIFEST"),
+                    !retained.iter().any(|name| name == "MANIFEST"),
                     "{isa:?}/{mode} committed a rejected generation"
                 );
                 assert!(
-                    snapshot.keys().all(|name| !name.starts_with("socket.")),
-                    "{isa:?}/{mode} published a socket queue before admission refusal: {:?}",
-                    snapshot.keys().collect::<Vec<_>>()
+                    retained.iter().all(|name| !name.starts_with("socket.")),
+                    "{isa:?}/{mode} left a socket queue in the sink after admission refusal: {retained:?}"
                 );
             } else {
                 accepted.push(format!("{isa:?}/{mode}"));

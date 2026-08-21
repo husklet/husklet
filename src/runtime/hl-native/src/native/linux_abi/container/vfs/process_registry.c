@@ -115,6 +115,17 @@ static int proc_fd_dir_open(void) {
 
 static void proc_dir_register(int fd, const char *tmpl, const char *guestpath); // defined below (dir synth)
 
+// One fdinfo entry: the guest-visible predicate, unchanged. Both the enumerated and the probed path
+// below run exactly this, so the two differ only in which descriptor NUMBERS they offer it.
+static void proc_fdinfo_entry_place(const char *dir, int fd) {
+    if (eventfd_hidden_peer_fd(fd)) return;
+    if (fcntl(fd, F_GETFD) == -1) return; // not open
+    char p[96];
+    snprintf(p, sizeof p, "%s/%d", dir, fd);
+    int f = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0444);
+    if (f >= 0) close(f);
+}
+
 // Build the temp dir of /proc/self/fdinfo entries -- one REGULAR-file placeholder per open fd (content is
 // served live by proc_open on the relative reopen). Linux exposes per-fd pos/flags/mnt_id here; runtimes
 // read it for descriptor flags, eventfd counters, epoll details. Tagged "/proc/<pid>/fdinfo" so an
@@ -128,13 +139,57 @@ static int proc_fdinfo_dir_open(const char *guestpath) {
     procfd_dirs_reap(0);
     char tmpl[] = "/tmp/.hl-fd-infoXXXXXX";
     if (!mkdtemp(tmpl)) return -1;
-    for (int fd = 0; fd < HL_NFD; fd++) {
-        if (eventfd_hidden_peer_fd(fd)) continue;
-        if (fcntl(fd, F_GETFD) == -1) continue; // not open
-        char p[96];
-        snprintf(p, sizeof p, "%s/%d", tmpl, fd);
-        int f = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0444);
-        if (f >= 0) close(f);
+    // Ask the host which descriptors are open ONCE, instead of asking fcntl(F_GETFD) about every number
+    // in 0..HL_NFD. The probe this replaces issued 65536 syscalls per listing -- measured 63.5M kernel
+    // instructions each -- to discover a handful of open descriptors, and it is 65536 rather than
+    // "the highest fd in use" only because the engine's own private descriptor band has expanded the
+    // table that far.
+    //
+    // The two questions are NOT the same question, so the enumeration is a source of candidate numbers
+    // and nothing more: every candidate is still confirmed with the same F_GETFD the probe used, and
+    // still filtered by eventfd_hidden_peer_fd(). The published set is therefore
+    // (open when enumerated) AND (open when confirmed) AND (not a hidden eventfd peer) -- a subset of
+    // what the probe publishes, never a superset. That direction is the one that matters: a descriptor
+    // opened during the walk can be missed, exactly as the ascending probe missed one opened below its
+    // cursor, but nothing the probe concealed can become visible.
+    //
+    // Two properties of the probe are deliberately preserved rather than inherited from the enumeration.
+    // The `fd < HL_NFD` bound is the probe's bound and it is load-bearing, not an artefact of the loop:
+    // dropping it publishes the whole engine-private band into the guest's listing, measured here as 12
+    // extra entries at 65536..65547 on an idle guest and 76 under load. Note what that does and does not
+    // rest on. hl_host_process_fd_private_floor() is min(RLIMIT_NOFILE - HL_HOST_PRIVATE_DESCRIPTOR_MINIMUM,
+    // HL_LINUX_FD_LIMIT), so the private band sits at or above HL_NFD only when the soft limit is generous
+    // -- true on Linux hosts, and on this one. On a host whose real ceiling is lower (macOS caps at
+    // kern.maxfilesperproc, commonly 10240, giving a floor near 6144) the private band lands INSIDE
+    // 0..HL_NFD, and this listing has always published it, because eventfd_hidden_peer_fd() is its only
+    // filter. That exposure predates this change and is untouched by it -- the bound and the filter are
+    // both carried over verbatim -- but it is worth someone's attention, and it cannot be confirmed from
+    // this box (no macOS host is reachable from the x86_64 Linux dev box).
+    //
+    // The HL_HOST_PROCESS_FD_ENGINE_PRIVATE flag the enumeration also carries is deliberately NOT
+    // consulted, even though it would close exactly that hole, because acting on it would conceal
+    // descriptors this listing shows today on every host. Changing what the guest observes is a separate
+    // claim needing its own evidence, and it is out of scope for a cost change.
+    //
+    // Creation ORDER is not a guest-visible property to preserve, and measuring said so before this was
+    // written: the placeholder directory lives on an ext4 htree /tmp, so the order a guest's own readdir
+    // returns is a hash of the names and is already unrelated to the order they were created in. (A
+    // three-entry listing comes back "2 0 1" from the ascending probe.) It happens to be moot anyway --
+    // Linux returns /proc/<pid>/fd ascending, so the enumeration hands over ascending numbers too.
+    //
+    // Windows has no descriptor enumeration -- hl_host_process_fds_collect() refuses there by name -- so
+    // the linear probe stays as the fallback and remains the only path on that host.
+    hl_host_process_fd *open_fds = NULL;
+    size_t open_count = 0;
+    if (hl_host_process_fds_collect((int64_t)getpid(), &open_fds, &open_count)) {
+        for (size_t i = 0; i < open_count; i++) {
+            int fd = open_fds[i].descriptor;
+            if (fd < 0 || fd >= HL_NFD) continue;
+            proc_fdinfo_entry_place(tmpl, fd);
+        }
+        free(open_fds);
+    } else {
+        for (int fd = 0; fd < HL_NFD; fd++) proc_fdinfo_entry_place(tmpl, fd);
     }
     int d = open(tmpl, O_RDONLY | O_DIRECTORY);
     if (d < 0) {
