@@ -89,6 +89,20 @@ static int sentry_route_exec(struct cpu *c, uint64_t nr) {
     return 1;
 }
 
+// The sentry keys a worker process's descriptor table by HOST pid: every request a worker publishes
+// stamps R->wpid from its own getpid(). clone(2) hands the PARENT the child's GUEST pid, and under a
+// container pid namespace those are different numbers -- a forked shell reads 2 where the host sees
+// 238623 -- so a lane that files the child's table under the clone return value files it where no
+// request from that child can ever find it. Translate once, here, so the clone, wait and reap lanes all
+// name the child by the identity the table is keyed on. An unmapped pid (no active pid namespace) is
+// already a host pid and passes through.
+static pid_t sentry_host_pid(int64_t guest) {
+    int host = 0;
+    if (guest > 0 && guest <= INT32_MAX && hl_linux_pidmap_host_checked(&g_pidmap, (int32_t)guest, &host) == 0)
+        return (pid_t)host;
+    return (pid_t)guest;
+}
+
 static int sentry_route_wait(struct cpu *c, uint64_t nr) {
     if (nr != 260) return 0;
     int64_t wpid = (int64_t)(int)G_A0(c);
@@ -99,7 +113,8 @@ static int sentry_route_wait(struct cpu *c, uint64_t nr) {
     service_local(c);
     int64_t result = (int64_t)G_RET(c);
     if (result <= 0) return 1;
-    if (g_sentry_pid && result == (int64_t)g_sentry_pid) {
+    pid_t host = sentry_host_pid(result);
+    if (g_sentry_pid && host == g_sentry_pid) {
         G_RET(c) = (uint64_t)(-ECHILD);
         return 1;
     }
@@ -110,10 +125,10 @@ static int sentry_route_wait(struct cpu *c, uint64_t nr) {
             terminated = (status & 0xff) != 0x7f && status != 0xffff;
     } else if (!terminated && !G_A1(c)) {
         errno = 0;
-        terminated = kill((pid_t)result, 0) < 0 && errno == ESRCH;
+        terminated = kill(host, 0) < 0 && errno == ESRCH;
     }
     if (terminated) {
-        sentry_ctl_op(SENTRY_OP_REAP, (uint64_t)(uint32_t)result, 0);
+        sentry_ctl_op(SENTRY_OP_REAP, (uint64_t)(uint32_t)host, 0);
         atomic_fetch_sub(&g_guest_children, 1);
     }
     return 1;
@@ -180,7 +195,7 @@ static int sentry_route_clone(struct cpu *c, uint64_t nr) {
             return 1;
         }
         close(sync[0]);
-        pid_t child = (pid_t)G_RET(c);
+        pid_t child = sentry_host_pid((int64_t)G_RET(c));
         int64_t installed = sentry_ctl_op(SENTRY_OP_FORK, (uint64_t)snapshot, (uint64_t)child);
         if (installed < 0) {
             sentry_ctl_op(SENTRY_OP_FORK_CANCEL, (uint64_t)snapshot, 0);

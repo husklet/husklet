@@ -4,3 +4,4 @@ pub(crate) mod build;
 pub(crate) mod compose;
 pub(crate) mod fixture;
 pub(crate) mod network;
+pub(crate) mod sandbox;

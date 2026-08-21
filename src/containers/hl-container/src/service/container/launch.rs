@@ -199,6 +199,9 @@ impl Service {
         let journal = JournalId::container(id.clone());
         let owner_service = Arc::clone(&service);
         let owner_journal = journal.clone();
+        // The generation this launch opened, kept so the completion path can close it. `own` no
+        // longer does: the stream must not end before the exit status is recorded.
+        let terminal = Arc::clone(&io);
         let owner = tokio::spawn(async move { owner_service.own(process, owner_journal, io, output_complete).await });
         let output_owner = Arc::new(super::OutputOwner {
             abort: owner.abort_handle(),
@@ -214,6 +217,9 @@ impl Service {
                 .and_then(std::convert::identity);
             service.retire_output_owner(&journal, &output_owner).await;
             service.finish(id, generation, result).await;
+            // `finish` closes this generation on the paths that publish an exit; this covers the
+            // ones that return early, so an attached session is never left waiting on a dead process.
+            service.retire_io_generation(&journal, &terminal).await;
         });
         Ok(())
     }

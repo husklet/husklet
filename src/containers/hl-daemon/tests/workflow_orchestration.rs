@@ -3,7 +3,7 @@
 #[path = "workflow/mod.rs"]
 mod workflows;
 
-use workflows::{build, compose, network};
+use workflows::{build, compose, network, sandbox};
 
 use hl_container::{Config, Containers};
 use tempfile::TempDir;
@@ -26,19 +26,12 @@ async fn containers(work: &TempDir) -> Result<Containers, Error> {
         .await?)
 }
 
-/// Still RED, but not for the reason this comment used to give. That reading was taken
-/// on an arm64 Mac, where `Daemon::new`'s hardcoded `Platform::linux_arm64()` happened to
-/// match the arm64 minirootfs the Darwin dev shell pins; on x86_64 Linux the same default
-/// refused the amd64 fixture at the door with `no manifest for platform linux/arm64`, and
-/// no build step ran at all. With the platform taken from the fixture, both `RUN` builds
-/// complete and their containers produce their expected bytes.
-///
-/// What remains is one step further in: `build::advanced` builds `workflow/advanced:test`
-/// (`USER nobody`, `SHELL ["/bin/sh","-eu","-c"]`, `ENTRYPOINT ["/bin/sh","-c"]`), the
-/// image, its labels and its history all verify, the container is created and started --
-/// and `wait` never returns. `Timeout` here is the client's own 30s request budget, not a
-/// daemon answer. That is a non-root guest lifecycle question for `hl-container`, not a
-/// fixture one.
+/// The `USER nobody` / `SHELL` / `ENTRYPOINT` image `build::advanced` produces was the first workflow
+/// here whose guest ran a command substitution, and it hung at `wait` for as long as this fixture has
+/// existed. The cause was not the non-root user: under the production sandbox default the sentry filed
+/// a forked child's descriptor table under the clone's GUEST pid while every request that child made
+/// was stamped with its HOST pid, so no child ever inherited a descriptor. See `sandbox_process_tree`,
+/// which pins the mechanism in about a second instead of through an image build.
 #[tokio::test(flavor = "multi_thread")]
 async fn docker_build() -> Result<(), Error> {
     if unavailable() {
@@ -55,6 +48,19 @@ async fn docker_net() -> Result<(), Error> {
     }
     let work = TempDir::new()?;
     network::run(&containers(&work).await?).await
+}
+
+/// A guest process tree under the production sandbox default. `Sandbox::SentryOnly` is what an
+/// ordinary container gets, and every other workflow in this file either disables it or reaches it
+/// only through a long end-to-end path -- so a descriptor defect behind it presented as an image
+/// build hanging and as a network fixture whose listeners never served, never as itself.
+#[tokio::test(flavor = "multi_thread")]
+async fn sandbox_process_tree() -> Result<(), Error> {
+    if unavailable() {
+        return Ok(());
+    }
+    let work = TempDir::new()?;
+    sandbox::run(&containers(&work).await?).await
 }
 
 #[tokio::test(flavor = "multi_thread")]

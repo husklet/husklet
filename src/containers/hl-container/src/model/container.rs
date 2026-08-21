@@ -186,6 +186,20 @@ impl Container {
         }
     }
 
+    /// The runtime's own account of why this container's wait failed instead of returning an exit
+    /// status, when there is one.
+    ///
+    /// It is present exactly beside the stand-in status that replaces the one the runtime could not
+    /// produce -- `ExitStatus::Fault { status: -1, detail: 0, reason: FaultCause::Unknown }` -- and
+    /// that value carries no cause at all: `-1`, `0` and `Unknown` are what the record says when
+    /// nothing is known, so a caller reading only the status cannot tell an engine refusal from a
+    /// guest that faulted with no diagnostic. The text is the whole cause and was reachable only
+    /// through `wait`, which a caller inspecting a stopped container never calls.
+    #[must_use]
+    pub fn runtime_diagnostic(&self) -> Option<&str> {
+        self.runtime_diagnostic.as_ref().map(RuntimeDiagnostic::message)
+    }
+
     pub(crate) fn uses_volume(&self, name: &str) -> bool {
         self.volume_names().any(|value| value == name)
     }
