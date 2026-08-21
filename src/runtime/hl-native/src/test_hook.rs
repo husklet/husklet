@@ -105,6 +105,31 @@ pub fn x86_reserved_register_test() -> i32 {
     bindings::x86_reserved_register_test()
 }
 
+/// Reports whether an imported pathname operand still gets judged as a guest pointer.
+///
+/// `svc_fs` copies the guest pathname into engine storage before dispatch and
+/// reaches the guest's `EFAULT` there. The fixture arms the production state
+/// that broke `npm ci` -- a guest `PROT_NONE` ledger interval covering the
+/// engine's own C stack -- and runs `fchmodat` over an absent pathname.
+/// Returns `0` when the filesystem verdict (`ENOENT`) survives, `1` for the
+/// spurious `EFAULT`, `2` for any other verdict, and `5` when the fixture could
+/// not allocate its stand-in guest pathname (a vacuous pass).
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+#[must_use]
+pub fn aarch64_imported_path_guard_test() -> i32 {
+    bindings::aarch64_imported_path_guard_test()
+}
+
+/// The x86-64 arm of [`aarch64_imported_path_guard_test`]; both target
+/// translation units compile the same syscall layer, so both must answer.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+#[must_use]
+pub fn x86_imported_path_guard_test() -> i32 {
+    bindings::x86_imported_path_guard_test()
+}
+
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 #[must_use]

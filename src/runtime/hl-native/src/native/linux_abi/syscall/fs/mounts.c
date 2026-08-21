@@ -10,10 +10,13 @@ static void svc_fs_mounts_40(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             G_RET(c) = 0;
             break;
         }
-        if (!a0 || guest_bad_ptr(a0, 1)) {
-            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
-            break;
-        }
+        /* No guest-pointer guard here: svc_fs (fs.c) imported this pathname operand into engine
+         * storage with guest_copy_string BEFORE dispatch, and returned the guest's own -EFAULT
+         * (NULL or inaccessible source) / -ENAMETOOLONG there, against the GUEST address and the
+         * same PROT_NONE ledger.  What arrives here is an engine C-stack buffer, so re-probing it
+         * asks the guest ledger about ENGINE memory -- and g_gna does cover engine storage (a
+         * released guest range is re-added by munmap and the host allocator later places the
+         * engine's own thread stacks there), which turned valid calls into -EFAULT.  */
         char utgt[4200];
         guest_abspath_at(-100, (const char *)a0, utgt, sizeof utgt);
         rt_del_vol(utgt); // -EINVAL if not a registered volume; treated as a no-op success below
@@ -37,10 +40,13 @@ static void svc_fs_mounts_41(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
             G_RET(c) = 0;
             break;
         }
-        if (!a0 || guest_bad_ptr(a0, 1)) {
-            G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
-            break;
-        }
+        /* No guest-pointer guard here: svc_fs (fs.c) imported this pathname operand into engine
+         * storage with guest_copy_string BEFORE dispatch, and returned the guest's own -EFAULT
+         * (NULL or inaccessible source) / -ENAMETOOLONG there, against the GUEST address and the
+         * same PROT_NONE ledger.  What arrives here is an engine C-stack buffer, so re-probing it
+         * asks the guest ledger about ENGINE memory -- and g_gna does cover engine storage (a
+         * released guest range is re-added by munmap and the host allocator later places the
+         * engine's own thread stacks there), which turned valid calls into -EFAULT.  */
         char nrabs[4200], nrhost[4200];
         guest_abspath_at(-100, (const char *)a0, nrabs, sizeof nrabs);
         secure_resolve(nrabs, nrhost, sizeof nrhost, 0);
@@ -77,11 +83,15 @@ static void svc_fs_mounts_43(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
         gpath[0] = 0; // guest ABSOLUTE path (container mode) -> pseudo-fs classification
         if (nr == 43) {
             // A path pointer outside the address space -> EFAULT (kernel getname copy_from_user), before
-            // the buffer is examined (LTP statfs02 "bad path"). guest_bad_ptr catches a PROT_NONE page.
-            if (!a0 || guest_bad_ptr(a0, 1)) {
-                G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
-                break;
-            }
+            // the buffer is examined (LTP statfs02 "bad path"). svc_fs's import reaches that verdict, and a
+            // guest PROT_NONE page still faults there.
+            /* No guest-pointer guard here: svc_fs (fs.c) imported this pathname operand into engine
+             * storage with guest_copy_string BEFORE dispatch, and returned the guest's own -EFAULT
+             * (NULL or inaccessible source) / -ENAMETOOLONG there, against the GUEST address and the
+             * same PROT_NONE ledger.  What arrives here is an engine C-stack buffer, so re-probing it
+             * asks the guest ledger about ENGINE memory -- and g_gna does cover engine storage (a
+             * released guest range is re-added by munmap and the host allocator later places the
+             * engine's own thread stacks there), which turned valid calls into -EFAULT.  */
             char pb[4200];
             const char *p = atpath(-100, (const char *)a0, pb, sizeof pb, 0);
             guest_abspath_at(-100, (const char *)a0, gpath, sizeof gpath); // guest-absolute path (both modes)
