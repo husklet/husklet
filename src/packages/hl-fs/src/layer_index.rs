@@ -143,6 +143,29 @@ impl LayerIndex {
         Ok(index)
     }
 
+    /// Refuses, naming the metadata this host does not carry.
+    ///
+    /// The entry point stays so that it and its consumers are one width -- `hl-images`'
+    /// `snapshot::index::publish` calls it ungated -- but it cannot answer here. Every entry the
+    /// Unix walk records is a POSIX `mode`, `uid`, `gid` and `mtime` read through `MetadataExt`,
+    /// and those fields are the whole comparison an overlay diff makes. An index built without
+    /// them would answer a lookup with a wrong entry rather than with a miss, and the sidecar's
+    /// contract is that a miss is never a wrong answer.
+    ///
+    /// # Errors
+    /// Always [`io::ErrorKind::Unsupported`].
+    #[cfg(not(unix))]
+    pub fn build(root: &Path) -> io::Result<Self> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!(
+                "cannot index {}: a layer index is a POSIX enumeration -- mode, uid, gid and mtime per \
+                 name -- and this host's metadata carries none of them",
+                root.display()
+            ),
+        ))
+    }
+
     #[cfg(unix)]
     fn walk(&mut self, directory: &Path, prefix: &[u8]) -> io::Result<()> {
         use std::os::unix::ffi::OsStrExt as _;
