@@ -133,6 +133,36 @@ jobs:
           nix --extra-experimental-features 'nix-command flakes' develop . --command
           cargo check --workspace --all-targets --locked --offline
 
+      # THE CONFIGURATION `--all-targets` ABOVE CANNOT REACH. `hl-client`'s library
+      # takes `hl-daemon` with `default-features = false`, so that build genuinely
+      # happens -- but nothing had ever built `hl-daemon`'s TEST targets that way, and
+      # Cargo skips a target whose required features are unmet WITHOUT PRINTING
+      # ANYTHING. Seven of the nine integration tests here once simply failed to build;
+      # `hl-daemon/Cargo.toml` carries that note and the `required-features` lines that
+      # repaired it. A test added without one reintroduces the same silence, and the
+      # step above cannot see it because it runs with `runtime` on by default.
+      #
+      # Measured 2026-08-21, not assumed: no `--no-default-features` invocation existed
+      # anywhere in `.github/` or `flake.nix`, so the exact failure that comment
+      # memorialises could recur today and no job would notice.
+      #
+      # SHOWN TO FAIL. Dropping the `required-features` line from `builtin_network`
+      # takes this step to `error[E0432]: unresolved import`, "no `Daemon` in the root",
+      # with a note naming `src/lib.rs:19` and the `runtime` gate; restoring it returns
+      # the step to 0. Clean run 2m46s on a loaded box.
+      #
+      # `hl-daemon` is the only crate that needs this arm. The other two crates with
+      # `required-features` targets already have an invocation that reaches them --
+      # `-p hl-native --all-targets --features native-test-hooks` and the two
+      # `-p husklet --all-targets --features gui|runtime` Clippy arms -- and the other
+      # internal dependencies taken with `default-features = false` (`hl-engine`,
+      # `hl-fs`, `hl-container`) have no feature-gated targets, so their unfeatured
+      # configuration is already built transitively by their consumers.
+      - name: Check the hl-daemon configuration hl-client builds against
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo check -p hl-daemon --no-default-features --all-targets --locked --offline
+
       - name: Verify formatting across every workspace crate
         # `--all` is not decoration: plain `cargo fmt --check` reaches only the seven
         # `default-members`. This is the spelling `flake.nix` uses for the same gate.
