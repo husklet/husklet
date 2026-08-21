@@ -517,6 +517,7 @@ impl Window {
         window.present();
         host::appearance::Appearance::apply();
         Screenshot::schedule(&window, "terminal");
+        Screenshot::schedule_resize(&window);
     }
 }
 
