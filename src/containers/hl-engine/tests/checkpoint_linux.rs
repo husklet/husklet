@@ -3307,10 +3307,27 @@ fn process_groups(store: &Store) -> BTreeSet<String> {
         .collect()
 }
 
+/// The process groups named by every COMPLETE `PIPE-READY` line the guest has emitted so far.
+///
+/// Completeness is the whole point. `CapturedOutput::wait` returns on the first sighting of a
+/// SUBSTRING, and the engine's relay hands this port arbitrary chunks, so at the instant
+/// `wait("PIPE-READY parent")` returns the buffer routinely still ends mid-line -- `PIPE-READY 2 pi`
+/// with its pid in flight. `str::lines()` yields that fragment as a line like any other, and it then
+/// reaches the parse below, where it fails in one of two ways:
+///
+///  - `rsplit_once("pid=")` finds nothing and the `expect` panics, in a helper whose name gives the
+///    reader no reason to suspect a chunk boundary; or, worse,
+///  - the fragment is `PIPE-READY 2 pid=169` for a pid that is really 16942, which parses cleanly
+///    into a plausible WRONG group and surfaces much later as an unequal process-group set.
+///
+/// So only terminated lines are considered. A caller that needs a known number of them must wait for
+/// that number rather than for a marker -- see `ready_process_groups_of_size`.
 fn ready_process_groups(output: &CapturedOutput) -> BTreeSet<String> {
     output
         .text()
-        .lines()
+        .split_inclusive('\n')
+        .filter(|line| line.ends_with('\n'))
+        .map(str::trim_end)
         .filter(|line| line.starts_with("PIPE-READY "))
         .map(|line| {
             if line.starts_with("PIPE-READY parent ") {
@@ -3321,6 +3338,27 @@ fn ready_process_groups(output: &CapturedOutput) -> BTreeSet<String> {
             }
         })
         .collect()
+}
+
+/// Wait until exactly `count` complete `PIPE-READY` lines have arrived, and return their groups.
+///
+/// Waiting for the last MARKER is not the same as waiting for the last LINE, and the difference is a
+/// chunk boundary wide. This closes it by waiting on the property the caller actually needs.
+fn ready_process_groups_of_size(output: &CapturedOutput, count: usize) -> BTreeSet<String> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let groups = ready_process_groups(output);
+        if groups.len() >= count {
+            return groups;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "only {} of {count} complete PIPE-READY lines arrived within 10 seconds:\n{}",
+            groups.len(),
+            output.text()
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 fn wait_bounded_with_output(
@@ -3363,7 +3401,7 @@ fn inherited_pipe_round_trip(isa: GuestIsa, executable: &Path) {
     for marker in ["PIPE-READY 0", "PIPE-READY 1", "PIPE-READY 2", "PIPE-READY parent"] {
         output.wait(marker);
     }
-    let expected_groups = ready_process_groups(&output);
+    let expected_groups = ready_process_groups_of_size(&output, 4);
     assert_eq!(expected_groups.len(), 4, "{isa:?}: {}", output.text());
     capture
         .capture_checkpoint_until(checkpoint_deadline())
@@ -4098,6 +4136,48 @@ fn socket_half_close_refuses_checkpoint_after_guest_dup_and_fork_on_both_isas() 
         accepted.is_empty(),
         "accepted half-closed guest socket paths: {accepted:?}"
     );
+}
+
+/// A `PIPE-READY` line split across two relay writes must not be parsed until it is whole.
+///
+/// `CapturedOutput::wait` returns on the first sighting of a substring, and the engine's relay
+/// delivers arbitrary chunks, so the buffer legitimately ends mid-line at the instant a marker
+/// matches. `inherited_pipe_ofd_survives_two_checkpoint_cycles_on_both_isas` then read an exact
+/// four-element set straight out of that buffer.
+///
+/// This drives the boundary directly rather than hoping to hit it: the split is placed inside a pid,
+/// which is the case that does not announce itself. Before the fix the first assertion panicked in
+/// `rsplit_once("pid=")`; had the split fallen one byte later it would have parsed `169` for a pid of
+/// `16942` and produced a wrong group that only surfaced as an unequal set much later.
+#[test]
+fn a_ready_line_split_across_two_relay_writes_is_not_parsed_until_it_is_complete() {
+    let output = CapturedOutput::default();
+    output
+        .write(
+            StandardStream::Stdout,
+            b"PIPE-READY 0 pid=11\nPIPE-READY 1 pid=22\nPIPE-READY 2 pid=169",
+        )
+        .unwrap();
+    // "PIPE-READY 2" -- the marker `wait` returns on -- is present, while its pid is still in flight.
+    assert_eq!(
+        ready_process_groups(&output),
+        BTreeSet::from(["proc.11".to_owned(), "proc.22".to_owned()]),
+        "a half-arrived line was parsed as though it were complete"
+    );
+    output
+        .write(StandardStream::Stdout, b"42\nPIPE-READY parent pid=1\n")
+        .unwrap();
+    assert_eq!(
+        ready_process_groups(&output),
+        BTreeSet::from([
+            "proc.11".to_owned(),
+            "proc.22".to_owned(),
+            "proc.16942".to_owned(),
+            "proc.1".to_owned()
+        ]),
+        "the completed line did not yield the pid it actually carried"
+    );
+    assert_eq!(ready_process_groups_of_size(&output, 4).len(), 4);
 }
 
 /// A poisoned test double must still answer, because the alternative is no result at all.
