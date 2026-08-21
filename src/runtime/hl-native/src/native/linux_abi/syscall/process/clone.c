@@ -1,6 +1,17 @@
 // Cohesive process-syscall handlers. Included by ../proc.c after shared process state.
 #include "../../../host/process.h"
 
+static int clone_has_namespace_flags(uint64_t flags) {
+    const uint64_t namespace_flags = 0x00020000ull | // CLONE_NEWNS
+                                     0x02000000ull | // CLONE_NEWCGROUP
+                                     0x04000000ull | // CLONE_NEWUTS
+                                     0x08000000ull | // CLONE_NEWIPC
+                                     0x10000000ull | // CLONE_NEWUSER
+                                     0x20000000ull | // CLONE_NEWPID
+                                     0x40000000ull;  // CLONE_NEWNET
+    return (flags & namespace_flags) != 0;
+}
+
 static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 220: {
@@ -10,14 +21,7 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // child remains in the original namespace. Return EINVAL, the kernel
         // contract for unsupported clone flags, so capability probes can use
         // their documented fallback.
-        const uint64_t namespace_flags = 0x00020000ull | // CLONE_NEWNS
-                                         0x02000000ull | // CLONE_NEWCGROUP
-                                         0x04000000ull | // CLONE_NEWUTS
-                                         0x08000000ull | // CLONE_NEWIPC
-                                         0x10000000ull | // CLONE_NEWUSER
-                                         0x20000000ull | // CLONE_NEWPID
-                                         0x40000000ull;  // CLONE_NEWNET
-        if (a0 & namespace_flags) {
+        if (clone_has_namespace_flags(a0)) {
             fork_diagnostic_emit(c, nr, a0, "namespace-flags", EINVAL, -1, NULL);
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
