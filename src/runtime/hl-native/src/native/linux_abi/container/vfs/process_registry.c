@@ -154,11 +154,22 @@ static int proc_fdinfo_dir_open(const char *guestpath) {
     // cursor, but nothing the probe concealed can become visible.
     //
     // Two properties of the probe are deliberately preserved rather than inherited from the enumeration.
-    // The `fd < HL_NFD` bound is the probe's bound: engine-private descriptors are relocated to the
-    // private floor at 65536 and above, and being above that bound is how they are concealed from this
-    // listing -- so it is load-bearing, not an artefact of the loop. And the HL_HOST_PROCESS_FD_ENGINE_PRIVATE
-    // flag the enumeration also carries is NOT consulted, because acting on it would conceal descriptors
-    // this listing shows today; changing what the guest observes is out of scope for a cost change.
+    // The `fd < HL_NFD` bound is the probe's bound and it is load-bearing, not an artefact of the loop:
+    // dropping it publishes the whole engine-private band into the guest's listing, measured here as 12
+    // extra entries at 65536..65547 on an idle guest and 76 under load. Note what that does and does not
+    // rest on. hl_host_process_fd_private_floor() is min(RLIMIT_NOFILE - HL_HOST_PRIVATE_DESCRIPTOR_MINIMUM,
+    // HL_LINUX_FD_LIMIT), so the private band sits at or above HL_NFD only when the soft limit is generous
+    // -- true on Linux hosts, and on this one. On a host whose real ceiling is lower (macOS caps at
+    // kern.maxfilesperproc, commonly 10240, giving a floor near 6144) the private band lands INSIDE
+    // 0..HL_NFD, and this listing has always published it, because eventfd_hidden_peer_fd() is its only
+    // filter. That exposure predates this change and is untouched by it -- the bound and the filter are
+    // both carried over verbatim -- but it is worth someone's attention, and it cannot be confirmed from
+    // this box (no macOS host is reachable from the x86_64 Linux dev box).
+    //
+    // The HL_HOST_PROCESS_FD_ENGINE_PRIVATE flag the enumeration also carries is deliberately NOT
+    // consulted, even though it would close exactly that hole, because acting on it would conceal
+    // descriptors this listing shows today on every host. Changing what the guest observes is a separate
+    // claim needing its own evidence, and it is out of scope for a cost change.
     //
     // Creation ORDER is not a guest-visible property to preserve, and measuring said so before this was
     // written: the placeholder directory lives on an ext4 htree /tmp, so the order a guest's own readdir
