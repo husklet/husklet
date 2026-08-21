@@ -95,6 +95,12 @@ struct AppConfig {
     overview_pane: Option<String>,
     screenshot: Option<String>,
     screenshot_ms: u64,
+    /// Debug: where to write what every pane is showing, as text (`HL_TERM_TEXT`).
+    pane_text: Option<String>,
+    /// Debug: keystrokes to write into a pane's tty, as `<ms>:<bytes>` chunks (`HL_TERM_SCRIPT`).
+    script: Option<String>,
+    /// Debug: a grid geometry to apply to every pane, as `<ms>:<columns>x<rows>` (`HL_TERM_RESIZE`).
+    resize: Option<String>,
     environment: host::environment::Environment,
     home: std::path::PathBuf,
 }
@@ -113,6 +119,9 @@ impl AppConfig {
             typed_text: std::env::var("HL_TERM_TYPE").ok(),
             overview_pane: std::env::var("HL_TERM_OVERVIEW_PAGE").ok(),
             screenshot: std::env::var("HL_TERM_SHOT").ok(),
+            pane_text: std::env::var("HL_TERM_TEXT").ok(),
+            script: std::env::var("HL_TERM_SCRIPT").ok(),
+            resize: std::env::var("HL_TERM_RESIZE").ok(),
             screenshot_ms: std::env::var("HL_TERM_SHOT_MS")
                 .ok()
                 .and_then(|value| value.parse().ok())

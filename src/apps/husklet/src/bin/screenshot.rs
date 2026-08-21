@@ -7,6 +7,7 @@
 use gtk::gdk;
 use gtk::glib;
 use gtk::prelude::*;
+use vte4::prelude::*;
 
 use crate::AppConfig;
 
@@ -26,6 +27,7 @@ impl Screenshot {
         let ms = AppConfig::get().screenshot_ms;
         let win = window.clone();
         glib::timeout_add_local_once(std::time::Duration::from_millis(ms), move || {
+            Self::write_pane_text(&win);
             Self::capture(&win, &path);
             let application = win.application();
             win.close();
@@ -33,6 +35,37 @@ impl Screenshot {
                 application.quit();
             }
         });
+    }
+
+    /// Debug: with `HL_TERM_TEXT=<path>`, write what every pane in this window is
+    /// showing, as text, beside the PNG.
+    ///
+    /// A screenshot proves pixels were produced; it cannot say which glyphs they
+    /// are without a human or an OCR pass. This reads the same grid VTE drew from,
+    /// so a headless run can assert on the output of a command it typed.
+    fn write_pane_text(window: &gtk::ApplicationWindow) {
+        let Some(path) = AppConfig::get().pane_text.clone() else {
+            return;
+        };
+        let mut panes = Vec::new();
+        crate::screens::workspace::terminal::PaneView::all(window.upcast_ref::<gtk::Widget>(), &mut panes);
+        let mut text = String::new();
+        for (index, pane) in panes.iter().enumerate() {
+            let (rows, _older) = crate::screens::workspace::terminal::Terminal::new(pane).tail(400);
+            text.push_str(&format!(
+                "--- pane {index} grid {}x{} ---\n",
+                pane.column_count(),
+                pane.row_count()
+            ));
+            for row in rows {
+                text.push_str(&row);
+                text.push('\n');
+            }
+        }
+        match std::fs::write(&path, text) {
+            Ok(()) => eprintln!("[husklet] wrote pane text {path} ({} panes)", panes.len()),
+            Err(error) => eprintln!("[husklet] pane text write failed for {path}: {error}"),
+        }
     }
 
     fn capture(window: &gtk::ApplicationWindow, path: &str) {

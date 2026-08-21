@@ -517,6 +517,42 @@ impl Window {
         window.present();
         host::appearance::Appearance::apply();
         Screenshot::schedule(&window, "terminal");
+        Self::schedule_resize(&window);
+    }
+
+    /// Debug: `HL_TERM_RESIZE=<ms>:<width>x<height>` resizes this window, in pixels, at
+    /// that offset from opening.
+    ///
+    /// This is the resize a developer performs by dragging the window edge, on a host
+    /// with no window manager to drag it with. It deliberately resizes the *window*
+    /// rather than calling `set_size` on the panes: a pane is `hexpand`/`vexpand` inside
+    /// its layout, so a grid set directly is overwritten by the next allocation and the
+    /// tty never learns anything -- measured, the guest still reported the old geometry
+    /// while the hook reported success.
+    fn schedule_resize(window: &gtk::ApplicationWindow) {
+        let Some(request) = AppConfig::get().resize.clone() else {
+            return;
+        };
+        let Some((offset, geometry)) = request.split_once(':') else {
+            return;
+        };
+        let Some((width, height)) = geometry.split_once('x') else {
+            return;
+        };
+        let (Ok(offset), Ok(width), Ok(height)) = (offset.parse::<u64>(), width.parse::<i32>(), height.parse::<i32>())
+        else {
+            return;
+        };
+        let window = window.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(offset), move || {
+            window.set_default_size(width, height);
+            let mut panes = Vec::new();
+            PaneView::all(window.upcast_ref::<gtk::Widget>(), &mut panes);
+            eprintln!(
+                "[husklet] resized the window to {width}x{height} px over {} pane(s)",
+                panes.len()
+            );
+        });
     }
 }
 
