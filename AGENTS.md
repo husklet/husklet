@@ -198,21 +198,67 @@ nix develop -c env \
 `HL_TERM_VIEW` picks the surface (`manager`, `terminal`, `newws`) and the shot fires only for
 the window it names. `HL_TERM_WS=<name>` selects a workspace from `$HOME/.hl/workspaces.conf`,
 and `HL_TERM_TABS=N`, `HL_TERM_SPLIT=h|v`, `HL_TERM_TYPE=<text>`, `HL_TERM_OVERVIEW`,
-`HL_TERM_OVERVIEW_PAGE` and `HL_TERM_DEBUG_LOG=<path>` drive it further. `storybook` carries
-the same hook under `STORYBOOK_SHOT`/`STORYBOOK_SHOT_MS`. Verified on x86_64 Linux at
-ad652522d: the manager window, the New-Workspace dialog, a terminal window with three tabs,
-a vertical split and typed text queued into both panes, and all 11 storybook stories
-(291 widgets).
+`HL_TERM_OVERVIEW_PAGE` and `HL_TERM_DEBUG_LOG=<path>` drive it further.
 
-Four things to know before you trust — or debug — this loop:
+A screenshot proves a window produced pixels. It cannot say which glyphs they are, cannot
+send a keystroke *while something is already running*, and cannot resize anything — so
+three further hooks carry the loop the rest of the way:
 
-- The terminal panes reach `workspace launch started` and show the "not live yet"
-  placeholder. Entering the image needs an OCI pull, which this loop does not do — so the
-  screenshot proves the toolkit, the pty spawn and the worker re-exec, not the container.
+- `HL_TERM_TEXT=<path>` writes what every pane is showing, as text, beside the PNG. This
+  is the assertable artefact: a screenshot needs a human or an OCR pass, a grid extraction
+  can be grepped for the output of a command the run typed.
+- `HL_TERM_SCRIPT=<ms>:<bytes>` chunks, separated by **ASCII RS (0x1e)**, write each
+  payload into a pane's tty at its own offset from launch, verbatim and with no newline
+  appended. A control byte is spelled by putting the control byte in the variable, which
+  is how a Ctrl-C is delivered mid-command. The separator is not printable because every
+  printable candidate — `|` above all — is something a real command line contains.
+- `HL_TERM_RESIZE=<ms>:<width>x<height>` resizes the **window**, in pixels. Do not
+  "simplify" this to `set_size` on the panes: a pane is `hexpand`/`vexpand`, the next
+  allocation overwrites the grid, and the guest goes on reporting the old geometry while
+  the hook reports success. That was measured here before it was fixed.
+
+`storybook` carries the same hook under `STORYBOOK_SHOT`/`STORYBOOK_SHOT_MS`.
+Verified on x86_64 Linux at ad652522d: the manager window, the New-Workspace dialog,
+a terminal window with three tabs, a vertical split and typed text queued into both
+panes, and all 11 storybook stories (291 widgets).
+
+Six things to know before you trust — or debug — this loop:
+
+- The terminal panes **do** enter the image, and the loop reaches a live shell. The
+  earlier note here said an OCI pull was out of reach and the screenshot therefore proved
+  only the toolkit; that was true of a run with no workspace configured. Write one into
+  `$HOME/.hl/workspaces.conf` (`name`/`image`/`arch`, three lines) and the pane's worker
+  starts the per-workspace domain, pulls the image and attaches a container exec:
+  measured 2026-08-21 on `naa0245` at 2b2cd63cf, ~20 s from launch to a prompt on the
+  first run including the pull of `alpine:3.20`, ~5 s once the domain is warm. Point
+  `HOME` at a scratch directory — `~/.hl` is shared with every other lane's tests.
 - `GTK_A11Y=none` only silences an `org.a11y.Bus` warning on a box with no accessibility
   bus. It is noise, not a failure.
-- `cargo test -p husklet --bins --features gui` needs **no** display at all. Do not add
-  `xvfb-run` to the test gate to "fix" something; the suite never opens one.
+- **The guest's terminal echoes every typed line twice, and this is not the toolkit.**
+  Measured 2026-08-21 at 2b2cd63cf against a live `alpine:3.20` workspace: every command
+  line appears once as busybox `ash`'s line editor draws it and again after the newline,
+  and each prompt carries a visible `^[[N;5R` — VTE's answer to the `ESC[6n` the editor
+  sends, echoed back as though it had been typed. The host pty is not the culprit;
+  `stty -a -F /dev/pts/N` on the live pane reports `-isig -icanon -echo`. The same
+  busybox binary, extracted from the same image layer and run under `chroot` on this
+  host's own kernel through a real pty, echoes each line exactly **once**. And the
+  guest's own termios is not simply ignored: `stty -echo` inside the container is
+  read back as `-echo` and the *second* copy stops. What is not honoured is the
+  raw-mode `tcsetattr` a line editor performs immediately before the read it is about
+  to do — which is what every interactive shell does on every prompt. It belongs to the
+  engine's line discipline, not to `hl-gui-gtk` or the `husklet` bins.
+- `cargo test -p husklet --bins --features gui` needs no display **to run**, and two of
+  its tests need one **to mean anything**. Measured 2026-08-21 on this box, both ways:
+  **`running 88 tests` / `88 passed` in both**, and only the display-less run prints
+  `skipped: no display connection`. The count cannot tell them apart, which is why this
+  has survived — `test_support::on_the_toolkit_thread` answers `false`, both callers say
+  they skipped, and between them 19 scenarios do not execute. Under
+  `xvfb-run -a -s '-screen 0 1600x1000x24' -- cargo test …` the skip lines are gone and
+  all 88 pass. Proven non-vacuous by planting a false assertion in one of those
+  scenarios: **87 passed / 1 failed under `xvfb-run`, 88 passed without a display.**
+  Wrapping the CI step is a decision for whoever owns the workflow, not a repair to make
+  silently — but do not read that step's green as covering the extension page or the
+  extension shelf until it is.
 - `TermConfig::default().font_family` is `Menlo`, which exists only on macOS. On Linux
   Pango falls back and VTE takes its cell metrics from the fallback, so the grid renders
   visibly letter-spaced until a workspace sets `font_family` to a font the host has
@@ -297,12 +343,22 @@ Enter the pinned shell with `nix develop` before running `cargo clippy` or
 `cargo fmt`. Two lanes have now reported the E0514 as a mysterious failure of
 their own change.
 
-### A real Docker is reachable — use `sudo -n docker`
+### Docker is NOT reachable on this host
 
-Several lanes have reported "no live baseline available" and fallen back to the
-documented API. The socket is `root:docker` and our uid is not in the group, so
-an unprivileged probe genuinely is denied — but **`sudo -n docker` works**, and
-Docker 29.1.3 is running on this box.
+**Corrected 2026-08-21.** This section used to say `sudo -n docker` works and
+Docker 29.1.3 is running. That was true of the macOS machine the project was
+developed on until 2026-08-20. On `naa0245`, the x86_64 Linux box, **Docker is
+not installed at all**: no `docker` binary, no `dockerd` binary, no socket, and
+`systemctl is-active docker` answers `inactive`. Verify before you rely on it
+rather than trusting either version of this paragraph.
+
+An end-to-end lane found this after being sent to it by these instructions. Any
+lane told to measure the real daemon as an oracle **cannot**, and must say so
+instead of quietly substituting the documentation.
+
+The findings below were measured against the real Docker on the macOS host and
+remain valid as observations of Docker's behaviour. They are **history, not
+something you can reproduce here.**
 
 That matters because Docker's documentation is thinner than its behavior. Probing
 it directly produced findings no spec would have given: `"TERM "` with trailing
@@ -1129,6 +1185,39 @@ refuses this case at the moment it happens — it recomputes the fingerprint aft
 linking and fails with both values if the sources moved under it — so the mixed
 artifact is never handed to a lane as a silent one.
 
+## A mechanism number and a workload number are different claims
+
+A lane bounded a scan and a `/proc/<pid>/fdinfo` listing went from 43.1 billion
+user instructions to 177 million -- **243x**. That figure was then repeated as
+though the product had got 243 times faster at something. It had not. It is the
+cost of the *mechanism*: what that path costs when you run it and nothing else.
+
+What a developer feels is the *workload* number -- the same fix measured inside a
+real program, where the mechanism is one component among many and is diluted by
+everything around it. On this host the surrounding guest code carries roughly
+1,000x of interpretation, so a 243x mechanism win can show up end-to-end as
+almost nothing.
+
+**Both numbers are true and neither substitutes for the other.** A diluted
+end-to-end result is not a failure to reproduce the mechanism result; it is the
+second half of the finding, and the ratio between them tells you how much of its
+time a real workload actually spends on that path. Report both, and say which
+each one is. A mechanism number quoted as a product improvement is the most
+flattering way there is to be wrong.
+
+## Say what you expect before you measure it
+
+The lane that drew the distinction above also wrote down, *before building its
+probe*, that it expected the end-to-end figure to come in far under 243x and
+why. Stated in advance that is a prediction and the measurement can refute it.
+Stated afterwards, the identical sentence is a rationalisation, and nothing in
+the result can tell the two apart -- including for the person who wrote it.
+
+This costs one sentence and it is worth taking every time a result could be
+argued either way. It also protects a *surprising* result: a number you
+predicted and got is evidence, where the same number produced by a lane that
+would have explained any outcome is not.
+
 ## A control that merely seems unaffected is not a control
 
 Disable the code path in both binaries and measure that. Anything weaker is a
@@ -1855,6 +1944,17 @@ a control that *had* to fail, and noticed it hadn't.
 A skip is not a pass. If a test cannot run here, it must say so out loud: the
 harness shows captured output only for failing tests, so an unrun arm otherwise
 looks exactly like a passing one.
+
+**When the thing you are varying is the environment, run the test binary
+directly.** A lane probing whether a test survives without a CA store got `ok`
+from `nix develop -c env ... cargo test`, and `0 passed; 1 failed` -- four times
+out of four, in two working directories -- from the same test's binary invoked
+directly. Two spellings of one command disagreed and only one was true. A
+`cargo test` wrapper stands between you and the process you believe you are
+configuring: it re-execs, it can re-resolve features, and it does not promise to
+hand your environment to the test unchanged. The direct run is the trustworthy
+one, and the lane caught this only because it re-ran a result it found
+surprising rather than reporting the first answer.
 
 **Count the summary line, not the `FAILED` lines.** `grep -c '\.\.\. FAILED'`
 is not a failure count. A test that re-execs itself has a child that prints its
