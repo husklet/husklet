@@ -1303,3 +1303,41 @@ async fn a_drained_container_stream_implies_a_published_exit() {
         "the stream ended before the exit was published: {state:?}"
     );
 }
+
+/// The stand-in status a failed runtime wait records carries no cause: `-1`, `0` and `Unknown` are
+/// the values the record writes when nothing is known, so an inspected container that could not be
+/// waited on looks identical to one whose guest faulted without a diagnostic. The runtime's own text
+/// was reachable only through `wait` -- which a caller inspecting a stopped container never calls --
+/// and reading it otherwise meant planting a probe in the crate, which several lanes have now done.
+#[tokio::test]
+async fn a_failed_runtime_wait_publishes_its_reason_on_the_inspected_record() {
+    let runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.fail_wait.store(true, Ordering::SeqCst);
+    let containers = test_containers(Arc::new(Memory::default()), Arc::new(runtime))
+        .await
+        .unwrap();
+    containers.create(spec("runtime-diagnostic-inspect")).await.unwrap();
+    containers.start("runtime-diagnostic-inspect").await.unwrap();
+    assert!(containers.wait("runtime-diagnostic-inspect").await.is_err());
+
+    let record = containers.inspect("runtime-diagnostic-inspect").await.unwrap();
+    assert!(
+        matches!(
+            record.state,
+            ContainerState::Exited {
+                result: ExitStatus::Fault {
+                    status: -1,
+                    detail: 0,
+                    reason: crate::FaultCause::Unknown
+                },
+                ..
+            }
+        ),
+        "{:?}",
+        record.state
+    );
+    assert_eq!(
+        record.runtime_diagnostic(),
+        Some("runtime failed: injected wait failure")
+    );
+}
