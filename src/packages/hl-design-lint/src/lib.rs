@@ -144,7 +144,19 @@ impl Linter {
             for finding in &findings {
                 reporter.finding(finding)?;
             }
-            summaries.push(Summary::new(rule.id(), severity, &findings));
+            let diagnostics = rule.diagnostics();
+            if diagnostics.is_empty() {
+                summaries.push(Summary::new(rule.id(), severity, &findings));
+                continue;
+            }
+            for diagnostic in diagnostics {
+                let reported: Vec<Finding> = findings
+                    .iter()
+                    .filter(|finding| finding.rule == *diagnostic)
+                    .cloned()
+                    .collect();
+                summaries.push(Summary::new(diagnostic, severity, &reported));
+            }
         }
         reporter.finish(&summaries)?;
         Ok(summaries)
@@ -263,7 +275,9 @@ mod tests {
             "c-ignored-result",
             "c-safety-rationale",
             "c-unchecked-allocation",
-            "c-source-structure",
+            "c-file-length",
+            "c-function-length",
+            "c-maximum-nesting",
             "c-source-policy",
             "c-test-only-state",
         ];
@@ -326,7 +340,7 @@ fn caller() {
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
 
-        assert_eq!(summaries.len(), 49);
+        assert_eq!(summaries.len(), 51);
         assert!(
             reporter
                 .0
@@ -961,7 +975,7 @@ const PROSE: &str = "mod misc {}";
     }
 
     #[test]
-    fn c_structure_totals_length_and_depth_under_their_own_units() {
+    fn c_structure_totals_length_and_depth_under_their_own_diagnostics() {
         let mut source = String::from("int oversized(int x) {\n");
         for _ in 0..7 {
             source.push_str("  if (x) {\n");
@@ -973,9 +987,19 @@ const PROSE: &str = "mod misc {}";
             source.push_str("  }\n");
         }
         source.push_str("  return x;\n}\n");
+        // One analysis, two budgets that mean different things: totalling them together produced
+        // "2 error(s), 7 line(s) over budget, 1 level(s) over budget", a line naming neither defect.
         assert_eq!(
-            summary_line("c-source-structure", "oversized.c", &source),
-            "c-source-structure: 2 error(s), 7 line(s) over budget, 1 level(s) over budget"
+            summary_line("c-function-length", "oversized.c", &source),
+            "c-function-length: 1 error(s), 7 line(s) over budget"
+        );
+        assert_eq!(
+            summary_line("c-maximum-nesting", "oversized.c", &source),
+            "c-maximum-nesting: 1 error(s), 1 level(s) over budget"
+        );
+        assert_eq!(
+            summary_line("c-file-length", "oversized.c", &source),
+            "c-file-length: 0 error(s)"
         );
     }
 

@@ -4,15 +4,60 @@
 //! every component, property, and style value has to survive the round trip
 //! unchanged. These run only with the optional `wire` feature; without it the
 //! library stays dependency-free.
+//!
+//! # Which invocations actually run these
+//!
+//! `wire` is not a default feature, so a per-package run compiles the eight tests
+//! below out and reports `running 0 tests ... ok`. That is an empty target, not a
+//! pass, and the two are indistinguishable because libtest shows captured output
+//! only for tests that fail. Measured on `x86_64` Linux at 641d3f580:
+//!
+//! ```text
+//! cargo test -p hl-gui --test wire ................... 0 tests
+//! cargo test -p hl-gui --all-features --test wire .... 8 tests
+//! cargo test -p hl-gui -p hl-extension --test wire ... 8 tests
+//! ```
+//!
+//! The third reading is why these are not uncovered. `hl-extension` and the
+//! extension application both depend on `hl-gui` with `features = ["wire"]`, so
+//! Cargo unifies `wire` on for every package selection that also builds one of
+//! them -- including the `cargo test --workspace --all-targets` that the
+//! `nix flake check` verification derivation runs. The eight tests run there.
+//!
+//! That coverage is real but incidental: it holds only while some other workspace
+//! member happens to want `wire`, and nothing asserts that it does. The feature
+//! itself is deliberately optional -- keeping the library dependency-free for an
+//! embedding application is the manifest's stated reason for it -- so the honest
+//! disposition is not to force `wire` on, but to stop the compiled-out case from
+//! impersonating a passing one. That is what the notice below is for.
 
-#![cfg(feature = "wire")]
+/// Says out loud that this target compiled to zero round-trip tests.
+///
+/// libtest captures `print!` and `eprint!` and reveals the capture only for tests
+/// that fail, so a notice written through those macros is discarded on the green
+/// path this test always takes. The standard-error handle is written directly
+/// instead, which bypasses the capture for the same reason the rest of the
+/// repository reaches for `libc::write(2, ...)`; `hl-gui` carries no `libc`
+/// dependency and does not need one to do it.
+#[cfg(not(feature = "wire"))]
+#[test]
+fn the_wire_round_trips_are_compiled_out_without_the_wire_feature() {
+    use std::io::Write as _;
+    let _ = std::io::stderr().write_all(
+        b"SKIP: hl-gui/tests/wire.rs compiled to zero round-trip tests because the `wire` \
+feature is off. Run `cargo test -p hl-gui --all-features`, or any package selection that \
+also builds hl-extension, to exercise the eight tests this file holds.\n",
+    );
+}
 
+#[cfg(feature = "wire")]
 use hl_gui::{
     Align, Cell, Column, Density, EventId, Frame, Handler, Length, NodeId, Orientation, Patch, Prop, PropValue,
     RequestId, Row, RowRange, RowRequest, RowWindow, Scale, SourceId, SourceMutation, Surface, Tag, Theme, Tone,
     Trigger, Version,
 };
 
+#[cfg(feature = "wire")]
 fn round_trip<T>(value: &T) -> T
 where
     T: serde::Serialize + serde::de::DeserializeOwned,
@@ -21,6 +66,7 @@ where
     serde_json::from_str(&encoded).expect("deserialized")
 }
 
+#[cfg(feature = "wire")]
 #[test]
 fn every_component_tag_survives_the_wire() {
     for tag in Tag::ALL {
@@ -32,6 +78,7 @@ fn every_component_tag_survives_the_wire() {
     }
 }
 
+#[cfg(feature = "wire")]
 #[test]
 fn every_property_value_shape_survives_the_wire() {
     let values = [
@@ -59,6 +106,7 @@ fn every_property_value_shape_survives_the_wire() {
     }
 }
 
+#[cfg(feature = "wire")]
 #[test]
 fn every_property_name_survives_the_wire() {
     for prop in [
@@ -88,6 +136,7 @@ fn every_property_name_survives_the_wire() {
     }
 }
 
+#[cfg(feature = "wire")]
 #[test]
 fn every_mutation_shape_survives_the_wire() {
     let patches = [
@@ -134,6 +183,7 @@ fn every_mutation_shape_survives_the_wire() {
     }
 }
 
+#[cfg(feature = "wire")]
 #[test]
 fn a_composed_interface_survives_the_wire_whole() {
     let mut surface = Surface::new();
@@ -165,6 +215,7 @@ fn a_composed_interface_survives_the_wire_whole() {
     );
 }
 
+#[cfg(feature = "wire")]
 #[test]
 fn an_applied_wire_frame_produces_the_same_tree_as_a_local_one() {
     let mut surface = Surface::new();
@@ -186,6 +237,7 @@ fn an_applied_wire_frame_produces_the_same_tree_as_a_local_one() {
     assert_eq!(local.root().children, remote.root().children);
 }
 
+#[cfg(feature = "wire")]
 #[test]
 fn row_data_survives_the_wire() {
     let window = RowWindow {
@@ -228,6 +280,7 @@ fn row_data_survives_the_wire() {
     assert_eq!(round_trip(&mutation), mutation);
 }
 
+#[cfg(feature = "wire")]
 #[test]
 fn a_theme_survives_the_wire() {
     let theme = Theme::dark();
@@ -237,8 +290,10 @@ fn a_theme_survives_the_wire() {
 }
 
 /// A renderer that records nothing, for tests that only care about the tree.
+#[cfg(feature = "wire")]
 struct Ignore;
 
+#[cfg(feature = "wire")]
 impl hl_gui::Renderer for Ignore {
     type Error = std::convert::Infallible;
 

@@ -12,6 +12,11 @@ const NESTING: usize = 6;
 /// Reports oversized C files, functions, and control-flow nesting from an embedded C syntax tree.
 pub struct Structure;
 
+/// The three independent budgets this one analysis measures. They share a parse and nothing else:
+/// a 1932-line file and a 239-line function are different defects with different remedies, and
+/// totalling their excesses together produced a roll-up figure that named neither.
+const DIAGNOSTICS: [&str; 3] = ["c-file-length", "c-function-length", "c-maximum-nesting"];
+
 impl Rule for Structure {
     fn id(&self) -> &'static str {
         "c-source-structure"
@@ -19,6 +24,10 @@ impl Rule for Structure {
 
     fn severity(&self) -> Severity {
         Severity::Error
+    }
+
+    fn diagnostics(&self) -> &'static [&'static str] {
+        &DIAGNOSTICS
     }
 
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
@@ -40,7 +49,7 @@ fn analyze(path: &Path, text: &str) -> Result<Vec<Finding>> {
         findings.push(metric(path, 1, 1, "file length", effective, FILE_LINES));
     }
     visit_functions(tree.root_node(), &clean, path, &mut findings);
-    let rules = BTreeSet::from(["c-file-length", "c-function-length", "c-maximum-nesting"]);
+    let rules = BTreeSet::from(DIAGNOSTICS);
     Ok(suppression::apply(
         path,
         text,

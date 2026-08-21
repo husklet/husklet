@@ -106,7 +106,11 @@ impl Credentials {
     }
 }
 
-#[cfg(test)]
+// These exercise `Credentials::decode`, which the `runtime` feature gates, so the
+// module needs the same gate -- the shape `api/model/filesystem.rs` already uses.
+// Without it `cargo check -p hl-daemon --no-default-features --all-targets` fails in
+// the LIB TEST, which no `required-features` key can express.
+#[cfg(all(test, feature = "runtime"))]
 mod tests {
     use super::*;
     use base64::Engine as _;
