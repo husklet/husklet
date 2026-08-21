@@ -37,6 +37,7 @@ impl Launch<'_> {
         });
         self.watch_child(child);
         self.schedule_typed_text();
+        self.schedule_script();
     }
 
     fn watch_child(&self, child: i32) {
@@ -54,6 +55,37 @@ impl Launch<'_> {
             }
             PaneView::new(&window, &terminal).close();
         });
+    }
+
+    /// Debug: `HL_TERM_SCRIPT=<ms>:<bytes>` chunks, separated by ASCII RS (0x1e), write
+    /// each payload into this pane's tty at its own offset from launch.
+    ///
+    /// `HL_TERM_TYPE` can only send one line at one moment, which cannot express the
+    /// two things a terminal is judged on: a keystroke that arrives while something is
+    /// already running (Ctrl-C is a byte, and it only means anything mid-command), and
+    /// a second command that must be read after the first has finished. The payload is
+    /// written verbatim -- no newline is appended -- so a control byte is spelled by
+    /// putting the control byte in the variable. The separator is the record separator
+    /// rather than a printable character because every printable candidate -- `|` above
+    /// all -- is something a developer's command line legitimately contains, and a
+    /// separator that can appear inside a payload silently truncates the scenario.
+    fn schedule_script(&self) {
+        let Some(script) = AppConfig::get().script.clone() else {
+            return;
+        };
+        for chunk in script.split('\u{1e}') {
+            let Some((offset, payload)) = chunk.split_once(':') else {
+                continue;
+            };
+            let Ok(offset) = offset.parse::<u64>() else {
+                continue;
+            };
+            let terminal = self.terminal.clone();
+            let payload = payload.to_owned();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(offset), move || {
+                terminal.feed_child(payload.as_bytes());
+            });
+        }
     }
 
     fn schedule_typed_text(&self) {

@@ -33,6 +33,11 @@ readme = "../../../README.md"
 # while `runtime` remains in `default`. If you take it out, these seven need a
 # `--features runtime` invocation somewhere or they stop being run at all.
 [[test]]
+name = "absent_ca_store"
+path = "tests/absent_ca_store.rs"
+required-features = ["runtime"]
+
+[[test]]
 name = "builtin_network"
 path = "tests/builtin_network.rs"
 required-features = ["runtime"]

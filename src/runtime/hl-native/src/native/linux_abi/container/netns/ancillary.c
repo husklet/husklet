@@ -828,7 +828,7 @@ static int cmsg_import_eventfd_trailer(int *fds, int nfds) {
         struct hl_cmsg_eventfd_meta *m = &metas[i];
         int pub = fds[m->ordinal];
         if (pub >= 0 && pub < HL_NFD) {
-            g_eventfd_peer[pub] = h + 1;
+            eventfd_peer_bind(pub, h + 1);
             g_eventfd_cslot[pub] = (int)m->slot + 1;
             g_eventfd_sema[pub] = (uint8_t)(m->sema != 0);
             eventfd_guest_nb_set(pub, m->nb != 0); // carry the OFD-shared guest blocking intent
