@@ -99,7 +99,7 @@ struct AppConfig {
     pane_text: Option<String>,
     /// Debug: keystrokes to write into a pane's tty, as `<ms>:<bytes>` chunks (`HL_TERM_SCRIPT`).
     script: Option<String>,
-    /// Debug: a grid geometry to apply to every pane, as `<ms>:<columns>x<rows>` (`HL_TERM_RESIZE`).
+    /// Debug: window geometry in pixels, as `<ms>:<width>x<height>` (`HL_TERM_RESIZE`).
     resize: Option<String>,
     environment: host::environment::Environment,
     home: std::path::PathBuf,
