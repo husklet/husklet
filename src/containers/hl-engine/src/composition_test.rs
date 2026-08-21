@@ -243,8 +243,6 @@ fn rejects_terminal_before_native_construction() {
     let factory = Factory::new(Machine::default());
     let terminal = Terminal::new(Arc::new(TerminalPort), 24, 80).unwrap();
     let services = RuntimeServices {
-        activation: Arc::new(Channel::default()),
-        executable_authority: None,
         checkpoint_sink: None,
         checkpoint_source: None,
         streams: StandardStreams::default().with_terminal(terminal),

@@ -1,6 +1,6 @@
 use super::{
-    Arc, Container, ContainerState, Error, Io, JournalId, NetworkConfig, Notify, ProcessConfig, Result, Run, Running,
-    Service, Signal, now_ms,
+    Arc, Container, ContainerState, Error, JournalId, NetworkConfig, Notify, ProcessConfig, Result, Run, Running,
+    Service, now_ms,
 };
 use crate::service::{CheckpointConfig, MemberTerminal};
 
@@ -199,6 +199,9 @@ impl Service {
         let journal = JournalId::container(id.clone());
         let owner_service = Arc::clone(&service);
         let owner_journal = journal.clone();
+        // The generation this launch opened, kept so the completion path can close it. `own` no
+        // longer does: the stream must not end before the exit status is recorded.
+        let terminal = Arc::clone(&io);
         let owner = tokio::spawn(async move { owner_service.own(process, owner_journal, io, output_complete).await });
         let output_owner = Arc::new(super::OutputOwner {
             abort: owner.abort_handle(),
@@ -214,57 +217,11 @@ impl Service {
                 .and_then(std::convert::identity);
             service.retire_output_owner(&journal, &output_owner).await;
             service.finish(id, generation, result).await;
+            // `finish` closes this generation on the paths that publish an exit; this covers the
+            // ones that return early, so an attached session is never left waiting on a dead process.
+            service.retire_io_generation(&journal, &terminal).await;
         });
         Ok(())
-    }
-
-    async fn rollback_unpublished_launch(
-        self: &Arc<Self>,
-        id: crate::ContainerId,
-        process: Arc<dyn Running>,
-        journal: &JournalId,
-        io: &Arc<Io>,
-        publication: Error,
-    ) -> Error {
-        let mut cleanup = Vec::new();
-        if let Err(error) = process.signal(Signal::KILL).await {
-            cleanup.push(format!("kill failed: {error}"));
-        }
-        let mut wait = tokio::spawn(Arc::clone(&process).wait());
-        match tokio::time::timeout(unpublished_reap_timeout(), &mut wait).await {
-            Ok(Ok(Ok(_))) => {}
-            Ok(Ok(Err(error))) => {
-                let failure = format!("unpublished process reap failed: {error}");
-                self.poison_launch_cleanup(id.clone(), failure.clone()).await;
-                cleanup.push(failure);
-            }
-            Ok(Err(error)) => {
-                let failure = format!("unpublished reap task failed: {error}");
-                self.poison_launch_cleanup(id.clone(), failure.clone()).await;
-                cleanup.push(failure);
-            }
-            Err(_) => {
-                cleanup.push(format!("reap timed out after {:?}", unpublished_reap_timeout()));
-                let cleanup_task = tokio::spawn(settle_late_reap(Arc::downgrade(self), id.clone(), wait));
-                self.launch_cleanups
-                    .lock()
-                    .await
-                    .insert(id, cleanup_task.abort_handle());
-            }
-        }
-        self.retire_io_generation(journal, io).await;
-        if cleanup.is_empty() {
-            publication
-        } else {
-            Error::Runtime(format!(
-                "failed to persist start ({publication}); process cleanup also failed ({})",
-                cleanup.join("; ")
-            ))
-        }
-    }
-
-    async fn poison_launch_cleanup(&self, id: crate::ContainerId, failure: String) {
-        self.launch_cleanup_failures.lock().await.insert(id, failure);
     }
 
     pub(super) async fn launch_networks(&self, container: &Container) -> Result<Vec<NetworkConfig>> {
@@ -300,44 +257,4 @@ impl Service {
             .map(|run| Arc::clone(&run.process))
             .ok_or_else(|| Error::Corrupt(format!("active container {} has no owned process", container.id)))
     }
-}
-
-#[cfg(test)]
-fn unpublished_reap_timeout() -> std::time::Duration {
-    std::time::Duration::from_millis(25)
-}
-
-#[cfg(not(test))]
-fn unpublished_reap_timeout() -> std::time::Duration {
-    std::time::Duration::from_secs(5)
-}
-
-/// Records the outcome of an unpublished process whose reap outlived the rollback that started it.
-///
-/// The rollback could wait no longer, so this runs detached and reports through the service's
-/// poison ledger instead. A service that has been dropped has nobody left to report to.
-async fn settle_late_reap<T>(
-    service: std::sync::Weak<Service>,
-    id: crate::ContainerId,
-    wait: tokio::task::JoinHandle<Result<T>>,
-) {
-    let result = wait.await;
-    let Some(service) = service.upgrade() else {
-        return;
-    };
-    let _guard = service.operations.lock().await;
-    match result {
-        Ok(Ok(_)) => {}
-        Ok(Err(error)) => {
-            service
-                .poison_launch_cleanup(id.clone(), format!("unpublished process reap failed: {error}"))
-                .await;
-        }
-        Err(error) => {
-            service
-                .poison_launch_cleanup(id.clone(), format!("unpublished reap task failed: {error}"))
-                .await;
-        }
-    }
-    service.launch_cleanups.lock().await.remove(&id);
 }

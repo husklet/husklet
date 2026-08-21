@@ -204,13 +204,20 @@ impl Changes {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::*;
+    #[cfg(unix)]
     use crate::{
         Leases,
         rootfs::Roots,
         snapshot::{Id, Snapshots},
     };
 
+    /// Unix only, and the platform is the subject rather than an incidental spelling: the case
+    /// builds a whiteout marker, an opaque-directory marker and a symlink, then asserts the `uid`,
+    /// `gid` and `mode` each resulting `Change` carries. Substituting a Windows symlink would keep
+    /// the file names and drop every field the assertion is about.
+    #[cfg(unix)]
     #[test]
     fn overlay_changes_merge_add_modify_whiteout_and_opaque_directory() {
         let root = tempfile::tempdir().unwrap();
@@ -317,5 +324,22 @@ mod tests {
                 .any(|entry| entry.0 == Path::new("owner") && entry.1 == 2 && entry.2 == 2)
         );
         assert!(!entries.iter().any(|entry| entry.0 == Path::new("keep")));
+    }
+
+    /// Says out loud that this module compiled to zero cases.
+    ///
+    /// libtest captures `print!` and `eprint!` and reveals the capture only for a FAILING test, so
+    /// a notice written through those macros is discarded on the green path this one always takes.
+    /// The standard-error handle is written directly instead, the way `hl-gui`'s `wire` notice does
+    /// it -- `hl-images` carries no `libc` dependency and does not need one for this.
+    #[cfg(not(unix))]
+    #[test]
+    fn the_overlay_change_merge_is_uncovered_on_this_host() {
+        use std::io::Write as _;
+        let _ = std::io::stderr().write_all(
+            b"SKIP: hl-images rootfs::tree compiled to zero cases. Its one case builds overlay \
+whiteout and opaque markers and a symlink, and asserts the POSIX uid, gid and mode of every \
+resulting Change; this host carries none of them.\n",
+        );
     }
 }

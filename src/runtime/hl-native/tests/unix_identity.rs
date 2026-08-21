@@ -9,40 +9,71 @@
 
 #![allow(unsafe_code)]
 
+#[cfg(unix)]
 use std::ffi::OsStr;
+#[cfg(unix)]
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::mem::{offset_of, size_of};
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
 const PREPARE: u32 = 0;
+#[cfg(unix)]
 const IDENTIFY: u32 = 1;
+#[cfg(unix)]
 const FAILED: u32 = 2;
+#[cfg(unix)]
 const RESET: u32 = 3;
+#[cfg(unix)]
 const PRIVATE_PREPARE: u32 = 4;
+#[cfg(unix)]
 const IN_PROGRESS: u32 = 5;
+#[cfg(unix)]
 const ASYNC_FAILED: u32 = 6;
+#[cfg(unix)]
 const CHECKPOINT_ADMIT: u32 = 8;
+#[cfg(unix)]
 const INITIALIZE_ALIAS: u32 = 9;
+#[cfg(unix)]
 const SNAPSHOT: u32 = 10;
+#[cfg(unix)]
 const INITIALIZE_PAIR_END: u32 = 11;
+#[cfg(unix)]
 const SHUTDOWN_READ: u32 = 12;
+#[cfg(unix)]
 const SHUTDOWN_WRITE: u32 = 13;
+#[cfg(unix)]
 const SHUTDOWN_BOTH: u32 = 14;
+#[cfg(unix)]
 const CONNECTED: u32 = 7;
+#[cfg(unix)]
 const PREPARE_MINTED: u32 = 15;
+#[cfg(unix)]
 const IDENTIFY_MINTED: u32 = 16;
 
+#[cfg(unix)]
 const LOCAL_HIDDEN: u32 = 1;
+#[cfg(unix)]
 const PEER_HIDDEN: u32 = 2;
+#[cfg(unix)]
 const RECIPROCITY_REQUIRED: u32 = 4;
+#[cfg(unix)]
 const CONNECTING: u32 = 8;
+#[cfg(unix)]
 const READ_CLOSED: u32 = 32;
+#[cfg(unix)]
 const WRITE_CLOSED: u32 = 64;
 
 /// An `AF_UNIX` stream socket that exists and is not yet named, connected, or listening.
+#[cfg(unix)]
 fn socket() -> UnixStream {
     // SAFETY: `socket(2)` reads no caller memory and returns either a descriptor this process is the sole
     // owner of or -1, which the assertion rejects before the integer reaches `from_raw_fd`. Ownership
@@ -55,6 +86,7 @@ fn socket() -> UnixStream {
     UnixStream::from(descriptor)
 }
 
+#[cfg(unix)]
 fn address(name: &[u8], abstract_name: bool) -> (libc::sockaddr_un, libc::socklen_t) {
     // SAFETY: `sockaddr_un` is a C aggregate of an integer family, an integer array, and -- on Darwin
     // only -- a `sun_len` byte. It holds no pointer and no field whose zero value is invalid, so all-zero
@@ -78,8 +110,10 @@ fn address(name: &[u8], abstract_name: bool) -> (libc::sockaddr_un, libc::sockle
 /// The two syscalls that hand an existing descriptor a `sockaddr_un`. They take one argument list and
 /// carry one safety obligation between them, so they are called through one place rather than through
 /// two blocks whose rationale would be the same sentence twice.
+#[cfg(unix)]
 type AddressCall = unsafe extern "C" fn(libc::c_int, *const libc::sockaddr, libc::socklen_t) -> libc::c_int;
 
+#[cfg(unix)]
 fn apply_address(syscall: AddressCall, descriptor: i32, address: &libc::sockaddr_un, length: libc::socklen_t) -> i32 {
     // SAFETY: `address` is borrowed for the whole call and both syscalls copy out of it rather than
     // retaining it, so nothing outlives the borrow. `length` is the value `address()` computed for THAT
@@ -88,11 +122,13 @@ fn apply_address(syscall: AddressCall, descriptor: i32, address: &libc::sockaddr
     unsafe { syscall(descriptor, std::ptr::from_ref(address).cast(), length) }
 }
 
+#[cfg(unix)]
 fn bind(descriptor: i32, address: &libc::sockaddr_un, length: libc::socklen_t) {
     let status = apply_address(libc::bind, descriptor, address, length);
     assert_eq!(status, 0, "bind: {}", std::io::Error::last_os_error());
 }
 
+#[cfg(unix)]
 fn connect(descriptor: i32, address: &libc::sockaddr_un, length: libc::socklen_t) -> i32 {
     apply_address(libc::connect, descriptor, address, length)
 }
@@ -103,8 +139,10 @@ fn connect(descriptor: i32, address: &libc::sockaddr_un, length: libc::socklen_t
 /// this repository turned a red into an infinite gate. A connector that dies before it dials -- which is
 /// exactly what a broken identity assertion in the child looks like -- must fail this test with a
 /// message, not hang the whole `cargo test -p hl-native --all-targets` run forever.
+#[cfg(unix)]
 const CONNECTOR_DEADLINE: Duration = Duration::from_secs(20);
 
+#[cfg(unix)]
 fn accept_within(listener: &UnixListener, deadline: Duration) -> Result<UnixStream, String> {
     listener
         .set_nonblocking(true)
@@ -132,8 +170,10 @@ fn accept_within(listener: &UnixListener, deadline: Duration) -> Result<UnixStre
 /// path. Leaving it to `Child`'s drop closes the read end of its stdout pipe while the child is still
 /// printing, and the child then dies of `failed printing to stdout: Broken pipe` -- destroying the
 /// diagnostic that says why the parent's own assertion failed. Observed on both connectors here.
+#[cfg(unix)]
 struct Connector(Option<std::process::Child>);
 
+#[cfg(unix)]
 impl Connector {
     fn spawn(mut command: std::process::Command) -> Self {
         Self(Some(
@@ -176,17 +216,20 @@ impl Connector {
     }
 }
 
+#[cfg(unix)]
 impl Drop for Connector {
     fn drop(&mut self) {
         let _ = self.finish(Duration::ZERO);
     }
 }
 
+#[cfg(unix)]
 fn identity(isa: u32, operation: u32, descriptor: i32, object: u64) -> (u64, u64, u32) {
     hl_native::unix_identity_test(isa, operation, descriptor, object)
         .unwrap_or_else(|status| panic!("ISA {isa} identity operation {operation} failed at {status}"))
 }
 
+#[cfg(unix)]
 fn reciprocal_connection(isa: u32, listener: &UnixListener, address: &libc::sockaddr_un, length: libc::socklen_t) {
     let client = socket();
     let client_object = 0x1000_0000_0000_0000_u64 | u64::from(isa);
@@ -231,6 +274,7 @@ fn reciprocal_connection(isa: u32, listener: &UnixListener, address: &libc::sock
 
 /// A connector that has published its half and has not yet collected the acceptor's names no reciprocal
 /// peer at all, so no downstream join could ever discharge its obligation. It must fail closed here.
+#[cfg(unix)]
 #[test]
 fn an_unreciprocated_pathname_connector_is_refused_capture_on_both_isas() {
     for isa in [1, 2] {
@@ -256,6 +300,7 @@ fn an_unreciprocated_pathname_connector_is_refused_capture_on_both_isas() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn pathname_connect_and_accept_have_reciprocal_identity_on_both_isas() {
     for isa in [1, 2] {
@@ -282,6 +327,7 @@ fn abstract_connect_and_accept_have_reciprocal_identity_on_both_isas() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn refused_connect_withdraws_the_unaccepted_peer_on_both_isas() {
     for isa in [1, 2] {
@@ -302,6 +348,7 @@ fn refused_connect_withdraws_the_unaccepted_peer_on_both_isas() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn guest_bound_client_keeps_its_name_and_fails_closed_without_a_false_peer() {
     for isa in [1, 2] {
@@ -339,6 +386,7 @@ fn guest_bound_client_keeps_its_name_and_fails_closed_without_a_false_peer() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn dup_before_connect_shares_identity_and_capture_refusal_on_both_isas() {
     for isa in [1, 2] {
@@ -371,6 +419,7 @@ fn dup_before_connect_shares_identity_and_capture_refusal_on_both_isas() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn async_failure_withdraws_every_alias_transactionally_on_both_isas() {
     for isa in [1, 2] {
@@ -398,6 +447,7 @@ fn async_failure_withdraws_every_alias_transactionally_on_both_isas() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn capture_gate_distinguishes_private_connects_and_socketpairs_on_both_isas() {
     for isa in [1, 2] {
@@ -430,6 +480,7 @@ fn capture_gate_distinguishes_private_connects_and_socketpairs_on_both_isas() {
 ///
 /// Capture used to REFUSE either direction here, because the image had nowhere to put the mask and one
 /// refused descriptor fails the whole image. It carries the mask now, so admission is the assertion.
+#[cfg(unix)]
 #[test]
 fn shutdown_state_is_shared_by_aliases_and_is_admissible_on_both_isas() {
     for isa in [1, 2] {
@@ -472,6 +523,7 @@ fn shutdown_state_is_shared_by_aliases_and_is_admissible_on_both_isas() {
 /// The predecessor encoded `(client, server)` object ids directly into a world-writable
 /// `/tmp/.hl-ci-<client>-<server>` name and adopted whatever `getpeername()` parsed back out, which let a
 /// guest choose the identity that checkpoint restore topology is about to key on.
+#[cfg(unix)]
 #[test]
 fn a_forged_identity_name_is_never_adopted_on_both_isas() {
     let forged_client = 0x0bad_0000_0000_0001_u64;
@@ -539,10 +591,14 @@ fn a_forged_identity_name_is_never_adopted_on_both_isas() {
 /// The existing suite could not see it: `reciprocal_connection` runs both ends in one process, where a
 /// private table is still the same table. So this test re-executes the test binary as the connector and
 /// keeps only the acceptor here. The child shares nothing but the namespace key.
+#[cfg(unix)]
 const CROSS_PROCESS_SOCKET: &str = "HL_UNIX_IDENTITY_CROSS_PROCESS_SOCKET";
+#[cfg(unix)]
 const CROSS_PROCESS_ISA: &str = "HL_UNIX_IDENTITY_CROSS_PROCESS_ISA";
+#[cfg(unix)]
 const CROSS_PROCESS_CLIENT_OBJECT: u64 = 0x5a5a_0000_0000_0011;
 
+#[cfg(unix)]
 #[test]
 #[ignore = "re-executed as the connector by an_honest_cross_process_connection_carries_reciprocal_identity"]
 fn cross_process_identity_connector() {
@@ -571,6 +627,7 @@ fn cross_process_identity_connector() {
     println!("collected-peer={collected:016x}");
 }
 
+#[cfg(unix)]
 #[test]
 fn an_honest_cross_process_connection_carries_reciprocal_identity_on_both_isas() {
     for isa in [1, 2] {
@@ -646,8 +703,10 @@ fn an_honest_cross_process_connection_carries_reciprocal_identity_on_both_isas()
 ///
 /// Both ends mint through the production allocator here (`PREPARE_MINTED/IDENTIFY_MINTED`) rather than
 /// taking a test-chosen object, because the property under test is which process the id encodes.
+#[cfg(unix)]
 const OWNER_PID_SOCKET: &str = "HL_UNIX_IDENTITY_OWNER_PID_SOCKET";
 
+#[cfg(unix)]
 #[test]
 #[ignore = "re-executed as the connector by an_accepted_socket_encodes_its_own_owners_pid"]
 fn owner_pid_identity_connector() {
@@ -674,6 +733,7 @@ fn owner_pid_identity_connector() {
     println!("collected-peer={collected:016x}");
 }
 
+#[cfg(unix)]
 #[test]
 fn an_accepted_socket_encodes_its_own_owners_pid_on_both_isas() {
     for isa in [1, 2] {
@@ -744,5 +804,34 @@ fn an_accepted_socket_encodes_its_own_owners_pid_on_both_isas() {
 
         identity(isa, RESET, accepted.as_raw_fd(), 0);
         let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// A target gated out at item scope is indistinguishable in the harness output from one whose tests all
+/// passed, so say which coverage this host does not have. The notice goes to the real stderr descriptor
+/// rather than through `eprintln!`, because libtest captures Rust-level output and prints it only for a
+/// FAILING test -- the same reason `hl-native`'s `guest_compiler_present` skip notice writes to
+/// descriptor 2.
+///
+/// The gate is per item rather than a file-scope `#![cfg(unix)]` because two of these cases re-execute
+/// the test binary with `--exact cross_process_identity_connector` and `--exact
+/// owner_pid_identity_connector`; a `mod` wrapper would rename the filter's target, and a file-scope
+/// attribute would leave no item outside it to carry this notice.
+#[cfg(not(unix))]
+#[test]
+fn unix_connection_identity_is_uncovered_on_this_host() {
+    let notice = "SKIP unix_identity: 12 cases left UNCOVERED -- AF_UNIX connection identity is a \
+                  sockaddr_un applied to an already-open descriptor by bind(2)/connect(2), and this \
+                  host has neither the address family nor the syscalls.\n";
+    // The CRT's _write takes its count as an unsigned int, while POSIX write takes a size_t, so the
+    // length is converted at the call rather than the type being assumed.
+    #[cfg(windows)]
+    let count = notice.len() as libc::c_uint;
+    #[cfg(not(windows))]
+    let count = notice.len();
+    // SAFETY: a write of a `'static` initialized buffer to the process's stderr descriptor. It borrows
+    // nothing beyond the call, and a short or failed write is not an error worth acting on.
+    unsafe {
+        libc::write(2, notice.as_ptr().cast(), count);
     }
 }

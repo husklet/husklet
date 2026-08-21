@@ -307,14 +307,39 @@ static int sentry_fork_cancel(pid_t owner, uint32_t token, uint64_t handle) {
     return result;
 }
 
+// Release a worker process's table on its exit: close every OWNED real fd it still holds and free the slot.
+// (Borrowed stdio is never closed -- it belongs to the sentry.) The init guest's table is reclaimed by the
+// sentry process tearing down; only forked children call this.
+static void sentry_proc_release_locked(pid_t wpid) {
+    uint16_t snapshot_table = 0;
+    while (hl_sentry_snapshot_take_owner(&g_snapshots, wpid, &snapshot_table))
+        table_release_locked(snapshot_table);
+    struct sentry_process *p = process_lookup_locked(wpid);
+    if (p) {
+        uint16_t table = p->table;
+        memset(p, 0, sizeof *p);
+        table_release_locked(table);
+    }
+    for (uint32_t i = 0; i < SENTRY_NBIND; i++)
+        if (g_binding[i].inuse && g_binding[i].owner == wpid) {
+            uint16_t table = g_binding[i].table;
+            memset(&g_binding[i], 0, sizeof g_binding[i]);
+            table_release_locked(table);
+        }
+}
+
 // Bind the immutable pre-fork snapshot to the child identity before the private fork barrier releases it.
 // The child's first token binding then inherits this process root.
+//
+// `child` was handed to the calling worker by clone(2) an instant ago, so it names a live child of that
+// worker and no other process on the host can hold that pid. An entry already filed under it is therefore
+// a corpse by construction -- a process whose release path did not run before the kernel reissued its
+// number -- and the fork lane is the one caller that holds that proof. Reclaim it. Refusing instead
+// (-EEXIST, which clone(2) never returns on Linux) fails a container's fork on a number the kernel was
+// free to hand out, and leaves the dead process's duplicated descriptors held forever.
 static int sentry_proc_fork(pid_t owner, uint32_t token, uint64_t handle, pid_t child) {
     pthread_mutex_lock(&g_fd_lock);
-    if (process_lookup_locked(child)) {
-        pthread_mutex_unlock(&g_fd_lock);
-        return -EEXIST;
-    }
+    if (process_lookup_locked(child)) sentry_proc_release_locked(child);
     struct hl_sentry_snapshot *snapshot = hl_sentry_snapshot_find(&g_snapshots, owner, token, handle);
     if (!snapshot) {
         pthread_mutex_unlock(&g_fd_lock);
@@ -341,26 +366,9 @@ static int sentry_proc_fork(pid_t owner, uint32_t token, uint64_t handle, pid_t 
     return 0;
 }
 
-// Release a worker process's table on its exit: close every OWNED real fd it still holds and free the slot.
-// (Borrowed stdio is never closed -- it belongs to the sentry.) The init guest's table is reclaimed by the
-// sentry process tearing down; only forked children call this.
 static void sentry_proc_release(pid_t wpid) {
     pthread_mutex_lock(&g_fd_lock);
-    uint16_t snapshot_table = 0;
-    while (hl_sentry_snapshot_take_owner(&g_snapshots, wpid, &snapshot_table))
-        table_release_locked(snapshot_table);
-    struct sentry_process *p = process_lookup_locked(wpid);
-    if (p) {
-        uint16_t table = p->table;
-        memset(p, 0, sizeof *p);
-        table_release_locked(table);
-    }
-    for (uint32_t i = 0; i < SENTRY_NBIND; i++)
-        if (g_binding[i].inuse && g_binding[i].owner == wpid) {
-            uint16_t table = g_binding[i].table;
-            memset(&g_binding[i], 0, sizeof g_binding[i]);
-            table_release_locked(table);
-        }
+    sentry_proc_release_locked(wpid);
     pthread_mutex_unlock(&g_fd_lock);
 }
 

@@ -3,7 +3,7 @@
 #[path = "workflow/mod.rs"]
 mod workflows;
 
-use workflows::{build, compose, network};
+use workflows::{build, compose, network, sandbox};
 
 use hl_container::{Config, Containers};
 use tempfile::TempDir;
@@ -26,9 +26,12 @@ async fn containers(work: &TempDir) -> Result<Containers, Error> {
         .await?)
 }
 
-/// Currently RED, and deliberately left so: the builder's `RUN` step fails with
-/// `Construction(Start)` (guest launch) while the sibling workflows start real
-/// containers from the same fixture, so the defect is in the daemon build path.
+/// The `USER nobody` / `SHELL` / `ENTRYPOINT` image `build::advanced` produces was the first workflow
+/// here whose guest ran a command substitution, and it hung at `wait` for as long as this fixture has
+/// existed. The cause was not the non-root user: under the production sandbox default the sentry filed
+/// a forked child's descriptor table under the clone's GUEST pid while every request that child made
+/// was stamped with its HOST pid, so no child ever inherited a descriptor. See `sandbox_process_tree`,
+/// which pins the mechanism in about a second instead of through an image build.
 #[tokio::test(flavor = "multi_thread")]
 async fn docker_build() -> Result<(), Error> {
     if unavailable() {
@@ -45,6 +48,19 @@ async fn docker_net() -> Result<(), Error> {
     }
     let work = TempDir::new()?;
     network::run(&containers(&work).await?).await
+}
+
+/// A guest process tree under the production sandbox default. `Sandbox::SentryOnly` is what an
+/// ordinary container gets, and every other workflow in this file either disables it or reaches it
+/// only through a long end-to-end path -- so a descriptor defect behind it presented as an image
+/// build hanging and as a network fixture whose listeners never served, never as itself.
+#[tokio::test(flavor = "multi_thread")]
+async fn sandbox_process_tree() -> Result<(), Error> {
+    if unavailable() {
+        return Ok(());
+    }
+    let work = TempDir::new()?;
+    sandbox::run(&containers(&work).await?).await
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -580,4 +580,15 @@ HL_API int HL_TARGET_LOCAL(namespace_transaction_test)(uint32_t scenario) {
     }
     return 99;
 }
+#elif defined(HL_NATIVE_TEST_HOOKS)
+/* The scenarios below fork, wait and rendezvous through a MAP_SHARED page, none of which the Windows
+ * target spells. The loader resolves every symbol named in the test export manifest, so the hook has to
+ * exist here: a guarded block with no Windows arm links as "cannot export ...: symbol not defined" with
+ * the hooks on, and would otherwise have been a MissingBridge at load rather than a compile error. */
+HL_API int HL_TARGET_LOCAL(namespace_transaction_test)(uint32_t scenario);
+HL_API int HL_TARGET_LOCAL(namespace_transaction_test)(uint32_t scenario) {
+    (void)scenario;
+    errno = ENOTSUP;
+    return -1;
+}
 #endif

@@ -216,7 +216,13 @@ fn append_frame(output: &mut Vec<u8>, stream: u8, payload: &[u8]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ContainerLogs, LogEncoder, LogOptions, LogProtocolError};
+    use super::{ContainerLogs, LogProtocolError};
+    // `LogEncoder` and `LogOptions::replay` are `runtime`-only, and so are the three
+    // tests below that use them. This import was not, which is the whole reason
+    // `--no-default-features` failed here: every test in the module was correctly
+    // gated and the line naming their types was not.
+    #[cfg(feature = "runtime")]
+    use super::{LogEncoder, LogOptions};
     #[test]
     fn multiplexed_logs_round_trip_binary_streams() {
         let encoded = ContainerLogs::encode(b"out\0", b"err\xff");

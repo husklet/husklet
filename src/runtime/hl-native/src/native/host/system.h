@@ -140,9 +140,12 @@ size_t hl_host_process_fd_private_count_current(void);
 int hl_host_process_fd_private_fork_prepare(void);
 int hl_host_process_fd_private_fork_complete(int child);
 void hl_host_process_fd_private_cleanup(void);
-#if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
+#if defined(HL_NATIVE_TEST_HOOKS)
 /* Forks while a sibling thread holds the private-fd fork lock and drives the child down the
-   locking path, bounded so an inherited-locked mutex reports instead of hanging. */
+   locking path, bounded so an inherited-locked mutex reports instead of hanging. The Windows host
+   has neither fork nor the private band, so its arm in host/windows/private.c refuses -- but the
+   symbol is in the test export manifest and the Rust loader resolves it unconditionally, so the
+   declaration is not host-conditional either. */
 int hl_c_backend_private_fork_lock_test(uint32_t scenario);
 #endif
 

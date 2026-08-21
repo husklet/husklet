@@ -236,7 +236,14 @@ impl From<hl_container::Container> for InspectContainer {
                 },
                 pid: i64::try_from(lifecycle.pid).unwrap_or(i64::MAX),
                 exit_code: i64::from(lifecycle.exit.code),
-                error: lifecycle.exit.error,
+                // Docker's `State.Error` is the free-text account of why a container stopped, and
+                // the runtime diagnostic is the only one that exists: the fault it accompanies is
+                // the `status=-1 detail=0 reason=Unknown` stand-in the record writes when the wait
+                // produced no status, so `engine fault reason=Unknown detail=0` names nothing at
+                // all. Prefer the runtime's own text wherever it has one.
+                error: value
+                    .runtime_diagnostic()
+                    .map_or(lifecycle.exit.error, ToOwned::to_owned),
                 started_at: Timestamp::from_millis(lifecycle.started).to_string(),
                 finished_at: Timestamp::from_millis(lifecycle.finished).to_string(),
                 health,
@@ -504,6 +511,42 @@ mod tests {
         assert_eq!(state.log[0].end, "1970-01-01T00:00:01.000000000Z");
         assert_eq!(state.log[0].exit_code, 9);
         assert_eq!(state.log[0].output, "not ready");
+    }
+
+    /// `State.Error` is Docker's free-text account of why a container stopped, and for a wait the
+    /// runtime could not complete it is the only account there is: the accompanying status is the
+    /// `-1 / 0 / Unknown` stand-in, which renders as `engine fault reason=Unknown detail=0` and
+    /// names nothing. The diagnostic reaches an API caller here or nowhere.
+    #[test]
+    fn a_runtime_diagnostic_is_the_inspected_error_rather_than_the_nameless_fault() {
+        let durable = hl_container::Container::new(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .parse()
+                .unwrap(),
+            hl_container::ContainerSpec::from_directory(
+                std::path::Path::new("/rootfs"),
+                hl_container::Process::new("/bin/sh"),
+            ),
+            hl_container::ContainerState::Exited {
+                result: hl_container::ExitStatus::Fault {
+                    status: -1,
+                    detail: 0,
+                    reason: hl_container::FaultCause::Unknown,
+                },
+                finished_at_ms: 2_000,
+            },
+            1_000,
+        );
+        // The field is crate-private to `hl-container` and durable, so the persisted shape is how a
+        // record carrying one is built from here -- which pins the serialized name as well.
+        let mut wire = serde_json::to_value(&durable).unwrap();
+        wire["runtime_diagnostic"] = serde_json::json!("engine wait: NativeWaitFailed(5)");
+        let durable: hl_container::Container = serde_json::from_value(wire).unwrap();
+        assert_eq!(durable.runtime_diagnostic(), Some("engine wait: NativeWaitFailed(5)"));
+
+        let inspected = InspectContainer::from(durable);
+        assert_eq!(inspected.state.error, "engine wait: NativeWaitFailed(5)");
+        assert_eq!(inspected.state.exit_code, -1);
     }
 
     #[test]

@@ -179,3 +179,17 @@ int hl_host_process_interrupt(hl_host_process_peer peer) {
     (void)peer;
     return 0;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+#include "hl/base.h"
+
+/* Peer enumeration is refused on this host (see hl_host_process_peers above), and it refuses by reporting
+   zero peers rather than by failing. So this probe must NOT be written as "call peers() and look": it
+   would answer 0, "pid is not a peer", for every input, which is a fixture that can never fail. -1 is the
+   Linux implementation's own harness-failure code, and it is the honest answer here. */
+HL_API int32_t hl_c_backend_host_process_peer_enumerated_test(int32_t pid);
+HL_API int32_t hl_c_backend_host_process_peer_enumerated_test(int32_t pid) {
+    (void)pid;
+    return -1;
+}
+#endif

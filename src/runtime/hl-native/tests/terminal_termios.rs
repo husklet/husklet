@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
 use std::{fs, path::Path};
 
@@ -101,6 +102,13 @@ fn the_host_termios_translation_cannot_carry_every_linux_flag() {
 /// The store is keyed by terminal identity via `fstat`, so a pipe stands in for a terminal and this
 /// runs without a pty on any host. The C-side store test has already installed images by the time
 /// this runs in the same binary, so the generation is expected to be non-zero and to move.
+///
+/// Unix only, because `hl_native::terminal_termios` is: the lib gates it `#[cfg(unix)]` and says why
+/// -- it takes a `RawFd`, and a Windows process HANDLE is not one. This case reads that function and
+/// takes the raw descriptor of a `PipeReader` to call it, so the platform is its subject and the gate
+/// belongs here rather than on the two cases above, which read the engine's own C sources and its
+/// ISA-keyed store and run on every host.
+#[cfg(unix)]
 #[test]
 fn the_bridge_answers_a_terminal_image_and_a_generation_that_only_moves_on_an_install() {
     let before = hl_native::terminal_termios_generation();
@@ -153,4 +161,27 @@ fn the_bridge_answers_a_terminal_image_and_a_generation_that_only_moves_on_an_in
         hl_native::terminal_termios_generation() > after,
         "installing an image must advance the generation a pump watches"
     );
+}
+
+/// The case above is the only one here that needs a Unix descriptor, so on a host without one this
+/// target still runs its other two and would otherwise report a smaller, silent count. The notice goes
+/// to the real stderr descriptor rather than through `eprintln!`, because libtest captures Rust-level
+/// output and prints it only for a FAILING test.
+#[cfg(not(unix))]
+#[test]
+fn the_terminal_termios_bridge_read_back_is_uncovered_on_this_host() {
+    let notice = "SKIP terminal_termios: 1 case left UNCOVERED -- reading an installed image back \
+                  through `hl_native::terminal_termios` needs a RawFd, which this host has not got.\n";
+    // The CRT's _write takes its count as an unsigned int, while POSIX write takes a size_t, so the
+    // length is converted at the call rather than the type being assumed.
+    #[cfg(windows)]
+    let count = notice.len() as libc::c_uint;
+    #[cfg(not(windows))]
+    let count = notice.len();
+    // SAFETY: a write of a `'static` initialized buffer to the process's stderr descriptor. It borrows
+    // nothing beyond the call, and a short or failed write is not an error worth acting on.
+    #[allow(unsafe_code)]
+    unsafe {
+        libc::write(2, notice.as_ptr().cast(), count);
+    }
 }

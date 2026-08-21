@@ -577,6 +577,28 @@ clippy exits 0 no matter what is wrong because `workspace.lints` sets everything
 to `warn`. But attribute its output against your parent before claiming or
 disclaiming a finding.
 
+## Uncommitted work does not exist
+
+A lane spent a day diagnosing why one nix check was red, found it was two
+independent layers deep, wrote the fix with the comments that make the next
+reader understand it — and left the whole thing as an unstaged modification in
+the shared checkout. `git log --all -S` found it on no branch anywhere. Any
+lane's `git checkout`, any `git pull` touching the same file, would have thrown
+away the day and left no trace that it had ever existed.
+
+Commit before you report, and commit before you stop. A finding you can only
+show as a working-tree diff is one command away from never having happened.
+
+This is also why `git stash` is forbidden here: the stash is the same hazard with
+a friendlier name. Commit on your own branch instead — a commit you later discard
+costs nothing, and it is visible to everyone until you do.
+
+If you must leave the shared tree dirty for a moment, say so in your report with
+the path, so whoever reads it can rescue the work instead of stepping on it. And
+if you find someone else's uncommitted work in the shared tree, preserve it
+before you touch anything: `git diff -- <path> > somewhere-outside-the-repo` and
+name it, then find out whose it is. Do not clean the tree first and ask after.
+
 ## The x86 arm of the scheduler lags the arm64 arm
 
 `native_aarch64` and `native_x86` are maintained in parallel by hand and the x86
@@ -599,6 +621,69 @@ which of the two you checked. Confirm by enumerating the call sites or match
 arms, not by reading the surrounding prose — one of the above was found only
 because a lane listed which `NativeExit` variants reach a call and compared the
 two functions side by side.
+
+## A `#[cfg]` and its consumers must be the same width
+
+Four instances in two days, all in the same shape: a `#[cfg]` on a module, an
+item, or a `use`, disagreeing with the `#[cfg]` on the code that names it. None
+was visible to any gate that runs on Linux or macOS, because the configuration
+that would have said so is the one nobody builds.
+
+- `mod terminal;` in `hl-engine/src/runtime/api.rs` was ungated while the
+  re-export and every consumer in `execution.rs` carried `#[cfg(unix)]`. A
+  Windows build entered a POSIX pty pump and produced **73 errors** inside it.
+- `mod test_hook;` in `hl-native/src/lib.rs` was gated on the feature alone
+  while the test target that calls into it was gated
+  `any(feature = "native-test-hooks", windows)`. The mingw smoke builds without
+  the feature, so on Windows the caller compiled and the callee did not exist.
+- `execution.rs::an_unfinalized_generation_is_a_permanent_recovery_refusal` was
+  an **ungated `#[test]` naming two `#[cfg(unix)]` items** -- `CheckpointControl`
+  in its own file and `super::super::checkpoint` in `api.rs`. Every other item in
+  that `mod tests` which names either already carried the gate; this one did not.
+- `composition_test.rs::rejects_terminal_before_native_construction` is a
+  `#[cfg(not(unix))]` test that built `RuntimeServices` with an `activation` and
+  an `executable_authority` field. **The struct has had neither for some time.**
+  Nothing rejected it because nothing compiles that arm.
+
+The first two are a consumer wider than what it names; the third is the same
+thing one layer up, in a test; the fourth is the opposite failure -- an arm
+exclusive to a configuration nobody builds, which does not break, it **rots**.
+Both directions have the same cause and the same cure.
+
+**Fix by matching, and the default direction is to widen the narrow side.**
+A module gated more narrowly than its consumers is usually just missing a
+declaration -- widen it. Narrowing the consumer is right only when the consumer's
+*subject* is the gated mechanism: a test of a `#[cfg(unix)] fn` that writes a
+Unix mode belongs under `#[cfg(unix)]`, and so does a test whose name claims it
+crossed a real Unix socket. Ask what the consumer is *for*. If the answer names
+the platform, gate it and write the reason at the gate; if the answer does not,
+the gate is in the wrong place.
+
+**Never widen by deleting.** Removing the method, the assertion, or the field
+that will not compile makes the arm green and the product smaller. Where a
+mechanism genuinely has no Windows equivalent, keep the entry point and refuse in
+it, with the reason written at the point of refusal -- the way
+`sock_identity_directory` returns `NULL` there, and the way `storybook::host` now
+answers `Fault::Socket` naming the missing socket pair rather than disappearing.
+
+**And do not widen by substituting.** Some Unix spellings are incidental and some
+are the subject. `UnixStream::pair()` used only to obtain two connected endpoints
+is incidental, and a loopback `TcpStream` pair is the same three properties, so
+widening keeps the test running on all four hosts -- which beats a `#![cfg(unix)]`
+integration target that compiles to zero tests and reports `ok`. The same call in
+`frames_cross_a_real_unix_socket_in_order` is the subject, and substituting there
+would have left the test's own name a claim about something it no longer did.
+
+**The only way to find these is to build the other configuration.** Not a grep:
+`cargo check --workspace --all-targets --target x86_64-pc-windows-gnu` is what
+found all four, and the CI mingw job runs `cargo build -p hl-native -p hl-engine
+-p engine`, which compiles no test target and only three crates. When a
+configuration cannot be built at all -- `hl-container` cannot cross to Windows
+because `aws-lc-sys` stops the graph -- rewrite every `cfg(unix)`/`cfg(not(unix))`
+in that crate to a cfg name that is never set, build with
+`RUSTFLAGS=--check-cfg=cfg(<name>)`, and plant a type error inside the arm to
+prove it was really selected. That technique is sound for cfg-graph consistency
+and blind to libc and ABI differences; say which you proved.
 
 ## Balance the arm order, or measure a 4% lie
 
@@ -1047,6 +1132,48 @@ produced both failure modes:
 
 So a profile row justifies investigating a symbol. Only a mutation justifies
 believing the cost can be recovered.
+
+### A serializing instruction collects the skid of everything ahead of it
+
+The two failure modes above are about a *symbol*. This one is about a single
+instruction, and it is the reason a `perf annotate` row can be enormous and worth
+nothing.
+
+`run_guest()` makes two `seq_cst` stores per dispatcher crossing -- `cpu->irq = 0`
+(`engine/dispatch.c`) and `in_translated = 1` (`translator/cache.c`) -- and both
+compile to `xchg` on x86. Measured 2026-08-20 on `naa0245` with the JIT-less
+x86_64 engine, `perf record -e cycles:u` over a guest fork+exec put `run_guest` at
+17.0% self-time with **80.5% of its samples on the instruction after the first
+`xchg`** and 13.6% on the instruction after the second: 13.6% and 2.3% of all user
+cycles, in two instructions.
+
+None of it came back. A candidate that skips the first store whenever `irq` is
+already clear -- the common case, and a change the instruction counters confirm
+reaches the binary, +21.5k instructions per spawn on a static x86_64 guest and
++63.6k on aarch64, exactly the load and branch it adds -- measured 1.0371 on
+aarch64 in a twelve-round balanced ABBA, a **3.7% regression**. A second build of
+the *same candidate source* measured 0.9868 on the same arm in the same run. The
+two builds' per-round ranges do not overlap: [1.0276, 1.0432] against
+[0.9825, 0.9929]. A variant with both stores weakened read 0.9908.
+
+Two durable things:
+
+- **`xchg` drains the store buffer, so it retires slowly and the sampled PC skids
+  onto the instruction after it.** What the row measures is the queue in front of
+  the barrier, not the barrier. A store nobody was waiting on can therefore carry
+  a double-digit share of a profile and cost nothing.
+- **One null arm is not the noise floor.** Base-versus-base read 1.0016
+  [0.9912, 1.0142] in the same run and would have certified a 3.7% verdict as
+  real. Layout noise is a property of the *pair* of binaries, so a candidate needs
+  a second build of its own source before its ratio means anything -- the same
+  reason "Identical source does not mean an identical binary" exists, one step
+  further on.
+
+The count that explains the whole thing: a spawn retires 112M user instructions in
+~21,500 crossings, so a crossing is ~5,200 instructions and one locked store
+cannot be a percent of it. On a host **with** the JIT a crossing is one translated
+guest basic block, tens of instructions, and the same two stores are a different
+question that no measurement on this box can answer.
 
 Time the mechanism before sizing a fix for it. The native/host operand round trip
 was assumed to cost about a microsecond and to dominate sqlite; measured, it is
@@ -1543,6 +1670,35 @@ cross a C boundary.
 
 Every hot-path migration compares against a pinned C baseline. Nested engine
 benchmarks measure compounding overhead.
+
+### `g_threaded` is not "is anything else running"
+
+`g_threaded` is set by the clone service and means **the guest has more than one
+guest thread**. The dispatcher guards its lock, its safepoint and its generation
+publication with it, which is correct for those, because each one's counterparty
+is another `run_guest()`. It is the wrong guard for anything whose counterparty is
+a *host* thread, and the engine creates several of those with the guest still
+single-threaded:
+
+- `hl_checkpoint_control_main` (`engine/lifecycle.c`) and `checkpoint_relay_main`
+  (`linux_abi/thread/lifecycle.c`) both store `cpu->irq = 1` on every registered
+  executor, from their own thread.
+- `gtimer_loop` (`linux_abi/syscall/time.c`), the POSIX-timer drain thread, reaches
+  `thread_target_signal_info()` for a `SIGEV_THREAD_ID` expiry, which publishes
+  `tpending` and then stores `cpu->irq = 1`.
+- `bound_watch_waiter` (`linux_abi/syscall/binding/watch.c`) calls
+  `hl_linux_bus_transition_begin()`, which is the *quiescing* side of
+  `stw_before_translated()`'s `in_translated` handshake. It is started by an
+  ordinary file-backed `mmap` on a host advertising `HL_HOST_CAP_WATCH`, which is
+  both Linux and macOS.
+
+So "the dispatcher already guards other work with `g_threaded`" is not an argument
+for guarding a handshake with it. Ask who the *reader* is: a signal handler is not
+a thread and needs only a compiler barrier, a `fork`ed child shares no memory with
+its parent, but a host service thread is a genuine second core and `g_threaded`
+says nothing about it. The translator already learned the same lesson from the
+other side -- `g_shared_obs` exists because `g_threaded`, being per-process, says
+nothing about a peer *process* on a `MAP_SHARED` region.
 
 ## Application boundaries
 

@@ -380,6 +380,7 @@ mod tests {
     use super::OwnedWorkspace;
     use crate::engine::{EngineError, Workspace, WorkspaceId};
     use std::fs::OpenOptions;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
 
@@ -391,6 +392,10 @@ mod tests {
             std::fs::read(workspace.root.join("etc/passwd")).unwrap(),
             b"root:x:0:0:root:/root:/bin/sh\n"
         );
+        // The mode half only: `OwnedWorkspace::regular_permissions` is a Unix mode write, and
+        // its Windows arm is deliberately `Ok(())` because NTFS carries no `0o644`. The staged
+        // content above is a contract on every host, so it stays outside this gate.
+        #[cfg(unix)]
         assert_eq!(
             std::fs::metadata(workspace.root.join("etc/group"))
                 .unwrap()
@@ -420,6 +425,10 @@ mod tests {
         workspace.cleanup(WorkspaceId(1)).unwrap();
     }
 
+    /// `#[cfg(unix)]` because the mode a staged copy inherits is a Unix mode: the Windows
+    /// arm of `OwnedWorkspace::regular_permissions` writes none, so there is nothing here to
+    /// assert on that host rather than something that would fail.
+    #[cfg(unix)]
     #[test]
     fn file_mode() {
         let workspace = OwnedWorkspace::create().unwrap();
@@ -438,6 +447,11 @@ mod tests {
         workspace.cleanup(WorkspaceId(1)).unwrap();
     }
 
+    /// `#[cfg(unix)]` for the fixture, not for the contract. Refusing a symlinked source is a
+    /// contract on every host -- `stage_file` reads `Path::is_symlink`, which Windows answers --
+    /// but *creating* the link the fixture needs requires `SeCreateSymbolicLinkPrivilege` there,
+    /// so a Windows arm of this test would fail on host policy rather than on the code it covers.
+    #[cfg(unix)]
     #[test]
     fn source_symlink() {
         let workspace = OwnedWorkspace::create().unwrap();

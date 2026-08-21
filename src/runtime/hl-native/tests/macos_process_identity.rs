@@ -254,9 +254,17 @@ fn scm_rights_peer_capability_uses_creator_identity_and_survives_disappearance()
 fn macos_process_and_peer_identity_are_uncovered_on_this_host() {
     let notice = "SKIP macos_process_identity: 3 cases left UNCOVERED -- kqueue EVFILT_PROC birth/\
                   generation binding and the SCM_RIGHTS peer capability exist only on Darwin.\n";
+    // The CRT's _write takes its count as an unsigned int, while POSIX write takes a size_t, so the
+    // length is converted at the call rather than the type being assumed. Spelled `notice.len()` this
+    // arm was narrower than its own `#[cfg]`: only a non-Unix build type-checks it, and nothing built
+    // one, so `cargo check -p hl-native --all-targets` for `x86_64-pc-windows-gnu` failed E0308 here.
+    #[cfg(windows)]
+    let count = notice.len() as libc::c_uint;
+    #[cfg(not(windows))]
+    let count = notice.len();
     // SAFETY: a write of a `'static` initialized buffer to the process's stderr descriptor. It
     // borrows nothing beyond the call, and a short or failed write is not an error worth acting on.
     unsafe {
-        libc::write(2, notice.as_ptr().cast(), notice.len());
+        libc::write(2, notice.as_ptr().cast(), count);
     }
 }

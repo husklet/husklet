@@ -22,19 +22,27 @@
 
 #![allow(unsafe_code)]
 
+#[cfg(unix)]
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
+#[cfg(unix)]
 use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
 
+#[cfg(unix)]
 const GETSOCKNAME: u32 = 0;
+#[cfg(unix)]
 const GETPEERNAME: u32 = 1;
+#[cfg(unix)]
 const RECVMSG: u32 = 2;
+#[cfg(unix)]
 const DATAGRAM_BUFFERS: u32 = 3;
 
+#[cfg(unix)]
 const ISAS: [(u32, &str); 2] = [(1, "aarch64"), (2, "x86_64")];
 
 /// An `AF_UNIX` stream socket carrying no name at all, which no `std` type can produce: `UnixListener`
 /// and `UnixStream` mint their socket and name it in the same call, and an unnamed socket is precisely
 /// the first row of the table above.
+#[cfg(unix)]
 fn stream_socket() -> OwnedFd {
     // SAFETY: `socket(2)` reads no caller memory, and it returns either a descriptor this process is the
     // sole owner of or -1, which the assertion rejects before the value reaches `from_raw_fd`. Nothing
@@ -46,12 +54,14 @@ fn stream_socket() -> OwnedFd {
     }
 }
 
+#[cfg(unix)]
 fn temporary_path(tag: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!("hl-shape-{}-{tag}", std::process::id()));
     let _ = std::fs::remove_file(&path);
     path
 }
 
+#[cfg(unix)]
 fn pathname_address(path: &std::path::Path) -> libc::sockaddr_un {
     // SAFETY: `sockaddr_un` is a C aggregate of an integer family, an integer array, and -- on Darwin
     // only -- a `sun_len` byte. It has no niche, no pointer, and no field whose zero value is invalid,
@@ -74,6 +84,7 @@ fn pathname_address(path: &std::path::Path) -> libc::sockaddr_un {
 /// `UnixListener::bind` passes. The third row of the table is a statement about what each host reports
 /// back for a name bound this way, so the length going in is part of the measurement and is not std's
 /// to choose.
+#[cfg(unix)]
 fn bind_path(descriptor: i32, path: &std::path::Path) {
     let address = pathname_address(path);
     // SAFETY: `address` is a live local for the whole call and the kernel copies out of it rather than
@@ -91,6 +102,7 @@ fn bind_path(descriptor: i32, path: &std::path::Path) {
 
 /// Guest-visible length only; the buffer is deliberately larger than any address so a translation that
 /// over-reports its length is caught by the length rather than by a truncating copy.
+#[cfg(unix)]
 fn guest_address(isa: u32, operation: u32, descriptor: i32) -> (u32, Vec<u8>) {
     let mut out = vec![0xAA_u8; 256];
     let length = hl_native::socket_shape_test(isa, operation, descriptor, 0, &mut out)
@@ -102,6 +114,7 @@ fn guest_address(isa: u32, operation: u32, descriptor: i32) -> (u32, Vec<u8>) {
 /// length: Linux reports the bare two-byte family. Darwin reports the whole `sockaddr_un` with the path
 /// zero-filled, and reading that padding as a name published a 16-byte abstract-looking address to the
 /// guest for an endpoint that has none.
+#[cfg(unix)]
 #[test]
 fn an_unbound_unix_socket_reports_the_bare_family_on_both_isas() {
     for (isa, name) in ISAS {
@@ -118,6 +131,7 @@ fn an_unbound_unix_socket_reports_the_bare_family_on_both_isas() {
 
 /// The same property on the far end of an accepted connection, which is where it is load-bearing: a
 /// server reads the peer address length to decide whether its client is nameable at all.
+#[cfg(unix)]
 #[test]
 fn an_accepted_socket_reports_an_unnamed_peer_on_both_isas() {
     for (isa, name) in ISAS {
@@ -137,6 +151,7 @@ fn an_accepted_socket_reports_an_unnamed_peer_on_both_isas() {
 
 /// A bound pathname survives the same translation with the Linux length, not the host's: the fix for the
 /// unnamed case must not collapse a real name.
+#[cfg(unix)]
 #[test]
 fn a_bound_pathname_keeps_its_linux_length_on_both_isas() {
     for (isa, name) in ISAS {
@@ -163,6 +178,7 @@ fn a_bound_pathname_keeps_its_linux_length_on_both_isas() {
 /// counts all three while delivering one, so a translation that trusts `cmsg_len` reads past the control
 /// buffer and publishes -- or closes -- integers the kernel never wrote. The guest must be told about
 /// exactly the descriptors that arrived.
+#[cfg(unix)]
 #[test]
 fn a_truncated_scm_rights_record_publishes_only_delivered_descriptors_on_both_isas() {
     for (isa, name) in ISAS {
@@ -259,6 +275,7 @@ fn a_truncated_scm_rights_record_publishes_only_delivered_descriptors_on_both_is
 /// A Linux `AF_UNIX` datagram is bounded by `SO_SNDBUF` (~208KB by default); Darwin starts every one at the
 /// 2048-byte `net.local.dgram.maxdgram`, so a datagram that is legal on Linux is refused on macOS. The
 /// engine's creation policy raises the window; without it the send fails.
+#[cfg(unix)]
 #[test]
 fn an_unix_datagram_socket_carries_a_linux_sized_message_on_both_isas() {
     for (isa, name) in ISAS {
@@ -273,5 +290,29 @@ fn an_unix_datagram_socket_carries_a_linux_sized_message_on_both_isas() {
             .send(&message)
             .unwrap_or_else(|error| panic!("{name}: an 8KiB AF_UNIX datagram must send: {error}"));
         assert_eq!(sent, message.len(), "{name}: the whole datagram must go in one send");
+    }
+}
+
+/// A target gated out at item scope is indistinguishable in the harness output from one whose tests all
+/// passed, so say which coverage this host does not have. The notice goes to the real stderr descriptor
+/// rather than through `eprintln!`, because libtest captures Rust-level output and prints it only for a
+/// FAILING test -- the same reason `hl-native`'s `guest_compiler_present` skip notice writes to
+/// descriptor 2.
+#[cfg(not(unix))]
+#[test]
+fn unix_socket_shape_is_uncovered_on_this_host() {
+    let notice = "SKIP socket_shape: 5 cases left UNCOVERED -- every row of this file's table is a \
+                  question asked of an AF_UNIX socket, a sockaddr_un or an SCM_RIGHTS control region, \
+                  and this host has none of the three.\n";
+    // The CRT's _write takes its count as an unsigned int, while POSIX write takes a size_t, so the
+    // length is converted at the call rather than the type being assumed.
+    #[cfg(windows)]
+    let count = notice.len() as libc::c_uint;
+    #[cfg(not(windows))]
+    let count = notice.len();
+    // SAFETY: a write of a `'static` initialized buffer to the process's stderr descriptor. It borrows
+    // nothing beyond the call, and a short or failed write is not an error worth acting on.
+    unsafe {
+        libc::write(2, notice.as_ptr().cast(), count);
     }
 }

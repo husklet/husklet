@@ -605,7 +605,7 @@ cleanup:
     return result;
 }
 
-#if defined(HL_NATIVE_TEST_HOOKS)
+#if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
 static _Thread_local uint32_t g_bound_vector_test_calls;
 static _Thread_local uint64_t g_bound_vector_test_bytes;
 
@@ -661,5 +661,21 @@ HL_API int HL_TARGET_LOCAL(bound_vector_io_test)(uint32_t scenario, int64_t *res
     (void)hl_logical_vma_global_unmap(guest, 8192);
     free(storage);
     return 0;
+}
+#elif defined(HL_NATIVE_TEST_HOOKS)
+/* The fixture backs its guest slice with aligned_alloc, which no Windows C runtime supplies -- UCRT
+ * offers only _aligned_malloc, whose storage free() may not release. The loader resolves every
+ * exported test symbol, so the hook exists here and refuses. This is the one guard in this sweep
+ * whose block is otherwise portable: give the fixture a page-aligned allocation the host can free
+ * and the real scenarios could run on Windows. */
+HL_API int HL_TARGET_LOCAL(bound_vector_io_test)(uint32_t scenario, int64_t *result, uint32_t *calls, uint64_t *bytes);
+HL_API int HL_TARGET_LOCAL(bound_vector_io_test)(uint32_t scenario, int64_t *result, uint32_t *calls,
+                                                 uint64_t *bytes) {
+    (void)scenario;
+    (void)result;
+    (void)calls;
+    (void)bytes;
+    errno = ENOTSUP;
+    return -1;
 }
 #endif

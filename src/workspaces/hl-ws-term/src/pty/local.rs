@@ -254,7 +254,7 @@ impl PtyBackend for LocalPty {
         }
     }
 
-    fn master_fd(&self) -> Option<RawFd> {
+    fn master_descriptor(&self) -> Option<RawFd> {
         Some(self.master)
     }
 
@@ -294,11 +294,11 @@ mod tests {
 
     /// Drive a `LocalPty` to completion, feeding all output into a fresh `Vt`, and return it.
     /// Blocks (with a timeout) until the child exits and the master drains — a synchronous helper for
-    /// deterministic tests. Real GUI use polls the `master_fd` on an event loop instead.
+    /// deterministic tests. Real GUI use polls the `master_descriptor` on an event loop instead.
     fn run_into_vt(mut pty: LocalPty, cols: usize, rows: usize) -> Vt {
         let mut vt = Vt::new(cols, rows);
         let mut buf = [0u8; 4096];
-        let fd = pty.master_fd().unwrap();
+        let fd = pty.master_descriptor().unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut exited = false;
         loop {

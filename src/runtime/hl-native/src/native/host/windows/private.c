@@ -136,3 +136,17 @@ int hl_host_process_fd_private_fork_complete(int child) {
 
 void hl_host_process_fd_private_cleanup(void) {
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+#include "hl/base.h"
+
+/* The POSIX probe forks while a sibling thread holds the private-fd fork lock, and checks that the child
+   does not inherit a locked mutex. This host has neither fork() nor the lock the band is built on, so the
+   scenario has nothing to drive. The symbol is named in the native test export manifest and is resolved
+   unconditionally by the Rust loader, so it exists here and refuses. */
+HL_API int hl_c_backend_private_fork_lock_test(uint32_t scenario) {
+    (void)scenario;
+    errno = ENOTSUP;
+    return -ENOTSUP;
+}
+#endif

@@ -9,9 +9,67 @@ rust-version.workspace = true
 description = "Docker-compatible server over hl-container"
 readme = "../../../README.md"
 
+# Every integration test here drives `Daemon`, which the `runtime` feature gates,
+# so every one of them needs that feature declared. Only `daemon-api` used to say
+# so; the other seven simply failed to build, and
+# `cargo check -p hl-daemon --no-default-features --all-targets` stopped at
+# `error[E0432]: unresolved import hl_daemon::Daemon`.
+#
+# Narrowing a test target is normally the wrong repair, because it removes the
+# target from runs that used to reach it. It removes nothing here: `runtime` is a
+# DEFAULT feature, so every invocation that does not pass `--no-default-features`
+# already has it on and runs all eight targets exactly as before. The only
+# configuration these lines change is the one where the targets did not compile.
+#
+# `runtime` stays optional because it is genuinely load-bearing that it is:
+# `hl-client`'s library depends on this crate with `default-features = false` and
+# re-exports ~90 wire model types out of `hl_daemon::api`. Deleting the feature
+# would pull axum, hyper, reqwest, tokio and hl-container into every client build
+# for types that need none of them.
+#
+# THE HAZARD THIS CREATES, for whoever changes `default` next: Cargo skips a
+# target whose required features are unmet WITHOUT PRINTING ANYTHING. Seven suites
+# are now one manifest edit away from disappearing in silence. They are safe only
+# while `runtime` remains in `default`. If you take it out, these seven need a
+# `--features runtime` invocation somewhere or they stop being run at all.
+[[test]]
+name = "builtin_network"
+path = "tests/builtin_network.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "container_export"
+path = "tests/container_export.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "container_size"
+path = "tests/container_size.rs"
+required-features = ["runtime"]
+
 [[test]]
 name = "daemon-api"
 path = "tests/daemon_api.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "disk_query"
+path = "tests/disk_query.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "network_prune"
+path = "tests/network_prune.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "system_disk"
+path = "tests/system_disk.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "workflow_orchestration"
+path = "tests/workflow_orchestration.rs"
 required-features = ["runtime"]
 
 [features]

@@ -115,6 +115,23 @@ void hl_ckpt_trigger_destroy(void *mapping, hl_activation_descriptor descriptor)
     (void)descriptor;
 }
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+/* The header declares these three whenever the hooks are compiled in, and checkpoint/image.c's own hook
+ * blocks CALL two of them, so the Windows arm has to answer as well -- otherwise the feature build is an
+ * undefined-reference at link, which is where this arm was found. There is no cached channel to forget on
+ * a host with no channel, so forgetting is a no-op and `current` reports the -1 every caller already
+ * handles as "this process has none". */
+void hl_ckpt_channel_test_claimed_pid(uint64_t claimed_pid) {
+    (void)claimed_pid;
+}
+
+void hl_ckpt_channel_forget_for_test(void) {}
+
+int hl_ckpt_channel_current_for_test(void) {
+    return -1;
+}
+#endif
+
 #else
 
 #include <errno.h>

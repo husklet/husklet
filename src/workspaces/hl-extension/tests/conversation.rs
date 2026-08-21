@@ -1,8 +1,8 @@
 //! A whole extension conversation over a real socket.
 //!
 //! The two sides here are shaped like two processes: an extension on its own
-//! thread that owns one end of a `UnixStream` and never touches the host's
-//! state, and a host on the main thread that owns a [`Session`], in-memory
+//! thread that owns one end of a connected [`Stream`] pair and never touches
+//! the host's state, and a host on the main thread that owns a [`Session`], in-memory
 //! ports, and a real [`hl_gui::Tree`]. Nothing is shared but bytes.
 //!
 //! What this proves is the claim the whole protocol exists to make: an
@@ -12,7 +12,6 @@
 //! checked for the absence of an error would pass on an empty tree.
 
 use std::cell::RefCell;
-use std::os::unix::net::UnixStream;
 
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerSummary, Division, Entry, HostError, ImageStore, ImageSummary,
@@ -26,6 +25,34 @@ use hl_gui::{
     Align, Choice, Column as TableColumn, EventId, Length, NodeId, Patch, Prop, PropValue, RowWindow, Scale, SourceId,
     Surface, Theme, Tone, Tree, Trigger, Variant,
 };
+
+/// The concrete stream this conversation runs over.
+///
+/// The protocol is defined over `Read + Write`, and what these tests need from a transport is
+/// only that the two ends are connected to each other, can be moved to another thread, and close
+/// ordinarily. `UnixStream::pair` is that on Unix. `std` binds no Unix-domain socket off Unix, and
+/// a loopback TCP connection has the same three properties, so the conversation is exercised on
+/// every host instead of vanishing on one -- an integration target that compiles to zero tests
+/// reports `ok` and proves nothing.
+#[cfg(unix)]
+type Stream = std::os::unix::net::UnixStream;
+#[cfg(not(unix))]
+type Stream = std::net::TcpStream;
+
+/// Two connected [`Stream`] endpoints.
+fn connected_pair() -> (Stream, Stream) {
+    #[cfg(unix)]
+    {
+        std::os::unix::net::UnixStream::pair().expect("a socket pair")
+    }
+    #[cfg(not(unix))]
+    {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("a loopback listener");
+        let ours = std::net::TcpStream::connect(listener.local_addr().expect("a bound address")).expect("connected");
+        let (theirs, _) = listener.accept().expect("accepted");
+        (ours, theirs)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // The host's in-memory ports.
@@ -513,7 +540,7 @@ fn footer(composition: &mut Composition) -> NodeId {
 // ---------------------------------------------------------------------------
 
 /// One call and its answer, from the extension's side.
-fn call(wire: &mut hl_extension::Wire<UnixStream>, request: &Request) -> Result<Reply, Failure> {
+fn call(wire: &mut hl_extension::Wire<Stream>, request: &Request) -> Result<Reply, Failure> {
     wire.send(&codec::request(request).expect("the call encodes"))
         .expect("sent");
     let frame = wire.receive().expect("an answer");
@@ -524,7 +551,7 @@ fn call(wire: &mut hl_extension::Wire<UnixStream>, request: &Request) -> Result<
 }
 
 /// Everything the extension process does, start to finish.
-fn extension(stream: UnixStream) -> Result<(), String> {
+fn extension(stream: Stream) -> Result<(), String> {
     let mut wire = hl_extension::Wire::new(stream);
 
     let opening = wire.receive().map_err(|error| error.to_string())?;
@@ -574,7 +601,7 @@ fn extension(stream: UnixStream) -> Result<(), String> {
 
 /// Answers one call, keeping the host's tree in step with what it accepted.
 fn turn(
-    wire: &mut hl_extension::Wire<UnixStream>,
+    wire: &mut hl_extension::Wire<Stream>,
     session: &mut Session,
     host: &Host,
     tree: &mut Tree,
@@ -683,7 +710,7 @@ fn compare_handlers(node: &hl_gui::Node, expectation: &Expectation) {
 
 #[test]
 fn a_whole_interface_is_rendered_from_a_socket() {
-    let (host_end, extension_end) = UnixStream::pair().expect("a socket pair");
+    let (host_end, extension_end) = connected_pair();
     let speaker = std::thread::spawn(move || extension(extension_end));
 
     let host = Host::new();

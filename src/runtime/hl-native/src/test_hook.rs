@@ -18,7 +18,11 @@ pub fn bound_vector_io_test(isa: u32, scenario: u32) -> Result<(i64, u32, u64), 
 }
 
 /// Drives the private-fd fork-lock scenario in the C engine.
-#[cfg(all(unix, feature = "native-test-hooks"))]
+///
+/// Gated on the feature alone, like [`bindings`] and the loader field it reaches: the C engine defines
+/// this export on every host with the hooks compiled in, refusing on the Windows arm rather than
+/// omitting the symbol, and a module narrower than its own binding is what left the two disagreeing.
+#[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 pub fn private_fork_lock_test(scenario: u32) -> Result<(), i32> {
     bindings::private_fork_lock_test(scenario)
@@ -31,7 +35,9 @@ pub fn process_identity_token_test(scenario: u32) -> Result<(), i32> {
 }
 
 /// Drives `F_SETFL(O_APPEND)` on an adopted descriptor followed by a write, in the C engine.
-#[cfg(all(unix, feature = "native-test-hooks"))]
+///
+/// Gated on the feature alone, for the reason given on [`private_fork_lock_test`].
+#[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 pub fn setfl_append_write_test(scenario: u32) -> Result<(), i32> {
     bindings::setfl_append_write_test(scenario)
@@ -309,7 +315,7 @@ pub fn checkpoint_restore_rollback_test(isa: u32) -> Result<(), i32> {
 /// it back through the bridge and check the whole path rather than only the C side of it.
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
-pub fn terminal_termios_install_test(descriptor: std::os::fd::RawFd, image: &[u8; 36]) {
+pub fn terminal_termios_install_test(descriptor: std::ffi::c_int, image: &[u8; 36]) {
     static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     bindings::terminal_termios_install_test(descriptor, image);

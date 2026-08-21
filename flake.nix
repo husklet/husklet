@@ -622,6 +622,14 @@
           strictDeps = true;
           nativeBuildInputs = commonNativeInputs pkgs ++ [
             pkgs.coreutils
+            pkgs.cacert
+            # `ps`. `product_checkpoint_test::process_tree` shells out to
+            # `ps -axo pid=,ppid=` to learn the domain worker's process tree, and
+            # `Command::new("ps")` on a host without it fails as a bare
+            # `No such file or directory (os error 2)` with nothing naming `ps`.
+            # That is the second layer this check was red for; see SSL_CERT_FILE below
+            # for the first.
+            pkgs.procps
             (rustFor pkgs)
           ];
           doCheck = false;
@@ -629,6 +637,26 @@
             runHook preBuild
             export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
             export HL_PRODUCT_CHECKPOINT_REQUIRED=1
+
+            # A CA BUNDLE, IN AN OFFLINE CHECK, ON PURPOSE. Nix sets
+            # SSL_CERT_FILE=/no-cert-file.crt in a sandboxed build, and the domain
+            # worker this gate spawns builds a `reqwest::Client` at startup --
+            # unconditionally, before it knows whether it will fetch anything, and this
+            # fixture sets the forbid-remote flag so it never will. `Client::new()`
+            # panics on a host with no CA store:
+            #
+            #   reqwest::Error { kind: Builder,
+            #     source: General("No CA certificates were loaded from the system") }
+            #
+            # so the worker exited 101 roughly 40ms in, before any checkpoint work, and
+            # this check had been red for that reason alone. It cost a day to see because
+            # the worker's log lives in the fixture's TMPDIR and dies with the sandbox;
+            # `nix build --keep-failed` is what finally preserved it.
+            #
+            # This grants no network. The sandbox still has none, `HL_FORBID_REMOTE` is
+            # still set by the fixture, and nothing here fetches. It only lets a client
+            # that is constructed and never used finish being constructed.
+            export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
 
             run_ignored() {
               package="$1"
@@ -649,12 +677,29 @@
               # exits 0 when the filter matches nothing, so from that commit until this one
               # both arms of this gate reported `running 0 tests ... test result: ok` and
               # the product's Continue-later contract was covered by nothing at all.
-              # Both are red on x86_64 Linux at this tip, with the same signature: `domain
-              # worker exited before publication (exit status: 101)`. The sleep-tree one
-              # fails inside this derivation's arm64 arm while passing in the dev shell's
-              # amd64 default, and the terminal-backed one fails in both. That is a real
-              # engine defect an engine lane owns, and this gate exists to say so. Do not
-              # silence it by narrowing the filter back to a name that matches nothing.
+              # THE `exit status: 101` THIS COMMENT USED TO BLAME ON THE ENGINE WAS THE CA
+              # PANIC BELOW. Every arm and both ISAs died identically ~70 ms in, before any
+              # checkpoint work, so one shared cause was read as evidence of an engine defect
+              # in the guest. Re-derived 2026-08-21 at 5d34dde49 with `--keep-failed`: the
+              # worker's own log says `Client::new(): ... No CA certificates were loaded from
+              # the system`, and see SSL_CERT_FILE below.
+              #
+              # THE ISA CLAIM IS WITHDRAWN. It said the sleep-tree arm failed on arm64 while
+              # passing on amd64. Measured outside the sandbox in the pinned dev shell, BOTH
+              # ISAs pass -- amd64 and arm64 each 5 cycles, `1 passed`, ~12.2 s. Nothing here
+              # is ISA-specific.
+              #
+              # WHAT IS STILL RED IS SANDBOX-ONLY, and it is now visible rather than masked.
+              # Inside this derivation the worker publishes (start_ms=60) and the guest runs:
+              # it writes its guard and all four identities, then loses all three background
+              # `sleep` children before the first `kill -0`. The fixture's own marker reads
+              # `SLEEP_CHILD_LOST` and the container records `exited code 91` ~100 ms in.
+              # The fixture then waits out `budget(PHASE)` for a progress file that will never
+              # be written, so on a loaded host `timeout` reaps it first and this step reports
+              # exit 124 with NO `test result:` line at all -- read the preserved `$TMPDIR`,
+              # not the exit code. That is an engine/sandbox interaction an engine lane owns,
+              # and this gate exists to say so. Do not silence it by narrowing the filter back
+              # to a name that matches nothing.
               for test_name in \
                 continue_later_restores_the_primary_sleep_tree_across_repeated_cycles \
                 continue_later_keeps_a_terminal_backed_pane_execution_across_repeated_cycles

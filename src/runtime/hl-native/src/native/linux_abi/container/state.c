@@ -448,7 +448,7 @@ static int proc_self_guest_ppid(int self_gpid) {
     return (g_init_hostpid && parent == g_init_hostpid) ? 1 : parent;
 }
 
-#if defined(HL_NATIVE_TEST_HOOKS)
+#if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
 // ------------------------------------------------------- pid namespace: behavioral fixture
 //
 // Drives the REAL container_pid_namespace_begin, the REAL allocate/publish pair that clone.c runs across a
@@ -659,6 +659,17 @@ HL_API int HL_TARGET_LOCAL(pid_namespace_test)(uint32_t scenario) {
     int status = 0;
     while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
     return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
+}
+#elif defined(HL_NATIVE_TEST_HOOKS)
+/* The scenarios fork, setsid and wait on the launch shape they are pinning; the Windows target has
+ * none of those spellings. The loader resolves every exported test symbol, so the hook exists here
+ * and refuses -- a hook that merely vanished would be a MissingBridge at load rather than a compile
+ * error, which is the failure this arm exists to prevent. */
+HL_API int HL_TARGET_LOCAL(pid_namespace_test)(uint32_t scenario);
+HL_API int HL_TARGET_LOCAL(pid_namespace_test)(uint32_t scenario) {
+    (void)scenario;
+    errno = ENOTSUP;
+    return -1;
 }
 #endif
 

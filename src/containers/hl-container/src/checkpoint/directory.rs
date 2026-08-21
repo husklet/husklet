@@ -1,3 +1,59 @@
+//! # The `cfg(not(unix))` arms in this subtree compile in no configuration at all
+//!
+//! `filesystem.rs`, `filesystem/inventory.rs` and `checkpoint/directory{,/listing,
+//! /transaction,/storage}.rs` hold 26 `#[cfg(not(unix))]` arms between them. Nothing
+//! builds them. `aws-lc-sys` refuses the mingw target, so `hl-container` cannot be
+//! cross-checked at a Windows target -- but that is only the outermost obstacle, and
+//! removing it would not help, because THIS CRATE CANNOT BE CONFIGURED NON-UNIX:
+//!
+//!   * `src/config.rs` and `src/engine/spec.rs` import `std::os::unix::fs` with no
+//!     `cfg` on them at all, and so does `hl-images` -- which this crate depends on
+//!     unconditionally -- in some sixty places across `snapshot/`, `layer/`,
+//!     `rootfs/` and `format/`;
+//!   * `hl-images` is also where `aws-lc-sys` comes from, through `oci-client` and
+//!     `reqwest`.
+//!
+//! ONE REASON THIS FILE USED TO GIVE IS FALSE, and it is the manifest one. It said
+//! `nix` sits in plain `[dependencies]` "and `nix` does not build off Unix". It does
+//! build: measured 2026-08-21 on this `x86_64` Linux box, a scratch crate depending on
+//! `nix = { version = "0.30", features = ["dir", "fs", "signal"] }` compiles clean for
+//! `x86_64-pc-windows-gnu` in the pinned shell. Every module inside it is gated on
+//! `target_os`, so what you get there is an EMPTY crate -- `nix::sys` and
+//! `nix::unistd` do not resolve -- which is a `cfg`-width defect in the dependency's
+//! consumers, not a build failure in the dependency. The entry has since moved to
+//! `[target.'cfg(unix)'.dependencies]` in both manifests anyway, because a dependency
+//! that can never carry an item off Unix should say so; but do not expect that move to
+//! have changed what compiles, and do not repeat the claim that it was a blocker.
+//!
+//! So these are not arms awaiting a host to run on. They are unreachable in every
+//! configuration the manifest permits, which is why nothing has ever type-checked
+//! them and why no build oracle reports it.
+//!
+//! They can be type-checked by hand, and were, on `x86_64` Linux at 641d3f580: rewrite
+//! every `cfg(unix)`/`cfg(not(unix))` in `src/` to a cfg name that is never set,
+//! build with `RUSTFLAGS=--check-cfg=cfg(<name>)`, and `cargo check -p hl-container
+//! --lib`. Selection was proved rather than assumed by planting `let _planted: u8 =
+//! "...";` inside `listing.rs::collect`, which reddened at E0308 exactly there. The
+//! result was 0 errors and 7 warnings, all of them exclusive to this arm: four unused
+//! imports (`storage.rs` `GENERATION` and `Ordering`; `transaction.rs` `super::storage`
+//! and `DirectoryImageState`), two dead items (`CheckpointError::published`,
+//! `storage::PublicationOutcome`), and one that is a contract divergence rather than
+//! tidiness -- `abort_state` below takes a `deadline` and its non-Unix arm never reads
+//! it, so the bounded abort that the Unix arm gets from `remove_tree_at_until` is
+//! simply unbounded there.
+//!
+//! What the technique proves is narrow, and the limit is worth stating plainly: it is
+//! sound for cfg-graph consistency and blind to libc and ABI differences. It shows
+//! these arms parse, name-resolve and type-check against Linux's `std`. It says
+//! nothing about whether they are correct on Windows.
+//!
+//! Deciding what to do belongs to this crate's owner and is one of two things, both
+//! larger than tidying the warnings: delete the 26 arms because `hl-container` is
+//! Unix-only by construction, or make the crate genuinely portable -- which is not a
+//! one-crate edit, because `hl-images` has to move first. Silencing the seven warnings
+//! on its own would be the worst of the three: it would leave the arm looking
+//! maintained while still building nowhere.
+
 use super::{CheckpointError, CheckpointImage, CheckpointImages};
 use std::collections::HashMap;
 use std::num::NonZeroU64;
