@@ -354,9 +354,26 @@ jobs:
       #                                    build sandbox -- so the cause is very likely
       #                                    what that sandbox denies the domain worker,
       #                                    and this check may not be runnable where it
-      #                                    is currently defined. Undiagnosed beyond
-      #                                    that; the failure artefacts live in the
-      #                                    builder's `$TMPDIR` and do not survive it.
+      #                                    is currently defined.
+      #                                    DIAGNOSED 2026-08-21, and the guess above was
+      #                                    right about WHERE and wrong about WHAT. The
+      #                                    sandbox sets SSL_CERT_FILE=/no-cert-file.crt;
+      #                                    the worker builds a reqwest client
+      #                                    unconditionally in `hl_daemon::Daemon::new`
+      #                                    and `Client::new()` panics with no CA store.
+      #                                    `nix build --keep-failed` preserves the
+      #                                    builder's `$TMPDIR` -- use it, the artefacts
+      #                                    do survive that way. Fixed in `flake.nix`.
+      #                                    STILL RED UNDERNEATH, and now visible: the
+      #                                    guest runs, then loses all three background
+      #                                    `sleep` children (`SLEEP_CHILD_LOST`, guest
+      #                                    exit 91 ~100ms in) and the step reports 124
+      #                                    with NO `test result:` line. Ruled out so far:
+      #                                    it is NOT ISA-specific -- outside the sandbox
+      #                                    both amd64 and arm64 pass, 5 cycles, ~12.2s --
+      #                                    and NOT the private PID namespace, which fails
+      #                                    differently (`old domain host processes
+      #                                    survived handover`) with the guest healthy.
       #
       # COST, MEASURED IN CI RATHER THAN ESTIMATED. Adding both scan-build attributes
       # was predicted to take this job from 20.0 to ~27 minutes, from a 7 minute cold

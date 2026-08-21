@@ -577,6 +577,28 @@ clippy exits 0 no matter what is wrong because `workspace.lints` sets everything
 to `warn`. But attribute its output against your parent before claiming or
 disclaiming a finding.
 
+## Uncommitted work does not exist
+
+A lane spent a day diagnosing why one nix check was red, found it was two
+independent layers deep, wrote the fix with the comments that make the next
+reader understand it — and left the whole thing as an unstaged modification in
+the shared checkout. `git log --all -S` found it on no branch anywhere. Any
+lane's `git checkout`, any `git pull` touching the same file, would have thrown
+away the day and left no trace that it had ever existed.
+
+Commit before you report, and commit before you stop. A finding you can only
+show as a working-tree diff is one command away from never having happened.
+
+This is also why `git stash` is forbidden here: the stash is the same hazard with
+a friendlier name. Commit on your own branch instead — a commit you later discard
+costs nothing, and it is visible to everyone until you do.
+
+If you must leave the shared tree dirty for a moment, say so in your report with
+the path, so whoever reads it can rescue the work instead of stepping on it. And
+if you find someone else's uncommitted work in the shared tree, preserve it
+before you touch anything: `git diff -- <path> > somewhere-outside-the-repo` and
+name it, then find out whose it is. Do not clean the tree first and ask after.
+
 ## The x86 arm of the scheduler lags the arm64 arm
 
 `native_aarch64` and `native_x86` are maintained in parallel by hand and the x86
