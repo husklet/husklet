@@ -1305,7 +1305,13 @@ async fn a_drained_container_stream_implies_a_published_exit() {
     while session.next().await.unwrap().is_some() {}
     let state = containers.inspect("drain-published").await.unwrap().state;
     assert!(
-        matches!(state, ContainerState::Exited { result: ExitStatus::Code(0), .. }),
+        matches!(
+            state,
+            ContainerState::Exited {
+                result: ExitStatus::Code(0),
+                ..
+            }
+        ),
         "the stream ended before the exit was published: {state:?}"
     );
 }
