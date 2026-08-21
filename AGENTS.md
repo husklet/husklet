@@ -1856,6 +1856,17 @@ A skip is not a pass. If a test cannot run here, it must say so out loud: the
 harness shows captured output only for failing tests, so an unrun arm otherwise
 looks exactly like a passing one.
 
+**When the thing you are varying is the environment, run the test binary
+directly.** A lane probing whether a test survives without a CA store got `ok`
+from `nix develop -c env ... cargo test`, and `0 passed; 1 failed` -- four times
+out of four, in two working directories -- from the same test's binary invoked
+directly. Two spellings of one command disagreed and only one was true. A
+`cargo test` wrapper stands between you and the process you believe you are
+configuring: it re-execs, it can re-resolve features, and it does not promise to
+hand your environment to the test unchanged. The direct run is the trustworthy
+one, and the lane caught this only because it re-ran a result it found
+surprising rather than reporting the first answer.
+
 **Count the summary line, not the `FAILED` lines.** `grep -c '\.\.\. FAILED'`
 is not a failure count. A test that re-execs itself has a child that prints its
 own `... FAILED` line into the same stream, so the grep reads **5** where
