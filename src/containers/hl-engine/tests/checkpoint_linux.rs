@@ -1569,13 +1569,31 @@ fn shared_process_tree(engine: &Arc<Engine>, output: &Path) -> SharedProcessTree
 /// any bound, so the number only has to exceed the ordinary cost of a reparent-and-reap.
 const REAP_SETTLE: Duration = Duration::from_secs(5);
 
-/// How long the transient-zombie arm of the gate below holds its zombie once the settle has been
-/// entered.
+/// How long the transient-zombie arm of the gate below holds its zombie, measured from the moment the
+/// settle is entered rather than from process spawn.
 ///
-/// Deliberately far shorter than `REAP_SETTLE` and far longer than a real reparent-and-reap. Both
-/// margins are load-bearing: the first is what lets a clamped settle stay a control rather than become a
-/// fixture artefact, and the second is what stops a slow host resolving the transient before the settle
-/// is even entered -- which would pass while proving nothing at all.
+/// **Both halves of that sentence are load-bearing, and the first version of this fixture got each of
+/// them wrong in a way that looked like success.** Read this before changing the number or the shape.
+///
+/// The first version let the intermediate process exit after a fixed sleep, which pinned the window at
+/// 1.35 s from spawn. Two independent failures followed, in opposite directions, neither visible from
+/// the result:
+///
+///  - **A false confirmation.** Clamping `REAP_SETTLE` to 1 s is the control that shows the settle's
+///    LENGTH is not what makes the gate pass. It reddened -- but because 1.35 s of fixture outlasted a
+///    1 s clamp, not because the fix needed the extra time. A control that fails for a fixture reason
+///    reads exactly like a control that fails for a real one.
+///  - **A false pass.** With the window running from spawn, a host slow enough to spend it during setup
+///    reaches the settle after the transient has already resolved. The helper then returns `Ok` on its
+///    first poll having never seen a `Z` at all, and the arm passes while proving nothing -- which is
+///    the precise failure this whole gate exists to rule out.
+///
+/// Opening the window after the settle starts closes both. The floor is "long enough that the settle is
+/// genuinely exercised"; the ceiling is "short enough that a clamped settle stays a control". 300 ms
+/// against a 5 s settle sits between them with an order of magnitude either side, and the arms of
+/// `wait_for_shared_child_reap_result_settles_a_transient_zombie_and_still_catches_a_leak` are what
+/// prove it: the 1 s clamp must stay GREEN and the 100 ms clamp must go RED. If you change this
+/// constant, re-run both clamps -- one of them alone cannot tell you which way you have gone wrong.
 const TRANSIENT_ZOMBIE_WINDOW: Duration = Duration::from_millis(300);
 
 /// Wait for the shared fixture's two worker identities to disappear, and say exactly what is left if
