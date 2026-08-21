@@ -230,6 +230,11 @@ three further hooks carry the loop the rest of the way:
   "simplify" this to `set_size` on the panes: a pane is `hexpand`/`vexpand`, the next
   allocation overwrites the grid, and the guest goes on reporting the old geometry while
   the hook reports success. That was measured here before it was fixed.
+  **Unverified as of 2026-08-21:** the tree carries two disagreeing doc comments
+  for this variable -- `screenshot.rs:40` says window pixels, as above, and
+  `husklet.rs:102` says "a grid geometry to apply to every pane, as
+  `<ms>:<columns>x<rows>`". One of the two is wrong; the GUI owner should say
+  which rather than either of us guessing from the outside.
 
 `storybook` carries the same hook under `STORYBOOK_SHOT`/`STORYBOOK_SHOT_MS`.
 Verified on x86_64 Linux at ad652522d: the manager window, the New-Workspace dialog,
@@ -563,9 +568,10 @@ your answer, whatever it is called and whether or not it took the lock. Run it
 before a measurement, not after one disappoints you.
 
 **Record elapsed time beside every result; it catches what the load average
-cannot.** A load figure averages over an eighteen-core box and absorbs four busy
-cores without looking alarming — `6.6` was recorded during those hours and read
-as ordinary. What gave the orphan away was a test that takes 12.4 seconds taking
+cannot.** A load figure averages over a 32-CPU box (16 cores, two threads each;
+`nproc` is 32, and this file said "eighteen-core" until 2026-08-21) and absorbs
+four busy cores without looking alarming — `6.6` was recorded during those hours
+and read as ordinary. What gave the orphan away was a test that takes 12.4 seconds taking
 **405**. A runtime thirty times its own baseline is unambiguous where a load
 number is deniable, so a result recorded without its elapsed time cannot be
 audited for contention afterwards.
@@ -664,7 +670,7 @@ line is missing rather than inferring one.
 *series* of invocations with brief gaps between them, so a point-in-time
 `pgrep` reads zero in every gap while the job is very much alive. Load average
 cannot rescue this either: all three figures read ~0.8 while a run was sixteen
-seconds underway, because they are decaying averages of an eighteen-core box.
+seconds underway, because they are decaying averages of a 32-CPU box.
 Require **quiet for a sustained interval** — poll every few seconds and only
 declare free after ~120 consecutive seconds at zero. A manager granting a
 window on one sample will hand it out mid-series, and the lane that accepts it
@@ -711,7 +717,7 @@ commit**, not against `main`.
 `cargo clippy ... -- -D warnings` makes this sharper, because it denies lints the
 crate's configured set only warns about, so it surfaces pre-existing findings as
 though they were yours. That does not make it the wrong command — it is
-`flake.nix:412`, the repository's own verification gate, and without the flag
+`flake.nix:436`, the repository's own verification gate, and without the flag
 clippy exits 0 no matter what is wrong because `workspace.lints` sets everything
 to `warn`. But attribute its output against your parent before claiming or
 disclaiming a finding.
@@ -739,6 +745,15 @@ before you touch anything: `git diff -- <path> > somewhere-outside-the-repo` and
 name it, then find out whose it is. Do not clean the tree first and ask after.
 
 ## The x86 arm of the scheduler lags the arm64 arm
+
+**The symbols below are gone.** `scheduler/native.rs`, `native_aarch64`,
+`native_x86` and `mark_productive` exist nowhere in the tree as of 2026-08-21;
+only `testing`'s output parsers still name `hl-native-entry:`. This records the
+deleted Rust executor, exactly as the "Historical: why the deleted Rust executor
+translated less on arm64" subsection does, and was simply never labelled. It is
+kept because the rule at the end survives its example, and because these counter
+readings may be the only surviving trace of what that arm did. Do not go looking
+for the code.
 
 `native_aarch64` and `native_x86` are maintained in parallel by hand and the x86
 side is repeatedly the one missing a piece. Two independent lanes found this on
@@ -852,8 +867,25 @@ non-root user could not, because doing so would have meant loosening the mode on
 a directory three other lanes were working in.
 
 Put worktrees under **`/srv/worktrees/<name>`**, which is `0755`, when the work
-may need running without privilege. `CARGO_TARGET_DIR` under `/var/tmp` is
-already fine -- that path is `1777`.
+may need running without privilege.
+
+**Corrected 2026-08-21: `/var/tmp` on this box is `0755` and not sticky.** This
+paragraph used to say it was `1777`. `/tmp` is `1777`; `/var/tmp` is not, and
+`stat -c %a /var/tmp` says so in one command. A `CARGO_TARGET_DIR` under
+`/var/tmp/<lane>` still serves an unprivileged run as long as your own directory
+below it is traversable, but check the mode rather than assuming the sticky bit.
+
+That correction has a consequence nobody has chased. The root-only failure of
+`stop_wait_failure_attempts_rollback_before_returning` -- named under "A single
+run of a suite with a flaky member is not a count" -- has been explained on this
+box, including in briefs circulated to roughly eighteen lanes, as a consequence
+of `/var/tmp` being sticky and shared. **The failure is real and reproducible;
+the premise of that explanation is false.** Nobody has re-derived the cause, so
+treat it as unknown rather than as documented. What would settle it: run the test
+as a non-root account with `CARGO_TARGET_DIR` on a `1777` path and again on a
+`0755` one, and see whether the mode is load-bearing at all. Until someone has,
+do not repeat the sticky-`/var/tmp` explanation -- a confidently wrong cause is
+harder to dislodge than an admitted gap.
 
 This matters beyond convenience. CI runs unprivileged, and several suites here
 (`pid_namespace`, `namespace_transaction`, `unix_identity`, `seccomp_vm`) can
@@ -1935,7 +1967,8 @@ Two limiters remain, and the third is gone:
   a `direct_modes` entry, which only a completed run creates, so the first run spends
   the resolver. That is what moved the 22-row signature `builds=1 hits=2 sites=1
   entries=1 completed=8` to `builds=36 … completed=258`: commit 271a6e86e, not drift.
-  `scheduler.rs::direct_authority_is_earned_by_a_completed_run` pins it. x86 still has
+  `scheduler.rs::direct_authority_is_earned_by_a_completed_run` pins it -- that test
+  no longer exists either, checked 2026-08-21. x86 still has
   no direct authority at all — `run_x86_lease` takes no `allow_direct`, `run_x86_inner`
   always passes an operand resolver, and the x86 `RunStatistics` hardcode
   `direct: false` and `direct_guard: false`. Its sixth positional argument is
