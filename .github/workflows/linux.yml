@@ -321,6 +321,29 @@ jobs:
           xvfb-run -a -s '-screen 0 1600x1000x24'
           cargo test -p husklet --bins --features gui --locked --offline
 
+      # THE FIVE FILES THE STEP ABOVE COULD NOT REACH. `hl-gui-gtk/tests/` holds five
+      # more suites that skip on `no display connection`, and until this step nothing
+      # RAN them on any host: `cargo check --workspace --all-targets` compiles without
+      # running, `cargo test --workspace --lib --bins` excludes integration targets, and
+      # the only runner that would reach them -- `cargo test --workspace --all-targets`
+      # inside the macOS `nix flake check` -- is a fast failure at design-lint.
+      #
+      # THIS ONE IS NOT MERELY VACUOUS HEADLESS, IT IS RED HEADLESS. Measured on the
+      # merged tip: with no display `--tests` exits 101 because `--test geometry` reports
+      # `0 passed; 1 failed` -- it does not skip, it fails. Under `xvfb-run` all seven
+      # targets pass. So this suite has to be wrapped rather than simply added, which is
+      # why it was not enough to append it to the list somewhere.
+      #
+      # SHOWN TO FAIL. Planting a false assertion in
+      # `a_described_panel_materializes_as_widgets` takes the wrapped step to
+      # `0 passed; 1 failed` on `declarative`; restoring it returns all seven to green.
+      - name: Test the GUI toolkit adapter suites
+        run: >-
+          .github/scripts/cargo-test-named.sh "GUI toolkit adapter suites"
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          xvfb-run -a -s '-screen 0 1600x1000x24'
+          cargo test -p hl-gui-gtk --tests --locked --offline
+
       - name: Test the engine composition root
         run: >-
           .github/scripts/cargo-test-named.sh "engine composition root"
