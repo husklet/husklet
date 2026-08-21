@@ -11,7 +11,9 @@ autobins = false
 workspace = true
 
 [dependencies]
-clap.workspace = true
+# `string` lets the usage, version and suggestion lines carry the worker name the caller actually
+# typed, which is resolved from argument zero and so cannot be a `&'static str`.
+clap = { workspace = true, features = ["string"] }
 hl-engine = { path = "../../containers/hl-engine" }
 hl-native = { path = "../../runtime/hl-native" }
 hl-log = { path = "../../packages/hl-log" }
@@ -37,3 +39,4 @@ path = "src/bin/x86.rs"
 # libtest prints captured output only for a failing test.
 libc = "0.2"
 serde_json.workspace = true
+tempfile.workspace = true
