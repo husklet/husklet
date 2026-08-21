@@ -1965,6 +1965,55 @@ comparing the same thing, and the failure is total rather than marginal, so it
 masquerades as "my change broke everything" or "my change fixed nothing". Redirect
 stdin, and say that you did.
 
+### `checkpoint_linux` has miscounted itself five different ways in one day
+
+Its failure count was quoted as 3, then 5, then 3 again to a dozen lanes on one
+day, and every disagreement was an artefact of how the suite was invoked or which
+line was read -- never of the code. Five distinct mechanisms, all of them live at
+the time of writing:
+
+- **Stdin**, above. The failure is total rather than marginal, so it reads as
+  "my change broke everything" or "my change fixed nothing".
+- **The first `test result:` line in the log is not the suite's.** Several tests
+  re-exec this binary with `--exact <name> --ignored` to capture a child's stderr,
+  and that child prints its own summary first. A child's line always carries a
+  **non-zero `filtered out`**; the suite's is the one reading `0 filtered out`.
+  Discriminate on that -- never on position, and never on `grep -c FAILED`.
+- **One run is not a number.** Two failures route through `shared_state_round_trip`
+  and were flaky at ~3/8 each until the reap settle was fixed, so a single run
+  could legitimately report anywhere across a range of three. Take at least three
+  and separate the deterministic core from the flaky tail before quoting anything.
+- **Another lane's concurrent run contends with yours.** `exclusive_checkpoint_test()`
+  is an in-process `RwLock` and says nothing about a second process; two suites at
+  once share host-global state and corrupt each other. Check for a foreign
+  `*/deps/checkpoint_linux-*` before you start **and while you run**. A lane that
+  checked only at the start found its own earlier job -- which had survived a
+  `kill` -- racing its measurement.
+- **A run can abort and produce no count at all.** A failing test poisons every
+  mutex it held; the engine's teardown then runs inside `Drop` while that panic is
+  unwinding, and a `lock().unwrap()` there is a panic in a destructor, which Rust
+  makes non-unwinding. The process `abort()`s: no `test result:` line, later tests
+  skipped, exit **134**. One flaky ten-second wait destroyed a whole run this way.
+  The doubles now tolerate poisoning, but **check for rc 134 and for a missing
+  summary line** before believing any figure -- a suite that reports nothing looks
+  less wrong than one reporting a wrong number.
+
+**The figure, at `a8da3e963`.** 43 tests: **35 passed, 3 failed, 5 ignored**, from
+
+```text
+nix develop . --command <target>/debug/deps/checkpoint_linux-<hash> \
+  --test-threads=1 < /dev/null
+```
+
+Two of the three are deterministic and fail in every run --
+`accepted_connected_unix_stream_survives_checkpoint_on_both_isas` and
+`one_rejected_process_prevents_manifest_publication_on_both_isas`. The rest of the
+tail is flaky and a count that includes it is a count of that run only:
+`arm64_cross_process_shared_futex` and `shared_memory_futex_and_pshared_sync` (both
+the reap-settle defect, now fixed), and `inherited_pipe_ofd` at about 1 in 8 for an
+unrelated reason. **Quote the deterministic core and the tail separately**, or the
+next lane will read your total as a target and chase a test that was never broken.
+
 **When the thing you are varying is the environment, run the test binary
 directly.** A lane probing whether a test survives without a CA store got `ok`
 from `nix develop -c env ... cargo test`, and `0 passed; 1 failed` -- four times
