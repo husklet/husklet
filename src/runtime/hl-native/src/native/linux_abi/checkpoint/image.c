@@ -2210,15 +2210,24 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
     }
     // The digest is asked of the sink: the server accumulated it while the bytes went past, so nothing
     // re-reads the embedder's store.
-    if (ckpt_sink_digest(sink, &man.image_hash, &man.image_files, &man.image_bytes) != 0) {
+    // Both of these fail from a checkpoint-stream PROTOCOL STATUS and set no errno anywhere on the path,
+    // so `strerror(errno)` here reported whatever unrelated syscall had last set it -- in practice the
+    // ENOTTY from this function's own tcgetattr on a non-tty, twenty lines above. Every socket-topology
+    // refusal in this engine consequently blamed a terminal that was never involved. The sink now reports
+    // its own outcome and the refusal names that.
+    struct ckpt_sink_outcome outcome;
+    char detail[256];
+    if (ckpt_sink_digest(sink, &man.image_hash, &man.image_files, &man.image_bytes, &outcome) != 0) {
         char reason[HL_CKPT_STREAM_NAME_MAX];
-        snprintf(reason, sizeof reason, "cannot hash the checkpoint image: %s", strerror(errno));
+        ckpt_sink_outcome_describe(&outcome, detail, sizeof detail);
+        snprintf(reason, sizeof reason, "cannot hash the checkpoint image: %s", detail);
         ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_DIGEST, reason);
     }
     // Explicit completion: the only signal that the image is complete.
-    if (ckpt_sink_commit(sink, &man, sizeof man) != 0) {
+    if (ckpt_sink_commit(sink, &man, sizeof man, &outcome) != 0) {
         char reason[HL_CKPT_STREAM_NAME_MAX];
-        snprintf(reason, sizeof reason, "cannot publish the checkpoint manifest: %s", strerror(errno));
+        ckpt_sink_outcome_describe(&outcome, detail, sizeof detail);
+        snprintf(reason, sizeof reason, "cannot publish the checkpoint manifest: %s", detail);
         ckpt_coordinator_refuse(&phases, CKPT_REFUSAL_MANIFEST, reason);
     }
     ckpt_phase_finish(&phases, "manifest_publication", phase, 0);

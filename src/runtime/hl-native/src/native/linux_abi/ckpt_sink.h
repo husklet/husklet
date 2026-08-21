@@ -54,6 +54,25 @@ enum {
     CKPT_SINK_PUBLISH_ATOMIC = 1u << 0,
 };
 
+// Why a sink round trip ended, in the vocabulary the sink actually has.
+//
+// NEITHER FIELD IS AN ERRNO, and nothing on this path sets one. A sink operation fails for exactly two
+// reasons -- the host answered and refused, or no reply arrived at all -- and both are protocol events,
+// not syscall results. A diagnostic that prints `strerror(errno)` after one of them prints whatever
+// unrelated syscall last set it: for months every socket-topology checkpoint refusal in this engine read
+// "Inappropriate ioctl for device", the ENOTTY left behind by the manifest's own `tcgetattr` on a non-tty
+// twenty lines earlier, and it sent every reader looking for a terminal that was never involved.
+//
+// `digest` and `commit` are the two operations whose failure a human reads, so they carry this out. See
+// `ckpt_sink_outcome_describe` in sink_stream.h, which renders it.
+struct ckpt_sink_outcome {
+    // 1: a well-formed reply arrived and `status` is the host's own answer.
+    // 0: no reply arrived -- the transport failed, or no sink is installed at all. `status` is unset,
+    //    and `hl_ckpt_channel_failure()` names the step the round trip died at.
+    int answered;
+    int status; // HL_CKPT_STATUS_*, meaningful only when `answered`.
+};
+
 typedef struct ckpt_sink_vtable {
     // Objects. `group` is NULL for an image-level object, else the name passed to group_begin.
     int (*begin)(struct ckpt_sink *sink, const char *group, const char *name, uint32_t flags,
@@ -79,11 +98,14 @@ typedef struct ckpt_sink_vtable {
     int (*group_count)(struct ckpt_sink *sink, const char *prefix);  // >=0 count, -1 error
 
     // The image digest that authenticates the checkpoint. Called once, by the
-    // coordinator, immediately before commit.
-    int (*digest)(struct ckpt_sink *sink, uint64_t *hash, uint64_t *files, uint64_t *bytes);
+    // coordinator, immediately before commit. Returns 0 or -1, and reports WHY through `outcome`
+    // (never NULL from the wrappers below) because the -1 carries no errno.
+    int (*digest)(struct ckpt_sink *sink, uint64_t *hash, uint64_t *files, uint64_t *bytes,
+                  struct ckpt_sink_outcome *outcome);
 
-    // Explicit completion of the whole image. Nothing may be emitted afterwards.
-    int (*commit)(struct ckpt_sink *sink, const void *manifest, size_t size);
+    // Explicit completion of the whole image. Nothing may be emitted afterwards. Same contract as
+    // `digest`: the -1 is a protocol outcome and `outcome` is the only account of it.
+    int (*commit)(struct ckpt_sink *sink, const void *manifest, size_t size, struct ckpt_sink_outcome *outcome);
 } ckpt_sink_vtable;
 
 struct ckpt_sink {
@@ -181,12 +203,18 @@ static int ckpt_sink_group_count(struct ckpt_sink *sink, const char *prefix) {
     return sink && sink->ops ? sink->ops->group_count(sink, prefix) : -1;
 }
 
-static int ckpt_sink_digest(struct ckpt_sink *sink, uint64_t *hash, uint64_t *files, uint64_t *bytes) {
-    return sink && sink->ops ? sink->ops->digest(sink, hash, files, bytes) : -1;
+static int ckpt_sink_digest(struct ckpt_sink *sink, uint64_t *hash, uint64_t *files, uint64_t *bytes,
+                            struct ckpt_sink_outcome *outcome) {
+    outcome->answered = 0;
+    outcome->status = 0;
+    return sink && sink->ops ? sink->ops->digest(sink, hash, files, bytes, outcome) : -1;
 }
 
-static int ckpt_sink_commit(struct ckpt_sink *sink, const void *manifest, size_t size) {
-    return sink && sink->ops ? sink->ops->commit(sink, manifest, size) : -1;
+static int ckpt_sink_commit(struct ckpt_sink *sink, const void *manifest, size_t size,
+                            struct ckpt_sink_outcome *outcome) {
+    outcome->answered = 0;
+    outcome->status = 0;
+    return sink && sink->ops ? sink->ops->commit(sink, manifest, size, outcome) : -1;
 }
 
 #endif

@@ -167,9 +167,22 @@ static long checkpoint_channel_receipt_owner;
  * only; see the header. */
 static char checkpoint_channel_failure[192];
 
+/* Records `step`, and the errno IF THERE IS ONE.
+ *
+ * Three of this file's failures are not syscall results and set no errno at all: an absent broker, a
+ * request that fails the protocol's own size bounds, and a peer that closed the connection cleanly (a
+ * zero-length read, which is not an error and touches nothing). This used to append `strerror(errno)`
+ * unconditionally, so those three reported whatever unrelated syscall had last set it -- and what the
+ * checkpoint coordinator leaves there is the ENOTTY from its own `tcgetattr` on a non-tty, so every
+ * socket-topology refusal in this engine read "Inappropriate ioctl for device" and sent its reader
+ * looking for a terminal that was never involved. Callers on those three paths clear errno first, and
+ * the parenthetical is omitted rather than fabricated. */
 static int checkpoint_channel_failed(const char *step) {
     int saved = errno;
-    snprintf(checkpoint_channel_failure, sizeof checkpoint_channel_failure, "%s (%s)", step, strerror(saved));
+    if (saved == 0)
+        snprintf(checkpoint_channel_failure, sizeof checkpoint_channel_failure, "%s", step);
+    else
+        snprintf(checkpoint_channel_failure, sizeof checkpoint_channel_failure, "%s (%s)", step, strerror(saved));
     errno = saved;
     return -1;
 }
@@ -330,7 +343,12 @@ static int checkpoint_write_all(int descriptor, const void *data, size_t size) {
             if (errno == EINTR) continue;
             return -1;
         }
-        if (count == 0) return -1;
+        /* A zero-length write is the peer gone, not a syscall error: errno is untouched, so clear it
+           rather than let the caller's diagnostic print an unrelated leftover. */
+        if (count == 0) {
+            errno = 0;
+            return -1;
+        }
         done += (size_t)count;
     }
     return 0;
@@ -345,7 +363,12 @@ static int checkpoint_read_all(int descriptor, void *data, size_t size) {
             if (errno == EINTR) continue;
             return -1;
         }
-        if (count == 0) return -1; /* the server went away mid-image: the capture must fail, not truncate */
+        /* The server went away mid-image: the capture must fail, not truncate. A clean EOF sets no
+           errno, so clear it -- see checkpoint_channel_failed. */
+        if (count == 0) {
+            errno = 0;
+            return -1;
+        }
         done += (size_t)count;
     }
     return 0;
@@ -354,7 +377,10 @@ static int checkpoint_read_all(int descriptor, void *data, size_t size) {
 int hl_ckpt_channel_acquire(void) {
     hl_ckpt_hello hello;
     int pair[2];
-    if (checkpoint_broker < 0) return checkpoint_channel_failed("find a published checkpoint broker");
+    if (checkpoint_broker < 0) {
+        errno = 0; /* no syscall was made; see checkpoint_channel_failed */
+        return checkpoint_channel_failed("find a published checkpoint broker");
+    }
     /* Inherited across fork() like the channel below, and dropped for the same reason: it belongs to the
      * parent's announcement, and this process is about to make its own. */
     if (checkpoint_channel_receipt >= 0 && checkpoint_channel_receipt_owner != (long)getpid())
@@ -410,8 +436,10 @@ int hl_ckpt_channel_call(hl_ckpt_request *request, const char *name, const void 
     int descriptor = hl_ckpt_channel_acquire();
     size_t name_size = name != NULL ? strlen(name) + 1 : 0;
     if (descriptor < 0) return -1; /* acquire already named the step */
-    if (name_size > HL_CKPT_STREAM_NAME_MAX || request->length > HL_CKPT_STREAM_PAYLOAD_MAX)
+    if (name_size > HL_CKPT_STREAM_NAME_MAX || request->length > HL_CKPT_STREAM_PAYLOAD_MAX) {
+        errno = 0; /* a bounds check, not a syscall; see checkpoint_channel_failed */
         return checkpoint_channel_failed("frame a request within the protocol's size bounds");
+    }
     request->magic = HL_CKPT_STREAM_MAGIC_REQUEST;
     request->abi = HL_CKPT_STREAM_ABI;
     request->name_size = (uint32_t)name_size;

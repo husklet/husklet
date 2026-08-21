@@ -339,24 +339,55 @@ static int ckpt_sink_stream_group_count(struct ckpt_sink *sink, const char *pref
     return (int)reply.value;
 }
 
-static int ckpt_sink_stream_digest(struct ckpt_sink *sink, uint64_t *hash, uint64_t *files, uint64_t *bytes) {
+// Record one round trip's outcome for a caller that has to explain it to a human. `ckpt_stream_call`
+// returns -1 for a TRANSPORT failure and >= 0 for the host's own status, and collapsing the two -- which
+// is what these two functions used to do -- destroys the only distinction the reader needs.
+static void ckpt_sink_stream_outcome(struct ckpt_sink_outcome *outcome, int status) {
+    if (outcome == NULL) return;
+    outcome->answered = status >= 0;
+    outcome->status = status;
+}
+
+// Render why a sink round trip failed, into `out`.
+//
+// Nothing here is an errno and nothing here sets one, which is the whole reason this function exists:
+// `strerror(errno)` after one of these failures reports an unrelated syscall's leftovers with complete
+// confidence, and a fabricated diagnostic is worse than none because it sends the reader somewhere wrong.
+static void ckpt_sink_outcome_describe(const struct ckpt_sink_outcome *outcome, char *out, size_t capacity) {
+    if (outcome != NULL && outcome->answered) {
+        snprintf(out, capacity, "the host answered and refused it (checkpoint-stream status %d)", outcome->status);
+        return;
+    }
+    const char *step = hl_ckpt_channel_failure();
+    snprintf(out, capacity, "it never reached the host: the channel could not %s",
+             step != NULL ? step : "complete the round trip");
+}
+
+static int ckpt_sink_stream_digest(struct ckpt_sink *sink, uint64_t *hash, uint64_t *files, uint64_t *bytes,
+                                   struct ckpt_sink_outcome *outcome) {
     hl_ckpt_stream_digest digest = {0};
     hl_ckpt_reply reply;
     (void)sink;
-    if (ckpt_stream_call(HL_CKPT_OP_DIGEST, NULL, 0, 0, 0, NULL, 0, &reply, &digest, sizeof digest) !=
-            HL_CKPT_STATUS_OK ||
-        reply.length != sizeof digest)
+    int status = ckpt_stream_call(HL_CKPT_OP_DIGEST, NULL, 0, 0, 0, NULL, 0, &reply, &digest, sizeof digest);
+    ckpt_sink_stream_outcome(outcome, status);
+    if (status != HL_CKPT_STATUS_OK || reply.length != sizeof digest) {
+        // A short reply is the host answering with something this protocol cannot be: report it as an
+        // answer, because it is one, rather than as a transport failure.
+        if (status == HL_CKPT_STATUS_OK) ckpt_sink_stream_outcome(outcome, HL_CKPT_STATUS_ERROR);
         return -1;
+    }
     *hash = digest.hash;
     *files = digest.files;
     *bytes = digest.bytes;
     return 0;
 }
 
-static int ckpt_sink_stream_commit(struct ckpt_sink *sink, const void *manifest, size_t size) {
+static int ckpt_sink_stream_commit(struct ckpt_sink *sink, const void *manifest, size_t size,
+                                   struct ckpt_sink_outcome *outcome) {
     (void)sink;
-    return ckpt_stream_call(HL_CKPT_OP_COMMIT, NULL, 0, 0, 0, manifest, size, NULL, NULL, 0) == HL_CKPT_STATUS_OK ? 0
-                                                                                                                  : -1;
+    int status = ckpt_stream_call(HL_CKPT_OP_COMMIT, NULL, 0, 0, 0, manifest, size, NULL, NULL, 0);
+    ckpt_sink_stream_outcome(outcome, status);
+    return status == HL_CKPT_STATUS_OK ? 0 : -1;
 }
 
 static const ckpt_sink_vtable g_ckpt_sink_stream_ops = {
