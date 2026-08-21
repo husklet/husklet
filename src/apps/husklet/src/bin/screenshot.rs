@@ -84,20 +84,20 @@ impl Screenshot {
         };
         let mut panes = Vec::new();
         crate::screens::workspace::terminal::PaneView::all(window.upcast_ref::<gtk::Widget>(), &mut panes);
-        let mut text = String::new();
-        for (index, pane) in panes.iter().enumerate() {
-            let (rows, _older) = crate::screens::workspace::terminal::Terminal::new(pane).tail(400);
-            text.push_str(&format!(
-                "--- pane {index} grid {}x{} ---\n",
-                pane.column_count(),
-                pane.row_count()
-            ));
-            for row in rows {
-                text.push_str(&row);
-                text.push('\n');
-            }
-        }
-        match std::fs::write(&path, text) {
+        let sections: Vec<String> = panes
+            .iter()
+            .enumerate()
+            .map(|(index, pane)| {
+                let (rows, _older) = crate::screens::workspace::terminal::Terminal::new(pane).tail(400);
+                format!(
+                    "--- pane {index} grid {}x{} ---\n{}\n",
+                    pane.column_count(),
+                    pane.row_count(),
+                    rows.join("\n")
+                )
+            })
+            .collect();
+        match std::fs::write(&path, sections.concat()) {
             Ok(()) => eprintln!("[husklet] wrote pane text {path} ({} panes)", panes.len()),
             Err(error) => eprintln!("[husklet] pane text write failed for {path}: {error}"),
         }
