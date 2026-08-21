@@ -19,8 +19,17 @@ path = "src/lib.rs"
 # model. The edge points UP to the std-only leaf `hl-ws` (this crate implements those traits).
 hl-ws = { path = "../hl-ws" }
 hl-fs = { path = "../../packages/hl-fs", default-features = false }
-libc = "0.2"
 bitflags = "2"
+
+# `libc` is here and not in plain `[dependencies]` because this crate's ONLY use of it is
+# `pty/local.rs` -- `posix_openpt`/`grantpt`/`unlockpt`/`ptsname` plus `fork`/`execvp`/`waitpid`.
+# `libc` itself builds for `x86_64-pc-windows-gnu`, so a plain entry does not FAIL there; it
+# silently offers a Windows CRT surface that has none of those symbols, and the 102 errors that
+# produces land in `pty/local.rs` rather than at the dependency. Declaring the edge Unix-only puts
+# the platform statement in the manifest, where `pty/mod.rs`'s `#[cfg(unix)] pub mod local;` can be
+# read against it.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile.workspace = true

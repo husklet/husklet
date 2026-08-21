@@ -18,7 +18,6 @@ futures-util.workspace = true
 fs2.workspace = true
 hl-fs = { path = "../../packages/hl-fs" }
 hl-log = { path = "../../packages/hl-log" }
-nix = { version = "0.30", features = ["fs"] }
 oci-client.workspace = true
 oci-spec.workspace = true
 reflink-copy.workspace = true
@@ -30,6 +29,12 @@ tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "rt", "sync"] }
 uuid = { workspace = true, features = ["v4"] }
+
+# Unix-only for the same measured reason as `hl-container`'s copy: `nix` builds off Unix and
+# resolves nothing there, so a plain entry states a portability the crate does not have. `fs` here
+# is `fchmodat`/`fchownat`/`mknodat` and the layer-application mode and ownership bits.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.30", features = ["fs"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

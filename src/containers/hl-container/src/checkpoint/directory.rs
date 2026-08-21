@@ -6,13 +6,24 @@
 //! cross-checked at a Windows target -- but that is only the outermost obstacle, and
 //! removing it would not help, because THIS CRATE CANNOT BE CONFIGURED NON-UNIX:
 //!
-//!   * `Cargo.toml` lists `nix = "0.30"` in plain `[dependencies]`, not under
-//!     `[target.'cfg(unix)'.dependencies]`, and `nix` does not build off Unix;
 //!   * `src/config.rs` and `src/engine/spec.rs` import `std::os::unix::fs` with no
-//!     `cfg` on them at all;
-//!   * and the same is true one crate down -- `hl-images`, which this crate depends
-//!     on unconditionally, also lists `nix = "0.30"` in plain `[dependencies]`. It is
-//!     also where `aws-lc-sys` comes from, through `oci-client` and `reqwest`.
+//!     `cfg` on them at all, and so does `hl-images` -- which this crate depends on
+//!     unconditionally -- in some sixty places across `snapshot/`, `layer/`,
+//!     `rootfs/` and `format/`;
+//!   * `hl-images` is also where `aws-lc-sys` comes from, through `oci-client` and
+//!     `reqwest`.
+//!
+//! ONE REASON THIS FILE USED TO GIVE IS FALSE, and it is the manifest one. It said
+//! `nix` sits in plain `[dependencies]` "and `nix` does not build off Unix". It does
+//! build: measured 2026-08-21 on this `x86_64` Linux box, a scratch crate depending on
+//! `nix = { version = "0.30", features = ["dir", "fs", "signal"] }` compiles clean for
+//! `x86_64-pc-windows-gnu` in the pinned shell. Every module inside it is gated on
+//! `target_os`, so what you get there is an EMPTY crate -- `nix::sys` and
+//! `nix::unistd` do not resolve -- which is a `cfg`-width defect in the dependency's
+//! consumers, not a build failure in the dependency. The entry has since moved to
+//! `[target.'cfg(unix)'.dependencies]` in both manifests anyway, because a dependency
+//! that can never carry an item off Unix should say so; but do not expect that move to
+//! have changed what compiles, and do not repeat the claim that it was a blocker.
 //!
 //! So these are not arms awaiting a host to run on. They are unreachable in every
 //! configuration the manifest permits, which is why nothing has ever type-checked
