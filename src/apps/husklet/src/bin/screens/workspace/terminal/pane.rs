@@ -286,6 +286,23 @@ impl<'a> PaneView<'a> {
         }
     }
 
+    /// Every VTE terminal in `w`'s subtree, in layout order.
+    ///
+    /// `first` answers the pane a split acts on; a headless verification run has
+    /// to read them all, because a window with two panes and one live shell is
+    /// exactly the failure worth catching.
+    pub(crate) fn all(w: &gtk::Widget, found: &mut Vec<vte4::Terminal>) {
+        if let Some(t) = w.downcast_ref::<vte4::Terminal>() {
+            found.push(t.clone());
+            return;
+        }
+        let mut child = w.first_child();
+        while let Some(c) = child {
+            Self::all(&c, found);
+            child = c.next_sibling();
+        }
+    }
+
     pub(crate) fn first(w: &gtk::Widget) -> Option<vte4::Terminal> {
         if let Some(t) = w.downcast_ref::<vte4::Terminal>() {
             return Some(t.clone());
