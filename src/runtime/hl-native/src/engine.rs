@@ -1376,7 +1376,10 @@ int main(void) {
                 10..=57 => format!("openat(\"/work\", O_DIRECTORY) failed with errno {}", status - 10),
                 60..=107 => format!("getdents64 on the mount failed with errno {}", status - 60),
                 110..=157 => {
-                    format!("openat(\"/work/nested\", O_DIRECTORY) failed with errno {}", status - 110)
+                    format!(
+                        "openat(\"/work/nested\", O_DIRECTORY) failed with errno {}",
+                        status - 110
+                    )
                 }
                 160..=207 => format!("getdents64 on `/work/nested` failed with errno {}", status - 160),
                 other => format!("the guest exited {other}"),
