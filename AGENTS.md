@@ -567,6 +567,30 @@ minute mark with no results file ever written. Start anything longer than a
 turn under `setsid nohup` so it survives, and have it write results
 incrementally rather than only at the end.
 
+**`setsid nohup` survives your turn, not your siblings.** It solves exactly one
+problem -- the harness reaping background jobs when a turn pauses -- and none of
+the others. A sibling's `pkill -x cargo` matches by name across every session on
+the box, so a gate started correctly under its own session still dies. One lane
+lost a twelve-arm gate this way at the eleventh minute of `check --workspace`.
+Detaching is necessary and not sufficient: the durable part is that the runner
+writes an `RC_<arm>=<rc>` line per arm as it finishes, so a kill costs you the
+arms you had not reached rather than all of them.
+
+**An arm with no `RC_` line has no verdict.** It is not a pass, it is not a
+fail, and it is not necessarily still running. Two states look identical in a
+directory of logs and must never be conflated: a log that ends with a
+diagnosis **failed**, and a log that ends abruptly mid-compilation with no error
+and no summary **was killed**. A lane read a stalled log directory as a live gate
+and waited on a process that had been dead for minutes. Check the runner's pid is
+alive before you attribute silence to slowness, and re-run any arm whose verdict
+line is missing rather than inferring one.
+
+**Green on the pre-merge commit is not green on what you push.** Six proven arms
+on your own SHA are evidence about your change in isolation. The thing you push
+is the merge, and the merge is precisely where a conflict with the other lanes'
+week would first appear. Re-run every arm on the merged tip, including the ones
+you already have.
+
 **A single zero does not mean the box is free.** A measuring lane runs a
 *series* of invocations with brief gaps between them, so a point-in-time
 `pgrep` reads zero in every gap while the job is very much alive. Load average
@@ -982,8 +1006,22 @@ grep hl-code /proc/$C/maps
 ```
 
 On the aarch64 host that prints the W^X pair -- two 64 MiB `/memfd:hl-code`
-mappings, one `rw-s` and one `r-xs`. On this x86_64 host the same engine, guest
-and command print **nothing**: there is no arena because there is no JIT. Dumping
+mappings, one `rw-s` and one `r-xs`.
+
+**Corrected 2026-08-21: this probe is not a JIT tripwire, and the paragraph that
+used to stand here was wrong.** It claimed the same command prints *nothing* on
+this x86_64 host because there is no JIT. It prints. A measuring lane ran it at
+tip and saw **four** `/memfd:hl-code` mappings under an x86_64 guest and **two**
+under an aarch64 guest, on a host with no translated execution at all. The arena
+exists because the interpreter bump-allocates its block descriptors from it, so a
+positive `grep` says only that the arena was mapped -- never that anything in it
+was translated. The same lane walked **175,644 live block descriptors** in a
+running guest and found **0** transliterated. Anyone using the presence of the
+mapping as evidence of JIT activity is reading a false positive; use the
+`reserved_register` sentinel above (0 live, 4 not applicable) which answers the
+question that was actually being asked.
+
+Dumping
 the arena settles it completely; 256 bytes off the head of one, disassembled with
 `objdump -D -b binary -m aarch64`, is the translated-block prologue --
 `ldr x9,[x0,#248]` / `mov sp,x9` / `msr nzcv,x9`, then `ldp q0,q1,[x0,#384]`
@@ -1863,6 +1901,52 @@ a control that *had* to fail, and noticed it hadn't.
 A skip is not a pass. If a test cannot run here, it must say so out loud: the
 harness shows captured output only for failing tests, so an unrun arm otherwise
 looks exactly like a passing one.
+
+**When the thing you are varying is the environment, run the test binary
+directly.** A lane probing whether a test survives without a CA store got `ok`
+from `nix develop -c env ... cargo test`, and `0 passed; 1 failed` -- four times
+out of four, in two working directories -- from the same test's binary invoked
+directly. Two spellings of one command disagreed and only one was true. A
+`cargo test` wrapper stands between you and the process you believe you are
+configuring: it re-execs, it can re-resolve features, and it does not promise to
+hand your environment to the test unchanged. The direct run is the trustworthy
+one, and the lane caught this only because it re-ran a result it found
+surprising rather than reporting the first answer.
+
+**Count the summary line, not the `FAILED` lines.** `grep -c '\.\.\. FAILED'`
+is not a failure count. A test that re-execs itself has a child that prints its
+own `... FAILED` line into the same stream, so the grep reads **5** where
+`test result:` reads **4**. That phantom was carried in this file and quoted into
+a dozen lane briefs as "five pre-existing failures" until someone ran the suite
+three times and read the summary. `test result: FAILED. 34 passed; 4 failed; 5
+ignored` is the number; anything you derive by grepping the transcript is a
+guess that happens to be usually right.
+
+### "Architecture-dependent" is a claim, and it needs the other architecture
+
+Four `checkpoint_linux.rs` failures were carried for weeks as "aarch64-flavoured"
+-- written on Apple silicon, failing on x86_64, therefore presumed to be about
+the ISA. Nobody had ever run them on aarch64, because after the move to this
+x86_64 box there was no aarch64 host to run them on.
+
+Run on a real aarch64 guest with the JIT live -- 89 emitter bodies present in the
+loaded `.so` against **0** on x86_64 -- **all four reproduce with byte-identical
+panic text and identical store key sets.** They are not architecture-dependent;
+they are broken everywhere. A second, cheaper control agrees: flipping the
+fixture's ISA order to put x86_64 first reproduces all four on the *x86_64* guest
+on this host, no VM required.
+
+One of the four was then found to be unsatisfiable rather than merely failing --
+it asserted that a refused capture leaves no socket queue behind, while handing
+the engine a `Store` whose `abort_until` is `Ok(())`. **No engine behaviour could
+have made it pass.** A test nobody can satisfy is indistinguishable, from the
+outside, from a product defect nobody has fixed.
+
+The rule: a failure is only "specific to X" once it has been run somewhere that
+is not X. Until then "aarch64-flavoured" is a hypothesis wearing a label, and it
+will keep four real bugs parked behind a plausible excuse. Look for the cheap
+control first -- an ISA order flip found this in minutes; the VM only confirmed
+it.
 
 ### The gate that reported nothing, and was read as if it had
 
