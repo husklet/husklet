@@ -357,8 +357,12 @@ changing edits until the dependent verification has captured a coherent commit.
 `cargo clippy` invoked directly fails on `hl-native`'s build script with
 `error[E0514]: found crate cc compiled by an incompatible version of rustc`. The
 shared `target/` was populated by the flake toolchain, and a host-resolved
-`cargo` is a different rustc reading the same directory. This is not a defect in
-anyone's diff and `cargo clean` is the wrong response — it would discard tens of
+`cargo` is a different rustc reading the same directory. The same error appears
+whenever `cargo`/`rustc` come from a distribution package and `clippy-driver`
+comes from Nix, and in both spellings **the two report the same version string** —
+what differs is how the builds hash crate metadata, not the version, which is why
+this does not look like a toolchain mismatch. This is not a defect in anyone's
+diff and `cargo clean` is the wrong response — it would discard tens of
 gigabytes other lanes are using.
 
 Enter the pinned shell with `nix develop` before running `cargo clippy` or
@@ -2129,11 +2133,9 @@ nix flake check -L --option cores 0 --max-jobs auto
 ```
 
 Run Clippy and rustfmt inside `nix develop`, or let `nix flake check` run the
-complete locked verification derivation. A bare `cargo clippy` on a host whose
-`cargo`/`rustc` come from a distribution package but whose
-`clippy-driver` comes from Nix fails with `error[E0514]: found crate ... compiled by
-an incompatible version of rustc` even though both report the same version string,
-because the two builds hash crate metadata differently.
+complete locked verification derivation. A bare `cargo clippy` fails with E0514;
+the mechanism and the recovery are in "Clippy and rustfmt only work through the
+pinned shell".
 
 The default shell exposes both Linux guest compilers and the retained
 `*_LINUX_CC`, `*_LINUX_STATIC_CC`, `*_DYNAMIC_LOADER`, and `*_DYNAMIC_LIBC`
