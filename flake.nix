@@ -1415,6 +1415,13 @@
           toolchain = toolchainFor pkgs;
           alpineArchives = alpineArchivesFor pkgs;
           alpine = if pkgs.stdenv.isLinux then linuxAlpineFor pkgs else null;
+          # The same `pkgsCross.mingwW64` the `host-windows-x86_64-gnu-smoke` check already
+          # builds against, so this adds no closure CI does not already substitute.
+          windows = pkgs.pkgsCross.mingwW64;
+          windowsCc = "${windows.stdenv.cc}/bin/${windows.stdenv.cc.targetPrefix}cc";
+          windowsCxx = "${windows.stdenv.cc}/bin/${windows.stdenv.cc.targetPrefix}c++";
+          windowsAr = "${windows.stdenv.cc}/bin/${windows.stdenv.cc.targetPrefix}ar";
+          windowsLibraries = "-L${windows.windows.mcfgthreads}/lib -L${windows.windows.pthreads}/lib";
         in
         {
           default = pkgs.mkShell (
@@ -1451,6 +1458,17 @@
               ++ lib.optionals pkgs.stdenv.isLinux [
                 pkgs.xorg-server
                 pkgs.xvfb-run
+                # WHY THE WINDOWS C SURFACE WAS FOLKLORE UNTIL NOW.
+                #
+                # `cargo check --target x86_64-pc-windows-gnu` compiles ZERO C on its own:
+                # `HostTarget::supported()` is false for Windows, so `native_build.rs` returns at
+                # `emit_planned_target` and stubs the fingerprint to `unbuilt`. Every "I checked the
+                # Windows surface" that used that command covered Rust only. Setting
+                # `HL_NATIVE_COMPILE_CHECK=1` asks for the C, and without a mingw compiler on PATH it
+                # then dies in `bridge/shim.c` against host glibc headers -- which reads like the
+                # target being impossible rather than the toolchain being absent. Two lanes have now
+                # concluded "unverifiable on this box"; it is verifiable, and this is what it needed.
+                windows.stdenv.cc
               ];
               shellHook = ''
                 export CC="${toolchain.env.CC}"
@@ -1466,6 +1484,25 @@
                 fi
                 export CARGO_BUILD_JOBS="''${CARGO_BUILD_JOBS:-1}"
                 export HL_COMPAT_JOBS="''${HL_COMPAT_JOBS:-1}"
+              '' + lib.optionalString pkgs.stdenv.isLinux ''
+                export CC_x86_64_pc_windows_gnu=${lib.escapeShellArg windowsCc}
+                export CXX_x86_64_pc_windows_gnu=${lib.escapeShellArg windowsCxx}
+                export AR_x86_64_pc_windows_gnu=${lib.escapeShellArg windowsAr}
+                export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=${lib.escapeShellArg windowsCc}
+                # `rustc` links the .exe; the two -L below are what it needs.
+                export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS=${
+                  lib.escapeShellArg "-Lnative=${windows.windows.pthreads}/lib -Lnative=${windows.windows.mcfgthreads}/lib"
+                }
+                # AND THE PIECE THAT IS MISSING EVERYWHERE. `hl-native`'s build script links
+                # `hl_native_engine.dll` ITSELF, through the compiler above rather than through
+                # `rustc`, so RUSTFLAGS never reaches it and the build dies on
+                # `cannot find -lmcfgthread` -- an error that names no crate and no target and has
+                # cost more time than anything else on this surface. In the
+                # `host-windows-x86_64-gnu-smoke` derivation this comes free from
+                # `buildInputs = [ windows.windows.mcfgthreads ]`; a devShell has to say it. The
+                # variable is the cross wrapper's own suffix-salted spelling, taken from
+                # `cc.suffixSalt` rather than hand-spelled so it cannot drift from the triple.
+                export NIX_LDFLAGS_${windows.stdenv.cc.suffixSalt}=${lib.escapeShellArg windowsLibraries}
               '';
             }
             // lib.optionalAttrs pkgs.stdenv.isLinux {
