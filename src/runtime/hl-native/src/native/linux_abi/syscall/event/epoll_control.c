@@ -57,7 +57,7 @@ static int svc_eventfd2(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             G_RET(c) = (uint64_t)(int64_t)(-EMFILE);
             break;
         }
-        g_eventfd_peer[fds[0]] = peer + 1;
+        eventfd_peer_bind(fds[0], peer + 1);
         g_eventfd_cslot[fds[0]] = fds[0] + 1;
         g_eventfd_sema[fds[0]] = (a1 & 1) != 0;          // EFD_SEMAPHORE
         eventfd_guest_nb_set(fds[0], (a1 & 0x800) != 0); // OFD-shared guest non-blocking intent
