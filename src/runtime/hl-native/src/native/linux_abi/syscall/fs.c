@@ -1467,3 +1467,35 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             (long long)(int64_t)G_RET(c));
     return handled;
 }
+
+/* ---- test hook: an imported pathname operand is engine storage, not a guest pointer ----------------
+ * svc_fs above copies every pathname operand out of guest memory into `imported_path0/1`, which live on
+ * the ENGINE's C stack, and reaches the guest's own -EFAULT/-ENAMETOOLONG there.  A handler that then
+ * re-probes the operand with guest_bad_ptr() is asking the GUEST PROT_NONE ledger about ENGINE memory,
+ * and that ledger genuinely does cover engine storage: munmap re-adds a released guest range to g_gna so
+ * the lazy grower faults it, the host allocator later hands the same free VA to glibc for one of the
+ * engine's own thread stacks, and every path syscall staged on that stack answers -EFAULT.  That is the
+ * npm-ci `chmod ... EFAULT` defect, and it is why this fixture arms exactly that state: a g_gna interval
+ * over the engine C stack the callee frames will use, with the stand-in guest pathname on the heap so the
+ * import itself still sees accessible guest memory.  The pathname names a directory that cannot exist, so
+ * a correct engine answers the filesystem's -ENOENT.
+ *   0 = the filesystem verdict survived, 1 = the spurious -EFAULT, 2 = some other verdict, 5 = no fixture. */
+static int hl_linux_imported_path_guard_probe(void) {
+    static const char absent[] = "/hl-imported-path-guard-absent/leaf";
+    char *guest_pathname = (char *)malloc(sizeof absent);
+    if (guest_pathname == NULL) return 5;
+    memcpy(guest_pathname, absent, sizeof absent);
+    char frame_marker = 0;
+    uint64_t frame = (uint64_t)(uintptr_t)&frame_marker;
+    uint64_t hi = (frame + 0xfffu) & ~(uint64_t)0xfff;
+    uint64_t lo = hi > (256u << 10) ? hi - (256u << 10) : 0; /* callee frames grow down from here */
+    struct cpu probe;
+    memset(&probe, 0, sizeof probe);
+    gna_add(lo, hi);
+    (void)svc_fs(&probe, 53, (uint64_t)(int64_t)-100, (uint64_t)(uintptr_t)guest_pathname, 0755, 0, 0, 0);
+    gna_clear(lo, hi);
+    int64_t verdict = (int64_t)G_RET(&probe);
+    free(guest_pathname);
+    if (verdict == -EFAULT) return 1;
+    return verdict == -ENOENT ? 0 : 2;
+}
