@@ -140,7 +140,7 @@ impl PtyBackend for ExecPty {
         }
     }
 
-    fn master_fd(&self) -> Option<RawFd> {
+    fn master_descriptor(&self) -> Option<RawFd> {
         None
     }
 

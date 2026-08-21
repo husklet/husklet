@@ -5,8 +5,6 @@
 //! answers with. Nothing here shares code with the extension's own view, so a
 //! change in either has to be reconciled deliberately.
 
-use std::os::unix::net::UnixStream;
-
 /// Calls to read before giving up on an extension that never finishes.
 const EXCHANGES: usize = 8;
 
@@ -16,9 +14,37 @@ use hl_extension::{
 };
 use hl_gui::{Patch, Prop, PropValue, RequestId, RowRange, RowRequest, Tag, Tree, Version};
 
+/// The concrete stream this conversation runs over.
+///
+/// The protocol is defined over `Read + Write`, and what these tests need from a transport is
+/// only that the two ends are connected to each other, can be moved to another thread, and close
+/// ordinarily. `UnixStream::pair` is that on Unix. `std` binds no Unix-domain socket off Unix, and
+/// a loopback TCP connection has the same three properties, so the conversation is exercised on
+/// every host instead of vanishing on one -- an integration target that compiles to zero tests
+/// reports `ok` and proves nothing.
+#[cfg(unix)]
+type Stream = std::os::unix::net::UnixStream;
+#[cfg(not(unix))]
+type Stream = std::net::TcpStream;
+
+/// Two connected [`Stream`] endpoints.
+fn connected_pair() -> (Stream, Stream) {
+    #[cfg(unix)]
+    {
+        std::os::unix::net::UnixStream::pair().expect("a socket pair")
+    }
+    #[cfg(not(unix))]
+    {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("a loopback listener");
+        let ours = std::net::TcpStream::connect(listener.local_addr().expect("a bound address")).expect("connected");
+        let (theirs, _) = listener.accept().expect("accepted");
+        (ours, theirs)
+    }
+}
+
 /// Runs the extension against a scripted host and returns everything it said.
 fn converse(exchanges: usize) -> Vec<Request> {
-    let (ours, theirs) = UnixStream::pair().expect("a socket pair");
+    let (ours, theirs) = connected_pair();
     let extension = std::thread::spawn(move || extension::serve(theirs, extension::Extension::new()));
 
     let mut wire = Wire::new(ours);
@@ -32,7 +58,7 @@ fn converse(exchanges: usize) -> Vec<Request> {
 }
 
 /// Sends the opening frame and reads the extension's reply.
-fn greet(wire: &mut Wire<UnixStream>) {
+fn greet(wire: &mut Wire<Stream>) {
     let welcome = Welcome {
         protocol: PROTOCOL,
         host: "test".into(),
@@ -55,7 +81,7 @@ fn greet(wire: &mut Wire<UnixStream>) {
 /// Stops once the extension has said how long its table is, which is the last
 /// thing it says unprompted. Reading past that blocks: both sides are then
 /// waiting on the other.
-fn listen(wire: &mut Wire<UnixStream>, exchanges: usize) -> Vec<Request> {
+fn listen(wire: &mut Wire<Stream>, exchanges: usize) -> Vec<Request> {
     let mut said = Vec::new();
     for _ in 0..exchanges {
         let frame = match wire.receive() {
@@ -98,7 +124,7 @@ fn containers() -> Vec<ContainerSummary> {
         .collect()
 }
 
-fn send<T: serde::Serialize>(wire: &mut Wire<UnixStream>, kind: Kind, value: &T) {
+fn send<T: serde::Serialize>(wire: &mut Wire<Stream>, kind: Kind, value: &T) {
     let payload = serde_json::to_vec(value).expect("serialized");
     wire.send(&Frame::new(ChannelId::new(1), kind, payload)).expect("sent");
 }
@@ -196,7 +222,7 @@ fn the_extension_reports_how_long_its_table_is() {
 
 #[test]
 fn the_extension_answers_a_row_window_with_the_containers_it_was_given() {
-    let (ours, theirs) = UnixStream::pair().expect("a socket pair");
+    let (ours, theirs) = connected_pair();
     let extension = std::thread::spawn(move || extension::serve(theirs, extension::Extension::new()));
     let mut wire = Wire::new(ours);
     greet(&mut wire);

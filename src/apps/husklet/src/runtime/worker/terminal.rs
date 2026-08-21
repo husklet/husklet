@@ -448,7 +448,7 @@ mod open_files_tests {
 
         fn resize(&mut self, _columns: u16, _rows: u16) {}
 
-        fn master_fd(&self) -> Option<RawFd> {
+        fn master_descriptor(&self) -> Option<RawFd> {
             None
         }
 
@@ -478,7 +478,7 @@ mod open_files_tests {
 
         fn resize(&mut self, _columns: u16, _rows: u16) {}
 
-        fn master_fd(&self) -> Option<RawFd> {
+        fn master_descriptor(&self) -> Option<RawFd> {
             None
         }
 
@@ -500,7 +500,7 @@ mod open_files_tests {
 
         fn resize(&mut self, _columns: u16, _rows: u16) {}
 
-        fn master_fd(&self) -> Option<RawFd> {
+        fn master_descriptor(&self) -> Option<RawFd> {
             None
         }
 
