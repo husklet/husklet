@@ -198,21 +198,67 @@ nix develop -c env \
 `HL_TERM_VIEW` picks the surface (`manager`, `terminal`, `newws`) and the shot fires only for
 the window it names. `HL_TERM_WS=<name>` selects a workspace from `$HOME/.hl/workspaces.conf`,
 and `HL_TERM_TABS=N`, `HL_TERM_SPLIT=h|v`, `HL_TERM_TYPE=<text>`, `HL_TERM_OVERVIEW`,
-`HL_TERM_OVERVIEW_PAGE` and `HL_TERM_DEBUG_LOG=<path>` drive it further. `storybook` carries
-the same hook under `STORYBOOK_SHOT`/`STORYBOOK_SHOT_MS`. Verified on x86_64 Linux at
-ad652522d: the manager window, the New-Workspace dialog, a terminal window with three tabs,
-a vertical split and typed text queued into both panes, and all 11 storybook stories
-(291 widgets).
+`HL_TERM_OVERVIEW_PAGE` and `HL_TERM_DEBUG_LOG=<path>` drive it further.
 
-Four things to know before you trust — or debug — this loop:
+A screenshot proves a window produced pixels. It cannot say which glyphs they are, cannot
+send a keystroke *while something is already running*, and cannot resize anything — so
+three further hooks carry the loop the rest of the way:
 
-- The terminal panes reach `workspace launch started` and show the "not live yet"
-  placeholder. Entering the image needs an OCI pull, which this loop does not do — so the
-  screenshot proves the toolkit, the pty spawn and the worker re-exec, not the container.
+- `HL_TERM_TEXT=<path>` writes what every pane is showing, as text, beside the PNG. This
+  is the assertable artefact: a screenshot needs a human or an OCR pass, a grid extraction
+  can be grepped for the output of a command the run typed.
+- `HL_TERM_SCRIPT=<ms>:<bytes>` chunks, separated by **ASCII RS (0x1e)**, write each
+  payload into a pane's tty at its own offset from launch, verbatim and with no newline
+  appended. A control byte is spelled by putting the control byte in the variable, which
+  is how a Ctrl-C is delivered mid-command. The separator is not printable because every
+  printable candidate — `|` above all — is something a real command line contains.
+- `HL_TERM_RESIZE=<ms>:<width>x<height>` resizes the **window**, in pixels. Do not
+  "simplify" this to `set_size` on the panes: a pane is `hexpand`/`vexpand`, the next
+  allocation overwrites the grid, and the guest goes on reporting the old geometry while
+  the hook reports success. That was measured here before it was fixed.
+
+`storybook` carries the same hook under `STORYBOOK_SHOT`/`STORYBOOK_SHOT_MS`.
+Verified on x86_64 Linux at ad652522d: the manager window, the New-Workspace dialog,
+a terminal window with three tabs, a vertical split and typed text queued into both
+panes, and all 11 storybook stories (291 widgets).
+
+Six things to know before you trust — or debug — this loop:
+
+- The terminal panes **do** enter the image, and the loop reaches a live shell. The
+  earlier note here said an OCI pull was out of reach and the screenshot therefore proved
+  only the toolkit; that was true of a run with no workspace configured. Write one into
+  `$HOME/.hl/workspaces.conf` (`name`/`image`/`arch`, three lines) and the pane's worker
+  starts the per-workspace domain, pulls the image and attaches a container exec:
+  measured 2026-08-21 on `naa0245` at 2b2cd63cf, ~20 s from launch to a prompt on the
+  first run including the pull of `alpine:3.20`, ~5 s once the domain is warm. Point
+  `HOME` at a scratch directory — `~/.hl` is shared with every other lane's tests.
 - `GTK_A11Y=none` only silences an `org.a11y.Bus` warning on a box with no accessibility
   bus. It is noise, not a failure.
-- `cargo test -p husklet --bins --features gui` needs **no** display at all. Do not add
-  `xvfb-run` to the test gate to "fix" something; the suite never opens one.
+- **The guest's terminal echoes every typed line twice, and this is not the toolkit.**
+  Measured 2026-08-21 at 2b2cd63cf against a live `alpine:3.20` workspace: every command
+  line appears once as busybox `ash`'s line editor draws it and again after the newline,
+  and each prompt carries a visible `^[[N;5R` — VTE's answer to the `ESC[6n` the editor
+  sends, echoed back as though it had been typed. The host pty is not the culprit;
+  `stty -a -F /dev/pts/N` on the live pane reports `-isig -icanon -echo`. The same
+  busybox binary, extracted from the same image layer and run under `chroot` on this
+  host's own kernel through a real pty, echoes each line exactly **once**. And the
+  guest's own termios is not simply ignored: `stty -echo` inside the container is
+  read back as `-echo` and the *second* copy stops. What is not honoured is the
+  raw-mode `tcsetattr` a line editor performs immediately before the read it is about
+  to do — which is what every interactive shell does on every prompt. It belongs to the
+  engine's line discipline, not to `hl-gui-gtk` or the `husklet` bins.
+- `cargo test -p husklet --bins --features gui` needs no display **to run**, and two of
+  its tests need one **to mean anything**. Measured 2026-08-21 on this box, both ways:
+  **`running 88 tests` / `88 passed` in both**, and only the display-less run prints
+  `skipped: no display connection`. The count cannot tell them apart, which is why this
+  has survived — `test_support::on_the_toolkit_thread` answers `false`, both callers say
+  they skipped, and between them 19 scenarios do not execute. Under
+  `xvfb-run -a -s '-screen 0 1600x1000x24' -- cargo test …` the skip lines are gone and
+  all 88 pass. Proven non-vacuous by planting a false assertion in one of those
+  scenarios: **87 passed / 1 failed under `xvfb-run`, 88 passed without a display.**
+  Wrapping the CI step is a decision for whoever owns the workflow, not a repair to make
+  silently — but do not read that step's green as covering the extension page or the
+  extension shelf until it is.
 - `TermConfig::default().font_family` is `Menlo`, which exists only on macOS. On Linux
   Pango falls back and VTE takes its cell metrics from the fallback, so the grid renders
   visibly letter-spaced until a workspace sets `font_family` to a font the host has

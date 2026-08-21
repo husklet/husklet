@@ -1,4 +1,4 @@
-//! Debug self-capture of a Husklet window, through GTK's own snapshot pipeline.
+//! Debug hooks that drive and capture a Husklet window on a host with no monitor.
 //!
 //! The application has no monitor on a build host, and screen capture needs a permission no CI
 //! runner grants. Rendering the window to a texture from inside the process needs neither, so this
@@ -34,6 +34,41 @@ impl Screenshot {
             if let Some(application) = application {
                 application.quit();
             }
+        });
+    }
+
+    /// Debug: `HL_TERM_RESIZE=<ms>:<width>x<height>` resizes this window, in pixels, at
+    /// that offset from opening.
+    ///
+    /// This is the resize a developer performs by dragging the window edge, on a host
+    /// with no window manager to drag it with. It deliberately resizes the *window*
+    /// rather than calling `set_size` on the panes: a pane is `hexpand`/`vexpand` inside
+    /// its layout, so a grid set directly is overwritten by the next allocation and the
+    /// tty never learns anything -- measured, the guest still reported the old geometry
+    /// while the hook reported success.
+    pub(crate) fn schedule_resize(window: &gtk::ApplicationWindow) {
+        let Some(request) = AppConfig::get().resize.clone() else {
+            return;
+        };
+        let Some((offset, geometry)) = request.split_once(':') else {
+            return;
+        };
+        let Some((width, height)) = geometry.split_once('x') else {
+            return;
+        };
+        let (Ok(offset), Ok(width), Ok(height)) = (offset.parse::<u64>(), width.parse::<i32>(), height.parse::<i32>())
+        else {
+            return;
+        };
+        let window = window.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(offset), move || {
+            window.set_default_size(width, height);
+            let mut panes = Vec::new();
+            crate::screens::workspace::terminal::PaneView::all(window.upcast_ref::<gtk::Widget>(), &mut panes);
+            eprintln!(
+                "[husklet] resized the window to {width}x{height} px over {} pane(s)",
+                panes.len()
+            );
         });
     }
 
