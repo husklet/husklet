@@ -520,6 +520,7 @@ static void fdpath_sweep_stale_locked(void);
 #if defined(HL_NATIVE_TEST_HOOKS)
 static int fdvis_after_fork_rollback_test(void);
 static int fdvis_stalled_parent_test(void);
+static int fdvis_corpse_holder_test(void);
 #endif
 
 static struct fdpath_slot *fdpath_find(uint64_t key, uint64_t owner_start_ns, int claim) {
@@ -662,6 +663,13 @@ HL_API int HL_TARGET_LOCAL(fdvis_path_publication_test)(uint32_t scenario) {
         free(paths);
         return propagated == -ENOSPC;
     }
+    if (scenario == 8) {
+        g_fdpaths = saved_paths;
+        free(paths);
+        memcpy(g_fdpath[descriptor], saved_path, sizeof saved_path);
+        g_fdpath_guest[descriptor] = saved_is_guest;
+        return fdvis_corpse_holder_test();
+    }
     if (scenario == 7) {
         const int dead = 2147483647;
         for (unsigned index = 0; index < FDPATH_N; ++index) {
@@ -758,6 +766,28 @@ static uint64_t fdvis_identity(int pid, uint64_t start_ns) {
     return ((uint64_t)(uint32_t)pid << 32) | fingerprint;
 }
 
+/* Can the process named in the fdvis lock word still reach fdvis_unlock()?
+ *
+ * The word carries (pid, start-time), so a pid the kernel has reissued to somebody else is already
+ * rejected by the stamp. What the stamp cannot see is a corpse. A terminated task keeps its /proc entry
+ * -- start time included -- until its parent collects it, so an owner killed inside the critical section
+ * goes on answering with exactly the token it published, and the reclaim below refuses to steal from it.
+ * Nothing releases the word either, because the owner has already run its last instruction.
+ *
+ * That is not a race window that closes on its own. In the ordinary double-fork shape -- a middle process
+ * that kills its child and exits without waiting -- the only task that could collect the corpse is the
+ * middle process, and the middle process is the one now spinning here on its way out through
+ * proc_fdvis_cleanup(). The wait is unbounded and burns a core for as long as it lasts.
+ *
+ * A task in state 'Z' is dead: Linux reports it from /proc/<pid>/stat and Darwin from SZOMB, and the
+ * Windows arm has no process reader at all and answers "gone" for every pid. Treat all three as gone. */
+static int fdvis_owner_is_gone(int pid, uint64_t owner) {
+    hl_host_process_info record;
+    if (pid <= 0 || !hl_host_process_read((int64_t)pid, &record)) return 1;
+    if (fdvis_identity(pid, record.start_time_ns) != owner) return 1;
+    return record.state == 'Z';
+}
+
 static void fdvis_init(const hl_host_services *host) {
     void *arena = NULL;
     if (g_fdvis != NULL) return;
@@ -829,9 +859,7 @@ static void fdvis_lock(void) {
             return;
         if ((spin & 1023u) == 1023u) {
             uint64_t owner = atomic_load_explicit(&g_fdvis_control->owner, memory_order_relaxed);
-            int owner_pid = (int)(uint32_t)(owner >> 32);
-            uint64_t live_start = fdvis_process_token(owner_pid);
-            if (owner != 0 && (live_start == 0 || fdvis_identity(owner_pid, live_start) != owner) &&
+            if (owner != 0 && fdvis_owner_is_gone((int)(uint32_t)(owner >> 32), owner) &&
                 atomic_compare_exchange_strong_explicit(&g_fdvis_control->owner, &owner, mine, memory_order_acquire,
                                                         memory_order_relaxed))
                 return;
@@ -1643,6 +1671,103 @@ static int fdvis_stalled_parent_test(void) {
  * which would report a half that never ran as having passed. The sibling rollback scenario above is
  * portable and still runs here. */
 static int fdvis_stalled_parent_test(void) {
+    return 0;
+}
+#endif
+
+#if !defined(_WIN32)
+/* The lock word has to be reclaimable from an owner that is dead but NOT YET COLLECTED.
+ *
+ * A holder killed inside the critical section never reaches fdvis_unlock(), and its /proc entry -- start
+ * time included -- survives until its parent waits for it, so an owner check built only on that stamp goes
+ * on reading "live" forever. Reclaiming only after collection is not a race window that closes on its own:
+ * in the ordinary double-fork shape the task that would collect the corpse is the middle process, and the
+ * middle process is by then spinning on this very word inside its own exit path. Measured before the fix:
+ * one core at 99.9% for as long as the run was allowed to last.
+ *
+ * The topology is reproduced exactly -- a corpse this process deliberately leaves uncollected while a
+ * SECOND child asks for the word. The acquisition is watched with a deadline rather than joined, so an
+ * engine that cannot reclaim fails this scenario instead of hanging the suite that runs it. */
+static int fdvis_corpse_holder_test(void) {
+    struct fdvis_control *control =
+        mmap(NULL, sizeof *control, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    unsigned char *held = mmap(NULL, 1, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (control == MAP_FAILED || held == MAP_FAILED) {
+        if (control != MAP_FAILED) (void)munmap(control, sizeof *control);
+        if (held != MAP_FAILED) (void)munmap(held, 1);
+        return 0;
+    }
+    memset(control, 0, sizeof *control);
+    *held = 0;
+    struct fdvis_control *saved_control = g_fdvis_control;
+    g_fdvis_control = control;
+    const struct timespec tick = {.tv_sec = 0, .tv_nsec = 1000000};
+    pid_t holder = fork();
+    if (holder == 0) {
+        fdvis_lock();
+        __atomic_store_n(held, 1, __ATOMIC_RELEASE);
+        for (;;) {
+            struct timespec forever = {.tv_sec = 3600, .tv_nsec = 0};
+            (void)nanosleep(&forever, NULL);
+        }
+    }
+    int acquired = 0;
+    if (holder > 0) {
+        for (int spin = 0; spin < 5000 && __atomic_load_n(held, __ATOMIC_ACQUIRE) == 0; ++spin)
+            (void)nanosleep(&tick, NULL);
+        /* The word must name the holder under ITS OWN identity: a child that reported its parent's pid
+         * would make everything below pass for the wrong reason. */
+        uint64_t owner = atomic_load_explicit(&control->owner, memory_order_relaxed);
+        int owned_by_holder = __atomic_load_n(held, __ATOMIC_ACQUIRE) == 1 &&
+                              (int)(uint32_t)(owner >> 32) == (int)holder;
+        (void)kill(holder, SIGKILL);
+        int corpse = 0;
+        for (int spin = 0; spin < 5000 && owned_by_holder && !corpse; ++spin) {
+            hl_host_process_info record;
+            if (hl_host_process_read((int64_t)holder, &record) && record.state == 'Z')
+                corpse = 1;
+            else
+                (void)nanosleep(&tick, NULL);
+        }
+        if (corpse) {
+            pid_t claimant = fork();
+            if (claimant == 0) {
+                fdvis_lock();
+                fdvis_unlock();
+                _exit(0);
+            }
+            if (claimant > 0) {
+                int status = 0;
+                for (int spin = 0; spin < 5000; ++spin) {
+                    pid_t seen = waitpid(claimant, &status, WNOHANG);
+                    if (seen == claimant) {
+                        acquired = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+                        break;
+                    }
+                    if (seen < 0 && errno != EINTR) break;
+                    (void)nanosleep(&tick, NULL);
+                }
+                if (!acquired) {
+                    (void)kill(claimant, SIGKILL);
+                    while (waitpid(claimant, &status, 0) < 0 && errno == EINTR) {}
+                }
+            }
+        }
+        /* Collected only now, and only so the scenario leaves no corpse of its own behind: the claimant
+         * above had to succeed without it. */
+        int status = 0;
+        while (waitpid(holder, &status, 0) < 0 && errno == EINTR) {}
+    }
+    g_fdvis_control = saved_control;
+    (void)munmap(control, sizeof *control);
+    (void)munmap(held, 1);
+    return acquired;
+}
+#else
+/* Forking, SIGKILL and a MAP_SHARED anonymous page have no Windows spelling, and the Windows process
+ * reader answers "gone" for every pid, so the reclaim this scenario is about cannot be staged there. It
+ * reports 0 rather than 1, which would record a scenario that never ran as having passed. */
+static int fdvis_corpse_holder_test(void) {
     return 0;
 }
 #endif
