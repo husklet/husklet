@@ -1119,6 +1119,7 @@
             (rustFor pkgs)
             windows.stdenv.cc
             pkgs.file
+            pkgs.jq
           ];
           buildInputs = [ windows.windows.mcfgthreads ];
           doCheck = false;
@@ -1178,6 +1179,14 @@
               ${windows.stdenv.cc.targetPrefix}objdump -p checkpoint-bridge-contract.exe \
                 | grep -F "$symbol" >/dev/null
             done
+            # HALF THIS CRATE'S WINDOWS TEST SURFACE IS EMPTY, and no artifact count can
+            # see it: of `hl-native`'s 46 test targets, 23 compile to empty crates on a
+            # Windows check without `native-test-hooks` -- 18 feature-gated and 5
+            # platform-gated -- while ALL 46 still emit artifacts. `identity_registry` is
+            # the only one deliberately armed FOR Windows, which is why it is named here
+            # rather than left to `--all-targets`. Unifying the feature through
+            # `-p hl-engine --all-targets` makes 18 of the 23 live; the other 5 are honest
+            # platform exclusions.
             cargo test --locked --offline --target ${target} -p hl-native \
               --test identity_registry --no-run
             ${lib.escapeShellArg compiler} -std=c11 -DHL_SHARED -DHL_BUILDING_ENGINE \
@@ -1244,6 +1253,61 @@
             file libhl-abi-fixture.dll.a | grep -F 'current ar archive'
             ${windows.stdenv.cc.targetPrefix}nm -g libhl-abi-fixture.dll.a \
               | grep -F ' T hl_ci_engine_abi' >/dev/null
+
+            # ---------------------------------------------------------------------------
+            # THE cfg-WIDTH GATE, READ AS A COUNT AND NEVER AS AN EXIT CODE.
+            #
+            # `cargo check --all-targets` exits 0 while SILENTLY SKIPPING a target whose
+            # required features are unmet. Measured rather than argued: clamping one target
+            # with a `required-features` it does not have left cargo at exit 0 while the
+            # compiled-unit count fell 87 to 86. An exit status cannot see that; a census
+            # can. So this arm diffs a per-crate unit count against a pinned table, and the
+            # `diff` IS the assertion -- nothing here reads `$?` from cargo.
+            #
+            # Shown to fail before landing, on the captured JSON of a real run: removing a
+            # single `hl-native` artifact takes the table from `48 hl-native` to
+            # `47 hl-native` and `diff -u` exits 1 naming the crate.
+            #
+            # Sorted by crate name so the comparison cannot fail on ordering alone. The
+            # first pair of files produced for this gate differed ONLY in the order of
+            # `engine` and `extension`, which would have been a spurious red.
+            #
+            # WHAT THIS WHOLE ATTRIBUTE IS AND IS NOT. Every claim here is COMPILE AND LINK
+            # evidence. Three DLLs and a PE32+ executable are produced and inspected, and
+            # NOT ONE INSTRUCTION HAS RUN -- there is no Windows host in this build. Whether
+            # the exported symbols behave, and whether `CreateProcess`-based spawning works,
+            # are open questions that need a real Windows runner. Do not let a green here be
+            # read as a working Windows product.
+            cargo check --locked --offline --target ${target} --all-targets \
+              --message-format=json \
+              -p hl-native -p hl-engine -p engine -p hl-fs -p hl-log -p hl-process \
+              -p hl-rpc -p hl-design -p hl-cc -p hl-gui -p hl-ws -p hl-ws-term \
+              -p hl-extension -p extension > windows-units.json
+            jq -r '
+              select(.reason == "compiler-artifact")
+              | select(.package_id | startswith("path+"))
+              | ((.package_id | capture("#(?<n>[A-Za-z0-9_-]+)@") | .n)
+                 // (.package_id | split("#")[0] | split("/") | last))
+                + "\t" + .target.name + "\t" + (.target.kind | join(","))
+            ' windows-units.json | sort -u | cut -f1 | sort | uniq -c \
+              | sed 's/^ *//' > windows-units.actual
+            cat > windows-units.expected <<'WINDOWS_UNITS'
+5 engine
+3 extension
+1 hl-cc
+2 hl-design
+5 hl-engine
+7 hl-extension
+1 hl-fs
+8 hl-gui
+2 hl-log
+48 hl-native
+1 hl-process
+1 hl-rpc
+1 hl-ws
+2 hl-ws-term
+WINDOWS_UNITS
+            diff -u windows-units.expected windows-units.actual
             runHook postBuild
           '';
           installPhase = ''
