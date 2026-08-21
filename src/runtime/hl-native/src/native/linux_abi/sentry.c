@@ -293,6 +293,77 @@ static __thread uint32_t t_token = 0;         // this worker thread's unique non
 static int64_t sentry_ctl_op(uint32_t op, uint64_t a0, uint64_t a1);
 static void ring_release(void);
 
+// ------------------------------------------------------------------ deferred SA_NOCLDWAIT releases
+// The kernel frees the host pid a virtual descriptor table is keyed on by three routes. Two of them are
+// guest syscalls the sentry can hear: the child's own exit (SENTRY_OP_EXIT) and the parent's wait4/waitid
+// (SENTRY_OP_REAP). The third is SA_NOCLDWAIT, where Linux leaves no zombie and the guest calls nothing at
+// all -- signal.c collects the corpse with waitpid(-1, WNOHANG) inside a HOST SIGNAL HANDLER.
+//
+// That handler cannot publish the release itself. sentry_ctl_op takes the ring's `busy` producer flag and
+// holds it across the whole round-trip, and the thread the signal interrupts is very often the thread
+// holding exactly that flag, parked in sentry_response_wait for the sentry's answer. Measured on x86_64
+// Linux at 5d34dde49: the guest wedges in the first round and spins in sched_yield forever, with the
+// handler's own frame sitting on top of the sentry_response_wait whose completion it is waiting for. Not a
+// race -- the interrupted thread cannot make progress until the handler returns, and the handler cannot
+// return until the interrupted thread makes progress.
+//
+// So the handler only RECORDS. This array of atomic pid slots is written with a compare-exchange and a
+// plain store, both lock-free on every host this engine builds for, and drained from ordinary syscall
+// context by the one route that needs the slot back (sentry_route_clone).
+//
+// The slot is reserved BEFORE waitpid, never after, so the array can never be the reason a pid is freed
+// with nothing recording it. If every slot is taken the handler stops collecting: the corpse stays a
+// zombie, the kernel does not reissue its number, and its table stays correct -- the same fail-closed
+// shape sentry_forkexhaustion already documents, and the drain retries the collection once slots free up.
+// SENTRY_NREAP is one slot per process the sentry can track plus one for the sentry itself, and an
+// undrained slot pins a sentry process slot, so a full array means the sentry has already refused the fork
+// that would have needed the slot after it. The decline is therefore unreachable by construction; it
+// exists so that the unreachable case is a decline and not a silent drop.
+#define SENTRY_NREAP 65u              // >= SENTRY_NPROC + 1; asserted against it where SENTRY_NPROC is defined
+#define SENTRY_REAP_RESERVED 0xFFFFFFFFu // no pid can be UINT32_MAX (pid_max is at most 1<<22)
+static _Atomic uint32_t g_reap_pending[SENTRY_NREAP];
+
+// Async-signal-safe: one compare-exchange per slot, no lock, no allocation, no libc call.
+static int sentry_reap_reserve(void) {
+    for (uint32_t i = 0; i < SENTRY_NREAP; i++) {
+        uint32_t empty = 0;
+        if (atomic_compare_exchange_strong_explicit(&g_reap_pending[i], &empty, SENTRY_REAP_RESERVED,
+                                                    memory_order_acq_rel, memory_order_relaxed))
+            return (int)i;
+    }
+    return -1;
+}
+
+static void sentry_reap_record(int slot, uint32_t pid) {
+    atomic_store_explicit(&g_reap_pending[slot], pid, memory_order_release);
+}
+
+static void sentry_reap_forget(int slot) {
+    atomic_store_explicit(&g_reap_pending[slot], 0, memory_order_release);
+}
+
+// The SA_NOCLDWAIT auto-reap, called from the host SIGCHLD handler in signal.c and again from the drain
+// once slots have come free. Reserving before collecting is what keeps "the pid is gone" and "the sentry
+// has been told" from being observable apart; with the sentry gate off it is the plain collection loop
+// signal.c used to inline.
+static void sentry_nocldwait_reap(void) {
+    int status;
+    if (!g_untrusted) {
+        while (waitpid(-1, &status, WNOHANG) > 0) {}
+        return;
+    }
+    for (;;) {
+        int slot = sentry_reap_reserve();
+        if (slot < 0) return;
+        pid_t collected = waitpid(-1, &status, WNOHANG);
+        if (collected <= 0) {
+            sentry_reap_forget(slot);
+            return;
+        }
+        sentry_reap_record(slot, (uint32_t)collected);
+    }
+}
+
 #include "sentry_binding.h"
 #include "sentry_start.h"
 #include "sentry_token.h"
@@ -391,6 +462,7 @@ static void sentry_fork_child(void) {
     t_ring = -1;             // drop the inherited lane index; claim a fresh one lazily
     t_token = 0;             // mint a fresh ownership token on the next claim
     g_guest_children = 0;    // the child starts with no children of its own
+    memset(g_reap_pending, 0, sizeof g_reap_pending); // the inherited records name the PARENT's corpses
     g_worker_threads = 1;    // only the calling thread survives fork()
     g_sentry_process_released = 0;
     memset(g_thread_start, 0, sizeof g_thread_start);
@@ -419,6 +491,27 @@ static int64_t sentry_ctl_op(uint32_t op, uint64_t a0, uint64_t a1) {
     int64_t result = atomic_load_explicit(&R->ret, memory_order_acquire);
     atomic_store_explicit(&R->busy, 0, memory_order_release);
     return result;
+}
+
+// Publish every release the SA_NOCLDWAIT handler recorded, from ordinary syscall context where taking the
+// ring's producer flag is legal. Read the pid, free the slot, then publish: a handler that reuses the slot
+// in between records a different corpse and loses nothing. The sentry is a real host child of the owning
+// worker but never a guest child, so it is dropped here exactly as the wait4 and waitid lanes drop it.
+static void sentry_reap_drain(void) {
+    if (!g_untrusted) return;
+    int published = 0;
+    for (uint32_t i = 0; i < SENTRY_NREAP; i++) {
+        uint32_t pid = atomic_load_explicit(&g_reap_pending[i], memory_order_acquire);
+        if (pid == 0 || pid == SENTRY_REAP_RESERVED) continue;
+        sentry_reap_forget((int)i);
+        published = 1;
+        if (g_sentry_pid && (pid_t)pid == g_sentry_pid) continue;
+        sentry_ctl_op(SENTRY_OP_REAP, pid, 0);
+        atomic_fetch_sub(&g_guest_children, 1);
+    }
+    // Slots are free again, so collect anything the handler had to decline. Only ever when the guest asked
+    // Linux to leave no zombie -- otherwise these corpses are the guest's to wait for.
+    if (published && (g_sigact[17].flags & 0x2)) sentry_nocldwait_reap();
 }
 
 // SCM_RIGHTS fd passing over a control socketpair. sentry_send_fd lends one fd; sentry_recv_fd borrows it.
@@ -610,6 +703,8 @@ static void worker_sandbox(void) {
 #define SENTRY_VFD_MAX 1024u // per-process virtual fd slots (dense; far beyond any test/jail guest's fd use)
 #define SENTRY_NPROC 64u     // worker processes the sentry tracks a table for at once (the init guest + forks)
 #define SENTRY_NTABLE (SENTRY_NPROC + SENTRY_NRINGS)
+_Static_assert(SENTRY_NREAP >= SENTRY_NPROC + 1u,
+               "one pending-release slot per trackable process, plus one for the sentry itself");
 #define SENTRY_NBIND HL_SENTRY_BINDING_CAPACITY
 #define SENTRY_NSNAP SENTRY_NPROC
 #include "sentry_snapshot.h"

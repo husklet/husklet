@@ -187,6 +187,10 @@ static int sentry_route_waitid(struct cpu *c, uint64_t nr) {
 
 static int sentry_route_clone(struct cpu *c, uint64_t nr) {
     if (nr != 220 && nr != 435) return 0;
+    // The SA_NOCLDWAIT auto-reap runs in a host signal handler and can only record its releases; publish
+    // them here, before this fork asks for the slot one of them is holding. This is the route that needs
+    // the slot back, so it is the route that pays for the drain.
+    sentry_reap_drain();
     fork_diagnostic_route previous_route =
         fork_diagnostic_route_enter("sentry-worker", (int)g_worker_pid, (int)g_sentry_pid,
                                     atomic_load_explicit(&g_guest_children, memory_order_relaxed),
