@@ -29,6 +29,31 @@ static int g_nlower = 0;
 
 #include "cursor.c"
 
+/* The cursor's mount edge (declared in cursor.c). A directory bind-mount volume is its own jail root,
+ * so the mounted tree replaces the image placeholder outright -- there is nothing to merge, and no
+ * layer below the mount is visible through it. Only the mount point itself crosses: a path inside the
+ * mount is already resolving under the volume's authority, and a single-file or projected-symlink bind
+ * has no interior to walk. The authority handed back is an independent clone; the caller owns it. */
+static int hl_vfs_cursor_mount_authority(const char *guest, hl_vfs_cursor_authority *output) {
+    if (guest == NULL || output == NULL) return -EINVAL;
+    memset(output, 0, sizeof *output);
+    int volume = jail_match(guest);
+    if (volume < 0 || g_vols[volume].isfile || g_vols[volume].issymlink) return 0;
+    if (strcmp(g_vols[volume].guest, guest) != 0) return 0;
+    hl_vfs_cursor_authority source = {0};
+    if (g_vols[volume].handle != HL_HOST_HANDLE_INVALID && g_host_services != NULL) {
+        source.kind = HL_VFS_CURSOR_AUTHORITY_HOST;
+        source.value.host.handle = g_vols[volume].handle;
+        source.value.host.services = g_host_services;
+    } else if (g_vols[volume].fd >= 0) {
+        source = hl_vfs_cursor_native(g_vols[volume].fd);
+    } else {
+        return 0;
+    }
+    int error = hl_vfs_cursor_authority_clone(&source, output);
+    return error != 0 ? error : 1;
+}
+
 static void hl_vfs_lower_release_at(int index) {
     if (index < 0 || index >= g_nlower) return;
     if (g_lower_borrowed[index] && g_host_services != NULL && g_host_services->posix_attachment != NULL &&
