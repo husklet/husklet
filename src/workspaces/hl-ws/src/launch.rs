@@ -28,7 +28,7 @@ mod tests {
             Ok(0)
         }
         fn resize(&mut self, _c: u16, _r: u16) {}
-        fn master_fd(&self) -> Option<std::os::unix::io::RawFd> {
+        fn master_descriptor(&self) -> Option<crate::terminal::PtyDescriptor> {
             None
         }
         fn try_wait(&mut self) -> Option<i32> {

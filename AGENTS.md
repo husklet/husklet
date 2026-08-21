@@ -600,6 +600,69 @@ arms, not by reading the surrounding prose — one of the above was found only
 because a lane listed which `NativeExit` variants reach a call and compared the
 two functions side by side.
 
+## A `#[cfg]` and its consumers must be the same width
+
+Four instances in two days, all in the same shape: a `#[cfg]` on a module, an
+item, or a `use`, disagreeing with the `#[cfg]` on the code that names it. None
+was visible to any gate that runs on Linux or macOS, because the configuration
+that would have said so is the one nobody builds.
+
+- `mod terminal;` in `hl-engine/src/runtime/api.rs` was ungated while the
+  re-export and every consumer in `execution.rs` carried `#[cfg(unix)]`. A
+  Windows build entered a POSIX pty pump and produced **73 errors** inside it.
+- `mod test_hook;` in `hl-native/src/lib.rs` was gated on the feature alone
+  while the test target that calls into it was gated
+  `any(feature = "native-test-hooks", windows)`. The mingw smoke builds without
+  the feature, so on Windows the caller compiled and the callee did not exist.
+- `execution.rs::an_unfinalized_generation_is_a_permanent_recovery_refusal` was
+  an **ungated `#[test]` naming two `#[cfg(unix)]` items** -- `CheckpointControl`
+  in its own file and `super::super::checkpoint` in `api.rs`. Every other item in
+  that `mod tests` which names either already carried the gate; this one did not.
+- `composition_test.rs::rejects_terminal_before_native_construction` is a
+  `#[cfg(not(unix))]` test that built `RuntimeServices` with an `activation` and
+  an `executable_authority` field. **The struct has had neither for some time.**
+  Nothing rejected it because nothing compiles that arm.
+
+The first two are a consumer wider than what it names; the third is the same
+thing one layer up, in a test; the fourth is the opposite failure -- an arm
+exclusive to a configuration nobody builds, which does not break, it **rots**.
+Both directions have the same cause and the same cure.
+
+**Fix by matching, and the default direction is to widen the narrow side.**
+A module gated more narrowly than its consumers is usually just missing a
+declaration -- widen it. Narrowing the consumer is right only when the consumer's
+*subject* is the gated mechanism: a test of a `#[cfg(unix)] fn` that writes a
+Unix mode belongs under `#[cfg(unix)]`, and so does a test whose name claims it
+crossed a real Unix socket. Ask what the consumer is *for*. If the answer names
+the platform, gate it and write the reason at the gate; if the answer does not,
+the gate is in the wrong place.
+
+**Never widen by deleting.** Removing the method, the assertion, or the field
+that will not compile makes the arm green and the product smaller. Where a
+mechanism genuinely has no Windows equivalent, keep the entry point and refuse in
+it, with the reason written at the point of refusal -- the way
+`sock_identity_directory` returns `NULL` there, and the way `storybook::host` now
+answers `Fault::Socket` naming the missing socket pair rather than disappearing.
+
+**And do not widen by substituting.** Some Unix spellings are incidental and some
+are the subject. `UnixStream::pair()` used only to obtain two connected endpoints
+is incidental, and a loopback `TcpStream` pair is the same three properties, so
+widening keeps the test running on all four hosts -- which beats a `#![cfg(unix)]`
+integration target that compiles to zero tests and reports `ok`. The same call in
+`frames_cross_a_real_unix_socket_in_order` is the subject, and substituting there
+would have left the test's own name a claim about something it no longer did.
+
+**The only way to find these is to build the other configuration.** Not a grep:
+`cargo check --workspace --all-targets --target x86_64-pc-windows-gnu` is what
+found all four, and the CI mingw job runs `cargo build -p hl-native -p hl-engine
+-p engine`, which compiles no test target and only three crates. When a
+configuration cannot be built at all -- `hl-container` cannot cross to Windows
+because `aws-lc-sys` stops the graph -- rewrite every `cfg(unix)`/`cfg(not(unix))`
+in that crate to a cfg name that is never set, build with
+`RUSTFLAGS=--check-cfg=cfg(<name>)`, and plant a type error inside the arm to
+prove it was really selected. That technique is sound for cfg-graph consistency
+and blind to libc and ABI differences; say which you proved.
+
 ## Balance the arm order, or measure a 4% lie
 
 Running base first and candidate second in every round puts a uniform **+4% on

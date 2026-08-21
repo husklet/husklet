@@ -3,7 +3,6 @@
 //! them, lying about a length, and hanging up.
 
 use std::io::{Cursor, Read};
-use std::os::unix::net::UnixStream;
 
 use hl_extension::{ChannelId, Frame, Kind, Malformed, Transit, Wire};
 
@@ -123,9 +122,15 @@ fn the_buffer_stays_bounded_across_many_frames() {
     assert_eq!(receiver.buffered(), 0);
 }
 
+/// `#[cfg(unix)]` because the socket is the subject, not the fixture. Every other test in this
+/// file drives the codec over an in-memory reader; this one exists to say that the same framing
+/// survives a real kernel socket -- its partial reads, its ordering, and its close. There is no
+/// Unix-domain socket in `std` off Unix, and substituting a different transport would leave the
+/// test's own name a claim about something it had stopped exercising.
+#[cfg(unix)]
 #[test]
 fn frames_cross_a_real_unix_socket_in_order() {
-    let (host, extension) = UnixStream::pair().expect("a socket pair");
+    let (host, extension) = std::os::unix::net::UnixStream::pair().expect("a socket pair");
     let count = 200_u32;
 
     let writer = std::thread::spawn(move || {

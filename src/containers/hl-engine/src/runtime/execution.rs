@@ -918,6 +918,16 @@ mod tests {
     /// A staged generation never becomes finalized while this launch is waiting,
     /// so the checkpoint preflight must surface the refusal instead of polling
     /// until its deadline.
+    ///
+    /// `#[cfg(unix)]` because both names in the body are: `CheckpointControl` is
+    /// declared under one in this file, and `super::super::checkpoint` under one in
+    /// `runtime/api.rs`. The gate belongs on the test rather than on the module,
+    /// because the module is a checkpoint coordinator that passes descriptors over an
+    /// `AF_UNIX` socket with `SCM_RIGHTS` -- widening it to Windows is a port, not a
+    /// `cfg` edit. Everything else in this `mod tests` that names either already
+    /// carries the same gate; this one item did not, and nothing built the
+    /// configuration that would have said so.
+    #[cfg(unix)]
     #[test]
     fn an_unfinalized_generation_is_a_permanent_recovery_refusal() {
         assert_eq!(

@@ -4,20 +4,36 @@
 //! speaking the protocol across a socket pair, describing an interface the
 //! toolkit renders. Nothing about the interface is known here in advance.
 
-use std::os::unix::net::UnixStream;
+#[cfg(unix)]
+use std::io::{Read, Write};
 
+#[cfg(unix)]
 use hl_extension::port::ContainerSummary;
+#[cfg(unix)]
+use hl_extension::WorkspaceInfo;
+#[cfg(unix)]
 use hl_extension::{
     Authority, Capability, ChannelId, ExtensionName, Frame, Grant, Kind, Limits, Reply, Request, Session, Transit,
-    Welcome, Wire, WorkspaceInfo, PROTOCOL,
+    Welcome, Wire, PROTOCOL,
 };
-use hl_gui::{Renderer, Tree};
+#[cfg(unix)]
+use hl_gui::Renderer;
+use hl_gui::Tree;
 use hl_gui_gtk::Surface as Widgets;
 
+/* The conversation below is a demonstration over a Unix-domain socket, so its whole call graph --
+ * the two submodules that produce frames included -- is reachable only from the three entry points
+ * that build one. Declaring the submodules under the same gate as their callers is what keeps this
+ * module's contents and its consumers the same width in both configurations; a portable module with
+ * no non-Unix consumer would be dead code there, which `-D warnings` reports and nobody reads. */
+#[cfg(unix)]
 mod host;
+#[cfg(unix)]
 mod process;
+#[cfg(unix)]
 mod producer;
 
+#[cfg(unix)]
 use host::Workspace;
 
 /// Why the hosted conversation ended early.
@@ -45,10 +61,18 @@ impl std::error::Error for Fault {}
 ///
 /// # Errors
 /// Returns why the conversation could not be completed.
+#[cfg(unix)]
 pub fn host(widgets: &mut Widgets, tree: &mut Tree) -> Result<usize, Fault> {
-    let (ours, theirs) = UnixStream::pair().map_err(|error| Fault::Socket(error.to_string()))?;
+    let (ours, theirs) = std::os::unix::net::UnixStream::pair().map_err(|error| Fault::Socket(error.to_string()))?;
     let extension = std::thread::spawn(move || extension::serve(theirs, extension::Extension::new()));
     converse_with(ours, widgets, tree, extension)
+}
+
+/// # Errors
+/// Always: see [`NO_SOCKET_PAIR`].
+#[cfg(not(unix))]
+pub fn host(_: &mut Widgets, _: &mut Tree) -> Result<usize, Fault> {
+    Err(Fault::Socket(NO_SOCKET_PAIR.into()))
 }
 
 /// Runs the whole component catalogue through the same socket path, so every
@@ -57,10 +81,18 @@ pub fn host(widgets: &mut Widgets, tree: &mut Tree) -> Result<usize, Fault> {
 ///
 /// # Errors
 /// Returns why the conversation could not be completed.
+#[cfg(unix)]
 pub fn catalogue(widgets: &mut Widgets, tree: &mut Tree, filter: Option<String>) -> Result<usize, Fault> {
-    let (ours, theirs) = UnixStream::pair().map_err(|error| Fault::Socket(error.to_string()))?;
+    let (ours, theirs) = std::os::unix::net::UnixStream::pair().map_err(|error| Fault::Socket(error.to_string()))?;
     let producer = std::thread::spawn(move || producer::serve(theirs, filter.as_deref()));
     converse_with(ours, widgets, tree, producer)
+}
+
+/// # Errors
+/// Always: see [`NO_SOCKET_PAIR`].
+#[cfg(not(unix))]
+pub fn catalogue(_: &mut Widgets, _: &mut Tree, _: Option<String>) -> Result<usize, Fault> {
+    Err(Fault::Socket(NO_SOCKET_PAIR.into()))
 }
 
 /// Hosts an extension running as a real process, rendering whatever it draws.
@@ -71,6 +103,7 @@ pub fn catalogue(widgets: &mut Widgets, tree: &mut Tree, filter: Option<String>)
 ///
 /// # Errors
 /// Returns why the extension could not be started or did not finish drawing.
+#[cfg(unix)]
 pub fn spawned(widgets: &mut Widgets, tree: &mut Tree, command: &str) -> Result<usize, Fault> {
     let guest = process::Guest::invite(command)?;
     let stream = guest.accept()?;
@@ -84,9 +117,42 @@ pub fn spawned(widgets: &mut Widgets, tree: &mut Tree, command: &str) -> Result<
     Ok(applied)
 }
 
+/// # Errors
+/// Always: see [`NO_LISTENER`].
+#[cfg(not(unix))]
+pub fn spawned(_: &mut Widgets, _: &mut Tree, _: &str) -> Result<usize, Fault> {
+    Err(Fault::Socket(NO_LISTENER.into()))
+}
+
+/// Why the two in-process modes refuse off Unix.
+///
+/// Both hand one end of a connected stream pair to a producer on another thread and keep the
+/// other. `std::os::unix::net::UnixStream::pair` is the only thing in the standard library that
+/// makes one; Windows has `AF_UNIX` sockets since 1803 but `std` exposes no binding for them, and
+/// the alternatives -- a named pipe, or a loopback listener -- are a different object with a
+/// different lifetime, not a spelling change. Refusing here rather than substituting one keeps the
+/// storybook honest about which host it demonstrated the protocol on.
+#[cfg(not(unix))]
+const NO_SOCKET_PAIR: &str =
+    "the storybook's in-process extension modes need a connected socket pair, which the standard \
+     library provides only on Unix";
+
+/// Why the spawned mode refuses off Unix.
+///
+/// It is the product path, and the product contract is a filesystem path in
+/// `HUSKLET_EXTENSION_SOCKET` that an extension in another process connects to -- exactly what a
+/// sidecar container receives. Windows would deliver that rendezvous as a named pipe, which is a
+/// different contract for the extension as well as for the host, so this refuses instead of
+/// quietly demonstrating something the product does not do.
+#[cfg(not(unix))]
+const NO_LISTENER: &str =
+    "the storybook's spawned extension mode needs a filesystem-path socket to invite a process to, \
+     which the standard library provides only on Unix";
+
 /// Drives one producer to completion and applies everything it describes.
-fn converse_with<T>(
-    stream: UnixStream,
+#[cfg(unix)]
+fn converse_with<S: Read + Write, T>(
+    stream: S,
     widgets: &mut Widgets,
     tree: &mut Tree,
     producer: std::thread::JoinHandle<T>,
@@ -105,6 +171,7 @@ fn converse_with<T>(
     Ok(applied)
 }
 
+#[cfg(unix)]
 /// The grant the storybook offers: draw, and read containers. Nothing else.
 fn authority() -> Authority {
     Authority::new(
@@ -116,7 +183,8 @@ fn authority() -> Authority {
 
 /// Sends the opening frame and reads the extension's reply, so the extension
 /// knows its grant before it asks for anything.
-fn greet(wire: &mut Wire<UnixStream>) -> Result<(), Fault> {
+#[cfg(unix)]
+fn greet<S: Read + Write>(wire: &mut Wire<S>) -> Result<(), Fault> {
     let welcome = Welcome {
         protocol: PROTOCOL,
         host: env!("CARGO_PKG_VERSION").into(),
@@ -137,8 +205,9 @@ fn greet(wire: &mut Wire<UnixStream>) -> Result<(), Fault> {
 /// listening. The interface is complete once the extension has both described
 /// it and said how long its table is; waiting past that would deadlock, since
 /// the extension is by then waiting on the host.
-fn converse(
-    wire: &mut Wire<UnixStream>,
+#[cfg(unix)]
+fn converse<S: Read + Write>(
+    wire: &mut Wire<S>,
     session: &mut Session,
     widgets: &mut Widgets,
     tree: &mut Tree,
@@ -169,6 +238,7 @@ fn converse(
 
 /// How far the extension has got. A ceiling on exchanges bounds a misbehaving
 /// extension; the completion check is what ends a well-behaved one.
+#[cfg(unix)]
 #[derive(Default)]
 struct Progress {
     applied: usize,
@@ -179,6 +249,7 @@ struct Progress {
     expected: usize,
 }
 
+#[cfg(unix)]
 impl Progress {
     fn note(&mut self, request: &Request) {
         match request {
@@ -198,11 +269,13 @@ impl Progress {
 
 /// Calls the storybook answers before giving up on an extension that never
 /// finishes describing itself.
+#[cfg(unix)]
 const EXCHANGES: usize = 16;
 
 /// Handles one call: dispatch it, apply anything it drew, and reply.
-fn exchange(
-    wire: &mut Wire<UnixStream>,
+#[cfg(unix)]
+fn exchange<S: Read + Write>(
+    wire: &mut Wire<S>,
     session: &mut Session,
     widgets: &mut Widgets,
     tree: &mut Tree,
@@ -218,6 +291,7 @@ fn exchange(
 }
 
 /// Applies whatever the extension drew since the last call.
+#[cfg(unix)]
 fn draw(session: &mut Session, widgets: &mut Widgets, tree: &mut Tree) -> Result<usize, Fault> {
     let mut applied = 0;
     for frame in session.drain() {
@@ -236,7 +310,8 @@ fn draw(session: &mut Session, widgets: &mut Widgets, tree: &mut Tree) -> Result
 /// A table asks for the windows it needs as it realizes rows, so the host has
 /// to carry those requests to the extension and the answers back; without this
 /// leg the interface is present but every row is a placeholder.
-fn fill(wire: &mut Wire<UnixStream>, widgets: &mut Widgets) -> Result<usize, Fault> {
+#[cfg(unix)]
+fn fill<S: Read + Write>(wire: &mut Wire<S>, widgets: &mut Widgets) -> Result<usize, Fault> {
     let mut delivered = 0;
     for round in 0..ROUNDS {
         let requests = widgets.requests(round);
@@ -252,7 +327,12 @@ fn fill(wire: &mut Wire<UnixStream>, widgets: &mut Widgets) -> Result<usize, Fau
 }
 
 /// Asks for one window and gives the answer to the table that wanted it.
-fn deliver(wire: &mut Wire<UnixStream>, widgets: &mut Widgets, request: &hl_gui::RowRequest) -> Result<(), Fault> {
+#[cfg(unix)]
+fn deliver<S: Read + Write>(
+    wire: &mut Wire<S>,
+    widgets: &mut Widgets,
+    request: &hl_gui::RowRequest,
+) -> Result<(), Fault> {
     let payload = serde_json::to_vec(request).map_err(|error| Fault::Malformed(error.to_string()))?;
     wire.send(&Frame::new(ChannelId::new(3), Kind::Event, payload))
         .map_err(transit)?;
@@ -267,9 +347,11 @@ fn deliver(wire: &mut Wire<UnixStream>, widgets: &mut Widgets, request: &hl_gui:
 
 /// Fetch rounds before the host stops asking, so a table over a source that
 /// never satisfies it cannot spin.
+#[cfg(unix)]
 const ROUNDS: u64 = 4;
 
 /// Records a source's length so its table describes the whole listing.
+#[cfg(unix)]
 fn resize(widgets: &mut Widgets, mutation: &hl_gui::SourceMutation) {
     let hl_gui::SourceMutation::Length { source, version, rows } = mutation else {
         return;
@@ -285,12 +367,14 @@ fn resize(widgets: &mut Widgets, mutation: &hl_gui::SourceMutation) {
     eprintln!("[storybook] source rejected: {failure}");
 }
 
-fn respond(wire: &mut Wire<UnixStream>, reply: &Reply) -> Result<(), Fault> {
+#[cfg(unix)]
+fn respond<S: Read + Write>(wire: &mut Wire<S>, reply: &Reply) -> Result<(), Fault> {
     let payload = serde_json::to_vec(reply).map_err(|error| Fault::Malformed(error.to_string()))?;
     wire.send(&Frame::new(ChannelId::new(1), Kind::Response, payload))
         .map_err(transit)
 }
 
+#[cfg(unix)]
 fn transit(transit: Transit) -> Fault {
     match transit {
         Transit::Closed => Fault::Socket("the extension closed the connection".into()),
@@ -299,6 +383,7 @@ fn transit(transit: Transit) -> Fault {
     }
 }
 
+#[cfg(unix)]
 /// Containers the storybook pretends the workspace is running.
 #[must_use]
 pub fn containers() -> Vec<ContainerSummary> {
@@ -321,6 +406,7 @@ pub fn containers() -> Vec<ContainerSummary> {
     .collect()
 }
 
+#[cfg(unix)]
 /// The workspace description the extension is told about.
 #[must_use]
 pub fn workspace() -> WorkspaceInfo {
