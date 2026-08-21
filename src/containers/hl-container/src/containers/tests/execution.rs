@@ -804,3 +804,40 @@ async fn restoring_a_sealed_terminal_backed_member_seats_the_restored_process_in
         "a pane's input did not reach the restored member's own terminal"
     );
 }
+
+/// A drained stream is the only end-of-output signal a caller gets, so it has to imply a published
+/// exit. It did not. `own` closed the stream as soon as it had drained the process, and the record
+/// was written afterwards by the task that awaits it -- measured at ~27ms behind on this host, 3
+/// runs out of 3. A caller that read to `None` and then inspected therefore saw `Running` for a
+/// process that had already exited, which is exactly what `compose_project`'s `exec-into-api` step
+/// does. The window existed on the arm64 Mac the workflows were written on too; that host runs this
+/// engine ~58x slower, so the publication always won the race and nothing ever caught it.
+///
+/// The container mirror is
+/// [`lifecycle::a_drained_container_stream_implies_a_published_exit`](super::lifecycle).
+#[tokio::test]
+async fn a_drained_execution_stream_implies_a_published_exit() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_millis(30);
+    let containers = service(Arc::new(runtime)).await;
+    containers.create(spec("exec-drain-parent")).await.unwrap();
+    containers.start("exec-drain-parent").await.unwrap();
+    let execution = containers
+        .executions()
+        .create("exec-drain-parent", ExecSpec::new(Process::new("fake")))
+        .await
+        .unwrap();
+    let mut session = containers.executions().start(&execution.id).await.unwrap();
+    while session.next().await.unwrap().is_some() {}
+    let state = containers.executions().inspect(&execution.id).await.unwrap().state;
+    assert!(
+        matches!(
+            state,
+            ExecState::Exited {
+                result: ExitStatus::Code(0),
+                ..
+            }
+        ),
+        "the stream ended before the exit was published: {state:?}"
+    );
+}

@@ -64,6 +64,16 @@ impl Service {
         Ok(crate::Session::new(Arc::clone(self), io, journal, 0, live_at))
     }
 
+    /// Owns one process's output until it exits, and reports how it exited.
+    ///
+    /// It deliberately does NOT terminate `io`. Ending the stream is the last event a reader can
+    /// observe about this process, so it has to come after the exit status is published -- otherwise
+    /// a caller that drains the stream and then inspects sees a live process that is already dead.
+    /// That window was real and only ever ~27ms wide, which is why it survived: the macOS host the
+    /// workflows were written on runs this engine ~58x slower, so the publication always won there.
+    /// The terminal therefore belongs to the completion path that records the exit -- `finish` for a
+    /// container, `finish_exec` for a session -- and both of this function's callers close the exact
+    /// generation they opened once that has run.
     pub(super) async fn own(
         self: Arc<Self>,
         process: Arc<dyn Running>,
@@ -80,7 +90,6 @@ impl Service {
             result
         };
         let (result, ()) = tokio::join!(waiting, self.drain(&journal, &io, logs, receiver));
-        io.finish().await;
         let _ = complete.send(true);
         result
     }

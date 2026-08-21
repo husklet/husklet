@@ -1282,3 +1282,24 @@ async fn a_capture_bounds_every_member_wait_by_one_shared_deadline() {
         let _ = release.send(());
     }
 }
+
+/// The container mirror of
+/// [`execution::a_drained_execution_stream_implies_a_published_exit`](super::execution): the stream
+/// terminal is the last thing a reader can observe about a process, so it must come after the exit
+/// status is recorded. `finish` has always closed this generation in the right order; what was wrong
+/// is that `own` closed it first, before `finish` ran at all.
+#[tokio::test]
+async fn a_drained_container_stream_implies_a_published_exit() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_millis(30);
+    let containers = service(Arc::new(runtime)).await;
+    containers.create(spec("drain-published")).await.unwrap();
+    let mut session = containers.attach("drain-published").await.unwrap();
+    containers.start("drain-published").await.unwrap();
+    while session.next().await.unwrap().is_some() {}
+    let state = containers.inspect("drain-published").await.unwrap().state;
+    assert!(
+        matches!(state, ContainerState::Exited { result: ExitStatus::Code(0), .. }),
+        "the stream ended before the exit was published: {state:?}"
+    );
+}
