@@ -1,4 +1,4 @@
-// translit/misc -- operand and terminator coverage for the TL_COPY whitelist.
+// translit/operands -- operand and terminator coverage for the TL_COPY whitelist.
 //
 // RIP-relative loads and stores (translit_fix_riprel re-aims the displacement at the guest address, and
 // out-of-int32 reach ends the block), indirect calls and jumps through a table (TL_CALL_REG/TL_JMP_REG),
@@ -62,7 +62,7 @@ int main(void) {
     // deep call/ret with a large frame
     for (int r = 0; r < 64; r++) h = h * 31 + recur(200, (uint64_t)r);
     // ret imm16 / stdarg-ish
-    printf("misc h=%016llx global=%016llx tbl=%016llx\n", (unsigned long long)h,
+    printf("operands h=%016llx global=%016llx tbl=%016llx\n", (unsigned long long)h,
            (unsigned long long)global_a, (unsigned long long)h64(table, sizeof table));
     return 0;
 }

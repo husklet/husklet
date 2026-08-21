@@ -187,7 +187,7 @@ fn threads_fork_and_exec_agree_with_the_interpreter() {
 /// RIP-relative operands, indirect terminators, string operations and deep call/ret.
 #[test]
 fn operand_and_terminator_coverage_agrees_with_the_interpreter() {
-    agrees("misc");
+    agrees("operands");
 }
 
 /// The image refusal, which is the one part of `translit.inc` that must fire rather than work.
@@ -201,7 +201,7 @@ fn operand_and_terminator_coverage_agrees_with_the_interpreter() {
 #[test]
 fn a_non_position_independent_image_is_refused_rather_than_transliterated() {
     let work = TempDir::new().unwrap();
-    for name in ["flags", "misc", "sigs"] {
+    for name in ["flags", "operands", "sigs"] {
         let executable = displaced_fixture(work.path(), name);
         let (interpreted, interpreted_status) = run(&executable, "0");
         let (selected, selected_status) = run(&executable, "1");
