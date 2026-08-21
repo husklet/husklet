@@ -1260,6 +1260,51 @@ argued either way. It also protects a *surprising* result: a number you
 predicted and got is evidence, where the same number produced by a lane that
 would have explained any outcome is not.
 
+## You cannot measure the syscall half on this host
+
+**An end-to-end workload measurement on this x86_64 box cannot validate a
+spawn-path or syscall-path optimisation. It will read as zero.** This is
+arithmetic, not pessimism, and it was established by a measurement designed to
+find the opposite.
+
+A lane fitted `host_instructions ~ D*guest_instructions + S*syscalls` across nine
+completed workloads, engine-startup floor subtracted. The fit **failed**:
+`R^2 = 0.064`, slope **-524,000** host instructions per guest syscall. A negative
+per-syscall cost is unphysical, so the correlation is absent. Workloads do not
+sort by syscall density; they sort very nearly backwards -- the densest
+(`spawn300`, 258 syscalls per million guest instructions) expands **977x**, the
+sparsest (`cc1`, 3.6) expands **1256x**.
+
+**The model is not wrong. It is unidentifiable here**, and the arithmetic says by
+how much. Take the aarch64 lane's measured `S = 3,135` host instructions per
+guest syscall against this host's measured `D = 1,169`:
+
+- densest workload: `3,135 x 258.2e-6` = **0.069%** of D
+- sparsest workload: `3,135 x 3.6e-6` = **0.001%** of D
+
+Between-workload scatter in expansion is 873-1504, about +-25%. So the largest
+possible syscall contribution is **0.28% of the noise -- roughly 370x below it.**
+The syscall term is not small on this host; it is **invisible**.
+
+On aarch64 with the JIT live, `D` collapses 434 -> 1.29 and the same
+~3,135-per-syscall term becomes the dominant cost. **The two components only
+become separable once the JIT removes the first one.**
+
+What follows for anyone optimising a syscall, descriptor or spawn path here:
+
+- **Validate on the mechanism, with counters.** `perf stat -e instructions` over
+  the path itself, with a null arm and a mechanism-derived control. That is how
+  the fdinfo and eventfd work was validated, and it was the right call.
+- **Or validate on aarch64 with the JIT live.** The cross-build takes ~70 s on
+  this box; the persistent VM is for things needing a real kernel.
+- **Do not ask for an end-to-end x86 confirmation of such a change**, and do not
+  read a flat end-to-end result as evidence the change did nothing. Asking for
+  that evidence is asking for a number that cannot exist.
+
+This is the counterpart to the mechanism-versus-workload rule above: there, both
+numbers are real and mean different things. Here, one of them **cannot be
+measured at all** on this host, and saying so is the honest report.
+
 ## The table is the unit of iteration and the unit of capacity
 
 Four independent instances were found in a single day, by four lanes that were
