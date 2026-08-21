@@ -604,7 +604,7 @@ fn spawn_output(
 /// The pair is what makes "the guest changed something" decidable across a process boundary: the
 /// projection is this pump's own last write to the slave, so a host termios that is not it was
 /// written by the guest.
-struct Adopted {
+struct AdoptedTerminal {
     image: [u8; 36],
     projection: [u8; 36],
 }
@@ -645,7 +645,7 @@ struct GuestDiscipline {
     /// on this slave before recording anything, so a host termios that is no longer what this pump
     /// installed **is** the guest having installed one. That is the only signal that crosses the
     /// fork, which is why the pump keeps what it imposed rather than assuming the slave stayed raw.
-    adopted: Mutex<Adopted>,
+    adopted: Mutex<AdoptedTerminal>,
     output_stopped: AtomicBool,
 }
 
@@ -674,7 +674,7 @@ impl GuestDiscipline {
         // Re-pair that cooked image with the raw projection the host now holds, so the guest's own
         // TCGETS keeps answering with a cooked terminal instead of the raw mode imposed here.
         hl_native::terminal_termios_adopt(slave.as_raw_fd(), &image).ok_or_else(missing)?;
-        let adopted = Mutex::new(Adopted {
+        let adopted = Mutex::new(AdoptedTerminal {
             image,
             projection: host_projection(&slave),
         });
@@ -762,7 +762,7 @@ impl GuestDiscipline {
         // After the re-assertion, never before: every write this module makes to the slave is
         // recorded here, so that the next batch reads a divergence only when somebody ELSE wrote.
         // `terminal_termios_adopt` bumps the generation itself, which is why it is re-read.
-        *self.adopted.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Adopted {
+        *self.adopted.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = AdoptedTerminal {
             image,
             projection: host_projection(&self.slave),
         };

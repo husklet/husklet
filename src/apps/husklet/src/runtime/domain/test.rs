@@ -72,8 +72,8 @@ fn container_configuration_identity_ignores_runtime_build_identity() {
         configuration.signature_for("runtime-b").unwrap()
     );
     assert_eq!(
-        configuration.configuration_signature().unwrap(),
-        configuration.configuration_signature().unwrap()
+        configuration.identity_signature().unwrap(),
+        configuration.identity_signature().unwrap()
     );
 }
 

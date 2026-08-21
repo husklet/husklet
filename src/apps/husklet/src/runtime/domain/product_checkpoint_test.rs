@@ -168,7 +168,7 @@ impl Fixture {
             let signature = context("derive workspace signature", configuration.signature())?;
             let configuration_signature = context(
                 "derive workspace configuration signature",
-                configuration.configuration_signature(),
+                configuration.identity_signature(),
             )?;
             let runtime_signature = configuration.runtime_signature();
             let session = context(
