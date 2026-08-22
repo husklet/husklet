@@ -260,10 +260,8 @@ const char *hl_options_get(const hl_options *options, const char *name) {
 }
 
 static size_t hl_option_value_size(const char *value) {
-    size_t length;
-    for (length = 0; length < HL_OPTION_STORE_LIMIT; ++length)
-        if (value[length] == 0) return length + 1;
-    return 0;
+    size_t length = strnlen(value, HL_OPTION_STORE_LIMIT);
+    return length == HL_OPTION_STORE_LIMIT ? 0 : length + 1;
 }
 
 int hl_options_set(hl_options *options, const char *name, const char *value, int overwrite) {

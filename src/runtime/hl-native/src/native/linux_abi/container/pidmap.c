@@ -183,9 +183,9 @@ static hl_linux_identity_registry_storage *registry_storage(void) {
     void *memory = mmap(NULL, sizeof(hl_linux_identity_registry_storage), PROT_READ | PROT_WRITE,
                         MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (memory == MAP_FAILED) return NULL;
-    memset(memory, 0, sizeof(hl_linux_identity_registry_storage));
 #endif
     if (memory == NULL) return NULL;
+    memset(memory, 0, sizeof(hl_linux_identity_registry_storage));
     hl_linux_identity_registry_storage *storage = memory;
     for (uint32_t kind = 0; kind < PIDMAP_KINDS; ++kind)
         atomic_init(&storage->map[kind].next_guest, 1);
