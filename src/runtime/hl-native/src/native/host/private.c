@@ -292,6 +292,23 @@ static void hl_private_floor_forget(void) {
     atomic_store_explicit(&hl_private_floor_pid, 0, memory_order_release);
 }
 
+static rlim_t hl_private_guest_ceiling(rlim_t ceiling) {
+    if (ceiling == RLIM_INFINITY || ceiling > INT32_MAX) ceiling = INT32_MAX;
+    /* Keep one sixteenth of a small descriptor table private, up to the 4096
+     * slots used on a large host.  A fixed 4096-slot reserve made an engine
+     * started from an ordinary `ulimit -n 1024` shell refuse before loading a
+     * guest at all.  The proportional reserve leaves 64 private descriptors in
+     * that case while preserving the existing 65536 guest ceiling on the
+     * generous limits used by containers and CI. */
+    rlim_t reserve = ceiling / 16u;
+    if (reserve > HL_HOST_PRIVATE_DESCRIPTOR_MINIMUM) reserve = HL_HOST_PRIVATE_DESCRIPTOR_MINIMUM;
+    if (reserve < 16u) reserve = 16u;
+    if (ceiling <= reserve + 3u) return 0;
+    rlim_t guest = ceiling - reserve;
+    if (guest > HL_LINUX_FD_LIMIT) guest = HL_LINUX_FD_LIMIT;
+    return guest;
+}
+
 static int hl_private_floor_derive(void) {
     struct rlimit limit;
     if (getrlimit(RLIMIT_NOFILE, &limit) != 0) return -errno;
@@ -310,31 +327,22 @@ static int hl_private_floor_derive(void) {
         if (sysctlbyname("kern.maxfilesperproc", &maxfiles, &maxfiles_size, NULL, 0) == 0 && maxfiles > 0 &&
             (rlim_t)maxfiles < limit.rlim_cur)
             limit.rlim_cur = (rlim_t)maxfiles;
-        if (limit.rlim_cur > HL_HOST_PRIVATE_DESCRIPTOR_MINIMUM + 1u) {
-            rlim_t mac_guest = limit.rlim_cur - HL_HOST_PRIVATE_DESCRIPTOR_MINIMUM;
-            if (mac_guest > HL_LINUX_FD_LIMIT) mac_guest = HL_LINUX_FD_LIMIT;
-            return (int)mac_guest;
-        }
-        return -EMFILE;
+        rlim_t mac_guest = hl_private_guest_ceiling(limit.rlim_cur);
+        return mac_guest != 0 ? (int)mac_guest : -EMFILE;
     }
 #endif
     /* Split the native descriptor namespace into a low guest interval and a high private interval.  The
      * old `host_limit - 4096` floor accidentally capped all typed host handles at 4096 even when the host
      * offered hundreds of thousands of descriptors; MySQL's table cache can legitimately cross that
-     * boundary.  Keep at least 4096 private slots, but otherwise begin the private interval immediately
-     * after the enforceable guest ceiling so it can use the whole remaining host range. */
-    const rlim_t reserve = HL_HOST_PRIVATE_DESCRIPTOR_MINIMUM;
-    const rlim_t maximum_guest = HL_LINUX_FD_LIMIT;
-    if (limit.rlim_cur == RLIM_INFINITY || limit.rlim_cur > INT32_MAX) limit.rlim_cur = INT32_MAX;
+     * boundary. Begin the private interval immediately after the enforceable guest ceiling, with the
+     * proportional reserve above keeping small host tables usable too. */
     /* Anchor the private interval just under the real ceiling rather than refusing when the soft limit does
      * not clear HL_HOST_GUEST_DESCRIPTOR_MINIMUM: below that minimum it is not the true ceiling (same as the
      * Darwin branch above).  Refusing broke engine-in-engine, where the inner guest reports RLIMIT_NOFILE
      * 20480 < MINIMUM + reserve.  Do NOT raise our own soft limit instead -- hl_engine_guest_fd_limit()
      * derives the GUEST-VISIBLE ceiling from it and that must stay golden-stable. */
-    if (limit.rlim_cur <= reserve + 1u) return -EMFILE;
-    rlim_t guest = limit.rlim_cur - reserve;
-    if (guest > maximum_guest) guest = maximum_guest;
-    return (int)guest;
+    rlim_t guest = hl_private_guest_ceiling(limit.rlim_cur);
+    return guest != 0 ? (int)guest : -EMFILE;
 }
 
 int hl_host_process_fd_private_floor(void) {
@@ -354,8 +362,9 @@ int hl_host_process_fd_private_floor(void) {
 }
 
 uint32_t hl_engine_guest_fd_limit(void) {
-    // The guest-visible fd ceiling (RLIMIT_NOFILE, /proc/self/limits) must be STABLE across hosts --
-    // HL_LINUX_FD_LIMIT-capped, derived only from the host RLIMIT_NOFILE -- so goldens match on every runner.
+    // The guest-visible fd ceiling (RLIMIT_NOFILE, /proc/self/limits) is HL_LINUX_FD_LIMIT-capped and derived
+    // from the host RLIMIT_NOFILE. Generous hosts therefore keep the golden-stable 65536 answer, while a host
+    // whose real table is smaller reports the lower enforceable boundary rather than refusing to start.
     // It deliberately does NOT apply the macOS kern.maxfilesperproc clamp that hl_host_process_fd_private_floor
     // uses: that clamp only bounds where the engine hoists its OWN host descriptors (F_DUPFD target), a
     // host-side concern invisible to the guest. Decoupling keeps getrlimit/proc consistent with the Linux
@@ -363,12 +372,7 @@ uint32_t hl_engine_guest_fd_limit(void) {
     // its private fds under that ceiling. (Guest fd numbers stay low in practice, far below the private band.)
     struct rlimit limit;
     if (getrlimit(RLIMIT_NOFILE, &limit) != 0) return 0;
-    const rlim_t reserve = HL_HOST_PRIVATE_DESCRIPTOR_MINIMUM;
-    if (limit.rlim_cur == RLIM_INFINITY || limit.rlim_cur > INT32_MAX) limit.rlim_cur = INT32_MAX;
-    if (limit.rlim_cur <= HL_HOST_GUEST_DESCRIPTOR_MINIMUM + reserve) return 0;
-    rlim_t guest = limit.rlim_cur - reserve;
-    if (guest > HL_LINUX_FD_LIMIT) guest = HL_LINUX_FD_LIMIT;
-    return (uint32_t)guest;
+    return (uint32_t)hl_private_guest_ceiling(limit.rlim_cur);
 }
 
 int hl_host_process_fd_private_adopt(int fd) {

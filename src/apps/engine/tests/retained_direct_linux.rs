@@ -188,6 +188,27 @@ mod linux_host {
         assert!(output.stderr.is_empty());
     }
 
+    #[test]
+    fn direct_x86_64_worker_starts_with_the_default_1024_descriptor_limit() {
+        let path = std::env::temp_dir().join(format!("hl-low-nofile-x86-{}", std::process::id()));
+        fs::write(&path, static_x86_64(60, 43)).unwrap();
+        // Keep the lowered limit inside the child shell; the parent and every
+        // sibling test retain the runner's own descriptor ceiling.
+        let output = Command::new("/bin/sh")
+            .args(["-c", "ulimit -n 1024; exec \"$@\"", "low-nofile"])
+            .arg(env!("CARGO_BIN_EXE_hl-x86_64"))
+            .arg(&path)
+            .output()
+            .unwrap();
+        fs::remove_file(path).unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(43),
+            "an ordinary 1024-fd developer shell must still start a guest; stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     /// Linux does not preserve an `exit_group` status: `do_group_exit` stores `(status & 0xff) << 8`,
     /// so a waiter observes the low eight bits and nothing else. Measured on this host's kernel with a
     /// glibc `exit(n)` -- which issues `exit_group` -- `exit(-1)` is waited as 255, `exit(-2)` as 254,
