@@ -73,7 +73,7 @@ fn a_child_collected_with_waitid_releases_its_descriptor_table() {
 /// still pins the corpse's pid; only after the sentry acknowledges the release is the corpse collected.
 ///
 /// One child is alive at a time here, so the only thing 200 rounds can exhaust is entries that outlived
-/// their processes; before the pending array existed this stopped at 63 with `EAGAIN`.
+/// their processes; before the deferred pending record existed this stopped at 63 with `EAGAIN`.
 #[test]
 fn a_child_auto_reaped_under_sa_nocldwait_releases_its_descriptor_table() {
     let work = TempDir::new().unwrap();
@@ -109,7 +109,7 @@ fn a_child_auto_reaped_while_the_guest_is_parked_in_a_forwarded_syscall_releases
 
 /// One SIGCHLD can stand for several dead children -- Linux coalesces a standard signal that is already
 /// pending -- so the auto-reap collects a whole batch inside a single handler entry and the sentry has to
-/// hear about every pid in it. The ordinary-context drain must therefore walk every WNOWAIT corpse rather
+/// hear about every pid in it. The ordinary-context drain must therefore walk every `WNOWAIT` corpse rather
 /// than treating the handler's one pending bit as one child.
 ///
 /// A batch of eight is alive at a time, far inside the sentry's 63-slot bound, and 20 rounds is 160
@@ -139,7 +139,9 @@ fn an_sa_nocldwait_release_is_published_while_the_old_pid_is_still_pinned() {
         .split_once("// SCM_RIGHTS")
         .unwrap()
         .0;
-    let pinned = drain.find("WNOWAIT").expect("the corpse is observed without collection");
+    let pinned = drain
+        .find("WEXITED | WNOHANG | WNOWAIT")
+        .expect("waitid observes the corpse without collecting it");
     let published = drain.find("sentry_ctl_op(SENTRY_OP_REAP").expect("the table release is published");
     let collected = drain.find("waitpid(pid").expect("the pinned corpse is collected");
     assert!(
