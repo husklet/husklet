@@ -649,19 +649,6 @@ static int ckpt_close_sync(FILE **file) {
     return failed ? -1 : 0;
 }
 
-static uint64_t ckpt_hash_bytes(uint64_t hash, const void *data, size_t size) {
-    const unsigned char *bytes = data;
-    for (size_t index = 0; index < size; ++index) {
-        hash ^= bytes[index];
-        hash *= UINT64_C(1099511628211);
-    }
-    return hash;
-}
-
-static int ckpt_name_compare(const void *left, const void *right) {
-    return strcmp(*(const char *const *)left, *(const char *const *)right);
-}
-
 // ---------------------------------------------------------------- image digest
 //
 // The manifest carries a digest that restore recomputes to authenticate the image. It used to be a single
@@ -677,17 +664,7 @@ static int ckpt_name_compare(const void *left, const void *right) {
 // given image hashes to and neither needs a format flag. MANIFEST and the restore-side RECOVERY.jsonl are
 // excluded, as before.
 #define CKPT_HASH_BASIS UINT64_C(14695981039346656037)
-
-static uint64_t ckpt_hash_object(uint64_t hash, const char *name, uint64_t size, const void *data, size_t length) {
-    hash = ckpt_hash_bytes(hash, name, strlen(name) + 1);
-    hash = ckpt_hash_bytes(hash, &size, sizeof size);
-    return ckpt_hash_bytes(hash, data, length);
-}
-
-static uint64_t ckpt_hash_combine(uint64_t image, const char *name, uint64_t object) {
-    image = ckpt_hash_bytes(image, name, strlen(name) + 1);
-    return ckpt_hash_bytes(image, &object, sizeof object);
-}
+#include "image_digest.c"
 
 // A pipe end is drainable only if it can be read. The bytes buffered in a pipe are reachable through a read
 // end and nowhere else, so a write-only holder must never take the image-wide claim: it would win the

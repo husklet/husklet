@@ -71,390 +71,139 @@ int main(void) {
     uint64_t pc = 0;
     uint64_t budget = 20000000ull; // ~20M dispatches through the megamorphic site
     goto *tab[prog[pc]];
-L0:
-    acc = acc * 1ull + 40503ull;
-    goto next;
-L1:
-    acc = acc * 3ull + 40502ull;
-    goto next;
-L2:
-    acc = acc * 5ull + 40501ull;
-    goto next;
-L3:
-    acc = acc * 7ull + 40500ull;
-    goto next;
-L4:
-    acc = acc * 9ull + 40499ull;
-    goto next;
-L5:
-    acc = acc * 11ull + 40498ull;
-    goto next;
-L6:
-    acc = acc * 13ull + 40497ull;
-    goto next;
-L7:
-    acc = acc * 15ull + 40496ull;
-    goto next;
-L8:
-    acc = acc * 17ull + 40511ull;
-    goto next;
-L9:
-    acc = acc * 19ull + 40510ull;
-    goto next;
-L10:
-    acc = acc * 21ull + 40509ull;
-    goto next;
-L11:
-    acc = acc * 23ull + 40508ull;
-    goto next;
-L12:
-    acc = acc * 25ull + 40507ull;
-    goto next;
-L13:
-    acc = acc * 27ull + 40506ull;
-    goto next;
-L14:
-    acc = acc * 29ull + 40505ull;
-    goto next;
-L15:
-    acc = acc * 31ull + 40504ull;
-    goto next;
-L16:
-    acc = acc * 33ull + 40487ull;
-    goto next;
-L17:
-    acc = acc * 35ull + 40486ull;
-    goto next;
-L18:
-    acc = acc * 37ull + 40485ull;
-    goto next;
-L19:
-    acc = acc * 39ull + 40484ull;
-    goto next;
-L20:
-    acc = acc * 41ull + 40483ull;
-    goto next;
-L21:
-    acc = acc * 43ull + 40482ull;
-    goto next;
-L22:
-    acc = acc * 45ull + 40481ull;
-    goto next;
-L23:
-    acc = acc * 47ull + 40480ull;
-    goto next;
-L24:
-    acc = acc * 49ull + 40495ull;
-    goto next;
-L25:
-    acc = acc * 51ull + 40494ull;
-    goto next;
-L26:
-    acc = acc * 53ull + 40493ull;
-    goto next;
-L27:
-    acc = acc * 55ull + 40492ull;
-    goto next;
-L28:
-    acc = acc * 57ull + 40491ull;
-    goto next;
-L29:
-    acc = acc * 59ull + 40490ull;
-    goto next;
-L30:
-    acc = acc * 61ull + 40489ull;
-    goto next;
-L31:
-    acc = acc * 63ull + 40488ull;
-    goto next;
-L32:
-    acc = acc * 65ull + 40471ull;
-    goto next;
-L33:
-    acc = acc * 67ull + 40470ull;
-    goto next;
-L34:
-    acc = acc * 69ull + 40469ull;
-    goto next;
-L35:
-    acc = acc * 71ull + 40468ull;
-    goto next;
-L36:
-    acc = acc * 73ull + 40467ull;
-    goto next;
-L37:
-    acc = acc * 75ull + 40466ull;
-    goto next;
-L38:
-    acc = acc * 77ull + 40465ull;
-    goto next;
-L39:
-    acc = acc * 79ull + 40464ull;
-    goto next;
-L40:
-    acc = acc * 81ull + 40479ull;
-    goto next;
-L41:
-    acc = acc * 83ull + 40478ull;
-    goto next;
-L42:
-    acc = acc * 85ull + 40477ull;
-    goto next;
-L43:
-    acc = acc * 87ull + 40476ull;
-    goto next;
-L44:
-    acc = acc * 89ull + 40475ull;
-    goto next;
-L45:
-    acc = acc * 91ull + 40474ull;
-    goto next;
-L46:
-    acc = acc * 93ull + 40473ull;
-    goto next;
-L47:
-    acc = acc * 95ull + 40472ull;
-    goto next;
-L48:
-    acc = acc * 97ull + 40455ull;
-    goto next;
-L49:
-    acc = acc * 99ull + 40454ull;
-    goto next;
-L50:
-    acc = acc * 101ull + 40453ull;
-    goto next;
-L51:
-    acc = acc * 103ull + 40452ull;
-    goto next;
-L52:
-    acc = acc * 105ull + 40451ull;
-    goto next;
-L53:
-    acc = acc * 107ull + 40450ull;
-    goto next;
-L54:
-    acc = acc * 109ull + 40449ull;
-    goto next;
-L55:
-    acc = acc * 111ull + 40448ull;
-    goto next;
-L56:
-    acc = acc * 113ull + 40463ull;
-    goto next;
-L57:
-    acc = acc * 115ull + 40462ull;
-    goto next;
-L58:
-    acc = acc * 117ull + 40461ull;
-    goto next;
-L59:
-    acc = acc * 119ull + 40460ull;
-    goto next;
-L60:
-    acc = acc * 121ull + 40459ull;
-    goto next;
-L61:
-    acc = acc * 123ull + 40458ull;
-    goto next;
-L62:
-    acc = acc * 125ull + 40457ull;
-    goto next;
-L63:
-    acc = acc * 127ull + 40456ull;
-    goto next;
-L64:
-    acc = acc * 129ull + 40567ull;
-    goto next;
-L65:
-    acc = acc * 131ull + 40566ull;
-    goto next;
-L66:
-    acc = acc * 133ull + 40565ull;
-    goto next;
-L67:
-    acc = acc * 135ull + 40564ull;
-    goto next;
-L68:
-    acc = acc * 137ull + 40563ull;
-    goto next;
-L69:
-    acc = acc * 139ull + 40562ull;
-    goto next;
-L70:
-    acc = acc * 141ull + 40561ull;
-    goto next;
-L71:
-    acc = acc * 143ull + 40560ull;
-    goto next;
-L72:
-    acc = acc * 145ull + 40575ull;
-    goto next;
-L73:
-    acc = acc * 147ull + 40574ull;
-    goto next;
-L74:
-    acc = acc * 149ull + 40573ull;
-    goto next;
-L75:
-    acc = acc * 151ull + 40572ull;
-    goto next;
-L76:
-    acc = acc * 153ull + 40571ull;
-    goto next;
-L77:
-    acc = acc * 155ull + 40570ull;
-    goto next;
-L78:
-    acc = acc * 157ull + 40569ull;
-    goto next;
-L79:
-    acc = acc * 159ull + 40568ull;
-    goto next;
-L80:
-    acc = acc * 161ull + 40551ull;
-    goto next;
-L81:
-    acc = acc * 163ull + 40550ull;
-    goto next;
-L82:
-    acc = acc * 165ull + 40549ull;
-    goto next;
-L83:
-    acc = acc * 167ull + 40548ull;
-    goto next;
-L84:
-    acc = acc * 169ull + 40547ull;
-    goto next;
-L85:
-    acc = acc * 171ull + 40546ull;
-    goto next;
-L86:
-    acc = acc * 173ull + 40545ull;
-    goto next;
-L87:
-    acc = acc * 175ull + 40544ull;
-    goto next;
-L88:
-    acc = acc * 177ull + 40559ull;
-    goto next;
-L89:
-    acc = acc * 179ull + 40558ull;
-    goto next;
-L90:
-    acc = acc * 181ull + 40557ull;
-    goto next;
-L91:
-    acc = acc * 183ull + 40556ull;
-    goto next;
-L92:
-    acc = acc * 185ull + 40555ull;
-    goto next;
-L93:
-    acc = acc * 187ull + 40554ull;
-    goto next;
-L94:
-    acc = acc * 189ull + 40553ull;
-    goto next;
-L95:
-    acc = acc * 191ull + 40552ull;
-    goto next;
-L96:
-    acc = acc * 193ull + 40535ull;
-    goto next;
-L97:
-    acc = acc * 195ull + 40534ull;
-    goto next;
-L98:
-    acc = acc * 197ull + 40533ull;
-    goto next;
-L99:
-    acc = acc * 199ull + 40532ull;
-    goto next;
-L100:
-    acc = acc * 201ull + 40531ull;
-    goto next;
-L101:
-    acc = acc * 203ull + 40530ull;
-    goto next;
-L102:
-    acc = acc * 205ull + 40529ull;
-    goto next;
-L103:
-    acc = acc * 207ull + 40528ull;
-    goto next;
-L104:
-    acc = acc * 209ull + 40543ull;
-    goto next;
-L105:
-    acc = acc * 211ull + 40542ull;
-    goto next;
-L106:
-    acc = acc * 213ull + 40541ull;
-    goto next;
-L107:
-    acc = acc * 215ull + 40540ull;
-    goto next;
-L108:
-    acc = acc * 217ull + 40539ull;
-    goto next;
-L109:
-    acc = acc * 219ull + 40538ull;
-    goto next;
-L110:
-    acc = acc * 221ull + 40537ull;
-    goto next;
-L111:
-    acc = acc * 223ull + 40536ull;
-    goto next;
-L112:
-    acc = acc * 225ull + 40519ull;
-    goto next;
-L113:
-    acc = acc * 227ull + 40518ull;
-    goto next;
-L114:
-    acc = acc * 229ull + 40517ull;
-    goto next;
-L115:
-    acc = acc * 231ull + 40516ull;
-    goto next;
-L116:
-    acc = acc * 233ull + 40515ull;
-    goto next;
-L117:
-    acc = acc * 235ull + 40514ull;
-    goto next;
-L118:
-    acc = acc * 237ull + 40513ull;
-    goto next;
-L119:
-    acc = acc * 239ull + 40512ull;
-    goto next;
-L120:
-    acc = acc * 241ull + 40527ull;
-    goto next;
-L121:
-    acc = acc * 243ull + 40526ull;
-    goto next;
-L122:
-    acc = acc * 245ull + 40525ull;
-    goto next;
-L123:
-    acc = acc * 247ull + 40524ull;
-    goto next;
-L124:
-    acc = acc * 249ull + 40523ull;
-    goto next;
-L125:
-    acc = acc * 251ull + 40522ull;
-    goto next;
-L126:
-    acc = acc * 253ull + 40521ull;
-    goto next;
-L127:
-    acc = acc * 255ull + 40520ull;
-    goto next;
+#define VM_OP(label, multiplier, increment)                                                                            \
+    label:                                                                                                             \
+    acc = acc * multiplier##ull + increment##ull;                                                                      \
+    goto next;
+    VM_OP(L0, 1, 40503)
+    VM_OP(L1, 3, 40502)
+    VM_OP(L2, 5, 40501)
+    VM_OP(L3, 7, 40500)
+    VM_OP(L4, 9, 40499)
+    VM_OP(L5, 11, 40498)
+    VM_OP(L6, 13, 40497)
+    VM_OP(L7, 15, 40496)
+    VM_OP(L8, 17, 40511)
+    VM_OP(L9, 19, 40510)
+    VM_OP(L10, 21, 40509)
+    VM_OP(L11, 23, 40508)
+    VM_OP(L12, 25, 40507)
+    VM_OP(L13, 27, 40506)
+    VM_OP(L14, 29, 40505)
+    VM_OP(L15, 31, 40504)
+    VM_OP(L16, 33, 40487)
+    VM_OP(L17, 35, 40486)
+    VM_OP(L18, 37, 40485)
+    VM_OP(L19, 39, 40484)
+    VM_OP(L20, 41, 40483)
+    VM_OP(L21, 43, 40482)
+    VM_OP(L22, 45, 40481)
+    VM_OP(L23, 47, 40480)
+    VM_OP(L24, 49, 40495)
+    VM_OP(L25, 51, 40494)
+    VM_OP(L26, 53, 40493)
+    VM_OP(L27, 55, 40492)
+    VM_OP(L28, 57, 40491)
+    VM_OP(L29, 59, 40490)
+    VM_OP(L30, 61, 40489)
+    VM_OP(L31, 63, 40488)
+    VM_OP(L32, 65, 40471)
+    VM_OP(L33, 67, 40470)
+    VM_OP(L34, 69, 40469)
+    VM_OP(L35, 71, 40468)
+    VM_OP(L36, 73, 40467)
+    VM_OP(L37, 75, 40466)
+    VM_OP(L38, 77, 40465)
+    VM_OP(L39, 79, 40464)
+    VM_OP(L40, 81, 40479)
+    VM_OP(L41, 83, 40478)
+    VM_OP(L42, 85, 40477)
+    VM_OP(L43, 87, 40476)
+    VM_OP(L44, 89, 40475)
+    VM_OP(L45, 91, 40474)
+    VM_OP(L46, 93, 40473)
+    VM_OP(L47, 95, 40472)
+    VM_OP(L48, 97, 40455)
+    VM_OP(L49, 99, 40454)
+    VM_OP(L50, 101, 40453)
+    VM_OP(L51, 103, 40452)
+    VM_OP(L52, 105, 40451)
+    VM_OP(L53, 107, 40450)
+    VM_OP(L54, 109, 40449)
+    VM_OP(L55, 111, 40448)
+    VM_OP(L56, 113, 40463)
+    VM_OP(L57, 115, 40462)
+    VM_OP(L58, 117, 40461)
+    VM_OP(L59, 119, 40460)
+    VM_OP(L60, 121, 40459)
+    VM_OP(L61, 123, 40458)
+    VM_OP(L62, 125, 40457)
+    VM_OP(L63, 127, 40456)
+    VM_OP(L64, 129, 40567)
+    VM_OP(L65, 131, 40566)
+    VM_OP(L66, 133, 40565)
+    VM_OP(L67, 135, 40564)
+    VM_OP(L68, 137, 40563)
+    VM_OP(L69, 139, 40562)
+    VM_OP(L70, 141, 40561)
+    VM_OP(L71, 143, 40560)
+    VM_OP(L72, 145, 40575)
+    VM_OP(L73, 147, 40574)
+    VM_OP(L74, 149, 40573)
+    VM_OP(L75, 151, 40572)
+    VM_OP(L76, 153, 40571)
+    VM_OP(L77, 155, 40570)
+    VM_OP(L78, 157, 40569)
+    VM_OP(L79, 159, 40568)
+    VM_OP(L80, 161, 40551)
+    VM_OP(L81, 163, 40550)
+    VM_OP(L82, 165, 40549)
+    VM_OP(L83, 167, 40548)
+    VM_OP(L84, 169, 40547)
+    VM_OP(L85, 171, 40546)
+    VM_OP(L86, 173, 40545)
+    VM_OP(L87, 175, 40544)
+    VM_OP(L88, 177, 40559)
+    VM_OP(L89, 179, 40558)
+    VM_OP(L90, 181, 40557)
+    VM_OP(L91, 183, 40556)
+    VM_OP(L92, 185, 40555)
+    VM_OP(L93, 187, 40554)
+    VM_OP(L94, 189, 40553)
+    VM_OP(L95, 191, 40552)
+    VM_OP(L96, 193, 40535)
+    VM_OP(L97, 195, 40534)
+    VM_OP(L98, 197, 40533)
+    VM_OP(L99, 199, 40532)
+    VM_OP(L100, 201, 40531)
+    VM_OP(L101, 203, 40530)
+    VM_OP(L102, 205, 40529)
+    VM_OP(L103, 207, 40528)
+    VM_OP(L104, 209, 40543)
+    VM_OP(L105, 211, 40542)
+    VM_OP(L106, 213, 40541)
+    VM_OP(L107, 215, 40540)
+    VM_OP(L108, 217, 40539)
+    VM_OP(L109, 219, 40538)
+    VM_OP(L110, 221, 40537)
+    VM_OP(L111, 223, 40536)
+    VM_OP(L112, 225, 40519)
+    VM_OP(L113, 227, 40518)
+    VM_OP(L114, 229, 40517)
+    VM_OP(L115, 231, 40516)
+    VM_OP(L116, 233, 40515)
+    VM_OP(L117, 235, 40514)
+    VM_OP(L118, 237, 40513)
+    VM_OP(L119, 239, 40512)
+    VM_OP(L120, 241, 40527)
+    VM_OP(L121, 243, 40526)
+    VM_OP(L122, 245, 40525)
+    VM_OP(L123, 247, 40524)
+    VM_OP(L124, 249, 40523)
+    VM_OP(L125, 251, 40522)
+    VM_OP(L126, 253, 40521)
+    VM_OP(L127, 255, 40520)
+#undef VM_OP
 next:
     if (--budget == 0) goto vmdone;
     pc = (pc + 1) & (PROG - 1);

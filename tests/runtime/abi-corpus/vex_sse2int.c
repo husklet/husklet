@@ -21,6 +21,13 @@ static void mixb(const void *p, int n) {
         H = H * 1000003ULL + b[i];
 }
 
+static void init_vectors(uint8_t a[32], uint8_t b[32]) {
+    for (int i = 0; i < 32; i++) {
+        a[i] = (uint8_t)(i * 7 + 3);
+        b[i] = (uint8_t)(i * 5 + 130);
+    }
+}
+
 #if !defined(__x86_64__)
 static int64_t clampi(int64_t v, int64_t lo, int64_t hi) {
     return v < lo ? lo : v > hi ? hi : v;
@@ -49,10 +56,7 @@ static void sat_addsub(uint8_t *d, const uint8_t *a, const uint8_t *b, int W, in
 
 TGT int main(void) {
     uint8_t a[32], b[32];
-    for (int i = 0; i < 32; i++) {
-        a[i] = (uint8_t)(i * 7 + 3);
-        b[i] = (uint8_t)(i * 5 + 130);
-    }
+    init_vectors(a, b);
     uint8_t o[32];
 #if defined(__x86_64__)
     __m256i A = _mm256_loadu_si256((void *)a), B = _mm256_loadu_si256((void *)b);

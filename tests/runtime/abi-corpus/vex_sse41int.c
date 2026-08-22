@@ -18,20 +18,24 @@ static void mixb(const void *p, int n) {
         H = H * 1000003ULL + b[i];
 }
 
-TGT int main(void) {
-    int32_t d1[8], d2[8];
+static void init_vectors(int32_t d1[8], int32_t d2[8], int8_t b1[32], int8_t b2[32], uint16_t words[16]) {
     for (int i = 0; i < 8; i++) {
         d1[i] = i * 333 - 1000;
         d2[i] = (i - 4) * 777 + 250;
     }
-    int8_t bb1[32], bb2[32];
     for (int i = 0; i < 32; i++) {
-        bb1[i] = (int8_t)(i * 9 - 100);
-        bb2[i] = (int8_t)(i * -6 + 50);
+        b1[i] = (int8_t)(i * 9 - 100);
+        b2[i] = (int8_t)(i * -6 + 50);
     }
-    uint16_t uw[16];
     for (int i = 0; i < 16; i++)
-        uw[i] = (uint16_t)(i * 4013 + 7);
+        words[i] = (uint16_t)(i * 4013 + 7);
+}
+
+TGT int main(void) {
+    int32_t d1[8], d2[8];
+    int8_t bb1[32], bb2[32];
+    uint16_t uw[16];
+    init_vectors(d1, d2, bb1, bb2, uw);
     uint16_t phin[8] = {900, 40000, 12, 65535, 7, 300, 12, 88};
     uint8_t o[32];
     int r;
