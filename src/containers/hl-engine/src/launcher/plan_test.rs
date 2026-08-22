@@ -136,20 +136,9 @@ mod rootfs_ownership {
     /// directly instead of requiring `CAP_CHOWN`; Nix intentionally runs uid 0 without that capability.
     #[test]
     fn a_writable_root_owned_by_another_host_user_refuses_a_launch_that_is_not_root() {
-        // SAFETY: `geteuid` takes no arguments and cannot fail.
-        #[allow(unsafe_code)]
-        let engine_uid = unsafe { libc::geteuid() };
-        if engine_uid != 0 {
-            assert_eq!(
-                plan(Some(host_root_owned()), &[]).refuse_unownable_root(),
-                Err(EngineError::RootfsNotOwnedByEngine {
-                    rootfs_uid: 0,
-                    engine_uid,
-                })
-            );
-            return;
-        }
         assert!(!super::root_is_unownable(0, 65_534));
+        assert!(super::root_is_unownable(1_000, 0));
+        assert!(!super::root_is_unownable(1_000, 1_000));
     }
 
     /// The kinder-to-refuse judgement stops exactly where the workspace stops being broken. A
