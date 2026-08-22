@@ -187,10 +187,6 @@ static int sentry_route_waitid(struct cpu *c, uint64_t nr) {
 
 static int sentry_route_clone(struct cpu *c, uint64_t nr) {
     if (nr != 220 && nr != 435) return 0;
-    // The SA_NOCLDWAIT auto-reap runs in a host signal handler and can only record its releases; publish
-    // them here, before this fork asks for the slot one of them is holding. This is the route that needs
-    // the slot back, so it is the route that pays for the drain.
-    sentry_reap_drain();
     fork_diagnostic_route previous_route =
         fork_diagnostic_route_enter("sentry-worker", (int)g_worker_pid, (int)g_sentry_pid,
                                     atomic_load_explicit(&g_guest_children, memory_order_relaxed),
@@ -1187,6 +1183,9 @@ static void syscall_route(struct cpu *c) {
     // a return of 1 means it was fully handled locally (arch_prctl/TLS) -- it must stay here.
     if (G_NORMALIZE(c)) return;
     uint64_t nr = G_NR(c);
+    // SA_NOCLDWAIT's handler leaves terminated children pinned as zombies. Publish their sentry releases
+    // and collect them before the guest can observe the next syscall (especially wait, kill, or clone).
+    sentry_reap_drain();
 
     /* service_local rebases pointer arguments from a biased ET_EXEC's Linux link range to the host mapping.
      * A FORWARDED call is marshaled before service_local runs, so apply the same table here -- the same

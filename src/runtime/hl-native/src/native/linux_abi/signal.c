@@ -903,8 +903,9 @@ static void host_sigh_si(int sig, siginfo_t *si, void *uc) {
     }
     // SA_NOCLDWAIT on the guest's SIGCHLD: Linux still DELIVERS the SIGCHLD but leaves no zombie. macOS's own
     // SA_NOCLDWAIT would suppress the signal entirely, so we don't set it (see rt_sigaction) -- instead
-    // auto-reap every terminated child here (WNOHANG, and no WUNTRACED so a stopped child is left alone). The
-    // guest handler still runs (host_sig_pend below) and a later wait() sees ECHILD. Gated on the guest opt-in.
+    // arrange to auto-reap every terminated child here. Under the sentry the handler records only intent;
+    // ordinary syscall context publishes each table release while WNOWAIT still pins the pid, then reaps.
+    // The guest handler still runs (host_sig_pend below) and a later wait() sees ECHILD. Gated on opt-in.
     // This is the one route that frees a child's host pid without any guest syscall to route, so it is also
     // where the sentry's per-process descriptor table would otherwise be orphaned; see sentry_nocldwait_reap.
     if (ls == 17 && (g_sigact[17].flags & 0x2)) sentry_nocldwait_reap();

@@ -69,7 +69,8 @@ fn a_child_collected_with_waitid_releases_its_descriptor_table() {
 /// `waitpid(-1, WNOHANG)` in `signal.c` -- and the guest never calls wait at all. The handler cannot
 /// publish the release itself: `sentry_ctl_op` spins on the ring's `busy` producer flag, which the very
 /// thread the signal interrupted may already hold, so the handler would wait for itself. The release is
-/// therefore recorded in a lock-free pending array and published from ordinary syscall context.
+/// therefore recorded as pending and published from ordinary syscall context while `waitid(WNOWAIT)`
+/// still pins the corpse's pid; only after the sentry acknowledges the release is the corpse collected.
 ///
 /// One child is alive at a time here, so the only thing 200 rounds can exhaust is entries that outlived
 /// their processes; before the pending array existed this stopped at 63 with `EAGAIN`.
@@ -108,8 +109,8 @@ fn a_child_auto_reaped_while_the_guest_is_parked_in_a_forwarded_syscall_releases
 
 /// One SIGCHLD can stand for several dead children -- Linux coalesces a standard signal that is already
 /// pending -- so the auto-reap collects a whole batch inside a single handler entry and the sentry has to
-/// hear about every pid in it. That is what makes the handler's pending record an array rather than one
-/// slot, and it is the only scenario here in which more than one release is outstanding at a time.
+/// hear about every pid in it. The ordinary-context drain must therefore walk every WNOWAIT corpse rather
+/// than treating the handler's one pending bit as one child.
 ///
 /// A batch of eight is alive at a time, far inside the sentry's 63-slot bound, and 20 rounds is 160
 /// children, so the only thing that can exhaust the sentry is entries that outlived their processes.
@@ -121,6 +122,29 @@ fn a_batch_auto_reaped_under_one_coalesced_sigchld_releases_every_descriptor_tab
         sandboxed(&executable, &["batch-nocldwait"]),
         0,
         "a coalesced SIGCHLD left a corpse uncollected or left its descriptor table behind"
+    );
+}
+
+/// A delayed release identified only by pid is unsafe after collection: another worker sharing the sentry
+/// can fork onto the freed number before the release is published. Keep this ordering check beside the
+/// end-to-end cases because deterministic host-pid reuse cannot be requested from Linux. WNOWAIT must pin
+/// the old generation, the sentry must release it, and only then may waitpid return the number to the host.
+#[test]
+fn an_sa_nocldwait_release_is_published_while_the_old_pid_is_still_pinned() {
+    let source = include_str!("../../../runtime/hl-native/src/native/linux_abi/sentry.c");
+    let drain = source
+        .split_once("static void sentry_reap_drain(void)")
+        .unwrap()
+        .1
+        .split_once("// SCM_RIGHTS")
+        .unwrap()
+        .0;
+    let pinned = drain.find("WNOWAIT").expect("the corpse is observed without collection");
+    let published = drain.find("sentry_ctl_op(SENTRY_OP_REAP").expect("the table release is published");
+    let collected = drain.find("waitpid(pid").expect("the pinned corpse is collected");
+    assert!(
+        pinned < published && published < collected,
+        "the host pid became reusable before the sentry released its old generation"
     );
 }
 
