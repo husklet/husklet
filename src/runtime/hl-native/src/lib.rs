@@ -222,7 +222,7 @@ pub fn checkpoint_process_authority_test(pid: i32) -> std::io::Result<Authentica
     })
 }
 
-#[cfg(test)]
+#[cfg(any(not(debug_assertions), test))]
 mod platform;
 
 #[cfg(test)]
