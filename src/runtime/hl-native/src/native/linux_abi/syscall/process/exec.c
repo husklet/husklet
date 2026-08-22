@@ -656,6 +656,8 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         int error = exec_prepare_request(a0, a1, a2, requested_descriptor, &prepared);
         if (error == 0) error = exec_commit_request(c, &prepared);
         if (error != 0) {
+            fprintf(stderr, "[execdiag] pid=%d error=%d path=%s\n", (int)getpid(), error,
+                    (const char *)(uintptr_t)a0);
             if (error == -EAGAIN) exec_prepared_discard(&prepared);
             G_RET(c) = (uint64_t)(int64_t)error;
         }
