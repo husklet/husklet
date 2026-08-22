@@ -613,6 +613,8 @@
         pkgs:
         let
           archives = alpineArchivesFor pkgs;
+          toolchain = toolchainFor pkgs;
+          arm64Compiler = builtins.elemAt toolchain.compilerAliases 0;
         in
         (rustPlatformFor pkgs).buildRustPackage {
           pname = "hl-alpine-compatibility";
@@ -629,6 +631,7 @@
             # Load-bearing, proven by removal rather than assumed: without it this gate
             # reddens at `total_failed_ms=62 error=No such file or directory (os error 2)`.
             pkgs.procps
+            arm64Compiler
             (rustFor pkgs)
           ];
           doCheck = false;
@@ -636,6 +639,10 @@
             runHook preBuild
             export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
             export HL_PRODUCT_CHECKPOINT_REQUIRED=1
+            # The daemon's public fixtures below currently target ARM64.  Use the
+            # pinned guest compiler wrapper, which also supplies glibc's static
+            # archive; a Nix sandbox deliberately has no /usr/bin compiler.
+            export HL_GUEST_CC=${arm64Compiler}/bin/aarch64-linux-gnu-gcc
 
             run_ignored() {
               package="$1"
