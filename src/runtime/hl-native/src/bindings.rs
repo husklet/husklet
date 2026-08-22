@@ -488,6 +488,18 @@ pub(crate) fn x86_reserved_register_test() -> i32 {
 }
 
 #[cfg(feature = "native-test-hooks")]
+pub(crate) fn aarch64_imported_path_guard_test() -> i32 {
+    // SAFETY: the hook owns its own cpu fixture and heap pathname, and clears the ledger interval it arms.
+    unsafe { (test_api().aarch64_imported_path_guard)() }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn x86_imported_path_guard_test() -> i32 {
+    // SAFETY: the hook owns its own cpu fixture and heap pathname, and clears the ledger interval it arms.
+    unsafe { (test_api().x86_64_imported_path_guard)() }
+}
+
+#[cfg(feature = "native-test-hooks")]
 pub(crate) fn linux_errno_from_host(domain: u32, host_errno: i32) -> i32 {
     // SAFETY: this pure test export accepts and returns one scalar value.
     unsafe { (test_api().errno_from_host)(domain, host_errno) }
@@ -826,6 +838,20 @@ mod tests {
         assert!(
             !fdvis_path_publication_test(1, 7),
             "scenario 7 forks; the Windows arm must refuse rather than report a pass"
+        );
+        // Scenario 8 stages the double-fork shape: a lock holder killed inside its critical section and
+        // deliberately left uncollected, while a second child asks for the same lock. It carries its own
+        // deadline, so an engine that can only reclaim from a COLLECTED owner fails here rather than
+        // spinning a core forever the way a guest does. Same host split as scenario 7.
+        #[cfg(not(windows))]
+        {
+            assert!(fdvis_path_publication_test(1, 8), "arm64 scenario 8");
+            assert!(fdvis_path_publication_test(2, 8), "x86 scenario 8");
+        }
+        #[cfg(windows)]
+        assert!(
+            !fdvis_path_publication_test(1, 8),
+            "scenario 8 forks; the Windows arm must refuse rather than report a pass"
         );
     }
 
