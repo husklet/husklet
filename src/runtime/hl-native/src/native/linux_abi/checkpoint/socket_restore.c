@@ -1466,7 +1466,11 @@ static int ckpt_restore_tree_body(const char *rootfs, const struct ckpt_phase_le
     }
     ckpt_restore_commit_stage(CKPT_RESTORE_IDENTITY);
     if (ckpt_restore_identity_hydrate() != 0) {
-        fprintf(stderr, "[restore] cannot publish restored init identity: %s\n", strerror(errno));
+        // The hydrate fails from the restore commit's own state -- a member that never published a host
+        // pid, or a pid-map insert the registry refused -- and hl_linux_pidmap_add sets no errno, so
+        // there is nothing here an errno could name.
+        fprintf(stderr, "[restore] cannot publish restored init identity: the guest/host pid map could not be "
+                        "completed for every member of the image\n");
         ckpt_restore_commit_abort();
         ckpt_restore_commit_destroy();
         free(images);

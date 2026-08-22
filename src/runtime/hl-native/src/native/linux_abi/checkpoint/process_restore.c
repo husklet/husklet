@@ -310,7 +310,10 @@ static int ckpt_restore_typed_inotify(const char *procdir, const struct ckpt_fd 
         int64_t stored = ckpt_source_object_size(image_path);
         size_t image_size;
         if (ckpt_inotify_object_size(stored, &image_size) != 0) {
-            fprintf(stderr, "[restore] inotify %d image %s is invalid: %s\n", record->gfd, image_path, strerror(errno));
+            // A bounds check over the stored size, not a syscall: it sets no errno, so the size that
+            // failed the bound is the only thing there is to report.
+            fprintf(stderr, "[restore] inotify %d image %s has an out-of-bounds size %lld\n", record->gfd, image_path,
+                    (long long)stored);
             return -1;
         }
         void *image = malloc(image_size);

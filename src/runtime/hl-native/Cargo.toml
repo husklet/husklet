@@ -41,6 +41,10 @@ name = "reserved_register"
 required-features = ["native-test-hooks"]
 
 [[test]]
+name = "imported_path_guard"
+required-features = ["native-test-hooks"]
+
+[[test]]
 name = "errno_namespace"
 required-features = ["native-test-hooks"]
 
