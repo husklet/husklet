@@ -363,7 +363,7 @@ mod tests {
         let mut ready = [-1; 2];
         // SAFETY: the pipe array is valid writable storage for two descriptors.
         assert_eq!(unsafe { libc::pipe(ready.as_mut_ptr()) }, 0);
-        let shell = std::ffi::CString::new("/bin/sh").unwrap();
+        let shell = std::ffi::CString::new(std::env::var("SHELL").unwrap_or_else(|_| "sh".into())).unwrap();
         let name = std::ffi::CString::new("sh").unwrap();
         let option = std::ffi::CString::new("-c").unwrap();
         let script = std::ffi::CString::new("printf x >&3; exec sleep 2").unwrap();
