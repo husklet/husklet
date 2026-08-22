@@ -429,6 +429,9 @@
               # runner's durable default namespace in /var/tmp.
               export TMPDIR="$(mktemp -d /tmp/husklet-verification.XXXXXX)"
               export HL_RUNTIME_WORK_ROOT="$TMPDIR/runtime"
+              export HOME="$TMPDIR/home"
+              export XDG_CACHE_HOME="$TMPDIR/cache"
+              mkdir -p "$HOME" "$XDG_CACHE_HOME"
               if [ "$NIX_BUILD_CORES" -gt 256 ]; then
                 export HL_COMPAT_JOBS=256
               else
