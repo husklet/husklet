@@ -556,9 +556,9 @@ int32_t hl_linux_identity_registry_join(hl_linux_pidmap *pid, hl_linux_pidmap *p
     // guest must see the same identity relationship rather than two unrelated numbers.
     int32_t guest_group = registry_guest_for_host(pgid, bank, host_group);
     if (guest_group <= 0)
-        guest_group = host_group == host_process ? guest_process
-                                                 : atomic_fetch_add_explicit(&pgid->storage->next_guest, 1,
-                                                                             memory_order_relaxed);
+        guest_group = host_group == host_process
+                          ? guest_process
+                          : atomic_fetch_add_explicit(&pgid->storage->next_guest, 1, memory_order_relaxed);
     int32_t guest_session = registry_guest_for_host(sid, bank, host_session);
     if (guest_session <= 0)
         guest_session = host_session == host_process

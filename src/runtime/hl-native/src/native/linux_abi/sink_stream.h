@@ -80,8 +80,7 @@ static int ckpt_stream_seal_membership(uint64_t *count) {
 }
 
 static int ckpt_stream_recovery_complete(void) {
-    return ckpt_stream_call(HL_CKPT_OP_RECOVERY_COMPLETE, NULL, 0, 0, 0, NULL, 0, NULL, NULL, 0) ==
-                   HL_CKPT_STATUS_OK
+    return ckpt_stream_call(HL_CKPT_OP_RECOVERY_COMPLETE, NULL, 0, 0, 0, NULL, 0, NULL, NULL, 0) == HL_CKPT_STATUS_OK
                ? 0
                : -1;
 }
@@ -243,8 +242,8 @@ static int ckpt_sink_stream_write(struct ckpt_sink_stream *stream, const void *d
 
 static int ckpt_sink_stream_write_at(struct ckpt_sink_stream *stream, uint64_t offset, const void *data, size_t size) {
     if (stream->failed || ckpt_sink_stream_flush(stream) != 0) return -1;
-    int patch_status = ckpt_stream_call(HL_CKPT_OP_OBJECT_WRITE_AT, NULL, stream->id, offset, 0, data, size, NULL,
-                                       NULL, 0);
+    int patch_status =
+        ckpt_stream_call(HL_CKPT_OP_OBJECT_WRITE_AT, NULL, stream->id, offset, 0, data, size, NULL, NULL, 0);
     if (patch_status != HL_CKPT_STATUS_OK) {
         fprintf(stderr, "[ckpt] refuse: the broker rejected a %zu byte patch at %llu of object %llu with status %d\n",
                 size, (unsigned long long)offset, (unsigned long long)stream->id, patch_status);
