@@ -388,7 +388,7 @@ fn run_cycles(fixture: &mut Fixture) -> TestResult {
     let failure = fixture.rootfs.join("tmp/husklet-continue-failure");
 
     let mut domain = fixture.spawn_domain(0)?;
-    wait_for_growth(&progress, 0, budget(PHASE))?;
+    wait_for_domain_growth(&progress, 0, budget(PHASE), &domain, &fixture.helper_log)?;
     let expected = read_guest_identities(&identities)?;
     assert_eq!(
         expected.len(),
@@ -403,7 +403,7 @@ fn run_cycles(fixture: &mut Fixture) -> TestResult {
             return Err("guest progressed after the old domain lease was released".into());
         }
         domain = fixture.spawn_domain(cycle)?;
-        wait_for_growth(&progress, stopped, budget(PHASE))?;
+        wait_for_domain_growth(&progress, stopped, budget(PHASE), &domain, &fixture.helper_log)?;
         if fresh.exists() {
             return Err("restore silently fresh-started the primary process".into());
         }
@@ -473,6 +473,40 @@ fn wait_for_growth(path: &Path, previous: u64, timeout: Duration) -> TestResult 
         }
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+fn wait_for_domain_growth(
+    path: &Path,
+    previous: u64,
+    timeout: Duration,
+    child: &DomainChild,
+    helper_log: &Path,
+) -> TestResult {
+    wait_for_growth(path, previous, timeout).map_err(|error| {
+        format!(
+            "{error}; domain state at timeout:\n{}",
+            domain_process_snapshot(child.id(), helper_log)
+        )
+        .into()
+    })
+}
+
+fn domain_process_snapshot(root: u32, helper_log: &Path) -> String {
+    let processes = Command::new("ps")
+        .args([
+            "-o",
+            "pid=,ppid=,pgid=,sid=,stat=,wchan=,comm=",
+            "--forest",
+            "-g",
+            &root.to_string(),
+        ])
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        .unwrap_or_else(|error| format!("ps failed: {error}"));
+    let leader = std::fs::read_to_string(format!("/proc/{root}/status"))
+        .unwrap_or_else(|error| format!("leader status unavailable: {error}"));
+    let helper = std::fs::read_to_string(helper_log).unwrap_or_else(|error| format!("helper log unavailable: {error}"));
+    format!("leader={root}\n{leader}\nprocesses:\n{processes}\nhelper log:\n{helper}")
 }
 
 fn wait_child(child: &mut Child, timeout: Duration) -> TestResult {
