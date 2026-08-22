@@ -1539,14 +1539,12 @@ fn shared_process_tree(engine: &Arc<Engine>, output: &Path) -> SharedProcessTree
     let (root, child) = loop {
         revalidate_process_identity(harness);
         let holders = processes_holding_file(output);
-        if holders.len() == 2 {
-            if let Some(root) = holders.iter().find(|candidate| candidate.session == candidate.pid) {
-                if let Some(child) = holders.iter().find(|candidate| candidate.parent == root.pid) {
-                    if child.session == root.pid {
-                        break (*root, *child);
-                    }
-                }
-            }
+        if holders.len() == 2
+            && let Some(root) = holders.iter().find(|candidate| candidate.session == candidate.pid)
+            && let Some(child) = holders.iter().find(|candidate| candidate.parent == root.pid)
+            && child.session == root.pid
+        {
+            break (*root, *child);
         }
         if Instant::now() >= deadline {
             let transcript = std::fs::read_to_string(output).unwrap_or_default();
@@ -2046,7 +2044,7 @@ fn assert_ambient_locks_released(paths: &[PathBuf]) {
     for path in paths {
         let probe = std::fs::OpenOptions::new().read(true).write(true).open(path).unwrap();
         descriptor::lock(probe.as_raw_fd(), Lock::ExclusiveNonblocking)
-            .unwrap_or_else(|error| panic!("ambient lock remains for {path:?}: {error}"));
+            .unwrap_or_else(|error| panic!("ambient lock remains for {}: {error}", path.display()));
     }
 }
 
@@ -2742,12 +2740,11 @@ impl<'a> RestoreGateEngine<'a> {
                     self.survivors()
                 );
             }
-            if Instant::now() >= deadline {
-                panic!(
-                    "{context}: guest did not publish {marker}; cleanup={}\n{output}",
-                    self.cleanup()
-                );
-            }
+            assert!(
+                Instant::now() < deadline,
+                "{context}: guest did not publish {marker}; cleanup={}\n{output}",
+                self.cleanup()
+            );
             std::thread::sleep(Duration::from_millis(5));
         }
     }
@@ -2761,9 +2758,11 @@ impl<'a> RestoreGateEngine<'a> {
     fn wait(&mut self, context: &str) -> hl_engine::engine::EngineExit {
         let deadline = Instant::now() + Duration::from_secs(10);
         while !self.waiter.as_ref().is_some_and(std::thread::JoinHandle::is_finished) {
-            if Instant::now() >= deadline {
-                panic!("{context}: wait timed out; cleanup={}", self.cleanup());
-            }
+            assert!(
+                Instant::now() < deadline,
+                "{context}: wait timed out; cleanup={}",
+                self.cleanup()
+            );
             std::thread::sleep(Duration::from_millis(5));
         }
         self.join_waiter()
@@ -3107,7 +3106,7 @@ fn one_rejected_process_prevents_manifest_publication_on_both_isas() {
             .lines()
             .filter(|line| line.starts_with("CAPTURE-CAPABLE "))
             .collect::<Vec<_>>();
-        capable.sort();
+        capable.sort_unstable();
         assert_eq!(capable, ["CAPTURE-CAPABLE 1", "CAPTURE-CAPABLE 2"]);
         let live_deadline = Instant::now() + Duration::from_secs(5);
         let live = loop {

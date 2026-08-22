@@ -13,7 +13,7 @@ mod checkpoint;
 #[cfg(all(unix, test))]
 pub(crate) use checkpoint::await_capture_completion;
 #[cfg(unix)]
-use checkpoint::*;
+use checkpoint::{CheckpointControl, run_with_recovery};
 
 #[cfg(unix)]
 use super::checkpoint::Server;
@@ -402,6 +402,7 @@ impl GuestMachine for ProductionMachine {
 /// boundary that owns the option, and makes it permanent so a preflight does not poll for it.
 #[cfg(test)]
 mod tests {
+    use super::checkpoint::{CheckpointPhaseLedger, RECOVERY_OPEN, RecoveryAdmission};
     use super::*;
 
     #[cfg(unix)]

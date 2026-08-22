@@ -1,6 +1,9 @@
 #![allow(unsafe_code)]
 
-use super::*;
+use super::{
+    Arc, AsRawFd, AtomicBool, CompositionError, File, FromRawFd, JoinHandle, Mutex, Ordering, OwnedFd, Read,
+    StandardStream, StandardStreamPort, write_master,
+};
 
 pub(crate) struct NativeOutputBridge {
     input: OwnedFd,

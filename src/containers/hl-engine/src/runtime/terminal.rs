@@ -365,6 +365,78 @@ fn write_output(port: &dyn TerminalPort, bytes: &[u8]) -> bool {
     true
 }
 
+/// The terminal one restored member reattaches to.
+///
+/// A whole-image restore rebinds every member's captured guest fds 0..2 to a live terminal, and until a
+/// per-member terminal existed that could only be the restoring engine's own bridge -- one bridge for a
+/// tree of many. This is the producer for a single member: an ordinary pty whose master end this host
+/// pumps to and from the port it was built with, and whose slave end is handed to the member's process
+/// during its descriptor restore.
+///
+/// It must be created BEFORE the container starts, because the member asks for it from inside that
+/// restore, long before any pane exists to ask on its behalf.
+#[cfg(unix)]
+pub struct MemberTerminal {
+    bridge: NativeTerminalBridge,
+    terminal: Arc<Terminal>,
+}
+
+#[cfg(unix)]
+impl MemberTerminal {
+    /// Opens the pty and starts its pumps, yielding the slave end to register with the engine.
+    ///
+    /// The slave is returned rather than retained: the member owns it once the engine hands it over, and a
+    /// copy kept here would hold the master open past the member's exit, turning an end-of-file into a
+    /// hang for whoever is reading the session.
+    ///
+    /// # Errors
+    /// Returns [`CompositionError::RuntimeConstruction`] when the pty or its pumps cannot be created.
+    pub fn open(terminal: Arc<Terminal>) -> Result<(Self, OwnedFd), CompositionError> {
+        // Explicitly the host discipline, and the reason is not the one this comment used to give.
+        //
+        // The lifetime objection -- that keeping a copy of the slave here would hold the master open
+        // past the member's exit and turn an end-of-file into a hang -- is real but solvable: the
+        // session that owns this terminal already observes the member's exit on its own poll, so it
+        // could drop the discipline's copy at that moment and let the master see its end-of-file.
+        //
+        // What is NOT solvable from this side is where the guest's termios lives. A restored member
+        // is a re-forked process of its own, and the engine's per-terminal termios store is a plain
+        // static inside the dlopened engine, so the fork gives the member a private copy: its
+        // `TCSETS` bumps ITS generation, never this process's, and
+        // `the_guest_termios_store_does_not_cross_the_restore_fork` pins exactly that. A discipline
+        // running here would therefore be frozen at the image the pty was opened with and would keep
+        // canonicalising a line for a shell that had asked for `-icanon` -- every keystroke withheld
+        // until Enter, no per-key echo, arrow keys and editors dead. That is far worse than losing a
+        // line over 1024 bytes, so a restored member keeps the host discipline until the store the
+        // guest writes to is one both processes can read. On macOS it therefore still loses a
+        // canonical line over 1024 bytes, and `a_restored_member_terminal_falls_back_to_the_host_discipline`
+        // keeps that fallback deliberate rather than accidental.
+        let mut bridge = NativeTerminalBridge::attach(Arc::clone(&terminal), InputDiscipline::Host)?;
+        let slave = bridge.take_slave().ok_or(CompositionError::RuntimeConstruction)?;
+        Ok((Self { bridge, terminal }, slave))
+    }
+
+    /// Which discipline this member's terminal actually runs. See [`Self::open`] for why it is the
+    /// host's.
+    #[cfg(test)]
+    pub(super) fn discipline(&self) -> InputDiscipline {
+        self.bridge.discipline()
+    }
+
+    /// Resizes this member's terminal, never its container's.
+    ///
+    /// # Errors
+    /// Returns [`CompositionError`] when the size is empty or the pty refuses the change.
+    pub fn resize(&self, rows: u16, columns: u16) -> Result<(), CompositionError> {
+        self.terminal.resize(rows, columns)
+    }
+
+    /// Waits for output already produced to reach the port, as the engine's own bridge does at exit.
+    pub fn flush(&self) {
+        self.bridge.flush();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{InputDiscipline, NativeOutputBridge, NativeTerminalBridge};
@@ -1062,9 +1134,10 @@ mod tests {
         }
         let (master, slave) = super::open_pair((24, 80)).expect("pty pair");
         let mut parent_image = [0_u8; 36];
-        if hl_native::terminal_termios_capture(slave.as_raw_fd(), &mut parent_image).is_none() {
-            panic!("capture the host termios of a fresh pty");
-        }
+        assert!(
+            hl_native::terminal_termios_capture(slave.as_raw_fd(), &mut parent_image).is_some(),
+            "capture the host termios of a fresh pty"
+        );
         // A bit no fresh pty carries, so the two images cannot be confused for one another.
         parent_image[16] = 0x5a;
         hl_native::terminal_termios_adopt(slave.as_raw_fd(), &parent_image).expect("adopt in the parent");
@@ -1180,77 +1253,5 @@ mod tests {
         completed
             .recv_timeout(Duration::from_secs(1))
             .expect("PTY bridge drop remained blocked behind a full master buffer");
-    }
-}
-
-/// The terminal one restored member reattaches to.
-///
-/// A whole-image restore rebinds every member's captured guest fds 0..2 to a live terminal, and until a
-/// per-member terminal existed that could only be the restoring engine's own bridge -- one bridge for a
-/// tree of many. This is the producer for a single member: an ordinary pty whose master end this host
-/// pumps to and from the port it was built with, and whose slave end is handed to the member's process
-/// during its descriptor restore.
-///
-/// It must be created BEFORE the container starts, because the member asks for it from inside that
-/// restore, long before any pane exists to ask on its behalf.
-#[cfg(unix)]
-pub struct MemberTerminal {
-    bridge: NativeTerminalBridge,
-    terminal: Arc<Terminal>,
-}
-
-#[cfg(unix)]
-impl MemberTerminal {
-    /// Opens the pty and starts its pumps, yielding the slave end to register with the engine.
-    ///
-    /// The slave is returned rather than retained: the member owns it once the engine hands it over, and a
-    /// copy kept here would hold the master open past the member's exit, turning an end-of-file into a
-    /// hang for whoever is reading the session.
-    ///
-    /// # Errors
-    /// Returns [`CompositionError::RuntimeConstruction`] when the pty or its pumps cannot be created.
-    pub fn open(terminal: Arc<Terminal>) -> Result<(Self, OwnedFd), CompositionError> {
-        // Explicitly the host discipline, and the reason is not the one this comment used to give.
-        //
-        // The lifetime objection -- that keeping a copy of the slave here would hold the master open
-        // past the member's exit and turn an end-of-file into a hang -- is real but solvable: the
-        // session that owns this terminal already observes the member's exit on its own poll, so it
-        // could drop the discipline's copy at that moment and let the master see its end-of-file.
-        //
-        // What is NOT solvable from this side is where the guest's termios lives. A restored member
-        // is a re-forked process of its own, and the engine's per-terminal termios store is a plain
-        // static inside the dlopened engine, so the fork gives the member a private copy: its
-        // `TCSETS` bumps ITS generation, never this process's, and
-        // `the_guest_termios_store_does_not_cross_the_restore_fork` pins exactly that. A discipline
-        // running here would therefore be frozen at the image the pty was opened with and would keep
-        // canonicalising a line for a shell that had asked for `-icanon` -- every keystroke withheld
-        // until Enter, no per-key echo, arrow keys and editors dead. That is far worse than losing a
-        // line over 1024 bytes, so a restored member keeps the host discipline until the store the
-        // guest writes to is one both processes can read. On macOS it therefore still loses a
-        // canonical line over 1024 bytes, and `a_restored_member_terminal_falls_back_to_the_host_discipline`
-        // keeps that fallback deliberate rather than accidental.
-        let mut bridge = NativeTerminalBridge::attach(Arc::clone(&terminal), InputDiscipline::Host)?;
-        let slave = bridge.take_slave().ok_or(CompositionError::RuntimeConstruction)?;
-        Ok((Self { bridge, terminal }, slave))
-    }
-
-    /// Which discipline this member's terminal actually runs. See [`Self::open`] for why it is the
-    /// host's.
-    #[cfg(test)]
-    pub(super) fn discipline(&self) -> InputDiscipline {
-        self.bridge.discipline()
-    }
-
-    /// Resizes this member's terminal, never its container's.
-    ///
-    /// # Errors
-    /// Returns [`CompositionError`] when the size is empty or the pty refuses the change.
-    pub fn resize(&self, rows: u16, columns: u16) -> Result<(), CompositionError> {
-        self.terminal.resize(rows, columns)
-    }
-
-    /// Waits for output already produced to reach the port, as the engine's own bridge does at exit.
-    pub fn flush(&self) {
-        self.bridge.flush();
     }
 }

@@ -1,6 +1,9 @@
 #![allow(unsafe_code)]
 
-use super::*;
+use super::{
+    Arc, AsRawFd, AtomicBool, CompositionError, File, FromRawFd, GuestDiscipline, JoinHandle, Mutex, Ordering, OwnedFd,
+    Read, Terminal, TerminalAttachment, TerminalPort, Write, line_discipline, write_output,
+};
 
 struct NativeTerminalControl {
     master: OwnedFd,
