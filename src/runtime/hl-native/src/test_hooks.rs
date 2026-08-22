@@ -1,6 +1,8 @@
 #![allow(unsafe_code)]
 
-use super::*;
+use super::c_int;
+#[cfg(test)]
+use super::c_uint;
 
 #[cfg(feature = "native-test-hooks")]
 pub(super) fn test_api() -> &'static crate::loader::TestApi {

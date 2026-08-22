@@ -1,6 +1,6 @@
 #![allow(unsafe_code)]
 
-use super::*;
+use super::{c_int, no_argument_status, scenario_status, test_api};
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn checkpoint_continuation_contract_test(isa: u32) -> Result<(), i32> {
