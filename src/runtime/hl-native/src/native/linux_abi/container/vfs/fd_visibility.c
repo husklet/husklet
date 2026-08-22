@@ -21,6 +21,18 @@ struct fdvis_slot {
     uint64_t device;
     uint64_t object;
 };
+/* This table is shared across fork and its arena is sliced by sizeof(struct fdvis_slot). The reservation
+   owner deliberately occupies the former 32-bit reserved cell; pin every boundary that makes that an
+   in-place semantic reuse rather than a silent shared-layout change. */
+_Static_assert(sizeof(struct fdvis_slot) == 48, "fdvis slot shared layout size changed");
+_Static_assert(_Alignof(struct fdvis_slot) == 8, "fdvis slot shared layout alignment changed");
+_Static_assert(offsetof(struct fdvis_slot, key) == 0, "fdvis key offset changed");
+_Static_assert(offsetof(struct fdvis_slot, generation) == 8, "fdvis generation offset changed");
+_Static_assert(offsetof(struct fdvis_slot, owner_start_ns) == 16, "fdvis owner token offset changed");
+_Static_assert(offsetof(struct fdvis_slot, kind) == 24, "fdvis kind offset changed");
+_Static_assert(offsetof(struct fdvis_slot, reserver_pid) == 28, "fdvis reservation owner left reserved cell");
+_Static_assert(offsetof(struct fdvis_slot, device) == 32, "fdvis device offset changed");
+_Static_assert(offsetof(struct fdvis_slot, object) == 40, "fdvis object offset changed");
 static struct fdvis_slot *g_fdvis;
 
 struct fdpath_slot {
