@@ -16,9 +16,9 @@ mod output;
 pub(super) use output::NativeOutputBridge;
 #[path = "terminal_bridge.rs"]
 mod bridge;
-pub(crate) use bridge::write_master;
 #[cfg(test)]
 use bridge::open_pair;
+pub(crate) use bridge::write_master;
 pub(super) use bridge::{InputDiscipline, NativeTerminalBridge};
 
 /// The guest termios one pump is running, and the host projection it imposed in order to run it.

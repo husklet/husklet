@@ -13,8 +13,8 @@ use std::{
 
 #[path = "broker_connection.rs"]
 mod connection;
-use connection::{Connection, read_authenticated};
 pub(super) use connection::AcceptedChannel;
+use connection::{Connection, read_authenticated};
 
 impl Server {
     pub(crate) fn stop(&self) {
