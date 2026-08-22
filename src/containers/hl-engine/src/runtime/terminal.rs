@@ -599,6 +599,16 @@ fn spawn_output(
         .map_err(|_| CompositionError::RuntimeConstruction)
 }
 
+/// The guest termios one pump is running, and the host projection it imposed in order to run it.
+///
+/// The pair is what makes "the guest changed something" decidable across a process boundary: the
+/// projection is this pump's own last write to the slave, so a host termios that is not it was
+/// written by the guest.
+struct Adopted {
+    image: [u8; 36],
+    projection: [u8; 36],
+}
+
 /// The Linux `N_TTY` discipline running over one raw host pty, and everything it needs from the host.
 ///
 /// The host slave is raw for the whole life of the terminal, so the host kernel neither canonicalises,
@@ -620,9 +630,22 @@ struct GuestDiscipline {
     original: libc::termios,
     state: Mutex<LineDiscipline>,
     /// The termios generation `state` was last synchronised at. One relaxed load per input batch
-    /// decides whether the image has to be read again; nothing in the keystroke path fstats or calls
-    /// `tcgetattr`.
+    /// decides whether the engine's store has to be read again.
     generation: AtomicU64,
+    /// What this pump last adopted, and the host projection it imposed in order to run it.
+    ///
+    /// The engine's termios store is a plain static, and the guest runs in a **fork child** of this
+    /// process -- `hl_linux_abi_spawn` in `engine/lifecycle.c`. So the guest's `TCSETS` bumps the
+    /// generation and records the image in the child's private copy of that static, and this process
+    /// never sees either; `the_guest_termios_store_does_not_cross_the_restore_fork` measures exactly
+    /// that property for the restore fork, and the launch fork has it for the same reason.
+    ///
+    /// What does cross is the pty. Every TCSETS route -- `syscall/fs/control.c` and
+    /// `syscall/binding/route_bound.c` alike -- reissues the guest's request as a real `tcsetattr`
+    /// on this slave before recording anything, so a host termios that is no longer what this pump
+    /// installed **is** the guest having installed one. That is the only signal that crosses the
+    /// fork, which is why the pump keeps what it imposed rather than assuming the slave stayed raw.
+    adopted: Mutex<Adopted>,
     output_stopped: AtomicBool,
 }
 
@@ -651,12 +674,17 @@ impl GuestDiscipline {
         // Re-pair that cooked image with the raw projection the host now holds, so the guest's own
         // TCGETS keeps answering with a cooked terminal instead of the raw mode imposed here.
         hl_native::terminal_termios_adopt(slave.as_raw_fd(), &image).ok_or_else(missing)?;
+        let adopted = Mutex::new(Adopted {
+            image,
+            projection: host_projection(&slave),
+        });
         Ok(Arc::new(Self {
             slave,
             master,
             original,
             state: Mutex::new(LineDiscipline::new(Termios::from_image(&image))),
             generation: AtomicU64::new(hl_native::terminal_termios_generation()),
+            adopted,
             output_stopped: AtomicBool::new(false),
         }))
     }
@@ -674,23 +702,72 @@ impl GuestDiscipline {
             .receive(bytes, effect);
     }
 
-    /// Adopts the guest's termios when it has moved. The common case is one relaxed load.
+    /// Adopts the guest's termios when it has moved, from whichever of the two signals moved.
+    ///
+    /// A line editor -- `ash`'s, `readline`, every interactive shell there is -- performs a
+    /// raw-mode `tcsetattr` between writing its prompt and issuing its own `read`, and restores the
+    /// cooked image once the line is in. Measured on this host against the `alpine:3.20` busybox:
+    /// `TCGETS`, then `TCSETS` clearing `ISIG|ICANON|ECHO`, then the read, then `TCSETS` putting
+    /// them back -- once per prompt. `bash` does the same with `TCSETSW` and also clears `ICRNL`.
+    /// Missing that one set is what makes the discipline draw a line the guest is about to draw
+    /// again, so it is checked on every batch and not only when the store says so.
+    ///
+    /// **Two signals, because only one of them crosses a process boundary.**
+    ///
+    /// - `terminal_termios_generation` is the exact one: it carries the whole 36-byte image the
+    ///   guest authored, including the bits a BSD host cannot hold. It is a plain static, so it
+    ///   reports only guests sharing this address space.
+    /// - The host slave's own termios is the one that crosses. Every TCSETS route reissues the
+    ///   guest's request as a real `tcsetattr` on this descriptor, and the descriptor is shared with
+    ///   the fork child the guest runs in, so a projection that is no longer what this pump imposed
+    ///   is the guest having installed something. On Linux the host structure already **is** the
+    ///   guest ABI and the reading is exact; on a BSD host it is the host's translation, so a
+    ///   cross-process change is seen minus the flags `termios_m2l` cannot carry -- which is what
+    ///   the host discipline would have given that terminal anyway, and strictly more than ignoring
+    ///   the change.
+    ///
+    /// The exact signal wins when both moved, so a same-address-space guest keeps full fidelity on
+    /// every host.
     fn synchronise(&self, effect: &mut line_discipline::Effect) {
-        let current = hl_native::terminal_termios_generation();
-        if current == self.generation.load(Ordering::Relaxed) {
+        let generation = hl_native::terminal_termios_generation();
+        let mut host = [0_u8; 36];
+        let read_host = hl_native::terminal_termios_capture(self.slave.as_raw_fd(), &mut host).is_some();
+        let mut store = [0_u8; 36];
+        let image = {
+            let adopted = self.adopted.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            // The generation counts installs across every terminal in the process, so a sibling
+            // pump adopting its own pty moves it too. The entry for THIS terminal having changed is
+            // what makes it ours; anything else falls through to the host.
+            let stored = generation != self.generation.load(Ordering::Relaxed)
+                && hl_native::terminal_termios(self.slave.as_raw_fd(), &mut store).is_some()
+                && store != adopted.image;
+            if stored {
+                Some(store)
+            } else if read_host && host != adopted.projection {
+                Some(host)
+            } else {
+                None
+            }
+        };
+        let Some(image) = image else {
+            self.generation.store(generation, Ordering::Relaxed);
             return;
-        }
-        self.generation.store(current, Ordering::Relaxed);
-        let mut image = [0_u8; 36];
-        if hl_native::terminal_termios(self.slave.as_raw_fd(), &mut image).is_none() {
-            return;
-        }
+        };
         // The guest's own TCSETS reached the host slave and undid the raw mode. Re-assert it before
         // any byte is written, and re-pair the guest's image with the projection that produces, so
         // the guest still reads back what it installed.
         if make_raw(&self.slave).is_some() {
             let _ = hl_native::terminal_termios_adopt(self.slave.as_raw_fd(), &image);
         }
+        // After the re-assertion, never before: every write this module makes to the slave is
+        // recorded here, so that the next batch reads a divergence only when somebody ELSE wrote.
+        // `terminal_termios_adopt` bumps the generation itself, which is why it is re-read.
+        *self.adopted.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Adopted {
+            image,
+            projection: host_projection(&self.slave),
+        };
+        self.generation
+            .store(hl_native::terminal_termios_generation(), Ordering::Relaxed);
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -796,6 +873,11 @@ impl GuestDiscipline {
         if hl_native::terminal_termios(self.slave.as_raw_fd(), &mut image).is_some() {
             let _ = hl_native::terminal_termios_adopt(self.slave.as_raw_fd(), &image);
         }
+        // Both writes above were this pump's, so the next batch must not read them as the guest's.
+        self.adopted
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .projection = host_projection(&self.slave);
         // A master that refused the end-of-file byte is gone, and so is the reason to keep pumping.
         written
     }
@@ -830,6 +912,19 @@ fn install(descriptor: &OwnedFd, attributes: &libc::termios) -> Option<()> {
 
 /// Puts a descriptor in raw mode, which is what makes the channel underneath lossless: a raw BSD
 /// slave applies backpressure at its buffer instead of flushing the whole canonical queue.
+/// The Linux image of the host termios `descriptor` carries right now, or all zeroes when it cannot
+/// be read.
+///
+/// A descriptor whose termios cannot be read reads as a projection no guest can install, so the next
+/// batch takes the divergence branch and re-derives everything rather than trusting a stale image.
+fn host_projection(descriptor: &OwnedFd) -> [u8; 36] {
+    let mut image = [0_u8; 36];
+    if hl_native::terminal_termios_capture(descriptor.as_raw_fd(), &mut image).is_none() {
+        image = [0_u8; 36];
+    }
+    image
+}
+
 fn make_raw(descriptor: &OwnedFd) -> Option<()> {
     let mut attributes = attributes(descriptor)?;
     // SAFETY: `attributes` is a valid initialized termios for the duration of the call.
@@ -1235,6 +1330,271 @@ mod tests {
             at(99),
         );
         drop(bridge);
+    }
+
+    /// The two line-editor shapes measured on this host, as the `tcsetattr` each performs between
+    /// writing its prompt and issuing its own `read`.
+    ///
+    /// Both were taken from `strace -e trace=ioctl` against a real pty on `naa0245`: the
+    /// `alpine:3.20` busybox from `/var/tmp/compat-sse-rootfs/alpine` and `bash 5.2 --norc -i`.
+    /// They are not guesses about what a shell might do -- they are what these two do at every
+    /// prompt, and the reason a pump that misses one draws a line the guest is about to draw again.
+    #[derive(Clone, Copy)]
+    enum LineEditor {
+        /// busybox `ash`: `TCSETS` (`TCSANOW`) clearing `ISIG|ICANON|ECHO`, leaving `ICRNL` and
+        /// `IXON` alone, and a cursor-position report at every prompt.
+        BusyboxAsh,
+        /// `bash`/`readline`: `TCSETSW` (`TCSADRAIN`) clearing `ICANON|ECHO` **and `ICRNL`**, and
+        /// keeping `ISIG`. `readline` has no `-echo` bail-out of the kind busybox carries, so it
+        /// draws the line back whatever the guest's `ECHO` says.
+        BashReadline,
+    }
+
+    impl LineEditor {
+        fn action(self) -> libc::c_int {
+            match self {
+                Self::BusyboxAsh => libc::TCSANOW,
+                Self::BashReadline => libc::TCSADRAIN,
+            }
+        }
+
+        /// Whether the editor asks the display where the cursor is, which is what puts a reply on
+        /// the input side that is a *reply* and not a keystroke.
+        fn asks_for_the_cursor(self) -> bool {
+            matches!(self, Self::BusyboxAsh)
+        }
+
+        fn raw(self, saved: &libc::termios) -> libc::termios {
+            let mut raw = *saved;
+            match self {
+                Self::BusyboxAsh => raw.c_lflag &= !(libc::ISIG | libc::ICANON | libc::ECHO),
+                Self::BashReadline => {
+                    raw.c_lflag &= !(libc::ICANON | libc::ECHO);
+                    raw.c_iflag &= !libc::ICRNL;
+                }
+            }
+            // VMIN 0 with a five-second VTIME rather than the VMIN 1 a real editor sets: a wedged
+            // child must end the test rather than hang the suite, and a zero-byte read is the only
+            // bounded way for it to notice.
+            raw.c_cc[libc::VMIN] = 0;
+            raw.c_cc[libc::VTIME] = 50;
+            raw
+        }
+    }
+
+    /// What one prompt of a line editor put on the display, and whether the editor saw its line.
+    struct Prompt {
+        display: Vec<u8>,
+        editor_exit: i32,
+    }
+
+    /// Drives one prompt of `editor` against a real pump over a real pty, with the editor in a
+    /// **fork child** -- which is where the guest actually runs.
+    ///
+    /// `hl_linux_abi_spawn` (`engine/lifecycle.c`) enters the Linux personality in a fork child, so
+    /// the engine's termios store records the guest's `TCSETS` in a private copy of a static this
+    /// process cannot read. The child here therefore calls `tcsetattr` and nothing else: recording
+    /// into its own copy of the store is exactly as invisible to this process as not recording at
+    /// all, and leaving the call out keeps the child free of every lock a fork of a threaded process
+    /// must not take.
+    fn one_prompt(editor: LineEditor) -> Prompt {
+        const TYPED: &[u8] = b"ls -la";
+        let port = Arc::new(Port::default());
+        let terminal = Terminal::new(port.clone(), 24, 80).unwrap();
+        let bridge = NativeTerminalBridge::attach(terminal, InputDiscipline::Linux).unwrap();
+        assert_eq!(
+            bridge.discipline(),
+            InputDiscipline::Linux,
+            "the Linux discipline was not adopted, so this exercises the host's"
+        );
+        let slave = bridge.standard_fds()[0];
+
+        // SAFETY: the child performs only `tcgetattr`/`tcsetattr`/`read`/`write`/`_exit` on an
+        // inherited descriptor. It allocates nothing, takes no Rust lock and no engine lock, and
+        // never returns into the harness, so no lock this threaded process held at fork time is
+        // ever acquired in it.
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0, "fork the line editor");
+        if child == 0 {
+            // SAFETY: every call below borrows an inherited descriptor and initialized storage for
+            // the duration of the call, and the process leaves through `_exit`.
+            unsafe {
+                let mut saved = std::mem::MaybeUninit::<libc::termios>::uninit();
+                if libc::tcgetattr(slave, saved.as_mut_ptr()) != 0 {
+                    libc::_exit(11);
+                }
+                let saved = saved.assume_init();
+                let editing = editor.raw(&saved);
+                if libc::tcsetattr(slave, editor.action(), &raw const editing) != 0 {
+                    libc::_exit(12);
+                }
+                let prompt = b"$ ";
+                libc::write(slave, prompt.as_ptr().cast(), prompt.len());
+                if editor.asks_for_the_cursor() {
+                    let query = b"\x1b[6n";
+                    libc::write(slave, query.as_ptr().cast(), query.len());
+                }
+                let mut seen = [0_u8; 64];
+                let mut count = 0_usize;
+                let mut byte = 0_u8;
+                let mut escaped = false;
+                let mut control_sequence = false;
+                let status = loop {
+                    let read = libc::read(slave, (&raw mut byte).cast(), 1);
+                    if read != 1 {
+                        break 13; // VTIME expired, or the master went away
+                    }
+                    if escaped {
+                        // An editor consumes its own reply rather than drawing it. `ESC [` opens a
+                        // control sequence that runs to a final byte in 0x40..=0x7e; the `[` is
+                        // itself in that range, so it has to open the sequence rather than close it.
+                        if control_sequence {
+                            if (0x40..=0x7e).contains(&byte) {
+                                escaped = false;
+                                control_sequence = false;
+                            }
+                        } else if byte == b'[' {
+                            control_sequence = true;
+                        } else {
+                            escaped = false;
+                        }
+                        continue;
+                    }
+                    if byte == 0x1b {
+                        escaped = true;
+                        continue;
+                    }
+                    if byte == b'\r' || byte == b'\n' {
+                        break i32::from(count != TYPED.len() || seen[..count] != *TYPED);
+                    }
+                    if count == seen.len() {
+                        break 14;
+                    }
+                    seen[count] = byte;
+                    count += 1;
+                    // The editor's own echo. This is the copy the developer is meant to see.
+                    libc::write(slave, (&raw const byte).cast(), 1);
+                };
+                let done = b"\r\n";
+                libc::write(slave, done.as_ptr().cast(), done.len());
+                libc::tcsetattr(slave, libc::TCSANOW, &raw const saved);
+                libc::_exit(status);
+            }
+        }
+
+        // The prompt is written after the `tcsetattr`, so seeing it on the display is proof the
+        // editor's raw mode is installed and the keystrokes below cannot race it.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        {
+            let mut state = port.state.lock().unwrap();
+            while !state.1.windows(2).any(|bytes| bytes == b"$ ") && Instant::now() < deadline {
+                state = port.changed.wait_timeout(state, Duration::from_millis(20)).unwrap().0;
+            }
+            assert!(
+                state.1.windows(2).any(|bytes| bytes == b"$ "),
+                "the line editor never reached its prompt"
+            );
+            // The display answering the cursor-position query, then the developer typing. Both
+            // arrive on the input side; only the second is a keystroke.
+            if editor.asks_for_the_cursor() {
+                state.0.extend(b"\x1b[24;5R");
+            }
+            state.0.extend(TYPED.iter().copied());
+            state.0.push_back(b'\r');
+            port.changed.notify_all();
+        }
+
+        let mut status = 0;
+        let mut reaped = false;
+        while Instant::now() < deadline {
+            // SAFETY: `status` is writable and `child` is this process's child.
+            let waited = unsafe { libc::waitpid(child, &raw mut status, libc::WNOHANG) };
+            if waited == child {
+                reaped = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if !reaped {
+            // SAFETY: `child` is this process's child and has not been reaped.
+            unsafe { libc::kill(child, libc::SIGKILL) };
+            // SAFETY: as above; the kill guarantees this returns.
+            unsafe { libc::waitpid(child, &raw mut status, 0) };
+            panic!("the line editor never finished its line");
+        }
+        // Let the editor's closing bytes finish their trip through the output pump.
+        std::thread::sleep(Duration::from_millis(100));
+        let display = port.state.lock().unwrap().1.clone();
+        drop(bridge);
+        Prompt {
+            display,
+            editor_exit: libc::WEXITSTATUS(status),
+        }
+    }
+
+    fn occurrences(haystack: &[u8], needle: &[u8]) -> usize {
+        let mut count = 0;
+        let mut index = 0;
+        while index + needle.len() <= haystack.len() {
+            if &haystack[index..index + needle.len()] == needle {
+                count += 1;
+                index += needle.len();
+            } else {
+                index += 1;
+            }
+        }
+        count
+    }
+
+    /// A command line typed at a guest line editor is drawn **once**, and the display's own reply
+    /// to a cursor-position query is never drawn at all.
+    ///
+    /// Both are the same defect. The guest runs in a fork child, so the engine's termios store --
+    /// the signal [`GuestDiscipline::synchronise`] once read alone -- records the editor's raw-mode
+    /// `tcsetattr` somewhere this process cannot see it. The pump therefore stayed on the cooked
+    /// image it captured when the pty was opened and kept `ICANON|ECHO|ECHOCTL` forever: it drew
+    /// every keystroke, held the line back until the terminator, and handed the whole line to an
+    /// editor which then drew it a second time. The cursor report is the same mechanism reached
+    /// from the other side -- a reply arriving on the input side, echoed in `ECHOCTL`'s caret form
+    /// as though the developer had typed `^[[24;5R`, instead of being passed through to the editor
+    /// that asked for it.
+    ///
+    /// The editor's exit status is asserted first and on purpose: without it, a pump that echoed
+    /// nothing and delivered nothing would satisfy every other assertion here.
+    fn one_line_is_drawn_once(editor: LineEditor) {
+        let prompt = one_prompt(editor);
+        let display = String::from_utf8_lossy(&prompt.display).into_owned();
+        assert_eq!(
+            prompt.editor_exit, 0,
+            "the line editor did not receive exactly the line that was typed; it saw {display:?}"
+        );
+        assert_eq!(
+            occurrences(&prompt.display, b"ls -la"),
+            1,
+            "the command line was drawn more than once: {display:?}"
+        );
+        assert!(
+            !prompt.display.windows(2).any(|bytes| bytes == b"^["),
+            "an escape sequence reached the display in echoed caret form: {display:?}"
+        );
+        assert!(
+            !prompt.display.windows(3).any(|bytes| bytes == b";5R"),
+            "the cursor-position report was echoed back to the display: {display:?}"
+        );
+    }
+
+    /// busybox `ash`, which is what the default image ships. Carries the cursor-position report.
+    #[test]
+    fn a_busybox_line_editor_draws_its_line_once_across_the_launch_fork() {
+        one_line_is_drawn_once(LineEditor::BusyboxAsh);
+    }
+
+    /// `bash`/`readline`, which is the first thing a developer installs. `TCSADRAIN` rather than
+    /// `TCSANOW`, and `ICRNL` cleared as well, so a pump that follows only one of the two spellings
+    /// passes here and fails there.
+    #[test]
+    fn a_readline_line_editor_draws_its_line_once_across_the_launch_fork() {
+        one_line_is_drawn_once(LineEditor::BashReadline);
     }
 
     /// A restored member's terminal runs the HOST discipline, deliberately.

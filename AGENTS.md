@@ -499,6 +499,18 @@ with the descriptor form instead:
 nothing and the run merely *appears* protected — the same shape as the
 `pgrep -f` self-match, where the mechanism looks like it is working.
 
+**A descriptor lock does not necessarily survive a process-boundary tool.**
+`nix develop` closes inherited nonstandard descriptors: a lane took fd 9 in
+its shell, entered `nix develop`, and the build continued after the lock had
+disappeared.  Keep the holder outside that boundary instead:
+
+    flock -s /var/tmp/husklet-box.lock -c 'nix develop -c cargo test ...'
+
+Verified with `lslocks`: the descriptor form showed no holder during the Nix
+build; the outer `flock` process remained a `FLOCK READ` holder for the whole
+inner command.  After launching a new wrapper shape, inspect the live holder
+once rather than assuming descriptor inheritance crosses every tool.
+
 **The descriptor is inherited, so killing the script does not release the
 lock.** Every child gets fd 9, and the lock lives until the last inheritor
 dies: one lane killed its sweep script and the lock stayed held by the sweep

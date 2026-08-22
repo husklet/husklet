@@ -33,7 +33,10 @@ static int ckpt_read_meta_dir(const char *procdir, struct ckpt_meta *m) {
     char pf[1300];
     snprintf(pf, sizeof pf, "%s/meta", procdir);
     if (ckpt_source_load(pf, m, sizeof *m) != 0) {
-        fprintf(stderr, "[restore] open %s: %s\n", pf, strerror(errno));
+        // Every failure path of ckpt_source_load is an image-protocol answer -- no source installed, a
+        // size the host would not give, or a short read -- and none of them sets errno.
+        fprintf(stderr, "[restore] image object %s is absent or shorter than the %zu bytes it must carry\n", pf,
+                sizeof *m);
         return -1;
     }
     if (m->magic != CKPT_MAGIC) {
