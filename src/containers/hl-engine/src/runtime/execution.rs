@@ -29,6 +29,16 @@ const REQUEST_SIGNAL: u32 = 3;
 #[cfg(unix)]
 const REQUEST_CHECKPOINT: u32 = 4;
 
+fn checkpoint_sandbox_refusal(options: &crate::options::Options) -> Option<EngineError> {
+    options
+        .get_bytes("HL_UNTRUSTED")
+        .map(|_| EngineError::CheckpointUnsupportedUnderSandbox)
+}
+
+fn native_run_failure(status: i32) -> EngineError {
+    EngineError::NativeRunFailed(status)
+}
+
 pub(crate) struct ProductionMachine {
     isa: crate::activation::GuestIsa,
     plan: crate::launcher::plan::RuntimePlan,

@@ -1,15 +1,6 @@
 use super::*;
 use crate::runtime::checkpoint::CaptureFailure;
 
-pub(super) fn checkpoint_sandbox_refusal(options: &crate::options::Options) -> Option<EngineError> {
-    options
-        .get_bytes("HL_UNTRUSTED")
-        .map(|_| EngineError::CheckpointUnsupportedUnderSandbox)
-}
-pub(super) fn native_run_failure(status: i32) -> EngineError {
-    EngineError::NativeRunFailed(status)
-}
-
 #[cfg(unix)]
 pub(super) struct CheckpointControl {
     pub(super) server: Arc<Server>,
