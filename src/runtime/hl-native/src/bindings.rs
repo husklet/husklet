@@ -316,7 +316,18 @@ mod tests {
         // both sweeps skip a non-positive owner. 9: our own live reservation survives a sweep.
         // 10: a reservation with no recorded holder is left alone, which is what keeps an in-flight
         // proc_fdvis_fork_prepare() plan from being stolen out from under the fork.
+        // 11 forks, SIGKILLs and waits for state 'Z' before sweeping, which is the only case that
+        // separates "does this owner still exist" from "can this owner still run" -- 8 uses a pid the
+        // kernel never issued and 9 uses this live process, and the old token comparison answers both
+        // the same way. Without it the corpse-aware predicate has no probe that can fail.
         for scenario in [8, 9, 10] {
+            assert!(fdvis_path_publication_test(1, scenario), "arm64 reservation scenario {scenario}");
+            assert!(fdvis_path_publication_test(2, scenario), "x86 reservation scenario {scenario}");
+        }
+        // Windows cannot stage a zombie and the C hook explicitly refuses this arm there rather than
+        // pretending it ran. Keep the unsupported host visible at the call site, as scenario 7 does.
+        #[cfg(not(windows))]
+        for scenario in [11] {
             assert!(fdvis_path_publication_test(1, scenario), "arm64 reservation scenario {scenario}");
             assert!(fdvis_path_publication_test(2, scenario), "x86 reservation scenario {scenario}");
         }

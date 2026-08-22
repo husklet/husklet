@@ -38,6 +38,7 @@ struct fdvis_control {
 static struct fdvis_control *g_fdvis_control;
 static int g_fdvis_fork_parent;
 static uint64_t fdvis_key(int pid, int fd);
+static uint64_t fdvis_process_token(int pid);
 static void fdpath_sweep_stale_locked(void);
 static void fdvis_sweep_stale_locked(void);
 static int fdvis_self(int *pid, uint64_t *token);
@@ -132,6 +133,51 @@ static int fdpath_restore_locked(uint64_t key, uint64_t owner_start_ns, const ch
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
+#if !defined(_WIN32)
+static int fdvis_corpse_sweep_test(struct fdvis_slot *slots) {
+    const struct timespec tick = {.tv_sec = 0, .tv_nsec = 1000000};
+    pid_t corpse = fork();
+    if (corpse == 0) {
+        for (;;) {
+            struct timespec forever = {.tv_sec = 3600, .tv_nsec = 0};
+            (void)nanosleep(&forever, NULL);
+        }
+    }
+    int verdict = 0;
+    if (corpse > 0) {
+        uint64_t start = fdvis_process_token((int)corpse);
+        (void)kill(corpse, SIGKILL);
+        int is_zombie = 0;
+        for (int spin = 0; spin < 5000 && !is_zombie; ++spin) {
+            hl_host_process_info record;
+            if (hl_host_process_read((int64_t)corpse, &record) && record.state == 'Z')
+                is_zombie = 1;
+            else
+                (void)nanosleep(&tick, NULL);
+        }
+        if (is_zombie && start != 0) {
+            slots[0].key = fdvis_key((int)corpse, 3);
+            slots[0].owner_start_ns = start;
+            slots[0].reserver_pid = 0;
+            fdvis_sweep_stale_locked();
+            verdict = slots[0].key == 0;
+        }
+        int status = 0;
+        while (waitpid(corpse, &status, 0) < 0 && errno == EINTR) {}
+    }
+    return verdict;
+}
+#else
+/* This scenario needs a real zombie: a process whose identity record remains readable after it can no
+   longer run. The Windows host reader has no such state and the target has no fork/waitpid staging.
+   Refuse with 0, as scenarios 7 and fdvis_corpse_holder_test do, rather than reporting an arm that did
+   not execute as passing. */
+static int fdvis_corpse_sweep_test(struct fdvis_slot *slots) {
+    (void)slots;
+    return 0;
+}
+#endif
+
 /* Scenarios 8-10: can an abandoned RESERVATION be reclaimed?
  *
  * A reservation overwrites the key with UINT64_MAX, so the owner both sweeps decode from the high 32
@@ -171,11 +217,21 @@ static int fdvis_reservation_sweep_test(uint32_t scenario) {
         slots[0].owner_start_ns = owner_start;
         fdvis_sweep_stale_locked();
         verdict = slots[0].key == UINT64_MAX; /* we are alive: our own reservation must survive */
-    } else {
+    } else if (scenario == 10) {
         slots[0].reserver_pid = 0; /* holder not recorded -- e.g. an in-flight fork plan */
         slots[0].owner_start_ns = 1;
         fdvis_sweep_stale_locked();
         verdict = slots[0].key == UINT64_MAX;
+    } else {
+        /* Scenario 11: a CORPSE owner's published slot must be swept.
+         *
+         * This is the case the token comparison could not see and the case no other scenario reaches:
+         * 8 uses a pid the kernel has never issued and 9 uses this live process, so both are answered
+         * identically by "does the start time still match" and by "can this owner still run". Only a
+         * zombie separates them -- Linux keeps /proc/<pid>/stat, start time and all, until the parent
+         * waits -- so the fixture has to make a real one. Deliberately NOT reaped until after the
+         * sweep has run: reaping first is what would make the old predicate pass too. */
+        verdict = fdvis_corpse_sweep_test(slots);
     }
     g_fdvis = saved_slots;
     g_fdpaths = saved_paths;
@@ -185,7 +241,7 @@ static int fdvis_reservation_sweep_test(uint32_t scenario) {
 }
 
 HL_API int HL_TARGET_LOCAL(fdvis_path_publication_test)(uint32_t scenario) {
-    if (scenario >= 8 && scenario <= 10) return fdvis_reservation_sweep_test(scenario);
+    if (scenario >= 8 && scenario <= 11) return fdvis_reservation_sweep_test(scenario);
     struct fdpath_slot *paths = calloc(FDPATH_N, sizeof *paths);
     struct fdpath_slot *saved_paths = g_fdpaths;
     const int descriptor = HL_NFD - 1;
