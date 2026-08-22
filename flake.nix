@@ -411,9 +411,9 @@
               pkgs.cacert
               pkgs.coreutils
               pkgs.procps
-            ] ++ lib.optionals pkgs.stdenv.isLinux (
-              toolchain.compilerAliases ++ [ pkgs.xorg-server pkgs.xvfb-run ]
-            );
+            ]
+            ++ lib.optionals toolchain.canBuildGuests toolchain.compilerAliases
+            ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.xorg-server pkgs.xvfb-run ];
             buildInputs = [
               pkgs.gtk4
               pkgs.librsvg

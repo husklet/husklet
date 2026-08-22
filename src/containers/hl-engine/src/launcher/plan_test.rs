@@ -98,7 +98,6 @@ fn formats_publish_and() {
 /// Host ownership of the plan's writable root, which decides whether a launch can write at all.
 #[cfg(unix)]
 mod rootfs_ownership {
-    use crate::engine::EngineError;
     use crate::launcher::plan::RuntimePlan;
     use crate::options::Options;
 
