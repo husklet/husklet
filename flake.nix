@@ -387,6 +387,7 @@
         pkgs:
         let
           alpine = if pkgs.stdenv.isLinux then linuxAlpineFor pkgs else null;
+          toolchain = toolchainFor pkgs;
         in
         (rustPlatformFor pkgs).buildRustPackage (
           {
@@ -407,7 +408,12 @@
               pkgs.gobject-introspection
               pkgs.glib
               pkgs.gdk-pixbuf
-            ];
+              pkgs.cacert
+              pkgs.coreutils
+              pkgs.procps
+            ] ++ lib.optionals pkgs.stdenv.isLinux (
+              toolchain.compilerAliases ++ [ pkgs.xorg-server pkgs.xvfb-run ]
+            );
             buildInputs = [
               pkgs.gtk4
               pkgs.librsvg
@@ -418,6 +424,11 @@
               runHook preBuild
 
               export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
+              export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+              # A unique root prevents two sandbox UIDs from sharing the corpus
+              # runner's durable default namespace in /var/tmp.
+              export TMPDIR="$(mktemp -d /tmp/husklet-verification.XXXXXX)"
+              export HL_RUNTIME_WORK_ROOT="$TMPDIR/runtime"
               if [ "$NIX_BUILD_CORES" -gt 256 ]; then
                 export HL_COMPAT_JOBS=256
               else
@@ -434,7 +445,13 @@
               export HL_TEST_ENGINE_APP_BIN_DIR="$PWD/target/debug"
               cargo check --workspace --all-targets --locked --offline
               cargo clippy --workspace --all-targets --locked --offline -- -D warnings
-              cargo test --workspace --all-targets --locked --offline --no-fail-fast
+              ${lib.optionalString pkgs.stdenv.isLinux ''
+                xvfb-run -a -s '-screen 0 1600x1000x24' -- \
+                  cargo test --workspace --all-targets --locked --offline --no-fail-fast
+              ''}
+              ${lib.optionalString pkgs.stdenv.isDarwin ''
+                cargo test --workspace --all-targets --locked --offline --no-fail-fast
+              ''}
               ${lib.optionalString pkgs.stdenv.isLinux ''export HL_PRODUCT_CHECKPOINT_REQUIRED=1''}
               cargo test -p husklet --features runtime --lib --locked --offline --no-fail-fast
               cargo test --workspace --doc --locked --offline
