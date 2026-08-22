@@ -402,6 +402,7 @@ impl GuestMachine for ProductionMachine {
 /// boundary that owns the option, and makes it permanent so a preflight does not poll for it.
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::checkpoint::{CheckpointPhaseLedger, RECOVERY_OPEN, RecoveryAdmission};
     use super::*;
 
