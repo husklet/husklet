@@ -226,7 +226,7 @@ int hl_host_process_fd_read(int64_t pid, int32_t descriptor, hl_host_process_fd 
     if (!hl_host_process_start_time_ns(pid, &start_time_ns)) return 0;
     snprintf(link, sizeof link, "/proc/%lld/fd/%d", (long long)pid, descriptor);
     length = readlink(link, target, sizeof target - 1);
-    if (length < 0) return 0;
+    if (length < 0 || (size_t)length >= sizeof target) return 0;
     target[length] = '\0';
     entry->descriptor = descriptor;
     entry->kind = hl_linux_fd_kind(target);
@@ -367,7 +367,7 @@ int hl_host_process_peers(hl_host_process_peer *entries, size_t capacity, size_t
     size_t total = 0;
     if (count == NULL || (capacity != 0 && entries == NULL)) return 0;
     self_length = readlink("/proc/self/exe", self_path, PATH_MAX);
-    if (self_length <= 0) return 0;
+    if (self_length <= 0 || (size_t)self_length >= sizeof self_path) return 0;
     self_path[self_length] = '\0';
     directory = opendir("/proc");
     if (directory == NULL) return 0;
