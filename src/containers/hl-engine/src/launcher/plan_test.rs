@@ -132,13 +132,12 @@ mod rootfs_ownership {
     /// any host. Assert the branch this identity actually reaches instead of leaving the run empty.
     ///
     /// `/` cannot express the root arm, because root owns it and the `rootfs_uid == engine_uid` arm
-    /// would answer first. The fixture therefore hands a directory to another uid, so only
-    /// `engine_uid == 0` can account for the acceptance.
+    /// would answer first. The root branch is a pure uid decision, so exercise it with a foreign uid
+    /// directly instead of requiring `CAP_CHOWN`; Nix intentionally runs uid 0 without that capability.
     #[test]
-    #[allow(unsafe_code)]
     fn a_writable_root_owned_by_another_host_user_refuses_a_launch_that_is_not_root() {
-        use std::os::unix::fs::MetadataExt as _;
         // SAFETY: `geteuid` takes no arguments and cannot fail.
+        #[allow(unsafe_code)]
         let engine_uid = unsafe { libc::geteuid() };
         if engine_uid != 0 {
             assert_eq!(
@@ -150,19 +149,7 @@ mod rootfs_ownership {
             );
             return;
         }
-        const FOREIGN_UID: u32 = 65_534;
-        let directory = tempfile::tempdir().unwrap();
-        std::os::unix::fs::chown(directory.path(), Some(FOREIGN_UID), None).unwrap();
-        assert_eq!(
-            std::fs::metadata(directory.path()).unwrap().uid(),
-            FOREIGN_UID,
-            "the fixture root must belong to another uid or the acceptance proves nothing"
-        );
-        assert_eq!(
-            plan(Some(directory.path().to_str().unwrap()), &[]).refuse_unownable_root(),
-            Ok(()),
-            "host root writes through every owner, so no ownership refusal may fire for uid 0"
-        );
+        assert!(!super::root_is_unownable(0, 65_534));
     }
 
     /// The kinder-to-refuse judgement stops exactly where the workspace stops being broken. A
