@@ -328,10 +328,6 @@ static int svc_sleep(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1) {
                 break;
             } // deadline reached
             r = engine_sleep_until_monotonic(&deadline);
-            if (r < 0) {
-                fprintf(stderr, "[sleepdiag] pid=%d syscall=%llu errno=%d deadline=%lld.%09ld\n", (int)getpid(),
-                        (unsigned long long)nr, errno, (long long)deadline.tv_sec, deadline.tv_nsec);
-            }
             if (r == 0) break;
             if (svc_poll_retry(c)) continue; // internal/spurious wakeup -> re-sleep the true remainder
             engine_clock_gettime(CLOCK_MONOTONIC, &now);

@@ -98,12 +98,16 @@ static int exec_image_capabilities(int descriptor, hl_exec_file_capabilities *ca
     const char *name = "user.hl.guest.security.capability";
     ssize_t length = hl_native_fgetxattr(descriptor, name, bytes, sizeof bytes, 0, 0);
     if (length < 0) {
-        /* glibc defines ENOATTR *as* ENODATA, so testing both is `-Werror=logical-op`:
-         * two operands the compiler can see are identical. Darwin keeps them distinct
-         * (ENOATTR 93, ENODATA 96), so the second test still has to exist there. */
-        if (errno == ENODATA
+        /* A filesystem with no xattr support has no file capability to apply; Linux still executes the
+         * image. Nix's sandbox /build is such a filesystem on this host, where rejecting ENOTSUP made every
+         * BusyBox applet exec fail with shell status 126. glibc aliases ENOATTR/ENODATA and
+         * ENOTSUP/EOPNOTSUPP, so compare the second spelling only where it is genuinely distinct. */
+        if (errno == ENODATA || errno == ENOTSUP
 #if defined(ENOATTR) && ENOATTR != ENODATA
             || errno == ENOATTR
+#endif
+#if defined(EOPNOTSUPP) && EOPNOTSUPP != ENOTSUP
+            || errno == EOPNOTSUPP
 #endif
         )
             return 0;
@@ -656,8 +660,6 @@ static int svc_proc_221(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         int error = exec_prepare_request(a0, a1, a2, requested_descriptor, &prepared);
         if (error == 0) error = exec_commit_request(c, &prepared);
         if (error != 0) {
-            fprintf(stderr, "[execdiag] pid=%d error=%d path=%s\n", (int)getpid(), error,
-                    (const char *)(uintptr_t)a0);
             if (error == -EAGAIN) exec_prepared_discard(&prepared);
             G_RET(c) = (uint64_t)(int64_t)error;
         }

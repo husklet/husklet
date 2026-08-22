@@ -544,40 +544,6 @@ fn wait_for_growth(path: &Path, previous: u64, timeout: Duration) -> TestResult 
     }
 }
 
-fn wait_for_domain_growth(
-    path: &Path,
-    previous: u64,
-    timeout: Duration,
-    child: &DomainChild,
-    helper_log: &Path,
-) -> TestResult {
-    wait_for_growth(path, previous, timeout).map_err(|error| {
-        format!(
-            "{error}; domain state at timeout:\n{}",
-            domain_process_snapshot(child.id(), helper_log)
-        )
-        .into()
-    })
-}
-
-fn domain_process_snapshot(root: u32, helper_log: &Path) -> String {
-    let processes = Command::new("ps")
-        .args([
-            "-o",
-            "pid=,ppid=,pgid=,sid=,stat=,wchan=,comm=",
-            "--forest",
-            "-g",
-            &root.to_string(),
-        ])
-        .output()
-        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
-        .unwrap_or_else(|error| format!("ps failed: {error}"));
-    let leader = std::fs::read_to_string(format!("/proc/{root}/status"))
-        .unwrap_or_else(|error| format!("leader status unavailable: {error}"));
-    let helper = std::fs::read_to_string(helper_log).unwrap_or_else(|error| format!("helper log unavailable: {error}"));
-    format!("leader={root}\n{leader}\nprocesses:\n{processes}\nhelper log:\n{helper}")
-}
-
 fn wait_child(child: &mut Child, timeout: Duration) -> TestResult {
     let deadline = Instant::now() + timeout;
     loop {
