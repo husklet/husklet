@@ -14,6 +14,8 @@
 #include "emit.h"
 #include "guest_fetch.h"
 
+#include <stddef.h>
+
 #define CACHE_SZ (64u << 20)
 /* A stitched AArch64 region may contain 4096 guest instructions.  When a
    file-backed BUS ledger is active, one memory instruction expands into a
@@ -219,6 +221,12 @@ typedef struct {
 // The marker above is only free while it fits the padding; if the entry ever grows, every probe pays a
 // second cache line and the hot lookup's one-line property is gone.
 _Static_assert(sizeof(hl_translation_map_entry) == 32, "translation entry must stay one half cache line");
+_Static_assert(_Alignof(hl_translation_map_entry) == 8, "translation entry alignment changed");
+_Static_assert(offsetof(hl_translation_map_entry, generation) == 8, "translation generation left the first 16 bytes");
+_Static_assert(offsetof(hl_translation_map_entry, tombstone_epoch) == 12,
+               "translation tombstone no longer occupies the pointer-alignment padding");
+_Static_assert(offsetof(hl_translation_map_entry, host) == 16, "translation host pointer moved");
+_Static_assert(offsetof(hl_translation_map_entry, body) == 24, "translation body pointer moved");
 
 // All indexes describing the currently live translation generation share one owner. Keep these arrays
 // embedded (rather than separately allocated) so the hot lookup layout and zero-initialized lifetime stay
@@ -273,6 +281,12 @@ typedef struct {
     uint64_t guest_end;
     uint64_t cache_generation;
 } hl_translation_map_metadata;
+
+_Static_assert(sizeof(hl_translation_map_metadata) == 24, "cold translation record gained padding");
+_Static_assert(_Alignof(hl_translation_map_metadata) == 8, "cold translation record alignment changed");
+_Static_assert(offsetof(hl_translation_map_metadata, guest_start) == 0, "cold guest start moved");
+_Static_assert(offsetof(hl_translation_map_metadata, guest_end) == 8, "cold guest end is no longer adjacent");
+_Static_assert(offsetof(hl_translation_map_metadata, cache_generation) == 16, "cold cache generation moved");
 
 static hl_translation_map_metadata g_map_metadata[JIT_MAP_N];
 
