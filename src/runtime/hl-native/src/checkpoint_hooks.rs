@@ -1,3 +1,5 @@
+#![allow(unsafe_code)]
+
 use super::*;
 
 #[cfg(feature = "native-test-hooks")]

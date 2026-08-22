@@ -274,13 +274,13 @@ pub(super) fn hl_c_backend_terminal_termios_adopt(native_fd: c_int, image: &[u8;
 engine_entry!(hl_c_backend_destroy(backend: *mut Backend), destroy);
 
 #[cfg(feature = "native-test-hooks")]
-#[path = "bindings_test_hooks.rs"]
+#[path = "test_hooks.rs"]
 mod test_hooks;
 #[cfg(feature = "native-test-hooks")]
 pub(crate) use test_hooks::*;
 
 #[cfg(feature = "native-test-hooks")]
-#[path = "bindings_checkpoint_hooks.rs"]
+#[path = "checkpoint_hooks.rs"]
 mod checkpoint_hooks;
 #[cfg(feature = "native-test-hooks")]
 pub(crate) use checkpoint_hooks::*;

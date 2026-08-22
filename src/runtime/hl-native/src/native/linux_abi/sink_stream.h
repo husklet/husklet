@@ -30,8 +30,9 @@ static uint64_t g_ckpt_stream_next_id = 1;
 static int ckpt_stream_call(uint32_t op, const char *name, uint64_t stream, uint64_t offset, uint32_t flags,
                             const void *payload, size_t size, hl_ckpt_reply *reply, void *out, size_t capacity) {
     hl_ckpt_request request = {0};
-    hl_ckpt_reply local;
+    hl_ckpt_reply local = {0};
     if (reply == NULL) reply = &local;
+    *reply = (hl_ckpt_reply){0};
     request.op = op;
     request.flags = flags;
     request.stream = stream;
