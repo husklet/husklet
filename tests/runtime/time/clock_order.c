@@ -16,7 +16,8 @@ static int never_backwards(clockid_t c, int n) {
     if (prev < 0) return 0;
     volatile unsigned sink = 0;
     for (int i = 0; i < n; i++) {
-        for (int k = 0; k < 1000; k++) sink += k;
+        for (int k = 0; k < 1000; k++)
+            sink += k;
         long long cur = ns(c);
         if (cur < prev) return 0;
         prev = cur;
@@ -33,7 +34,6 @@ int main(void) {
     // BOOTTIME read cannot lose the race when the two share a base with no suspend offset.
     long long m = ns(CLOCK_MONOTONIC);
     int boot_ge_mono = ns(CLOCK_BOOTTIME) >= m;
-    printf("monoorder mono=%d raw=%d boot=%d mcoarse=%d boot_ge_mono=%d\n", mono, raw, boot, mcoarse,
-           boot_ge_mono);
+    printf("monoorder mono=%d raw=%d boot=%d mcoarse=%d boot_ge_mono=%d\n", mono, raw, boot, mcoarse, boot_ge_mono);
     return 0;
 }

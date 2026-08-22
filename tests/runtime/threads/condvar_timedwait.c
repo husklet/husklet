@@ -4,12 +4,17 @@
 #include <stdio.h>
 #include <time.h>
 #include <errno.h>
+
 int main(void) {
     pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
     pthread_cond_t c = PTHREAD_COND_INITIALIZER;
-    struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_nsec += 50000000;
-    if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
+    if (ts.tv_nsec >= 1000000000) {
+        ts.tv_sec++;
+        ts.tv_nsec -= 1000000000;
+    }
     pthread_mutex_lock(&m);
     int r = pthread_cond_timedwait(&c, &m, &ts);
     pthread_mutex_unlock(&m);

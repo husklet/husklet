@@ -206,7 +206,9 @@ void hl_arena_test_fail_next_placeholder_restore(void) {
 // An absent zone is the empty range [0, 0). It owns no address, so there is nothing to claim and
 // nothing to release, and every zone-keyed operation below reads a cursor equal to its limit and
 // answers ENOMEM. Darwin needs this: see arena_low32_absent_on_this_host below.
-static int arena_zone_absent(uint64_t base, uint64_t limit) { return base == 0 && limit == 0; }
+static int arena_zone_absent(uint64_t base, uint64_t limit) {
+    return base == 0 && limit == 0;
+}
 
 static int arena_claim(uint64_t base, uint64_t limit) {
     uint64_t length = limit - base;

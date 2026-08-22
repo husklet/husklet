@@ -10,7 +10,10 @@ int main(void) {
     snprintf(name, sizeof name, "/hl_sem_%d", (int)getpid());
     sem_unlink(name);
     sem_t *s = sem_open(name, O_CREAT | O_EXCL, 0600, 1);
-    if (s == SEM_FAILED) { printf("semnamed open=0\n"); return 0; }
+    if (s == SEM_FAILED) {
+        printf("semnamed open=0\n");
+        return 0;
+    }
 
     // O_EXCL on existing name fails with EEXIST.
     sem_t *dup = sem_open(name, O_CREAT | O_EXCL, 0600, 1);
@@ -28,7 +31,7 @@ int main(void) {
 
     sem_close(s);
     int unlinked = sem_unlink(name) == 0;
-    printf("semnamed excl=%d v0=%d wait=%d v1=%d empty_eagain=%d v2=%d unlink=%d\n",
-           excl, v0 == 1, w, v1 == 0, tw, v2 == 1, unlinked);
+    printf("semnamed excl=%d v0=%d wait=%d v1=%d empty_eagain=%d v2=%d unlink=%d\n", excl, v0 == 1, w, v1 == 0, tw,
+           v2 == 1, unlinked);
     return 0;
 }

@@ -14,4 +14,6 @@ static int stable_kill(pid_t process, int signal_number) {
 #undef kill
 #undef main
 
-int main(void) { return legacy_pidfd_signal_main(); }
+int main(void) {
+    return legacy_pidfd_signal_main();
+}

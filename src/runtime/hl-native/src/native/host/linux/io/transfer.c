@@ -141,4 +141,3 @@ static hl_host_result hl_linux_transfer_duplicate(void *context, hl_host_handle 
     if (result.status != HL_STATUS_OK) close(descriptor);
     return result;
 }
-

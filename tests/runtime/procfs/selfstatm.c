@@ -14,9 +14,11 @@ int main(void) {
     int n = pf_read("/proc/self/statm", b, sizeof b);
     long f[8];
     int nf = 0;
-    for (char *t = strtok(b, " \n"); t && nf < 8; t = strtok(NULL, " \n")) f[nf++] = atol(t);
+    for (char *t = strtok(b, " \n"); t && nf < 8; t = strtok(NULL, " \n"))
+        f[nf++] = atol(t);
     int all_nonneg = 1;
-    for (int i = 0; i < nf; i++) if (f[i] < 0) all_nonneg = 0;
+    for (int i = 0; i < nf; i++)
+        if (f[i] < 0) all_nonneg = 0;
     int ok = n > 0 && nf == 7 && all_nonneg && f[0] >= f[1] && f[1] >= 1 && f[3] > 0;
     printf("selfstatm ok=%d\n", ok);
     return 0;

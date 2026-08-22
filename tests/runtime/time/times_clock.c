@@ -9,7 +9,8 @@
 
 static void burn(long iters) {
     volatile double x = 1.0;
-    for (long i = 1; i <= iters; i++) x = x * 1.0000001 + 1.0;
+    for (long i = 1; i <= iters; i++)
+        x = x * 1.0000001 + 1.0;
     (void)x;
 }
 
@@ -22,12 +23,12 @@ int main(void) {
     clock_t c1 = clock();
 
     int ret_valid = r0 != (clock_t)-1 && r1 != (clock_t)-1;
-    int ret_adv = r1 >= r0;                // real-time ticks never go backwards
+    int ret_adv = r1 >= r0;                                                    // real-time ticks never go backwards
     int utime_adv = b.tms_utime >= a.tms_utime && (b.tms_utime > a.tms_utime); // user CPU grew
     int clock_adv = c1 > c0;
     int clock_pos = c1 > 0;
 
-    printf("timesclock ret_valid=%d ret_adv=%d utime_adv=%d clock_adv=%d clock_pos=%d\n", ret_valid,
-           ret_adv, utime_adv, clock_adv, clock_pos);
+    printf("timesclock ret_valid=%d ret_adv=%d utime_adv=%d clock_adv=%d clock_pos=%d\n", ret_valid, ret_adv, utime_adv,
+           clock_adv, clock_pos);
     return 0;
 }

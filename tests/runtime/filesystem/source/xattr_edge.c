@@ -24,14 +24,20 @@ static const char *en(int e) {
     default: return "OTHER";
     }
 }
+
 // Result of a syscall that returns 0/-1: the errno name, or "ok".
-static const char *rc(long r) { return r == 0 ? "ok" : en(errno); }
+static const char *rc(long r) {
+    return r == 0 ? "ok" : en(errno);
+}
 
 int main(void) {
     char path[128];
     snprintf(path, sizeof path, "/tmp/hl_xattr_edge_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
-    if (fd < 0) { perror("open"); return 1; }
+    if (fd < 0) {
+        perror("open");
+        return 1;
+    }
     write(fd, "body", 4);
     close(fd);
 

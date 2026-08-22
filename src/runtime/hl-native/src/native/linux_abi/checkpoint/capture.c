@@ -811,7 +811,8 @@ static void ckpt_poll(struct cpu *c) {
         long long elapsed_ns;
         (void)clock_gettime(CLOCK_MONOTONIC, &started);
         do {
-            for (int i = 0; i < 100000; i++) spin += (unsigned long long)i;
+            for (int i = 0; i < 100000; i++)
+                spin += (unsigned long long)i;
             (void)clock_gettime(CLOCK_MONOTONIC, &now);
             elapsed_ns = (long long)(now.tv_sec - started.tv_sec) * 1000000000LL + (now.tv_nsec - started.tv_nsec);
         } while (elapsed_ns < 8000000000LL);
@@ -997,6 +998,7 @@ static uint64_t ckpt_backing_values(uint64_t device, uint64_t object) {
 // private mapping is not an object, it is this process's pages -- so the lookup below misses and
 // they keep the existing MAP_ANON|MAP_PRIVATE per-process restore, fork-inherited ones included.
 #define CKPT_ANON_SHARED_MAX 256
+
 struct ckpt_anon_shared_row {
     uint64_t lo, hi, offset, object_id;
 };
@@ -1052,8 +1054,8 @@ static void ckpt_anon_shared_scan(void) {
         // depth makes the call resolve submaps itself and never return one.
         natural_t depth = 1;
         memset(&info, 0, sizeof info);
-        kern_return_t status = mach_vm_region_recurse(mach_task_self(), &address, &size, &depth,
-                                                     (vm_region_recurse_info_t)&info, &count);
+        kern_return_t status =
+            mach_vm_region_recurse(mach_task_self(), &address, &size, &depth, (vm_region_recurse_info_t)&info, &count);
         // KERN_INVALID_ADDRESS terminates the walk: no region at or above this address. Any other
         // failure means the table was not fully read, which is the truncation this refuses on.
         if (status == KERN_INVALID_ADDRESS) break;
@@ -1106,16 +1108,17 @@ static void ckpt_anon_shared_scan(void) {
         // labels it "/dev/zero (deleted)"). A named file mapping is already carried by g_filemap
         // and must not be re-identified here.
         const char *path = line + consumed;
-        while (*path == ' ') path++;
+        while (*path == ' ')
+            path++;
         if (*path != '\0' && *path != '\n' && strncmp(path, "/dev/zero", 9) != 0) continue;
         if (inode == 0 || hi <= lo) continue;
         if (g_nanon_shared >= CKPT_ANON_SHARED_MAX) {
             g_anon_shared_truncated = 1;
             break;
         }
-        g_anon_shared[g_nanon_shared++] = (struct ckpt_anon_shared_row){
-            (uint64_t)lo, (uint64_t)hi, (uint64_t)file_offset,
-            ckpt_backing_values(((uint64_t)major << 8) | minor, (uint64_t)inode)};
+        g_anon_shared[g_nanon_shared++] =
+            (struct ckpt_anon_shared_row){(uint64_t)lo, (uint64_t)hi, (uint64_t)file_offset,
+                                          ckpt_backing_values(((uint64_t)major << 8) | minor, (uint64_t)inode)};
     }
     fclose(maps);
 }
@@ -1687,7 +1690,9 @@ static int ckpt_pipe_test_finish(struct ckpt_sink_stream *stream) {
     return 0;
 }
 
-static void ckpt_pipe_test_abort(struct ckpt_sink_stream *stream) { (void)stream; }
+static void ckpt_pipe_test_abort(struct ckpt_sink_stream *stream) {
+    (void)stream;
+}
 
 static int ckpt_pipe_test_claim(struct ckpt_sink *sink, const char *name) {
     (void)sink;
@@ -1737,8 +1742,8 @@ static const ckpt_source_vtable g_ckpt_pipe_test_source_ops = {
 };
 
 static int ckpt_pipe_test_open_shared(void) {
-    void *page = mmap(NULL, sizeof(struct ckpt_pipe_test_shared), PROT_READ | PROT_WRITE,
-                      MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    void *page =
+        mmap(NULL, sizeof(struct ckpt_pipe_test_shared), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (page == MAP_FAILED) return -1;
     memset(page, 0, sizeof(struct ckpt_pipe_test_shared));
     g_ckpt_pipe_test_shared = page;
@@ -1751,13 +1756,16 @@ static void ckpt_pipe_test_close_shared(void) {
 }
 
 // The bytes must come back in order, so make every byte a function of its position.
-static unsigned char ckpt_pipe_test_byte(unsigned index) { return (unsigned char)(index * 7u + 3u); }
+static unsigned char ckpt_pipe_test_byte(unsigned index) {
+    return (unsigned char)(index * 7u + 3u);
+}
 
 static int ckpt_pipe_test_fill(int writer) {
     for (unsigned at = 0; at < CKPT_PIPE_TEST_PAYLOAD;) {
         unsigned char block[4096];
         unsigned size = CKPT_PIPE_TEST_PAYLOAD - at < sizeof block ? CKPT_PIPE_TEST_PAYLOAD - at : sizeof block;
-        for (unsigned index = 0; index < size; ++index) block[index] = ckpt_pipe_test_byte(at + index);
+        for (unsigned index = 0; index < size; ++index)
+            block[index] = ckpt_pipe_test_byte(at + index);
         ssize_t written = write(writer, block, size);
         if (written <= 0) return -1;
         at += (unsigned)written;
@@ -1952,8 +1960,7 @@ HL_API int HL_TARGET_LOCAL(checkpoint_pipe_capture_test)(uint32_t scenario) {
         if (ckpt_pipe_test_open_shared() != 0) verdict = 84;
         ckpt_sink_install(&g_ckpt_pipe_test_ops);
         g_ckpt_capture_destructive = 0;
-        if (verdict == 0 &&
-            ckpt_pipe_test_refused_scan(pair[0], (uint64_t)0x11, refused_socket) == 0)
+        if (verdict == 0 && ckpt_pipe_test_refused_scan(pair[0], (uint64_t)0x11, refused_socket) == 0)
             verdict = 85; // the scan must refuse; a fixture whose refusal stopped firing proves nothing
         if (verdict == 0 && ckpt_pipe_test_buffered(pair[0]) != (int)CKPT_PIPE_TEST_PAYLOAD)
             verdict = 86; // the guest's buffered bytes were consumed for a capture that was refused
@@ -2023,7 +2030,9 @@ static int ckpt_halfclose_test_finish(struct ckpt_sink_stream *stream) {
     return 0;
 }
 
-static void ckpt_halfclose_test_abort(struct ckpt_sink_stream *stream) { (void)stream; }
+static void ckpt_halfclose_test_abort(struct ckpt_sink_stream *stream) {
+    (void)stream;
+}
 
 static int ckpt_halfclose_test_claim(struct ckpt_sink *sink, const char *name) {
     (void)sink;
@@ -2093,8 +2102,10 @@ HL_API int HL_TARGET_LOCAL(checkpoint_socket_halfclose_test)(uint32_t scenario) 
         if (verdict == 0 && g_ckpt_halfclose_test_length < sizeof recorded) verdict = 13;
         if (verdict == 0) {
             memcpy(&recorded, g_ckpt_halfclose_test_bytes, sizeof recorded);
-            if (recorded.magic != CKPT_SOCKET_STATE_MAGIC) verdict = 14;
-            else if (recorded.shutdown_mask != SOCK_SHUTDOWN_WRITE) verdict = 15;
+            if (recorded.magic != CKPT_SOCKET_STATE_MAGIC)
+                verdict = 14;
+            else if (recorded.shutdown_mask != SOCK_SHUTDOWN_WRITE)
+                verdict = 15;
         }
         // The peer closed nothing and must record nothing: a mask that is merely "the pair is half-closed"
         // cannot say which end may still write.
@@ -2116,8 +2127,10 @@ HL_API int HL_TARGET_LOCAL(checkpoint_socket_halfclose_test)(uint32_t scenario) 
         if (verdict == 0 && g_ckpt_halfclose_test_length < sizeof header) verdict = 23;
         if (verdict == 0) {
             memcpy(&header, g_ckpt_halfclose_test_bytes, sizeof header);
-            if (header.magic != CKPT_SOCKET_QUEUE_MAGIC) verdict = 24;
-            else if (header.peer_closed != 0) verdict = 25;
+            if (header.magic != CKPT_SOCKET_QUEUE_MAGIC)
+                verdict = 24;
+            else if (header.peer_closed != 0)
+                verdict = 25;
         }
     } else if (scenario == 2) {
         // A half-closed endpoint is admissible now that the mask is representable. It used to be refused

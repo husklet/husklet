@@ -9,9 +9,11 @@
 
 #if defined(HL_NATIVE_TEST_HOOKS)
 static _Atomic int hl_activation_ready_pause;
+
 HL_API void hl_c_backend_activation_ready_pause(int paused) {
     atomic_store_explicit(&hl_activation_ready_pause, paused != 0, memory_order_release);
 }
+
 void hl_host_activation_ready_test_wait(void) {
     if (atomic_load_explicit(&hl_activation_ready_pause, memory_order_acquire)) {
         struct timespec delay = {.tv_sec = 0, .tv_nsec = 250000000};
@@ -29,6 +31,7 @@ int hl_host_process_open(pid_t pid) {
     return -1;
 #endif
 }
+
 static hl_host_result hl_linux_process_spawn_mode(void *context, hl_host_process_entry entry, void *entry_context,
                                                   int prepared) {
     hl_host_linux *host = context;
@@ -132,13 +135,11 @@ static hl_host_result hl_linux_process_wait(void *context, hl_host_handle handle
             waited = waitpid(pid, &status, options);
         } while (waited < 0 && errno == EINTR);
         if (waited != 0) break;
-        if (deadline_ns == 0 ||
-            (deadline_ns != HL_HOST_DEADLINE_INFINITE && hl_linux_monotonic_value() >= deadline_ns))
+        if (deadline_ns == 0 || (deadline_ns != HL_HOST_DEADLINE_INFINITE && hl_linux_monotonic_value() >= deadline_ns))
             break;
         pthread_mutex_unlock(&host->lock);
-        hl_linux_sleep_until(deadline_ns == HL_HOST_DEADLINE_INFINITE
-                                 ? hl_linux_monotonic_value() + UINT64_C(1000000)
-                                 : deadline_ns);
+        hl_linux_sleep_until(deadline_ns == HL_HOST_DEADLINE_INFINITE ? hl_linux_monotonic_value() + UINT64_C(1000000)
+                                                                      : deadline_ns);
         pthread_mutex_lock(&host->lock);
         entry = hl_linux_lookup_locked(host, handle, HL_LINUX_HANDLE_PROCESS);
         if (entry == NULL || entry->process_reaped || host->destroying) {
@@ -186,8 +187,7 @@ static hl_host_result hl_linux_process_terminate(void *context, hl_host_handle h
     pid_t pid;
     if (reason != HL_HOST_PROCESS_TERMINATE_INTERRUPT && reason != HL_HOST_PROCESS_TERMINATE_FORCE &&
         (reason <= HL_HOST_PROCESS_TERMINATE_SIGNAL || reason > HL_HOST_PROCESS_TERMINATE_SIGNAL + 64) &&
-        (reason <= HL_HOST_PROCESS_TERMINATE_NATIVE_SIGNAL ||
-         reason > HL_HOST_PROCESS_TERMINATE_NATIVE_SIGNAL + 64))
+        (reason <= HL_HOST_PROCESS_TERMINATE_NATIVE_SIGNAL || reason > HL_HOST_PROCESS_TERMINATE_NATIVE_SIGNAL + 64))
         return hl_linux_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
     pthread_mutex_lock(&host->lock);
     entry = hl_linux_lookup_locked(host, handle, HL_LINUX_HANDLE_PROCESS);

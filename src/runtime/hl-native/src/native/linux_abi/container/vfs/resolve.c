@@ -478,8 +478,7 @@ static int jail_open_plan(int dirfd, const char *raw, uint32_t intent, uint32_t 
          * above already holds the correct answer and keeps it. An ordinary image tree is entirely in
          * the first case. */
         char case_absolute[8400], case_physical[8400];
-        const char *case_root =
-            volume >= 0 ? (g_vols[volume].isfile ? NULL : g_vols[volume].hcanon) : g_rootfs_canon;
+        const char *case_root = volume >= 0 ? (g_vols[volume].isfile ? NULL : g_vols[volume].hcanon) : g_rootfs_canon;
         if (strcmp(relative, ".") != 0 &&
             (case_root == NULL || case_root[0] == 0 ||
              snprintf(case_absolute, sizeof case_absolute, "/%s", relative) >= (int)sizeof case_absolute ||
@@ -498,8 +497,8 @@ static int jail_open_plan(int dirfd, const char *raw, uint32_t intent, uint32_t 
 #endif
         if (route_root != HL_HOST_HANDLE_INVALID &&
             g_host_services->file
-                    ->resolve_beneath(g_host_services->context, route_root, relative, strlen(relative),
-                                      route_policy, &resolved)
+                    ->resolve_beneath(g_host_services->context, route_root, relative, strlen(relative), route_policy,
+                                      &resolved)
                     .status == HL_STATUS_OK) {
             plan->directory = resolved.parent;
             plan->target = resolved.target;

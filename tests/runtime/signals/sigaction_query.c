@@ -5,7 +5,9 @@
 #include <signal.h>
 #include <stdio.h>
 
-static void h(int s) { (void)s; }
+static void h(int s) {
+    (void)s;
+}
 
 int main(void) {
     struct sigaction old = {0};
@@ -30,7 +32,7 @@ int main(void) {
     int s = sigaction(SIGSTOP, &ign, NULL);
     int stop_einval = s == -1 && errno == EINVAL;
 
-    printf("sigaction_query starts_dfl=%d handler_reported=%d kill_einval=%d stop_einval=%d\n",
-           starts_dfl, handler_reported, kill_einval, stop_einval);
+    printf("sigaction_query starts_dfl=%d handler_reported=%d kill_einval=%d stop_einval=%d\n", starts_dfl,
+           handler_reported, kill_einval, stop_einval);
     return 0;
 }

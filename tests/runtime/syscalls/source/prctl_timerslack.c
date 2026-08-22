@@ -4,9 +4,10 @@
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <sys/prctl.h>
-int main(void){
+
+int main(void) {
     prctl(PR_SET_TIMERSLACK, 123456UL, 0, 0, 0);
     long slack = prctl(PR_GET_TIMERSLACK, 0, 0, 0, 0);
-    printf("slack=%ld match=%d\n", slack, slack==123456); // native match=1, engine match=0
+    printf("slack=%ld match=%d\n", slack, slack == 123456); // native match=1, engine match=0
     return 0;
 }

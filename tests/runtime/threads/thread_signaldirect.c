@@ -33,22 +33,27 @@ int main(void) {
     sigaddset(&set, SIGUSR1);
     pthread_sigmask(SIG_BLOCK, &set, NULL); // inherited by all threads
 
-    for (long i = 0; i < 4; i++) pthread_create(&threads[i], 0, w, (void *)i);
+    for (long i = 0; i < 4; i++)
+        pthread_create(&threads[i], 0, w, (void *)i);
 
     struct timespec ts = {0, 50 * 1000000};
-    nanosleep(&ts, 0);                       // let all four enter sigwait
+    nanosleep(&ts, 0); // let all four enter sigwait
 
-    pthread_kill(threads[2], SIGUSR1);       // target exactly thread #2
+    pthread_kill(threads[2], SIGUSR1); // target exactly thread #2
 
     // wait for the targeted thread to consume the signal
-    while (atomic_load(&woke_index) < 0) { struct timespec t = {0, 200000}; nanosleep(&t, 0); }
+    while (atomic_load(&woke_index) < 0) {
+        struct timespec t = {0, 200000};
+        nanosleep(&t, 0);
+    }
     int targeted = atomic_load(&woke_index) == 2;
 
     // release the other three so the process can exit cleanly
-    for (int i = 0; i < 3; i++) pthread_kill(threads[i == 2 ? 3 : i], SIGUSR1);
-    for (int i = 0; i < 4; i++) pthread_join(threads[i], 0);
+    for (int i = 0; i < 3; i++)
+        pthread_kill(threads[i == 2 ? 3 : i], SIGUSR1);
+    for (int i = 0; i < 4; i++)
+        pthread_join(threads[i], 0);
 
-    printf("thread_signal_direct targeted=%d total_woken=%d\n",
-           targeted, atomic_load(&wake_count));
+    printf("thread_signal_direct targeted=%d total_woken=%d\n", targeted, atomic_load(&wake_count));
     return 0;
 }

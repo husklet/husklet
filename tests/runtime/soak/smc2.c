@@ -16,16 +16,18 @@
 #endif
 
 int main(void) {
-    uint32_t *code = mmap(0, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
-                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (code == MAP_FAILED) { perror("mmap"); return 1; }
+    uint32_t *code = mmap(0, 4096, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (code == MAP_FAILED) {
+        perror("mmap");
+        return 1;
+    }
     code[2] = 0xd65f03c0; // ret
     uint64_t sum = 0;
     for (uint32_t i = 0; i < 200000; i++) {
         uint16_t lo = (uint16_t)(i & 0xffff);
         uint16_t hi = (uint16_t)((i * 2654435761u) & 0xffff);
-        code[0] = 0x52800000u | ((uint32_t)lo << 5);  // movz w0, #lo
-        code[1] = 0x72a00000u | ((uint32_t)hi << 5);  // movk w0, #hi, lsl #16
+        code[0] = 0x52800000u | ((uint32_t)lo << 5); // movz w0, #lo
+        code[1] = 0x72a00000u | ((uint32_t)hi << 5); // movk w0, #hi, lsl #16
         __builtin___clear_cache((char *)code, (char *)code + 12);
         uint32_t (*f)(void) = (uint32_t (*)(void))code;
         sum += f(); // must observe ((hi<<16)|lo) from the just-written pair, never a stale translation

@@ -20,8 +20,8 @@ static int wait_epoll(int descriptor, uint32_t events) {
     int epoll = epoll_create1(EPOLL_CLOEXEC);
     struct epoll_event request = {.events = events, .data.fd = descriptor};
     struct epoll_event result = {0};
-    int ready = epoll >= 0 && epoll_ctl(epoll, EPOLL_CTL_ADD, descriptor, &request) == 0
-        && epoll_wait(epoll, &result, 1, 2000) == 1 && (result.events & events) != 0;
+    int ready = epoll >= 0 && epoll_ctl(epoll, EPOLL_CTL_ADD, descriptor, &request) == 0 &&
+                epoll_wait(epoll, &result, 1, 2000) == 1 && (result.events & events) != 0;
     if (epoll >= 0) close(epoll);
     return ready;
 }
@@ -31,16 +31,17 @@ static int tcp4(void) {
     int one = 1;
     struct sockaddr_in local = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
     socklen_t length = sizeof(local);
-    if (listener < 0 || setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one))
-        || bind(listener, (struct sockaddr *)&local, sizeof(local))
-        || getsockname(listener, (struct sockaddr *)&local, &length) || local.sin_port == 0
-        || listen(listener, 4)) return 0;
+    if (listener < 0 || setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) ||
+        bind(listener, (struct sockaddr *)&local, sizeof(local)) ||
+        getsockname(listener, (struct sockaddr *)&local, &length) || local.sin_port == 0 || listen(listener, 4))
+        return 0;
     int client = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     int buffer = 32768;
-    if (client < 0 || setsockopt(client, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one))
-        || setsockopt(client, SOL_SOCKET, SO_SNDBUF, &buffer, sizeof(buffer))
-        || setsockopt(client, SOL_SOCKET, SO_RCVBUF, &buffer, sizeof(buffer))
-        || setsockopt(client, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one))) return 0;
+    if (client < 0 || setsockopt(client, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one)) ||
+        setsockopt(client, SOL_SOCKET, SO_SNDBUF, &buffer, sizeof(buffer)) ||
+        setsockopt(client, SOL_SOCKET, SO_RCVBUF, &buffer, sizeof(buffer)) ||
+        setsockopt(client, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)))
+        return 0;
     buffer = 0;
     length = sizeof(buffer);
     if (getsockopt(client, SOL_SOCKET, SO_SNDBUF, &buffer, &length) || buffer <= 0) return 0;
@@ -59,12 +60,14 @@ static int tcp4(void) {
     if (accepted < 0) return 0;
     struct sockaddr_in client_peer = {0};
     length = sizeof(client_peer);
-    if (getpeername(client, (struct sockaddr *)&client_peer, &length)
-        || client_peer.sin_family != AF_INET || client_peer.sin_port != local.sin_port) return 0;
+    if (getpeername(client, (struct sockaddr *)&client_peer, &length) || client_peer.sin_family != AF_INET ||
+        client_peer.sin_port != local.sin_port)
+        return 0;
     struct sockaddr_in server_peer = {0};
     length = sizeof(server_peer);
-    if (getpeername(accepted, (struct sockaddr *)&server_peer, &length)
-        || server_peer.sin_family != AF_INET || server_peer.sin_port == 0) return 0;
+    if (getpeername(accepted, (struct sockaddr *)&server_peer, &length) || server_peer.sin_family != AF_INET ||
+        server_peer.sin_port == 0)
+        return 0;
     int bits = (fcntl(accepted, F_GETFD) & FD_CLOEXEC) ? 1 : 0;
     char sent[] = "tcp4";
     char received[8] = {0};
@@ -106,19 +109,20 @@ static int udp_family(int family) {
         value->sin6_addr = in6addr_loopback;
         length = sizeof(*value);
     }
-    if (bind(receiver, (struct sockaddr *)&address, length)
-        || getsockname(receiver, (struct sockaddr *)&address, &length)) return 0;
+    if (bind(receiver, (struct sockaddr *)&address, length) ||
+        getsockname(receiver, (struct sockaddr *)&address, &length))
+        return 0;
     char sent[] = "udp";
-    if (sendto(sender, sent, sizeof(sent), 0, (struct sockaddr *)&address, length)
-        != (ssize_t)sizeof(sent) || !wait_ready(receiver, POLLIN)) return 0;
+    if (sendto(sender, sent, sizeof(sent), 0, (struct sockaddr *)&address, length) != (ssize_t)sizeof(sent) ||
+        !wait_ready(receiver, POLLIN))
+        return 0;
     char received[8] = {0};
     struct sockaddr_storage source = {0};
     socklen_t source_length = sizeof(source);
-    int count = recvfrom(receiver, received, sizeof(received), 0,
-                         (struct sockaddr *)&source, &source_length);
-    int ok = count == (int)sizeof(sent) && !memcmp(sent, received, sizeof(sent))
-        && source.ss_family == family;
-    close(sender); close(receiver);
+    int count = recvfrom(receiver, received, sizeof(received), 0, (struct sockaddr *)&source, &source_length);
+    int ok = count == (int)sizeof(sent) && !memcmp(sent, received, sizeof(sent)) && source.ss_family == family;
+    close(sender);
+    close(receiver);
     return ok;
 }
 

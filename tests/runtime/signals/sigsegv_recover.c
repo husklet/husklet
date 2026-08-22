@@ -9,7 +9,8 @@ static sigjmp_buf jb;
 static volatile sig_atomic_t code_ok, addr_ok, caught;
 
 static void h(int s, siginfo_t *si, void *u) {
-    (void)s; (void)u;
+    (void)s;
+    (void)u;
     caught++;
     if (si->si_code == SEGV_MAPERR) code_ok = 1;
     if (si->si_addr == (void *)0) addr_ok = 1;
@@ -30,7 +31,6 @@ int main(void) {
     } else {
         recovered = 1;
     }
-    printf("sigsegv_recover caught=%d maperr=%d addr_null=%d recovered=%d\n",
-           caught == 1, code_ok, addr_ok, recovered);
+    printf("sigsegv_recover caught=%d maperr=%d addr_null=%d recovered=%d\n", caught == 1, code_ok, addr_ok, recovered);
     return 0;
 }

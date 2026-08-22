@@ -9,11 +9,15 @@
 #include <stdint.h>
 #include <sys/wait.h>
 static volatile int stop;
+
 static void *spin(void *a) { // peer thread translating/executing while main forks
     volatile uint64_t x = 1;
-    while (!stop) { x = x * 6364136223846793005ull + 1442695040888963407ull; }
+    while (!stop) {
+        x = x * 6364136223846793005ull + 1442695040888963407ull;
+    }
     return (void *)(uintptr_t)x;
 }
+
 int main(void) {
     pthread_t th;
     pthread_create(&th, NULL, spin, NULL);
@@ -21,7 +25,8 @@ int main(void) {
     for (int i = 0; i < 50; i++) {
         pid_t p = fork();
         if (p == 0) _exit(i & 63);
-        int st; waitpid(p, &st, 0);
+        int st;
+        waitpid(p, &st, 0);
         sum += WEXITSTATUS(st);
     }
     stop = 1;

@@ -53,7 +53,7 @@ int main(void) {
     unlinkat(dfd, "d", AT_REMOVEDIR);
     close(dfd);
     rmdir(dir);
-    printf("hardlink-nlink nlink3=%d same-inode=%d content-shared=%d nlink2=%d dir-eperm=%d\n",
-           nlink3, same_inode, content_shared, nlink2, dir_eperm);
+    printf("hardlink-nlink nlink3=%d same-inode=%d content-shared=%d nlink2=%d dir-eperm=%d\n", nlink3, same_inode,
+           content_shared, nlink2, dir_eperm);
     return 0;
 }

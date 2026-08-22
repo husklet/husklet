@@ -7,7 +7,11 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t pipe_sig;
-static void h(int s) { (void)s; pipe_sig++; }
+
+static void h(int s) {
+    (void)s;
+    pipe_sig++;
+}
 
 int main(void) {
     // Case 1: handler installed
@@ -17,7 +21,10 @@ int main(void) {
     sigaction(SIGPIPE, &sa, NULL);
 
     int p[2];
-    if (pipe(p) != 0) { printf("sigpipe_pipe pipe_fail\n"); return 1; }
+    if (pipe(p) != 0) {
+        printf("sigpipe_pipe pipe_fail\n");
+        return 1;
+    }
     close(p[0]);
     errno = 0;
     ssize_t r = write(p[1], "x", 1);
@@ -27,7 +34,10 @@ int main(void) {
     // Case 2: SIGPIPE ignored
     signal(SIGPIPE, SIG_IGN);
     pipe_sig = 0;
-    if (pipe(p) != 0) { printf("sigpipe_pipe pipe_fail2\n"); return 1; }
+    if (pipe(p) != 0) {
+        printf("sigpipe_pipe pipe_fail2\n");
+        return 1;
+    }
     close(p[0]);
     errno = 0;
     ssize_t r2 = write(p[1], "x", 1);

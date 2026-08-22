@@ -59,15 +59,15 @@ int main(void) {
     }
     if (pthread_create(&sender, NULL, send_interrupt, NULL) != 0) return 4;
     errno = 0;
-    interrupted = syscall(SYS_clock_nanosleep, CLOCK_MONOTONIC, TIMER_ABSTIME, &deadline, NULL) == -1 &&
-                  errno == EINTR;
+    interrupted = syscall(SYS_clock_nanosleep, CLOCK_MONOTONIC, TIMER_ABSTIME, &deadline, NULL) == -1 && errno == EINTR;
     if (pthread_join(sender, NULL) != 0) return 5;
 
     errno = 0;
     int process_past = syscall(SYS_clock_nanosleep, CLOCK_PROCESS_CPUTIME_ID, TIMER_ABSTIME, &zero, NULL) == 0;
-    printf("clocknanosleep-edges realtime=%d monotonic=%d interrupted=%d delivered=%d process-past=%d thread=%d raw=%d\n",
-           absolute_sleep(CLOCK_REALTIME, 20), absolute_sleep(CLOCK_MONOTONIC, 20), interrupted,
-           delivered != 0, process_past, raw_error(CLOCK_THREAD_CPUTIME_ID, TIMER_ABSTIME, EOPNOTSUPP),
-           raw_error(CLOCK_MONOTONIC_RAW, TIMER_ABSTIME, EOPNOTSUPP));
+    printf(
+        "clocknanosleep-edges realtime=%d monotonic=%d interrupted=%d delivered=%d process-past=%d thread=%d raw=%d\n",
+        absolute_sleep(CLOCK_REALTIME, 20), absolute_sleep(CLOCK_MONOTONIC, 20), interrupted, delivered != 0,
+        process_past, raw_error(CLOCK_THREAD_CPUTIME_ID, TIMER_ABSTIME, EOPNOTSUPP),
+        raw_error(CLOCK_MONOTONIC_RAW, TIMER_ABSTIME, EOPNOTSUPP));
     return 0;
 }

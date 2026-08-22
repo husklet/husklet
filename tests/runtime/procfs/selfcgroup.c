@@ -22,7 +22,8 @@ int main(void) {
     char *c2 = c1 ? strchr(c1 + 1, ':') : NULL;
     int shape_ok = 0;
     if (c1 && c2) {
-        *c1 = 0; *c2 = 0;
+        *c1 = 0;
+        *c2 = 0;
         const char *hier = b, *ctrl = c1 + 1, *path = c2 + 1;
         shape_ok = strcmp(hier, "0") == 0 && ctrl[0] == 0 && path[0] == '/';
     }

@@ -69,8 +69,7 @@ int main(void) {
     int sr = mq_setattr(rw, &na, &old);
     struct mq_attr now;
     mq_getattr(rw, &now);
-    printf("setattr_ret=%d old_max=%ld old_size=%ld old_flags=%ld\n", sr, old.mq_maxmsg, old.mq_msgsize,
-           old.mq_flags);
+    printf("setattr_ret=%d old_max=%ld old_size=%ld old_flags=%ld\n", sr, old.mq_maxmsg, old.mq_msgsize, old.mq_flags);
     printf("after_max=%ld after_size=%ld after_nonblock=%d\n", now.mq_maxmsg, now.mq_msgsize,
            (now.mq_flags & O_NONBLOCK) != 0);
 

@@ -13,7 +13,7 @@
 
 #define N 8
 
-static __thread long tls_slot;      // local-exec TLS: read+written from each spawned thread
+static __thread long tls_slot; // local-exec TLS: read+written from each spawned thread
 
 // Char buffer + memset => -fstack-protector installs a canary (mov %fs:0x28,...); reading it in the
 // spawned thread exercises the %fs TLS-base path that a wrong child fs_base would corrupt.
@@ -21,21 +21,23 @@ __attribute__((noinline)) static long canary_frame(long seed) {
     char buf[64];
     memset(buf, (int)(seed & 0x7f), sizeof buf);
     long acc = 0;
-    for (unsigned i = 0; i < sizeof buf; i++) acc += (unsigned char)buf[i];
+    for (unsigned i = 0; i < sizeof buf; i++)
+        acc += (unsigned char)buf[i];
     return acc;
 }
 
 static void *worker(void *arg) {
     long id = (long)arg;
-    tls_slot = id * 100;             // write this thread's local storage
-    long c = canary_frame(id + 1);   // stack-canary-protected frame
-    return (void *)(tls_slot + c);   // per-thread local value survives + canary frame returned
+    tls_slot = id * 100;           // write this thread's local storage
+    long c = canary_frame(id + 1); // stack-canary-protected frame
+    return (void *)(tls_slot + c); // per-thread local value survives + canary frame returned
 }
 
 int main(void) {
     pthread_t t[N];
     long total = 0;
-    for (long i = 0; i < N; i++) pthread_create(&t[i], 0, worker, (void *)i);
+    for (long i = 0; i < N; i++)
+        pthread_create(&t[i], 0, worker, (void *)i);
     for (long i = 0; i < N; i++) {
         void *r = 0;
         pthread_join(t[i], &r);

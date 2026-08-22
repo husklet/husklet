@@ -22,9 +22,13 @@ static void field(const char *buf, const char *key, char *out, size_t n) {
     const char *p = strstr(buf, key);
     if (!p) return;
     p += strlen(key);
-    while (*p == ' ') p++;
+    while (*p == ' ')
+        p++;
     size_t i = 0;
-    while (p[i] && p[i] != ' ' && p[i] != '\n' && i + 1 < n) { out[i] = p[i]; i++; }
+    while (p[i] && p[i] != ' ' && p[i] != '\n' && i + 1 < n) {
+        out[i] = p[i];
+        i++;
+    }
     out[i] = 0;
 }
 
@@ -41,8 +45,9 @@ int main(void) {
     field(buf, "Max core file size", core, sizeof core);
     field(buf, "Max processes", stackmax, sizeof stackmax);
     int haslines = 0;
-    for (const char *p = buf; *p; p++) if (*p == '\n') haslines++;
-    printf("s=%d ok=%d hasheader=%d nofile=%s corepresent=%d procpresent=%d lines_ge=%d\n",
-           s, n > 0, hasheader, nofile, core[0] != 0, stackmax[0] != 0, haslines >= 16);
+    for (const char *p = buf; *p; p++)
+        if (*p == '\n') haslines++;
+    printf("s=%d ok=%d hasheader=%d nofile=%s corepresent=%d procpresent=%d lines_ge=%d\n", s, n > 0, hasheader, nofile,
+           core[0] != 0, stackmax[0] != 0, haslines >= 16);
     return 0;
 }

@@ -6,7 +6,8 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <unistd.h>
-int main(void){
+
+int main(void) {
     printf("badmode_errno=%d\n", faccessat(AT_FDCWD, "/", 0x8, 0) == -1 ? errno : 0); // native 22, engine 0
     return 0;
 }

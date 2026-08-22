@@ -104,8 +104,10 @@ static void terminal_termios_remember(int native_fd, const uint8_t *image, const
             if (chosen == NULL || chosen->used) chosen = entry;
             continue;
         }
-        if (chosen == NULL) chosen = entry;
-        else if (chosen->used && entry->stamp < chosen->stamp) chosen = entry;
+        if (chosen == NULL)
+            chosen = entry;
+        else if (chosen->used && entry->stamp < chosen->stamp)
+            chosen = entry;
     }
     chosen->used = 1;
     chosen->stamp = ++g_terminal_termios_stamp;
@@ -145,8 +147,7 @@ static void terminal_termios_observe_set(int native_fd, const uint8_t *image) {
  * translation, which is what stays in place on a miss. */
 static void terminal_termios_apply_recall(int native_fd, uint8_t *argument) {
     uint8_t recalled[TERMINAL_TERMIOS_IMAGE];
-    if (terminal_termios_recall(native_fd, argument, recalled))
-        memcpy(argument, recalled, TERMINAL_TERMIOS_IMAGE);
+    if (terminal_termios_recall(native_fd, argument, recalled)) memcpy(argument, recalled, TERMINAL_TERMIOS_IMAGE);
 }
 
 /* How many times any terminal's guest image has been installed. A reader that sees an unchanged value
@@ -233,9 +234,9 @@ HL_API int HL_TARGET_LOCAL(terminal_termios_store_test)(void) {
      * hold: ECHOCTL, ECHOKE, EXTPROC and XTABS. */
     host_image[12] = 0x3b; /* ISIG|ICANON|ECHO|ECHOE|ECHOK */
     memcpy(guest_image, host_image, sizeof guest_image);
-    guest_image[13] = 0x0a;  /* ECHOCTL 0x200 | ECHOKE 0x800 */
-    guest_image[14] = 0x01;  /* EXTPROC 0x10000 */
-    guest_image[5] = 0x18;   /* XTABS 0x1800 in c_oflag */
+    guest_image[13] = 0x0a; /* ECHOCTL 0x200 | ECHOKE 0x800 */
+    guest_image[14] = 0x01; /* EXTPROC 0x10000 */
+    guest_image[5] = 0x18;  /* XTABS 0x1800 in c_oflag */
     memcpy(moved_image, host_image, sizeof moved_image);
     moved_image[12] = 0x39; /* the host dropped ICANON behind our back */
 

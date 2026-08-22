@@ -13,25 +13,27 @@
 #define NITER 2000000
 #define NTHREAD 8
 
-static atomic_ullong counter;   // exact final value = NITER*NTHREAD
-static atomic_ullong casacc;    // each successful CAS adds 1 -> also NITER*NTHREAD
+static atomic_ullong counter; // exact final value = NITER*NTHREAD
+static atomic_ullong casacc;  // each successful CAS adds 1 -> also NITER*NTHREAD
 
 static void *worker(void *arg) {
     (void)arg;
     for (int i = 0; i < NITER; i++) {
         atomic_fetch_add_explicit(&counter, 1, memory_order_relaxed);
         unsigned long long cur = atomic_load_explicit(&casacc, memory_order_relaxed);
-        while (!atomic_compare_exchange_weak_explicit(&casacc, &cur, cur + 1,
-                   memory_order_acq_rel, memory_order_relaxed)) { /* reloads cur, retry */ }
+        while (!atomic_compare_exchange_weak_explicit(&casacc, &cur, cur + 1, memory_order_acq_rel,
+                                                      memory_order_relaxed)) { /* reloads cur, retry */
+        }
     }
     return 0;
 }
 
 int main(void) {
     pthread_t th[NTHREAD];
-    for (int i = 0; i < NTHREAD; i++) pthread_create(&th[i], 0, worker, 0);
-    for (int i = 0; i < NTHREAD; i++) pthread_join(th[i], 0);
-    printf("soak atomicchurn counter=%llu cas=%llu\n",
-           (unsigned long long)counter, (unsigned long long)casacc);
+    for (int i = 0; i < NTHREAD; i++)
+        pthread_create(&th[i], 0, worker, 0);
+    for (int i = 0; i < NTHREAD; i++)
+        pthread_join(th[i], 0);
+    printf("soak atomicchurn counter=%llu cas=%llu\n", (unsigned long long)counter, (unsigned long long)casacc);
     return 0;
 }

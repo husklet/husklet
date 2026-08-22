@@ -26,18 +26,23 @@ static void stat_comm(const char *line, char *out, size_t n) {
         out[L] = 0;
     }
 }
+
 static long stat_ppid(const char *line) {
     const char *c = strrchr(line, ')');
     if (!c) return -1;
     const char *q = c + 2;
-    while (*q && *q != ' ') q++; // skip state
+    while (*q && *q != ' ')
+        q++; // skip state
     return atol(q);
 }
 
 int main(void) {
     pid_t parent = getpid();
     int pfd[2], done[2];
-    if (pipe(pfd) || pipe(done)) { printf("peerid ok=0\n"); return 0; }
+    if (pipe(pfd) || pipe(done)) {
+        printf("peerid ok=0\n");
+        return 0;
+    }
     pid_t child = fork();
     if (child == 0) {
         prctl(PR_SET_NAME, (unsigned long)NAME, 0, 0, 0);

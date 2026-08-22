@@ -8,18 +8,33 @@
 
 static uint8_t buf[64];
 
-static uint32_t ld32(int off) { uint32_t v; memcpy(&v, buf + off, 4); return v; }
-static uint64_t ld64(int off) { uint64_t v; memcpy(&v, buf + off, 8); return v; }
-static void st32(int off, uint32_t v) { memcpy(buf + off, &v, 4); }
+static uint32_t ld32(int off) {
+    uint32_t v;
+    memcpy(&v, buf + off, 4);
+    return v;
+}
+
+static uint64_t ld64(int off) {
+    uint64_t v;
+    memcpy(&v, buf + off, 8);
+    return v;
+}
+
+static void st32(int off, uint32_t v) {
+    memcpy(buf + off, &v, 4);
+}
 
 int main(void) {
-    for (int i = 0; i < 64; i++) buf[i] = (uint8_t)(i * 37 + 11);
+    for (int i = 0; i < 64; i++)
+        buf[i] = (uint8_t)(i * 37 + 11);
     unsigned long acc = 2166136261u;
     for (int off = 0; off < 8; off++) {
-        uint16_t h; memcpy(&h, buf + off, 2);
+        uint16_t h;
+        memcpy(&h, buf + off, 2);
         uint32_t w = ld32(off);
         uint64_t q = ld64(off);
-        float ff; memcpy(&ff, buf + off, 4);
+        float ff;
+        memcpy(&ff, buf + off, 4);
         (void)ff;
         acc = (acc ^ h) * 16777619u;
         acc = (acc ^ w) * 16777619u;

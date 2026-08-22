@@ -39,8 +39,8 @@ static int copy_self(const char *path, mode_t mode, uid_t uid, gid_t gid) {
     return ok && chown(path, uid, gid) == 0 && chmod(path, mode) == 0;
 }
 
-static int run_case(const char *name, mode_t mode, uid_t owner, gid_t group, uid_t uid, gid_t gid,
-                    const gid_t *groups, size_t group_count, int expect_exec) {
+static int run_case(const char *name, mode_t mode, uid_t owner, gid_t group, uid_t uid, gid_t gid, const gid_t *groups,
+                    size_t group_count, int expect_exec) {
     char path[256];
     snprintf(path, sizeof path, "/tmp/husklet-exec-dac-%s", name);
     if (!copy_self(path, mode, owner, group)) return 0;
@@ -70,16 +70,14 @@ static int shebang_interpreter_denied(void) {
     pid_t child = fork();
     if (child == 0) {
         gid_t groups[] = {3000};
-        if (setgroups(1, groups) != 0 || setresgid(3000, 3000, 3000) != 0 ||
-            setresuid(1002, 1002, 1002) != 0)
+        if (setgroups(1, groups) != 0 || setresgid(3000, 3000, 3000) != 0 || setresuid(1002, 1002, 1002) != 0)
             _exit(99);
         char *const argv[] = {(char *)script, NULL};
         execve(script, argv, environ);
         _exit(errno == EACCES ? EXEC_DENIED : 98);
     }
     int status = 0;
-    ok = child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status) &&
-         WEXITSTATUS(status) == EXEC_DENIED;
+    ok = child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == EXEC_DENIED;
     unlink(script);
     unlink(interpreter);
     return ok;

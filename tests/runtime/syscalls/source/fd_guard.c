@@ -52,7 +52,8 @@ static int read_reuse(int n) {
 int main(void) {
     int d = open(DATA, O_CREAT | O_TRUNC | O_WRONLY, 0644);
     if (d >= 0) {
-        if (write(d, WANT, WLEN) != WLEN) { /* ignore */ }
+        if (write(d, WANT, WLEN) != WLEN) { /* ignore */
+        }
         close(d);
     }
     mkdir(WDIR, 0755);
@@ -78,7 +79,8 @@ int main(void) {
     int mf = memfd_create("dd224", MFD_ALLOW_SEALING);
     int memfd_ok = 0;
     if (mf >= 0) {
-        if (ftruncate(mf, 8) == 0) { /* ok */ }
+        if (ftruncate(mf, 8) == 0) { /* ok */
+        }
         fcntl(mf, F_ADD_SEALS, F_SEAL_WRITE);
         int n = mf;
         close(n);
@@ -88,8 +90,7 @@ int main(void) {
         close(f);
     }
 
-    printf("fdreuse inotify=%d timerfd=%d eventfd=%d memfd=%d\n",
-           inotify_ok, timerfd_ok, eventfd_ok, memfd_ok);
+    printf("fdreuse inotify=%d timerfd=%d eventfd=%d memfd=%d\n", inotify_ok, timerfd_ok, eventfd_ok, memfd_ok);
     unlink(DATA);
     rmdir(WDIR);
     return 0;

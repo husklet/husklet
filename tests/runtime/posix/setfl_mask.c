@@ -20,13 +20,12 @@ int main(void) {
     // Status flags took effect...
     printf("append_on=%d nonblock_on=%d\n", (now & O_APPEND) != 0, (now & O_NONBLOCK) != 0);
     // ...but access mode is unchanged and creation flags never stick in the status word.
-    printf("accmode_unchanged=%d creat_ignored=%d trunc_ignored=%d\n",
-           (now & O_ACCMODE) == O_RDWR, (now & O_CREAT) == 0, (now & O_TRUNC) == 0);
+    printf("accmode_unchanged=%d creat_ignored=%d trunc_ignored=%d\n", (now & O_ACCMODE) == O_RDWR,
+           (now & O_CREAT) == 0, (now & O_TRUNC) == 0);
 
     // Clearing via F_SETFL(0) drops the status flags again.
     fcntl(fd, F_SETFL, 0);
     int cleared = fcntl(fd, F_GETFL);
-    printf("append_cleared=%d nonblock_cleared=%d\n",
-           (cleared & O_APPEND) == 0, (cleared & O_NONBLOCK) == 0);
+    printf("append_cleared=%d nonblock_cleared=%d\n", (cleared & O_APPEND) == 0, (cleared & O_NONBLOCK) == 0);
     return 0;
 }

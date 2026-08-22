@@ -21,6 +21,7 @@
 #include <time.h>
 
 static volatile sig_atomic_t timed_out = 0;
+
 static void on_alrm(int s) {
     (void)s;
     timed_out = 1;
@@ -28,7 +29,10 @@ static void on_alrm(int s) {
 
 int main(void) {
     pid_t c = fork();
-    if (c < 0) { printf("ptrace-attach-blocked fork-fail\n"); return 1; }
+    if (c < 0) {
+        printf("ptrace-attach-blocked fork-fail\n");
+        return 1;
+    }
     if (c == 0) {
         pause(); // park inside a host-blocking syscall before the parent attaches
         _exit(0);

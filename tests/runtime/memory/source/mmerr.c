@@ -24,17 +24,17 @@
 #endif
 #ifndef MADV_DONTFORK
 #define MADV_DONTFORK 10
-#define MADV_DOFORK   11
+#define MADV_DOFORK 11
 #endif
 #ifndef MREMAP_MAYMOVE
 #define MREMAP_MAYMOVE 1
-#define MREMAP_FIXED   2
+#define MREMAP_FIXED 2
 #endif
 
 // Linux MS_* (guest values): ASYNC=1, INVALIDATE=2, SYNC=4.
-#define L_MS_ASYNC      1
+#define L_MS_ASYNC 1
 #define L_MS_INVALIDATE 2
-#define L_MS_SYNC       4
+#define L_MS_SYNC 4
 
 static long PS;
 
@@ -64,7 +64,8 @@ static void t_noreserve(void) {
 static void t_prot_eacces(void) {
     char tmpl[] = "/tmp/mmerrXXXXXX";
     int fd = mkstemp(tmpl);
-    if (write(fd, "abcd", 4) != 4) { /* ignore */ }
+    if (write(fd, "abcd", 4) != 4) { /* ignore */
+    }
     close(fd);
     int rf = open(tmpl, O_RDONLY);
     errno = 0;
@@ -84,7 +85,8 @@ static void t_prot_eacces(void) {
 static void t_msync_flags(void) {
     char tmpl[] = "/tmp/mmerrXXXXXX";
     int fd = mkstemp(tmpl);
-    if (ftruncate(fd, PS)) { /* ignore */ }
+    if (ftruncate(fd, PS)) { /* ignore */
+    }
     char *m = mmap(NULL, PS, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     m[0] = 1;
     int rs = msync(m, PS, L_MS_SYNC);
@@ -124,8 +126,10 @@ static void t_mremap_fixed(void) {
     int moved = r == dst;
     int val = moved ? dst[0] : -1;
     printf("mremap_fixed moved=%d val=%d\n", moved, val);
-    if (r != MAP_FAILED) munmap(r, PS);
-    else munmap(dst, PS * 2);
+    if (r != MAP_FAILED)
+        munmap(r, PS);
+    else
+        munmap(dst, PS * 2);
 
     // FIXED without MAYMOVE -> EINVAL.
     char *a = mmap(NULL, PS, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);

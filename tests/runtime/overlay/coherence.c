@@ -24,9 +24,9 @@ int main(void) {
     struct timespec preserved[2] = {{1700000000, 123000000}, {1700000001, 456000000}};
     if (futimens(copy, preserved) != 0 || close(copy) != 0) return 6;
     struct stat copy_status;
-    if (stat("/etc/alpine-release.copy", &copy_status) != 0 ||
-        (copy_status.st_mode & 07777) != 0644 || copy_status.st_uid != 0 || copy_status.st_gid != 0 ||
-        copy_status.st_mtim.tv_sec != preserved[1].tv_sec) return 7;
+    if (stat("/etc/alpine-release.copy", &copy_status) != 0 || (copy_status.st_mode & 07777) != 0644 ||
+        copy_status.st_uid != 0 || copy_status.st_gid != 0 || copy_status.st_mtim.tv_sec != preserved[1].tv_sec)
+        return 7;
 
     int fd = open("/etc/alpine-release", O_RDWR);
     if (fd < 0) return 10;

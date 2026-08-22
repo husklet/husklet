@@ -23,19 +23,19 @@ int main(void) {
     int shm = shmget(IPC_PRIVATE, 4096, IPC_CREAT | 0600);
     void *memory = shm < 0 ? (void *)-1 : shmat(shm, NULL, 0);
     struct shmid_ds shmds;
-    int shm_ok = memory != (void *)-1 && shmctl(shm, IPC_STAT, &shmds) == 0 &&
-                 shmds.shm_perm.uid == geteuid() && shmds.shm_perm.cuid == geteuid();
+    int shm_ok = memory != (void *)-1 && shmctl(shm, IPC_STAT, &shmds) == 0 && shmds.shm_perm.uid == geteuid() &&
+                 shmds.shm_perm.cuid == geteuid();
 
     int sem = semget(IPC_PRIVATE, 1, IPC_CREAT | 0600);
     struct semid_ds semds;
     union semun argument = {.buf = &semds};
-    int sem_ok = sem >= 0 && semctl(sem, 0, IPC_STAT, argument) == 0 &&
-                 semds.sem_perm.uid == geteuid() && semds.sem_perm.cuid == geteuid();
+    int sem_ok = sem >= 0 && semctl(sem, 0, IPC_STAT, argument) == 0 && semds.sem_perm.uid == geteuid() &&
+                 semds.sem_perm.cuid == geteuid();
 
     int msg = msgget(IPC_PRIVATE, IPC_CREAT | 0600);
     struct msqid_ds msgds;
-    int msg_ok = msg >= 0 && msgctl(msg, IPC_STAT, &msgds) == 0 &&
-                 msgds.msg_perm.uid == geteuid() && msgds.msg_perm.cuid == geteuid();
+    int msg_ok = msg >= 0 && msgctl(msg, IPC_STAT, &msgds) == 0 && msgds.msg_perm.uid == geteuid() &&
+                 msgds.msg_perm.cuid == geteuid();
 
     printf("owner shm=%d sem=%d msg=%d\n", shm_ok, sem_ok, msg_ok);
 

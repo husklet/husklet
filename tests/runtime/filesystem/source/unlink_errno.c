@@ -52,7 +52,7 @@ int main(void) {
     unlinkat(dfd, "f", 0);
     close(dfd);
     rmdir(dir);
-    printf("unlink-errno eisdir=%d enotdir=%d enotempty=%d slash-enotdir=%d rmdir=%d enoent=%d\n",
-           eisdir, enotdir, enotempty, slash_enotdir, rmdir_ok, enoent);
+    printf("unlink-errno eisdir=%d enotdir=%d enotempty=%d slash-enotdir=%d rmdir=%d enoent=%d\n", eisdir, enotdir,
+           enotempty, slash_enotdir, rmdir_ok, enoent);
     return 0;
 }

@@ -27,7 +27,7 @@ int main(void) {
         else
             w1 += (w2 - w0); // another borrow path
     }
-    printf("flags-carry %llu %llu %llu %llu\n", (unsigned long long)w0, (unsigned long long)w1,
-           (unsigned long long)w2, (unsigned long long)w3);
+    printf("flags-carry %llu %llu %llu %llu\n", (unsigned long long)w0, (unsigned long long)w1, (unsigned long long)w2,
+           (unsigned long long)w3);
     return 0;
 }

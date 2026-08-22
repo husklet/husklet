@@ -10,7 +10,8 @@
 static int emit_add_chain(unsigned char *buf, int count, uint32_t step) {
     int off = 0;
     uint64_t total = 0;
-    for (int k = 1; k <= count; k++) total += (uint64_t)k * step;
+    for (int k = 1; k <= count; k++)
+        total += (uint64_t)k * step;
     (void)total;
 #if defined(__aarch64__)
     uint32_t *w = (uint32_t *)buf;
@@ -37,14 +38,17 @@ static int emit_add_chain(unsigned char *buf, int count, uint32_t step) {
     }
     buf[off++] = 0xC3; // ret
 #else
-    (void)buf; (void)count; (void)step;
+    (void)buf;
+    (void)count;
+    (void)step;
 #endif
     return off;
 }
 
 // Reference value of the emitted chain, computed in C for cross-checking.
 static uint64_t chain_ref(uint64_t x, int count, uint32_t step) {
-    for (int k = 1; k <= count; k++) x += (uint64_t)k * step;
+    for (int k = 1; k <= count; k++)
+        x += (uint64_t)k * step;
     return x;
 }
 
@@ -62,8 +66,8 @@ int main(void) {
         uint64_t got = f(x);
         uint64_t want = chain_ref(x, count, step);
         if (got != want) {
-            printf("smc-grow MISMATCH round=%d want=%llu got=%llu\n", round,
-                   (unsigned long long)want, (unsigned long long)got);
+            printf("smc-grow MISMATCH round=%d want=%llu got=%llu\n", round, (unsigned long long)want,
+                   (unsigned long long)got);
             return 1;
         }
         acc = acc * 1000003ULL + got;

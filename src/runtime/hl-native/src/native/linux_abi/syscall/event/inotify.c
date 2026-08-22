@@ -1,8 +1,13 @@
 /* Included by event.c: unity-build access with bounded syscall handlers. */
 
 static int svc_inotify_init1(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                      uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+                             uint64_t a4, uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 26: {
         // inotify_init1(flags) -> kqueue. Only IN_NONBLOCK(0x800) and IN_CLOEXEC(0x80000) are defined;
@@ -44,8 +49,13 @@ static int svc_inotify_init1(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
 }
 
 static int svc_inotify_add_watch(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                      uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+                                 uint64_t a4, uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 27: {
         char pb[4200];
@@ -113,8 +123,13 @@ static int svc_inotify_add_watch(struct cpu *c, uint64_t nr, uint64_t a0, uint64
 }
 
 static int svc_inotify_rm_watch(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                      uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+                                uint64_t a4, uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 28: {
 #if defined(__linux__)

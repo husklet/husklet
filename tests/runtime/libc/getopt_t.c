@@ -8,17 +8,19 @@ int main(void) {
     char *argv[] = {"prog", "-v", "--name=bob", "-n", "5", "file.txt", NULL};
     int argc = 6;
     static struct option opts[] = {
-        {"name", required_argument, 0, 1000},
-        {"verbose", no_argument, 0, 'v'},
-        {0, 0, 0, 0}
-    };
-    int verbose = 0; char name[16] = {0}; int num = 0;
+        {"name", required_argument, 0, 1000}, {"verbose", no_argument, 0, 'v'}, {0, 0, 0, 0}};
+    int verbose = 0;
+    char name[16] = {0};
+    int num = 0;
     int c, idx;
     optind = 1;
     while ((c = getopt_long(argc, argv, "vn:", opts, &idx)) != -1) {
-        if (c == 'v') verbose = 1;
-        else if (c == 1000) snprintf(name, sizeof name, "%s", optarg);
-        else if (c == 'n') num = atoi(optarg);
+        if (c == 'v')
+            verbose = 1;
+        else if (c == 1000)
+            snprintf(name, sizeof name, "%s", optarg);
+        else if (c == 'n')
+            num = atoi(optarg);
     }
     int d1 = verbose == 1;
     int d2 = strcmp(name, "bob") == 0;

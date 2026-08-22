@@ -11,9 +11,11 @@
 #define TGT
 #endif
 static uint64_t H = 0;
+
 static void mixb(const void *p, int n) {
-  const uint8_t *b = p;
-  for (int i = 0; i < n; i++) H = H * 1000003ULL + b[i];
+    const uint8_t *b = p;
+    for (int i = 0; i < n; i++)
+        H = H * 1000003ULL + b[i];
 }
 
 #if !defined(__x86_64__)
@@ -47,94 +49,175 @@ static const uint8_t k_isbox[256] = {
     0x51, 0x7f, 0xa9, 0x19, 0xb5, 0x4a, 0x0d, 0x2d, 0xe5, 0x7a, 0x9f, 0x93, 0xc9, 0x9c, 0xef, 0xa0, 0xe0, 0x3b, 0x4d,
     0xae, 0x2a, 0xf5, 0xb0, 0xc8, 0xeb, 0xbb, 0x3c, 0x83, 0x53, 0x99, 0x61, 0x17, 0x2b, 0x04, 0x7e, 0xba, 0x77, 0xd6,
     0x26, 0xe1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0c, 0x7d};
+
 static uint8_t gfmul(uint8_t a, uint8_t b) {
-  uint8_t p = 0;
-  for (int i = 0; i < 8; i++) { if (b & 1) p ^= a; uint8_t hi = a & 0x80; a <<= 1; if (hi) a ^= 0x1b; b >>= 1; }
-  return p;
-}
-static void shiftrows(const uint8_t in[16], uint8_t out[16], int inv) {
-  for (int col = 0; col < 4; col++) for (int row = 0; row < 4; row++) {
-    int sc = inv ? ((col - row) & 3) : ((col + row) & 3); out[4 * col + row] = in[4 * sc + row]; }
-}
-static void mixcols(uint8_t s[16], int inv) {
-  for (int col = 0; col < 4; col++) {
-    uint8_t a0 = s[4*col], a1 = s[4*col+1], a2 = s[4*col+2], a3 = s[4*col+3];
-    if (!inv) {
-      s[4*col]   = gfmul(a0, 2) ^ gfmul(a1, 3) ^ a2 ^ a3;
-      s[4*col+1] = a0 ^ gfmul(a1, 2) ^ gfmul(a2, 3) ^ a3;
-      s[4*col+2] = a0 ^ a1 ^ gfmul(a2, 2) ^ gfmul(a3, 3);
-      s[4*col+3] = gfmul(a0, 3) ^ a1 ^ a2 ^ gfmul(a3, 2);
-    } else {
-      s[4*col]   = gfmul(a0, 14) ^ gfmul(a1, 11) ^ gfmul(a2, 13) ^ gfmul(a3, 9);
-      s[4*col+1] = gfmul(a0, 9) ^ gfmul(a1, 14) ^ gfmul(a2, 11) ^ gfmul(a3, 13);
-      s[4*col+2] = gfmul(a0, 13) ^ gfmul(a1, 9) ^ gfmul(a2, 14) ^ gfmul(a3, 11);
-      s[4*col+3] = gfmul(a0, 11) ^ gfmul(a1, 13) ^ gfmul(a2, 9) ^ gfmul(a3, 14);
+    uint8_t p = 0;
+    for (int i = 0; i < 8; i++) {
+        if (b & 1) p ^= a;
+        uint8_t hi = a & 0x80;
+        a <<= 1;
+        if (hi) a ^= 0x1b;
+        b >>= 1;
     }
-  }
+    return p;
 }
+
+static void shiftrows(const uint8_t in[16], uint8_t out[16], int inv) {
+    for (int col = 0; col < 4; col++)
+        for (int row = 0; row < 4; row++) {
+            int sc = inv ? ((col - row) & 3) : ((col + row) & 3);
+            out[4 * col + row] = in[4 * sc + row];
+        }
+}
+
+static void mixcols(uint8_t s[16], int inv) {
+    for (int col = 0; col < 4; col++) {
+        uint8_t a0 = s[4 * col], a1 = s[4 * col + 1], a2 = s[4 * col + 2], a3 = s[4 * col + 3];
+        if (!inv) {
+            s[4 * col] = gfmul(a0, 2) ^ gfmul(a1, 3) ^ a2 ^ a3;
+            s[4 * col + 1] = a0 ^ gfmul(a1, 2) ^ gfmul(a2, 3) ^ a3;
+            s[4 * col + 2] = a0 ^ a1 ^ gfmul(a2, 2) ^ gfmul(a3, 3);
+            s[4 * col + 3] = gfmul(a0, 3) ^ a1 ^ a2 ^ gfmul(a3, 2);
+        } else {
+            s[4 * col] = gfmul(a0, 14) ^ gfmul(a1, 11) ^ gfmul(a2, 13) ^ gfmul(a3, 9);
+            s[4 * col + 1] = gfmul(a0, 9) ^ gfmul(a1, 14) ^ gfmul(a2, 11) ^ gfmul(a3, 13);
+            s[4 * col + 2] = gfmul(a0, 13) ^ gfmul(a1, 9) ^ gfmul(a2, 14) ^ gfmul(a3, 11);
+            s[4 * col + 3] = gfmul(a0, 11) ^ gfmul(a1, 13) ^ gfmul(a2, 9) ^ gfmul(a3, 14);
+        }
+    }
+}
+
 // VAES round: r = transform(state) ^ key.
 static void aes_round(uint8_t r[16], const uint8_t st[16], const uint8_t key[16], int dec, int last) {
-  uint8_t t[16];
-  shiftrows(st, t, dec);
-  for (int i = 0; i < 16; i++) t[i] = (dec ? k_isbox : k_sbox)[t[i]];
-  if (!last) mixcols(t, dec);
-  for (int i = 0; i < 16; i++) r[i] = t[i] ^ key[i];
+    uint8_t t[16];
+    shiftrows(st, t, dec);
+    for (int i = 0; i < 16; i++)
+        t[i] = (dec ? k_isbox : k_sbox)[t[i]];
+    if (!last) mixcols(t, dec);
+    for (int i = 0; i < 16; i++)
+        r[i] = t[i] ^ key[i];
 }
 #endif
 
 TGT int main(void) {
-  uint8_t s[16], k[16];
-  for (int i = 0; i < 16; i++) { s[i] = (uint8_t)(i * 9 + 1); k[i] = (uint8_t)(i * 3 + 7); }
-  uint8_t ab[32], bb[32];
-  for (int i = 0; i < 32; i++) { ab[i] = (uint8_t)(i * 7 + 3); bb[i] = (uint8_t)(i * 5 + 1); }
-  uint64_t cl0[2] = {0x0123456789abcdefULL, 0xfedcba9876543210ULL};
-  uint64_t cl1[2] = {0x1111222233334444ULL, 0x5555666677778888ULL};
-  uint8_t o[32];
+    uint8_t s[16], k[16];
+    for (int i = 0; i < 16; i++) {
+        s[i] = (uint8_t)(i * 9 + 1);
+        k[i] = (uint8_t)(i * 3 + 7);
+    }
+    uint8_t ab[32], bb[32];
+    for (int i = 0; i < 32; i++) {
+        ab[i] = (uint8_t)(i * 7 + 3);
+        bb[i] = (uint8_t)(i * 5 + 1);
+    }
+    uint64_t cl0[2] = {0x0123456789abcdefULL, 0xfedcba9876543210ULL};
+    uint64_t cl1[2] = {0x1111222233334444ULL, 0x5555666677778888ULL};
+    uint8_t o[32];
 #if defined(__x86_64__)
-  __m128i S = _mm_loadu_si128((void *)s), K = _mm_loadu_si128((void *)k);
-  _mm_storeu_si128((void *)o, _mm_aesenc_si128(S, K)); mixb(o, 16);
-  _mm_storeu_si128((void *)o, _mm_aesenclast_si128(S, K)); mixb(o, 16);
-  _mm_storeu_si128((void *)o, _mm_aesdec_si128(S, K)); mixb(o, 16);
-  _mm_storeu_si128((void *)o, _mm_aesdeclast_si128(S, K)); mixb(o, 16);
-  _mm_storeu_si128((void *)o, _mm_aesimc_si128(S)); mixb(o, 16);
-  _mm_storeu_si128((void *)o, _mm_aeskeygenassist_si128(S, 0x1b)); mixb(o, 16);
-  __m128i A1 = _mm_loadu_si128((void *)cl0), B1 = _mm_loadu_si128((void *)cl1);
-  _mm_storeu_si128((void *)o, _mm_clmulepi64_si128(A1, B1, 0x00)); mixb(o, 16);
-  _mm_storeu_si128((void *)o, _mm_clmulepi64_si128(A1, B1, 0x11)); mixb(o, 16);
-  _mm_storeu_si128((void *)o, _mm_clmulepi64_si128(A1, B1, 0x10)); mixb(o, 16);
-  __m256i A = _mm256_loadu_si256((void *)ab), B = _mm256_loadu_si256((void *)bb);
-  _mm256_storeu_si256((void *)o, _mm256_mpsadbw_epu8(A, B, 0x27)); mixb(o, 32);
-  __m128i A2 = _mm_loadu_si128((void *)ab), B2 = _mm_loadu_si128((void *)bb);
-  _mm_storeu_si128((void *)o, _mm_mpsadbw_epu8(A2, B2, 5)); mixb(o, 16);
+    __m128i S = _mm_loadu_si128((void *)s), K = _mm_loadu_si128((void *)k);
+    _mm_storeu_si128((void *)o, _mm_aesenc_si128(S, K));
+    mixb(o, 16);
+    _mm_storeu_si128((void *)o, _mm_aesenclast_si128(S, K));
+    mixb(o, 16);
+    _mm_storeu_si128((void *)o, _mm_aesdec_si128(S, K));
+    mixb(o, 16);
+    _mm_storeu_si128((void *)o, _mm_aesdeclast_si128(S, K));
+    mixb(o, 16);
+    _mm_storeu_si128((void *)o, _mm_aesimc_si128(S));
+    mixb(o, 16);
+    _mm_storeu_si128((void *)o, _mm_aeskeygenassist_si128(S, 0x1b));
+    mixb(o, 16);
+    __m128i A1 = _mm_loadu_si128((void *)cl0), B1 = _mm_loadu_si128((void *)cl1);
+    _mm_storeu_si128((void *)o, _mm_clmulepi64_si128(A1, B1, 0x00));
+    mixb(o, 16);
+    _mm_storeu_si128((void *)o, _mm_clmulepi64_si128(A1, B1, 0x11));
+    mixb(o, 16);
+    _mm_storeu_si128((void *)o, _mm_clmulepi64_si128(A1, B1, 0x10));
+    mixb(o, 16);
+    __m256i A = _mm256_loadu_si256((void *)ab), B = _mm256_loadu_si256((void *)bb);
+    _mm256_storeu_si256((void *)o, _mm256_mpsadbw_epu8(A, B, 0x27));
+    mixb(o, 32);
+    __m128i A2 = _mm_loadu_si128((void *)ab), B2 = _mm_loadu_si128((void *)bb);
+    _mm_storeu_si128((void *)o, _mm_mpsadbw_epu8(A2, B2, 5));
+    mixb(o, 16);
 #else
-  aes_round(o, s, k, 0, 0); mixb(o, 16); // aesenc
-  aes_round(o, s, k, 0, 1); mixb(o, 16); // aesenclast
-  aes_round(o, s, k, 1, 0); mixb(o, 16); // aesdec
-  aes_round(o, s, k, 1, 1); mixb(o, 16); // aesdeclast
-  { uint8_t t[16]; memcpy(t, s, 16); mixcols(t, 1); memcpy(o, t, 16); mixb(o, 16); } // aesimc
-  { uint32_t x[4]; memcpy(x, s, 16); uint32_t rcon = 0x1b; uint32_t oo[4];
-    for (int j = 1; j <= 3; j += 2) { uint32_t X = x[j];
-      uint32_t sub = (uint32_t)k_sbox[X & 0xff] | ((uint32_t)k_sbox[(X >> 8) & 0xff] << 8)
-        | ((uint32_t)k_sbox[(X >> 16) & 0xff] << 16) | ((uint32_t)k_sbox[(X >> 24) & 0xff] << 24);
-      uint32_t ror = (sub >> 8) | (sub << 24); oo[j - 1] = sub; oo[j] = ror ^ rcon; }
-    memcpy(o, oo, 16); mixb(o, 16); } // aeskeygenassist
-  // pclmulqdq, imm 0x00/0x11/0x10 (128-bit, single lane)
-#define CLMUL(imm) do { uint64_t a64 = cl0[(imm) & 1], b64 = cl1[((imm) >> 4) & 1]; \
-    unsigned __int128 prod = 0; for (int i = 0; i < 64; i++) if ((b64 >> i) & 1) prod ^= (unsigned __int128)a64 << i; \
-    memcpy(o, &prod, 16); mixb(o, 16); } while (0)
-  CLMUL(0x00); CLMUL(0x11); CLMUL(0x10);
-  // mpsadbw 256, imm 0x27: per-128-lane, ctl = (imm>>(lane/16*3))&7
-  for (int lane = 0; lane < 32; lane += 16) { int ctl = (0x27 >> ((lane / 16) * 3)) & 7;
-    int boff = (ctl & 3) * 4, aoff = ((ctl >> 2) & 1) * 4; uint16_t oo[8];
-    for (int i = 0; i < 8; i++) { int sum = 0; for (int kk = 0; kk < 4; kk++) {
-      int df = (int)ab[lane + aoff + i + kk] - (int)bb[lane + boff + kk]; sum += df < 0 ? -df : df; }
-      oo[i] = (uint16_t)sum; } memcpy(o + lane, oo, 16); } mixb(o, 32);
-  // mpsadbw 128, imm 5
-  { int ctl = 5 & 7; int boff = (ctl & 3) * 4, aoff = ((ctl >> 2) & 1) * 4; uint16_t oo[8];
-    for (int i = 0; i < 8; i++) { int sum = 0; for (int kk = 0; kk < 4; kk++) {
-      int df = (int)ab[aoff + i + kk] - (int)bb[boff + kk]; sum += df < 0 ? -df : df; }
-      oo[i] = (uint16_t)sum; } memcpy(o, oo, 16); mixb(o, 16); }
+    aes_round(o, s, k, 0, 0);
+    mixb(o, 16); // aesenc
+    aes_round(o, s, k, 0, 1);
+    mixb(o, 16); // aesenclast
+    aes_round(o, s, k, 1, 0);
+    mixb(o, 16); // aesdec
+    aes_round(o, s, k, 1, 1);
+    mixb(o, 16); // aesdeclast
+    {
+        uint8_t t[16];
+        memcpy(t, s, 16);
+        mixcols(t, 1);
+        memcpy(o, t, 16);
+        mixb(o, 16);
+    } // aesimc
+    {
+        uint32_t x[4];
+        memcpy(x, s, 16);
+        uint32_t rcon = 0x1b;
+        uint32_t oo[4];
+        for (int j = 1; j <= 3; j += 2) {
+            uint32_t X = x[j];
+            uint32_t sub = (uint32_t)k_sbox[X & 0xff] | ((uint32_t)k_sbox[(X >> 8) & 0xff] << 8) |
+                           ((uint32_t)k_sbox[(X >> 16) & 0xff] << 16) | ((uint32_t)k_sbox[(X >> 24) & 0xff] << 24);
+            uint32_t ror = (sub >> 8) | (sub << 24);
+            oo[j - 1] = sub;
+            oo[j] = ror ^ rcon;
+        }
+        memcpy(o, oo, 16);
+        mixb(o, 16);
+    } // aeskeygenassist
+    // pclmulqdq, imm 0x00/0x11/0x10 (128-bit, single lane)
+#define CLMUL(imm)                                                                                                     \
+    do {                                                                                                               \
+        uint64_t a64 = cl0[(imm) & 1], b64 = cl1[((imm) >> 4) & 1];                                                    \
+        unsigned __int128 prod = 0;                                                                                    \
+        for (int i = 0; i < 64; i++)                                                                                   \
+            if ((b64 >> i) & 1) prod ^= (unsigned __int128)a64 << i;                                                   \
+        memcpy(o, &prod, 16);                                                                                          \
+        mixb(o, 16);                                                                                                   \
+    } while (0)
+    CLMUL(0x00);
+    CLMUL(0x11);
+    CLMUL(0x10);
+    // mpsadbw 256, imm 0x27: per-128-lane, ctl = (imm>>(lane/16*3))&7
+    for (int lane = 0; lane < 32; lane += 16) {
+        int ctl = (0x27 >> ((lane / 16) * 3)) & 7;
+        int boff = (ctl & 3) * 4, aoff = ((ctl >> 2) & 1) * 4;
+        uint16_t oo[8];
+        for (int i = 0; i < 8; i++) {
+            int sum = 0;
+            for (int kk = 0; kk < 4; kk++) {
+                int df = (int)ab[lane + aoff + i + kk] - (int)bb[lane + boff + kk];
+                sum += df < 0 ? -df : df;
+            }
+            oo[i] = (uint16_t)sum;
+        }
+        memcpy(o + lane, oo, 16);
+    }
+    mixb(o, 32);
+    // mpsadbw 128, imm 5
+    {
+        int ctl = 5 & 7;
+        int boff = (ctl & 3) * 4, aoff = ((ctl >> 2) & 1) * 4;
+        uint16_t oo[8];
+        for (int i = 0; i < 8; i++) {
+            int sum = 0;
+            for (int kk = 0; kk < 4; kk++) {
+                int df = (int)ab[aoff + i + kk] - (int)bb[boff + kk];
+                sum += df < 0 ? -df : df;
+            }
+            oo[i] = (uint16_t)sum;
+        }
+        memcpy(o, oo, 16);
+        mixb(o, 16);
+    }
 #endif
-  printf("vexcrypto=%016llx\n", (unsigned long long)H);
-  return 0;
+    printf("vexcrypto=%016llx\n", (unsigned long long)H);
+    return 0;
 }

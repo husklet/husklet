@@ -12,12 +12,15 @@
 int main(void) {
     struct sockaddr_un a = {0};
     a.sun_family = AF_UNIX;
-    a.sun_path[0] = '\0';                     // abstract namespace
+    a.sun_path[0] = '\0'; // abstract namespace
     memcpy(a.sun_path + 1, "hl_abstract", 11);
     socklen_t alen = (socklen_t)(sizeof(a.sun_family) + 1 + 11);
 
     int ls = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (bind(ls, (struct sockaddr *)&a, alen) < 0) { printf("abstract bind_failed\n"); return 0; }
+    if (bind(ls, (struct sockaddr *)&a, alen) < 0) {
+        printf("abstract bind_failed\n");
+        return 0;
+    }
     listen(ls, 1);
     pid_t pid = fork();
     if (pid == 0) {

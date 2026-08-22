@@ -46,7 +46,6 @@ int main(void) {
         return 1;
     }
     pthread_join(t, NULL);
-    printf("getaffinity-tid tid=%d self=%d wrap=%d getattr=%d\n",
-           g_tid_ok, g_self_ok, g_wrap_ok, g_getattr_ok);
+    printf("getaffinity-tid tid=%d self=%d wrap=%d getattr=%d\n", g_tid_ok, g_self_ok, g_wrap_ok, g_getattr_ok);
     return 0;
 }

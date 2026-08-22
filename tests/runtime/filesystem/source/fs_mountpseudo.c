@@ -17,28 +17,22 @@ static int slurp(const char *f, char *buf, size_t n) {
 
 int main(void) {
     char mounts[8192], minfo[8192];
-    if (slurp("/proc/mounts", mounts, sizeof mounts) < 0 ||
-        slurp("/proc/self/mountinfo", minfo, sizeof minfo) < 0) {
+    if (slurp("/proc/mounts", mounts, sizeof mounts) < 0 || slurp("/proc/self/mountinfo", minfo, sizeof minfo) < 0) {
         printf("mountpseudo ok=0 (read failed)\n");
         return 0;
     }
     int ok =
         // /proc/mounts (fstab form): the pseudo-mounts df/mount/findmnt enumerate.
-        strstr(mounts, "shm /dev/shm tmpfs ") != NULL &&
-        strstr(mounts, "devpts /dev/pts devpts ") != NULL &&
+        strstr(mounts, "shm /dev/shm tmpfs ") != NULL && strstr(mounts, "devpts /dev/pts devpts ") != NULL &&
         strstr(mounts, "mqueue /dev/mqueue mqueue ") != NULL &&
         strstr(mounts, "cgroup /sys/fs/cgroup cgroup2 ") != NULL &&
         // sysfs is READ-ONLY under runc (ro immediately after the mountpoint), never rw.
-        strstr(mounts, "sysfs /sys sysfs ro,") != NULL &&
-        strstr(mounts, "sysfs /sys sysfs rw") == NULL &&
+        strstr(mounts, "sysfs /sys sysfs ro,") != NULL && strstr(mounts, "sysfs /sys sysfs rw") == NULL &&
         // /proc/self/mountinfo ("-"-separated form) lists the same set.
-        strstr(minfo, " - tmpfs shm ") != NULL &&
-        strstr(minfo, " - devpts devpts ") != NULL &&
-        strstr(minfo, " - mqueue mqueue ") != NULL &&
-        strstr(minfo, " - cgroup2 cgroup ") != NULL &&
+        strstr(minfo, " - tmpfs shm ") != NULL && strstr(minfo, " - devpts devpts ") != NULL &&
+        strstr(minfo, " - mqueue mqueue ") != NULL && strstr(minfo, " - cgroup2 cgroup ") != NULL &&
         // the /sys mountinfo line is ro (both the per-mount flags and the sysfs superblock opts).
-        strstr(minfo, " /sys ro,") != NULL &&
-        strstr(minfo, " - sysfs sysfs ro") != NULL;
+        strstr(minfo, " /sys ro,") != NULL && strstr(minfo, " - sysfs sysfs ro") != NULL;
     printf("mountpseudo ok=%d\n", ok ? 1 : 0);
     return 0;
 }

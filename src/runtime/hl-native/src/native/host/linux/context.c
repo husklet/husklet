@@ -162,4 +162,3 @@ static hl_host_result hl_linux_close_descriptor_kind(void *context, hl_host_hand
 static void hl_linux_counter_unsubscribe_all(hl_host_linux *host, hl_host_handle counter);
 static int hl_linux_descriptor(hl_host_linux *host, hl_host_handle handle, hl_linux_handle_kind first,
                                hl_linux_handle_kind second);
-

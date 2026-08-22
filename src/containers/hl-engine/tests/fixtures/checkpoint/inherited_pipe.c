@@ -147,7 +147,9 @@ static int child(const char *release, const char *final_release, int role) {
         await(final_release, "writer-closed");
         unsigned char byte;
         ssize_t count;
-        do count = read(4, &byte, 1); while (count < 0 && errno == EINTR);
+        do
+            count = read(4, &byte, 1);
+        while (count < 0 && errno == EINTR);
         if (count != 0) fail("pipe-eof");
         dprintf(STDOUT_FILENO, "PIPE-EOF pid=%ld\n", (long)getpid());
     }

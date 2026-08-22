@@ -208,4 +208,3 @@ int64_t hl_linux_object_poll(hl_linux_abi *linux_abi, hl_linux_poll_entry *entri
         }
     }
 }
-

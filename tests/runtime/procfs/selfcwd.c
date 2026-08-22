@@ -21,7 +21,10 @@ int main(void) {
     char link[4096];
     ssize_t n = readlink("/proc/self/cwd", link, sizeof link - 1);
     int is_root = 0;
-    if (n > 0) { link[n] = 0; is_root = strcmp(link, "/") == 0; }
+    if (n > 0) {
+        link[n] = 0;
+        is_root = strcmp(link, "/") == 0;
+    }
     int ok = before && changed && is_root;
     printf("selfcwd ok=%d\n", ok);
     return 0;

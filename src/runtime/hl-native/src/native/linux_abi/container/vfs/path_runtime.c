@@ -383,6 +383,7 @@ static void eventfd_peer_bind(int owner, int peer_plus_one) {
     g_eventfd_peer[owner] = peer_plus_one;
     if (peer_plus_one != 0 && owner >= g_eventfd_peer_bound) g_eventfd_peer_bound = owner + 1;
 }
+
 // eventfd accumulating counter: write() adds, read() returns + resets (the pipe is only readiness).
 // _xproc-eventfd-lockf_: the counter array lives in a MAP_SHARED anonymous region so a child created by
 // hl's real host fork() updates the SAME physical counters the parent reads -- the readiness pipe is

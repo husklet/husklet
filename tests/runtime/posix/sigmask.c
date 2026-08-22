@@ -3,7 +3,11 @@
 #include <stdio.h>
 
 static volatile sig_atomic_t got = 0;
-static void h(int s) { (void)s; got++; }
+
+static void h(int s) {
+    (void)s;
+    got++;
+}
 
 int main(void) {
     signal(SIGUSR1, h);

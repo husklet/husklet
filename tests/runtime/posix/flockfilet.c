@@ -26,12 +26,17 @@ int main(void) {
     char path[64];
     snprintf(path, sizeof path, "/tmp/hl_flf_%d", (int)getpid());
     fp = fopen(path, "w+");
-    if (!fp) { printf("flockfilet open=0\n"); return 0; }
+    if (!fp) {
+        printf("flockfilet open=0\n");
+        return 0;
+    }
 
     char ids[N] = {'a', 'b', 'c', 'd'};
     pthread_t t[N];
-    for (int i = 0; i < N; i++) pthread_create(&t[i], NULL, writer, &ids[i]);
-    for (int i = 0; i < N; i++) pthread_join(t[i], NULL);
+    for (int i = 0; i < N; i++)
+        pthread_create(&t[i], NULL, writer, &ids[i]);
+    for (int i = 0; i < N; i++)
+        pthread_join(t[i], NULL);
     fflush(fp);
 
     // Read back with getc_unlocked; every record must be a doubled char (no interleave).
@@ -40,7 +45,10 @@ int main(void) {
     int total = 0, paired = 1, ch;
     while ((ch = getc_unlocked(fp)) != EOF) {
         int ch2 = getc_unlocked(fp);
-        if (ch2 == EOF || ch2 != ch) { paired = 0; break; }
+        if (ch2 == EOF || ch2 != ch) {
+            paired = 0;
+            break;
+        }
         total++;
     }
     funlockfile(fp);

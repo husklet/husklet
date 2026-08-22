@@ -39,7 +39,7 @@ int main(void) {
         close(fd);
     }
     rmdir(dir);
-    printf("otmpfile-link supported=%d wrote=%d nlink0=%d materialized=%d content=%d nlink1=%d\n",
-           supported, wrote, has_no_name, materialized, content_ok, nlink_ok);
+    printf("otmpfile-link supported=%d wrote=%d nlink0=%d materialized=%d content=%d nlink1=%d\n", supported, wrote,
+           has_no_name, materialized, content_ok, nlink_ok);
     return 0;
 }

@@ -3,6 +3,7 @@
 #if defined(__aarch64__)
 #define GUEST_WRITE 64
 #define GUEST_EXIT 93
+
 static long guest_call(long number, long first, long second, long third) {
     register long x0 __asm__("x0") = first;
     register long x1 __asm__("x1") = second;
@@ -14,9 +15,12 @@ static long guest_call(long number, long first, long second, long third) {
 #elif defined(__x86_64__)
 #define GUEST_WRITE 1
 #define GUEST_EXIT 60
+
 static long guest_call(long number, long first, long second, long third) {
     long result;
-    __asm__ volatile("syscall" : "=a"(result) : "a"(number), "D"(first), "S"(second), "d"(third)
+    __asm__ volatile("syscall"
+                     : "=a"(result)
+                     : "a"(number), "D"(first), "S"(second), "d"(third)
                      : "rcx", "r11", "memory");
     return result;
 }

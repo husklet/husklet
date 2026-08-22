@@ -162,7 +162,8 @@ static uint64_t nonpie_zext(uint64_t v, int size) {
     return size >= 3 ? v : (v & ((1ull << (8 << size)) - 1));
 }
 
-static int nonpie_fixup_basic(uint32_t insn, uint64_t real, uint64_t va, uint64_t *X, __uint128_t *V, int rt, ucontext_t *uc) {
+static int nonpie_fixup_basic(uint32_t insn, uint64_t real, uint64_t va, uint64_t *X, __uint128_t *V, int rt,
+                              ucontext_t *uc) {
     // ---- DC ZVA (data-cache zero by VA): zero the DCZID_EL0-sized block containing the faulting addr.
     //      glibc's memset streams large zero-fills through `dc zva`; on the non-PIE image's .bss this
     //      faults at the low link address. The guest sized its loop from the host DCZID_EL0 (the frontend
@@ -307,7 +308,8 @@ static int nonpie_fixup_basic(uint32_t insn, uint64_t real, uint64_t va, uint64_
     return -1;
 }
 
-static int nonpie_fixup_pair_atomics(uint32_t insn, uint64_t real, uint64_t va, uint64_t *X, __uint128_t *V, int rt, ucontext_t *uc) {
+static int nonpie_fixup_pair_atomics(uint32_t insn, uint64_t real, uint64_t va, uint64_t *X, __uint128_t *V, int rt,
+                                     ucontext_t *uc) {
     // ---- Exclusive PAIR: LDXP/LDAXP/STXP/STLXP. bit30=element width (0=32-bit pair/8B, 1=64-bit pair/16B),
     //      bit22=L (load). These fell through the single-register handler above (o1==0 there) and every other
     //      case -> return 0 -> the low non-PIE fault re-raised on the SAME instruction forever (the observed
@@ -383,7 +385,8 @@ static int nonpie_fixup_pair_atomics(uint32_t insn, uint64_t real, uint64_t va, 
     return -1;
 }
 
-static int nonpie_fixup_simd_and_scalar(uint32_t insn, uint64_t real, uint64_t va, uint64_t *X, __uint128_t *V, int rt, ucontext_t *uc) {
+static int nonpie_fixup_simd_and_scalar(uint32_t insn, uint64_t real, uint64_t va, uint64_t *X, __uint128_t *V, int rt,
+                                        ucontext_t *uc) {
     // ---- AdvSIMD load/store MULTIPLE structures (LD1/ST1 contiguous AND LD2/3/4 / ST2/3/4 interleaved).
     //      glibc's NEON memcpy/memmove/memset/strlen stream the non-PIE image's absolute data through these.
     //      Encoding: bit31=0, bits[29:24]=001100, bit23=post-index, bits[21:16]=Rm/0, opcode[15:12],
@@ -763,8 +766,7 @@ static void load_elf(const char *path, struct loaded *out, const struct main_pla
     // the same g_pcache the consumer keys on, so a cache-on run is byte-identical and a cache-off run
     // stops producing a value no one will read. An empty digest is exactly what hl_identity_digest_empty
     // already denotes.
-    out->identity = g_pcache ? hl_identity_image_digest(image.bytes, image.size)
-                             : (hl_identity_digest){0};
+    out->identity = g_pcache ? hl_identity_image_digest(image.bytes, image.size) : (hl_identity_digest){0};
     hl_linux_elf64_layout layout;
     if (hl_linux_elf64_validate(&image, 0xB7, &layout) != 0) {
         hl_linux_image_release(&image);
@@ -948,7 +950,7 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
     // argv and envp are bounded identically (HL_MAXARGV/HL_MAXENVP); every producer fails closed with
     // -E2BIG at that bound, so neither vector can arrive longer than these arrays.
     uint64_t argp[HL_MAXARGV], envp_[HL_MAXENVP];
-    set_guest_cmdline(argc, argv);         // capture the full argv for /proc/self/cmdline (bare-mode fallback)
+    set_guest_cmdline(argc, argv); // capture the full argv for /proc/self/cmdline (bare-mode fallback)
     int envc = 0;
     // Resolve the env string list WITHOUT placing it yet (the placement order below is what matters). The
     // container's env arrives as HL_GUEST_ENV="K=V\nK=V\n…" (set by the launcher) -- forward EXACTLY these to

@@ -16,22 +16,26 @@ enum {
 };
 
 static void put_u32(unsigned char *output, uint32_t value) {
-    for (unsigned index = 0; index < 4; ++index) output[index] = (unsigned char)(value >> (8 * index));
+    for (unsigned index = 0; index < 4; ++index)
+        output[index] = (unsigned char)(value >> (8 * index));
 }
 
 static void put_u64(unsigned char *output, uint64_t value) {
-    for (unsigned index = 0; index < 8; ++index) output[index] = (unsigned char)(value >> (8 * index));
+    for (unsigned index = 0; index < 8; ++index)
+        output[index] = (unsigned char)(value >> (8 * index));
 }
 
 static uint32_t get_u32(const unsigned char *input) {
     uint32_t value = 0;
-    for (unsigned index = 0; index < 4; ++index) value |= (uint32_t)input[index] << (8 * index);
+    for (unsigned index = 0; index < 4; ++index)
+        value |= (uint32_t)input[index] << (8 * index);
     return value;
 }
 
 static uint64_t get_u64(const unsigned char *input) {
     uint64_t value = 0;
-    for (unsigned index = 0; index < 8; ++index) value |= (uint64_t)input[index] << (8 * index);
+    for (unsigned index = 0; index < 8; ++index)
+        value |= (uint64_t)input[index] << (8 * index);
     return value;
 }
 
@@ -133,17 +137,15 @@ int hl_arena_mapping_sidecar_parse(const void *input, size_t size, const hl_aren
         (expected->guest_isa != 1 && expected->guest_isa != 2) || expected->granule == 0 ||
         expected->authority_nonce == 0 || expected->authority_identity == 0 || expected->generation == 0 ||
         expected->mapping_count > HL_ARENA_SIDECAR_MAX_RECORDS || expected->mapping_reserved != 0 ||
-        (expected->mapping_count != 0 && expected->mappings == NULL) ||
-        size < HL_ARENA_SIDECAR_HEADER_SIZE)
+        (expected->mapping_count != 0 && expected->mappings == NULL) || size < HL_ARENA_SIDECAR_HEADER_SIZE)
         return (errno = EINVAL, -1);
     const uint32_t count = get_u32(bytes + HEADER_RECORD_COUNT);
     if (get_u64(bytes) != HL_ARENA_SIDECAR_MAGIC || get_u32(bytes + 8) != HL_ARENA_SIDECAR_VERSION ||
         get_u32(bytes + 12) != HL_ARENA_SIDECAR_HEADER_SIZE ||
-        get_u32(bytes + HEADER_RECORD_SIZE) != HL_ARENA_SIDECAR_RECORD_SIZE ||
-        get_u32(bytes + HEADER_RESERVED) != 0 || count > HL_ARENA_SIDECAR_MAX_RECORDS ||
-        count != expected->mapping_count || hl_arena_mapping_sidecar_size(count, &expected_size) != 0 ||
-        size != expected_size || get_u64(bytes + 16) != size ||
-        get_u64(bytes + HEADER_CHECKSUM) != checksum(bytes, size))
+        get_u32(bytes + HEADER_RECORD_SIZE) != HL_ARENA_SIDECAR_RECORD_SIZE || get_u32(bytes + HEADER_RESERVED) != 0 ||
+        count > HL_ARENA_SIDECAR_MAX_RECORDS || count != expected->mapping_count ||
+        hl_arena_mapping_sidecar_size(count, &expected_size) != 0 || size != expected_size ||
+        get_u64(bytes + 16) != size || get_u64(bytes + HEADER_CHECKSUM) != checksum(bytes, size))
         return (errno = EINVAL, -1);
     sidecar->guest_isa = get_u32(bytes + HEADER_ISA);
     sidecar->record_count = count;
@@ -171,7 +173,8 @@ int hl_arena_mapping_sidecar_parse(const void *input, size_t size, const hl_aren
         target->flags = get_u32(record + 48);
         target->reserved = get_u32(record + 52);
         if (target->reservation_identity != expected->mappings[index].reservation_identity ||
-            target->address != expected->mappings[index].address || target->length != expected->mappings[index].length) {
+            target->address != expected->mappings[index].address ||
+            target->length != expected->mappings[index].length) {
             memset(sidecar, 0, sizeof(*sidecar));
             return (errno = EACCES, -1);
         }

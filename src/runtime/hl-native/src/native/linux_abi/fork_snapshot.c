@@ -6,8 +6,7 @@ hl_status hl_linux_abi_fork_prepare(hl_linux_abi *linux_abi, hl_linux_fork_plan 
     uint32_t index;
     int topology_changed;
     if (!hl_linux_fork_plan_output_prepare(plan)) return HL_STATUS_INVALID_ARGUMENT;
-    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION ||
-        (plan->capacity != 0 && plan->records == NULL))
+    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION || (plan->capacity != 0 && plan->records == NULL))
         return HL_STATUS_INVALID_ARGUMENT;
     files = hl_linux_files(linux_abi);
     sync = hl_linux_sync(linux_abi);

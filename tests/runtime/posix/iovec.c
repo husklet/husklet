@@ -10,7 +10,9 @@ int main(void) {
     snprintf(path, sizeof path, "/tmp/hl_iovec_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
     struct iovec wv[3] = {
-        {(void *)"AAA", 3}, {(void *)"BBBB", 4}, {(void *)"CC", 2},
+        {(void *)"AAA", 3},
+        {(void *)"BBBB", 4},
+        {(void *)"CC", 2},
     };
     ssize_t w = writev(fd, wv, 3); // 9 bytes
     lseek(fd, 0, SEEK_SET);

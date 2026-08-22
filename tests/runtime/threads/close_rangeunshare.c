@@ -38,8 +38,7 @@ int main(void) {
     if (pthread_join(thread, NULL) != 0) return 13;
 
     uint64_t value = 0;
-    int owner_alive =
-        read(descriptor, &value, sizeof value) == sizeof value && value == 1;
+    int owner_alive = read(descriptor, &value, sizeof value) == sizeof value && value == 1;
     int owner_close = close(descriptor) == 0;
 
     printf("close_range_unshare thread_closed=%d owner_alive=%d owner_close=%d\n", request.closed, owner_alive,

@@ -15,21 +15,24 @@
 
 int main(void) {
     int m = posix_openpt(O_RDWR | O_NOCTTY);
-    if (m < 0) { printf("pty openpt=0\n"); return 0; }
+    if (m < 0) {
+        printf("pty openpt=0\n");
+        return 0;
+    }
     grantpt(m);
     unlockpt(m);
     char *sn = ptsname(m);
     int s = sn ? open(sn, O_RDWR | O_NOCTTY) : -1;
 
     struct termios mt;
-    int mget = tcgetattr(m, &mt) == 0;                 // termios on the MASTER (apt: fails w/ ENOTTY)
-    int mset = tcsetattr(m, TCSANOW, &mt) == 0;        // apt "Setting in Start via TCSANOW ... failed"
+    int mget = tcgetattr(m, &mt) == 0;          // termios on the MASTER (apt: fails w/ ENOTTY)
+    int mset = tcsetattr(m, TCSANOW, &mt) == 0; // apt "Setting in Start via TCSANOW ... failed"
 
     struct winsize ws = {40, 120, 0, 0};
-    int mswin = ioctl(m, TIOCSWINSZ, &ws) == 0;        // apt "Setting TIOCSWINSZ for master fd ... failed"
+    int mswin = ioctl(m, TIOCSWINSZ, &ws) == 0; // apt "Setting TIOCSWINSZ for master fd ... failed"
     struct winsize wg = {0, 0, 0, 0};
     int mgwin = ioctl(m, TIOCGWINSZ, &wg) == 0 && wg.ws_row == 40 && wg.ws_col == 120;
-    struct winsize sg = {0, 0, 0, 0};                  // htop/ncurses read the size from the slave
+    struct winsize sg = {0, 0, 0, 0}; // htop/ncurses read the size from the slave
     int sgwin = s >= 0 && ioctl(s, TIOCGWINSZ, &sg) == 0 && sg.ws_row == 40 && sg.ws_col == 120;
 
     // ALL tcsetattr actions must succeed on the MASTER too (apt uses TCSANOW; drain/flush must not ENOTTY).
@@ -56,7 +59,7 @@ int main(void) {
         }
     }
 
-    printf("pty mget=%d mset=%d mdrain=%d mflush=%d mswin=%d mgwin=%d sgwin=%d sraw=%d rawrt=%d\n", mget,
-           mset, mdrain, mflush, mswin, mgwin, sgwin, sraw, rawrt);
+    printf("pty mget=%d mset=%d mdrain=%d mflush=%d mswin=%d mgwin=%d sgwin=%d sraw=%d rawrt=%d\n", mget, mset, mdrain,
+           mflush, mswin, mgwin, sgwin, sraw, rawrt);
     return 0;
 }

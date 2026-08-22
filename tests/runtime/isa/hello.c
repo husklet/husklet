@@ -5,10 +5,7 @@
 // Build: x86_64-linux-gnu-gcc -O2 -static -no-pie -nostdlib
 static long sys3(long n, long a, long b, long c) {
     long r;
-    __asm__ volatile("syscall"
-                     : "=a"(r)
-                     : "a"(n), "D"(a), "S"(b), "d"(c)
-                     : "rcx", "r11", "memory");
+    __asm__ volatile("syscall" : "=a"(r) : "a"(n), "D"(a), "S"(b), "d"(c) : "rcx", "r11", "memory");
     return r;
 }
 

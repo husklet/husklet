@@ -216,9 +216,12 @@ static int contend(off_t start, off_t length, int codes[3]) {
     if (child == 0) {
         int code = 0;
         int upper = open("/etc/passwd", O_RDWR);
-        if (upper < 0) code = codes[0];
-        else if (lock_range(upper, F_WRLCK, start, length) == 0) code = codes[1];
-        else if (errno != EAGAIN && errno != EACCES) code = codes[2];
+        if (upper < 0)
+            code = codes[0];
+        else if (lock_range(upper, F_WRLCK, start, length) == 0)
+            code = codes[1];
+        else if (errno != EAGAIN && errno != EACCES)
+            code = codes[2];
         _exit(code);
     }
     if (waitpid(child, &status, 0) != child || !WIFEXITED(status)) return -1;

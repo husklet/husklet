@@ -1,6 +1,6 @@
-// multi-process application child-process IPC BOOTSTRAP shape end-to-end: the coordinator hands a freshly launched child its
-// initial platform channel + a shared-memory command buffer at LAUNCH time by (a) placing each fd at a
-// FIXED number and (b) passing that number as a command-line STRING (multi-process application's --mojo-platform-channel-
+// multi-process application child-process IPC BOOTSTRAP shape end-to-end: the coordinator hands a freshly launched
+// child its initial platform channel + a shared-memory command buffer at LAUNCH time by (a) placing each fd at a FIXED
+// number and (b) passing that number as a command-line STRING (multi-process application's --mojo-platform-channel-
 // handle=N / GlobalDescriptors convention). The child, after fork + in-place execve, must find each fd
 // alive AT THE NUMBER THE ARGV NAMED and be able to use it. The existing xproc-inbound/zygote/scm-futex
 // gates prove the cross-process TRANSPORT (socketpair/eventfd/epoll/SCM_RIGHTS/futex) delivers, but none
@@ -37,13 +37,18 @@
 #include <time.h>
 #include <unistd.h>
 
-// Fixed child fd numbers the coordinator assigns and names on the command line (mirrors multi-process application's fd remap +
-// base::GlobalDescriptors kBaseDescriptor offset -- deliberately above stdio, not 3/4).
-#define CH_CHAN  7
+// Fixed child fd numbers the coordinator assigns and names on the command line (mirrors multi-process application's fd
+// remap + base::GlobalDescriptors kBaseDescriptor offset -- deliberately above stdio, not 3/4).
+#define CH_CHAN 7
 #define CH_MEMFD 8
 
-static long fwait(int *a, int e, const struct timespec *to) { return syscall(SYS_futex, a, FUTEX_WAIT, e, to, NULL, 0); }
-static long fwake(int *a, int n) { return syscall(SYS_futex, a, FUTEX_WAKE, n, NULL, NULL, 0); }
+static long fwait(int *a, int e, const struct timespec *to) {
+    return syscall(SYS_futex, a, FUTEX_WAIT, e, to, NULL, 0);
+}
+
+static long fwake(int *a, int n) {
+    return syscall(SYS_futex, a, FUTEX_WAKE, n, NULL, NULL, 0);
+}
 
 static int argi(int argc, char **argv, const char *key) {
     size_t kl = strlen(key);
@@ -95,15 +100,24 @@ static int child_main(int argc, char **argv) {
     if (shmem_ok) {
         struct timespec to = {3, 0};
         for (;;) {
-            if (atomic_load((_Atomic int *)C) != 0) { futex_ok = 1; break; }
+            if (atomic_load((_Atomic int *)C) != 0) {
+                futex_ok = 1;
+                break;
+            }
             long rc = fwait(C, 0, &to);
-            if (rc == 0) { futex_ok = 1; break; }
-            if (rc == -1 && errno == ETIMEDOUT) { futex_ok = 0; break; }
+            if (rc == 0) {
+                futex_ok = 1;
+                break;
+            }
+            if (rc == -1 && errno == ETIMEDOUT) {
+                futex_ok = 0;
+                break;
+            }
         }
     }
 
-    printf("child bootstrap chan=%d msg=%s shmem=%d futex=%d decoy_swept=%d\n",
-           chan_ok, msg_ok ? "EstablishPeer" : "?", shmem_ok, futex_ok, decoy_swept);
+    printf("child bootstrap chan=%d msg=%s shmem=%d futex=%d decoy_swept=%d\n", chan_ok, msg_ok ? "EstablishPeer" : "?",
+           shmem_ok, futex_ok, decoy_swept);
     fflush(stdout);
     return (chan_ok && msg_ok && shmem_ok && futex_ok && decoy_swept) ? 0 : 25;
 }
@@ -113,15 +127,27 @@ int main(int argc, char **argv) {
 
     // Coordinator side: create the IPC channel + the shared command buffer.
     int sv[2];
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv) != 0) { perror("socketpair"); return 1; }
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv) != 0) {
+        perror("socketpair");
+        return 1;
+    }
     int shm = (int)syscall(SYS_memfd_create, "cmdbuf", 0u);
-    if (shm < 0 || ftruncate(shm, 4096) != 0) { perror("memfd"); return 1; }
+    if (shm < 0 || ftruncate(shm, 4096) != 0) {
+        perror("memfd");
+        return 1;
+    }
     int *P = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, shm, 0);
-    if (P == MAP_FAILED) { perror("mmap"); return 1; }
+    if (P == MAP_FAILED) {
+        perror("mmap");
+        return 1;
+    }
     P[0] = 0;
 
     pid_t pid = fork();
-    if (pid < 0) { perror("fork"); return 1; }
+    if (pid < 0) {
+        perror("fork");
+        return 1;
+    }
     if (pid == 0) {
         // Launch-time fd shuffle: place each bootstrap fd at its assigned number, non-CLOEXEC, and leave a
         // sibling CLOEXEC dup that the execve MUST drop. Then exec, naming the numbers on the command line.
@@ -149,16 +175,25 @@ int main(int argc, char **argv) {
     close(sv[1]);
     // Wait for the child's readiness datagram so the message we send is genuinely INBOUND to a parked epoll.
     char r = 0;
-    if (read(sv[0], &r, 1) != 1 || r != 'R') { printf("parent ready-read r=%d\n", r); return 2; }
+    if (read(sv[0], &r, 1) != 1 || r != 'R') {
+        printf("parent ready-read r=%d\n", r);
+        return 2;
+    }
     struct timespec settle = {0, 50 * 1000 * 1000};
     nanosleep(&settle, NULL);
     const char *m = "EstablishPeer";
-    if (write(sv[0], m, strlen(m)) < 0) { perror("write chan"); return 3; }
+    if (write(sv[0], m, strlen(m)) < 0) {
+        perror("write chan");
+        return 3;
+    }
 
     // Wait for the child's "parked" datagram (channel msg consumed, about to FUTEX_WAIT), then wake it
     // through the coordinator's OWN independent mapping of the shared page.
     char pk = 0;
-    if (read(sv[0], &pk, 1) != 1 || pk != 'P') { printf("parent park-read pk=%d\n", pk); return 4; }
+    if (read(sv[0], &pk, 1) != 1 || pk != 'P') {
+        printf("parent park-read pk=%d\n", pk);
+        return 4;
+    }
     nanosleep(&settle, NULL);
     atomic_store((_Atomic int *)&P[0], 1);
     fwake(&P[0], INT_MAX);

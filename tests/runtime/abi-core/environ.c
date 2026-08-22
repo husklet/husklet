@@ -18,8 +18,9 @@ int main(void) {
     int v4 = getenv("HL_TEST_KEY") == NULL;
 
     int count = 0;
-    for (char **e = environ; *e; e++) count += (strchr(*e, '=') != NULL);
-    printf("environ set=%d nooverwrite=%d overwrite=%d unset=%d haspath=%d\n",
-           v1, v2, v3, v4, getenv("PATH") != NULL || count >= 0);
+    for (char **e = environ; *e; e++)
+        count += (strchr(*e, '=') != NULL);
+    printf("environ set=%d nooverwrite=%d overwrite=%d unset=%d haspath=%d\n", v1, v2, v3, v4,
+           getenv("PATH") != NULL || count >= 0);
     return 0;
 }

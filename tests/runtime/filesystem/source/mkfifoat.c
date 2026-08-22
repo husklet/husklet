@@ -27,7 +27,7 @@ int main(void) {
         _exit(0);
     }
     int r = open(path, O_RDONLY);
-    struct pollfd pfd = { .fd = r, .events = POLLIN };
+    struct pollfd pfd = {.fd = r, .events = POLLIN};
     int ready = poll(&pfd, 1, 2000) == 1 && (pfd.revents & POLLIN);
     char buf[16] = {0};
     int n = read(r, buf, sizeof buf);

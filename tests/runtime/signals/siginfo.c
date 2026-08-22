@@ -31,10 +31,15 @@ int main(void) {
 
     pid_t parent = getpid();
     pid_t pid = fork();
-    if (pid == 0) { usleep(50000); kill(parent, SIGUSR1); _exit(0); }
+    if (pid == 0) {
+        usleep(50000);
+        kill(parent, SIGUSR1);
+        _exit(0);
+    }
     sender = pid;
     sigprocmask(SIG_SETMASK, &old, NULL);
-    while (!signo) usleep(1000);
+    while (!signo)
+        usleep(1000);
     waitpid(pid, NULL, 0);
     printf("siginfo signo=%d code_user=%d pid_match=%d\n", (int)signo, (int)code_user, (int)pid_match);
     return 0;

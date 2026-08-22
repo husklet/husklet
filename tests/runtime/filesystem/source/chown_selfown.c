@@ -44,7 +44,7 @@ int main(void) {
     unlinkat(dfd, "file", 0);
     close(dfd);
     rmdir(dir);
-    printf("chown-selfown same=%d preserved=%d noop=%d link=%d link-owner=%d\n",
-           same, preserved, noop_ok, link_ok, link_owner);
+    printf("chown-selfown same=%d preserved=%d noop=%d link=%d link-owner=%d\n", same, preserved, noop_ok, link_ok,
+           link_owner);
     return 0;
 }

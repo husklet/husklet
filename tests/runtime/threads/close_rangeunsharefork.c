@@ -24,8 +24,7 @@ struct state {
 
 static void *forker(void *opaque) {
     struct state *state = opaque;
-    if (syscall(SYS_close_range, (unsigned)state->closed, (unsigned)state->closed,
-                CLOSE_RANGE_UNSHARE) != 0) {
+    if (syscall(SYS_close_range, (unsigned)state->closed, (unsigned)state->closed, CLOSE_RANGE_UNSHARE) != 0) {
         atomic_store(&state->done, 1);
         return NULL;
     }
@@ -56,7 +55,8 @@ int main(void) {
     pthread_t thread;
     if (pthread_create(&thread, &attr, forker, &state) != 0) return 11;
     pthread_attr_destroy(&attr);
-    while (!atomic_load(&state.done)) sched_yield();
+    while (!atomic_load(&state.done))
+        sched_yield();
 
     int child = atomic_load(&state.child);
     int status = 0;

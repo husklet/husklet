@@ -149,7 +149,7 @@ static int interp_exec_branch_system(struct cpu *cpu, uint32_t insn) {
          * `-Werror=duplicated-branches`: two arms GCC can see are identical. The value carries
          * both meanings and is named rather than chosen. Same shape as ENOATTR/ENODATA. */
         int signal_code = 1; // TRAP_BRKPT when signo is SIGTRAP, ILL_ILLOPC when it is SIGILL
-        cpu->pc = gpc; // the faulting instruction the guest's frame must name
+        cpu->pc = gpc;       // the faulting instruction the guest's frame must name
         // si_addr is pcrel_base(gpc): signal_canonicalize_pc treats the frame's own pc the same way.
         interp_raise_sync_signal(cpu, signo, signal_code, pcrel_base(gpc));
         return INTERP_END;

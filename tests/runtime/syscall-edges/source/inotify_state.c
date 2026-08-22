@@ -15,7 +15,7 @@ int main(void) {
     if (!mkdtemp(dir)) return 1;
     int in = inotify_init1(IN_NONBLOCK);
     int w1 = inotify_add_watch(in, dir, IN_CREATE);
-    int w2 = inotify_add_watch(in, dir, IN_DELETE);           // replaces mask
+    int w2 = inotify_add_watch(in, dir, IN_DELETE);               // replaces mask
     int w3 = inotify_add_watch(in, dir, IN_CREATE | IN_MASK_ADD); // unions
     int same = (w1 == w2) && (w2 == w3);
 
@@ -49,7 +49,8 @@ int main(void) {
     ssize_t nt = read(in, tiny, sizeof tiny);
     int ent = (nt == -1) ? errno : 0;
     rmdir(dir);
-    printf("same=%d gotcreate=%d named=%d r1=%d r2=%d e2=%d ignored=%d bad=%d ebad=%d nomask=%d enomask=%d badfd=%d ebadfd=%d nt=%zd ent=%d\n",
+    printf("same=%d gotcreate=%d named=%d r1=%d r2=%d e2=%d ignored=%d bad=%d ebad=%d nomask=%d enomask=%d badfd=%d "
+           "ebadfd=%d nt=%zd ent=%d\n",
            same, gotcreate, named, r1, r2, e2, ignored, bad, ebad, nomask, enomask, badfd, ebadfd, nt, ent);
     return 0;
 }

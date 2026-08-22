@@ -29,7 +29,8 @@ static int read_percpu(char tup[][64], int max) {
         // per-cpu lines are "cpuN " with a digit right after "cpu"; the aggregate "cpu " is skipped.
         if (strncmp(line, "cpu", 3) != 0 || line[3] < '0' || line[3] > '9') continue;
         const char *p = line;
-        while (*p && *p != ' ') p++; // skip the "cpuN" token
+        while (*p && *p != ' ')
+            p++; // skip the "cpuN" token
         long user, nice, sys, idle;
         if (sscanf(p, " %ld %ld %ld %ld", &user, &nice, &sys, &idle) == 4 && n < max) {
             snprintf(tup[n], 64, "%ld-%ld-%ld-%ld", user, nice, sys, idle);
@@ -56,7 +57,8 @@ int main(void) {
     clock_gettime(CLOCK_MONOTONIC, &t0);
     volatile unsigned long x = 0;
     for (;;) {
-        for (int i = 0; i < 200000; i++) x += i;
+        for (int i = 0; i < 200000; i++)
+            x += i;
         clock_gettime(CLOCK_MONOTONIC, &now);
         double ms = (now.tv_sec - t0.tv_sec) * 1000.0 + (now.tv_nsec - t0.tv_nsec) / 1e6;
         if (ms >= 250.0) break;
@@ -68,7 +70,8 @@ int main(void) {
     int deltas_differ = 0;
     if (multicore) {
         char d[MAXC][64];
-        for (int i = 0; i < n0; i++) delta(after[i], before[i], d[i], sizeof d[0]);
+        for (int i = 0; i < n0; i++)
+            delta(after[i], before[i], d[i], sizeof d[0]);
         for (int i = 1; i < n0 && !deltas_differ; i++)
             if (strcmp(d[i], d[0]) != 0) deltas_differ = 1;
     }

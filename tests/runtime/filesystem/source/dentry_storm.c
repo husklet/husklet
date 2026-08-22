@@ -16,24 +16,29 @@
 #include <unistd.h>
 
 static int fails;
+
 static void ck(int cond, const char *what, int i) {
     if (!cond) {
         fails++;
         if (fails <= 8) fprintf(stderr, "FAIL %s iter=%d errno=%d\n", what, i, errno);
     }
 }
+
 static char base[64];
 static char pa[128], pb[128];
+
 static const char *P(const char *leaf) { // absolute path under the per-run dir (alternating buffers)
     static int flip;
     char *b = (flip ^= 1) ? pa : pb;
     snprintf(b, 128, "%s/%s", base, leaf);
     return b;
 }
+
 static int exists(const char *p) {
     struct stat st;
     return stat(p, &st) == 0;
 }
+
 static int readback(const char *p, const char *want) {
     char b[64];
     int fd = open(p, O_RDONLY);
@@ -44,6 +49,7 @@ static int readback(const char *p, const char *want) {
     b[n] = 0;
     return strcmp(b, want) == 0;
 }
+
 static void put(const char *p, const char *s) {
     int fd = open(p, O_CREAT | O_WRONLY | O_TRUNC, 0644);
     if (fd >= 0) {
@@ -75,7 +81,7 @@ int main(void) {
         put(P("b"), "B");
         ck(symlink("a", P("l")) == 0, "symlink", i);
         ck(readback(P("l"), "A"), "sym-follow-A", i); // follow-mode open (seeds any canonical cache)
-        int nf = open(P("l"), O_RDONLY | O_NOFOLLOW);  // ...which must NOT let O_NOFOLLOW succeed
+        int nf = open(P("l"), O_RDONLY | O_NOFOLLOW); // ...which must NOT let O_NOFOLLOW succeed
         ck(nf < 0 && errno == ELOOP, "nofollow-eloop", i);
         if (nf >= 0) close(nf);
         ck(unlink(P("l")) == 0, "sym-rm", i);

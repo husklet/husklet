@@ -12,9 +12,11 @@ int main(void) {
     struct timespec to = {0, 50000000};
     int timed_out = ppoll(&pr, 1, &to, NULL) == 0;
     write(fds[1], "x", 1);
-    sigset_t empty; sigemptyset(&empty);
+    sigset_t empty;
+    sigemptyset(&empty);
     int readable = ppoll(&pr, 1, &to, &empty) == 1 && (pr.revents & POLLIN);
-    close(fds[0]); close(fds[1]);
+    close(fds[0]);
+    close(fds[1]);
     printf("ppoll timeout=%d readable=%d\n", timed_out, readable);
     return 0;
 }

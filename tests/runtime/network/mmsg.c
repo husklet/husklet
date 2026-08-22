@@ -44,8 +44,7 @@ int main(void) {
         in[i].msg_hdr.msg_iovlen = 1;
     }
     int got = recvmmsg(rs, in, 3, MSG_WAITALL, NULL);
-    printf("sent=%d got=%d len0=%u len1=%u len2=%u\n", sent, got, in[0].msg_len, in[1].msg_len,
-           in[2].msg_len);
+    printf("sent=%d got=%d len0=%u len1=%u len2=%u\n", sent, got, in[0].msg_len, in[1].msg_len, in[2].msg_len);
     close(ss);
     close(rs);
     return 0;

@@ -15,14 +15,16 @@ int main(void) {
     struct stat st;
     int perm_ok = created && fstat(fd, &st) == 0 && (st.st_mode & 0777) == 0600;
     int rw = created && write(fd, "abc", 3) == 3;
-    if (created) { close(fd); unlink(tmpl); }
+    if (created) {
+        close(fd);
+        unlink(tmpl);
+    }
 
     char dtmpl[64];
     snprintf(dtmpl, sizeof dtmpl, "/tmp/hl_md_%d_XXXXXX", (int)getpid());
     char *dir = mkdtemp(dtmpl);
     struct stat ds;
-    int dir_ok = dir != NULL && stat(dir, &ds) == 0 && S_ISDIR(ds.st_mode) &&
-                 (ds.st_mode & 0777) == 0700;
+    int dir_ok = dir != NULL && stat(dir, &ds) == 0 && S_ISDIR(ds.st_mode) && (ds.st_mode & 0777) == 0700;
     if (dir) rmdir(dir);
 
     // tmpfile: writable, readable back, and has no visible link (st_nlink 0 once open).
@@ -39,7 +41,7 @@ int main(void) {
         fclose(tf);
     }
 
-    printf("mkstempt created=%d filled=%d perm=%d rw=%d dir=%d tmpfile=%d\n",
-           created, no_x, perm_ok, rw, dir_ok, tf_ok);
+    printf("mkstempt created=%d filled=%d perm=%d rw=%d dir=%d tmpfile=%d\n", created, no_x, perm_ok, rw, dir_ok,
+           tf_ok);
     return 0;
 }

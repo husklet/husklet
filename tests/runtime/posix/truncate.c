@@ -9,10 +9,11 @@ int main(void) {
     snprintf(path, sizeof path, "/tmp/hl_trunc_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
     write(fd, "0123456789", 10);
-    ftruncate(fd, 4);            // shrink to 4
-    struct stat st; fstat(fd, &st);
+    ftruncate(fd, 4); // shrink to 4
+    struct stat st;
+    fstat(fd, &st);
     int shrunk = st.st_size == 4;
-    ftruncate(fd, 20);           // grow to 20, zero-filled
+    ftruncate(fd, 20); // grow to 20, zero-filled
     fstat(fd, &st);
     int grew = st.st_size == 20;
     // the grown region reads as zeros
@@ -21,7 +22,7 @@ int main(void) {
     read(fd, buf, 20);
     int zeros = buf[10] == 0 && buf[19] == 0;
     close(fd);
-    truncate(path, 7);           // path-based
+    truncate(path, 7); // path-based
     stat(path, &st);
     int pathtrunc = st.st_size == 7;
     unlink(path);

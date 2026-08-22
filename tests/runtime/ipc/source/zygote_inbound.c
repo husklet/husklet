@@ -69,7 +69,10 @@ static void worker_main(int chan, int efd) {
         for (int j = 0; j < n; j++) {
             if (out[j].data.fd == chan) {
                 ssize_t r = read(chan, msg, sizeof msg - 1);
-                if (r > 0) { msg[r] = 0; gs = 1; }
+                if (r > 0) {
+                    msg[r] = 0;
+                    gs = 1;
+                }
             } else if (out[j].data.fd == efd) {
                 if (read(efd, &v, 8) == 8) ge = 1;
             }
@@ -84,15 +87,24 @@ static void worker_main(int chan, int efd) {
 int main(void) {
     // control channel coordinator<->zygote
     int zc[2];
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, zc) != 0) { perror("zc"); return 1; }
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, zc) != 0) {
+        perror("zc");
+        return 1;
+    }
     pid_t zyg = fork();
-    if (zyg < 0) { perror("fork zygote"); return 1; }
+    if (zyg < 0) {
+        perror("fork zygote");
+        return 1;
+    }
     if (zyg == 0) {
         close(zc[0]);
         int chan = -1, efd = -1;
         if (recv_two_fds(zc[1], &chan, &efd) != 0) _exit(50);
         pid_t r = fork(); // zygote forks the worker
-        if (r == 0) { close(zc[1]); worker_main(chan, efd); }
+        if (r == 0) {
+            close(zc[1]);
+            worker_main(chan, efd);
+        }
         // zygote: reap worker, then exit
         int st;
         waitpid(r, &st, 0);
@@ -101,21 +113,39 @@ int main(void) {
 
     close(zc[1]);
     int sv[2];
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv) != 0) { perror("sv"); return 1; }
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv) != 0) {
+        perror("sv");
+        return 1;
+    }
     int efd = eventfd(0, 0);
-    if (efd < 0) { perror("eventfd"); return 1; }
-    if (send_two_fds(zc[0], sv[1], efd) != 0) { perror("send_two_fds"); return 1; }
+    if (efd < 0) {
+        perror("eventfd");
+        return 1;
+    }
+    if (send_two_fds(zc[0], sv[1], efd) != 0) {
+        perror("send_two_fds");
+        return 1;
+    }
     close(sv[1]);
 
     // wait for the worker's readiness byte (it is a grandchild; the channel is our only link)
     char r;
-    if (read(sv[0], &r, 1) != 1) { printf("coordinator ready-read: %s\n", strerror(errno)); return 2; }
+    if (read(sv[0], &r, 1) != 1) {
+        printf("coordinator ready-read: %s\n", strerror(errno));
+        return 2;
+    }
     struct timespec ts = {0, 50 * 1000 * 1000};
     nanosleep(&ts, NULL);
     const char *m = "BeginFrame";
-    if (write(sv[0], m, strlen(m)) < 0) { perror("write chan"); return 3; }
+    if (write(sv[0], m, strlen(m)) < 0) {
+        perror("write chan");
+        return 3;
+    }
     uint64_t v = 7;
-    if (write(efd, &v, 8) != 8) { perror("write efd"); return 4; }
+    if (write(efd, &v, 8) != 8) {
+        perror("write efd");
+        return 4;
+    }
 
     char verdict[128] = {0};
     ssize_t vn = read(sv[0], verdict, sizeof verdict - 1);

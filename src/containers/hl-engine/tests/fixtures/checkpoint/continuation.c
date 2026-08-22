@@ -6,7 +6,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-static int exists(const char *path) { return access(path, F_OK) == 0; }
+static int exists(const char *path) {
+    return access(path, F_OK) == 0;
+}
 
 int main(int argc, char **argv) {
     if (argc != 4) return 2;

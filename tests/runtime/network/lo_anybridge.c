@@ -25,8 +25,14 @@ int main(void) {
     a.sin_family = AF_INET;
     a.sin_port = htons(PORT);
     a.sin_addr.s_addr = htonl(INADDR_ANY); // 0.0.0.0
-    if (bind(srv, (struct sockaddr *)&a, sizeof a) < 0) { printf("lo_any bind=FAIL(%s)\n", strerror(errno)); return 1; }
-    if (listen(srv, 8) < 0) { printf("lo_any listen=FAIL(%s)\n", strerror(errno)); return 1; }
+    if (bind(srv, (struct sockaddr *)&a, sizeof a) < 0) {
+        printf("lo_any bind=FAIL(%s)\n", strerror(errno));
+        return 1;
+    }
+    if (listen(srv, 8) < 0) {
+        printf("lo_any listen=FAIL(%s)\n", strerror(errno));
+        return 1;
+    }
     int collision = socket(AF_INET, SOCK_STREAM, 0);
     setsockopt(collision, SOL_SOCKET, SO_REUSEADDR, &on, sizeof on);
     if (bind(collision, (struct sockaddr *)&a, sizeof a) == 0 || errno != EADDRINUSE) {

@@ -18,12 +18,14 @@
 #define SOFT_TLB_INDEX_BITS 9
 #define SOFT_TLB_ENTRIES (1u << SOFT_TLB_INDEX_BITS)
 #define SOFT_TLB_TAG_INVALID (~(uint64_t)0xfff)
+
 struct hl_soft_tlb_entry {
     uint64_t page;       /* page-aligned tag; SOFT_TLB_TAG_INVALID = empty */
     uint64_t last;       /* exclusive end of the validated interval */
     uint64_t delta;      /* host address - guest address */
     uint64_t protection; /* HL_LOGICAL_VMA_* permission bits */
 };
+
 #define SOFT_TLB_SLOT(c, address) (&(c)->soft_tlb[((address) >> 12) & (SOFT_TLB_ENTRIES - 1)])
 #define SOFT_TLB_INVALIDATE_ALL(c)                                                                                     \
     do {                                                                                                               \

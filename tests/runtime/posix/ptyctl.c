@@ -12,11 +12,15 @@
 #include <errno.h>
 
 static int drain(int fd, char *buf, int cap) {
-    int fl = fcntl(fd, F_GETFL); fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+    int fl = fcntl(fd, F_GETFL);
+    fcntl(fd, F_SETFL, fl | O_NONBLOCK);
     int total = 0;
     for (int i = 0; i < 200 && total < cap; i++) {
         ssize_t n = read(fd, buf + total, cap - total);
-        if (n > 0) total += n; else break;
+        if (n > 0)
+            total += n;
+        else
+            break;
     }
     fcntl(fd, F_SETFL, fl);
     return total;
@@ -25,16 +29,24 @@ static int drain(int fd, char *buf, int cap) {
 int main(void) {
     // child owns a controlling tty so TIOCGSID/dev-tty are meaningful.
     int m = posix_openpt(O_RDWR | O_NOCTTY);
-    if (m < 0) { printf("ttyctl setup=0\n"); return 0; }
-    grantpt(m); unlockpt(m);
+    if (m < 0) {
+        printf("ttyctl setup=0\n");
+        return 0;
+    }
+    grantpt(m);
+    unlockpt(m);
     char *sn = ptsname(m);
-    char name[128]; strncpy(name, sn ? sn : "", sizeof name - 1);
+    char name[128];
+    strncpy(name, sn ? sn : "", sizeof name - 1);
 
     // --- TIOCPKT packet mode on the master (independent of ctty) ---
     int pkt = 1;
     int pkton = ioctl(m, TIOCPKT, &pkt) == 0;
     int s = open(name, O_RDWR | O_NOCTTY);
-    struct termios rt; tcgetattr(s, &rt); cfmakeraw(&rt); tcsetattr(s, TCSANOW, &rt);
+    struct termios rt;
+    tcgetattr(s, &rt);
+    cfmakeraw(&rt);
+    tcsetattr(s, TCSANOW, &rt);
     tcflush(m, TCIOFLUSH);
     write(s, "P", 1);
     usleep(20000);
@@ -49,11 +61,12 @@ int main(void) {
     close(s);
 
     // --- TIOCGSID / tcgetsid on a controlling slave (in a child session) ---
-    int pctl[2]; pipe(pctl);
+    int pctl[2];
+    pipe(pctl);
     pid_t pid = fork();
     if (pid == 0) {
         setsid();
-        int cs = open(name, O_RDWR);   // acquire ctty
+        int cs = open(name, O_RDWR); // acquire ctty
         ioctl(cs, TIOCSCTTY, 0);
         pid_t want = getsid(0);
         pid_t got = -1;
@@ -71,10 +84,11 @@ int main(void) {
     close(pctl[1]);
     int childres = 0;
     read(pctl[0], &childres, sizeof childres);
-    int st; waitpid(pid, &st, 0);
+    int st;
+    waitpid(pid, &st, 0);
 
-    printf("ttyctl pkton=%d pkt_data=%d gsid=%d devtty=%d tcgetsid=%d\n",
-           pkton, pkt_data, (childres & 1) != 0, (childres & 2) != 0, (childres & 4) != 0);
+    printf("ttyctl pkton=%d pkt_data=%d gsid=%d devtty=%d tcgetsid=%d\n", pkton, pkt_data, (childres & 1) != 0,
+           (childres & 2) != 0, (childres & 4) != 0);
     close(m);
     return 0;
 }

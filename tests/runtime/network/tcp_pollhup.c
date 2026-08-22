@@ -50,8 +50,8 @@ int main(void) {
     close(c);
     struct epoll_event out[4];
     int ne = epoll_wait(ep, out, 4, 1000);
-    printf("n=%d in=%d rdhup=%d hup=%d\n", ne, (out[0].events & EPOLLIN) != 0,
-           (out[0].events & EPOLLRDHUP) != 0, (out[0].events & EPOLLHUP) != 0);
+    printf("n=%d in=%d rdhup=%d hup=%d\n", ne, (out[0].events & EPOLLIN) != 0, (out[0].events & EPOLLRDHUP) != 0,
+           (out[0].events & EPOLLHUP) != 0);
     close(s);
     close(ep);
     return 0;

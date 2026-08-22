@@ -47,7 +47,8 @@ int main(void) {
         if (pthread_create(&blocked_thread, NULL, blocker, NULL) != 0 || read(ready[0], &byte, 1) != 1 ||
             pthread_create(&fault_thread, NULL, fault, NULL) != 0)
             _exit(94);
-        for (;;) pause();
+        for (;;)
+            pause();
     }
 
     int victim_status = 0, survivor_status = 0;

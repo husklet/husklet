@@ -44,9 +44,7 @@ static void put(const char *text) {
     ssize_t written = 0;
     while ((size_t)written < length) {
         ssize_t step = write(1, text + written, length - (size_t)written);
-        if (step <= 0) {
-            _exit(70);
-        }
+        if (step <= 0) { _exit(70); }
         written += step;
     }
 }
@@ -75,9 +73,7 @@ static void phase(const char *name, long long elapsed, unsigned long long ok) {
 static unsigned long long parse(const char *text) {
     unsigned long long value = 0;
     for (size_t index = 0; text[index] != '\0'; index++) {
-        if (text[index] < '0' || text[index] > '9') {
-            _exit(64);
-        }
+        if (text[index] < '0' || text[index] > '9') { _exit(64); }
         value = value * 10ULL + (unsigned long long)(text[index] - '0');
     }
     return value;
@@ -90,9 +86,7 @@ static unsigned long long parse(const char *text) {
 static int spawn(const char *self, unsigned long long count, const char *syscalls) {
     static char image[4096];
     ssize_t length = readlink("/proc/self/exe", image, sizeof(image) - 1);
-    if (length <= 0) {
-        return 74;
-    }
+    if (length <= 0) { return 74; }
     image[length] = '\0';
     self = image;
     char *const arguments[] = {(char *)self, (char *)"child", (char *)syscalls, NULL};
@@ -105,13 +99,9 @@ static int spawn(const char *self, unsigned long long count, const char *syscall
             execve(self, arguments, environment);
             _exit(errno & 0x7f);
         }
-        if (child < 0) {
-            return 72;
-        }
+        if (child < 0) { return 72; }
         int status = 0;
-        if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-            return 73;
-        }
+        if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) { return 73; }
         completed++;
     }
     phase("spawn", micros() - start, completed);
@@ -133,9 +123,7 @@ static int image(unsigned long long count, const char *victim) {
             execve(victim, arguments, environment);
             _exit(errno & 0x7f);
         }
-        if (child_pid < 0) {
-            return 72;
-        }
+        if (child_pid < 0) { return 72; }
         int status = 0;
         if (waitpid(child_pid, &status, 0) != child_pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
             return 73;
@@ -167,27 +155,20 @@ static int spin(unsigned long long iterations) {
 
 int main(int count, char **arguments) {
     if (count < 3) {
-        put("usage: floor spawn <count> <syscalls> | floor image <count> <path> | floor child <syscalls> | floor spin <iterations>\n");
+        put("usage: floor spawn <count> <syscalls> | floor image <count> <path> | floor child <syscalls> | floor spin "
+            "<iterations>\n");
         return 64;
     }
     const char *mode = arguments[1];
     if (mode[0] == 's' && mode[1] == 'p' && mode[2] == 'a') {
-        if (count < 4) {
-            return 64;
-        }
+        if (count < 4) { return 64; }
         return spawn(arguments[0], parse(arguments[2]), arguments[3]);
     }
     if (mode[0] == 'i') {
-        if (count < 4) {
-            return 64;
-        }
+        if (count < 4) { return 64; }
         return image(parse(arguments[2]), arguments[3]);
     }
-    if (mode[0] == 'c') {
-        return child(parse(arguments[2]));
-    }
-    if (mode[0] == 's' && mode[1] == 'p' && mode[2] == 'i') {
-        return spin(parse(arguments[2]));
-    }
+    if (mode[0] == 'c') { return child(parse(arguments[2])); }
+    if (mode[0] == 's' && mode[1] == 'p' && mode[2] == 'i') { return spin(parse(arguments[2])); }
     return 64;
 }

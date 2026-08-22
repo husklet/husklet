@@ -8,7 +8,7 @@
 #include <string.h>
 #include <stdint.h>
 #ifndef __NR_rseq
-#define __NR_rseq 293  /* stable across x86_64 (334) is legacy; 293 is the aarch64 no... */
+#define __NR_rseq 293 /* stable across x86_64 (334) is legacy; 293 is the aarch64 no... */
 #endif
 /* rseq shares no cross-arch number; resolve per arch. */
 #undef __NR_rseq
@@ -18,7 +18,11 @@
 #define __NR_rseq 334
 #endif
 
-struct rseq_area { uint32_t cpu_id_start, cpu_id; uint64_t rseq_cs; uint32_t flags; } __attribute__((aligned(32)));
+struct rseq_area {
+    uint32_t cpu_id_start, cpu_id;
+    uint64_t rseq_cs;
+    uint32_t flags;
+} __attribute__((aligned(32)));
 
 int main(void) {
     struct rseq_area area;
@@ -30,8 +34,7 @@ int main(void) {
     /* Registering a second, different area while glibc already holds one must fail EBUSY (or EINVAL
        for the signature), or ENOSYS. It must not silently succeed. */
     long dup = syscall(__NR_rseq, &area, (unsigned)sizeof area, 0u, 0x53053053u);
-    int dup_rejected = (dup < 0) && (errno == EBUSY || errno == EINVAL || errno == EPERM ||
-                                     errno == ENOSYS);
+    int dup_rejected = (dup < 0) && (errno == EBUSY || errno == EINVAL || errno == EPERM || errno == ENOSYS);
 
     printf("rseq badlen_rejected=%d dup_rejected=%d\n", badlen_rejected, dup_rejected);
     return 0;

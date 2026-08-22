@@ -20,14 +20,21 @@ int main(void) {
         }
         size_t sz = 8 + (size_t)((r >> 17) % (256 * 1024));
         unsigned char *p = malloc(sz);
-        if (!p) { printf("soak allocchurn oom@%llu\n", (unsigned long long)i); return 1; }
+        if (!p) {
+            printf("soak allocchurn oom@%llu\n", (unsigned long long)i);
+            return 1;
+        }
         p[0] = (unsigned char)(r);
         p[sz - 1] = (unsigned char)(r >> 8); // touch both ends (commit first + last page)
         sum += p[sz - 1];
         live[slot] = p;
         lsz[slot] = sz;
     }
-    for (int i = 0; i < 64; i++) if (live[i]) { sum += ((unsigned char *)live[i])[lsz[i] - 1]; free(live[i]); }
+    for (int i = 0; i < 64; i++)
+        if (live[i]) {
+            sum += ((unsigned char *)live[i])[lsz[i] - 1];
+            free(live[i]);
+        }
     printf("soak allocchurn sum=%llu\n", (unsigned long long)sum);
     return 0;
 }

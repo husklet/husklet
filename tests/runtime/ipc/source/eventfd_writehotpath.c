@@ -33,8 +33,8 @@ int main(void) {
     int emax = errno;
     uint64_t v = 0;
     ssize_t r = read(fd, &v, 8);
-    printf("acc w1=%zd w2=%zd wbad=%zd(%s) wzero=%zd wmax=%zd(%s) read=%zd sum=%lu\n", w1, w2, wbad,
-           strerror(ebad), wzero, wmax, strerror(emax), r, (unsigned long)v);
+    printf("acc w1=%zd w2=%zd wbad=%zd(%s) wzero=%zd wmax=%zd(%s) read=%zd sum=%lu\n", w1, w2, wbad, strerror(ebad),
+           wzero, wmax, strerror(emax), r, (unsigned long)v);
 
     // 5) overflow: seed near the cap, then a write that would exceed UINT64_MAX-1 is EAGAIN
     int of = eventfd(0, EFD_NONBLOCK);

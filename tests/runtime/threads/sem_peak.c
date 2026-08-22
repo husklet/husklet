@@ -32,13 +32,14 @@ static void *w(void *_) {
 int main(void) {
     sem_init(&sem, 0, PERMITS);
     pthread_t t[THREADS];
-    for (int i = 0; i < THREADS; i++) pthread_create(&t[i], 0, w, 0);
-    for (int i = 0; i < THREADS; i++) pthread_join(t[i], 0);
+    for (int i = 0; i < THREADS; i++)
+        pthread_create(&t[i], 0, w, 0);
+    for (int i = 0; i < THREADS; i++)
+        pthread_join(t[i], 0);
     int val = -1;
     sem_getvalue(&sem, &val);
-    printf("sem_peak within_limit=%d entries_ok=%d restored=%d\n",
-           atomic_load(&peak) <= PERMITS, atomic_load(&entries) == (long)THREADS * ITERS,
-           val == PERMITS);
+    printf("sem_peak within_limit=%d entries_ok=%d restored=%d\n", atomic_load(&peak) <= PERMITS,
+           atomic_load(&entries) == (long)THREADS * ITERS, val == PERMITS);
     sem_destroy(&sem);
     return 0;
 }

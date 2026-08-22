@@ -25,8 +25,8 @@
 
 // Engine-wide debug/identity state that stubs.c owns for the JIT; the trace hook, syscall tracer, /proc
 // synthesis, ELF loader and checkpoint writer all read it, so this backend must own it too.
-static int g_trace;       // G_TRACE_DUMP: per-block guest PC + register dump
-static int g_systrace;    // syscall tracer
+static int g_trace;    // G_TRACE_DUMP: per-block guest PC + register dump
+static int g_systrace; // syscall tracer
 // What /proc/self/exe must report; a literal, not NULL, so an early reader cannot deref it.
 static const char *g_exe_path = "";
 

@@ -25,7 +25,7 @@ int main(void) {
 
     int post_epoch = t > 946684800;
 
-    printf("timefunc consistent=%d matches=%d advances=%d post_epoch=%d\n", consistent,
-           matches_realtime, advances, post_epoch);
+    printf("timefunc consistent=%d matches=%d advances=%d post_epoch=%d\n", consistent, matches_realtime, advances,
+           post_epoch);
     return 0;
 }

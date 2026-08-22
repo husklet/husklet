@@ -7,7 +7,8 @@ int main(void) {
     char b[16];
     char *e = stpcpy(b, "hello");
     int d1 = e == b + 5 && *e == '\0';
-    char c[8]; char *e2 = stpncpy(c, "ab", 5); // pads to 5 with NUL, returns c+2
+    char c[8];
+    char *e2 = stpncpy(c, "ab", 5); // pads to 5 with NUL, returns c+2
     int d2 = e2 == c + 2 && c[2] == 0 && c[4] == 0;
     const char *s = "abcdef";
     int d3 = strchrnul(s, 'c') == s + 2 && strchrnul(s, 'z') == s + 6;

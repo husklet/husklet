@@ -7,36 +7,36 @@
 #include <unistd.h>
 
 enum { THREADS = 4, ROUNDS = 20000 };
+
 static _Atomic unsigned long *counter;
 
 #if defined(__aarch64__)
 static void exclusive_increment(_Atomic unsigned long *value) {
     unsigned long old, next;
     unsigned status;
-    __asm__ volatile(
-        "1: ldxr %x[old], [%x[value]]\n"
-        "add %x[next], %x[old], #1\n"
-        "stxr %w[status], %x[next], [%x[value]]\n"
-        "cbnz %w[status], 1b\n"
-        : [old] "=&r"(old), [next] "=&r"(next), [status] "=&r"(status)
-        : [value] "r"(value)
-        : "memory");
+    __asm__ volatile("1: ldxr %x[old], [%x[value]]\n"
+                     "add %x[next], %x[old], #1\n"
+                     "stxr %w[status], %x[next], [%x[value]]\n"
+                     "cbnz %w[status], 1b\n"
+                     : [old] "=&r"(old), [next] "=&r"(next), [status] "=&r"(status)
+                     : [value] "r"(value)
+                     : "memory");
 }
 
 static void stolen_exclusive_increment(_Atomic unsigned long *value) {
-    __asm__ volatile(
-        "1: ldxr x16, [%x[value]]\n"
-        "add x17, x16, #1\n"
-        "stxr w15, x17, [%x[value]]\n"
-        "cbnz w15, 1b\n"
-        :
-        : [value] "r"(value)
-        : "x15", "x16", "x17", "memory");
+    __asm__ volatile("1: ldxr x16, [%x[value]]\n"
+                     "add x17, x16, #1\n"
+                     "stxr w15, x17, [%x[value]]\n"
+                     "cbnz w15, 1b\n"
+                     :
+                     : [value] "r"(value)
+                     : "x15", "x16", "x17", "memory");
 }
 #else
 static void exclusive_increment(_Atomic unsigned long *value) {
     atomic_fetch_add_explicit(value, 1, memory_order_relaxed);
 }
+
 static void stolen_exclusive_increment(_Atomic unsigned long *value) {
     atomic_fetch_add_explicit(value, 1, memory_order_relaxed);
 }

@@ -37,7 +37,7 @@
 #include <unistd.h>
 
 #define CH_NODE 3 // primordial node channel — child end, placed by the parent at a fixed fd
-#define ROUNDS  64
+#define ROUNDS 64
 
 static int send_fd(int sock, int fd) {
     char b = 'x';
@@ -146,8 +146,7 @@ static int child_main(void) {
         char a = 'A';
         if (write(node, &a, 1) != 1) return 27;
     }
-    printf("child recv-epoll rounds=%ld/%d ok=%d\n", atomic_load(&g_rounds), ROUNDS,
-           atomic_load(&g_rounds) == ROUNDS);
+    printf("child recv-epoll rounds=%ld/%d ok=%d\n", atomic_load(&g_rounds), ROUNDS, atomic_load(&g_rounds) == ROUNDS);
     return atomic_load(&g_rounds) == ROUNDS ? 0 : 28;
 }
 

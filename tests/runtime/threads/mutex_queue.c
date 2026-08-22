@@ -19,7 +19,8 @@ static void *producer(void *_) {
     (void)_;
     for (int i = 0; i < PER; i++) {
         pthread_mutex_lock(&m);
-        while (count == CAP) pthread_cond_wait(&not_full, &m);
+        while (count == CAP)
+            pthread_cond_wait(&not_full, &m);
         buf[tail] = 1;
         tail = (tail + 1) % CAP;
         count++;
@@ -29,12 +30,17 @@ static void *producer(void *_) {
     }
     return 0;
 }
+
 static void *consumer(void *_) {
     (void)_;
     for (;;) {
         pthread_mutex_lock(&m);
-        while (count == 0 && !prod_done) pthread_cond_wait(&not_empty, &m);
-        if (count == 0 && prod_done) { pthread_mutex_unlock(&m); break; }
+        while (count == 0 && !prod_done)
+            pthread_cond_wait(&not_empty, &m);
+        if (count == 0 && prod_done) {
+            pthread_mutex_unlock(&m);
+            break;
+        }
         head = (head + 1) % CAP;
         count--;
         consumed++;
@@ -46,14 +52,18 @@ static void *consumer(void *_) {
 
 int main(void) {
     pthread_t p[PROD], c[CONS];
-    for (int i = 0; i < CONS; i++) pthread_create(&c[i], 0, consumer, 0);
-    for (int i = 0; i < PROD; i++) pthread_create(&p[i], 0, producer, 0);
-    for (int i = 0; i < PROD; i++) pthread_join(p[i], 0);
+    for (int i = 0; i < CONS; i++)
+        pthread_create(&c[i], 0, consumer, 0);
+    for (int i = 0; i < PROD; i++)
+        pthread_create(&p[i], 0, producer, 0);
+    for (int i = 0; i < PROD; i++)
+        pthread_join(p[i], 0);
     pthread_mutex_lock(&m);
     prod_done = 1;
     pthread_cond_broadcast(&not_empty);
     pthread_mutex_unlock(&m);
-    for (int i = 0; i < CONS; i++) pthread_join(c[i], 0);
+    for (int i = 0; i < CONS; i++)
+        pthread_join(c[i], 0);
     printf("queue produced=%ld consumed=%ld\n", produced, consumed); // 40000 40000
     return 0;
 }

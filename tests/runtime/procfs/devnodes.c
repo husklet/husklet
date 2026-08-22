@@ -29,8 +29,8 @@ int main(void) {
     int fd;
 
     fd = open("/dev/null", O_RDWR);
-    ok &= fd >= 0 && read(fd, buf, sizeof buf) == 0;          // null: immediate EOF
-    ok &= write(fd, "x", 1) == 1;                            // null: swallows writes
+    ok &= fd >= 0 && read(fd, buf, sizeof buf) == 0; // null: immediate EOF
+    ok &= write(fd, "x", 1) == 1;                    // null: swallows writes
     if (fd >= 0) close(fd);
 
     fd = open("/dev/zero", O_RDONLY);
@@ -40,17 +40,18 @@ int main(void) {
 
     fd = open("/dev/full", O_RDWR);
     memset(buf, 0xff, sizeof buf);
-    ok &= fd >= 0 && read(fd, buf, 8) == 8 && buf[0] == 0;   // full: reads zeros
+    ok &= fd >= 0 && read(fd, buf, 8) == 8 && buf[0] == 0; // full: reads zeros
     errno = 0;
-    ok &= write(fd, "x", 1) < 0 && errno == ENOSPC;         // full: writes ENOSPC
+    ok &= write(fd, "x", 1) < 0 && errno == ENOSPC; // full: writes ENOSPC
     if (fd >= 0) close(fd);
 
     fd = open("/dev/urandom", O_RDONLY);
     unsigned char r[32] = {0};
     int got = fd >= 0 ? (int)read(fd, r, sizeof r) : -1;
     int nonzero = 0;
-    for (int i = 0; i < 32; i++) nonzero |= r[i];
-    ok &= got == 32 && nonzero;                              // urandom: real entropy
+    for (int i = 0; i < 32; i++)
+        nonzero |= r[i];
+    ok &= got == 32 && nonzero; // urandom: real entropy
     if (fd >= 0) close(fd);
 
     printf("devnodes ok=%d\n", ok);

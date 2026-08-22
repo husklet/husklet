@@ -13,7 +13,7 @@
 #endif
 #endif
 #define KCMP_FILE 0
-#define KCMP_VM   1
+#define KCMP_VM 1
 #define KCMP_FILES 2
 
 int main(void) {
@@ -23,7 +23,7 @@ int main(void) {
 
     long same = syscall(__NR_kcmp, me, me, KCMP_FILE, (unsigned long)a, (unsigned long)a);
     long diff = syscall(__NR_kcmp, me, me, KCMP_FILE, (unsigned long)a, (unsigned long)b);
-    long vm   = syscall(__NR_kcmp, me, me, KCMP_VM, 0UL, 0UL);
+    long vm = syscall(__NR_kcmp, me, me, KCMP_VM, 0UL, 0UL);
     long files = syscall(__NR_kcmp, me, me, KCMP_FILES, 0UL, 0UL);
 
     int unsupported = (same < 0) && (errno == ENOSYS || errno == EPERM);

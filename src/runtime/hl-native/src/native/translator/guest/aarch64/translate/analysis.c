@@ -120,4 +120,3 @@ static void emit_cpu_model_value(int rd, uint64_t value) {
         e_movconst(rd, value);
     }
 }
-

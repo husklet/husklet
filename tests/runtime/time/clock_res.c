@@ -35,7 +35,7 @@ int main(void) {
     struct timespec junk;
     int bad = clock_getres((clockid_t)0x7fff, &junk) == -1 && errno == EINVAL;
 
-    printf("getres real=%d mono=%d raw=%d boot=%d proc=%d thr=%d rc=%d mc=%d coarser=%d bad=%d\n", real,
-           mono, raw, boot, proc, thr, rc, mc, coarser, bad);
+    printf("getres real=%d mono=%d raw=%d boot=%d proc=%d thr=%d rc=%d mc=%d coarser=%d bad=%d\n", real, mono, raw,
+           boot, proc, thr, rc, mc, coarser, bad);
     return 0;
 }

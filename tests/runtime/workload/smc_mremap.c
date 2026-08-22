@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <sys/mman.h>
+
 // Emit a leaf function `int f(void){ return imm; }` at p.
 static void emit_ret(unsigned char *p, uint32_t v) {
 #if defined(__aarch64__)
@@ -20,7 +21,9 @@ static void emit_ret(unsigned char *p, uint32_t v) {
 #error "needs an emitter for this ISA"
 #endif
 }
+
 typedef int (*fn)(void);
+
 int main(void) {
     size_t ps = 4096;
     int prot = PROT_READ | PROT_WRITE | PROT_EXEC;
@@ -29,8 +32,8 @@ int main(void) {
     unsigned char *b = mmap(0, ps, prot, flags, -1, 0);
     emit_ret(a, 11);
     __builtin___clear_cache((char *)a, (char *)a + ps);
-    int first = ((fn)a)();      // translate A (=11)
-    munmap(b, ps);              // free B as the relocation target
+    int first = ((fn)a)();                                         // translate A (=11)
+    munmap(b, ps);                                                 // free B as the relocation target
     void *r = mremap(a, ps, ps, MREMAP_MAYMOVE | MREMAP_FIXED, b); // move A -> B; A's VA freed
     int moved = (r == b);
     unsigned char *a2 = mmap(a, ps, prot, flags | MAP_FIXED, -1, 0); // reuse A's freed VA with new code

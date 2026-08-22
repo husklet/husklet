@@ -33,9 +33,14 @@
 #define CHUNK (64 * 1024)
 
 // EFAULT verdict for a call the kernel FAILS: -1 with errno==EFAULT.
-static const char *ef(long r) { return (r == -1 && errno == EFAULT) ? "EFAULT" : (r == -1 ? "err" : "ok"); }
+static const char *ef(long r) {
+    return (r == -1 && errno == EFAULT) ? "EFAULT" : (r == -1 ? "err" : "ok");
+}
+
 // ok verdict for a call the kernel SUCCEEDS (>=0). read/write return a count; the struct calls return 0.
-static const char *ok(long r) { return (r >= 0) ? "ok" : (errno == EFAULT ? "EFAULT" : "err"); }
+static const char *ok(long r) {
+    return (r >= 0) ? "ok" : (errno == EFAULT ? "EFAULT" : "err");
+}
 
 int main(void) {
     long pg = sysconf(_SC_PAGESIZE);
@@ -54,9 +59,12 @@ int main(void) {
     if (rw == MAP_FAILED) return 1;
     if (munmap(rw + CHUNK, CHUNK) != 0) return 1;
     void *straddle = (void *)(rw + CHUNK - 8); // 8 mapped bytes, tail in the hole
-    errno = 0; const char *ns_str = ef(syscall(SYS_nanosleep, straddle, (void *)0));
-    errno = 0; const char *ru_str = ef(syscall(SYS_getrusage, RUSAGE_SELF, straddle));
-    errno = 0; const char *fs_str = ef(syscall(SYS_fstat, fd, straddle));
+    errno = 0;
+    const char *ns_str = ef(syscall(SYS_nanosleep, straddle, (void *)0));
+    errno = 0;
+    const char *ru_str = ef(syscall(SYS_getrusage, RUSAGE_SELF, straddle));
+    errno = 0;
+    const char *fs_str = ef(syscall(SYS_fstat, fd, straddle));
 
     struct timespec req = {0, 1000000}; // 1ms — a real (short) sleep for the control call
     struct rusage ru;
@@ -65,41 +73,57 @@ int main(void) {
     char rbuf[16];
 
     // ---- nanosleep(request, remain) : request read by the kernel ----
-    errno = 0; const char *ns_bad = ef(syscall(SYS_nanosleep, bad, (void *)0));
-    errno = 0; const char *ns_ok  = ok(syscall(SYS_nanosleep, &req, (void *)0));
+    errno = 0;
+    const char *ns_bad = ef(syscall(SYS_nanosleep, bad, (void *)0));
+    errno = 0;
+    const char *ns_ok = ok(syscall(SYS_nanosleep, &req, (void *)0));
 
     // ---- getrusage(who, usage) : usage written by the engine ----
-    errno = 0; const char *ru_bad = ef(syscall(SYS_getrusage, RUSAGE_SELF, bad));
-    errno = 0; const char *ru_ok  = ok(syscall(SYS_getrusage, RUSAGE_SELF, &ru));
+    errno = 0;
+    const char *ru_bad = ef(syscall(SYS_getrusage, RUSAGE_SELF, bad));
+    errno = 0;
+    const char *ru_ok = ok(syscall(SYS_getrusage, RUSAGE_SELF, &ru));
 
     // ---- mincore(addr, len, vec) : vec written by the engine (rw's lower chunk is still mapped) ----
-    errno = 0; const char *mc_bad = ef(syscall(SYS_mincore, rw, (size_t)pg, bad));
-    errno = 0; const char *mc_ok  = ok(syscall(SYS_mincore, rw, (size_t)pg, &vec));
+    errno = 0;
+    const char *mc_bad = ef(syscall(SYS_mincore, rw, (size_t)pg, bad));
+    errno = 0;
+    const char *mc_ok = ok(syscall(SYS_mincore, rw, (size_t)pg, &vec));
 
     // ---- fstat(fd, statbuf) : statbuf written by the engine ----
-    errno = 0; const char *fs_bad = ef(syscall(SYS_fstat, fd, bad));
-    errno = 0; const char *fs_ok  = ok(syscall(SYS_fstat, fd, &st));
+    errno = 0;
+    const char *fs_bad = ef(syscall(SYS_fstat, fd, bad));
+    errno = 0;
+    const char *fs_ok = ok(syscall(SYS_fstat, fd, &st));
 
     // ---- newfstatat(dirfd, path, statbuf, flags) : statbuf written by the engine ----
-    errno = 0; const char *at_bad = ef(syscall(SYS_newfstatat, AT_FDCWD, "/", bad, 0));
-    errno = 0; const char *at_ok  = ok(syscall(SYS_newfstatat, AT_FDCWD, "/", &st, 0));
+    errno = 0;
+    const char *at_bad = ef(syscall(SYS_newfstatat, AT_FDCWD, "/", bad, 0));
+    errno = 0;
+    const char *at_ok = ok(syscall(SYS_newfstatat, AT_FDCWD, "/", &st, 0));
 
     // ---- rt_sigaction(sig, act, oldact, sigsetsize) : act read / oldact written by the engine ----
-    errno = 0; const char *sa_bad = ef(syscall(SYS_rt_sigaction, SIGUSR1, bad, (void *)0, 8));
-    errno = 0; const char *sa_old = ef(syscall(SYS_rt_sigaction, SIGUSR1, (void *)0, bad, 8));
-    errno = 0; const char *sa_ok  = ok(syscall(SYS_rt_sigaction, SIGUSR1, (void *)0, (void *)0, 8));
+    errno = 0;
+    const char *sa_bad = ef(syscall(SYS_rt_sigaction, SIGUSR1, bad, (void *)0, 8));
+    errno = 0;
+    const char *sa_old = ef(syscall(SYS_rt_sigaction, SIGUSR1, (void *)0, bad, 8));
+    errno = 0;
+    const char *sa_ok = ok(syscall(SYS_rt_sigaction, SIGUSR1, (void *)0, (void *)0, 8));
 
     // ---- read/write with a bad buffer : served by the host syscall, must still be EFAULT ----
-    errno = 0; const char *rd_bad = ef(syscall(SYS_read, fd, bad, 16));
-    errno = 0; const char *wr_bad = ef(syscall(SYS_write, fd, bad, 16));
+    errno = 0;
+    const char *rd_bad = ef(syscall(SYS_read, fd, bad, 16));
+    errno = 0;
+    const char *wr_bad = ef(syscall(SYS_write, fd, bad, 16));
     lseek(fd, 0, SEEK_SET);
-    errno = 0; const char *rd_ok  = ok(syscall(SYS_read, fd, rbuf, 13));
+    errno = 0;
+    const char *rd_ok = ok(syscall(SYS_read, fd, rbuf, 13));
 
     close(fd);
     printf("sysfault ns_str=%s ru_str=%s fs_str=%s ns_bad=%s ns_ok=%s ru_bad=%s ru_ok=%s "
            "mc_bad=%s mc_ok=%s fs_bad=%s fs_ok=%s at_bad=%s at_ok=%s "
            "sa_bad=%s sa_old=%s sa_ok=%s rd_bad=%s wr_bad=%s rd_ok=%s\n",
-           ns_str, ru_str, fs_str, ns_bad, ns_ok, ru_bad, ru_ok, mc_bad, mc_ok, fs_bad, fs_ok,
-           at_bad, at_ok, sa_bad, sa_old, sa_ok, rd_bad, wr_bad, rd_ok);
+           ns_str, ru_str, fs_str, ns_bad, ns_ok, ru_bad, ru_ok, mc_bad, mc_ok, fs_bad, fs_ok, at_bad, at_ok, sa_bad,
+           sa_old, sa_ok, rd_bad, wr_bad, rd_ok);
     return 0;
 }

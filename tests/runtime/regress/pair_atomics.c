@@ -45,8 +45,8 @@ int main(void) {
     uint64_t olo = 0, ohi = 0;
     do_casp(&olo, &ohi);
     llsc_add(1000);
-    printf("pairatomics casp_old=%016llx:%016llx casp_new=%016llx:%016llx llsc=%llu:%llu\n",
-           (unsigned long long)olo, (unsigned long long)ohi, (unsigned long long)g_casp[0],
-           (unsigned long long)g_casp[1], (unsigned long long)g_llsc[0], (unsigned long long)g_llsc[1]);
+    printf("pairatomics casp_old=%016llx:%016llx casp_new=%016llx:%016llx llsc=%llu:%llu\n", (unsigned long long)olo,
+           (unsigned long long)ohi, (unsigned long long)g_casp[0], (unsigned long long)g_casp[1],
+           (unsigned long long)g_llsc[0], (unsigned long long)g_llsc[1]);
     return 0;
 }

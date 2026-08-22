@@ -5,6 +5,7 @@
 #include <string.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+
 /* Pins the S3DB_DURABILITY=none|fast|strict fsync policy (helpers.c s3db_sync_fd), which is otherwise an
  * undocumented env-only switch. The engine routes fsync(82)/fdatasync(83)/sync_file_range(84) through the
  * policy. Two observable facts, host-independent:
@@ -34,7 +35,7 @@ int main(void) {
     /* A deliberately-invalid fd: `none` returns 0 (no real fsync issued -> no fd validation); every other
      * mode issues the real fsync and returns -1 (EBADF), matching Linux. */
     int badfd_fsync_ret = (int)syscall(SYS_fsync, 4242);
-    printf("s3db regfile_fsync=%d regfile_fdatasync=%d readback_ok=%d badfd_fsync_ret=%d\n",
-           regfile_fsync, regfile_fdatasync, readback_ok, badfd_fsync_ret);
+    printf("s3db regfile_fsync=%d regfile_fdatasync=%d readback_ok=%d badfd_fsync_ret=%d\n", regfile_fsync,
+           regfile_fdatasync, readback_ok, badfd_fsync_ret);
     return 0;
 }

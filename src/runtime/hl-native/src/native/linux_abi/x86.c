@@ -37,8 +37,7 @@ static void *elf_host_map(void *context, void *address, size_t length, uint32_t 
 static int x86_image_read(const char *path, hl_linux_image *image) {
     if (g_initial_executable_image != NULL)
         return hl_linux_image_read_bytes(g_initial_executable_image, g_initial_executable_size, image);
-    if (g_rootfs == NULL && g_authorized_executable_image != NULL && path != NULL &&
-        g_authorized_executable_path[0]) {
+    if (g_rootfs == NULL && g_authorized_executable_image != NULL && path != NULL && g_authorized_executable_path[0]) {
         char canonical[4200];
         if (realpath(path, canonical) != NULL && strcmp(canonical, g_authorized_executable_path) == 0)
             return hl_linux_image_read_bytes(g_authorized_executable_image, g_authorized_executable_size, image);
@@ -124,8 +123,8 @@ static void wr64(uint8_t *p, uint64_t v) {
 
 static int elf_interp(const char *path, char *out, size_t n, const hl_linux_image *pinned) {
     hl_linux_image image;
-    if ((pinned != NULL ? hl_linux_image_read_bytes(pinned->bytes, pinned->size, &image) : x86_image_read(path, &image)) !=
-        0)
+    if ((pinned != NULL ? hl_linux_image_read_bytes(pinned->bytes, pinned->size, &image)
+                        : x86_image_read(path, &image)) != 0)
         return -1;
     hl_linux_elf64_layout layout;
     if (n == 0 || hl_linux_elf64_validate(&image, 0x3E, &layout) != 0) {
@@ -173,8 +172,8 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
                      const hl_linux_image *pinned) {
     const struct main_placement *placement = placement_argument;
     hl_linux_image image;
-    if ((pinned != NULL ? hl_linux_image_read_bytes(pinned->bytes, pinned->size, &image) : x86_image_read(path, &image)) !=
-        0) {
+    if ((pinned != NULL ? hl_linux_image_read_bytes(pinned->bytes, pinned->size, &image)
+                        : x86_image_read(path, &image)) != 0) {
         fprintf(stderr, "hl-engine: cannot read guest ELF %s through host services\n", path);
         exit(1);
     }
@@ -186,8 +185,7 @@ static void load_elf(const char *path, struct loaded *out, const void *placement
     // the same g_pcache the consumer keys on, so a cache-on run is byte-identical and a cache-off run
     // stops producing a value no one will read. An empty digest is exactly what hl_identity_digest_empty
     // already denotes.
-    out->identity = g_pcache ? hl_identity_image_digest(image.bytes, image.size)
-                             : (hl_identity_digest){0};
+    out->identity = g_pcache ? hl_identity_image_digest(image.bytes, image.size) : (hl_identity_digest){0};
     hl_linux_elf64_layout layout;
     if (hl_linux_elf64_validate(&image, 0x3E, &layout) != 0) {
         hl_linux_image_release(&image);
@@ -366,7 +364,7 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
     // argv and envp are bounded identically (HL_MAXARGV/HL_MAXENVP); every producer fails closed with
     // -E2BIG at that bound, so neither vector can arrive longer than these arrays.
     uint64_t argp[HL_MAXARGV], envp_[HL_MAXENVP];
-    set_guest_cmdline(argc, argv);         // capture the full argv for /proc/self/cmdline (bare-mode fallback)
+    set_guest_cmdline(argc, argv); // capture the full argv for /proc/self/cmdline (bare-mode fallback)
     int envc = 0;
     for (int i = 0; i < argc; i++) {
         size_t l = strlen(argv[i]) + 1;

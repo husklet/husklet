@@ -32,10 +32,10 @@ int main(void) {
 
     // access(2): a mode with no execute bit -> X_OK fails; with r/w bits -> R_OK/W_OK on the owner.
     chmod(path, 0644);
-    int noexec = access(path, X_OK) != 0;      // 0644: not executable
+    int noexec = access(path, X_OK) != 0; // 0644: not executable
     int canrw = access(path, R_OK) == 0 && access(path, W_OK) == 0;
     chmod(path, 0755);
-    int canexec = access(path, X_OK) == 0;     // 0755: executable
+    int canexec = access(path, X_OK) == 0; // 0755: executable
     ok &= noexec && canrw && canexec;
 
     /* PostgreSQL chmods its bound Unix socket.  Some hosts permit native

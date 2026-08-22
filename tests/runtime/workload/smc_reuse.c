@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <sys/mman.h>
+
 // Emit a leaf function `int f(void){ return imm; }` at p.
 static void emit_ret(unsigned char *p, uint32_t v) {
 #if defined(__aarch64__)
@@ -21,7 +22,9 @@ static void emit_ret(unsigned char *p, uint32_t v) {
 #error "needs an emitter for this ISA"
 #endif
 }
+
 typedef int (*fn)(void);
+
 int main(void) {
     size_t ps = 4096;
     int flags = MAP_PRIVATE | MAP_ANONYMOUS;

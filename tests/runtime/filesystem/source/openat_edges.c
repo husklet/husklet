@@ -46,7 +46,8 @@ int main(void) {
     int el = (l == -1) ? errno : 0;
     int m = unlinkat(dfd, "f", 0);
     rmdir(dir);
-    printf("a=%d ea=%d b=%d eb=%d cok=%d ec=%d d=%d ed=%d eok=%d ee=%d f=%d ef=%d g=%d eg=%d h=%d eh=%d i=%d isdir=%d j=%d ej=%d k=%d l=%d el=%d m=%d\n",
+    printf("a=%d ea=%d b=%d eb=%d cok=%d ec=%d d=%d ed=%d eok=%d ee=%d f=%d ef=%d g=%d eg=%d h=%d eh=%d i=%d isdir=%d "
+           "j=%d ej=%d k=%d l=%d el=%d m=%d\n",
            a >= 0, ea, b, eb, c >= 0, ec, d, ed, e >= 0, ee, f, ef, g, eg, h, eh, i, isdir, j, ej, k, l, el, m);
     return 0;
 }

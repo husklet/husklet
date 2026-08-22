@@ -19,7 +19,8 @@ static void fail(const char *operation) {
 
 static void write_all(const char *text) {
     size_t length = 0;
-    while (text[length] != 0) length++;
+    while (text[length] != 0)
+        length++;
     while (length != 0) {
         ssize_t written = write(STDOUT_FILENO, text, length);
         if (written < 0 && errno == EINTR) continue;
@@ -78,7 +79,8 @@ int main(void) {
             pid_t identity = getpid();
             if (write(identities[1], &identity, sizeof(identity)) != sizeof(identity)) fail("publish-member");
             close(identities[1]);
-            while (!released) pause();
+            while (!released)
+                pause();
             write_all("REAPED-GROUP-MEMBER-SIGNALED\n");
             _exit(0);
         }

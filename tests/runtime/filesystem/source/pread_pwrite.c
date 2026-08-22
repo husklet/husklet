@@ -16,7 +16,7 @@ int main(void) {
     snprintf(path, sizeof path, "%s/file", dir);
     int fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
 
-    write(fd, "................................", 32);   // 32 dots
+    write(fd, "................................", 32); // 32 dots
     off_t before = lseek(fd, 5, SEEK_SET);
 
     // pwrite at offset 10 must not move the offset held at 5.
@@ -40,7 +40,6 @@ int main(void) {
     close(fd);
     unlink(path);
     rmdir(dir);
-    printf("pread-pwrite offset-kept=%d read=%d iov=%d bytes=%.4s\n",
-           offset_kept, read_ok, iov_ok, buf);
+    printf("pread-pwrite offset-kept=%d read=%d iov=%d bytes=%.4s\n", offset_kept, read_ok, iov_ok, buf);
     return 0;
 }

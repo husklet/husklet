@@ -14,6 +14,7 @@ static void nodefer_h(int s) {
 }
 
 static volatile sig_atomic_t defer_ran;
+
 static void defer_h(int s) {
     defer_ran++;
     // inside a default (masked) handler the signal is blocked
@@ -38,7 +39,6 @@ int main(void) {
     sigaction(SIGUSR2, &sb, NULL);
     raise(SIGUSR2);
 
-    printf("sa_nodefer nested=%d ran_once=%d defer_masked=%d\n",
-           nested, defer_ran == 1, defer_blocked);
+    printf("sa_nodefer nested=%d ran_once=%d defer_masked=%d\n", nested, defer_ran == 1, defer_blocked);
     return 0;
 }

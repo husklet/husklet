@@ -1,8 +1,13 @@
 /* Included by event.c: unity-build access with bounded syscall handlers. */
 
-static int svc_eventfd2(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                      uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+static int svc_eventfd2(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 19: {
         // Validate `flags` exactly as Linux (fs/eventfd.c): only EFD_SEMAPHORE(1) | EFD_NONBLOCK(O_NONBLOCK
@@ -76,8 +81,13 @@ static int svc_eventfd2(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
 }
 
 static int svc_epoll_create1(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                      uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+                             uint64_t a4, uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 20: {
         // epoll_create1(flags) -> kqueue. Only EPOLL_CLOEXEC (0x80000) is defined; any other bit is
@@ -113,9 +123,14 @@ static int svc_epoll_create1(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a
     return svc_done_host(c);
 }
 
-static int svc_epoll_ctl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                      uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+static int svc_epoll_ctl(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                         uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 21: {
         int op = (int)a1, fd = (int)a2, epfd = (int)a0;

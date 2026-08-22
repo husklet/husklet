@@ -16,6 +16,7 @@ int main(void) {
     struct stat st;
     int r = stat(loop, &st);
     printf("eloop_errno=%d\n", r == -1 ? errno : 0);
-    unlink(loop); rmdir(dir);
+    unlink(loop);
+    rmdir(dir);
     return 0;
 }

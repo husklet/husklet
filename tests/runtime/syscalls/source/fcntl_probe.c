@@ -15,7 +15,10 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t g_sig = 0;
-static void onsig(int s) { g_sig = s; }
+
+static void onsig(int s) {
+    g_sig = s;
+}
 
 int main(void) {
     // ---- F_GETFL / F_SETFL masking on a regular file ----
@@ -80,9 +83,11 @@ int main(void) {
     lseek(fd, 7, SEEK_SET);
     printf("dupfd.shared_offset=%d\n", lseek(d1, 0, SEEK_CUR) == 7);
     // F_DUPFD negative floor -> EINVAL
-    errno = 0; fcntl(fd, F_DUPFD, -1);
+    errno = 0;
+    fcntl(fd, F_DUPFD, -1);
     printf("dupfd.neg.einval=%d\n", errno == EINVAL);
-    close(d1); close(d2);
+    close(d1);
+    close(d2);
 
     // ---- F_GETOWN / F_SETOWN ----
     errno = 0;
@@ -121,14 +126,16 @@ int main(void) {
         signal(SIGUSR2, onsig);
         fcntl(sv[0], F_SETSIG, SIGUSR2);
         g_sig = 0;
-        char buf[8]; (void)read(sv[0], buf, sizeof buf); // drain
+        char buf[8];
+        (void)read(sv[0], buf, sizeof buf); // drain
         write(sv[1], "yy", 2);
         for (int i = 0; i < 100 && g_sig == 0; i++) {
             struct timespec ts = {0, 5000000};
             nanosleep(&ts, NULL);
         }
         printf("async.customsig.delivered=%d\n", g_sig == SIGUSR2);
-        close(sv[0]); close(sv[1]);
+        close(sv[0]);
+        close(sv[1]);
     }
 
     // ---- F_SETLEASE / F_GETLEASE ----

@@ -16,9 +16,9 @@ extern char **environ;
 static int exec_expect(const char *path) {
     pid_t p = fork();
     if (p == 0) {
-        char *cargv[] = { (char *)path, NULL };
+        char *cargv[] = {(char *)path, NULL};
         execve(path, cargv, environ);
-        _exit(errno & 0x7f);   // exec failed: report errno
+        _exit(errno & 0x7f); // exec failed: report errno
     }
     int st = 0;
     waitpid(p, &st, 0);
@@ -39,7 +39,6 @@ int main(void) {
     int noexec = exec_expect(path) == (ENOEXEC & 0x7f);
     unlink(path);
 
-    printf("exec_errno enoent=%d dir_err=%d wrote=%d noexec=%d\n",
-           enoent, dir_err, wrote, noexec);
+    printf("exec_errno enoent=%d dir_err=%d wrote=%d noexec=%d\n", enoent, dir_err, wrote, noexec);
     return 0;
 }

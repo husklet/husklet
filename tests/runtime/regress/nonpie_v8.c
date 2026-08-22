@@ -11,13 +11,18 @@
 #include <stdint.h>
 #include <stdio.h>
 
-__attribute__((used, noinline)) void v8_Default_embedded_blob_code_(void) { __asm__ volatile(""); }
+__attribute__((used, noinline)) void v8_Default_embedded_blob_code_(void) {
+    __asm__ volatile("");
+}
 
 static volatile uintptr_t g_ret;
-__attribute__((noinline)) static void capture(void) { g_ret = (uintptr_t)__builtin_return_address(0); }
+
+__attribute__((noinline)) static void capture(void) {
+    g_ret = (uintptr_t)__builtin_return_address(0);
+}
 
 int main(void) {
-    capture(); // g_ret = a return address into main -- where code actually executes (HIGH under hl)
+    capture();      // g_ret = a return address into main -- where code actually executes (HIGH under hl)
     uintptr_t base; // gcc emits `mov r64,imm32` (C7 /0) for the symbol address in a non-PIE build
     __asm__ volatile("mov %1, %0" : "=r"(base) : "i"(&v8_Default_embedded_blob_code_));
     printf("same_half=%d\n", (int)((base >> 32) == (g_ret >> 32)));

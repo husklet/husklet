@@ -254,8 +254,7 @@ int hl_owner_registry_writer_lookup(const hl_owner_registry *registry, hl_owner_
     uint64_t index = 0, state = 0;
     if (!hl_owner_initialized(registry) || value == NULL || !hl_owner_key_valid(key)) return EINVAL;
     if (!hl_owner_writer_valid(namespace, writer)) return EPERM;
-    if (!hl_owner_find(registry, key, &index, &state, NULL) ||
-        hl_owner_state_kind(state) != HL_OWNER_STATE_LIVE)
+    if (!hl_owner_find(registry, key, &index, &state, NULL) || hl_owner_state_kind(state) != HL_OWNER_STATE_LIVE)
         return ENOENT;
     const hl_owner_registry_slot *slot = &registry->slots[index];
     uint64_t owner = atomic_load_explicit(&slot->owner, memory_order_relaxed);

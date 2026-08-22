@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 enum { PER_GROUP = 3 };
+
 #define WBIT_A 0x1u
 #define WBIT_B 0x2u
 
@@ -47,7 +48,8 @@ int main(void) {
         pthread_create(&th[i], NULL, waiter, (void *)(uintptr_t)WBIT_A);
     for (int i = 0; i < PER_GROUP; ++i)
         pthread_create(&th[PER_GROUP + i], NULL, waiter, (void *)(uintptr_t)WBIT_B);
-    while (atomic_load_explicit(&ready, memory_order_acquire) != 2 * PER_GROUP) sched_yield();
+    while (atomic_load_explicit(&ready, memory_order_acquire) != 2 * PER_GROUP)
+        sched_yield();
     usleep(50000); // let every waiter reach the park
 
     // Wake exactly one A-group waiter; the disjoint B group must be untouched.
@@ -63,14 +65,11 @@ int main(void) {
     // Drain both groups.
     long rest_a = futex(FUTEX_WAKE_BITSET, INT_MAX, NULL, WBIT_A);
     long all_b = futex(FUTEX_WAKE_BITSET, INT_MAX, NULL, WBIT_B);
-    for (int i = 0; i < 2 * PER_GROUP; ++i) pthread_join(th[i], NULL);
+    for (int i = 0; i < 2 * PER_GROUP; ++i)
+        pthread_join(th[i], NULL);
 
-    printf("futex_wake_bitset first=%ld a_after_one=%d b_after_one=%d rest_a=%ld all_b=%ld a=%d b=%d\n",
-           first, a_after_one, b_after_one, rest_a, all_b,
-           atomic_load_explicit(&woke_a, memory_order_acquire),
+    printf("futex_wake_bitset first=%ld a_after_one=%d b_after_one=%d rest_a=%ld all_b=%ld a=%d b=%d\n", first,
+           a_after_one, b_after_one, rest_a, all_b, atomic_load_explicit(&woke_a, memory_order_acquire),
            atomic_load_explicit(&woke_b, memory_order_acquire));
-    return first == 1 && a_after_one == 1 && b_after_one == 0 && rest_a == PER_GROUP - 1 &&
-                   all_b == PER_GROUP
-               ? 0
-               : 1;
+    return first == 1 && a_after_one == 1 && b_after_one == 0 && rest_a == PER_GROUP - 1 && all_b == PER_GROUP ? 0 : 1;
 }

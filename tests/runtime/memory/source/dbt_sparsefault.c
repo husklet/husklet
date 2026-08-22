@@ -9,7 +9,7 @@
 
 int main(void) {
     size_t page = 4096;
-    size_t pages = 262144;          // 1 GiB reservation
+    size_t pages = 262144; // 1 GiB reservation
     size_t len = pages * page;
     unsigned char *m = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (m == MAP_FAILED) {
@@ -23,8 +23,8 @@ int main(void) {
         idx = (idx + stride) % pages;
         volatile uint64_t *slot = (volatile uint64_t *)(m + idx * page);
         uint64_t v = (uint64_t)idx * 0x9e3779b97f4a7c15ULL + 1;
-        *slot = v;         // fault the page in on write
-        sum += *slot ^ v;  // must read back exactly what was written -> contributes 0 if coherent
+        *slot = v;        // fault the page in on write
+        sum += *slot ^ v; // must read back exactly what was written -> contributes 0 if coherent
         sum = sum * 1000003ULL + (*slot >> 17);
     }
     munmap(m, len);

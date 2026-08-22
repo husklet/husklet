@@ -10,7 +10,10 @@
 int main(void) {
     net_watchdog(20);
     int sv[2];
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0) { perror("socketpair"); return 1; }
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0) {
+        perror("socketpair");
+        return 1;
+    }
     int ty = -1;
     socklen_t l = sizeof ty;
     getsockopt(sv[0], SOL_SOCKET, SO_TYPE, &ty, &l);

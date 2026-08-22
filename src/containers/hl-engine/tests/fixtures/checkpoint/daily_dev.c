@@ -48,7 +48,9 @@ static int workload(const char *directory, int transport) {
     }
 }
 
-static int helper(int cycle) { return cycle + 10; }
+static int helper(int cycle) {
+    return cycle + 10;
+}
 
 int main(int argc, char **argv) {
     if (argc != 2) return 2;
@@ -71,8 +73,8 @@ int main(int argc, char **argv) {
     if (sleeper == 0) {
         close(transport[0]);
         close(transport[1]);
-        dprintf(STDOUT_FILENO, "SLEEP-READY pid=%ld ppid=%ld pgid=%ld sid=%ld\n", (long)getpid(),
-                (long)getppid(), (long)getpgrp(), (long)getsid(0));
+        dprintf(STDOUT_FILENO, "SLEEP-READY pid=%ld ppid=%ld pgid=%ld sid=%ld\n", (long)getpid(), (long)getppid(),
+                (long)getpgrp(), (long)getsid(0));
         unsigned remaining = sleep(1000);
         dprintf(STDOUT_FILENO, "SLEEP-RETURN remaining=%u\n", remaining);
         return 30;
@@ -87,9 +89,8 @@ int main(int argc, char **argv) {
         return status;
     }
     close(transport[1]);
-    dprintf(STDOUT_FILENO,
-            "READY leader=%ld sleeper=%ld worker=%ld pgid=%ld sid=%ld fg=%ld\n", (long)leader, (long)sleeper,
-            (long)worker, (long)group, (long)session, (long)foreground);
+    dprintf(STDOUT_FILENO, "READY leader=%ld sleeper=%ld worker=%ld pgid=%ld sid=%ld fg=%ld\n", (long)leader,
+            (long)sleeper, (long)worker, (long)group, (long)session, (long)foreground);
 
     uint64_t progress = 0, previous = 0;
     if (foreground <= 0) return 14;
@@ -116,7 +117,8 @@ int main(int argc, char **argv) {
             WEXITSTATUS(child_status) != helper(next_cycle))
             return 10;
         if (getpid() != leader || getpgrp() != group || getsid(0) != session || tcgetpgrp(STDIN_FILENO) != foreground ||
-            getpgid(sleeper) != group || getsid(sleeper) != session || getpgid(worker) != group || getsid(worker) != session) {
+            getpgid(sleeper) != group || getsid(sleeper) != session || getpgid(worker) != group ||
+            getsid(worker) != session) {
             dprintf(STDOUT_FILENO,
                     "IDENTITY-ERROR expected=%ld/%ld/%ld/%ld actual=%ld/%ld/%ld/%ld sleeper=%ld/%ld worker=%ld/%ld\n",
                     (long)leader, (long)group, (long)session, (long)foreground, (long)getpid(), (long)getpgrp(),

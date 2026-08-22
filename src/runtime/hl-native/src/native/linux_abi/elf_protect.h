@@ -42,8 +42,8 @@ static uint64_t hl_elf_ph64(const uint8_t *p) {
 static int hl_elf_protect_span(const hl_host_memory_mapping *mapping, uint64_t address, uint64_t length,
                                uint32_t flags) {
     if (mapping != NULL) {
-        uint32_t protection = HL_HOST_MEMORY_READ | ((flags & 2) ? HL_HOST_MEMORY_WRITE : 0) |
-                              ((flags & 1) ? HL_HOST_MEMORY_EXECUTE : 0);
+        uint32_t protection =
+            HL_HOST_MEMORY_READ | ((flags & 2) ? HL_HOST_MEMORY_WRITE : 0) | ((flags & 1) ? HL_HOST_MEMORY_EXECUTE : 0);
         const hl_host_services *host = effective_host_services();
         for (int t = 0;; t++) {
             hl_host_result r =
@@ -62,8 +62,8 @@ static int hl_elf_protect_span(const hl_host_memory_mapping *mapping, uint64_t a
 // Apply one coalesced run. A refusal of the whole run falls back to the page-at-a-time form it replaced,
 // so a host that can tighten some pages of a span and not others still tightens exactly those pages --
 // the loader's protection contract is best-effort per page and coalescing must not narrow it.
-static void hl_elf_protect_run(const hl_host_memory_mapping *mapping, uint64_t address, uint64_t length,
-                               uint32_t flags, size_t host_page) {
+static void hl_elf_protect_run(const hl_host_memory_mapping *mapping, uint64_t address, uint64_t length, uint32_t flags,
+                               size_t host_page) {
     if (length == 0 || flags == 0) return;
     if (hl_elf_protect_span(mapping, address, length, flags)) return;
     if (length == (uint64_t)host_page) return; /* a one-page run has no narrower form to retry */

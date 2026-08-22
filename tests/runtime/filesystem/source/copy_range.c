@@ -21,7 +21,7 @@ int main(void) {
     write(sfd, payload, n);
 
     int dfd = open(dst, O_CREAT | O_RDWR | O_TRUNC, 0644);
-    off_t in_off = 10;   // start copying at 'K'
+    off_t in_off = 10; // start copying at 'K'
     off_t out_off = 0;
     ssize_t copied = copy_file_range(sfd, &in_off, dfd, &out_off, 16, 0);
     int count_ok = copied == 16;
@@ -39,7 +39,7 @@ int main(void) {
     unlink(src);
     unlink(dst);
     rmdir(dir);
-    printf("copy-range count=%d offsets=%d content=%d size=%d bytes=%.16s\n",
-           count_ok, offsets_ok, content_ok, size_ok, buf);
+    printf("copy-range count=%d offsets=%d content=%d size=%d bytes=%.16s\n", count_ok, offsets_ok, content_ok, size_ok,
+           buf);
     return 0;
 }

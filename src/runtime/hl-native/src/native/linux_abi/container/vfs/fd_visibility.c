@@ -158,7 +158,8 @@ HL_API int HL_TARGET_LOCAL(fdvis_path_publication_test)(uint32_t scenario) {
         return collision_ok;
     }
     if (scenario == 4) {
-        for (unsigned index = 0; index < FDPATH_N; ++index) paths[index].key = (uint64_t)index + 1;
+        for (unsigned index = 0; index < FDPATH_N; ++index)
+            paths[index].key = (uint64_t)index + 1;
         int full = fdpath_find(UINT64_C(0x100000001), 9, 1) == NULL;
         g_fdpaths = saved_paths;
         free(paths);
@@ -174,7 +175,8 @@ HL_API int HL_TARGET_LOCAL(fdvis_path_publication_test)(uint32_t scenario) {
         return cleaned;
     }
     if (scenario == 6) {
-        for (unsigned index = 0; index < FDPATH_N; ++index) paths[index].key = (uint64_t)index + 1;
+        for (unsigned index = 0; index < FDPATH_N; ++index)
+            paths[index].key = (uint64_t)index + 1;
         int propagated = fdpath_restore_locked(fdvis_key(88, descriptor), 100, "/fork/full", 1);
         g_fdpaths = saved_paths;
         free(paths);
@@ -308,8 +310,8 @@ static int fdvis_owner_is_gone(int pid, uint64_t owner) {
 static void fdvis_init(const hl_host_services *host) {
     void *arena = NULL;
     if (g_fdvis != NULL) return;
-    size_t bytes = sizeof(struct fdvis_slot) * FDVIS_N + sizeof(struct fdpath_slot) * FDPATH_N +
-                   sizeof(*g_fdvis_control);
+    size_t bytes =
+        sizeof(struct fdvis_slot) * FDVIS_N + sizeof(struct fdpath_slot) * FDPATH_N + sizeof(*g_fdvis_control);
     if (hl_linux_shared_create(host, bytes, &arena) != HL_STATUS_OK) return;
     g_fdvis = arena;
     g_fdpaths = (void *)((unsigned char *)arena + sizeof(struct fdvis_slot) * FDVIS_N);
@@ -502,9 +504,7 @@ static void proc_fdvis_reservation_publish(struct fdvis_reservation *reservation
     slot->device = device;
     slot->object = object;
     slot->kind = kind;
-    if (guest_fd >= 0 && guest_fd < HL_NFD) {
-        (void)proc_fdvis_publish_path_locked(pid, owner_start, guest_fd);
-    }
+    if (guest_fd >= 0 && guest_fd < HL_NFD) { (void)proc_fdvis_publish_path_locked(pid, owner_start, guest_fd); }
     slot->owner_start_ns = owner_start;
     slot->generation = ++g_fdvis_control->generation;
     slot->key = fdvis_key(pid, guest_fd);
@@ -1235,8 +1235,8 @@ static int fdvis_corpse_holder_test(void) {
         /* The word must name the holder under ITS OWN identity: a child that reported its parent's pid
          * would make everything below pass for the wrong reason. */
         uint64_t owner = atomic_load_explicit(&control->owner, memory_order_relaxed);
-        int owned_by_holder = __atomic_load_n(held, __ATOMIC_ACQUIRE) == 1 &&
-                              (int)(uint32_t)(owner >> 32) == (int)holder;
+        int owned_by_holder =
+            __atomic_load_n(held, __ATOMIC_ACQUIRE) == 1 && (int)(uint32_t)(owner >> 32) == (int)holder;
         (void)kill(holder, SIGKILL);
         int corpse = 0;
         for (int spin = 0; spin < 5000 && owned_by_holder && !corpse; ++spin) {

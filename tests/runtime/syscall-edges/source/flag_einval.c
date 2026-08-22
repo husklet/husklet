@@ -68,8 +68,8 @@ int main(void) {
     // is EINVAL BEFORE the family is consulted -- the type must not silently mask down to SOCK_STREAM.
     int spair[2] = {-1, -1};
     long spr = syscall(SYS_socketpair, AF_UNIX, SOCK_STREAM | 0x10, 0, (long)spair);
-    printf("socketpair_badtype_errno=%d socket_badtype_errno=%d\n",
-           spr == -1 ? errno : 0, ec(SYS_socket, AF_UNIX, SOCK_STREAM | 0x10, 0, 0, 0));
+    printf("socketpair_badtype_errno=%d socket_badtype_errno=%d\n", spr == -1 ? errno : 0,
+           ec(SYS_socket, AF_UNIX, SOCK_STREAM | 0x10, 0, 0, 0));
 
     // process_vm_readv/writev: the 6th arg `flags` must be 0 -- no flags are defined, so any non-zero value is
     // EINVAL, and the kernel checks it before importing the iovecs (so even valid iovecs still fail). A valid

@@ -1,8 +1,13 @@
 /* Included by io.c: unity-build access with bounded I/O capability handlers. */
 
-static int svc_lseek(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                     uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+static int svc_lseek(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                     uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 62: {
         // lseek -- SEEK_SET/CUR/END(0/1/2) match. SEEK_DATA/SEEK_HOLE use host-native constants because
@@ -71,9 +76,14 @@ static int svc_lseek(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
     return svc_done_host(c);
 }
 
-static int svc_pread64(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                     uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+static int svc_pread64(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                       uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 67: {
         // pread64
@@ -109,9 +119,14 @@ static int svc_pread64(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
     return svc_done_host(c);
 }
 
-static int svc_pwrite64(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                     uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+static int svc_pwrite64(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 68: {
         // pwrite64
@@ -175,9 +190,14 @@ static int svc_pwrite64(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return svc_done_host(c);
 }
 
-static int svc_sendfile(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                     uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+static int svc_sendfile(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 71: {
         int outfd = (int)a0, infd = (int)a1;
@@ -239,9 +259,14 @@ static int svc_sendfile(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return svc_done_host(c);
 }
 
-static int svc_tee(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                     uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+static int svc_tee(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                   uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 75: {
         int vfd = (int)a0;
@@ -266,9 +291,14 @@ static int svc_tee(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
     return svc_done_host(c);
 }
 
-static int svc_splice(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                     uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+static int svc_splice(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                      uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 76: {
         int fin = (int)a0, fout = (int)a2;
@@ -344,9 +374,14 @@ static int svc_splice(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
     return svc_done_host(c);
 }
 
-static int svc_ftruncate(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                     uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+static int svc_ftruncate(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                         uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 77: {
         int fin = (int)a0, fout = (int)a1; // tee(fd_in, fd_out, len, flags) -- NOT the splice arg layout

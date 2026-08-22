@@ -9,33 +9,37 @@
 static unsigned long fl_shld64_imm(unsigned long d, unsigned long s, int imm) {
     unsigned long fl;
     switch (imm) {
-    case 4:  __asm__ volatile("shldq $4,%2,%1\n\tpushfq\n\tpopq %0"  : "=r"(fl), "+r"(d) : "r"(s) : "cc"); break;
+    case 4: __asm__ volatile("shldq $4,%2,%1\n\tpushfq\n\tpopq %0" : "=r"(fl), "+r"(d) : "r"(s) : "cc"); break;
     default: __asm__ volatile("shldq $31,%2,%1\n\tpushfq\n\tpopq %0" : "=r"(fl), "+r"(d) : "r"(s) : "cc"); break;
     }
     (void)d;
     return fl & MASK;
 }
+
 static unsigned long fl_shrd64_imm(unsigned long d, unsigned long s, int imm) {
     unsigned long fl;
     switch (imm) {
-    case 4:  __asm__ volatile("shrdq $4,%2,%1\n\tpushfq\n\tpopq %0"  : "=r"(fl), "+r"(d) : "r"(s) : "cc"); break;
-    default: __asm__ volatile("shrdq $1,%2,%1\n\tpushfq\n\tpopq %0"  : "=r"(fl), "+r"(d) : "r"(s) : "cc"); break;
+    case 4: __asm__ volatile("shrdq $4,%2,%1\n\tpushfq\n\tpopq %0" : "=r"(fl), "+r"(d) : "r"(s) : "cc"); break;
+    default: __asm__ volatile("shrdq $1,%2,%1\n\tpushfq\n\tpopq %0" : "=r"(fl), "+r"(d) : "r"(s) : "cc"); break;
     }
     (void)d;
     return fl & MASK;
 }
+
 static unsigned long fl_shld32_imm(unsigned d, unsigned s) {
     unsigned long fl;
     __asm__ volatile("shldl $12,%2,%1\n\tpushfq\n\tpopq %0" : "=r"(fl), "+r"(d) : "r"(s) : "cc");
     (void)d;
     return fl & MASK;
 }
+
 static unsigned long fl_shrd32_imm(unsigned d, unsigned s) {
     unsigned long fl;
     __asm__ volatile("shrdl $7,%2,%1\n\tpushfq\n\tpopq %0" : "=r"(fl), "+r"(d) : "r"(s) : "cc");
     (void)d;
     return fl & MASK;
 }
+
 // by CL. count in cl; result in d. Capture CF|PF|ZF|SF.
 static unsigned long fl_shld64_cl(unsigned long d, unsigned long s, unsigned cl) {
     unsigned long fl;
@@ -43,12 +47,14 @@ static unsigned long fl_shld64_cl(unsigned long d, unsigned long s, unsigned cl)
     (void)d;
     return fl & MASK;
 }
+
 static unsigned long fl_shrd32_cl(unsigned d, unsigned s, unsigned cl) {
     unsigned long fl;
     __asm__ volatile("shrdl %%cl,%2,%1\n\tpushfq\n\tpopq %0" : "=r"(fl), "+r"(d) : "r"(s), "c"(cl) : "cc");
     (void)d;
     return fl & MASK;
 }
+
 // count==0 with CL: ALL flags preserved. Pre-set CF via stc/clc, then shld %cl (cl=0), read CF back.
 static int cf_shld_cl0(unsigned long d, unsigned long s, int precf) {
     unsigned long fl;

@@ -15,7 +15,9 @@ static int emit_parity_condition(int low) {
     return low == 0xA ? 1 : 0;
 }
 
-static void emit_edge_spill(int kind) { hl_x86_legacy_jcc_spill(kind); }
+static void emit_edge_spill(int kind) {
+    hl_x86_legacy_jcc_spill(kind);
+}
 
 static int lower_conditional_branch(struct insn *instruction, uint64_t *guest_pc, uint64_t next,
                                     hl_x86_trace_state *trace, hl_x86_branch_region *region) {
@@ -38,8 +40,7 @@ static int lower_conditional_branch(struct insn *instruction, uint64_t *guest_pc
                       !hl_x86_trace_trap_head(fall);
     int save_taken = 0;
     int save_fall = 0;
-    if (!parity)
-        hl_x86_trace_jcc_flags(trace, taken, fall, *guest_pc, stitch_fall, condition, &save_taken, &save_fall);
+    if (!parity) hl_x86_trace_jcc_flags(trace, taken, fall, *guest_pc, stitch_fall, condition, &save_taken, &save_fall);
     if (stitch_fall) {
         int inverse = (condition ^ 1) & 0xF;
         uint32_t *patch = hl_x86_emit_cursor();
@@ -69,20 +70,20 @@ static int lower_conditional_branch(struct insn *instruction, uint64_t *guest_pc
     return TX_BREAK;
 }
 
-int hl_x86_lower_near_branch(struct insn *instruction, uint64_t *guest_pc, uint64_t next,
-                             hl_x86_trace_state *trace, hl_x86_branch_region *region) {
+int hl_x86_lower_near_branch(struct insn *instruction, uint64_t *guest_pc, uint64_t next, hl_x86_trace_state *trace,
+                             hl_x86_branch_region *region) {
     if ((instruction->op & 0xF0) != 0x80) return TX_FALL;
     return lower_conditional_branch(instruction, guest_pc, next, trace, region);
 }
 
-int hl_x86_lower_short_branch(struct insn *instruction, uint64_t *guest_pc, uint64_t next,
-                              hl_x86_trace_state *trace, hl_x86_branch_region *region) {
+int hl_x86_lower_short_branch(struct insn *instruction, uint64_t *guest_pc, uint64_t next, hl_x86_trace_state *trace,
+                              hl_x86_branch_region *region) {
     if (instruction->op < 0x70 || instruction->op > 0x7F) return TX_FALL;
     return lower_conditional_branch(instruction, guest_pc, next, trace, region);
 }
 
-int hl_x86_lower_direct_jump(struct insn *instruction, uint64_t *guest_pc, uint64_t next,
-                             hl_x86_trace_state *trace, hl_x86_branch_region *region) {
+int hl_x86_lower_direct_jump(struct insn *instruction, uint64_t *guest_pc, uint64_t next, hl_x86_trace_state *trace,
+                             hl_x86_branch_region *region) {
     if (instruction->op != 0xE9 && instruction->op != 0xEB) return TX_FALL;
     uint64_t target = next + (uint64_t)instruction->imm;
     if (region->stitch_allowed && target != region->start &&
@@ -109,8 +110,10 @@ int hl_x86_lower_conditional_move(struct insn *instruction, uint64_t guest_pc, u
                 e_movconst(16, 1);
                 e_rrr(A_EOR, 19, 19, 16, 0, 0);
             }
-            if (instruction->is_mem) e_store(1, 19, 17);
-            else byte_wb(instruction, instruction->rm_reg, 19);
+            if (instruction->is_mem)
+                e_store(1, 19, 17);
+            else
+                byte_wb(instruction, instruction->rm_reg, 19);
             return TX_NEXT;
         }
         int condition = x86cc_to_arm(low);

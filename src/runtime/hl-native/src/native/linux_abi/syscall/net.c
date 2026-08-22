@@ -5,6 +5,7 @@
 static inline uint64_t net_nonpie_p(uint64_t address) {
     return nonpie_fold(address);
 }
+
 // A zero-length datagram receive that asks for the sender address. macOS short-circuits any receive with
 // a zero-length buffer (returns 0 at once, filling neither data nor the source address), but Linux blocks
 // until a datagram arrives and reports its sender. busybox `nc -u -l` depends on the Linux behaviour: it
@@ -117,8 +118,8 @@ static int unix_owner_same_object(const char *path, const struct stat *expected)
 }
 
 static int unix_owner_rollback(const char *path, const struct stat *expected, uint64_t expected_birth) {
-    int same = expected_birth == 0 ? unix_owner_same_object(path, expected)
-                                   : unix_owner_same(path, expected, expected_birth);
+    int same =
+        expected_birth == 0 ? unix_owner_same_object(path, expected) : unix_owner_same(path, expected, expected_birth);
     return same && unlink(path) == 0 ? 0 : -1;
 }
 

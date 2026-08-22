@@ -65,7 +65,8 @@ int main(int argc, char **argv) {
     }
     fn_t f = (fn_t)m;
     long acc = 0;
-    for (int i = 0; i < 1000; i++) acc += f(i); // execute code from the library-like map
+    for (int i = 0; i < 1000; i++)
+        acc += f(i); // execute code from the library-like map
     munmap(m, 4096);
     close(fd);
     printf("pcache libmap acc=%ld\n", acc); // 506500 = sum(i=0..999) + 7*1000

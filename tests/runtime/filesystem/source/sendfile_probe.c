@@ -39,10 +39,13 @@ int main(void) {
     pread(dfd2, full, n, 0);
     int full_ok = memcmp(full, payload, n) == 0;
 
-    close(sfd); close(dfd); close(dfd2);
-    unlink(src); unlink(dst);
+    close(sfd);
+    close(dfd);
+    close(dfd2);
+    unlink(src);
+    unlink(dst);
     rmdir(dir);
-    printf("sendfile-probe slice=%d slice-content=%d stream=%d full-content=%d\n",
-           slice_ok, slice_content, stream_ok, full_ok);
+    printf("sendfile-probe slice=%d slice-content=%d stream=%d full-content=%d\n", slice_ok, slice_content, stream_ok,
+           full_ok);
     return 0;
 }

@@ -19,9 +19,9 @@ int main(void) {
         if (g == 0) {
             // give the middle process time to exit so we are reparented before we exit
             usleep(60 * 1000);
-            _exit(77);              // grandchild's real exit code
+            _exit(77); // grandchild's real exit code
         }
-        _exit(0);                   // middle process dies now, orphaning the grandchild
+        _exit(0); // middle process dies now, orphaning the grandchild
     }
     // reap the middle child
     int st = 0;
@@ -33,10 +33,13 @@ int main(void) {
     for (;;) {
         int gs = 0;
         pid_t r = waitpid(-1, &gs, 0);
-        if (r <= 0) break;          // ECHILD -> nothing left
-        if (WIFEXITED(gs)) { gcode = WEXITSTATUS(gs); harvested = 1; }
+        if (r <= 0) break; // ECHILD -> nothing left
+        if (WIFEXITED(gs)) {
+            gcode = WEXITSTATUS(gs);
+            harvested = 1;
+        }
     }
-    printf("subreaper set=%d isreaper=%d mid_ok=%d harvested=%d gcode=%d\n",
-           set, isreaper ? 1 : 0, mid_ok, harvested, gcode); // 1 1 1 1 77
+    printf("subreaper set=%d isreaper=%d mid_ok=%d harvested=%d gcode=%d\n", set, isreaper ? 1 : 0, mid_ok, harvested,
+           gcode); // 1 1 1 1 77
     return 0;
 }

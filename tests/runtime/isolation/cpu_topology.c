@@ -16,10 +16,14 @@
 static int read_line(const char *path, char *out, size_t n) {
     FILE *f = fopen(path, "r");
     if (!f) return -1;
-    if (!fgets(out, (int)n, f)) { fclose(f); return -1; }
+    if (!fgets(out, (int)n, f)) {
+        fclose(f);
+        return -1;
+    }
     fclose(f);
     size_t L = strlen(out);
-    while (L && (out[L - 1] == '\n' || out[L - 1] == ' ')) out[--L] = 0;
+    while (L && (out[L - 1] == '\n' || out[L - 1] == ' '))
+        out[--L] = 0;
     return (int)L;
 }
 
@@ -40,27 +44,65 @@ static int list_has(const char *list, int v) {
 
 int main(void) {
     long nc = sysconf(_SC_NPROCESSORS_ONLN);
-    if (nc < 1) { printf("cputopo ok=0 nproc=%ld\n", nc); return 0; }
+    if (nc < 1) {
+        printf("cputopo ok=0 nproc=%ld\n", nc);
+        return 0;
+    }
     for (long i = 0; i < nc; i++) {
         char path[128], buf[128];
         // core_id: a non-negative integer.
         snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%ld/topology/core_id", i);
-        if (read_line(path, buf, sizeof buf) < 1) { printf("cputopo ok=0 miss=%s\n", path); return 0; }
-        { char *e; long v = strtol(buf, &e, 10); if (e == buf || v < 0) { printf("cputopo ok=0 bad=%s val=%s\n", path, buf); return 0; } }
+        if (read_line(path, buf, sizeof buf) < 1) {
+            printf("cputopo ok=0 miss=%s\n", path);
+            return 0;
+        }
+        {
+            char *e;
+            long v = strtol(buf, &e, 10);
+            if (e == buf || v < 0) {
+                printf("cputopo ok=0 bad=%s val=%s\n", path, buf);
+                return 0;
+            }
+        }
         // physical_package_id: a non-negative integer (the socket).
         snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%ld/topology/physical_package_id", i);
-        if (read_line(path, buf, sizeof buf) < 1) { printf("cputopo ok=0 miss=%s\n", path); return 0; }
-        { char *e; long v = strtol(buf, &e, 10); if (e == buf || v < 0) { printf("cputopo ok=0 bad=%s val=%s\n", path, buf); return 0; } }
+        if (read_line(path, buf, sizeof buf) < 1) {
+            printf("cputopo ok=0 miss=%s\n", path);
+            return 0;
+        }
+        {
+            char *e;
+            long v = strtol(buf, &e, 10);
+            if (e == buf || v < 0) {
+                printf("cputopo ok=0 bad=%s val=%s\n", path, buf);
+                return 0;
+            }
+        }
         // thread_siblings_list: a well-formed cpu-list that INCLUDES this cpu (a real Linux invariant).
         snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%ld/topology/thread_siblings_list", i);
-        if (read_line(path, buf, sizeof buf) < 1) { printf("cputopo ok=0 miss=%s\n", path); return 0; }
-        if (!list_has(buf, (int)i)) { printf("cputopo ok=0 selfnotin=%s val=%s\n", path, buf); return 0; }
+        if (read_line(path, buf, sizeof buf) < 1) {
+            printf("cputopo ok=0 miss=%s\n", path);
+            return 0;
+        }
+        if (!list_has(buf, (int)i)) {
+            printf("cputopo ok=0 selfnotin=%s val=%s\n", path, buf);
+            return 0;
+        }
         // core_cpus_list + core_siblings_list: present, non-empty cpu-lists.
         snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%ld/topology/core_cpus_list", i);
-        if (read_line(path, buf, sizeof buf) < 1) { printf("cputopo ok=0 miss=%s\n", path); return 0; }
+        if (read_line(path, buf, sizeof buf) < 1) {
+            printf("cputopo ok=0 miss=%s\n", path);
+            return 0;
+        }
         snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%ld/topology/core_siblings_list", i);
-        if (read_line(path, buf, sizeof buf) < 1) { printf("cputopo ok=0 miss=%s\n", path); return 0; }
-        if (!list_has(buf, (int)i)) { printf("cputopo ok=0 selfnotin=%s val=%s\n", path, buf); return 0; }
+        if (read_line(path, buf, sizeof buf) < 1) {
+            printf("cputopo ok=0 miss=%s\n", path);
+            return 0;
+        }
+        if (!list_has(buf, (int)i)) {
+            printf("cputopo ok=0 selfnotin=%s val=%s\n", path, buf);
+            return 0;
+        }
     }
     printf("cputopo ok=1\n");
     return 0;

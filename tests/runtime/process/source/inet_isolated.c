@@ -55,7 +55,7 @@ int main(void) {
     loopback.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     int local = connect_errno(AF_INET, SOCK_DGRAM, &loopback, sizeof loopback) == 0;
 
-    printf("inet isolated stream4=%d datagram4=%d stream6=%d external4=%d external6=%d loopback=%d\n",
-           stream4, datagram4, stream6, routed4, routed6, local);
+    printf("inet isolated stream4=%d datagram4=%d stream6=%d external4=%d external6=%d loopback=%d\n", stream4,
+           datagram4, stream6, routed4, routed6, local);
     return !(stream4 && datagram4 && stream6 && routed4 && routed6 && local);
 }

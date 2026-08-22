@@ -89,7 +89,7 @@ int main(void) {
     int st = 0;
     waitpid(pid, &st, 0);
 
-    printf("scm_eventfd epoll=%d read=%d val=%llu child=%d\n", n, rr,
-           (unsigned long long)val, WIFEXITED(st) ? WEXITSTATUS(st) : -1);
+    printf("scm_eventfd epoll=%d read=%d val=%llu child=%d\n", n, rr, (unsigned long long)val,
+           WIFEXITED(st) ? WEXITSTATUS(st) : -1);
     return (n == 1 && rr == 8 && val == 1 && WIFEXITED(st) && WEXITSTATUS(st) == 0) ? 0 : 1;
 }

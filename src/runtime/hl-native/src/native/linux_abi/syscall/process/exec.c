@@ -520,8 +520,7 @@ static int exec_prepare_request(uint64_t path_address, uint64_t argv_address, ui
         exec_prepared_discard(prepared);
         return error;
     }
-    prepared->credentials =
-        cred_exec_transition(&prepared->main_image.dac, &prepared->main_image.file_capabilities);
+    prepared->credentials = cred_exec_transition(&prepared->main_image.dac, &prepared->main_image.file_capabilities);
     if (prepared->credentials.error != 0) {
         error = -prepared->credentials.error;
         exec_prepared_discard(prepared);
@@ -608,8 +607,8 @@ static void exec_reload_image(struct cpu *cpu, exec_prepared *prepared) {
 
     uint64_t heap;
     uint64_t heap_hint = hl_linux_snapshot_reserve(&g_ckpt_snapshot, 256u << 20);
-    if (hl_gmap_map_anonymous(heap_hint, 256u << 20, HL_HOST_MEMORY_READ | HL_HOST_MEMORY_WRITE,
-                              HL_HOST_MEMORY_PRIVATE, &heap) != HL_STATUS_OK)
+    if (hl_gmap_map_anonymous(heap_hint, 256u << 20, HL_HOST_MEMORY_READ | HL_HOST_MEMORY_WRITE, HL_HOST_MEMORY_PRIVATE,
+                              &heap) != HL_STATUS_OK)
         _exit(127);
     brk_lo = brk_cur = heap;
     brk_hi = brk_lo + (256u << 20);

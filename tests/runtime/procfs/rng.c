@@ -28,7 +28,7 @@ static int uuid_valid(const char *s) {
             return 0;
         }
     }
-    if (s[14] != '4') return 0; // version nibble
+    if (s[14] != '4') return 0;             // version nibble
     char v = tolower((unsigned char)s[19]); // variant: 8,9,a,b
     if (!(v == '8' || v == '9' || v == 'a' || v == 'b')) return 0;
     return 1;
@@ -50,7 +50,7 @@ int main(void) {
     int ent_ok = read_line("/proc/sys/kernel/random/entropy_avail", ent, sizeof ent) && atoi(ent) > 0;
     int pool_ok = read_line("/proc/sys/kernel/random/poolsize", pool, sizeof pool) && atoi(pool) > 0;
 
-    printf("uuid_fmt=%d uuid_differ=%d boot_fmt=%d boot_stable=%d entropy=%d poolsize=%d\n", uuid_fmt_ok,
-           uuid_differ, boot_fmt_ok, boot_stable, ent_ok, pool_ok);
+    printf("uuid_fmt=%d uuid_differ=%d boot_fmt=%d boot_stable=%d entropy=%d poolsize=%d\n", uuid_fmt_ok, uuid_differ,
+           boot_fmt_ok, boot_stable, ent_ok, pool_ok);
     return 0;
 }

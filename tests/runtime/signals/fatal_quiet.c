@@ -22,7 +22,8 @@ int main(void) {
     close(p[1]);
     char buf[4096];
     ssize_t total = 0, n;
-    while ((n = read(p[0], buf, sizeof buf)) > 0) total += n;
+    while ((n = read(p[0], buf, sizeof buf)) > 0)
+        total += n;
     close(p[0]);
     int st = 0;
     waitpid(pid, &st, 0);

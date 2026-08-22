@@ -188,6 +188,7 @@ int hl_host_process_interrupt(hl_host_process_peer peer) {
    would answer 0, "pid is not a peer", for every input, which is a fixture that can never fail. -1 is the
    Linux implementation's own harness-failure code, and it is the honest answer here. */
 HL_API int32_t hl_c_backend_host_process_peer_enumerated_test(int32_t pid);
+
 HL_API int32_t hl_c_backend_host_process_peer_enumerated_test(int32_t pid) {
     (void)pid;
     return -1;

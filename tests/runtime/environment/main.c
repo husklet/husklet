@@ -18,8 +18,7 @@ static void finish(long status) {
 
 static int equal(const unsigned char *left, const unsigned char *right) {
     while (*left == *right) {
-        if (*left == 0)
-            return 1;
+        if (*left == 0) return 1;
         ++left;
         ++right;
     }

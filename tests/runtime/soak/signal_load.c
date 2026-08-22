@@ -12,18 +12,25 @@
 #define N 800000
 
 static volatile sig_atomic_t hits;
-static void on_usr1(int sig) { (void)sig; hits++; }
+
+static void on_usr1(int sig) {
+    (void)sig;
+    hits++;
+}
 
 int main(void) {
     struct sigaction sa;
     sa.sa_handler = on_usr1;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
-    if (sigaction(SIGUSR1, &sa, 0) != 0) { printf("soak signalload sigaction_fail\n"); return 1; }
+    if (sigaction(SIGUSR1, &sa, 0) != 0) {
+        printf("soak signalload sigaction_fail\n");
+        return 1;
+    }
     uint64_t work = 0;
     for (long i = 0; i < N; i++) {
         work = work * 1103515245ULL + 12345ULL + (uint64_t)i; // deterministic per-iter work
-        raise(SIGUSR1);                                        // synchronous -> handler runs now
+        raise(SIGUSR1);                                       // synchronous -> handler runs now
     }
     printf("soak signalload hits=%d work=%llu\n", (int)hits, (unsigned long long)work);
     return 0;
