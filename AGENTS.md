@@ -253,19 +253,17 @@ Six things to know before you trust — or debug — this loop:
   `HOME` at a scratch directory — `~/.hl` is shared with every other lane's tests.
 - `GTK_A11Y=none` only silences an `org.a11y.Bus` warning on a box with no accessibility
   bus. It is noise, not a failure.
-- **The guest's terminal echoes every typed line twice, and this is not the toolkit.**
-  Measured 2026-08-21 at 2b2cd63cf against a live `alpine:3.20` workspace: every command
-  line appears once as busybox `ash`'s line editor draws it and again after the newline,
-  and each prompt carries a visible `^[[N;5R` — VTE's answer to the `ESC[6n` the editor
-  sends, echoed back as though it had been typed. The host pty is not the culprit;
-  `stty -a -F /dev/pts/N` on the live pane reports `-isig -icanon -echo`. The same
-  busybox binary, extracted from the same image layer and run under `chroot` on this
-  host's own kernel through a real pty, echoes each line exactly **once**. And the
-  guest's own termios is not simply ignored: `stty -echo` inside the container is
-  read back as `-echo` and the *second* copy stops. What is not honoured is the
-  raw-mode `tcsetattr` a line editor performs immediately before the read it is about
-  to do — which is what every interactive shell does on every prompt. It belongs to the
-  engine's line discipline, not to `hl-gui-gtk` or the `husklet` bins.
+- **The terminal double echo and visible cursor report are fixed.** The historical
+  failure, measured 2026-08-21 at 2b2cd63cf against live `alpine:3.20`, drew each
+  command twice and displayed `^[[N;5R`. It belonged to the engine's line discipline,
+  not GTK: a launch fork gave the guest a private copy of the termios generation, so
+  the parent pump never saw the raw-mode `tcsetattr` issued at each shell prompt.
+  Commit 78acc31e4 follows that change through the shared pty's host projection instead.
+  Reverified 2026-08-23 on x86_64 Linux at abb13499c with an isolated offline home: a
+  live BusyBox pane drew the command once and its output once, with no cursor report;
+  the real-fork BusyBox and readline tests each ran one test and passed. Disabling only
+  the host-projection branch made the BusyBox test reproduce both old symptoms, so the
+  green result is not a test that would pass without the fix.
 - `cargo test -p husklet --bins --features gui` needs no display **to run**, and two of
   its tests need one **to mean anything**. Measured 2026-08-21 on this box, both ways:
   **`running 88 tests` / `88 passed` in both**, and only the display-less run prints
