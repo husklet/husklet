@@ -9,7 +9,7 @@ use std::io;
 
 mod process;
 
-use process::{ExecPty, Output, Shell};
+use process::{ExecPty, Output, PaneRuntime, Shell};
 
 #[derive(Clone)]
 pub(crate) struct PaneExecution {
@@ -97,10 +97,7 @@ pub fn launch(
     cwd: Option<&str>,
     slot: Option<&str>,
 ) -> io::Result<Box<dyn PtyBackend>> {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()?;
+    let mut runtime = PaneRuntime::shared()?;
     let socket = crate::runtime::domain::Domain::new(workspace).ensure(workspace)?;
     let client = hl_client::Client::unix(socket).map_err(LauncherError::io)?;
     let _workspace_session = runtime
@@ -345,7 +342,7 @@ async fn forward_output(
 /// pane must restore instead. Reclassifying once here lets the pane recover without asking the
 /// reader to reopen the workspace.
 fn reattach(
-    runtime: &tokio::runtime::Runtime,
+    runtime: &PaneRuntime,
     client: &hl_client::Client,
     execution: &str,
     request: &ExecAttach,

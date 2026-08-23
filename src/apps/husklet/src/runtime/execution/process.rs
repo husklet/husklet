@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::io;
 use std::os::unix::io::RawFd;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use super::PaneExecution;
 
@@ -18,13 +18,61 @@ impl Shell {
 }
 
 pub(super) struct ExecPty {
-    pub(super) runtime: tokio::runtime::Runtime,
+    pub(super) runtime: PaneRuntime,
     pub(super) client: Client,
     pub(super) execution: String,
     pub(super) input: tokio::sync::mpsc::Sender<Vec<u8>>,
     pub(super) output: Output,
     pub(super) exited: Arc<Mutex<Option<i32>>>,
     pub(super) pane: Option<PaneExecution>,
+}
+
+pub(super) struct PaneRuntime {
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+    runtime: Arc<tokio::runtime::Runtime>,
+}
+
+impl PaneRuntime {
+    pub(super) fn shared() -> io::Result<Self> {
+        static SHARED: OnceLock<Mutex<Weak<tokio::runtime::Runtime>>> = OnceLock::new();
+        let mut shared = SHARED
+            .get_or_init(|| Mutex::new(Weak::new()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let runtime = if let Some(runtime) = shared.upgrade() {
+            runtime
+        } else {
+            let runtime = Arc::new(
+                tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .thread_name("hl-exec")
+                    .enable_all()
+                    .build()?,
+            );
+            *shared = Arc::downgrade(&runtime);
+            runtime
+        };
+        Ok(Self {
+            tasks: Vec::new(),
+            runtime,
+        })
+    }
+
+    pub(super) fn block_on<F: Future>(&self, future: F) -> F::Output {
+        self.runtime.block_on(future)
+    }
+
+    pub(super) fn spawn(&mut self, future: impl Future<Output = ()> + Send + 'static) {
+        self.tasks.push(self.runtime.spawn(future));
+    }
+}
+
+impl Drop for PaneRuntime {
+    fn drop(&mut self) {
+        for task in &self.tasks {
+            task.abort();
+        }
+    }
 }
 
 const CLEANUP_STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
@@ -185,7 +233,7 @@ impl Drop for ExecPty {
 
 #[cfg(test)]
 mod tests {
-    use super::{cleanup_with, Output};
+    use super::{cleanup_with, Output, PaneRuntime};
 
     #[test]
     fn output_finishes_only_after_every_chunk_is_drained() {
@@ -320,5 +368,246 @@ mod tests {
 
         assert!(failures.is_empty());
         assert_eq!(*events.lock().unwrap(), ["remove"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    struct Active(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    #[cfg(target_os = "linux")]
+    impl Drop for Active {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn named_threads(name: &str) -> usize {
+        std::fs::read_dir("/proc/self/task")
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| std::fs::read_to_string(entry.path().join("comm")).is_ok_and(|comm| comm.trim() == name))
+            .count()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn descriptors() -> usize {
+        std::fs::read_dir("/proc/self/fd").unwrap().count()
+    }
+
+    #[test]
+    fn dropping_one_pane_cancels_its_tasks_without_harming_its_sibling() {
+        struct MarksDrop(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+        impl Drop for MarksDrop {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
+
+        let mut pane_a = PaneRuntime::shared().unwrap();
+        let mut pane_b = PaneRuntime::shared().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&pane_a.runtime, &pane_b.runtime));
+
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let pending_started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        pane_a.spawn({
+            let cancelled = std::sync::Arc::clone(&cancelled);
+            let pending_started = std::sync::Arc::clone(&pending_started);
+            async move {
+                let _cancelled = MarksDrop(cancelled);
+                pending_started.store(true, std::sync::atomic::Ordering::Release);
+                std::future::pending::<()>().await;
+            }
+        });
+        let panic_unwound = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        pane_a.spawn({
+            let panic_unwound = std::sync::Arc::clone(&panic_unwound);
+            async move {
+                let _panic_unwound = MarksDrop(panic_unwound);
+                tokio::task::yield_now().await;
+                panic!("intentional pane task panic");
+            }
+        });
+
+        let heartbeat = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        pane_b.spawn({
+            let heartbeat = std::sync::Arc::clone(&heartbeat);
+            async move {
+                loop {
+                    heartbeat.fetch_add(1, std::sync::atomic::Ordering::Release);
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+            }
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while (!pending_started.load(std::sync::atomic::Ordering::Acquire)
+            || !panic_unwound.load(std::sync::atomic::Ordering::Acquire)
+            || heartbeat.load(std::sync::atomic::Ordering::Acquire) < 2)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::yield_now();
+        }
+        assert!(pending_started.load(std::sync::atomic::Ordering::Acquire));
+        assert!(panic_unwound.load(std::sync::atomic::Ordering::Acquire));
+        let before_drop = heartbeat.load(std::sync::atomic::Ordering::Acquire);
+
+        drop(pane_a);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while (!cancelled.load(std::sync::atomic::Ordering::Acquire)
+            || heartbeat.load(std::sync::atomic::Ordering::Acquire) <= before_drop)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::yield_now();
+        }
+        assert!(
+            cancelled.load(std::sync::atomic::Ordering::Acquire),
+            "pane A task survived its owner"
+        );
+        assert!(
+            heartbeat.load(std::sync::atomic::Ordering::Acquire) > before_drop,
+            "pane A drop or panic stopped pane B"
+        );
+        drop(pane_b);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn eight_fake_panes_share_workers_and_drop_tasks_and_runtime_to_baseline() {
+        const CHILD: &str = "HL_EXEC_RUNTIME_CENSUS_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("eight_fake_panes_share_workers_and_drop_tasks_and_runtime_to_baseline")
+                .arg("--nocapture")
+                .env(CHILD, "1")
+                .status()
+                .unwrap();
+            assert!(status.success(), "isolated pane census failed");
+            return;
+        }
+
+        // Tokio installs two process-lifetime driver descriptors on first use. Warm that singleton before
+        // taking the zero-pane baseline; pane-owned descriptors must still return exactly to that baseline.
+        drop(PaneRuntime::shared().unwrap());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while named_threads("hl-exec") != 0 && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        let baseline_fds = descriptors();
+        let active = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut panes = Vec::new();
+        for _ in 0..8 {
+            let mut pane = PaneRuntime::shared().unwrap();
+            for _ in 0..3 {
+                let active = std::sync::Arc::clone(&active);
+                pane.spawn(async move {
+                    active.fetch_add(1, std::sync::atomic::Ordering::Release);
+                    let _active = Active(active);
+                    std::future::pending::<()>().await;
+                });
+            }
+            panes.push(pane);
+        }
+        assert!(panes[1..]
+            .iter()
+            .all(|pane| std::sync::Arc::ptr_eq(&panes[0].runtime, &pane.runtime)));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while (active.load(std::sync::atomic::Ordering::Acquire) != 24 || named_threads("hl-exec") != 2)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::yield_now();
+        }
+        assert_eq!(active.load(std::sync::atomic::Ordering::Acquire), 24);
+        assert_eq!(
+            named_threads("hl-exec"),
+            2,
+            "eight panes created more than one worker pair"
+        );
+        let held_fds = descriptors();
+
+        drop(panes);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while (active.load(std::sync::atomic::Ordering::Acquire) != 0 || named_threads("hl-exec") != 0)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::yield_now();
+        }
+        let final_fds = descriptors();
+        println!("execution-runtime panes=8 fds={baseline_fds}/{held_fds}/{final_fds}");
+        assert_eq!(
+            active.load(std::sync::atomic::Ordering::Acquire),
+            0,
+            "pane tasks survived their owner"
+        );
+        assert_eq!(
+            named_threads("hl-exec"),
+            0,
+            "the last pane left immortal runtime workers"
+        );
+        assert!(
+            held_fds > baseline_fds,
+            "runtime did not open any observable descriptors"
+        );
+        assert_eq!(final_fds, baseline_fds, "pane drop did not restore descriptor baseline");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "manual execution-runtime census used by /var/tmp/execution-runtime-abba.sh"]
+    fn execution_runtime_census() {
+        let panes = std::env::var("HL_EXEC_RUNTIME_PANES")
+            .unwrap()
+            .parse::<usize>()
+            .unwrap();
+        let mode = std::env::var("HL_EXEC_RUNTIME_MODE").unwrap();
+        let baseline_fds = descriptors();
+        let started = std::time::Instant::now();
+        let mut shared = Vec::new();
+        let mut isolated = Vec::new();
+        match mode.as_str() {
+            "null" => {
+                shared.reserve(panes);
+            }
+            "shared" => {
+                for _ in 0..panes {
+                    shared.push(PaneRuntime::shared().unwrap());
+                }
+            }
+            "isolated" => {
+                for _ in 0..panes {
+                    isolated.push(
+                        tokio::runtime::Builder::new_multi_thread()
+                            .worker_threads(2)
+                            .thread_name("hl-exec-control")
+                            .enable_all()
+                            .build()
+                            .unwrap(),
+                    );
+                }
+            }
+            _ => panic!("HL_EXEC_RUNTIME_MODE must be null, shared, or isolated"),
+        }
+        let worker_name = if mode == "isolated" {
+            "hl-exec-control"
+        } else {
+            "hl-exec"
+        };
+        let expected_workers = match mode.as_str() {
+            "null" => 0,
+            "shared" => 2,
+            "isolated" => panes * 2,
+            _ => unreachable!(),
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while named_threads(worker_name) != expected_workers && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        let elapsed = started.elapsed();
+        println!(
+            "execution-runtime mode={mode} panes={panes} elapsed_ns={} workers={} fds_delta={}",
+            elapsed.as_nanos(),
+            named_threads(worker_name),
+            descriptors().saturating_sub(baseline_fds),
+        );
+        assert_eq!(named_threads(worker_name), expected_workers);
     }
 }
