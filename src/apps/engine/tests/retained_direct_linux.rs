@@ -195,7 +195,7 @@ mod linux_host {
         fs::write(&path, static_x86_64(60, 43)).unwrap();
         let compiled = Command::new("cc")
             .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
-            .arg("tests/fixtures/mixed_stdio_launcher.c")
+            .arg("tests/mixed_stdio_launcher.c")
             .arg("-o")
             .arg(&launcher)
             .status()
