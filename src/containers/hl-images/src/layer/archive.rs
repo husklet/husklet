@@ -11,6 +11,40 @@ use crate::{
     snapshot::{Names, Ownership, Ownerships},
 };
 
+#[cfg(test)]
+thread_local! {
+    static REUSE_PARENT_VALIDATION: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+#[cfg(test)]
+fn reuse_parent_validation() -> bool {
+    REUSE_PARENT_VALIDATION.with(std::cell::Cell::get)
+}
+
+#[cfg(not(test))]
+const fn reuse_parent_validation() -> bool {
+    true
+}
+
+fn prepare_entry_parent(
+    path: &Path,
+    root: &FsPath,
+    parent: &FsPath,
+    reusable: bool,
+    cached: &mut Option<(PathBuf, super::path::Parents)>,
+) -> Result<Option<super::path::Parents>> {
+    if reusable && cached.as_ref().is_some_and(|(path, _)| path == parent) {
+        return Ok(None);
+    }
+    *cached = None;
+    let parents = path.prepare(root)?;
+    if reusable {
+        *cached = Some((parent.to_owned(), parents));
+        return Ok(None);
+    }
+    Ok(Some(parents))
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct DiffSize(u64);
 
@@ -196,6 +230,7 @@ impl<R: Read> Layer<R> {
         let mut archive = tar::Archive::new(&mut self.reader);
         let mut report = Report::default();
         let mut backlog = Backlog::default();
+        let mut prepared_parent: Option<(PathBuf, super::path::Parents)> = None;
         for item in archive.entries()? {
             let mut entry = item?;
             // Moby accounts every header before interpreting its kind. Directories,
@@ -212,6 +247,9 @@ impl<R: Read> Layer<R> {
                 continue;
             }
             let path = Path::new(&raw)?;
+            if path.name().starts_with(".wh.") {
+                prepared_parent = None;
+            }
             if path.apply_whiteout(&root, ownerships.as_deref_mut(), names.as_deref_mut())? {
                 report.whiteouts += 1;
                 continue;
@@ -223,8 +261,12 @@ impl<R: Read> Layer<R> {
             let physical_path = Path::new(&physical)?;
             let destination = physical_path.destination(&root);
             backlog.hard_links.supersede(&destination);
-            let _parents = physical_path.prepare(&root)?;
             let kind = entry.header().entry_type();
+            let parent = physical_path.as_path().parent().unwrap_or(FsPath::new(""));
+            let can_reuse_parent =
+                reuse_parent_validation() && matches!(kind, tar::EntryType::Regular | tar::EntryType::GNUSparse);
+            let entry_parents =
+                prepare_entry_parent(&physical_path, &root, parent, can_reuse_parent, &mut prepared_parent)?;
             let ownership = Ownership::from_header(entry.header(), &path)?;
             if path.is_device()
                 && matches!(
@@ -242,6 +284,10 @@ impl<R: Read> Layer<R> {
                 names.as_deref_mut(),
                 &mut backlog,
             )?;
+            if !can_reuse_parent {
+                prepared_parent = None;
+            }
+            drop(entry_parents);
             if let Some(ownerships) = ownerships.as_deref_mut() {
                 ownerships.record(path.as_path(), ownership)?;
             }
@@ -444,7 +490,24 @@ impl Ownership {
 
 #[cfg(test)]
 mod diff_size_tests {
-    use super::DiffSize;
+    use super::{DiffSize, Layer};
+    use std::io::Cursor;
+
+    fn regular_entries(paths: impl IntoIterator<Item = String>) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        {
+            let mut archive = tar::Builder::new(&mut bytes);
+            for path in paths {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(0);
+                header.set_mode(0o644);
+                header.set_cksum();
+                archive.append_data(&mut header, path, &[][..]).unwrap();
+            }
+            archive.finish().unwrap();
+        }
+        bytes
+    }
 
     #[test]
     fn rejects_overflow_instead_of_wrapping_layer_accounting() {
@@ -452,5 +515,96 @@ mod diff_size_tests {
 
         assert!(size.add(1).is_err());
         assert_eq!(size.bytes(), u64::MAX);
+    }
+
+    #[test]
+    fn consecutive_siblings_validate_their_shared_parent_once() {
+        let paths = (0..64).map(|index| format!("one/two/three/four/file-{index}"));
+        let bytes = regular_entries(paths);
+        let root = tempfile::tempdir().unwrap();
+        super::super::path::take_prepared_components();
+
+        let report = Layer::new(Cursor::new(bytes)).apply(root.path()).unwrap();
+
+        assert_eq!(report.entries, 64);
+        assert_eq!(
+            super::super::path::take_prepared_components(),
+            4,
+            "the four-component parent was revalidated for a sibling"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replacing_a_cached_parent_with_a_symlink_forces_revalidation() {
+        let outside = tempfile::tempdir().unwrap();
+        let mut bytes = regular_entries(["safe/seed".to_owned()]);
+        bytes.truncate(bytes.len() - 1024);
+        {
+            let mut archive = tar::Builder::new(&mut bytes);
+            let mut link = tar::Header::new_gnu();
+            link.set_entry_type(tar::EntryType::Symlink);
+            link.set_size(0);
+            link.set_mode(0o777);
+            link.set_link_name(outside.path()).unwrap();
+            link.set_cksum();
+            archive.append_data(&mut link, "safe", &[][..]).unwrap();
+
+            let mut file = tar::Header::new_gnu();
+            file.set_size(0);
+            file.set_mode(0o644);
+            file.set_cksum();
+            archive.append_data(&mut file, "safe/escaped", &[][..]).unwrap();
+            archive.finish().unwrap();
+        }
+        let root = tempfile::tempdir().unwrap();
+
+        assert!(Layer::new(Cursor::new(bytes)).apply(root.path()).is_err());
+        assert!(!outside.path().join("escaped").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_reused_readonly_parent_is_restored_after_its_last_sibling() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let locked = root.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let bytes = regular_entries(["locked/one".to_owned(), "locked/two".to_owned()]);
+
+        Layer::new(Cursor::new(bytes)).apply(root.path()).unwrap();
+
+        assert!(locked.join("one").is_file());
+        assert!(locked.join("two").is_file());
+        assert_eq!(
+            std::fs::symlink_metadata(locked).unwrap().permissions().mode() & 0o777,
+            0o555
+        );
+    }
+
+    #[test]
+    #[ignore = "manual OCI extraction census used by /var/tmp/layer-parent-abba.sh"]
+    fn layer_apply_census() {
+        let archive = std::env::var_os("HL_LAYER_ARCHIVE").unwrap();
+        let root = std::env::var_os("HL_LAYER_ROOT").unwrap();
+        let mode = std::env::var("HL_LAYER_MODE").unwrap();
+        let started = std::time::Instant::now();
+        let entries = if matches!(mode.as_str(), "candidate" | "baseline") {
+            super::REUSE_PARENT_VALIDATION.with(|reuse| reuse.set(mode == "candidate"));
+            let file = std::fs::File::open(archive).unwrap();
+            Layer::new(std::io::BufReader::new(file))
+                .apply(std::path::Path::new(&root))
+                .unwrap()
+                .entries
+        } else {
+            assert_eq!(mode, "null");
+            0
+        };
+        println!(
+            "layer-apply mode={mode} entries={entries} elapsed_ns={}",
+            started.elapsed().as_nanos()
+        );
     }
 }
