@@ -31,9 +31,10 @@ static int ckpt_pipe_end_drains(int flags) {
 //
 // Two properties the drain must not damage in the live process, since a checkpoint is not required to be
 // the process's last act:
-//   - O_NONBLOCK lives on the open file description, so it is shared with every process that inherited this
-//     pipe end through fork. Setting it for the drain and leaving it set would turn a blocking guest read()
-//     into a spurious EAGAIN afterwards. The original file status flags are restored on every exit path.
+//   - O_NONBLOCK lives on the open file description, so even temporarily setting it is observable by every
+//     process that inherited this pipe end through fork. Snapshot the buffered byte count and read exactly
+//     that many bytes instead; a capture participant must never publish the drain's implementation detail as
+//     guest state while another participant is recording the same shared description.
 //   - the identity is claimed image-wide, so exactly one participant drains a pipe several processes hold.
 //     Every OTHER holder returns 0 immediately and publishes its own record; the records agree by
 //     construction, because everything in them is derived from the identity and from the shared open file
@@ -88,9 +89,9 @@ static int ckpt_capture_pipe_reason(int fd, uint64_t identity, const char **reas
         ckpt_sink_unclaim(sink, name);
         return -1;
     }
-    int flags = fcntl(fd, F_GETFL);
-    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
-        *reason = "cannot make the pipe end non-blocking for the drain";
+    int remaining = -1;
+    if (ioctl(fd, FIONREAD, &remaining) != 0 || remaining < 0) {
+        *reason = "cannot inspect the pipe's buffered byte count";
         *cause = errno;
         ckpt_sink_abort(sink, &output);
         ckpt_sink_unclaim(sink, name);
@@ -98,8 +99,9 @@ static int ckpt_capture_pipe_reason(int fd, uint64_t identity, const char **reas
     }
     unsigned char buffer[65536];
     int failed = 0;
-    for (;;) {
-        ssize_t count = read(fd, buffer, sizeof buffer);
+    while (remaining > 0) {
+        size_t requested = (size_t)remaining < sizeof buffer ? (size_t)remaining : sizeof buffer;
+        ssize_t count = read(fd, buffer, requested);
         if (count > 0) {
             if (ckpt_sink_write(sink, output, buffer, (size_t)count) != 0) {
                 // The bytes are already out of the pipe and the object is being discarded, so the image can
@@ -109,25 +111,16 @@ static int ckpt_capture_pipe_reason(int fd, uint64_t identity, const char **reas
                 failed = 1;
                 break;
             }
+            remaining -= (int)count;
             continue;
         }
-        if (count == 0 || HL_HOST_ERRNO_WOULD_BLOCK(errno)) break;
         if (errno == EINTR) continue;
         *reason = "read of the buffered pipe bytes failed";
         *cause = errno;
         failed = 1;
         break;
     }
-    // Restore the shared open file description exactly as the guest left it, before deciding the outcome.
-    int restored = fcntl(fd, F_SETFL, flags);
     if (failed) {
-        ckpt_sink_abort(sink, &output);
-        ckpt_sink_unclaim(sink, name);
-        return -1;
-    }
-    if (restored != 0) {
-        *reason = "cannot restore the pipe end's file status flags after the drain";
-        *cause = errno;
         ckpt_sink_abort(sink, &output);
         ckpt_sink_unclaim(sink, name);
         return -1;

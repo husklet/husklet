@@ -1632,6 +1632,9 @@ struct ckpt_pipe_test_shared {
     _Atomic int winners;
     _Atomic int losers;
     _Atomic unsigned length;
+    _Atomic int pause_write;
+    _Atomic int write_entered;
+    _Atomic int release_write;
     unsigned char bytes[CKPT_PIPE_TEST_PAYLOAD];
 };
 
@@ -1654,6 +1657,13 @@ static int ckpt_pipe_test_begin(struct ckpt_sink *sink, const char *group, const
 static int ckpt_pipe_test_write(struct ckpt_sink_stream *stream, const void *data, size_t size) {
     (void)stream;
     struct ckpt_pipe_test_shared *shared = g_ckpt_pipe_test_shared;
+    if (atomic_load(&shared->pause_write)) {
+        atomic_store(&shared->write_entered, 1);
+        while (!atomic_load(&shared->release_write)) {
+            struct timespec span = {0, 1000000};
+            nanosleep(&span, NULL);
+        }
+    }
     unsigned at = atomic_load(&shared->length);
     if (size > sizeof shared->bytes - at) return -1;
     memcpy(shared->bytes + at, data, size);
@@ -1944,6 +1954,38 @@ HL_API int HL_TARGET_LOCAL(checkpoint_pipe_capture_test)(uint32_t scenario) {
         if (verdict == 0 && g_ckpt_capture_destructive != 0)
             verdict = 87; // the refusal is terminal for this member: the container does not survive it
         close(refused_socket);
+    } else if (scenario == 6) {
+        // A pipe drain must not mutate its shared OFD even transiently. Every holder snapshots status flags
+        // independently during a tree capture; pausing the winner inside its sink write makes that window
+        // deterministic and proves a co-holder can never record capture-internal O_NONBLOCK as guest state.
+        if (ckpt_pipe_test_open_shared() != 0) return 90;
+        if (pipe(pair) != 0) {
+            ckpt_pipe_test_close_shared();
+            return 91;
+        }
+        verdict = 0;
+        if (ckpt_pipe_test_fill(pair[1]) != 0) verdict = 92;
+        atomic_store(&g_ckpt_pipe_test_shared->pause_write, 1);
+        ckpt_sink_install(&g_ckpt_pipe_test_ops);
+        pid_t child = verdict == 0 ? hl_host_process_clone_current() : -1;
+        if (child == 0) _exit(ckpt_capture_pipe_reason(pair[0], 0x11, NULL, NULL) == 0 ? 0 : 1);
+        if (child < 0) verdict = 93;
+        for (int waited = 0; verdict == 0 && !atomic_load(&g_ckpt_pipe_test_shared->write_entered); ++waited) {
+            if (waited == 1000) {
+                verdict = 94;
+                break;
+            }
+            struct timespec span = {0, 1000000};
+            nanosleep(&span, NULL);
+        }
+        int flags = fcntl(pair[0], F_GETFL);
+        if (verdict == 0 && (flags < 0 || (flags & O_NONBLOCK) != 0)) verdict = 95;
+        atomic_store(&g_ckpt_pipe_test_shared->release_write, 1);
+        if (child > 0) {
+            int status = 0;
+            if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+                verdict = verdict ? verdict : 96;
+        }
     } else {
         return 99;
     }
