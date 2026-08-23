@@ -284,7 +284,19 @@ fn rootfs_plan(
         arguments: std::iter::once(guest_entry.as_os_str().as_encoded_bytes().to_vec())
             .chain(launch.arguments.iter().map(|argument| argument.as_bytes().to_vec()))
             .collect(),
-        environment: Vec::new(),
+        // The worker is a developer-facing raw-rootfs entry point, not an OCI launch with an image
+        // configuration supplying Env.  ProductionMachine deliberately treats this vector as exact;
+        // leaving it empty therefore gives the guest an actually empty environment and suppresses the
+        // native loader's fallback PATH.  A shell papers over that with a non-exported local PATH, then
+        // children receive no PATH: GCC cannot locate its own cc1 helper and reports posix_spawnp ENOENT.
+        // Supply the small architecture-neutral baseline the retained loader historically provided.  Do
+        // not inherit the host environment: that would leak developer credentials and make the guest vary
+        // with the machine running it.
+        environment: vec![
+            b"PATH=/usr/bin:/bin".to_vec(),
+            b"HOME=/root".to_vec(),
+            b"LANG=C".to_vec(),
+        ],
         result_path: None,
         options: hl_engine::options::Options::default(),
     })
@@ -469,6 +481,44 @@ mod tests {
         assert_eq!(
             plan.executable_host.as_deref(),
             Some(busybox.as_os_str().as_encoded_bytes())
+        );
+    }
+
+    /// A raw-rootfs worker has no OCI image configuration from which to obtain `Env`.  The runtime
+    /// treats the plan's environment as exact, so an empty vector is not a request for its C loader's
+    /// defaults: it is an authoritative empty environment.  Alpine ash masks that at its prompt with a
+    /// shell-local PATH, but does not export the invented value.  GCC then starts with no PATH and cannot
+    /// derive the absolute location of `cc1` from its `cc` argv[0].
+    #[cfg(unix)]
+    #[test]
+    fn a_rootfs_worker_exports_a_bounded_guest_environment() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let program = root.path().join("bin/program");
+        std::fs::create_dir_all(program.parent().unwrap()).unwrap();
+        std::fs::write(&program, b"\x7fELF").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let plan = rootfs_plan(
+            root.path(),
+            &launch(&["--rootfs", root.path().to_str().unwrap(), "bin/program"]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            plan.environment,
+            [
+                b"PATH=/usr/bin:/bin".as_slice(),
+                b"HOME=/root".as_slice(),
+                b"LANG=C".as_slice()
+            ]
+        );
+        assert!(
+            plan.environment
+                .iter()
+                .all(|record| !record.starts_with(b"NIX_") && !record.starts_with(b"AWS_")),
+            "the worker must not replace a missing guest environment by copying host credentials"
         );
     }
 
