@@ -233,8 +233,7 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
                     usleep(10000);
                 }
                 if (registered != 1) {
-                    fprintf(stderr,
-                            "[ckpt] test hook could not prove participant %lld registered before hiding it\n",
+                    fprintf(stderr, "[ckpt] test hook could not prove participant %lld registered before hiding it\n",
                             (long long)scan[index].identity);
                     ckpt_phase_exit(&phases, 71);
                 }
