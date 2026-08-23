@@ -416,17 +416,10 @@ impl NativeLibrary {
 /// replace. This turns that into a load failure naming both fingerprints.
 fn check_fingerprint(library: &DynamicLibrary, path: &Path) -> Result<(), LoadError> {
     const EXPECTED: &str = env!("HL_NATIVE_BUILD_FINGERPRINT");
-    let address = library
-        .symbol(b"hl_c_backend_build_fingerprint\0")
-        .map_err(|detail| LoadError::MissingBridge {
-            path: path.to_owned(),
-            detail,
-        })?;
-    // SAFETY: the named export is declared in the bridge header with exactly this signature.
-    let reader: unsafe extern "C" fn() -> *const c_char = unsafe { std::mem::transmute(address) };
-    // SAFETY: the export returns a static NUL-terminated string literal from the artifact's own image.
-    let actual = unsafe { std::ffi::CStr::from_ptr(reader()) };
-    let actual = String::from_utf8_lossy(actual.to_bytes()).into_owned();
+    let actual = library.build_fingerprint().map_err(|detail| LoadError::MissingBridge {
+        path: path.to_owned(),
+        detail,
+    })?;
     if actual == EXPECTED {
         Ok(())
     } else {
