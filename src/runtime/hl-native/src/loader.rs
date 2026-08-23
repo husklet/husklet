@@ -121,8 +121,10 @@ pub(crate) struct TestApi {
     pub(crate) x86_64_bound_vector_io: VectorIoTest,
     #[cfg(test)]
     pub(crate) aarch64_fdvis_path_publication: ScenarioTest,
+    pub(crate) aarch64_proc_fdinfo_listing: ScenarioTest,
     #[cfg(test)]
     pub(crate) x86_64_fdvis_path_publication: ScenarioTest,
+    pub(crate) x86_64_proc_fdinfo_listing: ScenarioTest,
     pub(crate) aarch64_namespace_transaction: ScenarioTest,
     pub(crate) x86_64_namespace_transaction: ScenarioTest,
     pub(crate) x86_64_store_preflight: NoArgumentTest,
@@ -463,8 +465,10 @@ impl TestApi {
             x86_64_bound_vector_io: symbol!("hl_x86_64_bound_vector_io_test", VectorIoTest),
             #[cfg(test)]
             aarch64_fdvis_path_publication: symbol!("hl_aarch64_fdvis_path_publication_test", ScenarioTest),
+            aarch64_proc_fdinfo_listing: symbol!("hl_aarch64_proc_fdinfo_listing_test", ScenarioTest),
             #[cfg(test)]
             x86_64_fdvis_path_publication: symbol!("hl_x86_64_fdvis_path_publication_test", ScenarioTest),
+            x86_64_proc_fdinfo_listing: symbol!("hl_x86_64_proc_fdinfo_listing_test", ScenarioTest),
             aarch64_namespace_transaction: symbol!("hl_aarch64_namespace_transaction_test", ScenarioTest),
             x86_64_namespace_transaction: symbol!("hl_x86_64_namespace_transaction_test", ScenarioTest),
             x86_64_store_preflight: symbol!("hl_x86_64_store_preflight_test", NoArgumentTest),
