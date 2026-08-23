@@ -130,6 +130,10 @@ impl MutationAdmission<'_> {
 impl Drop for MutationAdmission<'_> {
     fn drop(&mut self) {
         if !self.finished {
+            self.server.record_failure(
+                self.id,
+                "checkpoint mutation was abandoned before publishing its result".into(),
+            );
             let _ = self.server.finish_mutation(self.id, Err(CaptureFailure::Failed));
         }
     }
@@ -159,6 +163,11 @@ pub(crate) struct Server {
     /// host-side report of a failed capture named the failure and not the cause. The coordinator now
     /// sends the reason before it exits, and this is where it is held for the report.
     refusal: Mutex<Option<String>>,
+    /// First concrete cause attached to a failed capture generation.
+    ///
+    /// Generation filtering avoids a success-path clear and first-wins keeps a
+    /// later failure cascade from replacing the decision that started it.
+    failure_diagnostic: Mutex<Option<(u64, String)>>,
     committed: AtomicBool,
     running: AtomicBool,
     connections: AtomicUsize,
@@ -189,6 +198,7 @@ impl Server {
             member_terminals: Arc::new(member_stdio::MemberTerminals::default()),
             participants: Mutex::new(None),
             refusal: Mutex::new(None),
+            failure_diagnostic: Mutex::new(None),
             committed: AtomicBool::new(false),
             running: AtomicBool::new(true),
             connections: AtomicUsize::new(0),
@@ -211,6 +221,23 @@ impl Server {
         if let Ok(mut held) = self.refusal.lock() {
             *held = Some(reason);
         }
+    }
+
+    pub(super) fn record_failure(&self, id: u64, reason: String) {
+        if let Ok(mut held) = self.failure_diagnostic.lock()
+            && held.as_ref().is_none_or(|(generation, _)| *generation != id)
+        {
+            *held = Some((id, reason));
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn capture_failure_diagnostic(&self, id: u64) -> Option<String> {
+        self.failure_diagnostic.lock().ok().and_then(|held| {
+            held.as_ref()
+                .filter(|(generation, _)| *generation == id)
+                .map(|(_, reason)| reason.clone())
+        })
     }
 
     /// One member of the restored tree, by the guest pid its image names it by.

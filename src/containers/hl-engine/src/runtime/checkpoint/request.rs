@@ -210,6 +210,10 @@ impl Server {
             "checkpoint capture failed: process {id} aborted image group {name:?} because its own \
              process image was refused; the whole process-tree image is unrestorable without it"
         );
+        self.record_failure(
+            admission.id,
+            format!("process {id} aborted image group {name:?} because its own process image was refused"),
+        );
         if admission.finish(Err(super::CaptureFailure::Failed)).is_err() {
             self.interrupt_channels();
         }
