@@ -348,7 +348,7 @@ jobs:
         run: >-
           .github/scripts/cargo-test-named.sh "engine composition root"
           nix --extra-experimental-features 'nix-command flakes' develop . --command
-          cargo test -p hl-engine --lib --locked --offline
+          cargo test -p hl-engine --all-targets --locked --offline
 
       # `--all-targets` reaches hl-native's integration tests, which no CI job on any
       # host has ever run. That is the exact gap that let a tree which did not compile
