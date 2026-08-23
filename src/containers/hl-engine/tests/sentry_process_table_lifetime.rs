@@ -142,7 +142,9 @@ fn an_sa_nocldwait_release_is_published_while_the_old_pid_is_still_pinned() {
     let pinned = drain
         .find("WEXITED | WNOHANG | WNOWAIT")
         .expect("waitid observes the corpse without collecting it");
-    let published = drain.find("sentry_ctl_op(SENTRY_OP_REAP").expect("the table release is published");
+    let published = drain
+        .find("sentry_ctl_op(SENTRY_OP_REAP")
+        .expect("the table release is published");
     let collected = drain.find("waitpid(pid").expect("the pinned corpse is collected");
     assert!(
         pinned < published && published < collected,
