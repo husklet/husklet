@@ -564,6 +564,9 @@ mod tests {
         let mut shared = Vec::new();
         let mut isolated = Vec::new();
         match mode.as_str() {
+            "null" => {
+                shared.reserve(panes);
+            }
             "shared" => {
                 for _ in 0..panes {
                     shared.push(PaneRuntime::shared().unwrap());
@@ -581,15 +584,24 @@ mod tests {
                     );
                 }
             }
-            _ => panic!("HL_EXEC_RUNTIME_MODE must be shared or isolated"),
+            _ => panic!("HL_EXEC_RUNTIME_MODE must be null, shared, or isolated"),
         }
-        let elapsed = started.elapsed();
-        let worker_name = if mode == "shared" { "hl-exec" } else { "hl-exec-control" };
-        let expected_workers = if mode == "shared" { 2 } else { panes * 2 };
+        let worker_name = if mode == "isolated" {
+            "hl-exec-control"
+        } else {
+            "hl-exec"
+        };
+        let expected_workers = match mode.as_str() {
+            "null" => 0,
+            "shared" => 2,
+            "isolated" => panes * 2,
+            _ => unreachable!(),
+        };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while named_threads(worker_name) != expected_workers && std::time::Instant::now() < deadline {
             std::thread::yield_now();
         }
+        let elapsed = started.elapsed();
         println!(
             "execution-runtime mode={mode} panes={panes} elapsed_ns={} workers={} fds_delta={}",
             elapsed.as_nanos(),
