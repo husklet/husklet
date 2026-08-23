@@ -293,6 +293,39 @@ static __thread uint32_t t_token = 0;         // this worker thread's unique non
 static int64_t sentry_ctl_op(uint32_t op, uint64_t a0, uint64_t a1);
 static void ring_release(void);
 
+// ------------------------------------------------------------------ deferred SA_NOCLDWAIT releases
+// The kernel frees the host pid a virtual descriptor table is keyed on by three routes. Two of them are
+// guest syscalls the sentry can hear: the child's own exit (SENTRY_OP_EXIT) and the parent's wait4/waitid
+// (SENTRY_OP_REAP). The third is SA_NOCLDWAIT, where Linux leaves no zombie and the guest calls nothing at
+// all -- signal.c receives the event inside a HOST SIGNAL HANDLER.
+//
+// That handler cannot publish the release itself. sentry_ctl_op takes the ring's `busy` producer flag and
+// holds it across the whole round-trip, and the thread the signal interrupts is very often the thread
+// holding exactly that flag, parked in sentry_response_wait for the sentry's answer. Measured on x86_64
+// Linux at 5d34dde49: the guest wedges in the first round and spins in sched_yield forever, with the
+// handler's own frame sitting on top of the sentry_response_wait whose completion it is waiting for. Not a
+// race -- the interrupted thread cannot make progress until the handler returns, and the handler cannot
+// return until the interrupted thread makes progress.
+//
+// So the handler only records that collection is due. It deliberately leaves the corpse as a zombie:
+// the kernel cannot reuse a zombie's pid, which keeps the sentry table and the process it names inseparable
+// until ordinary syscall context can publish the release. Merely recording a pid *after* waitpid freed it
+// is not sufficient -- another worker sharing this sentry can fork onto that pid before publication and a
+// delayed REAP would then release the new process's live table.
+static _Atomic int g_nocldwait_pending;
+
+// The SA_NOCLDWAIT auto-reap entry, called from the host SIGCHLD handler in signal.c. Under the sentry it
+// only records intent; ordinary syscall context pins each corpse with WNOWAIT, publishes its release, and
+// then collects it. With the sentry gate off this remains the plain collection loop signal.c used to inline.
+static void sentry_nocldwait_reap(void) {
+    int status;
+    if (!g_untrusted) {
+        while (waitpid(-1, &status, WNOHANG) > 0) {}
+        return;
+    }
+    atomic_store_explicit(&g_nocldwait_pending, 1, memory_order_release);
+}
+
 #include "sentry_binding.h"
 #include "sentry_start.h"
 #include "sentry_token.h"
@@ -391,6 +424,7 @@ static void sentry_fork_child(void) {
     t_ring = -1;             // drop the inherited lane index; claim a fresh one lazily
     t_token = 0;             // mint a fresh ownership token on the next claim
     g_guest_children = 0;    // the child starts with no children of its own
+    g_nocldwait_pending = 0; // an inherited notification names the PARENT's corpses
     g_worker_threads = 1;    // only the calling thread survives fork()
     g_sentry_process_released = 0;
     memset(g_thread_start, 0, sizeof g_thread_start);
@@ -419,6 +453,26 @@ static int64_t sentry_ctl_op(uint32_t op, uint64_t a0, uint64_t a1) {
     int64_t result = atomic_load_explicit(&R->ret, memory_order_acquire);
     atomic_store_explicit(&R->busy, 0, memory_order_release);
     return result;
+}
+
+// Publish every release the SA_NOCLDWAIT handler requested, from ordinary syscall context where taking the
+// ring's producer flag is legal. WNOWAIT exposes a terminated child without collecting it, so its pid stays
+// unavailable for reuse until after the sentry has released that exact process's table. The sentry is a
+// real host child of the owning worker but never a guest child, so it is dropped here as in the wait lanes.
+static void sentry_reap_drain(void) {
+    if (!g_untrusted || !atomic_exchange_explicit(&g_nocldwait_pending, 0, memory_order_acq_rel)) return;
+    for (;;) {
+        siginfo_t info;
+        memset(&info, 0, sizeof info);
+        if (waitid(P_ALL, 0, &info, WEXITED | WNOHANG | WNOWAIT) != 0 || info.si_pid <= 0) return;
+        pid_t pid = info.si_pid;
+        if (!g_sentry_pid || pid != g_sentry_pid) {
+            sentry_ctl_op(SENTRY_OP_REAP, (uint64_t)(uint32_t)pid, 0);
+            atomic_fetch_sub(&g_guest_children, 1);
+        }
+        int status;
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    }
 }
 
 // SCM_RIGHTS fd passing over a control socketpair. sentry_send_fd lends one fd; sentry_recv_fd borrows it.

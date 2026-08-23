@@ -820,6 +820,12 @@ static void host_sigh(int sig) {
     host_sig_pend(sig_m2l(sig));
 } // host(macOS) signo -> Linux
 
+/* Defined by the sentry domain (linux_abi/sentry.c), which the per-target unity TU includes after this
+   one. Collects every terminated child exactly as the inlined waitpid(-1, WNOHANG) loop here used to, and
+   additionally records each freed pid for the sentry -- a record, not a publish, because publishing takes
+   the ring's producer flag and this runs inside a signal handler on a thread that may hold it. */
+static void sentry_nocldwait_reap(void);
+
 static void sig_diag_sync_reraise(int sig, int ls, siginfo_t *si, void *ucv);
 static void sig_diag_raise_default(struct cpu *c, int sig);
 static int deliver_guest_fault(int hostsig, siginfo_t *si, void *ucv);
@@ -901,12 +907,12 @@ static void host_sigh_si(int sig, siginfo_t *si, void *uc) {
     }
     // SA_NOCLDWAIT on the guest's SIGCHLD: Linux still DELIVERS the SIGCHLD but leaves no zombie. macOS's own
     // SA_NOCLDWAIT would suppress the signal entirely, so we don't set it (see rt_sigaction) -- instead
-    // auto-reap every terminated child here (WNOHANG, and no WUNTRACED so a stopped child is left alone). The
-    // guest handler still runs (host_sig_pend below) and a later wait() sees ECHILD. Gated on the guest opt-in.
-    if (ls == 17 && (g_sigact[17].flags & 0x2)) {
-        int wst;
-        while (waitpid(-1, &wst, WNOHANG) > 0) {}
-    }
+    // arrange to auto-reap every terminated child here. Under the sentry the handler records only intent;
+    // ordinary syscall context publishes each table release while WNOWAIT still pins the pid, then reaps.
+    // The guest handler still runs (host_sig_pend below) and a later wait() sees ECHILD. Gated on opt-in.
+    // This is the one route that frees a child's host pid without any guest syscall to route, so it is also
+    // where the sentry's per-process descriptor table would otherwise be orphaned; see sentry_nocldwait_reap.
+    if (ls == 17 && (g_sigact[17].flags & 0x2)) sentry_nocldwait_reap();
     host_sig_pend(ls);
 }
 
