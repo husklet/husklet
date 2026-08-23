@@ -684,8 +684,6 @@ mod tests {
 
     #[test]
     fn stop_wait_failure_attempts_rollback_before_returning() {
-        use std::os::unix::fs::PermissionsExt as _;
-
         let temporary = tempfile::tempdir().unwrap();
         let mut workspace = crate::config::WorkspaceConfig::new("demo", "ubuntu", hl_ws::Arch::Arm64);
         workspace.storage = Some(temporary.path().join("workspace"));
@@ -693,22 +691,30 @@ mod tests {
         daemon.binary = "/usr/bin/false".into();
         std::fs::create_dir_all(daemon.directory.join("shutdown.error")).unwrap();
         let (mut child, _) = spawn_daemon_helper(&daemon, &temporary, true, false, true, false);
-        let socket_parent = daemon.socket.parent().unwrap().to_owned();
-        let sabotage = socket_parent.clone();
+        let runtime = daemon.socket.parent().unwrap().to_owned();
+        let hidden = runtime.with_extension("hidden");
+        let sabotage = runtime.clone();
         let sabotaging = std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(100));
-            std::fs::set_permissions(sabotage, std::fs::Permissions::from_mode(0o000)).unwrap();
+            std::fs::rename(&sabotage, &hidden).unwrap();
+            std::fs::write(&sabotage, []).unwrap();
+            hidden
         });
 
         let error = daemon.prepare_checkpoint().unwrap_err();
-        sabotaging.join().unwrap();
-        std::fs::set_permissions(socket_parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let hidden = sabotaging.join().unwrap();
+        std::fs::remove_file(&runtime).unwrap();
+        std::fs::rename(hidden, runtime).unwrap();
         child.kill().unwrap();
         child.wait().unwrap();
 
         assert!(
             error.to_string().contains("rollback failed"),
             "rollback was not attempted after stop/wait failure: {error}"
+        );
+        assert!(
+            error.to_string().contains("Not a directory"),
+            "rollback sabotage did not reach the privilege-independent ENOTDIR path: {error}"
         );
     }
 }
