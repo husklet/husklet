@@ -96,14 +96,62 @@ static void translit_flags_out(struct cpu *cpu, uint64_t flags) {
 
 // ---- the switch
 //
-// HL_TRANSLIT selects the same-ISA backend at build time.
+// HL_TRANSLIT selects the same-ISA backend. HL_TRANSLIT_DEFAULT is the build-time default; the
+// HL_TRANSLIT launch option (engine/options.c) overrides it per launch, so one binary can be gated in
+// both states -- a compile-time-only switch makes "with the transliterator" and "without it" two
+// different binaries, and two binaries are never a differential test of one.
+//
+// Resolved ONCE, on the first call, and cached: translit_image_ok() runs on every block entry and
+// hl_option_get is a linear scan of the registry. The first call is hl_x86_init's SA_ONSTACK decision
+// (engine/target/x86_64.c), which is after the launch store is bound and before any guest code runs, so
+// the cache can never be filled from an unbound store. Guest exec keeps the same immutable launch option
+// store in the worker process, so the cached selection remains the selection for every later image.
+//
+// The environment fallback is a DELIBERATE, REVIEWED EXCEPTION to "ambient environment does not
+// configure the guest engine", and it is not precedent for anything else. It exists because the
+// standalone engine workers (hl-x86_64/hl-aarch64) build their option store from a RuntimePlan, and an
+// explicit store never imports the host environment (engine/runtime.c: `if (source_options == NULL)
+// hl_options_import_environment`) -- so without it this backend cannot be selected from a command line
+// at all, and the only way to measure it is to rebuild with a different HL_TRANSLIT_DEFAULT.
+//
+// That is exactly the mechanism that let these 475 lines sit unexecuted by any gate for the whole
+// history of this repository: `git log -S HL_TRANSLIT_DEFAULT` finds it has never been anything but 0,
+// and a feature that can only be measured by rebuilding goes unmeasured. The exception buys a corpus
+// run, a benchmark arm and a bisect that need one binary and two environments.
+//
+// The conditions it is granted under: the compiled default stays 0, so an unset environment changes
+// nothing; and the gate (hl-engine/tests/translit_differential.rs) selects the backend through the
+// LAUNCH OPTION, never through the environment, so the gate does not depend on this path existing.
+// Same lazy self-contained shape as HL_SOFT_SHARED_RESOLVER in the aarch64 translator.
 #ifndef HL_TRANSLIT_DEFAULT
 #define HL_TRANSLIT_DEFAULT 0
 #endif
 
+#if defined(__linux__) && defined(HL_HOST_CPU_X86_64)
+static int translit_selected = -1; // inside the gate: off a Linux/x86-64 host it would be an unused static
+
+// Why a launch got the speedup, or did not. Both refusals below are SILENT and permanent, and an
+// operator has no other way to tell "transliterated and fast" from "refused and slow" than by timing:
+//   - a non-PIE ET_EXEC placed at a storage bias declines the whole image;
+//   - g_rwx_guest latches on the first anonymous PROT_EXEC mmap or mprotect and is NOT cleared by
+//     execve, so one 4 KiB page of JIT arena disables this backend for the process and for every image
+//     it later execs -- which is every JIT-hosting guest there is.
+// Counted, not inferred: `blocks` is what the filter admitted, `entries` is what actually ran, and
+// `declined` is builds refused by the image predicate. A gate that only knows the option was SET does
+// not know the backend ran; these are what make that a measurement.
+static uint64_t translit_blocks;
+static uint64_t translit_entries;
+static uint64_t translit_declined;
+#endif
+
 static int translit_enabled(void) {
 #if defined(__linux__) && defined(HL_HOST_CPU_X86_64)
-    return HL_TRANSLIT_DEFAULT;
+    if (translit_selected < 0) {
+        const char *value = hl_option_get("HL_TRANSLIT");
+        if (value == NULL) value = getenv("HL_TRANSLIT");
+        translit_selected = value != NULL ? (value[0] != '0' && value[0] != 0) : HL_TRANSLIT_DEFAULT;
+    }
+    return translit_selected;
 #else
     return 0;
 #endif
@@ -298,7 +346,10 @@ static int translit_condition(const struct insn *insn) {
 }
 
 static void *translit_build(struct interp_block *block, uint64_t gpc) {
-    if (!translit_image_ok()) return NULL;
+    if (!translit_image_ok()) {
+        if (translit_enabled()) (void)__atomic_fetch_add(&translit_declined, 1, __ATOMIC_RELAXED);
+        return NULL;
+    }
     uint8_t *arena_limit = (uint8_t *)g_cache + CACHE_SZ - CACHE_EMIT_HEADROOM;
     uint8_t *start = g_cp;
     if (start + TL_MAX_BYTES > arena_limit) return NULL;
@@ -406,6 +457,7 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
     block->host_len = (uint32_t)(a->cursor - start);
     block->guest_end = pc;
     g_cp = a->cursor;
+    (void)__atomic_fetch_add(&translit_blocks, 1, __ATOMIC_RELAXED);
     return start;
 }
 
@@ -414,9 +466,32 @@ static void *translit_build(struct interp_block *block, uint64_t gpc) {
 // interpreter uses, which restores the host callee-saved registers the block is currently holding guest
 // values in.
 static void translit_run(struct cpu *cpu, struct interp_block *block) {
+    (void)__atomic_fetch_add(&translit_entries, 1, __ATOMIC_RELAXED);
     cpu->mmscratch[0] = translit_flags_in(cpu);
     hl_x86_translit_enter(cpu, (uint8_t *)block + block->host_entry_off);
     translit_flags_out(cpu, cpu->mmscratch[0]);
+}
+
+// One line of the [prof] report (engine/target/x86_64.c), and the only place an operator can learn that
+// this backend was selected and then silently refused. Written here rather than there because the
+// refusal predicates are this file's; the caller needs no #ifdef either way.
+static int translit_report(char *out, size_t size) {
+    uint64_t blocks = __atomic_load_n(&translit_blocks, __ATOMIC_RELAXED);
+    uint64_t entries = __atomic_load_n(&translit_entries, __ATOMIC_RELAXED);
+    uint64_t declined = __atomic_load_n(&translit_declined, __ATOMIC_RELAXED);
+    if (!translit_enabled()) return snprintf(out, size, "[prof] translit: not selected\n");
+    if (g_nonpie_lo != 0)
+        return snprintf(out, size,
+                        "[prof] translit: declined, non-PIE image at a storage bias (blocks=%llu entries=%llu"
+                        " declined=%llu)\n",
+                        (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined);
+    if (jit86_store_alias_observation_active())
+        return snprintf(out, size,
+                        "[prof] translit: declined, guest executable mapping or shared alias observed"
+                        " (blocks=%llu entries=%llu declined=%llu)\n",
+                        (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined);
+    return snprintf(out, size, "[prof] translit: blocks=%llu entries=%llu declined=%llu\n",
+                    (unsigned long long)blocks, (unsigned long long)entries, (unsigned long long)declined);
 }
 
 // cpu->r[] index -> ucontext greg index, for reconstructing guest state from a fault inside emitted code.
@@ -470,6 +545,10 @@ static int translit_signal_capture(struct cpu *cpu, void *native_context) {
     (void)cpu;
     (void)native_context;
     return 0;
+}
+
+static int translit_report(char *out, size_t size) {
+    return snprintf(out, size, "[prof] translit: absent, not a Linux x86-64 host\n");
 }
 
 #endif
