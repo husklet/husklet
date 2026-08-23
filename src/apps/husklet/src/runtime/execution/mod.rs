@@ -9,7 +9,7 @@ use std::io;
 
 mod process;
 
-use process::{ExecPty, Output, Shell};
+use process::{ExecPty, Output, PaneRuntime, Shell};
 
 #[derive(Clone)]
 pub(crate) struct PaneExecution {
@@ -72,11 +72,7 @@ enum PersistedAction {
 
 impl PersistedAction {
     fn for_running(running: bool) -> Self {
-        if running {
-            Self::Attach
-        } else {
-            Self::Restore
-        }
+        if running { Self::Attach } else { Self::Restore }
     }
 
     fn after_failed_attach(running: Option<bool>) -> Self {
@@ -97,10 +93,7 @@ pub fn launch(
     cwd: Option<&str>,
     slot: Option<&str>,
 ) -> io::Result<Box<dyn PtyBackend>> {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()?;
+    let mut runtime = PaneRuntime::shared()?;
     let socket = crate::runtime::domain::Domain::new(workspace).ensure(workspace)?;
     let client = hl_client::Client::unix(socket).map_err(LauncherError::io)?;
     let _workspace_session = runtime
@@ -502,7 +495,7 @@ impl PaneStart {
 
 #[cfg(test)]
 mod pane_execution_tests {
-    use super::{terminal_identity, PaneExecution, PersistedAction};
+    use super::{PaneExecution, PersistedAction, terminal_identity};
     use crate::config::WorkspaceConfig;
     use hl_ws::Arch;
 

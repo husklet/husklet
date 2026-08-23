@@ -1,11 +1,11 @@
-use hl_client::api::Size;
 use hl_client::Client;
+use hl_client::api::Size;
 use hl_ws_term::PtyBackend;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::io;
 use std::os::unix::io::RawFd;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use super::PaneExecution;
 
@@ -18,13 +18,61 @@ impl Shell {
 }
 
 pub(super) struct ExecPty {
-    pub(super) runtime: tokio::runtime::Runtime,
+    pub(super) runtime: PaneRuntime,
     pub(super) client: Client,
     pub(super) execution: String,
     pub(super) input: tokio::sync::mpsc::Sender<Vec<u8>>,
     pub(super) output: Output,
     pub(super) exited: Arc<Mutex<Option<i32>>>,
     pub(super) pane: Option<PaneExecution>,
+}
+
+pub(super) struct PaneRuntime {
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+    runtime: Arc<tokio::runtime::Runtime>,
+}
+
+impl PaneRuntime {
+    pub(super) fn shared() -> io::Result<Self> {
+        static SHARED: OnceLock<Mutex<Weak<tokio::runtime::Runtime>>> = OnceLock::new();
+        let mut shared = SHARED
+            .get_or_init(|| Mutex::new(Weak::new()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let runtime = if let Some(runtime) = shared.upgrade() {
+            runtime
+        } else {
+            let runtime = Arc::new(
+                tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .thread_name("hl-exec")
+                    .enable_all()
+                    .build()?,
+            );
+            *shared = Arc::downgrade(&runtime);
+            runtime
+        };
+        Ok(Self {
+            tasks: Vec::new(),
+            runtime,
+        })
+    }
+
+    pub(super) fn block_on<F: Future>(&self, future: F) -> F::Output {
+        self.runtime.block_on(future)
+    }
+
+    pub(super) fn spawn(&mut self, future: impl Future<Output = ()> + Send + 'static) {
+        self.tasks.push(self.runtime.spawn(future));
+    }
+}
+
+impl Drop for PaneRuntime {
+    fn drop(&mut self) {
+        for task in &self.tasks {
+            task.abort();
+        }
+    }
 }
 
 const CLEANUP_STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
@@ -185,7 +233,7 @@ impl Drop for ExecPty {
 
 #[cfg(test)]
 mod tests {
-    use super::{cleanup_with, Output};
+    use super::{Output, PaneRuntime, cleanup_with};
 
     #[test]
     fn output_finishes_only_after_every_chunk_is_drained() {
@@ -320,5 +368,151 @@ mod tests {
 
         assert!(failures.is_empty());
         assert_eq!(*events.lock().unwrap(), ["remove"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn named_threads(name: &str) -> usize {
+        std::fs::read_dir("/proc/self/task")
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| std::fs::read_to_string(entry.path().join("comm")).is_ok_and(|comm| comm.trim() == name))
+            .count()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn descriptors() -> usize {
+        std::fs::read_dir("/proc/self/fd").unwrap().count()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn eight_fake_panes_share_workers_and_drop_tasks_and_runtime_to_baseline() {
+        const CHILD: &str = "HL_EXEC_RUNTIME_CENSUS_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("eight_fake_panes_share_workers_and_drop_tasks_and_runtime_to_baseline")
+                .arg("--nocapture")
+                .env(CHILD, "1")
+                .status()
+                .unwrap();
+            assert!(status.success(), "isolated pane census failed");
+            return;
+        }
+
+        struct Active(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+        impl Drop for Active {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, std::sync::atomic::Ordering::Release);
+            }
+        }
+
+        let baseline_fds = descriptors();
+        let active = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut panes = Vec::new();
+        for _ in 0..8 {
+            let mut pane = PaneRuntime::shared().unwrap();
+            for _ in 0..3 {
+                let active = std::sync::Arc::clone(&active);
+                pane.spawn(async move {
+                    active.fetch_add(1, std::sync::atomic::Ordering::Release);
+                    let _active = Active(active);
+                    std::future::pending::<()>().await;
+                });
+            }
+            panes.push(pane);
+        }
+        assert!(
+            panes[1..]
+                .iter()
+                .all(|pane| std::sync::Arc::ptr_eq(&panes[0].runtime, &pane.runtime))
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while (active.load(std::sync::atomic::Ordering::Acquire) != 24 || named_threads("hl-exec") != 2)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::yield_now();
+        }
+        assert_eq!(active.load(std::sync::atomic::Ordering::Acquire), 24);
+        assert_eq!(
+            named_threads("hl-exec"),
+            2,
+            "eight panes created more than one worker pair"
+        );
+        let held_fds = descriptors();
+
+        drop(panes);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while (active.load(std::sync::atomic::Ordering::Acquire) != 0 || named_threads("hl-exec") != 0)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::yield_now();
+        }
+        let final_fds = descriptors();
+        println!("execution-runtime panes=8 fds={baseline_fds}/{held_fds}/{final_fds}");
+        assert_eq!(
+            active.load(std::sync::atomic::Ordering::Acquire),
+            0,
+            "pane tasks survived their owner"
+        );
+        assert_eq!(
+            named_threads("hl-exec"),
+            0,
+            "the last pane left immortal runtime workers"
+        );
+        assert!(
+            held_fds > baseline_fds,
+            "runtime did not open any observable descriptors"
+        );
+        assert_eq!(final_fds, baseline_fds, "pane drop did not restore descriptor baseline");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "manual execution-runtime census used by /var/tmp/execution-runtime-abba.sh"]
+    fn execution_runtime_census() {
+        let panes = std::env::var("HL_EXEC_RUNTIME_PANES")
+            .unwrap()
+            .parse::<usize>()
+            .unwrap();
+        let mode = std::env::var("HL_EXEC_RUNTIME_MODE").unwrap();
+        let baseline_fds = descriptors();
+        let started = std::time::Instant::now();
+        let mut shared = Vec::new();
+        let mut isolated = Vec::new();
+        match mode.as_str() {
+            "shared" => {
+                for _ in 0..panes {
+                    shared.push(PaneRuntime::shared().unwrap());
+                }
+            }
+            "isolated" => {
+                for _ in 0..panes {
+                    isolated.push(
+                        tokio::runtime::Builder::new_multi_thread()
+                            .worker_threads(2)
+                            .thread_name("hl-exec-control")
+                            .enable_all()
+                            .build()
+                            .unwrap(),
+                    );
+                }
+            }
+            _ => panic!("HL_EXEC_RUNTIME_MODE must be shared or isolated"),
+        }
+        let elapsed = started.elapsed();
+        let worker_name = if mode == "shared" { "hl-exec" } else { "hl-exec-control" };
+        let expected_workers = if mode == "shared" { 2 } else { panes * 2 };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while named_threads(worker_name) != expected_workers && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        println!(
+            "execution-runtime mode={mode} panes={panes} elapsed_ns={} workers={} fds_delta={}",
+            elapsed.as_nanos(),
+            named_threads(worker_name),
+            descriptors().saturating_sub(baseline_fds),
+        );
+        assert_eq!(named_threads(worker_name), expected_workers);
     }
 }
