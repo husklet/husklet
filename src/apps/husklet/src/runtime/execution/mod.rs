@@ -338,7 +338,7 @@ async fn forward_output(
 /// pane must restore instead. Reclassifying once here lets the pane recover without asking the
 /// reader to reopen the workspace.
 fn reattach(
-    runtime: &tokio::runtime::Runtime,
+    runtime: &PaneRuntime,
     client: &hl_client::Client,
     execution: &str,
     request: &ExecAttach,
