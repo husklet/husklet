@@ -16,10 +16,10 @@ mod output;
 pub(super) use output::NativeOutputBridge;
 #[path = "terminal_bridge.rs"]
 mod bridge;
+#[cfg(test)]
+use bridge::open_pair;
 pub(crate) use bridge::write_master;
 pub(super) use bridge::{InputDiscipline, NativeTerminalBridge};
-#[cfg(test)]
-use bridge::{drain_ready_batch, open_pair};
 
 /// The guest termios one pump is running, and the host projection it imposed in order to run it.
 ///
@@ -439,7 +439,7 @@ impl MemberTerminal {
 
 #[cfg(test)]
 mod tests {
-    use super::{InputDiscipline, NativeOutputBridge, NativeTerminalBridge};
+    use super::{InputDiscipline, NativeOutputBridge, NativeTerminalBridge, bridge::drain_ready_batch};
     use crate::composition::{StandardStream, StandardStreamPort, Terminal, TerminalPort};
     use std::collections::VecDeque;
     use std::io::{Read, Write};
