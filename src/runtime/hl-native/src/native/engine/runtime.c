@@ -32,6 +32,10 @@ static const hl_engine_backend *production_backends[HL_GUEST_ISA_X86_64 + 1];
 
 #if defined(HL_NATIVE_TEST_HOOKS)
 static atomic_uint engine_finish_test_phase;
+HL_API uint32_t hl_c_backend_engine_finish_test_arm(void);
+HL_API uint32_t hl_c_backend_engine_finish_test_phase(void);
+HL_API void hl_c_backend_engine_finish_test_release(void);
+HL_API int hl_c_backend_engine_request_state_test(uint32_t scenario);
 
 HL_API uint32_t hl_c_backend_engine_finish_test_arm(void) {
     atomic_store_explicit(&engine_finish_test_phase, 1, memory_order_release);

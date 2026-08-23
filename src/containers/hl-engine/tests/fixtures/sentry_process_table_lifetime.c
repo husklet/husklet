@@ -72,15 +72,24 @@ static int rounds_nocldwait(void) {
     for (int i = 0; i < ROUNDS; i++) {
         pid_t child = fork();
         if (child == 0)
-            for (;;) pause();
-        if (child < 0) { failure = errno; break; }
+            for (;;)
+                pause();
+        if (child < 0) {
+            failure = errno;
+            break;
+        }
         kill(child, SIGKILL);
         int gone = 0;
         for (int spin = 0; spin < 10000 && !gone; spin++) {
-            if (kill(child, 0) < 0 && errno == ESRCH) gone = 1;
-            else usleep(1000);
+            if (kill(child, 0) < 0 && errno == ESRCH)
+                gone = 1;
+            else
+                usleep(1000);
         }
-        if (!gone) { failure = -1; break; }
+        if (!gone) {
+            failure = -1;
+            break;
+        }
         completed++;
     }
     printf("nocldwait completed=%d failure=%d\n", completed, failure);
@@ -110,7 +119,8 @@ static int batch_nocldwait(void) {
                 }
             if (child < 0) {
                 printf("batch round=%d created=%d errno=%d\n", round, i, errno);
-                for (int done = 0; done < i; done++) kill(children[done], SIGKILL);
+                for (int done = 0; done < i; done++)
+                    kill(children[done], SIGKILL);
                 return 1;
             }
             children[i] = child;
@@ -120,12 +130,15 @@ static int batch_nocldwait(void) {
         for (int i = 0; i < BATCH; i++) {
             int gone = 0;
             for (int spin = 0; spin < 10000 && !gone; spin++) {
-                if (kill(children[i], 0) < 0 && errno == ESRCH) gone = 1;
-                else usleep(1000);
+                if (kill(children[i], 0) < 0 && errno == ESRCH)
+                    gone = 1;
+                else
+                    usleep(1000);
             }
             if (!gone) {
                 printf("batch round=%d uncollected=%d\n", round, i);
-                for (int rest = i; rest < BATCH; rest++) kill(children[rest], SIGKILL);
+                for (int rest = i; rest < BATCH; rest++)
+                    kill(children[rest], SIGKILL);
                 return 1;
             }
         }
@@ -160,7 +173,10 @@ static int blocked(void) {
                 volatile int alive = 1;
                 (void)alive;
             }
-        if (dying < 0) { printf("blocked round=%d fork-dying errno=%d\n", i, errno); return 1; }
+        if (dying < 0) {
+            printf("blocked round=%d fork-dying errno=%d\n", i, errno);
+            return 1;
+        }
         pid_t writer = fork();
         if (writer < 0) {
             printf("blocked round=%d fork-writer errno=%d\n", i, errno);
