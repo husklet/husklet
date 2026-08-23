@@ -112,6 +112,25 @@ impl Registry {
         Ok(self.client.get_or_init(|| client))
     }
 
+    /// Build the client for `transport`.
+    ///
+    /// **`Transport::Plain` still needs a CA store, and that cannot be fixed from here.** It speaks
+    /// only `http://` -- `ClientProtocol::Http` makes every URL oci-client builds plain -- so the
+    /// certificate roots it loads are never consulted, yet `reqwest` loads them while building any
+    /// client and a host with none cannot produce one. Two levers exist in `reqwest` and
+    /// `oci_client::client::ClientConfig` reaches neither usefully:
+    ///
+    /// * `ClientBuilder::tls_certs_only([])` gives a real TLS stack over an **empty** root store:
+    ///   no CA load, and fail-closed on anything TLS. It is what `hl-daemon`'s remote-`ADD` client
+    ///   uses for a plain-`http://` build. `ClientConfig` forwards `tls_certs_only` only when its
+    ///   vector is non-empty, so the empty case -- the whole point -- is unreachable through it.
+    /// * `accept_invalid_certificates` is reachable and would also build without a CA store, but it
+    ///   is not "no TLS", it is "TLS that trusts anyone". An `http://` registry that redirected to
+    ///   `https://` would then be accepted silently. Needing a CA store is the better failure.
+    ///
+    /// So this is a limit of oci-client's configuration surface, not an oversight. Closing it means
+    /// oci-client accepting a caller-supplied `reqwest::Client`, or exposing an empty-root-store
+    /// option; do not re-derive the above before checking whether it has gained one.
     fn connect(transport: Transport) -> Result<Client> {
         let config = oci_client::client::ClientConfig {
             protocol: match transport {

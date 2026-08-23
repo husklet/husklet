@@ -1299,6 +1299,143 @@ int main(int argc, char **argv) {
         }
     }
 
+    /// A bind-mounted host directory must enumerate, not merely open files by name.
+    ///
+    /// A volume is its own jail root: `openat`, `read` and `write` on a path under it route to the
+    /// host source, but the layered namespace walk that decides descriptor provenance knows only the
+    /// image layers, and the mount point exists in those as the empty placeholder
+    /// `vol_mkmountpoint()` materializes. The two therefore describe different directory objects, and
+    /// `openat(O_DIRECTORY)` rejects the disagreement -- so listing a mounted directory failed with
+    /// `EAGAIN` while reading a file inside it succeeded, and a subdirectory present only in the host
+    /// source was `ENOENT` to `openat` while `cat` of a file inside it worked.
+    ///
+    /// This is the product's flagship path -- a developer mounts a project directory and runs `ls` --
+    /// and no test in the repository listed a mounted directory before this one. The guest runs the
+    /// two syscalls directly rather than through a shell so the failure is an errno, not a message.
+    #[test]
+    fn a_bind_mounted_directory_enumerates_its_host_entries() {
+        const SOURCE: &str = r#"
+#include <errno.h>
+#include <fcntl.h>
+#include <string.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+
+/* linux_dirent64: d_ino, d_off, d_reclen, d_type, then the NUL-terminated name at offset 19. */
+struct record {
+    unsigned long long object;
+    long long offset;
+    unsigned short size;
+    unsigned char type;
+    char name[];
+};
+
+/* An exit status is 8 bits, so each failing step gets a 48-wide band and clamps its errno into it. */
+static int reported(int base) { return base + (errno < 47 ? errno : 47); }
+
+int main(void) {
+    int mount = open("/work", O_RDONLY | O_DIRECTORY);
+    if (mount < 0) return reported(10);
+    char buffer[8192];
+    long used = syscall(SYS_getdents64, mount, buffer, sizeof buffer);
+    if (used < 0) return reported(60);
+    int alpha = 0, nested = 0;
+    for (long at = 0; at + 19 <= used;) {
+        struct record *entry = (struct record *)(buffer + at);
+        if (entry->size < 24) return 3;
+        if (!strcmp(entry->name, "alpha.txt")) alpha = 1;
+        if (!strcmp(entry->name, "nested")) nested = 1;
+        at += entry->size;
+    }
+    if (!alpha) return 4;
+    if (!nested) return 5;
+    /* A directory that exists only in the host source, never in the image placeholder. */
+    int child = open("/work/nested", O_RDONLY | O_DIRECTORY);
+    if (child < 0) return reported(110);
+    long child_used = syscall(SYS_getdents64, child, buffer, sizeof buffer);
+    if (child_used < 0) return reported(160);
+    for (long at = 0; at + 19 <= child_used;) {
+        struct record *entry = (struct record *)(buffer + at);
+        if (entry->size < 24) return 6;
+        if (!strcmp(entry->name, "deep.txt")) return 0;
+        at += entry->size;
+    }
+    return 7;
+}
+"#;
+        /// Turn the guest's exit status back into the syscall and errno it stands for, because a bare
+        /// number here would say nothing about which half of the mechanism broke.
+        fn explain(status: i32) -> String {
+            match status {
+                0 => "success".to_owned(),
+                3 | 6 => "a getdents64 record was shorter than linux_dirent64's fixed header".to_owned(),
+                4 => "the mount listed without `alpha.txt`".to_owned(),
+                5 => "the mount listed without `nested`".to_owned(),
+                7 => "`/work/nested` listed without `deep.txt`".to_owned(),
+                10..=57 => format!("openat(\"/work\", O_DIRECTORY) failed with errno {}", status - 10),
+                60..=107 => format!("getdents64 on the mount failed with errno {}", status - 60),
+                110..=157 => {
+                    format!(
+                        "openat(\"/work/nested\", O_DIRECTORY) failed with errno {}",
+                        status - 110
+                    )
+                }
+                160..=207 => format!("getdents64 on `/work/nested` failed with errno {}", status - 160),
+                other => format!("the guest exited {other}"),
+            }
+        }
+
+        for (isa, compiler) in [(1, "aarch64-linux-gnu-gcc"), (2, "x86_64-linux-gnu-gcc")] {
+            if !guest_compiler_present(compiler, "a_bind_mounted_directory_enumerates_its_host_entries", isa) {
+                continue;
+            }
+            // The rootfs and the mounted source are separate host trees, exactly as a workspace mounts
+            // a project directory into an image: nothing the guest sees under `/work` exists in the
+            // image, and the placeholder the engine creates at the mount point is a different inode.
+            let root = tempfile::tempdir().unwrap();
+            let project = tempfile::tempdir().unwrap();
+            std::fs::write(project.path().join("alpha.txt"), "hello from the host").unwrap();
+            std::fs::create_dir(project.path().join("nested")).unwrap();
+            std::fs::write(project.path().join("nested/deep.txt"), "nested").unwrap();
+            let source = root.path().join("listing.c");
+            let guest = root.path().join("listing");
+            std::fs::write(&source, SOURCE).unwrap();
+            let compile = guest_compiler(compiler)
+                .args(["-static", "-no-pie", "-O2"])
+                .arg(&source)
+                .arg("-o")
+                .arg(&guest)
+                .output()
+                .unwrap_or_else(|error| panic!("{compiler} is required for ISA {isa}: {error}"));
+            assert!(
+                compile.status.success(),
+                "{compiler} failed: {}",
+                String::from_utf8_lossy(&compile.stderr)
+            );
+            let root_path = CString::new(root.path().to_str().unwrap()).unwrap();
+            let executable = CString::new(guest.to_str().unwrap()).unwrap();
+            let volumes = CString::new("HL_VOLUMES").unwrap();
+            let specification = CString::new(format!("/work:{}", project.path().display())).unwrap();
+            let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
+            let config = EngineConfig {
+                isa,
+                rootfs: Some(&root_path),
+                executable_host: Some(&executable),
+                executable_fd: -1,
+                option_names: &[volumes.as_ptr()],
+                option_values: &[specification.as_ptr()],
+                standard_fds: [standard.as_raw_fd(); 3],
+                provider_fd: -1,
+            };
+            // SAFETY: every borrowed string and descriptor remains live through create.
+            let engine = unsafe { Engine::create(config) }.unwrap();
+            let argument = CString::new("/listing").unwrap();
+            engine.run(&[argument.as_ptr()]).unwrap();
+            let status = engine.exit().status;
+            assert_eq!(status, 0, "ISA {isa}: {}", explain(status));
+        }
+    }
+
     fn resolved(mut roots: Vec<std::fs::File>, path: &str) -> Option<String> {
         let mut file = resolve_layered_guest(std::path::Path::new(path), &roots).ok()??;
         let mut value = String::new();
