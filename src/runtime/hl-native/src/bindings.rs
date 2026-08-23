@@ -321,15 +321,27 @@ mod tests {
         // kernel never issued and 9 uses this live process, and the old token comparison answers both
         // the same way. Without it the corpse-aware predicate has no probe that can fail.
         for scenario in [8, 9, 10] {
-            assert!(fdvis_path_publication_test(1, scenario), "arm64 reservation scenario {scenario}");
-            assert!(fdvis_path_publication_test(2, scenario), "x86 reservation scenario {scenario}");
+            assert!(
+                fdvis_path_publication_test(1, scenario),
+                "arm64 reservation scenario {scenario}"
+            );
+            assert!(
+                fdvis_path_publication_test(2, scenario),
+                "x86 reservation scenario {scenario}"
+            );
         }
         // Windows cannot stage a zombie and the C hook explicitly refuses this arm there rather than
         // pretending it ran. Keep the unsupported host visible at the call site, as scenario 7 does.
         #[cfg(not(windows))]
         for scenario in [11] {
-            assert!(fdvis_path_publication_test(1, scenario), "arm64 reservation scenario {scenario}");
-            assert!(fdvis_path_publication_test(2, scenario), "x86 reservation scenario {scenario}");
+            assert!(
+                fdvis_path_publication_test(1, scenario),
+                "arm64 reservation scenario {scenario}"
+            );
+            assert!(
+                fdvis_path_publication_test(2, scenario),
+                "x86 reservation scenario {scenario}"
+            );
         }
         // Scenario 7's second half forks and rendezvouses through a MAP_SHARED page, which the
         // Windows arm of path_runtime.c refuses. Naming the host here rather than dropping the
