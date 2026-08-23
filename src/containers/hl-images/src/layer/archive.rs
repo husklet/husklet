@@ -581,7 +581,7 @@ mod diff_size_tests {
         let mode = std::env::var("HL_LAYER_MODE").unwrap();
         let started = std::time::Instant::now();
         let entries = if matches!(mode.as_str(), "candidate" | "baseline") {
-            REUSE_PARENT_VALIDATION.with(|reuse| reuse.set(mode == "candidate"));
+            super::REUSE_PARENT_VALIDATION.with(|reuse| reuse.set(mode == "candidate"));
             let file = std::fs::File::open(archive).unwrap();
             Layer::new(std::io::BufReader::new(file))
                 .apply(std::path::Path::new(&root))
