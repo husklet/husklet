@@ -69,15 +69,16 @@ pub(crate) struct SplitPosition;
 
 impl SplitPosition {
     pub(crate) fn restore(paned: &gtk::Paned, direction: SplitDir, ratio: f64) {
-        let paned = paned.clone();
-        glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
+        paned.add_tick_callback(move |paned, _| {
             let dimension = match direction {
                 SplitDir::Horizontal => paned.width(),
                 SplitDir::Vertical => paned.height(),
             };
-            if dimension > 1 {
-                paned.set_position((ratio * dimension as f64).round() as i32);
+            if dimension <= 1 {
+                return glib::ControlFlow::Continue;
             }
+            paned.set_position((ratio * dimension as f64).round() as i32);
+            glib::ControlFlow::Break
         });
     }
 }
@@ -483,5 +484,132 @@ mod focus_ownership_tests {
         assert!(page_owns_focus(Some(&2), &[1, 2, 3]));
         assert!(!page_owns_focus(Some(&4), &[1, 2, 3]));
         assert!(!page_owns_focus::<i32>(None, &[1, 2, 3]));
+    }
+}
+
+#[cfg(test)]
+mod split_position_tests {
+    use super::*;
+
+    #[test]
+    fn a_hidden_tab_restores_when_it_is_first_allocated() {
+        let ran = crate::test_support::on_the_toolkit_thread(|| {
+            let stack = gtk::Stack::new();
+            let visible = gtk::Label::new(Some("visible"));
+            let hidden = split();
+            stack.add_named(&visible, Some("visible"));
+            stack.add_named(&hidden, Some("hidden"));
+            stack.set_visible_child_name("visible");
+            let window = gtk::Window::new();
+            window.set_default_size(800, 400);
+            window.set_child(Some(&stack));
+
+            SplitPosition::restore(&hidden, SplitDir::Horizontal, 0.25);
+            window.present();
+            settle_for(std::time::Duration::from_millis(250));
+            assert!(
+                hidden.width() <= 1,
+                "hidden split was unexpectedly allocated: {}",
+                hidden.width()
+            );
+
+            stack.set_visible_child_name("hidden");
+            let width = await_ratio(&hidden, 0.25);
+            assert_ne!(width, 0);
+            window.close();
+        });
+        if !ran {
+            println!("skipped: no display connection");
+        }
+    }
+
+    #[test]
+    fn an_allocated_split_restores_once_and_never_overrides_a_user_drag() {
+        let ran = crate::test_support::on_the_toolkit_thread(|| {
+            let paned = split();
+            let window = gtk::Window::new();
+            window.set_default_size(800, 400);
+            window.set_child(Some(&paned));
+            window.present();
+            await_dimension(&paned);
+
+            SplitPosition::restore(&paned, SplitDir::Horizontal, 0.25);
+            let width = await_ratio(&paned, 0.25);
+            let dragged = (f64::from(width) * 0.70).round() as i32;
+            paned.set_position(dragged);
+            settle_frames(4);
+            assert_eq!(
+                paned.position(),
+                dragged,
+                "restore callback remained armed after applying once"
+            );
+            window.close();
+        });
+        if !ran {
+            println!("skipped: no display connection");
+        }
+    }
+
+    fn split() -> gtk::Paned {
+        let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
+        paned.set_hexpand(true);
+        paned.set_vexpand(true);
+        paned.set_start_child(Some(&gtk::Label::new(Some("start"))));
+        paned.set_end_child(Some(&gtk::Label::new(Some("end"))));
+        paned
+    }
+
+    fn await_dimension(paned: &gtk::Paned) -> i32 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            while glib::MainContext::default().iteration(false) {}
+            if paned.width() > 1 {
+                return paned.width();
+            }
+            assert!(std::time::Instant::now() < deadline, "split was never allocated");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    fn await_ratio(paned: &gtk::Paned, ratio: f64) -> i32 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            while glib::MainContext::default().iteration(false) {}
+            let width = paned.width();
+            let expected = (f64::from(width) * ratio).round() as i32;
+            if width > 1 && (paned.position() - expected).abs() <= 1 {
+                return width;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "width={width} position={}",
+                paned.position()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    fn settle_frames(count: usize) {
+        let mut frames = 0;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while frames < count {
+            if glib::MainContext::default().iteration(false) {
+                frames += 1;
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "toolkit produced fewer than {count} events"
+            );
+        }
+    }
+
+    fn settle_for(duration: std::time::Duration) {
+        let deadline = std::time::Instant::now() + duration;
+        while std::time::Instant::now() < deadline {
+            while glib::MainContext::default().iteration(false) {}
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 }
