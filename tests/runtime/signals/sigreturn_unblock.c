@@ -47,7 +47,7 @@ int main(void) {
     sigpending(&pend);
     int drained = !sigismember(&pend, SIGUSR2);
 
-    printf("sigreturn-unblock handler=%d blocked_inside=%d delivered=%d drained=%d\n",
-           got1 == 1, got2_inside == 0, delivered, drained);
+    printf("sigreturn-unblock handler=%d blocked_inside=%d delivered=%d drained=%d\n", got1 == 1, got2_inside == 0,
+           delivered, drained);
     return 0;
 }

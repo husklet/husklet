@@ -55,37 +55,36 @@ static const hl_option_definition hl_option_definitions[] = {
     HL_INTERNAL_OPTION("HL_CHECKPOINT_PHASE_GENERATION", "checkpoint restore phase ledger generation",
                        HL_OPTION_INTEGER),
     HL_INJECTION_OPTION("HL_CKPT_TEST_PEER_EXIT_BEFORE_JOIN",
-                       "test-only capture peer that exits at its safepoint before proving membership",
-                       HL_OPTION_FLAG),
+                        "test-only capture peer that exits at its safepoint before proving membership", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_CKPT_TEST_PEER_EXIT_AFTER_JOIN",
-                       "test-only capture peer that exits after proving membership and before committing",
-                       HL_OPTION_FLAG),
+                        "test-only capture peer that exits after proving membership and before committing",
+                        HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_CKPT_TEST_PEER_SLOW_SAFEPOINT",
-                       "test-only capture peer that works for far longer than the rendezvous stall window "
-                       "before committing its group",
-                       HL_OPTION_FLAG),
+                        "test-only capture peer that works for far longer than the rendezvous stall window "
+                        "before committing its group",
+                        HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_CKPT_TEST_PEER_STALLS_AT_SAFEPOINT",
-                       "test-only capture peer that never commits its group and consumes no host CPU time",
-                       HL_OPTION_FLAG),
+                        "test-only capture peer that never commits its group and consumes no host CPU time",
+                        HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_CKPT_TEST_FAIL_AFTER_FORK", "test-only restore failure after rebuilding descendants",
-                       HL_OPTION_FLAG),
+                        HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_CKPT_TEST_FAIL_TRIGGER_REATTACH",
-                       "test-only restored checkpoint trigger reattachment failure", HL_OPTION_FLAG),
+                        "test-only restored checkpoint trigger reattachment failure", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_CKPT_TEST_FAIL_TTY_MASK", "test-only terminal-claim mask failure", HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_CKPT_TEST_FAIL_PIDMAP_AT",
                         "test-only restore identity-publication failure at this guest pid", HL_OPTION_INTEGER),
     HL_INJECTION_OPTION("HL_CKPT_TEST_PEER_FORGOTTEN_AFTER_KICK",
-                       "test-only capture peer that is kicked and then dropped from the coordinator's enumeration, "
-                       "so only the broker knows it is a member",
-                       HL_OPTION_FLAG),
+                        "test-only capture peer that is kicked and then dropped from the coordinator's enumeration, "
+                        "so only the broker knows it is a member",
+                        HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_CKPT_TEST_REAPED_UNNAMEABLE",
-                       "test-only: the capture's own reap destroys a child exit status it cannot name in the "
-                       "guest pid namespace, so the capture must refuse rather than publish",
-                       HL_OPTION_FLAG),
+                        "test-only: the capture's own reap destroys a child exit status it cannot name in the "
+                        "guest pid namespace, so the capture must refuse rather than publish",
+                        HL_OPTION_FLAG),
     HL_INJECTION_OPTION("HL_CKPT_TEST_PEER_HIDDEN_FROM_ENUMERATION",
-                       "test-only capture peer withheld from the coordinator's first enumeration, exactly as a "
-                       "process forked immediately after the scan is",
-                       HL_OPTION_FLAG),
+                        "test-only capture peer withheld from the coordinator's first enumeration, exactly as a "
+                        "process forked immediately after the scan is",
+                        HL_OPTION_FLAG),
     HL_LAUNCH_OPTION("HL_CHECKPOINT_POLICY", "checkpoint incompatible-resource recovery policy", HL_OPTION_INTEGER),
     HL_LAUNCH_OPTION("HL_CPUS", "guest-visible CPU quota", HL_OPTION_INTEGER),
     HL_LAUNCH_OPTION("HL_C_DIAGNOSTICS", "report retained C translation and dispatch phase counters at launch exit",
@@ -262,10 +261,8 @@ const char *hl_options_get(const hl_options *options, const char *name) {
 }
 
 static size_t hl_option_value_size(const char *value) {
-    size_t length;
-    for (length = 0; length < HL_OPTION_STORE_LIMIT; ++length)
-        if (value[length] == 0) return length + 1;
-    return 0;
+    size_t length = strnlen(value, HL_OPTION_STORE_LIMIT);
+    return length == HL_OPTION_STORE_LIMIT ? 0 : length + 1;
 }
 
 int hl_options_set(hl_options *options, const char *name, const char *value, int overwrite) {

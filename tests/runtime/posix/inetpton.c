@@ -28,7 +28,7 @@ int main(void) {
 
     int rej6 = inet_pton(AF_INET6, "fe80:::1", &a6) == 0;
 
-    printf("inetpton p4=%d n4=%d rej4=%d rej4b=%d p6=%d n6=%d canon=%d rej6=%d\n",
-           p4, n4, rej4, rej4b, p6, n6, canon, rej6);
+    printf("inetpton p4=%d n4=%d rej4=%d rej4b=%d p6=%d n6=%d canon=%d rej6=%d\n", p4, n4, rej4, rej4b, p6, n6, canon,
+           rej6);
     return 0;
 }

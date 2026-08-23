@@ -9,7 +9,9 @@
 #include <stdio.h>
 #include <string.h>
 
-static int bit(unsigned v, int b) { return (int)((v >> b) & 1u); }
+static int bit(unsigned v, int b) {
+    return (int)((v >> b) & 1u);
+}
 
 int main(void) {
     unsigned a, b, c, d;
@@ -29,8 +31,8 @@ int main(void) {
     // ---- leaf 1: baseline EDX + ECX feature bits ----
     __cpuid(1, a, b, c, d);
     // EDX: FPU TSC CX8 CMOV CLFSH MMX FXSR SSE SSE2
-    ok &= bit(d, 0) & bit(d, 4) & bit(d, 8) & bit(d, 15) & bit(d, 19) & bit(d, 23) & bit(d, 24) & bit(d, 25) &
-          bit(d, 26);
+    ok &=
+        bit(d, 0) & bit(d, 4) & bit(d, 8) & bit(d, 15) & bit(d, 19) & bit(d, 23) & bit(d, 24) & bit(d, 25) & bit(d, 26);
     // ECX: SSE3 PCLMULQDQ SSSE3 CX16 SSE4.1 SSE4.2 POPCNT AES
     ok &= bit(c, 0) & bit(c, 1) & bit(c, 9) & bit(c, 13) & bit(c, 19) & bit(c, 20) & bit(c, 23) & bit(c, 25);
     // NOT advertised (hl cannot translate VEX/EVEX or provide YMM/XSAVE state): FMA(12), XSAVE(26),
@@ -48,7 +50,7 @@ int main(void) {
     ok &= (a >= 0x80000004); // brand-string leaves reachable
     __cpuid(0x80000001, a, b, c, d);
     ok &= bit(d, 11) & bit(d, 20) & bit(d, 27) & bit(d, 29); // SYSCALL NX RDTSCP LM
-    ok &= bit(c, 0);                                          // LAHF/SAHF in long mode
+    ok &= bit(c, 0);                                         // LAHF/SAHF in long mode
 
     // ---- brand string (0x80000002..4), 48 bytes ----
     char brand[49];

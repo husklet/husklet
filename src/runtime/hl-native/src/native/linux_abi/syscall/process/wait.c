@@ -41,7 +41,8 @@ static pid_t ckpt_interruptible_wait4(pid_t pid, int *status, int options, struc
 }
 #endif
 
-static int svc_proc_260(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_260(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 260: {
         int st = 0;
@@ -256,7 +257,9 @@ static int svc_proc_260(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     }
     return 1;
 }
-static int svc_proc_261(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+
+static int svc_proc_261(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 261: {
         // prlimit64(pid, resource, NEW, OLD): report the CURRENT limit into OLD first (so a combined

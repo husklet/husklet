@@ -21,7 +21,8 @@ int main(void) {
 
     int rc = setxattr(path, "user.k", "hello", 5, 0);
     if (rc != 0 && errno == ENOTSUP) {
-        unlink(path); rmdir(dir);
+        unlink(path);
+        rmdir(dir);
         printf("xattr-ranges supported=0\n");
         return 0;
     }
@@ -43,8 +44,9 @@ int main(void) {
     char lb[1];
     int list_erange = listxattr(path, lb, 1) == -1 && errno == ERANGE;
 
-    unlink(path); rmdir(dir);
-    printf("xattr-ranges supported=1 probe=%d erange=%d missing=%d list_probe=%d list_erange=%d\n",
-           probe_ok, erange, missing, list_probe_ok, list_erange);
+    unlink(path);
+    rmdir(dir);
+    printf("xattr-ranges supported=1 probe=%d erange=%d missing=%d list_probe=%d list_erange=%d\n", probe_ok, erange,
+           missing, list_probe_ok, list_erange);
     return 0;
 }

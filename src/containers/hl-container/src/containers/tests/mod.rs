@@ -8,7 +8,6 @@ mod lifecycle;
 mod mount;
 mod network;
 mod recovery;
-mod restore_isolation;
 
 mod support;
 

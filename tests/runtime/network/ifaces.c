@@ -16,30 +16,49 @@
 
 static int nl_count_addr(void) {
     int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
-    if (fd < 0) { printf("netlink socket=FAIL\n"); return -1; }
+    if (fd < 0) {
+        printf("netlink socket=FAIL\n");
+        return -1;
+    }
     struct sockaddr_nl sa;
     memset(&sa, 0, sizeof sa);
     sa.nl_family = AF_NETLINK;
-    if (bind(fd, (struct sockaddr *)&sa, sizeof sa) < 0) { printf("netlink bind=FAIL\n"); close(fd); return -1; }
+    if (bind(fd, (struct sockaddr *)&sa, sizeof sa) < 0) {
+        printf("netlink bind=FAIL\n");
+        close(fd);
+        return -1;
+    }
+
     struct {
         struct nlmsghdr nh;
         struct ifaddrmsg ifa;
     } req;
+
     memset(&req, 0, sizeof req);
     req.nh.nlmsg_len = NLMSG_LENGTH(sizeof req.ifa);
     req.nh.nlmsg_type = RTM_GETADDR;
     req.nh.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
     req.nh.nlmsg_seq = 1;
     req.ifa.ifa_family = AF_UNSPEC;
-    if (send(fd, &req, req.nh.nlmsg_len, 0) < 0) { printf("netlink send=FAIL\n"); close(fd); return -1; }
+    if (send(fd, &req, req.nh.nlmsg_len, 0) < 0) {
+        printf("netlink send=FAIL\n");
+        close(fd);
+        return -1;
+    }
     char buf[8192];
     int naddr = 0, done = 0;
     while (!done) {
         ssize_t len = recv(fd, buf, sizeof buf, 0);
         if (len <= 0) break;
         for (struct nlmsghdr *nh = (struct nlmsghdr *)buf; NLMSG_OK(nh, len); nh = NLMSG_NEXT(nh, len)) {
-            if (nh->nlmsg_type == NLMSG_DONE) { done = 1; break; }
-            if (nh->nlmsg_type == NLMSG_ERROR) { done = 1; break; }
+            if (nh->nlmsg_type == NLMSG_DONE) {
+                done = 1;
+                break;
+            }
+            if (nh->nlmsg_type == NLMSG_ERROR) {
+                done = 1;
+                break;
+            }
             if (nh->nlmsg_type == RTM_NEWADDR) naddr++;
         }
     }
@@ -106,7 +125,10 @@ int main(void) {
     }
     char mac[64] = "";
     FILE *mf = fopen("/sys/class/net/eth0/address", "r");
-    if (mf) { if (fgets(mac, sizeof mac, mf)) { mac[strcspn(mac, "\n")] = 0; } fclose(mf); }
+    if (mf) {
+        if (fgets(mac, sizeof mac, mf)) { mac[strcspn(mac, "\n")] = 0; }
+        fclose(mf);
+    }
     printf("sysclassnet lo=%d eth0=%d eth0_addr=%s\n", sy_lo, sy_eth, mac);
     return 0;
 }

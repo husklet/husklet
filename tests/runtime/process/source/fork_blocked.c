@@ -19,7 +19,8 @@ static void *reader(void *unused) {
 int main(void) {
     pthread_t thread;
     if (pipe(descriptors) != 0 || pthread_create(&thread, NULL, reader, NULL) != 0) return 2;
-    while (!atomic_load_explicit(&entering, memory_order_acquire)) sched_yield();
+    while (!atomic_load_explicit(&entering, memory_order_acquire))
+        sched_yield();
     usleep(10000); /* reader is now blocked inside the typed host operation */
     pid_t child = fork();
     if (child == 0) _exit(0);

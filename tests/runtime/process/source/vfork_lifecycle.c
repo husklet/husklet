@@ -8,7 +8,7 @@
 int main(void) {
     pid_t pid = vfork();
     if (pid == 0) {
-        _exit(9);                 // only _exit / exec are permitted post-vfork
+        _exit(9); // only _exit / exec are permitted post-vfork
     }
     int status = 0;
     pid_t r = waitpid(pid, &status, 0);

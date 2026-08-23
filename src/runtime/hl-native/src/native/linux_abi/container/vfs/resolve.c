@@ -77,6 +77,44 @@ static int path_has_dotdot(const char *p) {
     return 0;
 }
 
+/* Consume a proven-positive dentry-cache entry for the final parent.  A miss is deliberately
+ * distinguished from a filesystem error: the caller must fall back to the confined component walk. */
+static int resolve_cached_parent(const char *guest, char *final, size_t capacity, int nofollow, int volume) {
+    if (volume >= 0 || path_has_dotdot(guest)) return -EAGAIN;
+
+    char normalized[4200];
+    confine(guest, normalized, sizeof normalized);
+    char *slash = strrchr(normalized, '/');
+    if (!slash || !slash[1] || strlen(slash + 1) >= 255) return -EAGAIN;
+
+    char component[256];
+    snprintf(component, sizeof component, "%s", slash + 1);
+    *slash = 0;
+    char key[DC_KEYMAX], canonical[DC_KEYMAX];
+    int kind;
+    int length = snprintf(key, sizeof key, "%s%s", g_rootfs_canon, normalized);
+    if (length <= 0 || (size_t)length >= sizeof key ||
+        !hl_fdcache_dentry_lookup(key, canonical, sizeof canonical, &kind) || kind != 0 || strcmp(canonical, key))
+        return -EAGAIN;
+
+    int descriptor = open(canonical, O_RDONLY | O_DIRECTORY);
+    if (descriptor < 0) return -EAGAIN;
+    char physical[768];
+    if (hl_case_component(descriptor, component, physical, sizeof physical) != 0) {
+        close(descriptor);
+        return -ENAMETOOLONG;
+    }
+    if (!nofollow) {
+        struct stat status;
+        if (fstatat(descriptor, physical, &status, AT_SYMLINK_NOFOLLOW) == 0 && S_ISLNK(status.st_mode)) {
+            close(descriptor);
+            return -EAGAIN;
+        }
+    }
+    snprintf(final, capacity, "%s", physical);
+    return descriptor;
+}
+
 // TOCTOU-FREE confinement. Resolve `guest` (absolute) one component at a time on PINNED dir-fds,
 // never following a symlink out of the jail. Returns a fresh dir-fd to the confined parent (caller
 // closes) + the final component in `final`. -1 on escape/error. No check/use gap: each step
@@ -163,41 +201,8 @@ restart:;
     //   * volumes (volidx >= 0) are never cached; a failed open falls through to the walk.
     // The caller's openat(pfd, final, ...) still runs -- existence/contents are never fabricated; a
     // stale path is impossible while the epoch matches (see the dc_ model in fscache.c). Kill switch:
-    if (volidx < 0 && !path_has_dotdot(gbuf)) {
-        char dnorm[4200];
-        confine(gbuf, dnorm, sizeof dnorm);
-        char *dsl = strrchr(dnorm, '/');
-        if (dsl && dsl[1] && strlen(dsl + 1) < 255) {
-            char fcomp[256];
-            snprintf(fcomp, sizeof fcomp, "%s", dsl + 1);
-            *dsl = 0; // dnorm = the parent dir ("" when the parent is the jail root itself)
-            char dkey[DC_KEYMAX];
-            int kl = snprintf(dkey, sizeof dkey, "%s%s", g_rootfs_canon, dnorm);
-            char dcanon[DC_KEYMAX];
-            int dk;
-            if (kl > 0 && (size_t)kl < sizeof dkey && hl_fdcache_dentry_lookup(dkey, dcanon, sizeof dcanon, &dk) &&
-                dk == 0 && !strcmp(dcanon, dkey)) {
-                int d = open(dcanon, O_RDONLY | O_DIRECTORY);
-                if (d >= 0) {
-                    char physical[768];
-                    if (hl_case_component(d, fcomp, physical, sizeof physical) != 0) {
-                        close(d);
-                        return -ENAMETOOLONG;
-                    }
-                    if (nofollow) {
-                        snprintf(final, fn, "%s", physical);
-                        return d;
-                    }
-                    struct stat fst;
-                    if (fstatat(d, physical, &fst, AT_SYMLINK_NOFOLLOW) != 0 || !S_ISLNK(fst.st_mode)) {
-                        snprintf(final, fn, "%s", physical);
-                        return d;
-                    }
-                    close(d); // final component is a symlink: the full walk must resplice it
-                }
-            }
-        }
-    }
+    int cached = resolve_cached_parent(gbuf, final, fn, nofollow, volidx);
+    if (cached != -EAGAIN) return cached;
     char rest[8192];
     snprintf(rest, sizeof rest, "%s", rel);
     int fds[260], nf = 0, budget = 40, ret = -EACCES;
@@ -473,8 +478,7 @@ static int jail_open_plan(int dirfd, const char *raw, uint32_t intent, uint32_t 
          * above already holds the correct answer and keeps it. An ordinary image tree is entirely in
          * the first case. */
         char case_absolute[8400], case_physical[8400];
-        const char *case_root =
-            volume >= 0 ? (g_vols[volume].isfile ? NULL : g_vols[volume].hcanon) : g_rootfs_canon;
+        const char *case_root = volume >= 0 ? (g_vols[volume].isfile ? NULL : g_vols[volume].hcanon) : g_rootfs_canon;
         if (strcmp(relative, ".") != 0 &&
             (case_root == NULL || case_root[0] == 0 ||
              snprintf(case_absolute, sizeof case_absolute, "/%s", relative) >= (int)sizeof case_absolute ||
@@ -493,8 +497,8 @@ static int jail_open_plan(int dirfd, const char *raw, uint32_t intent, uint32_t 
 #endif
         if (route_root != HL_HOST_HANDLE_INVALID &&
             g_host_services->file
-                    ->resolve_beneath(g_host_services->context, route_root, relative, strlen(relative),
-                                      route_policy, &resolved)
+                    ->resolve_beneath(g_host_services->context, route_root, relative, strlen(relative), route_policy,
+                                      &resolved)
                     .status == HL_STATUS_OK) {
             plan->directory = resolved.parent;
             plan->target = resolved.target;

@@ -19,7 +19,7 @@ int main(void) {
     memset(m, 1, len);
     errno = 0;
     int lock = honored(mlock(m, len));
-    m[0] = 42;                                  // locked page must stay usable
+    m[0] = 42; // locked page must stay usable
     int usable = m[0] == 42;
     errno = 0;
     int unlock = honored(munlock(m, len));
@@ -30,7 +30,6 @@ int main(void) {
     errno = 0;
     int unlockall = honored(munlockall());
     munmap(m, len);
-    printf("mlock lock=%d usable=%d unlock=%d lockall=%d unlockall=%d\n",
-           lock, usable, unlock, lockall, unlockall);
+    printf("mlock lock=%d usable=%d unlock=%d lockall=%d unlockall=%d\n", lock, usable, unlock, lockall, unlockall);
     return 0;
 }

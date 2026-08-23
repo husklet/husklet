@@ -11,8 +11,19 @@
 #include <string.h>
 
 static volatile double g_d;
-static double VD(double x) { g_d = x; return g_d; }
-static double bits_d(uint64_t u) { volatile uint64_t v = u; uint64_t w = v; double f; memcpy(&f, &w, 8); return f; }
+
+static double VD(double x) {
+    g_d = x;
+    return g_d;
+}
+
+static double bits_d(uint64_t u) {
+    volatile uint64_t v = u;
+    uint64_t w = v;
+    double f;
+    memcpy(&f, &w, 8);
+    return f;
+}
 
 // Store a runtime double (widened to long double) to memory and print its 10-byte ext80 image.
 static void st80(const char *tag, double x) {
@@ -20,7 +31,8 @@ static void st80(const char *tag, double x) {
     unsigned char b[16];
     memcpy(b, &y, sizeof y);
     printf("%s", tag);
-    for (int i = 0; i < 10; i++) printf("%02x", b[i]);
+    for (int i = 0; i < 10; i++)
+        printf("%02x", b[i]);
     printf("\n");
 }
 

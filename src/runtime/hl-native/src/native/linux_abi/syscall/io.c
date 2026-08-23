@@ -535,8 +535,8 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
          */
         uint64_t total = 0;
         for (int i = 0; i < (int)a2; i++) {
-            int validated = hl_guest_iov_validate((uint64_t)(uintptr_t)imported[i].iov_base,
-                                                  (uint64_t)imported[i].iov_len, &total);
+            int validated =
+                hl_guest_iov_validate((uint64_t)(uintptr_t)imported[i].iov_base, (uint64_t)imported[i].iov_len, &total);
             if (validated != 0) {
                 G_RET(c) = (uint64_t)(int64_t)validated;
                 return svc_done_host(c);
@@ -674,8 +674,8 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             if (a1 && a2 && a2 <= 1024) {
                 const struct iovec *iov = (const struct iovec *)a1;
                 for (int i = 0; i < (int)a2; i++)
-                    if (iov[i].iov_len && guest_accessible_prefix((uint64_t)(uintptr_t)iov[i].iov_base,
-                                                                  iov[i].iov_len, HL_LOGICAL_VMA_READ) == 0) {
+                    if (iov[i].iov_len && guest_accessible_prefix((uint64_t)(uintptr_t)iov[i].iov_base, iov[i].iov_len,
+                                                                  HL_LOGICAL_VMA_READ) == 0) {
                         G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
                         return svc_done_host(c);
                     }
@@ -686,28 +686,28 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         }
     }
     switch (nr) {
-    case 62: return svc_lseek(c,nr,a0,a1,a2,a3,a4,a5);
-    case 63: return svc_read(c,nr,a0,a1,a2,a3,a4,a5);
-    case 64: return svc_write(c,nr,a0,a1,a2,a3,a4,a5);
-    case 65: return svc_readv(c,nr,a0,a1,a2,a3,a4,a5);
-    case 66: return svc_writev(c,nr,a0,a1,a2,a3,a4,a5);
-    case 67: return svc_pread64(c,nr,a0,a1,a2,a3,a4,a5);
-    case 68: return svc_pwrite64(c,nr,a0,a1,a2,a3,a4,a5);
-    case 69: return svc_preadv(c,nr,a0,a1,a2,a3,a4,a5);
-    case 70: return svc_pwritev(c,nr,a0,a1,a2,a3,a4,a5);
-    case 71: return svc_sendfile(c,nr,a0,a1,a2,a3,a4,a5);
-    case 75: return svc_tee(c,nr,a0,a1,a2,a3,a4,a5);
-    case 76: return svc_splice(c,nr,a0,a1,a2,a3,a4,a5);
-    case 77: return svc_ftruncate(c,nr,a0,a1,a2,a3,a4,a5);
-    case 23: return svc_dup(c,nr,a0,a1,a2,a3,a4,a5);
-    case 24: return svc_dup3(c,nr,a0,a1,a2,a3,a4,a5);
-    case 25: return svc_fcntl(c,nr,a0,a1,a2,a3,a4,a5);
-    case 29: return svc_ioctl(c,nr,a0,a1,a2,a3,a4,a5);
-    case 59: return svc_pipe2(c,nr,a0,a1,a2,a3,a4,a5);
-    case 82: return svc_fsync(c,nr,a0,a1,a2,a3,a4,a5);
-    case 83: return svc_fdatasync(c,nr,a0,a1,a2,a3,a4,a5);
-    case 285: return svc_copy_file_range(c,nr,a0,a1,a2,a3,a4,a5);
-    case 84: return svc_sync_file_range(c,nr,a0,a1,a2,a3,a4,a5);
+    case 62: return svc_lseek(c, nr, a0, a1, a2, a3, a4, a5);
+    case 63: return svc_read(c, nr, a0, a1, a2, a3, a4, a5);
+    case 64: return svc_write(c, nr, a0, a1, a2, a3, a4, a5);
+    case 65: return svc_readv(c, nr, a0, a1, a2, a3, a4, a5);
+    case 66: return svc_writev(c, nr, a0, a1, a2, a3, a4, a5);
+    case 67: return svc_pread64(c, nr, a0, a1, a2, a3, a4, a5);
+    case 68: return svc_pwrite64(c, nr, a0, a1, a2, a3, a4, a5);
+    case 69: return svc_preadv(c, nr, a0, a1, a2, a3, a4, a5);
+    case 70: return svc_pwritev(c, nr, a0, a1, a2, a3, a4, a5);
+    case 71: return svc_sendfile(c, nr, a0, a1, a2, a3, a4, a5);
+    case 75: return svc_tee(c, nr, a0, a1, a2, a3, a4, a5);
+    case 76: return svc_splice(c, nr, a0, a1, a2, a3, a4, a5);
+    case 77: return svc_ftruncate(c, nr, a0, a1, a2, a3, a4, a5);
+    case 23: return svc_dup(c, nr, a0, a1, a2, a3, a4, a5);
+    case 24: return svc_dup3(c, nr, a0, a1, a2, a3, a4, a5);
+    case 25: return svc_fcntl(c, nr, a0, a1, a2, a3, a4, a5);
+    case 29: return svc_ioctl(c, nr, a0, a1, a2, a3, a4, a5);
+    case 59: return svc_pipe2(c, nr, a0, a1, a2, a3, a4, a5);
+    case 82: return svc_fsync(c, nr, a0, a1, a2, a3, a4, a5);
+    case 83: return svc_fdatasync(c, nr, a0, a1, a2, a3, a4, a5);
+    case 285: return svc_copy_file_range(c, nr, a0, a1, a2, a3, a4, a5);
+    case 84: return svc_sync_file_range(c, nr, a0, a1, a2, a3, a4, a5);
     default: return 0;
     }
     return svc_done_host(c); // boundary errno xlate (host macOS -> Linux); see helpers.c svc_done_host

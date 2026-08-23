@@ -25,8 +25,10 @@ static void *worker(void *_) {
 
 int main(void) {
     pthread_t t[N];
-    for (int i = 0; i < N; i++) pthread_create(&t[i], 0, worker, 0);
-    for (int i = 0; i < N; i++) pthread_join(t[i], 0);
+    for (int i = 0; i < N; i++)
+        pthread_create(&t[i], 0, worker, 0);
+    for (int i = 0; i < N; i++)
+        pthread_join(t[i], 0);
     printf("threads mutex=%ld atomic=%ld\n", shared, (long)ashared); // 640000 640000
     return 0;
 }

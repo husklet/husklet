@@ -12,8 +12,7 @@ static volatile sig_atomic_t exact;
 
 static void handle(int signal, siginfo_t *info, void *opaque) {
     ucontext_t *context = opaque;
-    exact = signal == SIGSEGV && info->si_addr == (void *)8 &&
-            context->uc_mcontext.pc == (uintptr_t)&faulting_load;
+    exact = signal == SIGSEGV && info->si_addr == (void *)8 && context->uc_mcontext.pc == (uintptr_t)&faulting_load;
     context->uc_mcontext.pc = (uintptr_t)&after_fault;
 }
 

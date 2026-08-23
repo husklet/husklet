@@ -27,11 +27,10 @@ int main(void) {
     struct dirent **names = NULL;
     int n = scandir(dir, &names, only_dat, alphasort);
     int count_ok = n == 3;
-    int sorted = count_ok &&
-                 strcmp(names[0]->d_name, "a.dat") == 0 &&
-                 strcmp(names[1]->d_name, "b.dat") == 0 &&
+    int sorted = count_ok && strcmp(names[0]->d_name, "a.dat") == 0 && strcmp(names[1]->d_name, "b.dat") == 0 &&
                  strcmp(names[2]->d_name, "c.dat") == 0;
-    for (int i = 0; i < n; i++) free(names[i]);
+    for (int i = 0; i < n; i++)
+        free(names[i]);
     free(names);
 
     for (int i = 0; i < 4; i++) {

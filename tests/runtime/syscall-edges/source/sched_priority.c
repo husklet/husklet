@@ -14,8 +14,7 @@ int main(void) {
     printf("batch_max=%d batch_min=%d\n", sched_get_priority_max(SCHED_BATCH), sched_get_priority_min(SCHED_BATCH));
     printf("idle_max=%d idle_min=%d\n", sched_get_priority_max(SCHED_IDLE), sched_get_priority_min(SCHED_IDLE));
     // Unknown policy -> EINVAL(22) on both queries.
-    printf("badpol_max_errno=%d badpol_min_errno=%d\n",
-           sched_get_priority_max(0x1234) == -1 ? errno : 0,
+    printf("badpol_max_errno=%d badpol_min_errno=%d\n", sched_get_priority_max(0x1234) == -1 ? errno : 0,
            sched_get_priority_min(0x1234) == -1 ? errno : 0);
     return 0;
 }

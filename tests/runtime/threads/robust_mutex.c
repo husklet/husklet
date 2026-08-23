@@ -11,8 +11,8 @@ static pthread_mutex_t mtx;
 
 static void *killer(void *_) {
     (void)_;
-    pthread_mutex_lock(&mtx);   // acquire and deliberately never unlock
-    return 0;                   // thread ends holding the lock
+    pthread_mutex_lock(&mtx); // acquire and deliberately never unlock
+    return 0;                 // thread ends holding the lock
 }
 
 int main(void) {
@@ -24,7 +24,7 @@ int main(void) {
 
     pthread_t t;
     pthread_create(&t, 0, killer, 0);
-    pthread_join(t, 0);         // owner thread is now dead while holding mtx
+    pthread_join(t, 0); // owner thread is now dead while holding mtx
 
     int rc = pthread_mutex_lock(&mtx);
     int owner_died = rc == EOWNERDEAD;
@@ -36,7 +36,7 @@ int main(void) {
     pthread_mutex_unlock(&mtx);
     pthread_mutex_destroy(&mtx);
 
-    printf("robust_mutex owner_died=%d consistent=%d unlocked=%d relock=%d\n",
-           owner_died, made_consistent, unlocked, relock);
+    printf("robust_mutex owner_died=%d consistent=%d unlocked=%d relock=%d\n", owner_died, made_consistent, unlocked,
+           relock);
     return 0;
 }

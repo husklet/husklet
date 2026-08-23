@@ -5,11 +5,13 @@
 #include <errno.h>
 #include <stdio.h>
 #include <time.h>
-int main(void){
-    struct timespec v={1000000,0}; errno=0;
-    int set_bad = clock_settime((clockid_t)0x7fff,&v)==-1 && errno==EINVAL;
-    errno=0;
-    int set_mono = clock_settime(CLOCK_MONOTONIC,&v)==-1 && errno==EINVAL;
+
+int main(void) {
+    struct timespec v = {1000000, 0};
+    errno = 0;
+    int set_bad = clock_settime((clockid_t)0x7fff, &v) == -1 && errno == EINVAL;
+    errno = 0;
+    int set_mono = clock_settime(CLOCK_MONOTONIC, &v) == -1 && errno == EINVAL;
     printf("settimeerrno set_bad=%d set_mono=%d\n", set_bad, set_mono);
     return 0;
 }

@@ -483,7 +483,6 @@ mod tests {
         fs::{File, OpenOptions},
         io::{Read as _, Seek, SeekFrom, Write},
         os::{fd::AsRawFd, unix::fs::PermissionsExt as _},
-        path::PathBuf,
     };
 
     #[cfg(feature = "native-test-hooks")]
@@ -557,7 +556,7 @@ mod tests {
         use std::io::BufRead as _;
         use std::process::Stdio;
 
-        let mut command = std::process::Command::new("/bin/sh");
+        let mut command = std::process::Command::new("sh");
         command.args(["-c", "sleep 60 & echo $!; wait"]).stdout(Stdio::piped());
         let mut child = IsolatedTestChild::spawn(command).unwrap();
         let output = child.0.as_mut().unwrap().stdout.take().unwrap();
@@ -692,7 +691,7 @@ mod tests {
         use std::io::BufRead as _;
         use std::process::Stdio;
 
-        let mut command = std::process::Command::new("/bin/sh");
+        let mut command = std::process::Command::new("sh");
         command.args(["-c", "sleep 60 & echo $!; wait"]).stdout(Stdio::piped());
         let mut activation = IsolatedTestChild::spawn(command).unwrap();
         let leader = i32::try_from(activation.0.as_ref().unwrap().id()).unwrap();
@@ -701,7 +700,7 @@ mod tests {
         let mut line = String::new();
         output.read_line(&mut line).unwrap();
         let descendant = line.trim().parse::<i32>().unwrap();
-        let mut unrelated = std::process::Command::new("/bin/sleep").arg("60").spawn().unwrap();
+        let mut unrelated = std::process::Command::new("sleep").arg("60").spawn().unwrap();
         let unrelated_pid = i32::try_from(unrelated.id()).unwrap();
 
         // SAFETY: these are exact live PIDs created and still owned by this test.
@@ -750,7 +749,7 @@ mod tests {
             }
         }
 
-        let mut unrelated = std::process::Command::new("/bin/sleep").arg("60").spawn().unwrap();
+        let mut unrelated = std::process::Command::new("sleep").arg("60").spawn().unwrap();
         // SAFETY: this arms a test-only pause before the activation child's setsid handshake.
         unsafe { crate::bindings::hl_c_backend_activation_ready_pause(1) };
         let resume = ResumeActivation;
@@ -1403,8 +1402,8 @@ int main(int argc, char **argv) {
     }
 
     fn inspect(bytes: &[u8]) -> Result<Plan, i32> {
-        let path = PathBuf::from(format!(
-            "/var/tmp/hl-native-elf-inspect-{}-{:x}",
+        let path = std::env::temp_dir().join(format!(
+            "hl-native-elf-inspect-{}-{:x}",
             std::process::id(),
             bytes.as_ptr() as usize
         ));

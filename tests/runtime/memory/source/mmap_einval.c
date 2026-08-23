@@ -29,14 +29,13 @@ int main(void) {
     int m3 = munmap(ok, ps * 2); // already gone: still succeeds on Linux
     int p0 = mprotect((void *)((unsigned long)ok + 1), ps, PROT_READ);
     int ep0 = (p0 == -1) ? errno : 0;
-    char *valid = mmap(NULL, ps, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    char *valid = mmap(NULL, ps, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     int pi = mprotect(valid, ps, PROT_READ | 0x10000000);
     int epi = pi == -1 ? errno : 0;
     valid[0] = 0x5a;
     int preserved = valid[0] == 0x5a;
-    printf("ea=%d eb=%d ec=%d ed=%d ee=%d m0=%d em0=%d m1=%d em1=%d m2=%d m3=%d p0=%d ep0=%d pi=%d epi=%d preserved=%d\n",
-           ea, eb, ec, ed, ee, m0, em0, m1, em1, m2, m3, p0, ep0, pi, epi,
-           preserved);
+    printf(
+        "ea=%d eb=%d ec=%d ed=%d ee=%d m0=%d em0=%d m1=%d em1=%d m2=%d m3=%d p0=%d ep0=%d pi=%d epi=%d preserved=%d\n",
+        ea, eb, ec, ed, ee, m0, em0, m1, em1, m2, m3, p0, ep0, pi, epi, preserved);
     return 0;
 }

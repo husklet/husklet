@@ -14,7 +14,10 @@
 // first line of a pseudo-file into `out`
 static void first_line(const char *hay, char *out, int cap) {
     int i = 0;
-    while (hay[i] && hay[i] != '\n' && i < cap - 1) { out[i] = hay[i]; i++; }
+    while (hay[i] && hay[i] != '\n' && i < cap - 1) {
+        out[i] = hay[i];
+        i++;
+    }
     out[i] = 0;
 }
 

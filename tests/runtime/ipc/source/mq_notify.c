@@ -27,6 +27,7 @@ static const char *en(int e) {
 #define NOTIFY_DATA 0x12345678
 static volatile sig_atomic_t g_notified;
 static volatile int g_ncode, g_nval, g_nsigno, g_npid;
+
 static void notify_handler(int sig, siginfo_t *si, void *uc) {
     (void)uc;
     g_nsigno = sig;

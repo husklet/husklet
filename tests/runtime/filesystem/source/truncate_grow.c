@@ -23,7 +23,11 @@ int main(void) {
     char buf[20] = {0};
     pread(fd, buf, 20, 0);
     int tail_zero = 1;
-    for (int i = 10; i < 20; i++) if (buf[i] != 0) { tail_zero = 0; break; }
+    for (int i = 10; i < 20; i++)
+        if (buf[i] != 0) {
+            tail_zero = 0;
+            break;
+        }
     int head_ok = memcmp(buf, "0123456789", 10) == 0;
 
     // Shrink via path truncate; the data past the new end is gone.
@@ -36,8 +40,7 @@ int main(void) {
     close(fd);
     unlink(path);
     rmdir(dir);
-    printf("truncate-grow grow=%d size20=%d head=%d tail-zero=%d shrink=%d size4=%d read=%zd data=%.4s\n",
-           grow, (int)(gs.st_size == 20), head_ok, tail_zero, shrink,
-           (int)(ss.st_size == 4), r, sb);
+    printf("truncate-grow grow=%d size20=%d head=%d tail-zero=%d shrink=%d size4=%d read=%zd data=%.4s\n", grow,
+           (int)(gs.st_size == 20), head_ok, tail_zero, shrink, (int)(ss.st_size == 4), r, sb);
     return 0;
 }

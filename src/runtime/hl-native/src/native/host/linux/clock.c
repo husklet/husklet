@@ -74,4 +74,3 @@ static hl_host_result hl_linux_clock_sleep_until(void *context, uint32_t clock_k
     }
     return hl_linux_result(HL_STATUS_OK, 0, 0);
 }
-

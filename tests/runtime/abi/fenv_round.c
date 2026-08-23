@@ -20,8 +20,7 @@ static void round_report(const char *name, int mode) {
     __builtin_memcpy(&u2, &q2, 8);
     __builtin_memcpy(&us, &s, 8);
     __builtin_memcpy(&uf, &f, 8);
-    printf("%s 1/3=%016llx 10/7=%016llx sqrt2=%016llx fma=%016llx\n",
-           name, u1, u2, us, uf);
+    printf("%s 1/3=%016llx 10/7=%016llx sqrt2=%016llx fma=%016llx\n", name, u1, u2, us, uf);
 }
 
 int main(void) {

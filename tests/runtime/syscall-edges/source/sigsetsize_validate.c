@@ -29,8 +29,7 @@ int main(void) {
     // rt_sigtimedwait(set, info, timeout, sigsetsize): same rule, and it wins over a NULL timeout (which
     // would otherwise mean "wait indefinitely").
     printf("sigtimedwait_size4_errno=%d\n", ec(syscall(SYS_rt_sigtimedwait, &set, (void *)0, (void *)0, 4)));
-    printf("sigtimedwait_size16_errno=%d\n",
-           ec(syscall(SYS_rt_sigtimedwait, &set, (void *)0, (void *)0, 16)));
+    printf("sigtimedwait_size16_errno=%d\n", ec(syscall(SYS_rt_sigtimedwait, &set, (void *)0, (void *)0, 16)));
 
     // The size check precedes the pointer copy-in, so a bad size beats a bad mask pointer.
     printf("sigsuspend_badsize_badptr_errno=%d\n", ec(syscall(SYS_rt_sigsuspend, (void *)0x10, 4)));

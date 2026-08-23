@@ -178,13 +178,17 @@ static inline struct dirent *readdir(DIR *directory) {
     if (directory->search == INVALID_HANDLE_VALUE) {
         directory->search = FindFirstFileW(directory->pattern, &directory->found);
         if (directory->search == INVALID_HANDLE_VALUE) {
-            if (GetLastError() == ERROR_FILE_NOT_FOUND) errno = 0;
-            else errno = EIO;
+            if (GetLastError() == ERROR_FILE_NOT_FOUND)
+                errno = 0;
+            else
+                errno = EIO;
             return NULL;
         }
     } else if (!FindNextFileW(directory->search, &directory->found)) {
-        if (GetLastError() == ERROR_NO_MORE_FILES) errno = 0;
-        else errno = EIO;
+        if (GetLastError() == ERROR_NO_MORE_FILES)
+            errno = 0;
+        else
+            errno = EIO;
         return NULL;
     }
     found = &directory->found;

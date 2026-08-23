@@ -15,7 +15,7 @@
 #define RITERS 4000
 
 static pthread_rwlock_t lk;
-static long a, b;                 // invariant: a == b outside the write critical section
+static long a, b; // invariant: a == b outside the write critical section
 static atomic_int live_writers = 0;
 static atomic_long violations = 0;
 
@@ -25,7 +25,7 @@ static void *writer(void *_) {
         pthread_rwlock_wrlock(&lk);
         int w = atomic_fetch_add(&live_writers, 1) + 1;
         if (w != 1) atomic_fetch_add(&violations, 1); // two writers at once
-        a++;                       // transiently a != b between these stores
+        a++;                                          // transiently a != b between these stores
         b++;
         atomic_fetch_sub(&live_writers, 1);
         pthread_rwlock_unlock(&lk);
@@ -39,7 +39,7 @@ static void *reader(void *_) {
         pthread_rwlock_rdlock(&lk);
         if (a != b || atomic_load(&live_writers) != 0) atomic_fetch_add(&violations, 1);
         pthread_rwlock_unlock(&lk);
-        sched_yield();             // let writers in -> avoids reader monopoly
+        sched_yield(); // let writers in -> avoids reader monopoly
     }
     return 0;
 }
@@ -52,12 +52,16 @@ int main(void) {
     pthread_rwlockattr_destroy(&attr);
 
     pthread_t r[READERS], w[WRITERS];
-    for (int i = 0; i < READERS; i++) pthread_create(&r[i], 0, reader, 0);
-    for (int i = 0; i < WRITERS; i++) pthread_create(&w[i], 0, writer, 0);
-    for (int i = 0; i < WRITERS; i++) pthread_join(w[i], 0);
-    for (int i = 0; i < READERS; i++) pthread_join(r[i], 0);
+    for (int i = 0; i < READERS; i++)
+        pthread_create(&r[i], 0, reader, 0);
+    for (int i = 0; i < WRITERS; i++)
+        pthread_create(&w[i], 0, writer, 0);
+    for (int i = 0; i < WRITERS; i++)
+        pthread_join(w[i], 0);
+    for (int i = 0; i < READERS; i++)
+        pthread_join(r[i], 0);
     pthread_rwlock_destroy(&lk);
-    printf("rwlock_invariant violations=%ld final_ok=%d\n",
-           atomic_load(&violations), a == b && a == (long)WRITERS * WITERS);
+    printf("rwlock_invariant violations=%ld final_ok=%d\n", atomic_load(&violations),
+           a == b && a == (long)WRITERS * WITERS);
     return 0;
 }

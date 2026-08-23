@@ -1119,4 +1119,3 @@ static int interp_step_x87_register(struct cpu *cpu, struct insn *insn, uint64_t
 static int interp_step_x87(struct cpu *cpu, struct insn *insn, uint64_t pc, uint64_t next) {
     return insn->is_mem ? interp_step_x87_memory(cpu, insn, pc, next) : interp_step_x87_register(cpu, insn, pc, next);
 }
-

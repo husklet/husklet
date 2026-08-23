@@ -58,8 +58,8 @@ int main(void) {
     char buf[8] = {0};
     int rd = (pread(m, buf, 4, 0) == 4 && memcmp(buf, "abcd", 4) == 0);
 
-    printf("mixed seal=%d w_eperm=%d pw_eperm=%d wv_eperm=%d pipe=%d pipe_rd=%d file=%d intact=%d\n", seal_ok,
-           w_eperm, pw_eperm, wv_eperm, pipe_ok, pipe_rd, file_ok, rd);
+    printf("mixed seal=%d w_eperm=%d pw_eperm=%d wv_eperm=%d pipe=%d pipe_rd=%d file=%d intact=%d\n", seal_ok, w_eperm,
+           pw_eperm, wv_eperm, pipe_ok, pipe_rd, file_ok, rd);
     close(m);
     close(p[0]);
     close(p[1]);

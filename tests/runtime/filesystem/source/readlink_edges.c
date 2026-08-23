@@ -14,7 +14,7 @@ int main(void) {
     mkdir(dir, 0755);
     int dfd = open(dir, O_RDONLY | O_DIRECTORY);
 
-    const char target[] = "abcdefghij";   // 10 bytes
+    const char target[] = "abcdefghij"; // 10 bytes
     symlinkat(target, dfd, "link");
     close(openat(dfd, "regular", O_CREAT | O_WRONLY, 0644));
 
@@ -46,7 +46,6 @@ int main(void) {
     unlinkat(dfd, "regular", 0);
     close(dfd);
     rmdir(dir);
-    printf("readlink-edges trunc=%d exact=%d content=%d einval=%d\n",
-           trunc_ok, exact_ok, content_ok, einval_ok);
+    printf("readlink-edges trunc=%d exact=%d content=%d einval=%d\n", trunc_ok, exact_ok, content_ok, einval_ok);
     return 0;
 }

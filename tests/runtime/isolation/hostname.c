@@ -23,7 +23,8 @@ int main(void) {
         int n = (int)read(fd, proc, sizeof proc - 1);
         close(fd);
         if (n > 0) {
-            while (n > 0 && (proc[n - 1] == '\n' || proc[n - 1] == '\r')) n--;
+            while (n > 0 && (proc[n - 1] == '\n' || proc[n - 1] == '\r'))
+                n--;
             proc[n] = 0;
             pn = 0;
         }

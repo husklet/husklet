@@ -27,9 +27,11 @@ static char read_state(int pid) {
     char *rp = strrchr(b, ')');
     if (!rp) return '?';
     char *s = rp + 1;
-    while (*s == ' ') s++;
+    while (*s == ' ')
+        s++;
     return *s;
 }
+
 // Poll the child's state until it reaches `target` (or ~timeout_ms elapses); return the last state seen.
 static char wait_state(int pid, char target, int timeout_ms) {
     char st = '?';
@@ -45,7 +47,10 @@ static char wait_state(int pid, char target, int timeout_ms) {
 int main(void) {
     // Test 1: a child parked in pause() must be observed as 'S' (interruptible sleep) by its parent.
     pid_t paused = fork();
-    if (paused == 0) { pause(); _exit(0); }
+    if (paused == 0) {
+        pause();
+        _exit(0);
+    }
     char s_paused = wait_state(paused, 'S', 3000);
     kill(paused, SIGKILL);
     waitpid(paused, NULL, 0);
@@ -54,7 +59,8 @@ int main(void) {
     pid_t running = fork();
     if (running == 0) {
         volatile unsigned long x = 0;
-        for (;;) x++;
+        for (;;)
+            x++;
     }
     char s_run = wait_state(running, 'R', 3000);
     kill(running, SIGKILL);

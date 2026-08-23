@@ -34,7 +34,7 @@ pub(crate) struct HashOptions {
 }
 
 pub(crate) use calibration::Options as CalibrationOptions;
-pub(crate) use floor::Options as FloorOptions;
+pub(crate) use floor::FloorOptions;
 pub(crate) use stage::Options as StageOptions;
 
 pub(crate) fn hash(options: HashOptions) -> Result<(), Error> {

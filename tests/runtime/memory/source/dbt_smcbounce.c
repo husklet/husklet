@@ -12,10 +12,16 @@ int main(void) {
     uint64_t acc = 0;
     for (int i = 0; i < 20000; i++) {
         int imm = (i & 1) ? 0x2468 : 0x1357; // strictly alternating, distinct bodies
-        if (dbt_make_write(p, sz) != 0) { perror("mprotect rw"); return 1; }
+        if (dbt_make_write(p, sz) != 0) {
+            perror("mprotect rw");
+            return 1;
+        }
         dbt_emit_ret_imm(p, imm);
         dbt_flush(p, sz);
-        if (dbt_make_exec(p, sz) != 0) { perror("mprotect rx"); return 1; }
+        if (dbt_make_exec(p, sz) != 0) {
+            perror("mprotect rx");
+            return 1;
+        }
         int got = f();
         if (got != imm) {
             printf("smc-bounce MISMATCH i=%d want=%d got=%d\n", i, imm, got);

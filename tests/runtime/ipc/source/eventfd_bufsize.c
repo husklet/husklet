@@ -26,13 +26,13 @@ int main(void) {
     unsigned char wide[16];
     memset(wide, 0xAA, sizeof wide);
     ssize_t r16 = read(fd, wide, sizeof wide);
-    printf("w8 ret=%zd r16 ret=%zd value=%lu tail_untouched=%d\n",
-           w8, r16, (unsigned long)*(uint64_t *)wide, wide[8] == 0xAA);
+    printf("w8 ret=%zd r16 ret=%zd value=%lu tail_untouched=%d\n", w8, r16, (unsigned long)*(uint64_t *)wide,
+           wide[8] == 0xAA);
 
     // write rejects any count that is not exactly 8: 16, 9, and 4 are all EINVAL.
     *(uint64_t *)wide = 1;
-    printf("write16 errno=%d write9 errno=%d write4 errno=%d\n",
-           wr_errno(fd, wide, 16), wr_errno(fd, wide, 9), wr_errno(fd, wide, 4));
+    printf("write16 errno=%d write9 errno=%d write4 errno=%d\n", wr_errno(fd, wide, 16), wr_errno(fd, wide, 9),
+           wr_errno(fd, wide, 4));
 
     // read rejects a short (< 8) buffer with EINVAL.
     uint32_t half = 0;
@@ -47,7 +47,6 @@ int main(void) {
     uint64_t v = 12345;
     errno = 0;
     ssize_t zr = read(fd, &v, 8);
-    printf("zero_write ret=%zd zero_noop_read ret=%zd errno=%s\n",
-           zw, zr, strerror(errno));
+    printf("zero_write ret=%zd zero_noop_read ret=%zd errno=%s\n", zw, zr, strerror(errno));
     return 0;
 }

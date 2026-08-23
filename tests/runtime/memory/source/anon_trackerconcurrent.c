@@ -29,7 +29,9 @@ enum { THREADS = 8, ITERS = 1200, LENGTH = 0x4000, STRIDE = 0x40000 };
 
 static uintptr_t g_base;
 
-static int transient(void) { return errno == ENOMEM; }
+static int transient(void) {
+    return errno == ENOMEM;
+}
 
 static void *worker(void *arg) {
     unsigned tid = (unsigned)(uintptr_t)arg;
@@ -37,8 +39,7 @@ static void *worker(void *arg) {
     unsigned char pat = (unsigned char)(0x40 + tid);
 
     // anon_track: establish this thread's private-anon window (concurrent with every peer's mmap).
-    if (mmap(addr, LENGTH, PROT_READ | PROT_WRITE,
-             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) != addr)
+    if (mmap(addr, LENGTH, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) != addr)
         return (void *)1;
     memset(addr, pat, LENGTH);
 
@@ -94,8 +95,7 @@ int main(void) {
     pid_t child = fork();
     if (child == 0) _exit(spin() ? 0 : 1);
     int status = 0;
-    int forked = (child > 0) && waitpid(child, &status, 0) == child &&
-                 WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    int forked = (child > 0) && waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
 
     printf("anon-tracker-concurrent threads=%d threaded=%d forked=%d\n", THREADS, threaded, forked);
     return threaded && forked ? 0 : 1;

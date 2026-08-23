@@ -48,8 +48,8 @@ int main(void) {
     waitpid(leader, &status, 0);
     int leader_eperm = WIFEXITED(status) && WEXITSTATUS(status) == 0;
 
-    printf("job_control self=%d neg_group=%d neg_pgid=%d neg_sid=%d child_group=%d waited=%d reaped=%d session=%d leader_eperm=%d\n",
-        self, negative_group, negative_pgid, negative_sid, child_group,
-        waited, reaped, session, leader_eperm);
+    printf("job_control self=%d neg_group=%d neg_pgid=%d neg_sid=%d child_group=%d waited=%d reaped=%d session=%d "
+           "leader_eperm=%d\n",
+           self, negative_group, negative_pgid, negative_sid, child_group, waited, reaped, session, leader_eperm);
     return 0;
 }

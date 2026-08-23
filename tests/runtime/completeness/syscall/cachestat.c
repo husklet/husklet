@@ -12,8 +12,13 @@
 #define __NR_cachestat 451
 #endif
 
-struct cachestat_range { uint64_t off, len; };
-struct cachestat { uint64_t nr_cache, nr_dirty, nr_writeback, nr_evicted, nr_recently_evicted; };
+struct cachestat_range {
+    uint64_t off, len;
+};
+
+struct cachestat {
+    uint64_t nr_cache, nr_dirty, nr_writeback, nr_evicted, nr_recently_evicted;
+};
 
 int main(void) {
     const char *p = "/tmp/hlc_cachestat";

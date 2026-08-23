@@ -7,7 +7,11 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t ran;
-static void h(int s) { (void)s; ran++; }
+
+static void h(int s) {
+    (void)s;
+    ran++;
+}
 
 int main(void) {
     struct sigaction sa = {0};

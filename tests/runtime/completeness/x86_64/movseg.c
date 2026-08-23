@@ -28,9 +28,8 @@ int main(void) {
     uint64_t es2 = ~0ULL;
     __asm__ volatile("mov %%es, %0" : "=r"(es2));
 
-    printf("seg ds=%llu es=%llu ss=%llu cs=%llu fs=%llu gs=%llu w16=%llx mem=%u es2=%llu\n",
-           (unsigned long long)ds, (unsigned long long)es, (unsigned long long)ss, (unsigned long long)cs,
-           (unsigned long long)fs, (unsigned long long)gs, (unsigned long long)base, (unsigned)m,
-           (unsigned long long)es2);
+    printf("seg ds=%llu es=%llu ss=%llu cs=%llu fs=%llu gs=%llu w16=%llx mem=%u es2=%llu\n", (unsigned long long)ds,
+           (unsigned long long)es, (unsigned long long)ss, (unsigned long long)cs, (unsigned long long)fs,
+           (unsigned long long)gs, (unsigned long long)base, (unsigned)m, (unsigned long long)es2);
     return 0;
 }

@@ -178,7 +178,7 @@ static int ckpt_sysv_image_build(void **out_image, size_t *out_size) {
         return -1;
     }
     struct ckpt_sysv_header *header = (struct ckpt_sysv_header *)image;
-    *header = (struct ckpt_sysv_header){CKPT_SYSV_MAGIC, CKPT_SYSV_VERSION, shm_count, sem_count,
+    *header = (struct ckpt_sysv_header){CKPT_SYSV_MAGIC, CKPT_SYSV_VERSION, shm_count,  sem_count,
                                         msg_count,       attach_count,      undo_count, 0};
     size_t offset = sizeof *header;
     // The tables are copied under the registry lock; the payload objects are copied after it is
@@ -248,8 +248,7 @@ static int ckpt_sysv_image_build(void **out_image, size_t *out_size) {
         hl_ipc_message_name(name, sizeof name, msg_records[i].idx);
         void *store = ckpt_sysv_map_object(name, sizeof(struct hl_ipc_msg_store), 0);
         if (store == NULL) {
-            fprintf(stderr, "[ckpt] refuse: SysV domain -- cannot read message queue %s: %s\n", name,
-                    strerror(errno));
+            fprintf(stderr, "[ckpt] refuse: SysV domain -- cannot read message queue %s: %s\n", name, strerror(errno));
             free(image);
             ckpt_sysv_release(control);
             return -1;
@@ -349,8 +348,7 @@ static int ckpt_sysv_image_apply(const void *image_bytes, size_t size) {
     const struct ckpt_sysv_shm_record *shm_records = (const struct ckpt_sysv_shm_record *)(image + shm_off);
     const struct ckpt_sysv_sem_record *sem_records = (const struct ckpt_sysv_sem_record *)(image + sem_off);
     const struct ckpt_sysv_msg_record *msg_records = (const struct ckpt_sysv_msg_record *)(image + msg_off);
-    const struct ckpt_sysv_attach_record *attach_records =
-        (const struct ckpt_sysv_attach_record *)(image + attach_off);
+    const struct ckpt_sysv_attach_record *attach_records = (const struct ckpt_sysv_attach_record *)(image + attach_off);
     const struct ckpt_sysv_undo_record *undo_records = (const struct ckpt_sysv_undo_record *)(image + undo_off);
     uint64_t payload = 0;
     for (uint32_t i = 0; i < header.shm_count; i++) {
@@ -386,9 +384,12 @@ static int ckpt_sysv_image_apply(const void *image_bytes, size_t size) {
         memset(control->shm, 0, sizeof control->shm);
         memset(control->sem, 0, sizeof control->sem);
         memset(control->msg, 0, sizeof control->msg);
-        for (uint32_t i = 0; i < header.shm_count; i++) control->shm[shm_records[i].idx] = shm_records[i].entry;
-        for (uint32_t i = 0; i < header.sem_count; i++) control->sem[sem_records[i].idx] = sem_records[i].entry;
-        for (uint32_t i = 0; i < header.msg_count; i++) control->msg[msg_records[i].idx] = msg_records[i].entry;
+        for (uint32_t i = 0; i < header.shm_count; i++)
+            control->shm[shm_records[i].idx] = shm_records[i].entry;
+        for (uint32_t i = 0; i < header.sem_count; i++)
+            control->sem[sem_records[i].idx] = sem_records[i].entry;
+        for (uint32_t i = 0; i < header.msg_count; i++)
+            control->msg[msg_records[i].idx] = msg_records[i].entry;
         hl_ipc_unlock(&control->lock);
         for (uint32_t i = 0; i < header.shm_count; i++) {
             char name[40];
@@ -427,8 +428,8 @@ static int ckpt_sysv_image_apply(const void *image_bytes, size_t size) {
         if (mapped != (void *)(uintptr_t)record->address) {
             // Guests store absolute pointers into shared memory; a different address is a corrupt
             // guest, not a degraded one, so this refuses instead of relocating the attachment.
-            fprintf(stderr, "[restore] SysV segment %s could not be re-attached at its captured address 0x%llx\n",
-                    name, (unsigned long long)record->address);
+            fprintf(stderr, "[restore] SysV segment %s could not be re-attached at its captured address 0x%llx\n", name,
+                    (unsigned long long)record->address);
             if (mapped != MAP_FAILED) munmap(mapped, (size_t)record->length);
             return -1;
         }
@@ -527,8 +528,9 @@ static int ckpt_refuse_uncaptured_file_locks(int permissive) {
                 "[ckpt] %s: file-lock domain -- this process holds %u fcntl record lock(s) (first: dev %llu ino %llu "
                 "range [%lld,%lld) type %d); the checkpoint image carries no lock section, so a restore would drop "
                 "the interlock\n",
-                verdict, record_locks, (unsigned long long)record_first->device, (unsigned long long)record_first->object,
-                (long long)record_first->lo, (long long)record_first->hi, record_first->type);
+                verdict, record_locks, (unsigned long long)record_first->device,
+                (unsigned long long)record_first->object, (long long)record_first->lo, (long long)record_first->hi,
+                record_first->type);
     if (flock_leases)
         fprintf(stderr,
                 "[ckpt] %s: file-lock domain -- this process holds %u flock(2) lease(s) (first: dev %llu ino %llu "
@@ -561,7 +563,8 @@ static int ckpt_sysv_roundtrip_test(uint32_t scenario) {
     uint32_t idx = UINT32_MAX;
     uint32_t limit = scenario == 1 ? HL_IPC_SHMMNI : (scenario == 2 ? HL_IPC_SEMMNI : HL_IPC_MSGMNI);
     for (uint32_t i = 0; i < limit && idx == UINT32_MAX; i++) {
-        int used = scenario == 1 ? control->shm[i].inuse : (scenario == 2 ? control->sem[i].inuse : control->msg[i].inuse);
+        int used =
+            scenario == 1 ? control->shm[i].inuse : (scenario == 2 ? control->sem[i].inuse : control->msg[i].inuse);
         if (!used) idx = i;
     }
     if (idx == UINT32_MAX) return 22;
@@ -651,9 +654,12 @@ static int ckpt_sysv_roundtrip_test(uint32_t scenario) {
     }
     memset(g_undo, 0, sizeof g_undo);
     hl_ipc_lock(&control->lock);
-    if (scenario == 1) control->shm[idx] = (struct hl_shm_entry){0};
-    else if (scenario == 2) memset(&control->sem[idx], 0, sizeof control->sem[idx]);
-    else control->msg[idx] = (struct hl_msg_queue){0};
+    if (scenario == 1)
+        control->shm[idx] = (struct hl_shm_entry){0};
+    else if (scenario == 2)
+        memset(&control->sem[idx], 0, sizeof control->sem[idx]);
+    else
+        control->msg[idx] = (struct hl_msg_queue){0};
     hl_ipc_unlock(&control->lock);
     if (scenario != 2) shm_unlink(name);
 
@@ -666,11 +672,15 @@ static int ckpt_sysv_roundtrip_test(uint32_t scenario) {
     g_ipc_creator = 0;
 
     int verdict = 0;
-    if (built != 0 || image == NULL) verdict = 30;
-    else if (ckpt_sysv_image_apply(image, size) != 0) verdict = 31;
-    else if (g_ctrl == NULL) verdict = 32;
+    if (built != 0 || image == NULL)
+        verdict = 30;
+    else if (ckpt_sysv_image_apply(image, size) != 0)
+        verdict = 31;
+    else if (g_ctrl == NULL)
+        verdict = 32;
     else if (scenario == 1) {
-        if (!g_shmat[0].used || g_shmat[0].addr != address) verdict = 33; // attach-address fidelity
+        if (!g_shmat[0].used || g_shmat[0].addr != address)
+            verdict = 33; // attach-address fidelity
         else if (memcmp(address, "HLSYSVPATTERN", 13) != 0 || ((const uint8_t *)address)[length - 1] != 0xa5)
             verdict = 34;
         else if (!g_ctrl->shm[idx].inuse || g_ctrl->shm[idx].segsz != (uint64_t)length ||
@@ -687,9 +697,12 @@ static int ckpt_sysv_roundtrip_test(uint32_t scenario) {
         hl_ipc_message_name(restored_name, sizeof restored_name, idx);
         struct hl_ipc_msg_store *store =
             (struct hl_ipc_msg_store *)ckpt_sysv_map_object(restored_name, sizeof *store, 0);
-        if (!g_ctrl->msg[idx].inuse || g_ctrl->msg[idx].qnum != 1) verdict = 38;
-        else if (store == NULL) verdict = 39;
-        else if (store->slots[0].mtype != 42 || memcmp(store->slots[0].data, "queue", 5) != 0) verdict = 40;
+        if (!g_ctrl->msg[idx].inuse || g_ctrl->msg[idx].qnum != 1)
+            verdict = 38;
+        else if (store == NULL)
+            verdict = 39;
+        else if (store->slots[0].mtype != 42 || memcmp(store->slots[0].data, "queue", 5) != 0)
+            verdict = 40;
         if (store != NULL) munmap(store, sizeof *store);
     }
 
@@ -743,8 +756,8 @@ HL_API int HL_TARGET_LOCAL(checkpoint_ipc_admission_test)(uint32_t scenario) {
             poslk_unlock();
             return 32;
         }
-        *record = (struct poslk_rec){.device = 7, .object = 99, .lo = 0, .hi = INT64_MAX, .type = F_WRLCK,
-                                     .owner = poslk_mypid()};
+        *record = (struct poslk_rec){
+            .device = 7, .object = 99, .lo = 0, .hi = INT64_MAX, .type = F_WRLCK, .owner = poslk_mypid()};
         poslk_unlock();
         int verdict = ckpt_admit_ipc_and_lock_state();
         poslk_lock();

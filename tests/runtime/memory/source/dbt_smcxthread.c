@@ -19,12 +19,14 @@ static size_t code_sz = 4096;
 // body a translation unit the scheduler re-enters in its own right, with the patched word inside the
 // entry's forward source window. Emits `int f(void){ ...FILL adds...; return imm; }`.
 #define FILL 48
+
 static void emit_body(unsigned char *buf, int imm) {
 #if defined(__aarch64__)
     uint32_t *w = (uint32_t *)buf;
-    for (int i = 0; i < FILL; i++) w[i] = 0x91000421u;          // add x1, x1, #1
-    w[FILL] = 0x52800000u | ((uint32_t)(imm & 0xffff) << 5);    // movz w0, #imm16
-    w[FILL + 1] = 0xD65F03C0u;                                  // ret
+    for (int i = 0; i < FILL; i++)
+        w[i] = 0x91000421u;                                  // add x1, x1, #1
+    w[FILL] = 0x52800000u | ((uint32_t)(imm & 0xffff) << 5); // movz w0, #imm16
+    w[FILL + 1] = 0xD65F03C0u;                               // ret
 #elif defined(__x86_64__)
     unsigned char *p = buf;
     for (int i = 0; i < FILL; i++) {
@@ -45,18 +47,18 @@ static void emit_body(unsigned char *buf, int imm) {
 #endif
 }
 
-static int nextval;   // value the writer is installing this round; read only once gen is published
-static int arming;    // round number+1 before the writer touches the code, so a call that observes
-                      // it unset afterwards is known to have run entirely on the old body
-static int gen;       // round number+1 once the patch for that round is flushed and visible
-static int ready;     // round number+1 once the spinner is spinning on the previous value
-static long spins;    // spinner's iteration count within the current round
-static int finished;  // spinner has left the loop; releases a waiting writer
+static int nextval;  // value the writer is installing this round; read only once gen is published
+static int arming;   // round number+1 before the writer touches the code, so a call that observes
+                     // it unset afterwards is known to have run entirely on the old body
+static int gen;      // round number+1 once the patch for that round is flushed and visible
+static int ready;    // round number+1 once the spinner is spinning on the previous value
+static long spins;   // spinner's iteration count within the current round
+static int finished; // spinner has left the loop; releases a waiting writer
 
 static uint64_t acc;
-static int stale_round = -1;  // saw the OLD constant on a call that began after the patch published
-static int wild_round = -1;   // saw neither constant with no patch in flight
-static int lost_round = -1;   // exhausted LIMIT without the writer ever publishing
+static int stale_round = -1; // saw the OLD constant on a call that began after the patch published
+static int wild_round = -1;  // saw neither constant with no patch in flight
+static int lost_round = -1;  // exhausted LIMIT without the writer ever publishing
 
 static void *spinner(void *unused) {
     (void)unused;

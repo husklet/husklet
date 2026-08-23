@@ -8,6 +8,14 @@ use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 
 #[cfg(unix)]
+#[path = "execution_checkpoint.rs"]
+mod checkpoint;
+#[cfg(all(unix, test))]
+pub(crate) use checkpoint::await_capture_completion;
+#[cfg(unix)]
+use checkpoint::{CheckpointControl, run_with_recovery};
+
+#[cfg(unix)]
 use super::checkpoint::Server;
 
 #[cfg(unix)]
@@ -21,67 +29,14 @@ const REQUEST_SIGNAL: u32 = 3;
 #[cfg(unix)]
 const REQUEST_CHECKPOINT: u32 = 4;
 
-/// The writable root a plan will materialize guest state into, if it has one.
-///
-/// An overlay upper layer, when the launch configures one, is where every guest write lands and the
-/// lower layers are read-only by construction -- so a root-owned lower layer is legitimate and must
-/// not be refused. Without an overlay the rootfs itself is the writable root, unless the launch
-/// asked for `HL_ROOTFS_RO`, in which case nothing is written and any owner works.
-#[cfg(unix)]
-fn writable_root(plan: &crate::launcher::plan::RuntimePlan) -> Option<&[u8]> {
-    if let Some(upper) = plan.options.get_bytes("HL_OVERLAY_UPPER") {
-        return Some(upper);
-    }
-    if plan.options.get_bytes("HL_ROOTFS_RO").is_some() {
-        return None;
-    }
-    plan.rootfs.as_deref()
+fn checkpoint_sandbox_refusal(options: &crate::options::Options) -> Option<EngineError> {
+    options
+        .get_bytes("HL_UNTRUSTED")
+        .map(|_| EngineError::CheckpointUnsupportedUnderSandbox)
 }
 
-/// Refuses a launch whose writable root belongs to a host user the engine cannot act as.
-///
-/// The engine runs as an unprivileged host uid and never acquires host privilege: guest ownership
-/// lives in its own owner overlay (`container/owner.h`, `HL_FILE_OWNERS`), which is why a guest can
-/// report `id -u` = 0 while every write to a host-root-owned tree returns `EACCES`. Granting the
-/// access is not merely refused by the engine, it is unimplementable -- `chmod(2)` refuses for a
-/// non-owner without `CAP_FOWNER` -- so the contract has to be stated at launch instead.
-///
-/// Only the root directory is examined. Walking the tree would be unbounded work at launch, and a
-/// root-owned subtree below a writable root is a legitimate shape: shared read-only layers and host
-/// bind mounts both produce it, and the guest can still do everything the host user could. A root
-/// the engine does not own is different in kind -- nothing in the workspace is writable, so the
-/// failure is total, and refusing is kinder than letting a developer find it through a failing
-/// `git checkout`.
-///
-/// A path that cannot be stat'd is not refused here: the existing launch path already owns "the
-/// rootfs is not there", and an ownership cause for a missing directory is a worse diagnostic than
-/// the one it would replace. Running as host root refuses nothing, because then every owner is
-/// writable.
-#[cfg(unix)]
-fn refuse_unownable_root(plan: &crate::launcher::plan::RuntimePlan) -> Result<(), EngineError> {
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::MetadataExt;
-    let Some(root) = writable_root(plan) else { return Ok(()) };
-    let path = std::path::Path::new(std::ffi::OsStr::from_bytes(root));
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return Ok(());
-    };
-    // SAFETY: `geteuid` takes no arguments, reads no caller memory, and is documented never to fail.
-    let engine_uid = unsafe { libc::geteuid() };
-    let rootfs_uid = metadata.uid();
-    if engine_uid == 0 || rootfs_uid == engine_uid {
-        return Ok(());
-    }
-    hl_log::hl_error!(
-        hl_log::tag::EXEC,
-        "refusing launch: the writable root {} is owned by host uid {rootfs_uid}, but the engine runs \
-         as host uid {engine_uid} and never acquires host privilege, so no guest write can succeed \
-         however the guest reports its own id. Re-materialize the rootfs as uid {engine_uid} -- unpack \
-         it without sudo, or `chown -R {engine_uid} {}` -- or launch it read-only with HL_ROOTFS_RO.",
-        path.display(),
-        path.display()
-    );
-    Err(EngineError::RootfsNotOwnedByEngine { rootfs_uid, engine_uid })
+fn native_run_failure(status: i32) -> EngineError {
+    EngineError::NativeRunFailed(status)
 }
 
 pub(crate) struct ProductionMachine {
@@ -98,7 +53,56 @@ pub(crate) struct ProductionMachine {
     /// image of its own on; its guest processes commit into the coordinator's store.
     #[cfg(unix)]
     member: Option<crate::composition::CheckpointChannel>,
-    engine: Mutex<Option<Arc<hl_native::Engine>>>,
+    state: Mutex<StartupState<hl_native::Engine>>,
+}
+
+struct StartupState<T> {
+    engine: Option<Arc<T>>,
+    pending_stop: Option<StopRequest>,
+}
+
+impl<T> Default for StartupState<T> {
+    fn default() -> Self {
+        Self {
+            engine: None,
+            pending_stop: None,
+        }
+    }
+}
+
+impl<T> StartupState<T> {
+    fn publish(&mut self, engine: Arc<T>) -> Option<StopRequest> {
+        self.engine = Some(engine);
+        self.pending_stop.take()
+    }
+
+    fn request(&mut self, request: StopRequest) -> Option<Arc<T>> {
+        let Some(engine) = self.engine.as_ref() else {
+            self.pending_stop = Some(match (self.pending_stop, request) {
+                (Some(StopRequest::Force), _) | (_, StopRequest::Force) => StopRequest::Force,
+                (_, request) => request,
+            });
+            return None;
+        };
+        Some(Arc::clone(engine))
+    }
+}
+
+#[cfg(test)]
+mod startup_state_tests {
+    use super::*;
+
+    #[test]
+    fn a_stop_during_native_construction_is_delivered_when_the_engine_publishes() {
+        let mut state = StartupState::<()>::default();
+        assert!(state.request(StopRequest::Interrupt).is_none());
+        assert!(state.request(StopRequest::Force).is_none());
+        assert!(state.request(StopRequest::Signal(12)).is_none());
+
+        let engine = Arc::new(());
+        assert_eq!(state.publish(Arc::clone(&engine)), Some(StopRequest::Force));
+        assert!(Arc::ptr_eq(&state.request(StopRequest::Signal(10)).unwrap(), &engine));
+    }
 }
 
 pub(crate) struct ProductionFactory;
@@ -162,7 +166,7 @@ impl RuntimeFactory for ProductionFactory {
             checkpoint,
             #[cfg(unix)]
             member,
-            engine: Mutex::new(None),
+            state: Mutex::new(StartupState::default()),
         })
     }
 }
@@ -179,14 +183,9 @@ impl ProductionMachine {
         encoded
     }
 
-    #[cfg(unix)]
-    fn refuse_unownable_root(&self) -> Result<(), EngineError> {
-        refuse_unownable_root(&self.plan)
-    }
-
     fn create(&self) -> Result<hl_native::Engine, EngineError> {
         #[cfg(unix)]
-        self.refuse_unownable_root()?;
+        self.plan.refuse_unownable_root()?;
         let rootfs = self
             .plan
             .rootfs
@@ -277,9 +276,10 @@ impl ProductionMachine {
     }
 
     fn current(&self) -> Result<Arc<hl_native::Engine>, EngineError> {
-        self.engine
+        self.state
             .lock()
             .map_err(|_| EngineError::Synchronization)?
+            .engine
             .clone()
             .ok_or(EngineError::NotStarted)
     }
@@ -326,7 +326,19 @@ impl GuestMachine for ProductionMachine {
             None
         };
         let engine = Arc::new(self.create()?);
-        *self.engine.lock().map_err(|_| EngineError::Synchronization)? = Some(Arc::clone(&engine));
+        let pending_stop = self
+            .state
+            .lock()
+            .map_err(|_| EngineError::Synchronization)?
+            .publish(Arc::clone(&engine));
+        if let Some(request) = pending_stop {
+            let (kind, signal) = match request {
+                StopRequest::Interrupt => (REQUEST_INTERRUPT, request.signal()),
+                StopRequest::Force => (REQUEST_FORCE_STOP, request.signal()),
+                StopRequest::Signal(signal) => (REQUEST_SIGNAL, signal),
+            };
+            engine.request(kind, signal).map_err(EngineError::NativeStopFailed)?;
+        }
         let arguments = self
             .plan
             .arguments
@@ -370,9 +382,14 @@ impl GuestMachine for ProductionMachine {
             StopRequest::Force => (REQUEST_FORCE_STOP, request.signal()),
             StopRequest::Signal(signal) => (REQUEST_SIGNAL, signal),
         };
-        self.current()?
-            .request(kind, signal)
-            .map_err(EngineError::NativeStopFailed)
+        let engine = self
+            .state
+            .lock()
+            .map_err(|_| EngineError::Synchronization)?
+            .request(request);
+        engine.map_or(Ok(()), |engine| {
+            engine.request(kind, signal).map_err(EngineError::NativeStopFailed)
+        })
     }
 
     #[cfg(unix)]
@@ -450,415 +467,10 @@ impl GuestMachine for ProductionMachine {
 ///
 /// Reporting it here rather than as a bare native failure keeps the refusal on the launch-policy
 /// boundary that owns the option, and makes it permanent so a preflight does not poll for it.
-fn checkpoint_sandbox_refusal(options: &crate::options::Options) -> Option<EngineError> {
-    options
-        .get_bytes("HL_UNTRUSTED")
-        .map(|_| EngineError::CheckpointUnsupportedUnderSandbox)
-}
-
-fn native_run_failure(status: i32) -> EngineError {
-    EngineError::NativeRunFailed(status)
-}
-
-#[cfg(unix)]
-struct CheckpointControl {
-    server: Arc<Server>,
-    transport: Arc<hl_native::CheckpointTransport>,
-    acceptor: Option<std::thread::JoinHandle<()>>,
-    phases: CheckpointPhaseLedger,
-}
-
-#[cfg(unix)]
-impl CheckpointControl {
-    fn start(
-        sink: Arc<dyn CheckpointSink>,
-        source: Arc<dyn CheckpointSource>,
-        isa: crate::activation::GuestIsa,
-        phase_ledger: Option<i32>,
-        phase_clock_failure: bool,
-    ) -> Result<Self, CompositionError> {
-        let (broker, transport) = hl_native::CheckpointTransport::create().map_err(|error| {
-            hl_log::hl_error!(hl_log::tag::EXEC, "checkpoint transport creation failed: error={error}");
-            CompositionError::RuntimeConstruction
-        })?;
-        let server = Arc::new(Server::new(sink, source));
-        let acceptor = Server::start(&server, broker);
-        Ok(Self {
-            server,
-            transport: Arc::new(transport),
-            acceptor: Some(acceptor),
-            phases: CheckpointPhaseLedger::new(phase_ledger, phase_clock_failure, isa),
-        })
-    }
-
-    fn capture(
-        &self,
-        engine: &hl_native::Engine,
-        isa: crate::activation::GuestIsa,
-        deadline: std::time::Instant,
-    ) -> Result<(), EngineError> {
-        use std::time::Instant;
-
-        if Instant::now() >= deadline {
-            self.phases.terminal(0, 1);
-            return Err(EngineError::WaitFailed);
-        }
-        let ready = self.phases.begin();
-        if let Err(failure) = self.server.wait_capture_ready(deadline) {
-            self.phases.terminal(0, 1);
-            return Err(Self::capture_failure(failure));
-        }
-        let admission = self.phases.begin();
-        let capture = match self
-            .server
-            .begin_capture_after_admission(deadline, || self.transport.bump())
-        {
-            Ok(capture) => capture,
-            Err(failure) => {
-                self.phases.terminal(0, 1);
-                return Err(Self::capture_failure(failure));
-            }
-        };
-        self.phases.finish(capture, "capture_ready_wait", ready);
-        self.phases.finish(capture, "capture_admission", admission);
-        let signal = hl_native::CheckpointTransport::interrupt_signal(match isa {
-            crate::activation::GuestIsa::Aarch64 => 1,
-            crate::activation::GuestIsa::X86_64 => 2,
-        });
-        let dispatch = self.phases.begin();
-        if signal <= 0 || engine.request(REQUEST_CHECKPOINT, signal).is_err() {
-            if self.server.abort_capture(capture).is_err() {
-                self.phases.terminal(capture, 1);
-                return Err(EngineError::LaunchFailed);
-            }
-            self.phases.terminal(capture, 1);
-            return Err(EngineError::StopFailed);
-        }
-        self.phases.finish(capture, "request_dispatch", dispatch);
-        let completion = self.phases.begin();
-        let result = await_capture_completion(&self.server, capture, deadline, || {
-            let _ = engine.request(REQUEST_CHECKPOINT, signal);
-        });
-        match result {
-            Ok(result) => {
-                self.phases.finish(capture, "completion_wait", completion);
-                self.phases.terminal(capture, u32::from(result.is_err()));
-                result.map_err(|failure| self.capture_failure_reported(engine, failure))
-            }
-            Err(failure) => {
-                self.phases.terminal(capture, 1);
-                Err(Self::capture_failure(failure))
-            }
-        }
-    }
-
-    fn begin_recovery(&self, deadline: std::time::Instant) -> Result<RecoveryAdmission, EngineError> {
-        let id = match self
-            .server
-            .begin_recovery_after_admission(deadline, || self.transport.bump())
-        {
-            Ok(id) => id,
-            Err(failure) => {
-                self.phases.terminal(0, 1);
-                return Err(Self::capture_failure(failure));
-            }
-        };
-        Ok(RecoveryAdmission {
-            server: Arc::clone(&self.server),
-            id,
-            state: std::sync::atomic::AtomicU8::new(RECOVERY_OPEN),
-            phases: self.phases,
-        })
-    }
-
-    fn capture_failure(failure: super::checkpoint::CaptureFailure) -> EngineError {
-        match failure {
-            super::checkpoint::CaptureFailure::Busy => EngineError::Busy,
-            super::checkpoint::CaptureFailure::Deadline => EngineError::WaitFailed,
-            super::checkpoint::CaptureFailure::Unfinalized => EngineError::CheckpointGenerationUnfinalized,
-            super::checkpoint::CaptureFailure::Failed => EngineError::CaptureFailed,
-            super::checkpoint::CaptureFailure::Refused => EngineError::CaptureRefused,
-            super::checkpoint::CaptureFailure::Poisoned => EngineError::CapturePoisoned,
-        }
-    }
-
-    /// The error a failed capture reaches the caller as, having first said what the engine said.
-    ///
-    /// A refusal is a DECISION the engine already explained, and the explanation is the whole value of
-    /// it. Sending one through the exit-status probe below would replace that explanation with a bare
-    /// `CheckpointExited`, which is exactly how a named cause used to become an anonymous one on the
-    /// way out of the engine.
-    fn capture_failure_reported(
-        &self,
-        engine: &hl_native::Engine,
-        failure: super::checkpoint::CaptureFailure,
-    ) -> EngineError {
-        if failure == super::checkpoint::CaptureFailure::Refused {
-            if let Some(reason) = self.server.capture_refusal() {
-                hl_log::hl_error!(hl_log::tag::CHECKPOINT, "checkpoint refused by the engine: {reason}");
-            }
-            return EngineError::CaptureRefused;
-        }
-        Self::capture_failure_with_exit(engine, failure)
-    }
-
-    fn capture_failure_with_exit(
-        engine: &hl_native::Engine,
-        failure: super::checkpoint::CaptureFailure,
-    ) -> EngineError {
-        // A channel EOF is observed just before the native child-reaper publishes its status. Give that
-        // publication a tightly bounded opportunity to win so a host SIGSEGV is reported as Signal(11)
-        // instead of the generic capture failure that triggered this diagnostic path.
-        for _ in 0..10 {
-            let native = engine.exit();
-            if native.kind != 0 {
-                return EngineError::CheckpointExited(ProductionMachine::exit(engine));
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        Self::capture_failure(failure)
-    }
-}
-
-/// Wait for a dispatched capture to reach a terminal result, re-issuing the guest checkpoint
-/// interrupt every 100ms until it does.
-///
-/// The wait is bounded by `deadline` here and not only by the deadline the server recorded with
-/// the capture: `Server::wait_capture` returns `Ok(None)` from phases that carry no deadline of
-/// their own (an in-flight abort settlement), so a loop that trusted the server to expire the
-/// capture would re-interrupt a stalled guest forever. Exceeding the deadline aborts the capture
-/// and reports `CaptureFailure::Deadline`, naming the completion wait as the stalled phase.
-#[cfg(unix)]
-pub(super) fn await_capture_completion(
-    server: &Server,
-    capture: u64,
-    deadline: std::time::Instant,
-    mut reinterrupt: impl FnMut(),
-) -> Result<Result<(), super::checkpoint::CaptureFailure>, super::checkpoint::CaptureFailure> {
-    use std::time::{Duration, Instant};
-
-    let mut next_interrupt = Instant::now() + Duration::from_millis(100);
-    loop {
-        match server.wait_capture(capture, next_interrupt.min(deadline)) {
-            Ok(Some(result)) => return Ok(result),
-            Ok(None) => {}
-            Err(failure) => return Err(failure),
-        }
-        let now = Instant::now();
-        if now >= deadline {
-            let _ = server.abort_capture(capture);
-            return Err(super::checkpoint::CaptureFailure::Deadline);
-        }
-        if now >= next_interrupt {
-            reinterrupt();
-            next_interrupt = now + Duration::from_millis(100);
-        }
-    }
-}
-
-#[cfg(unix)]
-#[derive(Clone, Copy)]
-struct CheckpointPhaseLedger {
-    descriptor: Option<i32>,
-    clock_failure: bool,
-    isa: crate::activation::GuestIsa,
-}
-
-#[cfg(unix)]
-impl CheckpointPhaseLedger {
-    const fn new(descriptor: Option<i32>, clock_failure: bool, isa: crate::activation::GuestIsa) -> Self {
-        Self {
-            descriptor,
-            clock_failure,
-            isa,
-        }
-    }
-
-    fn now(self) -> u64 {
-        if self.descriptor.is_none() {
-            return u64::MAX;
-        }
-        if self.clock_failure {
-            return 0;
-        }
-        let mut now = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-        // SAFETY: `now` is writable storage of the exact ABI type; CLOCK_MONOTONIC
-        // retains no pointer and invokes no callback.
-        if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &raw mut now) } != 0 {
-            return 0;
-        }
-        u64::try_from(now.tv_sec)
-            .ok()
-            .and_then(|seconds| seconds.checked_mul(1_000_000))
-            .and_then(|micros| u64::try_from(now.tv_nsec).ok().map(|nanos| micros + nanos / 1_000))
-            .unwrap_or(0)
-    }
-
-    fn begin(self) -> u64 {
-        self.now()
-    }
-
-    fn finish(self, generation: u64, phase: &str, started: u64) {
-        if started == u64::MAX {
-            return;
-        }
-        let finished = self.now();
-        let (duration, clock) = if started == 0 || finished == 0 {
-            (0, "unavailable")
-        } else {
-            (finished.saturating_sub(started), "ok")
-        };
-        self.emit(format!(
-            "checkpoint_phase_ledger\tcomponent=control\tisa={}\tsession={generation}\tattempt={generation}\tgeneration={generation}\tphase={phase}\tduration_us={duration}\tbudget_us=0\tclock={clock}\toutcome=progress\tstatus=0",
-            match self.isa {
-                crate::activation::GuestIsa::Aarch64 => "aarch64",
-                crate::activation::GuestIsa::X86_64 => "x86_64",
-            }
-        ));
-    }
-
-    fn terminal(self, generation: u64, status: u32) {
-        if self.descriptor.is_none() {
-            return;
-        }
-        static NEXT_UNADMITTED_ATTEMPT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let correlation = if generation == 0 {
-            NEXT_UNADMITTED_ATTEMPT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        } else {
-            generation
-        };
-        let clock = if self.now() == 0 { "unavailable" } else { "ok" };
-        self.emit(format!(
-            "checkpoint_phase_ledger\tcomponent=control\tisa={}\tsession={correlation}\tattempt={correlation}\tgeneration={generation}\tphase=terminal\tduration_us=0\tbudget_us=0\tclock={}\toutcome={}\tstatus={status}",
-            match self.isa {
-                crate::activation::GuestIsa::Aarch64 => "aarch64",
-                crate::activation::GuestIsa::X86_64 => "x86_64",
-            },
-            clock,
-            if status == 0 { "success" } else { "failure" },
-        ));
-    }
-
-    fn emit(self, mut record: String) {
-        let Some(descriptor) = self.descriptor else { return };
-        record.push('\n');
-        // SAFETY: the test harness owns this inherited append-only descriptor for
-        // the subprocess lifetime; the bounded record is borrowed for one write.
-        let written = unsafe { libc::write(descriptor, record.as_ptr().cast(), record.len()) };
-        assert_eq!(
-            written,
-            isize::try_from(record.len()).unwrap(),
-            "checkpoint phase ledger write"
-        );
-    }
-}
-
-#[cfg(unix)]
-struct RecoveryAdmission {
-    server: Arc<Server>,
-    id: u64,
-    state: std::sync::atomic::AtomicU8,
-    phases: CheckpointPhaseLedger,
-}
-
-#[cfg(unix)]
-const RECOVERY_OPEN: u8 = 0;
-#[cfg(unix)]
-const RECOVERY_WAIT_CLAIMED: u8 = 1;
-#[cfg(unix)]
-const RECOVERY_RETURNED_NEEDS_ABORT: u8 = 2;
-#[cfg(unix)]
-const RECOVERY_SETTLED: u8 = 3;
-
-#[cfg(unix)]
-impl Drop for RecoveryAdmission {
-    fn drop(&mut self) {
-        let state = self.state.load(std::sync::atomic::Ordering::Acquire);
-        if state != RECOVERY_SETTLED {
-            let _ = self.abort_recovery();
-            if state == RECOVERY_OPEN {
-                self.phases.terminal(self.id, 1);
-            }
-        }
-    }
-}
-
-#[cfg(unix)]
-impl RecoveryAdmission {
-    fn abort(&self) -> Result<(), EngineError> {
-        self.abort_recovery().map_err(CheckpointControl::capture_failure)
-    }
-
-    fn abort_recovery(&self) -> Result<(), super::checkpoint::CaptureFailure> {
-        let result = self.server.abort_recovery(self.id);
-        if result == Err(super::checkpoint::CaptureFailure::Poisoned) {
-            // capture_lock reports mutex poison once after converting the phase to Poisoned and
-            // clearing the mutex flag. No replacement generation can admit in that phase, so one
-            // bounded retry safely performs the transaction discard without reopening an ABA gap.
-            self.server.abort_recovery(self.id)
-        } else {
-            result
-        }
-    }
-
-    fn wait(&self) -> Result<(), EngineError> {
-        let started = self.phases.begin();
-        if self
-            .state
-            .compare_exchange(
-                RECOVERY_OPEN,
-                RECOVERY_WAIT_CLAIMED,
-                std::sync::atomic::Ordering::AcqRel,
-                std::sync::atomic::Ordering::Acquire,
-            )
-            .is_err()
-        {
-            return Err(EngineError::Busy);
-        }
-        let result = self.server.wait_recovery(self.id);
-        let state = if matches!(result, Err(super::checkpoint::CaptureFailure::Poisoned)) {
-            RECOVERY_RETURNED_NEEDS_ABORT
-        } else {
-            RECOVERY_SETTLED
-        };
-        self.state.store(state, std::sync::atomic::Ordering::Release);
-        self.phases.finish(self.id, "recovery_wait", started);
-        self.phases.terminal(self.id, u32::from(result.is_err()));
-        result.map_err(CheckpointControl::capture_failure)
-    }
-}
-
-#[cfg(unix)]
-fn run_with_recovery<T>(
-    recovery: &RecoveryAdmission,
-    run: impl FnOnce() -> Result<T, EngineError>,
-) -> Result<T, EngineError> {
-    std::thread::scope(|scope| {
-        let waiting = scope.spawn(|| recovery.wait());
-        let run = run();
-        if run.is_err() {
-            // A launch can fail before native code adopts a checkpoint channel.
-            // With no broker EOF to wake the waiter, settle at the failure site.
-            let _ = recovery.abort();
-        }
-        let restored = waiting.join().map_err(|_| EngineError::WaitFailed)?;
-        restored?;
-        run
-    })
-}
-
-#[cfg(unix)]
-impl Drop for CheckpointControl {
-    fn drop(&mut self) {
-        self.server.stop();
-        if let Some(acceptor) = self.acceptor.take() {
-            let _ = acceptor.join();
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::checkpoint::{CheckpointPhaseLedger, RECOVERY_OPEN, RecoveryAdmission};
     use super::*;
 
     #[cfg(unix)]
@@ -1098,121 +710,5 @@ mod sandbox_refusal_tests {
     #[test]
     fn a_launch_without_the_sentry_is_not_refused_by_policy() {
         assert_eq!(checkpoint_sandbox_refusal(&crate::options::Options::default()), None);
-    }
-}
-
-#[cfg(all(test, unix))]
-mod rootfs_ownership_tests {
-    use super::{refuse_unownable_root, writable_root};
-    use crate::engine::EngineError;
-    use crate::launcher::plan::RuntimePlan;
-    use crate::options::Options;
-
-    fn plan(rootfs: Option<&str>, options: &[(&str, &str)]) -> RuntimePlan {
-        let mut set = Options::default();
-        for (name, value) in options {
-            set.set(name, value, true).unwrap();
-        }
-        RuntimePlan {
-            rootfs: rootfs.map(|path| path.as_bytes().to_vec()),
-            executable_host: None,
-            arguments: Vec::new(),
-            environment: Vec::new(),
-            result_path: None,
-            options: set,
-        }
-    }
-
-    /// `/` is owned by host root on every host this runs on, so for an engine that is not root it is
-    /// the portable stand-in for a rootfs unpacked under `sudo` -- and it needs no privilege to set
-    /// up. It says nothing when the suite itself runs as root, which is the case the test below
-    /// covers separately.
-    fn host_root_owned() -> &'static str {
-        "/"
-    }
-
-    /// `refuse_unownable_root` has two acceptance branches and one refusal, and which of them a run
-    /// exercises is decided by the identity the suite happens to have. The root arm used to be a
-    /// bare `return;`, so on a host that runs the suite as uid 0 -- as this repository's Linux box
-    /// does -- the case asserted nothing and reported `ok`, and `engine_uid == 0` had no coverage on
-    /// any host. Assert the branch this identity actually reaches instead of leaving the run empty.
-    ///
-    /// `/` cannot express the root arm, because root owns it and the `rootfs_uid == engine_uid` arm
-    /// would answer first. The fixture therefore hands a directory to another uid, so only
-    /// `engine_uid == 0` can account for the acceptance.
-    #[test]
-    fn a_writable_root_owned_by_another_host_user_refuses_a_launch_that_is_not_root() {
-        use std::os::unix::fs::MetadataExt as _;
-        // SAFETY: `geteuid` takes no arguments and cannot fail.
-        let engine_uid = unsafe { libc::geteuid() };
-        if engine_uid != 0 {
-            assert_eq!(
-                refuse_unownable_root(&plan(Some(host_root_owned()), &[])),
-                Err(EngineError::RootfsNotOwnedByEngine {
-                    rootfs_uid: 0,
-                    engine_uid,
-                })
-            );
-            return;
-        }
-        const FOREIGN_UID: u32 = 65_534;
-        let directory = tempfile::tempdir().unwrap();
-        std::os::unix::fs::chown(directory.path(), Some(FOREIGN_UID), None).unwrap();
-        assert_eq!(
-            std::fs::metadata(directory.path()).unwrap().uid(),
-            FOREIGN_UID,
-            "the fixture root must belong to another uid or the acceptance proves nothing"
-        );
-        assert_eq!(
-            refuse_unownable_root(&plan(Some(directory.path().to_str().unwrap()), &[])),
-            Ok(()),
-            "host root writes through every owner, so no ownership refusal may fire for uid 0"
-        );
-    }
-
-    /// The kinder-to-refuse judgement stops exactly where the workspace stops being broken. A
-    /// read-only launch writes nothing, so a root-owned tree serves it perfectly well and refusing
-    /// it would take away a shape that works.
-    #[test]
-    fn a_read_only_launch_over_the_same_root_is_still_admitted() {
-        assert_eq!(
-            writable_root(&plan(Some(host_root_owned()), &[("HL_ROOTFS_RO", "1")])),
-            None
-        );
-        assert_eq!(
-            refuse_unownable_root(&plan(Some(host_root_owned()), &[("HL_ROOTFS_RO", "1")])),
-            Ok(())
-        );
-    }
-
-    /// With an overlay the lower layers are read-only by construction and every write lands in the
-    /// upper, so the upper is the only ownership that decides whether the workspace works.
-    #[test]
-    fn an_overlay_is_judged_by_its_upper_layer_not_by_a_root_owned_lower() {
-        let directory = tempfile::tempdir().unwrap();
-        let upper = directory.path().to_str().unwrap();
-        let over_root = plan(Some(host_root_owned()), &[("HL_OVERLAY_UPPER", upper)]);
-        assert_eq!(writable_root(&over_root), Some(upper.as_bytes()));
-        assert_eq!(refuse_unownable_root(&over_root), Ok(()));
-    }
-
-    #[test]
-    fn a_root_the_engine_owns_and_a_launch_without_one_are_both_admitted() {
-        let directory = tempfile::tempdir().unwrap();
-        assert_eq!(
-            refuse_unownable_root(&plan(Some(directory.path().to_str().unwrap()), &[])),
-            Ok(())
-        );
-        assert_eq!(refuse_unownable_root(&plan(None, &[])), Ok(()));
-    }
-
-    /// A rootfs that is not there is the existing launch path's error to report, and an ownership
-    /// cause for a missing directory would be a worse diagnostic than the one it replaced.
-    #[test]
-    fn a_missing_root_is_left_to_the_launch_path_that_already_owns_it() {
-        assert_eq!(
-            refuse_unownable_root(&plan(Some("/var/tmp/husklet-no-such-rootfs-6f21"), &[])),
-            Ok(())
-        );
     }
 }

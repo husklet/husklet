@@ -11,8 +11,9 @@ int main(void) {
     pipe(sync);
     pid_t c = fork();
     if (c == 0) {
-        char go; read(sync[0], &go, 1); // wait until parent has a pidfd
-        pause();                         // wait to be killed
+        char go;
+        read(sync[0], &go, 1); // wait until parent has a pidfd
+        pause();               // wait to be killed
         _exit(0);
     }
     int pidfd = syscall(SYS_pidfd_open, c, 0);

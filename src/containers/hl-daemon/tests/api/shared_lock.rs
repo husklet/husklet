@@ -148,7 +148,7 @@ async fn await_held(containers: &Containers) -> Result<(), Box<dyn std::error::E
     Err("holder never reported acquiring its write lock".into())
 }
 
-/// Builds the probe for the guest, which is this host's own architecture.
+/// Builds the probe for the guest architecture selected by the caller.
 ///
 /// The pinned dev shell cross compiler intentionally ships no static libc.
 /// Prefer the system compiler that owns the host static libc; `HL_GUEST_CC`

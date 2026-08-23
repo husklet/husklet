@@ -16,7 +16,8 @@ static int mk_unlinked(const char *tag, int len) {
     int fd = mkstemp(t);
     if (fd < 0) return -1;
     char buf[256];
-    for (int i = 0; i < len; i++) buf[i] = tag[i % (int)strlen(tag)];
+    for (int i = 0; i < len; i++)
+        buf[i] = tag[i % (int)strlen(tag)];
     if (write(fd, buf, (size_t)len) != len) {
         close(fd);
         return -1;
@@ -62,8 +63,7 @@ int main(void) {
     // shared offset: reading 3 via d1 advances the shared position for d2
     lseek(d1, 0, SEEK_SET);
     char x3[3] = {0}, y3[3] = {0};
-    int adv = (read(d1, x3, 3) == 3 && read(d2, y3, 3) == 3 && memcmp(x3, "DUP", 3) == 0 &&
-               memcmp(y3, "DUP", 3) == 0);
+    int adv = (read(d1, x3, 3) == 3 && read(d2, y3, 3) == 3 && memcmp(x3, "DUP", 3) == 0 && memcmp(y3, "DUP", 3) == 0);
     printf("dup_ok=%d dup_shared_offset=%d\n", dok, adv);
 
     close(a);

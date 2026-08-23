@@ -25,7 +25,7 @@ static int unchanged(const unsigned char *bytes, size_t length, unsigned char va
     return 1;
 }
 
-#define EXPECT_FAULT(statement)                                                                                         \
+#define EXPECT_FAULT(statement)                                                                                        \
     __extension__({                                                                                                    \
         int caught;                                                                                                    \
         if (sigsetjmp(jump, 1) == 0) {                                                                                 \
@@ -45,8 +45,7 @@ __attribute__((target("avx"), noinline)) static int avx_fault(unsigned char *poi
 int main(void) {
     setbuf(stdout, NULL);
     const size_t page = 4096;
-    unsigned char *mapping = mmap(NULL, 2 * page, PROT_READ | PROT_WRITE,
-                                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned char *mapping = mmap(NULL, 2 * page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (mapping == MAP_FAILED || mprotect(mapping + page, page, PROT_NONE) != 0) return 2;
     struct sigaction action = {.sa_sigaction = fault, .sa_flags = SA_SIGINFO};
     sigemptyset(&action.sa_mask);
@@ -69,7 +68,8 @@ int main(void) {
 
     long double extended = 1.25L;
     memset(mapping + page - 64, 0xa5, 64);
-    int m80 = EXPECT_FAULT(__asm__ volatile("fldt %1; fstpt (%0)" : : "r"(mapping + page - 5), "m"(extended) : "memory"));
+    int m80 =
+        EXPECT_FAULT(__asm__ volatile("fldt %1; fstpt (%0)" : : "r"(mapping + page - 5), "m"(extended) : "memory"));
     int m80_clean = unchanged(mapping + page - 5, 5, 0xa5);
     __asm__ volatile("fninit");
     int env28 = EXPECT_FAULT(__asm__ volatile("fnstenv (%0)" : : "r"(mapping + page - 14) : "memory"));
@@ -80,17 +80,21 @@ int main(void) {
     __asm__ volatile("fninit");
     int save512 = EXPECT_FAULT(__asm__ volatile("fxsave64 (%0)" : : "r"(mapping + page - 256) : "memory"));
     int save512_clean = unchanged(mapping + page - 256, 256, 0xa5);
-    printf("xstate m80=%d/%d env28=%d/%d save108=%d/%d save512=%d/%d\n", m80, m80_clean, env28,
-           env28_clean, save108, save108_clean, save512, save512_clean);
+    printf("xstate m80=%d/%d env28=%d/%d save108=%d/%d save512=%d/%d\n", m80, m80_clean, env28, env28_clean, save108,
+           save108_clean, save512, save512_clean);
 
     uint16_t expected2 = UINT16_C(0xa5a5);
     uint32_t expected4 = UINT32_C(0xa5a5a5a5);
     uint64_t expected8 = UINT64_C(0xa5a5a5a5a5a5a5a5);
-    int cmp2 = EXPECT_FAULT(__asm__ volatile("lock cmpxchgw %2, (%1)" : "+a"(expected2) : "r"(mapping + page - 1), "r"((uint16_t)7) : "memory", "cc"));
-    int cmp4 = EXPECT_FAULT(__asm__ volatile("lock cmpxchgl %2, (%1)" : "+a"(expected4) : "r"(mapping + page - 2), "r"((uint32_t)7) : "memory", "cc"));
-    int cmp8 = EXPECT_FAULT(__asm__ volatile("lock cmpxchgq %2, (%1)" : "+a"(expected8) : "r"(mapping + page - 4), "r"((uint64_t)7) : "memory", "cc"));
+    int cmp2 = EXPECT_FAULT(__asm__ volatile("lock cmpxchgw %2, (%1)" : "+a"(expected2) : "r"(mapping + page - 1),
+                                             "r"((uint16_t)7) : "memory", "cc"));
+    int cmp4 = EXPECT_FAULT(__asm__ volatile("lock cmpxchgl %2, (%1)" : "+a"(expected4) : "r"(mapping + page - 2),
+                                             "r"((uint32_t)7) : "memory", "cc"));
+    int cmp8 = EXPECT_FAULT(__asm__ volatile("lock cmpxchgq %2, (%1)" : "+a"(expected8) : "r"(mapping + page - 4),
+                                             "r"((uint64_t)7) : "memory", "cc"));
     unsigned long long low = UINT64_C(0xa5a5a5a5a5a5a5a5), high = low;
-    int cmp16 = EXPECT_FAULT(__asm__ volatile("lock cmpxchg16b (%4)" : "+a"(low), "+d"(high) : "b"((uint64_t)7), "c"((uint64_t)9), "r"(mapping + page - 8) : "memory", "cc"));
+    int cmp16 = EXPECT_FAULT(__asm__ volatile("lock cmpxchg16b (%4)" : "+a"(low), "+d"(high) : "b"((uint64_t)7),
+                                              "c"((uint64_t)9), "r"(mapping + page - 8) : "memory", "cc"));
     int compare_clean = unchanged(mapping + page - 8, 8, 0xa5);
     printf("compare=%d%d%d%d/%d\n", cmp2, cmp4, cmp8, cmp16, compare_clean);
 
@@ -101,10 +105,12 @@ int main(void) {
     printf("rotate=%d%d%d/%d\n", rotate2, rotate4, rotate8, rotate_clean);
 
     printf("x86-projection-fault complete=1\n");
-    return !(scalar_fault && scalar_clean && sse_fault && sse_clean && avx && avx_clean && m80 && m80_clean &&
-             env28 && env28_clean && save108 && save108_clean && save512 && save512_clean && cmp2 && cmp4 &&
-             cmp8 && cmp16 && compare_clean && rotate2 && rotate4 && rotate8 && rotate_clean);
+    return !(scalar_fault && scalar_clean && sse_fault && sse_clean && avx && avx_clean && m80 && m80_clean && env28 &&
+             env28_clean && save108 && save108_clean && save512 && save512_clean && cmp2 && cmp4 && cmp8 && cmp16 &&
+             compare_clean && rotate2 && rotate4 && rotate8 && rotate_clean);
 }
 #else
-int main(void) { return 0; }
+int main(void) {
+    return 0;
+}
 #endif

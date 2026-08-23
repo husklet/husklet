@@ -11,27 +11,37 @@ enum { OP_ADD, OP_SUB, OP_SHL1, OP_END };
 static int jit_compile(unsigned char *buf, const unsigned char *ops, const uint32_t *imm, int n) {
     int off = 0;
 #if defined(__x86_64__)
-    buf[off++] = 0x48; buf[off++] = 0x89; buf[off++] = 0xF8; // mov rax, rdi
+    buf[off++] = 0x48;
+    buf[off++] = 0x89;
+    buf[off++] = 0xF8; // mov rax, rdi
 #endif
     for (int i = 0; i < n; i++) {
         uint32_t v = imm[i];
         switch (ops[i]) {
         case OP_ADD:
 #if defined(__aarch64__)
-            *(uint32_t *)(buf + off) = 0x91000000u | ((v & 0xfff) << 10); off += 4; // add x0,x0,#imm12
+            *(uint32_t *)(buf + off) = 0x91000000u | ((v & 0xfff) << 10);
+            off += 4; // add x0,x0,#imm12
 #elif defined(__x86_64__)
-            buf[off++] = 0x48; buf[off++] = 0x05;
-            buf[off++] = (unsigned char)(v); buf[off++] = (unsigned char)(v >> 8);
-            buf[off++] = (unsigned char)(v >> 16); buf[off++] = (unsigned char)(v >> 24);
+            buf[off++] = 0x48;
+            buf[off++] = 0x05;
+            buf[off++] = (unsigned char)(v);
+            buf[off++] = (unsigned char)(v >> 8);
+            buf[off++] = (unsigned char)(v >> 16);
+            buf[off++] = (unsigned char)(v >> 24);
 #endif
             break;
         case OP_SUB:
 #if defined(__aarch64__)
-            *(uint32_t *)(buf + off) = 0xD1000000u | ((v & 0xfff) << 10); off += 4; // sub x0,x0,#imm12
+            *(uint32_t *)(buf + off) = 0xD1000000u | ((v & 0xfff) << 10);
+            off += 4; // sub x0,x0,#imm12
 #elif defined(__x86_64__)
-            buf[off++] = 0x48; buf[off++] = 0x2D;
-            buf[off++] = (unsigned char)(v); buf[off++] = (unsigned char)(v >> 8);
-            buf[off++] = (unsigned char)(v >> 16); buf[off++] = (unsigned char)(v >> 24);
+            buf[off++] = 0x48;
+            buf[off++] = 0x2D;
+            buf[off++] = (unsigned char)(v);
+            buf[off++] = (unsigned char)(v >> 8);
+            buf[off++] = (unsigned char)(v >> 16);
+            buf[off++] = (unsigned char)(v >> 24);
 #endif
             break;
         case OP_SHL1:
@@ -39,13 +49,16 @@ static int jit_compile(unsigned char *buf, const unsigned char *ops, const uint3
             *(uint32_t *)(buf + off) = 0x8B000000u | (0u << 16) | (0u << 5) | 0u; // add x0,x0,x0
             off += 4;
 #elif defined(__x86_64__)
-            buf[off++] = 0x48; buf[off++] = 0xD1; buf[off++] = 0xE0; // shl rax,1
+            buf[off++] = 0x48;
+            buf[off++] = 0xD1;
+            buf[off++] = 0xE0; // shl rax,1
 #endif
             break;
         }
     }
 #if defined(__aarch64__)
-    *(uint32_t *)(buf + off) = 0xD65F03C0u; off += 4; // ret
+    *(uint32_t *)(buf + off) = 0xD65F03C0u;
+    off += 4; // ret
 #elif defined(__x86_64__)
     buf[off++] = 0xC3; // ret
 #endif
@@ -55,7 +68,7 @@ static int jit_compile(unsigned char *buf, const unsigned char *ops, const uint3
 static uint64_t ref_run(uint64_t x, const unsigned char *ops, const uint32_t *imm, int n) {
     for (int i = 0; i < n; i++) {
         switch (ops[i]) {
-        case OP_ADD: x += (imm[i] & 0xfff); break;   // match aarch64 12-bit add width
+        case OP_ADD: x += (imm[i] & 0xfff); break; // match aarch64 12-bit add width
         case OP_SUB: x -= (imm[i] & 0xfff); break;
         case OP_SHL1: x += x; break;
         }
@@ -85,8 +98,8 @@ int main(void) {
         uint64_t got = f(x);
         uint64_t want = ref_run(x, ops, imm, n);
         if (got != want) {
-            printf("smc-minijit MISMATCH round=%d want=%llu got=%llu\n", round,
-                   (unsigned long long)want, (unsigned long long)got);
+            printf("smc-minijit MISMATCH round=%d want=%llu got=%llu\n", round, (unsigned long long)want,
+                   (unsigned long long)got);
             return 1;
         }
         acc = acc * 1000003ULL + got;

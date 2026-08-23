@@ -53,7 +53,7 @@ pub(super) fn checkpoint_artifact_hash<'a>(
             } else if path.is_file() {
                 files += 1;
                 let mut file = std::fs::File::open(path)?;
-                let mut buffer = [0_u8; 64 * 1024];
+                let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
                 loop {
                     let count = file.read(&mut buffer)?;
                     if count == 0 {
@@ -94,7 +94,7 @@ pub(super) fn checkpoint_artifact_hash<'a>(
 pub(super) fn file_hash(path: &Path) -> Result<String, Error> {
     let mut file = std::fs::File::open(path)?;
     let mut hash = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
     loop {
         let count = file.read(&mut buffer)?;
         if count == 0 {
@@ -120,10 +120,12 @@ pub(super) fn bounded_text(bytes: &[u8]) -> String {
         return String::from_utf8_lossy(bytes).into_owned();
     }
     let half = LIMIT / 2;
-    let mut text = String::from_utf8_lossy(&bytes[..half]).into_owned();
-    text.push_str(&format!("\n[{} bytes omitted]\n", bytes.len() - LIMIT));
-    text.push_str(&String::from_utf8_lossy(&bytes[bytes.len() - half..]));
-    text
+    format!(
+        "{}\n[{} bytes omitted]\n{}",
+        String::from_utf8_lossy(&bytes[..half]),
+        bytes.len() - LIMIT,
+        String::from_utf8_lossy(&bytes[bytes.len() - half..])
+    )
 }
 
 pub(super) fn append_output(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), Error> {

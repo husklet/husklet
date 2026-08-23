@@ -23,7 +23,7 @@ int main(void) {
     int nnp_set = prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0;
     int nnp_after = prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0);
 
-    printf("prctl-capbset in_range_ok=%d oor_einval=%d nnp_before=%d nnp_set=%d nnp_after=%d\n",
-           in_range_ok, oor_einval, nnp_before, nnp_set, nnp_after);
+    printf("prctl-capbset in_range_ok=%d oor_einval=%d nnp_before=%d nnp_set=%d nnp_after=%d\n", in_range_ok,
+           oor_einval, nnp_before, nnp_set, nnp_after);
     return 0;
 }

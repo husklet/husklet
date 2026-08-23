@@ -7,18 +7,24 @@
    files via readdir before opening them, so a listing that omits openable files breaks discovery. */
 
 static int listed(const char *name) {
-  DIR *d = opendir("/proc/self");
-  if (!d) return 0;
-  struct dirent *e; int found = 0;
-  while ((e = readdir(d))) if (!strcmp(e->d_name, name)) { found = 1; break; }
-  closedir(d);
-  return found;
+    DIR *d = opendir("/proc/self");
+    if (!d) return 0;
+    struct dirent *e;
+    int found = 0;
+    while ((e = readdir(d)))
+        if (!strcmp(e->d_name, name)) {
+            found = 1;
+            break;
+        }
+    closedir(d);
+    return found;
 }
 
 int main(void) {
-  const char *names[] = {"mountinfo", "limits", "environ", "smaps", "pagemap"};
-  int ok = 1;
-  for (int i = 0; i < 5; i++) if (!listed(names[i])) ok = 0;
-  printf("selfdir all_listed=%d\n", ok);
-  return 0;
+    const char *names[] = {"mountinfo", "limits", "environ", "smaps", "pagemap"};
+    int ok = 1;
+    for (int i = 0; i < 5; i++)
+        if (!listed(names[i])) ok = 0;
+    printf("selfdir all_listed=%d\n", ok);
+    return 0;
 }

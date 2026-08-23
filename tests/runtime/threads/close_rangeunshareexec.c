@@ -61,8 +61,7 @@ int main(int argc, char **argv) {
     };
     if (descriptors.closed < 0 || descriptors.survivor < 0) return 10;
 
-    if (syscall(SYS_close_range, (unsigned)descriptors.closed, (unsigned)descriptors.closed,
-                CLOSE_RANGE_UNSHARE) != 0)
+    if (syscall(SYS_close_range, (unsigned)descriptors.closed, (unsigned)descriptors.closed, CLOSE_RANGE_UNSHARE) != 0)
         return 11;
     char closed[24];
     char survivor[24];

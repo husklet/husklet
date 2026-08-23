@@ -19,7 +19,7 @@
 struct sched_attr {
     uint32_t size, sched_policy;
     uint64_t sched_flags;
-    int32_t  sched_nice;
+    int32_t sched_nice;
     uint32_t sched_priority;
     uint64_t sched_runtime, sched_deadline, sched_period;
 };
@@ -34,14 +34,12 @@ int main(void) {
     int size_set = (g != 0) ? 1 : (a.size >= 48);
 
     long s = -1;
-    if (g == 0 && a.sched_policy <= 2) {   /* only for normal/batch/idle */
+    if (g == 0 && a.sched_policy <= 2) { /* only for normal/batch/idle */
         a.size = sizeof a;
         s = syscall(__NR_sched_setattr, 0, &a, 0u);
     }
-    int set_ok = (g != 0) || (a.sched_policy > 2) || (s == 0) ||
-                 (errno == ENOSYS || errno == EPERM);
+    int set_ok = (g != 0) || (a.sched_policy > 2) || (s == 0) || (errno == ENOSYS || errno == EPERM);
 
-    printf("sched_getattr get_ok=%d policy_normal=%d size_set=%d set_ok=%d\n",
-           get_ok, policy_normal, size_set, set_ok);
+    printf("sched_getattr get_ok=%d policy_normal=%d size_set=%d set_ok=%d\n", get_ok, policy_normal, size_set, set_ok);
     return 0;
 }

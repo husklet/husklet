@@ -24,7 +24,7 @@ int main(void) {
     int event_ok = fresh >= 0 && write(fresh, &one, sizeof one) == sizeof one &&
                    read(fresh, &value, sizeof value) == sizeof value && value == 1;
     int final_close = fresh >= 0 && close(fresh) == 0;
-    printf("sentry_dup3_cleanup replaced=%d file_ok=%d close_ok=%d event_ok=%d final_close=%d\n", replaced,
-           file_ok, close_ok, event_ok, final_close);
+    printf("sentry_dup3_cleanup replaced=%d file_ok=%d close_ok=%d event_ok=%d final_close=%d\n", replaced, file_ok,
+           close_ok, event_ok, final_close);
     return replaced && file_ok && close_ok && event_ok && final_close ? 0 : 1;
 }

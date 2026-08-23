@@ -33,63 +33,87 @@ int main(void) {
     /* regular file: always ready for read; returns 1, readfds bit set */
     {
         int fd = open(freg, O_CREAT | O_RDWR, 0600);
-        fd_set r; FD_ZERO(&r); FD_SET(fd, &r);
+        fd_set r;
+        FD_ZERO(&r);
+        FD_SET(fd, &r);
         struct timeval to = {0, 100000};
         int ret = select(fd + 1, &r, NULL, NULL, &to);
         T("selreg ret1", ret == 1);
         T("selreg readset", FD_ISSET(fd, &r));
-        close(fd); unlink(freg);
+        close(fd);
+        unlink(freg);
     }
     /* system pipe: write a byte -> read end readable AND write end writable -> returns 2 */
     {
-        int p[2]; if (pipe(p)) return 2;
-        char b = 'x'; if (write(p[1], &b, 1) != 1) return 2;
-        fd_set r, w; FD_ZERO(&r); FD_ZERO(&w); FD_SET(p[0], &r); FD_SET(p[1], &w);
+        int p[2];
+        if (pipe(p)) return 2;
+        char b = 'x';
+        if (write(p[1], &b, 1) != 1) return 2;
+        fd_set r, w;
+        FD_ZERO(&r);
+        FD_ZERO(&w);
+        FD_SET(p[0], &r);
+        FD_SET(p[1], &w);
         int nfds = (p[0] > p[1] ? p[0] : p[1]) + 1;
         struct timeval to = {0, 100000};
         int ret = select(nfds, &r, &w, NULL, &to);
         T("selpipe ret2", ret == 2);
         T("selpipe readset", FD_ISSET(p[0], &r));
         T("selpipe writeset", FD_ISSET(p[1], &w));
-        close(p[0]); close(p[1]);
+        close(p[0]);
+        close(p[1]);
     }
     /* named pipe (FIFO) opened O_RDWR: write a byte -> read+write ready on same fd -> returns 2 */
     {
         unlink(ffifo);
         if (mkfifo(ffifo, 0600)) return 2;
         int fd = open(ffifo, O_RDWR);
-        char b = 'y'; if (write(fd, &b, 1) != 1) return 2;
-        fd_set r, w; FD_ZERO(&r); FD_ZERO(&w); FD_SET(fd, &r); FD_SET(fd, &w);
+        char b = 'y';
+        if (write(fd, &b, 1) != 1) return 2;
+        fd_set r, w;
+        FD_ZERO(&r);
+        FD_ZERO(&w);
+        FD_SET(fd, &r);
+        FD_SET(fd, &w);
         struct timeval to = {0, 100000};
         int ret = select(fd + 1, &r, &w, NULL, &to);
         T("selfifo ret2", ret == 2);
         T("selfifo readset", FD_ISSET(fd, &r));
         T("selfifo writeset", FD_ISSET(fd, &w));
-        close(fd); unlink(ffifo);
+        close(fd);
+        unlink(ffifo);
     }
     /* select02/pselect01: empty read set + finite timeout -> returns 0 (timed out) */
     {
-        int p[2]; if (pipe(p)) return 2;
-        fd_set r; FD_ZERO(&r); FD_SET(p[0], &r);
+        int p[2];
+        if (pipe(p)) return 2;
+        fd_set r;
+        FD_ZERO(&r);
+        FD_SET(p[0], &r);
         struct timeval to = {0, 1000};
         errno = 0;
         int ret = select(p[0] + 1, &r, NULL, NULL, &to);
         T("seltimeout ret0", ret == 0);
         /* timeout==0 -> immediate return 0 */
-        fd_set r2; FD_ZERO(&r2); FD_SET(p[0], &r2);
+        fd_set r2;
+        FD_ZERO(&r2);
+        FD_SET(p[0], &r2);
         struct timeval z = {0, 0};
         T("selpoll0 ret0", select(p[0] + 1, &r2, NULL, NULL, &z) == 0);
-        close(p[0]); close(p[1]);
+        close(p[0]);
+        close(p[1]);
     }
     /* nfds==0: pure sleep, returns 0 (pselect01 uses nfds 0) */
     {
-        fd_set r; FD_ZERO(&r);
+        fd_set r;
+        FD_ZERO(&r);
         struct timeval z = {0, 0};
         T("selnfds0 ret0", select(0, &r, NULL, NULL, &z) == 0);
     }
     /* negative nfds -> EINVAL */
     {
-        fd_set r; FD_ZERO(&r);
+        fd_set r;
+        FD_ZERO(&r);
         struct timeval z = {0, 0};
         errno = 0;
         int ret = select(-1, &r, NULL, NULL, &z);
@@ -97,14 +121,19 @@ int main(void) {
     }
     /* EBADF: a closed fd present in the set */
     {
-        int p[2]; if (pipe(p)) return 2;
-        int cfd = dup(p[0]); close(cfd);
-        fd_set r; FD_ZERO(&r); FD_SET(cfd, &r);
+        int p[2];
+        if (pipe(p)) return 2;
+        int cfd = dup(p[0]);
+        close(cfd);
+        fd_set r;
+        FD_ZERO(&r);
+        FD_SET(cfd, &r);
         struct timeval z = {0, 0};
         errno = 0;
         int ret = select(cfd + 1, &r, NULL, NULL, &z);
         T("selbadf ebadf", ret == -1 && errno == EBADF);
-        close(p[0]); close(p[1]);
+        close(p[0]);
+        close(p[1]);
     }
     /* EFAULT: bad fd_set pointer */
     {
@@ -116,7 +145,8 @@ int main(void) {
     /* ---- raw pselect6: bad timeout pointer -> EFAULT (libc select derefs a bad timeval itself) ---- */
 #ifdef __NR_pselect6
     {
-        fd_set r; FD_ZERO(&r);
+        fd_set r;
+        FD_ZERO(&r);
         errno = 0;
         long ret = syscall(__NR_pselect6, 0, &r, NULL, NULL, (void *)BAD, NULL);
         T("pselbadtmo efault", ret == -1 && errno == EFAULT);
@@ -128,10 +158,11 @@ int main(void) {
 #endif
     /* ---- poll(2)/ppoll ---- */
     {
-        int p[2]; if (pipe(p)) return 2;
+        int p[2];
+        if (pipe(p)) return 2;
         struct pollfd pf = {.fd = p[0], .events = POLLIN};
         errno = 0;
-        T("poll empty tmo0", poll(&pf, 1, 0) == 0);          /* nothing ready, immediate */
+        T("poll empty tmo0", poll(&pf, 1, 0) == 0); /* nothing ready, immediate */
         struct pollfd pw = {.fd = p[1], .events = POLLOUT};
         int rw = poll(&pw, 1, 0);
         T("poll writable", rw == 1 && (pw.revents & POLLOUT));
@@ -143,7 +174,8 @@ int main(void) {
         T("poll negfd ignored", rn == 0 && pn.revents == 0);
         errno = 0;
         T("poll badptr efault", poll((struct pollfd *)BAD, 1, 0) == -1 && errno == EFAULT);
-        close(p[0]); close(p[1]);
+        close(p[0]);
+        close(p[1]);
     }
 
     /* ---- epoll_create1: CLOEXEC round-trip + bad-flag EINVAL (epoll_create1_01) ---- */

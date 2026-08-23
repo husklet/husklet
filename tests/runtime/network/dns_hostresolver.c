@@ -31,15 +31,23 @@ static int enc(unsigned char *o, const char *name) {
 int main(void) {
     unsigned char q[256];
     int p = 0;
-    q[p++] = 0x12; q[p++] = 0x34; // id
-    q[p++] = 0x01; q[p++] = 0x00; // flags: RD
-    q[p++] = 0; q[p++] = 1;       // qdcount
-    q[p++] = 0; q[p++] = 0;       // ancount
-    q[p++] = 0; q[p++] = 0;       // nscount
-    q[p++] = 0; q[p++] = 0;       // arcount
+    q[p++] = 0x12;
+    q[p++] = 0x34; // id
+    q[p++] = 0x01;
+    q[p++] = 0x00; // flags: RD
+    q[p++] = 0;
+    q[p++] = 1; // qdcount
+    q[p++] = 0;
+    q[p++] = 0; // ancount
+    q[p++] = 0;
+    q[p++] = 0; // nscount
+    q[p++] = 0;
+    q[p++] = 0; // arcount
     p += enc(q + p, "localhost");
-    q[p++] = 0; q[p++] = 1; // qtype A
-    q[p++] = 0; q[p++] = 1; // qclass IN
+    q[p++] = 0;
+    q[p++] = 1; // qtype A
+    q[p++] = 0;
+    q[p++] = 1; // qclass IN
 
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     struct sockaddr_in ns;
@@ -47,25 +55,41 @@ int main(void) {
     ns.sin_family = AF_INET;
     ns.sin_port = htons(53);
     ns.sin_addr.s_addr = inet_addr("127.0.0.11");
-    if (connect(fd, (struct sockaddr *)&ns, sizeof ns) < 0) { printf("dns connect fail\n"); return 1; }
-    if (send(fd, q, p, 0) != p) { printf("dns send fail\n"); return 1; }
+    if (connect(fd, (struct sockaddr *)&ns, sizeof ns) < 0) {
+        printf("dns connect fail\n");
+        return 1;
+    }
+    if (send(fd, q, p, 0) != p) {
+        printf("dns send fail\n");
+        return 1;
+    }
 
     unsigned char r[1500];
     struct sockaddr_in from;
     socklen_t fl = sizeof from;
     int n = recvfrom(fd, r, sizeof r, 0, (struct sockaddr *)&from, &fl);
-    if (n < 12) { printf("dns recv short n=%d\n", n); return 1; }
+    if (n < 12) {
+        printf("dns recv short n=%d\n", n);
+        return 1;
+    }
 
     int src_ok = (from.sin_addr.s_addr == inet_addr("127.0.0.11")) && (ntohs(from.sin_port) == 53);
     int rcode = r[3] & 0xf;
     int anc = (r[6] << 8) | r[7];
     // Walk past the header + echoed question to the first answer's A rdata.
     int o = 12;
-    while (o < n && r[o]) o += r[o] + 1;
+    while (o < n && r[o])
+        o += r[o] + 1;
     o += 1 + 4; // qname terminator + qtype + qclass
     char ip[64] = "";
     if (anc >= 1 && o + 12 <= n) {
-        if ((r[o] & 0xc0) == 0xc0) o += 2; else { while (o < n && r[o]) o += r[o] + 1; o++; }
+        if ((r[o] & 0xc0) == 0xc0)
+            o += 2;
+        else {
+            while (o < n && r[o])
+                o += r[o] + 1;
+            o++;
+        }
         int type = (r[o] << 8) | r[o + 1];
         o += 8; // type(2) class(2) ttl(4)
         int rdl = (r[o] << 8) | r[o + 1];

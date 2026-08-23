@@ -22,18 +22,22 @@
 #include <stdio.h>
 #include <sys/mman.h>
 
-#define WORK_N 1200        // working-set functions -> the per-flush wholesale-drop re-translation cost
-#define PAD 48             // nop padding per function (bigger blocks -> costlier re-translation)
-#define FN_WORDS 64        // 64 * 4 = 256B per slot: each function starts on its own 64B line (aligned)
-#define ITERS 25000        // hot-loop iterations each re-flushing sf's own unchanged line. Sized so the
-                           // bug (wholesale drop = WORK_N re-translations/iter) blows past the harness 25s
-                           // timeout (~60s), while the content-gated fix stays a few seconds.
+#define WORK_N 1200 // working-set functions -> the per-flush wholesale-drop re-translation cost
+#define PAD 48      // nop padding per function (bigger blocks -> costlier re-translation)
+#define FN_WORDS 64 // 64 * 4 = 256B per slot: each function starts on its own 64B line (aligned)
+#define ITERS                                                                                                          \
+    25000 // hot-loop iterations each re-flushing sf's own unchanged line. Sized so the
+          // bug (wholesale drop = WORK_N re-translations/iter) blows past the harness 25s
+          // timeout (~60s), while the content-gated fix stays a few seconds.
 
 int main(void) {
     size_t slots = (size_t)(WORK_N + 1);
     uint32_t *arena = mmap(NULL, slots * FN_WORDS * sizeof(uint32_t), PROT_READ | PROT_WRITE | PROT_EXEC,
                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (arena == MAP_FAILED) { perror("mmap"); return 1; }
+    if (arena == MAP_FAILED) {
+        perror("mmap");
+        return 1;
+    }
 
     // slot 0: sf(x0) -- flush the 64B line at x0 from WITHIN this executing block, then return. We call
     // it with x0 = &sf so it invalidates its OWN (already-translated, never-changing) source line.
@@ -52,8 +56,9 @@ int main(void) {
         uint16_t imm = (uint16_t)(i & 0xffff);
         int w = 0;
         f[w++] = 0x52800000u | ((uint32_t)imm << 5); // movz w0, #imm
-        for (int p = 0; p < PAD; p++) f[w++] = 0xD503201Fu; // nop
-        f[w++] = 0xD65F03C0u; // ret
+        for (int p = 0; p < PAD; p++)
+            f[w++] = 0xD503201Fu; // nop
+        f[w++] = 0xD65F03C0u;     // ret
     }
     __builtin___clear_cache((char *)arena, (char *)(arena + slots * FN_WORDS)); // publish all code once
 

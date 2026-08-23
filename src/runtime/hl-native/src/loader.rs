@@ -1,6 +1,9 @@
 #![allow(unsafe_code)]
 
-use crate::bindings::{Backend, EngineExit, MainImagePlan, SyscallDispatch};
+use crate::{
+    bindings::{Backend, EngineExit, MainImagePlan, SyscallDispatch},
+    dynamic_library::DynamicLibrary,
+};
 use std::{
     ffi::{c_char, c_int, c_uint, c_void},
     path::{Path, PathBuf},
@@ -125,6 +128,8 @@ pub(crate) struct TestApi {
     pub(crate) x86_64_store_preflight: NoArgumentTest,
     pub(crate) aarch64_reserved_register: NoArgumentTest,
     pub(crate) x86_64_reserved_register: NoArgumentTest,
+    pub(crate) aarch64_imported_path_guard: NoArgumentTest,
+    pub(crate) x86_64_imported_path_guard: NoArgumentTest,
     pub(crate) aarch64_signal_errno_frame: SignalFrameTest,
     pub(crate) x86_64_signal_errno_frame: SignalFrameTest,
     pub(crate) aarch64_checkpoint_signal_precedence: NoArgumentTest,
@@ -297,7 +302,7 @@ impl std::fmt::Display for LoadError {
 
 impl std::error::Error for LoadError {}
 
-struct Loaded {
+struct NativeLibrary {
     _library: DynamicLibrary,
     api: BridgeApi,
     path: PathBuf,
@@ -305,7 +310,7 @@ struct Loaded {
     tests: TestApi,
 }
 
-static LOADED: OnceLock<Result<Loaded, LoadError>> = OnceLock::new();
+static LOADED: OnceLock<Result<NativeLibrary, LoadError>> = OnceLock::new();
 
 pub(crate) fn api() -> Result<&'static BridgeApi, &'static LoadError> {
     loaded().map(|value| &value.api)
@@ -320,60 +325,62 @@ pub(crate) fn tests() -> Result<&'static TestApi, &'static LoadError> {
     loaded().map(|value| &value.tests)
 }
 
-fn loaded() -> Result<&'static Loaded, &'static LoadError> {
-    match LOADED.get_or_init(load) {
+fn loaded() -> Result<&'static NativeLibrary, &'static LoadError> {
+    match LOADED.get_or_init(NativeLibrary::load) {
         Ok(value) => Ok(value),
         Err(error) => Err(error),
     }
 }
 
-fn load() -> Result<Loaded, LoadError> {
-    let candidates = candidates()?;
-    let mut existing = Vec::new();
-    for candidate in &candidates {
-        if candidate.is_file() {
-            existing.push(candidate.clone());
+impl NativeLibrary {
+    fn load() -> Result<Self, LoadError> {
+        let candidates = candidates()?;
+        let mut existing = Vec::new();
+        for candidate in &candidates {
+            if candidate.is_file() {
+                existing.push(candidate.clone());
+            }
         }
-    }
-    if existing.is_empty() {
-        return Err(LoadError::NotFound(candidates));
-    }
-    let path = existing[0].canonicalize().map_err(|error| LoadError::Open {
-        path: existing[0].clone(),
-        detail: error.to_string(),
-    })?;
-    let library = DynamicLibrary::open(&path).map_err(|detail| LoadError::Open {
-        path: path.clone(),
-        detail,
-    })?;
-    let getter_address = library
-        .symbol(b"hl_c_bridge_api_v1\0")
-        .map_err(|detail| LoadError::MissingBridge {
+        if existing.is_empty() {
+            return Err(LoadError::NotFound(candidates));
+        }
+        let path = existing[0].canonicalize().map_err(|error| LoadError::Open {
+            path: existing[0].clone(),
+            detail: error.to_string(),
+        })?;
+        let library = DynamicLibrary::open(&path).map_err(|detail| LoadError::Open {
             path: path.clone(),
             detail,
         })?;
-    // SAFETY: the symbol name is the versioned getter whose C declaration has this exact signature.
-    let getter: BridgeGetter = unsafe { std::mem::transmute(getter_address) };
-    // SAFETY: the versioned getter promises either null or a readable stable bridge header.
-    let table = unsafe { read_table(getter()) }?;
-    // SAFETY: validation proved the metadata entry is non-null.
-    let actual = unsafe { table.engine_abi.expect("validated engine_abi")() };
-    if actual != ENGINE_ABI {
-        return Err(LoadError::EngineAbi {
-            expected: ENGINE_ABI,
-            actual,
-        });
-    }
-    check_fingerprint(&library, &path)?;
-    #[cfg(feature = "native-test-hooks")]
-    let tests = load_tests(&library, &path)?;
-    Ok(Loaded {
-        _library: library,
-        api: table,
-        path,
+        let getter_address = library
+            .symbol(b"hl_c_bridge_api_v1\0")
+            .map_err(|detail| LoadError::MissingBridge {
+                path: path.clone(),
+                detail,
+            })?;
+        // SAFETY: the symbol name is the versioned getter whose C declaration has this exact signature.
+        let getter: BridgeGetter = unsafe { std::mem::transmute(getter_address) };
+        // SAFETY: the versioned getter promises either null or a readable stable bridge header.
+        let table = unsafe { read_table(getter()) }?;
+        // SAFETY: validation proved the metadata entry is non-null.
+        let actual = unsafe { table.engine_abi.expect("validated engine_abi")() };
+        if actual != ENGINE_ABI {
+            return Err(LoadError::EngineAbi {
+                expected: ENGINE_ABI,
+                actual,
+            });
+        }
+        check_fingerprint(&library, &path)?;
         #[cfg(feature = "native-test-hooks")]
-        tests,
-    })
+        let tests = TestApi::load(&library, &path)?;
+        Ok(Self {
+            _library: library,
+            api: table,
+            path,
+            #[cfg(feature = "native-test-hooks")]
+            tests,
+        })
+    }
 }
 
 /// Refuses a shared object compiled from C sources other than the ones this executable was
@@ -428,188 +435,202 @@ unsafe fn read_table(address: *const BridgeHeader) -> Result<BridgeApi, LoadErro
     // SAFETY: the validated size proves every byte of the v1 table is readable. Copying avoids
     // creating a typed reference into foreign storage before all pointer entries are validated.
     let table = unsafe { address.cast::<BridgeApi>().read() };
-    validate(&table)?;
+    table.validate()?;
     Ok(table)
 }
 
 #[cfg(feature = "native-test-hooks")]
-fn load_tests(library: &DynamicLibrary, path: &Path) -> Result<TestApi, LoadError> {
-    macro_rules! symbol {
-        ($name:literal, $kind:ty) => {{
-            let address =
-                library
+impl TestApi {
+    fn load(library: &DynamicLibrary, path: &Path) -> Result<Self, LoadError> {
+        macro_rules! symbol {
+            ($name:literal, $kind:ty) => {{
+                let address = library
                     .symbol(concat!($name, "\0").as_bytes())
                     .map_err(|detail| LoadError::MissingBridge {
                         path: path.to_owned(),
                         detail,
                     })?;
-            // SAFETY: every named test export is declared with `$kind` in the native test ABI.
-            unsafe { std::mem::transmute::<*mut c_void, $kind>(address) }
-        }};
+                // SAFETY: every named test export is declared with `$kind` in the native test ABI.
+                unsafe { std::mem::transmute::<*mut c_void, $kind>(address) }
+            }};
+        }
+        Ok(Self {
+            aarch64_bound_vector_io: symbol!("hl_aarch64_bound_vector_io_test", VectorIoTest),
+            x86_64_bound_vector_io: symbol!("hl_x86_64_bound_vector_io_test", VectorIoTest),
+            #[cfg(test)]
+            aarch64_fdvis_path_publication: symbol!("hl_aarch64_fdvis_path_publication_test", ScenarioTest),
+            #[cfg(test)]
+            x86_64_fdvis_path_publication: symbol!("hl_x86_64_fdvis_path_publication_test", ScenarioTest),
+            aarch64_namespace_transaction: symbol!("hl_aarch64_namespace_transaction_test", ScenarioTest),
+            x86_64_namespace_transaction: symbol!("hl_x86_64_namespace_transaction_test", ScenarioTest),
+            x86_64_store_preflight: symbol!("hl_x86_64_store_preflight_test", NoArgumentTest),
+            aarch64_reserved_register: symbol!("hl_aarch64_reserved_register_test", NoArgumentTest),
+            x86_64_reserved_register: symbol!("hl_x86_64_reserved_register_test", NoArgumentTest),
+            aarch64_imported_path_guard: symbol!("hl_aarch64_imported_path_guard_test", NoArgumentTest),
+            x86_64_imported_path_guard: symbol!("hl_x86_64_imported_path_guard_test", NoArgumentTest),
+            aarch64_signal_errno_frame: symbol!("hl_aarch64_signal_errno_frame_test", SignalFrameTest),
+            x86_64_signal_errno_frame: symbol!("hl_x86_64_signal_errno_frame_test", SignalFrameTest),
+            aarch64_checkpoint_signal_precedence: symbol!(
+                "hl_aarch64_checkpoint_signal_precedence_test",
+                NoArgumentTest
+            ),
+            x86_64_checkpoint_signal_precedence: symbol!("hl_x86_64_checkpoint_signal_precedence_test", NoArgumentTest),
+            aarch64_checkpoint_restart_register: symbol!("hl_aarch64_checkpoint_restart_register_test", NoArgumentTest),
+            x86_64_checkpoint_restart_register: symbol!("hl_x86_64_checkpoint_restart_register_test", NoArgumentTest),
+            aarch64_checkpoint_restore_claim: symbol!("hl_aarch64_checkpoint_restore_claim_test", ScenarioTest),
+            aarch64_checkpoint_restore_slice: symbol!("hl_aarch64_checkpoint_restore_slice_test", ScenarioTest),
+            x86_64_checkpoint_restore_slice: symbol!("hl_x86_64_checkpoint_restore_slice_test", ScenarioTest),
+            aarch64_checkpoint_gmap_release: symbol!("hl_aarch64_checkpoint_gmap_release_test", ScenarioTest),
+            x86_64_checkpoint_gmap_release: symbol!("hl_x86_64_checkpoint_gmap_release_test", ScenarioTest),
+            x86_64_checkpoint_restore_claim: symbol!("hl_x86_64_checkpoint_restore_claim_test", ScenarioTest),
+            aarch64_checkpoint_anon_shared: symbol!("hl_aarch64_checkpoint_anon_shared_test", ScenarioTest),
+            x86_64_checkpoint_anon_shared: symbol!("hl_x86_64_checkpoint_anon_shared_test", ScenarioTest),
+            aarch64_checkpoint_membership: symbol!("hl_aarch64_checkpoint_membership_test", ScenarioTest),
+            x86_64_checkpoint_membership: symbol!("hl_x86_64_checkpoint_membership_test", ScenarioTest),
+            aarch64_checkpoint_rendezvous: symbol!("hl_aarch64_checkpoint_rendezvous_test", ScenarioTest),
+            x86_64_checkpoint_rendezvous: symbol!("hl_x86_64_checkpoint_rendezvous_test", ScenarioTest),
+            aarch64_checkpoint_election: symbol!("hl_aarch64_checkpoint_election_test", ScenarioTest),
+            x86_64_checkpoint_election: symbol!("hl_x86_64_checkpoint_election_test", ScenarioTest),
+            aarch64_pid_namespace: symbol!("hl_aarch64_pid_namespace_test", ScenarioTest),
+            x86_64_pid_namespace: symbol!("hl_x86_64_pid_namespace_test", ScenarioTest),
+            aarch64_checkpoint_identity: symbol!("hl_aarch64_checkpoint_identity_test", ScenarioTest),
+            x86_64_checkpoint_identity: symbol!("hl_x86_64_checkpoint_identity_test", ScenarioTest),
+            aarch64_checkpoint_launch_identity: symbol!("hl_aarch64_checkpoint_launch_identity_test", ScenarioTest),
+            x86_64_checkpoint_launch_identity: symbol!("hl_x86_64_checkpoint_launch_identity_test", ScenarioTest),
+            aarch64_checkpoint_pipe_capture: symbol!("hl_aarch64_checkpoint_pipe_capture_test", ScenarioTest),
+            x86_64_checkpoint_pipe_capture: symbol!("hl_x86_64_checkpoint_pipe_capture_test", ScenarioTest),
+            aarch64_checkpoint_stdio_alias_capture: symbol!(
+                "hl_aarch64_checkpoint_stdio_alias_capture_test",
+                ScenarioTest
+            ),
+            x86_64_checkpoint_stdio_alias_capture: symbol!(
+                "hl_x86_64_checkpoint_stdio_alias_capture_test",
+                ScenarioTest
+            ),
+            aarch64_checkpoint_socket_halfclose: symbol!("hl_aarch64_checkpoint_socket_halfclose_test", ScenarioTest),
+            x86_64_checkpoint_socket_halfclose: symbol!("hl_x86_64_checkpoint_socket_halfclose_test", ScenarioTest),
+            aarch64_checkpoint_ipc_admission: symbol!("hl_aarch64_checkpoint_ipc_admission_test", ScenarioTest),
+            x86_64_checkpoint_ipc_admission: symbol!("hl_x86_64_checkpoint_ipc_admission_test", ScenarioTest),
+            aarch64_checkpoint_restore_rollback: symbol!("hl_aarch64_checkpoint_restore_rollback_test", NoArgumentTest),
+            x86_64_checkpoint_restore_rollback: symbol!("hl_x86_64_checkpoint_restore_rollback_test", NoArgumentTest),
+            aarch64_terminal_termios_store: symbol!("hl_aarch64_terminal_termios_store_test", NoArgumentTest),
+            x86_64_terminal_termios_store: symbol!("hl_x86_64_terminal_termios_store_test", NoArgumentTest),
+            aarch64_terminal_termios_install: symbol!("hl_aarch64_terminal_termios_install_test", TermiosInstallTest),
+            aarch64_unix_identity: symbol!("hl_aarch64_unix_identity_test", UnixIdentityTest),
+            x86_64_unix_identity: symbol!("hl_x86_64_unix_identity_test", UnixIdentityTest),
+            aarch64_unix_identity_capture: symbol!("hl_aarch64_unix_identity_capture_test", UnixIdentityCaptureTest),
+            x86_64_unix_identity_capture: symbol!("hl_x86_64_unix_identity_capture_test", UnixIdentityCaptureTest),
+            aarch64_socket_shape: symbol!("hl_aarch64_socket_shape_test", SocketShapeTest),
+            x86_64_socket_shape: symbol!("hl_x86_64_socket_shape_test", SocketShapeTest),
+            errno_from_host: symbol!(
+                "hl_c_backend_errno_from_host_test",
+                unsafe extern "C" fn(c_uint, c_int) -> c_int
+            ),
+            #[cfg(target_os = "macos")]
+            directory_stream_private: symbol!(
+                "hl_c_backend_directory_stream_private_test",
+                unsafe extern "C" fn(c_uint) -> c_int
+            ),
+            identity_registry: symbol!(
+                "hl_c_backend_identity_registry_test",
+                unsafe extern "C" fn(c_uint, c_uint) -> c_int
+            ),
+            private_fork_lock: symbol!(
+                "hl_c_backend_private_fork_lock_test",
+                unsafe extern "C" fn(c_uint) -> c_int
+            ),
+            process_identity_token: symbol!(
+                "hl_c_backend_process_identity_token_test",
+                unsafe extern "C" fn(c_uint) -> c_int
+            ),
+            setfl_append_write: symbol!(
+                "hl_c_backend_setfl_append_write_test",
+                unsafe extern "C" fn(c_uint) -> c_int
+            ),
+            checkpoint_peer_authenticate: symbol!(
+                "hl_c_backend_checkpoint_peer_authenticate_test",
+                unsafe extern "C" fn(c_int, u64, *mut u64, *mut u64) -> c_int
+            ),
+            checkpoint_channel_connect: symbol!(
+                "hl_c_backend_checkpoint_channel_connect_test",
+                unsafe extern "C" fn(c_int) -> c_int
+            ),
+            #[cfg(target_os = "macos")]
+            checkpoint_process_identity_open: symbol!(
+                "hl_c_backend_checkpoint_process_identity_open_test",
+                unsafe extern "C" fn(c_int, u64, u64, *mut u64, *mut u64) -> c_int
+            ),
+            #[cfg(target_os = "macos")]
+            checkpoint_peer_identity_open: symbol!(
+                "hl_c_backend_checkpoint_peer_identity_open_test",
+                unsafe extern "C" fn(c_int, u64, *mut u64, *mut u64, *mut u64) -> c_int
+            ),
+            #[cfg(test)]
+            checkpoint_test_prune_foreign_descriptors: symbol!(
+                "hl_c_backend_checkpoint_test_prune_foreign_descriptors",
+                unsafe extern "C" fn() -> c_uint
+            ),
+            #[cfg(test)]
+            checkpoint_test_fail_registry_allocation: symbol!(
+                "hl_c_backend_checkpoint_test_fail_registry_allocation",
+                unsafe extern "C" fn()
+            ),
+            #[cfg(test)]
+            checkpoint_test_fail_private_adopt: symbol!(
+                "hl_c_backend_checkpoint_test_fail_private_adopt",
+                unsafe extern "C" fn(c_uint)
+            ),
+            #[cfg(test)]
+            checkpoint_test_private_descriptor_count: symbol!(
+                "hl_c_backend_checkpoint_test_private_descriptor_count",
+                unsafe extern "C" fn() -> u64
+            ),
+            #[cfg(all(test, unix))]
+            host_process_force: symbol!(
+                "hl_c_backend_host_process_force_test",
+                unsafe extern "C" fn(c_int) -> c_int
+            ),
+            #[cfg(all(test, target_os = "linux"))]
+            host_process_peer_enumerated: symbol!(
+                "hl_c_backend_host_process_peer_enumerated_test",
+                unsafe extern "C" fn(c_int) -> c_int
+            ),
+            #[cfg(test)]
+            activation_ready_pause: symbol!("hl_c_backend_activation_ready_pause", unsafe extern "C" fn(c_int)),
+        })
     }
-    Ok(TestApi {
-        aarch64_bound_vector_io: symbol!("hl_aarch64_bound_vector_io_test", VectorIoTest),
-        x86_64_bound_vector_io: symbol!("hl_x86_64_bound_vector_io_test", VectorIoTest),
-        #[cfg(test)]
-        aarch64_fdvis_path_publication: symbol!("hl_aarch64_fdvis_path_publication_test", ScenarioTest),
-        #[cfg(test)]
-        x86_64_fdvis_path_publication: symbol!("hl_x86_64_fdvis_path_publication_test", ScenarioTest),
-        aarch64_namespace_transaction: symbol!("hl_aarch64_namespace_transaction_test", ScenarioTest),
-        x86_64_namespace_transaction: symbol!("hl_x86_64_namespace_transaction_test", ScenarioTest),
-        x86_64_store_preflight: symbol!("hl_x86_64_store_preflight_test", NoArgumentTest),
-        aarch64_reserved_register: symbol!("hl_aarch64_reserved_register_test", NoArgumentTest),
-        x86_64_reserved_register: symbol!("hl_x86_64_reserved_register_test", NoArgumentTest),
-        aarch64_signal_errno_frame: symbol!("hl_aarch64_signal_errno_frame_test", SignalFrameTest),
-        x86_64_signal_errno_frame: symbol!("hl_x86_64_signal_errno_frame_test", SignalFrameTest),
-        aarch64_checkpoint_signal_precedence: symbol!("hl_aarch64_checkpoint_signal_precedence_test", NoArgumentTest),
-        x86_64_checkpoint_signal_precedence: symbol!("hl_x86_64_checkpoint_signal_precedence_test", NoArgumentTest),
-        aarch64_checkpoint_restart_register: symbol!("hl_aarch64_checkpoint_restart_register_test", NoArgumentTest),
-        x86_64_checkpoint_restart_register: symbol!("hl_x86_64_checkpoint_restart_register_test", NoArgumentTest),
-        aarch64_checkpoint_restore_claim: symbol!("hl_aarch64_checkpoint_restore_claim_test", ScenarioTest),
-        aarch64_checkpoint_restore_slice: symbol!("hl_aarch64_checkpoint_restore_slice_test", ScenarioTest),
-        x86_64_checkpoint_restore_slice: symbol!("hl_x86_64_checkpoint_restore_slice_test", ScenarioTest),
-        aarch64_checkpoint_gmap_release: symbol!("hl_aarch64_checkpoint_gmap_release_test", ScenarioTest),
-        x86_64_checkpoint_gmap_release: symbol!("hl_x86_64_checkpoint_gmap_release_test", ScenarioTest),
-        x86_64_checkpoint_restore_claim: symbol!("hl_x86_64_checkpoint_restore_claim_test", ScenarioTest),
-        aarch64_checkpoint_anon_shared: symbol!("hl_aarch64_checkpoint_anon_shared_test", ScenarioTest),
-        x86_64_checkpoint_anon_shared: symbol!("hl_x86_64_checkpoint_anon_shared_test", ScenarioTest),
-        aarch64_checkpoint_membership: symbol!("hl_aarch64_checkpoint_membership_test", ScenarioTest),
-        x86_64_checkpoint_membership: symbol!("hl_x86_64_checkpoint_membership_test", ScenarioTest),
-        aarch64_checkpoint_rendezvous: symbol!("hl_aarch64_checkpoint_rendezvous_test", ScenarioTest),
-        x86_64_checkpoint_rendezvous: symbol!("hl_x86_64_checkpoint_rendezvous_test", ScenarioTest),
-        aarch64_checkpoint_election: symbol!("hl_aarch64_checkpoint_election_test", ScenarioTest),
-        x86_64_checkpoint_election: symbol!("hl_x86_64_checkpoint_election_test", ScenarioTest),
-        aarch64_pid_namespace: symbol!("hl_aarch64_pid_namespace_test", ScenarioTest),
-        x86_64_pid_namespace: symbol!("hl_x86_64_pid_namespace_test", ScenarioTest),
-        aarch64_checkpoint_identity: symbol!("hl_aarch64_checkpoint_identity_test", ScenarioTest),
-        x86_64_checkpoint_identity: symbol!("hl_x86_64_checkpoint_identity_test", ScenarioTest),
-        aarch64_checkpoint_launch_identity: symbol!("hl_aarch64_checkpoint_launch_identity_test", ScenarioTest),
-        x86_64_checkpoint_launch_identity: symbol!("hl_x86_64_checkpoint_launch_identity_test", ScenarioTest),
-        aarch64_checkpoint_pipe_capture: symbol!("hl_aarch64_checkpoint_pipe_capture_test", ScenarioTest),
-        x86_64_checkpoint_pipe_capture: symbol!("hl_x86_64_checkpoint_pipe_capture_test", ScenarioTest),
-        aarch64_checkpoint_stdio_alias_capture: symbol!("hl_aarch64_checkpoint_stdio_alias_capture_test", ScenarioTest),
-        x86_64_checkpoint_stdio_alias_capture: symbol!("hl_x86_64_checkpoint_stdio_alias_capture_test", ScenarioTest),
-        aarch64_checkpoint_socket_halfclose: symbol!("hl_aarch64_checkpoint_socket_halfclose_test", ScenarioTest),
-        x86_64_checkpoint_socket_halfclose: symbol!("hl_x86_64_checkpoint_socket_halfclose_test", ScenarioTest),
-        aarch64_checkpoint_ipc_admission: symbol!("hl_aarch64_checkpoint_ipc_admission_test", ScenarioTest),
-        x86_64_checkpoint_ipc_admission: symbol!("hl_x86_64_checkpoint_ipc_admission_test", ScenarioTest),
-        aarch64_checkpoint_restore_rollback: symbol!("hl_aarch64_checkpoint_restore_rollback_test", NoArgumentTest),
-        x86_64_checkpoint_restore_rollback: symbol!("hl_x86_64_checkpoint_restore_rollback_test", NoArgumentTest),
-        aarch64_terminal_termios_store: symbol!("hl_aarch64_terminal_termios_store_test", NoArgumentTest),
-        x86_64_terminal_termios_store: symbol!("hl_x86_64_terminal_termios_store_test", NoArgumentTest),
-        aarch64_terminal_termios_install: symbol!("hl_aarch64_terminal_termios_install_test", TermiosInstallTest),
-        aarch64_unix_identity: symbol!("hl_aarch64_unix_identity_test", UnixIdentityTest),
-        x86_64_unix_identity: symbol!("hl_x86_64_unix_identity_test", UnixIdentityTest),
-        aarch64_unix_identity_capture: symbol!("hl_aarch64_unix_identity_capture_test", UnixIdentityCaptureTest),
-        x86_64_unix_identity_capture: symbol!("hl_x86_64_unix_identity_capture_test", UnixIdentityCaptureTest),
-        aarch64_socket_shape: symbol!("hl_aarch64_socket_shape_test", SocketShapeTest),
-        x86_64_socket_shape: symbol!("hl_x86_64_socket_shape_test", SocketShapeTest),
-        errno_from_host: symbol!(
-            "hl_c_backend_errno_from_host_test",
-            unsafe extern "C" fn(c_uint, c_int) -> c_int
-        ),
-        #[cfg(target_os = "macos")]
-        directory_stream_private: symbol!(
-            "hl_c_backend_directory_stream_private_test",
-            unsafe extern "C" fn(c_uint) -> c_int
-        ),
-        identity_registry: symbol!(
-            "hl_c_backend_identity_registry_test",
-            unsafe extern "C" fn(c_uint, c_uint) -> c_int
-        ),
-        private_fork_lock: symbol!(
-            "hl_c_backend_private_fork_lock_test",
-            unsafe extern "C" fn(c_uint) -> c_int
-        ),
-        process_identity_token: symbol!(
-            "hl_c_backend_process_identity_token_test",
-            unsafe extern "C" fn(c_uint) -> c_int
-        ),
-        setfl_append_write: symbol!(
-            "hl_c_backend_setfl_append_write_test",
-            unsafe extern "C" fn(c_uint) -> c_int
-        ),
-        checkpoint_peer_authenticate: symbol!(
-            "hl_c_backend_checkpoint_peer_authenticate_test",
-            unsafe extern "C" fn(c_int, u64, *mut u64, *mut u64) -> c_int
-        ),
-        checkpoint_channel_connect: symbol!(
-            "hl_c_backend_checkpoint_channel_connect_test",
-            unsafe extern "C" fn(c_int) -> c_int
-        ),
-        #[cfg(target_os = "macos")]
-        checkpoint_process_identity_open: symbol!(
-            "hl_c_backend_checkpoint_process_identity_open_test",
-            unsafe extern "C" fn(c_int, u64, u64, *mut u64, *mut u64) -> c_int
-        ),
-        #[cfg(target_os = "macos")]
-        checkpoint_peer_identity_open: symbol!(
-            "hl_c_backend_checkpoint_peer_identity_open_test",
-            unsafe extern "C" fn(c_int, u64, *mut u64, *mut u64, *mut u64) -> c_int
-        ),
-        #[cfg(test)]
-        checkpoint_test_prune_foreign_descriptors: symbol!(
-            "hl_c_backend_checkpoint_test_prune_foreign_descriptors",
-            unsafe extern "C" fn() -> c_uint
-        ),
-        #[cfg(test)]
-        checkpoint_test_fail_registry_allocation: symbol!(
-            "hl_c_backend_checkpoint_test_fail_registry_allocation",
-            unsafe extern "C" fn()
-        ),
-        #[cfg(test)]
-        checkpoint_test_fail_private_adopt: symbol!(
-            "hl_c_backend_checkpoint_test_fail_private_adopt",
-            unsafe extern "C" fn(c_uint)
-        ),
-        #[cfg(test)]
-        checkpoint_test_private_descriptor_count: symbol!(
-            "hl_c_backend_checkpoint_test_private_descriptor_count",
-            unsafe extern "C" fn() -> u64
-        ),
-        #[cfg(all(test, unix))]
-        host_process_force: symbol!(
-            "hl_c_backend_host_process_force_test",
-            unsafe extern "C" fn(c_int) -> c_int
-        ),
-        #[cfg(all(test, target_os = "linux"))]
-        host_process_peer_enumerated: symbol!(
-            "hl_c_backend_host_process_peer_enumerated_test",
-            unsafe extern "C" fn(c_int) -> c_int
-        ),
-        #[cfg(test)]
-        activation_ready_pause: symbol!("hl_c_backend_activation_ready_pause", unsafe extern "C" fn(c_int)),
-    })
 }
 
-fn validate(table: &BridgeApi) -> Result<(), LoadError> {
-    macro_rules! required {
+impl BridgeApi {
+    fn validate(&self) -> Result<(), LoadError> {
+        macro_rules! required {
         ($($field:ident),+ $(,)?) => {
-            $(if table.$field.is_none() { return Err(LoadError::NullEntry(stringify!($field))); })+
+            $(if self.$field.is_none() { return Err(LoadError::NullEntry(stringify!($field))); })+
         };
     }
-    required!(
-        engine_abi,
-        engine_version,
-        leak_check_nonvacuity,
-        checkpoint_broker_pair,
-        checkpoint_broker_accept,
-        checkpoint_trigger_create,
-        checkpoint_trigger_bump,
-        checkpoint_trigger_destroy,
-        checkpoint_adopt,
-        checkpoint_interrupt_signal,
-        checkpoint_configure,
-        executable_open,
-        executable_discard,
-        create,
-        run,
-        request,
-        exit,
-        destroy,
-        checkpoint_broker_accept_authenticated,
-    );
-    Ok(())
+        required!(
+            engine_abi,
+            engine_version,
+            leak_check_nonvacuity,
+            checkpoint_broker_pair,
+            checkpoint_broker_accept,
+            checkpoint_trigger_create,
+            checkpoint_trigger_bump,
+            checkpoint_trigger_destroy,
+            checkpoint_adopt,
+            checkpoint_interrupt_signal,
+            checkpoint_configure,
+            executable_open,
+            executable_discard,
+            create,
+            run,
+            request,
+            exit,
+            destroy,
+            checkpoint_broker_accept_authenticated,
+        );
+        Ok(())
+    }
 }
 
 #[cfg(debug_assertions)]
@@ -621,7 +642,7 @@ fn candidates() -> Result<Vec<PathBuf>, LoadError> {
 
 #[cfg(not(debug_assertions))]
 fn candidates() -> Result<Vec<PathBuf>, LoadError> {
-    let executable = std::env::current_exe().map_err(LoadError::CurrentExecutable)?;
+    let executable = crate::platform::current_executable().map_err(LoadError::CurrentExecutable)?;
     release_candidates(&executable)
 }
 
@@ -659,131 +680,6 @@ fn installed_candidates(directory: &Path) -> Vec<PathBuf> {
     return vec![directory.join(name)];
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     vec![directory.join("../lib").join(name), directory.join(name)]
-}
-
-struct DynamicLibrary(*mut c_void);
-
-// SAFETY: the handle is immutable after construction, and symbol lookup is serialized by OnceLock.
-unsafe impl Send for DynamicLibrary {}
-// SAFETY: the platform loaders permit concurrent calls through resolved immutable function pointers.
-unsafe impl Sync for DynamicLibrary {}
-
-#[cfg(unix)]
-impl Drop for DynamicLibrary {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            // SAFETY: this handle was returned by dlopen and is dropped at most once.
-            unsafe { dlclose(self.0) };
-        }
-    }
-}
-
-#[cfg(windows)]
-impl Drop for DynamicLibrary {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            // SAFETY: this handle was returned by LoadLibraryExW and is dropped at most once.
-            unsafe { FreeLibrary(self.0) };
-        }
-    }
-}
-
-#[cfg(unix)]
-impl DynamicLibrary {
-    fn open(path: &Path) -> Result<Self, String> {
-        use std::os::unix::ffi::OsStrExt as _;
-        let path = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|error| error.to_string())?;
-        // SAFETY: path is NUL-terminated and flags request immediate, local binding.
-        let handle = unsafe { dlopen(path.as_ptr(), RTLD_NOW | RTLD_LOCAL) };
-        if handle.is_null() {
-            Err(dynamic_error())
-        } else {
-            Ok(Self(handle))
-        }
-    }
-
-    fn symbol(&self, name: &'static [u8]) -> Result<*mut c_void, String> {
-        // SAFETY: names are static NUL-terminated byte strings and the handle remains live.
-        let address = unsafe { dlsym(self.0, name.as_ptr().cast()) };
-        if address.is_null() {
-            Err(dynamic_error())
-        } else {
-            Ok(address)
-        }
-    }
-}
-
-#[cfg(unix)]
-fn dynamic_error() -> String {
-    // SAFETY: dlerror returns either null or a thread-local NUL-terminated message.
-    let message = unsafe { dlerror() };
-    if message.is_null() {
-        "dynamic loader did not report an error".to_owned()
-    } else {
-        // SAFETY: a non-null dlerror result is a NUL-terminated string valid until the next loader call.
-        unsafe { std::ffi::CStr::from_ptr(message) }
-            .to_string_lossy()
-            .into_owned()
-    }
-}
-
-#[cfg(unix)]
-const RTLD_LOCAL: c_int = 0;
-#[cfg(unix)]
-const RTLD_NOW: c_int = 2;
-
-#[cfg(unix)]
-unsafe extern "C" {
-    fn dlopen(path: *const c_char, flags: c_int) -> *mut c_void;
-    fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
-    fn dlerror() -> *const c_char;
-    fn dlclose(handle: *mut c_void) -> c_int;
-}
-
-#[cfg(windows)]
-impl DynamicLibrary {
-    fn open(path: &Path) -> Result<Self, String> {
-        use std::os::windows::ffi::OsStrExt as _;
-        let mut path = path.as_os_str().encode_wide().collect::<Vec<_>>();
-        path.push(0);
-        // SAFETY: the path is absolute and NUL-terminated; flags restrict dependency lookup to the DLL
-        // directory and System32, never the current directory or ambient PATH.
-        let handle = unsafe {
-            LoadLibraryExW(
-                path.as_ptr(),
-                std::ptr::null_mut(),
-                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
-            )
-        };
-        if handle.is_null() {
-            Err(format!("Windows loader error {}", unsafe { GetLastError() }))
-        } else {
-            Ok(Self(handle))
-        }
-    }
-
-    fn symbol(&self, name: &'static [u8]) -> Result<*mut c_void, String> {
-        // SAFETY: the symbol name is static and NUL-terminated and the module remains live.
-        let address = unsafe { GetProcAddress(self.0, name.as_ptr().cast()) };
-        if address.is_null() {
-            Err(format!("Windows loader error {}", unsafe { GetLastError() }))
-        } else {
-            Ok(address)
-        }
-    }
-}
-
-#[cfg(windows)]
-const LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x0000_0100;
-#[cfg(windows)]
-const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
-
-#[cfg(windows)]
-unsafe extern "system" {
-    fn LoadLibraryExW(path: *const u16, file: *mut c_void, flags: u32) -> *mut c_void;
-    fn GetProcAddress(module: *mut c_void, name: *const c_char) -> *mut c_void;
-    fn GetLastError() -> u32;
-    fn FreeLibrary(module: *mut c_void) -> i32;
 }
 
 #[cfg(test)]

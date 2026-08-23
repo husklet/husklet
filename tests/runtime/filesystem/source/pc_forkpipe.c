@@ -15,7 +15,8 @@ int main(void) {
     if (p == 0) {
         close(fds[0]);
         volatile unsigned long h = 5381;
-        for (int i = 0; i < 300000; i++) h = h * 31 + (unsigned)i;
+        for (int i = 0; i < 300000; i++)
+            h = h * 31 + (unsigned)i;
         unsigned long v = h;
         write(fds[1], &v, sizeof v);
         close(fds[1]);

@@ -14,10 +14,16 @@ static int map_reads_zero(const char *dev, int mflags, off_t off, size_t len) {
     int fd = open(dev, MAP_SHARED == mflags ? O_RDWR : O_RDONLY);
     if (fd < 0) return -1;
     void *m = mmap(NULL, len, PROT_READ, mflags, fd, off);
-    if (m == MAP_FAILED) { close(fd); return -2; }
+    if (m == MAP_FAILED) {
+        close(fd);
+        return -2;
+    }
     int zero = 1;
     for (size_t i = 0; i < len; i++)
-        if (((volatile unsigned char *)m)[i] != 0) { zero = 0; break; }
+        if (((volatile unsigned char *)m)[i] != 0) {
+            zero = 0;
+            break;
+        }
     munmap(m, len);
     close(fd);
     return zero;

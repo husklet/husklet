@@ -65,8 +65,6 @@ static int hl_x86_force_barriers_for_shared(void) {
     return hl_x86_flush_for_thread_start();
 }
 
-
-
 // Link range and storage bias for a displaced ET_EXEC image. Architectural addresses remain in this low
 // guest range; the bias is applied only when instruction or data bytes are dereferenced on the host.
 static uint64_t g_nonpie_lo, g_nonpie_hi, g_nonpie_bias;
@@ -169,7 +167,6 @@ void g_str_q_ea(int t, struct insn *I, uint64_t next) {
 
 // unimplemented-insn diagnostic (defined below translate_block); fwd-declared so the instruction-class
 
-
 // x86 direction flag (DF). The AUTHORITATIVE copy is now the RUNTIME bit cpu->df (OFF_DF), maintained by
 // cld/std/popfq and read at runtime by pushfq and the string-op lowering -- so a `std` (or popfq-set DF)
 // whose `rep movs/stos/scas` lands in a LATER block honors the backward direction (previously it silently
@@ -183,9 +180,14 @@ void hl_x86_legacy_image(uint64_t *lo, uint64_t *hi, uint64_t *bias) {
     *hi = g_nonpie_hi;
     *bias = g_nonpie_bias;
 }
-enum hl_x86_direction hl_x86_legacy_direction(void) { return g_df; }
-void hl_x86_legacy_direction_set(enum hl_x86_direction direction) { g_df = direction; }
 
+enum hl_x86_direction hl_x86_legacy_direction(void) {
+    return g_df;
+}
+
+void hl_x86_legacy_direction_set(enum hl_x86_direction direction) {
+    g_df = direction;
+}
 
 #include "lower/sse4x.h"
 #include "lower/branch.h"
@@ -400,8 +402,13 @@ static void emit_irq_check(uint64_t rip) {
     *p = 0xB4000000u | (((uint32_t)(((uint8_t *)cont - (uint8_t *)p) / 4) & 0x7FFFF) << 5) | 16;
 }
 
-void hl_x86_emit_vector_dirty(void) { mark_vdirty(); }
-void hl_x86_emit_memory_barrier(void) { e_dmb_ish(); }
+void hl_x86_emit_vector_dirty(void) {
+    mark_vdirty();
+}
+
+void hl_x86_emit_memory_barrier(void) {
+    e_dmb_ish();
+}
 
 // AVX/VEX inline lowering lives in lower/avx_inline.c.
 
@@ -455,8 +462,7 @@ static int lower_vector_family(struct insn *instruction, uint64_t guest_pc, uint
 // Lowers the two-byte SSE/MMX move family. Keeping these forms together makes
 // their operand width and register-file rules explicit, especially where bare
 // encodings name MMX while mandatory prefixes name XMM registers.
-static int lower_sse_moves(struct insn *instruction, uint64_t guest_pc, uint64_t next, int vd, int vm,
-                           int mmx) {
+static int lower_sse_moves(struct insn *instruction, uint64_t guest_pc, uint64_t next, int vd, int vm, int mmx) {
     uint8_t opcode = instruction->op;
     if (opcode == 0x6E) { // movd/movq xmm, r/m (bare form names MMX)
         if (instruction->is_mem) {
@@ -547,16 +553,14 @@ static int lower_sse_moves(struct insn *instruction, uint64_t guest_pc, uint64_t
         g_ldr_q_ea(vd, instruction, next); // LDDQU: architectural result is an unaligned load.
         return TX_NEXT;
     }
-    if (opcode == 0x6F || opcode == 0x28 ||
-        (opcode == 0x10 && !instruction->rep && !instruction->repne)) {
+    if (opcode == 0x6F || opcode == 0x28 || (opcode == 0x10 && !instruction->rep && !instruction->repne)) {
         if (instruction->is_mem)
             g_ldr_q_ea(vd, instruction, next);
         else
             e_vmov(vd, vm);
         return TX_NEXT;
     }
-    if (opcode == 0x7F || opcode == 0x29 ||
-        (opcode == 0x11 && !instruction->rep && !instruction->repne)) {
+    if (opcode == 0x7F || opcode == 0x29 || (opcode == 0x11 && !instruction->rep && !instruction->repne)) {
         if (instruction->is_mem)
             g_str_q_ea(vd, instruction, next);
         else
@@ -788,8 +792,8 @@ static int lower_scalar_two_byte(struct insn *instruction, uint64_t guest_pc, ui
     if (opcode == 0xAF) {
         int memory;
         int source = rm_load(instruction, next, instruction->opsize, &memory);
-        int carry_overflow_live = !trace_state->flag_elision ||
-                                  (hl_x86_trace_flags_livein(trace_state, next, guest_pc) & HL_X86_FLAG_NZCV);
+        int carry_overflow_live =
+            !trace_state->flag_elision || (hl_x86_trace_flags_livein(trace_state, next, guest_pc) & HL_X86_FLAG_NZCV);
         e_imul2(instruction->reg, instruction->reg, source, instruction->opsize, carry_overflow_live);
         return TX_NEXT;
     }
@@ -977,7 +981,7 @@ static int lower_sse_float_arithmetic(struct insn I, uint64_t guest_pc, uint64_t
         emit32(0x6E31A800u | (21 << 5) | 21); // uminv b21, v21.16b
         emit32(0x1E260000u | (21 << 5) | 16); // fmov w16, s21
         uint32_t *p_cbnz = (uint32_t *)g_cp;
-        emit32(0);                     // cbnz w16, Lfast (patched below)
+        emit32(0);                          // cbnz w16, Lfast (patched below)
         emit_exit_const(guest_pc, R_SSE3B); // any NaN lane -> x86-exact C emulation
         uint8_t *Lfast = (uint8_t *)g_cp;
         *p_cbnz = 0x35000000u | ((uint32_t)(((Lfast - (uint8_t *)p_cbnz) / 4) & 0x7FFFF) << 5) | 16;
@@ -998,14 +1002,14 @@ static int lower_sse_float_arithmetic(struct insn I, uint64_t guest_pc, uint64_t
             emit32(EQ | (vd << 16) | (vd << 5) | 24);      // v24 = (src1==src1)
             emit32(EQ | (s << 16) | (s << 5) | 25);        // v25 = (src2==src2)
             e_v3(0x4E201C00u, 24, 24, 25);                 // v24 = src1nn & src2nn (AND.16b)
-            if (packed) { // fold both 64-bit halves -> low 64 = all lanes
+            if (packed) {                                  // fold both 64-bit halves -> low 64 = all lanes
                 e_ext(25, 24, 24, 8);
                 e_v3(0x4E201C00u, 24, 24, 25);
             }
             e_fmov_from_d(16, 24);          // x16 = lane mask (all-ones iff no NaN in checked lanes)
             e_rrr(A_ORN, 16, 31, 16, 1, 0); // x16 = ~mask (0 iff clean; nonzero iff a NaN input)
             uint32_t *p_cbz = (uint32_t *)g_cp;
-            emit32(0);                     // cbz {w,x}16, Lfast (patched below)
+            emit32(0);                          // cbz {w,x}16, Lfast (patched below)
             emit_exit_const(guest_pc, R_SSE3B); // NaN present -> x86-exact C emulation of this insn
             uint8_t *Lfast = (uint8_t *)g_cp;
             // scalar single checks only the low 32 bits (cbz w16); packed / scalar double check 64 (cbz
@@ -1015,7 +1019,7 @@ static int lower_sse_float_arithmetic(struct insn I, uint64_t guest_pc, uint64_t
         }
         int fixnan = fpdnan_on();
         if (fixnan) hl_x86_emit_dnan_pre(vd, s, !unary, dbl); // capture "no input NaN" (uses v20/v21)
-        if (packed) {                                  // vector FP: 66 -> .2d (sz bit), none -> .4s
+        if (packed) {                                         // vector FP: 66 -> .2d (sz bit), none -> .4s
             uint32_t d = I.p66 ? 0x00400000u : 0;
             uint32_t b = op == 0x58   ? 0x4E20D400u  // FADD
                          : op == 0x59 ? 0x6E20DC00u  // FMUL
@@ -1142,13 +1146,13 @@ static int lower_sse_family(struct insn *instruction, uint64_t guest_pc, uint64_
         vm &= 7;
     }
     int writeback = mmx ? vd : -1;
-#define SSE_TRY(expression)     \
-    do {                        \
-        int result = expression; \
-        if (result != TX_FALL) { \
-            if (result == TX_NEXT && writeback >= 0) e_vmov8(writeback, writeback); \
-            return result;      \
-        }                       \
+#define SSE_TRY(expression)                                                                                            \
+    do {                                                                                                               \
+        int result = expression;                                                                                       \
+        if (result != TX_FALL) {                                                                                       \
+            if (result == TX_NEXT && writeback >= 0) e_vmov8(writeback, writeback);                                    \
+            return result;                                                                                             \
+        }                                                                                                              \
     } while (0)
     SSE_TRY(lower_sse_moves(instruction, guest_pc, next, vd, vm, mmx));
     SSE_TRY(lower_sse_horizontal(instruction, guest_pc, next, vd, vm));
@@ -1290,8 +1294,8 @@ static void *translate_block(uint64_t gpc) {
 #define STITCH_MAX_COND 3
 #endif
 #define STITCH_OK                                                                                                      \
-    (stitch && trace_blk < HL_X86_TRACE_MAX_BLOCKS - 1 &&                                                               \
-     ncond < STITCH_MAX_COND && (size_t)((uint8_t *)g_cp - (uint8_t *)host) < HL_X86_TRACE_MAX_BYTES)
+    (stitch && trace_blk < HL_X86_TRACE_MAX_BLOCKS - 1 && ncond < STITCH_MAX_COND &&                                   \
+     (size_t)((uint8_t *)g_cp - (uint8_t *)host) < HL_X86_TRACE_MAX_BYTES)
     for (;;) {
         struct insn I;
         g_emit_gpc = gpc; // IRQSLIM: tag chain emission with the current branch's rip
@@ -1322,14 +1326,14 @@ static void *translate_block(uint64_t gpc) {
         if (hl_x86_x87_known() && !(!I.two && op >= 0xD8 && op <= 0xDF)) hl_x86_x87_drop();
 
         if (!I.two) {
-            hl_x86_branch_region branch_region = {start, body, seen, &nseen, &trace_blk, &ncond, STITCH_OK,
-                                                  g_tier2_build, 0, t2_slot, map_body};
+            hl_x86_branch_region branch_region = {start,     body,          seen, &nseen,  &trace_blk, &ncond,
+                                                  STITCH_OK, g_tier2_build, 0,    t2_slot, map_body};
             int one_byte_result = lower_one_byte_family(&I, &gpc, next, &trace_state, &crypto_state, &branch_region);
             if (one_byte_result == TX_NEXT) continue;
             if (one_byte_result == TX_BREAK) break;
         } else {
-            hl_x86_branch_region branch_region = {start, body, seen, &nseen, &trace_blk, &ncond, STITCH_OK,
-                                                  g_tier2_build, 0, t2_slot, map_body};
+            hl_x86_branch_region branch_region = {start,     body,          seen, &nseen,  &trace_blk, &ncond,
+                                                  STITCH_OK, g_tier2_build, 0,    t2_slot, map_body};
             int two_byte_result = lower_two_byte_family(&I, &gpc, next, &trace_state, &crypto_state, &branch_region);
             if (two_byte_result == TX_NEXT) continue;
             if (two_byte_result == TX_BREAK) break;

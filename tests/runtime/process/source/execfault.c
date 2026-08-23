@@ -21,7 +21,12 @@
 
 static sigjmp_buf jb;
 static volatile sig_atomic_t caught;
-static void onsegv(int sig) { (void)sig; caught = 1; siglongjmp(jb, 1); }
+
+static void onsegv(int sig) {
+    (void)sig;
+    caught = 1;
+    siglongjmp(jb, 1);
+}
 
 static void install_handler(void) {
     struct sigaction sa;
@@ -38,8 +43,8 @@ static int fault_and_catch(void) {
     install_handler();
     if (sigsetjmp(jb, 1) == 0) {
         volatile int *p = (int *)0x0;
-        *p = 123;   // fault
-        return 7;   // never reached
+        *p = 123; // fault
+        return 7; // never reached
     }
     return caught ? 42 : 8;
 }
@@ -65,13 +70,19 @@ int main(int argc, char **argv) {
     const char *modes[] = {"handled", "unhandled"};
     for (int m = 0; m < 2; m++) {
         pid_t pid = fork();
-        if (pid < 0) { printf("fork_fail\n"); return 1; }
+        if (pid < 0) {
+            printf("fork_fail\n");
+            return 1;
+        }
         if (pid == 0) {
             execl(argv[0], argv[0], modes[m], (char *)NULL);
             _exit(97); // exec failed
         }
         int st = 0;
-        if (waitpid(pid, &st, 0) != pid) { printf("wait_fail\n"); return 1; }
+        if (waitpid(pid, &st, 0) != pid) {
+            printf("wait_fail\n");
+            return 1;
+        }
         if (WIFEXITED(st))
             printf("%s: exited %d\n", modes[m], WEXITSTATUS(st));
         else if (WIFSIGNALED(st))

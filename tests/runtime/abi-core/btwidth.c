@@ -6,10 +6,10 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define GEN(name, insn, sfx)                                                                                \
-    static uint64_t name(uint64_t r) {                                                                      \
-        __asm__ volatile(insn " $3, %" sfx "0" : "+r"(r)::"cc");                                             \
-        return r;                                                                                            \
+#define GEN(name, insn, sfx)                                                                                           \
+    static uint64_t name(uint64_t r) {                                                                                 \
+        __asm__ volatile(insn " $3, %" sfx "0" : "+r"(r)::"cc");                                                       \
+        return r;                                                                                                      \
     }
 GEN(bts16, "btsw", "w")
 GEN(btr16, "btrw", "w")

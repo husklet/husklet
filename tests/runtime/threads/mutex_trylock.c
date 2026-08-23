@@ -3,6 +3,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <errno.h>
+
 int main(void) {
     pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
     int ok = pthread_mutex_trylock(&m) == 0;

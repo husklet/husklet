@@ -4,6 +4,7 @@
 #include <string.h>
 #include <unistd.h>
 extern char **environ;
+
 /* Guest-initiated execve makes the passed envp AUTHORITATIVE, exactly like Linux:
  *   - a curated single-var envp yields exactly that one entry (NO PATH/HOME/LANG defaults injected), and
  *   - envp==NULL yields an EMPTY environment (envc==0), not a stale/default inherited env.
@@ -14,6 +15,7 @@ static int envcount(void) {
         n++;
     return n;
 }
+
 int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "one") == 0) {
         /* Stage 2: exec'd with a curated single-var env -> Linux passes it verbatim, no injected defaults. */

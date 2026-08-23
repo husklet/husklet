@@ -32,7 +32,7 @@ int main(void) {
     ssize_t r4 = recv(sv[1], buf, sizeof buf, MSG_DONTWAIT);
     ssize_t r5 = recv(sv[1], buf, sizeof buf, MSG_DONTWAIT);
     int e5 = (r5 == -1) ? errno : 0;
-    printf("s1=%zd p1=%zd p2=%zd r1=%zd r2=%zd e2=%d z=%zd rz=%zd r3=%zd e3=%d s2=%zd r4=%zd r5=%zd e5=%d\n",
-           s1, p1, p2, r1, r2, e2, z, rz, r3, e3, s2, r4, r5, e5);
+    printf("s1=%zd p1=%zd p2=%zd r1=%zd r2=%zd e2=%d z=%zd rz=%zd r3=%zd e3=%d s2=%zd r4=%zd r5=%zd e5=%d\n", s1, p1,
+           p2, r1, r2, e2, z, rz, r3, e3, s2, r4, r5, e5);
     return 0;
 }

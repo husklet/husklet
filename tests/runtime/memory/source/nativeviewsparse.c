@@ -100,8 +100,6 @@ static int load_probe(unsigned long page) {
 
 int main(void) {
     unsigned long page = (unsigned long)sysconf(_SC_PAGESIZE);
-    if (store_probe(page) != 0) {
-        return 1;
-    }
+    if (store_probe(page) != 0) { return 1; }
     return load_probe(page);
 }

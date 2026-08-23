@@ -52,8 +52,8 @@ int main(void) {
     logical = mmap(NULL, 14 * page, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (logical == MAP_FAILED) return 3;
     for (size_t index = 0; index < 12; index++) {
-        if (mmap(logical + index * page, page, PROT_READ | PROT_WRITE,
-                 MAP_SHARED | MAP_FIXED, fd, (off_t)(index * page)) != logical + index * page)
+        if (mmap(logical + index * page, page, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd,
+                 (off_t)(index * page)) != logical + index * page)
             return 4;
     }
 
@@ -62,7 +62,8 @@ int main(void) {
     __asm__ volatile("movq (%1), %0" : "=r"(scalar_out) : "r"(logical + page - 4) : "memory");
     int scalar = scalar_out == scalar_in;
 
-    for (unsigned i = 0; i < 32; i++) logical[2 * page + i] = (unsigned char)(i + 1);
+    for (unsigned i = 0; i < 32; i++)
+        logical[2 * page + i] = (unsigned char)(i + 1);
     __m128i sse16 = _mm_loadu_si128((const __m128i *)(logical + 2 * page));
     unsigned char wide[32];
     _mm_storeu_si128((__m128i *)wide, sse16);
@@ -127,14 +128,15 @@ int main(void) {
 
     uint64_t *alias_a = (uint64_t *)(logical + 3 * page + 128);
     unsigned char *alias_page = logical + 11 * page;
-    int alias = mmap(alias_page, page, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, (off_t)(3 * page)) ==
-                alias_page;
+    int alias =
+        mmap(alias_page, page, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, (off_t)(3 * page)) == alias_page;
     uint64_t *alias_b = (uint64_t *)(alias_page + 128);
     *alias_a = 0;
     pthread_t first_thread, second_thread;
     alias = alias && pthread_create(&first_thread, NULL, atomic_thread, alias_a) == 0 &&
-            pthread_create(&second_thread, NULL, atomic_thread, alias_b) == 0 && pthread_join(first_thread, NULL) == 0 &&
-            pthread_join(second_thread, NULL) == 0 && *alias_a == 2000 && *alias_b == 2000;
+            pthread_create(&second_thread, NULL, atomic_thread, alias_b) == 0 &&
+            pthread_join(first_thread, NULL) == 0 && pthread_join(second_thread, NULL) == 0 && *alias_a == 2000 &&
+            *alias_b == 2000;
 
     int pipefd[2];
     int legacy = pipe(pipefd) == 0;
@@ -154,8 +156,10 @@ int main(void) {
     __builtin___clear_cache((char *)code, (char *)code + sizeof first);
     int smc = before == 11 && generated() == 29;
 
-    printf("x86-projection-core scalar=%d vector=%d atomic=%d cmp-widths=%d rotate=%d rotate-widths=%d x87=%d altstack=%d stack=%d alias=%d legacy=%d smc=%d\n",
-           scalar, vector, atomic, compare_widths, rotate, rotate_widths, x87, altstack_ok, thread_ok, alias, legacy, smc);
+    printf("x86-projection-core scalar=%d vector=%d atomic=%d cmp-widths=%d rotate=%d rotate-widths=%d x87=%d "
+           "altstack=%d stack=%d alias=%d legacy=%d smc=%d\n",
+           scalar, vector, atomic, compare_widths, rotate, rotate_widths, x87, altstack_ok, thread_ok, alias, legacy,
+           smc);
     fflush(stdout);
     int values[8] = {10, 20, 30, 40, 50, 60, 70, 80};
     memcpy(logical + 4 * page + 2048, values, sizeof values);
@@ -165,5 +169,7 @@ int main(void) {
              thread_ok && alias && legacy && smc);
 }
 #else
-int main(void) { return 0; }
+int main(void) {
+    return 0;
+}
 #endif

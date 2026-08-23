@@ -11,7 +11,8 @@ int main(void) {
     sigaddset(&mask, SIGRTMIN);
     sigprocmask(SIG_BLOCK, &mask, NULL);
     int sfd = signalfd(-1, &mask, 0);
-    for (int i = 0; i < 3; i++) raise(SIGRTMIN);
+    for (int i = 0; i < 3; i++)
+        raise(SIGRTMIN);
     int reads = 0, signo_ok = 0;
     struct signalfd_siginfo si;
     for (int i = 0; i < 3; i++) {

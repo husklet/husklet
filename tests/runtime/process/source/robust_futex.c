@@ -85,8 +85,10 @@ int main(void) {
     pthread_mutexattr_setprotocol(&pa, PTHREAD_PRIO_INHERIT);
     pthread_mutex_init(&pim, &pa);
     pthread_t pw[NTHREAD];
-    for (int i = 0; i < NTHREAD; i++) pthread_create(&pw[i], NULL, pi_worker, NULL);
-    for (int i = 0; i < NTHREAD; i++) pthread_join(pw[i], NULL);
+    for (int i = 0; i < NTHREAD; i++)
+        pthread_create(&pw[i], NULL, pi_worker, NULL);
+    for (int i = 0; i < NTHREAD; i++)
+        pthread_join(pw[i], NULL);
     printf("pi_mutex sum=%ld\n", pisum);
 
     // --- robust mutex: owner dies holding it, next lock recovers via EOWNERDEAD ---

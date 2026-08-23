@@ -8,7 +8,10 @@
 int main(void) {
     regex_t re;
     int rc = regcomp(&re, "^([a-z]+)-([0-9]+)$", REG_EXTENDED);
-    if (rc) { printf("regex compile_fail\n"); return 1; }
+    if (rc) {
+        printf("regex compile_fail\n");
+        return 1;
+    }
 
     regmatch_t m[3];
     int hit = regexec(&re, "alpha-2026", 3, m, 0) == 0;

@@ -47,9 +47,9 @@ static int read_program_interpreter(const char *image) {
         if (pread(descriptor, &program, sizeof program, offset) != (ssize_t)sizeof program) break;
         if (program.p_type != PT_INTERP) continue;
         if (program.p_filesz == 0 || program.p_filesz > sizeof interpreter) break;
-        found = pread(descriptor, interpreter, program.p_filesz, (off_t)program.p_offset) ==
-                    (ssize_t)program.p_filesz &&
-                interpreter[program.p_filesz - 1] == 0 && interpreter[0] != 0;
+        found =
+            pread(descriptor, interpreter, program.p_filesz, (off_t)program.p_offset) == (ssize_t)program.p_filesz &&
+            interpreter[program.p_filesz - 1] == 0 && interpreter[0] != 0;
     }
     close(descriptor);
     return found;

@@ -63,16 +63,16 @@ int main(void) {
     // getxattr needs host read permission too; an authorized guest root must see "no such attribute",
     // never a permission error.
     errno = 0;
-    unsigned xattr_nodata = getxattr("/tmp/dachost/closed", "user.absent", buffer, sizeof buffer) < 0 &&
-                            errno == ENODATA;
+    unsigned xattr_nodata =
+        getxattr("/tmp/dachost/closed", "user.absent", buffer, sizeof buffer) < 0 && errno == ENODATA;
     struct stat status;
     unsigned mode = lstat("/tmp/dachost/closed", &status) == 0 ? (unsigned)(status.st_mode & 07777) : 0xffffu;
     unsigned readonly_mode =
         lstat("/tmp/dachost/readonly", &status) == 0 ? (unsigned)(status.st_mode & 07777) : 0xffffu;
 
     rmdir("/tmp/dachost/slash");
-    unsigned slash = mkdir("/tmp/dachost/slash/", 0755) == 0 && lstat("/tmp/dachost/slash", &status) == 0 &&
-                     S_ISDIR(status.st_mode);
+    unsigned slash =
+        mkdir("/tmp/dachost/slash/", 0755) == 0 && lstat("/tmp/dachost/slash", &status) == 0 && S_ISDIR(status.st_mode);
 
     int pipes[2];
     if (pipe(pipes) != 0) return 1;

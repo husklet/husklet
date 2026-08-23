@@ -8,8 +8,20 @@
 #include <string.h>
 #include <unistd.h>
 
-static void put(const char *p, const char *s) { FILE *f = fopen(p, "w"); fputs(s, f); fclose(f); }
-static int get(const char *p, char *b, int n) { FILE *f = fopen(p, "r"); if (!f) return -1; int k = fread(b, 1, n - 1, f); b[k] = 0; fclose(f); return k; }
+static void put(const char *p, const char *s) {
+    FILE *f = fopen(p, "w");
+    fputs(s, f);
+    fclose(f);
+}
+
+static int get(const char *p, char *b, int n) {
+    FILE *f = fopen(p, "r");
+    if (!f) return -1;
+    int k = fread(b, 1, n - 1, f);
+    b[k] = 0;
+    fclose(f);
+    return k;
+}
 
 int main(void) {
     const char *a = "/tmp/hl_r2_a", *b = "/tmp/hl_r2_b";

@@ -8,7 +8,11 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t fired;
-static void h(int s) { (void)s; fired = 1; }
+
+static void h(int s) {
+    (void)s;
+    fired = 1;
+}
 
 int main(void) {
     struct sigaction sa;
@@ -32,10 +36,10 @@ int main(void) {
     // A short real alarm fires SIGALRM.
     fired = 0;
     alarm(1);
-    for (int i = 0; i < 30 && !fired; i++) usleep(100 * 1000);
+    for (int i = 0; i < 30 && !fired; i++)
+        usleep(100 * 1000);
     int delivered = fired == 1;
 
-    printf("alarm fresh=%d reported=%d cancelled=%d delivered=%d\n", fresh, reported, cancelled,
-           delivered);
+    printf("alarm fresh=%d reported=%d cancelled=%d delivered=%d\n", fresh, reported, cancelled, delivered);
     return 0;
 }

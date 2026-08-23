@@ -223,8 +223,8 @@ static void svc_fs_metadata_79(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
             break;
         }
-        G_RET(c) = (uint64_t)(int64_t)guest_fill_linux_stat(a2, &s, empty_self ? NULL : p,
-                                                           empty_self ? (int)a0 : -1, (a3 & 0x100) != 0);
+        G_RET(c) = (uint64_t)(int64_t)guest_fill_linux_stat(a2, &s, empty_self ? NULL : p, empty_self ? (int)a0 : -1,
+                                                            (a3 & 0x100) != 0);
         break;
     }
     default: break;
@@ -316,14 +316,12 @@ static void svc_fs_metadata_88(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t
             }
             ts = lts;
         }
-        int valid_times = ts == NULL ||
-                          ((ts[0].tv_nsec == UTIME_NOW || ts[0].tv_nsec == UTIME_OMIT ||
-                            (ts[0].tv_nsec >= 0 && ts[0].tv_nsec < 1000000000L)) &&
-                           (ts[1].tv_nsec == UTIME_NOW || ts[1].tv_nsec == UTIME_OMIT ||
-                            (ts[1].tv_nsec >= 0 && ts[1].tv_nsec < 1000000000L)));
+        int valid_times = ts == NULL || ((ts[0].tv_nsec == UTIME_NOW || ts[0].tv_nsec == UTIME_OMIT ||
+                                          (ts[0].tv_nsec >= 0 && ts[0].tv_nsec < 1000000000L)) &&
+                                         (ts[1].tv_nsec == UTIME_NOW || ts[1].tv_nsec == UTIME_OMIT ||
+                                          (ts[1].tv_nsec >= 0 && ts[1].tv_nsec < 1000000000L)));
         int both_omit = valid_times && ts != NULL && ts[0].tv_nsec == UTIME_OMIT && ts[1].tv_nsec == UTIME_OMIT;
-        int now_times = valid_times &&
-                        (ts == NULL || (ts[0].tv_nsec == UTIME_NOW && ts[1].tv_nsec == UTIME_NOW));
+        int now_times = valid_times && (ts == NULL || (ts[0].tv_nsec == UTIME_NOW && ts[1].tv_nsec == UTIME_NOW));
         int explicit_times = valid_times && !both_omit && !now_times;
         if (!a1) {
             if (explicit_times || now_times) {
@@ -342,9 +340,8 @@ static void svc_fs_metadata_88(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t
             break;
         }
         if (explicit_times || now_times) {
-            int authorization = explicit_times
-                                    ? dac_explicit_times_at((int)a0, (const char *)a1, (a3 & 0x100) ? 1 : 0)
-                                    : dac_now_times_at((int)a0, (const char *)a1, (a3 & 0x100) ? 1 : 0);
+            int authorization = explicit_times ? dac_explicit_times_at((int)a0, (const char *)a1, (a3 & 0x100) ? 1 : 0)
+                                               : dac_now_times_at((int)a0, (const char *)a1, (a3 & 0x100) ? 1 : 0);
             if (authorization != 0) {
                 G_RET(c) = (uint64_t)(int64_t)authorization;
                 break;

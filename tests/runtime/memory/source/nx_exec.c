@@ -53,15 +53,18 @@ static int run(int prot, int with_handler) {
 }
 
 int main(void) {
-    struct { const char *name; int prot; } cases[] = {
+    struct {
+        const char *name;
+        int prot;
+    } cases[] = {
         {"prot_read", PROT_READ},
         {"prot_none", PROT_NONE},
     };
+
     for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         int sd = run(cases[i].prot, 0);
         int sh = run(cases[i].prot, 1);
-        printf("%s killed_segv=%d handler_accerr=%d\n", cases[i].name,
-               WIFSIGNALED(sd) && WTERMSIG(sd) == SIGSEGV,
+        printf("%s killed_segv=%d handler_accerr=%d\n", cases[i].name, WIFSIGNALED(sd) && WTERMSIG(sd) == SIGSEGV,
                WIFEXITED(sh) && WEXITSTATUS(sh) == 100);
     }
     return 0;

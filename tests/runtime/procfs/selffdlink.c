@@ -21,7 +21,10 @@ static int link_of(int fd, char *out, int cap) {
 int main(void) {
     char path[] = "/tmp/selffdlink_probe.XXXXXX";
     int fd = mkstemp(path);
-    if (fd < 0) { printf("selffdlink ok=0\n"); return 0; }
+    if (fd < 0) {
+        printf("selffdlink ok=0\n");
+        return 0;
+    }
     char link[4096];
     // The link must be the guest path (/tmp/...), not a host path (/private/tmp/... or a host scratch dir).
     int file_link_ok = link_of(fd, link, sizeof link) && strcmp(link, path) == 0;

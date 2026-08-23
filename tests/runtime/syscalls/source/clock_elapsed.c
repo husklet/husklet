@@ -18,6 +18,7 @@ static long long ns(clockid_t c) {
     clock_gettime(c, &ts);
     return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
+
 static int band(long long elapsed_ns) {
     double ms = elapsed_ns / 1e6;
     return ms >= REQ_MS * 0.4 && ms <= REQ_MS * 20.0;
@@ -38,7 +39,7 @@ int main(void) {
     // REALTIME and MONOTONIC share the host timebase, so their measured elapsed must agree closely; a
     // per-clock scaling bug (REALTIME slow while MONOTONIC correct) shows up as a large divergence here.
     int agree = llabs(re - me) < 50 * 1000000LL; // < 50ms
-    printf("clockelapsed real_ok=%d mono_ok=%d gtod_ok=%d mono_fwd=%d agree=%d\n",
-           band(re), band(me), band(gd), me >= 0, agree);
+    printf("clockelapsed real_ok=%d mono_ok=%d gtod_ok=%d mono_fwd=%d agree=%d\n", band(re), band(me), band(gd),
+           me >= 0, agree);
     return 0;
 }

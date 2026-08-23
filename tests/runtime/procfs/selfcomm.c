@@ -11,7 +11,10 @@
 
 int main(void) {
     const char *name = "probecomm";
-    if (prctl(PR_SET_NAME, name, 0, 0, 0) != 0) { printf("selfcomm ok=0\n"); return 0; }
+    if (prctl(PR_SET_NAME, name, 0, 0, 0) != 0) {
+        printf("selfcomm ok=0\n");
+        return 0;
+    }
     char got[32] = {0};
     prctl(PR_GET_NAME, got, 0, 0, 0);
     int prctl_ok = strcmp(got, name) == 0;

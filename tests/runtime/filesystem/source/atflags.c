@@ -29,7 +29,7 @@ int main(void) {
     int gone = faccessat(dfd, "f", F_OK, 0) != 0;
     close(dfd);
     rmdir(dir);
-    printf("atflags chmod=%d mode=%d chown=%d acc=%d accmiss=%d unlink=%d gone=%d\n",
-           chm, mode_ok, cho, acc_r, acc_miss, unl, gone);
+    printf("atflags chmod=%d mode=%d chown=%d acc=%d accmiss=%d unlink=%d gone=%d\n", chm, mode_ok, cho, acc_r,
+           acc_miss, unl, gone);
     return 0;
 }

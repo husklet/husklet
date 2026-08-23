@@ -5,8 +5,11 @@
 
 static int sum_vla(int n) {
     int a[n];
-    for (int i = 0; i < n; i++) a[i] = i + 1;
-    int s = 0; for (int i = 0; i < n; i++) s += a[i];
+    for (int i = 0; i < n; i++)
+        a[i] = i + 1;
+    int s = 0;
+    for (int i = 0; i < n; i++)
+        s += a[i];
     return s;
 }
 
@@ -18,7 +21,9 @@ int main(void) {
     // 2D VLA
     int r = 3, c = 4;
     int m[r][c];
-    for (int i = 0; i < r; i++) for (int j = 0; j < c; j++) m[i][j] = i * c + j;
+    for (int i = 0; i < r; i++)
+        for (int j = 0; j < c; j++)
+            m[i][j] = i * c + j;
     int d3 = m[2][3] == 11 && m[0][0] == 0;
     printf("vla_alloca d1=%d d2=%d d3=%d\n", d1, d2, d3);
     return 0;

@@ -36,7 +36,10 @@ int main(void) {
     snprintf(sym, sizeof sym, "%s/sym", directory);
     snprintf(missing, sizeof missing, "%s/nope", directory);
     snprintf(child, sizeof child, "%s/x", base);
-    unlink(base); unlink(l1); unlink(l2); unlink(sym);
+    unlink(base);
+    unlink(l1);
+    unlink(l2);
+    unlink(sym);
 
     int fd = open(base, O_RDWR | O_CREAT | O_TRUNC, 0644);
     write(fd, "hello", 5);
@@ -45,7 +48,8 @@ int main(void) {
     // link: new name -> same inode, st_nlink becomes 2.
     int r = link(base, l1);
     struct stat s1, s2;
-    stat(base, &s1); stat(l1, &s2);
+    stat(base, &s1);
+    stat(l1, &s2);
     printf("link ok=%d nlink=%d sameino=%d\n", r == 0, (int)s1.st_nlink, s1.st_ino == s2.st_ino);
 
     // a second link -> nlink 3 (link05: multiple links).
@@ -133,7 +137,10 @@ int main(void) {
     long xe = syscall(SYS_statx, (int)AT_FDCWD, (const char *)bad, 0, 0x7ffu, stxbuf);
     printf("statx(NULL): ret=%d efault=%d\n", (int)xe, xe < 0 && errno == EFAULT);
 
-    unlink(base); unlink(l1); unlink(l2); unlink(sym);
+    unlink(base);
+    unlink(l1);
+    unlink(l2);
+    unlink(sym);
     rmdir(directory);
     return 0;
 }

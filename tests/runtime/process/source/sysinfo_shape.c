@@ -22,7 +22,7 @@ int main(void) {
     int unit_pos = si.mem_unit > 0;
     int procs_pos = si.procs > 0;
 
-    printf("getcpu-sysinfo getcpu_ok=%d sysinfo_ok=%d ram_pos=%d unit_pos=%d procs_pos=%d\n",
-           getcpu_ok, sysinfo_ok, ram_pos, unit_pos, procs_pos);
+    printf("getcpu-sysinfo getcpu_ok=%d sysinfo_ok=%d ram_pos=%d unit_pos=%d procs_pos=%d\n", getcpu_ok, sysinfo_ok,
+           ram_pos, unit_pos, procs_pos);
     return 0;
 }

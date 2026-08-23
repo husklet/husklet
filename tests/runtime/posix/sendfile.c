@@ -13,7 +13,8 @@ int main(void) {
     snprintf(b, sizeof b, "/tmp/hl_sf_b_%d", (int)getpid());
     int in = open(a, O_CREAT | O_RDWR | O_TRUNC, 0644);
     char data[1000];
-    for (int i = 0; i < 1000; i++) data[i] = (char)(i & 0x7f);
+    for (int i = 0; i < 1000; i++)
+        data[i] = (char)(i & 0x7f);
     write(in, data, sizeof data);
     lseek(in, 0, SEEK_SET);
     int out = open(b, O_CREAT | O_RDWR | O_TRUNC, 0644);
@@ -23,9 +24,12 @@ int main(void) {
     lseek(out, 0, SEEK_SET);
     char buf[1000];
     int n = read(out, buf, sizeof buf);
-    for (int i = 0; i < n; i++) sum += (unsigned char)buf[i];
-    close(in); close(out);
-    unlink(a); unlink(b);
+    for (int i = 0; i < n; i++)
+        sum += (unsigned char)buf[i];
+    close(in);
+    close(out);
+    unlink(a);
+    unlink(b);
     printf("sendfile sent=%ld off=%ld n=%d sum=%ld\n", (long)sent, (long)off, n, sum);
     return 0;
 }

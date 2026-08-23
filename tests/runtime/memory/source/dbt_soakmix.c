@@ -10,7 +10,7 @@ int main(void) {
     for (uint64_t i = 0; i < 300000000ULL; i++) {
         a += (b ^ (a << 7)) + i;
         b ^= (a >> 11) + (b << 3);
-        a = (a << 41) | (a >> 23); // rotate to keep the branch-free chain lively
+        a = (a << 41) | (a >> 23);          // rotate to keep the branch-free chain lively
         if ((a & 0xffff) == 0x1234) b += a; // rare data-dependent branch
     }
     printf("soak-mix a=%llu b=%llu\n", (unsigned long long)a, (unsigned long long)b);

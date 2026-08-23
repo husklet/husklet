@@ -14,7 +14,10 @@
 
 int main(void) {
     unsigned char *m = mmap(NULL, SZ, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (m == MAP_FAILED) { perror("mmap"); return 1; }
+    if (m == MAP_FAILED) {
+        perror("mmap");
+        return 1;
+    }
     uint64_t sum = 0;
     for (uint64_t off = 0; off < SZ; off += PG) {
         m[off] = (unsigned char)((off / PG) & 0xff);

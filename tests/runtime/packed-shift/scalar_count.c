@@ -13,6 +13,7 @@
 enum shift_op { SRL16, SRL32, SRL64, SRA16, SRA32, SLL16, SLL32, SLL64, OP_COUNT };
 
 static uint64_t digest;
+
 static void mix(const void *bytes, size_t length) {
     const uint8_t *p = bytes;
     for (size_t i = 0; i < length; ++i)
@@ -41,21 +42,27 @@ static void reference(uint8_t out[16], const uint8_t in[16], enum shift_op op, u
             }
             continue;
         }
-        if (count < bits)
-            result = op >= SLL16 ? value << count : value >> count;
+        if (count < bits) result = op >= SLL16 ? value << count : value >> count;
         memcpy(out + offset, &result, bytes);
     }
 }
 
 #if defined(__x86_64__)
-#define REG_CASE(name, instruction) case name: __asm__ volatile(instruction " %1,%0" : "+x"(value) : "x"(count)); break
-#define MEM_CASE(name, instruction) case name: __asm__ volatile(instruction " %1,%0" : "+x"(value) : "m"(*count)); break
+#define REG_CASE(name, instruction)                                                                                    \
+    case name: __asm__ volatile(instruction " %1,%0" : "+x"(value) : "x"(count)); break
+#define MEM_CASE(name, instruction)                                                                                    \
+    case name: __asm__ volatile(instruction " %1,%0" : "+x"(value) : "m"(*count)); break
 
 static __m128i shift_register(__m128i value, __m128i count, enum shift_op op) {
     switch (op) {
-    REG_CASE(SRL16, "psrlw"); REG_CASE(SRL32, "psrld"); REG_CASE(SRL64, "psrlq");
-    REG_CASE(SRA16, "psraw"); REG_CASE(SRA32, "psrad");
-    REG_CASE(SLL16, "psllw"); REG_CASE(SLL32, "pslld"); REG_CASE(SLL64, "psllq");
+        REG_CASE(SRL16, "psrlw");
+        REG_CASE(SRL32, "psrld");
+        REG_CASE(SRL64, "psrlq");
+        REG_CASE(SRA16, "psraw");
+        REG_CASE(SRA32, "psrad");
+        REG_CASE(SLL16, "psllw");
+        REG_CASE(SLL32, "pslld");
+        REG_CASE(SLL64, "psllq");
     default: __builtin_unreachable();
     }
     return value;
@@ -63,15 +70,21 @@ static __m128i shift_register(__m128i value, __m128i count, enum shift_op op) {
 
 static __m128i shift_memory(__m128i value, const __m128i *count, enum shift_op op) {
     switch (op) {
-    MEM_CASE(SRL16, "psrlw"); MEM_CASE(SRL32, "psrld"); MEM_CASE(SRL64, "psrlq");
-    MEM_CASE(SRA16, "psraw"); MEM_CASE(SRA32, "psrad");
-    MEM_CASE(SLL16, "psllw"); MEM_CASE(SLL32, "pslld"); MEM_CASE(SLL64, "psllq");
+        MEM_CASE(SRL16, "psrlw");
+        MEM_CASE(SRL32, "psrld");
+        MEM_CASE(SRL64, "psrlq");
+        MEM_CASE(SRA16, "psraw");
+        MEM_CASE(SRA32, "psrad");
+        MEM_CASE(SLL16, "psllw");
+        MEM_CASE(SLL32, "pslld");
+        MEM_CASE(SLL64, "psllq");
     default: __builtin_unreachable();
     }
     return value;
 }
 
 static sigjmp_buf fault_return;
+
 static void fault_handler(int signal_number) {
     (void)signal_number;
     siglongjmp(fault_return, 1);
@@ -101,10 +114,8 @@ static int check_fault_before_commit(const uint8_t input[16]) {
 #endif
 
 int main(void) {
-    static const uint8_t input[16] = {
-        0x81, 0xf0, 0x7e, 0x80, 0x55, 0xaa, 0x00, 0x80,
-        0xff, 0x7f, 0x01, 0x80, 0x34, 0x12, 0xef, 0xcd
-    };
+    static const uint8_t input[16] = {0x81, 0xf0, 0x7e, 0x80, 0x55, 0xaa, 0x00, 0x80,
+                                      0xff, 0x7f, 0x01, 0x80, 0x34, 0x12, 0xef, 0xcd};
     static const uint64_t counts[] = {0, 1, 15, 16, 17, 31, 32, 33, 63, 64, 65, UINT64_MAX};
     for (enum shift_op op = 0; op < OP_COUNT; ++op) {
         for (size_t i = 0; i < sizeof(counts) / sizeof(counts[0]); ++i) {

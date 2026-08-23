@@ -2,9 +2,13 @@
 #include <stdio.h>
 
 int main(void) {
-    FILE *f = tmpfile(); fputs("ABC", f); rewind(f);
-    int c = fgetc(f); int d1 = c == 'A';
-    int u = ungetc(c, f); int d2 = u == 'A';
+    FILE *f = tmpfile();
+    fputs("ABC", f);
+    rewind(f);
+    int c = fgetc(f);
+    int d1 = c == 'A';
+    int u = ungetc(c, f);
+    int d2 = u == 'A';
     int d3 = fgetc(f) == 'A';
     int d4 = fgetc(f) == 'B';
     ungetc('Z', f);

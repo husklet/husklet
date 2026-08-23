@@ -124,6 +124,7 @@ struct hl_cmsg_ofd_meta {
     uint32_t ordinal;
     uint64_t identity;
 };
+
 _Static_assert(sizeof(struct hl_cmsg_ofd_meta) == HL_SOCKET_OWNER_OFD_ACK_OFFSET, "immutable OFD marker prefix");
 
 struct hl_cmsg_memfd_meta {

@@ -3,7 +3,9 @@
 #include <stdio.h>
 #include <time.h>
 
-static long long ns(struct timespec t) { return (long long)t.tv_sec * 1000000000LL + t.tv_nsec; }
+static long long ns(struct timespec t) {
+    return (long long)t.tv_sec * 1000000000LL + t.tv_nsec;
+}
 
 int main(void) {
     struct timespec raw1, raw2, boot, coarse;

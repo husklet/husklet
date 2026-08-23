@@ -50,7 +50,7 @@ int main(void) {
     }
     rmdir(dir);
 
-    printf("fnmatchglob m1=%d m2=%d m3=%d m4=%d m5=%d m6=%d glob=%d sorted=%d\n",
-           m1, m2, m3, m4, m5, m6, glob_ok, sorted);
+    printf("fnmatchglob m1=%d m2=%d m3=%d m4=%d m5=%d m6=%d glob=%d sorted=%d\n", m1, m2, m3, m4, m5, m6, glob_ok,
+           sorted);
     return 0;
 }

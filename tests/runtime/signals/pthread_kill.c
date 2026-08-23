@@ -7,7 +7,12 @@
 
 static volatile sig_atomic_t ran;
 static pthread_t who;
-static void h(int s) { (void)s; ran++; who = pthread_self(); }
+
+static void h(int s) {
+    (void)s;
+    ran++;
+    who = pthread_self();
+}
 
 int main(void) {
     struct sigaction sa = {0};
@@ -19,7 +24,6 @@ int main(void) {
     int r = pthread_kill(pthread_self(), SIGUSR1);
     int on_self = ran == 1 && pthread_equal(who, pthread_self());
 
-    printf("pthread_kill_self probe0=%d sent=%d on_self=%d\n",
-           probe == 0, r == 0, on_self);
+    printf("pthread_kill_self probe0=%d sent=%d on_self=%d\n", probe == 0, r == 0, on_self);
     return 0;
 }

@@ -22,11 +22,9 @@ int main(void) {
 
     int ok = statx(dfd, "", AT_EMPTY_PATH, STATX_BASIC_STATS, &stx) == 0;
     int have_type = ok && (stx.stx_mask & STATX_TYPE) && S_ISDIR(stx.stx_mode);
-    int have_core = ok && (stx.stx_mask & STATX_MODE) && (stx.stx_mask & STATX_INO)
-                       && (stx.stx_mask & STATX_NLINK);
+    int have_core = ok && (stx.stx_mask & STATX_MODE) && (stx.stx_mask & STATX_INO) && (stx.stx_mask & STATX_NLINK);
 
     close(dfd);
-    printf("statx-validate badflag=%d badmask=%d have_type=%d have_core=%d\n",
-           badflag, badmask, have_type, have_core);
+    printf("statx-validate badflag=%d badmask=%d have_type=%d have_core=%d\n", badflag, badmask, have_type, have_core);
     return 0;
 }

@@ -15,7 +15,8 @@ int main(void) {
     char a[128], b[128];
     snprintf(a, sizeof a, "/tmp/hl_ren_a_%d", (int)getpid());
     snprintf(b, sizeof b, "/tmp/hl_ren_b_%d", (int)getpid());
-    unlink(a); unlink(b);
+    unlink(a);
+    unlink(b);
     put(a, "from-a");
     int moved = rename(a, b) == 0;
     int oldgone = access(a, F_OK) < 0 && errno == ENOENT;

@@ -6,15 +6,18 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t code, status, seen;
+
 static void h(int s, siginfo_t *si, void *u) {
-    (void)s; (void)u;
+    (void)s;
+    (void)u;
     code = si->si_code;
     status = si->si_status;
     seen++;
 }
 
 static void wait_gone(pid_t pid) {
-    while (seen == 0) usleep(1000);
+    while (seen == 0)
+        usleep(1000);
     waitpid(pid, NULL, 0);
 }
 
@@ -35,7 +38,10 @@ int main(void) {
     // Case B: killed by SIGKILL
     seen = 0;
     pid_t b = fork();
-    if (b == 0) { for (;;) pause(); }
+    if (b == 0) {
+        for (;;)
+            pause();
+    }
     usleep(30 * 1000);
     kill(b, SIGKILL);
     wait_gone(b);

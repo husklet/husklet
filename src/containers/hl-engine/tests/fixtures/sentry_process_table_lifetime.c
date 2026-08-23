@@ -38,8 +38,12 @@ static int rounds(void) {
     for (int i = 0; i < ROUNDS; i++) {
         pid_t child = fork();
         if (child == 0)
-            for (;;) pause();
-        if (child < 0) { failure = errno; break; }
+            for (;;)
+                pause();
+        if (child < 0) {
+            failure = errno;
+            break;
+        }
         kill(child, SIGKILL);
         siginfo_t info;
         memset(&info, 0, sizeof info);
@@ -58,8 +62,12 @@ static int bound(void) {
     for (int i = 0; i < ATTEMPTS; i++) {
         pid_t child = fork();
         if (child == 0)
-            for (;;) pause();
-        if (child < 0) { failure = errno; break; }
+            for (;;)
+                pause();
+        if (child < 0) {
+            failure = errno;
+            break;
+        }
         children[created++] = child;
     }
     int reaped = 0;
@@ -82,7 +90,10 @@ static void publish(const char *path, const char *text) {
 static int await(const char *path, int seconds) {
     for (int i = 0; i < seconds * 1000; i++) {
         FILE *file = fopen(path, "r");
-        if (file) { fclose(file); return 1; }
+        if (file) {
+            fclose(file);
+            return 1;
+        }
         usleep(1000);
     }
     return 0;
@@ -103,7 +114,8 @@ static int collide(const char *directory) {
     arm_nocldwait();
     pid_t victim = fork();
     if (victim == 0)
-        for (;;) pause();
+        for (;;)
+            pause();
     if (victim < 0) return 2;
     kill(victim, SIGKILL);
     usleep(20000);

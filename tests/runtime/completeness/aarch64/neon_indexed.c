@@ -189,9 +189,15 @@ static int widen_16(int32_t *sum) {
         break;                                                                                                         \
     }
             W16(0)
-            W16(1) W16(2) W16(3) W16(4) W16(5) W16(6) W16(7)
+            W16(1)
+            W16(2)
+            W16(3)
+            W16(4)
+            W16(5)
+            W16(6)
+            W16(7)
 #undef W16
-                default : break;
+        default: break;
         }
     }
     return ok;
@@ -239,9 +245,11 @@ static int widen_32(int32_t *sum) {
         break;                                                                                                         \
     }
             W32(0)
-            W32(1) W32(2) W32(3)
+            W32(1)
+            W32(2)
+            W32(3)
 #undef W32
-                default : break;
+        default: break;
         }
     }
     // SQDMULL scalar: one element wide, upper bits zeroed. 2 * INT32_MIN * INT32_MIN is 2^63, so it saturates.
@@ -425,9 +433,11 @@ static int floating(uint32_t *mulx_bits) {
         break;                                                                                                         \
     }
             F32(0)
-            F32(1) F32(2) F32(3)
+            F32(1)
+            F32(2)
+            F32(3)
 #undef F32
-                default : break;
+        default: break;
         }
     }
     // 64-bit elements index with H alone, so only [0] and [1] exist and Q must be 1.

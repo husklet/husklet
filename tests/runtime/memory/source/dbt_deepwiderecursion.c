@@ -21,8 +21,10 @@ static uint64_t tree(uint64_t d, uint64_t seed) {
 int main(void) {
     uint64_t acc = 0;
     for (uint64_t m = 0; m <= 3; m++)
-        for (uint64_t n = 0; n <= 6; n++) acc = acc * 31 + ack(m, n);
-    for (uint64_t s = 0; s < 64; s++) acc ^= tree(20, s);
+        for (uint64_t n = 0; n <= 6; n++)
+            acc = acc * 31 + ack(m, n);
+    for (uint64_t s = 0; s < 64; s++)
+        acc ^= tree(20, s);
     printf("deepwide acc=%llu\n", (unsigned long long)acc);
     return 0;
 }

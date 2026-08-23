@@ -17,19 +17,25 @@ static void *w(void *arg) {
     tls_slot = idx;
     tls_second = idx * 3 + 1;
     // give the scheduler room to interleave writers before we re-read
-    for (int i = 0; i < 50; i++) { struct timespec ts = {0, 100000}; nanosleep(&ts, 0); }
-    if (tls_slot == idx && tls_second == idx * 3 + 1) atomic_fetch_add(&correct, 1);
-    else atomic_fetch_add(&leaked, 1);
+    for (int i = 0; i < 50; i++) {
+        struct timespec ts = {0, 100000};
+        nanosleep(&ts, 0);
+    }
+    if (tls_slot == idx && tls_second == idx * 3 + 1)
+        atomic_fetch_add(&correct, 1);
+    else
+        atomic_fetch_add(&leaked, 1);
     return 0;
 }
 
 int main(void) {
     pthread_t t[N];
-    for (long i = 0; i < N; i++) pthread_create(&t[i], 0, w, (void *)i);
-    for (int i = 0; i < N; i++) pthread_join(t[i], 0);
+    for (long i = 0; i < N; i++)
+        pthread_create(&t[i], 0, w, (void *)i);
+    for (int i = 0; i < N; i++)
+        pthread_join(t[i], 0);
     // main's TLS untouched by workers
     int main_pristine = tls_slot == -1 && tls_second == 0xBEEF;
-    printf("tls correct=%d leaked=%d main_pristine=%d\n",
-           atomic_load(&correct), atomic_load(&leaked), main_pristine);
+    printf("tls correct=%d leaked=%d main_pristine=%d\n", atomic_load(&correct), atomic_load(&leaked), main_pristine);
     return 0;
 }

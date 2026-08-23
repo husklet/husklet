@@ -37,7 +37,7 @@ const uint8_t interp_aes_inv_sbox[256] = {
 };
 
 static uint8_t aes_xtime(uint8_t value) {
-    return (uint8_t)((value & 0x80u) ? (uint8_t)((value << 1) ^ 0x1Bu) : (uint8_t)(value << 1));
+    return (uint8_t)((value & 0x80u) ? (((uint32_t)value << 1) ^ UINT32_C(0x1B)) : ((uint32_t)value << 1));
 }
 
 static uint8_t aes_multiply(uint8_t left, uint8_t right) {

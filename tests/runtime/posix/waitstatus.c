@@ -14,7 +14,10 @@ int main(void) {
     int exited = WIFEXITED(st) && WEXITSTATUS(st) == 7;
     // child 2: killed by SIGKILL
     pid_t b = fork();
-    if (b == 0) { raise(SIGKILL); _exit(0); }
+    if (b == 0) {
+        raise(SIGKILL);
+        _exit(0);
+    }
     waitpid(b, &st, 0);
     int killed = WIFSIGNALED(st) && WTERMSIG(st) == SIGKILL;
     // child 3: abort -> SIGABRT

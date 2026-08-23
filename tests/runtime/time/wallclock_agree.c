@@ -34,7 +34,6 @@ int main(void) {
     // All wall sources are well past the year-2000 epoch (positive sanity).
     int post_epoch = t > 946684800; // 2000-01-01
 
-    printf("wallagree gtod=%d time=%d coarse=%d post_epoch=%d\n", gtod_agree, time_agree, coarse_agree,
-           post_epoch);
+    printf("wallagree gtod=%d time=%d coarse=%d post_epoch=%d\n", gtod_agree, time_agree, coarse_agree, post_epoch);
     return 0;
 }

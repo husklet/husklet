@@ -11,10 +11,8 @@ int main(void) {
     wordexp_t we;
     int rc = wordexp("one $HL_WE two", &we, 0);
     // $HL_WE undergoes field splitting -> "one","alpha","beta","two".
-    int split_ok = rc == 0 && we.we_wordc == 4 &&
-                   strcmp(we.we_wordv[0], "one") == 0 &&
-                   strcmp(we.we_wordv[1], "alpha") == 0 &&
-                   strcmp(we.we_wordv[2], "beta") == 0 &&
+    int split_ok = rc == 0 && we.we_wordc == 4 && strcmp(we.we_wordv[0], "one") == 0 &&
+                   strcmp(we.we_wordv[1], "alpha") == 0 && strcmp(we.we_wordv[2], "beta") == 0 &&
                    strcmp(we.we_wordv[3], "two") == 0;
     if (rc == 0) wordfree(&we);
 

@@ -140,8 +140,8 @@ int main(void) {
         ssize_t rn = read(out[0], &r, sizeof r);
         int st = 0;
         waitpid(pid, &st, 0);
-        printf("scm_eventfd_dense recv=%d trunc=%d woke=%d read=%d sum=%llu child=%d\n", r.recv_n, r.trunc,
-               r.woke, r.reads, r.sum, WIFEXITED(st) ? WEXITSTATUS(st) : -1);
+        printf("scm_eventfd_dense recv=%d trunc=%d woke=%d read=%d sum=%llu child=%d\n", r.recv_n, r.trunc, r.woke,
+               r.reads, r.sum, WIFEXITED(st) ? WEXITSTATUS(st) : -1);
         return rn == (ssize_t)sizeof r ? 1 : 2;
     }
     for (int i = 0; i < NFD; i++) {
@@ -156,9 +156,10 @@ int main(void) {
     ssize_t rn = read(out[0], &r, sizeof r);
     int st = 0;
     waitpid(pid, &st, 0);
-    for (int i = 0; i < NFD; i++) close(efd[i]);
-    printf("scm_eventfd_dense recv=%d trunc=%d woke=%d read=%d sum=%llu child=%d\n", r.recv_n, r.trunc,
-           r.woke, r.reads, r.sum, WIFEXITED(st) ? WEXITSTATUS(st) : -1);
+    for (int i = 0; i < NFD; i++)
+        close(efd[i]);
+    printf("scm_eventfd_dense recv=%d trunc=%d woke=%d read=%d sum=%llu child=%d\n", r.recv_n, r.trunc, r.woke, r.reads,
+           r.sum, WIFEXITED(st) ? WEXITSTATUS(st) : -1);
     return rn == (ssize_t)sizeof r && r.recv_n == NFD && !r.trunc && r.woke == NFD && r.reads == NFD &&
                    r.sum == (unsigned long long)NFD * (NFD + 1) / 2 && WIFEXITED(st) && WEXITSTATUS(st) == 0
                ? 0

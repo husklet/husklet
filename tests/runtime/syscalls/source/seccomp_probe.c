@@ -35,6 +35,7 @@ static long sc(unsigned op, unsigned flags, void *arg) {
     errno = 0;
     return syscall(SYS_seccomp, op, flags, arg);
 }
+
 static void avail(const char *name, uint32_t action) {
     long r = sc(SECCOMP_GET_ACTION_AVAIL, 0, &action);
     printf("avail_%-13s r=%ld e=%d\n", name, r < 0 ? -1L : 0, r < 0 ? errno : 0);
@@ -57,7 +58,10 @@ int main(void) {
         printf("avail_flag_einval r=%ld e=%d\n", r < 0 ? -1L : 0, r < 0 ? errno : 0);
     }
     {
-        struct { uint16_t notif, resp, data; } sz = {0, 0, 0};
+        struct {
+            uint16_t notif, resp, data;
+        } sz = {0, 0, 0};
+
         long r = sc(SECCOMP_GET_NOTIF_SIZES, 0, &sz);
         printf("notif_sizes r=%ld e=%d nonzero=%d\n", r < 0 ? -1L : 0, r < 0 ? errno : 0,
                (sz.notif | sz.resp | sz.data) != 0);

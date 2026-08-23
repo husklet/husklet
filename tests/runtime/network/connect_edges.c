@@ -62,8 +62,7 @@ int main(void) {
         struct sockaddr_in sn;
         socklen_t sl = sizeof sn;
         r = getsockname(fd, (struct sockaddr *)&sn, &sl);
-        printf("getsockname_unbound=%s port0=%d\n", r < 0 ? err_name(errno) : "OK",
-               r == 0 && sn.sin_port == 0);
+        printf("getsockname_unbound=%s port0=%d\n", r < 0 ? err_name(errno) : "OK", r == 0 && sn.sin_port == 0);
         close(fd);
     }
 

@@ -36,7 +36,6 @@ int main(void) {
     struct timeval z = {0, 0};
     int select0 = select(0, NULL, NULL, NULL, &z) == 0;
 
-    printf("pselectppoll pselect=%d ppoll=%d poll0=%d select0=%d\n", pselect_ok, ppoll_ok, poll0,
-           select0);
+    printf("pselectppoll pselect=%d ppoll=%d poll0=%d select0=%d\n", pselect_ok, ppoll_ok, poll0, select0);
     return 0;
 }

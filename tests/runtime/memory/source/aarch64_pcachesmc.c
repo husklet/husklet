@@ -38,7 +38,8 @@ static unsigned call_patchable(void) {
 
 int main(int argc, char **argv, char **environment) {
     unsigned before = 0;
-    for (unsigned i = 0; i < 256; i++) before = call_patchable();
+    for (unsigned i = 0; i < 256; i++)
+        before = call_patchable();
 
     if (argc == 1) {
         /*
@@ -54,9 +55,7 @@ int main(int argc, char **argv, char **environment) {
     long queried = sysconf(_SC_PAGESIZE);
     size_t page_size = queried > 0 ? (size_t)queried : 4096u;
     uintptr_t page = (uintptr_t)hl_patchable & ~(uintptr_t)(page_size - 1);
-    if (mprotect((void *)page, page_size,
-                 PROT_READ | PROT_WRITE | PROT_EXEC) != 0)
-        return 3;
+    if (mprotect((void *)page, page_size, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) return 3;
     uint32_t *instruction = (uint32_t *)(uintptr_t)hl_patchable;
     if (instruction[0] != PATCHABLE_ENTRY_WORD) {
         printf("pcache-smc unexpected entry word=%08x\n", instruction[0]);

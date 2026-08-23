@@ -8,7 +8,8 @@ int main(void) {
     char path[128], link[128];
     snprintf(path, sizeof path, "/tmp/hl_stat_%d", (int)getpid());
     snprintf(link, sizeof link, "/tmp/hl_stat_%d.lnk", (int)getpid());
-    unlink(path); unlink(link);
+    unlink(path);
+    unlink(link);
     int fd = open(path, O_CREAT | O_WRONLY, 0644);
     write(fd, "1234567", 7);
     struct stat fs;
@@ -27,7 +28,8 @@ int main(void) {
     struct stat fls;
     stat(link, &fls);
     statfollow = S_ISREG(fls.st_mode) && fls.st_size == 7;
-    unlink(path); unlink(link);
+    unlink(path);
+    unlink(link);
     printf("statfam reg=%d size=%d ino=%d lnk=%d follow=%d\n", reg, sizeok, sameino, islink, statfollow);
     return 0;
 }

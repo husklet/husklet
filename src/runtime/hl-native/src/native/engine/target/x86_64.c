@@ -1792,3 +1792,12 @@ void hl_target_runtime_init(void) {
 uint64_t hl_run_linux_guest_translations(void) {
     return g_dispatch_profile.translations;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+/* See hl_linux_imported_path_guard_probe (linux_abi/syscall/fs.c): the pathname operand a handler
+   receives has already been imported into engine storage, so the guest PROT_NONE ledger must not be
+   consulted about it.  Both target TUs export the probe because both compile that syscall layer. */
+HL_API int hl_x86_64_imported_path_guard_test(void) {
+    return hl_linux_imported_path_guard_probe();
+}
+#endif

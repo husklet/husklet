@@ -11,9 +11,15 @@ int main(void) {
     for (int i = 0; i < 3000; i++) {
         pid_t p = fork();
         if (p == 0) _exit((i % 100) + 1);
-        if (p < 0) { printf("soak forkchurn fork_fail@%d\n", i); return 1; }
+        if (p < 0) {
+            printf("soak forkchurn fork_fail@%d\n", i);
+            return 1;
+        }
         int st = 0;
-        if (waitpid(p, &st, 0) == p && WIFEXITED(st)) { acc += WEXITSTATUS(st); reaped++; }
+        if (waitpid(p, &st, 0) == p && WIFEXITED(st)) {
+            acc += WEXITSTATUS(st);
+            reaped++;
+        }
     }
     printf("soak forkchurn reaped=%ld acc=%ld\n", reaped, acc);
     return 0;

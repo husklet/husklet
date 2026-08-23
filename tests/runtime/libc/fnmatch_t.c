@@ -8,7 +8,7 @@ int main(void) {
     int d3 = fnmatch("a?c", "abc", 0) == 0;
     int d4 = fnmatch("[a-c]x", "bx", 0) == 0;
     int d5 = fnmatch("*/foo", "a/b/foo", FNM_PATHNAME) == FNM_NOMATCH; // * won't cross '/'
-    int d6 = fnmatch("*bar", ".bar", FNM_PERIOD) == FNM_NOMATCH; // leading period not matched
+    int d6 = fnmatch("*bar", ".bar", FNM_PERIOD) == FNM_NOMATCH;       // leading period not matched
     printf("fnmatch d1=%d d2=%d d3=%d d4=%d d5=%d d6=%d\n", d1, d2, d3, d4, d5, d6);
     return 0;
 }

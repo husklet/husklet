@@ -637,7 +637,8 @@ static int hl_case_path(const char *root, const char *guest, char *physical, siz
     physical[0] = 0;
     const char *cursor = guest;
     while (*cursor) {
-        while (*cursor == '/') cursor++;
+        while (*cursor == '/')
+            cursor++;
         if (!*cursor) break;
         const char *end = strchr(cursor, '/');
         size_t size = end ? (size_t)(end - cursor) : strlen(cursor);

@@ -915,9 +915,7 @@ typedef struct hl_host_network_services {
     hl_host_result (*duplicate)(void *context, hl_host_handle socket);
 } hl_host_network_services;
 
-HL_STATIC_ASSERT(offsetof(hl_host_network_services, close) +
-                         sizeof(((hl_host_network_services *)0)->close) ==
-                     56,
+HL_STATIC_ASSERT(offsetof(hl_host_network_services, close) + sizeof(((hl_host_network_services *)0)->close) == 56,
                  "host network ABI 1 prefix drifted");
 HL_STATIC_ASSERT(sizeof(hl_host_network_services) == 168, "host network ABI 2 table drifted");
 HL_STATIC_ASSERT(HL_ALIGNOF(hl_host_network_services) == 8, "host network callback alignment drifted");
@@ -1286,8 +1284,7 @@ HL_STATIC_ASSERT(sizeof(hl_host_directory_services) == 64, "host directory callb
 HL_STATIC_ASSERT(sizeof(hl_host_watch_services) == 40, "host watch callback table drifted");
 HL_STATIC_ASSERT(sizeof(hl_host_stream_services) == 72, "host stream callback table drifted");
 HL_STATIC_ASSERT(sizeof(hl_host_terminal_services) == 72, "host terminal callback table drifted");
-HL_STATIC_ASSERT(sizeof(hl_host_posix_attachment_services) == 32,
-                 "host POSIX attachment callback table drifted");
+HL_STATIC_ASSERT(sizeof(hl_host_posix_attachment_services) == 32, "host POSIX attachment callback table drifted");
 HL_STATIC_ASSERT(sizeof(hl_host_services) == 152, "top-level host service table drifted");
 HL_STATIC_ASSERT(offsetof(hl_host_services, context) == 16, "host service context ABI drifted");
 HL_STATIC_ASSERT(offsetof(hl_host_services, terminal) == 144, "host service terminal ABI drifted");

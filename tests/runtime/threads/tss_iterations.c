@@ -6,7 +6,7 @@
 #include <pthread.h>
 #include <stdio.h>
 
-#define ITER 4   // must be <= PTHREAD_DESTRUCTOR_ITERATIONS (32 on Linux)
+#define ITER 4 // must be <= PTHREAD_DESTRUCTOR_ITERATIONS (32 on Linux)
 static pthread_key_t key;
 static int calls;
 

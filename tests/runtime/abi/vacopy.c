@@ -28,17 +28,17 @@ static double mix(int count, ...) {
 }
 
 static long isum_only(int count, ...) {
-    va_list ap; va_start(ap, count);
+    va_list ap;
+    va_start(ap, count);
     long s = 0;
-    for (int i = 0; i < count; i++) s += va_arg(ap, long);
+    for (int i = 0; i < count; i++)
+        s += va_arg(ap, long);
     va_end(ap);
     return s;
 }
 
 int main(void) {
-    double r = mix(10,
-        1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5,
-        6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10, 10.5);
+    double r = mix(10, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10, 10.5);
     printf("mix=%.3f\n", r);
     printf("ints=%ld\n", isum_only(12, 1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L, 11L, 12L));
     /* many FP args to overflow the FP register save area */

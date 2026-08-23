@@ -14,9 +14,13 @@ int main(void) {
     int cols = 0;
     if (cpu_agg) {
         const char *nl = strchr(b, '\n');
-        char line[256]; int L = nl ? (int)(nl - b) : 0; if (L > 255) L = 255;
-        memcpy(line, b, (size_t)L); line[L] = 0;
-        for (char *t = strtok(line + 3, " "); t; t = strtok(NULL, " ")) cols++;
+        char line[256];
+        int L = nl ? (int)(nl - b) : 0;
+        if (L > 255) L = 255;
+        memcpy(line, b, (size_t)L);
+        line[L] = 0;
+        for (char *t = strtok(line + 3, " "); t; t = strtok(NULL, " "))
+            cols++;
     }
     int has_cpu0 = pf_has(b, "\ncpu0 ");
     char v[64];
@@ -26,8 +30,8 @@ int main(void) {
     int has_ctxt = pf_line_val(b, "ctxt ", v, sizeof v);
     int has_procs = pf_line_val(b, "processes ", v, sizeof v);
     int has_blocked = pf_line_val(b, "procs_blocked ", v, sizeof v);
-    int ok = n > 0 && cpu_agg && cols >= 10 && has_cpu0 && has_intr && has_ctxt && has_procs &&
-             has_blocked && btime > 0 && running >= 1;
+    int ok = n > 0 && cpu_agg && cols >= 10 && has_cpu0 && has_intr && has_ctxt && has_procs && has_blocked &&
+             btime > 0 && running >= 1;
     printf("pstat ok=%d\n", ok);
     return 0;
 }

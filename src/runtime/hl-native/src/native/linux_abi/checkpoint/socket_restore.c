@@ -159,7 +159,8 @@ static int ckpt_prepare_restore_socket_states(void) {
             if (record.kind != CKF_SOCKET || ckpt_restore_socket_state_find(record.object_id) != NULL) continue;
             if (!record.object_id || ckpt_vector_reserve((void **)&g_restore_sockets, &g_restore_sockets_capacity,
                                                          sizeof *g_restore_sockets, g_nrestore_sockets + 1) != 0) {
-                fprintf(stderr, "[restore] refuse: standalone socket in %s has no object identity or exceeds capacity\n",
+                fprintf(stderr,
+                        "[restore] refuse: standalone socket in %s has no object identity or exceeds capacity\n",
                         records_path);
                 ckpt_source_fclose(records);
                 return -1;
@@ -1108,8 +1109,7 @@ static int ckpt_restore_reaped_children(const char *procdir, const struct ckpt_m
     if (image == NULL) return -1;
     char path[1300];
     snprintf(path, sizeof path, "%s/reaped", procdir);
-    if (ckpt_source_load(path, image, total) != 0 || image->magic != CKPT_REAPED_MAGIC ||
-        image->count != m->n_reaped) {
+    if (ckpt_source_load(path, image, total) != 0 || image->magic != CKPT_REAPED_MAGIC || image->count != m->n_reaped) {
         free(image);
         return -1;
     }
@@ -1184,8 +1184,7 @@ static void ckpt_fork_children(int gpid, struct cpu *parent) {
        inherits the page the root created rather than minting a second one. */
     sigexit_init();
     for (int i = 0; i < g_nrprocs; i++) {
-        if (!g_rprocs[i].viable || ckpt_restore_parent_gpid(&g_rprocs[i]) != gpid || g_rprocs[i].gpid == gpid)
-            continue;
+        if (!g_rprocs[i].viable || ckpt_restore_parent_gpid(&g_rprocs[i]) != gpid || g_rprocs[i].gpid == gpid) continue;
         int cg = g_rprocs[i].gpid;
         int source = cpu_tid(parent);
         if (!hl_target_task_event(parent, HL_TASK_EVENT_PREPARE_FORK, 0, (uint64_t)source, 0)) {
@@ -1466,7 +1465,11 @@ static int ckpt_restore_tree_body(const char *rootfs, const struct ckpt_phase_le
     }
     ckpt_restore_commit_stage(CKPT_RESTORE_IDENTITY);
     if (ckpt_restore_identity_hydrate() != 0) {
-        fprintf(stderr, "[restore] cannot publish restored init identity: %s\n", strerror(errno));
+        // The hydrate fails from the restore commit's own state -- a member that never published a host
+        // pid, or a pid-map insert the registry refused -- and hl_linux_pidmap_add sets no errno, so
+        // there is nothing here an errno could name.
+        fprintf(stderr, "[restore] cannot publish restored init identity: the guest/host pid map could not be "
+                        "completed for every member of the image\n");
         ckpt_restore_commit_abort();
         ckpt_restore_commit_destroy();
         free(images);

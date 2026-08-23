@@ -34,7 +34,8 @@ int main(void) {
     int stale_unlock = call_errno(stale, SHM_UNLOCK, NULL);
     int invalid = call_errno(-1, SHM_LOCK, NULL);
 
-    printf("sysv_shm_lock lock=%d unlock=%d ignored=%d unchanged=%d removed=%d removed_einval=%d stale_einval=%d invalid_einval=%d\n",
+    printf("sysv_shm_lock lock=%d unlock=%d ignored=%d unchanged=%d removed=%d removed_einval=%d stale_einval=%d "
+           "invalid_einval=%d\n",
            lock == 0, unlock == 0, lock != EFAULT && unlock != EFAULT, unchanged, removed, removed_lock == EINVAL,
            stale_unlock == EINVAL, invalid == EINVAL);
     if (replacement >= 0) shmctl(replacement, IPC_RMID, NULL);

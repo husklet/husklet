@@ -20,9 +20,9 @@ int main(void) {
     int cpu = sched_getcpu();
     int cpu_in_mask = (cpu >= 0 && aff_ok) ? CPU_ISSET(cpu, &set) : 0;
 
-    printf("online_positive=%d conf_ge_online=%d affinity_matches_online=%d\n",
-           online > 0, conf >= online, aff == (int)online);
-    printf("getcpu_valid=%d getcpu_in_mask=%d getcpu_below_conf=%d\n",
-           cpu >= 0, cpu_in_mask, cpu >= 0 && cpu < (int)conf);
+    printf("online_positive=%d conf_ge_online=%d affinity_matches_online=%d\n", online > 0, conf >= online,
+           aff == (int)online);
+    printf("getcpu_valid=%d getcpu_in_mask=%d getcpu_below_conf=%d\n", cpu >= 0, cpu_in_mask,
+           cpu >= 0 && cpu < (int)conf);
     return 0;
 }

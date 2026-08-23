@@ -12,13 +12,13 @@ extern char **environ;
 int main(int argc, char **argv) {
     if (argc >= 2 && strcmp(argv[1], "vchild") == 0) return 33;
 
-    volatile int sentinel = 0xABC;      // parent memory that must be unchanged after vfork+exec
+    volatile int sentinel = 0xABC; // parent memory that must be unchanged after vfork+exec
     pid_t pid = vfork();
     if (pid == 0) {
         // Only exec is legal here besides _exit. Replace image immediately.
-        char *cargv[] = { argv[0], (char *)"vchild", NULL };
+        char *cargv[] = {argv[0], (char *)"vchild", NULL};
         execve(argv[0], cargv, environ);
-        _exit(120);                     // exec failed
+        _exit(120); // exec failed
     }
     int st = 0;
     int reaped = waitpid(pid, &st, 0) == pid;

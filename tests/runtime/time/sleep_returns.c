@@ -7,7 +7,9 @@
 #include <string.h>
 #include <unistd.h>
 
-static void h(int s) { (void)s; }
+static void h(int s) {
+    (void)s;
+}
 
 int main(void) {
     int u_ok = usleep(50 * 1000) == 0;

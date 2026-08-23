@@ -5,7 +5,8 @@
 #include <errno.h>
 #include <stdio.h>
 #include <sys/random.h>
-int main(void){
+
+int main(void) {
     unsigned char a[32];
     printf("badflag_errno=%d\n", getrandom(a, sizeof(a), 0x10) == -1 ? errno : 0); // native 22, engine 0
     return 0;
