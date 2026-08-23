@@ -384,6 +384,82 @@ mod tests {
         std::fs::read_dir("/proc/self/fd").unwrap().count()
     }
 
+    #[test]
+    fn dropping_one_pane_cancels_its_tasks_without_harming_its_sibling() {
+        struct MarksDrop(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+        impl Drop for MarksDrop {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
+
+        let mut pane_a = PaneRuntime::shared().unwrap();
+        let mut pane_b = PaneRuntime::shared().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&pane_a.runtime, &pane_b.runtime));
+
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let pending_started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        pane_a.spawn({
+            let cancelled = std::sync::Arc::clone(&cancelled);
+            let pending_started = std::sync::Arc::clone(&pending_started);
+            async move {
+                let _cancelled = MarksDrop(cancelled);
+                pending_started.store(true, std::sync::atomic::Ordering::Release);
+                std::future::pending::<()>().await;
+            }
+        });
+        let panic_unwound = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        pane_a.spawn({
+            let panic_unwound = std::sync::Arc::clone(&panic_unwound);
+            async move {
+                let _panic_unwound = MarksDrop(panic_unwound);
+                tokio::task::yield_now().await;
+                panic!("intentional pane task panic");
+            }
+        });
+
+        let heartbeat = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        pane_b.spawn({
+            let heartbeat = std::sync::Arc::clone(&heartbeat);
+            async move {
+                loop {
+                    heartbeat.fetch_add(1, std::sync::atomic::Ordering::Release);
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+            }
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while (!pending_started.load(std::sync::atomic::Ordering::Acquire)
+            || !panic_unwound.load(std::sync::atomic::Ordering::Acquire)
+            || heartbeat.load(std::sync::atomic::Ordering::Acquire) < 2)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::yield_now();
+        }
+        assert!(pending_started.load(std::sync::atomic::Ordering::Acquire));
+        assert!(panic_unwound.load(std::sync::atomic::Ordering::Acquire));
+        let before_drop = heartbeat.load(std::sync::atomic::Ordering::Acquire);
+
+        drop(pane_a);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while (!cancelled.load(std::sync::atomic::Ordering::Acquire)
+            || heartbeat.load(std::sync::atomic::Ordering::Acquire) <= before_drop)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::yield_now();
+        }
+        assert!(
+            cancelled.load(std::sync::atomic::Ordering::Acquire),
+            "pane A task survived its owner"
+        );
+        assert!(
+            heartbeat.load(std::sync::atomic::Ordering::Acquire) > before_drop,
+            "pane A drop or panic stopped pane B"
+        );
+        drop(pane_b);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn eight_fake_panes_share_workers_and_drop_tasks_and_runtime_to_baseline() {
@@ -407,6 +483,13 @@ mod tests {
             }
         }
 
+        // Tokio installs two process-lifetime driver descriptors on first use. Warm that singleton before
+        // taking the zero-pane baseline; pane-owned descriptors must still return exactly to that baseline.
+        drop(PaneRuntime::shared().unwrap());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while named_threads("hl-exec") != 0 && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
         let baseline_fds = descriptors();
         let active = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut panes = Vec::new();
