@@ -371,6 +371,16 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    struct Active(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    #[cfg(target_os = "linux")]
+    impl Drop for Active {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
     fn named_threads(name: &str) -> usize {
         std::fs::read_dir("/proc/self/task")
             .unwrap()
@@ -473,14 +483,6 @@ mod tests {
                 .unwrap();
             assert!(status.success(), "isolated pane census failed");
             return;
-        }
-
-        struct Active(std::sync::Arc<std::sync::atomic::AtomicUsize>);
-
-        impl Drop for Active {
-            fn drop(&mut self) {
-                self.0.fetch_sub(1, std::sync::atomic::Ordering::Release);
-            }
         }
 
         // Tokio installs two process-lifetime driver descriptors on first use. Warm that singleton before
