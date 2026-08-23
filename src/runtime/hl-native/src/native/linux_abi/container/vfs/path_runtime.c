@@ -376,12 +376,16 @@ static int g_eventfd_peer[HL_NFD];
 // highest owner ever bound. The mark only ever rises -- clearing an entry deliberately does not lower
 // it -- so no live entry can ever sit above it, and a stale-high mark costs extra loads, never a wrong
 // answer. Every store of a non-zero peer goes through eventfd_peer_bind so the invariant has one owner.
-static int g_eventfd_peer_bound;
+static int g_virtual_fd_bound;
+
+static void virtual_fd_bound_include(int fd) {
+    if (fd >= 0 && fd < HL_NFD && fd >= g_virtual_fd_bound) g_virtual_fd_bound = fd + 1;
+}
 
 static void eventfd_peer_bind(int owner, int peer_plus_one) {
     if (owner < 0 || owner >= HL_NFD) return;
     g_eventfd_peer[owner] = peer_plus_one;
-    if (peer_plus_one != 0 && owner >= g_eventfd_peer_bound) g_eventfd_peer_bound = owner + 1;
+    if (peer_plus_one != 0) virtual_fd_bound_include(owner);
 }
 
 // eventfd accumulating counter: write() adds, read() returns + resets (the pipe is only readiness).
@@ -465,7 +469,7 @@ static int eventfd_counter_slot(int fd) {
 
 static int eventfd_hidden_peer_fd(int fd) {
     if (fd < 0) return 0;
-    for (int i = 0; i < g_eventfd_peer_bound; i++)
+    for (int i = 0; i < g_virtual_fd_bound; i++)
         if (g_eventfd_peer[i] == fd + 1) return 1;
     return 0;
 }

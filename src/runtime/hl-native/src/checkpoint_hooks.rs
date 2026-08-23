@@ -36,6 +36,19 @@ pub(crate) fn checkpoint_restore_claim_test(isa: u32, scenario: u32) -> Result<(
     )
 }
 
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn checkpoint_restore_fd_reset_test(isa: u32, scenario: u32) -> Result<u64, i32> {
+    let hook = match isa {
+        1 => test_api().aarch64_checkpoint_restore_fd_reset,
+        2 => test_api().x86_64_checkpoint_restore_fd_reset,
+        _ => return Err(-22),
+    };
+    let mut inspected = 0;
+    // SAFETY: the hook owns its descriptor fixture and writes one initialized scalar to this live pointer.
+    let status = unsafe { hook(scenario, &raw mut inspected) };
+    (status == 0).then_some(inspected).ok_or(status)
+}
+
 /// Exercise the restore-side host-page slicing that keeps a rounded claim off a neighbouring guest
 /// region's already-claimed host page.
 #[cfg(feature = "native-test-hooks")]
