@@ -266,7 +266,6 @@ impl<'a> Page<'a> {
     pub(crate) fn close(&self) {
         let tw = self.window;
         let name = self.name.as_str();
-        // Non-closable overview (first tab) stays.
         if tw.entries.borrow().first().map(|e| e.name.as_str()) == Some(name) {
             return;
         }
@@ -282,7 +281,6 @@ impl<'a> Page<'a> {
             if clear_focus {
                 tw.focused.borrow_mut().take();
             }
-            // A user-closed tab must forget its pane registry entries.
             Slots::new(tw).discard_page(&child);
             tw.stack.remove(&child);
         }
@@ -307,7 +305,6 @@ impl<'a> Page<'a> {
         page.select_and_focus();
     }
 
-    /// Walk up from `widget` to the page owned by the window's stack.
     pub(crate) fn of(window: &'a Rc<TermWin>, widget: &gtk::Widget) -> Option<Self> {
         let mut current = widget.clone();
         loop {
@@ -321,7 +318,6 @@ impl<'a> Page<'a> {
     }
 }
 
-/// Find the first VTE terminal in `w`'s subtree (used by the `HL_TERM_SPLIT` screenshot hook).
 pub(crate) struct PaneView<'a> {
     window: &'a Rc<TermWin>,
     terminal: vte4::Terminal,
@@ -335,9 +331,7 @@ impl<'a> PaneView<'a> {
         }
     }
 
-    /// Every VTE terminal in `w`'s subtree, in layout order.
-    ///
-    /// `first` answers the pane a split acts on; a headless verification run has
+    /// Every VTE terminal in `w`'s subtree; a headless verification run has
     /// to read them all, because a window with two panes and one live shell is
     /// exactly the failure worth catching.
     pub(crate) fn all(w: &gtk::Widget, found: &mut Vec<vte4::Terminal>) {
