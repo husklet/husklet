@@ -1,8 +1,6 @@
 #![allow(unsafe_code)]
 
-use super::{
-    Arc, CheckpointSink, CheckpointSource, CompositionError, EngineError, ProductionMachine, REQUEST_CHECKPOINT, Server,
-};
+use super::{Arc, CheckpointSink, CheckpointSource, CompositionError, EngineError, REQUEST_CHECKPOINT, Server};
 use crate::runtime::checkpoint::CaptureFailure;
 
 #[cfg(unix)]
@@ -150,11 +148,80 @@ impl CheckpointControl {
         for _ in 0..10 {
             let native = engine.exit();
             if native.kind != 0 {
-                return EngineError::CheckpointExited(ProductionMachine::exit(engine));
+                return Self::capture_failure_with_native_exit(failure, native);
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         Self::capture_failure(failure)
+    }
+
+    fn capture_failure_with_native_exit(failure: CaptureFailure, native: hl_native::Exit) -> EngineError {
+        // The server's result names the checkpoint operation. A native ENGINE_ERROR is the same failed
+        // checkpoint surfacing through the child-result side channel, so replacing the server's richer
+        // refusal/channel outcome with it discards the cause. A guest exit, signal or fault is independent
+        // evidence about the process itself and keeps its existing precedence.
+        if native.kind == 4 {
+            return Self::capture_failure(failure);
+        }
+        EngineError::CheckpointExited(crate::engine::EngineExit {
+            kind: match native.kind {
+                1 => crate::engine::ExitKind::Code,
+                2 => crate::engine::ExitKind::Signal,
+                3 => crate::engine::ExitKind::Fault,
+                _ => crate::engine::ExitKind::EngineError,
+            },
+            guest_status: native.status,
+            detail: native.detail,
+            fault: None,
+        })
+    }
+}
+
+#[cfg(test)]
+mod failure_precedence_tests {
+    use super::*;
+
+    #[test]
+    fn checkpoint_failure_outlives_its_secondary_native_engine_error() {
+        let native = hl_native::Exit {
+            kind: 4,
+            status: 3,
+            detail: 4,
+        };
+        assert_eq!(
+            CheckpointControl::capture_failure_with_native_exit(CaptureFailure::Failed, native),
+            EngineError::CaptureFailed
+        );
+        assert_eq!(
+            CheckpointControl::capture_failure_with_native_exit(CaptureFailure::Refused, native),
+            EngineError::CaptureRefused
+        );
+    }
+
+    #[test]
+    fn native_signal_and_fault_still_override_a_checkpoint_failure() {
+        for (kind, expected) in [
+            (2, crate::engine::ExitKind::Signal),
+            (3, crate::engine::ExitKind::Fault),
+        ] {
+            let error = CheckpointControl::capture_failure_with_native_exit(
+                CaptureFailure::Failed,
+                hl_native::Exit {
+                    kind,
+                    status: 11,
+                    detail: 29,
+                },
+            );
+            assert!(matches!(
+                error,
+                EngineError::CheckpointExited(crate::engine::EngineExit {
+                    kind: actual,
+                    guest_status: 11,
+                    detail: 29,
+                    ..
+                }) if actual == expected
+            ));
+        }
     }
 }
 
