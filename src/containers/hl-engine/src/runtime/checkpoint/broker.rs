@@ -61,7 +61,6 @@ impl Server {
             _ => {}
         }
     }
-
     #[cfg(test)]
     pub(super) fn serve(self: &Arc<Self>, channel: UnixStream, id: u64) {
         let accepted = AcceptedChannel::new(Arc::clone(self));
