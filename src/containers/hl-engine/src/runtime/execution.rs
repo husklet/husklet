@@ -53,7 +53,56 @@ pub(crate) struct ProductionMachine {
     /// image of its own on; its guest processes commit into the coordinator's store.
     #[cfg(unix)]
     member: Option<crate::composition::CheckpointChannel>,
-    engine: Mutex<Option<Arc<hl_native::Engine>>>,
+    state: Mutex<StartupState<hl_native::Engine>>,
+}
+
+struct StartupState<T> {
+    engine: Option<Arc<T>>,
+    pending_stop: Option<StopRequest>,
+}
+
+impl<T> Default for StartupState<T> {
+    fn default() -> Self {
+        Self {
+            engine: None,
+            pending_stop: None,
+        }
+    }
+}
+
+impl<T> StartupState<T> {
+    fn publish(&mut self, engine: Arc<T>) -> Option<StopRequest> {
+        self.engine = Some(engine);
+        self.pending_stop.take()
+    }
+
+    fn request(&mut self, request: StopRequest) -> Option<Arc<T>> {
+        let Some(engine) = self.engine.as_ref() else {
+            self.pending_stop = Some(match (self.pending_stop, request) {
+                (Some(StopRequest::Force), _) | (_, StopRequest::Force) => StopRequest::Force,
+                (_, request) => request,
+            });
+            return None;
+        };
+        Some(Arc::clone(engine))
+    }
+}
+
+#[cfg(test)]
+mod startup_state_tests {
+    use super::*;
+
+    #[test]
+    fn a_stop_during_native_construction_is_delivered_when_the_engine_publishes() {
+        let mut state = StartupState::<()>::default();
+        assert!(state.request(StopRequest::Interrupt).is_none());
+        assert!(state.request(StopRequest::Force).is_none());
+        assert!(state.request(StopRequest::Signal(12)).is_none());
+
+        let engine = Arc::new(());
+        assert_eq!(state.publish(Arc::clone(&engine)), Some(StopRequest::Force));
+        assert!(Arc::ptr_eq(&state.request(StopRequest::Signal(10)).unwrap(), &engine));
+    }
 }
 
 pub(crate) struct ProductionFactory;
@@ -117,7 +166,7 @@ impl RuntimeFactory for ProductionFactory {
             checkpoint,
             #[cfg(unix)]
             member,
-            engine: Mutex::new(None),
+            state: Mutex::new(StartupState::default()),
         })
     }
 }
@@ -227,9 +276,10 @@ impl ProductionMachine {
     }
 
     fn current(&self) -> Result<Arc<hl_native::Engine>, EngineError> {
-        self.engine
+        self.state
             .lock()
             .map_err(|_| EngineError::Synchronization)?
+            .engine
             .clone()
             .ok_or(EngineError::NotStarted)
     }
@@ -276,7 +326,19 @@ impl GuestMachine for ProductionMachine {
             None
         };
         let engine = Arc::new(self.create()?);
-        *self.engine.lock().map_err(|_| EngineError::Synchronization)? = Some(Arc::clone(&engine));
+        let pending_stop = self
+            .state
+            .lock()
+            .map_err(|_| EngineError::Synchronization)?
+            .publish(Arc::clone(&engine));
+        if let Some(request) = pending_stop {
+            let (kind, signal) = match request {
+                StopRequest::Interrupt => (REQUEST_INTERRUPT, request.signal()),
+                StopRequest::Force => (REQUEST_FORCE_STOP, request.signal()),
+                StopRequest::Signal(signal) => (REQUEST_SIGNAL, signal),
+            };
+            engine.request(kind, signal).map_err(EngineError::NativeStopFailed)?;
+        }
         let arguments = self
             .plan
             .arguments
@@ -320,9 +382,14 @@ impl GuestMachine for ProductionMachine {
             StopRequest::Force => (REQUEST_FORCE_STOP, request.signal()),
             StopRequest::Signal(signal) => (REQUEST_SIGNAL, signal),
         };
-        self.current()?
-            .request(kind, signal)
-            .map_err(EngineError::NativeStopFailed)
+        let engine = self
+            .state
+            .lock()
+            .map_err(|_| EngineError::Synchronization)?
+            .request(request);
+        engine.map_or(Ok(()), |engine| {
+            engine.request(kind, signal).map_err(EngineError::NativeStopFailed)
+        })
     }
 
     #[cfg(unix)]
