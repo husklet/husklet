@@ -125,6 +125,17 @@ fn create_workspace(store: &mut WorkspaceStore, workspace: WorkspaceConfig) -> s
     store.upsert(workspace)
 }
 
+const fn native_workspace_architecture() -> Arch {
+    #[cfg(target_arch = "x86_64")]
+    {
+        Arch::Amd64
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        Arch::Arm64
+    }
+}
+
 impl Form {
     pub(crate) fn new() -> Self {
         let terminal = TermConfig::default();
@@ -140,7 +151,7 @@ impl Form {
             image: Field::entry("ubuntu:24.04", true),
             shell: Field::entry("/bin/bash -l", true),
             storage: Field::entry("", true),
-            cpu_amd: Rc::new(Cell::new(false)),
+            cpu_amd: Rc::new(Cell::new(native_workspace_architecture() == Arch::Amd64)),
             cpus: gtk::SpinButton::with_range(0.0, 64.0, 1.0),
             mem: gtk::SpinButton::with_range(0.0, 65536.0, 256.0),
             scrollback: Field::entry(&scrollback, false),
@@ -217,7 +228,8 @@ impl Form {
         let arm = gtk::ToggleButton::with_label("arm64");
         let amd = gtk::ToggleButton::with_label("x86-64");
         amd.set_group(Some(&arm));
-        arm.set_active(true);
+        arm.set_active(!form.cpu_amd.get());
+        amd.set_active(form.cpu_amd.get());
         {
             let c = form.cpu_amd.clone();
             arm.connect_toggled(move |t| {
@@ -427,6 +439,53 @@ impl Form {
 #[cfg(test)]
 mod create_tests {
     use super::*;
+
+    #[test]
+    fn new_workspaces_default_to_the_build_hosts_architecture() {
+        #[cfg(target_arch = "x86_64")]
+        assert_eq!(native_workspace_architecture(), Arch::Amd64);
+        #[cfg(target_arch = "aarch64")]
+        assert_eq!(native_workspace_architecture(), Arch::Arm64);
+    }
+
+    #[test]
+    fn architecture_control_and_persisted_configuration_share_the_native_default() {
+        let ran = crate::test_support::on_the_toolkit_thread(|| {
+            let form = Rc::new(Form::new());
+            let general = form.general();
+            #[cfg(target_arch = "x86_64")]
+            let expected = Arch::Amd64;
+            #[cfg(not(target_arch = "x86_64"))]
+            let expected = Arch::Arm64;
+            assert_eq!(form.cpu_amd.get(), expected == Arch::Amd64);
+
+            let mut active = None;
+            let mut pending = vec![general.upcast::<gtk::Widget>()];
+            while let Some(widget) = pending.pop() {
+                if let Ok(toggle) = widget.clone().downcast::<gtk::ToggleButton>() {
+                    if toggle.is_active() && matches!(toggle.label().as_deref(), Some("arm64" | "x86-64")) {
+                        active = toggle.label().map(|label| label.to_string());
+                    }
+                }
+                let mut child = widget.first_child();
+                while let Some(current) = child {
+                    child = current.next_sibling();
+                    pending.push(current);
+                }
+            }
+            assert_eq!(
+                active.as_deref(),
+                Some(if expected == Arch::Amd64 { "x86-64" } else { "arm64" })
+            );
+
+            form.name.set_text("native-default");
+            form.image.set_text("ubuntu:24.04");
+            assert_eq!(form.configuration().unwrap().arch, expected);
+        });
+        if !ran {
+            eprintln!("skipped: no display connection, so the workspace architecture control cannot be rendered");
+        }
+    }
 
     #[test]
     fn duplicate_creation_preserves_the_existing_workspace() {
