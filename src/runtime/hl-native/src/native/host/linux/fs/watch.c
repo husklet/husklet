@@ -147,6 +147,7 @@ void hl_host_directory_close(hl_host_directory *directory) {
 void hl_host_directory_abandon(hl_host_directory *directory) {
     if (directory != NULL) directory->state = NULL;
 }
+
 static uint32_t hl_linux_directory_mask(uint32_t interests) {
     uint32_t mask = 0;
     if ((interests & HL_HOST_DIRECTORY_ACCESS) != 0) mask |= IN_ACCESS | IN_OPEN | IN_CLOSE;
@@ -591,4 +592,3 @@ static hl_host_result hl_linux_watch_close(void *context, hl_host_handle handle)
     free(watch);
     return hl_linux_result(HL_STATUS_OK, 0, 0);
 }
-

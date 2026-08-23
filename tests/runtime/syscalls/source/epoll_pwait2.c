@@ -17,8 +17,7 @@
 #define __NR_epoll_pwait2 441
 #endif
 
-static int ep_pwait2(int epfd, struct epoll_event *ev, int maxev, const struct timespec *to,
-                     const sigset_t *sm) {
+static int ep_pwait2(int epfd, struct epoll_event *ev, int maxev, const struct timespec *to, const sigset_t *sm) {
     return (int)syscall(__NR_epoll_pwait2, epfd, ev, maxev, to, sm, _NSIG / 8);
 }
 

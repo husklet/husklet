@@ -62,9 +62,9 @@ typedef enum hl_ckpt_stream_op {
     /* --- digest (accumulated as bytes are emitted; never re-reads the store) --- */
     HL_CKPT_OP_DIGEST = 15, /* -> payload = hl_ckpt_stream_digest */
     /* --- source (restore) --- */
-    HL_CKPT_OP_SOURCE_LIST = 16, /* name = prefix -> payload = NUL-terminated names, value = count */
-    HL_CKPT_OP_SOURCE_SIZE = 17, /* name -> value = size, status 1 when absent */
-    HL_CKPT_OP_SOURCE_READ = 18, /* name, offset, length -> payload (short read at end of object) */
+    HL_CKPT_OP_SOURCE_LIST = 16,       /* name = prefix -> payload = NUL-terminated names, value = count */
+    HL_CKPT_OP_SOURCE_SIZE = 17,       /* name -> value = size, status 1 when absent */
+    HL_CKPT_OP_SOURCE_READ = 18,       /* name, offset, length -> payload (short read at end of object) */
     HL_CKPT_OP_RECOVERY_COMPLETE = 19, /* restore is complete; release its publication authority */
     /* Exact capture membership. Sent by a process whose threads are all stopped and whose
        thread registry is held; payload is [u32 count][u32 zero][u32 executor]*count, and
@@ -147,11 +147,11 @@ typedef struct hl_ckpt_request {
     uint32_t magic;
     uint32_t abi;
     uint32_t op;
-    uint32_t flags;     /* CKPT_SINK_PUBLISH_ATOMIC and friends, for OBJECT_BEGIN */
-    uint64_t stream;    /* engine-assigned object handle, unique within a channel */
-    uint64_t offset;    /* WRITE_AT / SOURCE_READ */
-    uint64_t length;    /* payload bytes following the name, or requested read length */
-    uint32_t name_size; /* including the terminating NUL; 0 when the op takes no name */
+    uint32_t flags;      /* CKPT_SINK_PUBLISH_ATOMIC and friends, for OBJECT_BEGIN */
+    uint64_t stream;     /* engine-assigned object handle, unique within a channel */
+    uint64_t offset;     /* WRITE_AT / SOURCE_READ */
+    uint64_t length;     /* payload bytes following the name, or requested read length */
+    uint32_t name_size;  /* including the terminating NUL; 0 when the op takes no name */
     uint32_t generation; /* shared trigger generation; 0 for restore-only traffic */
 } hl_ckpt_request;
 

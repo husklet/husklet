@@ -6,12 +6,12 @@
 
 static int g_pcache; // HL_PCACHE=1 requested (never hits)
 static int g_coldprof;
-static uint64_t g_force_base;   // one-shot fixed-VA request consumed by load_elf
-static int g_force_base_failed; // a fixed-VA map fell back to a kernel base
+static uint64_t g_force_base;         // one-shot fixed-VA request consumed by load_elf
+static int g_force_base_failed;       // a fixed-VA map fell back to a kernel base
 static hl_identity_digest g_pc_binid; // binary + interp + argv0 + build + host ISA
-static uint64_t g_pc_entry;     // initial guest pc
-static int g_pcache_loaded;     // never set here
-static int g_nreloc;            // always zero here
+static uint64_t g_pc_entry;           // initial guest pc
+static int g_pcache_loaded;           // never set here
+static int g_nreloc;                  // always zero here
 
 // Engine-identity mix-in for the cache key. Must be right even though the cache never hits: host_isa is
 // HL_HOST_CPU_ISA, not a hardcoded 1 -- passing 1 would collide an x86-64-host identity with a JIT-written
@@ -33,7 +33,7 @@ static hl_identity_digest pcache_translator_identity(void) {
 }
 
 static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity_digest interpreter,
-                                        const char *argv0) {
+                                         const char *argv0) {
     return hl_identity_digest_mix(program, interpreter, pcache_translator_identity(), argv0);
 }
 

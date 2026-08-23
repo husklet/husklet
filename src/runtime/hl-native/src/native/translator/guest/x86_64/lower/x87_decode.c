@@ -50,7 +50,7 @@ static void emit_x87_environment(int selector, uint64_t next) {
 static int lower_x87_memory_state(struct insn *instruction, uint64_t guest_pc, uint64_t next, int reg) {
     uint8_t opcode = instruction->op;
     if (opcode != 0xD9 && opcode != 0xDD && opcode != 0xDB && opcode != 0xDF) return TX_FALL;
-    if (opcode == 0xD9) {    // f32 mem
+    if (opcode == 0xD9) { // f32 mem
         if (reg == 0) {
             hl_x86_emit_load_scalar32(16, 19);
             emit32(0x1E260000u | ((16) << 5) | (20));
@@ -71,7 +71,7 @@ static int lower_x87_memory_state(struct insn *instruction, uint64_t guest_pc, u
             hl_x86_emit_store_scalar32(16, 19);
             if (reg == 3) hl_x86_x87_pop();
         } // fst/fstp
-        else if (reg == 5) { // fldcw m16: load the x87 control word (RC/PC/exception masks)
+        else if (reg == 5) {                      // fldcw m16: load the x87 control word (RC/PC/exception masks)
             emit32(0x79400000u | (19 << 5) | 16); // ldrh w16, [x19]
             e_movconst(17, 0x1f3f);               // FCW is not stored verbatim: bit 6 reads
             e_rrr(A_AND, 16, 16, 17, 1, 0);       // back 1, bit 7 and 15:13 as 0 (measured:
@@ -393,14 +393,13 @@ static int lower_x87_register_control(struct insn *instruction, uint64_t guest_p
             return TX_BREAK;
         }
     } else if (opcode == 0xDA) { // fcmovcc ST0,ST(i) (reg 0/1/2/3 = B/E/BE/U)
-        if (reg <= 3) {      // condition from integer EFLAGS
+        if (reg <= 3) {          // condition from integer EFLAGS
             int jcc = (reg == 0) ? 2 : (reg == 1) ? 4 : (reg == 2) ? 6 : 10; // jb/je/jbe/jp
             int armc = condition_to_arm(jcc);
             hl_x86_emit_flags_load();
             hl_x86_x87_load(18, 0);
-            hl_x86_x87_load(16, rm); // v18=ST0, v16=ST(i)
-            emit32(0x1E600C00u | (18 << 16) | ((armc & 0xF) << 12) | (16 << 5) |
-                   17); // fcsel d17, STi, ST0, cond
+            hl_x86_x87_load(16, rm);                                                  // v18=ST0, v16=ST(i)
+            emit32(0x1E600C00u | (18 << 16) | ((armc & 0xF) << 12) | (16 << 5) | 17); // fcsel d17, STi, ST0, cond
             hl_x86_x87_store(17, 0);
         } else if (reg == 5 && rm == 1) { // DA E9: fucompp (compare ST0,ST1; pop twice)
             hl_x86_x87_live(0, 1);
@@ -434,10 +433,10 @@ static int lower_x87_memory_arithmetic(struct insn *instruction, uint64_t guest_
         emit32(0x1E260000u | ((16) << 5) | (20));
         hl_x86_x87_denormal(20, 1);
         emit32(0x1E22C000u | (16 << 5) | 16); // fcvt d16, s16
-    } else if (opcode == 0xDA) {                  // m32 signed integer
+    } else if (opcode == 0xDA) {              // m32 signed integer
         emit32(0xB9400000u | (19 << 5) | 16); // ldr   w16, [x19]
         emit32(0x1E620000u | (16 << 5) | 16); // scvtf d16, w16
-    } else if (opcode == 0xDE) {                  // m16 signed integer
+    } else if (opcode == 0xDE) {              // m16 signed integer
         emit32(0x79C00000u | (19 << 5) | 16); // ldrsh w16, [x19]
         emit32(0x1E620000u | (16 << 5) | 16); // scvtf d16, w16
     } else {                                  // 0xDC: m64 float
@@ -485,60 +484,60 @@ static int lower_x87_memory_arithmetic(struct insn *instruction, uint64_t guest_
 static int lower_x87_register_arithmetic(struct insn *instruction, uint64_t guest_pc, int reg, int rm) {
     uint8_t opcode = instruction->op;
     if (opcode != 0xD8 && opcode != 0xDC && opcode != 0xDE) return TX_FALL;
-        hl_x86_x87_live(0, rm);
-        hl_x86_x87_load(18, 0);
-        hl_x86_x87_load(16, rm); // v18=ST0, v16=ST(rm)
-        hl_x86_x87_indefinite(18);
-        hl_x86_x87_indefinite(16);
-        int dst_i = (opcode == 0xD8) ? 0 : rm; // D8 -> ST0; DC/DE -> ST(i)
-        if (reg == 2 || reg == 3) {
-            e_fcom_setfpsw(18, 16, 1);
-            if (opcode == 0xDE && rm == 1) hl_x86_x87_pop();
-            if (reg == 3) hl_x86_x87_pop();
-            return TX_NEXT;
-        } // fcom[p]/fcompp
-        int a = 18, b = 16;
-        if (opcode != 0xD8) {
-            a = 16;
-            b = 18;
-        } // DC/DE: dst=ST(i)=v16, other=ST0=v18
-        hl_x86_x87_rc_enter();
-        hl_x86_x87_dnan_pre(18, 16); // x86 indefinite is NEGATIVE; ARM's default NaN is not
-        if (reg == 0)
-            hl_x86_x87_add(a, a, b);
-        else if (reg == 1)
-            hl_x86_x87_multiply(a, a, b);
-        else if (reg == 4) {
-            if (opcode == 0xD8)
-                hl_x86_x87_subtract(a, a, b);
-            else
-                hl_x86_x87_subtract(a, b, a);
-        } // DC/DE reverse sub
-        else if (reg == 5) {
-            if (opcode == 0xD8)
-                hl_x86_x87_subtract(a, b, a);
-            else
-                hl_x86_x87_subtract(a, a, b);
-        } else if (reg == 6) {
-            if (opcode == 0xD8)
-                hl_x86_x87_divide(a, a, b);
-            else
-                hl_x86_x87_divide(a, b, a);
-        } else if (reg == 7) {
-            if (opcode == 0xD8)
-                hl_x86_x87_divide(a, b, a);
-            else
-                hl_x86_x87_divide(a, a, b);
-        } else {
-            g_unimplemented(guest_pc, instruction);
-            return TX_BREAK;
-        }
-        hl_x86_x87_dnan_post(a);
-        hl_x86_x87_narrow(a); // FCW.PC, inside the RC scope so it rounds the same way
-        hl_x86_x87_rc_leave();
-        hl_x86_x87_indefinite(a);
-        hl_x86_x87_store(a, dst_i);
-        if (opcode == 0xDE) hl_x86_x87_pop();
+    hl_x86_x87_live(0, rm);
+    hl_x86_x87_load(18, 0);
+    hl_x86_x87_load(16, rm); // v18=ST0, v16=ST(rm)
+    hl_x86_x87_indefinite(18);
+    hl_x86_x87_indefinite(16);
+    int dst_i = (opcode == 0xD8) ? 0 : rm; // D8 -> ST0; DC/DE -> ST(i)
+    if (reg == 2 || reg == 3) {
+        e_fcom_setfpsw(18, 16, 1);
+        if (opcode == 0xDE && rm == 1) hl_x86_x87_pop();
+        if (reg == 3) hl_x86_x87_pop();
+        return TX_NEXT;
+    } // fcom[p]/fcompp
+    int a = 18, b = 16;
+    if (opcode != 0xD8) {
+        a = 16;
+        b = 18;
+    } // DC/DE: dst=ST(i)=v16, other=ST0=v18
+    hl_x86_x87_rc_enter();
+    hl_x86_x87_dnan_pre(18, 16); // x86 indefinite is NEGATIVE; ARM's default NaN is not
+    if (reg == 0)
+        hl_x86_x87_add(a, a, b);
+    else if (reg == 1)
+        hl_x86_x87_multiply(a, a, b);
+    else if (reg == 4) {
+        if (opcode == 0xD8)
+            hl_x86_x87_subtract(a, a, b);
+        else
+            hl_x86_x87_subtract(a, b, a);
+    } // DC/DE reverse sub
+    else if (reg == 5) {
+        if (opcode == 0xD8)
+            hl_x86_x87_subtract(a, b, a);
+        else
+            hl_x86_x87_subtract(a, a, b);
+    } else if (reg == 6) {
+        if (opcode == 0xD8)
+            hl_x86_x87_divide(a, a, b);
+        else
+            hl_x86_x87_divide(a, b, a);
+    } else if (reg == 7) {
+        if (opcode == 0xD8)
+            hl_x86_x87_divide(a, b, a);
+        else
+            hl_x86_x87_divide(a, a, b);
+    } else {
+        g_unimplemented(guest_pc, instruction);
+        return TX_BREAK;
+    }
+    hl_x86_x87_dnan_post(a);
+    hl_x86_x87_narrow(a); // FCW.PC, inside the RC scope so it rounds the same way
+    hl_x86_x87_rc_leave();
+    hl_x86_x87_indefinite(a);
+    hl_x86_x87_store(a, dst_i);
+    if (opcode == 0xDE) hl_x86_x87_pop();
     return TX_NEXT;
 }
 
@@ -554,9 +553,9 @@ int hl_x86_lower_x87(struct insn *instruction, uint64_t guest_pc, uint64_t next,
         hl_x86_x87_materialize();
         emit_ea(instruction, next);
         int bytes = (instruction->op == 0xD8 || instruction->op == 0xDA) ? 4
-                    : instruction->op == 0xDC                              ? 8
-                    : instruction->op == 0xDE                              ? 2
-                                                                           : 0;
+                    : instruction->op == 0xDC                            ? 8
+                    : instruction->op == 0xDE                            ? 2
+                                                                         : 0;
         if (instruction->op == 0xD9)
             bytes = reg == 6 || reg == 4 ? 28 : (reg == 5 || reg == 7 ? 2 : 4);
         else if (instruction->op == 0xDD)
@@ -569,8 +568,7 @@ int hl_x86_lower_x87(struct insn *instruction, uint64_t guest_pc, uint64_t next,
                     (instruction->op == 0xDD && (reg == 2 || reg == 3 || reg == 6 || reg == 7)) ||
                     (instruction->op == 0xDB && (reg == 2 || reg == 3 || reg == 7)) ||
                     (instruction->op == 0xDF && (reg == 3 || reg == 7));
-        if (bytes)
-            emit_memory_guard(17, (uint64_t)bytes, guest_pc, store ? X86_SOFT_WRITE : X86_SOFT_READ);
+        if (bytes) emit_memory_guard(17, (uint64_t)bytes, guest_pc, store ? X86_SOFT_WRITE : X86_SOFT_READ);
         if (store && emit_soft_memory_active()) {
             emit_soft_store_commit((uint64_t)bytes);
             e_ldr(17, 28, OFF_BUS_EA);

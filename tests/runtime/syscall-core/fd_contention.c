@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 enum { WORKERS = 6, ITERATIONS = 2000 };
+
 static atomic_int start;
 static atomic_int failures;
 
@@ -31,7 +32,8 @@ static void *allocator(void *unused) {
 
 int main(void) {
     pthread_t threads[WORKERS];
-    for (int i = 0; i < WORKERS; ++i) pthread_create(&threads[i], NULL, allocator, NULL);
+    for (int i = 0; i < WORKERS; ++i)
+        pthread_create(&threads[i], NULL, allocator, NULL);
     atomic_store_explicit(&start, 1, memory_order_release);
     for (int i = 0; i < ITERATIONS; ++i) {
         DIR *directory = opendir("/tmp");
@@ -53,10 +55,12 @@ int main(void) {
             atomic_fetch_add(&failures, 1);
         }
     }
-    for (int i = 0; i < WORKERS; ++i) pthread_join(threads[i], NULL);
+    for (int i = 0; i < WORKERS; ++i)
+        pthread_join(threads[i], NULL);
 
     int held[16];
-    for (int i = 0; i < 16; ++i) held[i] = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    for (int i = 0; i < 16; ++i)
+        held[i] = open("/dev/null", O_RDONLY | O_CLOEXEC);
     int expected = held[5];
     close(held[5]);
     int lowest = dup(held[0]);

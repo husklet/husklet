@@ -192,8 +192,7 @@ static int sentry_route_clone(struct cpu *c, uint64_t nr) {
                                     atomic_load_explicit(&g_guest_children, memory_order_relaxed),
                                     atomic_load_explicit(&g_worker_threads, memory_order_relaxed), t_ring);
     uint64_t clone3_flags = 0;
-    if (nr == 435 && G_A0(c) &&
-        guest_copy_from(&clone3_flags, G_A0(c), sizeof clone3_flags) != sizeof clone3_flags) {
+    if (nr == 435 && G_A0(c) && guest_copy_from(&clone3_flags, G_A0(c), sizeof clone3_flags) != sizeof clone3_flags) {
         fork_diagnostic_emit(c, nr, 0, "sentry-clone3-arguments", EFAULT, -1, NULL);
         fork_diagnostic_route_leave(previous_route);
         G_RET(c) = (uint64_t)(int64_t)-EFAULT;
@@ -300,7 +299,8 @@ static int sentry_route_worker_proc(struct cpu *c, uint64_t nr) {
 static int sentry_route_file_mmap(struct cpu *c, uint64_t nr) {
     if (nr != 222 || (G_A3(c) & 0x20) || (int)G_A4(c) < 0) return 0;
     struct sentry_ring *R = ring_for_thread();
-    while (atomic_exchange_explicit(&R->busy, 1, memory_order_acquire)) sched_yield();
+    while (atomic_exchange_explicit(&R->busy, 1, memory_order_acquire))
+        sched_yield();
     int idx = t_ring;
     R->wpid = (uint32_t)g_worker_pid;
     R->wtid = t_token;
@@ -308,7 +308,8 @@ static int sentry_route_file_mmap(struct cpu *c, uint64_t nr) {
     R->rawnr = SENTRY_OP_FDPASS;
     R->a[0] = (uint64_t)(uint32_t)(int)G_A4(c);
     R->iovn = 0;
-    for (int i = 0; i < 6; i++) R->redir[i] = -1;
+    for (int i = 0; i < 6; i++)
+        R->redir[i] = -1;
     uint64_t request = atomic_fetch_add_explicit(&R->request, 1, memory_order_relaxed) + 1;
     sentry_request_publish(R);
     sentry_response_wait(R, request);
@@ -364,7 +365,6 @@ struct sentry_marshal {
             return -1;                                                                                                 \
         }                                                                                                              \
     } while (0)
-
 
 static int sentry_import_file(struct sentry_marshal *M) {
     struct cpu *c = M->c;
@@ -504,7 +504,8 @@ static int sentry_import_file(struct sentry_marshal *M) {
             }
             if (g_nonpie_lo)
                 for (uint32_t i = 0; i < n; i++)
-                    M->worker_iov[i].iov_base = (void *)(uintptr_t)nonpie_p((uint64_t)(uintptr_t)M->worker_iov[i].iov_base);
+                    M->worker_iov[i].iov_base =
+                        (void *)(uintptr_t)nonpie_p((uint64_t)(uintptr_t)M->worker_iov[i].iov_base);
         }
         M->worker_iovn = n;
         struct iovec *biov = (struct iovec *)R->buf;
@@ -555,8 +556,7 @@ static int sentry_import_file(struct sentry_marshal *M) {
         R->a[2] = n; // sentry runs the (possibly clamped) segment count
         break;
     }
-    default:
-        return 0;
+    default: return 0;
     }
     return 1;
 }
@@ -675,8 +675,7 @@ static int sentry_import_socket(struct sentry_marshal *M) {
         if (G_A3(c)) R->redir[3] = SENTRY_OPT_OFF; // out optval -> opt window
         break;
     }
-    default:
-        return 0;
+    default: return 0;
     }
     return 1;
 }
@@ -787,8 +786,7 @@ static int sentry_import_message(struct sentry_marshal *M) {
         R->inlen = cur;
         break;
     }
-    default:
-        return 0;
+    default: return 0;
     }
     return 1;
 }
@@ -896,7 +894,7 @@ static int sentry_import_misc(struct sentry_marshal *M) {
         break;
     default:
         return 0; // 57 close / 62 lseek / 198 socket / 201 listen / 210 shutdown / 20 epoll_create1 /
-               // 23 dup / 24 dup3: no buffer.
+                  // 23 dup / 24 dup3: no buffer.
     }
     return 1;
 }
@@ -971,8 +969,7 @@ static int sentry_export_file(struct sentry_marshal *M, int64_t *result) {
             }
         }
         break;
-    default:
-        return 0;
+    default: return 0;
     }
     *result = ret;
     return 1;
@@ -1078,8 +1075,7 @@ static int sentry_export_socket(struct sentry_marshal *M, int64_t *result) {
             if (ret >= 0) SENTRY_EXPORT_EXACT(G_A1(c), M->worker_msghdr, SENTRY_MSGHDR_SZ);
         }
         break;
-    default:
-        return 0;
+    default: return 0;
     }
     *result = ret;
     return 1;
@@ -1138,8 +1134,8 @@ static int sentry_export_misc(struct sentry_marshal *M, int64_t *result) {
         break;
     default:
         return 0; // 56 openat / 57 close / 62 lseek / 64 write / 66 writev / 68 pwrite / 198 socket /
-               // 200 bind / 203 connect / 206 sendto / 208 setsockopt / 210 shutdown / 211 sendmsg /
-               // 20 epoll_create1 / 21 epoll_ctl / 23 dup / 24 dup3: no out bytes
+                  // 200 bind / 203 connect / 206 sendto / 208 setsockopt / 210 shutdown / 211 sendmsg /
+                  // 20 epoll_create1 / 21 epoll_ctl / 23 dup / 24 dup3: no out bytes
     }
     *result = ret;
     return 1;
@@ -1149,17 +1145,15 @@ static int64_t sentry_export(struct sentry_marshal *M) {
     int64_t ret = M->R->ret;
     if (M->nr == 56 && ret >= 0 && ret < HL_NFD) {
         const char *opened_path = (const char *)M->R->buf;
-        if (!strcmp(opened_path, "/proc") || !strncmp(opened_path, "/proc/", 6) ||
-            !strcmp(opened_path, "/dev/fd"))
-            snprintf(g_fdpath[(int)ret], sizeof g_fdpath[(int)ret], "%.*s",
-                     (int)sizeof(g_fdpath[(int)ret]) - 1, opened_path);
+        if (!strcmp(opened_path, "/proc") || !strncmp(opened_path, "/proc/", 6) || !strcmp(opened_path, "/dev/fd"))
+            snprintf(g_fdpath[(int)ret], sizeof g_fdpath[(int)ret], "%.*s", (int)sizeof(g_fdpath[(int)ret]) - 1,
+                     opened_path);
     }
-    if (!sentry_export_file(M, &ret) && !sentry_export_socket(M, &ret))
-        (void)sentry_export_misc(M, &ret);
+    if (!sentry_export_file(M, &ret) && !sentry_export_socket(M, &ret)) (void)sentry_export_misc(M, &ret);
     return ret;
 }
-#undef SENTRY_EXPORT_EXACT
 
+#undef SENTRY_EXPORT_EXACT
 
 static int sentry_import(struct sentry_marshal *M) {
     int handled = sentry_import_file(M);

@@ -11,7 +11,10 @@
 
 int main(void) {
     int fd = open("/tmp", O_TMPFILE | O_RDWR, 0600);
-    if (fd < 0) { printf("otmpfile open_failed errno_path\n"); return 0; } // native success vs JIT failure diverge here
+    if (fd < 0) {
+        printf("otmpfile open_failed errno_path\n");
+        return 0;
+    } // native success vs JIT failure diverge here
     write(fd, "anon-tmpfile", 12);
     char buf[16] = {0};
     pread(fd, buf, 12, 0);

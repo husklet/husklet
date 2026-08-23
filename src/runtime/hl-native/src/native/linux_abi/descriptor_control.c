@@ -107,8 +107,8 @@ int64_t hl_linux_fcntl(hl_linux_abi *linux_abi, hl_linux_fd fd, int32_t command,
         // Linux replaces exactly the settable status flags and preserves everything else, so the access
         // mode, O_LARGEFILE and O_PATH survive a set (fs/fcntl.c setfl). Masking down to the access mode
         // instead had erased them.
-        uint32_t requested = (ofd_entry->status_flags & ~(uint32_t)HL_LINUX_O_SETFL) |
-                             ((uint32_t)argument & (uint32_t)HL_LINUX_O_SETFL);
+        uint32_t requested =
+            (ofd_entry->status_flags & ~(uint32_t)HL_LINUX_O_SETFL) | ((uint32_t)argument & (uint32_t)HL_LINUX_O_SETFL);
         // The engine records only what the object is actually carrying. A host that arms fewer flags than
         // it was given reports the difference, and a host that cannot arm them at all reports why -- so
         // F_GETFL never answers with a capability nothing is applying.
@@ -121,8 +121,8 @@ int64_t hl_linux_fcntl(hl_linux_abi *linux_abi, hl_linux_fd fd, int32_t command,
             result = ofd->object_ops->set_status_flags(ofd->object_context, requested, &effective);
             hl_linux_lock(linux_abi);
             if (result == 0)
-                ofd->status_flags = (requested & ~(uint32_t)HL_LINUX_O_SETFL_HOST) |
-                                    (effective & (uint32_t)HL_LINUX_O_SETFL_HOST);
+                ofd->status_flags =
+                    (requested & ~(uint32_t)HL_LINUX_O_SETFL_HOST) | (effective & (uint32_t)HL_LINUX_O_SETFL_HOST);
             ofd->active_operations--;
             hl_linux_unlock(linux_abi);
             hl_linux_ofd_unlock(linux_abi, ofd);
@@ -147,9 +147,9 @@ int64_t hl_linux_fcntl(hl_linux_abi *linux_abi, hl_linux_fd fd, int32_t command,
                                                hl_linux_host_stream_flags(requested));
             hl_linux_lock(linux_abi);
             if (result.status == HL_STATUS_OK)
-                ofd->status_flags = (requested & ~(uint32_t)HL_LINUX_O_SETFL_HOST) |
-                                    (hl_linux_status_flags_from_host_stream((uint32_t)result.value) &
-                                     (uint32_t)HL_LINUX_O_SETFL_HOST);
+                ofd->status_flags =
+                    (requested & ~(uint32_t)HL_LINUX_O_SETFL_HOST) |
+                    (hl_linux_status_flags_from_host_stream((uint32_t)result.value) & (uint32_t)HL_LINUX_O_SETFL_HOST);
             ofd->active_operations--;
             hl_linux_unlock(linux_abi);
             hl_linux_ofd_unlock(linux_abi, ofd);
@@ -164,4 +164,3 @@ int64_t hl_linux_fcntl(hl_linux_abi *linux_abi, hl_linux_fd fd, int32_t command,
     hl_linux_unlock(linux_abi);
     return (int64_t)argument;
 }
-

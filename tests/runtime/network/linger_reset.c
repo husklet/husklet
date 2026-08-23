@@ -41,8 +41,14 @@ int main(void) {
     for (int i = 0; i < 5; i++) {
         errno = 0;
         n = recv(as, b, sizeof b, 0);
-        if (n < 0 && errno == ECONNRESET) { saw_reset = 1; break; }
-        if (n == 0) { saw_eof = 1; break; }
+        if (n < 0 && errno == ECONNRESET) {
+            saw_reset = 1;
+            break;
+        }
+        if (n == 0) {
+            saw_eof = 1;
+            break;
+        }
         // n > 0: got the "data", keep reading until reset/eof
     }
     int st = 0;

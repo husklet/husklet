@@ -22,7 +22,7 @@ int main(void) {
     struct stat st;
     int stat_ok = fstat(pfd, &st) == 0 && st.st_size == 9;
     char buf[16];
-    int read_ebadf = read(pfd, buf, 4) == -1;   // O_PATH fds cannot be read
+    int read_ebadf = read(pfd, buf, 4) == -1; // O_PATH fds cannot be read
 
     int dpath = open(dir, O_PATH | O_DIRECTORY);
     int subfd = openat(dpath, "f", O_RDONLY | O_NOCTTY); // glibc/fts includes harmless O_NOCTTY
@@ -42,7 +42,7 @@ int main(void) {
     int closed_ebadf = fchdir(dpath) == -1 && errno == EBADF;
     unlink(fpath);
     rmdir(dir);
-    printf("opath stat=%d read_ebadf=%d reopened=%d dir_ebadf=%d fchdir=%d fstatat=%d closed=%d\n", stat_ok,
-           read_ebadf, reopened, directory_ebadf, changed, relative_stat, closed_ebadf);
+    printf("opath stat=%d read_ebadf=%d reopened=%d dir_ebadf=%d fchdir=%d fstatat=%d closed=%d\n", stat_ok, read_ebadf,
+           reopened, directory_ebadf, changed, relative_stat, closed_ebadf);
     return 0;
 }

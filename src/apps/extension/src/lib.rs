@@ -13,7 +13,7 @@ pub use session::{serve, Outcome};
 pub use view::{Actions, View};
 
 use hl_extension::port::ContainerSummary;
-use hl_extension::{Capability, Grant, Manifest, RelativePath, Request, Topic};
+use hl_extension::{Capability, Grant, Manifest, Request, Topic};
 use hl_gui::RowRequest;
 
 /// The source the container table is drawn from.

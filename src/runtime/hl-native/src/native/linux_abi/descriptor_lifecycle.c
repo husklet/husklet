@@ -152,8 +152,7 @@ hl_status hl_linux_fd_exec(hl_linux_abi *linux_abi, hl_linux_fd fd, uint32_t *ou
     hl_status status;
     hl_host_result result;
     if (!hl_linux_count_output_prepare(out_closed)) return HL_STATUS_INVALID_ARGUMENT;
-    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION)
-        return HL_STATUS_INVALID_ARGUMENT;
+    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION) return HL_STATUS_INVALID_ARGUMENT;
     hl_linux_lock(linux_abi);
     if (fd >= linux_abi->fd_capacity || linux_abi->fds[fd].ofd == 0 || linux_abi->fds[fd].ofd == HL_LINUX_FD_RESERVED) {
         hl_linux_unlock(linux_abi);
@@ -180,8 +179,7 @@ hl_status hl_linux_fd_exec_all(hl_linux_abi *linux_abi, hl_linux_fd_exec_callbac
     hl_linux_fd cursor = 0;
     uint32_t count = 0;
     if (!hl_linux_count_output_prepare(out_closed)) return HL_STATUS_INVALID_ARGUMENT;
-    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION)
-        return HL_STATUS_INVALID_ARGUMENT;
+    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION) return HL_STATUS_INVALID_ARGUMENT;
     while (cursor < linux_abi->fd_capacity) {
         hl_linux_fd candidate;
         uint32_t removed = 0;

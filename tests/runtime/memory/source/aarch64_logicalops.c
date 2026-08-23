@@ -14,8 +14,7 @@ int main(void) {
     const size_t page = 4096;
     int fd = (int)syscall(SYS_memfd_create, "logical-ops", 0u);
     if (fd < 0 || ftruncate(fd, (off_t)(page * 2)) != 0) return 2;
-    unsigned char *memory =
-        mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (off_t)page);
+    unsigned char *memory = mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (off_t)page);
     if (memory == MAP_FAILED) return 3;
 
     uint64_t *word = (uint64_t *)(void *)(memory + 128);
@@ -57,8 +56,7 @@ int main(void) {
             second += 3;
             __asm__ volatile("stxp %w[status], %x[first], %x[second], [%x[address]]"
                              : [status] "=&r"(status)
-                             : [first] "r"(first), [second] "r"(second),
-                               [address] "r"(pair)
+                             : [first] "r"(first), [second] "r"(second), [address] "r"(pair)
                              : "memory");
         } while (status);
         exclusive_pair &= pair[0] == 42 && pair[1] == 44;
@@ -83,10 +81,11 @@ int main(void) {
             if (line[i] != 0) zva = 0;
     }
 
-    printf("aarch64-logical-ops lse=%d cas=%d casp=%d exclusive-pair=%d zva=%d\n",
-           lse, cas, casp, exclusive_pair, zva);
+    printf("aarch64-logical-ops lse=%d cas=%d casp=%d exclusive-pair=%d zva=%d\n", lse, cas, casp, exclusive_pair, zva);
     return lse && cas && casp && exclusive_pair && zva ? 0 : 1;
 }
 #else
-int main(void) { return 0; }
+int main(void) {
+    return 0;
+}
 #endif

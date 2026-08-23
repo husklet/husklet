@@ -36,13 +36,13 @@ int main(void) {
     int fresh_ok = fresh >= 0 && event_works(fresh);
     int fresh_close = fresh >= 0 && close(fresh) == 0;
     int cleanup = 1;
-    for (int i = 0; i < OPEN_COUNT - 1; i++) cleanup &= close(descriptors[i]) == 0;
+    for (int i = 0; i < OPEN_COUNT - 1; i++)
+        cleanup &= close(descriptors[i]) == 0;
 
-    printf("sentry_fd_emfile create=%d duplicate=%d recovered_dup=%d recovered_new=%d cleanup=%d\n",
-           create_emfile, duplicate_emfile, released && duplicate_ok && duplicate_close,
-           fresh_ok && fresh_close, cleanup);
-    return create_emfile && duplicate_emfile && released && duplicate_ok && duplicate_close &&
-                   fresh_ok && fresh_close && cleanup
+    printf("sentry_fd_emfile create=%d duplicate=%d recovered_dup=%d recovered_new=%d cleanup=%d\n", create_emfile,
+           duplicate_emfile, released && duplicate_ok && duplicate_close, fresh_ok && fresh_close, cleanup);
+    return create_emfile && duplicate_emfile && released && duplicate_ok && duplicate_close && fresh_ok &&
+                   fresh_close && cleanup
                ? 0
                : 1;
 }

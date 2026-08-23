@@ -10,13 +10,15 @@ int main(void) {
     snprintf(path, sizeof path, "/tmp/hl_fadvise_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
     char blk[8192];
-    for (int i = 0; i < (int)sizeof blk; i++) blk[i] = (char)i;
-    for (int i = 0; i < 16; i++) write(fd, blk, sizeof blk);
+    for (int i = 0; i < (int)sizeof blk; i++)
+        blk[i] = (char)i;
+    for (int i = 0; i < 16; i++)
+        write(fd, blk, sizeof blk);
 
     int seq = posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
-    int wn  = posix_fadvise(fd, 0, 65536, POSIX_FADV_WILLNEED);
+    int wn = posix_fadvise(fd, 0, 65536, POSIX_FADV_WILLNEED);
     int rnd = posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM);
-    int dn  = posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+    int dn = posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
     close(fd);
     unlink(path);
     printf("fadvise seq=%d willneed=%d random=%d dontneed=%d\n", seq, wn, rnd, dn);

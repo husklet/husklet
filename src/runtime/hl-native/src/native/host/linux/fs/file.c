@@ -1220,4 +1220,3 @@ static hl_host_result hl_linux_counter_close(void *context, hl_host_handle handl
 static hl_host_result hl_linux_transfer_close(void *context, hl_host_handle handle) {
     return hl_linux_close_descriptor_kind(context, handle, HL_LINUX_HANDLE_TRANSFER);
 }
-

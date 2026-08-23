@@ -39,23 +39,29 @@ static uint64_t signal_pending_bit(int signal) {
 static uint64_t thread_pending_hi_load(const struct cpu *cpu) {
     return __atomic_load_n(&cpu->tpending_hi, __ATOMIC_SEQ_CST);
 }
+
 static void thread_pending_hi_set(struct cpu *cpu) {
     __atomic_store_n(&cpu->tpending_hi, UINT64_C(1), __ATOMIC_SEQ_CST);
 }
+
 static void thread_pending_hi_clear(struct cpu *cpu) {
     __atomic_store_n(&cpu->tpending_hi, 0, __ATOMIC_SEQ_CST);
 }
+
 static int thread_defer_hi_test(const struct cpu *cpu) {
     return cpu->sig_defer_hi != 0;
 }
+
 static void thread_defer_hi_restore(struct cpu *cpu, int depth) {
     cpu->sig_defer_hi = depth > 0 ? cpu->sig_defer_hi_stack[depth] : 0;
 }
+
 static void thread_defer_hi_push(struct cpu *cpu, int depth, int pending) {
     if (depth < 0 || depth >= (int)(sizeof cpu->sig_defer_hi_stack / sizeof cpu->sig_defer_hi_stack[0])) return;
     cpu->sig_defer_hi_stack[depth] = cpu->sig_defer_hi;
     if (pending) cpu->sig_defer_hi = 1;
 }
+
 static int cpu_tid(const struct cpu *cpu);
 static int sfd_any_ready_for_cpu(struct cpu *cpu);
 
@@ -98,6 +104,7 @@ static void thread_pending_clear(struct cpu *cpu, int signal) {
     else
         __atomic_and_fetch(&cpu->tpending, ~signal_pending_bit(signal), __ATOMIC_SEQ_CST);
 }
+
 // Per-thread "this guest thread is currently inside a host syscall on the guest's behalf" flag, set
 // around service() (os/linux/syscall/dispatch.c). It is the reliable discriminator, when a fault-class
 // signal (SIGSEGV/BUS/ILL/TRAP/FPE) arrives via a POSIX handler with the host PC NOT in translated code,
@@ -212,8 +219,7 @@ static int sigq_push(int sig, int tag, int error, int code, uint64_t value, int 
     return queued;
 }
 
-static int sigq_push_signalfd(int sig, int tag, int error, int code, uint64_t value, int pid, int uid,
-                              uint64_t addr) {
+static int sigq_push_signalfd(int sig, int tag, int error, int code, uint64_t value, int pid, int uid, uint64_t addr) {
     pthread_mutex_lock(&g_sigq_lk);
     int queued = sigq_push_target_locked(sig, 0, 1, tag, error, code, value, pid, uid, addr);
     pthread_mutex_unlock(&g_sigq_lk);
@@ -260,8 +266,7 @@ static void sigq_drop_tag(int sig, int tag) {
 
 // Pop the oldest queued instance of `sig` into *out. Returns 1 iff one was dequeued; clears the g_pending
 // bit when the queue drains so a realtime signal keeps its bit set while further instances remain.
-static int sigq_pop_for(int sig, struct cpu *cpu, struct sigq_ent *out, int *popped_targeted,
-                        int *targeted_remaining) {
+static int sigq_pop_for(int sig, struct cpu *cpu, struct sigq_ent *out, int *popped_targeted, int *targeted_remaining) {
     if (sig < 1 || sig > 64) return 0;
     int got = 0;
     int got_index = -1;
@@ -285,13 +290,12 @@ static int sigq_pop_for(int sig, struct cpu *cpu, struct sigq_ent *out, int *pop
         if (entry.target_tid == 0) process_remaining = 1;
         if (entry.target_tid == tid) *targeted_remaining = 1;
     }
-    for (int i = 0; i < kept; ++i) g_sigq[sig].e[i] = copy[i];
+    for (int i = 0; i < kept; ++i)
+        g_sigq[sig].e[i] = copy[i];
     g_sigq[sig].head = 0;
     g_sigq[sig].count = kept;
-    if (got && !*popped_targeted && !process_remaining)
-        process_pending_clear(sig);
-    if (*popped_targeted && !*targeted_remaining)
-        thread_pending_clear(cpu, sig);
+    if (got && !*popped_targeted && !process_remaining) process_pending_clear(sig);
+    if (*popped_targeted && !*targeted_remaining) thread_pending_clear(cpu, sig);
     if (got) sfd_consume_slots(out->signalfd_slots);
     pthread_mutex_unlock(&g_sigq_lk);
     return got;
@@ -320,7 +324,8 @@ static void sigq_drop_target_tid(int tid) {
             if (entry.target_tid == tid) continue;
             copy[kept++] = entry;
         }
-        for (int index = 0; index < kept; ++index) g_sigq[sig].e[index] = copy[index];
+        for (int index = 0; index < kept; ++index)
+            g_sigq[sig].e[index] = copy[index];
         g_sigq[sig].head = 0;
         g_sigq[sig].count = kept;
     }
@@ -622,8 +627,7 @@ static uint64_t sfd_subscribers(int signal) {
     uint64_t slots = 0;
     uint64_t bit = UINT64_C(1) << (signal - 1);
     for (int slot = 0; slot < HL_SFD_MAX; ++slot)
-        if (g_sfd[slot].refs > 0 && g_sfd[slot].wr >= 0 && (g_sfd[slot].mask & bit))
-            slots |= UINT64_C(1) << slot;
+        if (g_sfd[slot].refs > 0 && g_sfd[slot].wr >= 0 && (g_sfd[slot].mask & bit)) slots |= UINT64_C(1) << slot;
     return slots;
 }
 
@@ -646,8 +650,8 @@ static void sfd_consume_slots(uint64_t slots) {
 
 static int sfd_routed(int ls);
 
-static int thread_directed_signal_publish(struct cpu *target, int signal, int tag, int error, int code,
-                                          uint64_t value, int pid, int uid, uint64_t address) {
+static int thread_directed_signal_publish(struct cpu *target, int signal, int tag, int error, int code, uint64_t value,
+                                          int pid, int uid, uint64_t address) {
     pthread_mutex_lock(&g_sigq_lk);
     int queued = sigq_push_target_locked(signal, cpu_tid(target), 0, tag, error, code, value, pid, uid, address);
     if (queued >= 0) thread_pending_set(target, signal);
@@ -991,8 +995,7 @@ static void maybe_deliver_signal(struct cpu *c) {
         // Deferred: this signal was already pending when the current handler was entered, so it waits until
         // that handler returns (native delivers a batch of unblocked signals serially, not nested). A signal
         // raised DURING the handler is not in c->sig_defer and still nests. Force-delivery overrides.
-        if (((sig == 64 ? thread_defer_hi_test(c) : (c->sig_defer & bit) != 0)) && !signal_force_test(sig))
-            continue;
+        if (((sig == 64 ? thread_defer_hi_test(c) : (c->sig_defer & bit) != 0)) && !signal_force_test(sig)) continue;
         uint64_t h = g_sigact[sig].handler;
         if (h <= 1) {
             // No guest handler -- discard every pending instance from all queues (and any force mark).
@@ -1482,8 +1485,7 @@ static int deliver_guest_fatal_fault(int hostsig, siginfo_t *si, void *ucv) {
     int bus_is_guest_fault = !g_in_service && si && !hl_linux_bus_hit((uint64_t)si->si_addr, 1);
 #else
     int bus_is_guest_fault = HOST_SIGNAL_HAS_FAULT_ADDRESS(si) && si->si_addr &&
-                             (gna_hit((uint64_t)si->si_addr, 1) ||
-                              !host_addr_mapped((uintptr_t)si->si_addr));
+                             (gna_hit((uint64_t)si->si_addr, 1) || !host_addr_mapped((uintptr_t)si->si_addr));
 #endif
     if (hostsig == SIGBUS && bus_is_guest_fault) sig = 11;
     if (g_sigact[sig].handler > 1) return 0; // a guest handler exists -> not ours (deliver_guest_fault owns it)

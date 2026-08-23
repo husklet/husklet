@@ -28,21 +28,34 @@ int main(void) {
 
     // 3. child killed by SIGKILL
     pid_t k = fork();
-    if (k == 0) { raise(SIGKILL); _exit(0); }
+    if (k == 0) {
+        raise(SIGKILL);
+        _exit(0);
+    }
     printf("sigkill code=%d\n", reap(k)); // 1000+9
 
     // 4. multiple children, distinct codes, reaped in order
     pid_t m[4];
-    for (int i = 0; i < 4; i++) { m[i] = fork(); if (m[i] == 0) _exit(i * 10); }
+    for (int i = 0; i < 4; i++) {
+        m[i] = fork();
+        if (m[i] == 0) _exit(i * 10);
+    }
     int sum = 0;
-    for (int i = 0; i < 4; i++) sum += reap(m[i]);
+    for (int i = 0; i < 4; i++)
+        sum += reap(m[i]);
     printf("multi sum=%d\n", sum); // 0+10+20+30
 
     // 5. WNOHANG poll until the child is reaped
     pid_t w = fork();
-    if (w == 0) { usleep(50 * 1000); _exit(7); }
+    if (w == 0) {
+        usleep(50 * 1000);
+        _exit(7);
+    }
     int st = 0, polls = 0;
-    while (waitpid(w, &st, WNOHANG) == 0) { usleep(5 * 1000); polls++; }
+    while (waitpid(w, &st, WNOHANG) == 0) {
+        usleep(5 * 1000);
+        polls++;
+    }
     printf("wnohang code=%d polled=%d\n", WEXITSTATUS(st), polls > 0);
 
     // 6. nested fork: grandchild
@@ -57,9 +70,13 @@ int main(void) {
     // 7. process-group teardown (the #394 root cause): the child makes its OWN process group and blocks;
     //    the parent SIGKILLs that whole group and must SURVIVE (not kill itself), then reap WIFSIGNALED.
     pid_t c = fork();
-    if (c == 0) { setpgid(0, 0); pause(); _exit(0); }
-    usleep(30 * 1000);          // let the child establish its group + block in pause()
-    kill(-c, SIGKILL);          // signal the child's private group -- must NOT hit the parent
+    if (c == 0) {
+        setpgid(0, 0);
+        pause();
+        _exit(0);
+    }
+    usleep(30 * 1000);                              // let the child establish its group + block in pause()
+    kill(-c, SIGKILL);                              // signal the child's private group -- must NOT hit the parent
     printf("pgkill code=%d survived=1\n", reap(c)); // 1000+9
 
     printf("procreap done\n");

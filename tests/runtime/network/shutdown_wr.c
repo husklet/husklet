@@ -17,7 +17,7 @@ int main(void) {
     char b[8] = {0};
     ssize_t n1 = recv(sv[1], b, sizeof b - 1, 0); // buffered data
     b[n1 > 0 ? n1 : 0] = 0;
-    ssize_t n2 = recv(sv[1], b, sizeof b, 0);      // EOF
+    ssize_t n2 = recv(sv[1], b, sizeof b, 0); // EOF
     // reverse direction still works
     write(sv[1], "reply", 5);
     char r[8] = {0};

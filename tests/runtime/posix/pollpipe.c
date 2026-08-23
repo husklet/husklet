@@ -12,7 +12,8 @@ int main(void) {
     int writable = poll(&pw, 1, 50) == 1 && (pw.revents & POLLOUT);
     write(fds[1], "x", 1);
     int readable = poll(&pr, 1, 50) == 1 && (pr.revents & POLLIN);
-    close(fds[0]); close(fds[1]);
+    close(fds[0]);
+    close(fds[1]);
     printf("pollpipe timeout=%d writable=%d readable=%d\n", timed_out, writable, readable);
     return 0;
 }

@@ -48,13 +48,16 @@ int main(void) {
     pthread_rwlock_unlock(&rw);
 
     pthread_t rd[R], wr[2];
-    for (int i = 0; i < R; i++) pthread_create(&rd[i], NULL, reader, NULL);
-    for (int i = 0; i < 2; i++) pthread_create(&wr[i], NULL, writer, NULL);
-    for (int i = 0; i < R; i++) pthread_join(rd[i], NULL);
-    for (int i = 0; i < 2; i++) pthread_join(wr[i], NULL);
+    for (int i = 0; i < R; i++)
+        pthread_create(&rd[i], NULL, reader, NULL);
+    for (int i = 0; i < 2; i++)
+        pthread_create(&wr[i], NULL, writer, NULL);
+    for (int i = 0; i < R; i++)
+        pthread_join(rd[i], NULL);
+    for (int i = 0; i < 2; i++)
+        pthread_join(wr[i], NULL);
     pthread_rwlock_destroy(&rw);
     // max_concurrent is timing-dependent; only assert it never underflowed.
-    printf("rwlock wbusy=%d writes_ok=%d readers_ok=%d\n",
-           wbusy, shared == 2 * ITERS, max_concurrent >= 1);
+    printf("rwlock wbusy=%d writes_ok=%d readers_ok=%d\n", wbusy, shared == 2 * ITERS, max_concurrent >= 1);
     return 0;
 }

@@ -29,8 +29,14 @@
 #define CAP_NET_RAW 13
 #define DOCKER_CAP 0x00000000a80425fbULL
 
-struct chdr { unsigned version; int pid; };
-struct cdata { unsigned eff, prm, inh; };
+struct chdr {
+    unsigned version;
+    int pid;
+};
+
+struct cdata {
+    unsigned eff, prm, inh;
+};
 
 static unsigned long long capget_eff(void) {
     struct chdr h = {0x20080522u, 0};
@@ -39,6 +45,7 @@ static unsigned long long capget_eff(void) {
     if (syscall(SYS_capget, &h, d) != 0) return ~0ULL;
     return ((unsigned long long)d[1].eff << 32) | d[0].eff;
 }
+
 static int capset_eff(unsigned long long eff) {
     struct chdr h = {0x20080522u, 0};
     struct cdata d[2];
@@ -55,16 +62,21 @@ static int status_line(const char *key, char *out, int n) {
     char b[8192];
     int fd = open("/proc/self/status", O_RDONLY), o = 0, r;
     if (fd < 0) return 0;
-    while (o < (int)sizeof b - 1 && (r = (int)read(fd, b + o, sizeof b - 1 - o)) > 0) o += r;
+    while (o < (int)sizeof b - 1 && (r = (int)read(fd, b + o, sizeof b - 1 - o)) > 0)
+        o += r;
     close(fd);
     b[o] = 0;
     size_t kl = strlen(key);
     for (char *p = b; p && *p;) {
         if (!strncmp(p, key, kl)) {
             char *v = p + kl;
-            while (*v == ' ' || *v == '\t') v++;
+            while (*v == ' ' || *v == '\t')
+                v++;
             int i = 0;
-            while (v[i] && v[i] != '\n' && i < n - 1) { out[i] = v[i]; i++; }
+            while (v[i] && v[i] != '\n' && i < n - 1) {
+                out[i] = v[i];
+                i++;
+            }
             out[i] = 0;
             return 1;
         }
@@ -73,16 +85,19 @@ static int status_line(const char *key, char *out, int n) {
     }
     return 0;
 }
+
 static unsigned long long status_hex(const char *key) {
     char v[64];
     return status_line(key, v, sizeof v) ? strtoull(v, 0, 16) : ~0ULL;
 }
+
 // parse the 4 whitespace ids of a Uid:/Gid: line.
 static int status_ids(const char *key, long id[4]) {
     char v[128];
     if (!status_line(key, v, sizeof v)) return 0;
     int i = 0;
-    for (char *t = strtok(v, " \t"); t && i < 4; t = strtok(NULL, " \t")) id[i++] = strtol(t, 0, 10);
+    for (char *t = strtok(v, " \t"); t && i < 4; t = strtok(NULL, " \t"))
+        id[i++] = strtol(t, 0, 10);
     return i == 4;
 }
 
@@ -106,8 +121,8 @@ int main(void) {
     // ---- PR_GET_SECUREBITS round-trips (default 0); PR_SET stores it ----
     errno = 0;
     int sb = prctl(PR_GET_SECUREBITS, 0, 0, 0, 0);
-    int securebits_ok = sb == 0 && prctl(PR_SET_SECUREBITS, sb, 0, 0, 0) == 0 &&
-                        prctl(PR_GET_SECUREBITS, 0, 0, 0, 0) == sb;
+    int securebits_ok =
+        sb == 0 && prctl(PR_SET_SECUREBITS, sb, 0, 0, 0) == 0 && prctl(PR_GET_SECUREBITS, 0, 0, 0, 0) == sb;
 
     // ---- PR_SET/GET_KEEPCAPS round-trip ----
     int keepcaps_ok = prctl(PR_GET_KEEPCAPS, 0, 0, 0, 0) == 0 && prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) == 0 &&
@@ -115,7 +130,7 @@ int main(void) {
                       prctl(PR_GET_KEEPCAPS, 0, 0, 0, 0) == 0;
 
     // ---- setfsuid returns the PREVIOUS fs id and never fails ----
-    int prev_fsuid = setfsuid(-1);      // query: returns current fsuid without changing it
+    int prev_fsuid = setfsuid(-1); // query: returns current fsuid without changing it
     int fsuid_ok = prev_fsuid == (int)geteuid() && setfsuid(geteuid()) == (int)geteuid();
 
     // ---- PR_CAPBSET_DROP clears a bounding bit visibly in PR_CAPBSET_READ and status CapBnd ----
@@ -123,8 +138,8 @@ int main(void) {
     int drop = prctl(PR_CAPBSET_DROP, CAP_NET_RAW, 0, 0, 0);
     int bnd_after = prctl(PR_CAPBSET_READ, CAP_NET_RAW, 0, 0, 0);
     unsigned long long s_bnd = status_hex("CapBnd:");
-    int capbset_ok = bnd_before == 1 && drop == 0 && bnd_after == 0 &&
-                     (s_bnd & (1ULL << CAP_NET_RAW)) == 0 && (s_bnd & (1ULL << CAP_SETPCAP)) != 0;
+    int capbset_ok = bnd_before == 1 && drop == 0 && bnd_after == 0 && (s_bnd & (1ULL << CAP_NET_RAW)) == 0 &&
+                     (s_bnd & (1ULL << CAP_SETPCAP)) != 0;
 
     // ---- capset() narrows the EFFECTIVE set; capget(2) and status CapEff both reflect it ----
     unsigned long long eff0 = capget_eff();
@@ -171,10 +186,10 @@ int main(void) {
             uid_t self = getuid();
             gid_t selfg = getgid();
             errno = 0;
-            ok = setuid(0) == -1 && errno == EPERM;                  // cannot raise to an id it does not hold
+            ok = setuid(0) == -1 && errno == EPERM; // cannot raise to an id it does not hold
             errno = 0;
             ok = ok && setresuid((uid_t)-1, 0, (uid_t)-1) == -1 && errno == EPERM; // seteuid(0) also EPERM
-            ok = ok && setuid(self) == 0 && setgid(selfg) == 0;      // setting a held id succeeds (no-op)
+            ok = ok && setuid(self) == 0 && setgid(selfg) == 0;                    // setting a held id succeeds (no-op)
             long cu[4];
             ok = ok && status_ids("Uid:", cu) && cu[0] == (long)self && cu[1] == (long)self; // unchanged + consistent
         }
@@ -184,8 +199,8 @@ int main(void) {
     waitpid(child, &st, 0);
     int drop_ok = WIFEXITED(st) && WEXITSTATUS(st) == 0;
 
-    int ok = uid_consistent && gid_consistent && noop_ok && securebits_ok && keepcaps_ok && fsuid_ok &&
-             capbset_ok && capset_ok && nnp_ok && drop_ok;
+    int ok = uid_consistent && gid_consistent && noop_ok && securebits_ok && keepcaps_ok && fsuid_ok && capbset_ok &&
+             capset_ok && nnp_ok && drop_ok;
     if (ok)
         printf("credentials ok=1\n");
     else

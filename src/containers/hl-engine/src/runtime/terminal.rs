@@ -11,592 +11,24 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-pub(super) struct NativeOutputBridge {
-    input: OwnedFd,
-    stdout: Option<OwnedFd>,
-    stderr: Option<OwnedFd>,
-    stop: Arc<AtomicBool>,
-    in_flight: Arc<Mutex<usize>>,
-    port: Arc<dyn StandardStreamPort>,
-    workers: Vec<JoinHandle<()>>,
-}
+#[path = "terminal_output.rs"]
+mod output;
+pub(super) use output::NativeOutputBridge;
+#[path = "terminal_bridge.rs"]
+mod bridge;
+#[cfg(test)]
+use bridge::open_pair;
+pub(crate) use bridge::write_master;
+pub(super) use bridge::{InputDiscipline, NativeTerminalBridge};
 
-impl NativeOutputBridge {
-    pub(super) fn attach(port: Arc<dyn StandardStreamPort>) -> Result<Self, CompositionError> {
-        let (input, input_writer) = open_input_pipe()?;
-        let (stdout_reader, stdout) = open_pipe()?;
-        let (stderr_reader, stderr) = open_pipe()?;
-        let stop = Arc::new(AtomicBool::new(false));
-        let in_flight = Arc::new(Mutex::new(0));
-        let input_worker = spawn_standard_input(Arc::clone(&port), Arc::clone(&stop), input_writer)?;
-        let stdout_worker = match spawn_stream_reader(
-            Arc::clone(&port),
-            Arc::clone(&stop),
-            Arc::clone(&in_flight),
-            stdout_reader,
-            StandardStream::Stdout,
-        ) {
-            Ok(worker) => worker,
-            Err(error) => {
-                stop.store(true, Ordering::Release);
-                port.close();
-                let _ = input_worker.join();
-                return Err(error);
-            }
-        };
-        let stderr_worker = match spawn_stream_reader(
-            Arc::clone(&port),
-            Arc::clone(&stop),
-            Arc::clone(&in_flight),
-            stderr_reader,
-            StandardStream::Stderr,
-        ) {
-            Ok(worker) => worker,
-            Err(error) => {
-                stop.store(true, Ordering::Release);
-                port.close();
-                drop(stdout);
-                let _ = input_worker.join();
-                let _ = stdout_worker.join();
-                return Err(error);
-            }
-        };
-        Ok(Self {
-            input,
-            stdout: Some(stdout),
-            stderr: Some(stderr),
-            stop,
-            in_flight,
-            port,
-            workers: vec![input_worker, stdout_worker, stderr_worker],
-        })
-    }
-
-    pub(super) fn standard_fds(&self) -> [i32; 3] {
-        [
-            self.input.as_raw_fd(),
-            self.stdout.as_ref().expect("live stdout bridge").as_raw_fd(),
-            self.stderr.as_ref().expect("live stderr bridge").as_raw_fd(),
-        ]
-    }
-
-    pub(super) fn flush(&self) {
-        for _ in 0..200 {
-            let in_flight = self.in_flight.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            if *in_flight == 0 && self.pending_bytes() == 0 {
-                return;
-            }
-            drop(in_flight);
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-    }
-
-    fn pending_bytes(&self) -> i32 {
-        [&self.stdout, &self.stderr]
-            .into_iter()
-            .filter_map(Option::as_ref)
-            .map(|descriptor| {
-                let mut pending = 0;
-                // SAFETY: FIONREAD writes one integer and borrows a live pipe descriptor.
-                if unsafe { libc::ioctl(descriptor.as_raw_fd(), libc::FIONREAD, &raw mut pending) } == 0 {
-                    pending
-                } else {
-                    1
-                }
-            })
-            .sum()
-    }
-}
-
-impl Drop for NativeOutputBridge {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        self.stdout.take();
-        self.stderr.take();
-        self.port.close();
-        for worker in self.workers.drain(..) {
-            let _ = worker.join();
-        }
-    }
-}
-
-fn open_input_pipe() -> Result<(OwnedFd, File), CompositionError> {
-    let (reader, writer) = open_pipe_descriptors()?;
-    set_file_nonblocking(&writer)?;
-    Ok((reader, writer))
-}
-
-fn open_pipe() -> Result<(File, OwnedFd), CompositionError> {
-    let (reader, writer) = open_pipe_descriptors()?;
-    let reader = File::from(reader);
-    set_file_nonblocking(&reader)?;
-    Ok((reader, writer.into()))
-}
-
-fn open_pipe_descriptors() -> Result<(OwnedFd, File), CompositionError> {
-    let mut descriptors = [-1; 2];
-    // SAFETY: descriptors points to two writable integers.
-    if unsafe { libc::pipe(descriptors.as_mut_ptr()) } != 0 {
-        return Err(CompositionError::RuntimeConstruction);
-    }
-    for descriptor in descriptors {
-        // SAFETY: pipe returned live descriptors; F_SETFD does not transfer ownership.
-        if unsafe { libc::fcntl(descriptor, libc::F_SETFD, libc::FD_CLOEXEC) } != 0 {
-            // SAFETY: both descriptors are still uniquely owned here.
-            unsafe {
-                libc::close(descriptors[0]);
-                libc::close(descriptors[1]);
-            }
-            return Err(CompositionError::RuntimeConstruction);
-        }
-    }
-    // SAFETY: successful pipe returned two fresh descriptors with distinct ownership.
-    Ok(unsafe { (OwnedFd::from_raw_fd(descriptors[0]), File::from_raw_fd(descriptors[1])) })
-}
-
-fn set_file_nonblocking(descriptor: &File) -> Result<(), CompositionError> {
-    // SAFETY: both operations borrow a live descriptor and do not transfer ownership.
-    let flags = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETFL) };
-    if flags < 0 || unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
-        return Err(CompositionError::RuntimeConstruction);
-    }
-    Ok(())
-}
-
-fn spawn_stream_reader(
-    port: Arc<dyn StandardStreamPort>,
-    stop: Arc<AtomicBool>,
-    in_flight: Arc<Mutex<usize>>,
-    mut reader: File,
-    stream: StandardStream,
-) -> Result<JoinHandle<()>, CompositionError> {
-    std::thread::Builder::new()
-        .name(match stream {
-            StandardStream::Stdout => "hl-stdout".to_owned(),
-            StandardStream::Stderr => "hl-stderr".to_owned(),
-        })
-        .spawn(move || {
-            let mut bytes = [0_u8; 8192];
-            while !stop.load(Ordering::Acquire) {
-                let Some(count) = read_stream(&mut reader, &mut bytes, &stop, &in_flight) else {
-                    break;
-                };
-                let written = write_stream(port.as_ref(), stream, &bytes[..count]);
-                let mut active = in_flight.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                *active -= 1;
-                drop(active);
-                if !written {
-                    return;
-                }
-            }
-        })
-        .map_err(|_| CompositionError::RuntimeConstruction)
-}
-
-fn spawn_standard_input(
-    port: Arc<dyn StandardStreamPort>,
-    stop: Arc<AtomicBool>,
-    mut writer: File,
-) -> Result<JoinHandle<()>, CompositionError> {
-    std::thread::Builder::new()
-        .name("hl-stdin".to_owned())
-        .spawn(move || {
-            let mut bytes = [0_u8; 8192];
-            while !stop.load(Ordering::Acquire) {
-                let count = match port.read(&mut bytes) {
-                    Ok(0) | Err(_) => break,
-                    Ok(count) => count,
-                };
-                if write_master(&mut writer, &bytes[..count], &stop).is_err() {
-                    break;
-                }
-            }
-        })
-        .map_err(|_| CompositionError::RuntimeConstruction)
-}
-
-fn read_stream(reader: &mut File, bytes: &mut [u8], stop: &AtomicBool, in_flight: &Mutex<usize>) -> Option<usize> {
-    while !stop.load(Ordering::Acquire) {
-        let mut active = in_flight.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        match reader.read(bytes) {
-            Ok(0) => return None,
-            Ok(count) => {
-                *active += 1;
-                return Some(count);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                drop(active);
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => drop(active),
-            Err(_) => return None,
-        }
-    }
-    None
-}
-
-fn write_stream(port: &dyn StandardStreamPort, stream: StandardStream, bytes: &[u8]) -> bool {
-    let mut written = 0;
-    while written < bytes.len() {
-        match port.write(stream, &bytes[written..]) {
-            Ok(0) | Err(_) => return false,
-            Ok(count) => written += count,
-        }
-    }
-    true
-}
-
-struct NativeTerminalControl {
-    master: OwnedFd,
-}
-
-impl TerminalAttachment for NativeTerminalControl {
-    fn resize(&self, rows: u16, columns: u16) -> Result<(), CompositionError> {
-        let size = libc::winsize {
-            ws_row: rows,
-            ws_col: columns,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        // SAFETY: the control owns a live PTY master and `size` is readable for this ioctl call.
-        let result = unsafe { libc::ioctl(self.master.as_raw_fd(), libc::TIOCSWINSZ, &raw const size) };
-        (result == 0).then_some(()).ok_or(CompositionError::RuntimeConstruction)
-    }
-}
-
-pub(super) struct NativeTerminalBridge {
-    /// `None` once the slave has been taken for a restored member: that member's engine process receives
-    /// the descriptor over `SCM_RIGHTS` and owns it from then on, and the host keeping a second copy would
-    /// hold the master open past the member's exit and turn an end-of-file into a hang.
-    slave: Option<OwnedFd>,
-    monitor: File,
-    stop: Arc<AtomicBool>,
-    in_flight: Arc<Mutex<usize>>,
-    terminal: Arc<Terminal>,
-    port: Arc<dyn TerminalPort>,
-    guest: Option<Arc<GuestDiscipline>>,
-    workers: Vec<JoinHandle<()>>,
-}
-
-/// Which line discipline stands between the host's keystrokes and the guest's `read`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum InputDiscipline {
-    /// The host kernel's. What every terminal here used to get, and still the only choice for a pty
-    /// whose slave this process does not keep: the discipline needs that descriptor to read the
-    /// guest's termios and to raise end-of-file.
-    ///
-    /// On a macOS host this is the BSD discipline, whose `MAX_CANON` is 1024 and which **flushes the
-    /// whole input queue** on overflow, so a pasted canonical line of 1025 bytes or more is silently
-    /// destroyed while every write reports success.
-    Host,
-    /// The Linux `N_TTY` discipline, run in this process over a raw host slave.
-    ///
-    /// A raw BSD slave applies backpressure instead of flushing -- measured: the write goes short and
-    /// every accepted byte is delivered, at any length -- so the channel underneath is lossless and
-    /// [`super::line_discipline`] supplies the semantics the guest expects, including Linux's 4096-byte
-    /// canonical line and its truncate-rather-than-discard overflow.
-    Linux,
-}
-
-impl NativeTerminalBridge {
-    pub(super) fn attach(terminal: Arc<Terminal>, discipline: InputDiscipline) -> Result<Self, CompositionError> {
-        let (master, slave) = open_pair(terminal.initial())?;
-        set_nonblocking(&master)?;
-        let input_master = duplicate(&master)?;
-        let output_master = duplicate(&master)?;
-        let monitor = duplicate(&master)?;
-        // Built before the master is moved into the control: it needs a descriptor of its own for
-        // `tcgetpgrp`, and none of the pumps' duplicates outlive a failure here.
-        let guest = match discipline {
-            InputDiscipline::Host => None,
-            InputDiscipline::Linux => Some(GuestDiscipline::adopt(&slave, &master)?),
-        };
-        let control = Arc::new(NativeTerminalControl { master });
-        terminal.attach(control)?;
-        let stop = Arc::new(AtomicBool::new(false));
-        let in_flight = Arc::new(Mutex::new(0));
-        let port = terminal.port();
-        let input = spawn_input(Arc::clone(&port), Arc::clone(&stop), input_master, guest.clone())?;
-        let output = match spawn_output(
-            Arc::clone(&port),
-            Arc::clone(&stop),
-            Arc::clone(&in_flight),
-            output_master,
-            guest.clone(),
-        ) {
-            Ok(worker) => worker,
-            Err(error) => {
-                stop.store(true, Ordering::Release);
-                port.close();
-                let _ = input.join();
-                return Err(error);
-            }
-        };
-        Ok(Self {
-            slave: Some(slave),
-            monitor,
-            stop,
-            in_flight,
-            terminal,
-            port,
-            guest,
-            workers: vec![input, output],
-        })
-    }
-
-    /// Which discipline this bridge actually ended up running.
-    ///
-    /// Not the one that was asked for: adopting the Linux discipline needs the engine's termios
-    /// store, and a bridge that could not reach it falls back to the host's rather than running with
-    /// a guest view it cannot keep truthful.
-    #[cfg(test)]
-    pub(super) fn discipline(&self) -> InputDiscipline {
-        if self.guest.is_some() {
-            InputDiscipline::Linux
-        } else {
-            InputDiscipline::Host
-        }
-    }
-
-    pub(super) fn standard_fds(&self) -> [i32; 3] {
-        [self.slave.as_ref().expect("engine-bound terminal slave").as_raw_fd(); 3]
-    }
-
-    /// Takes the slave end, transferring it to the caller.
-    ///
-    /// Used for a restored member's terminal, whose slave is handed to the member's own process rather
-    /// than bound as this engine's standard descriptors. A bridge whose slave has been taken must not be
-    /// asked for [`Self::standard_fds`].
-    pub(super) fn take_slave(&mut self) -> Option<OwnedFd> {
-        self.slave.take()
-    }
-
-    pub(super) fn flush(&self) {
-        for _ in 0..200 {
-            let in_flight = self.in_flight.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            if *in_flight == 0 && self.pending_bytes() == 0 {
-                return;
-            }
-            drop(in_flight);
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-    }
-
-    fn pending_bytes(&self) -> i32 {
-        let mut pending = 0;
-        // SAFETY: FIONREAD writes one integer and borrows a live duplicate of the PTY master.
-        if unsafe { libc::ioctl(self.monitor.as_raw_fd(), libc::FIONREAD, &raw mut pending) } == 0 {
-            pending
-        } else {
-            1
-        }
-    }
-}
-
-impl Drop for NativeTerminalBridge {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        self.terminal.detach();
-        self.port.close();
-        for worker in self.workers.drain(..) {
-            let _ = worker.join();
-        }
-        // After the pumps have stopped, never before: a running pump would re-assert raw mode on the
-        // next input batch and undo this.
-        if let Some(guest) = self.guest.as_ref() {
-            guest.release();
-        }
-    }
-}
-
-fn set_nonblocking(descriptor: &OwnedFd) -> Result<(), CompositionError> {
-    // SAFETY: both operations borrow a live descriptor and do not transfer ownership.
-    let flags = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETFL) };
-    if flags < 0 || unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
-        return Err(CompositionError::RuntimeConstruction);
-    }
-    Ok(())
-}
-
-fn open_pair(initial: (u16, u16)) -> Result<(OwnedFd, OwnedFd), CompositionError> {
-    let mut master = -1;
-    let mut slave = -1;
-    let mut size = libc::winsize {
-        ws_row: initial.0,
-        ws_col: initial.1,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    // SAFETY: writable descriptor outputs and a readable winsize are supplied; no termios override is requested.
-    let result = unsafe {
-        libc::openpty(
-            &raw mut master,
-            &raw mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &raw mut size,
-        )
-    };
-    if result != 0 {
-        return Err(CompositionError::RuntimeConstruction);
-    }
-    // SAFETY: successful `openpty` returned two new uniquely owned descriptors.
-    Ok(unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) })
-}
-
-fn duplicate(descriptor: &OwnedFd) -> Result<File, CompositionError> {
-    // SAFETY: `dup` borrows a live descriptor and returns a fresh descriptor on success.
-    let copy = unsafe { libc::dup(descriptor.as_raw_fd()) };
-    if copy < 0 {
-        return Err(CompositionError::RuntimeConstruction);
-    }
-    // SAFETY: `copy` is a fresh uniquely owned descriptor.
-    Ok(unsafe { File::from_raw_fd(copy) })
-}
-
-fn spawn_input(
-    port: Arc<dyn TerminalPort>,
-    stop: Arc<AtomicBool>,
-    mut master: File,
-    guest: Option<Arc<GuestDiscipline>>,
-) -> Result<JoinHandle<()>, CompositionError> {
-    std::thread::Builder::new()
-        .name("hl-terminal-input".to_owned())
-        .spawn(move || {
-            let mut bytes = [0_u8; 8192];
-            // One effect for the life of the pump. Its buffers are cleared, not reallocated, so a
-            // steady stream of keystrokes runs the discipline without touching the allocator.
-            let mut effect = line_discipline::Effect::default();
-            while !stop.load(Ordering::Acquire) {
-                let count = match port.read(&mut bytes) {
-                    Ok(0) | Err(_) => break,
-                    Ok(count) => count,
-                };
-                let Some(guest) = guest.as_ref() else {
-                    if write_master(&mut master, &bytes[..count], &stop).is_err() {
-                        break;
-                    }
-                    continue;
-                };
-                effect.clear();
-                guest.receive(&bytes[..count], &mut effect);
-                if !guest.deliver(&effect, &mut master, port.as_ref(), &stop) {
-                    break;
-                }
-            }
-        })
-        .map_err(|_| CompositionError::RuntimeConstruction)
-}
-
-fn write_master(master: &mut File, bytes: &[u8], stop: &AtomicBool) -> std::io::Result<()> {
-    let mut written = 0;
-    while written < bytes.len() && !stop.load(Ordering::Acquire) {
-        match master.write(&bytes[written..]) {
-            Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
-            Ok(count) => written += count,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                let mut poll = libc::pollfd {
-                    fd: master.as_raw_fd(),
-                    events: libc::POLLOUT,
-                    revents: 0,
-                };
-                // SAFETY: `poll` references one initialized record for the duration of the call.
-                if unsafe { libc::poll(&raw mut poll, 1, 50) } < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(())
-}
-
-/// Tops up a short read once, so one guest write does not reach the display in two pieces.
+/// The guest termios one pump is running, and the host projection it imposed in order to run it.
 ///
-/// The sleep is what makes it worth trying: the writer is a guest that has just been scheduled out,
-/// and a full buffer means there was never a gap to top up.
-fn top_up_batch(master: &mut File, bytes: &mut [u8; 16 * 1024], count: usize) -> usize {
-    let mut count = count;
-    if count >= bytes.len() {
-        return count;
-    }
-    std::thread::sleep(std::time::Duration::from_millis(1));
-    while count < bytes.len() {
-        match master.read(&mut bytes[count..]) {
-            Ok(read) if read > 0 => count += read,
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            _ => break,
-        }
-    }
-    count
-}
-
-fn spawn_output(
-    port: Arc<dyn TerminalPort>,
-    stop: Arc<AtomicBool>,
-    in_flight: Arc<Mutex<usize>>,
-    mut master: File,
-    guest: Option<Arc<GuestDiscipline>>,
-) -> Result<JoinHandle<()>, CompositionError> {
-    std::thread::Builder::new()
-        .name("hl-terminal-output".to_owned())
-        .spawn(move || {
-            let mut bytes = [0_u8; 16 * 1024];
-            // Reused across batches for the same reason the input pump reuses its effect.
-            let mut processed = Vec::new();
-            while !stop.load(Ordering::Acquire) {
-                let mut poll = libc::pollfd {
-                    fd: master.as_raw_fd(),
-                    events: libc::POLLIN,
-                    revents: 0,
-                };
-                // SAFETY: `poll` references one initialized poll record for the duration of the call.
-                let ready = unsafe { libc::poll(&raw mut poll, 1, 50) };
-                if ready < 0 {
-                    break;
-                }
-                if ready == 0 {
-                    continue;
-                }
-                let mut active = in_flight.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                let mut count = match master.read(&mut bytes) {
-                    Ok(0) => break,
-                    Ok(count) => {
-                        *active += 1;
-                        count
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        drop(active);
-                        continue;
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
-                        drop(active);
-                        continue;
-                    }
-                    Err(_) => break,
-                };
-                drop(active);
-                count = top_up_batch(&mut master, &mut bytes, count);
-                // A raw host slave post-processes nothing, so `OPOST` is applied here or every
-                // guest newline reaches the display without its carriage return.
-                let written = match guest.as_ref() {
-                    None => write_output(port.as_ref(), &bytes[..count]),
-                    Some(guest) => {
-                        guest.await_output_resumed(&stop);
-                        guest.post_process(&bytes[..count], &mut processed);
-                        write_output(port.as_ref(), &processed)
-                    }
-                };
-                let mut active = in_flight.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                *active -= 1;
-                drop(active);
-                if !written {
-                    return;
-                }
-            }
-        })
-        .map_err(|_| CompositionError::RuntimeConstruction)
+/// The pair is what makes "the guest changed something" decidable across a process boundary: the
+/// projection is this pump's own last write to the slave, so a host termios that is not it was
+/// written by the guest.
+struct AdoptedTerminal {
+    image: [u8; 36],
+    projection: [u8; 36],
 }
 
 /// The Linux `N_TTY` discipline running over one raw host pty, and everything it needs from the host.
@@ -620,9 +52,22 @@ struct GuestDiscipline {
     original: libc::termios,
     state: Mutex<LineDiscipline>,
     /// The termios generation `state` was last synchronised at. One relaxed load per input batch
-    /// decides whether the image has to be read again; nothing in the keystroke path fstats or calls
-    /// `tcgetattr`.
+    /// decides whether the engine's store has to be read again.
     generation: AtomicU64,
+    /// What this pump last adopted, and the host projection it imposed in order to run it.
+    ///
+    /// The engine's termios store is a plain static, and the guest runs in a **fork child** of this
+    /// process -- `hl_linux_abi_spawn` in `engine/lifecycle.c`. So the guest's `TCSETS` bumps the
+    /// generation and records the image in the child's private copy of that static, and this process
+    /// never sees either; `the_guest_termios_store_does_not_cross_the_restore_fork` measures exactly
+    /// that property for the restore fork, and the launch fork has it for the same reason.
+    ///
+    /// What does cross is the pty. Every TCSETS route -- `syscall/fs/control.c` and
+    /// `syscall/binding/route_bound.c` alike -- reissues the guest's request as a real `tcsetattr`
+    /// on this slave before recording anything, so a host termios that is no longer what this pump
+    /// installed **is** the guest having installed one. That is the only signal that crosses the
+    /// fork, which is why the pump keeps what it imposed rather than assuming the slave stayed raw.
+    adopted: Mutex<AdoptedTerminal>,
     output_stopped: AtomicBool,
 }
 
@@ -651,12 +96,17 @@ impl GuestDiscipline {
         // Re-pair that cooked image with the raw projection the host now holds, so the guest's own
         // TCGETS keeps answering with a cooked terminal instead of the raw mode imposed here.
         hl_native::terminal_termios_adopt(slave.as_raw_fd(), &image).ok_or_else(missing)?;
+        let adopted = Mutex::new(AdoptedTerminal {
+            image,
+            projection: host_projection(&slave),
+        });
         Ok(Arc::new(Self {
             slave,
             master,
             original,
             state: Mutex::new(LineDiscipline::new(Termios::from_image(&image))),
             generation: AtomicU64::new(hl_native::terminal_termios_generation()),
+            adopted,
             output_stopped: AtomicBool::new(false),
         }))
     }
@@ -674,23 +124,72 @@ impl GuestDiscipline {
             .receive(bytes, effect);
     }
 
-    /// Adopts the guest's termios when it has moved. The common case is one relaxed load.
+    /// Adopts the guest's termios when it has moved, from whichever of the two signals moved.
+    ///
+    /// A line editor -- `ash`'s, `readline`, every interactive shell there is -- performs a
+    /// raw-mode `tcsetattr` between writing its prompt and issuing its own `read`, and restores the
+    /// cooked image once the line is in. Measured on this host against the `alpine:3.20` busybox:
+    /// `TCGETS`, then `TCSETS` clearing `ISIG|ICANON|ECHO`, then the read, then `TCSETS` putting
+    /// them back -- once per prompt. `bash` does the same with `TCSETSW` and also clears `ICRNL`.
+    /// Missing that one set is what makes the discipline draw a line the guest is about to draw
+    /// again, so it is checked on every batch and not only when the store says so.
+    ///
+    /// **Two signals, because only one of them crosses a process boundary.**
+    ///
+    /// - `terminal_termios_generation` is the exact one: it carries the whole 36-byte image the
+    ///   guest authored, including the bits a BSD host cannot hold. It is a plain static, so it
+    ///   reports only guests sharing this address space.
+    /// - The host slave's own termios is the one that crosses. Every TCSETS route reissues the
+    ///   guest's request as a real `tcsetattr` on this descriptor, and the descriptor is shared with
+    ///   the fork child the guest runs in, so a projection that is no longer what this pump imposed
+    ///   is the guest having installed something. On Linux the host structure already **is** the
+    ///   guest ABI and the reading is exact; on a BSD host it is the host's translation, so a
+    ///   cross-process change is seen minus the flags `termios_m2l` cannot carry -- which is what
+    ///   the host discipline would have given that terminal anyway, and strictly more than ignoring
+    ///   the change.
+    ///
+    /// The exact signal wins when both moved, so a same-address-space guest keeps full fidelity on
+    /// every host.
     fn synchronise(&self, effect: &mut line_discipline::Effect) {
-        let current = hl_native::terminal_termios_generation();
-        if current == self.generation.load(Ordering::Relaxed) {
+        let generation = hl_native::terminal_termios_generation();
+        let mut host = [0_u8; 36];
+        let read_host = hl_native::terminal_termios_capture(self.slave.as_raw_fd(), &mut host).is_some();
+        let mut store = [0_u8; 36];
+        let image = {
+            let adopted = self.adopted.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            // The generation counts installs across every terminal in the process, so a sibling
+            // pump adopting its own pty moves it too. The entry for THIS terminal having changed is
+            // what makes it ours; anything else falls through to the host.
+            let stored = generation != self.generation.load(Ordering::Relaxed)
+                && hl_native::terminal_termios(self.slave.as_raw_fd(), &mut store).is_some()
+                && store != adopted.image;
+            if stored {
+                Some(store)
+            } else if read_host && host != adopted.projection {
+                Some(host)
+            } else {
+                None
+            }
+        };
+        let Some(image) = image else {
+            self.generation.store(generation, Ordering::Relaxed);
             return;
-        }
-        self.generation.store(current, Ordering::Relaxed);
-        let mut image = [0_u8; 36];
-        if hl_native::terminal_termios(self.slave.as_raw_fd(), &mut image).is_none() {
-            return;
-        }
+        };
         // The guest's own TCSETS reached the host slave and undid the raw mode. Re-assert it before
         // any byte is written, and re-pair the guest's image with the projection that produces, so
         // the guest still reads back what it installed.
         if make_raw(&self.slave).is_some() {
             let _ = hl_native::terminal_termios_adopt(self.slave.as_raw_fd(), &image);
         }
+        // After the re-assertion, never before: every write this module makes to the slave is
+        // recorded here, so that the next batch reads a divergence only when somebody ELSE wrote.
+        // `terminal_termios_adopt` bumps the generation itself, which is why it is re-read.
+        *self.adopted.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = AdoptedTerminal {
+            image,
+            projection: host_projection(&self.slave),
+        };
+        self.generation
+            .store(hl_native::terminal_termios_generation(), Ordering::Relaxed);
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -796,6 +295,11 @@ impl GuestDiscipline {
         if hl_native::terminal_termios(self.slave.as_raw_fd(), &mut image).is_some() {
             let _ = hl_native::terminal_termios_adopt(self.slave.as_raw_fd(), &image);
         }
+        // Both writes above were this pump's, so the next batch must not read them as the guest's.
+        self.adopted
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .projection = host_projection(&self.slave);
         // A master that refused the end-of-file byte is gone, and so is the reason to keep pumping.
         written
     }
@@ -830,6 +334,19 @@ fn install(descriptor: &OwnedFd, attributes: &libc::termios) -> Option<()> {
 
 /// Puts a descriptor in raw mode, which is what makes the channel underneath lossless: a raw BSD
 /// slave applies backpressure at its buffer instead of flushing the whole canonical queue.
+/// The Linux image of the host termios `descriptor` carries right now, or all zeroes when it cannot
+/// be read.
+///
+/// A descriptor whose termios cannot be read reads as a projection no guest can install, so the next
+/// batch takes the divergence branch and re-derives everything rather than trusting a stale image.
+fn host_projection(descriptor: &OwnedFd) -> [u8; 36] {
+    let mut image = [0_u8; 36];
+    if hl_native::terminal_termios_capture(descriptor.as_raw_fd(), &mut image).is_none() {
+        image = [0_u8; 36];
+    }
+    image
+}
+
 fn make_raw(descriptor: &OwnedFd) -> Option<()> {
     let mut attributes = attributes(descriptor)?;
     // SAFETY: `attributes` is a valid initialized termios for the duration of the call.
@@ -846,6 +363,78 @@ fn write_output(port: &dyn TerminalPort, bytes: &[u8]) -> bool {
         }
     }
     true
+}
+
+/// The terminal one restored member reattaches to.
+///
+/// A whole-image restore rebinds every member's captured guest fds 0..2 to a live terminal, and until a
+/// per-member terminal existed that could only be the restoring engine's own bridge -- one bridge for a
+/// tree of many. This is the producer for a single member: an ordinary pty whose master end this host
+/// pumps to and from the port it was built with, and whose slave end is handed to the member's process
+/// during its descriptor restore.
+///
+/// It must be created BEFORE the container starts, because the member asks for it from inside that
+/// restore, long before any pane exists to ask on its behalf.
+#[cfg(unix)]
+pub struct MemberTerminal {
+    bridge: NativeTerminalBridge,
+    terminal: Arc<Terminal>,
+}
+
+#[cfg(unix)]
+impl MemberTerminal {
+    /// Opens the pty and starts its pumps, yielding the slave end to register with the engine.
+    ///
+    /// The slave is returned rather than retained: the member owns it once the engine hands it over, and a
+    /// copy kept here would hold the master open past the member's exit, turning an end-of-file into a
+    /// hang for whoever is reading the session.
+    ///
+    /// # Errors
+    /// Returns [`CompositionError::RuntimeConstruction`] when the pty or its pumps cannot be created.
+    pub fn open(terminal: Arc<Terminal>) -> Result<(Self, OwnedFd), CompositionError> {
+        // Explicitly the host discipline, and the reason is not the one this comment used to give.
+        //
+        // The lifetime objection -- that keeping a copy of the slave here would hold the master open
+        // past the member's exit and turn an end-of-file into a hang -- is real but solvable: the
+        // session that owns this terminal already observes the member's exit on its own poll, so it
+        // could drop the discipline's copy at that moment and let the master see its end-of-file.
+        //
+        // What is NOT solvable from this side is where the guest's termios lives. A restored member
+        // is a re-forked process of its own, and the engine's per-terminal termios store is a plain
+        // static inside the dlopened engine, so the fork gives the member a private copy: its
+        // `TCSETS` bumps ITS generation, never this process's, and
+        // `the_guest_termios_store_does_not_cross_the_restore_fork` pins exactly that. A discipline
+        // running here would therefore be frozen at the image the pty was opened with and would keep
+        // canonicalising a line for a shell that had asked for `-icanon` -- every keystroke withheld
+        // until Enter, no per-key echo, arrow keys and editors dead. That is far worse than losing a
+        // line over 1024 bytes, so a restored member keeps the host discipline until the store the
+        // guest writes to is one both processes can read. On macOS it therefore still loses a
+        // canonical line over 1024 bytes, and `a_restored_member_terminal_falls_back_to_the_host_discipline`
+        // keeps that fallback deliberate rather than accidental.
+        let mut bridge = NativeTerminalBridge::attach(Arc::clone(&terminal), InputDiscipline::Host)?;
+        let slave = bridge.take_slave().ok_or(CompositionError::RuntimeConstruction)?;
+        Ok((Self { bridge, terminal }, slave))
+    }
+
+    /// Which discipline this member's terminal actually runs. See [`Self::open`] for why it is the
+    /// host's.
+    #[cfg(test)]
+    pub(super) fn discipline(&self) -> InputDiscipline {
+        self.bridge.discipline()
+    }
+
+    /// Resizes this member's terminal, never its container's.
+    ///
+    /// # Errors
+    /// Returns [`CompositionError`] when the size is empty or the pty refuses the change.
+    pub fn resize(&self, rows: u16, columns: u16) -> Result<(), CompositionError> {
+        self.terminal.resize(rows, columns)
+    }
+
+    /// Waits for output already produced to reach the port, as the engine's own bridge does at exit.
+    pub fn flush(&self) {
+        self.bridge.flush();
+    }
 }
 
 #[cfg(test)]
@@ -1237,6 +826,271 @@ mod tests {
         drop(bridge);
     }
 
+    /// The two line-editor shapes measured on this host, as the `tcsetattr` each performs between
+    /// writing its prompt and issuing its own `read`.
+    ///
+    /// Both were taken from `strace -e trace=ioctl` against a real pty on `naa0245`: the
+    /// `alpine:3.20` busybox from `/var/tmp/compat-sse-rootfs/alpine` and `bash 5.2 --norc -i`.
+    /// They are not guesses about what a shell might do -- they are what these two do at every
+    /// prompt, and the reason a pump that misses one draws a line the guest is about to draw again.
+    #[derive(Clone, Copy)]
+    enum LineEditor {
+        /// busybox `ash`: `TCSETS` (`TCSANOW`) clearing `ISIG|ICANON|ECHO`, leaving `ICRNL` and
+        /// `IXON` alone, and a cursor-position report at every prompt.
+        BusyboxAsh,
+        /// `bash`/`readline`: `TCSETSW` (`TCSADRAIN`) clearing `ICANON|ECHO` **and `ICRNL`**, and
+        /// keeping `ISIG`. `readline` has no `-echo` bail-out of the kind busybox carries, so it
+        /// draws the line back whatever the guest's `ECHO` says.
+        BashReadline,
+    }
+
+    impl LineEditor {
+        fn action(self) -> libc::c_int {
+            match self {
+                Self::BusyboxAsh => libc::TCSANOW,
+                Self::BashReadline => libc::TCSADRAIN,
+            }
+        }
+
+        /// Whether the editor asks the display where the cursor is, which is what puts a reply on
+        /// the input side that is a *reply* and not a keystroke.
+        fn asks_for_the_cursor(self) -> bool {
+            matches!(self, Self::BusyboxAsh)
+        }
+
+        fn raw(self, saved: &libc::termios) -> libc::termios {
+            let mut raw = *saved;
+            match self {
+                Self::BusyboxAsh => raw.c_lflag &= !(libc::ISIG | libc::ICANON | libc::ECHO),
+                Self::BashReadline => {
+                    raw.c_lflag &= !(libc::ICANON | libc::ECHO);
+                    raw.c_iflag &= !libc::ICRNL;
+                }
+            }
+            // VMIN 0 with a five-second VTIME rather than the VMIN 1 a real editor sets: a wedged
+            // child must end the test rather than hang the suite, and a zero-byte read is the only
+            // bounded way for it to notice.
+            raw.c_cc[libc::VMIN] = 0;
+            raw.c_cc[libc::VTIME] = 50;
+            raw
+        }
+    }
+
+    /// What one prompt of a line editor put on the display, and whether the editor saw its line.
+    struct Prompt {
+        display: Vec<u8>,
+        editor_exit: i32,
+    }
+
+    /// Drives one prompt of `editor` against a real pump over a real pty, with the editor in a
+    /// **fork child** -- which is where the guest actually runs.
+    ///
+    /// `hl_linux_abi_spawn` (`engine/lifecycle.c`) enters the Linux personality in a fork child, so
+    /// the engine's termios store records the guest's `TCSETS` in a private copy of a static this
+    /// process cannot read. The child here therefore calls `tcsetattr` and nothing else: recording
+    /// into its own copy of the store is exactly as invisible to this process as not recording at
+    /// all, and leaving the call out keeps the child free of every lock a fork of a threaded process
+    /// must not take.
+    fn one_prompt(editor: LineEditor) -> Prompt {
+        const TYPED: &[u8] = b"ls -la";
+        let port = Arc::new(Port::default());
+        let terminal = Terminal::new(port.clone(), 24, 80).unwrap();
+        let bridge = NativeTerminalBridge::attach(terminal, InputDiscipline::Linux).unwrap();
+        assert_eq!(
+            bridge.discipline(),
+            InputDiscipline::Linux,
+            "the Linux discipline was not adopted, so this exercises the host's"
+        );
+        let slave = bridge.standard_fds()[0];
+
+        // SAFETY: the child performs only `tcgetattr`/`tcsetattr`/`read`/`write`/`_exit` on an
+        // inherited descriptor. It allocates nothing, takes no Rust lock and no engine lock, and
+        // never returns into the harness, so no lock this threaded process held at fork time is
+        // ever acquired in it.
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0, "fork the line editor");
+        if child == 0 {
+            // SAFETY: every call below borrows an inherited descriptor and initialized storage for
+            // the duration of the call, and the process leaves through `_exit`.
+            unsafe {
+                let mut saved = std::mem::MaybeUninit::<libc::termios>::uninit();
+                if libc::tcgetattr(slave, saved.as_mut_ptr()) != 0 {
+                    libc::_exit(11);
+                }
+                let saved = saved.assume_init();
+                let editing = editor.raw(&saved);
+                if libc::tcsetattr(slave, editor.action(), &raw const editing) != 0 {
+                    libc::_exit(12);
+                }
+                let prompt = b"$ ";
+                libc::write(slave, prompt.as_ptr().cast(), prompt.len());
+                if editor.asks_for_the_cursor() {
+                    let query = b"\x1b[6n";
+                    libc::write(slave, query.as_ptr().cast(), query.len());
+                }
+                let mut seen = [0_u8; 64];
+                let mut count = 0_usize;
+                let mut byte = 0_u8;
+                let mut escaped = false;
+                let mut control_sequence = false;
+                let status = loop {
+                    let read = libc::read(slave, (&raw mut byte).cast(), 1);
+                    if read != 1 {
+                        break 13; // VTIME expired, or the master went away
+                    }
+                    if escaped {
+                        // An editor consumes its own reply rather than drawing it. `ESC [` opens a
+                        // control sequence that runs to a final byte in 0x40..=0x7e; the `[` is
+                        // itself in that range, so it has to open the sequence rather than close it.
+                        if control_sequence {
+                            if (0x40..=0x7e).contains(&byte) {
+                                escaped = false;
+                                control_sequence = false;
+                            }
+                        } else if byte == b'[' {
+                            control_sequence = true;
+                        } else {
+                            escaped = false;
+                        }
+                        continue;
+                    }
+                    if byte == 0x1b {
+                        escaped = true;
+                        continue;
+                    }
+                    if byte == b'\r' || byte == b'\n' {
+                        break i32::from(count != TYPED.len() || seen[..count] != *TYPED);
+                    }
+                    if count == seen.len() {
+                        break 14;
+                    }
+                    seen[count] = byte;
+                    count += 1;
+                    // The editor's own echo. This is the copy the developer is meant to see.
+                    libc::write(slave, (&raw const byte).cast(), 1);
+                };
+                let done = b"\r\n";
+                libc::write(slave, done.as_ptr().cast(), done.len());
+                libc::tcsetattr(slave, libc::TCSANOW, &raw const saved);
+                libc::_exit(status);
+            }
+        }
+
+        // The prompt is written after the `tcsetattr`, so seeing it on the display is proof the
+        // editor's raw mode is installed and the keystrokes below cannot race it.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        {
+            let mut state = port.state.lock().unwrap();
+            while !state.1.windows(2).any(|bytes| bytes == b"$ ") && Instant::now() < deadline {
+                state = port.changed.wait_timeout(state, Duration::from_millis(20)).unwrap().0;
+            }
+            assert!(
+                state.1.windows(2).any(|bytes| bytes == b"$ "),
+                "the line editor never reached its prompt"
+            );
+            // The display answering the cursor-position query, then the developer typing. Both
+            // arrive on the input side; only the second is a keystroke.
+            if editor.asks_for_the_cursor() {
+                state.0.extend(b"\x1b[24;5R");
+            }
+            state.0.extend(TYPED.iter().copied());
+            state.0.push_back(b'\r');
+            port.changed.notify_all();
+        }
+
+        let mut status = 0;
+        let mut reaped = false;
+        while Instant::now() < deadline {
+            // SAFETY: `status` is writable and `child` is this process's child.
+            let waited = unsafe { libc::waitpid(child, &raw mut status, libc::WNOHANG) };
+            if waited == child {
+                reaped = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if !reaped {
+            // SAFETY: `child` is this process's child and has not been reaped.
+            unsafe { libc::kill(child, libc::SIGKILL) };
+            // SAFETY: as above; the kill guarantees this returns.
+            unsafe { libc::waitpid(child, &raw mut status, 0) };
+            panic!("the line editor never finished its line");
+        }
+        // Let the editor's closing bytes finish their trip through the output pump.
+        std::thread::sleep(Duration::from_millis(100));
+        let display = port.state.lock().unwrap().1.clone();
+        drop(bridge);
+        Prompt {
+            display,
+            editor_exit: libc::WEXITSTATUS(status),
+        }
+    }
+
+    fn occurrences(haystack: &[u8], needle: &[u8]) -> usize {
+        let mut count = 0;
+        let mut index = 0;
+        while index + needle.len() <= haystack.len() {
+            if &haystack[index..index + needle.len()] == needle {
+                count += 1;
+                index += needle.len();
+            } else {
+                index += 1;
+            }
+        }
+        count
+    }
+
+    /// A command line typed at a guest line editor is drawn **once**, and the display's own reply
+    /// to a cursor-position query is never drawn at all.
+    ///
+    /// Both are the same defect. The guest runs in a fork child, so the engine's termios store --
+    /// the signal [`GuestDiscipline::synchronise`] once read alone -- records the editor's raw-mode
+    /// `tcsetattr` somewhere this process cannot see it. The pump therefore stayed on the cooked
+    /// image it captured when the pty was opened and kept `ICANON|ECHO|ECHOCTL` forever: it drew
+    /// every keystroke, held the line back until the terminator, and handed the whole line to an
+    /// editor which then drew it a second time. The cursor report is the same mechanism reached
+    /// from the other side -- a reply arriving on the input side, echoed in `ECHOCTL`'s caret form
+    /// as though the developer had typed `^[[24;5R`, instead of being passed through to the editor
+    /// that asked for it.
+    ///
+    /// The editor's exit status is asserted first and on purpose: without it, a pump that echoed
+    /// nothing and delivered nothing would satisfy every other assertion here.
+    fn one_line_is_drawn_once(editor: LineEditor) {
+        let prompt = one_prompt(editor);
+        let display = String::from_utf8_lossy(&prompt.display).into_owned();
+        assert_eq!(
+            prompt.editor_exit, 0,
+            "the line editor did not receive exactly the line that was typed; it saw {display:?}"
+        );
+        assert_eq!(
+            occurrences(&prompt.display, b"ls -la"),
+            1,
+            "the command line was drawn more than once: {display:?}"
+        );
+        assert!(
+            !prompt.display.windows(2).any(|bytes| bytes == b"^["),
+            "an escape sequence reached the display in echoed caret form: {display:?}"
+        );
+        assert!(
+            !prompt.display.windows(3).any(|bytes| bytes == b";5R"),
+            "the cursor-position report was echoed back to the display: {display:?}"
+        );
+    }
+
+    /// busybox `ash`, which is what the default image ships. Carries the cursor-position report.
+    #[test]
+    fn a_busybox_line_editor_draws_its_line_once_across_the_launch_fork() {
+        one_line_is_drawn_once(LineEditor::BusyboxAsh);
+    }
+
+    /// `bash`/`readline`, which is the first thing a developer installs. `TCSADRAIN` rather than
+    /// `TCSANOW`, and `ICRNL` cleared as well, so a pump that follows only one of the two spellings
+    /// passes here and fails there.
+    #[test]
+    fn a_readline_line_editor_draws_its_line_once_across_the_launch_fork() {
+        one_line_is_drawn_once(LineEditor::BashReadline);
+    }
+
     /// A restored member's terminal runs the HOST discipline, deliberately.
     ///
     /// It is the terminal a reattached pane is seated on after a Continue-later restore, so on macOS
@@ -1280,9 +1134,10 @@ mod tests {
         }
         let (master, slave) = super::open_pair((24, 80)).expect("pty pair");
         let mut parent_image = [0_u8; 36];
-        if hl_native::terminal_termios_capture(slave.as_raw_fd(), &mut parent_image).is_none() {
-            panic!("capture the host termios of a fresh pty");
-        }
+        assert!(
+            hl_native::terminal_termios_capture(slave.as_raw_fd(), &mut parent_image).is_some(),
+            "capture the host termios of a fresh pty"
+        );
         // A bit no fresh pty carries, so the two images cannot be confused for one another.
         parent_image[16] = 0x5a;
         hl_native::terminal_termios_adopt(slave.as_raw_fd(), &parent_image).expect("adopt in the parent");
@@ -1398,77 +1253,5 @@ mod tests {
         completed
             .recv_timeout(Duration::from_secs(1))
             .expect("PTY bridge drop remained blocked behind a full master buffer");
-    }
-}
-
-/// The terminal one restored member reattaches to.
-///
-/// A whole-image restore rebinds every member's captured guest fds 0..2 to a live terminal, and until a
-/// per-member terminal existed that could only be the restoring engine's own bridge -- one bridge for a
-/// tree of many. This is the producer for a single member: an ordinary pty whose master end this host
-/// pumps to and from the port it was built with, and whose slave end is handed to the member's process
-/// during its descriptor restore.
-///
-/// It must be created BEFORE the container starts, because the member asks for it from inside that
-/// restore, long before any pane exists to ask on its behalf.
-#[cfg(unix)]
-pub struct MemberTerminal {
-    bridge: NativeTerminalBridge,
-    terminal: Arc<Terminal>,
-}
-
-#[cfg(unix)]
-impl MemberTerminal {
-    /// Opens the pty and starts its pumps, yielding the slave end to register with the engine.
-    ///
-    /// The slave is returned rather than retained: the member owns it once the engine hands it over, and a
-    /// copy kept here would hold the master open past the member's exit, turning an end-of-file into a
-    /// hang for whoever is reading the session.
-    ///
-    /// # Errors
-    /// Returns [`CompositionError::RuntimeConstruction`] when the pty or its pumps cannot be created.
-    pub fn open(terminal: Arc<Terminal>) -> Result<(Self, OwnedFd), CompositionError> {
-        // Explicitly the host discipline, and the reason is not the one this comment used to give.
-        //
-        // The lifetime objection -- that keeping a copy of the slave here would hold the master open
-        // past the member's exit and turn an end-of-file into a hang -- is real but solvable: the
-        // session that owns this terminal already observes the member's exit on its own poll, so it
-        // could drop the discipline's copy at that moment and let the master see its end-of-file.
-        //
-        // What is NOT solvable from this side is where the guest's termios lives. A restored member
-        // is a re-forked process of its own, and the engine's per-terminal termios store is a plain
-        // static inside the dlopened engine, so the fork gives the member a private copy: its
-        // `TCSETS` bumps ITS generation, never this process's, and
-        // `the_guest_termios_store_does_not_cross_the_restore_fork` pins exactly that. A discipline
-        // running here would therefore be frozen at the image the pty was opened with and would keep
-        // canonicalising a line for a shell that had asked for `-icanon` -- every keystroke withheld
-        // until Enter, no per-key echo, arrow keys and editors dead. That is far worse than losing a
-        // line over 1024 bytes, so a restored member keeps the host discipline until the store the
-        // guest writes to is one both processes can read. On macOS it therefore still loses a
-        // canonical line over 1024 bytes, and `a_restored_member_terminal_falls_back_to_the_host_discipline`
-        // keeps that fallback deliberate rather than accidental.
-        let mut bridge = NativeTerminalBridge::attach(Arc::clone(&terminal), InputDiscipline::Host)?;
-        let slave = bridge.take_slave().ok_or(CompositionError::RuntimeConstruction)?;
-        Ok((Self { bridge, terminal }, slave))
-    }
-
-    /// Which discipline this member's terminal actually runs. See [`Self::open`] for why it is the
-    /// host's.
-    #[cfg(test)]
-    pub(super) fn discipline(&self) -> InputDiscipline {
-        self.bridge.discipline()
-    }
-
-    /// Resizes this member's terminal, never its container's.
-    ///
-    /// # Errors
-    /// Returns [`CompositionError`] when the size is empty or the pty refuses the change.
-    pub fn resize(&self, rows: u16, columns: u16) -> Result<(), CompositionError> {
-        self.terminal.resize(rows, columns)
-    }
-
-    /// Waits for output already produced to reach the port, as the engine's own bridge does at exit.
-    pub fn flush(&self) {
-        self.bridge.flush();
     }
 }

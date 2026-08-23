@@ -28,7 +28,9 @@ static int bound_exec_descriptor(int descriptor) {
     hl_host_process_fd_private_remove(native);
     return native;
 }
+
 #include "vector_validation.h"
+
 /* Publish descriptors supplied through the embedding API as logical guest
  * descriptors too.  In particular, typed stdin/stdout/stderr intentionally
  * do not occupy native fds 0..2: those numbers remain available to the engine
@@ -574,7 +576,7 @@ issue_or_fail:
         result = g_bound_vector_test_provider(host_vectors, usable, output);
     else
 #endif
-    if (output)
+        if (output)
         result = positioned ? hl_linux_preadv(g_linux_box, file->fd, host_vectors, usable, offset)
                             : hl_linux_readv(g_linux_box, file->fd, host_vectors, usable);
     else
@@ -669,8 +671,8 @@ HL_API int HL_TARGET_LOCAL(bound_vector_io_test)(uint32_t scenario, int64_t *res
  * whose block is otherwise portable: give the fixture a page-aligned allocation the host can free
  * and the real scenarios could run on Windows. */
 HL_API int HL_TARGET_LOCAL(bound_vector_io_test)(uint32_t scenario, int64_t *result, uint32_t *calls, uint64_t *bytes);
-HL_API int HL_TARGET_LOCAL(bound_vector_io_test)(uint32_t scenario, int64_t *result, uint32_t *calls,
-                                                 uint64_t *bytes) {
+
+HL_API int HL_TARGET_LOCAL(bound_vector_io_test)(uint32_t scenario, int64_t *result, uint32_t *calls, uint64_t *bytes) {
     (void)scenario;
     (void)result;
     (void)calls;

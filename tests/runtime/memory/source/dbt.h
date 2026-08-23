@@ -28,6 +28,7 @@ static inline void dbt_flush(void *p, size_t sz) {
 static inline int dbt_make_exec(void *p, size_t sz) {
     return mprotect(p, sz, PROT_READ | PROT_EXEC);
 }
+
 static inline int dbt_make_write(void *p, size_t sz) {
     return mprotect(p, sz, PROT_READ | PROT_WRITE);
 }
@@ -38,7 +39,7 @@ static inline int dbt_emit_add_imm(unsigned char *buf, uint32_t imm) {
     uint32_t *w = (uint32_t *)buf;
     // x0 in, x0 out. add x0, x0, #imm  (imm must fit 12 bits for this encoding)
     w[0] = 0x91000000u | ((imm & 0xfffu) << 10); // add x0, x0, #imm12
-    w[1] = 0xD65F03C0u;                           // ret
+    w[1] = 0xD65F03C0u;                          // ret
     return 8;
 #elif defined(__x86_64__)
     // rdi in, rax out.  lea rax,[rdi+imm32]; ret

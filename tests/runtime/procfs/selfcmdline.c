@@ -13,11 +13,13 @@ int main(int argc, char **argv) {
     char b[4096];
     int fd = open("/proc/self/cmdline", O_RDONLY);
     int len = 0, r;
-    while (fd >= 0 && len < (int)sizeof b && (r = (int)read(fd, b + len, sizeof b - len)) > 0) len += r;
+    while (fd >= 0 && len < (int)sizeof b && (r = (int)read(fd, b + len, sizeof b - len)) > 0)
+        len += r;
     if (fd >= 0) close(fd);
     int nul_term = len > 0 && b[len - 1] == 0;
     int count = 0;
-    for (int i = 0; i < len; i++) if (b[i] == 0) count++;
+    for (int i = 0; i < len; i++)
+        if (b[i] == 0) count++;
     int argv0_ok = len > 0 && strcmp(b, argv[0]) == 0;
     int ok = nul_term && count == argc && argv0_ok;
     printf("selfcmdline ok=%d\n", ok);

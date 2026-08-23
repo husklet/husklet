@@ -53,8 +53,9 @@ int main(void) {
     char small[4];
     ssize_t r4 = read(fd, small, sizeof small);
     int e4 = (r4 == -1) ? errno : 0;
-    printf("r0=%zd e0=%d r1=%zd signo=%d code=%d r2=%zd e2=%d stillpend=%d same=%d stale_ready=%d stale=%zd stale_errno=%d r3=%zd signo3=%d usr1pend=%d r4=%zd e4=%d\n",
-           r0, e0, r1, signo, code, r2, e2, stillpend, fd2 == fd, stale_ready, stale, stale_errno, r3, signo3,
-           usr1pend, r4, e4);
+    printf("r0=%zd e0=%d r1=%zd signo=%d code=%d r2=%zd e2=%d stillpend=%d same=%d stale_ready=%d stale=%zd "
+           "stale_errno=%d r3=%zd signo3=%d usr1pend=%d r4=%zd e4=%d\n",
+           r0, e0, r1, signo, code, r2, e2, stillpend, fd2 == fd, stale_ready, stale, stale_errno, r3, signo3, usr1pend,
+           r4, e4);
     return 0;
 }

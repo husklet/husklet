@@ -919,6 +919,19 @@ struct TestTerminal {
     changed: Condvar,
 }
 
+// Every lock below tolerates poisoning, and that is load-bearing rather than tidy.
+//
+// A test double whose `lock().unwrap()` panics inside a `Drop` running during another
+// panic's unwind produces a NON-UNWINDING panic, which aborts the whole test binary:
+// no `test result:` line is printed at all, every later test is skipped, and the run
+// exits 134 with nothing to read. Measured on `main` at a8da3e963 -- a ten-second
+// terminal wait timed out, its panic poisoned the terminal mutex, and the engine's
+// teardown then called `TerminalPort::close`, which took that mutex and unwrapped it.
+// One flaky timeout therefore destroyed the count for the entire suite.
+//
+// A poisoned mutex in a double means "some other test thread panicked", which is
+// exactly the situation in which the surviving diagnostic matters most. Taking the
+// data anyway is always better here than converting one red test into no result.
 #[derive(Default)]
 struct CapturedOutput {
     bytes: Mutex<Vec<u8>>,
@@ -928,7 +941,7 @@ struct CapturedOutput {
 impl CapturedOutput {
     fn wait(&self, marker: &str) {
         let deadline = Instant::now() + Duration::from_secs(10);
-        let mut bytes = self.bytes.lock().unwrap();
+        let mut bytes = self.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         while !bytes.windows(marker.len()).any(|window| window == marker.as_bytes()) {
             let remaining = deadline.saturating_duration_since(Instant::now());
             assert!(
@@ -936,24 +949,28 @@ impl CapturedOutput {
                 "standard output did not contain {marker:?}:\n{}",
                 String::from_utf8_lossy(&bytes)
             );
-            let (next, timeout) = self.changed.wait_timeout(bytes, remaining).unwrap();
-            bytes = next;
-            assert!(
-                !timeout.timed_out(),
-                "standard output did not contain {marker:?}:\n{}",
-                String::from_utf8_lossy(&bytes)
-            );
+            // Re-check the predicate rather than the timeout flag. A wait that times out
+            // in the same instant the marker arrives has the marker; the deadline is
+            // enforced by `remaining.is_zero()` above, on the next turn of the loop.
+            bytes = self
+                .changed
+                .wait_timeout(bytes, remaining)
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
         }
     }
 
     fn text(&self) -> String {
-        String::from_utf8_lossy(&self.bytes.lock().unwrap()).into_owned()
+        String::from_utf8_lossy(&self.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).into_owned()
     }
 }
 
 impl StandardStreamPort for CapturedOutput {
     fn write(&self, _: StandardStream, input: &[u8]) -> std::io::Result<usize> {
-        self.bytes.lock().unwrap().extend_from_slice(input);
+        self.bytes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend_from_slice(input);
         self.changed.notify_all();
         Ok(input.len())
     }
@@ -965,14 +982,14 @@ impl StandardStreamPort for CapturedOutput {
 
 impl TestTerminal {
     fn input(&self, bytes: &[u8]) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.input.extend(bytes);
         self.changed.notify_all();
     }
 
     fn wait_output(&self, marker: &[u8]) {
         let deadline = Instant::now() + Duration::from_secs(10);
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         while !state.output.windows(marker.len()).any(|window| window == marker) {
             assert!(
                 !state.closed,
@@ -987,27 +1004,35 @@ impl TestTerminal {
                 String::from_utf8_lossy(marker),
                 String::from_utf8_lossy(&state.output)
             );
-            let (next, timeout) = self.changed.wait_timeout(state, remaining).unwrap();
-            state = next;
-            assert!(
-                !timeout.timed_out(),
-                "terminal did not produce {:?}:\n{}",
-                String::from_utf8_lossy(marker),
-                String::from_utf8_lossy(&state.output)
-            );
+            // As in CapturedOutput::wait -- re-check the predicate, not the flag.
+            state = self
+                .changed
+                .wait_timeout(state, remaining)
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
         }
     }
 
     fn output(&self) -> String {
-        String::from_utf8_lossy(&self.state.lock().unwrap().output).into_owned()
+        String::from_utf8_lossy(
+            &self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .output,
+        )
+        .into_owned()
     }
 }
 
 impl TerminalPort for TestTerminal {
     fn read(&self, output: &mut [u8]) -> std::io::Result<usize> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         while state.input.is_empty() && !state.closed {
-            state = self.changed.wait(state).unwrap();
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         if state.closed {
             return Ok(0);
@@ -1020,7 +1045,7 @@ impl TerminalPort for TestTerminal {
     }
 
     fn write(&self, input: &[u8]) -> std::io::Result<usize> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.closed {
             return Err(std::io::ErrorKind::BrokenPipe.into());
         }
@@ -1030,7 +1055,7 @@ impl TerminalPort for TestTerminal {
     }
 
     fn close(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.closed = true;
         self.changed.notify_all();
     }
@@ -1059,7 +1084,11 @@ impl AtomicStore {
     }
 
     fn snapshot(&self) -> BTreeMap<String, Vec<u8>> {
-        self.0.lock().unwrap().committed.clone()
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .committed
+            .clone()
     }
 
     /// Every object the sink still holds: staged under an open transaction as
@@ -1067,7 +1096,7 @@ impl AtomicStore {
     /// invisible in `snapshot` alone -- nothing was committed either way -- so
     /// an assertion about a rejected generation has to read this instead.
     fn retained(&self) -> Vec<String> {
-        let state = self.0.lock().unwrap();
+        let state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.staging.keys().chain(state.committed.keys()).cloned().collect()
     }
 
@@ -1123,7 +1152,7 @@ impl CheckpointSink for AtomicStore {
     }
 
     fn begin_until(&self, deadline: Instant) -> Result<NonZeroU64, CompositionError> {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.owner.is_some() || Instant::now() >= deadline {
             return Err(CompositionError::TransactionBusy);
         }
@@ -1141,14 +1170,14 @@ impl CheckpointSink for AtomicStore {
         bytes: &[u8],
         deadline: Instant,
     ) -> Result<(), CompositionError> {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::validate(&state, owner, deadline)?;
         state.staging.insert(name.into(), bytes.into());
         Ok(())
     }
 
     fn abort_until(&self, owner: NonZeroU64, deadline: Instant) -> Result<(), CompositionError> {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::validate(&state, owner, deadline)?;
         state.staging.clear();
         state.owner = None;
@@ -1156,7 +1185,7 @@ impl CheckpointSink for AtomicStore {
     }
 
     fn commit_until(&self, owner: NonZeroU64, manifest: &[u8], deadline: Instant) -> Result<(), CompositionError> {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::validate(&state, owner, deadline)?;
         state.staging.insert("MANIFEST".into(), manifest.into());
         state.committed = std::mem::take(&mut state.staging);
@@ -1181,7 +1210,14 @@ impl CheckpointSource for AtomicStore {
     }
 
     fn list(&self) -> Result<Vec<String>, CompositionError> {
-        Ok(self.0.lock().unwrap().committed.keys().cloned().collect())
+        Ok(self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .committed
+            .keys()
+            .cloned()
+            .collect())
     }
 
     fn get_until(&self, name: &str, deadline: Instant) -> Result<Vec<u8>, CompositionError> {
@@ -1205,9 +1241,12 @@ struct TestTerminalPort {
 
 impl TerminalPort for TestTerminalPort {
     fn read(&self, _: &mut [u8]) -> std::io::Result<usize> {
-        let mut closed = self.closed.lock().unwrap();
+        let mut closed = self.closed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         while !*closed {
-            closed = self.changed.wait(closed).unwrap();
+            closed = self
+                .changed
+                .wait(closed)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         Ok(0)
     }
@@ -1217,7 +1256,7 @@ impl TerminalPort for TestTerminalPort {
     }
 
     fn close(&self) {
-        *self.closed.lock().unwrap() = true;
+        *self.closed.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
         self.changed.notify_all();
     }
 }
@@ -1500,14 +1539,12 @@ fn shared_process_tree(engine: &Arc<Engine>, output: &Path) -> SharedProcessTree
     let (root, child) = loop {
         revalidate_process_identity(harness);
         let holders = processes_holding_file(output);
-        if holders.len() == 2 {
-            if let Some(root) = holders.iter().find(|candidate| candidate.session == candidate.pid) {
-                if let Some(child) = holders.iter().find(|candidate| candidate.parent == root.pid) {
-                    if child.session == root.pid {
-                        break (*root, *child);
-                    }
-                }
-            }
+        if holders.len() == 2
+            && let Some(root) = holders.iter().find(|candidate| candidate.session == candidate.pid)
+            && let Some(child) = holders.iter().find(|candidate| candidate.parent == root.pid)
+            && child.session == root.pid
+        {
+            break (*root, *child);
         }
         if Instant::now() >= deadline {
             let transcript = std::fs::read_to_string(output).unwrap_or_default();
@@ -1522,9 +1559,63 @@ fn shared_process_tree(engine: &Arc<Engine>, output: &Path) -> SharedProcessTree
     processes
 }
 
+/// How long a departed worker gets to finish departing before its remains count as leaked.
+///
+/// This is the bound that makes the check a property rather than a race; see
+/// `wait_for_shared_child_reap_result`. Its exact value is not load-bearing -- the test that gates that
+/// function passes with it clamped to a fifth of this -- and that is the point: a leak is still there at
+/// any bound, so the number only has to exceed the ordinary cost of a reparent-and-reap.
+const REAP_SETTLE: Duration = Duration::from_secs(5);
+
+/// How long the transient-zombie arm of the gate below holds its zombie, measured from the moment the
+/// settle is entered rather than from process spawn.
+///
+/// **Both halves of that sentence are load-bearing, and the first version of this fixture got each of
+/// them wrong in a way that looked like success.** Read this before changing the number or the shape.
+///
+/// The first version let the intermediate process exit after a fixed sleep, which pinned the window at
+/// 1.35 s from spawn. Two independent failures followed, in opposite directions, neither visible from
+/// the result:
+///
+///  - **A false confirmation.** Clamping `REAP_SETTLE` to 1 s is the control that shows the settle's
+///    LENGTH is not what makes the gate pass. It reddened -- but because 1.35 s of fixture outlasted a
+///    1 s clamp, not because the fix needed the extra time. A control that fails for a fixture reason
+///    reads exactly like a control that fails for a real one.
+///  - **A false pass.** With the window running from spawn, a host slow enough to spend it during setup
+///    reaches the settle after the transient has already resolved. The helper then returns `Ok` on its
+///    first poll having never seen a `Z` at all, and the arm passes while proving nothing -- which is
+///    the precise failure this whole gate exists to rule out.
+///
+/// Opening the window after the settle starts closes both. The floor is "long enough that the settle is
+/// genuinely exercised"; the ceiling is "short enough that a clamped settle stays a control". 300 ms
+/// against a 5 s settle sits between them with an order of magnitude either side, and the arms of
+/// `wait_for_shared_child_reap_result_settles_a_transient_zombie_and_still_catches_a_leak` are what
+/// prove it: the 1 s clamp must stay GREEN and the 100 ms clamp must go RED. If you change this
+/// constant, re-run both clamps -- one of them alone cannot tell you which way you have gone wrong.
+const TRANSIENT_ZOMBIE_WINDOW: Duration = Duration::from_millis(300);
+
+/// Wait for the shared fixture's two worker identities to disappear, and say exactly what is left if
+/// they do not.
+///
+/// **A `Z` is not a leak.** When the root worker exits before its child, the child is reparented to init
+/// and is `Z` for precisely as long as it takes init to get round to waiting on it -- microseconds on
+/// this host, milliseconds on a slow one. This function used to return `Err` on the FIRST sighting of
+/// `Z`, with no grace at all, on processes it reported in the same breath as `parent: 1`. That graded
+/// the test by how fast the host is: intermittent here, deterministic on a ~9x slower aarch64 VM, and
+/// on neither host able to tell "leaked" from "not reaped in the microsecond I looked".
+///
+/// A real descriptor or process leak is not a race. The corpse is still there a second later and a
+/// minute later, because nothing is going to wait on it. So the property is PERSISTENCE, and the settle
+/// is what measures it: the loop runs to the bound and only then classifies what survived. The
+/// zombie diagnosis is kept, because "still `Z` after five seconds" and "still running after five
+/// seconds" are different defects and the reader needs to know which -- and so is the parent, because a
+/// corpse still owed to a live supervisor is a different defect from one owed to init.
+///
+/// `wait_for_shared_child_reap_result_settles_a_transient_zombie_and_still_catches_a_leak` is the gate
+/// on all of that; it constructs both cases directly and does not depend on host speed.
 fn wait_for_shared_child_reap_result(processes: SharedProcessTree) -> Result<(), String> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
+    let deadline = Instant::now() + REAP_SETTLE;
+    let survivors = loop {
         revalidate_process_identity(processes.harness);
         let live = [processes.root, processes.child]
             .into_iter()
@@ -1535,14 +1626,160 @@ fn wait_for_shared_child_reap_result(processes: SharedProcessTree) -> Result<(),
         if live.is_empty() {
             return Ok(());
         }
-        if let Some((actual, _)) = live.iter().find(|(_, state)| *state == 'Z') {
-            return Err(format!("guest worker became an unreaped zombie: {actual:?}"));
-        }
         if Instant::now() >= deadline {
-            return Err(format!("guest worker identities did not disappear: {live:?}"));
+            break live;
         }
         std::thread::sleep(Duration::from_millis(10));
+    };
+    let zombies = survivors
+        .iter()
+        .filter(|(_, state)| *state == 'Z')
+        .map(|(actual, _)| *actual)
+        .collect::<Vec<_>>();
+    if !zombies.is_empty() {
+        return Err(format!(
+            "guest worker is still an unreaped zombie {REAP_SETTLE:?} after the engine exited: {zombies:?}"
+        ));
     }
+    Err(format!(
+        "guest worker identities did not disappear within {REAP_SETTLE:?}: {survivors:?}"
+    ))
+}
+
+fn observed_process_state(pid: u32) -> Option<char> {
+    process_identity(pid).map(|(_, state)| state)
+}
+
+fn wait_for_process_state(pid: u32, state: char, context: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while observed_process_state(pid) != Some(state) {
+        assert!(
+            Instant::now() < deadline,
+            "{context}: pid {pid} never reached state {state}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn spawned_process_identity(pid: u32, context: &str) -> ProcessIdentity {
+    process_identity(pid)
+        .unwrap_or_else(|| panic!("{context}: pid {pid} vanished before it could be identified"))
+        .0
+}
+
+/// The gate on the settle above: a transient `Z` is tolerated, a persistent one is still caught.
+///
+/// Both cases are built here rather than provoked through the engine, because the engine's own timing is
+/// exactly what must not decide the verdict. Neither depends on host speed. The transient zombie is held
+/// as a zombie for a fixed interval by construction -- a grandchild that exits while its parent is still
+/// alive, which is precisely the state the old first-sighting check refused on sight -- and the leaked
+/// one is never waited on at all, so it is `Z` for as long as anybody cares to look.
+///
+/// A grace period added carelessly turns a flaky test into a vacuous one. The leak arm is what stops
+/// that: it asserts the settle still ends in a refusal, that the refusal names the zombie rather than
+/// folding it into a generic timeout, and that the function really spent the settle instead of returning
+/// early for some unrelated reason.
+#[test]
+fn wait_for_shared_child_reap_result_settles_a_transient_zombie_and_still_catches_a_leak() {
+    let _exclusive = exclusive_checkpoint_test();
+    let harness = verified_process_identity(std::process::id()).expect("stable harness identity");
+
+    // Arm 1 -- a real leak. Two children exit and nothing ever waits on them. `std::process::Child`
+    // deliberately does not reap on drop, so these stay zombies owed to a LIVE parent for as long as
+    // this process runs. That is what a leaked worker looks like, and no settle may forgive it.
+    let mut leaked = ["0.05", "0.05"].map(|delay| {
+        std::process::Command::new("sleep")
+            .arg(delay)
+            .spawn()
+            .expect("spawn a child for the leaked-zombie arm")
+    });
+    let leaked_tree = SharedProcessTree {
+        harness,
+        root: spawned_process_identity(leaked[0].id(), "leaked-zombie arm"),
+        child: spawned_process_identity(leaked[1].id(), "leaked-zombie arm"),
+    };
+    for child in &leaked {
+        wait_for_process_state(child.id(), 'Z', "leaked-zombie arm");
+    }
+    let started = Instant::now();
+    let refusal = wait_for_shared_child_reap_result(leaked_tree)
+        .expect_err("a zombie nobody will ever wait on is a leak and must be refused");
+    let waited = started.elapsed();
+    for child in &mut leaked {
+        child.wait().expect("reap the leaked-zombie arm");
+    }
+    assert!(
+        refusal.contains("unreaped zombie"),
+        "a persistent zombie must be named as one, not folded into a generic timeout: {refusal}"
+    );
+    assert!(
+        waited >= REAP_SETTLE,
+        "the leak was refused after {waited:?}, short of the settle: the settle is not being served"
+    );
+
+    // Arm 2 -- a transient `Z`, and NOT a leak. The shell backgrounds a very short sleep, prints its
+    // pid, then `exec`s `cat`: the process keeps its pid and stops being a shell, so nothing waits on the
+    // background child. The grandchild is therefore observably `Z` under a live parent -- exactly the
+    // state the old first-sighting check refused on sight -- and when that parent exits it reparents to
+    // init, which reaps it in the ordinary course of events.
+    //
+    // The parent exits on stdin EOF rather than after a fixed sleep, so the transient window is measured
+    // from the moment this test starts the settle rather than from process spawn. That matters twice: a
+    // slow host cannot let the transient resolve before the settle is even entered (which would pass
+    // while proving nothing), and the window stays short enough that a clamped settle is still a
+    // meaningful control rather than a fixture artefact.
+    let mut parent = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("sleep 0.05 & echo $! ; exec cat")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn the transient-zombie arm");
+    let mut announcement = parent.stdout.take().expect("transient arm stdout");
+    let announced = {
+        use std::io::Read as _;
+        let mut text = String::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !text.contains('\n') {
+            let mut byte = [0u8; 1];
+            match announcement.read(&mut byte) {
+                Ok(0) => break,
+                Ok(_) => text.push(char::from(byte[0])),
+                Err(error) => panic!("transient arm announcement failed: {error}"),
+            }
+            assert!(
+                Instant::now() < deadline,
+                "transient arm never announced its grandchild"
+            );
+        }
+        text
+    };
+    let grandchild = announced
+        .trim()
+        .parse::<u32>()
+        .unwrap_or_else(|error| panic!("transient arm announced {announced:?}, not a pid: {error}"));
+    let transient_tree = SharedProcessTree {
+        harness,
+        root: spawned_process_identity(parent.id(), "transient-zombie arm"),
+        child: spawned_process_identity(grandchild, "transient-zombie arm"),
+    };
+    wait_for_process_state(grandchild, 'Z', "transient-zombie arm");
+    // Hold the zombie for a fixed interval AFTER the settle is entered, then close the parent's stdin so
+    // it exits and the grandchild reparents to init.
+    let stdin = parent.stdin.take().expect("transient arm stdin");
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(TRANSIENT_ZOMBIE_WINDOW);
+        drop(stdin);
+    });
+    // The parent is OUR child, so somebody has to wait on it -- otherwise it becomes a leak of its own
+    // and this arm would fail for a reason that has nothing to do with the grandchild.
+    let reaper = std::thread::spawn(move || parent.wait().expect("reap the transient-zombie arm's parent"));
+    wait_for_shared_child_reap_result(transient_tree).unwrap_or_else(|error| {
+        panic!("a transient zombie on a child about to be reparented to init is not a leak: {error}")
+    });
+    release.join().unwrap();
+    drop(announcement);
+    reaper.join().unwrap();
 }
 
 fn wait_for_exact_process_reap(executable: &Path) {
@@ -1758,7 +1995,7 @@ impl AmbientDescriptors {
                 AmbientDescriptor {
                     target,
                     path,
-                    identity: descriptor::identity(target).unwrap(),
+                    identity: Identity::of(target).unwrap(),
                 }
             })
             .collect();
@@ -1770,7 +2007,7 @@ impl AmbientDescriptors {
     fn assert_preserved(&self, phase: &str) {
         for record in &self.records {
             assert_eq!(
-                descriptor::identity(record.target).unwrap(),
+                Identity::of(record.target).unwrap(),
                 record.identity,
                 "{phase}: fd {}",
                 record.target
@@ -1807,12 +2044,12 @@ fn assert_ambient_locks_released(paths: &[PathBuf]) {
     for path in paths {
         let probe = std::fs::OpenOptions::new().read(true).write(true).open(path).unwrap();
         descriptor::lock(probe.as_raw_fd(), Lock::ExclusiveNonblocking)
-            .unwrap_or_else(|error| panic!("ambient lock remains for {path:?}: {error}"));
+            .unwrap_or_else(|error| panic!("ambient lock remains for {}: {error}", path.display()));
     }
 }
 
 fn start_with_closed_standard_descriptor(engine: &Engine, descriptor: StandardDescriptor) {
-    let closed = descriptor::close_standard(descriptor).expect("close standard descriptor");
+    let closed = descriptor.close().expect("close standard descriptor");
     let started = engine.start();
     closed
         .restore()
@@ -2503,12 +2740,11 @@ impl<'a> RestoreGateEngine<'a> {
                     self.survivors()
                 );
             }
-            if Instant::now() >= deadline {
-                panic!(
-                    "{context}: guest did not publish {marker}; cleanup={}\n{output}",
-                    self.cleanup()
-                );
-            }
+            assert!(
+                Instant::now() < deadline,
+                "{context}: guest did not publish {marker}; cleanup={}\n{output}",
+                self.cleanup()
+            );
             std::thread::sleep(Duration::from_millis(5));
         }
     }
@@ -2522,9 +2758,11 @@ impl<'a> RestoreGateEngine<'a> {
     fn wait(&mut self, context: &str) -> hl_engine::engine::EngineExit {
         let deadline = Instant::now() + Duration::from_secs(10);
         while !self.waiter.as_ref().is_some_and(std::thread::JoinHandle::is_finished) {
-            if Instant::now() >= deadline {
-                panic!("{context}: wait timed out; cleanup={}", self.cleanup());
-            }
+            assert!(
+                Instant::now() < deadline,
+                "{context}: wait timed out; cleanup={}",
+                self.cleanup()
+            );
             std::thread::sleep(Duration::from_millis(5));
         }
         self.join_waiter()
@@ -2868,7 +3106,7 @@ fn one_rejected_process_prevents_manifest_publication_on_both_isas() {
             .lines()
             .filter(|line| line.starts_with("CAPTURE-CAPABLE "))
             .collect::<Vec<_>>();
-        capable.sort();
+        capable.sort_unstable();
         assert_eq!(capable, ["CAPTURE-CAPABLE 1", "CAPTURE-CAPABLE 2"]);
         let live_deadline = Instant::now() + Duration::from_secs(5);
         let live = loop {
@@ -2886,7 +3124,12 @@ fn one_rejected_process_prevents_manifest_publication_on_both_isas() {
             capture.capture_checkpoint_until(checkpoint_deadline()).is_err(),
             "{isa:?} accepted a process tree containing a rejected member"
         );
-        let _ = wait_result_bounded(&capture, "rejected-member checkpoint process tree");
+        // This refusal is non-destructive: the two members that reached the
+        // safepoint resume, and the fixture deliberately parks forever.  A
+        // capture refusal therefore is not an exit request.  Stop the live
+        // fixture explicitly before proving that every original member was
+        // reaped; waiting for it first can only reach the test timeout.
+        let cleanup = force_and_reap_bounded(&capture);
         let reap_deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let remaining = live
@@ -2900,7 +3143,7 @@ fn one_rejected_process_prevents_manifest_publication_on_both_isas() {
             }
             assert!(
                 Instant::now() < reap_deadline,
-                "{isa:?} leaked rejected checkpoint members: {remaining:?}"
+                "{isa:?} leaked rejected checkpoint members: {remaining:?}; cleanup={cleanup}"
             );
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -3068,10 +3311,27 @@ fn process_groups(store: &Store) -> BTreeSet<String> {
         .collect()
 }
 
+/// The process groups named by every COMPLETE `PIPE-READY` line the guest has emitted so far.
+///
+/// Completeness is the whole point. `CapturedOutput::wait` returns on the first sighting of a
+/// SUBSTRING, and the engine's relay hands this port arbitrary chunks, so at the instant
+/// `wait("PIPE-READY parent")` returns the buffer routinely still ends mid-line -- `PIPE-READY 2 pi`
+/// with its pid in flight. `str::lines()` yields that fragment as a line like any other, and it then
+/// reaches the parse below, where it fails in one of two ways:
+///
+///  - `rsplit_once("pid=")` finds nothing and the `expect` panics, in a helper whose name gives the
+///    reader no reason to suspect a chunk boundary; or, worse,
+///  - the fragment is `PIPE-READY 2 pid=169` for a pid that is really 16942, which parses cleanly
+///    into a plausible WRONG group and surfaces much later as an unequal process-group set.
+///
+/// So only terminated lines are considered. A caller that needs a known number of them must wait for
+/// that number rather than for a marker -- see `ready_process_groups_of_size`.
 fn ready_process_groups(output: &CapturedOutput) -> BTreeSet<String> {
     output
         .text()
-        .lines()
+        .split_inclusive('\n')
+        .filter(|line| line.ends_with('\n'))
+        .map(str::trim_end)
         .filter(|line| line.starts_with("PIPE-READY "))
         .map(|line| {
             if line.starts_with("PIPE-READY parent ") {
@@ -3082,6 +3342,27 @@ fn ready_process_groups(output: &CapturedOutput) -> BTreeSet<String> {
             }
         })
         .collect()
+}
+
+/// Wait until exactly `count` complete `PIPE-READY` lines have arrived, and return their groups.
+///
+/// Waiting for the last MARKER is not the same as waiting for the last LINE, and the difference is a
+/// chunk boundary wide. This closes it by waiting on the property the caller actually needs.
+fn ready_process_groups_of_size(output: &CapturedOutput, count: usize) -> BTreeSet<String> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let groups = ready_process_groups(output);
+        if groups.len() >= count {
+            return groups;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "only {} of {count} complete PIPE-READY lines arrived within 10 seconds:\n{}",
+            groups.len(),
+            output.text()
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 fn wait_bounded_with_output(
@@ -3124,7 +3405,7 @@ fn inherited_pipe_round_trip(isa: GuestIsa, executable: &Path) {
     for marker in ["PIPE-READY 0", "PIPE-READY 1", "PIPE-READY 2", "PIPE-READY parent"] {
         output.wait(marker);
     }
-    let expected_groups = ready_process_groups(&output);
+    let expected_groups = ready_process_groups_of_size(&output, 4);
     assert_eq!(expected_groups.len(), 4, "{isa:?}: {}", output.text());
     capture
         .capture_checkpoint_until(checkpoint_deadline())
@@ -3387,23 +3668,24 @@ fn checkpoint_phase_ledger_probe() {
     eprint!("{ledger}");
 }
 
-fn phase_probe_output(test: &str, timeout: Duration) -> String {
+/// Run one `#[ignore]`d test of this binary in a subprocess and return everything it wrote to stderr.
+///
+/// The engine worker is a grandchild of that subprocess and inherits its stderr, so this is how a
+/// diagnostic the engine writes -- a refusal, a phase ledger -- becomes an assertable value. It is the
+/// only honest way to gate one: the message is produced by C running in another process, and a unit test
+/// over a formatting helper in this crate would pass while the real path printed something else entirely.
+fn probe_child_stderr(test: &str, timeout: Duration, extra_environment: &[(&[u8], &Path)]) -> String {
     let capture = tempfile::tempdir().unwrap();
     let stdout = capture.path().join("stdout");
     let stderr_path = capture.path().join("stderr");
-    let ledger_path = capture.path().join("ledger");
     let mut command = ProcessCommand::new(std::env::current_exe().unwrap());
     command.args(["--exact", test, "--ignored", "--nocapture", "--test-threads=1"]);
     let mut environment = std::env::vars_os()
         .map(|(name, value)| EnvironmentEntry::new(name.as_encoded_bytes(), value.as_encoded_bytes()).unwrap())
         .collect::<Vec<_>>();
-    environment.push(
-        EnvironmentEntry::new(
-            b"HL_CHECKPOINT_PHASE_LEDGER_PATH",
-            ledger_path.as_os_str().as_encoded_bytes(),
-        )
-        .unwrap(),
-    );
+    for (name, value) in extra_environment {
+        environment.push(EnvironmentEntry::new(name, value.as_os_str().as_encoded_bytes()).unwrap());
+    }
     command.exact_environment(environment).unwrap();
     let outcome = hl_process::run(
         &command,
@@ -3421,9 +3703,19 @@ fn phase_probe_output(test: &str, timeout: Duration) -> String {
     assert_eq!(
         outcome,
         ProcessOutcome::Exited(Some(0)),
-        "phase-ledger child {test} failed:\n{stderr}"
+        "probe child {test} failed:\n{stderr}"
     );
     stderr
+}
+
+fn phase_probe_output(test: &str, timeout: Duration) -> String {
+    let ledger = tempfile::tempdir().unwrap();
+    let ledger_path = ledger.path().join("ledger");
+    probe_child_stderr(
+        test,
+        timeout,
+        &[(b"HL_CHECKPOINT_PHASE_LEDGER_PATH", ledger_path.as_path())],
+    )
 }
 
 #[test]
@@ -3847,6 +4139,159 @@ fn socket_half_close_refuses_checkpoint_after_guest_dup_and_fork_on_both_isas() 
     assert!(
         accepted.is_empty(),
         "accepted half-closed guest socket paths: {accepted:?}"
+    );
+}
+
+/// A `PIPE-READY` line split across two relay writes must not be parsed until it is whole.
+///
+/// `CapturedOutput::wait` returns on the first sighting of a substring, and the engine's relay
+/// delivers arbitrary chunks, so the buffer legitimately ends mid-line at the instant a marker
+/// matches. `inherited_pipe_ofd_survives_two_checkpoint_cycles_on_both_isas` then read an exact
+/// four-element set straight out of that buffer.
+///
+/// This drives the boundary directly rather than hoping to hit it: the split is placed inside a pid,
+/// which is the case that does not announce itself. Before the fix the first assertion panicked in
+/// `rsplit_once("pid=")`; had the split fallen one byte later it would have parsed `169` for a pid of
+/// `16942` and produced a wrong group that only surfaced as an unequal set much later.
+#[test]
+fn a_ready_line_split_across_two_relay_writes_is_not_parsed_until_it_is_complete() {
+    let output = CapturedOutput::default();
+    output
+        .write(
+            StandardStream::Stdout,
+            b"PIPE-READY 0 pid=11\nPIPE-READY 1 pid=22\nPIPE-READY 2 pid=169",
+        )
+        .unwrap();
+    // "PIPE-READY 2" -- the marker `wait` returns on -- is present, while its pid is still in flight.
+    assert_eq!(
+        ready_process_groups(&output),
+        BTreeSet::from(["proc.11".to_owned(), "proc.22".to_owned()]),
+        "a half-arrived line was parsed as though it were complete"
+    );
+    output
+        .write(StandardStream::Stdout, b"42\nPIPE-READY parent pid=1\n")
+        .unwrap();
+    assert_eq!(
+        ready_process_groups(&output),
+        BTreeSet::from([
+            "proc.11".to_owned(),
+            "proc.22".to_owned(),
+            "proc.16942".to_owned(),
+            "proc.1".to_owned()
+        ]),
+        "the completed line did not yield the pid it actually carried"
+    );
+    assert_eq!(ready_process_groups_of_size(&output, 4).len(), 4);
+}
+
+/// A poisoned test double must still answer, because the alternative is no result at all.
+///
+/// When a test fails, its panic poisons every mutex it held. The engine's teardown then runs
+/// inside `Drop` **while that panic is unwinding**, and a `lock().unwrap()` there is a panic in a
+/// destructor -- which Rust makes non-unwinding, so it `abort()`s the process. The whole binary
+/// dies: no `test result:` line, every later test skipped, exit 134.
+///
+/// Observed on `main` at a8da3e963, run 3 of 3: a ten-second terminal wait timed out in
+/// `identities_created_after_restore_survive_recapture_on_both_isas`, and `TerminalPort::close`
+/// unwrapped the mutex that panic had just poisoned. One flaky timeout destroyed the count for
+/// the entire suite -- and a suite that reports nothing is harder to notice than one that
+/// reports a wrong number.
+///
+/// This gate poisons the lock the same way and requires every entry point to keep working.
+#[test]
+fn a_poisoned_terminal_double_still_answers_instead_of_aborting_the_suite() {
+    let terminal = Arc::new(TestTerminal::default());
+    let poisoner = Arc::clone(&terminal);
+    let panicked = std::thread::spawn(move || {
+        let _held = poisoner.state.lock().unwrap();
+        panic!("deliberate: poison the terminal state exactly as a failing assertion does");
+    })
+    .join();
+    assert!(panicked.is_err(), "the poisoning thread was supposed to panic");
+    assert!(
+        terminal.state.is_poisoned(),
+        "the fixture did not actually poison the lock, so this gate would pass for free"
+    );
+
+    // Every one of these is reached from teardown. On the unfixed double each panics, and the
+    // one inside `Drop` takes the process with it.
+    terminal.input(b"i");
+    assert_eq!(terminal.write(b"still answering").unwrap(), 15);
+    terminal.close();
+    assert!(
+        terminal.output().contains("still answering"),
+        "a poisoned double lost the output a failing test needs to read: {}",
+        terminal.output()
+    );
+}
+
+/// Provoke a REAL socket-topology refusal, in a process whose stderr the gate below captures.
+///
+/// Deliberately asserts nothing about what the image contains: its whole job is to make the coordinator
+/// reach `ckpt_sink_commit` and be refused, and to exit 0 having done so.
+#[test]
+#[ignore = "subprocess target for the checkpoint refusal-diagnostic gate"]
+fn socket_topology_refusal_probe_child() {
+    let compiling = fixture_compilation();
+    let fixtures = tempfile::tempdir().unwrap();
+    let executable = socket_half_close_fixture(GuestIsa::X86_64, fixtures.path());
+    drop(compiling);
+    let _exclusive = exclusive_checkpoint_test();
+    let directory = tempfile::tempdir().unwrap();
+    let ready = directory.path().join("ready");
+    let store = Arc::new(Store::default());
+    let capture = Arc::new(
+        Engine::with_checkpoint(
+            GuestIsa::X86_64,
+            socket_half_close_plan(&executable, &ready, "dup"),
+            streams(false),
+            store.clone(),
+            store.clone(),
+        )
+        .unwrap(),
+    );
+    capture.start().unwrap();
+    wait_for(&ready, "READY dup");
+    assert!(
+        capture.capture_checkpoint_until(checkpoint_deadline()).is_err(),
+        "the half-closed socket topology was admitted, so this probe provoked no refusal at all"
+    );
+    let _ = wait_result_bounded(&capture, "half-closed socket checkpoint refusal");
+}
+
+/// A refusal must name what actually refused it.
+///
+/// `ckpt_sink_commit` and `ckpt_sink_digest` fail from a checkpoint-stream protocol status and set no
+/// `errno` at any point, yet both call sites in `checkpoint/image.c` printed `strerror(errno)`. That
+/// picks up whatever unrelated syscall last set it, and what is left there is the `ENOTTY` from the
+/// manifest's own `tcgetattr` on a non-tty about twenty lines earlier. Every socket-topology checkpoint
+/// refusal in this repository therefore read
+///
+/// ```text
+/// [ckpt] refuse: cannot publish the checkpoint manifest: Inappropriate ioctl for device
+/// ```
+///
+/// -- a message pointing the reader at a terminal, for a failure that never touched one. It is what made
+/// the `socket_half_close` failure unreadable for weeks.
+///
+/// The gate runs in a subprocess and reads the engine's real stderr, because that is the only place the
+/// defect exists: a unit test over a formatting helper passes with the bug present.
+#[test]
+fn checkpoint_manifest_refusal_names_the_protocol_status_rather_than_a_stale_errno() {
+    let _exclusive = exclusive_checkpoint_test();
+    let stderr = probe_child_stderr("socket_topology_refusal_probe_child", Duration::from_secs(180), &[]);
+    let refusal = stderr
+        .lines()
+        .find(|line| line.contains("cannot publish the checkpoint manifest"))
+        .unwrap_or_else(|| panic!("the probe provoked no manifest refusal at all:\n{stderr}"));
+    assert!(
+        !refusal.contains("Inappropriate ioctl for device"),
+        "the manifest refusal reports the stale ENOTTY of an unrelated tcgetattr: {refusal}"
+    );
+    assert!(
+        refusal.contains("checkpoint-stream status") || refusal.contains("this channel ended before one arrived"),
+        "the manifest refusal names neither of the two things that can actually refuse it -- a host status \
+         or a transport that never delivered the request: {refusal}"
     );
 }
 

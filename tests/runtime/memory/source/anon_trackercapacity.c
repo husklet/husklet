@@ -11,8 +11,7 @@ int main(void) {
     uintptr_t base = UINT64_C(0x500000000);
     for (unsigned index = 0; index < MAPPINGS; ++index) {
         unsigned char *address = (unsigned char *)(base + (uintptr_t)index * STRIDE);
-        if (mmap(address, LENGTH, PROT_READ | PROT_WRITE,
-                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) != address)
+        if (mmap(address, LENGTH, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) != address)
             return 2;
         address[0] = 0xa5;
     }
@@ -37,7 +36,6 @@ int main(void) {
         void *address = (void *)(base + (uintptr_t)index * STRIDE);
         if (munmap(address, LENGTH) != 0) unmapped = 0;
     }
-    printf("anon-tracker-capacity mappings=%u readable=%d wiped=%d unmapped=%d\n",
-           MAPPINGS, readable, wiped, unmapped);
+    printf("anon-tracker-capacity mappings=%u readable=%d wiped=%d unmapped=%d\n", MAPPINGS, readable, wiped, unmapped);
     return readable && wiped && unmapped ? 0 : 1;
 }

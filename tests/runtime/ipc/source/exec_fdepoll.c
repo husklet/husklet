@@ -1,14 +1,14 @@
 // exec-fd-inheritance + epoll: the EXACT multi-process application worker-launch bootstrap that Wall 7 blocks on.
 //
-// multi-process application's PlatformChannel: the coordinator creates a socketpair, dup2()s one end to a known fd number,
-// clears FD_CLOEXEC, and execve()s the worker, passing that fd number on the command line
+// multi-process application's PlatformChannel: the coordinator creates a socketpair, dup2()s one end to a known fd
+// number, clears FD_CLOEXEC, and execve()s the worker, passing that fd number on the command line
 // (--mojo-platform-channel-handle=<fd>). The worker then arms epoll (EPOLLIN) on THAT
 // exec-inherited fd and blocks in epoll_wait for the "invitation" the coordinator writes later.
 //
-// This gate reproduces that permutation OFFLINE with no live multi-process application. The distinguishing feature vs the
-// existing zygote-inbound (fork-inherit) / scm-recv-epoll (SCM_RIGHTS) gates is EXECVE: exec resets
-// process state, so the socket fd must survive across exec at its specific number (FD_CLOEXEC clear),
-// and an epoll arm on that exec-inherited fd must deliver a CROSS-PROCESS wake when the parent writes.
+// This gate reproduces that permutation OFFLINE with no live multi-process application. The distinguishing feature vs
+// the existing zygote-inbound (fork-inherit) / scm-recv-epoll (SCM_RIGHTS) gates is EXECVE: exec resets process state,
+// so the socket fd must survive across exec at its specific number (FD_CLOEXEC clear), and an epoll arm on that
+// exec-inherited fd must deliver a CROSS-PROCESS wake when the parent writes.
 //
 // Protocol per trigger mode (level-triggered and edge-triggered, both exercised):
 //   child (post-exec): epoll_ctl ADD the inherited fd, write "R" (armed), then two rounds of
@@ -34,10 +34,13 @@
 
 extern char **environ;
 
-#define CHILD_FD 42       // multi-process application passes the platform-channel fd at a fixed number; mirror that here
-#define WAIT_MS 2500      // per-round epoll_wait budget (comfortably > the parent's arm delay)
+#define CHILD_FD 42  // multi-process application passes the platform-channel fd at a fixed number; mirror that here
+#define WAIT_MS 2500 // per-round epoll_wait budget (comfortably > the parent's arm delay)
 
-static void die_alarm(int sig) { (void)sig; _exit(7); } // watchdog: any hang -> hard exit, never block
+static void die_alarm(int sig) {
+    (void)sig;
+    _exit(7);
+} // watchdog: any hang -> hard exit, never block
 
 static void sleep_ms(int ms) {
     struct timespec ts = {ms / 1000, (long)(ms % 1000) * 1000000L};
@@ -80,7 +83,7 @@ static int child_main(int fd, int et) {
     for (int round = 0; round < 2; round++) {
         struct epoll_event out[4];
         int n = epoll_wait(ep, out, 4, WAIT_MS);
-        if (n != 1) return 20 + round;            // 0 == the lost cross-process wake (Wall 7 shape)
+        if (n != 1) return 20 + round; // 0 == the lost cross-process wake (Wall 7 shape)
         if (out[0].data.fd != fd) return 30 + round;
         if (!(out[0].events & EPOLLIN)) return 40 + round;
         char b[4] = {0};
@@ -131,11 +134,11 @@ static void run_mode(const char *self, const char *mode, int *out_child, int *ou
     char r;
     if (read_n(p, &r, 1) == 0 && r == 'R') {
         for (int round = 0; round < 2; round++) {
-            sleep_ms(120);                             // child is now blocked in epoll_wait
+            sleep_ms(120); // child is now blocked in epoll_wait
             const char *inv = round == 0 ? "GO1" : "GO2";
             if (write(p, inv, 3) != 3) break;
             char ack[2];
-            if (read_n(p, ack, 2) != 0) break;         // A1 / A2
+            if (read_n(p, ack, 2) != 0) break; // A1 / A2
             if (ack[0] != 'A' || ack[1] != (char)('1' + round)) break;
         }
         // 2) reverse direction, received via the PARENT's OWN epoll on its end.
@@ -163,8 +166,7 @@ static void run_mode(const char *self, const char *mode, int *out_child, int *ou
 
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
-    if (argc >= 4 && strcmp(argv[1], "child") == 0)
-        return child_main(atoi(argv[2]), strcmp(argv[3], "et") == 0);
+    if (argc >= 4 && strcmp(argv[1], "child") == 0) return child_main(atoi(argv[2]), strcmp(argv[3], "et") == 0);
 
     const char *self = "/proc/self/exe"; // canonical re-exec target inside the rootfs (matches procexe)
     int c_lt, p_lt, c_et, p_et;

@@ -13,7 +13,10 @@
 int main(void) {
     long ps = sysconf(_SC_PAGESIZE);
     char *m = mmap(0, ps, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (m == MAP_FAILED) { printf("mmap_failed\n"); return 1; }
+    if (m == MAP_FAILED) {
+        printf("mmap_failed\n");
+        return 1;
+    }
 
     errno = 0;
     int madv_bad = madvise(m, ps, 9999) == -1 ? errno : 0;
@@ -28,7 +31,7 @@ int main(void) {
     int msync_bad = msync(m, ps, 0x8) == -1 ? errno : 0;
     munmap(m, ps);
 
-    printf("advice-einval madv=%d fadv=%d mlockall=%d msync=%d madv_ok=%d\n",
-           madv_bad, fadv_bad, mlockall_bad, msync_bad, madv_ok);
+    printf("advice-einval madv=%d fadv=%d mlockall=%d msync=%d madv_ok=%d\n", madv_bad, fadv_bad, mlockall_bad,
+           msync_bad, madv_ok);
     return 0;
 }

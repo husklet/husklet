@@ -10,11 +10,14 @@ int main(void) {
     clock_gettime(CLOCK_MONOTONIC, &t0);
     deadline = t0;
     deadline.tv_nsec += 40 * 1000 * 1000;
-    if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000L; }
+    if (deadline.tv_nsec >= 1000000000L) {
+        deadline.tv_sec++;
+        deadline.tv_nsec -= 1000000000L;
+    }
     int rc = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &deadline, NULL);
     clock_gettime(CLOCK_MONOTONIC, &t1);
     long long ms = (long long)(t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
     int ok = (rc == 0) && ms >= 30 && ms < 2000; // woke near the absolute deadline, not way early/late
-    printf("clockabstime abstime_ok=%d\n", ok); // 1
+    printf("clockabstime abstime_ok=%d\n", ok);  // 1
     return 0;
 }

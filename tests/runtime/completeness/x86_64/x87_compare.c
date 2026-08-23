@@ -12,13 +12,20 @@ static unsigned fsw(void) {
     __asm__ volatile("fnstsw %0" : "=am"(s));
     return s;
 }
+
 static unsigned fcw(void) {
     unsigned short c;
     __asm__ volatile("fnstcw %0" : "=m"(c));
     return c;
 }
-static void setcw(unsigned short c) { __asm__ volatile("fldcw %0" : : "m"(c)); }
-static void init(void) { __asm__ volatile("fninit"); }
+
+static void setcw(unsigned short c) {
+    __asm__ volatile("fldcw %0" : : "m"(c));
+}
+
+static void init(void) {
+    __asm__ volatile("fninit");
+}
 
 #define C0 0x0100u
 #define C1 0x0200u
@@ -28,9 +35,9 @@ static void init(void) { __asm__ volatile("fninit"); }
 #define TOP 0x3800u
 
 static void cc(const char *tag, unsigned s) {
-    printf("%-22s fsw=%04x cc=%x top=%u exc=%02x\n", tag, s, (unsigned)(((s & C3) >> 11) | ((s & C2) >> 8) |
-                                                                       ((s & C1) >> 8) | ((s & C0) >> 8)),
-           (s & TOP) >> 11, s & 0x3f);
+    printf("%-22s fsw=%04x cc=%x top=%u exc=%02x\n", tag, s,
+           (unsigned)(((s & C3) >> 11) | ((s & C2) >> 8) | ((s & C1) >> 8) | ((s & C0) >> 8)), (s & TOP) >> 11,
+           s & 0x3f);
 }
 
 /* ---- FCOM / FUCOM / FCOMI condition codes over the whole cross product incl. NaN. */

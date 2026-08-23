@@ -32,28 +32,32 @@ static long call6(long number, long a, long b, long c, long d, long e, long f) {
     register long r8 __asm__("r8") = e;
     register long r9 __asm__("r9") = f;
     long result;
-    __asm__ volatile("syscall" : "=a"(result)
-        : "a"(number), "D"(a), "S"(b), "d"(c), "r"(r10), "r"(r8), "r"(r9)
-        : "rcx", "r11", "memory");
+    __asm__ volatile("syscall"
+                     : "=a"(result)
+                     : "a"(number), "D"(a), "S"(b), "d"(c), "r"(r10), "r"(r8), "r"(r9)
+                     : "rcx", "r11", "memory");
     return result;
 }
+
 #define SYS_CLONE 56
 #define SYS_EXIT 60
 #define SYS_FUTEX 202
 #define SYS_ROBUST 273
 #define SYS_SCHED_YIELD 24
+
 static __attribute__((always_inline)) inline long clone_call(void) {
     register long r10 __asm__("r10") = (long)&child_tid;
     register long r8 __asm__("r8") = 0;
     register long r9 __asm__("r9") = 0;
     long result;
-    __asm__ volatile("syscall" : "=a"(result)
-        : "a"(SYS_CLONE), "D"(CLONE_FLAGS),
-          "S"((long)(child_stack + sizeof(child_stack))), "d"(0),
-          "r"(r10), "r"(r8), "r"(r9)
-        : "rcx", "r11", "memory");
+    __asm__ volatile("syscall"
+                     : "=a"(result)
+                     : "a"(SYS_CLONE), "D"(CLONE_FLAGS), "S"((long)(child_stack + sizeof(child_stack))), "d"(0),
+                       "r"(r10), "r"(r8), "r"(r9)
+                     : "rcx", "r11", "memory");
     return result;
 }
+
 #define CLONE_CALL() clone_call()
 #elif defined(__aarch64__)
 static long call6(long number, long a, long b, long c, long d, long e, long f) {
@@ -64,10 +68,10 @@ static long call6(long number, long a, long b, long c, long d, long e, long f) {
     register long x4 __asm__("x4") = e;
     register long x5 __asm__("x5") = f;
     register long x8 __asm__("x8") = number;
-    __asm__ volatile("svc 0" : "+r"(x0)
-        : "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x8) : "memory");
+    __asm__ volatile("svc 0" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x8) : "memory");
     return x0;
 }
+
 #define SYS_CLONE 220
 #define SYS_EXIT 93
 #define SYS_FUTEX 98
@@ -98,15 +102,19 @@ void _start(void) {
         head.offset = 8;
         head.pending = 0;
         long robust = call6(SYS_ROBUST, (long)&head, 24, 0, 0, 0, 0);
-        if (robust == -38) robust_available = 0;
-        else if (robust != 0) finish(11);
+        if (robust == -38)
+            robust_available = 0;
+        else if (robust != 0)
+            finish(11);
         ready = 1;
         call6(SYS_FUTEX, (long)&ready, FUTEX_WAKE, 1, 0, 0, 0);
-        while (gate == 0) call6(SYS_FUTEX, (long)&gate, FUTEX_WAIT, 0, 0, 0, 0);
+        while (gate == 0)
+            call6(SYS_FUTEX, (long)&gate, FUTEX_WAIT, 0, 0, 0, 0);
         finish(0);
     }
     if ((uint32_t)cloned != child_tid) finish(20);
-    while (ready == 0) call6(SYS_FUTEX, (long)&ready, FUTEX_WAIT, 0, 0, 0, 0);
+    while (ready == 0)
+        call6(SYS_FUTEX, (long)&ready, FUTEX_WAIT, 0, 0, 0, 0);
     while (call6(SYS_FUTEX, (long)&gate, FUTEX_WAKE, 1, 0, 0, 0) != 1) {
         call6(SYS_SCHED_YIELD, 0, 0, 0, 0, 0, 0);
         if (++attempts == 100) finish(23);
@@ -117,9 +125,7 @@ void _start(void) {
         uint32_t observed = child_tid;
         call6(SYS_FUTEX, (long)&child_tid, FUTEX_WAIT, observed, 0, 0, 0);
     }
-    uint32_t expected = robust_available
-        ? (FUTEX_WAITERS | FUTEX_OWNER_DIED)
-        : (FUTEX_WAITERS | (uint32_t)cloned);
+    uint32_t expected = robust_available ? (FUTEX_WAITERS | FUTEX_OWNER_DIED) : (FUTEX_WAITERS | (uint32_t)cloned);
     if (node.futex != expected) finish(22);
     finish(0);
 }

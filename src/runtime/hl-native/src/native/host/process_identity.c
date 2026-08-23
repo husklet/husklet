@@ -148,8 +148,8 @@ HL_API int hl_c_backend_process_identity_token_test(uint32_t scenario) {
         (void)close(pipefd[1]);
         if (child > 0) {
             int status = 0;
-            if (read(pipefd[0], &child_token, sizeof child_token) == (ssize_t)sizeof child_token &&
-                child_token != 0 && child_token != token)
+            if (read(pipefd[0], &child_token, sizeof child_token) == (ssize_t)sizeof child_token && child_token != 0 &&
+                child_token != token)
                 outcome = 0;
             (void)waitpid(child, &status, 0);
         }
@@ -161,7 +161,7 @@ HL_API int hl_c_backend_process_identity_token_test(uint32_t scenario) {
         uint64_t peer_token = 0;
         if (peer == self) return 0;
         if (!hl_host_process_start_time_ns(self, &token)) return -1; /* prime the memo */
-        if (!hl_host_process_read(peer, &record)) return 0; /* peer unreadable here; nothing to pin */
+        if (!hl_host_process_read(peer, &record)) return 0;          /* peer unreadable here; nothing to pin */
         if (!hl_host_process_start_time_ns(peer, &peer_token)) return -1;
         return peer_token == record.start_time_ns && peer_token != token ? 0 : -1;
     }
@@ -207,10 +207,9 @@ HL_API int hl_c_backend_process_identity_token_test(uint32_t scenario) {
         (void)close(pipefd[0]);
         return outcome;
     }
-    if (scenario == 4) return hl_host_process_start_time_ns(-1, &token) == 0 &&
-                                      hl_host_process_start_time_ns(self, NULL) == 0
-                                  ? 0
-                                  : -1;
+    if (scenario == 4)
+        return hl_host_process_start_time_ns(-1, &token) == 0 && hl_host_process_start_time_ns(self, NULL) == 0 ? 0
+                                                                                                                : -1;
     errno = EINVAL;
     return -1;
 }
@@ -218,6 +217,7 @@ HL_API int hl_c_backend_process_identity_token_test(uint32_t scenario) {
 /* The scenarios above fork and wait; the Windows target has neither, and the loader still resolves
  * every exported test symbol, so the hook must exist and refuse. */
 HL_API int hl_c_backend_process_identity_token_test(uint32_t scenario);
+
 HL_API int hl_c_backend_process_identity_token_test(uint32_t scenario) {
     (void)scenario;
     errno = ENOTSUP;

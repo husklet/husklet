@@ -22,7 +22,14 @@
 int main(void) {
     // Force the allocator to touch memory so a heap/arena mapping exists and is resident.
     volatile char *blk = NULL;
-    for (int i = 0; i < 64; i++) { char *p = malloc(4096); if (p) { p[0] = (char)i; p[4095] = (char)i; blk = p; } }
+    for (int i = 0; i < 64; i++) {
+        char *p = malloc(4096);
+        if (p) {
+            p[0] = (char)i;
+            p[4095] = (char)i;
+            blk = p;
+        }
+    }
     unsigned long probe = (unsigned long)(uintptr_t)blk;
 
     char b[1 << 16];
@@ -79,8 +86,8 @@ int main(void) {
             ssize_t ll = readlink(path, tgt, sizeof tgt - 1);
             if (ll > 0) {
                 tgt[ll] = 0;
-                if (!strncmp(tgt, "pipe:[", 6) || !strncmp(tgt, "socket:[", 8) ||
-                    !strncmp(tgt, "anon_inode:", 11)) pipe_seen = 1;
+                if (!strncmp(tgt, "pipe:[", 6) || !strncmp(tgt, "socket:[", 8) || !strncmp(tgt, "anon_inode:", 11))
+                    pipe_seen = 1;
             }
         }
         closedir(d);
@@ -91,8 +98,8 @@ int main(void) {
     ssize_t ll = readlink("/proc/self/fd/1", lnk, sizeof lnk - 1);
     int fd_link_ok = ll > 0;
 
-    int ok = n > 0 && nlines >= 3 && perms_ok && dev_ok && has_xp && has_stack && heap_ok &&
-             ascending && probe_mapped && fdcount >= 3 && fd_link_ok && pipe_open && pipe_seen;
+    int ok = n > 0 && nlines >= 3 && perms_ok && dev_ok && has_xp && has_stack && heap_ok && ascending &&
+             probe_mapped && fdcount >= 3 && fd_link_ok && pipe_open && pipe_seen;
     printf("maps ok=%d\n", ok);
     return 0;
 }

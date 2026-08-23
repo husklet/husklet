@@ -60,7 +60,13 @@ pub fn run(config: &AnalyzerConfig, roots: &[PathBuf], policy: &SourcePolicy) ->
                 .args(["--quiet", "-p"])
                 .arg(filtered_database.path())
                 .arg(format!("--checks={TIDY_CHECKS}"))
-                .args(["--extra-arg=-std=c11", "--warnings-as-errors=*"])
+                // Bear records the GCC wrapper's `--param` tuning too. Clang correctly ignores it,
+                // so keep driver-option noise out of the code-diagnostic error budget.
+                .args([
+                    "--extra-arg=-std=c11",
+                    "--extra-arg=-Wno-unused-command-line-argument",
+                    "--warnings-as-errors=*",
+                ])
                 .arg(&file),
             Some(&file),
         )?;

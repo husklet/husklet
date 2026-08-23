@@ -33,7 +33,7 @@ int main(void) {
     ssize_t r3 = read(fds[0], (void *)0x123456789000ULL, 4);
     int read_unmapped_efault = (r3 == -1 && errno == EFAULT);
 
-    printf("read_none_efault=%d write_unmapped_efault=%d read_unmapped_efault=%d\n",
-           read_none_efault, write_unmapped_efault, read_unmapped_efault);
+    printf("read_none_efault=%d write_unmapped_efault=%d read_unmapped_efault=%d\n", read_none_efault,
+           write_unmapped_efault, read_unmapped_efault);
     return 0;
 }

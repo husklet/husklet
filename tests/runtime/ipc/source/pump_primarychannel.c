@@ -59,22 +59,22 @@
 #include <time.h>
 #include <unistd.h>
 
-#define CH_NODE 3      // primordial node channel — child end, placed by the parent at a fixed fd (IPC launch)
-#define ROUNDS  12000  // messages the coordinator streams over the primary channel
-#define NFILLER 3000   // idle watched fds on the SAME epoll — the high-fd regime (>=1024)
-#define CHURN   96     // fds each churn thread cycles ADD/DEL on the live epoll
-#define NCHURN  2      // concurrent churn threads (more changelist pressure on the live instance)
-#define REARM   37     // every Nth message, StopWatch->Watch the primary (DEL+ADD) racing pending data
-#define MSGSZ   8      // one primary-channel message = an 8-byte sequence number
+#define CH_NODE 3    // primordial node channel — child end, placed by the parent at a fixed fd (IPC launch)
+#define ROUNDS 12000 // messages the coordinator streams over the primary channel
+#define NFILLER 3000 // idle watched fds on the SAME epoll — the high-fd regime (>=1024)
+#define CHURN 96     // fds each churn thread cycles ADD/DEL on the live epoll
+#define NCHURN 2     // concurrent churn threads (more changelist pressure on the live instance)
+#define REARM 37     // every Nth message, StopWatch->Watch the primary (DEL+ADD) racing pending data
+#define MSGSZ 8      // one primary-channel message = an 8-byte sequence number
 
-static int g_primary;                 // SCM_RIGHTS-received SOCK_STREAM (the IPC primary channel)
-static int g_io_ep, g_main_ep;        // the IO-thread pump epoll + the main-thread pump epoll
-static int g_schedwork_io;            // eventfd: ScheduleWork for the IO pump (posted work / self-wake)
-static int g_waitable;                // eventfd: cross-thread WaitableEvent, IO thread -> main thread
-static _Atomic long g_processed = 0;  // messages the MAIN pump has dispatched + processed
-static _Atomic long g_recvd = 0;      // messages the IO pump has recv'd off the primary channel
-static _Atomic int  g_done = 0;
-static _Atomic int  g_main_ready = 0;
+static int g_primary;                // SCM_RIGHTS-received SOCK_STREAM (the IPC primary channel)
+static int g_io_ep, g_main_ep;       // the IO-thread pump epoll + the main-thread pump epoll
+static int g_schedwork_io;           // eventfd: ScheduleWork for the IO pump (posted work / self-wake)
+static int g_waitable;               // eventfd: cross-thread WaitableEvent, IO thread -> main thread
+static _Atomic long g_processed = 0; // messages the MAIN pump has dispatched + processed
+static _Atomic long g_recvd = 0;     // messages the IO pump has recv'd off the primary channel
+static _Atomic int g_done = 0;
+static _Atomic int g_main_ready = 0;
 
 static int recv_fd(int sock) {
     char b;
@@ -89,6 +89,7 @@ static int recv_fd(int sock) {
     memcpy(&fd, CMSG_DATA(c), sizeof fd);
     return fd;
 }
+
 static int send_fd(int sock, int fd) {
     char b = 'x';
     struct iovec io = {.iov_base = &b, .iov_len = 1};
@@ -125,7 +126,10 @@ static void *main_pump(void *arg) {
                     if (write(CH_NODE, &a, 1) != 1) return NULL;
                     acked += 256;
                 }
-                if (done >= ROUNDS) { atomic_store(&g_done, 1); return NULL; }
+                if (done >= ROUNDS) {
+                    atomic_store(&g_done, 1);
+                    return NULL;
+                }
             }
         }
     }
@@ -137,7 +141,8 @@ static void *main_pump(void *arg) {
 static void *churn_thread(void *arg) {
     (void)arg;
     int pool[CHURN];
-    for (int i = 0; i < CHURN; i++) pool[i] = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    for (int i = 0; i < CHURN; i++)
+        pool[i] = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     int in[CHURN];
     memset(in, 0, sizeof in);
     unsigned r = 0x9e3779b9u;
@@ -151,9 +156,13 @@ static void *churn_thread(void *arg) {
         } else {
             if (epoll_ctl(g_io_ep, EPOLL_CTL_DEL, pool[k], NULL) == 0) in[k] = 0;
         }
-        if ((r & 0x3f) == 0) { struct timespec ts = {0, 20 * 1000}; nanosleep(&ts, NULL); }
+        if ((r & 0x3f) == 0) {
+            struct timespec ts = {0, 20 * 1000};
+            nanosleep(&ts, NULL);
+        }
     }
-    for (int i = 0; i < CHURN; i++) if (pool[i] >= 0) close(pool[i]);
+    for (int i = 0; i < CHURN; i++)
+        if (pool[i] >= 0) close(pool[i]);
     return NULL;
 }
 
@@ -174,8 +183,8 @@ static void *watchdog(void *arg) {
         // "work pending" verdict.  Require direct evidence of pending work while progress is unchanged:
         // either the IO pump has handed work to the main pump, or the primary channel is readable.
         if (p == last && (received > p || primary_pending)) {
-            fprintf(stderr, "STALL processed=%ld recvd=%ld/%d (worker pump parked with work pending)\n",
-                    p, received, ROUNDS);
+            fprintf(stderr, "STALL processed=%ld recvd=%ld/%d (worker pump parked with work pending)\n", p, received,
+                    ROUNDS);
             fflush(stderr);
             _exit(7); // lost wake: a pump is dormant with a message pending — the worker-dormancy shape
         }
@@ -187,23 +196,38 @@ static int child_main(void) {
     int node = CH_NODE;
     // AcceptInvitee/AcceptBrokerClient: pull the IPC PRIMARY channel (SOCK_STREAM) off the node channel.
     g_primary = recv_fd(node);
-    if (g_primary < 0) { printf("child recv primary failed: %s\n", strerror(errno)); return 20; }
+    if (g_primary < 0) {
+        printf("child recv primary failed: %s\n", strerror(errno));
+        return 20;
+    }
     fcntl(g_primary, F_SETFL, fcntl(g_primary, F_GETFL) | O_NONBLOCK);
 
     struct rlimit rl;
-    if (getrlimit(RLIMIT_NOFILE, &rl) == 0) { rl.rlim_cur = rl.rlim_max; setrlimit(RLIMIT_NOFILE, &rl); }
+    if (getrlimit(RLIMIT_NOFILE, &rl) == 0) {
+        rl.rlim_cur = rl.rlim_max;
+        setrlimit(RLIMIT_NOFILE, &rl);
+    }
 
     g_schedwork_io = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-    g_waitable     = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-    if (g_schedwork_io < 0 || g_waitable < 0) { printf("child eventfd: %s\n", strerror(errno)); return 21; }
+    g_waitable = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (g_schedwork_io < 0 || g_waitable < 0) {
+        printf("child eventfd: %s\n", strerror(errno));
+        return 21;
+    }
 
-    g_io_ep   = epoll_create1(EPOLL_CLOEXEC);
+    g_io_ep = epoll_create1(EPOLL_CLOEXEC);
     g_main_ep = epoll_create1(EPOLL_CLOEXEC);
-    if (g_io_ep < 0 || g_main_ep < 0) { printf("child epoll_create1: %s\n", strerror(errno)); return 22; }
+    if (g_io_ep < 0 || g_main_ep < 0) {
+        printf("child epoll_create1: %s\n", strerror(errno));
+        return 22;
+    }
 
     // IO pump watches: the primary channel + the ScheduleWork eventfd — LEVEL-triggered (NO EPOLLET).
     struct epoll_event pe = {.events = EPOLLIN, .data.fd = g_primary};
-    if (epoll_ctl(g_io_ep, EPOLL_CTL_ADD, g_primary, &pe) != 0) { printf("child arm primary: %s\n", strerror(errno)); return 23; }
+    if (epoll_ctl(g_io_ep, EPOLL_CTL_ADD, g_primary, &pe) != 0) {
+        printf("child arm primary: %s\n", strerror(errno));
+        return 23;
+    }
     struct epoll_event se = {.events = EPOLLIN, .data.fd = g_schedwork_io};
     epoll_ctl(g_io_ep, EPOLL_CTL_ADD, g_schedwork_io, &se);
 
@@ -215,7 +239,10 @@ static int child_main(void) {
         struct epoll_event fe = {.events = EPOLLIN, .data.fd = fd};
         if (epoll_ctl(g_io_ep, EPOLL_CTL_ADD, fd, &fe) == 0) nfill++;
     }
-    if (nfill < 1024) { printf("child high-fd regime not reached: nfill=%d (need >=1024)\n", nfill); return 24; }
+    if (nfill < 1024) {
+        printf("child high-fd regime not reached: nfill=%d (need >=1024)\n", nfill);
+        return 24;
+    }
 
     // MAIN pump watches the cross-thread WaitableEvent — level-triggered.
     struct epoll_event we = {.events = EPOLLIN, .data.fd = g_waitable};
@@ -230,7 +257,8 @@ static int child_main(void) {
     // coordinator must not stream work until the main pump is genuinely live. Without this barrier a
     // loaded host could let the IO thread consume all input before scheduling main_pump, contradicting
     // the readiness byte's promise that "both pumps are up" and yielding a false processed=0 verdict.
-    while (!atomic_load(&g_main_ready)) sched_yield();
+    while (!atomic_load(&g_main_ready))
+        sched_yield();
     if (pthread_create(&wd, NULL, watchdog, NULL) != 0) return 34;
 
     // Tell the coordinator the primary channel is received + armed and both pumps are up.
@@ -244,7 +272,10 @@ static int child_main(void) {
     while (!atomic_load(&g_done)) {
         struct epoll_event out[16];
         int n = epoll_wait(g_io_ep, out, 16, 4000);
-        if (n < 0) { if (errno == EINTR) continue; return 26; }
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return 26;
+        }
         if (n == 0) {
             if (atomic_load(&g_recvd) >= ROUNDS || atomic_load(&g_done)) break;
             fprintf(stderr, "IO pump epoll_wait timeout recvd=%ld/%d\n", atomic_load(&g_recvd), ROUNDS);
@@ -252,12 +283,19 @@ static int child_main(void) {
         }
         for (int i = 0; i < n; i++) {
             if (out[i].data.fd == g_schedwork_io) {
-                uint64_t v; while (read(g_schedwork_io, &v, 8) == 8) {}
+                uint64_t v;
+                while (read(g_schedwork_io, &v, 8) == 8) {}
             } else if (out[i].data.fd == g_primary) {
                 // Read ONE syscall's worth (LEVEL re-report drives the remainder). Count whole messages.
                 ssize_t r = read(g_primary, buf, sizeof buf);
-                if (r == 0) { atomic_store(&g_done, 1); break; }
-                if (r < 0) { if (errno == EAGAIN || errno == EWOULDBLOCK) continue; return 28; }
+                if (r == 0) {
+                    atomic_store(&g_done, 1);
+                    break;
+                }
+                if (r < 0) {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                    return 28;
+                }
                 long msgs = r / MSGSZ;
                 if (msgs <= 0) msgs = 0;
                 long total = atomic_fetch_add(&g_recvd, msgs) + msgs;
@@ -280,10 +318,13 @@ static int child_main(void) {
     }
     // let the main pump finish dispatching everything it was handed
     for (int spins = 0; atomic_load(&g_processed) < ROUNDS && spins < 4000; spins++) {
-        struct timespec ts = {0, 1000 * 1000}; nanosleep(&ts, NULL);
+        struct timespec ts = {0, 1000 * 1000};
+        nanosleep(&ts, NULL);
     }
     atomic_store(&g_done, 1);
-    uint64_t one = 1; if (write(g_waitable, &one, 8) != 8) { /* wake main to exit */ }
+    uint64_t one = 1;
+    if (write(g_waitable, &one, 8) != 8) { /* wake main to exit */
+    }
     long p = atomic_load(&g_processed);
     if (p != ROUNDS)
         fprintf(stderr, "primary-pump final processed=%ld recvd=%ld main-ready=%d\n", p, atomic_load(&g_recvd),
@@ -297,12 +338,21 @@ int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "child")) return child_main();
 
     int node[2];
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, node) != 0) { perror("socketpair node"); return 1; }
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, node) != 0) {
+        perror("socketpair node");
+        return 1;
+    }
     int primary[2];
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, primary) != 0) { perror("socketpair primary"); return 1; }
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, primary) != 0) {
+        perror("socketpair primary");
+        return 1;
+    }
 
     pid_t pid = fork();
-    if (pid < 0) { perror("fork"); return 1; }
+    if (pid < 0) {
+        perror("fork");
+        return 1;
+    }
     if (pid == 0) {
         close(node[0]);
         close(primary[0]);
@@ -319,11 +369,17 @@ int main(int argc, char **argv) {
     }
 
     close(node[1]);
-    if (send_fd(node[0], primary[1]) != 0) { perror("send_fd primary"); return 2; }
+    if (send_fd(node[0], primary[1]) != 0) {
+        perror("send_fd primary");
+        return 2;
+    }
     close(primary[1]);
 
     char r;
-    if (read(node[0], &r, 1) != 1) { printf("parent ready-read: %s\n", strerror(errno)); return 3; }
+    if (read(node[0], &r, 1) != 1) {
+        printf("parent ready-read: %s\n", strerror(errno));
+        return 3;
+    }
 
     // Coordinator: stream ROUNDS messages, each after a VARIABLE (jittered) delay so messages land both while
     // the pump is fully parked and inside its drain/re-block window. Bounded outstanding via the child's
@@ -337,17 +393,26 @@ int main(int argc, char **argv) {
         unsigned phase = (rng >> 16) & 7u;
         // mixture: 0 = immediate (tight drain/re-block window), else park the pump for a jittered spell
         long ns = (phase == 0) ? 0 : (long)((rng % 400u) + 1u) * 1000L; // 0 .. ~400us
-        if (ns > 0) { struct timespec ts = {0, ns}; nanosleep(&ts, NULL); }
+        if (ns > 0) {
+            struct timespec ts = {0, ns};
+            nanosleep(&ts, NULL);
+        }
         memcpy(msg, &i, MSGSZ);
         ssize_t w = write(primary[0], msg, MSGSZ);
-        if (w != MSGSZ) { perror("parent write primary"); return 4; }
+        if (w != MSGSZ) {
+            perror("parent write primary");
+            return 4;
+        }
         sent++;
         // occasional 2-message burst: guarantees the socket buffer is NON-EMPTY when the IO pump (one read
         // per level wake) hits its StopWatch->Watch window, so the re-ADD must re-prime a readable socket.
         if (phase == 1 && i + 1 < ROUNDS) {
             i++;
             memcpy(msg, &i, MSGSZ);
-            if (write(primary[0], msg, MSGSZ) != MSGSZ) { perror("parent burst write"); return 4; }
+            if (write(primary[0], msg, MSGSZ) != MSGSZ) {
+                perror("parent burst write");
+                return 4;
+            }
             sent++;
         }
         // drain any pending ACK bytes (backpressure): keep outstanding bounded
@@ -356,9 +421,13 @@ int main(int argc, char **argv) {
         if (ar > 0) acked += ar;
         // if we are too far ahead, block briefly for an ACK so the pump's parked-then-arrive window recurs
         while (sent - acked * 256 > 2048) {
-            struct timespec ts = {0, 200 * 1000}; nanosleep(&ts, NULL);
+            struct timespec ts = {0, 200 * 1000};
+            nanosleep(&ts, NULL);
             ar = read(node[0], a, sizeof a);
-            if (ar > 0) acked += ar; else break;
+            if (ar > 0)
+                acked += ar;
+            else
+                break;
         }
     }
 

@@ -40,7 +40,9 @@ struct shared_diag {
 static int lock_whole(int fd, int type) {
     struct flock fl = {.l_type = (short)type, .l_whence = SEEK_SET, .l_start = 0, .l_len = 0};
     int result;
-    do result = fcntl(fd, F_SETLKW, &fl); while (result < 0 && errno == EINTR);
+    do
+        result = fcntl(fd, F_SETLKW, &fl);
+    while (result < 0 && errno == EINTR);
     return result;
 }
 
@@ -78,13 +80,16 @@ static void worker(const char *path, struct shared_diag *diag, int index) {
 }
 
 int main(void) {
-    struct shared_diag *diag = mmap(NULL, sizeof(*diag), PROT_READ | PROT_WRITE,
-                                    MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    struct shared_diag *diag = mmap(NULL, sizeof(*diag), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (diag == MAP_FAILED) return 3;
     char path[] = "/tmp/hl_poslk_XXXXXX";
     int fd = mkstemp(path);
-    if (fd < 0) { printf("poslk mkstemp fail\n"); return 1; }
-    if (write(fd, "0", 1) != 1) { /* ignore */ }
+    if (fd < 0) {
+        printf("poslk mkstemp fail\n");
+        return 1;
+    }
+    if (write(fd, "0", 1) != 1) { /* ignore */
+    }
 
     // (3) flock EX + fcntl WR on the same fd must BOTH succeed (independent lock spaces, #237).
     int flock_ok = (flock(fd, LOCK_EX) == 0);
@@ -93,21 +98,24 @@ int main(void) {
 
     // (2) a child sees the parent's fcntl write lock via F_GETLK (cross-process).
     int gp[2];
-    if (pipe(gp) != 0) { /* ignore */ }
+    if (pipe(gp) != 0) { /* ignore */
+    }
     pid_t g = fork();
     if (g == 0) {
         close(gp[0]);
         int cfd = open(path, O_RDWR);
         struct flock q = {.l_type = F_WRLCK, .l_whence = SEEK_SET, .l_start = 0, .l_len = 0};
         fcntl(cfd, F_GETLK, &q);
-        int seen = (q.l_type != F_UNLCK); // parent's lock must be visible as a conflict
-        if (write(gp[1], &seen, sizeof seen) != sizeof seen) { /* ignore */ }
+        int seen = (q.l_type != F_UNLCK);                      // parent's lock must be visible as a conflict
+        if (write(gp[1], &seen, sizeof seen) != sizeof seen) { /* ignore */
+        }
         close(cfd);
         _exit(0);
     }
     close(gp[1]);
     int getlk_seen = 0;
-    if (read(gp[0], &getlk_seen, sizeof getlk_seen) != sizeof getlk_seen) { /* ignore */ }
+    if (read(gp[0], &getlk_seen, sizeof getlk_seen) != sizeof getlk_seen) { /* ignore */
+    }
     waitpid(g, 0, 0);
     close(gp[0]);
 
@@ -116,16 +124,24 @@ int main(void) {
     fcntl(fd, F_SETLK, &u);
     flock(fd, LOCK_UN);
     lseek(fd, 0, SEEK_SET);
-    if (ftruncate(fd, 0) != 0) { /* ignore */ }
-    if (write(fd, "0", 1) != 1) { /* ignore */ }
+    if (ftruncate(fd, 0) != 0) { /* ignore */
+    }
+    if (write(fd, "0", 1) != 1) { /* ignore */
+    }
     close(fd);
 
     // (1) two racing writers, each doing N locked increments.
     pid_t a = fork();
-    if (a < 0) { perror("poslk fork a"); return 2; }
+    if (a < 0) {
+        perror("poslk fork a");
+        return 2;
+    }
     if (a == 0) worker(path, diag, 0);
     pid_t b = fork();
-    if (b < 0) { perror("poslk fork b"); return 2; }
+    if (b < 0) {
+        perror("poslk fork b");
+        return 2;
+    }
     if (b == 0) worker(path, diag, 1);
     int ast = 0, bst = 0;
     if (waitpid(a, &ast, 0) != a || waitpid(b, &bst, 0) != b || !WIFEXITED(ast) || WEXITSTATUS(ast) != 0 ||
@@ -149,17 +165,14 @@ int main(void) {
                 "a={pid=%d dev=%llu ino=%llu lock=%d read=%d write=%d} "
                 "b={pid=%d dev=%llu ino=%llu lock=%d read=%d write=%d}\n",
                 final, atomic_load_explicit(&diag->overlap, memory_order_acquire),
-                atomic_load_explicit(&diag->inside, memory_order_acquire),
-                diag->worker[0].pid, (unsigned long long)diag->worker[0].device,
-                (unsigned long long)diag->worker[0].inode, diag->worker[0].locks,
-                diag->worker[0].reads, diag->worker[0].writes,
-                diag->worker[1].pid, (unsigned long long)diag->worker[1].device,
-                (unsigned long long)diag->worker[1].inode, diag->worker[1].locks,
-                diag->worker[1].reads, diag->worker[1].writes);
+                atomic_load_explicit(&diag->inside, memory_order_acquire), diag->worker[0].pid,
+                (unsigned long long)diag->worker[0].device, (unsigned long long)diag->worker[0].inode,
+                diag->worker[0].locks, diag->worker[0].reads, diag->worker[0].writes, diag->worker[1].pid,
+                (unsigned long long)diag->worker[1].device, (unsigned long long)diag->worker[1].inode,
+                diag->worker[1].locks, diag->worker[1].reads, diag->worker[1].writes);
     }
 
-    printf("poslk final=%ld noloss=%d getlk=%d indep=%d\n", final, final == 2 * N, getlk_seen,
-           flock_ok && fcntl_ok);
+    printf("poslk final=%ld noloss=%d getlk=%d indep=%d\n", final, final == 2 * N, getlk_seen, flock_ok && fcntl_ok);
     munmap(diag, sizeof(*diag));
     return final == 2 * N && getlk_seen && flock_ok && fcntl_ok ? 0 : 2;
 }

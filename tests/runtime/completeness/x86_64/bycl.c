@@ -22,9 +22,21 @@
 #define SA 0x5UL
 #define SB 0x9UL /* 5 - 9 = -4: sets SF=1, CF=1 (borrow), OF=0, ZF=0; a known non-trivial seed */
 
-static const uint64_t IN[] = {0, 1, 2, 0x7f, 0x80, 0xff, 0x100, 0x8000, 0xffff, 0x40000000ull,
-                              0x80000000ull, 0xffffffffull, 0x8000000000000000ull,
-                              0xffffffffffffffffull, 0x123456789abcdef0ull};
+static const uint64_t IN[] = {0,
+                              1,
+                              2,
+                              0x7f,
+                              0x80,
+                              0xff,
+                              0x100,
+                              0x8000,
+                              0xffff,
+                              0x40000000ull,
+                              0x80000000ull,
+                              0xffffffffull,
+                              0x8000000000000000ull,
+                              0xffffffffffffffffull,
+                              0x123456789abcdef0ull};
 #define NIN (sizeof IN / sizeof IN[0])
 static const unsigned CNT[] = {0, 1, 2, 7, 8, 31, 32, 63, 64, 65};
 #define NCNT (sizeof CNT / sizeof CNT[0])
@@ -33,14 +45,14 @@ static unsigned long acc;
 
 /* Emit one by-CL op: producer block seeds flags (cmp) then runs `MNE %cl, OPND`; a backward jmp reaches
    the consumer block that reads the flags via pushfq (chained edge). Returns result value + flags. */
-#define RUNCL(MNE, OPND, vio, clv, of_out)                                                                \
-    __asm__ volatile("movl %k[c], %%ecx\n\t"                                                               \
-                     "jmp 2f\n\t"                                                                          \
-                     "1: pushfq\n\t pop %[f]\n\t jmp 4f\n\t"                                               \
-                     "2: cmpq %[sb], %[sa]\n\t " MNE " %%cl, " OPND "\n\t jmp 1b\n\t"                      \
-                     "4:\n\t"                                                                              \
-                     : [f] "=&r"(of_out), [v] "+r"(vio)                                                    \
-                     : [c] "r"((unsigned)(clv)), [sa] "r"((uint64_t)SA), [sb] "r"((uint64_t)SB)           \
+#define RUNCL(MNE, OPND, vio, clv, of_out)                                                                             \
+    __asm__ volatile("movl %k[c], %%ecx\n\t"                                                                           \
+                     "jmp 2f\n\t"                                                                                      \
+                     "1: pushfq\n\t pop %[f]\n\t jmp 4f\n\t"                                                           \
+                     "2: cmpq %[sb], %[sa]\n\t " MNE " %%cl, " OPND "\n\t jmp 1b\n\t"                                  \
+                     "4:\n\t"                                                                                          \
+                     : [f] "=&r"(of_out), [v] "+r"(vio)                                                                \
+                     : [c] "r"((unsigned)(clv)), [sa] "r"((uint64_t)SA), [sb] "r"((uint64_t)SB)                        \
                      : "rcx", "cc")
 
 /* width-defined flag bits to fold/print: CF PF ZF SF always; OF only for count in {0,1}. */
@@ -49,7 +61,10 @@ static unsigned showmask(unsigned c) {
     if (c == 0 || c == 1) s |= 0x800;       /* OF defined (1-bit) or unchanged (count 0) */
     return s;
 }
-static uint64_t wmask(int width) { return width == 64 ? ~0UL : ((1ULL << width) - 1); }
+
+static uint64_t wmask(int width) {
+    return width == 64 ? ~0UL : ((1ULL << width) - 1);
+}
 
 /* fold one (op,width,count,input) outcome into acc and (sparsely) print a deterministic line. */
 static void fold(const char *tag, int width, unsigned c, uint64_t vin, uint64_t res, unsigned long f) {
@@ -59,31 +74,31 @@ static void fold(const char *tag, int width, unsigned c, uint64_t vin, uint64_t 
     /* print ~1 in 17 to keep stdout bounded but oracle-meaningful across every op */
     static unsigned n;
     if (n++ % 17 == 0)
-        printf("%-5s w=%02d c=%02u in=%016lx r=%016lx f=%03lx\n", tag, width, c, (unsigned long)vin,
-               (unsigned long)rv, ff);
+        printf("%-5s w=%02d c=%02u in=%016lx r=%016lx f=%03lx\n", tag, width, c, (unsigned long)vin, (unsigned long)rv,
+               ff);
 }
 
 /* run all 4 widths of one op-mnemonic-stem over every (count,input). STEM e.g. "shl","sar","rcl". */
-#define OP_ALL(STEM)                                                                                      \
-    do {                                                                                                  \
-        for (unsigned ci = 0; ci < NCNT; ci++)                                                            \
-            for (unsigned vi = 0; vi < NIN; vi++) {                                                       \
-                unsigned char cl = (unsigned char)CNT[ci];                                                \
-                uint64_t v;                                                                               \
-                unsigned long f;                                                                          \
-                v = IN[vi];                                                                               \
-                RUNCL(STEM "b", "%b[v]", v, cl, f);                                                        \
-                fold(STEM "b", 8, CNT[ci], IN[vi], v, f);                                                 \
-                v = IN[vi];                                                                               \
-                RUNCL(STEM "w", "%w[v]", v, cl, f);                                                        \
-                fold(STEM "w", 16, CNT[ci], IN[vi], v, f);                                                \
-                v = IN[vi];                                                                               \
-                RUNCL(STEM "l", "%k[v]", v, cl, f);                                                        \
-                fold(STEM "l", 32, CNT[ci], IN[vi], v, f);                                                \
-                v = IN[vi];                                                                               \
-                RUNCL(STEM "q", "%q[v]", v, cl, f);                                                        \
-                fold(STEM "q", 64, CNT[ci], IN[vi], v, f);                                                \
-            }                                                                                             \
+#define OP_ALL(STEM)                                                                                                   \
+    do {                                                                                                               \
+        for (unsigned ci = 0; ci < NCNT; ci++)                                                                         \
+            for (unsigned vi = 0; vi < NIN; vi++) {                                                                    \
+                unsigned char cl = (unsigned char)CNT[ci];                                                             \
+                uint64_t v;                                                                                            \
+                unsigned long f;                                                                                       \
+                v = IN[vi];                                                                                            \
+                RUNCL(STEM "b", "%b[v]", v, cl, f);                                                                    \
+                fold(STEM "b", 8, CNT[ci], IN[vi], v, f);                                                              \
+                v = IN[vi];                                                                                            \
+                RUNCL(STEM "w", "%w[v]", v, cl, f);                                                                    \
+                fold(STEM "w", 16, CNT[ci], IN[vi], v, f);                                                             \
+                v = IN[vi];                                                                                            \
+                RUNCL(STEM "l", "%k[v]", v, cl, f);                                                                    \
+                fold(STEM "l", 32, CNT[ci], IN[vi], v, f);                                                             \
+                v = IN[vi];                                                                                            \
+                RUNCL(STEM "q", "%q[v]", v, cl, f);                                                                    \
+                fold(STEM "q", 64, CNT[ci], IN[vi], v, f);                                                             \
+            }                                                                                                          \
     } while (0)
 
 int main(void) {

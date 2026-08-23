@@ -83,8 +83,7 @@ int main(void) {
     unsigned long f_entry = file_auxval(AT_ENTRY, &e_present);
     int misc_ok = p_present && f_pagesz == getauxval(AT_PAGESZ) && e_present && f_entry == getauxval(AT_ENTRY);
 
-    int ok = execfn_ok && execfn_abs && execfn_open && phdr_consistent && phent_ok && phdr_live && misc_ok &&
-             fterm;
+    int ok = execfn_ok && execfn_abs && execfn_open && phdr_consistent && phent_ok && phdr_live && misc_ok && fterm;
     printf("auxv_execfn ok=%d\n", ok);
     return 0;
 }

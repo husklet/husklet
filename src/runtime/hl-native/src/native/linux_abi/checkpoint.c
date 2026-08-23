@@ -3,7 +3,7 @@
 // Keeping this assembly file small makes each capability independently reviewable
 // without widening the native ABI.
 #include "checkpoint/capture.c"
-#include "checkpoint/ipc_lock_state.c"
+#include "checkpoint/ipc_state.c"
 #include "checkpoint/image.c"
 #include "checkpoint/memory_restore.c"
 #include "checkpoint/process_restore.c"

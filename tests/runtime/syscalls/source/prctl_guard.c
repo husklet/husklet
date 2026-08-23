@@ -19,16 +19,37 @@
 #define CAP_SETPCAP 8
 
 static int fails;
-#define CK(name, cond) do { if (!(cond)) { printf("FAIL %s\n", name); fails++; } } while (0)
+#define CK(name, cond)                                                                                                 \
+    do {                                                                                                               \
+        if (!(cond)) {                                                                                                 \
+            printf("FAIL %s\n", name);                                                                                 \
+            fails++;                                                                                                   \
+        }                                                                                                              \
+    } while (0)
 
 /* prctl option numbers (avoid depending on libc header coverage) */
 enum {
-    P_SET_PDEATHSIG = 1, P_GET_PDEATHSIG = 2, P_GET_DUMPABLE = 3, P_SET_DUMPABLE = 4,
-    P_GET_KEEPCAPS = 7, P_SET_KEEPCAPS = 8, P_SET_TIMING = 14, P_SET_NAME = 15, P_GET_NAME = 16,
-    P_CAPBSET_DROP = 24, P_SET_SECUREBITS = 28, P_SET_CHILD_SUBREAPER = 36, P_GET_CHILD_SUBREAPER = 37,
-    P_SET_NO_NEW_PRIVS = 38, P_GET_NO_NEW_PRIVS = 39, P_SET_THP_DISABLE = 41, P_GET_THP_DISABLE = 42,
-    P_CAP_AMBIENT = 47, P_GET_SPECULATION_CTRL = 52,
+    P_SET_PDEATHSIG = 1,
+    P_GET_PDEATHSIG = 2,
+    P_GET_DUMPABLE = 3,
+    P_SET_DUMPABLE = 4,
+    P_GET_KEEPCAPS = 7,
+    P_SET_KEEPCAPS = 8,
+    P_SET_TIMING = 14,
+    P_SET_NAME = 15,
+    P_GET_NAME = 16,
+    P_CAPBSET_DROP = 24,
+    P_SET_SECUREBITS = 28,
+    P_SET_CHILD_SUBREAPER = 36,
+    P_GET_CHILD_SUBREAPER = 37,
+    P_SET_NO_NEW_PRIVS = 38,
+    P_GET_NO_NEW_PRIVS = 39,
+    P_SET_THP_DISABLE = 41,
+    P_GET_THP_DISABLE = 42,
+    P_CAP_AMBIENT = 47,
+    P_GET_SPECULATION_CTRL = 52,
 };
+
 enum { AMB_IS_SET = 1, AMB_RAISE = 2, AMB_LOWER = 3, AMB_CLEAR_ALL = 4 };
 
 static long pr(int opt, unsigned long a2, unsigned long a3, unsigned long a4, unsigned long a5) {
@@ -52,7 +73,10 @@ int main(void) {
     /* PR_SET_PDEATHSIG: invalid signal -> EINVAL; valid -> 0; GET round-trips */
     CK("pdeathsig_bad", pr(P_SET_PDEATHSIG, (unsigned long)-1, 0, 0, 0) == -1 && errno == EINVAL);
     CK("pdeathsig_ok", pr(P_SET_PDEATHSIG, 9, 0, 0, 0) == 0);
-    { int v = -1; CK("pdeathsig_get", pr(P_GET_PDEATHSIG, (unsigned long)&v, 0, 0, 0) == 0 && v == 9); }
+    {
+        int v = -1;
+        CK("pdeathsig_get", pr(P_GET_PDEATHSIG, (unsigned long)&v, 0, 0, 0) == 0 && v == 9);
+    }
 
     /* PR_SET_DUMPABLE: 2 is invalid; 0/1 round-trip via GET */
     CK("dumpable_2_einval", pr(P_SET_DUMPABLE, 2, 0, 0, 0) == -1 && errno == EINVAL);
@@ -98,16 +122,29 @@ int main(void) {
 
     /* PR_SET/GET_CHILD_SUBREAPER round-trip (prctl03) */
     CK("subreaper_set1", pr(P_SET_CHILD_SUBREAPER, 1, 0, 0, 0) == 0);
-    { int v = -1; CK("subreaper_get1", pr(P_GET_CHILD_SUBREAPER, (unsigned long)&v, 0, 0, 0) == 0 && v == 1); }
+    {
+        int v = -1;
+        CK("subreaper_get1", pr(P_GET_CHILD_SUBREAPER, (unsigned long)&v, 0, 0, 0) == 0 && v == 1);
+    }
     CK("subreaper_set0", pr(P_SET_CHILD_SUBREAPER, 0, 0, 0, 0) == 0);
-    { int v = -1; CK("subreaper_get0", pr(P_GET_CHILD_SUBREAPER, (unsigned long)&v, 0, 0, 0) == 0 && v == 0); }
+    {
+        int v = -1;
+        CK("subreaper_get0", pr(P_GET_CHILD_SUBREAPER, (unsigned long)&v, 0, 0, 0) == 0 && v == 0);
+    }
 
     /* Capability-gated options: after dropping CAP_SETPCAP, PR_SET_SECUREBITS and PR_CAPBSET_DROP -> EPERM.
        (The container starts as full root; the native oracle shell has no caps -- either way the drop leaves
        CAP_SETPCAP clear and both options must EPERM, matching LTP prctl02's CAP_SETPCAP-drop subtests.) */
     {
-        struct { uint32_t version; int pid; } hdr = {0x20080522u, 0};
-        struct { uint32_t eff, perm, inh; } data[2] = {{0}};
+        struct {
+            uint32_t version;
+            int pid;
+        } hdr = {0x20080522u, 0};
+
+        struct {
+            uint32_t eff, perm, inh;
+        } data[2] = {{0}};
+
         syscall(SYS_capget, &hdr, data);
         data[0].eff &= ~(1u << CAP_SETPCAP); /* CAP_SETPCAP = 8, index 0 */
         syscall(SYS_capset, &hdr, data);     /* ignore result: no-op if already unset */
@@ -115,7 +152,9 @@ int main(void) {
         CK("capbset_drop_eperm", pr(P_CAPBSET_DROP, 1, 0, 0, 0) == -1 && errno == EPERM);
     }
 
-    if (fails == 0) printf("PRCTL_GUARD_OK\n");
-    else printf("PRCTL_GUARD_FAILED %d\n", fails);
+    if (fails == 0)
+        printf("PRCTL_GUARD_OK\n");
+    else
+        printf("PRCTL_GUARD_FAILED %d\n", fails);
     return fails ? 1 : 0;
 }

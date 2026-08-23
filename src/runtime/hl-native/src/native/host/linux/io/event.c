@@ -262,4 +262,3 @@ static hl_host_result hl_linux_event_close(void *context, hl_host_handle pollset
     pthread_mutex_unlock(&host->lock);
     return hl_linux_close_descriptor(context, pollset);
 }
-

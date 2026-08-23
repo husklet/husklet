@@ -8,7 +8,8 @@ int main(void) {
     long sum = 0;
     if (memory == MAP_FAILED) return 1;
     memset(memory, 3, size);
-    for (size_t offset = 0; offset < size; offset += 4096) sum += memory[offset];
+    for (size_t offset = 0; offset < size; offset += 4096)
+        sum += memory[offset];
     if (munmap(memory, size) != 0) return 1;
     printf("mmap sum=%ld\n", sum);
     return sum == 768 ? 0 : 1;

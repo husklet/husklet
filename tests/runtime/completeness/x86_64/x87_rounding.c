@@ -20,8 +20,14 @@ static unsigned fsw(void) {
     __asm__ volatile("fnstsw %0" : "=am"(s));
     return s;
 }
-static void init(void) { __asm__ volatile("fninit"); }
-static void setcw(unsigned short c) { __asm__ volatile("fldcw %0" : : "m"(c)); }
+
+static void init(void) {
+    __asm__ volatile("fninit");
+}
+
+static void setcw(unsigned short c) {
+    __asm__ volatile("fldcw %0" : : "m"(c));
+}
 
 static const unsigned short RC[4] = {0x037f, 0x077f, 0x0b7f, 0x0f7f}; // near/down/up/zero at PC=64
 static const unsigned short RC53[4] = {0x027f, 0x067f, 0x0a7f, 0x0e7f};
@@ -56,11 +62,11 @@ int main(void) {
         int op;
         const char *name;
     } cases[] = {
-        {1.0, 3.0, 3, "1/3"},         {10.0, 7.0, 3, "10/7"},   {1.0, 49.0, 3, "1/49"},
-        {2.0, 0.0, 4, "sqrt2"},       {3.0, 0.0, 4, "sqrt3"},   {10.0, 0.0, 4, "sqrt10"},
-        {1e16, 3.0, 0, "1e16+3"},     {1.0, 1e-17, 0, "1+1e-17"}, {0.1, 0.2, 0, "0.1+0.2"},
-        {1.0, 1e-17, 1, "1-1e-17"},   {3.0, 7.0, 2, "3*7"},     {0.1, 0.3, 2, "0.1*0.3"},
+        {1.0, 3.0, 3, "1/3"},     {10.0, 7.0, 3, "10/7"},     {1.0, 49.0, 3, "1/49"},   {2.0, 0.0, 4, "sqrt2"},
+        {3.0, 0.0, 4, "sqrt3"},   {10.0, 0.0, 4, "sqrt10"},   {1e16, 3.0, 0, "1e16+3"}, {1.0, 1e-17, 0, "1+1e-17"},
+        {0.1, 0.2, 0, "0.1+0.2"}, {1.0, 1e-17, 1, "1-1e-17"}, {3.0, 7.0, 2, "3*7"},     {0.1, 0.3, 2, "0.1*0.3"},
     };
+
     puts("== RC at PC=64 (the FNINIT default)");
     for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++)
         for (int r = 0; r < 4; r++) {

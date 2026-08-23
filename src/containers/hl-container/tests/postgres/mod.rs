@@ -1,4 +1,4 @@
-//! PostgreSQL checkpoint acceptance fixture and lifecycle assertions.
+//! `PostgreSQL` checkpoint acceptance fixture and lifecycle assertions.
 
 mod fixture;
 mod lifecycle;
@@ -34,17 +34,16 @@ const POSTGRES_ARM64_DIGEST: &str = "sha256:738d1359df5aa0b6d50a9071e989c49fdd39
 #[ignore = "requires HL_POSTGRES_ROOTFS_ARCHIVE containing a pinned postgres:16-alpine rootfs"]
 async fn postgres_survives_three_product_checkpoint_cycles() -> Result<(), Error> {
     let fixture = Fixture::new().await?;
-    let outcome = bounded(
+    let outcome = Box::pin(bounded(
         "complete PostgreSQL acceptance",
         Duration::from_secs(420),
         fixture.run(),
-    )
+    ))
     .await;
     let outcome = append_failure_diagnostics(outcome, || async {
-        let diagnostics = tokio::time::timeout(Duration::from_secs(3), fixture.failure_diagnostics())
+        tokio::time::timeout(Duration::from_secs(3), fixture.failure_diagnostics())
             .await
-            .unwrap_or_else(|_| "PostgreSQL failure diagnostics exceeded 3s".to_owned());
-        diagnostics
+            .unwrap_or_else(|_| "PostgreSQL failure diagnostics exceeded 3s".to_owned())
     })
     .await;
     finish(outcome, fixture.cleanup().await)
@@ -81,18 +80,14 @@ mod tests {
         let postmaster = directory.path().join("postmaster.pid");
         std::fs::write(&postmaster, "1508937\n").unwrap();
         let command = process::readiness_command_with(&postmaster.to_string_lossy(), "printf reached");
-        let rejected = std::process::Command::new("/bin/sh")
-            .args(["-c", &command])
-            .output()
-            .unwrap();
+        let guard = directory.path().join("postmaster-guard.sh");
+        std::fs::write(&guard, &command).unwrap();
+        let rejected = std::process::Command::new("/bin/sh").arg(&guard).output().unwrap();
         assert!(!rejected.status.success());
         assert!(rejected.stdout.is_empty());
 
         std::fs::write(&postmaster, "1\n").unwrap();
-        let accepted = std::process::Command::new("/bin/sh")
-            .args(["-c", &command])
-            .output()
-            .unwrap();
+        let accepted = std::process::Command::new("/bin/sh").arg(&guard).output().unwrap();
         assert!(accepted.status.success());
         assert_eq!(accepted.stdout, b"reached");
     }

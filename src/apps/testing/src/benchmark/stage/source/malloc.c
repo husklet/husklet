@@ -17,21 +17,15 @@
 
 static uint64_t micros(void) {
     struct timespec value;
-    if (clock_gettime(CLOCK_MONOTONIC, &value) != 0) {
-        abort();
-    }
+    if (clock_gettime(CLOCK_MONOTONIC, &value) != 0) { abort(); }
     return (uint64_t)value.tv_sec * UINT64_C(1000000) + (uint64_t)value.tv_nsec / UINT64_C(1000);
 }
 
 static int write_all(const char *buffer, size_t length) {
     while (length != 0) {
         ssize_t written = write(STDOUT_FILENO, buffer, length);
-        if (written < 0 && errno == EINTR) {
-            continue;
-        }
-        if (written <= 0) {
-            return -1;
-        }
+        if (written < 0 && errno == EINTR) { continue; }
+        if (written <= 0) { return -1; }
         buffer += (size_t)written;
         length -= (size_t)written;
     }
@@ -70,22 +64,14 @@ static const struct work_factor *parse_factor(const char *text, size_t length) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        return 1;
-    }
+    if (argc != 2) { return 1; }
     const char *separator = strchr(argv[1], ',');
-    if (separator == NULL || strchr(separator + 1, ',') != NULL) {
-        return 1;
-    }
+    if (separator == NULL || strchr(separator + 1, ',') != NULL) { return 1; }
     const struct work_factor *compute_factor = parse_factor(argv[1], (size_t)(separator - argv[1]));
     const struct work_factor *malloc_factor = parse_factor(separator + 1, strlen(separator + 1));
-    if (compute_factor == NULL || malloc_factor == NULL) {
-        return 1;
-    }
+    if (compute_factor == NULL || malloc_factor == NULL) { return 1; }
 #if defined(HL_SQLITE_LAYOUT)
-    if (sqlite3_initialize() != SQLITE_OK) {
-        return 3;
-    }
+    if (sqlite3_initialize() != SQLITE_OK) { return 3; }
 #endif
     uint64_t compute_proof = 0;
     uint64_t started = micros();
@@ -100,9 +86,7 @@ int main(int argc, char **argv) {
         for (size_t slot = 0; slot < 241; ++slot) {
             size_t size = 1 + ((slot * 17 + sweep * 131) % 4096);
             volatile unsigned char *allocation = malloc(size);
-            if (allocation == NULL) {
-                return 2;
-            }
+            if (allocation == NULL) { return 2; }
             unsigned char first = (unsigned char)(size ^ sweep);
             unsigned char last = (unsigned char)((size >> 8) ^ slot);
             allocation[0] = first;
@@ -113,9 +97,7 @@ int main(int argc, char **argv) {
         }
     }
     uint64_t malloc_time = micros() - started;
-    if (compute_proof != compute_factor->compute_proof || malloc_proof != malloc_factor->malloc_proof) {
-        return 5;
-    }
+    if (compute_proof != compute_factor->compute_proof || malloc_proof != malloc_factor->malloc_proof) { return 5; }
 
     char frame[256];
     int length = snprintf(frame, sizeof(frame),
@@ -124,9 +106,7 @@ int main(int argc, char **argv) {
                           "PHASE malloc us=%" PRIu64 " ok=%" PRIu64 "\n",
                           HL_LAYOUT, compute_factor->text, malloc_factor->text, compute ? compute : 1, compute_proof,
                           malloc_time ? malloc_time : 1, malloc_proof);
-    if (length < 0 || (size_t)length >= sizeof(frame) || write_all(frame, (size_t)length) != 0) {
-        return 4;
-    }
+    if (length < 0 || (size_t)length >= sizeof(frame) || write_all(frame, (size_t)length) != 0) { return 4; }
 #if defined(HL_SQLITE_LAYOUT)
     sqlite3_shutdown();
 #endif

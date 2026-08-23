@@ -47,7 +47,8 @@ int main(void) {
     char zb = 1;
     read(b, &zb, 1); // b now aliases /dev/zero -> reads a 0 byte
     printf("dup2 over open: ret==b=%d reads_zero=%d\n", r3 == b, zb == 0);
-    close(a); close(b);
+    close(a);
+    close(b);
 
     // dup() clears FD_CLOEXEC on the copy even if the source had it.
     fcntl(f, F_SETFD, FD_CLOEXEC);
@@ -87,15 +88,21 @@ int main(void) {
     // fields (l_whence/l_start/l_len) are left UNCHANGED. (LTP fcntl05.)
     struct flock gl;
     memset(&gl, 0, sizeof gl);
-    gl.l_type = F_RDLCK; gl.l_whence = SEEK_CUR; gl.l_start = 0; gl.l_len = 0;
+    gl.l_type = F_RDLCK;
+    gl.l_whence = SEEK_CUR;
+    gl.l_start = 0;
+    gl.l_len = 0;
     int glr = fcntl(w, F_GETLK, &gl);
-    printf("F_GETLK unlocked: ok=%d unlck=%d whence_kept=%d start0=%d len0=%d\n",
-           glr == 0, gl.l_type == F_UNLCK, gl.l_whence == SEEK_CUR, gl.l_start == 0, gl.l_len == 0);
+    printf("F_GETLK unlocked: ok=%d unlck=%d whence_kept=%d start0=%d len0=%d\n", glr == 0, gl.l_type == F_UNLCK,
+           gl.l_whence == SEEK_CUR, gl.l_start == 0, gl.l_len == 0);
 
     // F_SETLK with an out-of-range l_whence -> EINVAL (validated before the fd type is consulted). (fcntl13)
     struct flock bw;
     memset(&bw, 0, sizeof bw);
-    bw.l_type = F_RDLCK; bw.l_whence = 999; bw.l_start = 0; bw.l_len = 0;
+    bw.l_type = F_RDLCK;
+    bw.l_whence = 999;
+    bw.l_start = 0;
+    bw.l_len = 0;
     errno = 0;
     int bwr = fcntl(w, F_SETLK, &bw);
     printf("F_SETLK bad whence: einval=%d\n", bwr < 0 && errno == EINVAL);
@@ -164,11 +171,15 @@ int main(void) {
     for (int i = 0; i < 60; i++) {
         errno = 0;
         int nf = dup(f);
-        if (nf < 0) { got_emfile = (errno == EMFILE); break; }
+        if (nf < 0) {
+            got_emfile = (errno == EMFILE);
+            break;
+        }
         if (nheld < (int)(sizeof held / sizeof held[0])) held[nheld++] = nf;
     }
     printf("dup exhaust: emfile=%d\n", got_emfile);
-    for (int i = 0; i < nheld; i++) close(held[i]);
+    for (int i = 0; i < nheld; i++)
+        close(held[i]);
 
     close(f);
     return 0;

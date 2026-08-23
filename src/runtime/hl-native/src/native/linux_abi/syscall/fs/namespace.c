@@ -9,7 +9,8 @@ static int absolute_exclusive_create_precheck(const char *raw) {
     char path[HL_LINUX_PATH_MAX + 1];
     if (path_copy(path, sizeof path, raw) != 0) return -ENAMETOOLONG;
     size_t length = strlen(path);
-    while (length > 1 && path[length - 1] == '/') path[--length] = 0;
+    while (length > 1 && path[length - 1] == '/')
+        path[--length] = 0;
 
     hl_vfs_cursor root;
     int error = hl_vfs_cursor_namespace_root(&root);
@@ -17,15 +18,15 @@ static int absolute_exclusive_create_precheck(const char *raw) {
     uint32_t groups[HL_NGROUPS_MAX];
     hl_dac_credentials credentials = dac_credentials_current(groups);
     hl_vfs_cursor_entry entry;
-    error = hl_vfs_cursor_walk(&root, &root, path, 1, 1, 0, NULL, 0, NULL, NULL, NULL,
-                               dac_authorize_cursor_search, &credentials, &entry);
+    error = hl_vfs_cursor_walk(&root, &root, path, 1, 1, 0, NULL, 0, NULL, NULL, NULL, dac_authorize_cursor_search,
+                               &credentials, &entry);
     if (error == 0) {
         hl_vfs_cursor_entry_release(&entry);
         error = -EEXIST;
     } else if (error == -ENOENT) {
         // Distinguish an absent final name (creation may proceed) from an absent prefix (preserve ENOENT).
-        error = hl_vfs_cursor_walk(&root, &root, path, 1, 1, 1, NULL, 0, NULL, NULL, NULL,
-                                   dac_authorize_cursor_search, &credentials, &entry);
+        error = hl_vfs_cursor_walk(&root, &root, path, 1, 1, 1, NULL, 0, NULL, NULL, NULL, dac_authorize_cursor_search,
+                                   &credentials, &entry);
     }
     hl_vfs_cursor_release(&root);
     return error;
@@ -197,9 +198,11 @@ static void svc_fs_namespace_34(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
 
 static int rmdir_final_dot_errno(const char *path) {
     size_t end = strlen(path);
-    while (end > 1 && path[end - 1] == '/') --end;
+    while (end > 1 && path[end - 1] == '/')
+        --end;
     size_t start = end;
-    while (start > 0 && path[start - 1] != '/') --start;
+    while (start > 0 && path[start - 1] != '/')
+        --start;
     size_t length = end - start;
     if (length == 1 && path[start] == '.') return EINVAL;
     if (length == 2 && path[start] == '.' && path[start + 1] == '.') return ENOTEMPTY;

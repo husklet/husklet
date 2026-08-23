@@ -24,26 +24,39 @@ int main(void) {
     int dfd = open(dir, O_RDONLY | O_DIRECTORY);
 
     struct open_how h = {.flags = O_RDONLY};
-    errno = 0; int size0 = oa2(dfd, ".", &h, 0) < 0 ? errno : 0;
-    errno = 0; int small = oa2(dfd, ".", &h, sizeof h - 4) < 0 ? errno : 0;
+    errno = 0;
+    int size0 = oa2(dfd, ".", &h, 0) < 0 ? errno : 0;
+    errno = 0;
+    int small = oa2(dfd, ".", &h, sizeof h - 4) < 0 ? errno : 0;
 
     struct open_how hr = {.flags = O_RDONLY, .resolve = 0x1000};
-    errno = 0; int badresolve = oa2(dfd, ".", &hr, sizeof hr) < 0 ? errno : 0;
+    errno = 0;
+    int badresolve = oa2(dfd, ".", &hr, sizeof hr) < 0 ? errno : 0;
 
     struct open_how hf = {.flags = 0x1ULL << 40};
-    errno = 0; int badflags = oa2(dfd, ".", &hf, sizeof hf) < 0 ? errno : 0;
+    errno = 0;
+    int badflags = oa2(dfd, ".", &hf, sizeof hf) < 0 ? errno : 0;
 
-    struct big { struct open_how h; char pad[16]; };
-    struct big bj; memset(&bj, 0, sizeof bj); bj.h.flags = O_RDONLY; bj.pad[0] = 1;
-    errno = 0; int bigjunk = oa2(dfd, ".", &bj, sizeof bj) < 0 ? errno : 0;
-    struct big bz; memset(&bz, 0, sizeof bz); bz.h.flags = O_RDONLY;
+    struct big {
+        struct open_how h;
+        char pad[16];
+    };
+    struct big bj;
+    memset(&bj, 0, sizeof bj);
+    bj.h.flags = O_RDONLY;
+    bj.pad[0] = 1;
+    errno = 0;
+    int bigjunk = oa2(dfd, ".", &bj, sizeof bj) < 0 ? errno : 0;
+    struct big bz;
+    memset(&bz, 0, sizeof bz);
+    bz.h.flags = O_RDONLY;
     int bzr = oa2(dfd, ".", &bz, sizeof bz);
     int bigzero_ok = bzr >= 0;
     if (bzr >= 0) close(bzr);
 
     close(dfd);
     rmdir(dir);
-    printf("openat2-einval size0=%d small=%d badresolve=%d badflags=%d bigjunk=%d bigzero_ok=%d\n",
-           size0, small, badresolve, badflags, bigjunk, bigzero_ok);
+    printf("openat2-einval size0=%d small=%d badresolve=%d badflags=%d bigjunk=%d bigzero_ok=%d\n", size0, small,
+           badresolve, badflags, bigjunk, bigzero_ok);
     return 0;
 }

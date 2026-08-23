@@ -11,12 +11,14 @@ static volatile uint64_t sink;
 
 static void deep(uint64_t seed, int depth) {
     volatile uint64_t local[8];
-    for (int i = 0; i < 8; i++) local[i] = seed ^ (uint64_t)(depth * 131 + i);
+    for (int i = 0; i < 8; i++)
+        local[i] = seed ^ (uint64_t)(depth * 131 + i);
     if (depth > 40) {
         sink = local[seed & 7];
         longjmp(env, (int)((seed & 0x7fffffff) | 1)); // non-local exit from depth ~40
     }
-    for (uint64_t k = 0; k < 3; k++) deep(seed + k + (uint64_t)depth, depth + 1);
+    for (uint64_t k = 0; k < 3; k++)
+        deep(seed + k + (uint64_t)depth, depth + 1);
 }
 
 int main(void) {

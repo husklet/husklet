@@ -11,15 +11,24 @@
 
 int main(void) {
     int ls = socket(AF_INET, SOCK_STREAM, 0);
-    if (ls < 0) { perror("socket"); return 1; }
+    if (ls < 0) {
+        perror("socket");
+        return 1;
+    }
     int one = 1;
     setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
     struct sockaddr_in a = {0};
     a.sin_family = AF_INET;
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     a.sin_port = 0; // ephemeral
-    if (bind(ls, (struct sockaddr *)&a, sizeof a) < 0) { perror("bind"); return 1; }
-    if (listen(ls, 4) < 0) { perror("listen"); return 1; }
+    if (bind(ls, (struct sockaddr *)&a, sizeof a) < 0) {
+        perror("bind");
+        return 1;
+    }
+    if (listen(ls, 4) < 0) {
+        perror("listen");
+        return 1;
+    }
     socklen_t al = sizeof a;
     getsockname(ls, (struct sockaddr *)&a, &al);
     int port = ntohs(a.sin_port);
@@ -41,7 +50,10 @@ int main(void) {
     s.sin_family = AF_INET;
     s.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     s.sin_port = htons(port);
-    if (connect(cs, (struct sockaddr *)&s, sizeof s) < 0) { perror("connect"); return 1; }
+    if (connect(cs, (struct sockaddr *)&s, sizeof s) < 0) {
+        perror("connect");
+        return 1;
+    }
     const char *msg = "hello-socket";
     send(cs, msg, strlen(msg), 0);
     char buf[64] = {0};

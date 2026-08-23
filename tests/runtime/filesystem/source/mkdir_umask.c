@@ -17,12 +17,12 @@ int main(void) {
     mkdirat(dfd, "d777", 0777);
     struct stat sd;
     fstatat(dfd, "d777", &sd, 0);
-    int dir_masked = (sd.st_mode & 07777) == 0755;   // 0777 & ~022
+    int dir_masked = (sd.st_mode & 07777) == 0755; // 0777 & ~022
 
     close(openat(dfd, "f666", O_CREAT | O_WRONLY, 0666));
     struct stat sf;
     fstatat(dfd, "f666", &sf, 0);
-    int file_masked = (sf.st_mode & 07777) == 0644;  // 0666 & ~022
+    int file_masked = (sf.st_mode & 07777) == 0644; // 0666 & ~022
 
     // Tighter umask.
     umask(077);
@@ -46,7 +46,6 @@ int main(void) {
     unlinkat(dfd, "explicit", 0);
     close(dfd);
     rmdir(dir);
-    printf("mkdir-umask dir=%d file=%d tight=%d explicit=%d\n",
-           dir_masked, file_masked, tight_masked, explicit_ok);
+    printf("mkdir-umask dir=%d file=%d tight=%d explicit=%d\n", dir_masked, file_masked, tight_masked, explicit_ok);
     return 0;
 }

@@ -25,9 +25,7 @@ static void handler(int sig, siginfo_t *si, void *uc) {
 #define TRY(body)                                                                                                      \
     do {                                                                                                               \
         gsig = gcode = 0;                                                                                              \
-        if (sigsetjmp(jb, 1) == 0) {                                                                                   \
-            body;                                                                                                      \
-        }                                                                                                              \
+        if (sigsetjmp(jb, 1) == 0) { body; }                                                                           \
     } while (0)
 
 int main(void) {
@@ -42,9 +40,8 @@ int main(void) {
     printf("div64-ovf sig=%d code=%d\n", gsig, gcode);
     TRY(__asm__ volatile("divq %4" : "=a"(q), "=d"(r) : "0"(10ULL), "1"(0ULL), "r"(0ULL)));
     printf("div64-zero sig=%d code=%d\n", gsig, gcode);
-    TRY(__asm__ volatile("idivq %4"
-                         : "=a"(q), "=d"(r)
-                         : "0"(0x8000000000000000ULL), "1"(0xffffffffffffffffULL), "r"(0xffffffffffffffffULL)));
+    TRY(__asm__ volatile("idivq %4" : "=a"(q), "=d"(r) : "0"(0x8000000000000000ULL), "1"(0xffffffffffffffffULL),
+                         "r"(0xffffffffffffffffULL)));
     printf("idiv64-minus1 sig=%d code=%d\n", gsig, gcode);
     TRY(__asm__ volatile("idivq %4" : "=a"(q), "=d"(r) : "0"(0ULL), "1"(1ULL), "r"(2ULL)));
     printf("idiv64-ovf sig=%d code=%d\n", gsig, gcode);
@@ -66,25 +63,20 @@ int main(void) {
     }
 
     // RDX:RAX = INT128_MIN over -1, and the same numerator plus one.
-    TRY(__asm__ volatile("idivq %4"
-                         : "=a"(q), "=d"(r)
-                         : "0"(0ULL), "1"(0x8000000000000000ULL), "r"(0xffffffffffffffffULL)));
+    TRY(__asm__ volatile("idivq %4" : "=a"(q), "=d"(r) : "0"(0ULL), "1"(0x8000000000000000ULL),
+                         "r"(0xffffffffffffffffULL)));
     printf("idiv64-int128min sig=%d code=%d\n", gsig, gcode);
-    TRY(__asm__ volatile("idivq %4"
-                         : "=a"(q), "=d"(r)
-                         : "0"(1ULL), "1"(0x8000000000000000ULL), "r"(0xffffffffffffffffULL)));
+    TRY(__asm__ volatile("idivq %4" : "=a"(q), "=d"(r) : "0"(1ULL), "1"(0x8000000000000000ULL),
+                         "r"(0xffffffffffffffffULL)));
     printf("idiv64-int128min1 sig=%d code=%d\n", gsig, gcode);
 
     // Boundaries that must NOT fault: the quotient is exactly INT64_MIN, resp. exactly 2^63.
     TRY(__asm__ volatile("idivq %4" : "=a"(q), "=d"(r) : "0"(0ULL), "1"(0xffffffffffffffffULL), "r"(2ULL)));
-    printf("idiv64-ok sig=%d code=%d q=%016llx r=%016llx\n", gsig, gcode, (unsigned long long)q,
-           (unsigned long long)r);
+    printf("idiv64-ok sig=%d code=%d q=%016llx r=%016llx\n", gsig, gcode, (unsigned long long)q, (unsigned long long)r);
     TRY(__asm__ volatile("divq %4" : "=a"(q), "=d"(r) : "0"(0ULL), "1"(1ULL), "r"(2ULL)));
-    printf("div64-ok sig=%d code=%d q=%016llx r=%016llx\n", gsig, gcode, (unsigned long long)q,
-           (unsigned long long)r);
-    TRY(__asm__ volatile("idivq %4"
-                         : "=a"(q), "=d"(r)
-                         : "0"(0x8000000000000000ULL), "1"(0xffffffffffffffffULL), "r"(1ULL)));
+    printf("div64-ok sig=%d code=%d q=%016llx r=%016llx\n", gsig, gcode, (unsigned long long)q, (unsigned long long)r);
+    TRY(__asm__ volatile("idivq %4" : "=a"(q), "=d"(r) : "0"(0x8000000000000000ULL), "1"(0xffffffffffffffffULL),
+                         "r"(1ULL)));
     printf("idiv64-min-by-1 sig=%d code=%d q=%016llx r=%016llx\n", gsig, gcode, (unsigned long long)q,
            (unsigned long long)r);
     TRY(__asm__ volatile("idivq %4" : "=a"(q), "=d"(r) : "0"(7ULL), "1"(0ULL), "r"(0xfffffffffffffffeULL)));

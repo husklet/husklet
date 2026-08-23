@@ -45,8 +45,8 @@ int main(int argc, char **argv) {
     int isolated = wait_data(first, first_event.data.u64) && wait_data(second, second_event.data.u64);
 
     int alias = dup(first);
-    int close_range_alias = alias >= 0 && syscall(SYS_close_range, (unsigned)first, (unsigned)first, 0) == 0 &&
-                            fcntl(first, F_GETFD) < 0;
+    int close_range_alias =
+        alias >= 0 && syscall(SYS_close_range, (unsigned)first, (unsigned)first, 0) == 0 && fcntl(first, F_GETFD) < 0;
     char byte;
     read(first_pipe[0], &byte, 1);
     write(first_pipe[1], "c", 1);
@@ -61,8 +61,7 @@ int main(int argc, char **argv) {
     waitpid(child, &status, 0);
     read(first_pipe[0], &byte, 1);
     write(first_pipe[1], "d", 1);
-    int fork_close = WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
-                     wait_data(alias, first_event.data.u64);
+    int fork_close = WIFEXITED(status) && WEXITSTATUS(status) == 0 && wait_data(alias, first_event.data.u64);
 
     close(alias);
     int reused = epoll_create1(0);
@@ -82,8 +81,8 @@ int main(int argc, char **argv) {
     snprintf(state, sizeof(state), "%d,%d,%d", exec_alias, exec_pipe[0], exec_pipe[1]);
     setenv("HL_EPOLL_EXEC_STATE", state, 1);
 
-    printf("epoll_instance isolated=%d duplicate_close=%d fork_close=%d close_range=%d reuse=%d\n",
-           isolated, duplicate_close, fork_close, close_range_alias, reuse);
+    printf("epoll_instance isolated=%d duplicate_close=%d fork_close=%d close_range=%d reuse=%d\n", isolated,
+           duplicate_close, fork_close, close_range_alias, reuse);
     fflush(stdout);
     if (!isolated) return 41;
     if (!duplicate_close) return 42;

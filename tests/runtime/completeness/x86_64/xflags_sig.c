@@ -11,7 +11,11 @@
 #include <sys/time.h>
 
 static volatile sig_atomic_t fired;
-static void on_alrm(int s) { (void)s; fired++; }
+
+static void on_alrm(int s) {
+    (void)s;
+    fired++;
+}
 
 int main(void) {
     struct sigaction sa = {0};

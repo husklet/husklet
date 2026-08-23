@@ -75,8 +75,8 @@ impl Fixture {
             )
             .await?;
         self.remember_execution("sleeper", &sleeper.id);
-        let _sleep_attachment = self.containers.executions().start(&sleeper.id).await?;
-        drop(_sleep_attachment);
+        let sleep_attachment = self.containers.executions().start(&sleeper.id).await?;
+        drop(sleep_attachment);
         session.write(format!(
             "CREATE TEMP TABLE session_nonce(v text); INSERT INTO session_nonce VALUES ('{run_id}'); SELECT pg_advisory_lock({ADVISORY_LOCK}); SELECT 'SESSION_READY:'||pg_backend_pid();\n"
         )).await?;
@@ -101,7 +101,7 @@ impl Fixture {
             previous_tokens: std::collections::BTreeMap::new(),
         };
         for cycle in 1..=3 {
-            self.checkpoint_cycle(cycle, &mut context).await?;
+            Box::pin(self.checkpoint_cycle(cycle, &mut context)).await?;
         }
         let mut session = context
             .session
@@ -149,14 +149,14 @@ impl Fixture {
         let witness = self.prepare_checkpoint_cycle(cycle, context, &mut session).await?;
         let close_started = Instant::now();
         let before_generation = self.containers.inspect(CONTAINER).await?.generation;
-        self.capture_checkpoint_cycle(
+        Box::pin(self.capture_checkpoint_cycle(
             cycle,
             context,
             &witness.waiter,
             before_generation,
             close_started,
             session,
-        )
+        ))
         .await?;
         let reopen_started = Instant::now();
         let (mut session, mut waiter_session) = self

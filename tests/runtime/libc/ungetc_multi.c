@@ -8,14 +8,16 @@ int main(void) {
     rewind(f);
     int c = fgetc(f); // '4'
     ungetc(c, f);
-    int n = 0; fscanf(f, "%d", &n);
+    int n = 0;
+    fscanf(f, "%d", &n);
     int d1 = n == 42;
     // Push a non-read char then read it.
     ungetc('Z', f);
     int d2 = fgetc(f) == 'Z';
     int d3 = fgetc(f) == 'r';
     // EOF then ungetc clears EOF.
-    char buf[16]; while (fgetc(f) != EOF) {}
+    char buf[16];
+    while (fgetc(f) != EOF) {}
     int d4 = feof(f) != 0;
     ungetc('x', f);
     int d5 = feof(f) == 0 && fgetc(f) == 'x';

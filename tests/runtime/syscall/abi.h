@@ -9,6 +9,7 @@ static inline long guest_call(long number, long first, long second, long third) 
     __asm__ volatile("svc 0" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x8) : "memory");
     return x0;
 }
+
 #define GUEST_WRITE 64
 #define GUEST_EXIT 93
 #define GUEST_GETPID 172
@@ -21,6 +22,7 @@ static inline long guest_call(long number, long first, long second, long third) 
     __asm__ volatile("syscall" : "+r"(rax) : "r"(rdi), "r"(rsi), "r"(rdx) : "rcx", "r11", "memory");
     return rax;
 }
+
 #define GUEST_WRITE 1
 #define GUEST_EXIT 60
 #define GUEST_GETPID 39

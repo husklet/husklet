@@ -28,8 +28,7 @@ int main(void) {
     read(sv[1], b, 1);
     short r2 = revents(sv[1], POLLIN, 0);
     int in_drained = (r2 & POLLIN) != 0;
-    printf("out_ready=%d in_before=%d in_after=%d in_drained=%d\n", out_ready, in_before, in_after,
-           in_drained);
+    printf("out_ready=%d in_before=%d in_after=%d in_drained=%d\n", out_ready, in_before, in_after, in_drained);
     close(sv[0]);
     close(sv[1]);
     return 0;

@@ -47,8 +47,8 @@ int main(void) {
     char *rw = mmap(NULL, 2 * CHUNK, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (rw == MAP_FAILED) return 1;
     if (munmap(rw + CHUNK, CHUNK) != 0) return 1;
-    struct flock *hole = (struct flock *)(rw + CHUNK);          // fully unmapped
-    struct flock *straddle = (struct flock *)(rw + CHUNK - 8);  // 8 mapped bytes, tail in the hole
+    struct flock *hole = (struct flock *)(rw + CHUNK);         // fully unmapped
+    struct flock *straddle = (struct flock *)(rw + CHUNK - 8); // 8 mapped bytes, tail in the hole
     struct flock ok;
 
     int r, e;
@@ -85,7 +85,7 @@ int main(void) {
     ok.l_len = 1;
     int getlk = (fcntl(fd, F_GETLK, &ok) == 0 && ok.l_type == F_UNLCK);
 
-    printf("efault unmapped=%d again=%d straddle=%d null=%d noncanonical=%d valid=%d getlk=%d\n",
-           unmapped, again, strad, nullp, noncanonical, valid, getlk);
+    printf("efault unmapped=%d again=%d straddle=%d null=%d noncanonical=%d valid=%d getlk=%d\n", unmapped, again,
+           strad, nullp, noncanonical, valid, getlk);
     return 0;
 }

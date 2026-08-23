@@ -35,15 +35,20 @@ int main(void) {
 
     // ---- (1) ATTACH / GETREGSET / DETACH against a running child ----
     volatile int *flag = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    if (flag == MAP_FAILED) { printf("ptrace-att mmap-fail\n"); return 1; }
+    if (flag == MAP_FAILED) {
+        printf("ptrace-att mmap-fail\n");
+        return 1;
+    }
     *flag = 0;
     pid_t child = fork();
-    if (child < 0) { printf("ptrace-att fork-fail\n"); return 1; }
+    if (child < 0) {
+        printf("ptrace-att fork-fail\n");
+        return 1;
+    }
     if (child == 0) {
         // Spin hitting syscall boundaries so ATTACH's stop is observed promptly; exit once released.
         while (!*flag) {
-            for (volatile int i = 0; i < 2000; i++) {
-            }
+            for (volatile int i = 0; i < 2000; i++) {}
             syscall(SYS_getpid);
         }
         _exit(55);
@@ -76,9 +81,8 @@ int main(void) {
         sa.sa_handler = on_usr1;
         sigaction(SIGUSR1, &sa, NULL);
         if (ptrace(PTRACE_TRACEME, 0, 0, 0) != 0) _exit(90);
-        raise(SIGSTOP);         // initial stop -> parent injects SIGUSR1 on resume
-        for (volatile int i = 0; i < 100000000; i++) {
-        }
+        raise(SIGSTOP); // initial stop -> parent injects SIGUSR1 on resume
+        for (volatile int i = 0; i < 100000000; i++) {}
         _exit(1); // reached only if the injected signal never arrived
     }
     int s2 = 0;

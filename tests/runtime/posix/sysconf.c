@@ -11,7 +11,6 @@ int main(void) {
     int ok = ps > 0 && clk > 0 && nproc >= 1;
     // page size is a power of two
     int pow2 = ps > 0 && (ps & (ps - 1)) == 0;
-    printf("sysconf ps=%d clk=%d ok=%d pow2=%d nproc_ge1=%d\n",
-           ps > 0, clk > 0, ok, pow2, nproc >= 1);
+    printf("sysconf ps=%d clk=%d ok=%d pow2=%d nproc_ge1=%d\n", ps > 0, clk > 0, ok, pow2, nproc >= 1);
     return 0;
 }

@@ -21,7 +21,10 @@
 int main(void) {
     // A pipe gives us a real fd whose duplicate we can prove points at the same open file description.
     int pp[2];
-    if (pipe(pp) != 0) { printf("pidfd_getfd pipe_fail\n"); return 1; }
+    if (pipe(pp) != 0) {
+        printf("pidfd_getfd pipe_fail\n");
+        return 1;
+    }
 
     long pidfd = syscall(SYS_pidfd_open, getpid(), 0u);
     int opened = pidfd >= 0;
@@ -50,7 +53,7 @@ int main(void) {
     close(pp[0]);
     close(pp[1]);
 
-    printf("pidfd_getfd opened=%d badflags_einval=%d nonpidfd_ebadf=%d got=%d same_file=%d\n",
-           opened, badflags_einval, nonpidfd_ebadf, got, same_file);
+    printf("pidfd_getfd opened=%d badflags_einval=%d nonpidfd_ebadf=%d got=%d same_file=%d\n", opened, badflags_einval,
+           nonpidfd_ebadf, got, same_file);
     return 0;
 }

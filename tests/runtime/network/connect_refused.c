@@ -6,11 +6,15 @@
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
 int main(void) {
     int probe = socket(AF_INET, SOCK_STREAM, 0);
-    struct sockaddr_in a = {0}; a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    struct sockaddr_in a = {0};
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     bind(probe, (struct sockaddr *)&a, sizeof a);
-    socklen_t al = sizeof a; getsockname(probe, (struct sockaddr *)&a, &al);
+    socklen_t al = sizeof a;
+    getsockname(probe, (struct sockaddr *)&a, &al);
     close(probe);
     int cs = socket(AF_INET, SOCK_STREAM, 0);
     int r = connect(cs, (struct sockaddr *)&a, sizeof a);

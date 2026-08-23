@@ -203,7 +203,7 @@ mod tests {
             };
             assert_eq!(
                 super::run(
-                    &Command::new("/bin/true"),
+                    &Command::new("true"),
                     &capture,
                     std::time::Duration::from_secs(1),
                     &cancelled,

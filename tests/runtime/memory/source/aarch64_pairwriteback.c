@@ -33,12 +33,11 @@ int main(void) {
         uint64_t out_first, out_second;
         words[2] = 0;
         words[3] = 0;
-        __asm__ volatile(
-            "stp %x[first], %x[second], [%x[base], #-16]!\n"
-            "ldp %x[out_first], %x[out_second], [%x[base]], #16\n"
-            : [base] "+r"(base), [out_first] "=&r"(out_first), [out_second] "=&r"(out_second)
-            : [first] "r"(first), [second] "r"(second)
-            : "memory");
+        __asm__ volatile("stp %x[first], %x[second], [%x[base], #-16]!\n"
+                         "ldp %x[out_first], %x[out_second], [%x[base]], #16\n"
+                         : [base] "+r"(base), [out_first] "=&r"(out_first), [out_second] "=&r"(out_second)
+                         : [first] "r"(first), [second] "r"(second)
+                         : "memory");
 
         values &= out_first == first && out_second == second;
         address &= base == &words[4];
@@ -48,5 +47,7 @@ int main(void) {
     return values && address && slots ? 0 : 1;
 }
 #else
-int main(void) { return 0; }
+int main(void) {
+    return 0;
+}
 #endif

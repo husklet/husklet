@@ -5,11 +5,13 @@
 int main(void) {
     char src[] = "hello\nworld";
     FILE *r = fmemopen(src, strlen(src), "r");
-    char l1[16] = {0}; fgets(l1, sizeof l1, r);
+    char l1[16] = {0};
+    fgets(l1, sizeof l1, r);
     int d1 = strcmp(l1, "hello\n") == 0;
     fclose(r);
 
-    char buf[32]; memset(buf, 'Z', sizeof buf);
+    char buf[32];
+    memset(buf, 'Z', sizeof buf);
     FILE *w = fmemopen(buf, sizeof buf, "w");
     fputs("abc", w);
     fflush(w);

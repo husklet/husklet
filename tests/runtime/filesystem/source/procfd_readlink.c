@@ -30,10 +30,10 @@ int main(void) {
 
     // stat through the magic link reaches the real inode.
     struct stat viaproc, direct;
-    int stat_same = stat(proc, &viaproc) == 0 && stat(path, &direct) == 0 &&
-                    viaproc.st_ino == direct.st_ino;
+    int stat_same = stat(proc, &viaproc) == 0 && stat(path, &direct) == 0 && viaproc.st_ino == direct.st_ino;
 
-    close(pf[0]); close(pf[1]);
+    close(pf[0]);
+    close(pf[1]);
     close(fd);
     unlink(path);
     rmdir(dir);

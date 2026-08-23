@@ -87,7 +87,7 @@ int main(void) {
     rmdir(dir);
     printf("lock-close ofd=%d dup=%d ofdfree=%d posix=%d seen=%d posixfree=%d span=%d spanseen=%d "
            "ranged=%d spanfree=%d\n",
-           ofd_taken, held_after_dup_close, ofd_released, posix_taken, posix_seen, posix_released,
-           span_taken, span_seen, ranged, span_released);
+           ofd_taken, held_after_dup_close, ofd_released, posix_taken, posix_seen, posix_released, span_taken,
+           span_seen, ranged, span_released);
     return 0;
 }

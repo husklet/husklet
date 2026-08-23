@@ -31,6 +31,7 @@ void byte_wb(struct insn *I, int regnum, int val) {
     else
         e_bfi(regnum, val, 0, 8, 1);
 }
+
 // helpers in translate/<class>.c (#included above translate_block) can defer a rare unhandled form.
 void report_unimpl(uint64_t pc, struct insn *I);
 
@@ -189,6 +190,7 @@ void emit_rcl_rcr(struct insn *I, uint64_t next, int w, int rcr, int cnt_raw) {
     e_str(20, 28, OFF_NZCV);
     emit32(0xD51B4200u | 20); // sync live ARM nzcv
 }
+
 // Lazy flags (x86-perf PR1 + opt3): pending-finalizer record. Translate-time only -- no guest
 // state, never exists at runtime. A width-4/8 do_alu producer *defers* its NZCV materialization:
 // the LIVE ARM NZCV currently holds that op's result flags, and g_fl_pending names which finalizer
@@ -221,17 +223,33 @@ static int g_fl_pending;
 // nzcv_to_eflags, ptrace, core) reads cpu->pf/cpu->af, so block boundaries are not PF/AF consumers.
 static int g_pfaf_dead;
 
-int *hl_x86_integer_pending_flags(void) { return &g_fl_pending; }
-void hl_x86_integer_reset_flags(void) { g_fl_pending = FL_NONE; }
-int hl_x86_legacy_pfaf_dead(void) { return g_pfaf_dead; }
-int hl_x86_legacy_flags_pending(void) { return g_fl_pending; }
-void hl_x86_legacy_flags_pending_clear(void) { g_fl_pending = FL_NONE; }
+int *hl_x86_integer_pending_flags(void) {
+    return &g_fl_pending;
+}
+
+void hl_x86_integer_reset_flags(void) {
+    g_fl_pending = FL_NONE;
+}
+
+int hl_x86_legacy_pfaf_dead(void) {
+    return g_pfaf_dead;
+}
+
+int hl_x86_legacy_flags_pending(void) {
+    return g_fl_pending;
+}
+
+void hl_x86_legacy_flags_pending_clear(void) {
+    g_fl_pending = FL_NONE;
+}
 
 static int lazyflags_on(void) {
     return 1;
 }
 
-int hl_x86_integer_lazy_flags(void) { return lazyflags_on(); }
+int hl_x86_integer_lazy_flags(void) {
+    return lazyflags_on();
+}
 
 // Direct-write ALU dst: when an ALU (or group1) instruction's r/m operand is a REGISTER (not memory)
 // at width>=4, compute the result straight into the guest reg's host home instead of into scratch x16
@@ -260,8 +278,8 @@ void flags_materialize(void) {
 // position `dp`, via a scratch reg `tmp`. (ubfx wtmp,wsrc,#sp,#1 ; orr xdst,xdst,xtmp,lsl #dp)
 void e_bit_move(int dst, int src, int sp, int dp, int tmp) {
     emit32(0x53000000u | ((uint32_t)sp << 16) | ((uint32_t)sp << 10) | ((uint32_t)src << 5) |
-           (uint32_t)tmp); // ubfx wtmp,wsrc,#sp,#1
-    e_rrr(A_ORR, dst, dst, tmp, 0, dp);                               // orr xdst,xdst,xtmp,lsl #dp
+           (uint32_t)tmp);              // ubfx wtmp,wsrc,#sp,#1
+    e_rrr(A_ORR, dst, dst, tmp, 0, dp); // orr xdst,xdst,xtmp,lsl #dp
 }
 
 // opt3 dead-flag elimination: 1 iff I's handler provably writes the FULL NZCV while reading no
@@ -643,13 +661,14 @@ int lock_rmw(int k, int w, int rs) {
     do_alu(k, -1, 19, rs, w);   // x86 flags from (old OP original-operand)
     return 1;
 }
+
 void hl_x86_integer_prepare_flags(const struct insn *instruction, uint64_t guest_pc, uint64_t next,
-                                 const hl_x86_trace_state *trace_state) {
+                                  const hl_x86_trace_state *trace_state) {
     uint8_t opcode = instruction->op;
-    int conditional = (!instruction->two && opcode >= 0x70 && opcode <= 0x7F) ||
-                      (instruction->two && (opcode & 0xF0) == 0x80);
-    int transparent_edge = trace_state->flag_elision && !instruction->two &&
-                           (opcode == 0xE9 || opcode == 0xEB || opcode == 0xE8);
+    int conditional =
+        (!instruction->two && opcode >= 0x70 && opcode <= 0x7F) || (instruction->two && (opcode & 0xF0) == 0x80);
+    int transparent_edge =
+        trace_state->flag_elision && !instruction->two && (opcode == 0xE9 || opcode == 0xEB || opcode == 0xE8);
     if (g_fl_pending && !conditional && !transparent_edge) {
         int lazy = lazyflags_on();
         if (lazy && insn_is_carry_consumer(instruction)) {
@@ -672,6 +691,5 @@ void hl_x86_integer_prepare_flags(const struct insn *instruction, uint64_t guest
     if (!g_pfaf_dead && trace_state->flag_elision && following.len > 0)
         g_pfaf_dead = hl_x86_trace_pfaf_dead(trace_state, &following, next, guest_pc);
     if (!g_pfaf_dead && trace_state->flag_elision)
-        g_pfaf_dead =
-            !(hl_x86_trace_flags_livein(trace_state, next, guest_pc) & (HL_X86_FLAG_PF | HL_X86_FLAG_AF));
+        g_pfaf_dead = !(hl_x86_trace_flags_livein(trace_state, next, guest_pc) & (HL_X86_FLAG_PF | HL_X86_FLAG_AF));
 }

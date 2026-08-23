@@ -10,20 +10,20 @@
 #define N 96
 
 int main(void) {
-  int fds[N];
-  int invariant = 1;
-  for (int i = 0; i < N; i++) {
-    long fd = syscall(__NR_pidfd_open, (long)getpid(), 0L);
-    fds[i] = (int)fd;
-    if (fd >= 0) {
-      /* a returned fd MUST be resolvable */
-      long r = syscall(__NR_pidfd_send_signal, fd, 0L, (void *)0, 0L);
-      if (r != 0) invariant = 0;
-    } else {
-      /* a failure must be a clean resource errno, not garbage */
-      if (!(errno == EMFILE || errno == ENFILE || errno == ENOMEM || errno == EMFILE)) invariant = 0;
+    int fds[N];
+    int invariant = 1;
+    for (int i = 0; i < N; i++) {
+        long fd = syscall(__NR_pidfd_open, (long)getpid(), 0L);
+        fds[i] = (int)fd;
+        if (fd >= 0) {
+            /* a returned fd MUST be resolvable */
+            long r = syscall(__NR_pidfd_send_signal, fd, 0L, (void *)0, 0L);
+            if (r != 0) invariant = 0;
+        } else {
+            /* a failure must be a clean resource errno, not garbage */
+            if (!(errno == EMFILE || errno == ENFILE || errno == ENOMEM || errno == EMFILE)) invariant = 0;
+        }
     }
-  }
-  printf("pidfd_cap invariant=%d\n", invariant);
-  return 0;
+    printf("pidfd_cap invariant=%d\n", invariant);
+    return 0;
 }

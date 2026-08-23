@@ -24,9 +24,16 @@ static const char *en(int e) {
     default: return "OTHER";
     }
 }
-static const char *rc(long r) { return r >= 0 ? "ok" : en(errno); }
 
-union semun { int val; struct semid_ds *buf; unsigned short *array; };
+static const char *rc(long r) {
+    return r >= 0 ? "ok" : en(errno);
+}
+
+union semun {
+    int val;
+    struct semid_ds *buf;
+    unsigned short *array;
+};
 
 int main(void) {
     key_t key = (key_t)(0x0DD0000 + (getpid() & 0xffff));
@@ -41,7 +48,10 @@ int main(void) {
     // attach, write, detach, re-attach, read back
     char *p = shmat(sid, NULL, 0);
     int at_ok = p != (char *)-1;
-    if (at_ok) { strcpy(p, "sysv-shm-payload"); shmdt(p); }
+    if (at_ok) {
+        strcpy(p, "sysv-shm-payload");
+        shmdt(p);
+    }
     char *p2 = at_ok ? shmat(sid, NULL, SHM_RDONLY) : (char *)-1;
     int rt = (p2 != (char *)-1) && strcmp(p2, "sysv-shm-payload") == 0;
     printf("shm_roundtrip=%d\n", rt);
@@ -73,12 +83,21 @@ int main(void) {
     printf("msg_create=%s\n", rc(qid));
     printf("msg_excl=%s\n", en(msgget(key, IPC_CREAT | IPC_EXCL | 0600) < 0 ? errno : 0));
     printf("msg_noent=%s\n", en(msgget(key + 1, 0600) < 0 ? errno : 0));
-    struct { long mtype; char mtext[16]; } m;
+
+    struct {
+        long mtype;
+        char mtext[16];
+    } m;
+
     // receive on an empty queue with IPC_NOWAIT -> ENOMSG
     printf("msg_nowait=%s\n", en(msgrcv(qid, &m, sizeof m.mtext, 0, IPC_NOWAIT) < 0 ? errno : 0));
     // send two typed messages, receive type 2 first (selective), then any
-    m.mtype = 1; strcpy(m.mtext, "one");   msgsnd(qid, &m, 4, 0);
-    m.mtype = 2; strcpy(m.mtext, "two");   msgsnd(qid, &m, 4, 0);
+    m.mtype = 1;
+    strcpy(m.mtext, "one");
+    msgsnd(qid, &m, 4, 0);
+    m.mtype = 2;
+    strcpy(m.mtext, "two");
+    msgsnd(qid, &m, 4, 0);
     memset(&m, 0, sizeof m);
     ssize_t r2 = msgrcv(qid, &m, sizeof m.mtext, 2, 0);
     printf("msg_type2=%d\n", r2 == 4 && strcmp(m.mtext, "two") == 0);

@@ -819,4 +819,3 @@ static void sysv_on_exit(void) {
         shm_unlink(nm);
     }
 }
-

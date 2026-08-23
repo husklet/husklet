@@ -29,6 +29,8 @@ int main(void) {
     mode_t got = umask(prev);
     printf("prev_was_077=%d\n", got == 077);
 
-    unlink(file); rmdir(sub); rmdir(dir);
+    unlink(file);
+    rmdir(sub);
+    rmdir(dir);
     return 0;
 }

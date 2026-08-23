@@ -37,6 +37,7 @@ impl Launch<'_> {
         });
         self.watch_child(child);
         self.schedule_typed_text();
+        self.schedule_script();
     }
 
     fn watch_child(&self, child: i32) {
@@ -54,6 +55,37 @@ impl Launch<'_> {
             }
             PaneView::new(&window, &terminal).close();
         });
+    }
+
+    /// Debug: `HL_TERM_SCRIPT=<ms>:<bytes>` chunks, separated by ASCII RS (0x1e), write
+    /// each payload into this pane's tty at its own offset from launch.
+    ///
+    /// `HL_TERM_TYPE` can only send one line at one moment, which cannot express the
+    /// two things a terminal is judged on: a keystroke that arrives while something is
+    /// already running (Ctrl-C is a byte, and it only means anything mid-command), and
+    /// a second command that must be read after the first has finished. The payload is
+    /// written verbatim -- no newline is appended -- so a control byte is spelled by
+    /// putting the control byte in the variable. The separator is the record separator
+    /// rather than a printable character because every printable candidate -- `|` above
+    /// all -- is something a developer's command line legitimately contains, and a
+    /// separator that can appear inside a payload silently truncates the scenario.
+    fn schedule_script(&self) {
+        let Some(script) = AppConfig::get().script.clone() else {
+            return;
+        };
+        for chunk in script.split('\u{1e}') {
+            let Some((offset, payload)) = chunk.split_once(':') else {
+                continue;
+            };
+            let Ok(offset) = offset.parse::<u64>() else {
+                continue;
+            };
+            let terminal = self.terminal.clone();
+            let payload = payload.to_owned();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(offset), move || {
+                terminal.feed_child(payload.as_bytes());
+            });
+        }
     }
 
     fn schedule_typed_text(&self) {
@@ -114,9 +146,9 @@ impl std::fmt::Display for ChildStatus {
 /// one and watched it execute. A banner exists so a live pane can be told from a replayed one; a
 /// banner the user can catch lying teaches them to distrust the true cases too. So it now says what
 /// actually happens to the keystroke.
-struct NotYetLive;
+struct StartupNotice;
 
-impl NotYetLive {
+impl StartupNotice {
     /// Dim styling, matching the reopen notice, applied only where it is written to a terminal.
     const DIM: &'static str = "\u{1b}[2m";
     const RESET: &'static str = "\u{1b}[0m";
@@ -224,7 +256,7 @@ pub(crate) fn make_terminal_ex(
     // will not for as long as the restore takes. Say so, in the same attributed voice the restore
     // summary uses, so "restoring" is legible as a state distinct from "ready". The notice carries
     // the notice prefix, so it is filtered out of the scrollback this pane persists.
-    term.feed(NotYetLive::notice(!replay.is_empty()).as_bytes());
+    term.feed(StartupNotice::notice(!replay.is_empty()).as_bytes());
     // NOTE: we deliberately do NOT use VTE's spawn_async — on macOS it fork()s inside the multithreaded
     // GTK process and does non-async-signal-safe work before exec, which crashes the child before it
     // runs (every command "exits 11"). Instead spawn via posix_spawn (async-safe) onto a PTY we own.
@@ -246,13 +278,13 @@ pub(crate) const URL_REGEX: &str = r"(?:https?://|www\.)[^\s<>\x22'`{}|\\^\[\]]+
 
 #[cfg(test)]
 mod child_status_tests {
-    use super::{ChildStatus, NotYetLive};
+    use super::{ChildStatus, StartupNotice};
 
     #[test]
     fn a_pane_that_is_not_live_yet_says_so_in_husklets_own_attributed_voice() {
         let prefix = hl::runtime::domain::RESTORE_NOTICE_PREFIX;
-        let restoring = NotYetLive::notice(true);
-        let starting = NotYetLive::notice(false);
+        let restoring = StartupNotice::notice(true);
+        let starting = StartupNotice::notice(false);
 
         for notice in [&restoring, &starting] {
             assert!(notice.contains(prefix), "the notice must be attributed to Husklet");

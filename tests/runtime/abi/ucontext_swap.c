@@ -43,7 +43,8 @@ __attribute__((noinline)) static int stack_opcode_probe(void) {
 static void coroutine(int a, int b, int c) {
     co_arg_seen = (a == 11 && b == 22 && c == 33);
     stack_opcode_seen = 1;
-    for (int probe = 0; probe < 1000; ++probe) stack_opcode_seen &= stack_opcode_probe();
+    for (int probe = 0; probe < 1000; ++probe)
+        stack_opcode_seen &= stack_opcode_probe();
     for (int i = 0; i < 5; i++) {
         register long cs asm(CALLEE_SAVED_REGISTER) = 0xc0ffee + i;
         co_counter++;
@@ -73,7 +74,7 @@ int main(void) {
     }
     swapcontext(&uc_main, &uc_co); // final resume; coroutine returns via uc_link
 
-    printf("ucontext setctx=%d args=%d stack=%d counter=%d ping=%d\n",
-           setctx_ok, co_arg_seen, stack_opcode_seen, co_counter == 5, ping == 5);
+    printf("ucontext setctx=%d args=%d stack=%d counter=%d ping=%d\n", setctx_ok, co_arg_seen, stack_opcode_seen,
+           co_counter == 5, ping == 5);
     return 0;
 }

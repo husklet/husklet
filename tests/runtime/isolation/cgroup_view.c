@@ -21,7 +21,8 @@ static const char *slurp(const char *path, char *buf, int cap) {
     int n = (int)read(fd, buf, cap - 1);
     close(fd);
     if (n < 0) return "ERR";
-    while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) n--;
+    while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r'))
+        n--;
     buf[n] = 0;
     return buf;
 }
@@ -37,7 +38,10 @@ int main(void) {
     {
         char mi[16384];
         const char *m = slurp("/proc/self/mountinfo", mi, sizeof mi);
-        for (const char *p = m; (p = strstr(p, " cgroup2 ")); p++) { cgv2 = 1; break; }
+        for (const char *p = m; (p = strstr(p, " cgroup2 ")); p++) {
+            cgv2 = 1;
+            break;
+        }
     }
 
     // cgroup.controllers must advertise at least cpu + memory (what runtimes gate on).
@@ -52,12 +56,9 @@ int main(void) {
 
     printf("cgv2=%d controllers=%s type=%s v1absent=%d "
            "cpu.max=[%s] mem.max=[%s] mem.swap.max=[%s] mem.high=[%s] cpu.weight=[%s] pids.max=[%s]\n",
-           cgv2, ctl_ok ? "OK" : ctl, type, v1_absent,
-           slurp("/sys/fs/cgroup/cpu.max", b3, sizeof b3),
-           slurp("/sys/fs/cgroup/memory.max", b4, sizeof b4),
-           slurp("/sys/fs/cgroup/memory.swap.max", b5, sizeof b5),
-           slurp("/sys/fs/cgroup/memory.high", b6, sizeof b6),
-           slurp("/sys/fs/cgroup/cpu.weight", b7, sizeof b7),
+           cgv2, ctl_ok ? "OK" : ctl, type, v1_absent, slurp("/sys/fs/cgroup/cpu.max", b3, sizeof b3),
+           slurp("/sys/fs/cgroup/memory.max", b4, sizeof b4), slurp("/sys/fs/cgroup/memory.swap.max", b5, sizeof b5),
+           slurp("/sys/fs/cgroup/memory.high", b6, sizeof b6), slurp("/sys/fs/cgroup/cpu.weight", b7, sizeof b7),
            slurp("/sys/fs/cgroup/pids.max", b1, sizeof b1));
     return 0;
 }

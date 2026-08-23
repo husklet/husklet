@@ -9,7 +9,11 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t handler_ran;
-static void h(int s) { (void)s; handler_ran++; }
+
+static void h(int s) {
+    (void)s;
+    handler_ran++;
+}
 
 int main(void) {
     signal(SIGUSR1, h);
@@ -19,7 +23,10 @@ int main(void) {
     sigprocmask(SIG_BLOCK, &mask, NULL);
 
     int fd = signalfd(-1, &mask, 0);
-    if (fd < 0) { printf("signalfd_basic fd_fail\n"); return 1; }
+    if (fd < 0) {
+        printf("signalfd_basic fd_fail\n");
+        return 1;
+    }
 
     raise(SIGUSR1);
 

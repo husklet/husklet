@@ -53,8 +53,15 @@ int main(void) {
     errno = 0;
     int loop_ok = open(loop_a, O_RDONLY) < 0 && errno == ELOOP;
 
-    unlink(loop_b); unlink(loop_a); unlink(chain); unlink(relative); unlink(absolute); unlink(file); rmdir(run); rmdir(base);
-    printf("absolute-symlink absolute=%d relative-dotdot=%d chain=%d nofollow=%d eloop=%d\n",
-           absolute_ok, dotdot_ok, chain_ok, nofollow_ok, loop_ok);
+    unlink(loop_b);
+    unlink(loop_a);
+    unlink(chain);
+    unlink(relative);
+    unlink(absolute);
+    unlink(file);
+    rmdir(run);
+    rmdir(base);
+    printf("absolute-symlink absolute=%d relative-dotdot=%d chain=%d nofollow=%d eloop=%d\n", absolute_ok, dotdot_ok,
+           chain_ok, nofollow_ok, loop_ok);
     return !(absolute_ok && dotdot_ok && chain_ok && nofollow_ok && loop_ok);
 }

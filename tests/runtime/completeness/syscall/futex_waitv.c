@@ -18,7 +18,7 @@ int main(void) {
     long huge = syscall(__NR_futex_waitv, (void *)0, 1000000u, 0u, (void *)0, 0u);
     long badf = syscall(__NR_futex_waitv, (void *)0, 1u, 0xFFFFFFFFu, (void *)0, 0u);
 
-    printf("futex_waitv zero_rejected=%d huge_rejected=%d badflags_rejected=%d\n",
-           rejected(zero), rejected(huge), rejected(badf));
+    printf("futex_waitv zero_rejected=%d huge_rejected=%d badflags_rejected=%d\n", rejected(zero), rejected(huge),
+           rejected(badf));
     return 0;
 }

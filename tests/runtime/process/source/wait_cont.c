@@ -11,7 +11,8 @@ int main(void) {
     pid_t p = fork();
     if (p == 0) {
         // wait to be stopped then continued; a simple spin with sleeps keeps it alive and observable
-        for (int i = 0; i < 200; i++) usleep(10 * 1000);
+        for (int i = 0; i < 200; i++)
+            usleep(10 * 1000);
         _exit(8);
     }
 

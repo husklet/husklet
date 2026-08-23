@@ -166,10 +166,8 @@ HL_STATIC_ASSERT(offsetof(hl_engine_fd_binding, host_handle) == 24, "engine desc
 HL_STATIC_ASSERT(sizeof(hl_engine_executable) == 40, "engine executable ABI drifted");
 HL_STATIC_ASSERT(sizeof(hl_engine_main_image_plan) == 48, "engine main-image plan ABI drifted");
 HL_STATIC_ASSERT(sizeof(hl_engine_box_config) == 152, "engine box configuration ABI drifted");
-HL_STATIC_ASSERT(offsetof(hl_engine_box_config, publish_count) == 64,
-                 "engine box publish count ABI drifted");
-HL_STATIC_ASSERT(offsetof(hl_engine_box_config, checkpoint_mode) == 144,
-                 "engine box checkpoint mode ABI drifted");
+HL_STATIC_ASSERT(offsetof(hl_engine_box_config, publish_count) == 64, "engine box publish count ABI drifted");
+HL_STATIC_ASSERT(offsetof(hl_engine_box_config, checkpoint_mode) == 144, "engine box checkpoint mode ABI drifted");
 HL_STATIC_ASSERT(sizeof(hl_engine_config) == 96, "engine configuration ABI drifted");
 HL_STATIC_ASSERT(offsetof(hl_engine_config, payload) == 32, "engine payload ABI drifted");
 HL_STATIC_ASSERT(offsetof(hl_engine_config, main_image_plan) == 88, "engine plan pointer ABI drifted");

@@ -18,17 +18,22 @@ static int eq(const char *path, const char *want) {
     if (pf_read(path, b, sizeof b) < 0) return 0;
     return strcmp(b, want) == 0;
 }
+
 // read the first unsigned integer in the file; -1 if the file is absent.
 static long long num(const char *path) {
     char b[512];
     if (pf_read(path, b, sizeof b) < 0) return -1;
     return strtoll(b, NULL, 10);
 }
+
 static int ge(const char *path, long long floor) {
     long long v = num(path);
     return v >= floor;
 }
-static int present(const char *path) { return num(path) >= 0; }
+
+static int present(const char *path) {
+    return num(path) >= 0;
+}
 
 int main(void) {
     int ok = 1;
@@ -53,10 +58,10 @@ int main(void) {
     ok &= ge("/proc/sys/vm/max_map_count", 262144);    // elasticsearch bootstrap floor
     ok &= ge("/proc/sys/fs/file-max", 2000000);        // modern kernels report ~LONG_MAX
     ok &= ge("/proc/sys/fs/aio-max-nr", 262144);
-    ok &= ge("/proc/sys/fs/inotify/max_user_instances", 1024);   // watchers (VS Code / node chokidar)
+    ok &= ge("/proc/sys/fs/inotify/max_user_instances", 1024); // watchers (VS Code / node chokidar)
     ok &= ge("/proc/sys/fs/inotify/max_queued_events", 65536);
     ok &= ge("/proc/sys/fs/inotify/max_user_watches", 8192);
-    ok &= present("/proc/sys/fs/mqueue/msg_max");      // hl used to ENOENT the whole mqueue subtree
+    ok &= present("/proc/sys/fs/mqueue/msg_max"); // hl used to ENOENT the whole mqueue subtree
     ok &= present("/proc/sys/fs/mqueue/msgsize_max");
     ok &= present("/proc/sys/fs/mqueue/queues_max");
 
@@ -65,7 +70,10 @@ int main(void) {
     ok &= ge("/proc/sys/fs/nr_open", 1048576);
     ok &= ge("/proc/sys/net/core/rmem_max", 131072);
     ok &= ge("/proc/sys/net/ipv4/tcp_max_syn_backlog", 128);
-    { long long s = num("/proc/sys/vm/swappiness");  ok &= (s >= 0 && s <= 100); }
+    {
+        long long s = num("/proc/sys/vm/swappiness");
+        ok &= (s >= 0 && s <= 100);
+    }
     ok &= ge("/proc/sys/vm/mmap_min_addr", 4096);
 
     printf("sysctl ok=%d\n", ok);

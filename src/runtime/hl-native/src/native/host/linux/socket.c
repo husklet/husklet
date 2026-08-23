@@ -660,4 +660,3 @@ static hl_host_result hl_linux_network_duplicate(void *context, hl_host_handle s
     if (result.status != HL_STATUS_OK) close(copy);
     return result;
 }
-

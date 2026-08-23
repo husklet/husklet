@@ -20,8 +20,8 @@ int main(void) {
     // second consuming recv would block; use MSG_DONTWAIT to confirm queue is empty
     errno = 0;
     ssize_t en = recv(sv[1], r, sizeof r, MSG_DONTWAIT);
-    printf("peek=%s peek_len=%zd recv=%s recv_len=%zd empty_errno=%s empty_ret=%zd\n", p, pn, r, rn,
-           err_name(errno), en);
+    printf("peek=%s peek_len=%zd recv=%s recv_len=%zd empty_errno=%s empty_ret=%zd\n", p, pn, r, rn, err_name(errno),
+           en);
     close(sv[0]);
     close(sv[1]);
     return 0;

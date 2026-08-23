@@ -27,7 +27,8 @@ int main(void) {
     memcpy(&ug, &g, 8);
     printf("cabs=%016llx carg=%016llx\n", um, ug);
     double complex acc = 0;
-    for (int k = 1; k <= 8; k++) acc += (double)k / (a + (double)k);
+    for (int k = 1; k <= 8; k++)
+        acc += (double)k / (a + (double)k);
     emit("acc", acc);
     return 0;
 }

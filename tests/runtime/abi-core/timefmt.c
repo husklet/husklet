@@ -16,7 +16,7 @@ int main(void) {
     struct tm again = tmv;
     time_t back = timegm(&again);
     int roundtrip = back == t;
-    int wday = tmv.tm_wday; // Tuesday = 2
+    int wday = tmv.tm_wday;                                                   // Tuesday = 2
     printf("timefmt fmt=%d roundtrip=%d wday=%d\n", fmt_ok, roundtrip, wday); // 1 1 2
     return 0;
 }

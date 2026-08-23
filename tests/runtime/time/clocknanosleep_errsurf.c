@@ -21,7 +21,7 @@ int main(void) {
     int f = clock_nanosleep(CLOCK_REALTIME, 0, &z, NULL);
     struct timespec rem = {7, 7};
     int g = clock_nanosleep(CLOCK_MONOTONIC, 0, &z, &rem);
-    printf("a=%d b=%d c=%d d=%d e=%d f=%d g=%d rem=%ld.%ld\n", a, b, c, d, e, f, g,
-           (long)rem.tv_sec, (long)rem.tv_nsec);
+    printf("a=%d b=%d c=%d d=%d e=%d f=%d g=%d rem=%ld.%ld\n", a, b, c, d, e, f, g, (long)rem.tv_sec,
+           (long)rem.tv_nsec);
     return 0;
 }

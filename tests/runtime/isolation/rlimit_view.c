@@ -38,8 +38,8 @@ static int limits_nofile(unsigned long long *soft, unsigned long long *hard) {
 }
 
 int main(void) {
-    printf("nofile_sane=%d nproc_sane=%d stack_sane=%d as_sane=%d\n",
-           sane(RLIMIT_NOFILE), sane(RLIMIT_NPROC), sane(RLIMIT_STACK), sane(RLIMIT_AS));
+    printf("nofile_sane=%d nproc_sane=%d stack_sane=%d as_sane=%d\n", sane(RLIMIT_NOFILE), sane(RLIMIT_NPROC),
+           sane(RLIMIT_STACK), sane(RLIMIT_AS));
 
     struct rlimit r;
     getrlimit(RLIMIT_NOFILE, &r);
@@ -47,7 +47,6 @@ int main(void) {
     int have = limits_nofile(&ls, &lh) == 0;
     int soft_match = have && ((r.rlim_cur == RLIM_INFINITY) ? 0 : (r.rlim_cur == ls));
     int hard_match = have && ((r.rlim_max == RLIM_INFINITY) ? 0 : (r.rlim_max == lh));
-    printf("limits_present=%d nofile_soft_match=%d nofile_hard_match=%d\n",
-           have, soft_match, hard_match);
+    printf("limits_present=%d nofile_soft_match=%d nofile_hard_match=%d\n", have, soft_match, hard_match);
     return 0;
 }

@@ -33,7 +33,10 @@ static int ckpt_read_meta_dir(const char *procdir, struct ckpt_meta *m) {
     char pf[1300];
     snprintf(pf, sizeof pf, "%s/meta", procdir);
     if (ckpt_source_load(pf, m, sizeof *m) != 0) {
-        fprintf(stderr, "[restore] open %s: %s\n", pf, strerror(errno));
+        // Every failure path of ckpt_source_load is an image-protocol answer -- no source installed, a
+        // size the host would not give, or a short read -- and none of them sets errno.
+        fprintf(stderr, "[restore] image object %s is absent or shorter than the %zu bytes it must carry\n", pf,
+                sizeof *m);
         return -1;
     }
     if (m->magic != CKPT_MAGIC) {
@@ -193,7 +196,7 @@ static int ckpt_restore_backing_seed(const char *procdir, uint64_t object_id, ui
 // file and get a private copy -- the same defect, moved.
 //
 // So the object is republished by NAME under the CURRENT restore generation, exactly as SysV segments
-// are (ipc_lock_state.c): whichever member arrives first creates it, every other member opens the same
+// are (ipc_state.c): whichever member arrives first creates it, every other member opens the same
 // name, and all of them map it MAP_SHARED at their captured address. Fork order stops mattering.
 //
 // THE NAME IS A PURE FUNCTION OF (restore generation, object id), AND THE GENERATION IS THE POINT.
@@ -245,7 +248,8 @@ static void ckpt_anon_shared_name(uint64_t object_id, char out[CKPT_ANON_SHARED_
 // sharer of that object holds the same name and unlinks it on its own way out. Ownership lives in the
 // name, which survives an `_exit` because it never lived in the exiting process to begin with.
 static void ckpt_anon_shared_unlink_all(void) {
-    for (int index = 0; index < g_nanon_shared_unlink; index++) shm_unlink(g_anon_shared_unlink[index]);
+    for (int index = 0; index < g_nanon_shared_unlink; index++)
+        shm_unlink(g_anon_shared_unlink[index]);
     g_nanon_shared_unlink = 0;
 }
 
@@ -299,8 +303,8 @@ static int ckpt_restore_anon_shared_seed(uint64_t object_id, uint64_t minimum_si
     // instead of setting it, and a wait that times out is a restore failure, not a short mapping.
     struct stat status;
     if (created) {
-        if (fstat(fd, &status) != 0 || ((uint64_t)status.st_size < minimum_size &&
-                                        ftruncate(fd, (off_t)minimum_size) != 0)) {
+        if (fstat(fd, &status) != 0 ||
+            ((uint64_t)status.st_size < minimum_size && ftruncate(fd, (off_t)minimum_size) != 0)) {
             int failure = errno;
             close(fd);
             shm_unlink(name);
@@ -365,8 +369,8 @@ static void ckpt_report_overlap(uint64_t lo, uint64_t hi) {
             break;
         if (address >= (mach_vm_address_t)hi) break;
         fprintf(stderr, "[restore]   in the way: %llx-%llx prot=%x/%x shared=%d reserved=%d\n",
-                (unsigned long long)address, (unsigned long long)(address + size), info.protection,
-                info.max_protection, (int)info.shared, (int)info.reserved);
+                (unsigned long long)address, (unsigned long long)(address + size), info.protection, info.max_protection,
+                (int)info.shared, (int)info.reserved);
         if (size == 0) break;
         address += size;
     }
@@ -657,6 +661,7 @@ static void ckpt_restore_reserve_release_all(void) {
 #define CKPT_SLICE_CLAIM 0
 #define CKPT_SLICE_HELD 1
 #define CKPT_SLICE_REFUSE (-1)
+
 static int ckpt_claim_slice(uint64_t cursor, uint64_t map_e, const uint64_t *mapped_a, const uint64_t *mapped_e,
                             const uint64_t *mapped_anon, size_t nmapped, int shareable, uint64_t *chunk_e) {
     uint64_t limit = map_e;
@@ -791,8 +796,8 @@ HL_API int HL_TARGET_LOCAL(checkpoint_gmap_release_test)(uint32_t scenario) {
         uint64_t start = 0, end = 0;
         if (!hl_gmap_host_release_span(UINT64_C(0x50000001000), UINT64_C(0x4000), UINT64_C(0x4000), &start, &end))
             return 1;
-        if (start != UINT64_C(0x50000000000)) return 2;  /* the head page the guest range begins inside */
-        if (end != UINT64_C(0x50000008000)) return 3;    /* and the tail page it ends inside */
+        if (start != UINT64_C(0x50000000000)) return 2; /* the head page the guest range begins inside */
+        if (end != UINT64_C(0x50000008000)) return 3;   /* and the tail page it ends inside */
         if (hl_gmap_host_release_span(UINT64_C(0x1000), 0, UINT64_C(0x4000), &start, &end)) return 4;
         if (hl_gmap_host_release_span(UINT64_C(0x1000), UINT64_C(0x1000), 0, &start, &end)) return 5;
         return 0;
@@ -817,8 +822,8 @@ HL_API int HL_TARGET_LOCAL(checkpoint_gmap_release_test)(uint32_t scenario) {
      * reason that has nothing to do with the teardown it measures -- and retrying could not help, because
      * every attempt re-opened the same hole in the same place. The production sequence runs in a
      * just-forked restorer that has one thread and no peer to lose the range to. */
-    static const uint64_t probe_band[] = {UINT64_C(0x5c000000000), UINT64_C(0x5c400000000),
-                                          UINT64_C(0x5c800000000), UINT64_C(0x5cc00000000)};
+    static const uint64_t probe_band[] = {UINT64_C(0x5c000000000), UINT64_C(0x5c400000000), UINT64_C(0x5c800000000),
+                                          UINT64_C(0x5cc00000000)};
     void *host = MAP_FAILED;
     for (size_t index = 0; index < sizeof probe_band / sizeof probe_band[0]; ++index) {
         void *want = (void *)(uintptr_t)probe_band[index];
@@ -836,8 +841,8 @@ HL_API int HL_TARGET_LOCAL(checkpoint_gmap_release_test)(uint32_t scenario) {
     hl_gmap_add(base + offset, grain);
     hl_gmap_reset();
     void *claimed = NULL;
-    int reclaimed = ckpt_claim_exact(base, span, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1,
-                                     0, &claimed);
+    int reclaimed =
+        ckpt_claim_exact(base, span, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0, &claimed);
     int claim_errno = errno;
     (void)munmap((void *)(uintptr_t)base, span);
     if (reclaimed != 0) return claim_errno == EEXIST ? 22 : 23;
@@ -861,8 +866,7 @@ static void ckpt_restore_rollback(const struct ckpt_region *topology, size_t pro
         const struct ckpt_region *region = &topology[index];
         hl_gmap_unmap_range(region->addr, region->addr + region->len);
         anon_split_unmap(region->addr, region->addr + region->len);
-        gna_clear(region->addr & ~(uint64_t)0xfff,
-                  (region->addr + region->glen + UINT64_C(0xfff)) & ~UINT64_C(0xfff));
+        gna_clear(region->addr & ~(uint64_t)0xfff, (region->addr + region->glen + UINT64_C(0xfff)) & ~UINT64_C(0xfff));
         if (region->logical) {
             (void)hl_logical_vma_global_unmap(region->addr, region->glen);
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -905,6 +909,29 @@ HL_API int HL_TARGET_LOCAL(checkpoint_restore_rollback_test)(void) {
     return 0;
 }
 #endif
+
+static int ckpt_restore_register_backings(const char *procdir, struct ckpt_region *topology, uint64_t count,
+                                          size_t *registered) {
+    for (uint64_t i = 0; i < count; i++) {
+        struct ckpt_region *reg = &topology[i];
+        // Anonymous shared mappings have no guest file descriptor; their seed is already bound.
+        if (reg->backing_object == 0 || reg->backing_anon_shared) continue;
+        if (reg->backing_offset > UINT64_MAX - reg->glen) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        int seed = ckpt_restore_backing_seed(procdir, reg->backing_object, reg->backing_offset + reg->glen);
+        if (seed < 0) {
+            fprintf(stderr, "[restore] cannot rebuild backing object %llx\n", (unsigned long long)reg->backing_object);
+            return -1;
+        }
+        filemap_register(reg->addr, reg->glen, seed, reg->backing_offset, reg->backing_shared, reg->backing_emulated);
+        if (reg->backing_shared && !reg->backing_emulated)
+            futex_shared_register(reg->addr, reg->glen, seed, reg->backing_offset);
+        *registered = (size_t)i + 1;
+    }
+    return 0;
+}
 
 // Rebuild this process's guest memory (MAP_FIXED) + the mapping side-registries from `procdir`. For the init
 // this runs BEFORE engine init (so MAP_FIXED lands on free VAs); a re-forked child calls hl_gmap_reset() +
@@ -1037,8 +1064,8 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
                     fprintf(stderr,
                             "[restore] gpid %d cannot claim guest region %llx+%llx (map %llx-%llx fd=%d) without "
                             "replacing a live host mapping\n",
-                            g_self_gpid, (unsigned long long)a, (unsigned long long)reg.len,
-                            (unsigned long long)map_a, (unsigned long long)map_e, map_fd);
+                            g_self_gpid, (unsigned long long)a, (unsigned long long)reg.len, (unsigned long long)map_a,
+                            (unsigned long long)map_e, map_fd);
                     ckpt_report_overlap(map_a, map_e);
                     errno = claim_errno;
                     fprintf(stderr, "[restore] exact guest-address claim failed: %s\n", strerror(errno));
@@ -1099,28 +1126,7 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
     }
     ckpt_source_fclose(f);
     f = NULL;
-    for (uint64_t i = 0; i < m->n_regions; i++) {
-        struct ckpt_region *reg = &topology[i];
-        if (reg->backing_object == 0) continue;
-        // An anonymous shared region is not a FILE mapping to the guest: it has no path, no guest
-        // descriptor, and /proc/<pid>/maps must keep reporting it anonymous. Its seed was already
-        // bound above, and its shared-futex keys stay VA-keyed, which is still correct because the
-        // region is re-mapped at exactly its captured address.
-        if (reg->backing_anon_shared) continue;
-        if (reg->backing_offset > UINT64_MAX - reg->glen) {
-            errno = EOVERFLOW;
-            goto fail;
-        }
-        int seed = ckpt_restore_backing_seed(procdir, reg->backing_object, reg->backing_offset + reg->glen);
-        if (seed < 0) {
-            fprintf(stderr, "[restore] cannot rebuild backing object %llx\n", (unsigned long long)reg->backing_object);
-            goto fail;
-        }
-        filemap_register(reg->addr, reg->glen, seed, reg->backing_offset, reg->backing_shared, reg->backing_emulated);
-        if (reg->backing_shared && !reg->backing_emulated)
-            futex_shared_register(reg->addr, reg->glen, seed, reg->backing_offset);
-        registered = (size_t)i + 1;
-    }
+    if (ckpt_restore_register_backings(procdir, topology, m->n_regions, &registered) != 0) goto fail;
     free(mapped);
     free(topology);
     brk_lo = m->brk_lo;
@@ -1132,14 +1138,13 @@ static int ckpt_restore_mem_dir(const char *procdir, const struct ckpt_meta *m) 
     g_stack_lo = m->stack_lo;
     g_stack_hi = m->stack_hi;
     return 0;
-fail:
-    {
-        int restore_errno = errno != 0 ? errno : EIO;
-        if (f != NULL) ckpt_source_fclose(f);
-        errno = restore_errno;
-        ckpt_restore_rollback(topology, processed, registered, mapped_a, mapped_e, nmapped);
-        errno = restore_errno;
-    }
+fail: {
+    int restore_errno = errno != 0 ? errno : EIO;
+    if (f != NULL) ckpt_source_fclose(f);
+    errno = restore_errno;
+    ckpt_restore_rollback(topology, processed, registered, mapped_a, mapped_e, nmapped);
+    errno = restore_errno;
+}
     free(mapped);
     free(topology);
     return -1;
@@ -1379,8 +1384,8 @@ static int ckpt_restore_epoll_watches(const char *procdir, const struct ckpt_fd 
     snprintf(path, sizeof path, "%s/%s", procdir, record->path);
     int64_t stored = ckpt_source_object_size(path);
     size_t size;
-    const size_t maximum = sizeof(struct ckpt_epoll_header) +
-                           (size_t)CKPT_EPOLL_WATCH_LIMIT * sizeof(struct ckpt_epoll_watch);
+    const size_t maximum =
+        sizeof(struct ckpt_epoll_header) + (size_t)CKPT_EPOLL_WATCH_LIMIT * sizeof(struct ckpt_epoll_watch);
     if (ckpt_bounded_object_size(stored, sizeof(struct ckpt_epoll_header), maximum, &size) != 0) return -1;
     unsigned char *image = malloc(size);
     if (image == NULL || ckpt_source_load(path, image, size) != 0) {
@@ -1657,9 +1662,9 @@ static int ckpt_anon_shared_leftover_test(void) {
     int verdict = 0;
     int fresh = ckpt_restore_anon_shared_seed(object_id, size);
     if (fresh < 0) verdict = 34; // a leftover must not be able to FAIL the restore either
-    unsigned char *fresh_map = fresh >= 0 ? (unsigned char *)mmap(NULL, (size_t)size, PROT_READ | PROT_WRITE,
-                                                                 MAP_SHARED, fresh, 0)
-                                          : (unsigned char *)MAP_FAILED;
+    unsigned char *fresh_map =
+        fresh >= 0 ? (unsigned char *)mmap(NULL, (size_t)size, PROT_READ | PROT_WRITE, MAP_SHARED, fresh, 0)
+                   : (unsigned char *)MAP_FAILED;
     if (verdict == 0 && fresh_map == MAP_FAILED) verdict = 35;
     if (verdict == 0) {
         for (size_t i = 0; i < (size_t)size; i++)
@@ -1709,7 +1714,8 @@ static int ckpt_anon_shared_roundtrip_test(uint32_t scenario) {
 #if !defined(__APPLE__)
         // Linux mints one shmem inode per mmap, so two mappings are two objects. Darwin coalesces
         // adjacent shared anonymous mappings into one, which the offsets below already carry.
-        else if (first_id == second_id) verdict = 14; // two objects must not share one identity
+        else if (first_id == second_id)
+            verdict = 14; // two objects must not share one identity
 #endif
         else if (!ckpt_anon_shared_object((uint64_t)(uintptr_t)first + 4096, 4096, &tail_id, &tail_offset) ||
                  tail_id != first_id || tail_offset != first_offset + 4096)
@@ -1736,11 +1742,13 @@ static int ckpt_anon_shared_roundtrip_test(uint32_t scenario) {
     }
     if (scenario != 1) return 99;
     ckpt_anon_shared_generation_init();
+
     // What each process independently derives for the region, and what both must agree on.
     struct ckpt_anon_shared_named {
         uint64_t identity;
         uint64_t offset;
     };
+
     unsigned char *shared = mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (shared == MAP_FAILED) return 20;
     memset(shared, 0, length);
@@ -1759,9 +1767,8 @@ static int ckpt_anon_shared_roundtrip_test(uint32_t scenario) {
         if (!ckpt_anon_shared_object((uint64_t)(uintptr_t)shared, length, &named.identity, &named.offset))
             named.identity = 0;
         int seed = named.identity != 0 ? ckpt_restore_anon_shared_seed(named.identity, named.offset + length) : -1;
-        unsigned char *restored = seed >= 0 ? mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED, seed,
-                                                   (off_t)named.offset)
-                                            : MAP_FAILED;
+        unsigned char *restored =
+            seed >= 0 ? mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED, seed, (off_t)named.offset) : MAP_FAILED;
         if (restored != MAP_FAILED) memcpy(restored + 4096, "CHILD", 5);
         if (restored == MAP_FAILED) named.identity = 0;
         ssize_t ignored = write(channel[1], &named, sizeof named);
@@ -1772,7 +1779,8 @@ static int ckpt_anon_shared_roundtrip_test(uint32_t scenario) {
     close(channel[1]);
     int verdict = 0;
     struct ckpt_anon_shared_named from_child = {0, 0};
-    if (child < 0) verdict = 22;
+    if (child < 0)
+        verdict = 22;
     else {
         size_t read_bytes = 0;
         while (read_bytes < sizeof from_child) {
@@ -1787,9 +1795,8 @@ static int ckpt_anon_shared_roundtrip_test(uint32_t scenario) {
     if (child > 0) waitpid(child, &status, 0);
     struct ckpt_anon_shared_named here = {0, 0};
     ckpt_anon_shared_scan();
-    if (verdict == 0 &&
-        (!ckpt_anon_shared_object((uint64_t)(uintptr_t)shared, length, &here.identity, &here.offset) ||
-         here.identity == 0))
+    if (verdict == 0 && (!ckpt_anon_shared_object((uint64_t)(uintptr_t)shared, length, &here.identity, &here.offset) ||
+                         here.identity == 0))
         verdict = 24;
     // The two processes must have named the SAME object at the SAME offset without any engine-side
     // coordination. The offset is asserted because it is what the restore maps at: two processes that
@@ -1799,9 +1806,8 @@ static int ckpt_anon_shared_roundtrip_test(uint32_t scenario) {
     unsigned char *restored = MAP_FAILED;
     if (verdict == 0) {
         int seed = ckpt_restore_anon_shared_seed(here.identity, here.offset + length);
-        restored = seed >= 0
-                       ? mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED, seed, (off_t)here.offset)
-                       : MAP_FAILED;
+        restored =
+            seed >= 0 ? mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED, seed, (off_t)here.offset) : MAP_FAILED;
         if (restored == MAP_FAILED) verdict = 26;
     }
     // The child's write, made through ITS OWN mapping of the restored object, is visible here.

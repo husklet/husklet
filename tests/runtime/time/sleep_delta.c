@@ -15,7 +15,8 @@ static int slept_ok(clockid_t c, long ms) {
     long long t0 = ns(c);
     struct timespec req = {ms / 1000, (ms % 1000) * 1000000L};
     struct timespec rem;
-    while (nanosleep(&req, &rem) == -1) req = rem; // finish the full sleep
+    while (nanosleep(&req, &rem) == -1)
+        req = rem; // finish the full sleep
     long long d = ns(c) - t0;
     long long want = (long long)ms * 1000000LL;
     return d >= want - 5 * 1000000LL && d < want + 500LL * 1000000LL;

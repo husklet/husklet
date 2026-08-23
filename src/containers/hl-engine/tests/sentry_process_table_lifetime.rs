@@ -8,7 +8,7 @@
 //! * the table is released when its process dies, whichever route collects the corpse -- otherwise it holds
 //!   that process's duplicated descriptors forever and occupies one of the sentry's bounded process slots;
 //! * a host pid the kernel has reissued names a different process, and the fork lane must serve it. Measured
-//!   on this x86_64 box: the kernel reissued a specific freed pid after 40.9 s of ordinary fork churn, so
+//!   on this `x86_64` box: the kernel reissued a specific freed pid after 40.9 s of ordinary fork churn, so
 //!   this is a matter of container uptime, not of probability.
 
 use hl_engine::{activation::GuestIsa, launcher::plan::RuntimePlan, options::Options, runtime::Engine};

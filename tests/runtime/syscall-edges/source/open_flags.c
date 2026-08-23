@@ -31,6 +31,8 @@ int main(void) {
     int pf = open(link, O_PATH | O_NOFOLLOW);
     printf("opath_nofollow_ok=%d\n", pf >= 0);
 
-    unlink(link); unlink(file); rmdir(dir);
+    unlink(link);
+    unlink(file);
+    rmdir(dir);
     return 0;
 }

@@ -28,8 +28,7 @@ static void set_limit(void) {
 // no signal fires (which would itself be the bug the expected output rejects).
 static void probe(const char *tag, int (*body)(void)) {
     pid_t pid = fork();
-    if (pid == 0)
-        _exit(body());
+    if (pid == 0) _exit(body());
     int status = 0;
     waitpid(pid, &status, 0);
     int sigxfsz = WIFSIGNALED(status) && WTERMSIG(status) == SIGXFSZ;

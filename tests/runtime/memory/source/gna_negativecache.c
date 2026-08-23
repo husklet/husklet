@@ -43,11 +43,8 @@ int main(void) {
     }
     void *status = NULL;
     pthread_join(thread, &status);
-    int split = mprotect(page, 3 * 4096, PROT_NONE) == 0 &&
-                mprotect(page + 4096, 4096, PROT_READ | PROT_WRITE) == 0 &&
-                write(fd[1], page + 4096, 1) == 1 &&
-                write(fd[1], page, 1) == -1;
-    printf("gna-negative-cache fault=%d clear=%d split=%d thread=%d\n",
-           fault, clear, split, status == NULL);
+    int split = mprotect(page, 3 * 4096, PROT_NONE) == 0 && mprotect(page + 4096, 4096, PROT_READ | PROT_WRITE) == 0 &&
+                write(fd[1], page + 4096, 1) == 1 && write(fd[1], page, 1) == -1;
+    printf("gna-negative-cache fault=%d clear=%d split=%d thread=%d\n", fault, clear, split, status == NULL);
     return !(fault && clear && split && status == NULL);
 }

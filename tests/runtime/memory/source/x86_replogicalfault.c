@@ -30,15 +30,9 @@ static void fault_handler(int signal, siginfo_t *info, void *opaque) {
 static int copy_fault(unsigned char *destination, unsigned char *source, size_t length, int backward) {
     if (sigsetjmp(jump, 1) == 0) {
         if (backward)
-            __asm__ volatile("std; rep movsb; cld"
-                             : "+D"(destination), "+S"(source), "+c"(length)
-                             :
-                             : "memory", "cc");
+            __asm__ volatile("std; rep movsb; cld" : "+D"(destination), "+S"(source), "+c"(length) : : "memory", "cc");
         else
-            __asm__ volatile("cld; rep movsb"
-                             : "+D"(destination), "+S"(source), "+c"(length)
-                             :
-                             : "memory", "cc");
+            __asm__ volatile("cld; rep movsb" : "+D"(destination), "+S"(source), "+c"(length) : : "memory", "cc");
         return 0;
     }
     return 1;
@@ -55,8 +49,8 @@ int main(void) {
     if (mmap(source, page, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, (off_t)page) != source ||
         mmap(source + page, page, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, (off_t)(2 * page)) !=
             source + page ||
-        mmap(destination, 2 * page, PROT_READ | PROT_WRITE,
-             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) != destination)
+        mmap(destination, 2 * page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) !=
+            destination)
         return 3;
 
     struct sigaction action = {.sa_sigaction = fault_handler, .sa_flags = SA_SIGINFO};
@@ -67,22 +61,16 @@ int main(void) {
     memcpy(source + page - 4, "ABCD", 4);
     memset(destination, 0, 8);
     if (mprotect(source + page, page, PROT_NONE) != 0) return 5;
-    int forward = copy_fault(destination, source + page - 4, 8, 0) &&
-                  memcmp(destination, "ABCD", 4) == 0 && fault_rcx == 4 &&
-                  fault_address == (uintptr_t)(source + page) &&
-                  fault_rsi == (uintptr_t)(source + page) &&
-                  fault_rdi == (uintptr_t)(destination + 4);
+    int forward = copy_fault(destination, source + page - 4, 8, 0) && memcmp(destination, "ABCD", 4) == 0 &&
+                  fault_rcx == 4 && fault_address == (uintptr_t)(source + page) &&
+                  fault_rsi == (uintptr_t)(source + page) && fault_rdi == (uintptr_t)(destination + 4);
 
-    if (mprotect(source, page, PROT_NONE) != 0 ||
-        mprotect(source + page, page, PROT_READ | PROT_WRITE) != 0)
-        return 6;
+    if (mprotect(source, page, PROT_NONE) != 0 || mprotect(source + page, page, PROT_READ | PROT_WRITE) != 0) return 6;
     memcpy(source + page, "WXYZ", 4);
     memset(destination, 0, 8);
-    int backward = copy_fault(destination + 7, source + page + 3, 8, 1) &&
-                   memcmp(destination + 4, "WXYZ", 4) == 0 && fault_rcx == 4 &&
-                   fault_address == (uintptr_t)(source + page - 1) &&
-                   fault_rsi == (uintptr_t)(source + page - 1) &&
-                   fault_rdi == (uintptr_t)(destination + 3);
+    int backward = copy_fault(destination + 7, source + page + 3, 8, 1) && memcmp(destination + 4, "WXYZ", 4) == 0 &&
+                   fault_rcx == 4 && fault_address == (uintptr_t)(source + page - 1) &&
+                   fault_rsi == (uintptr_t)(source + page - 1) && fault_rdi == (uintptr_t)(destination + 3);
 
     unsigned char overlap1[] = "abcdefgh";
     unsigned char overlap2[] = "abcdefgh";
@@ -95,8 +83,8 @@ int main(void) {
     int overlap_forward = memcmp(overlap1, "abababab", 8) == 0;
     int overlap_backward = memcmp(overlap2, "ababcdef", 8) == 0;
 
-    printf("x86-rep-logical forward=%d backward=%d overlap-fwd=%d overlap-back=%d\n",
-           forward, backward, overlap_forward, overlap_backward);
+    printf("x86-rep-logical forward=%d backward=%d overlap-fwd=%d overlap-back=%d\n", forward, backward,
+           overlap_forward, overlap_backward);
     return !(forward && backward && overlap_forward && overlap_backward);
 }
 #else

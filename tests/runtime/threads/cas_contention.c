@@ -6,6 +6,7 @@
 #define N 32
 #define PER 10000
 static atomic_long v;
+
 static void *w(void *_) {
     (void)_;
     for (int i = 0; i < PER; i++) {
@@ -14,10 +15,13 @@ static void *w(void *_) {
     }
     return 0;
 }
+
 int main(void) {
     pthread_t t[N];
-    for (int i = 0; i < N; i++) pthread_create(&t[i], 0, w, 0);
-    for (int i = 0; i < N; i++) pthread_join(t[i], 0);
+    for (int i = 0; i < N; i++)
+        pthread_create(&t[i], 0, w, 0);
+    for (int i = 0; i < N; i++)
+        pthread_join(t[i], 0);
     printf("cas v=%ld\n", (long)v); // 320000
     return 0;
 }

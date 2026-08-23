@@ -13,7 +13,10 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t got;
-static void h(int s) { got = s; }
+
+static void h(int s) {
+    got = s;
+}
 
 // A child installs a handler for `sig`, then pause()s; the parent kills it with `sig`. The child must
 // resume from pause() with -1/EINTR and its handler must have run. Returns 1 on the correct outcome.
@@ -66,9 +69,9 @@ static int sigkill_kills(void) {
 
 int main(void) {
     // The full LTP pause01 signal set (each caught, delivered by kill(2)).
-    int sigs[] = {SIGHUP, SIGINT,  SIGQUIT, SIGILL,  SIGTRAP, SIGABRT,
-                  SIGFPE, SIGSEGV, SIGBUS,  SIGPIPE, SIGALRM, SIGTERM, SIGUSR1, SIGUSR2};
-    const char *nm[] = {"HUP", "INT",  "QUIT", "ILL",  "TRAP", "ABRT", "FPE",
+    int sigs[] = {SIGHUP,  SIGINT, SIGQUIT, SIGILL,  SIGTRAP, SIGABRT, SIGFPE,
+                  SIGSEGV, SIGBUS, SIGPIPE, SIGALRM, SIGTERM, SIGUSR1, SIGUSR2};
+    const char *nm[] = {"HUP",  "INT", "QUIT", "ILL",  "TRAP", "ABRT", "FPE",
                         "SEGV", "BUS", "PIPE", "ALRM", "TERM", "USR1", "USR2"};
     int all = 1;
     for (unsigned i = 0; i < sizeof sigs / sizeof sigs[0]; i++) {

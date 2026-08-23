@@ -14,8 +14,7 @@ int main(void) {
     if (fd >= 0) close((int)fd);
 
     long bad = syscall(__NR_memfd_secret, 0xFFFFFFFFu);
-    int bad_rejected = (bad < 0) && (errno == EINVAL || errno == ENOSYS || errno == EPERM ||
-                                     errno == EOPNOTSUPP);
+    int bad_rejected = (bad < 0) && (errno == EINVAL || errno == ENOSYS || errno == EPERM || errno == EOPNOTSUPP);
     if (bad >= 0) close((int)bad);
 
     printf("memfd_secret handled=%d bad_flags_rejected=%d\n", handled, bad_rejected);

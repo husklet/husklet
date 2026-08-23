@@ -24,8 +24,8 @@ int g_rwx_guest;
 #include <stdlib.h>
 #include "../host_proc.h" // times(2): CPU accounting (struct tms is layout-compatible with Linux)
 #include "../guest_sync.h"
-#include "../host_fs.h"   // host struct statfs -> translated to the Linux statfs layout
-#include <time.h>         // sysinfo(2) uptime = now - host boot time
+#include "../host_fs.h" // host struct statfs -> translated to the Linux statfs layout
+#include <time.h>       // sysinfo(2) uptime = now - host boot time
 #include "../errno.h"
 #include "../../host/directory.h"
 #include "../../host/process.h"
@@ -94,8 +94,9 @@ static void ptrace_service_traced(struct cpu *c); // service() hot-path hook whe
 static int ptrace_wait(struct cpu *c, pid_t wpid, int opts, struct rusage *ru, int *status, pid_t *out);
 static long ptrace_pvm(struct cpu *c, int is_write, pid_t rpid, const struct iovec *liov, unsigned long ln,
                        const struct iovec *riov, unsigned long rn);
-static int ptrace_any_tracee_of_self(void);      // does the caller trace anyone? (wait4 routing)
-static int ptrace_wait_active(void);             // is ptrace in use in this session? (wait4 routing gate)
+static int ptrace_any_tracee_of_self(void); // does the caller trace anyone? (wait4 routing)
+static int ptrace_wait_active(void);        // is ptrace in use in this session? (wait4 routing gate)
+
 // A control-channel interrupt is otherwise indistinguishable from a spurious host EINTR to the
 // syscall retry helpers.  Consult the shared link directly so pause/read/poll return to the ptrace
 // dispatcher instead of transparently re-blocking before it can publish the requested stop.
@@ -804,13 +805,13 @@ static void service(struct cpu *c) {
  * normalization and a restart. x86 issues legacy poll(2) (7) and the frontend rewrites it to ppoll (271,
  * canonical 73) with a NULL timespec; aarch64 has only ppoll (73) and normalization leaves it alone. */
 #if defined(HL_GUEST_SIGACTION_HAS_RESTORER)
-#define HL_RESTART_POLL_NUMBER UINT64_C(7) /* x86 legacy poll(fds, nfds, timeout_ms) */
-#define HL_RESTART_POLL_FOREVER UINT64_MAX /* -1 milliseconds */
+#define HL_RESTART_POLL_NUMBER UINT64_C(7)     /* x86 legacy poll(fds, nfds, timeout_ms) */
+#define HL_RESTART_POLL_FOREVER UINT64_MAX     /* -1 milliseconds */
 #define HL_RESTART_POLL_NORMALIZED UINT64_C(0) /* ppoll's NULL timespec */
 #else
-#define HL_RESTART_POLL_NUMBER UINT64_C(73)        /* aarch64 issues ppoll directly */
-#define HL_RESTART_POLL_FOREVER UINT64_C(0)        /* a NULL timespec already */
-#define HL_RESTART_POLL_NORMALIZED UINT64_C(0)     /* ...and normalization must not touch it */
+#define HL_RESTART_POLL_NUMBER UINT64_C(73)    /* aarch64 issues ppoll directly */
+#define HL_RESTART_POLL_FOREVER UINT64_C(0)    /* a NULL timespec already */
+#define HL_RESTART_POLL_NORMALIZED UINT64_C(0) /* ...and normalization must not touch it */
 #endif
 
 HL_API int HL_TARGET_LOCAL(checkpoint_restart_register_test)(void) {

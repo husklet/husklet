@@ -77,11 +77,13 @@ struct hl_engine {
 
 #if !defined(_WIN32)
 static pthread_mutex_t checkpoint_registry_lock = PTHREAD_MUTEX_INITIALIZER;
+
 typedef struct hl_checkpoint_descriptor {
     int descriptor;
     dev_t device;
     ino_t inode;
 } hl_checkpoint_descriptor;
+
 static hl_checkpoint_descriptor *checkpoint_registry;
 static size_t checkpoint_registry_count;
 static size_t checkpoint_registry_capacity;
@@ -96,7 +98,8 @@ static void hl_engine_checkpoint_registry_compact_locked(void) {
     for (index = 0; index < checkpoint_registry_count; ++index) {
         hl_checkpoint_descriptor *entry = &checkpoint_registry[index];
         struct stat current;
-        if (fstat(entry->descriptor, &current) != 0 || current.st_dev != entry->device || current.st_ino != entry->inode)
+        if (fstat(entry->descriptor, &current) != 0 || current.st_dev != entry->device ||
+            current.st_ino != entry->inode)
             *entry = checkpoint_registry[--checkpoint_registry_count];
         else
             continue;
@@ -114,7 +117,8 @@ static int hl_engine_checkpoint_registry_reserve_locked(size_t additional) {
 #endif
     if (required > checkpoint_registry_capacity) {
         size_t capacity = checkpoint_registry_capacity == 0 ? 16 : checkpoint_registry_capacity;
-        while (capacity < required) capacity *= 2;
+        while (capacity < required)
+            capacity *= 2;
         hl_checkpoint_descriptor *grown = realloc(checkpoint_registry, capacity * sizeof(*grown));
         if (grown == NULL) return -1;
         checkpoint_registry = grown;
@@ -177,19 +181,25 @@ void hl_engine_checkpoint_fork_child(int broker, int trigger, int control) {
     for (index = 0; index < checkpoint_registry_count; ++index) {
         hl_checkpoint_descriptor *entry = &checkpoint_registry[index];
         struct stat identity;
-        if (fstat(entry->descriptor, &identity) == 0 && identity.st_dev == entry->device && identity.st_ino == entry->inode)
+        if (fstat(entry->descriptor, &identity) == 0 && identity.st_dev == entry->device &&
+            identity.st_ino == entry->inode)
             hl_engine_checkpoint_fork_close(entry->descriptor, broker, trigger, control);
     }
     (void)pthread_mutex_unlock(&checkpoint_registry_lock);
 }
 #else
-void hl_engine_checkpoint_fork_prepare(void) {}
-void hl_engine_checkpoint_fork_parent(void) {}
+void hl_engine_checkpoint_fork_prepare(void) {
+}
+
+void hl_engine_checkpoint_fork_parent(void) {
+}
+
 void hl_engine_checkpoint_fork_child(int broker, int trigger, int control) {
     (void)broker;
     (void)trigger;
     (void)control;
 }
+
 int hl_engine_checkpoint_descriptors_register(int first, int second) {
     (void)first;
     (void)second;
@@ -299,8 +309,8 @@ HL_API uint32_t hl_c_backend_checkpoint_test_prune_foreign_descriptors(void) {
         hl_engine_checkpoint_fork_child(active[0], active[1], -1);
         (void)close(release[1]);
         if (read(release[0], &byte, sizeof(byte)) != (ssize_t)sizeof(byte)) _exit(2);
-        valid = fcntl(foreign[0], F_GETFD) < 0 && errno == EBADF && fcntl(foreign[1], F_GETFD) < 0 &&
-                errno == EBADF && fcntl(active[0], F_GETFD) >= 0 && fcntl(active[1], F_GETFD) >= 0;
+        valid = fcntl(foreign[0], F_GETFD) < 0 && errno == EBADF && fcntl(foreign[1], F_GETFD) < 0 && errno == EBADF &&
+                fcntl(active[0], F_GETFD) >= 0 && fcntl(active[1], F_GETFD) >= 0;
         _exit(valid ? 0 : 3);
     }
     hl_engine_checkpoint_fork_parent();
@@ -309,10 +319,10 @@ HL_API uint32_t hl_c_backend_checkpoint_test_prune_foreign_descriptors(void) {
     release[0] = -1;
     (void)close(foreign[0]);
     (void)close(foreign[1]);
+    if (foreign[0] < 0 || foreign[1] < 0 || active[0] < 0 || active[1] < 0) goto cleanup_child;
     if (dup2(active[0], foreign[0]) < 0 || dup2(active[1], foreign[1]) < 0) goto cleanup_child;
     if (write(release[1], &byte, sizeof(byte)) != (ssize_t)sizeof(byte)) goto cleanup_child;
     if (waitpid(child, &status, 0) != child) goto cleanup;
-    child = -1;
     status = WIFEXITED(status) && WEXITSTATUS(status) == 0;
     goto cleanup;
 cleanup_child:
@@ -391,8 +401,7 @@ static void hl_engine_checkpoint_arena_stop(hl_engine *engine) {
 #if defined(_WIN32)
     (void)engine;
 #else
-    if (engine->checkpoint_control_parent >= 0)
-        (void)shutdown(engine->checkpoint_control_parent, SHUT_RDWR);
+    if (engine->checkpoint_control_parent >= 0) (void)shutdown(engine->checkpoint_control_parent, SHUT_RDWR);
 #endif
 }
 
@@ -1348,8 +1357,7 @@ hl_status hl_engine_request(hl_engine *engine, uint32_t request, const void *dat
                 do {
                     ready = poll(&waiting, 1, 5000);
                 } while (ready < 0 && errno == EINTR);
-                if (ready <= 0 || read(waiting.fd, &interrupted, sizeof(interrupted)) !=
-                                      (ssize_t)sizeof(interrupted) ||
+                if (ready <= 0 || read(waiting.fd, &interrupted, sizeof(interrupted)) != (ssize_t)sizeof(interrupted) ||
                     interrupted == 0)
                     status = HL_STATUS_PLATFORM_FAILURE;
             } else {
@@ -1367,8 +1375,7 @@ hl_status hl_engine_request(hl_engine *engine, uint32_t request, const void *dat
         uint32_t signal_number;
         if (data == NULL || data_size != sizeof(signal_number)) return HL_STATUS_INVALID_ARGUMENT;
         memcpy(&signal_number, data, sizeof(signal_number));
-        if (signal_number == 0 || signal_number > 64 || signal_number == 9)
-            return HL_STATUS_INVALID_ARGUMENT;
+        if (signal_number == 0 || signal_number > 64 || signal_number == 9) return HL_STATUS_INVALID_ARGUMENT;
         reason = HL_HOST_PROCESS_TERMINATE_SIGNAL + signal_number;
     } else if (data_size != 0) {
         return HL_STATUS_INVALID_ARGUMENT;

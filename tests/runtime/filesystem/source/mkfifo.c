@@ -10,18 +10,23 @@
 int main(void) {
     const char *path = "/tmp/hl_fifo_test";
     unlink(path);
-    if (mkfifo(path, 0644) < 0) { perror("mkfifo"); return 1; }
+    if (mkfifo(path, 0644) < 0) {
+        perror("mkfifo");
+        return 1;
+    }
     pid_t pid = fork();
     if (pid == 0) {
         int w = open(path, O_WRONLY); // blocks until reader opens
-        for (int i = 1; i <= 500; i++) write(w, &i, sizeof i);
+        for (int i = 1; i <= 500; i++)
+            write(w, &i, sizeof i);
         close(w);
         _exit(0);
     }
     int r = open(path, O_RDONLY);
     long sum = 0;
     int v;
-    while (read(r, &v, sizeof v) == sizeof v) sum += v;
+    while (read(r, &v, sizeof v) == sizeof v)
+        sum += v;
     close(r);
     waitpid(pid, NULL, 0);
     unlink(path);

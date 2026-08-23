@@ -21,13 +21,19 @@ static void on_bus(int number, siginfo_t *info, void *context) {
 
 static int catches_load(volatile unsigned char *address) {
     fault_address = address;
-    if (sigsetjmp(jump, 1) == 0) { (void)*address; return 0; }
+    if (sigsetjmp(jump, 1) == 0) {
+        (void)*address;
+        return 0;
+    }
     return 1;
 }
 
 static int catches_store(volatile unsigned char *address) {
     fault_address = address;
-    if (sigsetjmp(jump, 1) == 0) { *address = 0x44; return 0; }
+    if (sigsetjmp(jump, 1) == 0) {
+        *address = 0x44;
+        return 0;
+    }
     return 1;
 }
 
@@ -72,7 +78,8 @@ int main(void) {
     shared[8193] = 0x7c;
     int shared_write = pread(fd, &observed, 1, 8193) == 1 && observed == 0x7c;
 
-    printf("truncate-bus partial=%d shared-load=%d shared-store=%d private-load=%d private-store=%d fork=%d extend-shared=%d extend-private=%d shared-write=%d metadata=%d\n",
+    printf("truncate-bus partial=%d shared-load=%d shared-store=%d private-load=%d private-store=%d fork=%d "
+           "extend-shared=%d extend-private=%d shared-write=%d metadata=%d\n",
            partial_zero, shared_load, shared_store, private_load, private_store, fork_bus, shared_extend,
            private_extend, shared_write, metadata_ok == 4);
     munmap(shared, 16384);
@@ -80,8 +87,8 @@ int main(void) {
     close(copy);
     close(fd);
     unlink(path);
-    return partial_zero && shared_load && shared_store && private_load && private_store && fork_bus &&
-                   shared_extend && private_extend && shared_write && metadata_ok == 4
+    return partial_zero && shared_load && shared_store && private_load && private_store && fork_bus && shared_extend &&
+                   private_extend && shared_write && metadata_ok == 4
                ? 0
                : 9;
 }

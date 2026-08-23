@@ -55,7 +55,6 @@ int main(void) {
     close(b);
     unlink(path);
     rmdir(dir);
-    printf("ofd-lock locked=%d conflict=%d getlk=%d disjoint=%d freed=%d\n",
-           locked, conflict, getlk, disjoint, freed);
+    printf("ofd-lock locked=%d conflict=%d getlk=%d disjoint=%d freed=%d\n", locked, conflict, getlk, disjoint, freed);
     return 0;
 }

@@ -20,7 +20,9 @@
 #include <unistd.h>
 
 // Run one connect()/bind() and return the errno it failed with (0 if it unexpectedly succeeded).
-static int err_of(int rc) { return rc < 0 ? errno : 0; }
+static int err_of(int rc) {
+    return rc < 0 ? errno : 0;
+}
 
 int main(void) {
     void *bad = mmap(0, 1, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -93,8 +95,8 @@ int main(void) {
     int c_erefused = err_of(connect(s, (struct sockaddr *)&dead, sizeof dead));
     int c_eafnos = err_of(connect(s, (struct sockaddr *)&badfam, sizeof badfam));
 
-    printf("ltp_neterr connect %d %d %d %d %d %d %d\n", c_ebadf, c_efault, c_einval, c_enotsock, c_eisconn,
-           c_erefused, c_eafnos);
+    printf("ltp_neterr connect %d %d %d %d %d %d %d\n", c_ebadf, c_efault, c_einval, c_enotsock, c_eisconn, c_erefused,
+           c_eafnos);
 
     // ---- bind(2) matrix ----
     int b_sock = socket(AF_INET, SOCK_STREAM, 0);

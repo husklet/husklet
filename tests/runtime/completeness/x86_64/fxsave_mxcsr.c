@@ -10,7 +10,11 @@ static uint32_t getmxcsr(void) {
     __asm__ volatile("stmxcsr %0" : "=m"(v));
     return v;
 }
-static void setmxcsr(uint32_t v) { __asm__ volatile("ldmxcsr %0" ::"m"(v)); }
+
+static void setmxcsr(uint32_t v) {
+    __asm__ volatile("ldmxcsr %0" ::"m"(v));
+}
+
 static int cvt(volatile double *x) {
     int r;
     __asm__ volatile("cvtsd2si %1,%0" : "=r"(r) : "x"(*x));

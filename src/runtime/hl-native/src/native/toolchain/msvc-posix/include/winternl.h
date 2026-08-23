@@ -94,7 +94,8 @@ typedef enum _HL_FS_INFORMATION_CLASS {
     FileFsDriverPathInformation = 9,
     FileFsVolumeFlagsInformation = 10,
     FileFsMaximumInformation = 11
-} FS_INFORMATION_CLASS, *PFS_INFORMATION_CLASS;
+} FS_INFORMATION_CLASS,
+    *PFS_INFORMATION_CLASS;
 
 /* ---- file information structures ---------------------------------------- */
 

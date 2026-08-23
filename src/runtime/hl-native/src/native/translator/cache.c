@@ -1698,9 +1698,7 @@ static int jit_flush_to_fresh(int retain_map_generations) {
      * map.  Pre-SMC direct chains retain the historical wholesale policy.
      */
 #if HL_ENABLE_LOGGING
-    uint32_t evicted = retain_generations && g_cache_gen >= 3
-                           ? map_invalidate_cache_generation(g_cache_gen - 3)
-                           : 0;
+    uint32_t evicted = retain_generations && g_cache_gen >= 3 ? map_invalidate_cache_generation(g_cache_gen - 3) : 0;
 #else
     if (retain_generations && g_cache_gen >= 3) (void)map_invalidate_cache_generation(g_cache_gen - 3);
 #endif

@@ -36,7 +36,7 @@ int main(void) {
     struct timespec bad = {0, 1000000000};
     int e = sigtimedwait(&m, &si, &bad);
     int ee = (e == -1) ? errno : 0;
-    printf("a=%d ea=%d b=%d val=%d code=%d c=%d ec=%d d=%d ed=%d e=%d ee=%d sicode_queue=%d\n",
-           a, ea, b, val, code, c, ec, d, ed, e, ee, code == SI_QUEUE);
+    printf("a=%d ea=%d b=%d val=%d code=%d c=%d ec=%d d=%d ed=%d e=%d ee=%d sicode_queue=%d\n", a, ea, b, val, code, c,
+           ec, d, ed, e, ee, code == SI_QUEUE);
     return 0;
 }

@@ -19,24 +19,43 @@ int main(void) {
     // /proc/self/status VmRSS (kB)
     long vmrss = -1;
     FILE *f = fopen("/proc/self/status", "r");
-    if (!f) { printf("selfrss ok=0 nostatus\n"); return 0; }
+    if (!f) {
+        printf("selfrss ok=0 nostatus\n");
+        return 0;
+    }
     char line[256];
     while (fgets(line, sizeof line, f))
-        if (!strncmp(line, "VmRSS:", 6)) { vmrss = strtol(line + 6, NULL, 10); break; }
+        if (!strncmp(line, "VmRSS:", 6)) {
+            vmrss = strtol(line + 6, NULL, 10);
+            break;
+        }
     fclose(f);
-    if (vmrss <= 0) { printf("selfrss ok=0 vmrss=%ld\n", vmrss); return 0; }
+    if (vmrss <= 0) {
+        printf("selfrss ok=0 vmrss=%ld\n", vmrss);
+        return 0;
+    }
 
     // /proc/self/statm field 2 = resident pages
     long sm_size = -1, sm_res = -1;
     f = fopen("/proc/self/statm", "r");
-    if (!f || fscanf(f, "%ld %ld", &sm_size, &sm_res) != 2) { printf("selfrss ok=0 nostatm\n"); if (f) fclose(f); return 0; }
+    if (!f || fscanf(f, "%ld %ld", &sm_size, &sm_res) != 2) {
+        printf("selfrss ok=0 nostatm\n");
+        if (f) fclose(f);
+        return 0;
+    }
     fclose(f);
-    if (sm_res <= 0) { printf("selfrss ok=0 statm_res=%ld\n", sm_res); return 0; }
+    if (sm_res <= 0) {
+        printf("selfrss ok=0 statm_res=%ld\n", sm_res);
+        return 0;
+    }
 
     // /proc/self/stat field 24 = rss pages (fields are space-separated after the "(comm)" token)
     long st_rss = -1;
     f = fopen("/proc/self/stat", "r");
-    if (!f) { printf("selfrss ok=0 nostat\n"); return 0; }
+    if (!f) {
+        printf("selfrss ok=0 nostat\n");
+        return 0;
+    }
     static char sbuf[4096];
     size_t nr = fread(sbuf, 1, sizeof sbuf - 1, f);
     fclose(f);
@@ -46,13 +65,18 @@ int main(void) {
         char *p = rp + 2;
         int field = 3; // p is at the start of field 3; walk token-by-token to field 24 (rss, in pages)
         while (*p && field < 24) {
-            while (*p && *p != ' ') p++; // skip the current field's token
-            while (*p == ' ') p++;       // skip the separating space(s)
+            while (*p && *p != ' ')
+                p++; // skip the current field's token
+            while (*p == ' ')
+                p++; // skip the separating space(s)
             field++;
         }
         if (field == 24) st_rss = strtol(p, NULL, 10);
     }
-    if (st_rss <= 0) { printf("selfrss ok=0 stat_rss=%ld\n", st_rss); return 0; }
+    if (st_rss <= 0) {
+        printf("selfrss ok=0 stat_rss=%ld\n", st_rss);
+        return 0;
+    }
 
     (void)sm_size;
     printf("selfrss ok=1\n");

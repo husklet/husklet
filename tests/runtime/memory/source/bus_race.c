@@ -28,12 +28,15 @@ static void on_bus(int signal_number) {
     siglongjmp(fault_jump, 1);
 }
 
-__attribute__((noinline)) static unsigned char hot_load(void) { return *target; }
+__attribute__((noinline)) static unsigned char hot_load(void) {
+    return *target;
+}
 
 static void *accessor(void *unused) {
     (void)unused;
     unsigned char value = 0;
-    for (unsigned i = 0; i < 200000; ++i) value ^= hot_load();
+    for (unsigned i = 0; i < 200000; ++i)
+        value ^= hot_load();
     fault_armed = 1;
     atomic_store_explicit(&ready, 1, memory_order_release);
     while (atomic_load_explicit(&phase, memory_order_acquire) >= 0) {
@@ -65,10 +68,10 @@ static void *toggle_mapping(void *argument) {
     struct toggler *toggle = argument;
     toggle->ok = 1;
     for (int i = 0; i < 16; ++i) {
-        if (mmap(toggle->base, PAGE_SIZE * 2, PROT_READ | PROT_WRITE,
-                 MAP_FIXED | MAP_PRIVATE, toggle->descriptor, 0) != toggle->base ||
-            mmap(toggle->base, PAGE_SIZE * 2, PROT_READ | PROT_WRITE,
-                 MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) != toggle->base) {
+        if (mmap(toggle->base, PAGE_SIZE * 2, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE, toggle->descriptor, 0) !=
+                toggle->base ||
+            mmap(toggle->base, PAGE_SIZE * 2, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) !=
+                toggle->base) {
             toggle->ok = 0;
             break;
         }
@@ -92,7 +95,8 @@ int main(void) {
     action.sa_handler = on_bus;
     sigemptyset(&action.sa_mask);
     if (sigaction(SIGBUS, &action, NULL) != 0 || pthread_create(&worker, NULL, accessor, NULL) != 0) return 3;
-    while (!atomic_load_explicit(&ready, memory_order_acquire)) sched_yield();
+    while (!atomic_load_explicit(&ready, memory_order_acquire))
+        sched_yield();
 
     int blocked_ok = 0;
     if (pipe(pipefd) == 0 && pthread_create(&reader, NULL, blocked_reader, &pipefd[0]) == 0) {
@@ -100,14 +104,14 @@ int main(void) {
         void *base = (void *)(target - PAGE_SIZE);
         if (mmap(base, PAGE_SIZE * 2, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE, descriptor, 0) == base) {
             atomic_store_explicit(&phase, 1, memory_order_release);
-            while (atomic_load_explicit(&faults, memory_order_acquire) == 0) sched_yield();
+            while (atomic_load_explicit(&faults, memory_order_acquire) == 0)
+                sched_yield();
             if (write(pipefd[1], "x", 1) == 1) {
                 void *reader_result = NULL;
                 blocked_ok = pthread_join(reader, &reader_result) == 0 && reader_result == NULL;
             }
             atomic_store_explicit(&phase, 2, memory_order_release);
-            mmap(base, PAGE_SIZE * 2, PROT_READ | PROT_WRITE,
-                 MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            mmap(base, PAGE_SIZE * 2, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
             atomic_store_explicit(&phase, 2, memory_order_release);
         }
         close(pipefd[0]);
@@ -118,14 +122,13 @@ int main(void) {
     for (unsigned round = 0; round < ROUNDS; ++round) {
         void *base = (void *)(target - PAGE_SIZE);
         unsigned before = atomic_load_explicit(&faults, memory_order_acquire);
-        if (mmap(base, PAGE_SIZE * 2, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE, descriptor, 0) != base)
-            break;
+        if (mmap(base, PAGE_SIZE * 2, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE, descriptor, 0) != base) break;
         int bus_phase = 3 + (int)(round * 2);
         atomic_store_explicit(&phase, bus_phase, memory_order_release);
-        while (atomic_load_explicit(&faults, memory_order_acquire) == before) sched_yield();
+        while (atomic_load_explicit(&faults, memory_order_acquire) == before)
+            sched_yield();
         atomic_store_explicit(&phase, bus_phase + 1, memory_order_release);
-        if (mmap(base, PAGE_SIZE * 2, PROT_READ | PROT_WRITE,
-                 MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) != base)
+        if (mmap(base, PAGE_SIZE * 2, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) != base)
             break;
         completed++;
     }
@@ -137,20 +140,16 @@ int main(void) {
        and persistent BUS prove that filter maintenance neither saturates into
        a global slow path nor loses a live interval during rebuild. */
     size_t churn_size = (size_t)ROUNDS * PAGE_SIZE * 3u;
-    unsigned char *churn = mmap(NULL, churn_size, PROT_READ | PROT_WRITE,
-                                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    unsigned char *persistent = mmap(NULL, PAGE_SIZE * 2, PROT_READ | PROT_WRITE,
-                                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned char *churn = mmap(NULL, churn_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned char *persistent = mmap(NULL, PAGE_SIZE * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     int churn_ok = churn != MAP_FAILED && persistent != MAP_FAILED;
-    if (churn_ok && mmap(persistent, PAGE_SIZE * 2, PROT_READ | PROT_WRITE,
-                         MAP_FIXED | MAP_PRIVATE, descriptor, 0) != persistent)
+    if (churn_ok &&
+        mmap(persistent, PAGE_SIZE * 2, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE, descriptor, 0) != persistent)
         churn_ok = 0;
     for (unsigned round = 0; churn_ok && round < ROUNDS; ++round) {
         void *base = churn + (size_t)round * PAGE_SIZE * 3u;
-        if (mmap(base, PAGE_SIZE * 2, PROT_READ | PROT_WRITE,
-                 MAP_FIXED | MAP_PRIVATE, descriptor, 0) != base ||
-            mmap(base, PAGE_SIZE * 2, PROT_READ | PROT_WRITE,
-                 MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) != base)
+        if (mmap(base, PAGE_SIZE * 2, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE, descriptor, 0) != base ||
+            mmap(base, PAGE_SIZE * 2, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) != base)
             churn_ok = 0;
     }
     if (churn_ok) {
@@ -166,10 +165,8 @@ int main(void) {
     if (churn != MAP_FAILED) munmap(churn, churn_size);
     if (persistent != MAP_FAILED) munmap(persistent, PAGE_SIZE * 2);
 
-    void *second = mmap(NULL, PAGE_SIZE * 2, PROT_READ | PROT_WRITE,
-                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    struct toggler toggles[2] = {{(void *)(target - PAGE_SIZE), descriptor, 0, 0},
-                                 {second, descriptor, 0, 0}};
+    void *second = mmap(NULL, PAGE_SIZE * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    struct toggler toggles[2] = {{(void *)(target - PAGE_SIZE), descriptor, 0, 0}, {second, descriptor, 0, 0}};
     pthread_t toggle_threads[2];
     int concurrent_ok = second != MAP_FAILED &&
                         pthread_create(&toggle_threads[0], NULL, toggle_mapping, &toggles[0]) == 0 &&
@@ -199,8 +196,8 @@ int main(void) {
     if (second != MAP_FAILED) munmap(second, PAGE_SIZE * 2);
     close(descriptor);
     unlink(path);
-    return completed == ROUNDS && atomic_load_explicit(&escaped, memory_order_relaxed) == 0 && blocked_ok &&
-           churn_ok && concurrent_ok && fork_ok
+    return completed == ROUNDS && atomic_load_explicit(&escaped, memory_order_relaxed) == 0 && blocked_ok && churn_ok &&
+                   concurrent_ok && fork_ok
                ? 0
                : 4;
 }

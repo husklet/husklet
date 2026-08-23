@@ -16,33 +16,32 @@
  * gone and the same transcript falls out of the hardware, which is what makes
  * this a portable oracle.  Both directions (live->hole across the low edge and
  * hole->live across the high edge) and several widths, as a load and a store. */
-#define CROSS_LOAD(label, address, type, warm)                                    \
-    do {                                                                    \
-        caught = 0;                                                         \
-        if (warm) sink += *(const volatile unsigned char *)(warm); /* warm the start page's guard entry */ \
-        if (sigsetjmp(jump, 1) == 0) {                                      \
-            type value;                                                     \
-            memcpy(&value, (const void *)(address), sizeof value);          \
-            sink += (unsigned long long)value;                              \
-            printf(label "=NOFAULT\n");                                     \
-        } else {                                                            \
-            printf(label "=FAULT\n");                                       \
-        }                                                                   \
+#define CROSS_LOAD(label, address, type, warm)                                                                         \
+    do {                                                                                                               \
+        caught = 0;                                                                                                    \
+        if (warm) sink += *(const volatile unsigned char *)(warm); /* warm the start page's guard entry */             \
+        if (sigsetjmp(jump, 1) == 0) {                                                                                 \
+            type value;                                                                                                \
+            memcpy(&value, (const void *)(address), sizeof value);                                                     \
+            sink += (unsigned long long)value;                                                                         \
+            printf(label "=NOFAULT\n");                                                                                \
+        } else {                                                                                                       \
+            printf(label "=FAULT\n");                                                                                  \
+        }                                                                                                              \
     } while (0)
 
-#define CROSS_STORE(label, address, type, warm)                                   \
-    do {                                                                    \
-        caught = 0;                                                         \
-        if (warm) sink += *(const volatile unsigned char *)(warm); /* warm the start page's guard entry */ \
-        if (sigsetjmp(jump, 1) == 0) {                                      \
-            type value = (type)0x5a5a5a5a5a5a5a5aULL;                       \
-            memcpy((void *)(address), &value, sizeof value);                \
-            printf(label "=NOFAULT\n");                                     \
-        } else {                                                            \
-            printf(label "=FAULT\n");                                       \
-        }                                                                   \
+#define CROSS_STORE(label, address, type, warm)                                                                        \
+    do {                                                                                                               \
+        caught = 0;                                                                                                    \
+        if (warm) sink += *(const volatile unsigned char *)(warm); /* warm the start page's guard entry */             \
+        if (sigsetjmp(jump, 1) == 0) {                                                                                 \
+            type value = (type)0x5a5a5a5a5a5a5a5aULL;                                                                  \
+            memcpy((void *)(address), &value, sizeof value);                                                           \
+            printf(label "=NOFAULT\n");                                                                                \
+        } else {                                                                                                       \
+            printf(label "=FAULT\n");                                                                                  \
+        }                                                                                                              \
     } while (0)
-
 
 /* The compiler is free to lower an 8-byte constant store as two 4-byte stores
  * (gcc does exactly that for the repeated-byte pattern above), so the C cases
@@ -71,20 +70,21 @@ static void cross_store8(volatile void *address, unsigned long long value) {
 #endif
 }
 
-#define ONE_INSTRUCTION(label, body)                                                    \
-    do {                                                                                \
-        caught = 0;                                                                     \
-        if (sigsetjmp(jump, 1) == 0) {                                                  \
-            body;                                                                       \
-            printf(label "=NOFAULT\n");                                                 \
-        } else {                                                                        \
-            printf(label "=FAULT\n");                                                   \
-        }                                                                               \
+#define ONE_INSTRUCTION(label, body)                                                                                   \
+    do {                                                                                                               \
+        caught = 0;                                                                                                    \
+        if (sigsetjmp(jump, 1) == 0) {                                                                                 \
+            body;                                                                                                      \
+            printf(label "=NOFAULT\n");                                                                                \
+        } else {                                                                                                       \
+            printf(label "=FAULT\n");                                                                                  \
+        }                                                                                                              \
     } while (0)
 
 static sigjmp_buf jump;
 static volatile int caught;
 static volatile unsigned long long sink;
+
 static void on_segv(int signal_number) {
     (void)signal_number;
     caught = 1;
@@ -97,10 +97,17 @@ static void on_segv(int signal_number) {
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     unsigned char *p = mmap(NULL, SPAN, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (p == MAP_FAILED) { printf("mmap failed\n"); return 1; }
-    for (unsigned i = 0; i < SPAN; ++i) p[i] = (unsigned char)(i & 0xff);
+    if (p == MAP_FAILED) {
+        printf("mmap failed\n");
+        return 1;
+    }
+    for (unsigned i = 0; i < SPAN; ++i)
+        p[i] = (unsigned char)(i & 0xff);
     /* Sub-host-page unmap of exactly one guest page. */
-    if (munmap(p + PAGE, PAGE) != 0) { printf("munmap failed\n"); return 1; }
+    if (munmap(p + PAGE, PAGE) != 0) {
+        printf("munmap failed\n");
+        return 1;
+    }
 
     struct sigaction action;
     memset(&action, 0, sizeof action);
@@ -186,7 +193,10 @@ int main(void) {
        unmapped sub-host-page: the standing grant must not outlive the unmap. */
     sink += *(const volatile unsigned char *)(p + 5 * PAGE + 8);
     p[5 * PAGE + 8] = 3;
-    if (munmap(p + 5 * PAGE, PAGE) != 0) { printf("munmap of the warmed page failed\n"); return 1; }
+    if (munmap(p + 5 * PAGE, PAGE) != 0) {
+        printf("munmap of the warmed page failed\n");
+        return 1;
+    }
     ONE_INSTRUCTION("warmed_read", sink += *(const volatile unsigned char *)(p + 5 * PAGE + 8));
     ONE_INSTRUCTION("warmed_write", p[5 * PAGE + 8] = 4);
     ONE_INSTRUCTION("warmed_load8", sink += cross_load8(p + 5 * PAGE + 8));

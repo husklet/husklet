@@ -11,7 +11,8 @@ int main(void) {
     snprintf(b, sizeof b, "/tmp/hl_cfr_b_%d", (int)getpid());
     int in = open(a, O_CREAT | O_RDWR | O_TRUNC, 0644);
     char data[500];
-    for (int i = 0; i < 500; i++) data[i] = (char)(i & 0x3f);
+    for (int i = 0; i < 500; i++)
+        data[i] = (char)(i & 0x3f);
     write(in, data, sizeof data);
     int out = open(b, O_CREAT | O_RDWR | O_TRUNC, 0644);
     off_t io = 0, oo = 0;
@@ -20,10 +21,12 @@ int main(void) {
     lseek(out, 0, SEEK_SET);
     char buf[500];
     int n = read(out, buf, sizeof buf);
-    for (int i = 0; i < n; i++) sum += (unsigned char)buf[i];
-    close(in); close(out);
-    unlink(a); unlink(b);
-    printf("copy_file_range copied=%ld in_off=%ld out_off=%ld n=%d sum=%ld\n",
-           (long)c, (long)io, (long)oo, n, sum);
+    for (int i = 0; i < n; i++)
+        sum += (unsigned char)buf[i];
+    close(in);
+    close(out);
+    unlink(a);
+    unlink(b);
+    printf("copy_file_range copied=%ld in_off=%ld out_off=%ld n=%d sum=%ld\n", (long)c, (long)io, (long)oo, n, sum);
     return 0;
 }

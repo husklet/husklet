@@ -112,10 +112,10 @@ static int pcache_load(uint64_t entry_jump) {
     }
     if (h.magic != PC_MAGIC || !hl_pcache_compatible(h.version, h.translator_abi, PC_VERSION_EFF, PC_TRANSLATOR_ABI) ||
         h.cpu_sz != sizeof(struct cpu) || h.jit_map_n != JIT_MAP_N || h.ibtc_n != IBTC_N || h.img_base != PC_IMG_BASE ||
-        h.interp_base != PC_INTERP_BASE || !hl_identity_digest_equal(&h.bin_id, &g_pc_binid) || h.entry_jump != entry_jump ||
-        h.arena_used > CACHE_SZ || (h.arena_used & 3) || h.n_reloc > PC_RELOC_CAP || h.n_mapent > JIT_MAP_N ||
-        h.n_pend > (1u << 16) || h.n_t2 > T2_MAX || h.n_txpg > TXPG_N || h.n_prov > PC_PROV_CAP ||
-        h.n_lib != 0) {
+        h.interp_base != PC_INTERP_BASE || !hl_identity_digest_equal(&h.bin_id, &g_pc_binid) ||
+        h.entry_jump != entry_jump || h.arena_used > CACHE_SZ || (h.arena_used & 3) || h.n_reloc > PC_RELOC_CAP ||
+        h.n_mapent > JIT_MAP_N || h.n_pend > (1u << 16) || h.n_t2 > T2_MAX || h.n_txpg > TXPG_N ||
+        h.n_prov > PC_PROV_CAP || h.n_lib != 0) {
         free(image);
         return 0;
     }

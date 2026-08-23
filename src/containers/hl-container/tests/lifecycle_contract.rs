@@ -4,8 +4,8 @@
 //! Public lifecycle acceptance contracts against a pinned Alpine root filesystem.
 
 use hl_container::{
-    Check, Config, Console, ContainerSpec, Containers, ExitStatus, Guest, HealthStatus, Healthcheck, Isolation,
-    Process, Sandbox, Signal, Size,
+    Check, Config, Console, ContainerSpec, ContainerState, Containers, ExitStatus, Guest, HealthStatus, Healthcheck,
+    Isolation, Process, Sandbox, Signal, Size,
 };
 use std::{future::Future, path::Path, time::Duration};
 
@@ -132,12 +132,19 @@ async fn checkpoint_restore_preserves_filesystem_and_container_control() -> Resu
     let outcome = bounded("checkpoint lifecycle", async {
         let process = Process::new("/bin/sh").args([
             "-c",
-            "echo durable > /tmp/checkpoint-marker; while true; do printf x >> /tmp/checkpoint-progress; i=0; while [ $i -lt 10000 ]; do i=$((i + 1)); done; done",
+            // Keep this CPU-bound so capture still interrupts translated guest work, but publish progress
+            // independently of interpreter throughput. The old 10,000-iteration cadence deterministically
+            // missed the five-second amd64 observation budget before checkpointing began.
+            "echo durable > /tmp/checkpoint-marker; printf S >> /tmp/checkpoint-starts; while true; do printf x >> /tmp/checkpoint-progress; i=0; while [ $i -lt 100 ]; do i=$((i + 1)); done; done",
         ]);
         fixture.containers.create(fixture.spec(name, process)).await?;
         fixture.containers.start(name).await?;
         let progress = fixture.rootfs.join("tmp/checkpoint-progress");
         wait_for_size(&progress, 2).await?;
+        require(
+            matches!(fixture.containers.inspect(name).await?.state, ContainerState::Running { .. }),
+            "checkpoint fixture was not running before capture",
+        )?;
         fixture.containers.checkpoint(name, Duration::from_secs(10)).await?;
         fixture.containers.start(name).await?;
         let resumed = std::fs::metadata(&progress)?.len();
@@ -145,6 +152,10 @@ async fn checkpoint_restore_preserves_filesystem_and_container_control() -> Resu
         require(
             std::fs::read_to_string(fixture.rootfs.join("tmp/checkpoint-marker"))? == "durable\n",
             "checkpoint restore lost the guest filesystem marker",
+        )?;
+        require(
+            std::fs::read(fixture.rootfs.join("tmp/checkpoint-starts"))? == b"S",
+            "checkpoint restore fresh-started the guest process",
         )?;
         fixture.containers.pause(name).await?;
         let paused = std::fs::metadata(&progress)?.len();

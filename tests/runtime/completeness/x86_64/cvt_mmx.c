@@ -36,15 +36,15 @@ static void set_rc(unsigned rc) {
 
 static void cvtpi2ps(const int32_t in[2], const unsigned char seed[16], unsigned char out[16]) {
     __asm__ volatile("movdqu %1, %%xmm0\n\tcvtpi2ps %2, %%xmm0\n\tmovdqu %%xmm0, %0\n\temms"
-                     : "=m"(*(char(*)[16])out)
-                     : "m"(*(const char(*)[16])seed), "m"(*(const char(*)[8])in)
+                     : "=m"(*(char (*)[16])out)
+                     : "m"(*(const char (*)[16])seed), "m"(*(const char (*)[8])in)
                      : "xmm0", "memory");
 }
 
 static void cvtpi2pd(const int32_t in[2], const unsigned char seed[16], unsigned char out[16]) {
     __asm__ volatile("movdqu %1, %%xmm0\n\tcvtpi2pd %2, %%xmm0\n\tmovdqu %%xmm0, %0\n\temms"
-                     : "=m"(*(char(*)[16])out)
-                     : "m"(*(const char(*)[16])seed), "m"(*(const char(*)[8])in)
+                     : "=m"(*(char (*)[16])out)
+                     : "m"(*(const char (*)[16])seed), "m"(*(const char (*)[8])in)
                      : "xmm0", "memory");
 }
 
@@ -52,8 +52,8 @@ static void cvtpi2pd(const int32_t in[2], const unsigned char seed[16], unsigned
 #define CVT_TO_PI(name, mnemonic)                                                                                      \
     static void name(const unsigned char in[16], int32_t out[2]) {                                                     \
         __asm__ volatile("movdqu %1, %%xmm4\n\t" mnemonic " %%xmm4, %%mm1\n\tmovq %%mm1, %0\n\temms"                   \
-                         : "=m"(*(char(*)[8])out)                                                                      \
-                         : "m"(*(const char(*)[16])in)                                                                 \
+                         : "=m"(*(char (*)[8])out)                                                                     \
+                         : "m"(*(const char (*)[16])in)                                                                \
                          : "xmm4", "mm1", "memory");                                                                   \
     }
 CVT_TO_PI(cvtps2pi, "cvtps2pi")
@@ -70,24 +70,31 @@ static void hex(const char *tag, const void *p, int n) {
 
 static const float fsrc[][4] = {
     {1.5f, -1.5f, 0, 0},
-    {2.5f, -2.5f, 0, 0},                   // ties: RC decides, and 2C never rounds
+    {2.5f, -2.5f, 0, 0}, // ties: RC decides, and 2C never rounds
     {0.5f, -0.5f, 0, 0},
     {2147483648.0f, -2147483904.0f, 0, 0}, // both out of int32 range -> indefinite
     {2147483520.0f, -2147483648.0f, 0, 0}, // largest representable in range, and exactly INT_MIN
     {1.0f / 0.0f, -1.0f / 0.0f, 0, 0},
-    {0.0f / 0.0f, 3.0f, 0, 0},             // NaN -> indefinite, with a good lane beside it
-    {1e-45f, -1e-45f, 0, 0},               // denormals
+    {0.0f / 0.0f, 3.0f, 0, 0}, // NaN -> indefinite, with a good lane beside it
+    {1e-45f, -1e-45f, 0, 0},   // denormals
 };
 
 static const double dsrc[][2] = {
-    {1.5, -1.5},   {2.5, -2.5},
-    {0.5, -0.5},   {2147483648.0, -2147483649.0},
-    {2147483647.0, -2147483648.0}, {1.0 / 0.0, -1.0 / 0.0},
-    {0.0 / 0.0, 3.0}, {4.9e-324, -4.9e-324},
+    {1.5, -1.5},
+    {2.5, -2.5},
+    {0.5, -0.5},
+    {2147483648.0, -2147483649.0},
+    {2147483647.0, -2147483648.0},
+    {1.0 / 0.0, -1.0 / 0.0},
+    {0.0 / 0.0, 3.0},
+    {4.9e-324, -4.9e-324},
 };
 
 static const int32_t isrc[][2] = {
-    {0, 1}, {-1, INT32_MIN}, {INT32_MAX, -16777217}, {16777217, -16777217}, // the last two are inexact as float
+    {0, 1},
+    {-1, INT32_MIN},
+    {INT32_MAX, -16777217},
+    {16777217, -16777217}, // the last two are inexact as float
 };
 
 int main(void) {

@@ -61,8 +61,18 @@ enum Decision {
 impl Domain {
     #[must_use]
     pub fn new(workspace: &WorkspaceConfig) -> Self {
+        Self::in_root(&paths::hl_root(), workspace)
+    }
+
+    /// The same domain, under a caller-supplied state root.
+    ///
+    /// Production always passes `~/.hl`. A test must not: `close_handover` creates the workspace's
+    /// runtime directory and its two lock files, so a test that takes the default root leaves them
+    /// in the user's own state directory, once per run, forever.
+    #[must_use]
+    pub fn in_root(root: &std::path::Path, workspace: &WorkspaceConfig) -> Self {
         Self {
-            directory: workspace.storage_dir(&paths::hl_root()).join("runtime"),
+            directory: workspace.storage_dir(root).join("runtime"),
         }
     }
 
