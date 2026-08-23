@@ -47,6 +47,18 @@ pub fn proc_fdinfo_listing_test(isa: u32, scenario: u32) -> i32 {
 
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
+pub fn checkpoint_channel_notify_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    bindings::checkpoint_channel_notify_test(isa, scenario)
+}
+
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn checkpoint_refusal_order_test(isa: u32) -> Result<(), i32> {
+    bindings::checkpoint_refusal_order_test(isa)
+}
+
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
 pub fn process_identity_token_test(scenario: u32) -> Result<(), i32> {
     bindings::process_identity_token_test(scenario)
 }
