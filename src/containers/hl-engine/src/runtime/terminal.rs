@@ -439,7 +439,7 @@ impl MemberTerminal {
 
 #[cfg(test)]
 mod tests {
-    use super::{InputDiscipline, NativeOutputBridge, NativeTerminalBridge};
+    use super::{InputDiscipline, NativeOutputBridge, NativeTerminalBridge, bridge::drain_ready_batch};
     use crate::composition::{StandardStream, StandardStreamPort, Terminal, TerminalPort};
     use std::collections::VecDeque;
     use std::io::{Read, Write};
@@ -697,6 +697,102 @@ mod tests {
         drop(bridge);
         assert!(port.state.lock().unwrap().2);
         assert!(terminal.resize(42, 110).is_err());
+    }
+
+    #[test]
+    fn ready_terminal_output_is_drained_in_order_without_waiting_for_another_write() {
+        let mut batch = [0_u8; 16 * 1024];
+        batch[..3].copy_from_slice(b"abc");
+        let mut reads = 0;
+        let count = drain_ready_batch(&mut batch, 3, |tail| {
+            reads += 1;
+            match reads {
+                1 => {
+                    tail[..2].copy_from_slice(b"de");
+                    Ok(2)
+                }
+                2 => Err(std::io::ErrorKind::Interrupted.into()),
+                3 => {
+                    tail[..3].copy_from_slice(b"fgh");
+                    Ok(3)
+                }
+                4 => Err(std::io::ErrorKind::WouldBlock.into()),
+                _ => panic!("the ready-byte drain spun after EAGAIN"),
+            }
+        });
+        assert_eq!(reads, 4);
+        assert_eq!(&batch[..count], b"abcdefgh");
+    }
+
+    #[test]
+    fn ready_terminal_output_yields_after_eight_tiny_reads() {
+        let mut batch = [0_u8; 16 * 1024];
+        let mut reads = 0_u8;
+        let count = drain_ready_batch(&mut batch, 0, |tail| {
+            reads = reads.checked_add(1).expect("bounded follow-up reads");
+            tail[0] = b'a' + reads - 1;
+            Ok(1)
+        });
+        assert_eq!(reads, 8, "the ready-byte drain attempted a ninth read before yielding");
+        assert_eq!(&batch[..count], b"abcdefgh");
+    }
+
+    #[test]
+    fn ready_terminal_output_yields_after_eight_interruptions() {
+        let mut batch = [0_u8; 16 * 1024];
+        batch[..3].copy_from_slice(b"abc");
+        let mut reads = 0;
+        let count = drain_ready_batch(&mut batch, 3, |_| {
+            reads += 1;
+            Err(std::io::ErrorKind::Interrupted.into())
+        });
+        assert_eq!(reads, 8, "signal interruption kept the output pump from yielding");
+        assert_eq!(&batch[..count], b"abc");
+    }
+
+    #[test]
+    fn terminal_output_has_no_per_burst_timer_floor() {
+        const BURSTS: usize = 64;
+        let port = Arc::new(Port::default());
+        let terminal = Terminal::new(port.clone(), 24, 80).unwrap();
+        let bridge = NativeTerminalBridge::attach(terminal, InputDiscipline::Linux).unwrap();
+        let descriptor = bridge.standard_fds()[1];
+        // SAFETY: dup returns a fresh descriptor and the result is checked.
+        let copy = unsafe { libc::dup(descriptor) };
+        assert!(copy >= 0);
+        // SAFETY: successful dup transferred a uniquely owned descriptor.
+        let mut writer = unsafe { std::fs::File::from_raw_fd(copy) };
+        let expected = (0..BURSTS)
+            .map(|index| b'a' + u8::try_from(index % 26).unwrap())
+            .collect::<Vec<_>>();
+        let started = Instant::now();
+        for (index, byte) in expected.iter().copied().enumerate() {
+            writer.write_all(&[byte]).unwrap();
+            let mut state = port.state.lock().unwrap();
+            while state.1.len() <= index {
+                state = port.changed.wait(state).unwrap();
+            }
+        }
+        let elapsed = started.elapsed();
+        assert_eq!(port.state.lock().unwrap().1, expected);
+        let hash = port
+            .state
+            .lock()
+            .unwrap()
+            .1
+            .iter()
+            .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+                (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)
+            });
+        println!(
+            "terminal-burst engine n={BURSTS} elapsed_ns={} fnv64={hash:016x}",
+            elapsed.as_nanos()
+        );
+        assert!(
+            elapsed < Duration::from_millis(400),
+            "{BURSTS} acknowledged bursts took {elapsed:?}; the output pump has a per-burst timer floor"
+        );
+        drop(bridge);
     }
 
     /// Reads exactly `expected` bytes from `slave`, or panics with what it did get.
