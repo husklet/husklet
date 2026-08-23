@@ -3,8 +3,29 @@
 #include "decoder.h"
 
 #include <string.h>
+#if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 static hl_x86_instruction_fetch_fn g_instruction_fetch;
+
+enum { DECODE_MEMO_SLOTS = 1024, X86_MAX_INSN = 15 };
+
+typedef struct {
+    uint64_t pc;
+    hl_x86_insn instruction;
+    uint8_t bytes[X86_MAX_INSN];
+    uint8_t length;
+    uint8_t valid;
+} decode_memo_entry;
+
+static _Thread_local decode_memo_entry g_decode_memo[DECODE_MEMO_SLOTS];
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static _Thread_local uint64_t g_decode_memo_decodes;
+static _Thread_local uint64_t g_decode_memo_hits;
+#endif
 
 void hl_x86_decode_set_instruction_fetch(hl_x86_instruction_fetch_fn fetch) {
     g_instruction_fetch = fetch;
@@ -303,7 +324,17 @@ static int decode_bytes(const uint8_t bytes[15], hl_x86_insn *I) {
 }
 
 int hl_x86_decode(uint64_t pc, hl_x86_insn *I) {
-    uint8_t bytes[15] = {0};
+    uint8_t bytes[X86_MAX_INSN] = {0};
+    decode_memo_entry *memo = &g_decode_memo[(pc ^ (pc >> 10)) & (DECODE_MEMO_SLOTS - 1)];
+    if (memo->valid && memo->pc == pc && instruction_fetch(pc, bytes, memo->length) == 0 &&
+        memcmp(bytes, memo->bytes, memo->length) == 0) {
+        *I = memo->instruction;
+#if defined(HL_NATIVE_TEST_HOOKS)
+        ++g_decode_memo_hits;
+#endif
+        return memo->length;
+    }
+
     size_t available = 4096u - (size_t)(pc & UINT64_C(4095));
     if (available > sizeof bytes) available = sizeof bytes;
     if (instruction_fetch(pc, bytes, available) != 0) {
@@ -311,17 +342,124 @@ int hl_x86_decode(uint64_t pc, hl_x86_insn *I) {
         return -1;
     }
     int length = decode_bytes(bytes, I);
-    if (length <= (int)available) return length;
-
-    /*
-     * Only touch the following guest page when decoding proves that the
-     * instruction actually reaches it.  Eagerly fetching all fifteen bytes
-     * would incorrectly fault a short instruction at the end of an executable
-     * VMA merely because the following page is inaccessible.
-     */
-    if (instruction_fetch(pc, bytes, sizeof bytes) != 0) {
-        memset(I, 0, sizeof *I);
-        return -1;
+    if (length > (int)available) {
+        /*
+         * Only touch the following guest page when decoding proves that the
+         * instruction actually reaches it.  Eagerly fetching all fifteen bytes
+         * would incorrectly fault a short instruction at the end of an executable
+         * VMA merely because the following page is inaccessible.
+         */
+        if (instruction_fetch(pc, bytes, sizeof bytes) != 0) {
+            memset(I, 0, sizeof *I);
+            return -1;
+        }
+        length = decode_bytes(bytes, I);
     }
-    return decode_bytes(bytes, I);
+
+    if (length > 0 && length <= X86_MAX_INSN) {
+        memo->pc = pc;
+        memo->instruction = *I;
+        memcpy(memo->bytes, bytes, (size_t)length);
+        memo->length = (uint8_t)length;
+        memo->valid = 1;
+#if defined(HL_NATIVE_TEST_HOOKS)
+        ++g_decode_memo_decodes;
+#endif
+    }
+    return length;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+typedef struct {
+    uint64_t pc;
+    uint8_t bytes[X86_MAX_INSN];
+    int first_page_executable;
+    int second_page_executable;
+} decode_memo_fixture;
+
+static _Thread_local decode_memo_fixture *g_decode_memo_fixture;
+
+static int decode_memo_fetch(uint64_t guest, void *destination, size_t length) {
+    decode_memo_fixture *fixture = g_decode_memo_fixture;
+    if (fixture == NULL || guest != fixture->pc || length > sizeof fixture->bytes || !fixture->first_page_executable)
+        return -1;
+    size_t first_page = 4096u - (size_t)(guest & UINT64_C(4095));
+    if (length > first_page && !fixture->second_page_executable) return -1;
+    memcpy(destination, fixture->bytes, length);
+    return 0;
+}
+
+/* Invoked through the existing target-local scenario/count hook. */
+int hl_x86_decode_memo_test(uint32_t scenario, uint64_t *decodes) {
+    decode_memo_fixture fixture = {
+        .pc = scenario == 7 ? UINT64_C(0x50000fff) : UINT64_C(0x50000100),
+        .bytes = {0x90},
+        .first_page_executable = 1,
+        .second_page_executable = 1,
+    };
+    size_t slot = (fixture.pc ^ (fixture.pc >> 10)) & (DECODE_MEMO_SLOTS - 1);
+    decode_memo_entry saved = g_decode_memo[slot];
+    hl_x86_instruction_fetch_fn saved_fetch = g_instruction_fetch;
+    memset(&g_decode_memo[slot], 0, sizeof g_decode_memo[slot]);
+    g_decode_memo_decodes = 0;
+    g_decode_memo_hits = 0;
+    g_decode_memo_fixture = &fixture;
+    g_instruction_fetch = decode_memo_fetch;
+    hl_x86_insn first;
+    hl_x86_insn second;
+    int result = 0;
+
+    if (scenario == 7) {
+        fixture.bytes[0] = 0x66;
+        fixture.bytes[1] = 0x90;
+    }
+    if (hl_x86_decode(fixture.pc, &first) <= 0) result = -20;
+    switch (scenario) {
+    case 5: /* Stable PC: one decode followed by permission-and-byte-checked hits. */
+        for (int i = 0; result == 0 && i < 31; ++i)
+            if (hl_x86_decode(fixture.pc, &second) != first.len || second.op != first.op) result = -21;
+        if (g_decode_memo_decodes != 1 || g_decode_memo_hits != 31) result = -22;
+        break;
+    case 6:  /* In-place instruction rewrite invalidates by byte comparison. */
+    case 9:  /* MAP_FIXED/unmap-remap replacement at the same virtual PC. */
+    case 10: /* A guest exec image replacing the same virtual PC cannot reuse stale IR. */
+        fixture.bytes[0] = 0xc3;
+        if (hl_x86_decode(fixture.pc, &second) != 1 || second.op != 0xc3 || first.op == second.op) result = -23;
+        if (g_decode_memo_decodes != 2 || g_decode_memo_hits != 0) result = -24;
+        break;
+#if !defined(_WIN32)
+    case 11: { /* A fork-inherited memo cannot authorize stale bytes in the child. */
+        pid_t child = fork();
+        if (child < 0) {
+            result = -29;
+            break;
+        }
+        if (child == 0) {
+            fixture.bytes[0] = 0xc3;
+            int child_ok = hl_x86_decode(fixture.pc, &second) == 1 && second.op == 0xc3 && first.op != second.op;
+            _exit(child_ok ? 0 : 1);
+        }
+        int status = 0;
+        if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) result = -30;
+        break;
+    }
+#endif
+    case 7: /* A crossing instruction revalidates both pages on every hit. */
+        if (hl_x86_decode(fixture.pc, &second) != 2 || g_decode_memo_hits != 1) result = -25;
+        fixture.second_page_executable = 0;
+        if (hl_x86_decode(fixture.pc, &second) != -1) result = -26;
+        break;
+    case 8: /* mprotect(PROT_NONE) rejects a warm entry before it can be used. */
+        fixture.first_page_executable = 0;
+        if (hl_x86_decode(fixture.pc, &second) != -1) result = -27;
+        break;
+    default: result = -28;
+    }
+
+    *decodes = g_decode_memo_decodes;
+    g_instruction_fetch = saved_fetch;
+    g_decode_memo_fixture = NULL;
+    g_decode_memo[slot] = saved;
+    return result;
+}
+#endif

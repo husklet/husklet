@@ -63,6 +63,20 @@ struct hl_c_backend {
     hl_engine_exit result;
 };
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+HL_API uint32_t hl_c_backend_engine_finish_test_arm(hl_c_backend *backend) {
+    return backend == NULL ? 0 : hl_engine_finish_test_arm(backend->engine);
+}
+
+HL_API uint32_t hl_c_backend_engine_finish_test_phase(hl_c_backend *backend) {
+    return backend == NULL ? 0 : hl_engine_finish_test_phase(backend->engine);
+}
+
+HL_API void hl_c_backend_engine_finish_test_release(hl_c_backend *backend) {
+    if (backend != NULL) hl_engine_finish_test_release(backend->engine);
+}
+#endif
+
 static void hl_c_backend_result_lock(hl_c_backend *backend) {
     while (atomic_exchange_explicit(&backend->result_lock, true, memory_order_acquire)) {}
 }

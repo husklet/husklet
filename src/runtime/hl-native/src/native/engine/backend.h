@@ -53,4 +53,10 @@ int hl_engine_checkpoint_descriptors_register(int first, int second);
 /* Re-arms the engine-owner lifetime capability after fork removed every peer thread. */
 int hl_engine_checkpoint_lifetime_after_fork(void);
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+uint32_t hl_engine_finish_test_arm(hl_engine *engine);
+uint32_t hl_engine_finish_test_phase(hl_engine *engine);
+void hl_engine_finish_test_release(hl_engine *engine);
+#endif
+
 #endif
