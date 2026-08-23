@@ -85,7 +85,6 @@ int hl_ckpt_channel_notify(hl_ckpt_request *request, const char *name);
 int hl_ckpt_channel_call_receive_descriptor(hl_ckpt_request *request, const void *payload, hl_ckpt_reply *reply,
                                             int *out_descriptor);
 
-
 /* The checkpoint TRIGGER is a 4-byte generation counter shared by every engine process and bumped by the
  * embedder to request a capture. ckpt_poll reads it at every safepoint, so it has to be a plain memory load;
  * it cannot be a message. It is an anonymous shared mapping whose descriptor activation hands to the engine
