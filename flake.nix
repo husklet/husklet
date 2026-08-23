@@ -615,17 +615,27 @@
           buildPhase = ''
             runHook preBuild
             export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
-            for native_test in \
-              bound_vector_io \
-              errno_namespace \
-              identity_registry \
-              x86_store_preflight \
-              restore_collision
-            do
-              timeout --kill-after=30s 10m \
-                cargo test -p hl-native --features native-test-hooks --test "$native_test" \
-                --locked --offline -- --test-threads=1
-            done
+            set -o pipefail
+            {
+              for native_test in \
+                bound_vector_io \
+                checkpoint_rendezvous \
+                errno_namespace \
+                identity_registry \
+                x86_store_preflight \
+                restore_collision
+              do
+                timeout --kill-after=30s 10m \
+                  cargo test -p hl-native --features native-test-hooks --test "$native_test" \
+                  --locked --offline -- --test-threads=1
+              done
+            } 2>&1 | tee native-hook-tests.log
+            verdict='test outstanding_participants_are_classified_by_liveness_and_registration ... ok'
+            count=$(grep -Fxc "$verdict" native-hook-tests.log || true)
+            if [ "$count" -ne 1 ]; then
+              echo "native hook checkpoint verdict appeared $count times, expected exactly once: $verdict" >&2
+              exit 1
+            fi
             runHook postBuild
           '';
           installPhase = ''

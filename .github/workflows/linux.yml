@@ -350,6 +350,23 @@ jobs:
           nix --extra-experimental-features 'nix-command flakes' develop . --command
           cargo test -p hl-engine --all-targets --locked --offline
 
+      # `engine` is the worker application crate, not `hl-engine`. Its Linux direct-worker
+      # regressions are integration tests, so neither the composition-root command above nor
+      # `cargo test --workspace --lib --bins` below executes them. Require one guest-execution
+      # verdict by name: a green target containing only the non-Linux SKIP arm proves nothing.
+      - name: Test the engine worker application
+        run: |
+          set -o pipefail
+          .github/scripts/cargo-test-named.sh "engine worker application" \
+            nix --extra-experimental-features 'nix-command flakes' develop . --command \
+            cargo test -p engine --tests --locked --offline --no-fail-fast 2>&1 | \
+            tee "$RUNNER_TEMP/engine-worker.log"
+          verdict=a_callers_controlling_terminal_survives_redirected_output
+          grep -qE "^test linux_host::$verdict \.\.\. ok$" "$RUNNER_TEMP/engine-worker.log" || {
+            echo "::error title=Engine worker verdict missing::$verdict did not report ok on Linux; this target may have compiled to no real tests."
+            exit 1
+          }
+
       # `--all-targets` reaches hl-native's integration tests, which no CI job on any
       # host has ever run. That is the exact gap that let a tree which did not compile
       # on x86_64 at all reach main: the two reserved-register hooks called emitters
