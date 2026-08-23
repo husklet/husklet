@@ -474,6 +474,30 @@
                   authority_test="''${authority_tests[0]}"
                 }
 
+                reject_sanitizer_reports() {
+                  local label="$1"
+                  local prefix="$2"
+                  local found=0
+                  for report in "$TMPDIR/$prefix" "$TMPDIR/$prefix".*; do
+                    [ -f "$report" ] || continue
+                    if [ "$found" -eq 0 ]; then
+                      printf '%s reported an error in the clean lifecycle tests\n' "$label" >&2
+                    fi
+                    cat "$report" >&2
+                    found=1
+                  done
+                  [ "$found" -eq 0 ]
+                }
+
+                # Prove the shell running this derivation can discover a report. The previous `compgen`
+                # probe was unavailable here and its failure made the surrounding `if` silently pass.
+                printf 'sanitizer-report-probe\n' > "$TMPDIR/sanitizer-probe.known"
+                if reject_sanitizer_reports Probe sanitizer-probe >/dev/null 2>&1; then
+                  printf 'sanitizer report probe was not discovered\n' >&2
+                  exit 1
+                fi
+                rm "$TMPDIR/sanitizer-probe.known"
+
                 # AddressSanitizer covers native lifetime violations that leak
                 # accounting cannot observe. Run the bounded ownership tests,
                 # then prove that the instrumentation rejects a C heap UAF.
@@ -482,9 +506,7 @@
                 asan_runtime="$(${pkgs.stdenv.cc}/bin/cc -print-file-name=libasan.so)"
                 ASAN_OPTIONS="detect_leaks=0:halt_on_error=1:exitcode=97:log_path=$TMPDIR/asan-clean" \
                   LD_PRELOAD="$asan_runtime" "$authority_test"
-                if compgen -G "$TMPDIR/asan-clean*" >/dev/null; then
-                  printf 'AddressSanitizer reported an error in the clean lifecycle tests\n' >&2
-                  cat "$TMPDIR"/asan-clean* >&2
+                if ! reject_sanitizer_reports AddressSanitizer asan-clean; then
                   exit 1
                 fi
 
@@ -507,9 +529,7 @@
                 export HL_C_SANITIZER=leak
                 export LSAN_OPTIONS="suppressions=$PWD/tests/lsan.supp:print_suppressions=1:exitcode=97:log_path=$TMPDIR/lsan-clean"
                 cargo test -p hl-native --test executable_authority --locked --offline
-                if compgen -G "$TMPDIR/lsan-clean*" >/dev/null; then
-                  printf 'LeakSanitizer reported an error in the clean lifecycle tests\n' >&2
-                  cat "$TMPDIR"/lsan-clean* >&2
+                if ! reject_sanitizer_reports LeakSanitizer lsan-clean; then
                   exit 1
                 fi
 
