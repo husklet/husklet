@@ -459,26 +459,26 @@
               cargo test -p husklet --features runtime --lib --locked --offline --no-fail-fast
               cargo test --workspace --doc --locked --offline
               ${lib.optionalString pkgs.stdenv.isLinux ''
+                build_authority_test() {
+                  local receipt="$1"
+                  cargo test -p hl-native --test executable_authority --locked --offline --no-run \
+                    --message-format=json | tee "$receipt"
+                  mapfile -t authority_tests < <(
+                    sed -n 's/.*"executable":"\([^"]*\/executable_authority-[^"]*\)".*/\1/p' "$receipt"
+                  )
+                  if [ "''${#authority_tests[@]}" -ne 1 ] || [ ! -x "''${authority_tests[0]}" ]; then
+                    printf 'expected one executable-authority artifact from this build, found %s\n' \
+                      "''${#authority_tests[@]}" >&2
+                    exit 1
+                  fi
+                  authority_test="''${authority_tests[0]}"
+                }
+
                 # AddressSanitizer covers native lifetime violations that leak
                 # accounting cannot observe. Run the bounded ownership tests,
                 # then prove that the instrumentation rejects a C heap UAF.
                 export HL_C_SANITIZER=address
-                cargo test -p hl-native --test executable_authority --locked --offline --no-run
-                authority_tests=(target/debug/deps/executable_authority-*)
-                authority_test=""
-                for candidate in "''${authority_tests[@]}"; do
-                  if [ -x "$candidate" ] && [ "''${candidate##*.}" != d ]; then
-                    if [ -n "$authority_test" ]; then
-                      printf 'multiple executable-authority test binaries found\n' >&2
-                      exit 1
-                    fi
-                    authority_test="$candidate"
-                  fi
-                done
-                if [ -z "$authority_test" ]; then
-                  printf 'executable-authority test binary is absent\n' >&2
-                  exit 1
-                fi
+                build_authority_test "$TMPDIR/asan-authority-build.json"
                 asan_runtime="$(${pkgs.stdenv.cc}/bin/cc -print-file-name=libasan.so)"
                 ASAN_OPTIONS="detect_leaks=0:halt_on_error=1:exitcode=97:log_path=$TMPDIR/asan-clean" \
                   LD_PRELOAD="$asan_runtime" "$authority_test"
@@ -532,22 +532,7 @@
                 # bounded authority lifecycle tests do not execute generated guest
                 # code, which Valgrind cannot reliably inspect.
                 export HL_C_SANITIZER=memcheck
-                cargo test -p hl-native --test executable_authority --locked --offline --no-run
-                authority_tests=(target/debug/deps/executable_authority-*)
-                authority_test=""
-                for candidate in "''${authority_tests[@]}"; do
-                  if [ -x "$candidate" ] && [ "''${candidate##*.}" != d ]; then
-                    if [ -n "$authority_test" ]; then
-                      printf 'multiple executable-authority test binaries found\n' >&2
-                      exit 1
-                    fi
-                    authority_test="$candidate"
-                  fi
-                done
-                if [ -z "$authority_test" ]; then
-                  printf 'executable-authority test binary is absent\n' >&2
-                  exit 1
-                fi
+                build_authority_test "$TMPDIR/memcheck-authority-build.json"
                 valgrind \
                   --leak-check=full \
                   --show-leak-kinds=definite,indirect \
