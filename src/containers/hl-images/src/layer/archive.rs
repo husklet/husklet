@@ -26,6 +26,25 @@ const fn reuse_parent_validation() -> bool {
     true
 }
 
+fn prepare_entry_parent(
+    path: &Path,
+    root: &FsPath,
+    parent: &FsPath,
+    reusable: bool,
+    cached: &mut Option<(PathBuf, super::path::Parents)>,
+) -> Result<Option<super::path::Parents>> {
+    if reusable && cached.as_ref().is_some_and(|(path, _)| path == parent) {
+        return Ok(None);
+    }
+    *cached = None;
+    let parents = path.prepare(root)?;
+    if reusable {
+        *cached = Some((parent.to_owned(), parents));
+        return Ok(None);
+    }
+    Ok(Some(parents))
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct DiffSize(u64);
 
@@ -246,16 +265,8 @@ impl<R: Read> Layer<R> {
             let parent = physical_path.as_path().parent().unwrap_or(FsPath::new(""));
             let can_reuse_parent =
                 reuse_parent_validation() && matches!(kind, tar::EntryType::Regular | tar::EntryType::GNUSparse);
-            let mut entry_parents = None;
-            if !can_reuse_parent || prepared_parent.as_ref().is_none_or(|(cached, _)| cached != parent) {
-                prepared_parent = None;
-                let parents = physical_path.prepare(&root)?;
-                if can_reuse_parent {
-                    prepared_parent = Some((parent.to_owned(), parents));
-                } else {
-                    entry_parents = Some(parents);
-                }
-            }
+            let entry_parents =
+                prepare_entry_parent(&physical_path, &root, parent, can_reuse_parent, &mut prepared_parent)?;
             let ownership = Ownership::from_header(entry.header(), &path)?;
             if path.is_device()
                 && matches!(
