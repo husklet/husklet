@@ -802,9 +802,18 @@ HL_API int HL_TARGET_LOCAL(exec_page_cache_test)(uint32_t scenario, uint64_t *sc
         gnx_add(guest_page + 128, guest_page + 256);
         if (!guest_exec_direct_valid(page, 15) || !guest_exec_direct_valid(page + 16, 15)) result = -9;
         break;
+#if defined(HL_X86_DECODE_MEMO_TEST)
+    case 5:
+    case 6:
+    case 7:
+    case 8:
+    case 9:
+    case 10:
+    case 11: result = hl_x86_decode_memo_test(scenario, scans); break;
+#endif
     default: result = -10;
     }
-    *scans = g_gnx_scan_count;
+    if (scenario <= 4) *scans = g_gnx_scan_count;
     gnx_writer_lock();
     atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_acq_rel);
     memcpy(g_gnx, saved, sizeof g_gnx);
