@@ -568,7 +568,7 @@ pub(crate) use surface::*;
 
 #[cfg(test)]
 mod shortcut_tests {
-    use super::{Shortcut, editable_captures};
+    use super::{editable_captures, Shortcut};
     use gtk::gdk;
 
     #[cfg(target_os = "macos")]
