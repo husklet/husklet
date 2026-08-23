@@ -3,8 +3,11 @@ use std::{fs, path::Path};
 #[cfg(target_os = "linux")]
 use std::process::Command;
 
+static NATIVE_FIXTURE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn actual_restore_claim_helper_fails_closed_on_both_isas() {
+    let _fixture = NATIVE_FIXTURE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     for isa in [1, 2] {
         for scenario in [0, 1, 2] {
             hl_native::checkpoint_restore_claim_test(isa, scenario)
@@ -15,6 +18,7 @@ fn actual_restore_claim_helper_fails_closed_on_both_isas() {
 
 #[test]
 fn descriptor_reset_scans_only_the_inherited_population_and_preserves_desired_pipes() {
+    let _fixture = NATIVE_FIXTURE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     for isa in [1, 2] {
         assert_eq!(hl_native::checkpoint_restore_fd_reset_test(isa, 0).unwrap(), 0);
         let inspected = hl_native::checkpoint_restore_fd_reset_test(isa, 1).unwrap();
@@ -34,6 +38,7 @@ fn descriptor_reset_scans_only_the_inherited_population_and_preserves_desired_pi
 /// Apple Silicon addresses; on a 4 KiB host the two regions never share a page at all.
 #[test]
 fn a_rounded_claim_shares_a_host_page_with_its_neighbour_on_both_isas() {
+    let _fixture = NATIVE_FIXTURE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     for isa in [1, 2] {
         for scenario in [0, 1, 2, 3] {
             hl_native::checkpoint_restore_slice_test(isa, scenario)
@@ -44,6 +49,7 @@ fn a_rounded_claim_shares_a_host_page_with_its_neighbour_on_both_isas() {
 
 #[test]
 fn actual_restore_rollback_unwinds_every_published_class_on_both_isas() {
+    let _fixture = NATIVE_FIXTURE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     for isa in [1, 2] {
         hl_native::checkpoint_restore_rollback_test(isa)
             .unwrap_or_else(|status| panic!("ISA {isa} restore rollback failed at {status}"));
@@ -52,6 +58,7 @@ fn actual_restore_rollback_unwinds_every_published_class_on_both_isas() {
 
 #[test]
 fn restore_collision_fails_closed_on_every_host() {
+    let _fixture = NATIVE_FIXTURE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let native = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/native");
     let restore = fs::read_to_string(native.join("linux_abi/checkpoint/memory_restore.c"))
         .expect("read direct memory restore implementation");
@@ -80,6 +87,7 @@ fn restore_collision_fails_closed_on_every_host() {
 #[cfg(target_os = "linux")]
 #[test]
 fn fixed_noreplace_collision_preserves_sentinel_bytes() {
+    let _fixture = NATIVE_FIXTURE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let scratch = tempfile::tempdir().expect("create restore collision probe directory");
     let source = scratch.path().join("restore_collision.c");
     let executable = scratch.path().join("restore_collision");
@@ -127,6 +135,7 @@ int main(void) {
 /// member whose own image named the same address failed its exact claim with `EEXIST`.
 #[test]
 fn a_registry_teardown_releases_the_host_pages_a_guest_range_occupies_on_both_isas() {
+    let _fixture = NATIVE_FIXTURE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     for isa in [1, 2] {
         for scenario in [0, 1] {
             claim_the_released_pages(isa, scenario);
