@@ -1177,6 +1177,9 @@ static void syscall_route(struct cpu *c) {
     // a return of 1 means it was fully handled locally (arch_prctl/TLS) -- it must stay here.
     if (G_NORMALIZE(c)) return;
     uint64_t nr = G_NR(c);
+    // SA_NOCLDWAIT's handler leaves terminated children pinned as zombies. Publish their sentry releases
+    // and collect them before the guest can observe the next syscall (especially wait, kill, or clone).
+    sentry_reap_drain();
 
     /* service_local rebases pointer arguments from a biased ET_EXEC's Linux link range to the host mapping.
      * A FORWARDED call is marshaled before service_local runs, so apply the same table here -- the same

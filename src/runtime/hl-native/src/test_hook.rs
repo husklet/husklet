@@ -28,6 +28,23 @@ pub fn private_fork_lock_test(scenario: u32) -> Result<(), i32> {
     bindings::private_fork_lock_test(scenario)
 }
 
+/// Drives the `/proc/<pid>/fdinfo` listing scenarios in the C engine, once per guest ISA.
+///
+/// `isa` is 1 for aarch64 and 2 for x86-64: the producer is compiled once per target TU, and the two
+/// are maintained by the same source but not by the same build, which is the asymmetry
+/// `reserved_register` exists to catch. Returns 0 for a pass, a positive code naming the violated
+/// invariant, and a negative errno when the scenario could not be set up.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+#[must_use]
+pub fn proc_fdinfo_listing_test(isa: u32, scenario: u32) -> i32 {
+    // The scenarios mutate process-global descriptor state -- the eventfd peer table and the
+    // engine-private ledger -- so two of them running at once would read each other's fixtures.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    bindings::proc_fdinfo_listing_test(isa, scenario)
+}
+
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 pub fn checkpoint_channel_notify_test(isa: u32, scenario: u32) -> Result<(), i32> {
