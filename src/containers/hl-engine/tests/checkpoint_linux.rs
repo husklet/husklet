@@ -375,6 +375,11 @@ fn a_registered_member_the_enumeration_never_saw_still_refuses_the_capture_on_bo
             .capture_checkpoint_until(checkpoint_deadline())
             .expect_err("a capture missing a member the enumeration never saw was reported as successful");
         let _ = capture.wait();
+        assert_eq!(
+            refusal,
+            EngineError::CaptureRefused,
+            "{isa:?} did not reach the sealed-member mismatch the fixture exists to exercise"
+        );
         let stored = image.0.lock().unwrap();
         assert!(
             !stored.contains_key("MANIFEST"),

@@ -211,6 +211,13 @@ pub fn checkpoint_restore_claim_test(isa: u32, scenario: u32) -> Result<(), i32>
     bindings::checkpoint_restore_claim_test(isa, scenario)
 }
 
+/// Exercise population-bounded cleanup of inherited eventfd and pipe restore state.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn checkpoint_restore_fd_reset_test(isa: u32, scenario: u32) -> Result<u64, i32> {
+    bindings::checkpoint_restore_fd_reset_test(isa, scenario)
+}
+
 /// Exercise the restore-side host-page slicing: scenario 0 is the observed Apple Silicon collision,
 /// 1 and 2 are the file-backed refusals, 3 is the untouched single-claim case.
 #[cfg(feature = "native-test-hooks")]

@@ -520,6 +520,14 @@ static void load_elf(const char *path, struct loaded *out, const struct main_pla
                      const hl_linux_image *pinned);
 static int elf_interp(const char *path, char *out, size_t n, const hl_linux_image *pinned);
 static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t at_base);
+// The same-ISA x86-64 transliterator's one line of the [prof] exit report. It belongs to the x86-64
+// guest target (translator/guest/x86_64/translit.inc); the shared exit path calls the hook on every
+// target, so an aarch64 guest answers "absent" here rather than the call site growing an #ifdef -- the
+// same convention engine/target/x86_64.c uses for translit_enabled on an ARM64 host.
+static int translit_report(char *out, size_t size) {
+    return snprintf(out, size, "[prof] translit: absent, aarch64 guest\n");
+}
+
 // the syscall layer (service())
 #include "../../linux_abi/syscall/dispatch.c"
 // untrusted-guest isolation: SPSC ring + sentry split (g_untrusted; OFF by default)

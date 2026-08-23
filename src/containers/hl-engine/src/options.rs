@@ -115,6 +115,11 @@ const DEFINITIONS: &[Definition] = &[
     launch!("HL_PUBLISH", "guest-to-host port publication rules", Records),
     launch!("HL_PUBLISH_DAEMON", "host daemon publishes guest ports", Flag),
     launch!("HL_RESTORE", "restore the image held by the store channel", Flag),
+    launch!(
+        "HL_TRANSLIT",
+        "select the same-ISA transliterating backend for an x86-64 guest",
+        Flag
+    ),
     internal!(
         "HL_CKPT_TEST_FAIL_AFTER_FORK",
         "test-only restore failure after rebuilding descendants",

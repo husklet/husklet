@@ -46,7 +46,7 @@ static void eventfd_drain_readiness(int rfd, int signalled) {
 
 static int eventfd_peer_owner(int fd) {
     if (fd < 0) return -1;
-    for (int i = 0; i < g_eventfd_peer_bound; i++)
+    for (int i = 0; i < g_virtual_fd_bound; i++)
         if (g_eventfd_peer[i] == fd + 1) return i;
     return -1;
 }
@@ -130,7 +130,7 @@ static void fd_carry_virt(int newfd, int oldfd, struct fdvis_reservation *reserv
     g_devtty[newfd] = g_devtty[oldfd];
     mq_fd_duplicate(newfd, oldfd);
     if (g_pipe_identity[oldfd] != 0) {
-        g_pipe_identity[newfd] = g_pipe_identity[oldfd];
+        pipe_identity_bind(newfd, g_pipe_identity[oldfd]);
         proc_fdvis_reservation_publish(reservation, newfd, HL_HOST_FD_PIPE, 1, g_pipe_identity[newfd]);
     }
     // eventfd: share the peer write end + counter slot; bump the slot refcount so closing either alias does
@@ -395,7 +395,7 @@ static void engine_fd_vacate_range(unsigned first, unsigned last) {
     for (int i = 0; i < HL_SFD_MAX; i++) // signalfd write ends (engine-private)
         if (g_sfd[i].refs > 0 && g_sfd[i].wr >= 0 && (unsigned)g_sfd[i].wr >= first && (unsigned)g_sfd[i].wr <= last)
             engine_fd_vacate(g_sfd[i].wr);
-    for (int i = 0; i < g_eventfd_peer_bound; i++) {
+    for (int i = 0; i < g_virtual_fd_bound; i++) {
         int p = g_eventfd_peer[i] - 1;
         if (p >= 0 && (unsigned)p >= first && (unsigned)p <= last) eventfd_peer_vacate(p);
     }

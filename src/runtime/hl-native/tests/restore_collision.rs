@@ -13,6 +13,22 @@ fn actual_restore_claim_helper_fails_closed_on_both_isas() {
     }
 }
 
+#[test]
+fn descriptor_reset_scans_only_the_inherited_population_and_preserves_desired_pipes() {
+    for isa in [1, 2] {
+        assert_eq!(hl_native::checkpoint_restore_fd_reset_test(isa, 0).unwrap(), 0);
+        let inspected = hl_native::checkpoint_restore_fd_reset_test(isa, 1).unwrap();
+        assert!(
+            inspected > 0,
+            "ISA {isa} did not inspect its populated descriptor prefix"
+        );
+        assert!(
+            inspected < 2 * 65_536,
+            "ISA {isa} scanned the whole descriptor table ({inspected} slots)"
+        );
+    }
+}
+
 /// A rounded host claim must step over the host page a neighbouring guest region of the same image
 /// already claimed, instead of colliding with this restore's own mapping. Reproduces the real
 /// Apple Silicon addresses; on a 4 KiB host the two regions never share a page at all.

@@ -304,9 +304,10 @@ impl Fixture {
                 .ok()
                 .and_then(|bytes| terminal_container_result(&bytes))
             {
-                let journal = std::fs::read(&self.container_journal)
-                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-                    .unwrap_or_else(|error| format!("<journal unavailable: {error}>"));
+                let journal = std::fs::read(&self.container_journal).map_or_else(
+                    |error| format!("<journal unavailable: {error}>"),
+                    |bytes| String::from_utf8_lossy(&bytes).into_owned(),
+                );
                 let helper = std::fs::read_to_string(&self.helper_log)
                     .unwrap_or_else(|error| format!("<helper log unavailable: {error}>"));
                 return Err(format!(
