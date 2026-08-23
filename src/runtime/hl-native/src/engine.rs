@@ -891,6 +891,61 @@ mod tests {
         create_engine_with_options(isa, &[], &[])
     }
 
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn requesting_stop_after_native_finish_is_idempotent() {
+        for isa in [1, 2] {
+            let mut executable = tempfile::tempfile().unwrap();
+            executable.write_all(&exiting_interpreter(isa)).unwrap();
+            executable.seek(SeekFrom::Start(0)).unwrap();
+            let standard = OpenOptions::new().read(true).write(true).open("/dev/null").unwrap();
+            let config = EngineConfig {
+                isa,
+                rootfs: None,
+                executable_host: None,
+                executable_fd: executable.as_raw_fd(),
+                option_names: &[],
+                option_values: &[],
+                standard_fds: [standard.as_raw_fd(); 3],
+                provider_fd: -1,
+            };
+            // SAFETY: all borrowed descriptors remain live until engine construction returns.
+            let engine = unsafe { Engine::create(config) }.unwrap();
+            let api = crate::loader::tests().unwrap();
+            // SAFETY: these test-only calls operate on one process-global phase owned by this test.
+            unsafe { (api.engine_finish_test_arm)() };
+            let argument = CString::new("guest").unwrap();
+            std::thread::scope(|scope| {
+                let running = scope.spawn(|| engine.run(&[argument.as_ptr()]));
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                // SAFETY: the phase query reads one atomic and retains nothing.
+                while unsafe { (api.engine_finish_test_phase)() } != 2 {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "ISA {isa} did not reach native FINISHED"
+                    );
+                    std::thread::yield_now();
+                }
+                let stopped = engine.request(2, 0);
+                // SAFETY: releases the run thread parked by this test's arm above.
+                unsafe { (api.engine_finish_test_release)() };
+                assert_eq!(stopped, Ok(()), "ISA {isa} terminal stop was not idempotent");
+                assert_eq!(running.join().unwrap(), Ok(()));
+            });
+        }
+    }
+
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn destroying_stays_busy_and_a_terminate_race_to_finished_succeeds() {
+        let api = crate::loader::tests().unwrap();
+        // SAFETY: the test export owns its complete synthetic engine and retains no pointer.
+        assert_eq!(unsafe { (api.engine_request_state_test)(0) }, 14);
+        // SAFETY: scenario one supplies a terminating host callback that publishes FINISHED before
+        // returning INVALID_ARGUMENT, reproducing the post-terminate race without a live process.
+        assert_eq!(unsafe { (api.engine_request_state_test)(1) }, 0);
+    }
+
     fn create_engine_with_options(
         isa: u32,
         option_names: &[*const std::ffi::c_char],

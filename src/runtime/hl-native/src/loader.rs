@@ -203,6 +203,14 @@ pub(crate) struct TestApi {
     pub(crate) checkpoint_test_fail_private_adopt: unsafe extern "C" fn(c_uint),
     #[cfg(test)]
     pub(crate) checkpoint_test_private_descriptor_count: unsafe extern "C" fn() -> u64,
+    #[cfg(test)]
+    pub(crate) engine_finish_test_arm: unsafe extern "C" fn() -> c_uint,
+    #[cfg(test)]
+    pub(crate) engine_finish_test_phase: unsafe extern "C" fn() -> c_uint,
+    #[cfg(test)]
+    pub(crate) engine_finish_test_release: unsafe extern "C" fn(),
+    #[cfg(test)]
+    pub(crate) engine_request_state_test: ScenarioTest,
     #[cfg(all(test, unix))]
     pub(crate) host_process_force: unsafe extern "C" fn(c_int) -> c_int,
     #[cfg(all(test, target_os = "linux"))]
@@ -597,6 +605,17 @@ impl TestApi {
                 "hl_c_backend_checkpoint_test_private_descriptor_count",
                 unsafe extern "C" fn() -> u64
             ),
+            #[cfg(test)]
+            engine_finish_test_arm: symbol!("hl_c_backend_engine_finish_test_arm", unsafe extern "C" fn() -> c_uint),
+            #[cfg(test)]
+            engine_finish_test_phase: symbol!(
+                "hl_c_backend_engine_finish_test_phase",
+                unsafe extern "C" fn() -> c_uint
+            ),
+            #[cfg(test)]
+            engine_finish_test_release: symbol!("hl_c_backend_engine_finish_test_release", unsafe extern "C" fn()),
+            #[cfg(test)]
+            engine_request_state_test: symbol!("hl_c_backend_engine_request_state_test", ScenarioTest),
             #[cfg(all(test, unix))]
             host_process_force: symbol!(
                 "hl_c_backend_host_process_force_test",

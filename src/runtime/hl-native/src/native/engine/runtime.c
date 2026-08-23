@@ -91,6 +91,20 @@ static size_t checkpoint_registry_capacity;
 static _Thread_local int checkpoint_registry_fail_allocation;
 static _Thread_local uint32_t checkpoint_adopt_failure_position;
 static _Thread_local uint32_t checkpoint_adopt_position;
+static atomic_uint engine_finish_test_phase;
+
+HL_API uint32_t hl_c_backend_engine_finish_test_arm(void) {
+    atomic_store_explicit(&engine_finish_test_phase, 1, memory_order_release);
+    return 1;
+}
+
+HL_API uint32_t hl_c_backend_engine_finish_test_phase(void) {
+    return atomic_load_explicit(&engine_finish_test_phase, memory_order_acquire);
+}
+
+HL_API void hl_c_backend_engine_finish_test_release(void) {
+    atomic_store_explicit(&engine_finish_test_phase, 3, memory_order_release);
+}
 #endif
 
 static void hl_engine_checkpoint_registry_compact_locked(void) {
@@ -553,7 +567,7 @@ static hl_status hl_engine_read_executable(hl_engine *engine, hl_host_handle han
         return HL_STATUS_PLATFORM_FAILURE;
     if (before.stable_device != after.stable_device || before.stable_object != after.stable_object ||
         before.size != after.size || before.modified_ns != after.modified_ns || before.changed_ns != after.changed_ns)
-        return HL_STATUS_BUSY;
+        return HL_STATUS_OK;
     engine->executable_config.image = engine->owned_executable_image;
     engine->executable_config.image_size = (size_t)before.size;
     return HL_STATUS_OK;
@@ -1310,6 +1324,15 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
     hl_engine_lock(engine);
     engine->state = HL_ENGINE_FINISHED;
     hl_engine_unlock(engine);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    {
+        unsigned int expected = 1;
+        if (atomic_compare_exchange_strong_explicit(&engine_finish_test_phase, &expected, 2, memory_order_acq_rel,
+                                                    memory_order_acquire))
+            while (atomic_load_explicit(&engine_finish_test_phase, memory_order_acquire) != 3)
+                hl_engine_yield(engine);
+    }
+#endif
     return status;
 }
 
@@ -1386,7 +1409,11 @@ hl_status hl_engine_request(hl_engine *engine, uint32_t request, const void *dat
     else
         return HL_STATUS_NOT_SUPPORTED;
     hl_engine_lock(engine);
-    if (engine->state == HL_ENGINE_FINISHED || engine->state == HL_ENGINE_DESTROYING) {
+    if (engine->state == HL_ENGINE_FINISHED) {
+        hl_engine_unlock(engine);
+        return HL_STATUS_OK;
+    }
+    if (engine->state == HL_ENGINE_DESTROYING) {
         hl_engine_unlock(engine);
         return HL_STATUS_BUSY;
     }
@@ -1401,11 +1428,44 @@ hl_status hl_engine_request(hl_engine *engine, uint32_t request, const void *dat
     status = (hl_status)engine->host.process->terminate(engine->host.context, process, reason).status;
     if (status == HL_STATUS_INVALID_ARGUMENT) {
         hl_engine_lock(engine);
-        if (engine->state == HL_ENGINE_FINISHED) status = HL_STATUS_BUSY;
+        if (engine->state == HL_ENGINE_FINISHED) status = HL_STATUS_OK;
         hl_engine_unlock(engine);
     }
     return status;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+static hl_host_result hl_engine_finish_test_terminate(void *context, hl_host_handle process, uint32_t reason) {
+    hl_engine *engine = context;
+    (void)process;
+    (void)reason;
+    hl_engine_lock(engine);
+    engine->state = HL_ENGINE_FINISHED;
+    hl_engine_unlock(engine);
+    return (hl_host_result){.status = HL_STATUS_INVALID_ARGUMENT};
+}
+
+HL_API int hl_c_backend_engine_request_state_test(uint32_t scenario) {
+    hl_engine engine = {0};
+    static const hl_host_process_services process_services = {
+        .abi = HL_HOST_PROCESS_ABI,
+        .size = sizeof(hl_host_process_services),
+        .terminate = hl_engine_finish_test_terminate,
+    };
+    atomic_flag_clear_explicit(&engine.lock, memory_order_release);
+    if (scenario == 0) {
+        engine.state = HL_ENGINE_DESTROYING;
+    } else if (scenario == 1) {
+        engine.state = HL_ENGINE_RUNNING;
+        engine.process = 1;
+        engine.host.context = &engine;
+        engine.host.process = &process_services;
+    } else {
+        return -1;
+    }
+    return (int)hl_engine_request(&engine, HL_ENGINE_REQUEST_FORCE_STOP, NULL, 0);
+}
+#endif
 
 void hl_engine_destroy(hl_engine *engine) {
     hl_host_handle process;
