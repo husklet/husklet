@@ -224,6 +224,8 @@ pub(crate) fn proc_fdinfo_listing_test(isa: u32, scenario: u32) -> i32 {
 
 #[cfg(feature = "native-test-hooks")]
 pub(crate) fn exec_page_cache_test(isa: u32, scenario: u32) -> Result<u64, i32> {
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let hook = match isa {
         1 => test_api().aarch64_exec_page_cache,
         2 => test_api().x86_64_exec_page_cache,
