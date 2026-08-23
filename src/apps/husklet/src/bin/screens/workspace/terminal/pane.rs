@@ -235,9 +235,7 @@ impl<'a> Page<'a> {
         }
     }
 
-    /// Selects a tab in response to an explicit user action and restores the
-    /// pane that tab most recently owned. Programmatic selection keeps using
-    /// `select`, so opening an overlay or restoring a layout cannot steal focus.
+    /// Restores a user-selected tab's last pane; programmatic selection does not steal focus.
     fn select_and_focus(&self) {
         self.select();
         let tw = self.window;
@@ -280,10 +278,7 @@ impl<'a> Page<'a> {
         if let Some(child) = tw.stack.child_by_name(name) {
             let mut terminals = Vec::new();
             PaneView::collect(&child, &mut terminals);
-            let clear_focus = {
-                let focused = tw.focused.borrow();
-                page_owns_focus(focused.as_ref(), &terminals)
-            };
+            let clear_focus = page_owns_focus(tw.focused.borrow().as_ref(), &terminals);
             if clear_focus {
                 tw.focused.borrow_mut().take();
             }
@@ -300,16 +295,16 @@ impl<'a> Page<'a> {
                 pos = Some(i.min(es.len().saturating_sub(1)));
             }
         }
-        if let Some(i) = pos {
-            let next = tw.entries.borrow().get(i).map(|e| e.name.clone());
-            if let Some(n) = next {
-                if tw.search.entry.has_focus() {
-                    Self::new(tw, &n).select();
-                } else {
-                    Self::new(tw, &n).select_and_focus();
-                }
-            }
+        let Some(i) = pos else { return };
+        let Some(next) = tw.entries.borrow().get(i).map(|e| e.name.clone()) else {
+            return;
+        };
+        let page = Self::new(tw, &next);
+        if tw.search.entry.has_focus() {
+            page.select();
+            return;
         }
+        page.select_and_focus();
     }
 
     /// Walk up from `widget` to the page owned by the window's stack.
