@@ -86,7 +86,7 @@ impl CheckpointControl {
             Ok(result) => {
                 self.phases.finish(capture, "completion_wait", completion);
                 self.phases.terminal(capture, u32::from(result.is_err()));
-                result.map_err(|failure| self.capture_failure_reported(engine, failure))
+                result.map_err(|failure| self.capture_failure_reported(engine, capture, failure))
             }
             Err(failure) => {
                 self.phases.terminal(capture, 1);
@@ -131,12 +131,22 @@ impl CheckpointControl {
     /// it. Sending one through the exit-status probe below would replace that explanation with a bare
     /// `CheckpointExited`, which is exactly how a named cause used to become an anonymous one on the
     /// way out of the engine.
-    fn capture_failure_reported(&self, engine: &hl_native::Engine, failure: CaptureFailure) -> EngineError {
+    fn capture_failure_reported(
+        &self,
+        engine: &hl_native::Engine,
+        capture: u64,
+        failure: CaptureFailure,
+    ) -> EngineError {
         if failure == CaptureFailure::Refused {
             if let Some(reason) = self.server.capture_refusal() {
                 hl_log::hl_error!(hl_log::tag::CHECKPOINT, "checkpoint refused by the engine: {reason}");
             }
             return EngineError::CaptureRefused;
+        }
+        if failure == CaptureFailure::Failed
+            && let Some(reason) = self.server.capture_failure_diagnostic(capture)
+        {
+            hl_log::hl_error!(hl_log::tag::CHECKPOINT, "checkpoint capture failed: {reason}");
         }
         Self::capture_failure_with_exit(engine, failure)
     }

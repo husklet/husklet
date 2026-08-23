@@ -47,11 +47,13 @@ impl Server {
         let phase = self.capture_lock().ok().map(|capture| capture.phase);
         match phase {
             Some(CapturePhase::Active { id, .. }) => {
+                self.record_failure(id, message);
                 if self.finish_failed(id, failure).is_err() {
                     self.interrupt_channels();
                 }
             }
             Some(CapturePhase::Recovery { id, .. }) => {
+                self.record_failure(id, message);
                 if self.fail_recovery(id, failure).is_err() {
                     self.interrupt_channels();
                 }

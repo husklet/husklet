@@ -1096,6 +1096,70 @@ fn dropped_mutation_admission_still_settles_and_clears_the_transaction() {
         Some(Err(CaptureFailure::Failed))
     );
     assert_eq!(server.transaction_state(), (0, 0, 0, 0, 0));
+    assert_eq!(
+        server.capture_failure_diagnostic(capture).as_deref(),
+        Some("checkpoint mutation was abandoned before publishing its result")
+    );
+}
+
+#[test]
+fn finishing_an_unknown_object_names_the_abandoned_mutation() {
+    let store = Arc::new(TransactionStore::default());
+    let server = Server::new(store.clone(), store);
+    let capture = server
+        .begin_capture(30, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+
+    assert_ne!(
+        server
+            .dispatch(7, &object_request(protocol::OBJECT_FINISH, 91, 30), "", &[])
+            .status,
+        protocol::STATUS_OK
+    );
+    assert_eq!(
+        server
+            .wait_capture(capture, std::time::Instant::now() + Duration::from_secs(1))
+            .unwrap(),
+        Some(Err(CaptureFailure::Failed))
+    );
+    assert_eq!(
+        server.capture_failure_diagnostic(capture).as_deref(),
+        Some("checkpoint mutation was abandoned before publishing its result")
+    );
+}
+
+#[test]
+fn capture_failure_diagnostic_keeps_the_first_cause_and_filters_generations() {
+    let server = Server::new(Arc::new(Store), Arc::new(Store));
+    server.record_failure(41, "first cause".into());
+    server.record_failure(41, "later cascade".into());
+    assert_eq!(server.capture_failure_diagnostic(41).as_deref(), Some("first cause"));
+
+    server.record_failure(42, "next capture".into());
+    assert!(server.capture_failure_diagnostic(41).is_none());
+    assert_eq!(server.capture_failure_diagnostic(42).as_deref(), Some("next capture"));
+}
+
+#[test]
+fn manifest_store_failure_retains_the_storage_context() {
+    let server = Server::new(Arc::new(Store), Arc::new(Store));
+    let capture = server
+        .begin_capture(43, std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    let mut commit = commit_request();
+    commit.generation = 43;
+
+    assert_ne!(server.dispatch(1, &commit, "", b"manifest").status, protocol::STATUS_OK);
+    assert_eq!(
+        server
+            .wait_capture(capture, std::time::Instant::now() + Duration::from_secs(1))
+            .unwrap(),
+        Some(Err(CaptureFailure::Failed))
+    );
+    assert_eq!(
+        server.capture_failure_diagnostic(capture).as_deref(),
+        Some("checkpoint store rejected manifest: RuntimeConstruction")
+    );
 }
 
 #[test]
