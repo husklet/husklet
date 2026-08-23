@@ -275,14 +275,19 @@ pub(crate) fn write_master(master: &mut File, bytes: &[u8], stop: &AtomicBool) -
 ///
 /// A terminal is a byte stream, not a record transport: waiting in the hope that a later guest write
 /// joins this batch only adds latency. Reading until `EAGAIN` keeps bytes which are ready together
-/// without a timer or a busy-spin, and the fixed buffer bounds the work before the display gets it.
+/// without a timer or a busy-spin. The fixed buffer and follow-up-attempt cap bound the work before
+/// the display gets it, including under a stream of tiny reads or repeated signal interruption.
 pub(super) fn drain_ready_batch(
     bytes: &mut [u8; 16 * 1024],
     count: usize,
     mut read: impl FnMut(&mut [u8]) -> std::io::Result<usize>,
 ) -> usize {
+    const FOLLOW_UP_ATTEMPTS: usize = 8;
     let mut count = count;
-    while count < bytes.len() {
+    for _ in 0..FOLLOW_UP_ATTEMPTS {
+        if count == bytes.len() {
+            break;
+        }
         match read(&mut bytes[count..]) {
             Ok(read) if read > 0 => count += read,
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,

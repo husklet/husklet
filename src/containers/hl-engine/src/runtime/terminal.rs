@@ -725,6 +725,32 @@ mod tests {
     }
 
     #[test]
+    fn ready_terminal_output_yields_after_eight_tiny_reads() {
+        let mut batch = [0_u8; 16 * 1024];
+        let mut reads = 0_u8;
+        let count = drain_ready_batch(&mut batch, 0, |tail| {
+            reads = reads.checked_add(1).expect("bounded follow-up reads");
+            tail[0] = b'a' + reads - 1;
+            Ok(1)
+        });
+        assert_eq!(reads, 8, "the ready-byte drain attempted a ninth read before yielding");
+        assert_eq!(&batch[..count], b"abcdefgh");
+    }
+
+    #[test]
+    fn ready_terminal_output_yields_after_eight_interruptions() {
+        let mut batch = [0_u8; 16 * 1024];
+        batch[..3].copy_from_slice(b"abc");
+        let mut reads = 0;
+        let count = drain_ready_batch(&mut batch, 3, |_| {
+            reads += 1;
+            Err(std::io::ErrorKind::Interrupted.into())
+        });
+        assert_eq!(reads, 8, "signal interruption kept the output pump from yielding");
+        assert_eq!(&batch[..count], b"abc");
+    }
+
+    #[test]
     fn terminal_output_has_no_per_burst_timer_floor() {
         const BURSTS: usize = 64;
         let port = Arc::new(Port::default());
