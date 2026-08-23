@@ -529,16 +529,17 @@ static int32_t hl_production_cold_entry(void *opaque) {
 
 #if !defined(_WIN32)
 /* A terminal binding is more than three readable/writable file descriptors.
- * The guest process must lead the terminal's session and foreground process
- * group too, otherwise an interactive shell's first tcgetpgrp() fails ENOTTY
- * even though isatty(0) succeeds.  Engine runs are fork children, so establish
- * that kernel relationship here, before any guest code observes fd 0. */
-static hl_status hl_production_claim_terminal(const hl_production_entry_context *context) {
+ * An unattached slave needs a new session and foreground group before guest
+ * code observes fd 0. A shell or terminal worker can instead hand us its own
+ * controlling terminal; preserve that session because setsid() would detach
+ * it and TIOCSCTTY cannot steal it back from the still-live caller. */
+static hl_status hl_production_terminal_state(const hl_production_entry_context *context, int claim, int *owned) {
     hl_linux_fd_snapshot input;
     const hl_host_posix_attachment_services *attachments;
     hl_host_result borrowed;
     int descriptor;
     int saved_errno;
+    if (owned != NULL) *owned = 0;
     if (context->box == NULL || hl_linux_fd_snapshot_get(context->box, 0, &input) != HL_STATUS_OK ||
         input.host_handle == HL_HOST_HANDLE_INVALID)
         return HL_STATUS_OK;
@@ -555,6 +556,11 @@ static hl_status hl_production_claim_terminal(const hl_production_entry_context 
      * that session intact; only an unattached slave (the container PTY path)
      * needs a new session and TIOCSCTTY. */
     if (tcgetsid(descriptor) >= 0) {
+        if (owned != NULL) *owned = 1;
+        (void)attachments->release(context->host->context, borrowed.value);
+        return HL_STATUS_OK;
+    }
+    if (!claim) {
         (void)attachments->release(context->host->context, borrowed.value);
         return HL_STATUS_OK;
     }
@@ -641,7 +647,10 @@ static int32_t hl_production_entry(void *opaque) {
 #if defined(HL_NATIVE_TEST_HOOKS)
     hl_host_activation_ready_test_wait();
 #endif
-    if (setsid() < 0) return HL_STATUS_PLATFORM_FAILURE;
+    int inherited_terminal = 0;
+    hl_status terminal_status = hl_production_terminal_state(context, 0, &inherited_terminal);
+    if (terminal_status != HL_STATUS_OK) return terminal_status;
+    if (!inherited_terminal && setsid() < 0) return HL_STATUS_PLATFORM_FAILURE;
     if (context->activation_ready_read >= 0) {
         int activation_read = context->activation_ready_read;
         if (close(activation_read) != 0) {
@@ -666,8 +675,10 @@ static int32_t hl_production_entry(void *opaque) {
     /* Keep process-directed checkpoint kicks away from helper/control threads.
      * Guest executor registration selectively unblocks the reserved signal. */
     hl_ckpt_interrupt_block();
-    hl_status terminal_status = hl_production_claim_terminal(context);
-    if (terminal_status != HL_STATUS_OK) return terminal_status;
+    if (!inherited_terminal) {
+        terminal_status = hl_production_terminal_state(context, 1, NULL);
+        if (terminal_status != HL_STATUS_OK) return terminal_status;
+    }
     active_result = context->result;
     atomic_store_explicit(&result_published, 0, memory_order_release);
     hl_options *previous = hl_options_bind_process(context->options);

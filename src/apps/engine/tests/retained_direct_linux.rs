@@ -189,6 +189,37 @@ mod linux_host {
     }
 
     #[test]
+    fn a_callers_controlling_terminal_survives_redirected_output() {
+        let path = std::env::temp_dir().join(format!("hl-mixed-stdio-x86-{}", std::process::id()));
+        let launcher = std::env::temp_dir().join(format!("hl-mixed-stdio-launcher-{}", std::process::id()));
+        fs::write(&path, static_x86_64(60, 43)).unwrap();
+        let compiled = Command::new("cc")
+            .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+            .arg("tests/fixtures/mixed_stdio_launcher.c")
+            .arg("-o")
+            .arg(&launcher)
+            .status()
+            .unwrap();
+        assert!(compiled.success());
+        let output = Command::new(&launcher)
+            .arg(env!("CARGO_BIN_EXE_hl-x86_64"))
+            .arg(&path)
+            .output()
+            .unwrap();
+        fs::remove_file(path).unwrap();
+        fs::remove_file(launcher).unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(43),
+            "a controlling stdin must not make redirected output fail: stdout={:?} stderr={:?}",
+            output.stdout,
+            output.stderr
+        );
+        assert!(output.stdout.is_empty());
+        assert!(output.stderr.is_empty());
+    }
+
+    #[test]
     fn direct_x86_64_worker_starts_with_the_default_1024_descriptor_limit() {
         let path = std::env::temp_dir().join(format!("hl-low-nofile-x86-{}", std::process::id()));
         fs::write(&path, static_x86_64(60, 43)).unwrap();
