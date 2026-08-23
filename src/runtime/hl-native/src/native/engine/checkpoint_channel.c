@@ -536,8 +536,9 @@ HL_API int HL_TARGET_LOCAL(checkpoint_channel_notify_test)(uint32_t scenario) {
         char bytes[4096] = {0};
         while (send(pair[0], bytes, sizeof bytes, MSG_DONTWAIT | MSG_NOSIGNAL) > 0) {}
         if (errno != EAGAIN && errno != EWOULDBLOCK) goto done;
-        status = hl_ckpt_channel_notify(&request, reason) == -1 ? 0 : -1;
+        (void)hl_ckpt_channel_notify(&request, reason);
         pair[0] = -1;
+        status = checkpoint_channel == -1 ? 0 : -100 - checkpoint_channel;
     } else {
         unsigned char frame[sizeof request + sizeof reason];
         hl_ckpt_request observed;
