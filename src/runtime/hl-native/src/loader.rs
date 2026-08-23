@@ -182,6 +182,8 @@ pub(crate) struct TestApi {
     pub(crate) private_fork_lock: unsafe extern "C" fn(c_uint) -> c_int,
     pub(crate) aarch64_checkpoint_channel_notify: ScenarioTest,
     pub(crate) x86_64_checkpoint_channel_notify: ScenarioTest,
+    pub(crate) aarch64_checkpoint_refusal_order: NoArgumentTest,
+    pub(crate) x86_64_checkpoint_refusal_order: NoArgumentTest,
     pub(crate) process_identity_token: unsafe extern "C" fn(c_uint) -> c_int,
     pub(crate) setfl_append_write: unsafe extern "C" fn(c_uint) -> c_int,
     #[allow(dead_code)]
@@ -543,6 +545,8 @@ impl TestApi {
             ),
             aarch64_checkpoint_channel_notify: symbol!("hl_aarch64_checkpoint_channel_notify_test", ScenarioTest),
             x86_64_checkpoint_channel_notify: symbol!("hl_x86_64_checkpoint_channel_notify_test", ScenarioTest),
+            aarch64_checkpoint_refusal_order: symbol!("hl_aarch64_checkpoint_refusal_order_test", NoArgumentTest),
+            x86_64_checkpoint_refusal_order: symbol!("hl_x86_64_checkpoint_refusal_order_test", NoArgumentTest),
             process_identity_token: symbol!(
                 "hl_c_backend_process_identity_token_test",
                 unsafe extern "C" fn(c_uint) -> c_int

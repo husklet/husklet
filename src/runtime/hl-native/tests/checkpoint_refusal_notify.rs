@@ -27,3 +27,12 @@ fn refusal_notification_hook_rejects_unknown_scenarios() {
     }
     assert_eq!(hl_native::checkpoint_channel_notify_test(9, 0), Err(-22));
 }
+
+#[test]
+fn child_result_is_published_before_best_effort_notification() {
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    for isa in [1, 2] {
+        hl_native::checkpoint_refusal_order_test(isa)
+            .unwrap_or_else(|status| panic!("ISA {isa} notified before publishing its child result at {status}"));
+    }
+}

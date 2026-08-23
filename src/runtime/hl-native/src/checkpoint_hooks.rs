@@ -120,6 +120,15 @@ pub(crate) fn checkpoint_rendezvous_test(isa: u32, scenario: u32) -> Result<(), 
 }
 
 #[cfg(feature = "native-test-hooks")]
+pub(crate) fn checkpoint_refusal_order_test(isa: u32) -> Result<(), i32> {
+    no_argument_status(
+        isa,
+        test_api().aarch64_checkpoint_refusal_order,
+        test_api().x86_64_checkpoint_refusal_order,
+    )
+}
+
+#[cfg(feature = "native-test-hooks")]
 pub(crate) fn checkpoint_launch_identity_test(isa: u32, scenario: u32) -> Result<(), i32> {
     // before returning, and answers a scalar status.
     scenario_status(

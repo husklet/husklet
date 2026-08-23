@@ -32,5 +32,9 @@ void hl_engine_child_result_publish(int32_t guest_status, hl_status engine_statu
 void hl_engine_child_result_publish_signal(int32_t guest_signal);
 void hl_engine_child_result_publish_guest_pid(int32_t guest_pid);
 void hl_engine_child_result_after_fork(void);
+#if defined(HL_NATIVE_TEST_HOOKS)
+void hl_engine_child_result_begin_for_test(hl_engine_child_result *record);
+void hl_engine_child_result_end_for_test(void);
+#endif
 
 #endif

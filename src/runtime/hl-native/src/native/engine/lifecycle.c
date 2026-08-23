@@ -118,6 +118,19 @@ void hl_engine_child_result_after_fork(void) {
     atomic_store_explicit(&result_published, 2, memory_order_release);
 }
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+void hl_engine_child_result_begin_for_test(hl_engine_child_result *record) {
+    active_result = record;
+    memset(record, 0, sizeof *record);
+    atomic_store_explicit(&result_published, 0, memory_order_release);
+}
+
+void hl_engine_child_result_end_for_test(void) {
+    active_result = NULL;
+    atomic_store_explicit(&result_published, 2, memory_order_release);
+}
+#endif
+
 typedef struct hl_production_entry_context {
     const hl_engine_config *config;
     uint32_t argc;
