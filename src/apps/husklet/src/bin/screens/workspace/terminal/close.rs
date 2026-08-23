@@ -29,11 +29,10 @@ impl CloseRequest {
 
     fn close(parent: &gtk::ApplicationWindow, terminal: &Rc<TermWin>, choice: crate::components::dialog::CloseChoice) {
         terminal.closing.set(true);
+        let root = Home::current().root();
         let preparation = match choice {
             crate::components::dialog::CloseChoice::Continue => WindowSession::new(terminal).save(),
-            crate::components::dialog::CloseChoice::Kill => {
-                Session::clear(&terminal.ws.storage_dir(&Home::current().root()))
-            }
+            crate::components::dialog::CloseChoice::Kill => Session::clear(&terminal.ws.storage_dir(&root)),
         };
         if let Err(error) = preparation {
             terminal.closing.set(false);
@@ -41,17 +40,22 @@ impl CloseRequest {
             return;
         }
         let result = std::sync::Arc::new(std::sync::Mutex::new(None));
-        Self::spawn_close(terminal.ws.clone(), choice, &result);
+        Self::spawn_close(terminal.ws.clone(), choice, &result, root);
         Self::poll_close(parent, terminal, result);
     }
 
+    /// `root` is the state root the close runs against -- `~/.hl` in production. It is a parameter
+    /// because `close_handover` writes: it creates the workspace's runtime directory and takes two
+    /// locks in it, so a test that let this default to the user's home left a `close-reap-*`
+    /// directory behind on every run.
     fn spawn_close(
         workspace: WorkspaceConfig,
         choice: crate::components::dialog::CloseChoice,
         result: &std::sync::Arc<std::sync::Mutex<Option<std::io::Result<()>>>>,
+        root: std::path::PathBuf,
     ) {
-        Self::spawn_close_with(workspace, choice, result, |workspace, disposition| {
-            hl::runtime::domain::Domain::new(workspace)
+        Self::spawn_close_with(workspace, choice, result, move |workspace, disposition| {
+            hl::runtime::domain::Domain::in_root(&root, workspace)
                 .close_handover(disposition, || Processes::close_workspace(&workspace.key()))
         });
     }
@@ -180,23 +184,44 @@ mod tests {
         child
     }
 
+    /// A name no earlier run and no concurrent run can have used, so the state-root assertion
+    /// below cannot be satisfied by somebody else's leftovers.
+    fn unique_key(prefix: &str) -> String {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        format!("{prefix}-{}-{unique}", std::process::id())
+    }
+
     #[cfg(unix)]
     fn assert_production_close_reaps(choice: CloseChoice) {
+        // `close_handover` creates the workspace runtime directory and two lock files in it. Given
+        // the user's own state root -- which is what `Domain::new` resolves -- that is a directory
+        // per test, per run, in `$HOME/.hl/workspaces`, and 550 of them had accumulated there
+        // before this test was given a root of its own.
+        let root = tempfile::tempdir().unwrap();
         let workspace = WorkspaceConfig::new(
-            format!("close-reap-{}-{}", std::process::id(), choice as u8),
+            format!("{}-{}", unique_key("close-reap"), choice as u8),
             "ubuntu",
             hl_ws::Arch::Arm64,
         );
         let key = workspace.key();
         let mut child = hup_resistant_launcher(&key);
         let completed = result();
-        CloseRequest::spawn_close(workspace, choice, &completed);
+        CloseRequest::spawn_close(workspace.clone(), choice, &completed, root.path().to_path_buf());
         wait(&completed).unwrap();
         let status = child
             .try_wait()
             .unwrap()
             .expect("workspace close returned before its HUP-resistant launcher exited");
         assert!(!status.success());
+        // The close really did write, and it wrote inside the private root and nowhere else.
+        assert!(workspace.storage_dir(root.path()).join("runtime").is_dir());
+        assert!(
+            !workspace.storage_dir(&hl::paths::hl_root()).exists(),
+            "the close wrote into the user's own state root"
+        );
     }
 
     #[cfg(unix)]
@@ -214,11 +239,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn domain_error_still_reaps_the_exact_workspace_launcher() {
-        let workspace = WorkspaceConfig::new(
-            format!("close-error-reap-{}", std::process::id()),
-            "ubuntu",
-            hl_ws::Arch::Arm64,
-        );
+        let workspace = WorkspaceConfig::new(unique_key("close-error-reap"), "ubuntu", hl_ws::Arch::Arm64);
         let key = workspace.key();
         let mut child = hup_resistant_launcher(&key);
         let completed = result();
@@ -248,11 +269,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn continue_error_still_reaps_the_exact_workspace_launcher() {
-        let workspace = WorkspaceConfig::new(
-            format!("close-continue-error-reap-{}", std::process::id()),
-            "ubuntu",
-            hl_ws::Arch::Arm64,
-        );
+        let workspace = WorkspaceConfig::new(unique_key("close-continue-error-reap"), "ubuntu", hl_ws::Arch::Arm64);
         let key = workspace.key();
         let mut child = hup_resistant_launcher(&key);
         let completed = result();
