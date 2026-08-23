@@ -87,9 +87,9 @@ fn a_child_auto_reaped_under_sa_nocldwait_releases_its_descriptor_table() {
 
 /// The window the deferred publish exists for, and the reason the handler cannot simply publish. A worker
 /// thread inside a forwarded syscall holds the ring's producer flag across the whole round-trip and is
-/// parked waiting for the sentry's answer. The SA_NOCLDWAIT auto-reap interrupts THAT thread, so a
+/// parked waiting for the sentry's answer. The `SA_NOCLDWAIT` auto-reap interrupts THAT thread, so a
 /// release published through `sentry_ctl_op` from the handler asks the interrupted thread for a flag only
-/// the interrupted thread can return -- measured on this x86_64 box, the guest wedges in the first round
+/// the interrupted thread can return -- measured on this `x86_64` box, the guest wedges in the first round
 /// and never returns. Recording the pid in the pending array and publishing it from ordinary syscall
 /// context takes no flag at all.
 ///
