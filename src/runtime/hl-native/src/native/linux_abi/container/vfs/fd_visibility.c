@@ -21,6 +21,7 @@ struct fdvis_slot {
     uint64_t device;
     uint64_t object;
 };
+
 /* This table is shared across fork and its arena is sliced by sizeof(struct fdvis_slot). The reservation
    owner deliberately occupies the former 32-bit reserved cell; pin every boundary that makes that an
    in-place semantic reuse rather than a silent shared-layout change. */

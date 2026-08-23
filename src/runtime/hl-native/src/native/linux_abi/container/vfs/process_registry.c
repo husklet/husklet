@@ -1071,7 +1071,6 @@ static int proc_fd_dir_pid_open(int guest, int host) {
 // (a peer pid already reports a live resident size through host process stats; self must not read 0). Floor the tracked
 // charge with this engine process's real resident size so the reported RSS is non-zero and plausible.
 
-
 #if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
 /* Test-only export: pin what a guest may and may not see in /proc/<pid>/fdinfo.
  *
@@ -1136,8 +1135,10 @@ static int proc_fdinfo_listing_has(const int *numbers, int count, int wanted) {
 }
 
 HL_API int HL_TARGET_LOCAL(proc_fdinfo_listing_test)(uint32_t scenario);
+
 HL_API int HL_TARGET_LOCAL(proc_fdinfo_listing_test)(uint32_t scenario) {
     enum { CAPACITY = 4096 };
+
     static int numbers[CAPACITY];
     int count = 0;
     int verdict = 0;
@@ -1168,8 +1169,10 @@ HL_API int HL_TARGET_LOCAL(proc_fdinfo_listing_test)(uint32_t scenario) {
         }
         status = proc_fdinfo_listing_read(numbers, CAPACITY, &count);
         if (status == 0) {
-            if (above < HL_NFD) verdict = 3;                                  /* fixture: not actually above the band */
-            else if (proc_fdinfo_listing_has(numbers, count, above)) verdict = 4; /* out-of-band number published */
+            if (above < HL_NFD)
+                verdict = 3; /* fixture: not actually above the band */
+            else if (proc_fdinfo_listing_has(numbers, count, above))
+                verdict = 4; /* out-of-band number published */
         }
         close(above);
         close(donor);
@@ -1211,8 +1214,10 @@ HL_API int HL_TARGET_LOCAL(proc_fdinfo_listing_test)(uint32_t scenario) {
         eventfd_peer_bind(ends[0], ends[1] + 1);
         status = proc_fdinfo_listing_read(numbers, CAPACITY, &count);
         if (status == 0) {
-            if (proc_fdinfo_listing_has(numbers, count, ends[1])) verdict = 8;       /* hidden peer published */
-            else if (!proc_fdinfo_listing_has(numbers, count, ends[0])) verdict = 9; /* the eventfd itself vanished */
+            if (proc_fdinfo_listing_has(numbers, count, ends[1]))
+                verdict = 8; /* hidden peer published */
+            else if (!proc_fdinfo_listing_has(numbers, count, ends[0]))
+                verdict = 9; /* the eventfd itself vanished */
         }
         eventfd_peer_bind(ends[0], 0);
         close(ends[0]);
@@ -1250,6 +1255,7 @@ HL_API int HL_TARGET_LOCAL(proc_fdinfo_listing_test)(uint32_t scenario) {
    from mkdtemp/opendir, and hl_host_process_fds_collect() refuses on this host, so the producer takes
    its linear-probe fallback and the private band private.c refuses to establish does not exist. */
 HL_API int HL_TARGET_LOCAL(proc_fdinfo_listing_test)(uint32_t scenario);
+
 HL_API int HL_TARGET_LOCAL(proc_fdinfo_listing_test)(uint32_t scenario) {
     (void)scenario;
     errno = ENOTSUP;
