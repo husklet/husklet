@@ -118,6 +118,17 @@ static void proc_dir_register(int fd, const char *tmpl, const char *guestpath); 
 // One fdinfo entry: the guest-visible predicate, unchanged. Both the enumerated and the probed path
 // below run exactly this, so the two differ only in which descriptor NUMBERS they offer it.
 static void proc_fdinfo_entry_place(const char *dir, int fd) {
+    // Engine-private descriptors are concealed by their LEDGER ROW, not by their number. Being above
+    // HL_NFD is what used to hide them here, and that holds only where the private floor reaches
+    // HL_NFD: hl_host_process_fd_private_floor() is min(RLIMIT_NOFILE - 4096, 65536), so it does so
+    // only when RLIMIT_NOFILE is at least 69632. This box runs 1048576; a host at the very common
+    // 65536 puts the entire private band at 61440..65535, inside the range this listing walks, and
+    // published every one of the engine's own descriptors to the guest. Reachable on Linux, not only
+    // on the Darwin arm that additionally clamps to kern.maxfilesperproc. Asking the ledger -- the
+    // same question exec_fd_is_engine() asks first -- makes the concealment independent of where the
+    // floor happens to land. Measured on this host: no descriptor changes visibility, because every
+    // ledger row here is already above the bound. proc_fdinfo_listing_test scenario 5 is the probe.
+    if (hl_host_process_fd_private_current(fd)) return;
     if (eventfd_hidden_peer_fd(fd)) return;
     if (fcntl(fd, F_GETFD) == -1) return; // not open
     char p[96];
@@ -166,10 +177,11 @@ static int proc_fdinfo_dir_open(const char *guestpath) {
     // both carried over verbatim -- but it is worth someone's attention, and it cannot be confirmed from
     // this box (no macOS host is reachable from the x86_64 Linux dev box).
     //
-    // The HL_HOST_PROCESS_FD_ENGINE_PRIVATE flag the enumeration also carries is deliberately NOT
-    // consulted, even though it would close exactly that hole, because acting on it would conceal
-    // descriptors this listing shows today on every host. Changing what the guest observes is a separate
-    // claim needing its own evidence, and it is out of scope for a cost change.
+    // The hole that bound leaves open where the private floor lands below it is now closed in
+    // proc_fdinfo_entry_place() by asking the private ledger directly, rather than by consulting the
+    // enumeration's HL_HOST_PROCESS_FD_ENGINE_PRIVATE flag -- the ledger answer is available on the
+    // linear-probe fallback too, so both paths conceal identically and Windows does not become the
+    // one host that leaks.
     //
     // Creation ORDER is not a guest-visible property to preserve, and measuring said so before this was
     // written: the placeholder directory lives on an ext4 htree /tmp, so the order a guest's own readdir
@@ -1058,3 +1070,195 @@ static int proc_fd_dir_pid_open(int guest, int host) {
 // ALWAYS has a non-zero VmRSS -- top/htop/ps would otherwise show this process at RES=0, a engine-specific divergence
 // (a peer pid already reports a live resident size through host process stats; self must not read 0). Floor the tracked
 // charge with this engine process's real resident size so the reported RSS is non-zero and plausible.
+
+#if defined(HL_NATIVE_TEST_HOOKS) && !defined(_WIN32)
+/* Test-only export: pin what a guest may and may not see in /proc/<pid>/fdinfo.
+ *
+ * proc_fdinfo_dir_open() had NO covering test of any kind -- `grep -rn fdinfo --include=*.rs src tests`
+ * matched nothing -- and two separate lanes then found guest-visible defects in it, both by mutation,
+ * using hand-built guest fixtures that were deleted with their worktrees. The weaker probe those lanes
+ * carried counted the DELTA in listing size after creating an eventfd, and it stayed green under both
+ * defects, because a leak and a phantom each shift the before and after counts together. So the
+ * scenarios below assert the listing's CONTENTS, which is the property that actually failed.
+ *
+ * Each scenario manufactures the condition it tests rather than hoping the ambient process supplies it:
+ * an ordinary `cargo test` process has no engine-private descriptors and no emulated eventfd, so a
+ * scenario that merely inspected the current listing would pass against every mutation.
+ *
+ *   0  no phantom entries: every listed number is an open descriptor. Reddens when the enumeration's
+ *      own /proc/self/fd stream is published -- it is closed before the listing is read.
+ *   1  nothing at or above HL_NFD: a descriptor past the guest's own ceiling is absent. It carries no
+ *      ledger row, so the bound is the only mechanism that can conceal it.
+ *   2  completeness: a descriptor this hook opens is listed, and is gone once closed.
+ *   3  reach: a descriptor duplicated to a high number still inside the guest band is listed.
+ *   4  concealment: the hidden pipe write end behind an emulated eventfd is absent.
+ *   5  concealment by LEDGER, not by number: a descriptor carrying an engine-private ledger row is
+ *      absent even when it sits low. See the comment on proc_fdinfo_entry_place for why the number
+ *      alone cannot carry this: the private floor is min(RLIMIT_NOFILE - 4096, 65536), so every host
+ *      with RLIMIT_NOFILE below 69632 places the private band INSIDE the range this listing walks.
+ *
+ * Returns 0 on success, a positive code naming the violated invariant, negative errno on a harness
+ * failure. */
+static int proc_fdinfo_listing_read(int *numbers, int capacity, int *count) {
+    int listing = proc_fdinfo_dir_open("/proc/self/fdinfo");
+    if (listing < 0) return -EIO;
+    int scan = dup(listing); /* fdopendir consumes its argument; the registry still owns `listing` */
+    if (scan < 0) {
+        close(listing);
+        return -EMFILE;
+    }
+    DIR *directory = fdopendir(scan);
+    if (!directory) {
+        close(scan);
+        close(listing);
+        return -EIO;
+    }
+    int found = 0;
+    for (struct dirent *entry = readdir(directory); entry; entry = readdir(directory)) {
+        if (entry->d_name[0] == '.') continue;
+        if (found < capacity) numbers[found] = atoi(entry->d_name);
+        found++;
+    }
+    closedir(directory); /* closes `scan` */
+    /* Close the registry's own descriptor before the caller tests whether the listed numbers are open,
+       so neither it nor the scan duplicate can make a phantom entry look live. The next
+       proc_fdinfo_dir_open() reaps the temp directory, which is what procfd_dirs_reap(0) is for. */
+    close(listing);
+    *count = found > capacity ? capacity : found;
+    return found > capacity ? -ENOSPC : 0;
+}
+
+static int proc_fdinfo_listing_has(const int *numbers, int count, int wanted) {
+    for (int index = 0; index < count; index++)
+        if (numbers[index] == wanted) return 1;
+    return 0;
+}
+
+HL_API int HL_TARGET_LOCAL(proc_fdinfo_listing_test)(uint32_t scenario);
+
+HL_API int HL_TARGET_LOCAL(proc_fdinfo_listing_test)(uint32_t scenario) {
+    enum { CAPACITY = 4096 };
+
+    static int numbers[CAPACITY];
+    int count = 0;
+    int verdict = 0;
+    int status;
+
+    if (scenario == 0) {
+        status = proc_fdinfo_listing_read(numbers, CAPACITY, &count);
+        if (status != 0) return status;
+        if (count == 0) return 1; /* an empty listing would pass every other check vacuously */
+        for (int index = 0; index < count && verdict == 0; index++)
+            if (fcntl(numbers[index], F_GETFD) == -1) verdict = 2; /* listed a descriptor that is not open */
+        return verdict;
+    }
+
+    if (scenario == 1) {
+        /* A descriptor at or above HL_NFD with NO ledger row, so the bound is the only thing that can
+           conceal it. Using an adopted (ledger-carrying) descriptor here would test the ledger check
+           instead and leave the bound with no probe of its own -- the two conceal the same descriptors
+           in production, which is exactly why each needs a scenario that isolates it. HL_NFD is also
+           the guest's own descriptor ceiling, so a number at or above it is one no guest could have
+           opened and none may see. */
+        int donor = open("/dev/null", O_RDONLY);
+        if (donor < 0) return -errno;
+        int above = fcntl(donor, F_DUPFD, HL_NFD);
+        if (above < 0) {
+            close(donor);
+            return -errno; /* the host cannot reach past HL_NFD -- reported, never silently skipped */
+        }
+        status = proc_fdinfo_listing_read(numbers, CAPACITY, &count);
+        if (status == 0) {
+            if (above < HL_NFD)
+                verdict = 3; /* fixture: not actually above the band */
+            else if (proc_fdinfo_listing_has(numbers, count, above))
+                verdict = 4; /* out-of-band number published */
+        }
+        close(above);
+        close(donor);
+        return status != 0 ? status : verdict;
+    }
+
+    if (scenario == 2) {
+        int subject = open("/dev/null", O_RDONLY);
+        if (subject < 0) return -errno;
+        status = proc_fdinfo_listing_read(numbers, CAPACITY, &count);
+        if (status == 0 && !proc_fdinfo_listing_has(numbers, count, subject)) verdict = 5; /* open fd missing */
+        close(subject);
+        if (status == 0 && verdict == 0) {
+            status = proc_fdinfo_listing_read(numbers, CAPACITY, &count);
+            if (status == 0 && proc_fdinfo_listing_has(numbers, count, subject)) verdict = 6; /* closed fd retained */
+        }
+        return status != 0 ? status : verdict;
+    }
+
+    if (scenario == 3) {
+        int donor = open("/dev/null", O_RDONLY);
+        if (donor < 0) return -errno;
+        int high = fcntl(donor, F_DUPFD, HL_NFD - 4096);
+        if (high < 0) {
+            close(donor);
+            return -errno;
+        }
+        status = proc_fdinfo_listing_read(numbers, CAPACITY, &count);
+        if (status == 0 && !proc_fdinfo_listing_has(numbers, count, high)) verdict = 7; /* listing stops short */
+        close(high);
+        close(donor);
+        return status != 0 ? status : verdict;
+    }
+
+    if (scenario == 4) {
+        int ends[2];
+        if (pipe(ends) != 0) return -errno;
+        /* Bind the write end as the hidden peer of the read end, exactly as svc_eventfd2 does. */
+        eventfd_peer_bind(ends[0], ends[1] + 1);
+        status = proc_fdinfo_listing_read(numbers, CAPACITY, &count);
+        if (status == 0) {
+            if (proc_fdinfo_listing_has(numbers, count, ends[1]))
+                verdict = 8; /* hidden peer published */
+            else if (!proc_fdinfo_listing_has(numbers, count, ends[0]))
+                verdict = 9; /* the eventfd itself vanished */
+        }
+        eventfd_peer_bind(ends[0], 0);
+        close(ends[0]);
+        close(ends[1]);
+        return status != 0 ? status : verdict;
+    }
+
+    if (scenario == 5) {
+        int subject = open("/dev/null", O_RDONLY);
+        if (subject < 0) return -errno;
+        if (subject >= HL_NFD) { /* would be concealed by the bound alone; the scenario needs a LOW number */
+            close(subject);
+            return 10;
+        }
+        int added = hl_host_process_fd_private_add(subject);
+        if (added < 0) {
+            close(subject);
+            return added;
+        }
+        status = proc_fdinfo_listing_read(numbers, CAPACITY, &count);
+        if (status == 0 && proc_fdinfo_listing_has(numbers, count, subject))
+            verdict = 11; /* a ledger-registered descriptor was published to the guest */
+        hl_host_process_fd_private_remove(subject);
+        close(subject);
+        return status != 0 ? status : verdict;
+    }
+
+    return -EINVAL;
+}
+#elif defined(HL_NATIVE_TEST_HOOKS)
+/* The loader resolves every symbol in the test export manifest against the artifact, so this hook has to
+   exist on Windows too. It refuses by name rather than being omitted -- a guarded block with no Windows
+   arm links as "cannot export ...: symbol not defined" with the hooks on, which is a MissingBridge at
+   load rather than a compile error. There is nothing to assert here in any case: this listing is built
+   from mkdtemp/opendir, and hl_host_process_fds_collect() refuses on this host, so the producer takes
+   its linear-probe fallback and the private band private.c refuses to establish does not exist. */
+HL_API int HL_TARGET_LOCAL(proc_fdinfo_listing_test)(uint32_t scenario);
+
+HL_API int HL_TARGET_LOCAL(proc_fdinfo_listing_test)(uint32_t scenario) {
+    (void)scenario;
+    errno = ENOTSUP;
+    return -ENOTSUP;
+}
+#endif
