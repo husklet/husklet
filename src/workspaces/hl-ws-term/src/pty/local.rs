@@ -335,6 +335,30 @@ mod tests {
         std::path::Path::new(prog).exists()
     }
 
+    const PROCESS_MARKER: &[u8] = b"HL_DESCENDANT_PID=";
+
+    fn reported_process_id(bytes: &[u8]) -> Result<Option<libc::pid_t>, String> {
+        for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+            if !line.ends_with(b"\n") {
+                break;
+            }
+            let line = line.strip_suffix(b"\n").unwrap_or(line);
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            let Some(value) = line.strip_prefix(PROCESS_MARKER) else {
+                continue;
+            };
+            let value = std::str::from_utf8(value).map_err(|error| format!("PID marker is not UTF-8: {error}"))?;
+            let process = value
+                .parse::<libc::pid_t>()
+                .map_err(|error| format!("PID marker {value:?} is invalid: {error}"))?;
+            if process <= 0 {
+                return Err(format!("PID marker must be positive, got {process}"));
+            }
+            return Ok(Some(process));
+        }
+        Ok(None)
+    }
+
     fn read_process_id(pty: &mut LocalPty) -> libc::pid_t {
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut bytes = Vec::new();
@@ -342,16 +366,24 @@ mod tests {
         while Instant::now() < deadline {
             if let Ok(count) = pty.read(&mut buffer) {
                 bytes.extend_from_slice(&buffer[..count]);
-                if bytes.contains(&b'\n') {
-                    break;
+                match reported_process_id(&bytes) {
+                    Ok(Some(process)) => return process,
+                    Ok(None) => {}
+                    Err(error) => panic!("shell reported an invalid descendant pid: {error}; bytes={bytes:?}"),
                 }
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        String::from_utf8_lossy(&bytes)
-            .trim()
-            .parse()
-            .expect("shell must report its descendant pid")
+        panic!("shell did not report a complete descendant pid before the deadline; bytes={bytes:?}")
+    }
+
+    #[test]
+    fn descendant_pid_waits_for_the_complete_tagged_line_across_chunks() {
+        let mut bytes = b"shell noise\r\nHL_DESCENDANT_PID=169".to_vec();
+        assert_eq!(reported_process_id(&bytes), Ok(None));
+        bytes.extend_from_slice(b"42\r\nmore noise\r\n");
+        assert_eq!(reported_process_id(&bytes), Ok(Some(16_942)));
+        assert!(reported_process_id(b"HL_DESCENDANT_PID=16x42\r\n").is_err());
     }
 
     fn process_exists(process: libc::pid_t) -> bool {
@@ -439,7 +471,7 @@ mod tests {
             &[
                 "/bin/sh",
                 "-c",
-                "trap '' HUP TERM; sleep 60 & printf '%s\\n' \"$!\"; wait",
+                "trap '' HUP TERM; sleep 60 & printf 'HL_DESCENDANT_PID=%s\\n' \"$!\"; wait",
             ],
             40,
             10,
@@ -495,7 +527,7 @@ mod tests {
             &[
                 "/bin/sh",
                 "-c",
-                "trap '' HUP TERM; sleep 60 & printf '%s\\n' \"$!\"; exit 0",
+                "trap '' HUP TERM; sleep 60 & printf 'HL_DESCENDANT_PID=%s\\n' \"$!\"; exit 0",
             ],
             40,
             10,
