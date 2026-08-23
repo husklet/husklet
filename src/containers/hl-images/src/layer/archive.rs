@@ -11,6 +11,21 @@ use crate::{
     snapshot::{Names, Ownership, Ownerships},
 };
 
+#[cfg(test)]
+thread_local! {
+    static REUSE_PARENT_VALIDATION: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+#[cfg(test)]
+fn reuse_parent_validation() -> bool {
+    REUSE_PARENT_VALIDATION.with(std::cell::Cell::get)
+}
+
+#[cfg(not(test))]
+const fn reuse_parent_validation() -> bool {
+    true
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct DiffSize(u64);
 
@@ -229,7 +244,8 @@ impl<R: Read> Layer<R> {
             backlog.hard_links.supersede(&destination);
             let kind = entry.header().entry_type();
             let parent = physical_path.as_path().parent().unwrap_or(FsPath::new(""));
-            let can_reuse_parent = matches!(kind, tar::EntryType::Regular | tar::EntryType::GNUSparse);
+            let can_reuse_parent =
+                reuse_parent_validation() && matches!(kind, tar::EntryType::Regular | tar::EntryType::GNUSparse);
             let mut entry_parents = None;
             if !can_reuse_parent || prepared_parent.as_ref().is_none_or(|(cached, _)| cached != parent) {
                 prepared_parent = None;
@@ -564,7 +580,8 @@ mod diff_size_tests {
         let root = std::env::var_os("HL_LAYER_ROOT").unwrap();
         let mode = std::env::var("HL_LAYER_MODE").unwrap();
         let started = std::time::Instant::now();
-        let entries = if mode == "apply" {
+        let entries = if matches!(mode.as_str(), "candidate" | "baseline") {
+            REUSE_PARENT_VALIDATION.with(|reuse| reuse.set(mode == "candidate"));
             let file = std::fs::File::open(archive).unwrap();
             Layer::new(std::io::BufReader::new(file))
                 .apply(std::path::Path::new(&root))
