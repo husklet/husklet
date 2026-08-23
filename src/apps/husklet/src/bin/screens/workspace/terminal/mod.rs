@@ -542,6 +542,7 @@ impl<'a> Terminal<'a> {
 use crate::*;
 
 mod close;
+mod grid;
 mod launch;
 mod link;
 mod pane;
