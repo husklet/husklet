@@ -4,6 +4,25 @@ fn page_owns_focus<T: PartialEq>(focused: Option<&T>, page: &[T]) -> bool {
     focused.is_some_and(|focused| page.iter().any(|candidate| candidate == focused))
 }
 
+pub(super) struct PaneFocus;
+
+impl PaneFocus {
+    pub(super) fn wire(tw: &Rc<TermWin>, terminal: &vte4::Terminal) {
+        let tw = tw.clone();
+        let focused = terminal.clone();
+        let controller = gtk::EventControllerFocus::new();
+        controller.connect_enter(move |_| {
+            if let Some(page) = Page::of(&tw, focused.upcast_ref::<gtk::Widget>()) {
+                tw.page_focus.borrow_mut().insert(page.name, focused.downgrade());
+            }
+            let previous = tw.focused.replace(Some(focused.clone()));
+            tw.copymode.focus(previous.clone(), &focused);
+            tw.search.focus(previous, focused.clone());
+        });
+        terminal.add_controller(controller);
+    }
+}
+
 pub(crate) struct PaneWidget;
 
 impl PaneWidget {
@@ -131,7 +150,7 @@ impl<'a> Tabs<'a> {
         let click = gtk::GestureClick::new();
         let tw2 = tw.clone();
         let name2 = name.clone();
-        click.connect_released(move |_, _, _, _| Page::new(&tw2, &name2).select());
+        click.connect_released(move |_, _, _, _| Page::new(&tw2, &name2).select_and_focus());
         bx.add_controller(click);
 
         tw.tabs.append(&bx);
@@ -216,6 +235,36 @@ impl<'a> Page<'a> {
         }
     }
 
+    /// Selects a tab in response to an explicit user action and restores the
+    /// pane that tab most recently owned. Programmatic selection keeps using
+    /// `select`, so opening an overlay or restoring a layout cannot steal focus.
+    fn select_and_focus(&self) {
+        self.select();
+        let tw = self.window;
+        let name = self.name.clone();
+        let terminal = tw
+            .page_focus
+            .borrow()
+            .get(&name)
+            .and_then(glib::WeakRef::upgrade)
+            .or_else(|| tw.stack.child_by_name(&name).and_then(|page| PaneView::first(&page)));
+        let Some(terminal) = terminal else { return };
+        let stack = tw.stack.downgrade();
+        terminal.add_tick_callback(move |terminal, _| {
+            let Some(stack) = stack.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if stack.visible_child_name().as_deref() != Some(name.as_str()) {
+                return glib::ControlFlow::Break;
+            }
+            if !terminal.is_mapped() {
+                return glib::ControlFlow::Continue;
+            }
+            terminal.grab_focus();
+            glib::ControlFlow::Break
+        });
+    }
+
     pub(crate) fn close(&self) {
         let tw = self.window;
         let name = self.name.as_str();
@@ -254,7 +303,11 @@ impl<'a> Page<'a> {
         if let Some(i) = pos {
             let next = tw.entries.borrow().get(i).map(|e| e.name.clone());
             if let Some(n) = next {
-                Self::new(tw, &n).select();
+                if tw.search.entry.has_focus() {
+                    Self::new(tw, &n).select();
+                } else {
+                    Self::new(tw, &n).select_and_focus();
+                }
             }
         }
     }
@@ -476,14 +529,235 @@ impl PaneReplacement {
 }
 
 #[cfg(test)]
+#[allow(unsafe_code)]
 mod focus_ownership_tests {
-    use super::page_owns_focus;
+    use super::*;
+    use std::os::fd::{AsRawFd as _, FromRawFd as _};
 
     #[test]
     fn removed_page_clears_only_focus_owned_by_that_page() {
         assert!(page_owns_focus(Some(&2), &[1, 2, 3]));
         assert!(!page_owns_focus(Some(&4), &[1, 2, 3]));
         assert!(!page_owns_focus::<i32>(None, &[1, 2, 3]));
+    }
+
+    #[test]
+    fn tab_selection_and_close_route_utf8_paste_only_to_the_visible_pty() {
+        let ran = crate::test_support::on_the_toolkit_thread(|| {
+            let workspace = WorkspaceConfig::new("dev", "alpine:3.20", hl_ws::Arch::Arm64);
+            let tw = Window::bench(&workspace);
+            let root = tw.stack.root().unwrap().downcast::<gtk::Window>().unwrap();
+            root.set_child(gtk::Widget::NONE);
+            let overlay = gtk::Overlay::new();
+            overlay.set_child(Some(&tw.stack));
+            overlay.add_overlay(&tw.search.bar);
+            root.set_child(Some(&overlay));
+            root.present();
+            let overview = gtk::Label::new(Some("overview"));
+            Tabs::new(&tw).add("overview", None, &overview, false);
+
+            let (a, a_slave) = terminal_with_pty();
+            let a_page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            a_page.append(&a);
+            let a_name = Tabs::new(&tw).add("a", None, &a_page, true);
+            PaneFocus::wire(&tw, &a);
+
+            let (b_first, b_first_slave) = terminal_with_pty();
+            let (b, b_slave) = terminal_with_pty();
+            let b_page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            b_page.append(&b_first);
+            assert!(PaneSplit::insert(
+                b_first.upcast_ref::<gtk::Widget>(),
+                gtk::Orientation::Horizontal,
+                b.upcast_ref::<gtk::Widget>()
+            ));
+            let b_name = Tabs::new(&tw).add("b", None, &b_page, true);
+            PaneFocus::wire(&tw, &b_first);
+            PaneFocus::wire(&tw, &b);
+
+            Page::new(&tw, &b_name).select_and_focus();
+            await_focus(&tw, &b_first);
+            b.grab_focus();
+            await_focus(&tw, &b);
+            Page::new(&tw, &a_name).select_and_focus();
+            await_focus(&tw, &a);
+            paste_and_expect(&tw, &a, a_slave.as_raw_fd(), "α from a");
+            assert_quiet(b_slave.as_raw_fd());
+            assert_quiet(b_first_slave.as_raw_fd());
+
+            // This is the same route the tab-strip click handler invokes.
+            Page::new(&tw, &b_name).select_and_focus();
+            await_focus(&tw, &b);
+            paste_and_expect(&tw, &b, b_slave.as_raw_fd(), "β from b");
+            assert_quiet(a_slave.as_raw_fd());
+            assert_quiet(b_first_slave.as_raw_fd());
+
+            // A programmatic page change must not take focus from the search
+            // overlay merely because the new page contains a terminal.
+            tw.search.bar.set_visible(true);
+            tw.search.entry.grab_focus();
+            await_widget_focus(&root, tw.search.entry.upcast_ref());
+            Page::new(&tw, &a_name).select();
+            settle_frames(2);
+            assert!(owns_focus(&root, tw.search.entry.upcast_ref()));
+            tw.search.bar.set_visible(false);
+
+            // A focus request queued for a page is cancelled if another page
+            // becomes visible before the mapped-frame callback runs.
+            Page::new(&tw, &a_name).select_and_focus();
+            Page::new(&tw, &b_name).select();
+            settle_frames(2);
+            assert!(!a.has_focus());
+
+            b.grab_focus();
+            await_focus(&tw, &b);
+            Page::new(&tw, &a_name).select_and_focus();
+            await_focus(&tw, &a);
+            Page::new(&tw, &a_name).close();
+            await_focus(&tw, &b);
+            paste_and_expect(&tw, &b, b_slave.as_raw_fd(), "終 after close");
+            assert_quiet(a_slave.as_raw_fd());
+            assert_quiet(b_first_slave.as_raw_fd());
+        });
+        if !ran {
+            println!("skipped: no display connection");
+        }
+    }
+
+    fn terminal_with_pty() -> (vte4::Terminal, std::os::fd::OwnedFd) {
+        let mut master = -1;
+        let mut slave = -1;
+        // SAFETY: openpty initializes both descriptors; ownership is immediately adopted below.
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &raw mut master,
+                    &raw mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            },
+            0
+        );
+        // SAFETY: openpty returned these two unique owned descriptors.
+        let master = unsafe { std::os::fd::OwnedFd::from_raw_fd(master) };
+        let slave = unsafe { std::os::fd::OwnedFd::from_raw_fd(slave) };
+        let mut attrs = std::mem::MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: slave is live; tcgetattr initializes attrs and tcsetattr only borrows it.
+        assert_eq!(unsafe { libc::tcgetattr(slave.as_raw_fd(), attrs.as_mut_ptr()) }, 0);
+        // SAFETY: successful tcgetattr initialized attrs.
+        let mut attrs = unsafe { attrs.assume_init() };
+        // SAFETY: attrs is an initialized termios exclusively owned here.
+        unsafe { libc::cfmakeraw(&raw mut attrs) };
+        // SAFETY: slave is live and attrs remains borrowed for this call only.
+        assert_eq!(
+            unsafe { libc::tcsetattr(slave.as_raw_fd(), libc::TCSANOW, &raw const attrs) },
+            0
+        );
+        let pty = vte4::Pty::foreign_sync(master, gio::Cancellable::NONE).unwrap();
+        let terminal = vte4::Terminal::new();
+        terminal.set_pty(Some(&pty));
+        (terminal, slave)
+    }
+
+    fn await_focus(tw: &Rc<TermWin>, expected: &vte4::Terminal) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            while glib::MainContext::default().iteration(false) {}
+            if expected.has_focus() && tw.focused.borrow().as_ref() == Some(expected) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "selected terminal never acquired focus: mapped={} visible={} focusable={} root={} page={:?}",
+                expected.is_mapped(),
+                expected.is_visible(),
+                expected.is_focusable(),
+                expected.root().is_some(),
+                tw.stack.visible_child_name()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    fn paste_and_expect(tw: &TermWin, terminal: &vte4::Terminal, fd: libc::c_int, text: &str) {
+        terminal.clipboard().set_text(text);
+        Clipboard::paste(tw);
+        let mut received = vec![0_u8; text.len()];
+        let mut offset = 0;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while offset < received.len() {
+            while glib::MainContext::default().iteration(false) {}
+            let mut descriptor = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: descriptor is initialized and exclusively borrowed for poll.
+            if unsafe { libc::poll(&raw mut descriptor, 1, 5) } > 0 {
+                // SAFETY: fd is live and the remaining slice is writable for this call.
+                let count = unsafe { libc::read(fd, received[offset..].as_mut_ptr().cast(), received.len() - offset) };
+                assert!(count > 0);
+                offset += count as usize;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "paste received only {offset} bytes"
+            );
+        }
+        assert_eq!(received, text.as_bytes());
+    }
+
+    fn assert_quiet(fd: libc::c_int) {
+        let mut descriptor = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: descriptor is initialized and exclusively borrowed for poll.
+        assert_eq!(
+            unsafe { libc::poll(&raw mut descriptor, 1, 20) },
+            0,
+            "paste reached a hidden terminal"
+        );
+    }
+
+    fn settle_frames(count: usize) {
+        for _ in 0..count {
+            while glib::MainContext::default().iteration(false) {}
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    fn await_widget_focus(root: &gtk::Window, widget: &gtk::Widget) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            while glib::MainContext::default().iteration(false) {}
+            if owns_focus(root, widget) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "widget never acquired focus: mapped={} visible={} focusable={} root={}",
+                widget.is_mapped(),
+                widget.is_visible(),
+                widget.is_focusable(),
+                widget.root().is_some()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    fn owns_focus(root: &gtk::Window, owner: &gtk::Widget) -> bool {
+        let mut focused: Option<gtk::Widget> = gtk::prelude::RootExt::focus(root);
+        while let Some(widget) = focused {
+            if widget == *owner {
+                return true;
+            }
+            focused = widget.parent();
+        }
+        false
     }
 }
 

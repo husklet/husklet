@@ -162,17 +162,7 @@ pub(crate) fn make_terminal_ex(
     Terminal::new(&term).style(&cfg);
     term.set_font_scale(tw.zoom.scale());
     Terminal::new(&term).setup_hyperlinks();
-    {
-        let tw = tw.clone();
-        let t = term.clone();
-        let fc = gtk::EventControllerFocus::new();
-        fc.connect_enter(move |_| {
-            let previous = tw.focused.replace(Some(t.clone()));
-            tw.copymode.focus(previous.clone(), &t);
-            tw.search.focus(previous, t.clone());
-        });
-        term.add_controller(fc);
-    }
+    PaneFocus::wire(tw, &term);
     // Gentler, more natural scrolling. macOS trackpad / high-res wheel deltas make VTE's default scroll
     // fly by many lines per flick; intercept in the capture phase and move the scrollback a damped,
     // clamped number of lines. When there is no scrollback to move (alt-screen apps like htop/less/vim),

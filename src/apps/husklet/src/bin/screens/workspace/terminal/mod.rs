@@ -3,6 +3,9 @@ pub(crate) struct TermWin {
     tabs: gtk::Box,
     pub(crate) ws: WorkspaceConfig,
     focused: RefCell<Option<vte4::Terminal>>,
+    /// Last terminal focused in each tab, so returning to a split restores the
+    /// pane the user was working in rather than arbitrarily choosing its first.
+    page_focus: RefCell<HashMap<String, glib::WeakRef<vte4::Terminal>>>,
     entries: RefCell<Vec<TabEntry>>,
     pids: RefCell<HashMap<String, Vec<Rc<Cell<i32>>>>>,
     counter: Cell<u32>,
@@ -312,6 +315,7 @@ impl Window {
             tabs: gtk::Box::new(gtk::Orientation::Horizontal, 0),
             ws: ws.clone(),
             focused: RefCell::new(None),
+            page_focus: RefCell::new(HashMap::new()),
             entries: RefCell::new(Vec::new()),
             pids: RefCell::new(HashMap::new()),
             counter: Cell::new(0),
@@ -383,6 +387,7 @@ impl Window {
             tabs,
             ws: ws.clone(),
             focused: RefCell::new(None),
+            page_focus: RefCell::new(HashMap::new()),
             entries: RefCell::new(Vec::new()),
             pids: RefCell::new(HashMap::new()),
             counter: Cell::new(0),
@@ -563,7 +568,7 @@ pub(crate) use surface::*;
 
 #[cfg(test)]
 mod shortcut_tests {
-    use super::{editable_captures, Shortcut};
+    use super::{Shortcut, editable_captures};
     use gtk::gdk;
 
     #[cfg(target_os = "macos")]
