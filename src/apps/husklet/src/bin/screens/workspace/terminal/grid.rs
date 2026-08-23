@@ -40,6 +40,16 @@ mod tests {
     }
 
     #[test]
+    fn production_attach_invokes_immediate_grid_synchronisation() {
+        let launch = include_str!("launch.rs");
+        assert_eq!(
+            launch.matches("super::grid::synchronise(self.terminal, pty);").count(),
+            1,
+            "Launch::attach must synchronise the allocated grid when it binds the foreign PTY"
+        );
+    }
+
+    #[test]
     fn foreign_pty_catches_up_at_attach_and_vte_propagates_later_resizes() {
         let ran = crate::test_support::on_the_toolkit_thread(|| {
             let mut master = -1;
