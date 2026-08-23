@@ -242,7 +242,7 @@ fn operand_and_terminator_coverage_agrees_with_the_interpreter() {
 ///
 /// A single anonymous `PROT_EXEC` mapping latches `g_rwx_guest`, and nothing clears it -- not a later
 /// `mprotect`, not `execve`. Every JIT-hosting guest takes that mapping within milliseconds of starting,
-/// so a JVM, V8, .NET or LuaJIT workload runs entirely interpreted with the option on and nothing says
+/// so a JVM, V8, .NET or `LuaJIT` workload runs entirely interpreted with the option on and nothing says
 /// so. This case exists to keep that fact attached to a number rather than to a memory: it asserts the
 /// refusal is reported, that it is the executable-mapping one and not the image one, and that the
 /// answer is unchanged either way.
