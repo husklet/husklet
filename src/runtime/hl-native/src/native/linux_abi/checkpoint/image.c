@@ -118,13 +118,32 @@ enum ckpt_refusal_reason {
  *
  * Best effort in this order deliberately: the stderr line is written first, so a refusal is still diagnosed
  * when the channel is the thing that broke. */
+#if defined(HL_NATIVE_TEST_HOOKS)
+static const hl_engine_child_result *g_ckpt_refusal_test_result;
+static int g_ckpt_refusal_test_observed;
+#endif
+
+static void ckpt_coordinator_report_refusal(enum ckpt_refusal_reason code, const char *reason) {
+    hl_engine_child_result_publish(0, HL_STATUS_NOT_SUPPORTED, (uint64_t)code);
+#if defined(HL_NATIVE_TEST_HOOKS)
+    if (g_ckpt_refusal_test_result != NULL && g_ckpt_refusal_test_result->magic == HL_ENGINE_CHILD_RESULT_MAGIC &&
+        g_ckpt_refusal_test_result->engine_status == HL_STATUS_NOT_SUPPORTED &&
+        g_ckpt_refusal_test_result->detail == (uint64_t)code)
+        g_ckpt_refusal_test_observed = 1;
+#endif
+    ckpt_stream_capture_refused(reason);
+}
+
 static _Noreturn void ckpt_coordinator_refuse(const struct ckpt_phase_ledger *ledger, enum ckpt_refusal_reason code,
                                               const char *reason) {
     fprintf(stderr, "[ckpt] refuse: %s\n", reason);
-    ckpt_stream_capture_refused(reason);
-    hl_engine_child_result_publish(0, HL_STATUS_NOT_SUPPORTED, (uint64_t)code);
+    ckpt_coordinator_report_refusal(code, reason);
     ckpt_phase_exit(ledger, 70);
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+#include "refusal_order_test.inc"
+#endif
 
 static int ckpt_fd_was_captured(const struct ckpt_fd *records, int count, int fd) {
     for (int prior = 0; prior < count; ++prior)

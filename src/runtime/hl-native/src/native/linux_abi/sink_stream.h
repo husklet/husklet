@@ -47,8 +47,11 @@ static int ckpt_stream_call(uint32_t op, const char *name, uint64_t stream, uint
 // correctness: the refusal itself is already decided and the coordinator exits regardless. What it buys is
 // that the host fails the capture on the decision rather than on its own deadline, and can name the reason.
 static void ckpt_stream_capture_refused(const char *reason) {
+    hl_ckpt_request request = {0};
     if (reason == NULL || reason[0] == 0) reason = "the coordinator refused the capture";
-    (void)ckpt_stream_call(HL_CKPT_OP_CAPTURE_REFUSED, reason, 0, 0, 0, NULL, 0, NULL, NULL, 0);
+    request.op = HL_CKPT_OP_CAPTURE_REFUSED;
+    request.generation = ckpt_request_generation();
+    (void)hl_ckpt_channel_notify(&request, reason);
 }
 
 // Ask the broker whether `host_pid` ever proved exact membership (REGISTER_READY) of the capture
