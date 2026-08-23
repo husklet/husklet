@@ -395,8 +395,18 @@ mod tests {
         let mut blocker = [-1; 2];
         // SAFETY: `blocker` is writable storage for the two descriptors returned by pipe.
         assert_eq!(unsafe { libc::pipe(blocker.as_mut_ptr()) }, 0);
+        // Force the condition a parallel workspace run creates naturally. Dash accepts only a
+        // single-digit descriptor in `<&N`, so interpolating this inherited fd used to print both
+        // readiness markers and then lose the descendant as soon as `read` parsed fd 10 or above.
+        // `/dev/fd/N` opens the inherited descriptor without that shell grammar limit.
+        // SAFETY: `blocker[0]` is a live descriptor and F_DUPFD retains no pointer.
+        let inherited = unsafe { libc::fcntl(blocker[0], libc::F_DUPFD, 32) };
+        assert!(inherited >= 32, "could not force a high inherited blocker descriptor");
+        // SAFETY: `inherited` is now the uniquely retained duplicate of this read end.
+        unsafe { libc::close(blocker[0]) };
+        blocker[0] = inherited;
         let script = format!(
-            "trap '' HUP TERM; {{ trap '' HUP TERM; printf 'HL_DESCENDANT_READY\\n'; read _ <&{}; }} & printf 'HL_DESCENDANT_PID=%s\\n' \"$!\"; {}",
+            "trap '' HUP TERM; {{ trap '' HUP TERM; printf 'HL_DESCENDANT_READY\\n'; read _ </dev/fd/{}; }} & printf 'HL_DESCENDANT_PID=%s\\n' \"$!\"; {}",
             blocker[0],
             if exit_leader { "exit 0" } else { "wait" }
         );
