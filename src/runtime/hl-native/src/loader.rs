@@ -121,8 +121,10 @@ pub(crate) struct TestApi {
     pub(crate) x86_64_bound_vector_io: VectorIoTest,
     #[cfg(test)]
     pub(crate) aarch64_fdvis_path_publication: ScenarioTest,
+    pub(crate) aarch64_proc_fdinfo_listing: ScenarioTest,
     #[cfg(test)]
     pub(crate) x86_64_fdvis_path_publication: ScenarioTest,
+    pub(crate) x86_64_proc_fdinfo_listing: ScenarioTest,
     pub(crate) aarch64_namespace_transaction: ScenarioTest,
     pub(crate) x86_64_namespace_transaction: ScenarioTest,
     pub(crate) x86_64_store_preflight: NoArgumentTest,
@@ -180,6 +182,10 @@ pub(crate) struct TestApi {
     pub(crate) directory_stream_private: unsafe extern "C" fn(c_uint) -> c_int,
     pub(crate) identity_registry: unsafe extern "C" fn(c_uint, c_uint) -> c_int,
     pub(crate) private_fork_lock: unsafe extern "C" fn(c_uint) -> c_int,
+    pub(crate) aarch64_checkpoint_channel_notify: ScenarioTest,
+    pub(crate) x86_64_checkpoint_channel_notify: ScenarioTest,
+    pub(crate) aarch64_checkpoint_refusal_order: NoArgumentTest,
+    pub(crate) x86_64_checkpoint_refusal_order: NoArgumentTest,
     pub(crate) process_identity_token: unsafe extern "C" fn(c_uint) -> c_int,
     pub(crate) setfl_append_write: unsafe extern "C" fn(c_uint) -> c_int,
     #[allow(dead_code)]
@@ -459,8 +465,10 @@ impl TestApi {
             x86_64_bound_vector_io: symbol!("hl_x86_64_bound_vector_io_test", VectorIoTest),
             #[cfg(test)]
             aarch64_fdvis_path_publication: symbol!("hl_aarch64_fdvis_path_publication_test", ScenarioTest),
+            aarch64_proc_fdinfo_listing: symbol!("hl_aarch64_proc_fdinfo_listing_test", ScenarioTest),
             #[cfg(test)]
             x86_64_fdvis_path_publication: symbol!("hl_x86_64_fdvis_path_publication_test", ScenarioTest),
+            x86_64_proc_fdinfo_listing: symbol!("hl_x86_64_proc_fdinfo_listing_test", ScenarioTest),
             aarch64_namespace_transaction: symbol!("hl_aarch64_namespace_transaction_test", ScenarioTest),
             x86_64_namespace_transaction: symbol!("hl_x86_64_namespace_transaction_test", ScenarioTest),
             x86_64_store_preflight: symbol!("hl_x86_64_store_preflight_test", NoArgumentTest),
@@ -539,6 +547,10 @@ impl TestApi {
                 "hl_c_backend_private_fork_lock_test",
                 unsafe extern "C" fn(c_uint) -> c_int
             ),
+            aarch64_checkpoint_channel_notify: symbol!("hl_aarch64_checkpoint_channel_notify_test", ScenarioTest),
+            x86_64_checkpoint_channel_notify: symbol!("hl_x86_64_checkpoint_channel_notify_test", ScenarioTest),
+            aarch64_checkpoint_refusal_order: symbol!("hl_aarch64_checkpoint_refusal_order_test", NoArgumentTest),
+            x86_64_checkpoint_refusal_order: symbol!("hl_x86_64_checkpoint_refusal_order_test", NoArgumentTest),
             process_identity_token: symbol!(
                 "hl_c_backend_process_identity_token_test",
                 unsafe extern "C" fn(c_uint) -> c_int

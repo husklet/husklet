@@ -61,6 +61,10 @@ name = "setfl_append_write"
 required-features = ["native-test-hooks"]
 
 [[test]]
+name = "proc_fdinfo_listing"
+required-features = ["native-test-hooks"]
+
+[[test]]
 name = "identity_registry"
 
 [[test]]

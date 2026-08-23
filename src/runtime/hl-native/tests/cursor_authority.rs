@@ -100,6 +100,14 @@ static const hl_host_services services = {
 
 #include "linux_abi/container/vfs/cursor.c"
 
+/* This fixture compiles the cursor without the container namespace that owns bind mounts, so the
+ * mount edge has no volume table to consult and every guest path stays inside the merged layers. */
+static int hl_vfs_cursor_mount_authority(const char *guest, hl_vfs_cursor_authority *output) {
+    (void)guest;
+    (void)output;
+    return 0;
+}
+
 static int search_hook(const hl_vfs_cursor *directory, void *context) {
     int *calls = context;
     (*calls)++;
@@ -342,6 +350,14 @@ static const hl_host_services services = {
 };
 
 #include "linux_abi/container/vfs/cursor.c"
+
+/* This fixture compiles the cursor without the container namespace that owns bind mounts, so the
+ * mount edge has no volume table to consult and every guest path stays inside the merged layers. */
+static int hl_vfs_cursor_mount_authority(const char *guest, hl_vfs_cursor_authority *output) {
+    (void)guest;
+    (void)output;
+    return 0;
+}
 
 static hl_vfs_cursor_authority authority_for(hl_host_handle handle) {
     references[handle]++;

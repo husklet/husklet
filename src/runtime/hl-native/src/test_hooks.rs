@@ -177,6 +177,17 @@ pub(crate) fn private_fork_lock_test(scenario: u32) -> Result<(), i32> {
 }
 
 #[cfg(feature = "native-test-hooks")]
+pub(crate) fn checkpoint_channel_notify_test(isa: u32, scenario: u32) -> Result<(), i32> {
+    // SAFETY: the feature-gated native hook owns both ends of its socket fixture and returns a scalar.
+    scenario_status(
+        isa,
+        test_api().aarch64_checkpoint_channel_notify,
+        test_api().x86_64_checkpoint_channel_notify,
+        scenario,
+    )
+}
+
+#[cfg(feature = "native-test-hooks")]
 pub(crate) fn namespace_transaction_test(isa: u32, scenario: u32) -> Result<(), i32> {
     let hook = match isa {
         1 => test_api().aarch64_namespace_transaction,
@@ -198,6 +209,17 @@ pub(crate) fn fdvis_path_publication_test(isa: u32, scenario: u32) -> bool {
     };
     // SAFETY: the feature-gated hook owns and restores its isolated descriptor-path fixture.
     unsafe { hook(scenario) == 1 }
+}
+
+#[cfg(feature = "native-test-hooks")]
+pub(crate) fn proc_fdinfo_listing_test(isa: u32, scenario: u32) -> i32 {
+    let hook = match isa {
+        1 => test_api().aarch64_proc_fdinfo_listing,
+        2 => test_api().x86_64_proc_fdinfo_listing,
+        _ => return -(libc::EINVAL),
+    };
+    // SAFETY: the hook owns its descriptors and restores its eventfd binding and ledger rows.
+    unsafe { hook(scenario) }
 }
 
 #[cfg(feature = "native-test-hooks")]
