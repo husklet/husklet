@@ -55,6 +55,8 @@ pub(crate) type VectorIoTest = unsafe extern "C" fn(c_uint, *mut i64, *mut c_uin
 #[cfg(feature = "native-test-hooks")]
 pub(crate) type ScenarioTest = unsafe extern "C" fn(c_uint) -> c_int;
 #[cfg(feature = "native-test-hooks")]
+pub(crate) type RestoreFdResetTest = unsafe extern "C" fn(c_uint, *mut u64) -> c_int;
+#[cfg(feature = "native-test-hooks")]
 pub(crate) type SignalFrameTest = unsafe extern "C" fn(c_uint, c_uint, u64, i64, *mut i64, *mut i64) -> c_int;
 #[cfg(feature = "native-test-hooks")]
 pub(crate) type NoArgumentTest = unsafe extern "C" fn() -> c_int;
@@ -146,6 +148,8 @@ pub(crate) struct TestApi {
     pub(crate) x86_64_checkpoint_restart_register: NoArgumentTest,
     pub(crate) aarch64_checkpoint_restore_claim: ScenarioTest,
     pub(crate) x86_64_checkpoint_restore_claim: ScenarioTest,
+    pub(crate) aarch64_checkpoint_restore_fd_reset: RestoreFdResetTest,
+    pub(crate) x86_64_checkpoint_restore_fd_reset: RestoreFdResetTest,
     pub(crate) aarch64_checkpoint_restore_slice: ScenarioTest,
     pub(crate) x86_64_checkpoint_restore_slice: ScenarioTest,
     pub(crate) aarch64_checkpoint_gmap_release: ScenarioTest,
@@ -505,6 +509,14 @@ impl TestApi {
             aarch64_checkpoint_gmap_release: symbol!("hl_aarch64_checkpoint_gmap_release_test", ScenarioTest),
             x86_64_checkpoint_gmap_release: symbol!("hl_x86_64_checkpoint_gmap_release_test", ScenarioTest),
             x86_64_checkpoint_restore_claim: symbol!("hl_x86_64_checkpoint_restore_claim_test", ScenarioTest),
+            aarch64_checkpoint_restore_fd_reset: symbol!(
+                "hl_aarch64_checkpoint_restore_fd_reset_test",
+                RestoreFdResetTest
+            ),
+            x86_64_checkpoint_restore_fd_reset: symbol!(
+                "hl_x86_64_checkpoint_restore_fd_reset_test",
+                RestoreFdResetTest
+            ),
             aarch64_checkpoint_anon_shared: symbol!("hl_aarch64_checkpoint_anon_shared_test", ScenarioTest),
             x86_64_checkpoint_anon_shared: symbol!("hl_x86_64_checkpoint_anon_shared_test", ScenarioTest),
             aarch64_checkpoint_membership: symbol!("hl_aarch64_checkpoint_membership_test", ScenarioTest),

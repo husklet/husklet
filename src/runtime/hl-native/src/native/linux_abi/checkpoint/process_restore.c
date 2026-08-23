@@ -10,9 +10,24 @@ static int ckpt_restore_prior_ofd(const struct ckpt_fd *records, int index, uint
     return -1;
 }
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+static uint64_t g_ckpt_restore_reset_inspected;
+#define CKPT_RESET_INSPECT() (g_ckpt_restore_reset_inspected++)
+#else
+#define CKPT_RESET_INSPECT() ((void)0)
+#endif
+
 static void ckpt_restore_reset_inherited_fds(const struct ckpt_fd *records, int count) {
-    static unsigned char desired_pipe[HL_NFD];
-    for (int fd = 0; fd < HL_NFD; fd++) {
+    static uint32_t desired_pipe[HL_NFD];
+    static uint32_t desired_generation;
+    desired_generation++;
+    if (desired_generation == 0) {
+        memset(desired_pipe, 0, sizeof desired_pipe);
+        desired_generation = 1;
+    }
+    int inherited_bound = g_virtual_fd_bound;
+    for (int fd = 0; fd < inherited_bound; fd++) {
+        CKPT_RESET_INSPECT();
         if (!g_eventfd_peer[fd]) continue;
         proc_fdvis_close(fd);
         close(fd);
@@ -22,17 +37,68 @@ static void ckpt_restore_reset_inherited_fds(const struct ckpt_fd *records, int 
         g_eventfd_gnb[fd] = 0;
     }
     memset(g_eventfd_refs, 0, sizeof g_eventfd_refs);
-    memset(desired_pipe, 0, sizeof desired_pipe);
+    int desired_bound = 0;
     for (int i = 0; i < count; i++)
-        if (records[i].kind == CKF_PIPE && records[i].gfd >= 0 && records[i].gfd < HL_NFD)
-            desired_pipe[records[i].gfd] = 1;
-    for (int fd = 0; fd < HL_NFD; fd++) {
-        if (g_pipe_identity[fd] == 0 || desired_pipe[fd]) continue;
+        if (records[i].kind == CKF_PIPE && records[i].gfd >= 0 && records[i].gfd < HL_NFD) {
+            desired_pipe[records[i].gfd] = desired_generation;
+            if (records[i].gfd >= desired_bound) desired_bound = records[i].gfd + 1;
+        }
+    for (int fd = 0; fd < inherited_bound; fd++) {
+        CKPT_RESET_INSPECT();
+        if (g_pipe_identity[fd] == 0 || desired_pipe[fd] == desired_generation) continue;
         proc_fdvis_close(fd);
         g_pipe_identity[fd] = 0;
         close(fd);
     }
+    g_virtual_fd_bound = desired_bound;
 }
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+HL_API int hl_checkpoint_restore_fd_reset_test(uint32_t scenario, uint64_t *inspected) {
+    if (inspected == NULL) return 90;
+    g_ckpt_restore_reset_inspected = 0;
+    if (scenario == 0) {
+        g_virtual_fd_bound = 0;
+        ckpt_restore_reset_inherited_fds(NULL, 0);
+        *inspected = g_ckpt_restore_reset_inspected;
+        return *inspected == 0 ? 0 : 1;
+    }
+    if (scenario != 1) return 91;
+
+    int event_pair[2] = {-1, -1};
+    int stale_pipe[2] = {-1, -1};
+    int desired_pipe_pair[2] = {-1, -1};
+    if (pipe(event_pair) != 0 || pipe(stale_pipe) != 0 || pipe(desired_pipe_pair) != 0) goto failed;
+    eventfd_peer_bind(event_pair[0], event_pair[1] + 1);
+    pipe_identity_bind(stale_pipe[0], UINT64_C(11));
+    pipe_identity_bind(desired_pipe_pair[0], UINT64_C(12));
+    int inherited_bound = g_virtual_fd_bound;
+    struct ckpt_fd desired = {.gfd = desired_pipe_pair[0], .kind = CKF_PIPE};
+    ckpt_restore_reset_inherited_fds(&desired, 1);
+    *inspected = g_ckpt_restore_reset_inspected;
+    int result = 0;
+    if (fcntl(event_pair[0], F_GETFD) >= 0 || errno != EBADF) result = 2;
+    if (fcntl(stale_pipe[0], F_GETFD) >= 0 || errno != EBADF) result = 3;
+    if (fcntl(desired_pipe_pair[0], F_GETFD) < 0 || g_pipe_identity[desired_pipe_pair[0]] != UINT64_C(12)) result = 4;
+    if (*inspected != (uint64_t)(unsigned)inherited_bound * 2u) result = 5;
+    close(event_pair[1]);
+    close(stale_pipe[1]);
+    close(desired_pipe_pair[0]);
+    close(desired_pipe_pair[1]);
+    g_pipe_identity[desired_pipe_pair[0]] = 0;
+    g_virtual_fd_bound = 0;
+    return result;
+
+failed:
+    for (size_t i = 0; i < 2; ++i) {
+        if (event_pair[i] >= 0) close(event_pair[i]);
+        if (stale_pipe[i] >= 0) close(stale_pipe[i]);
+        if (desired_pipe_pair[i] >= 0) close(desired_pipe_pair[i]);
+    }
+    g_virtual_fd_bound = 0;
+    return 92;
+}
+#endif
 
 static int ckpt_restore_record_replaces_typed_fd(int kind) {
     switch (kind) {
@@ -487,7 +553,7 @@ static int ckpt_restore_pipe_fd(const struct ckpt_fd *record) {
     if (live_flags < 0 || fcntl(record->gfd, F_SETFL, (live_flags & ~O_NONBLOCK) | (record->flags & O_NONBLOCK)) != 0)
         return -1;
     if (record->descriptor_flags & FD_CLOEXEC) fcntl(record->gfd, F_SETFD, FD_CLOEXEC);
-    g_pipe_identity[record->gfd] = identity;
+    pipe_identity_bind(record->gfd, identity);
     g_pipesz[record->gfd] = pipe->size;
     return proc_fdvis_publish(record->gfd, HL_HOST_FD_PIPE, 1, identity);
 }
