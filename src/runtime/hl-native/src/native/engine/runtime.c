@@ -30,6 +30,23 @@
  * guest ISA: a constructor for one backend must never overwrite another. */
 static const hl_engine_backend *production_backends[HL_GUEST_ISA_X86_64 + 1];
 
+#if defined(HL_NATIVE_TEST_HOOKS)
+static atomic_uint engine_finish_test_phase;
+
+HL_API uint32_t hl_c_backend_engine_finish_test_arm(void) {
+    atomic_store_explicit(&engine_finish_test_phase, 1, memory_order_release);
+    return 1;
+}
+
+HL_API uint32_t hl_c_backend_engine_finish_test_phase(void) {
+    return atomic_load_explicit(&engine_finish_test_phase, memory_order_acquire);
+}
+
+HL_API void hl_c_backend_engine_finish_test_release(void) {
+    atomic_store_explicit(&engine_finish_test_phase, 3, memory_order_release);
+}
+#endif
+
 void hl_engine_backend_register(const hl_engine_backend *backend) {
     if (backend == NULL || backend->guest_isa > HL_GUEST_ISA_X86_64) return;
     production_backends[backend->guest_isa] = backend;
@@ -91,20 +108,6 @@ static size_t checkpoint_registry_capacity;
 static _Thread_local int checkpoint_registry_fail_allocation;
 static _Thread_local uint32_t checkpoint_adopt_failure_position;
 static _Thread_local uint32_t checkpoint_adopt_position;
-static atomic_uint engine_finish_test_phase;
-
-HL_API uint32_t hl_c_backend_engine_finish_test_arm(void) {
-    atomic_store_explicit(&engine_finish_test_phase, 1, memory_order_release);
-    return 1;
-}
-
-HL_API uint32_t hl_c_backend_engine_finish_test_phase(void) {
-    return atomic_load_explicit(&engine_finish_test_phase, memory_order_acquire);
-}
-
-HL_API void hl_c_backend_engine_finish_test_release(void) {
-    atomic_store_explicit(&engine_finish_test_phase, 3, memory_order_release);
-}
 #endif
 
 static void hl_engine_checkpoint_registry_compact_locked(void) {

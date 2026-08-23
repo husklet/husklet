@@ -59,6 +59,12 @@ pub(crate) type SignalFrameTest = unsafe extern "C" fn(c_uint, c_uint, u64, i64,
 #[cfg(feature = "native-test-hooks")]
 pub(crate) type NoArgumentTest = unsafe extern "C" fn() -> c_int;
 #[cfg(feature = "native-test-hooks")]
+type UnaryStatus = unsafe extern "C" fn(c_uint) -> c_int;
+#[cfg(feature = "native-test-hooks")]
+type BinaryStatus = unsafe extern "C" fn(c_uint, c_uint) -> c_int;
+#[cfg(test)]
+type TestPhase = unsafe extern "C" fn() -> c_uint;
+#[cfg(feature = "native-test-hooks")]
 pub(crate) type TermiosInstallTest = unsafe extern "C" fn(c_int, *const u8);
 #[cfg(feature = "native-test-hooks")]
 pub(crate) type UnixIdentityTest = unsafe extern "C" fn(c_uint, c_int, u64, *mut u64, *mut u64, *mut c_uint) -> c_int;
@@ -179,15 +185,15 @@ pub(crate) struct TestApi {
     pub(crate) x86_64_socket_shape: SocketShapeTest,
     pub(crate) errno_from_host: unsafe extern "C" fn(c_uint, c_int) -> c_int,
     #[cfg(target_os = "macos")]
-    pub(crate) directory_stream_private: unsafe extern "C" fn(c_uint) -> c_int,
-    pub(crate) identity_registry: unsafe extern "C" fn(c_uint, c_uint) -> c_int,
-    pub(crate) private_fork_lock: unsafe extern "C" fn(c_uint) -> c_int,
+    pub(crate) directory_stream_private: UnaryStatus,
+    pub(crate) identity_registry: BinaryStatus,
+    pub(crate) private_fork_lock: UnaryStatus,
     pub(crate) aarch64_checkpoint_channel_notify: ScenarioTest,
     pub(crate) x86_64_checkpoint_channel_notify: ScenarioTest,
     pub(crate) aarch64_checkpoint_refusal_order: NoArgumentTest,
     pub(crate) x86_64_checkpoint_refusal_order: NoArgumentTest,
-    pub(crate) process_identity_token: unsafe extern "C" fn(c_uint) -> c_int,
-    pub(crate) setfl_append_write: unsafe extern "C" fn(c_uint) -> c_int,
+    pub(crate) process_identity_token: UnaryStatus,
+    pub(crate) setfl_append_write: UnaryStatus,
     #[allow(dead_code)]
     pub(crate) checkpoint_peer_authenticate: unsafe extern "C" fn(c_int, u64, *mut u64, *mut u64) -> c_int,
     pub(crate) checkpoint_channel_connect: unsafe extern "C" fn(c_int) -> c_int,
@@ -204,9 +210,9 @@ pub(crate) struct TestApi {
     #[cfg(test)]
     pub(crate) checkpoint_test_private_descriptor_count: unsafe extern "C" fn() -> u64,
     #[cfg(test)]
-    pub(crate) engine_finish_test_arm: unsafe extern "C" fn() -> c_uint,
+    pub(crate) engine_finish_test_arm: TestPhase,
     #[cfg(test)]
-    pub(crate) engine_finish_test_phase: unsafe extern "C" fn() -> c_uint,
+    pub(crate) engine_finish_test_phase: TestPhase,
     #[cfg(test)]
     pub(crate) engine_finish_test_release: unsafe extern "C" fn(),
     #[cfg(test)]
@@ -543,30 +549,15 @@ impl TestApi {
                 unsafe extern "C" fn(c_uint, c_int) -> c_int
             ),
             #[cfg(target_os = "macos")]
-            directory_stream_private: symbol!(
-                "hl_c_backend_directory_stream_private_test",
-                unsafe extern "C" fn(c_uint) -> c_int
-            ),
-            identity_registry: symbol!(
-                "hl_c_backend_identity_registry_test",
-                unsafe extern "C" fn(c_uint, c_uint) -> c_int
-            ),
-            private_fork_lock: symbol!(
-                "hl_c_backend_private_fork_lock_test",
-                unsafe extern "C" fn(c_uint) -> c_int
-            ),
+            directory_stream_private: symbol!("hl_c_backend_directory_stream_private_test", UnaryStatus),
+            identity_registry: symbol!("hl_c_backend_identity_registry_test", BinaryStatus),
+            private_fork_lock: symbol!("hl_c_backend_private_fork_lock_test", UnaryStatus),
             aarch64_checkpoint_channel_notify: symbol!("hl_aarch64_checkpoint_channel_notify_test", ScenarioTest),
             x86_64_checkpoint_channel_notify: symbol!("hl_x86_64_checkpoint_channel_notify_test", ScenarioTest),
             aarch64_checkpoint_refusal_order: symbol!("hl_aarch64_checkpoint_refusal_order_test", NoArgumentTest),
             x86_64_checkpoint_refusal_order: symbol!("hl_x86_64_checkpoint_refusal_order_test", NoArgumentTest),
-            process_identity_token: symbol!(
-                "hl_c_backend_process_identity_token_test",
-                unsafe extern "C" fn(c_uint) -> c_int
-            ),
-            setfl_append_write: symbol!(
-                "hl_c_backend_setfl_append_write_test",
-                unsafe extern "C" fn(c_uint) -> c_int
-            ),
+            process_identity_token: symbol!("hl_c_backend_process_identity_token_test", UnaryStatus),
+            setfl_append_write: symbol!("hl_c_backend_setfl_append_write_test", UnaryStatus),
             checkpoint_peer_authenticate: symbol!(
                 "hl_c_backend_checkpoint_peer_authenticate_test",
                 unsafe extern "C" fn(c_int, u64, *mut u64, *mut u64) -> c_int
@@ -606,12 +597,9 @@ impl TestApi {
                 unsafe extern "C" fn() -> u64
             ),
             #[cfg(test)]
-            engine_finish_test_arm: symbol!("hl_c_backend_engine_finish_test_arm", unsafe extern "C" fn() -> c_uint),
+            engine_finish_test_arm: symbol!("hl_c_backend_engine_finish_test_arm", TestPhase),
             #[cfg(test)]
-            engine_finish_test_phase: symbol!(
-                "hl_c_backend_engine_finish_test_phase",
-                unsafe extern "C" fn() -> c_uint
-            ),
+            engine_finish_test_phase: symbol!("hl_c_backend_engine_finish_test_phase", TestPhase),
             #[cfg(test)]
             engine_finish_test_release: symbol!("hl_c_backend_engine_finish_test_release", unsafe extern "C" fn()),
             #[cfg(test)]
