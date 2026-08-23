@@ -5,6 +5,16 @@ use std::{
 
 use crate::{Error, Result};
 
+#[cfg(test)]
+thread_local! {
+    static PREPARED_COMPONENTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn take_prepared_components() -> usize {
+    PREPARED_COMPONENTS.with(std::cell::Cell::take)
+}
+
 /// Validated relative path carried by an OCI layer entry.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Path(PathBuf);
@@ -105,6 +115,8 @@ impl Path {
         let mut current = root.to_owned();
         let mut changed = Vec::new();
         for component in self.0.parent().unwrap_or(FsPath::new("")).components() {
+            #[cfg(test)]
+            PREPARED_COMPONENTS.with(|counter| counter.set(counter.get() + 1));
             current.push(component);
             match fs::symlink_metadata(&current) {
                 Ok(meta) if meta.file_type().is_symlink() => {
