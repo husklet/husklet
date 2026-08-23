@@ -450,6 +450,17 @@ static uint32_t hl_vfs_mount_flags_for_guest(const char *guest, uint32_t inherit
     return inherited;
 }
 
+// A bind mount is a namespace edge the layer merge cannot see. The mount point exists in the image as
+// an empty placeholder directory (vol_mkmountpoint materializes it, exactly as Docker mkdir -p's a mount
+// target inside the container rootfs), while the mounted tree lives under an entirely different
+// authority. A merged walk therefore descends into the placeholder and reports the image's empty
+// directory for the mount and ENOENT for everything inside it. The namespace owner answers this for a
+// fully resolved guest directory path: 1 and an OWNED authority when `guest` is a directory mount point,
+// 0 when it is not, a negative errno on failure. A translation unit that compiles the cursor without a
+// mount table supplies its own definition returning 0; leaving it undefined is a link error rather than
+// a silently unmounted namespace.
+static int hl_vfs_cursor_mount_authority(const char *guest, hl_vfs_cursor_authority *output);
+
 static void hl_vfs_cursor_entry_release(hl_vfs_cursor_entry *entry) {
     if (entry == NULL) return;
     hl_vfs_cursor_authority_close(&entry->file);
@@ -587,6 +598,30 @@ static int hl_vfs_cursor_lookup_intent(const hl_vfs_cursor *cursor, const char *
     if (length < 0 || (size_t)length >= sizeof output->directory.guest) {
         hl_vfs_cursor_entry_release(output);
         return -ENAMETOOLONG;
+    }
+    // Cross a bind mount at its mount point: the placeholder's merged layers are released and the
+    // mounted tree becomes the sole authority, so every later component -- and the descriptor cursor
+    // published for an opened directory -- resolves inside the mount instead of inside the image.
+    // `parent` is still the placeholder's directory, which is what `..` out of a mount root means.
+    hl_vfs_cursor_authority mounted = {0};
+    int mount_error = hl_vfs_cursor_mount_authority(output->directory.guest, &mounted);
+    if (mount_error > 0) {
+        struct stat mounted_status;
+        mount_error = hl_vfs_cursor_authority_metadata(&mounted, ".", &mounted_status);
+        if (mount_error == 0) {
+            for (size_t layer = 0; layer < output->directory.count; layer++)
+                hl_vfs_cursor_authority_close(&output->directory.layers[layer]);
+            output->directory.layers[0] = mounted;
+            output->directory.count = 1;
+            output->directory.opaque_cut = 0;
+            output->status = mounted_status;
+        } else {
+            hl_vfs_cursor_authority_close(&mounted);
+        }
+    }
+    if (mount_error < 0) {
+        hl_vfs_cursor_entry_release(output);
+        return mount_error;
     }
     int parent_error = hl_vfs_cursor_parent_create(cursor, &output->directory.parent);
     if (parent_error != 0) {
