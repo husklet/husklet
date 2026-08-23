@@ -142,21 +142,7 @@ static _Noreturn void ckpt_coordinator_refuse(const struct ckpt_phase_ledger *le
 }
 
 #if defined(HL_NATIVE_TEST_HOOKS)
-HL_API int HL_TARGET_LOCAL(checkpoint_refusal_order_test)(void) {
-    hl_engine_child_result result;
-    int status;
-    hl_engine_child_result_begin_for_test(&result);
-    g_ckpt_refusal_test_result = &result;
-    g_ckpt_refusal_test_observed = 0;
-    ckpt_coordinator_report_refusal(CKPT_REFUSAL_SELF_DUMP, "test refusal");
-    status = g_ckpt_refusal_test_observed && result.magic == HL_ENGINE_CHILD_RESULT_MAGIC &&
-                     result.engine_status == HL_STATUS_NOT_SUPPORTED && result.detail == CKPT_REFUSAL_SELF_DUMP
-                 ? 0
-                 : -1;
-    g_ckpt_refusal_test_result = NULL;
-    hl_engine_child_result_end_for_test();
-    return status;
-}
+#include "refusal_order_test.inc"
 #endif
 
 static int ckpt_fd_was_captured(const struct ckpt_fd *records, int count, int fd) {
