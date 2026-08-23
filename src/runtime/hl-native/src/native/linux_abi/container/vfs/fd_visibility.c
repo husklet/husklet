@@ -357,6 +357,13 @@ HL_API int HL_TARGET_LOCAL(fdvis_path_publication_test)(uint32_t scenario) {
 #endif
 static uint64_t g_fdvis_fork_parent_start;
 static uint64_t g_pipe_identity[HL_NFD];
+
+static void pipe_identity_bind(int fd, uint64_t identity) {
+    if (fd < 0 || fd >= HL_NFD) return;
+    g_pipe_identity[fd] = identity;
+    if (identity != 0) virtual_fd_bound_include(fd);
+}
+
 // Guest-visible F_SETPIPE_SZ/F_GETPIPE_SZ state is also needed by early SCM_RIGHTS marshalling.
 static int g_pipesz[HL_NFD];
 static uint8_t g_fdvis_private[HL_NFD];
@@ -750,8 +757,8 @@ static int proc_fdvis_publish_pipe_pair(int first, int second) {
         proc_fdvis_close(first);
         return -ENOSPC;
     }
-    g_pipe_identity[first] = identity;
-    g_pipe_identity[second] = identity;
+    pipe_identity_bind(first, identity);
+    pipe_identity_bind(second, identity);
     return 0;
 }
 

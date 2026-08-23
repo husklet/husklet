@@ -14,6 +14,17 @@ unsafe impl Send for DynamicLibrary {}
 // SAFETY: the platform loaders permit concurrent calls through resolved immutable function pointers.
 unsafe impl Sync for DynamicLibrary {}
 
+impl DynamicLibrary {
+    pub(crate) fn build_fingerprint(&self) -> Result<String, String> {
+        let address = self.symbol(b"hl_c_backend_build_fingerprint\0")?;
+        // SAFETY: the named export is declared to return a static NUL-terminated string.
+        let reader: unsafe extern "C" fn() -> *const c_char = unsafe { std::mem::transmute(address) };
+        // SAFETY: the export's declaration guarantees a static NUL-terminated result.
+        let value = unsafe { std::ffi::CStr::from_ptr(reader()) };
+        Ok(String::from_utf8_lossy(value.to_bytes()).into_owned())
+    }
+}
+
 #[cfg(unix)]
 impl Drop for DynamicLibrary {
     fn drop(&mut self) {

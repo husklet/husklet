@@ -511,7 +511,7 @@ static int cmsg_import_pipe_trailer(int *fds, int nfds) {
         if (metadata.ordinal >= (uint32_t)(visible - 1) || metadata.identity == 0) break;
         int fd = fds[metadata.ordinal];
         if (fd >= 0 && fd < HL_NFD) {
-            g_pipe_identity[fd] = metadata.identity;
+            pipe_identity_bind(fd, metadata.identity);
             g_pipesz[fd] = metadata.size;
         }
         close(marker);
