@@ -271,18 +271,24 @@ pub(crate) fn write_master(master: &mut File, bytes: &[u8], stop: &AtomicBool) -
     Ok(())
 }
 
-/// Tops up a short read once, so one guest write does not reach the display in two pieces.
+/// Drains bytes which are already readable into the current display batch.
 ///
-/// The sleep is what makes it worth trying: the writer is a guest that has just been scheduled out,
-/// and a full buffer means there was never a gap to top up.
-fn top_up_batch(master: &mut File, bytes: &mut [u8; 16 * 1024], count: usize) -> usize {
+/// A terminal is a byte stream, not a record transport: waiting in the hope that a later guest write
+/// joins this batch only adds latency. Reading until `EAGAIN` keeps bytes which are ready together
+/// without a timer or a busy-spin. The fixed buffer and follow-up-attempt cap bound the work before
+/// the display gets it, including under a stream of tiny reads or repeated signal interruption.
+pub(super) fn drain_ready_batch(
+    bytes: &mut [u8; 16 * 1024],
+    count: usize,
+    mut read: impl FnMut(&mut [u8]) -> std::io::Result<usize>,
+) -> usize {
+    const FOLLOW_UP_ATTEMPTS: usize = 8;
     let mut count = count;
-    if count >= bytes.len() {
-        return count;
-    }
-    std::thread::sleep(std::time::Duration::from_millis(1));
-    while count < bytes.len() {
-        match master.read(&mut bytes[count..]) {
+    for _ in 0..FOLLOW_UP_ATTEMPTS {
+        if count == bytes.len() {
+            break;
+        }
+        match read(&mut bytes[count..]) {
             Ok(read) if read > 0 => count += read,
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             _ => break,
@@ -336,7 +342,7 @@ fn spawn_output(
                     Err(_) => break,
                 };
                 drop(active);
-                count = top_up_batch(&mut master, &mut bytes, count);
+                count = drain_ready_batch(&mut bytes, count, |tail| master.read(tail));
                 // A raw host slave post-processes nothing, so `OPOST` is applied here or every
                 // guest newline reaches the display without its carriage return.
                 let written = match guest.as_ref() {
