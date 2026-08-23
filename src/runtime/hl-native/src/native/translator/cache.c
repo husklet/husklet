@@ -257,6 +257,7 @@ static uint32_t g_map_epoch = 1;
 static uint64_t g_cache_gen; /* generation of the current immutable code arena */
 static uint32_t g_live_map_indices[JIT_MAP_N];
 static uint32_t g_live_map_count;
+
 /*
  * A live entry's cold per-slot record: the decoded guest-source interval, and the code-cache generation
  * which owns the entry's immutable host bytes.  Kept beside the hot 32-byte hash entry rather than
