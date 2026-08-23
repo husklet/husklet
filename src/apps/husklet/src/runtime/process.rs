@@ -339,7 +339,7 @@ mod tests {
     #[test]
     fn liveness_distinguishes_a_reaped_process_from_an_idempotent_signal() {
         assert!(process_exists_for_test(std::process::id()).unwrap());
-        let mut child = std::process::Command::new("/bin/true").spawn().unwrap();
+        let mut child = std::process::Command::new("true").spawn().unwrap();
         let identity = child.id();
         child.wait().unwrap();
         assert!(!process_exists_for_test(identity).unwrap());

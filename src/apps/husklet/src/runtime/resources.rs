@@ -513,7 +513,7 @@ mod tests {
         let mut workspace = crate::config::WorkspaceConfig::new("demo", "ubuntu", hl_ws::Arch::Arm64);
         workspace.storage = Some(temporary.path().join("workspace"));
         let daemon = Daemon::new(&workspace);
-        let child = std::process::Command::new("/usr/bin/false").spawn().unwrap();
+        let child = std::process::Command::new("false").spawn().unwrap();
         let started = std::time::Instant::now();
 
         let error = daemon
