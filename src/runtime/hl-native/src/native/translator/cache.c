@@ -14,6 +14,8 @@
 #include "emit.h"
 #include "guest_fetch.h"
 
+#include <stddef.h>
+
 #define CACHE_SZ (64u << 20)
 /* A stitched AArch64 region may contain 4096 guest instructions.  When a
    file-backed BUS ledger is active, one memory instruction expands into a
@@ -199,9 +201,32 @@ typedef struct {
     // the hot lookup (map_body runs inside the decode loop's stitch checks) and on map_put. Semantics are
     // unchanged: an entry is live iff generation == g_map_epoch.
     uint32_t generation;
+    /*
+     * Open-address deletion marker, and the reason this entry is still 32 bytes: {uint64_t; uint32_t;
+     * pointer; pointer} leaves four bytes of padding after `generation`, so the marker rides along for
+     * free.  It belongs here on merit as well -- `generation` and `tombstone_epoch` are the two halves of
+     * one question, "is this slot live, dead-but-chained, or empty", and map_idx/map_put ask both on every
+     * probe step that lands on a non-live slot.  Held in its own JIT_MAP_N array it made that step read a
+     * second multi-megabyte table, which on a cold or freshly-forked address space is a second page fault.
+     *
+     * An invalidated slot cannot become an ordinary empty slot, because a colliding live key may follow it
+     * in the probe cluster.  Tagging the tombstone with the epoch preserves that lookup chain without
+     * clearing an array on a wholesale generation change.
+     */
+    uint32_t tombstone_epoch;
     void *host;
     void *body;
 } hl_translation_map_entry;
+
+// The marker above is only free while it fits the padding; if the entry ever grows, every probe pays a
+// second cache line and the hot lookup's one-line property is gone.
+_Static_assert(sizeof(hl_translation_map_entry) == 32, "translation entry must stay one half cache line");
+_Static_assert(_Alignof(hl_translation_map_entry) == 8, "translation entry alignment changed");
+_Static_assert(offsetof(hl_translation_map_entry, generation) == 8, "translation generation left the first 16 bytes");
+_Static_assert(offsetof(hl_translation_map_entry, tombstone_epoch) == 12,
+               "translation tombstone no longer occupies the pointer-alignment padding");
+_Static_assert(offsetof(hl_translation_map_entry, host) == 16, "translation host pointer moved");
+_Static_assert(offsetof(hl_translation_map_entry, body) == 24, "translation body pointer moved");
 
 // All indexes describing the currently live translation generation share one owner. Keep these arrays
 // embedded (rather than separately allocated) so the hot lookup layout and zero-initialized lifetime stay
@@ -232,23 +257,39 @@ static uint32_t g_map_epoch = 1;
 static uint64_t g_cache_gen; /* generation of the current immutable code arena */
 static uint32_t g_live_map_indices[JIT_MAP_N];
 static uint32_t g_live_map_count;
+
 /*
- * A live entry's decoded guest-source interval.  Keep this metadata parallel
- * to the hot 32-byte hash entry: map lookup still touches one cache line, while
- * the SMC slow path can retire only translations which consumed a rewritten
- * cache line.
+ * A live entry's cold per-slot record: the decoded guest-source interval, and the code-cache generation
+ * which owns the entry's immutable host bytes.  Kept beside the hot 32-byte hash entry rather than
+ * inside it, because map lookup reads none of these and must keep touching exactly one cache line,
+ * while the SMC slow path needs them to retire only translations which consumed a rewritten line.
+ *
+ * These three fields were three parallel JIT_MAP_N arrays.  map_put writes all three for every newly
+ * translated block, and as separate tables those stores landed on three different pages of three
+ * multi-megabyte arrays, so a process paid three first-touch -- or, after fork, copy-on-write -- page
+ * faults per translated block where one would do.  Measured on an x86_64 Linux host at 641d3f580 with
+ * `perf record -e page-faults -c 1`, differencing an 8-spawn run against a 0-spawn one: a guest
+ * fork+exec translates ~900 blocks, and the three arrays plus the tombstone array now folded into the
+ * entry above cost 2,196 of the spawn's 5,726 page faults.  One record per slot pays that once, and
+ * map_source_overlaps' two loads become adjacent where they were certainly two pages apart.
+ *
+ * The record is 24 bytes and deliberately unpadded: nothing reads it on the hot path, so paying a
+ * quarter more pages -- and a quarter more copy-on-write after fork -- to line-align a cold field
+ * would spend exactly what this change is here to recover.
  */
-static uint64_t g_map_guest_start[JIT_MAP_N];
-static uint64_t g_map_guest_end[JIT_MAP_N];
-/* Code-cache generation which owns each live entry's immutable host bytes. */
-static uint64_t g_map_cache_gen[JIT_MAP_N];
-/*
- * Open-address deletion marker.  An invalidated slot cannot become an ordinary
- * empty slot because a colliding live key may follow it in the probe cluster.
- * Epoch-tagged tombstones preserve that lookup chain without clearing another
- * multi-megabyte array on a wholesale generation change.
- */
-static uint32_t g_map_tombstone_epoch[JIT_MAP_N];
+typedef struct {
+    uint64_t guest_start;
+    uint64_t guest_end;
+    uint64_t cache_generation;
+} hl_translation_map_metadata;
+
+_Static_assert(sizeof(hl_translation_map_metadata) == 24, "cold translation record gained padding");
+_Static_assert(_Alignof(hl_translation_map_metadata) == 8, "cold translation record alignment changed");
+_Static_assert(offsetof(hl_translation_map_metadata, guest_start) == 0, "cold guest start moved");
+_Static_assert(offsetof(hl_translation_map_metadata, guest_end) == 8, "cold guest end is no longer adjacent");
+_Static_assert(offsetof(hl_translation_map_metadata, cache_generation) == 16, "cold cache generation moved");
+
+static hl_translation_map_metadata g_map_metadata[JIT_MAP_N];
 
 // Bounded instruction provenance shared by diagnostics and synchronous guest-fault delivery. Translation
 // records source boundaries; execution performs no checkpoint writes. Epoch publication makes signal-side
@@ -301,7 +342,7 @@ static int map_live(uint32_t index) {
 }
 
 static int map_tombstone(uint32_t index) {
-    return !map_live(index) && g_map_tombstone_epoch[index] == g_map_epoch;
+    return !map_live(index) && g_map[index].tombstone_epoch == g_map_epoch;
 }
 
 static void map_clear(void) {
@@ -312,7 +353,7 @@ static void map_clear(void) {
         // clear every entry's generation before restarting at 1. Cold path; correctness over speed.
         for (uint32_t i = 0; i < JIT_MAP_N; i++) {
             g_map[i].generation = 0;
-            g_map_tombstone_epoch[i] = 0;
+            g_map[i].tombstone_epoch = 0;
         }
         for (uint32_t i = 0; i < JIT_INSN_MAP_N; i++)
             __atomic_store_n(&g_instruction_map[i].epoch, 0, __ATOMIC_RELAXED);
@@ -566,11 +607,11 @@ static void map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest_end, void
             g_map[j].gpc = gpc;
             g_map[j].host = host;
             g_map[j].body = body;
-            g_map_guest_start[j] = guest_start;
-            g_map_guest_end[j] =
+            g_map_metadata[j].guest_start = guest_start;
+            g_map_metadata[j].guest_end =
                 guest_end > guest_start ? guest_end : (guest_start == UINT64_MAX ? UINT64_MAX : guest_start + 1);
-            g_map_cache_gen[j] = g_cache_gen;
-            g_map_tombstone_epoch[j] = 0;
+            g_map_metadata[j].cache_generation = g_cache_gen;
+            g_map[j].tombstone_epoch = 0;
             g_map[j].generation = g_map_epoch;
             g_live_map_indices[g_live_map_count++] = j;
             return;
@@ -581,18 +622,18 @@ static void map_put(uint64_t gpc, uint64_t guest_start, uint64_t guest_end, void
         g_map[j].gpc = gpc;
         g_map[j].host = host;
         g_map[j].body = body;
-        g_map_guest_start[j] = guest_start;
-        g_map_guest_end[j] =
+        g_map_metadata[j].guest_start = guest_start;
+        g_map_metadata[j].guest_end =
             guest_end > guest_start ? guest_end : (guest_start == UINT64_MAX ? UINT64_MAX : guest_start + 1);
-        g_map_cache_gen[j] = g_cache_gen;
-        g_map_tombstone_epoch[j] = 0;
+        g_map_metadata[j].cache_generation = g_cache_gen;
+        g_map[j].tombstone_epoch = 0;
         g_map[j].generation = g_map_epoch;
         g_live_map_indices[g_live_map_count++] = j;
     }
 }
 
 static int map_source_overlaps(uint32_t index, uint64_t lo, uint64_t hi) {
-    return g_map_guest_start[index] < hi && lo < g_map_guest_end[index];
+    return g_map_metadata[index].guest_start < hi && lo < g_map_metadata[index].guest_end;
 }
 
 /*
@@ -619,7 +660,7 @@ static uint32_t map_invalidate_source_ranges(const uint64_t ranges[][2], uint32_
         }
         ibtc_drop_target(g_map[index].gpc);
         g_map[index].generation = 0;
-        g_map_tombstone_epoch[index] = g_map_epoch;
+        g_map[index].tombstone_epoch = g_map_epoch;
         removed++;
     }
     g_live_map_count = retained;
@@ -631,13 +672,13 @@ static uint32_t map_invalidate_cache_generation(uint64_t generation) {
     for (uint32_t n = 0; n < g_live_map_count; n++) {
         uint32_t index = g_live_map_indices[n];
         if (!map_live(index)) continue;
-        if (g_map_cache_gen[index] != generation) {
+        if (g_map_metadata[index].cache_generation != generation) {
             g_live_map_indices[retained++] = index;
             continue;
         }
         ibtc_drop_target(g_map[index].gpc);
         g_map[index].generation = 0;
-        g_map_tombstone_epoch[index] = g_map_epoch;
+        g_map[index].tombstone_epoch = g_map_epoch;
         removed++;
     }
     g_live_map_count = retained;
@@ -647,7 +688,7 @@ static uint32_t map_invalidate_cache_generation(uint64_t generation) {
 static int map_has_cache_generation(uint64_t generation) {
     for (uint32_t n = 0; n < g_live_map_count; n++) {
         uint32_t index = g_live_map_indices[n];
-        if (map_live(index) && g_map_cache_gen[index] == generation) return 1;
+        if (map_live(index) && g_map_metadata[index].cache_generation == generation) return 1;
     }
     return 0;
 }

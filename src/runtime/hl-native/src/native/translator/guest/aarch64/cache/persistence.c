@@ -325,8 +325,8 @@ static void pcache_save(void) {
     pthread_mutex_lock(&g_jit_lock);
     uint64_t nmap = 0;
     for (uint32_t i = 0; i < JIT_MAP_N; i++)
-        if (map_live(i) && (pc_range_fixed(g_map_guest_start[i], g_map_guest_end[i]) ||
-                            pc_range_in_lib(g_map_guest_start[i], g_map_guest_end[i])))
+        if (map_live(i) && (pc_range_fixed(g_map_metadata[i].guest_start, g_map_metadata[i].guest_end) ||
+                            pc_range_in_lib(g_map_metadata[i].guest_start, g_map_metadata[i].guest_end)))
             nmap++;
     uint64_t ntxpg = 0;
     for (uint32_t i = 0; i < TXPG_N; i++)
@@ -374,12 +374,12 @@ static void pcache_save(void) {
         memcpy(w, g_reloc, (size_t)g_nreloc * sizeof(hl_reloc));
         w += (size_t)g_nreloc * sizeof(hl_reloc);
         for (uint32_t i = 0; i < JIT_MAP_N; i++) {
-            if (!map_live(i) || !(pc_range_fixed(g_map_guest_start[i], g_map_guest_end[i]) ||
-                                  pc_range_in_lib(g_map_guest_start[i], g_map_guest_end[i])))
+            if (!map_live(i) || !(pc_range_fixed(g_map_metadata[i].guest_start, g_map_metadata[i].guest_end) ||
+                                  pc_range_in_lib(g_map_metadata[i].guest_start, g_map_metadata[i].guest_end)))
                 continue;
             // The hot map entry stays 32 bytes; cold source bounds live in parallel arrays and are persisted
             // so a warm-loaded block remains individually invalidatable after guest code rewrites.
-            struct pc_mapent e = {g_map[i].gpc, g_map_guest_start[i], g_map_guest_end[i],
+            struct pc_mapent e = {g_map[i].gpc, g_map_metadata[i].guest_start, g_map_metadata[i].guest_end,
                                   (uint64_t)((uint8_t *)g_map[i].host - g_cache),
                                   (uint64_t)((uint8_t *)g_map[i].body - g_cache)};
             memcpy(w, &e, sizeof e);
