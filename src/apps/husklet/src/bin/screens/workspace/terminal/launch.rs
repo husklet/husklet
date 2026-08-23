@@ -14,27 +14,9 @@ struct Launch<'a> {
 }
 
 impl Launch<'_> {
-    fn attach(&self, child: i32, pty: vte4::Pty) {
+    fn attach(&self, child: i32, pty: &vte4::Pty) {
         self.pid.set(child);
-        // Keep the FOREIGN pty sized to the terminal grid — VTE doesn't resize a foreign pty itself,
-        // so without this htop is malformed / half-height and doesn't reflow on window resize.
-        let weak = self.terminal.downgrade();
-        let pid = self.pid.clone();
-        let mut last = (0, 0);
-        glib::timeout_add_local(std::time::Duration::from_millis(300), move || {
-            if pid.get() == 0 {
-                return glib::ControlFlow::Break;
-            }
-            let Some(terminal) = weak.upgrade() else {
-                return glib::ControlFlow::Break;
-            };
-            let dimensions = (terminal.column_count() as i32, terminal.row_count() as i32);
-            if dimensions.0 > 0 && dimensions.1 > 0 && dimensions != last {
-                let _ = pty.set_size(dimensions.1, dimensions.0);
-                last = dimensions;
-            }
-            glib::ControlFlow::Continue
-        });
+        super::grid::synchronise(self.terminal, pty);
         self.watch_child(child);
         self.schedule_typed_text();
         self.schedule_script();
@@ -266,7 +248,7 @@ pub(crate) fn make_terminal_ex(
             terminal: &term,
             pid: &pid,
         }
-        .attach(child, pty),
+        .attach(child, &pty),
         Err(e) => term.feed(format!("\r\n\x1b[31mfailed to start shell: {e}\x1b[0m\r\n").as_bytes()),
     }
     (term, pid)
