@@ -223,6 +223,19 @@ pub(crate) fn proc_fdinfo_listing_test(isa: u32, scenario: u32) -> i32 {
 }
 
 #[cfg(feature = "native-test-hooks")]
+pub(crate) fn exec_page_cache_test(isa: u32, scenario: u32) -> Result<u64, i32> {
+    let hook = match isa {
+        1 => test_api().aarch64_exec_page_cache,
+        2 => test_api().x86_64_exec_page_cache,
+        _ => return Err(-22),
+    };
+    let mut scans = 0;
+    // SAFETY: the hook serially owns and restores the non-executable-range fixture and writes one scalar.
+    let status = unsafe { hook(scenario, &raw mut scans) };
+    if status == 0 { Ok(scans) } else { Err(status) }
+}
+
+#[cfg(feature = "native-test-hooks")]
 pub(crate) fn x86_store_preflight_test() -> i32 {
     // SAFETY: the feature-gated hook owns its local emitter and CPU fixtures.
     unsafe { (test_api().x86_64_store_preflight)() }

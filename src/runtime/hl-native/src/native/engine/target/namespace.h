@@ -72,6 +72,7 @@
 #define hl_linux_bus_transition_begin HL_TARGET_LOCAL(linux_bus_transition_begin)
 #define hl_linux_bus_transition_clear HL_TARGET_LOCAL(linux_bus_transition_clear)
 #define hl_linux_bus_transition_end HL_TARGET_LOCAL(linux_bus_transition_end)
+#define hl_exec_page_cache_test HL_TARGET_LOCAL(exec_page_cache_test)
 
 #define jit_cache_diag HL_TARGET_LOCAL(jit_cache_diag)
 #define jit_guest_bus_active HL_TARGET_LOCAL(jit_guest_bus_active)

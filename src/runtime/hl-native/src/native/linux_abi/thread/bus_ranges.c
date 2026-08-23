@@ -690,6 +690,25 @@ static void gnx_clear(uint64_t lo, uint64_t hi) {
     gnx_writer_unlock();
 }
 
+static void gnx_reset(void) {
+    gnx_writer_lock();
+    atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_acq_rel);
+    __atomic_store_n(&g_ngnx, 0, __ATOMIC_RELEASE);
+    atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_release);
+    gnx_writer_unlock();
+}
+
+typedef struct {
+    uint64_t generation;
+    uint64_t first;
+    uint64_t last;
+} guest_exec_page;
+
+static _Thread_local guest_exec_page g_exec_page;
+#if HL_NATIVE_TEST_HOOKS
+static _Thread_local uint64_t g_gnx_scan_count;
+#endif
+
 static int gnx_hit(uint64_t a, uint64_t len) {
     if (!len || __atomic_load_n(&g_ngnx, __ATOMIC_ACQUIRE) == 0) return 0;
     a = nonpie_unfold(a);
@@ -702,6 +721,9 @@ static int gnx_hit(uint64_t a, uint64_t len) {
             continue;
         }
         int count = __atomic_load_n(&g_ngnx, __ATOMIC_ACQUIRE);
+#if HL_NATIVE_TEST_HOOKS
+        g_gnx_scan_count++;
+#endif
         int hit = 0;
         for (int i = 0; i < count; ++i) {
             uint64_t lo = __atomic_load_n(&g_gnx[i].lo, __ATOMIC_RELAXED);
@@ -717,8 +739,83 @@ static int gnx_hit(uint64_t a, uint64_t len) {
 }
 
 static int guest_exec_direct_valid(uint64_t guest, size_t length) {
+    if (length == 0) return 1;
+    if (guest > UINT64_MAX - length) return 0;
+    uint64_t generation = atomic_load_explicit(&g_gnx_generation, memory_order_acquire);
+    uint64_t end = guest + length;
+    if (!(generation & 1) && g_exec_page.generation == generation && guest >= g_exec_page.first &&
+        end <= g_exec_page.last)
+        return 1;
+
+    uint64_t first = guest & ~UINT64_C(4095);
+    if (first <= UINT64_MAX - UINT64_C(4096) && !gnx_hit(first, 4096)) {
+        uint64_t confirmed = atomic_load_explicit(&g_gnx_generation, memory_order_acquire);
+        if (confirmed == generation && !(confirmed & 1)) {
+            g_exec_page = (guest_exec_page){confirmed, first, first + UINT64_C(4096)};
+            return 1;
+        }
+    }
     return !gnx_hit(guest, length);
 }
+
+#if HL_NATIVE_TEST_HOOKS
+HL_API int HL_TARGET_LOCAL(exec_page_cache_test)(uint32_t scenario, uint64_t *scans) {
+    if (scans == NULL) return -1;
+    void *saved = malloc(sizeof g_gnx);
+    if (saved == NULL) return -ENOMEM;
+    gnx_writer_lock();
+    int saved_count = __atomic_load_n(&g_ngnx, __ATOMIC_RELAXED);
+    memcpy(saved, g_gnx, sizeof g_gnx);
+    gnx_writer_unlock();
+    guest_exec_page saved_page = g_exec_page;
+    uint64_t guest_page = UINT64_C(0x40000000);
+    guest_page -= nonpie_fold(guest_page) & UINT64_C(4095);
+    uint64_t page = nonpie_fold(guest_page);
+    gnx_reset();
+    gnx_add(guest_page + UINT64_C(0x2000), guest_page + UINT64_C(0x3000));
+    g_exec_page = (guest_exec_page){0};
+    g_gnx_scan_count = 0;
+    int result = 0;
+    switch (scenario) {
+    case 0: // Stable executable page: one scan, then cache hits.
+        for (int i = 0; i < 32; ++i)
+            if (!guest_exec_direct_valid(page + (uint64_t)i, 15)) result = -2;
+        break;
+    case 1: // mprotect/MAP_FIXED removing execute invalidates the warm verdict.
+        if (!guest_exec_direct_valid(page, 15)) result = -3;
+        gnx_add(guest_page, guest_page + UINT64_C(4096));
+        if (guest_exec_direct_valid(page, 15)) result = -4;
+        break;
+    case 2: // munmap followed by an executable remap invalidates both transitions.
+        if (!guest_exec_direct_valid(page, 15)) result = -5;
+        gnx_add(guest_page, guest_page + UINT64_C(4096));
+        gnx_clear(guest_page, guest_page + UINT64_C(4096));
+        if (!guest_exec_direct_valid(page, 15)) result = -6;
+        break;
+    case 3: // exec reset drops the old image's non-executable ranges and cache verdict.
+        if (!guest_exec_direct_valid(page, 15)) result = -7;
+        gnx_add(guest_page, guest_page + UINT64_C(4096));
+        gnx_reset();
+        if (!guest_exec_direct_valid(page, 15)) result = -8;
+        break;
+    case 4: // A partially non-executable page is never cached as wholly valid.
+        gnx_add(guest_page + 128, guest_page + 256);
+        if (!guest_exec_direct_valid(page, 15) || !guest_exec_direct_valid(page + 16, 15)) result = -9;
+        break;
+    default: result = -10;
+    }
+    *scans = g_gnx_scan_count;
+    gnx_writer_lock();
+    atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_acq_rel);
+    memcpy(g_gnx, saved, sizeof g_gnx);
+    __atomic_store_n(&g_ngnx, saved_count, __ATOMIC_RELEASE);
+    atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_release);
+    gnx_writer_unlock();
+    free(saved);
+    g_exec_page = saved_page;
+    return result;
+}
+#endif
 
 // execve replaces the whole address space -> drop all tracked PROT_NONE ranges (they're gone with the old
 // image; a stale entry could otherwise wrongly EFAULT a fresh mapping the new image lays at the same address).
@@ -731,11 +828,7 @@ static void gna_reset(void) {
     atomic_fetch_add_explicit(&g_gna_generation, 1, memory_order_release);
     gna_writer_unlock();
     __atomic_store_n(&g_ngro, 0, __ATOMIC_RELEASE);
-    gnx_writer_lock();
-    atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_acq_rel);
-    __atomic_store_n(&g_ngnx, 0, __ATOMIC_RELEASE);
-    atomic_fetch_add_explicit(&g_gnx_generation, 1, memory_order_release);
-    gnx_writer_unlock();
+    gnx_reset();
     pthread_mutex_lock(&g_filemap_lock);
     for (int index = 0; index < g_nfilemap; ++index) {
         int retained = g_filemap[index].fd;

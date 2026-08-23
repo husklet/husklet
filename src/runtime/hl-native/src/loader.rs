@@ -57,6 +57,8 @@ pub(crate) type ScenarioTest = unsafe extern "C" fn(c_uint) -> c_int;
 #[cfg(feature = "native-test-hooks")]
 pub(crate) type RestoreFdResetTest = unsafe extern "C" fn(c_uint, *mut u64) -> c_int;
 #[cfg(feature = "native-test-hooks")]
+pub(crate) type ScenarioCountTest = unsafe extern "C" fn(c_uint, *mut u64) -> c_int;
+#[cfg(feature = "native-test-hooks")]
 pub(crate) type SignalFrameTest = unsafe extern "C" fn(c_uint, c_uint, u64, i64, *mut i64, *mut i64) -> c_int;
 #[cfg(feature = "native-test-hooks")]
 pub(crate) type NoArgumentTest = unsafe extern "C" fn() -> c_int;
@@ -133,6 +135,8 @@ pub(crate) struct TestApi {
     #[cfg(test)]
     pub(crate) x86_64_fdvis_path_publication: ScenarioTest,
     pub(crate) x86_64_proc_fdinfo_listing: ScenarioTest,
+    pub(crate) aarch64_exec_page_cache: ScenarioCountTest,
+    pub(crate) x86_64_exec_page_cache: ScenarioCountTest,
     pub(crate) aarch64_namespace_transaction: ScenarioTest,
     pub(crate) x86_64_namespace_transaction: ScenarioTest,
     pub(crate) x86_64_store_preflight: NoArgumentTest,
@@ -480,6 +484,8 @@ impl TestApi {
             #[cfg(test)]
             x86_64_fdvis_path_publication: symbol!("hl_x86_64_fdvis_path_publication_test", ScenarioTest),
             x86_64_proc_fdinfo_listing: symbol!("hl_x86_64_proc_fdinfo_listing_test", ScenarioTest),
+            aarch64_exec_page_cache: symbol!("hl_aarch64_exec_page_cache_test", ScenarioCountTest),
+            x86_64_exec_page_cache: symbol!("hl_x86_64_exec_page_cache_test", ScenarioCountTest),
             aarch64_namespace_transaction: symbol!("hl_aarch64_namespace_transaction_test", ScenarioTest),
             x86_64_namespace_transaction: symbol!("hl_x86_64_namespace_transaction_test", ScenarioTest),
             x86_64_store_preflight: symbol!("hl_x86_64_store_preflight_test", NoArgumentTest),
