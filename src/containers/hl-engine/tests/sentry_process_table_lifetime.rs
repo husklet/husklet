@@ -64,10 +64,100 @@ fn a_child_collected_with_waitid_releases_its_descriptor_table() {
     );
 }
 
+/// The third route that frees the pid a table is keyed on, and the only one with no syscall to route:
+/// `SA_NOCLDWAIT` asks Linux to leave no zombie, so the auto-reap runs inside a HOST SIGNAL HANDLER --
+/// `waitpid(-1, WNOHANG)` in `signal.c` -- and the guest never calls wait at all. The handler cannot
+/// publish the release itself: `sentry_ctl_op` spins on the ring's `busy` producer flag, which the very
+/// thread the signal interrupted may already hold, so the handler would wait for itself. The release is
+/// therefore recorded as pending and published from ordinary syscall context while `waitid(WNOWAIT)`
+/// still pins the corpse's pid; only after the sentry acknowledges the release is the corpse collected.
+///
+/// One child is alive at a time here, so the only thing 200 rounds can exhaust is entries that outlived
+/// their processes; before the deferred pending record existed this stopped at 63 with `EAGAIN`.
+#[test]
+fn a_child_auto_reaped_under_sa_nocldwait_releases_its_descriptor_table() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    assert_eq!(
+        sandboxed(&executable, &["rounds-nocldwait"]),
+        0,
+        "a child collected by the SA_NOCLDWAIT auto-reap left its descriptor table behind"
+    );
+}
+
+/// The window the deferred publish exists for, and the reason the handler cannot simply publish. A worker
+/// thread inside a forwarded syscall holds the ring's producer flag across the whole round-trip and is
+/// parked waiting for the sentry's answer. The `SA_NOCLDWAIT` auto-reap interrupts THAT thread, so a
+/// release published through `sentry_ctl_op` from the handler asks the interrupted thread for a flag only
+/// the interrupted thread can return -- measured on this `x86_64` box, the guest wedges in the first round
+/// and never returns. Recording the pid in the pending array and publishing it from ordinary syscall
+/// context takes no flag at all.
+///
+/// The round's other child is killed by a sibling, so it never publishes its own exit and only the
+/// auto-reap route can release its table; 70 rounds therefore outlives the sentry's 63 process slots as
+/// well, and one program answers both questions: the guest is not wedged, and the table was released.
+#[test]
+fn a_child_auto_reaped_while_the_guest_is_parked_in_a_forwarded_syscall_releases_its_table() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    assert_eq!(
+        sandboxed(&executable, &["blocked"]),
+        0,
+        "a child that died while the guest was parked in a forwarded syscall wedged it or leaked its table"
+    );
+}
+
+/// One SIGCHLD can stand for several dead children -- Linux coalesces a standard signal that is already
+/// pending -- so the auto-reap collects a whole batch inside a single handler entry and the sentry has to
+/// hear about every pid in it. The ordinary-context drain must therefore walk every `WNOWAIT` corpse rather
+/// than treating the handler's one pending bit as one child.
+///
+/// A batch of eight is alive at a time, far inside the sentry's 63-slot bound, and 20 rounds is 160
+/// children, so the only thing that can exhaust the sentry is entries that outlived their processes.
+#[test]
+fn a_batch_auto_reaped_under_one_coalesced_sigchld_releases_every_descriptor_table() {
+    let work = TempDir::new().unwrap();
+    let executable = fixture(work.path());
+    assert_eq!(
+        sandboxed(&executable, &["batch-nocldwait"]),
+        0,
+        "a coalesced SIGCHLD left a corpse uncollected or left its descriptor table behind"
+    );
+}
+
+/// A delayed release identified only by pid is unsafe after collection: another worker sharing the sentry
+/// can fork onto the freed number before the release is published. Keep this ordering check beside the
+/// end-to-end cases because deterministic host-pid reuse cannot be requested from Linux. WNOWAIT must pin
+/// the old generation, the sentry must release it, and only then may waitpid return the number to the host.
+#[test]
+fn an_sa_nocldwait_release_is_published_while_the_old_pid_is_still_pinned() {
+    let source = include_str!("../../../runtime/hl-native/src/native/linux_abi/sentry.c");
+    let drain = source
+        .split_once("static void sentry_reap_drain(void)")
+        .unwrap()
+        .1
+        .split_once("// SCM_RIGHTS")
+        .unwrap()
+        .0;
+    let pinned = drain
+        .find("WEXITED | WNOHANG | WNOWAIT")
+        .expect("waitid observes the corpse without collecting it");
+    let published = drain
+        .find("sentry_ctl_op(SENTRY_OP_REAP")
+        .expect("the table release is published");
+    let collected = drain.find("waitpid(pid").expect("the pinned corpse is collected");
+    assert!(
+        pinned < published && published < collected,
+        "the host pid became reusable before the sentry released its old generation"
+    );
+}
+
 /// The bound on tables held for SIMULTANEOUSLY live children is fail-closed and must stay where it is: a
 /// fork past it is refused with `EAGAIN`, never served out of a slot something else still owns. This is the
-/// control for the test above -- without it, "200 rounds completed" would also be satisfied by a sentry
-/// that had stopped bounding anything.
+/// control for every rounds test above -- without it, "200 rounds completed" would also be satisfied by a
+/// sentry that had stopped bounding anything, and it is what catches a harness that never applied the
+/// sandbox default at all: `HL_UNTRUSTED` is a launch option with no environment importer, and a run
+/// missing it reads `created=70` here while every other test in this file reads a vacuous pass.
 #[test]
 fn the_bound_on_simultaneously_live_children_is_unchanged() {
     let work = TempDir::new().unwrap();
