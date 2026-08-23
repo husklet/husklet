@@ -29,6 +29,7 @@ pub(super) mod input_flag {
     pub(super) const IXON: u32 = 0x400;
     pub(super) const IXANY: u32 = 0x800;
     pub(super) const IMAXBEL: u32 = 0x2000;
+    pub(super) const IUTF8: u32 = 0x4000;
 }
 
 /// `c_oflag` bits.
@@ -193,7 +194,8 @@ impl Effect {
 pub(super) struct LineDiscipline {
     termios: Termios,
     line: Vec<u8>,
-    /// Display columns each byte of `line` occupies, so ERASE can rub out exactly what it drew.
+    /// Display columns each byte of `line` occupies. With IUTF8, continuation bytes are removed
+    /// together and the leading byte's width is the one ERASE rubs out.
     widths: Vec<u8>,
     column: usize,
     literal_next: bool,
@@ -420,10 +422,26 @@ impl LineDiscipline {
     }
 
     fn erase_one(&mut self, effect: &mut Effect) {
-        let Some(width) = self.widths.pop() else {
+        let Some(mut width) = self.widths.pop() else {
             return;
         };
-        self.line.pop();
+        let Some(mut byte) = self.line.pop() else {
+            return;
+        };
+        // Linux IUTF8 is deliberately structural rather than a UTF-8 validator: a trailing
+        // continuation byte pulls preceding continuation bytes and then one leading byte into the
+        // same erase. An incomplete leading byte or a non-continuation invalid tail remains one byte.
+        // Mirroring that rule both avoids allocating/decoding on the keystroke path and matches N_TTY
+        // for malformed input as well as valid two-, three- and four-byte code points.
+        if self.termios.has_input(input_flag::IUTF8) {
+            while byte & 0xc0 == 0x80 {
+                let (Some(previous), Some(previous_width)) = (self.line.pop(), self.widths.pop()) else {
+                    break;
+                };
+                byte = previous;
+                width = previous_width;
+            }
+        }
         self.rub_out(width, effect);
     }
 
@@ -513,7 +531,7 @@ impl LineDiscipline {
             }
             printable => {
                 effect.echo.push(printable);
-                self.column += 1;
+                self.column += usize::from(width);
             }
         }
         width
@@ -533,6 +551,7 @@ impl LineDiscipline {
                     0
                 }
             }
+            continuation if self.termios.has_input(input_flag::IUTF8) && continuation & 0xc0 == 0x80 => 0,
             _ => 1,
         }
     }
@@ -551,7 +570,7 @@ mod tests {
     use super::control_character::{
         VEOF, VEOL, VEOL2, VERASE, VINTR, VKILL, VLNEXT, VQUIT, VREPRINT, VSTART, VSTOP, VSUSP, VWERASE,
     };
-    use super::input_flag::{ICRNL, IGNCR, IMAXBEL, INLCR, ISTRIP, IXANY, IXON};
+    use super::input_flag::{ICRNL, IGNCR, IMAXBEL, INLCR, ISTRIP, IUTF8, IXANY, IXON};
     use super::local_flag::{ECHO, ECHOCTL, ECHOE, ECHOK, ECHOKE, ECHONL, ICANON, IEXTEN, ISIG, NOFLSH};
     use super::output_flag::{OCRNL, ONLCR, OPOST};
     use super::{CANONICAL_CAPACITY, Effect, LineDiscipline, Signal, Termios};
@@ -710,6 +729,52 @@ mod tests {
         let effect = feed(&mut discipline, &[0x7f]);
         assert_eq!(effect.echo, b"\x08 \x08", "ECHOE draws backspace-space-backspace");
         assert_eq!(feed(&mut discipline, b"\n").to_guest, b"a\n");
+    }
+
+    #[test]
+    fn iutf8_erase_removes_one_complete_code_point() {
+        for typed in ["é", "€", "😀"] {
+            let termios = Termios {
+                input: cooked().input | IUTF8,
+                ..cooked()
+            };
+            let mut discipline = LineDiscipline::new(termios);
+            feed(&mut discipline, typed.as_bytes());
+            assert_eq!(discipline.column, 1, "{typed:?} must occupy one terminal column");
+            let erased = feed(&mut discipline, &[0x7f]);
+            assert_eq!(erased.echo, b"\x08 \x08", "{typed:?} occupies one terminal column");
+            assert_eq!(
+                feed(&mut discipline, b"\n").to_guest,
+                b"\n",
+                "{typed:?} left an orphaned UTF-8 byte"
+            );
+        }
+    }
+
+    #[test]
+    fn clearing_iutf8_keeps_linux_byte_wise_erase() {
+        let mut discipline = LineDiscipline::new(cooked());
+        feed(&mut discipline, "é".as_bytes());
+        feed(&mut discipline, &[0x7f]);
+        assert_eq!(feed(&mut discipline, b"\n").to_guest, [0xc3, b'\n']);
+    }
+
+    #[test]
+    fn iutf8_malformed_input_uses_linux_structural_erase() {
+        let termios = Termios {
+            input: cooked().input | IUTF8,
+            ..cooked()
+        };
+        for (typed, expected) in [
+            (&[0xe2, 0x82][..], &b"\n"[..]),
+            (&[0xe2, b'x'][..], &[0xe2, b'\n'][..]),
+            (&[0x80][..], &b"\n"[..]),
+        ] {
+            let mut discipline = LineDiscipline::new(termios);
+            feed(&mut discipline, typed);
+            feed(&mut discipline, &[0x7f]);
+            assert_eq!(feed(&mut discipline, b"\n").to_guest, expected, "input {typed:x?}");
+        }
     }
 
     #[test]
