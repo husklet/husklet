@@ -386,7 +386,7 @@ fn host_quiet(max_load: f64, box_path: &Path, lock_held: bool) -> Result<bool, E
 /// nobody before it acquires, and by itself alone once it has.
 ///
 /// The answer comes from the lock, not from `/proc/locks`. That table cannot
-/// support the question, in three independently measured ways. It is a seq_file
+/// support the question, in three independently measured ways. It is a `seq_file`
 /// over a per-CPU list enumerated by ordinal position, and reading it takes six
 /// to ten `read` calls, each of which re-enters the list at an ordinal; a lock
 /// inserted or removed ahead of that ordinal shifts every later record, so a

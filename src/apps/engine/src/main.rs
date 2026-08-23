@@ -6,7 +6,10 @@ fn main() {
                 println!("{receipt}");
                 std::process::exit(0);
             }
-            Err(()) => std::process::exit(125),
+            Err(reason) => {
+                eprintln!("hl-engine: {reason}");
+                std::process::exit(125);
+            }
         }
     }
     let guest = arguments

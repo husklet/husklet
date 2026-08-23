@@ -95,6 +95,8 @@ static void ofd_writer(const char *root, const char *prefix) {
     if (fcntl(4, F_SETFL, flags) != 0) fail("ofd-restore");
     snprintf(marker, sizeof marker, "%s-clear", prefix);
     publish(root, marker);
+    snprintf(marker, sizeof marker, "%s-checked", prefix);
+    await(root, marker);
 }
 
 static void ofd_observer(const char *root, const char *prefix) {
@@ -107,7 +109,14 @@ static void ofd_observer(const char *root, const char *prefix) {
     publish(root, marker);
     snprintf(marker, sizeof marker, "%s-clear", prefix);
     await(root, marker);
-    if ((fcntl(4, F_GETFL) & O_NONBLOCK) != 0) fail("ofd-not-restored");
+    int restored = fcntl(4, F_GETFL);
+    if (restored < 0 || (restored & O_NONBLOCK) != 0) {
+        dprintf(STDERR_FILENO, "FAIL ofd-not-restored flags=%#x nonblock=%d\n", restored,
+                restored >= 0 && (restored & O_NONBLOCK) != 0);
+        _exit(70);
+    }
+    snprintf(marker, sizeof marker, "%s-checked", prefix);
+    publish(root, marker);
 }
 
 static void descriptor_state(int role, int expected_writer_cloexec) {

@@ -90,7 +90,7 @@ impl RuntimePlan {
         // SAFETY: `geteuid` takes no arguments, reads no caller memory, and is documented never to fail.
         let engine_uid = unsafe { libc::geteuid() };
         let rootfs_uid = metadata.uid();
-        if engine_uid == 0 || rootfs_uid == engine_uid {
+        if !root_is_unownable(engine_uid, rootfs_uid) {
             return Ok(());
         }
         hl_log::hl_error!(
@@ -250,6 +250,11 @@ impl RuntimePlan {
         }
         Ok(records.into_bytes())
     }
+}
+
+#[cfg(unix)]
+const fn root_is_unownable(engine_uid: u32, rootfs_uid: u32) -> bool {
+    engine_uid != 0 && rootfs_uid != engine_uid
 }
 
 impl From<OptionError> for PlanError {

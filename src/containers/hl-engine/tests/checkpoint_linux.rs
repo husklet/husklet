@@ -3124,7 +3124,12 @@ fn one_rejected_process_prevents_manifest_publication_on_both_isas() {
             capture.capture_checkpoint_until(checkpoint_deadline()).is_err(),
             "{isa:?} accepted a process tree containing a rejected member"
         );
-        let _ = wait_result_bounded(&capture, "rejected-member checkpoint process tree");
+        // This refusal is non-destructive: the two members that reached the
+        // safepoint resume, and the fixture deliberately parks forever.  A
+        // capture refusal therefore is not an exit request.  Stop the live
+        // fixture explicitly before proving that every original member was
+        // reaped; waiting for it first can only reach the test timeout.
+        let cleanup = force_and_reap_bounded(&capture);
         let reap_deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let remaining = live
@@ -3138,7 +3143,7 @@ fn one_rejected_process_prevents_manifest_publication_on_both_isas() {
             }
             assert!(
                 Instant::now() < reap_deadline,
-                "{isa:?} leaked rejected checkpoint members: {remaining:?}"
+                "{isa:?} leaked rejected checkpoint members: {remaining:?}; cleanup={cleanup}"
             );
             std::thread::sleep(Duration::from_millis(5));
         }

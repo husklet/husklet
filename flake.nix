@@ -387,6 +387,7 @@
         pkgs:
         let
           alpine = if pkgs.stdenv.isLinux then linuxAlpineFor pkgs else null;
+          toolchain = toolchainFor pkgs;
         in
         (rustPlatformFor pkgs).buildRustPackage (
           {
@@ -407,7 +408,12 @@
               pkgs.gobject-introspection
               pkgs.glib
               pkgs.gdk-pixbuf
-            ];
+              pkgs.cacert
+              pkgs.coreutils
+              pkgs.procps
+            ]
+            ++ lib.optionals toolchain.canBuildGuests toolchain.compilerAliases
+            ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.xorg-server pkgs.xvfb-run ];
             buildInputs = [
               pkgs.gtk4
               pkgs.librsvg
@@ -418,6 +424,14 @@
               runHook preBuild
 
               export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
+              export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+              # A unique root prevents two sandbox UIDs from sharing the corpus
+              # runner's durable default namespace in /var/tmp.
+              export TMPDIR="$(mktemp -d /tmp/husklet-verification.XXXXXX)"
+              export HL_RUNTIME_WORK_ROOT="$TMPDIR/runtime"
+              export HOME="$TMPDIR/home"
+              export XDG_CACHE_HOME="$TMPDIR/cache"
+              mkdir -p "$HOME" "$XDG_CACHE_HOME"
               if [ "$NIX_BUILD_CORES" -gt 256 ]; then
                 export HL_COMPAT_JOBS=256
               else
@@ -434,37 +448,65 @@
               export HL_TEST_ENGINE_APP_BIN_DIR="$PWD/target/debug"
               cargo check --workspace --all-targets --locked --offline
               cargo clippy --workspace --all-targets --locked --offline -- -D warnings
-              cargo test --workspace --all-targets --locked --offline --no-fail-fast
+              ${lib.optionalString pkgs.stdenv.isLinux ''
+                xvfb-run -a -s '-screen 0 1600x1000x24' -- \
+                  cargo test --workspace --all-targets --locked --offline --no-fail-fast
+              ''}
+              ${lib.optionalString pkgs.stdenv.isDarwin ''
+                cargo test --workspace --all-targets --locked --offline --no-fail-fast
+              ''}
               ${lib.optionalString pkgs.stdenv.isLinux ''export HL_PRODUCT_CHECKPOINT_REQUIRED=1''}
               cargo test -p husklet --features runtime --lib --locked --offline --no-fail-fast
               cargo test --workspace --doc --locked --offline
               ${lib.optionalString pkgs.stdenv.isLinux ''
+                build_authority_test() {
+                  local receipt="$1"
+                  cargo test -p hl-native --test executable_authority --locked --offline --no-run \
+                    --message-format=json | tee "$receipt"
+                  mapfile -t authority_tests < <(
+                    sed -n 's/.*"executable":"\([^"]*\/executable_authority-[^"]*\)".*/\1/p' "$receipt"
+                  )
+                  if [ "''${#authority_tests[@]}" -ne 1 ] || [ ! -x "''${authority_tests[0]}" ]; then
+                    printf 'expected one executable-authority artifact from this build, found %s\n' \
+                      "''${#authority_tests[@]}" >&2
+                    exit 1
+                  fi
+                  authority_test="''${authority_tests[0]}"
+                }
+
+                reject_sanitizer_reports() {
+                  local label="$1"
+                  local prefix="$2"
+                  local found=0
+                  for report in "$TMPDIR/$prefix" "$TMPDIR/$prefix".*; do
+                    [ -f "$report" ] || continue
+                    if [ "$found" -eq 0 ]; then
+                      printf '%s reported an error in the clean lifecycle tests\n' "$label" >&2
+                    fi
+                    cat "$report" >&2
+                    found=1
+                  done
+                  [ "$found" -eq 0 ]
+                }
+
+                # Prove the shell running this derivation can discover a report. The previous `compgen`
+                # probe was unavailable here and its failure made the surrounding `if` silently pass.
+                printf 'sanitizer-report-probe\n' > "$TMPDIR/sanitizer-probe.known"
+                if reject_sanitizer_reports Probe sanitizer-probe >/dev/null 2>&1; then
+                  printf 'sanitizer report probe was not discovered\n' >&2
+                  exit 1
+                fi
+                rm "$TMPDIR/sanitizer-probe.known"
+
                 # AddressSanitizer covers native lifetime violations that leak
                 # accounting cannot observe. Run the bounded ownership tests,
                 # then prove that the instrumentation rejects a C heap UAF.
                 export HL_C_SANITIZER=address
-                cargo test -p hl-native --test executable_authority --locked --offline --no-run
-                authority_tests=(target/debug/deps/executable_authority-*)
-                authority_test=""
-                for candidate in "''${authority_tests[@]}"; do
-                  if [ -x "$candidate" ] && [ "''${candidate##*.}" != d ]; then
-                    if [ -n "$authority_test" ]; then
-                      printf 'multiple executable-authority test binaries found\n' >&2
-                      exit 1
-                    fi
-                    authority_test="$candidate"
-                  fi
-                done
-                if [ -z "$authority_test" ]; then
-                  printf 'executable-authority test binary is absent\n' >&2
-                  exit 1
-                fi
+                build_authority_test "$TMPDIR/asan-authority-build.json"
                 asan_runtime="$(${pkgs.stdenv.cc}/bin/cc -print-file-name=libasan.so)"
                 ASAN_OPTIONS="detect_leaks=0:halt_on_error=1:exitcode=97:log_path=$TMPDIR/asan-clean" \
                   LD_PRELOAD="$asan_runtime" "$authority_test"
-                if compgen -G "$TMPDIR/asan-clean*" >/dev/null; then
-                  printf 'AddressSanitizer reported an error in the clean lifecycle tests\n' >&2
-                  cat "$TMPDIR"/asan-clean* >&2
+                if ! reject_sanitizer_reports AddressSanitizer asan-clean; then
                   exit 1
                 fi
 
@@ -487,9 +529,7 @@
                 export HL_C_SANITIZER=leak
                 export LSAN_OPTIONS="suppressions=$PWD/tests/lsan.supp:print_suppressions=1:exitcode=97:log_path=$TMPDIR/lsan-clean"
                 cargo test -p hl-native --test executable_authority --locked --offline
-                if compgen -G "$TMPDIR/lsan-clean*" >/dev/null; then
-                  printf 'LeakSanitizer reported an error in the clean lifecycle tests\n' >&2
-                  cat "$TMPDIR"/lsan-clean* >&2
+                if ! reject_sanitizer_reports LeakSanitizer lsan-clean; then
                   exit 1
                 fi
 
@@ -512,22 +552,7 @@
                 # bounded authority lifecycle tests do not execute generated guest
                 # code, which Valgrind cannot reliably inspect.
                 export HL_C_SANITIZER=memcheck
-                cargo test -p hl-native --test executable_authority --locked --offline --no-run
-                authority_tests=(target/debug/deps/executable_authority-*)
-                authority_test=""
-                for candidate in "''${authority_tests[@]}"; do
-                  if [ -x "$candidate" ] && [ "''${candidate##*.}" != d ]; then
-                    if [ -n "$authority_test" ]; then
-                      printf 'multiple executable-authority test binaries found\n' >&2
-                      exit 1
-                    fi
-                    authority_test="$candidate"
-                  fi
-                done
-                if [ -z "$authority_test" ]; then
-                  printf 'executable-authority test binary is absent\n' >&2
-                  exit 1
-                fi
+                build_authority_test "$TMPDIR/memcheck-authority-build.json"
                 valgrind \
                   --leak-check=full \
                   --show-leak-kinds=definite,indirect \
@@ -613,6 +638,8 @@
         pkgs:
         let
           archives = alpineArchivesFor pkgs;
+          toolchain = toolchainFor pkgs;
+          arm64Compiler = builtins.elemAt toolchain.compilerAliases 0;
         in
         (rustPlatformFor pkgs).buildRustPackage {
           pname = "hl-alpine-compatibility";
@@ -629,6 +656,7 @@
             # Load-bearing, proven by removal rather than assumed: without it this gate
             # reddens at `total_failed_ms=62 error=No such file or directory (os error 2)`.
             pkgs.procps
+            arm64Compiler
             (rustFor pkgs)
           ];
           doCheck = false;
@@ -636,6 +664,10 @@
             runHook preBuild
             export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
             export HL_PRODUCT_CHECKPOINT_REQUIRED=1
+            # The daemon's public fixtures below currently target ARM64.  Use the
+            # pinned guest compiler wrapper, which also supplies glibc's static
+            # archive; a Nix sandbox deliberately has no /usr/bin compiler.
+            export HL_GUEST_CC=${arm64Compiler}/bin/aarch64-linux-gnu-gcc
 
             run_ignored() {
               package="$1"
@@ -1299,7 +1331,7 @@
             ' windows-units.json | sort -u | cut -f1 | sort | uniq -c \
               | sed 's/^ *//' > windows-units.actual
             cat > windows-units.expected <<'WINDOWS_UNITS'
-5 engine
+6 engine
 3 extension
 1 hl-cc
 2 hl-design

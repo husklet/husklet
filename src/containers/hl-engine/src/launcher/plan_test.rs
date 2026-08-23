@@ -98,7 +98,6 @@ fn formats_publish_and() {
 /// Host ownership of the plan's writable root, which decides whether a launch can write at all.
 #[cfg(unix)]
 mod rootfs_ownership {
-    use crate::engine::EngineError;
     use crate::launcher::plan::RuntimePlan;
     use crate::options::Options;
 
@@ -132,37 +131,13 @@ mod rootfs_ownership {
     /// any host. Assert the branch this identity actually reaches instead of leaving the run empty.
     ///
     /// `/` cannot express the root arm, because root owns it and the `rootfs_uid == engine_uid` arm
-    /// would answer first. The fixture therefore hands a directory to another uid, so only
-    /// `engine_uid == 0` can account for the acceptance.
+    /// would answer first. The root branch is a pure uid decision, so exercise it with a foreign uid
+    /// directly instead of requiring `CAP_CHOWN`; Nix intentionally runs uid 0 without that capability.
     #[test]
-    #[allow(unsafe_code)]
     fn a_writable_root_owned_by_another_host_user_refuses_a_launch_that_is_not_root() {
-        use std::os::unix::fs::MetadataExt as _;
-        // SAFETY: `geteuid` takes no arguments and cannot fail.
-        let engine_uid = unsafe { libc::geteuid() };
-        if engine_uid != 0 {
-            assert_eq!(
-                plan(Some(host_root_owned()), &[]).refuse_unownable_root(),
-                Err(EngineError::RootfsNotOwnedByEngine {
-                    rootfs_uid: 0,
-                    engine_uid,
-                })
-            );
-            return;
-        }
-        const FOREIGN_UID: u32 = 65_534;
-        let directory = tempfile::tempdir().unwrap();
-        std::os::unix::fs::chown(directory.path(), Some(FOREIGN_UID), None).unwrap();
-        assert_eq!(
-            std::fs::metadata(directory.path()).unwrap().uid(),
-            FOREIGN_UID,
-            "the fixture root must belong to another uid or the acceptance proves nothing"
-        );
-        assert_eq!(
-            plan(Some(directory.path().to_str().unwrap()), &[]).refuse_unownable_root(),
-            Ok(()),
-            "host root writes through every owner, so no ownership refusal may fire for uid 0"
-        );
+        assert!(!super::root_is_unownable(0, 65_534));
+        assert!(super::root_is_unownable(1_000, 0));
+        assert!(!super::root_is_unownable(1_000, 1_000));
     }
 
     /// The kinder-to-refuse judgement stops exactly where the workspace stops being broken. A
