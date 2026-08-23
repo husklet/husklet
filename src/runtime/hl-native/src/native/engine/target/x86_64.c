@@ -502,7 +502,13 @@ static int smc_tracked_written(uint64_t address, uint64_t size) {
     return 0;
 }
 #endif
+#if defined(HL_NATIVE_TEST_HOOKS)
+#define HL_X86_DECODE_MEMO_TEST 1
+#endif
 #include "../../linux_abi/thread.c" // SHARED: clone->pthread, per-thread cpu, futex
+#if defined(HL_NATIVE_TEST_HOOKS)
+#undef HL_X86_DECODE_MEMO_TEST
+#endif
 
 /*
  * Queue the bytes a store actually wrote into an emulated MAP_SHARED mapping,

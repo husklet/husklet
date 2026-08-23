@@ -9,6 +9,12 @@ fn stable_executable_pages_scan_the_nonexec_registry_once_per_thread() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn a_fork_child_revalidates_an_inherited_decoded_pc() {
+    assert!(exec_page_cache_test(2, 11).is_ok());
+}
+
 #[test]
 fn every_executable_mapping_transition_invalidates_a_warm_page_verdict() {
     for isa in [1, 2] {
@@ -26,5 +32,13 @@ fn a_partially_nonexecutable_page_is_never_cached_as_wholly_valid() {
     for isa in [1, 2] {
         let scans = exec_page_cache_test(isa, 4).unwrap();
         assert!(scans >= 4, "isa={isa} scanned only {scans} time(s)");
+    }
+}
+
+#[test]
+fn x86_decoded_pc_memo_revalidates_bytes_and_execute_permission() {
+    assert_eq!(exec_page_cache_test(2, 5), Ok(1));
+    for scenario in 6..=10 {
+        assert!(exec_page_cache_test(2, scenario).is_ok(), "scenario={scenario}");
     }
 }
