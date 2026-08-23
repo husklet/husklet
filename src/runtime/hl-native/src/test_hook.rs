@@ -45,6 +45,12 @@ pub fn proc_fdinfo_listing_test(isa: u32, scenario: u32) -> i32 {
     bindings::proc_fdinfo_listing_test(isa, scenario)
 }
 
+/// Exercises the per-thread executable-page verdict cache and its mapping-generation invalidation.
+#[cfg(feature = "native-test-hooks")]
+#[doc(hidden)]
+pub fn exec_page_cache_test(isa: u32, scenario: u32) -> Result<u64, i32> {
+    bindings::exec_page_cache_test(isa, scenario)
+}
 #[cfg(feature = "native-test-hooks")]
 #[doc(hidden)]
 pub fn checkpoint_channel_notify_test(isa: u32, scenario: u32) -> Result<(), i32> {

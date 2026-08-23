@@ -55,7 +55,7 @@ pub(crate) type VectorIoTest = unsafe extern "C" fn(c_uint, *mut i64, *mut c_uin
 #[cfg(feature = "native-test-hooks")]
 pub(crate) type ScenarioTest = unsafe extern "C" fn(c_uint) -> c_int;
 #[cfg(feature = "native-test-hooks")]
-pub(crate) type RestoreFdResetTest = unsafe extern "C" fn(c_uint, *mut u64) -> c_int;
+pub(crate) type ScenarioCountTest = unsafe extern "C" fn(c_uint, *mut u64) -> c_int;
 #[cfg(feature = "native-test-hooks")]
 pub(crate) type SignalFrameTest = unsafe extern "C" fn(c_uint, c_uint, u64, i64, *mut i64, *mut i64) -> c_int;
 #[cfg(feature = "native-test-hooks")]
@@ -133,6 +133,8 @@ pub(crate) struct TestApi {
     #[cfg(test)]
     pub(crate) x86_64_fdvis_path_publication: ScenarioTest,
     pub(crate) x86_64_proc_fdinfo_listing: ScenarioTest,
+    pub(crate) aarch64_exec_page_cache: ScenarioCountTest,
+    pub(crate) x86_64_exec_page_cache: ScenarioCountTest,
     pub(crate) aarch64_namespace_transaction: ScenarioTest,
     pub(crate) x86_64_namespace_transaction: ScenarioTest,
     pub(crate) x86_64_store_preflight: NoArgumentTest,
@@ -148,8 +150,8 @@ pub(crate) struct TestApi {
     pub(crate) x86_64_checkpoint_restart_register: NoArgumentTest,
     pub(crate) aarch64_checkpoint_restore_claim: ScenarioTest,
     pub(crate) x86_64_checkpoint_restore_claim: ScenarioTest,
-    pub(crate) aarch64_checkpoint_restore_fd_reset: RestoreFdResetTest,
-    pub(crate) x86_64_checkpoint_restore_fd_reset: RestoreFdResetTest,
+    pub(crate) aarch64_checkpoint_restore_fd_reset: ScenarioCountTest,
+    pub(crate) x86_64_checkpoint_restore_fd_reset: ScenarioCountTest,
     pub(crate) aarch64_checkpoint_restore_slice: ScenarioTest,
     pub(crate) x86_64_checkpoint_restore_slice: ScenarioTest,
     pub(crate) aarch64_checkpoint_gmap_release: ScenarioTest,
@@ -480,6 +482,8 @@ impl TestApi {
             #[cfg(test)]
             x86_64_fdvis_path_publication: symbol!("hl_x86_64_fdvis_path_publication_test", ScenarioTest),
             x86_64_proc_fdinfo_listing: symbol!("hl_x86_64_proc_fdinfo_listing_test", ScenarioTest),
+            aarch64_exec_page_cache: symbol!("hl_aarch64_exec_page_cache_test", ScenarioCountTest),
+            x86_64_exec_page_cache: symbol!("hl_x86_64_exec_page_cache_test", ScenarioCountTest),
             aarch64_namespace_transaction: symbol!("hl_aarch64_namespace_transaction_test", ScenarioTest),
             x86_64_namespace_transaction: symbol!("hl_x86_64_namespace_transaction_test", ScenarioTest),
             x86_64_store_preflight: symbol!("hl_x86_64_store_preflight_test", NoArgumentTest),
@@ -504,11 +508,11 @@ impl TestApi {
             x86_64_checkpoint_restore_claim: symbol!("hl_x86_64_checkpoint_restore_claim_test", ScenarioTest),
             aarch64_checkpoint_restore_fd_reset: symbol!(
                 "hl_aarch64_checkpoint_restore_fd_reset_test",
-                RestoreFdResetTest
+                ScenarioCountTest
             ),
             x86_64_checkpoint_restore_fd_reset: symbol!(
                 "hl_x86_64_checkpoint_restore_fd_reset_test",
-                RestoreFdResetTest
+                ScenarioCountTest
             ),
             aarch64_checkpoint_anon_shared: symbol!("hl_aarch64_checkpoint_anon_shared_test", ScenarioTest),
             x86_64_checkpoint_anon_shared: symbol!("hl_x86_64_checkpoint_anon_shared_test", ScenarioTest),

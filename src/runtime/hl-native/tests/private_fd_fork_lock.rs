@@ -20,3 +20,15 @@ fn a_fork_child_completes_the_private_fd_path_while_a_sibling_holds_the_lock() {
         Err(status) => panic!("private fork-lock scenario failed with status {status}"),
     }
 }
+
+#[test]
+fn an_ordinary_soft_limit_keeps_the_guest_ceiling_and_a_full_private_band() {
+    hl_native::private_fork_lock_test(2)
+        .unwrap_or_else(|status| panic!("guest/private descriptor split is inconsistent: {status}"));
+}
+
+#[test]
+fn lowering_the_hard_limit_makes_the_reported_guest_ceiling_honest() {
+    hl_native::private_fork_lock_test(3)
+        .unwrap_or_else(|status| panic!("low-hard-limit descriptor split is inconsistent: {status}"));
+}

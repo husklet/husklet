@@ -31,6 +31,7 @@ static _Atomic uint64_t g_gnx_generation = 2;
 static atomic_flag g_gnx_writer = ATOMIC_FLAG_INIT;
 static void gnx_clear(uint64_t lo, uint64_t hi);
 static void gnx_clear_raw(uint64_t lo, uint64_t hi);
+static void gnx_reset(void);
 
 static void gro_writer_lock(void) {
     while (atomic_flag_test_and_set_explicit(&g_gro_writer, memory_order_acquire))

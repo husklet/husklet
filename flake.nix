@@ -1340,7 +1340,7 @@
 1 hl-fs
 8 hl-gui
 2 hl-log
-51 hl-native
+52 hl-native
 1 hl-process
 1 hl-rpc
 1 hl-ws
