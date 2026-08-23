@@ -40,7 +40,7 @@ int main(void) {
 
     unlink(path);
     rmdir(dir);
-    printf("fsync-probe fsync=%d fdatasync=%d syncfs=%d opath-ebadf=%d content=%d\n",
-           fsync_ok, fdatasync_ok, syncfs_ok, ebadf_ok, content_ok);
+    printf("fsync-probe fsync=%d fdatasync=%d syncfs=%d opath-ebadf=%d content=%d\n", fsync_ok, fdatasync_ok, syncfs_ok,
+           ebadf_ok, content_ok);
     return 0;
 }

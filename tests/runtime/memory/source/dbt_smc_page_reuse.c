@@ -7,8 +7,7 @@ int main(void) {
     int (*function)(void) = (int (*)(void))page;
     if (function() != 7) return 2;
     if (munmap(page, 4096) != 0) return 3;
-    unsigned char *data = mmap(page, 4096, PROT_READ | PROT_WRITE,
-                               MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    unsigned char *data = mmap(page, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
     if (data != page) return 4;
     data[0] = 11;
     data[1] = 29;

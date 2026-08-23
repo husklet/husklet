@@ -14,7 +14,7 @@ int main(void) {
     int ok = 1;
     // loopback attributes are fixed on Linux
     ok &= eq("/sys/class/net/lo/mtu", "65536\n");
-    ok &= eq("/sys/class/net/lo/type", "772\n");           // ARPHRD_LOOPBACK
+    ok &= eq("/sys/class/net/lo/type", "772\n"); // ARPHRD_LOOPBACK
     ok &= eq("/sys/class/net/lo/address", "00:00:00:00:00:00\n");
     ok &= eq("/sys/class/net/lo/flags", "0x9\n");
     char b[256];

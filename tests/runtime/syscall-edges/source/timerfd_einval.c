@@ -29,7 +29,7 @@ int main(void) {
     timerfd_gettime(fd, &cur);
     int stillzero = (cur.it_value.tv_sec == 0 && cur.it_value.tv_nsec == 0);
     int ebadfd = (timerfd_settime(-1, 0, &ok, NULL) == -1) ? errno : 0;
-    printf("bad=%d ebad=%d badflag=%d ebadflag=%d e1=%d e2=%d e3=%d e4=%d e5=%d stillzero=%d ebadfd=%d\n",
-           bad, ebad, badflag, ebadflag, e1, e2, e3, e4, e5, stillzero, ebadfd);
+    printf("bad=%d ebad=%d badflag=%d ebadflag=%d e1=%d e2=%d e3=%d e4=%d e5=%d stillzero=%d ebadfd=%d\n", bad, ebad,
+           badflag, ebadflag, e1, e2, e3, e4, e5, stillzero, ebadfd);
     return 0;
 }

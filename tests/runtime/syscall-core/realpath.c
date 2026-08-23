@@ -14,9 +14,8 @@ int main(void) {
     int cwd_dot_ok = getcwd(original, sizeof original) != NULL;
     mkdir(dir, 0755);
     snprintf(dotted, sizeof dotted, "%s/.", dir);
-    cwd_dot_ok = cwd_dot_ok && chdir(dotted) == 0 && getcwd(cwd, sizeof cwd) != NULL &&
-                 strcmp(cwd, dotted) != 0 && strstr(cwd, "/./") == NULL &&
-                 (strlen(cwd) < 2 || strcmp(cwd + strlen(cwd) - 2, "/.") != 0);
+    cwd_dot_ok = cwd_dot_ok && chdir(dotted) == 0 && getcwd(cwd, sizeof cwd) != NULL && strcmp(cwd, dotted) != 0 &&
+                 strstr(cwd, "/./") == NULL && (strlen(cwd) < 2 || strcmp(cwd + strlen(cwd) - 2, "/.") != 0);
     if (original[0]) chdir(original);
     char target[256], l1[256], l2[256], l3[256];
     snprintf(target, sizeof target, "%s/target.txt", dir);

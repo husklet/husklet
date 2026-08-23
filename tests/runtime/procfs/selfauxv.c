@@ -22,11 +22,14 @@ int main(void) {
     for (int i = 0; i < npairs; i++) {
         unsigned long type = buf[2 * i], val = buf[2 * i + 1];
         switch (type) {
-            case AT_PAGESZ: pagesz = val; has_pagesz = 1; break;
-            case AT_PHENT:  phent = val; break;
-            case AT_PHDR:   has_phdr = 1; break;
-            case AT_ENTRY:  has_entry = 1; break;
-            case AT_NULL:   terminated = 1; break;
+        case AT_PAGESZ:
+            pagesz = val;
+            has_pagesz = 1;
+            break;
+        case AT_PHENT: phent = val; break;
+        case AT_PHDR: has_phdr = 1; break;
+        case AT_ENTRY: has_entry = 1; break;
+        case AT_NULL: terminated = 1; break;
         }
         if (type == AT_NULL) break;
     }

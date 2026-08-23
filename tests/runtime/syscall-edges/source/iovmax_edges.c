@@ -16,7 +16,10 @@ int main(void) {
     ssize_t z = writev(fd, &one, 0);
     int ez = (z == -1) ? errno : 0;
     static struct iovec many[IOV_MAX + 1];
-    for (int i = 0; i <= IOV_MAX; i++) { many[i].iov_base = (void *)"x"; many[i].iov_len = 0; }
+    for (int i = 0; i <= IOV_MAX; i++) {
+        many[i].iov_base = (void *)"x";
+        many[i].iov_len = 0;
+    }
     ssize_t big = writev(fd, many, IOV_MAX + 1);
     int ebig = (big == -1) ? errno : 0;
     volatile int negc = -1;

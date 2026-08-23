@@ -33,10 +33,16 @@ int main(void) {
         char line[512];
         int first = 1;
         while (fgets(line, sizeof line, f)) {
-            if (first) { first = 0; continue; } // header
+            if (first) {
+                first = 0;
+                continue;
+            } // header
             unsigned sl, la, lp, ra, rp, st;
             if (sscanf(line, " %u: %x:%x %x:%x %x", &sl, &la, &lp, &ra, &rp, &st) >= 6) {
-                if (lp == PORT) { seen = 1; if (st == 0x0A) st_listen = 1; }
+                if (lp == PORT) {
+                    seen = 1;
+                    if (st == 0x0A) st_listen = 1;
+                }
             }
         }
         fclose(f);

@@ -35,13 +35,13 @@ int main(void) {
     struct epoll_event out[4];
     uint64_t one = 1;
     (void)!write(ev, &one, 8);
-    int n1 = epoll_wait(ep, out, 4, 0);          // level: readable
-    int n2 = epoll_wait(ep, out, 4, 0);          // still level-triggered readable
+    int n1 = epoll_wait(ep, out, 4, 0); // level: readable
+    int n2 = epoll_wait(ep, out, 4, 0); // still level-triggered readable
     uint32_t data = (n1 > 0) ? out[0].data.u32 : 0;
     uint64_t drain = 0;
-    (void)!read(ev, &drain, 8);                  // drain the counter
-    int n3 = epoll_wait(ep, out, 4, 0);          // no longer readable
-    printf("a1=%d a2=%d ea2=%d m=%d em=%d d=%d ed=%d self=%d eself=%d n=%d,%d,%d data=%u\n",
-           a1, a2, ea2, m, em, d, ed, self, eself, n1, n2, n3, data);
+    (void)!read(ev, &drain, 8);         // drain the counter
+    int n3 = epoll_wait(ep, out, 4, 0); // no longer readable
+    printf("a1=%d a2=%d ea2=%d m=%d em=%d d=%d ed=%d self=%d eself=%d n=%d,%d,%d data=%u\n", a1, a2, ea2, m, em, d, ed,
+           self, eself, n1, n2, n3, data);
     return 0;
 }

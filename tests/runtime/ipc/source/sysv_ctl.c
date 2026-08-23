@@ -78,8 +78,8 @@ int main(void) {
     struct msqid_ds mds;
     memset(&mds, 0, sizeof mds);
     int mst = msgctl(qid, IPC_STAT, &mds) == 0;
-    printf("msg_stat ok=%d qbytes_pos=%d qnum0=%d mode600=%d owner=%d\n", mst, mds.msg_qbytes > 0,
-           mds.msg_qnum == 0, (mds.msg_perm.mode & 0777) == 0600, mds.msg_perm.uid == me);
+    printf("msg_stat ok=%d qbytes_pos=%d qnum0=%d mode600=%d owner=%d\n", mst, mds.msg_qbytes > 0, mds.msg_qnum == 0,
+           (mds.msg_perm.mode & 0777) == 0600, mds.msg_perm.uid == me);
     mds.msg_perm.mode = (mds.msg_perm.mode & ~0777) | 0620;
     mds.msg_qbytes = 1024; // lowering the queue limit is allowed for a non-privileged owner
     int mset = msgctl(qid, IPC_SET, &mds) == 0;
@@ -101,8 +101,8 @@ int main(void) {
     int i_seminfo = semctl(0, 0, SEM_INFO, su) >= 0;
     int i_msg = msgctl(0, IPC_INFO, (struct msqid_ds *)&msgi) >= 0;
     int i_msginfo = msgctl(0, MSG_INFO, (struct msqid_ds *)&msgi) >= 0;
-    printf("info shmi=%d shminfo=%d semi=%d seminfo=%d msgi=%d msginfo=%d\n", i_shm, i_shminfo, i_sem,
-           i_seminfo, i_msg, i_msginfo);
+    printf("info shmi=%d shminfo=%d semi=%d seminfo=%d msgi=%d msginfo=%d\n", i_shm, i_shminfo, i_sem, i_seminfo, i_msg,
+           i_msginfo);
 
     // ============================ EINVAL on an unknown command ============================
     int c_shm = shmctl(sid, 0x2345, &sds) < 0 ? errno : 0;

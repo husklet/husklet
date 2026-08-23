@@ -19,6 +19,7 @@ static int bound_poll_references(uint64_t address, uint64_t count) {
     free(fds);
     return 0;
 }
+
 static int bound_fdsets_reference(uint64_t count, uint64_t read_set, uint64_t write_set, uint64_t except_set) {
     uint64_t fd;
     size_t bytes;
@@ -98,7 +99,8 @@ static int bound_host_wait(struct pollfd *fds, nfds_t count, int wait_ms) {
             return poll_host_wait(fds, count, wait_ms);
 #endif
         }
-    for (index = 0; index < count; ++index) fds[index].revents = 0;
+    for (index = 0; index < count; ++index)
+        fds[index].revents = 0;
     if (wait_ms > 0) {
         struct timespec request = {wait_ms / 1000, (long)(wait_ms % 1000) * 1000000L};
         if (nanosleep(&request, NULL) != 0) return -1; /* errno == EINTR: the caller retries as before */
@@ -310,8 +312,7 @@ static int64_t bound_pselect(struct cpu *c, uint64_t count_value, uint64_t read_
             result = object_ready;
             break;
         }
-        native_ready =
-            bound_host_wait(native, count, object_ready == 0 && deadline != 0 && now < deadline ? 1 : 0);
+        native_ready = bound_host_wait(native, count, object_ready == 0 && deadline != 0 && now < deadline ? 1 : 0);
         if (native_ready < 0) {
             if (svc_poll_retry(c)) continue;
             result = -errno;
@@ -540,8 +541,8 @@ static int64_t bound_sendfile(const hl_linux_fd_snapshot *output, int output_fd,
 }
 
 static int64_t bound_copy_file_range(const hl_linux_fd_snapshot *input, int input_fd, uint64_t input_offset_address,
-                                     const hl_linux_fd_snapshot *output, int output_fd,
-                                     uint64_t output_offset_address, uint64_t count, uint64_t flags) {
+                                     const hl_linux_fd_snapshot *output, int output_fd, uint64_t output_offset_address,
+                                     uint64_t count, uint64_t flags) {
     off_t input_value = 0, output_value = 0;
     off_t *input_offset = input_offset_address != 0 ? &input_value : NULL;
     off_t *output_offset = output_offset_address != 0 ? &output_value : NULL;
@@ -549,17 +550,15 @@ static int64_t bound_copy_file_range(const hl_linux_fd_snapshot *input, int inpu
     int64_t error = 0;
     char buffer[8192];
     if (flags != 0) return -EINVAL;
-    if ((input_offset != NULL &&
-         guest_copy_from(input_offset, input_offset_address, sizeof(*input_offset)) !=
-             (ssize_t)sizeof(*input_offset)) ||
-        (output_offset != NULL &&
-         guest_copy_from(output_offset, output_offset_address, sizeof(*output_offset)) !=
-             (ssize_t)sizeof(*output_offset)))
+    if ((input_offset != NULL && guest_copy_from(input_offset, input_offset_address, sizeof(*input_offset)) !=
+                                     (ssize_t)sizeof(*input_offset)) ||
+        (output_offset != NULL && guest_copy_from(output_offset, output_offset_address, sizeof(*output_offset)) !=
+                                      (ssize_t)sizeof(*output_offset)))
         return -EFAULT;
     if ((input_offset != NULL && *input_offset < 0) || (output_offset != NULL && *output_offset < 0)) return -EINVAL;
     if (count > UINT64_C(0x7ffff000)) count = UINT64_C(0x7ffff000);
-    if (count != 0 && input != NULL && output != NULL && g_host_services != NULL &&
-        g_host_services->file != NULL && g_host_services->file->metadata != NULL) {
+    if (count != 0 && input != NULL && output != NULL && g_host_services != NULL && g_host_services->file != NULL &&
+        g_host_services->file->metadata != NULL) {
         hl_host_file_metadata input_metadata, output_metadata;
         hl_host_result input_status =
             g_host_services->file->metadata(g_host_services->context, input->host_handle, &input_metadata);
@@ -592,9 +591,9 @@ static int64_t bound_copy_file_range(const hl_linux_fd_snapshot *input, int inpu
         if (input_offset != NULL) *input_offset += (off_t)written;
         if (output_offset != NULL) *output_offset += (off_t)written;
         if (output != NULL)
-            bound_mapping_file_written(output, output_offset != NULL ? (uint64_t)(*output_offset - written)
-                                                                     : output->offset + done,
-                                       (uint64_t)written);
+            bound_mapping_file_written(
+                output, output_offset != NULL ? (uint64_t)(*output_offset - written) : output->offset + done,
+                (uint64_t)written);
         done += (uint64_t)written;
         if (written != read_count) {
             if (input_offset == NULL)

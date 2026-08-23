@@ -16,8 +16,8 @@ int main(void) {
     time_t fixed = 1614834367;
     struct tm g;
     gmtime_r(&fixed, &g);
-    int fields_ok = g.tm_year == 121 && g.tm_mon == 2 && g.tm_mday == 4 && g.tm_hour == 5 &&
-                    g.tm_min == 6 && g.tm_sec == 7 && g.tm_wday == 4; // Thursday
+    int fields_ok = g.tm_year == 121 && g.tm_mon == 2 && g.tm_mday == 4 && g.tm_hour == 5 && g.tm_min == 6 &&
+                    g.tm_sec == 7 && g.tm_wday == 4; // Thursday
 
     // timegm round-trips back to the same epoch.
     time_t back = timegm(&g);
@@ -42,7 +42,6 @@ int main(void) {
     mktime(&over);
     int norm_ok = over.tm_mon == 1 && over.tm_mday == 1;
 
-    printf("calendar fields=%d timegm=%d local=%d diff=%d norm=%d\n", fields_ok, timegm_ok, local_ok,
-           diff_ok, norm_ok);
+    printf("calendar fields=%d timegm=%d local=%d diff=%d norm=%d\n", fields_ok, timegm_ok, local_ok, diff_ok, norm_ok);
     return 0;
 }

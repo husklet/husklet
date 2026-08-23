@@ -16,7 +16,9 @@
 #include <dlfcn.h>
 
 // exported so dladdr can name it and RTLD_DEFAULT can find it
-__attribute__((visibility("default"))) int probe_marker(int x) { return x + 1; }
+__attribute__((visibility("default"))) int probe_marker(int x) {
+    return x + 1;
+}
 
 int main(void) {
     Dl_info info;
@@ -27,9 +29,9 @@ int main(void) {
     // dlsym(RTLD_NEXT, ...) uses the CALLER's (un-biased) return address to find the calling object, then
     // searches the objects after it — the exact lookup that returned NULL when the ranges were HIGH.
     void *next_malloc = dlsym(RTLD_NEXT, "malloc");
-    void *def_self    = dlsym(RTLD_DEFAULT, "probe_marker");
+    void *def_self = dlsym(RTLD_DEFAULT, "probe_marker");
 
-    printf("dladdr=%d sname_ok=%d rtld_next_malloc=%d rtld_default_self=%d\n",
-           da ? 1 : 0, has_name ? 1 : 0, next_malloc ? 1 : 0, def_self ? 1 : 0);
+    printf("dladdr=%d sname_ok=%d rtld_next_malloc=%d rtld_default_self=%d\n", da ? 1 : 0, has_name ? 1 : 0,
+           next_malloc ? 1 : 0, def_self ? 1 : 0);
     return 0;
 }

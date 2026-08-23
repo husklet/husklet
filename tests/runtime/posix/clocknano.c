@@ -11,7 +11,10 @@ int main(void) {
     clock_gettime(CLOCK_MONOTONIC, &start);
     target = start;
     target.tv_nsec += 80 * 1000 * 1000; // +80ms
-    if (target.tv_nsec >= 1000000000L) { target.tv_nsec -= 1000000000L; target.tv_sec++; }
+    if (target.tv_nsec >= 1000000000L) {
+        target.tv_nsec -= 1000000000L;
+        target.tv_sec++;
+    }
     int rc = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &target, NULL);
     clock_gettime(CLOCK_MONOTONIC, &end);
     long slept = elapsed_ms(&start, &end);

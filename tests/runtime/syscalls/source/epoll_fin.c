@@ -19,4 +19,6 @@ static int stable_printf(const char *format, ...) {
 #undef printf
 #undef main
 
-int main(void) { return legacy_epoll_reblock_fin_main(); }
+int main(void) {
+    return legacy_epoll_reblock_fin_main();
+}

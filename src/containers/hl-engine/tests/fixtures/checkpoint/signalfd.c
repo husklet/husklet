@@ -115,9 +115,9 @@ static void *worker(void *unused) {
     ssize_t count = read(signal_fd, &info, sizeof info);
     struct signalfd_siginfo process_info = {0};
     ssize_t process_count = read(process_signal_fd, &process_info, sizeof process_info);
-    int failed = !(ready && count == sizeof info && info.ssi_signo == (uint32_t)SIGRTMAX &&
-                   info.ssi_code == SI_TKILL && process_count == sizeof process_info &&
-                   process_info.ssi_signo == (uint32_t)SIGUSR2 && process_info.ssi_code == SI_USER);
+    int failed = !(ready && count == sizeof info && info.ssi_signo == (uint32_t)SIGRTMAX && info.ssi_code == SI_TKILL &&
+                   process_count == sizeof process_info && process_info.ssi_signo == (uint32_t)SIGUSR2 &&
+                   process_info.ssi_code == SI_USER);
     atomic_store_explicit(&worker_done, failed ? -1 : 1, memory_order_release);
     return (void *)(uintptr_t)failed;
 }
@@ -155,7 +155,8 @@ int main(int argc, char **argv) {
 
     pthread_t thread;
     if (pthread_create(&thread, NULL, worker, NULL) != 0) return 5;
-    while (!worker_tid) sched_yield();
+    while (!worker_tid)
+        sched_yield();
     if (syscall(SYS_tgkill, getpid(), worker_tid, SIGRTMAX) != 0 || kill(getpid(), SIGUSR2) != 0) return 6;
     errno = 0;
     struct signalfd_siginfo wrong_info;
@@ -163,7 +164,8 @@ int main(int argc, char **argv) {
     int wrong_ready = readiness(0);
     dprintf(STDOUT_FILENO, "READY targeted_wrong_read=%d targeted_wrong_ready=%d\n", wrong_read, wrong_ready);
 
-    while (atomic_load_explicit(&worker_done, memory_order_acquire) == 0) sched_yield();
+    while (atomic_load_explicit(&worker_done, memory_order_acquire) == 0)
+        sched_yield();
     void *thread_result = (void *)1;
     pthread_join(thread, &thread_result);
     if (thread_result != NULL) return 7;
@@ -175,7 +177,8 @@ int main(int argc, char **argv) {
     sigemptyset(&high.sa_mask);
     if (sigaction(SIGUSR1, &low, NULL) != 0 || sigaction(SIGRTMAX, &high, NULL) != 0) return 8;
     if (syscall(SYS_tgkill, getpid(), syscall(SYS_gettid), SIGUSR1) != 0 ||
-        syscall(SYS_tgkill, getpid(), syscall(SYS_gettid), SIGRTMAX) != 0) return 9;
+        syscall(SYS_tgkill, getpid(), syscall(SYS_gettid), SIGRTMAX) != 0)
+        return 9;
     sigset_t lower;
     sigemptyset(&lower);
     sigaddset(&lower, SIGUSR1);
@@ -186,7 +189,8 @@ int main(int argc, char **argv) {
     sigaddset(&highest, SIGRTMAX);
     if (pthread_sigmask(SIG_UNBLOCK, &highest, NULL) != 0) return 11;
     dprintf(STDOUT_FILENO, "HIGH-UNBLOCK\n");
-    for (int attempt = 0; attempt < 1000 && high_seen != 1; ++attempt) usleep(1000);
+    for (int attempt = 0; attempt < 1000 && high_seen != 1; ++attempt)
+        usleep(1000);
     dprintf(STDOUT_FILENO, "DEFER-RESTORED seen=%d nested=%d\n", high_seen == 1, high_nested == 0);
     return !(wrong_read && wrong_ready && high_seen == 1 && high_nested == 0);
 }

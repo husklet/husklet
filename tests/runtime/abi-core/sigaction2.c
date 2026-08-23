@@ -15,6 +15,7 @@ static void on_usr1(int sig, siginfo_t *si, void *u) {
     got_usr1 = 1;
     usr1_signo = si->si_signo;
 }
+
 static void on_chld(int sig, siginfo_t *si, void *u) {
     (void)sig;
     (void)si;

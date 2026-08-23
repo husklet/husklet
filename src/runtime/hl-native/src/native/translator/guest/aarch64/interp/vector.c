@@ -210,19 +210,18 @@ static unsigned interp_simd_access_bytes(unsigned size, unsigned opc) {
 
 #include "exclusive.c"
 
-#define DEFINE_INTERP_LSE_MINMAX(name, type, signed_type)                                                           \
-    static uint64_t name(void *pointer, uint64_t operand, int want_max, int is_signed) {                            \
-        type *slot = (type *)pointer;                                                                               \
-        type argument = (type)operand;                                                                              \
-        type current = __atomic_load_n(slot, __ATOMIC_SEQ_CST);                                                     \
-        for (;;) {                                                                                                  \
-            int argument_greater =                                                                                  \
-                is_signed ? ((signed_type)argument > (signed_type)current) : (argument > current);                  \
-            type chosen = (argument_greater == (want_max != 0)) ? argument : current;                              \
-            if (chosen == current) break;                                                                           \
-            if (__atomic_compare_exchange_n(slot, &current, chosen, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) break; \
-        }                                                                                                           \
-        return (uint64_t)current;                                                                                   \
+#define DEFINE_INTERP_LSE_MINMAX(name, type, signed_type)                                                              \
+    static uint64_t name(void *pointer, uint64_t operand, int want_max, int is_signed) {                               \
+        type *slot = (type *)pointer;                                                                                  \
+        type argument = (type)operand;                                                                                 \
+        type current = __atomic_load_n(slot, __ATOMIC_SEQ_CST);                                                        \
+        for (;;) {                                                                                                     \
+            int argument_greater = is_signed ? ((signed_type)argument > (signed_type)current) : (argument > current);  \
+            type chosen = (argument_greater == (want_max != 0)) ? argument : current;                                  \
+            if (chosen == current) break;                                                                              \
+            if (__atomic_compare_exchange_n(slot, &current, chosen, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) break;     \
+        }                                                                                                              \
+        return (uint64_t)current;                                                                                      \
     }
 
 DEFINE_INTERP_LSE_MINMAX(interp_lse_minmax_u8, uint8_t, int8_t)

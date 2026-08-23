@@ -2,6 +2,7 @@
 // compare_exchange success+failure, and exchange. Verifies each RMW op's value semantics. Golden.
 #include <stdatomic.h>
 #include <stdio.h>
+
 int main(void) {
     atomic_long v = 0;
     atomic_fetch_add(&v, 100);
@@ -15,7 +16,7 @@ int main(void) {
     long cur2 = 12345;
     int fail = !atomic_compare_exchange_strong(&v, &cur2, 0);
     long old = atomic_exchange(&v, 7);
-    printf("atomics v=%ld cas_ok=%d cas_fail=%d old=%ld final=%ld\n",
-           acc, ok, fail, old, (long)atomic_load(&v)); // 249 1 1 999 7
+    printf("atomics v=%ld cas_ok=%d cas_fail=%d old=%ld final=%ld\n", acc, ok, fail, old,
+           (long)atomic_load(&v)); // 249 1 1 999 7
     return 0;
 }

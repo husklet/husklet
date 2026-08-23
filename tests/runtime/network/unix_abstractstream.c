@@ -17,7 +17,10 @@ int main(void) {
     a.sun_family = AF_UNIX;
     memcpy(a.sun_path, "\0hl-abs-stream", 14);
     socklen_t al = offsetof(struct sockaddr_un, sun_path) + 14;
-    if (bind(ls, (struct sockaddr *)&a, al) < 0) { perror("bind"); return 1; }
+    if (bind(ls, (struct sockaddr *)&a, al) < 0) {
+        perror("bind");
+        return 1;
+    }
     listen(ls, 4);
 
     pid_t pid = fork();

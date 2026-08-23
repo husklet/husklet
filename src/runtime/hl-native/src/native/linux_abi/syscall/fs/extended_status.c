@@ -23,11 +23,10 @@ static int statx_provider_status(const hl_provider_node *provider, struct stat *
 }
 
 static int statx_resolve_status(const hl_provider_node *provider, const char *guest_path, const char *raw_path,
-                                const char *native_path, uint64_t dirfd, int nofollow, int empty,
-                                struct stat *status, const char **ownership_path, int *ownership_fd,
-                                char *backing_path, size_t backing_path_size) {
-    if (provider != NULL && provider->kind != HL_PROVIDER_NODE_DIRECTORY &&
-        provider->kind != HL_PROVIDER_NODE_SYMLINK)
+                                const char *native_path, uint64_t dirfd, int nofollow, int empty, struct stat *status,
+                                const char **ownership_path, int *ownership_fd, char *backing_path,
+                                size_t backing_path_size) {
+    if (provider != NULL && provider->kind != HL_PROVIDER_NODE_DIRECTORY && provider->kind != HL_PROVIDER_NODE_SYMLINK)
         return statx_provider_status(provider, status);
 
     char executable[1024];
@@ -45,8 +44,7 @@ static int statx_resolve_status(const hl_provider_node *provider, const char *gu
         return rc;
     }
     if (sysnet_hidden(guest_path)) return -ENOENT;
-    if (!nofollow && procfd_num(guest_path) >= 0)
-        return procfd_follow_stat(guest_path, status) > 0 ? 0 : -ENOENT;
+    if (!nofollow && procfd_num(guest_path) >= 0) return procfd_follow_stat(guest_path, status) > 0 ? 0 : -ENOENT;
     if (synth_stat_raw(guest_path, status)) return 0;
     if (raw_path && raw_path[0] && !empty && !nofollow) {
         int rc;
@@ -61,8 +59,8 @@ static int statx_resolve_status(const hl_provider_node *provider, const char *gu
 
     int memory_file = empty && memf_get((int)dirfd);
     int result = memory_file ? memf_fstat((int)dirfd, status)
-                 : empty    ? fstat((int)dirfd, status)
-                            : fstatat(ATFD(dirfd), native_path, status, nofollow ? AT_SYMLINK_NOFOLLOW : 0);
+                 : empty     ? fstat((int)dirfd, status)
+                             : fstatat(ATFD(dirfd), native_path, status, nofollow ? AT_SYMLINK_NOFOLLOW : 0);
     int rc = result < 0 ? -errno : 0;
     if (rc == 0 && empty) *ownership_fd = (int)dirfd;
     if (rc == 0 && !empty) *ownership_path = native_path;
@@ -156,8 +154,8 @@ static void svc_fs_extended_status_291(struct cpu *c, uint64_t nr, uint64_t a0, 
                 }
                 xpath = NULL;
                 xfd = -1;
-                rc = statx_resolve_status(provider, gp, raw, p, a0, nofollow, empty, &s, &xpath, &xfd,
-                                          backing_path, sizeof backing_path);
+                rc = statx_resolve_status(provider, gp, raw, p, a0, nofollow, empty, &s, &xpath, &xfd, backing_path,
+                                          sizeof backing_path);
                 if (rc != 0) break;
                 stat_virt_ids_raw(&s, xpath, xfd, &vuid, &vgid);
                 virtual_mode = stat_virt_mode_raw(&s, xpath, xfd);
@@ -315,6 +313,7 @@ static void svc_fs_extended_status_265(struct cpu *c, uint64_t nr, uint64_t a0, 
         GUEST_AT_EACCESS = 0x200,
         GUEST_AT_EMPTY_PATH = 0x1000,
     };
+
     switch (nr) {
     case 265: G_RET(c) = (uint64_t)(int64_t)(-EPERM); break;
     // faccessat2(dirfd,path,mode,flags) -- glibc access() uses it; same path/confinement, flags ignored
@@ -327,8 +326,7 @@ static void svc_fs_extended_status_265(struct cpu *c, uint64_t nr, uint64_t a0, 
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
         }
-        if (nr == 439 &&
-            (a3 & ~(uint64_t)(GUEST_AT_EACCESS | GUEST_AT_SYMLINK_NOFOLLOW | GUEST_AT_EMPTY_PATH))) {
+        if (nr == 439 && (a3 & ~(uint64_t)(GUEST_AT_EACCESS | GUEST_AT_SYMLINK_NOFOLLOW | GUEST_AT_EMPTY_PATH))) {
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
         }
@@ -375,9 +373,9 @@ static void svc_fs_extended_status_265(struct cpu *c, uint64_t nr, uint64_t a0, 
         int access_nofollow = (nr == 439) && (a3 & GUEST_AT_SYMLINK_NOFOLLOW);
         char canonical_access[4200];
         int final_requires_directory = 0;
-        int search_result = dac_search_at((int)a0, (const char *)a1, access_nofollow,
-                                          nr == 439 && (a3 & GUEST_AT_EACCESS),
-                                          canonical_access, sizeof canonical_access, &final_requires_directory);
+        int search_result =
+            dac_search_at((int)a0, (const char *)a1, access_nofollow, nr == 439 && (a3 & GUEST_AT_EACCESS),
+                          canonical_access, sizeof canonical_access, &final_requires_directory);
         const char *synthetic_device = search_result == 0 ? dev_node_hostpath(canonical_access) : NULL;
         if (g_rootfs && synthetic_device != NULL) {
             int result = final_requires_directory ? -ENOTDIR : search_result;
@@ -401,8 +399,7 @@ static void svc_fs_extended_status_265(struct cpu *c, uint64_t nr, uint64_t a0, 
         if (proc_self_exe(proc_candidate, ep, sizeof ep)) {
             G_RET(c) = final_requires_directory
                            ? (uint64_t)(int64_t)(-ENOTDIR)
-                           : (uint64_t)(int64_t)dac_access_executable((int)a2,
-                                                                      nr == 439 && (a3 & GUEST_AT_EACCESS));
+                           : (uint64_t)(int64_t)dac_access_executable((int)a2, nr == 439 && (a3 & GUEST_AT_EACCESS));
             break;
         }
         {
@@ -411,8 +408,8 @@ static void svc_fs_extended_status_265(struct cpu *c, uint64_t nr, uint64_t a0, 
                 int result = final_requires_directory ? -ENOTDIR : access(host_device, F_OK);
                 if (result < 0 && !final_requires_directory) result = -errno;
                 G_RET(c) = result < 0 ? (uint64_t)(int64_t)result
-                                      : (uint64_t)(int64_t)dac_access_synthetic(
-                                            canonical_access, (int)a2, nr == 439 && (a3 & GUEST_AT_EACCESS));
+                                      : (uint64_t)(int64_t)dac_access_synthetic(canonical_access, (int)a2,
+                                                                                nr == 439 && (a3 & GUEST_AT_EACCESS));
                 break;
             }
         }

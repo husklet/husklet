@@ -8,7 +8,11 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t got = 0;
-static void h(int s) { (void)s; got = 1; }
+
+static void h(int s) {
+    (void)s;
+    got = 1;
+}
 
 int main(void) {
     struct sigaction sa;

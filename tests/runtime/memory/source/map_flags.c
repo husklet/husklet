@@ -61,7 +61,7 @@ int main(void) {
     int populate = maps_and_zero(MAP_POPULATE, len);
     int locked = maps_and_zero(MAP_LOCKED, len);
 
-    printf("map_flags hugetlb_einval=%d noreserve=%d stack=%d populate=%d locked=%d\n", hugetlb_einval,
-           noreserve, stack, populate, locked);
+    printf("map_flags hugetlb_einval=%d noreserve=%d stack=%d populate=%d locked=%d\n", hugetlb_einval, noreserve,
+           stack, populate, locked);
     return hugetlb_einval && noreserve && stack && populate && locked ? 0 : 1;
 }

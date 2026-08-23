@@ -1,5 +1,6 @@
 // Cohesive process-syscall handlers. Included by ../proc.c after shared process state.
-static int svc_proc_92(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_92(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                       uint64_t a5) {
     switch (nr) {
     case 92: {
         unsigned prev = g_persona;
@@ -18,7 +19,9 @@ static int svc_proc_92(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
     }
     return 1;
 }
-static int svc_proc_90(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+
+static int svc_proc_90(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                       uint64_t a5) {
     switch (nr) {
     case 90: {
         uint32_t header[2];
@@ -92,7 +95,8 @@ static int svc_proc_90(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
     return 1;
 }
 
-static int svc_proc_91(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_91(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                       uint64_t a5) {
     switch (nr) {
     case 91: {
         uint32_t header[2];
@@ -150,7 +154,8 @@ static int svc_proc_91(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
     return 1;
 }
 
-static int svc_proc_51(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_51(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                       uint64_t a5) {
     switch (nr) {
     case 51: {
         char guest_path[4200], gabs[4200];
@@ -218,7 +223,8 @@ static void process_last_thread_exit(int status) {
     ckpt_restored_member_exit_code(status);
 }
 
-static int svc_proc_93(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_93(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                       uint64_t a5) {
     switch (nr) {
     case 93:
         vfork_publish_exit();
@@ -242,7 +248,8 @@ static int svc_proc_93(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
     return 1;
 }
 
-static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                       uint64_t a5) {
     switch (nr) {
     case 94:
         vfork_publish_exit();
@@ -250,24 +257,25 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
         hl_dispatch_profile_report(&g_dispatch_profile, &g_jit_log, translation_log_summary);
         if (g_prof && g_profile_output_owner) {
             char profile[1024];
-            int profile_size = snprintf(profile, sizeof profile,
-                    "[prof] crossings=%llu syscalls=%llu ibtc_miss=%llu branch_cross=%llu translations=%llu lse=%llu "
-                    "wx_toggles=%llu dualmap=%d xlate_ms=%.3f service_ms=%.3f mtibtc=%d mtfill=%llu "
-                    "fwake_fast=%llu fwake_slow=%llu fwait=%llu soft_sample_shift=6 soft_sampled_sites=%llu "
-                    "soft_hull_direct_sampled=%llu soft_cached_hit_sampled=%llu soft_miss=%llu soft_span=%llu "
-                    "soft_bounce_prepare=%llu soft_bounce_commit=%llu smc_queued=%llu smc_commit=%llu "
-                    "soft_guard_bytes=%llu shared_sites=%llu inline_sites=%llu\n",
-                    (unsigned long long)g_prof_cross, (unsigned long long)g_prof_sys, (unsigned long long)g_prof_miss,
-                    (unsigned long long)(g_prof_cross - g_prof_sys - g_prof_miss), (unsigned long long)g_prof_xlate,
-                    (unsigned long long)g_lse_n, (unsigned long long)g_wx_toggles, g_dualmap, g_xlate_ns / 1e6,
-                    g_service_ns / 1e6, g_mtibtc, (unsigned long long)g_mtfill, (unsigned long long)g_futex_wake_fast,
-                    (unsigned long long)g_futex_wake_slow, (unsigned long long)g_futex_wait_n,
-                    (unsigned long long)g_prof_soft_sites_sampled, (unsigned long long)g_prof_soft_hull_sampled,
-                    (unsigned long long)g_prof_soft_cached_sampled, (unsigned long long)g_prof_soft_miss,
-                    (unsigned long long)g_prof_soft_span, (unsigned long long)g_prof_soft_bounce_prepare,
-                    (unsigned long long)g_prof_soft_bounce_commit, (unsigned long long)g_prof_smc_queued,
-                    (unsigned long long)g_prof_smc_commit, (unsigned long long)g_prof_soft_guard_bytes, (unsigned long long)g_prof_soft_shared_sites,
-                    (unsigned long long)g_prof_soft_inline_sites);
+            int profile_size = snprintf(
+                profile, sizeof profile,
+                "[prof] crossings=%llu syscalls=%llu ibtc_miss=%llu branch_cross=%llu translations=%llu lse=%llu "
+                "wx_toggles=%llu dualmap=%d xlate_ms=%.3f service_ms=%.3f mtibtc=%d mtfill=%llu "
+                "fwake_fast=%llu fwake_slow=%llu fwait=%llu soft_sample_shift=6 soft_sampled_sites=%llu "
+                "soft_hull_direct_sampled=%llu soft_cached_hit_sampled=%llu soft_miss=%llu soft_span=%llu "
+                "soft_bounce_prepare=%llu soft_bounce_commit=%llu smc_queued=%llu smc_commit=%llu "
+                "soft_guard_bytes=%llu shared_sites=%llu inline_sites=%llu\n",
+                (unsigned long long)g_prof_cross, (unsigned long long)g_prof_sys, (unsigned long long)g_prof_miss,
+                (unsigned long long)(g_prof_cross - g_prof_sys - g_prof_miss), (unsigned long long)g_prof_xlate,
+                (unsigned long long)g_lse_n, (unsigned long long)g_wx_toggles, g_dualmap, g_xlate_ns / 1e6,
+                g_service_ns / 1e6, g_mtibtc, (unsigned long long)g_mtfill, (unsigned long long)g_futex_wake_fast,
+                (unsigned long long)g_futex_wake_slow, (unsigned long long)g_futex_wait_n,
+                (unsigned long long)g_prof_soft_sites_sampled, (unsigned long long)g_prof_soft_hull_sampled,
+                (unsigned long long)g_prof_soft_cached_sampled, (unsigned long long)g_prof_soft_miss,
+                (unsigned long long)g_prof_soft_span, (unsigned long long)g_prof_soft_bounce_prepare,
+                (unsigned long long)g_prof_soft_bounce_commit, (unsigned long long)g_prof_smc_queued,
+                (unsigned long long)g_prof_smc_commit, (unsigned long long)g_prof_soft_guard_bytes,
+                (unsigned long long)g_prof_soft_shared_sites, (unsigned long long)g_prof_soft_inline_sites);
             if (profile_size > 0) {
                 size_t bounded = (size_t)profile_size < sizeof profile ? (size_t)profile_size : sizeof profile - 1;
                 (void)hl_linux_write(g_linux_box, STDERR_FILENO, profile, bounded);
@@ -284,7 +292,8 @@ static int svc_proc_94(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
     return 1;
 }
 
-static int svc_proc_96(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_96(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                       uint64_t a5) {
     switch (nr) {
     case 96:
         // set_tid_address(tidptr): store tidptr as this thread's clear_child_tid so thread exit zeroes it and
@@ -297,17 +306,18 @@ static int svc_proc_96(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
     return 1;
 }
 
-static int svc_proc_97(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_97(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                       uint64_t a5) {
     switch (nr) {
     case 97: {
         // unshare(flags): this engine does not create a distinct namespace or process-sharing domain.
         // Preserve Linux's flag validation, but report a recognized nonzero request as unavailable instead
         // of claiming isolation that was never established.  Callers can then fall back safely.
         unsigned uf = (unsigned)a0;
-        const unsigned UNSHARE_VALID =
-            0x80u /*NEWTIME*/ | 0x200u /*FS*/ | 0x400u /*FILES*/ | 0x20000u /*NEWNS*/ |
-            0x40000u /*SYSVSEM*/ | 0x2000000u /*NEWCGROUP*/ | 0x4000000u /*NEWUTS*/ |
-            0x8000000u /*NEWIPC*/ | 0x10000000u /*NEWUSER*/ | 0x20000000u /*NEWPID*/ | 0x40000000u /*NEWNET*/;
+        const unsigned UNSHARE_VALID = 0x80u /*NEWTIME*/ | 0x200u /*FS*/ | 0x400u /*FILES*/ | 0x20000u /*NEWNS*/ |
+                                       0x40000u /*SYSVSEM*/ | 0x2000000u /*NEWCGROUP*/ | 0x4000000u /*NEWUTS*/ |
+                                       0x8000000u /*NEWIPC*/ | 0x10000000u /*NEWUSER*/ | 0x20000000u /*NEWPID*/ |
+                                       0x40000000u /*NEWNET*/;
         if (uf & ~UNSHARE_VALID)
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
         else
@@ -321,7 +331,8 @@ static int svc_proc_97(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
     return 1;
 }
 
-static int svc_proc_268(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_268(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 268: {
         int fd = (int)a0;
@@ -345,7 +356,8 @@ static int svc_proc_268(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_172(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_172(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 172: G_RET(c) = (uint64_t)container_pid(); break;
     default: return 0;
@@ -353,7 +365,8 @@ static int svc_proc_172(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_173(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_173(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 173:
         // getppid (init's parent is 0 in the ns). A restored process reports its recorded guest parent
@@ -368,7 +381,8 @@ static int svc_proc_173(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_174(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_174(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 174:
         cred_init();
@@ -379,7 +393,8 @@ static int svc_proc_174(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_175(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_175(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 175: G_RET(c) = (uint64_t)cred_euid(); break;
     // getgid/getegid
@@ -388,7 +403,8 @@ static int svc_proc_175(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_176(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_176(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 176:
         cred_init();
@@ -399,7 +415,8 @@ static int svc_proc_176(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_177(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_177(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 177: G_RET(c) = (uint64_t)cred_egid(); break;
     // gettid -- a UNIQUE per-thread id (unlike getpid, which is the shared tgid). The init thread keeps
@@ -412,7 +429,8 @@ static int svc_proc_177(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_178(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_178(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 178: G_RET(c) = (uint64_t)(c->tid ? c->tid : container_pid()); break;
     // clone(flags,stack,ptid,tls,ctid)

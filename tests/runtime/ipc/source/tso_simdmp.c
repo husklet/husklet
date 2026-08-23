@@ -37,8 +37,7 @@ static __m128i mk(uint32_t n) {
 static void *consumer(void *argument) {
     uint32_t rounds = *(const uint32_t *)argument;
     for (uint32_t n = 1; n <= rounds; n++) {
-        while (atomic_load_explicit(&fwd.flag, memory_order_acquire) != n) {
-        }
+        while (atomic_load_explicit(&fwd.flag, memory_order_acquire) != n) {}
         __m128i got = _mm_loadu_si128((const __m128i *)fwd.payload);
         if (_mm_movemask_epi8(_mm_cmpeq_epi8(got, mk(n))) != 0xFFFF) bad = 1;
         _mm_storeu_si128((__m128i *)bwd.payload, mk(~n)); /* ack payload first */
@@ -57,8 +56,7 @@ int main(int argc, char **argv) {
     for (uint32_t n = 1; n <= rounds; n++) {
         _mm_storeu_si128((__m128i *)fwd.payload, mk(n));           /* payload first */
         atomic_store_explicit(&fwd.flag, n, memory_order_release); /* ...then flag */
-        while (atomic_load_explicit(&bwd.flag, memory_order_acquire) != n) {
-        }
+        while (atomic_load_explicit(&bwd.flag, memory_order_acquire) != n) {}
         __m128i got = _mm_loadu_si128((const __m128i *)bwd.payload);
         if (_mm_movemask_epi8(_mm_cmpeq_epi8(got, mk(~n))) != 0xFFFF) bad = 1;
     }

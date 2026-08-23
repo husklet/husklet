@@ -8,11 +8,12 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-static int fails(int result, int error) { return result == -1 && errno == error; }
+static int fails(int result, int error) {
+    return result == -1 && errno == error;
+}
 
 static int exclusive_existing(const char *path) {
-    return fails(mkdirat(9876, path, 0700), EEXIST) &&
-           fails(mknodat(9876, path, S_IFIFO | 0600, 0), EEXIST) &&
+    return fails(mkdirat(9876, path, 0700), EEXIST) && fails(mknodat(9876, path, S_IFIFO | 0600, 0), EEXIST) &&
            fails(symlinkat("target", 9876, path), EEXIST);
 }
 
@@ -97,13 +98,16 @@ int main(void) {
     rmdir(right);
     rmdir(base);
 
-    printf("create_root closed_setup=%d closed_search=%d mkdir=%d mknod=%d symlink=%d merged_existing=%d mknod_dir_badfd=%d mknod_dir_root=%d "
-           "mknod_dir_existing=%d layout_setup=%d symlink_dotdot_existing=%d symlink_dotdot_missing=%d dangling_trailing=%d "
+    printf("create_root closed_setup=%d closed_search=%d mkdir=%d mknod=%d symlink=%d merged_existing=%d "
+           "mknod_dir_badfd=%d mknod_dir_root=%d "
+           "mknod_dir_existing=%d layout_setup=%d symlink_dotdot_existing=%d symlink_dotdot_missing=%d "
+           "dangling_trailing=%d "
            "missing_child=%d busybox_pg_path=%d\n",
-           closed_setup, closed_search, mkdir_root, mknod_root, symlink_root, merged_existing, mknod_dir_relative_badfd, mknod_dir_root,
-           mknod_dir_existing, layout_setup, symlink_before_dotdot_existing, symlink_before_dotdot_missing, dangling_trailing,
-           missing_child, busybox_path);
-    return !(closed_setup && closed_search && mkdir_root && mknod_root && symlink_root && mknod_dir_relative_badfd && mknod_dir_root &&
-             merged_existing && mknod_dir_existing && layout_setup && symlink_before_dotdot_existing &&
-             symlink_before_dotdot_missing && dangling_trailing && missing_child && busybox_path);
+           closed_setup, closed_search, mkdir_root, mknod_root, symlink_root, merged_existing, mknod_dir_relative_badfd,
+           mknod_dir_root, mknod_dir_existing, layout_setup, symlink_before_dotdot_existing,
+           symlink_before_dotdot_missing, dangling_trailing, missing_child, busybox_path);
+    return !(closed_setup && closed_search && mkdir_root && mknod_root && symlink_root && mknod_dir_relative_badfd &&
+             mknod_dir_root && merged_existing && mknod_dir_existing && layout_setup &&
+             symlink_before_dotdot_existing && symlink_before_dotdot_missing && dangling_trailing && missing_child &&
+             busybox_path);
 }

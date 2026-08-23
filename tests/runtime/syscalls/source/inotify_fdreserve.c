@@ -35,7 +35,8 @@ int main(void) {
     snprintf(created, sizeof created, "%s/a", dir);
     int cf = open(created, O_CREAT | O_WRONLY, 0644);
     if (cf >= 0) {
-        if (write(cf, "z", 1) != 1) { /* ignore */ }
+        if (write(cf, "z", 1) != 1) { /* ignore */
+        }
         close(cf);
     }
 

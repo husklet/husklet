@@ -13,7 +13,7 @@ static void h(int s) {
     sigset_t cur;
     sigprocmask(SIG_BLOCK, NULL, &cur);
     if (sigismember(&cur, SIGUSR1)) blocked_in_handler = 1; // auto-masked during handler
-    siglongjmp(jb, 1); // restores saved mask (SIGUSR1 unblocked)
+    siglongjmp(jb, 1);                                      // restores saved mask (SIGUSR1 unblocked)
 }
 
 int main(void) {
@@ -31,7 +31,6 @@ int main(void) {
     sigset_t after;
     sigprocmask(SIG_BLOCK, NULL, &after);
     int restored = !sigismember(&after, SIGUSR1);
-    printf("sigsetjmp_savemask blocked_in_handler=%d restored=%d done=%d\n",
-           blocked_in_handler, restored, done);
+    printf("sigsetjmp_savemask blocked_in_handler=%d restored=%d done=%d\n", blocked_in_handler, restored, done);
     return 0;
 }

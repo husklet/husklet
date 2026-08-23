@@ -72,8 +72,8 @@ fn container_configuration_identity_ignores_runtime_build_identity() {
         configuration.signature_for("runtime-b").unwrap()
     );
     assert_eq!(
-        configuration.configuration_signature().unwrap(),
-        configuration.configuration_signature().unwrap()
+        configuration.identity_signature().unwrap(),
+        configuration.identity_signature().unwrap()
     );
 }
 
@@ -414,7 +414,7 @@ fn domain_startup_reports_an_exited_worker_without_waiting_for_timeout() {
     let mut workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);
     workspace.storage = Some(root.path().to_owned());
     let domain = Domain::new(&workspace);
-    let child = std::process::Command::new("/usr/bin/false").spawn().unwrap();
+    let child = std::process::Command::new("false").spawn().unwrap();
     let started = std::time::Instant::now();
     let error = domain
         .wait_for_start(child, std::time::Duration::from_secs(10))

@@ -13,8 +13,8 @@
 int main(void) {
     int tfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
     struct itimerspec its = {
-        .it_value = {0, 20 * 1000 * 1000},    // first expiry at 20ms
-        .it_interval = {10, 0},               // then every 10s (never reached within the test budget)
+        .it_value = {0, 20 * 1000 * 1000}, // first expiry at 20ms
+        .it_interval = {10, 0},            // then every 10s (never reached within the test budget)
     };
     int set = timerfd_settime(tfd, 0, &its, NULL) == 0;
     struct pollfd pfd = {.fd = tfd, .events = POLLIN};

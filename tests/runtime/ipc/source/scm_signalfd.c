@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <poll.h>
+
 int main(void) {
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv)) return 1;

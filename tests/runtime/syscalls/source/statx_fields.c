@@ -23,10 +23,10 @@ int main(void) {
     struct statx sx;
     long r = syscall(__NR_statx, AT_FDCWD, tmpl, 0, STATX_ALL, &sx);
     printf("statx_ok=%d\n", r == 0);
-    printf("has_size=%d has_type=%d has_mode=%d\n", (sx.stx_mask & STATX_SIZE) != 0,
-           (sx.stx_mask & STATX_TYPE) != 0, (sx.stx_mask & STATX_MODE) != 0);
-    printf("size=%llu isreg=%d nlink=%d\n", (unsigned long long)sx.stx_size,
-           (sx.stx_mode & S_IFMT) == S_IFREG, sx.stx_nlink == 1);
+    printf("has_size=%d has_type=%d has_mode=%d\n", (sx.stx_mask & STATX_SIZE) != 0, (sx.stx_mask & STATX_TYPE) != 0,
+           (sx.stx_mask & STATX_MODE) != 0);
+    printf("size=%llu isreg=%d nlink=%d\n", (unsigned long long)sx.stx_size, (sx.stx_mode & S_IFMT) == S_IFREG,
+           sx.stx_nlink == 1);
 
     unlink(tmpl);
     struct statx sx2;

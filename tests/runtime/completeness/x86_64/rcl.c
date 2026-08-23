@@ -6,20 +6,33 @@
 #include <stdint.h>
 
 static unsigned long long acc = 1469598103934665603ULL;
-static void mix(unsigned long long x) { acc ^= x; acc *= 1099511628211ULL; }
+
+static void mix(unsigned long long x) {
+    acc ^= x;
+    acc *= 1099511628211ULL;
+}
 
 // One (v, cl, cfin) probe for a given width; captures result + CF, and OF for the single-bit case.
-#define DEF(W, TY, CON)                                                                                    \
-    static void rcl_##W(TY v, unsigned char cl, int cfin) {                                                \
-        TY r1 = v, r2 = v;                                                                                 \
-        unsigned char c1, c2, o1, o2;                                                                      \
-        __asm__ volatile("bt $0,%4\n\t rcl %%cl,%0\n\t setc %1\n\t seto %2\n\t"                            \
-                         : CON(r1), "=q"(c1), "=q"(o1) : "c"(cl), "r"((int)cfin) : "cc");                  \
-        __asm__ volatile("bt $0,%4\n\t rcr %%cl,%0\n\t setc %1\n\t seto %2\n\t"                            \
-                         : CON(r2), "=q"(c2), "=q"(o2) : "c"(cl), "r"((int)cfin) : "cc");                  \
-        mix((unsigned long long)(TY)r1); mix(c1);                                                          \
-        mix((unsigned long long)(TY)r2); mix(c2);                                                          \
-        if ((cl & (W == 64 ? 63 : 31)) == 1) { mix(o1); mix(o2); }                                         \
+#define DEF(W, TY, CON)                                                                                                \
+    static void rcl_##W(TY v, unsigned char cl, int cfin) {                                                            \
+        TY r1 = v, r2 = v;                                                                                             \
+        unsigned char c1, c2, o1, o2;                                                                                  \
+        __asm__ volatile("bt $0,%4\n\t rcl %%cl,%0\n\t setc %1\n\t seto %2\n\t"                                        \
+                         : CON(r1), "=q"(c1), "=q"(o1)                                                                 \
+                         : "c"(cl), "r"((int)cfin)                                                                     \
+                         : "cc");                                                                                      \
+        __asm__ volatile("bt $0,%4\n\t rcr %%cl,%0\n\t setc %1\n\t seto %2\n\t"                                        \
+                         : CON(r2), "=q"(c2), "=q"(o2)                                                                 \
+                         : "c"(cl), "r"((int)cfin)                                                                     \
+                         : "cc");                                                                                      \
+        mix((unsigned long long)(TY)r1);                                                                               \
+        mix(c1);                                                                                                       \
+        mix((unsigned long long)(TY)r2);                                                                               \
+        mix(c2);                                                                                                       \
+        if ((cl & (W == 64 ? 63 : 31)) == 1) {                                                                         \
+            mix(o1);                                                                                                   \
+            mix(o2);                                                                                                   \
+        }                                                                                                              \
     }
 DEF(8, uint8_t, "+q")
 DEF(16, uint16_t, "+r")
@@ -43,12 +56,18 @@ int main(void) {
             uint64_t m = 0xF0E1D2C3B4A59687ULL;
             unsigned char c;
             __asm__ volatile("bt $0,%3\n\t rclq %%cl,%0\n\t setc %1\n\t"
-                             : "+m"(m), "=q"(c) : "c"(cl), "r"((int)cf) : "cc");
-            mix(m); mix(c);
+                             : "+m"(m), "=q"(c)
+                             : "c"(cl), "r"((int)cf)
+                             : "cc");
+            mix(m);
+            mix(c);
             uint8_t mb = 0x87;
             __asm__ volatile("bt $0,%3\n\t rcrb %%cl,%0\n\t setc %1\n\t"
-                             : "+m"(mb), "=q"(c) : "c"(cl), "r"((int)cf) : "cc");
-            mix(mb); mix(c);
+                             : "+m"(mb), "=q"(c)
+                             : "c"(cl), "r"((int)cf)
+                             : "cc");
+            mix(mb);
+            mix(c);
         }
     printf("rcl acc=%llx\n", acc);
     return 0;

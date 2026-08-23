@@ -28,6 +28,7 @@ static int tracee_regs(pid_t child, unsigned long long *buf, int n) {
     struct iovec iov = {buf, (size_t)n * 8};
     return ptrace(PTRACE_GETREGSET, child, (void *)NT_PRSTATUS, &iov) == 0 ? 0 : -1;
 }
+
 static long tracee_sysnr(pid_t child) {
     unsigned long long r[40];
     if (tracee_regs(child, r, 40) != 0) return -1;
@@ -39,6 +40,7 @@ static long tracee_sysnr(pid_t child) {
     return -1;
 #endif
 }
+
 // Second syscall argument (write()'s buffer pointer) from the register image.
 static unsigned long tracee_arg1(pid_t child) {
     unsigned long long r[40];
@@ -57,15 +59,18 @@ int main(void) {
     static const char marker[8] = {'d', 'd', 'p', 't', 'r', 'a', 'c', 'e'};
 
     pid_t child = fork();
-    if (child < 0) { printf("ptrace fork-fail\n"); return 1; }
+    if (child < 0) {
+        printf("ptrace fork-fail\n");
+        return 1;
+    }
 
     if (child == 0) {
         // ---- tracee ----
         if (ptrace(PTRACE_TRACEME, 0, 0, 0) != 0) _exit(90);
         raise(SIGSTOP); // parent gets the initial group-stop here, then arms PTRACE_SYSCALL
         // The parent single-steps these via PTRACE_SYSCALL and inspects the register image:
-        syscall(SYS_getpid);                 // arch-native __NR_getpid
-        syscall(SYS_write, -1, marker, 8);   // arch-native __NR_write (fd -1 -> harmless EBADF)
+        syscall(SYS_getpid);               // arch-native __NR_getpid
+        syscall(SYS_write, -1, marker, 8); // arch-native __NR_write (fd -1 -> harmless EBADF)
         _exit(7);
     }
 
@@ -81,8 +86,14 @@ int main(void) {
     for (;;) {
         if (ptrace(PTRACE_SYSCALL, child, 0, 0) != 0) break;
         if (waitpid(child, &status, 0) != child) break;
-        if (WIFEXITED(status)) { child_exit = WEXITSTATUS(status); break; }
-        if (WIFSIGNALED(status)) { child_exit = 128 + WTERMSIG(status); break; }
+        if (WIFEXITED(status)) {
+            child_exit = WEXITSTATUS(status);
+            break;
+        }
+        if (WIFSIGNALED(status)) {
+            child_exit = 128 + WTERMSIG(status);
+            break;
+        }
         if (!WIFSTOPPED(status)) continue;
 
         int ss = WSTOPSIG(status);

@@ -15,13 +15,20 @@ static unsigned fsw(void) {
     __asm__ volatile("fnstsw %0" : "=am"(s));
     return s;
 }
+
 static unsigned fcw(void) {
     unsigned short c;
     __asm__ volatile("fnstcw %0" : "=m"(c));
     return c;
 }
-static void setcw(unsigned short c) { __asm__ volatile("fldcw %0" : : "m"(c)); }
-static void init(void) { __asm__ volatile("fninit"); }
+
+static void setcw(unsigned short c) {
+    __asm__ volatile("fldcw %0" : : "m"(c));
+}
+
+static void init(void) {
+    __asm__ volatile("fninit");
+}
 
 // IE(0) SF(6) C0(8) C1(9) C2(10) TOP(13:11) C3(14)
 static void sw(const char *tag) {
@@ -29,7 +36,10 @@ static void sw(const char *tag) {
     printf("%-26s top=%u cc=%u%u%u ie=%u sf=%u exc=%02x\n", tag, (s >> 11) & 7, (s >> 14) & 1, (s >> 10) & 1,
            (s >> 8) & 1, s & 1, (s >> 6) & 1, s & 0x3f);
 }
-static void c1(const char *tag) { printf("%-26s c1=%u ie=%u sf=%u\n", tag, (fsw() >> 9) & 1, fsw() & 1, (fsw() >> 6) & 1); }
+
+static void c1(const char *tag) {
+    printf("%-26s c1=%u ie=%u sf=%u\n", tag, (fsw() >> 9) & 1, fsw() & 1, (fsw() >> 6) & 1);
+}
 
 static unsigned tagword(void) {
     unsigned char env[28];
@@ -42,11 +52,13 @@ static void overflow(void) {
     puts("-- overflow");
     double v = 7.0, out;
     init();
-    for (int i = 0; i < 8; i++) __asm__ volatile("fldl %0" : : "m"(v));
+    for (int i = 0; i < 8; i++)
+        __asm__ volatile("fldl %0" : : "m"(v));
     sw("8 pushes");
     printf("8 pushes tw=%04x\n", tagword());
     init();
-    for (int i = 0; i < 8; i++) __asm__ volatile("fldl %0" : : "m"(v));
+    for (int i = 0; i < 8; i++)
+        __asm__ volatile("fldl %0" : : "m"(v));
     __asm__ volatile("fldl %0" : : "m"(v));
     sw("9th push");
     __asm__ volatile("fstpl %0" : "=m"(out));
@@ -84,7 +96,8 @@ static void underflow(void) {
     init();
     __asm__ volatile("fstpt %0" : "=m"(m80) : : "memory");
     printf("fstp m80 empty  = ");
-    for (int i = 9; i >= 0; i--) printf("%02x", m80[i]);
+    for (int i = 9; i >= 0; i--)
+        printf("%02x", m80[i]);
     printf("\n");
 
     init();
@@ -114,10 +127,12 @@ static void underflow(void) {
     sw("fxch st(1) empty");
     __asm__ volatile("fstpt %0" : "=m"(m80) : : "memory");
     printf("  st0=");
-    for (int i = 9; i >= 0; i--) printf("%02x", m80[i]);
+    for (int i = 9; i >= 0; i--)
+        printf("%02x", m80[i]);
     __asm__ volatile("fstpt %0" : "=m"(m80) : : "memory");
     printf(" st1=");
-    for (int i = 9; i >= 0; i--) printf("%02x", m80[i]);
+    for (int i = 9; i >= 0; i--)
+        printf("%02x", m80[i]);
     printf("\n");
 
     // A compare against an empty register is UNORDERED as well as faulting.
@@ -143,7 +158,8 @@ static void underflow(void) {
     printf("fst st(3) tw=%04x\n", tagword());
     // FDECSTP never faults, even onto a full stack, and does not retag.
     init();
-    for (int i = 0; i < 8; i++) __asm__ volatile("fld1");
+    for (int i = 0; i < 8; i++)
+        __asm__ volatile("fld1");
     __asm__ volatile("fdecstp");
     sw("fdecstp onto full");
     init();
@@ -266,7 +282,8 @@ static void savearea(void) {
            (unsigned)*(uint16_t *)(area + 8));
     for (int i = 0; i < 2; i++) { // only the two LIVE slots: empty ones hold stale physical bytes
         printf("saved st(%d)=", i);
-        for (int j = 9; j >= 0; j--) printf("%02x", area[28 + 10 * i + j]);
+        for (int j = 9; j >= 0; j--)
+            printf("%02x", area[28 + 10 * i + j]);
         printf("\n");
     }
     printf("after fnsave: cw=%04x tw=%04x top=%u ie=%u\n", fcw(), tagword(), (fsw() >> 11) & 7, fsw() & 1);
@@ -301,7 +318,8 @@ static void fxsave_area(void) {
     printf("top=%u ftw_byte=%02x\n", (unsigned)((*(uint16_t *)(area + 2) >> 11) & 7), area[4]);
     for (int i = 0; i < 3; i++) { // slot i must be ST(i), not physical st[i]
         printf("fxsave slot %d=", i);
-        for (int j = 9; j >= 0; j--) printf("%02x", area[32 + 16 * i + j]);
+        for (int j = 9; j >= 0; j--)
+            printf("%02x", area[32 + 16 * i + j]);
         printf("\n");
     }
     init();

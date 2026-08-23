@@ -12,7 +12,8 @@
 int main(void) {
     char st[] = "/tmp/sf_src_XXXXXX", dt[] = "/tmp/sf_dst_XXXXXX";
     int sfd = mkstemp(st), dfd = mkstemp(dt);
-    unlink(st); unlink(dt);
+    unlink(st);
+    unlink(dt);
     write(sfd, "ABCDEFGH", 8);
     lseek(sfd, 0, SEEK_SET);
 

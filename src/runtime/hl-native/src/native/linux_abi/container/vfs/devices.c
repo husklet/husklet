@@ -168,7 +168,7 @@ static const char *dev_node_hostpath(const char *gp) {
            : !strcmp(gp, "/dev/urandom") ? "/dev/urandom"
            : !strcmp(gp, "/dev/tty")     ? "/dev/tty"
            : !strcmp(gp, "/dev/console") ? "/dev/null" // no host console in the jail -> back it with /dev/null
-           : dev_node_is_ptmx(gp) ? "/dev/ptmx" // both Linux spellings name the same devpts multiplexer
+           : dev_node_is_ptmx(gp)        ? "/dev/ptmx" // both Linux spellings name the same devpts multiplexer
                                          : NULL;
 }
 
@@ -458,10 +458,10 @@ static int synth_device_stat(const char *gp, struct stat *s) {
         const char *p;
         int maj, min;
         unsigned mode;
-    } devices[] = {{"/dev/null", 1, 3, 0666},    {"/dev/zero", 1, 5, 0666},
-                   {"/dev/full", 1, 7, 0666},    {"/dev/random", 1, 8, 0666},
-                   {"/dev/urandom", 1, 9, 0666}, {"/dev/tty", 5, 0, 0666},
-                   {"/dev/console", 5, 1, 0600}, {"/dev/ptmx", 5, 2, 0666},
+    } devices[] = {{"/dev/null", 1, 3, 0666},     {"/dev/zero", 1, 5, 0666},
+                   {"/dev/full", 1, 7, 0666},     {"/dev/random", 1, 8, 0666},
+                   {"/dev/urandom", 1, 9, 0666},  {"/dev/tty", 5, 0, 0666},
+                   {"/dev/console", 5, 1, 0600},  {"/dev/ptmx", 5, 2, 0666},
                    {"/dev/pts/ptmx", 5, 2, 0666}, {0, 0, 0, 0}};
 
     for (int i = 0; devices[i].p; i++)

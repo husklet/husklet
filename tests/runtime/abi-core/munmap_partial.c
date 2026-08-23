@@ -26,30 +26,36 @@ int main(void) {
     {
         unsigned long n = 4 * P;
         char *b = mmap(0, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (b == MAP_FAILED) { printf("munmap_partial mmap_fail\n"); return 1; }
+        if (b == MAP_FAILED) {
+            printf("munmap_partial mmap_fail\n");
+            return 1;
+        }
         char *tail = b + P;
-        tail[0] = 0x11;  // sentinel at the start of the survivor
-        b[n - 1] = 0x5a; // sentinel at the end of the survivor
-        int unmap = munmap(b, P);                        // partial: unmap only the HEAD unit
-        int tail_a = (unsigned char)tail[0];             // survivor still readable, intact
+        tail[0] = 0x11;                      // sentinel at the start of the survivor
+        b[n - 1] = 0x5a;                     // sentinel at the end of the survivor
+        int unmap = munmap(b, P);            // partial: unmap only the HEAD unit
+        int tail_a = (unsigned char)tail[0]; // survivor still readable, intact
         int tail_b = (unsigned char)b[n - 1];
-        int free = munmap(tail, 3 * P);                  // survivor is independently unmappable
+        int free = munmap(tail, 3 * P); // survivor is independently unmappable
         printf("munmap_partial head: unmap=%d tail_a=%d tail_b=%d free=%d\n", unmap, tail_a, tail_b, free);
     }
     // ---- MIDDLE unmap: unmapping the interior [P,3P) must split into head + tail survivors ----
     {
         unsigned long n = 4 * P;
         char *b = mmap(0, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (b == MAP_FAILED) { printf("munmap_partial mmap_fail2\n"); return 1; }
-        b[0] = 0x33;     // sentinel in the head survivor
-        b[n - 1] = 0x44; // sentinel in the tail survivor
-        int unmap = munmap(b + P, 2 * P);                // partial: unmap the two interior units
-        int head = (unsigned char)b[0];                  // both survivors still readable, intact
+        if (b == MAP_FAILED) {
+            printf("munmap_partial mmap_fail2\n");
+            return 1;
+        }
+        b[0] = 0x33;                      // sentinel in the head survivor
+        b[n - 1] = 0x44;                  // sentinel in the tail survivor
+        int unmap = munmap(b + P, 2 * P); // partial: unmap the two interior units
+        int head = (unsigned char)b[0];   // both survivors still readable, intact
         int tail = (unsigned char)b[n - 1];
-        int free_h = munmap(b, P);                       // head survivor independently unmappable
-        int free_t = munmap(b + 3 * P, P);               // tail survivor independently unmappable
-        printf("munmap_partial middle: unmap=%d head=%d tail=%d free_h=%d free_t=%d\n", unmap, head, tail,
-               free_h, free_t);
+        int free_h = munmap(b, P);         // head survivor independently unmappable
+        int free_t = munmap(b + 3 * P, P); // tail survivor independently unmappable
+        printf("munmap_partial middle: unmap=%d head=%d tail=%d free_h=%d free_t=%d\n", unmap, head, tail, free_h,
+               free_t);
     }
     return 0;
 }

@@ -6,13 +6,11 @@
 int main(void) {
     const size_t reservation_size = 128u * 1024u * 1024u;
     const size_t mapping_size = 16u * 1024u;
-    unsigned char *reservation =
-        mmap(NULL, reservation_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned char *reservation = mmap(NULL, reservation_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (reservation == MAP_FAILED) return 1;
 
     void *hint = reservation + 2u * 1024u * 1024u;
-    unsigned char *mapping =
-        mmap(hint, mapping_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned char *mapping = mmap(hint, mapping_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (mapping == MAP_FAILED) return 2;
 
     int relocated = mapping != hint;

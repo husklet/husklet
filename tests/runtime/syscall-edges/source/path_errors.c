@@ -40,6 +40,7 @@ int main(void) {
     mkdir(child, 0755);
     printf("rmdir_notempty_errno=%d\n", rmdir(dir) == -1 ? errno : 0);
 
-    rmdir(child); rmdir(dir);
+    rmdir(child);
+    rmdir(dir);
     return 0;
 }

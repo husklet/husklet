@@ -38,14 +38,12 @@ int main(void) {
     status_triple("Uid:", &su_r, &su_e, &su_s);
     status_triple("Gid:", &sg_r, &sg_e, &sg_s);
 
-    printf("uid_match=%d gid_match=%d\n",
-           (long)ru == su_r && (long)eu == su_e && (long)su == su_s,
+    printf("uid_match=%d gid_match=%d\n", (long)ru == su_r && (long)eu == su_e && (long)su == su_s,
            (long)rg == sg_r && (long)eg == sg_e && (long)sg == sg_s);
-    printf("uid_effective_real_match=%d gid_effective_real_match=%d\n",
-           ru == eu, rg == eg);
+    printf("uid_effective_real_match=%d gid_effective_real_match=%d\n", ru == eu, rg == eg);
 
     /* getuid/geteuid must agree with the resuid pair */
-    printf("legacy_uid_match=%d legacy_gid_match=%d\n",
-           getuid() == ru && geteuid() == eu, getgid() == rg && getegid() == eg);
+    printf("legacy_uid_match=%d legacy_gid_match=%d\n", getuid() == ru && geteuid() == eu,
+           getgid() == rg && getegid() == eg);
     return 0;
 }

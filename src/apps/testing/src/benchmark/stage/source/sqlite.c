@@ -23,14 +23,10 @@ struct work_factor {
 
 /* Expected totals are fixed per factor rather than computed from the work-control bounds. */
 static const struct work_factor FACTORS[] = {
-    {"1", 1, INT64_C(200000), INT64_C(1000000)},
-    {"2", 2, INT64_C(400000), INT64_C(2000000)},
-    {"4", 4, INT64_C(800000), INT64_C(4000000)},
-    {"8", 8, INT64_C(1600000), INT64_C(8000000)},
-    {"16", 16, INT64_C(3200000), INT64_C(16000000)},
-    {"32", 32, INT64_C(6400000), INT64_C(32000000)},
-    {"64", 64, INT64_C(12800000), INT64_C(64000000)},
-    {"128", 128, INT64_C(25600000), INT64_C(128000000)},
+    {"1", 1, INT64_C(200000), INT64_C(1000000)},      {"2", 2, INT64_C(400000), INT64_C(2000000)},
+    {"4", 4, INT64_C(800000), INT64_C(4000000)},      {"8", 8, INT64_C(1600000), INT64_C(8000000)},
+    {"16", 16, INT64_C(3200000), INT64_C(16000000)},  {"32", 32, INT64_C(6400000), INT64_C(32000000)},
+    {"64", 64, INT64_C(12800000), INT64_C(64000000)}, {"128", 128, INT64_C(25600000), INT64_C(128000000)},
 };
 
 static const struct work_factor *parse_factor(const char *text, size_t length) {
@@ -71,12 +67,8 @@ static void execute(sqlite3 *database, const char *sql) {
 static int write_all(const char *buffer, size_t length) {
     while (length != 0) {
         ssize_t written = write(STDOUT_FILENO, buffer, length);
-        if (written < 0 && errno == EINTR) {
-            continue;
-        }
-        if (written <= 0) {
-            return -1;
-        }
+        if (written < 0 && errno == EINTR) { continue; }
+        if (written <= 0) { return -1; }
         buffer += (size_t)written;
         length -= (size_t)written;
     }
@@ -84,18 +76,12 @@ static int write_all(const char *buffer, size_t length) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        return 1;
-    }
+    if (argc != 2) { return 1; }
     const char *separator = strchr(argv[1], ',');
-    if (separator == NULL || strchr(separator + 1, ',') != NULL) {
-        return 1;
-    }
+    if (separator == NULL || strchr(separator + 1, ',') != NULL) { return 1; }
     const struct work_factor *write_factor = parse_factor(argv[1], (size_t)(separator - argv[1]));
     const struct work_factor *read_factor = parse_factor(separator + 1, strlen(separator + 1));
-    if (write_factor == NULL || read_factor == NULL) {
-        return 1;
-    }
+    if (write_factor == NULL || read_factor == NULL) { return 1; }
     sqlite3 *database = NULL;
     require_sqlite(sqlite3_open(":memory:", &database), database, "sqlite3_open");
 
@@ -162,9 +148,7 @@ int main(int argc, char **argv) {
                           "PHASE sqlite-read us=%llu ok=%lld:%lld:%lld\n",
                           write_factor->text, read_factor->text, (unsigned long long)write, (long long)written,
                           (unsigned long long)read, (long long)count, (long long)checksum, (long long)square_checksum);
-    if (length < 0 || (size_t)length >= sizeof(frame) || write_all(frame, (size_t)length) != 0) {
-        return 4;
-    }
+    if (length < 0 || (size_t)length >= sizeof(frame) || write_all(frame, (size_t)length) != 0) { return 4; }
     require_sqlite(sqlite3_close(database), database, "sqlite3_close");
     return 0;
 }

@@ -704,8 +704,7 @@ static int64_t bound_mmap_file(const hl_linux_fd_snapshot *file, uint64_t addres
         pthread_mutex_unlock(&g_bound_mapping_gate);
         return -ENOMEM;
     }
-    if (address == 0 && (linux_flags & 0x10u) == 0)
-        address = hl_linux_snapshot_reserve(&g_ckpt_snapshot, size);
+    if (address == 0 && (linux_flags & 0x10u) == 0) address = hl_linux_snapshot_reserve(&g_ckpt_snapshot, size);
 #ifdef PCACHE_MMAP_HINT
     /* The typed route precedes svc_mem, so it owns the production persistent-cache hint.
      * Metadata failure and non-regular files remain ordinary, uncacheable mappings. */

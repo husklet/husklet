@@ -115,13 +115,13 @@ static int g_pcache;   // persistent cache active (HL_PCACHE=1)
 static int g_coldprof; // Internal cache timing diagnostics; production entry keeps this disabled.
 static hl_persist_directory g_pc_directory;
 static char g_pc_directory_path[1024];
-static uint64_t g_force_base;   // if nonzero, load_elf() maps the NEXT image MAP_FIXED here (one-shot; elf.c)
-static int g_force_base_failed; // a fixed-VA map fell back to a kernel base -> this image can't hit OR save
+static uint64_t g_force_base;         // if nonzero, load_elf() maps the NEXT image MAP_FIXED here (one-shot; elf.c)
+static int g_force_base_failed;       // a fixed-VA map fell back to a kernel base -> this image can't hit OR save
 static hl_identity_digest g_pc_binid; // full identity of guest+interp+argv0+engine+mode
-static uint64_t g_pc_entry;     // initial guest pc (sanity key)
-static int g_pcache_poison;     // an unrecorded baked host pointer may exist -> save() refuses (correctness)
-static int g_pcache_loaded;     // this run restored from cache -> never re-save (arena would snowball)
-static int g_pcache_forked;     // this process is a fork child -> never save (stale-bookkeeping guard)
+static uint64_t g_pc_entry;           // initial guest pc (sanity key)
+static int g_pcache_poison;           // an unrecorded baked host pointer may exist -> save() refuses (correctness)
+static int g_pcache_loaded;           // this run restored from cache -> never re-save (arena would snowball)
+static int g_pcache_forked;           // this process is a fork child -> never save (stale-bookkeeping guard)
 static hl_reloc g_reloc_storage[PC_RELOC_CAP];
 static hl_reloc_table g_reloc_table = {g_reloc_storage, 0, (int)PC_RELOC_CAP};
 #define g_reloc (g_reloc_table.records)

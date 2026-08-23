@@ -9,9 +9,12 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/syscall.h>
-int main(void){
-    struct sigaction sa; memset(&sa,0,sizeof(sa)); sa.sa_handler=SIG_IGN;
-    long r=syscall(SYS_rt_sigaction, SIGUSR1, &sa, (void*)0, 4);
-    printf("badsize_errno=%d\n", r==-1?errno:0); // native 22, engine 0
+
+int main(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = SIG_IGN;
+    long r = syscall(SYS_rt_sigaction, SIGUSR1, &sa, (void *)0, 4);
+    printf("badsize_errno=%d\n", r == -1 ? errno : 0); // native 22, engine 0
     return 0;
 }

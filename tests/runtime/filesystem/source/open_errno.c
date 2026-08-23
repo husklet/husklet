@@ -48,7 +48,6 @@ int main(void) {
     unlinkat(dfd, "sub", AT_REMOVEDIR);
     close(dfd);
     rmdir(dir);
-    printf("open-errno eexist=%d enotdir=%d eloop=%d eisdir=%d enoent=%d\n",
-           eexist, enotdir, eloop, eisdir, enoent);
+    printf("open-errno eexist=%d enotdir=%d eloop=%d eisdir=%d enoent=%d\n", eexist, enotdir, eloop, eisdir, enoent);
     return 0;
 }

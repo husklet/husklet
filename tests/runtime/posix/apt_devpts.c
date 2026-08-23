@@ -20,17 +20,20 @@
 
 int main(void) {
     int m = posix_openpt(O_RDWR | O_NOCTTY);
-    if (m < 0) { printf("aptptsdev openpt=0\n"); return 0; }
+    if (m < 0) {
+        printf("aptptsdev openpt=0\n");
+        return 0;
+    }
     grantpt(m);
     unlockpt(m);
 
     // ---- master ops with NO slave open (exactly what apt does) ----
     struct termios t;
-    int mget = tcgetattr(m, &t) == 0;                       // TCGETS on the master
-    t.c_lflag &= ~(ECHO | ICANON);                          // put it in a distinctive (raw-ish) state
-    int mset = mget && tcsetattr(m, TCSANOW, &t) == 0;      // TCSETS on the master (apt's TCSANOW)
+    int mget = tcgetattr(m, &t) == 0;                  // TCGETS on the master
+    t.c_lflag &= ~(ECHO | ICANON);                     // put it in a distinctive (raw-ish) state
+    int mset = mget && tcsetattr(m, TCSANOW, &t) == 0; // TCSETS on the master (apt's TCSANOW)
     struct winsize ws = {51, 133, 0, 0};
-    int mswin = ioctl(m, TIOCSWINSZ, &ws) == 0;             // apt's failing ioctl, pre-fix
+    int mswin = ioctl(m, TIOCSWINSZ, &ws) == 0; // apt's failing ioctl, pre-fix
     struct winsize wg = {0, 0, 0, 0};
     int mgwin = ioctl(m, TIOCGWINSZ, &wg) == 0 && wg.ws_row == 51 && wg.ws_col == 133;
 
@@ -47,7 +50,7 @@ int main(void) {
     struct termios st;
     int sterm = s >= 0 && tcgetattr(s, &st) == 0 && !(st.c_lflag & ECHO) && !(st.c_lflag & ICANON);
 
-    printf("aptptsdev mget=%d mset=%d mswin=%d mgwin=%d ptn=%d sopen=%d sgwin=%d sterm=%d\n",
-           mget, mset, mswin, mgwin, gotptn && ptn >= 0, s >= 0, sgwin, sterm);
+    printf("aptptsdev mget=%d mset=%d mswin=%d mgwin=%d ptn=%d sopen=%d sgwin=%d sterm=%d\n", mget, mset, mswin, mgwin,
+           gotptn && ptn >= 0, s >= 0, sgwin, sterm);
     return 0;
 }

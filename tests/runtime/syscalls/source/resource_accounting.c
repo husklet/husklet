@@ -31,7 +31,8 @@ static unsigned long long memtotal_kb(void) {
 
 static void spin(void) {
     volatile unsigned long x = 0;
-    for (unsigned long i = 0; i < 40000000UL; i++) x += i;
+    for (unsigned long i = 0; i < 40000000UL; i++)
+        x += i;
 }
 
 int main(void) {
@@ -55,8 +56,8 @@ int main(void) {
     if (buf) {
         memset(buf, 0x5a, megs << 20);
         if (getrusage(RUSAGE_SELF, &r1) != 0) ok = 0;
-        if (r1.ru_maxrss < r0.ru_maxrss) ok = 0;   // high-water must not shrink
-        if (r1.ru_minflt < r0.ru_minflt) ok = 0;   // faulting in the buffer raises minor faults
+        if (r1.ru_maxrss < r0.ru_maxrss) ok = 0; // high-water must not shrink
+        if (r1.ru_minflt < r0.ru_minflt) ok = 0; // faulting in the buffer raises minor faults
         free(buf);
     } else {
         ok = 0;
@@ -81,8 +82,7 @@ int main(void) {
         waitpid(pid, &st, 0);
         struct rusage rc;
         if (getrusage(RUSAGE_CHILDREN, &rc) != 0) ok = 0;
-        if (rc.ru_utime.tv_sec == 0 && rc.ru_utime.tv_usec == 0 && rc.ru_stime.tv_sec == 0 &&
-            rc.ru_stime.tv_usec == 0)
+        if (rc.ru_utime.tv_sec == 0 && rc.ru_utime.tv_usec == 0 && rc.ru_stime.tv_sec == 0 && rc.ru_stime.tv_usec == 0)
             ok = 0; // some CPU must be attributed to the reaped child
     } else {
         ok = 0;
@@ -96,8 +96,10 @@ int main(void) {
     if (pg != getpagesize()) ok = 0;
 
     unsigned long long mt = memtotal_kb() * 1024ULL;
-    if (mt == 0) ok = 0;
-    else if ((unsigned long long)phys * (unsigned long long)pg != mt) ok = 0;
+    if (mt == 0)
+        ok = 0;
+    else if ((unsigned long long)phys * (unsigned long long)pg != mt)
+        ok = 0;
 
     printf("resource-accounting ok=%d\n", ok);
     return 0;

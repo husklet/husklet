@@ -35,7 +35,7 @@ int main(int argc, char **argv) {
     sigaddset(&def, SIGTERM);
     posix_spawnattr_setsigdefault(&attr, &def);
 
-    char *cargv[] = { argv[0], (char *)"child", NULL };
+    char *cargv[] = {argv[0], (char *)"child", NULL};
     pid_t pid = 0;
     int rc = posix_spawn(&pid, argv[0], NULL, &attr, cargv, environ);
     int spawned = rc == 0 && pid > 0;
@@ -44,7 +44,6 @@ int main(int argc, char **argv) {
     int code = WIFEXITED(st) ? WEXITSTATUS(st) : -1;
     posix_spawnattr_destroy(&attr);
 
-    printf("posix_spawn_attr spawned=%d own_group=%d term_dfl=%d\n",
-           spawned, (code & 1) ? 1 : 0, (code & 2) ? 1 : 0);
+    printf("posix_spawn_attr spawned=%d own_group=%d term_dfl=%d\n", spawned, (code & 1) ? 1 : 0, (code & 2) ? 1 : 0);
     return 0;
 }

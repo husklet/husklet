@@ -10,7 +10,9 @@ int main(void) {
     snprintf(a, sizeof a, "/tmp/hl_lnk_%d", (int)getpid());
     snprintf(h, sizeof h, "/tmp/hl_lnk_%d.hard", (int)getpid());
     snprintf(s, sizeof s, "/tmp/hl_lnk_%d.sym", (int)getpid());
-    unlink(a); unlink(h); unlink(s);
+    unlink(a);
+    unlink(h);
+    unlink(s);
     int fd = open(a, O_CREAT | O_WRONLY, 0644);
     write(fd, "shared", 6);
     close(fd);
@@ -26,7 +28,8 @@ int main(void) {
     unlink(h);
     stat(a, &st);
     int nlink1 = st.st_nlink == 1;
-    unlink(a); unlink(s);
+    unlink(a);
+    unlink(s);
     printf("linksym hardlink=%d nlink2=%d symlink=%d readlink=%d nlink1=%d\n", hl, nlink2, sl, rl, nlink1);
     return 0;
 }

@@ -42,9 +42,7 @@ int main(void) {
     int alias_coherent = readable[0] == 0x0b && readable[page - 1] == 0x7d;
 
     unsigned char *fixed = mmap(NULL, page, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (fixed == MAP_FAILED ||
-        mmap(fixed, page, PROT_NONE, MAP_SHARED | MAP_FIXED, fd, (off_t)page) != fixed)
-        return 4;
+    if (fixed == MAP_FAILED || mmap(fixed, page, PROT_NONE, MAP_SHARED | MAP_FIXED, fd, (off_t)page) != fixed) return 4;
     int protected = mprotect(fixed, page, PROT_READ | PROT_EXEC) == 0;
     writable[1] = 0x36;
     writable[page - 2] = 0x9a;
@@ -65,8 +63,7 @@ int main(void) {
                           threaded.observed;
 
     int fixed_unmapped = munmap(fixed, page) == 0;
-    unsigned char *reused = mmap(fixed, page, PROT_READ | PROT_WRITE,
-                                 MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned char *reused = mmap(fixed, page, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (reused != MAP_FAILED) reused[7] = 0x91;
     int va_reuse = fixed_unmapped && reused == fixed && reused[7] == 0x91;
     int unmapped = munmap(readable, page) == 0 && munmap(writable, page) == 0 && munmap(reused, page) == 0 &&

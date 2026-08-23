@@ -9,11 +9,9 @@
 
 int main(void) {
     long ps = sysconf(_SC_PAGESIZE);
-    char *base = mmap(NULL, ps * 5, PROT_READ | PROT_WRITE,
-                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    char *base = mmap(NULL, ps * 5, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     memset(base, 'A', ps * 5);
-    char *mid = mmap(base + ps * 2, ps, PROT_READ | PROT_WRITE,
-                     MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    char *mid = mmap(base + ps * 2, ps, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
     int placed = (mid == base + ps * 2);
     int midzero = (base[ps * 2] == 0);
     int leftA = (base[ps] == 'A');
@@ -31,8 +29,7 @@ int main(void) {
     base[ps * 3] = 'R';
     int flanks = (base[ps] == 'L' && base[ps * 3] == 'R');
     // remapping into the hole succeeds
-    char *again = mmap(base + ps * 2, ps, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    char *again = mmap(base + ps * 2, ps, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
     int refilled = (again == base + ps * 2) && (again[0] == 0);
     int mu2 = munmap(base, ps * 5);
     printf("placed=%d midzero=%d leftA=%d rightA=%d mp=%d mc=%d resident=%d mu=%d flanks=%d refilled=%d mu2=%d\n",

@@ -28,14 +28,15 @@
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_cond = PTHREAD_COND_INITIALIZER;
-static int g_release;    // set once the main thread has finished all bus transitions
-static int g_parked;     // number of workers confirmed blocked in the futex wait
-static long g_sum;       // deterministic per-worker contribution, guarded by g_lock
+static int g_release; // set once the main thread has finished all bus transitions
+static int g_parked;  // number of workers confirmed blocked in the futex wait
+static long g_sum;    // deterministic per-worker contribution, guarded by g_lock
 
 static long spin_work(long seed) {
     // A little translated code so the worker is a fully warmed guest thread before it parks.
     long acc = seed;
-    for (int i = 1; i <= 4096; i++) acc = (acc + (long)i * 7) % 1000003;
+    for (int i = 1; i <= 4096; i++)
+        acc = (acc + (long)i * 7) % 1000003;
     return acc;
 }
 
@@ -46,7 +47,8 @@ static void *worker(void *arg) {
     g_parked++;
     pthread_cond_broadcast(&g_cond);
     // Block in a guest futex wait for the whole duration of the main thread's bus transitions.
-    while (!g_release) pthread_cond_wait(&g_cond, &g_lock);
+    while (!g_release)
+        pthread_cond_wait(&g_cond, &g_lock);
     g_sum += value;
     pthread_mutex_unlock(&g_lock);
     return NULL;
@@ -74,11 +76,13 @@ int main(void) {
     map[0] = 1;
 
     pthread_t threads[WORKERS];
-    for (long i = 0; i < WORKERS; i++) pthread_create(&threads[i], NULL, worker, (void *)i);
+    for (long i = 0; i < WORKERS; i++)
+        pthread_create(&threads[i], NULL, worker, (void *)i);
 
     // Wait until every worker is genuinely blocked in the futex before disturbing mappings.
     pthread_mutex_lock(&g_lock);
-    while (g_parked < WORKERS) pthread_cond_wait(&g_cond, &g_lock);
+    while (g_parked < WORKERS)
+        pthread_cond_wait(&g_cond, &g_lock);
     pthread_mutex_unlock(&g_lock);
 
     long checksum = 0;
@@ -102,7 +106,8 @@ int main(void) {
     g_release = 1;
     pthread_cond_broadcast(&g_cond);
     pthread_mutex_unlock(&g_lock);
-    for (int i = 0; i < WORKERS; i++) pthread_join(threads[i], NULL);
+    for (int i = 0; i < WORKERS; i++)
+        pthread_join(threads[i], NULL);
 
     munmap(map, PAGE);
     close(fd);

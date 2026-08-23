@@ -98,12 +98,16 @@ static int exec_image_capabilities(int descriptor, hl_exec_file_capabilities *ca
     const char *name = "user.hl.guest.security.capability";
     ssize_t length = hl_native_fgetxattr(descriptor, name, bytes, sizeof bytes, 0, 0);
     if (length < 0) {
-        /* glibc defines ENOATTR *as* ENODATA, so testing both is `-Werror=logical-op`:
-         * two operands the compiler can see are identical. Darwin keeps them distinct
-         * (ENOATTR 93, ENODATA 96), so the second test still has to exist there. */
-        if (errno == ENODATA
+        /* A filesystem with no xattr support has no file capability to apply; Linux still executes the
+         * image. Nix's sandbox /build is such a filesystem on this host, where rejecting ENOTSUP made every
+         * BusyBox applet exec fail with shell status 126. glibc aliases ENOATTR/ENODATA and
+         * ENOTSUP/EOPNOTSUPP, so compare the second spelling only where it is genuinely distinct. */
+        if (errno == ENODATA || errno == ENOTSUP
 #if defined(ENOATTR) && ENOATTR != ENODATA
             || errno == ENOATTR
+#endif
+#if defined(EOPNOTSUPP) && EOPNOTSUPP != ENOTSUP
+            || errno == EOPNOTSUPP
 #endif
         )
             return 0;
@@ -520,8 +524,7 @@ static int exec_prepare_request(uint64_t path_address, uint64_t argv_address, ui
         exec_prepared_discard(prepared);
         return error;
     }
-    prepared->credentials =
-        cred_exec_transition(&prepared->main_image.dac, &prepared->main_image.file_capabilities);
+    prepared->credentials = cred_exec_transition(&prepared->main_image.dac, &prepared->main_image.file_capabilities);
     if (prepared->credentials.error != 0) {
         error = -prepared->credentials.error;
         exec_prepared_discard(prepared);
@@ -608,8 +611,8 @@ static void exec_reload_image(struct cpu *cpu, exec_prepared *prepared) {
 
     uint64_t heap;
     uint64_t heap_hint = hl_linux_snapshot_reserve(&g_ckpt_snapshot, 256u << 20);
-    if (hl_gmap_map_anonymous(heap_hint, 256u << 20, HL_HOST_MEMORY_READ | HL_HOST_MEMORY_WRITE,
-                              HL_HOST_MEMORY_PRIVATE, &heap) != HL_STATUS_OK)
+    if (hl_gmap_map_anonymous(heap_hint, 256u << 20, HL_HOST_MEMORY_READ | HL_HOST_MEMORY_WRITE, HL_HOST_MEMORY_PRIVATE,
+                              &heap) != HL_STATUS_OK)
         _exit(127);
     brk_lo = brk_cur = heap;
     brk_hi = brk_lo + (256u << 20);

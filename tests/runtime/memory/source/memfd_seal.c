@@ -22,8 +22,14 @@
 int main(void) {
     long ps = sysconf(_SC_PAGESIZE);
     int fd = (int)syscall(SYS_memfd_create, "sealed", MFD_ALLOW_SEALING);
-    if (fd < 0) { printf("memfd unsupported\n"); return 2; }
-    if (ftruncate(fd, ps) != 0) { printf("truncate fail\n"); return 2; }
+    if (fd < 0) {
+        printf("memfd unsupported\n");
+        return 2;
+    }
+    if (ftruncate(fd, ps) != 0) {
+        printf("truncate fail\n");
+        return 2;
+    }
 
     int sealed = fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE) == 0;
 
@@ -41,7 +47,7 @@ int main(void) {
     if (pr != MAP_FAILED) munmap(pr, ps);
 
     close(fd);
-    printf("sealed=%d shared_wr_eperm=%d shared_ro_ok=%d private_wr_ok=%d\n", sealed, shared_wr_eperm,
-           shared_ro_ok, private_wr_ok);
+    printf("sealed=%d shared_wr_eperm=%d shared_ro_ok=%d private_wr_ok=%d\n", sealed, shared_wr_eperm, shared_ro_ok,
+           private_wr_ok);
     return 0;
 }

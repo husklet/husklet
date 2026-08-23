@@ -10,6 +10,7 @@
 
 int main(void) {
     enum { CHURN_DESCRIPTORS = 600 };
+
     char dir[128];
     snprintf(dir, sizeof dir, "/tmp/hl_flock_%d", (int)getpid());
     mkdir(dir, 0755);
@@ -39,11 +40,11 @@ int main(void) {
     // the engine's broker table so a stale unlocked record cannot exhaust it.
     int churn_fds[CHURN_DESCRIPTORS];
     int same_inode_churn = 1;
-    for (int i = 0; i < CHURN_DESCRIPTORS; ++i) churn_fds[i] = -1;
+    for (int i = 0; i < CHURN_DESCRIPTORS; ++i)
+        churn_fds[i] = -1;
     for (int i = 0; i < CHURN_DESCRIPTORS; ++i) {
         churn_fds[i] = open(path, O_RDWR);
-        if (churn_fds[i] < 0 || flock(churn_fds[i], LOCK_EX | LOCK_NB) != 0 ||
-            flock(churn_fds[i], LOCK_UN) != 0) {
+        if (churn_fds[i] < 0 || flock(churn_fds[i], LOCK_EX | LOCK_NB) != 0 || flock(churn_fds[i], LOCK_UN) != 0) {
             same_inode_churn = 0;
             break;
         }
@@ -58,8 +59,7 @@ int main(void) {
         char churn_path[192];
         snprintf(churn_path, sizeof churn_path, "%s/churn-%d", dir, i);
         churn_fds[i] = open(churn_path, O_CREAT | O_RDWR, 0644);
-        if (churn_fds[i] < 0 || flock(churn_fds[i], LOCK_EX | LOCK_NB) != 0 ||
-            flock(churn_fds[i], LOCK_UN) != 0) {
+        if (churn_fds[i] < 0 || flock(churn_fds[i], LOCK_EX | LOCK_NB) != 0 || flock(churn_fds[i], LOCK_UN) != 0) {
             distinct_inode_churn = 0;
             break;
         }

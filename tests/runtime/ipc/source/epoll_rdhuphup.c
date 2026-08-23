@@ -3,11 +3,12 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <stdio.h>
-int main(void){
+
+int main(void) {
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv)) return 1;
     int ep = epoll_create1(0);
-    struct epoll_event r = { .events = EPOLLIN | EPOLLRDHUP, .data.fd = sv[0] };
+    struct epoll_event r = {.events = EPOLLIN | EPOLLRDHUP, .data.fd = sv[0]};
     epoll_ctl(ep, EPOLL_CTL_ADD, sv[0], &r);
     shutdown(sv[1], SHUT_WR);
     struct epoll_event ev;

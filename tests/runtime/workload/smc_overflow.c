@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
+
 // Emit a leaf function `int f(void){ return imm; }` at p.
 static void emit_ret(unsigned char *p, uint32_t v) {
 #if defined(__aarch64__)
@@ -24,9 +25,11 @@ static void emit_ret(unsigned char *p, uint32_t v) {
 #error "needs an emitter for this ISA"
 #endif
 }
+
 typedef int (*fn)(void);
 #define STRIDE 0x4000u // one distinct 16 KB SMC page per function
 #define NPAGES 8300u   // > SMC_MAX (8192) -> overflow the table
+
 int main(void) {
     size_t span = (size_t)NPAGES * STRIDE;
     unsigned char *base = mmap(0, span, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);

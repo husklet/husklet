@@ -217,7 +217,7 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
     guard.miss_reg[guard.nmiss - 1] = tmp;
     emit32(0);
 
-    e_ldr(tmp, tmp2, OFF_SOFT_TLB + 8);                                               /* exclusive end */
+    e_ldr(tmp, tmp2, OFF_SOFT_TLB + 8);                                                /* exclusive end */
     emit32(0xCB000000u | ((unsigned)ea << 16) | ((unsigned)tmp << 5) | (unsigned)tmp); /* sub tmp,tmp,ea */
     emit_a64_soft_sub_bytes(tmp, bytes);
     emit32(0xD37FFC00u | ((unsigned)tmp << 5) | (unsigned)tmp);
@@ -240,7 +240,7 @@ static struct a64_soft_guard emit_a64_soft_guard_begin(int ea, int tmp, int tmp2
         emit32(0); /* tbz tmp,#1,miss */
     }
     e_ldr(tmp, tmp2, OFF_SOFT_TLB + 16);
-    if (borrowed_base >= 0) e_ldr(borrowed_base, CPUREG, borrowed_base * 8); /* last use of the entry base */
+    if (borrowed_base >= 0) e_ldr(borrowed_base, CPUREG, borrowed_base * 8);          /* last use of the entry base */
     emit32(0x8B000000u | ((unsigned)tmp << 16) | ((unsigned)ea << 5) | (unsigned)ea); /* add ea,ea,tmp */
     guard.native = g_cp;
     SOFT_BYTES_END;
@@ -512,9 +512,9 @@ static void emit_a64_soft_fold_address(int address, int temporary) {
     if (!guestbase_on()) return;
     emit32(0xD360FC00u | ((unsigned)address << 5) | (unsigned)temporary); // lsr temporary, address, #32
     uint32_t *high = (uint32_t *)g_cp;
-    emit32(0);                                  // cbnz temporary, done
-    emit32(0xD53B4200u | (unsigned)temporary);  // mrs temporary, nzcv
-    e_str(temporary, CPUREG, OFF_NZCV_FOLD);    // park the guest flags (host x18 is not a register here)
+    emit32(0);                                 // cbnz temporary, done
+    emit32(0xD53B4200u | (unsigned)temporary); // mrs temporary, nzcv
+    e_str(temporary, CPUREG, OFF_NZCV_FOLD);   // park the guest flags (host x18 is not a register here)
     e_movconst(temporary, g_nonpie_lo);
     emit32(0xEB000000u | ((unsigned)temporary << 16) | ((unsigned)address << 5) | 31u); // cmp address, lo
     uint32_t *below = (uint32_t *)g_cp;

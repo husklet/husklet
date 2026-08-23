@@ -8,7 +8,11 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t hits;
-static void oneshot(int s) { (void)s; hits++; }
+
+static void oneshot(int s) {
+    (void)s;
+    hits++;
+}
 
 int main(void) {
     pid_t pid = fork();
@@ -18,11 +22,11 @@ int main(void) {
         sigemptyset(&sa.sa_mask);
         sa.sa_flags = SA_RESETHAND;
         sigaction(SIGUSR1, &sa, NULL);
-        raise(SIGUSR1);          // handled once
+        raise(SIGUSR1); // handled once
         // disposition now SIG_DFL for SIGUSR1 (terminates process)
         if (hits != 1) _exit(42);
-        raise(SIGUSR1);          // must terminate now
-        _exit(7);                // reached only if not terminated
+        raise(SIGUSR1); // must terminate now
+        _exit(7);       // reached only if not terminated
     }
     int st = 0;
     waitpid(pid, &st, 0);

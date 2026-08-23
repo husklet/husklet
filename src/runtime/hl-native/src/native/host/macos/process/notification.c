@@ -60,13 +60,12 @@ static int hl_host_macos_process_identity_read(pid_t pid, hl_host_macos_process_
     memset(&bsd, 0, sizeof bsd);
     memset(&unique, 0, sizeof unique);
     if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, sizeof bsd) != (int)sizeof bsd ||
-        proc_pidinfo(pid, HL_MACOS_PROC_PID_UNIQUE_IDENTIFIER_INFO, 0, &unique, sizeof unique) !=
-            (int)sizeof unique) {
+        proc_pidinfo(pid, HL_MACOS_PROC_PID_UNIQUE_IDENTIFIER_INFO, 0, &unique, sizeof unique) != (int)sizeof unique) {
         if (errno == 0) errno = ESRCH;
         return -1;
     }
-    identity->birth = (uint64_t)bsd.pbi_start_tvsec * UINT64_C(1000000000) +
-                      (uint64_t)bsd.pbi_start_tvusec * UINT64_C(1000);
+    identity->birth =
+        (uint64_t)bsd.pbi_start_tvsec * UINT64_C(1000000000) + (uint64_t)bsd.pbi_start_tvusec * UINT64_C(1000);
     identity->unique = unique.unique;
     identity->generation = unique.generation > 0 ? (uint64_t)(uint32_t)unique.generation : 0;
     if (identity->birth == 0 || identity->unique == 0 || identity->generation == 0) {

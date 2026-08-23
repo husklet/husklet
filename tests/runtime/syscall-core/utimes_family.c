@@ -30,6 +30,7 @@ static int mk(const char *p) { // create/truncate the target file
     close(fd);
     return 0;
 }
+
 static int at_sec(const char *p, long *a, long *m) { // stat -> atime/mtime seconds
     struct stat st;
     if (stat(p, &st) < 0) return -1;
@@ -37,7 +38,10 @@ static int at_sec(const char *p, long *a, long *m) { // stat -> atime/mtime seco
     *m = (long)st.st_mtime;
     return 0;
 }
-static int recent(long t, long now) { return t >= now - 5 && t <= now + 30; } // "set to now" window
+
+static int recent(long t, long now) {
+    return t >= now - 5 && t <= now + 30;
+} // "set to now" window
 
 int main(void) {
     const char *path = "/tmp/hl_utimes_family";
@@ -46,7 +50,10 @@ int main(void) {
     int ok = 1;
 
     // 1. utime() with explicit utimbuf.
-    if (mk(path)) { printf("utimes-family FAIL mk\n"); return 1; }
+    if (mk(path)) {
+        printf("utimes-family FAIL mk\n");
+        return 1;
+    }
     struct utimbuf ub = {.actime = A1, .modtime = M1};
     if (utime(path, &ub) < 0 || at_sec(path, &a, &m) < 0) ok = 0;
     int c_utime = (a == A1 && m == M1);

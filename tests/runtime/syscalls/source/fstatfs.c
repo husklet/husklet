@@ -16,7 +16,7 @@ int main(void) {
     int blocks = sp.f_blocks > 0;
     int free_le = sp.f_bfree <= sp.f_blocks;
     int agree = sp.f_bsize == sf.f_bsize;
-    printf("fstatfs statfs=%d fstatfs=%d bsize=%d blocks=%d free_le=%d agree=%d\n",
-           sok, fok, bsize, blocks, free_le, agree);
+    printf("fstatfs statfs=%d fstatfs=%d bsize=%d blocks=%d free_le=%d agree=%d\n", sok, fok, bsize, blocks, free_le,
+           agree);
     return 0;
 }

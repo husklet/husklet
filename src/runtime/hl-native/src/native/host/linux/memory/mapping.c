@@ -58,6 +58,7 @@ int hl_host_region_query(uintptr_t address, hl_host_region *region) {
     fclose(maps);
     return 0;
 }
+
 static hl_host_result hl_linux_memory_reserve(void *context, uint64_t size, uint64_t alignment, uint32_t flags) {
     hl_host_linux *host = context;
     void *address;
@@ -495,8 +496,8 @@ static hl_host_result hl_linux_memory_code_write(void *context) {
    same region of the address space as the engine's own text and data.  The deterministic guest arena at
    HL_LINUX_SNAPSHOT_BASE (linux_abi/container/snapshot.h) grows upward from far below, so it cannot meet the
    arena either.  Every reservation is MAP_FIXED_NOREPLACE, so host storage never replaces anything. */
-#define HL_LINUX_HOST_CODE_ARENA_GAP UINT64_C(0x10000000000)  /* 1 TiB below the top-down pool */
-#define HL_LINUX_HOST_CODE_ARENA_SIZE UINT64_C(0x1000000000)  /* 64 GiB of host storage */
+#define HL_LINUX_HOST_CODE_ARENA_GAP UINT64_C(0x10000000000) /* 1 TiB below the top-down pool */
+#define HL_LINUX_HOST_CODE_ARENA_SIZE UINT64_C(0x1000000000) /* 64 GiB of host storage */
 
 static uint64_t g_host_code_arena_base;
 static uint64_t g_host_code_arena_cursor;
@@ -671,8 +672,8 @@ static hl_host_result hl_linux_memory_repair_code(void *context, hl_host_code_ma
         if (descriptor < 0) return hl_linux_errno_result();
         if (ftruncate(descriptor, (off_t)inherited.size) != 0) goto fresh_failed;
         /* Same arena, same reason: a fork child that rebuilds its cache must not take a VA the guest owns. */
-        writable = hl_linux_map_aligned(descriptor, inherited.size, (uint64_t)hl_host_page_size(), PROT_READ | PROT_WRITE,
-                                        MAP_SHARED);
+        writable = hl_linux_map_aligned(descriptor, inherited.size, (uint64_t)hl_host_page_size(),
+                                        PROT_READ | PROT_WRITE, MAP_SHARED);
         if (writable == MAP_FAILED) goto fresh_failed;
         executable = hl_linux_map_aligned(descriptor, inherited.size, (uint64_t)hl_host_page_size(),
                                           PROT_READ | PROT_EXEC, MAP_SHARED);

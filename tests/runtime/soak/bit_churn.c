@@ -7,13 +7,16 @@
 #include <stdint.h>
 #include <stdio.h>
 
-static inline uint64_t rotl(uint64_t v, unsigned r) { r &= 63; return (v << r) | (v >> ((64 - r) & 63)); }
+static inline uint64_t rotl(uint64_t v, unsigned r) {
+    r &= 63;
+    return (v << r) | (v >> ((64 - r) & 63));
+}
 
 int main(void) {
     uint64_t r = 0x0123456789abcdefULL, acc = 0;
     for (uint64_t i = 0; i < 80000000ULL; i++) {
         r = r * 6364136223846793005ULL + 1442695040888963407ULL; // LCG
-        uint64_t v = r | 1ULL;                                    // ensure nonzero for ctz/clz
+        uint64_t v = r | 1ULL;                                   // ensure nonzero for ctz/clz
         acc += __builtin_popcountll(v);
         acc ^= rotl(v, (unsigned)(i & 63));
         acc += __builtin_ctzll(v);

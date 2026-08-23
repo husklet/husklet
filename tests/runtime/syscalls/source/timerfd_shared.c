@@ -8,7 +8,10 @@
 
 int main(void) {
     int fd = timerfd_create(CLOCK_MONOTONIC, 0);
-    if (fd < 0) { perror("timerfd_create"); return 1; }
+    if (fd < 0) {
+        perror("timerfd_create");
+        return 1;
+    }
     struct itimerspec its = {0};
     its.it_value.tv_sec = 0;
     its.it_value.tv_nsec = 40 * 1000 * 1000; // 40ms one-shot

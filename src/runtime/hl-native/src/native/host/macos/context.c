@@ -345,6 +345,7 @@ void hl_host_macos_destroy(hl_host_macos *host) {
  * Returns 0 on success, a negative errno-shaped code on a harness failure, and a positive code naming the
  * violated invariant. */
 HL_API int32_t hl_c_backend_directory_stream_private_test(uint32_t scenario);
+
 HL_API int32_t hl_c_backend_directory_stream_private_test(uint32_t scenario) {
     hl_host_macos *host = NULL;
     hl_host_services services;

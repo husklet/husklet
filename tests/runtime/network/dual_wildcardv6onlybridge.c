@@ -10,8 +10,7 @@ static int listener(int family, int port) {
     if (fd < 0) return -1;
     int one = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-    if (family == AF_INET6 && setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof one) != 0)
-        return -1;
+    if (family == AF_INET6 && setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof one) != 0) return -1;
     if (family == AF_INET6) {
         struct sockaddr_in6 address = {
             .sin6_family = AF_INET6,

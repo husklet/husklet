@@ -11,10 +11,14 @@
 static int files = 0, dirs = 0, links = 0, depth_ok = 1;
 
 static int cb(const char *path, const struct stat *sb, int type, struct FTW *ftw) {
-    (void)path; (void)sb;
-    if (type == FTW_F) files++;
-    else if (type == FTW_D || type == FTW_DP) dirs++;
-    else if (type == FTW_SL) links++;
+    (void)path;
+    (void)sb;
+    if (type == FTW_F)
+        files++;
+    else if (type == FTW_D || type == FTW_DP)
+        dirs++;
+    else if (type == FTW_SL)
+        links++;
     if (ftw->level < 0) depth_ok = 0;
     return 0;
 }
@@ -30,16 +34,21 @@ int main(void) {
     mkdir(root, 0755);
     mkdir(sub, 0755);
     int fd;
-    fd = open(f1, O_CREAT | O_WRONLY, 0644); if (fd >= 0) close(fd);
-    fd = open(f2, O_CREAT | O_WRONLY, 0644); if (fd >= 0) close(fd);
+    fd = open(f1, O_CREAT | O_WRONLY, 0644);
+    if (fd >= 0) close(fd);
+    fd = open(f2, O_CREAT | O_WRONLY, 0644);
+    if (fd >= 0) close(fd);
     symlink("top.txt", ln);
 
     int rc = nftw(root, cb, 16, FTW_PHYS);
     // 2 dirs (root, sub), 2 regular files, 1 symlink (FTW_PHYS keeps it a link).
     int counts = rc == 0 && dirs == 2 && files == 2 && links == 1 && depth_ok;
 
-    unlink(f1); unlink(f2); unlink(ln); rmdir(sub); rmdir(root);
-    printf("nftwt counts=%d dirs=%d files=%d links=%d\n",
-           counts, dirs == 2, files == 2, links == 1);
+    unlink(f1);
+    unlink(f2);
+    unlink(ln);
+    rmdir(sub);
+    rmdir(root);
+    printf("nftwt counts=%d dirs=%d files=%d links=%d\n", counts, dirs == 2, files == 2, links == 1);
     return 0;
 }

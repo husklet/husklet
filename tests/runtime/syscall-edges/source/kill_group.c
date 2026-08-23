@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t got;
+
 static void onusr1(int s) {
     (void)s;
     got = 1;
@@ -25,8 +26,8 @@ int main(void) {
     signal(SIGUSR1, onusr1); // installed BEFORE fork so the child inherits it too
     pid_t c = fork();
     if (c == 0) {
-        signal(SIGUSR1, onusr1);          // (redundant; the child inherited it) keep the child in our pgroup
-        if (write(rp[1], "r", 1) < 0) {}  // signal readiness -- handler is armed
+        signal(SIGUSR1, onusr1);         // (redundant; the child inherited it) keep the child in our pgroup
+        if (write(rp[1], "r", 1) < 0) {} // signal readiness -- handler is armed
         for (int i = 0; i < 1000 && !got; i++) {
             struct timespec ts = {0, 1000000}; // 1ms; ~1s ceiling so a missed signal can never hang the test
             nanosleep(&ts, NULL);

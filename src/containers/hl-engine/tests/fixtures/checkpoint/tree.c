@@ -172,9 +172,8 @@ static int worker(const char *release, const char *final_release, int role) {
     if (read(independent_file, observed, 1) != 1 || observed[0] != 'o') return 66 + role;
     if ((fcntl(file, F_GETFL) & (O_APPEND | O_NONBLOCK)) != (O_APPEND | O_NONBLOCK) ||
         (fcntl(duplicate_file, F_GETFL) & (O_APPEND | O_NONBLOCK)) != (O_APPEND | O_NONBLOCK) ||
-        (fcntl(independent_file, F_GETFL) & (O_APPEND | O_NONBLOCK)) != 0 ||
-        (fcntl(file, F_GETFD) & FD_CLOEXEC) != 0 || (fcntl(duplicate_file, F_GETFD) & FD_CLOEXEC) == 0 ||
-        (fcntl(independent_file, F_GETFD) & FD_CLOEXEC) != 0)
+        (fcntl(independent_file, F_GETFL) & (O_APPEND | O_NONBLOCK)) != 0 || (fcntl(file, F_GETFD) & FD_CLOEXEC) != 0 ||
+        (fcntl(duplicate_file, F_GETFD) & FD_CLOEXEC) == 0 || (fcntl(independent_file, F_GETFD) & FD_CLOEXEC) != 0)
         return 69 + role;
     struct stat deleted_status;
     char byte;
@@ -196,8 +195,8 @@ static int worker(const char *release, const char *final_release, int role) {
     for (int attempt = 0; attempt < 1000 && delivered != 1; ++attempt)
         usleep(1000);
     if (delivered != 1) {
-        dprintf(STDOUT_FILENO, "SIGNAL-ERROR %d main=%d helper=%d helper_alt=%d\n", role, delivered,
-                helper_delivered, helper_on_altstack);
+        dprintf(STDOUT_FILENO, "SIGNAL-ERROR %d main=%d helper=%d helper_alt=%d\n", role, delivered, helper_delivered,
+                helper_on_altstack);
         return 90 + role;
     }
     if (sigprocmask(SIG_BLOCK, &blocked, &previous) != 0 || kill(original_pid, SIGUSR1) != 0) return 100 + role;
@@ -225,8 +224,8 @@ static int worker(const char *release, const char *final_release, int role) {
         usleep(1000);
     if (delivered != 2) return 150 + role;
     void *helper_result = NULL;
-    if (pthread_join(helper_thread, &helper_result) != 0 || helper_result != NULL || pthread_mutex_lock(&held_mutex) != 0 ||
-        pthread_mutex_unlock(&held_mutex) != 0)
+    if (pthread_join(helper_thread, &helper_result) != 0 || helper_result != NULL ||
+        pthread_mutex_lock(&held_mutex) != 0 || pthread_mutex_unlock(&held_mutex) != 0)
         return 155 + role;
     close(file);
     close(independent_file);

@@ -51,8 +51,7 @@ int main(void) {
         int rd = (read(pfd[0], &rb, 1) == 1 && rb == 'X');
         uint64_t exp = 0;
         int tr = (read(tf, &exp, 8) == 8 && exp >= 1); // inherited armed timerfd fires
-        printf("child epoll_n=%d saw_pipe=%d pipe_rd=%d timerfd_fired=%d\n", n >= 1 ? 1 : 0, saw_pipe, rd,
-               tr ? 1 : 0);
+        printf("child epoll_n=%d saw_pipe=%d pipe_rd=%d timerfd_fired=%d\n", n >= 1 ? 1 : 0, saw_pipe, rd, tr ? 1 : 0);
         fflush(stdout);
         _exit((saw_pipe && rd && tr) ? 0 : 2);
     }

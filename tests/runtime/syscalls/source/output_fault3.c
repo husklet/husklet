@@ -34,8 +34,7 @@ int main(void) {
     if (page <= 0) return 10;
 
     // Two mapped pages, second unmapped: pointers near the boundary straddle into the hole.
-    unsigned char *base = mmap(NULL, (size_t)page * 2, PROT_READ | PROT_WRITE,
-                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned char *base = mmap(NULL, (size_t)page * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (base == MAP_FAILED) return 11;
     if (munmap(base + page, (size_t)page) != 0) return 12;
     void *hole = base + page;         // fully unmapped page start
@@ -53,21 +52,24 @@ int main(void) {
     // --- recvmmsg: the mmsghdr array itself is unmapped; reading its first field must EFAULT. ---
     int sp[2];
     int have_pair = (socketpair(AF_UNIX, SOCK_DGRAM, 0, sp) == 0);
-    if (have_pair) { ssize_t w = write(sp[1], "hi", 2); (void)w; }
+    if (have_pair) {
+        ssize_t w = write(sp[1], "hi", 2);
+        (void)w;
+    }
     r = sc(SYS_recvmmsg, have_pair ? sp[0] : -1, (long)hole, 4, 0x40, 0); // MSG_DONTWAIT
     int recvmmsg_efault = (r == -1 && errno == EFAULT);
 
     // --- process_vm_readv: local (destination) iov base in the hole -> scatter memcpy must not crash. ---
     char src[64];
     memset(src, 7, sizeof src);
-    struct iovec lbad = { hole, 64 };
-    struct iovec rok = { src, 64 };
+    struct iovec lbad = {hole, 64};
+    struct iovec rok = {src, 64};
     r = sc(SYS_process_vm_readv, getpid(), (long)&lbad, 1, (long)&rok, 1);
     int pvm_readv_survived = (r == -1);
 
     // --- process_vm_writev: remote (destination) iov base in the hole -> gather memcpy must not crash. ---
-    struct iovec lok = { src, 64 };
-    struct iovec rbad = { hole, 64 };
+    struct iovec lok = {src, 64};
+    struct iovec rbad = {hole, 64};
     r = sc(SYS_process_vm_writev, getpid(), (long)&lok, 1, (long)&rbad, 1);
     int pvm_writev_survived = (r == -1);
 
@@ -89,7 +91,7 @@ int main(void) {
     int recvmmsg_ok = 0;
     if (have_pair) {
         char rb[8];
-        struct iovec riov = { rb, sizeof rb };
+        struct iovec riov = {rb, sizeof rb};
         struct mmsghdr mm;
         memset(&mm, 0, sizeof mm);
         mm.msg_hdr.msg_iov = &riov;
@@ -104,10 +106,9 @@ int main(void) {
 
     printf("listxattr_efault=%d recvmmsg_efault=%d pvm_readv_survived=%d pvm_writev_survived=%d "
            "pvm_badarray_survived=%d valid=%d\n",
-           listxattr_efault, recvmmsg_efault, pvm_readv_survived, pvm_writev_survived,
-           pvm_badarray_survived, valid);
-    return (listxattr_efault && recvmmsg_efault && pvm_readv_survived && pvm_writev_survived &&
-            pvm_badarray_survived && valid)
+           listxattr_efault, recvmmsg_efault, pvm_readv_survived, pvm_writev_survived, pvm_badarray_survived, valid);
+    return (listxattr_efault && recvmmsg_efault && pvm_readv_survived && pvm_writev_survived && pvm_badarray_survived &&
+            valid)
                ? 0
                : 1;
 }

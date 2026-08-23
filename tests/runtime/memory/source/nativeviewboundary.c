@@ -148,11 +148,7 @@ static int shared_probe(unsigned long page) {
 
 int main(void) {
     unsigned long page = (unsigned long)sysconf(_SC_PAGESIZE);
-    if (walk_probes(page) != 0) {
-        return 1;
-    }
-    if (alias_probe(page) != 0) {
-        return 1;
-    }
+    if (walk_probes(page) != 0) { return 1; }
+    if (alias_probe(page) != 0) { return 1; }
     return shared_probe(page);
 }

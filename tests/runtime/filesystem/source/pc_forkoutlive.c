@@ -12,7 +12,8 @@ int main(void) {
     if (p == 0) {
         usleep(300000); // outlive the parent -> the child's exit-time save (if any) is the last writer
         volatile unsigned long h = 5381;
-        for (int i = 0; i < 400000; i++) h = h * 31 + (unsigned)i;
+        for (int i = 0; i < 400000; i++)
+            h = h * 31 + (unsigned)i;
         (void)h;
         _exit(0);
     }

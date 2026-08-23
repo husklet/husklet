@@ -17,12 +17,16 @@ int main(void) {
     pid_t pid = fork();
     if (pid == 0) {
         signal(SIGTERM, SIG_DFL);
-        for (;;) pause();
+        for (;;)
+            pause();
         _exit(0);
     }
     usleep(50 * 1000);
     int pidfd = (int)syscall(SYS_pidfd_open, pid, 0);
-    if (pidfd < 0) { printf("pidfd_send_signal open_fail\n"); return 1; }
+    if (pidfd < 0) {
+        printf("pidfd_send_signal open_fail\n");
+        return 1;
+    }
 
     int probe = (int)syscall(SYS_pidfd_send_signal, pidfd, 0, (void *)0, 0);
     int alive = probe == 0;

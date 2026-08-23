@@ -8,10 +8,20 @@
 #include <stdio.h>
 #include <sys/resource.h>
 #include <unistd.h>
-int main(void){
-    struct rlimit rl; getrlimit(RLIMIT_NOFILE,&rl); rl.rlim_cur=64; setrlimit(RLIMIT_NOFILE,&rl);
-    int last=0;
-    for(int i=0;i<200;i++){ int fd=open("/dev/null",O_RDONLY); if(fd==-1){last=errno;break;} }
+
+int main(void) {
+    struct rlimit rl;
+    getrlimit(RLIMIT_NOFILE, &rl);
+    rl.rlim_cur = 64;
+    setrlimit(RLIMIT_NOFILE, &rl);
+    int last = 0;
+    for (int i = 0; i < 200; i++) {
+        int fd = open("/dev/null", O_RDONLY);
+        if (fd == -1) {
+            last = errno;
+            break;
+        }
+    }
     printf("emfile_errno=%d\n", last); // native 24, engine 0
     return 0;
 }

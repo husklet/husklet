@@ -155,8 +155,7 @@ hl_status hl_linux_abi_spawn(hl_linux_abi *linux_abi, hl_host_process_entry entr
     hl_host_result spawned;
     hl_status completed;
     if (!hl_linux_process_output_prepare(out_process)) return HL_STATUS_INVALID_ARGUMENT;
-    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION || entry == NULL)
-        return HL_STATUS_INVALID_ARGUMENT;
+    if (linux_abi == NULL || linux_abi->abi != HL_LINUX_ABI_VERSION || entry == NULL) return HL_STATUS_INVALID_ARGUMENT;
     processes = linux_abi->host == NULL ? NULL : linux_abi->host->process;
     if (linux_abi->host == NULL || (linux_abi->host->capabilities & HL_HOST_CAP_PROCESS) == 0 || processes == NULL ||
         processes->abi != HL_HOST_PROCESS_ABI || processes->size < sizeof(*processes) ||

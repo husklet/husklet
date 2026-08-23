@@ -24,35 +24,33 @@ static void op_matrix(void) {
     uint64_t exp;
     // CAS success (seq_cst)
     exp = 0;
-    int ok1 = atomic_compare_exchange_strong_explicit((atomic_ullong *)&v, &exp, 100,
-                                                       memory_order_seq_cst, memory_order_relaxed);
+    int ok1 = atomic_compare_exchange_strong_explicit((atomic_ullong *)&v, &exp, 100, memory_order_seq_cst,
+                                                      memory_order_relaxed);
     // CAS failure: v==100, expect 0 -> fail, exp must be updated to 100
     uint64_t exp2 = 0;
-    int ok2 = atomic_compare_exchange_strong_explicit((atomic_ullong *)&v, &exp2, 999,
-                                                       memory_order_seq_cst, memory_order_relaxed);
+    int ok2 = atomic_compare_exchange_strong_explicit((atomic_ullong *)&v, &exp2, 999, memory_order_seq_cst,
+                                                      memory_order_relaxed);
     uint64_t fa = atomic_fetch_add_explicit((atomic_ullong *)&v, 7, memory_order_acq_rel);   // 100->107
     uint64_t fs = atomic_fetch_sub_explicit((atomic_ullong *)&v, 5, memory_order_acq_rel);   // 107->102
     uint64_t fo = atomic_fetch_or_explicit((atomic_ullong *)&v, 0x11, memory_order_seq_cst); // 102|0x11
     uint64_t fx = atomic_fetch_xor_explicit((atomic_ullong *)&v, 0xff, memory_order_seq_cst);
     uint64_t fn = atomic_fetch_and_explicit((atomic_ullong *)&v, 0x0f, memory_order_seq_cst);
     uint64_t sw = atomic_exchange_explicit((atomic_ullong *)&v, 0xdead, memory_order_acq_rel);
-    printf("m64 ok1=%d ok2=%d exp2=%llu fa=%llu fs=%llu fo=%llu fx=%llu fn=%llu sw=%llu v=%llu\n",
-           ok1, ok2, (unsigned long long)exp2, (unsigned long long)fa, (unsigned long long)fs,
-           (unsigned long long)fo, (unsigned long long)fx, (unsigned long long)fn,
-           (unsigned long long)sw, (unsigned long long)v);
+    printf("m64 ok1=%d ok2=%d exp2=%llu fa=%llu fs=%llu fo=%llu fx=%llu fn=%llu sw=%llu v=%llu\n", ok1, ok2,
+           (unsigned long long)exp2, (unsigned long long)fa, (unsigned long long)fs, (unsigned long long)fo,
+           (unsigned long long)fx, (unsigned long long)fn, (unsigned long long)sw, (unsigned long long)v);
 
     uint32_t w = 0;
     uint32_t we = 0;
-    int wok1 = atomic_compare_exchange_strong_explicit((atomic_uint *)&w, &we, 100,
-                                                        memory_order_seq_cst, memory_order_relaxed);
+    int wok1 = atomic_compare_exchange_strong_explicit((atomic_uint *)&w, &we, 100, memory_order_seq_cst,
+                                                       memory_order_relaxed);
     uint32_t we2 = 5;
-    int wok2 = atomic_compare_exchange_strong_explicit((atomic_uint *)&w, &we2, 999,
-                                                        memory_order_seq_cst, memory_order_relaxed);
+    int wok2 = atomic_compare_exchange_strong_explicit((atomic_uint *)&w, &we2, 999, memory_order_seq_cst,
+                                                       memory_order_relaxed);
     uint32_t wfa = atomic_fetch_add_explicit((atomic_uint *)&w, 7, memory_order_acq_rel);
     uint32_t wfo = atomic_fetch_or_explicit((atomic_uint *)&w, 0x11, memory_order_seq_cst);
     uint32_t wsw = atomic_exchange_explicit((atomic_uint *)&w, 0xbeef, memory_order_release);
-    printf("m32 wok1=%d wok2=%d we2=%u wfa=%u wfo=%u wsw=%u w=%u\n",
-           wok1, wok2, we2, wfa, wfo, wsw, w);
+    printf("m32 wok1=%d wok2=%d we2=%u wfa=%u wfo=%u wsw=%u w=%u\n", wok1, wok2, we2, wfa, wfo, wsw, w);
 }
 
 // ---- ABA ----
@@ -61,8 +59,8 @@ static void aba(void) {
     atomic_store_explicit((atomic_ullong *)&v, 0xB, memory_order_seq_cst); // A->B
     atomic_store_explicit((atomic_ullong *)&v, 0xA, memory_order_seq_cst); // B->A
     uint64_t exp = 0xA;
-    int ok = atomic_compare_exchange_strong_explicit((atomic_ullong *)&v, &exp, 0xC,
-                                                     memory_order_acq_rel, memory_order_relaxed);
+    int ok = atomic_compare_exchange_strong_explicit((atomic_ullong *)&v, &exp, 0xC, memory_order_acq_rel,
+                                                     memory_order_relaxed);
     printf("aba ok=%d v=%llu\n", ok, (unsigned long long)v);
 }
 
@@ -70,6 +68,7 @@ static void aba(void) {
 #define NT 16
 #define PER 200000
 static atomic_ullong counter;
+
 static void *addw(void *_) {
     (void)_;
     for (int i = 0; i < PER; i++)
@@ -90,6 +89,7 @@ static atomic_ullong g_flag;
 static atomic_ullong g_payload;
 static atomic_ullong g_violations;
 static atomic_int g_stop;
+
 static void *observer(void *_) {
     (void)_;
     while (!atomic_load_explicit(&g_stop, memory_order_relaxed)) {
@@ -106,20 +106,24 @@ int main(void) {
 
     // contended total
     pthread_t t[NT];
-    for (int i = 0; i < NT; i++) pthread_create(&t[i], 0, addw, 0);
-    for (int i = 0; i < NT; i++) pthread_join(t[i], 0);
-    printf("contended counter=%llu expect=%llu\n",
-           (unsigned long long)counter, (unsigned long long)((uint64_t)NT * PER));
+    for (int i = 0; i < NT; i++)
+        pthread_create(&t[i], 0, addw, 0);
+    for (int i = 0; i < NT; i++)
+        pthread_join(t[i], 0);
+    printf("contended counter=%llu expect=%llu\n", (unsigned long long)counter,
+           (unsigned long long)((uint64_t)NT * PER));
 
     // release/acquire ordering
     pthread_t o[OBS];
-    for (int i = 0; i < OBS; i++) pthread_create(&o[i], 0, observer, 0);
+    for (int i = 0; i < OBS; i++)
+        pthread_create(&o[i], 0, observer, 0);
     for (uint64_t r = 1; r <= ROUNDS; r++) {
         atomic_store_explicit(&g_payload, r, memory_order_release); // publish payload first
         atomic_store_explicit(&g_flag, r, memory_order_release);    // then release the flag
     }
     atomic_store_explicit(&g_stop, 1, memory_order_relaxed);
-    for (int i = 0; i < OBS; i++) pthread_join(o[i], 0);
+    for (int i = 0; i < OBS; i++)
+        pthread_join(o[i], 0);
     printf("ordering violations=%llu\n", (unsigned long long)g_violations);
     return 0;
 }

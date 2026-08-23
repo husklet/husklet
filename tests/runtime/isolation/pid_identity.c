@@ -43,8 +43,8 @@ int main(void) {
     long link_pid = -1;
     if (readlink("/proc/self", link, sizeof link - 1) > 0) link_pid = strtol(link, NULL, 10);
 
-    printf("stat_match=%d status_match=%d link_match=%d pid_positive=%d\n",
-           stat_pid == me, status_pid == me, link_pid == me, me > 0);
+    printf("stat_match=%d status_match=%d link_match=%d pid_positive=%d\n", stat_pid == me, status_pid == me,
+           link_pid == me, me > 0);
 
     long ppid_status = status_field("PPid:");
     printf("ppid_match=%d\n", ppid_status == (long)getppid());

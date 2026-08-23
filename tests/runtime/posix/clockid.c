@@ -3,7 +3,9 @@
 #include <time.h>
 #include <unistd.h>
 
-static long long ns(struct timespec t) { return (long long)t.tv_sec * 1000000000LL + t.tv_nsec; }
+static long long ns(struct timespec t) {
+    return (long long)t.tv_sec * 1000000000LL + t.tv_nsec;
+}
 
 int main(void) {
     struct timespec rt, m1, m2, cpu;
@@ -11,7 +13,8 @@ int main(void) {
     clock_gettime(CLOCK_MONOTONIC, &m1);
     // busy a touch
     volatile long x = 0;
-    for (int i = 0; i < 2000000; i++) x += i;
+    for (int i = 0; i < 2000000; i++)
+        x += i;
     clock_gettime(CLOCK_MONOTONIC, &m2);
     int mono = ns(m2) >= ns(m1);
     int cp = clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cpu) == 0;

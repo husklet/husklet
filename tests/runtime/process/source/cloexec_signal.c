@@ -28,7 +28,9 @@ static int probe_main(char **argv) {
     return (keep_open ? 1 : 0) | (cle_closed ? 2 : 0) | (term_dfl ? 4 : 0) | (usr1_ign ? 8 : 0);
 }
 
-static void handler(int s) { (void)s; }
+static void handler(int s) {
+    (void)s;
+}
 
 int main(int argc, char **argv) {
     if (argc >= 2 && strcmp(argv[1], "probe") == 0) return probe_main(argv);
@@ -36,29 +38,35 @@ int main(int argc, char **argv) {
     // a surviving pipe fd carrying one byte, and a CLOEXEC pipe fd
     int keep_fd, cle_fd;
     int p1[2], p2[2];
-    if (pipe(p1) != 0 || pipe(p2) != 0) { printf("pipe fail\n"); return 1; }
-    if (write(p1[1], "K", 1) != 1) { printf("write fail\n"); return 1; }
-    keep_fd = p1[0];               // no CLOEXEC -> survives exec
+    if (pipe(p1) != 0 || pipe(p2) != 0) {
+        printf("pipe fail\n");
+        return 1;
+    }
+    if (write(p1[1], "K", 1) != 1) {
+        printf("write fail\n");
+        return 1;
+    }
+    keep_fd = p1[0]; // no CLOEXEC -> survives exec
     cle_fd = p2[0];
     fcntl(cle_fd, F_SETFD, FD_CLOEXEC); // survives fork, closed on exec
 
-    signal(SIGTERM, handler);      // custom handler -> reset to DFL on exec
-    signal(SIGUSR1, SIG_IGN);      // ignored -> stays ignored on exec
+    signal(SIGTERM, handler); // custom handler -> reset to DFL on exec
+    signal(SIGUSR1, SIG_IGN); // ignored -> stays ignored on exec
 
     pid_t pid = fork();
     if (pid == 0) {
         char ka[16], ca[16];
         snprintf(ka, sizeof ka, "%d", keep_fd);
         snprintf(ca, sizeof ca, "%d", cle_fd);
-        char *cargv[] = { argv[0], (char *)"probe", ka, ca, NULL };
+        char *cargv[] = {argv[0], (char *)"probe", ka, ca, NULL};
         execv(argv[0], cargv);
         _exit(100);
     }
     int st = 0;
     waitpid(pid, &st, 0);
     int code = WIFEXITED(st) ? WEXITSTATUS(st) : -1;
-    printf("keep_open=%d cloexec_closed=%d term_reset=%d usr1_ign=%d\n",
-           (code & 1) ? 1 : 0, (code & 2) ? 1 : 0, (code & 4) ? 1 : 0, (code & 8) ? 1 : 0);
+    printf("keep_open=%d cloexec_closed=%d term_reset=%d usr1_ign=%d\n", (code & 1) ? 1 : 0, (code & 2) ? 1 : 0,
+           (code & 4) ? 1 : 0, (code & 8) ? 1 : 0);
     printf("exec_cloexec_signal done\n");
     return 0;
 }

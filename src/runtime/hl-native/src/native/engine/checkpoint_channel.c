@@ -125,7 +125,8 @@ void hl_ckpt_channel_test_claimed_pid(uint64_t claimed_pid) {
     (void)claimed_pid;
 }
 
-void hl_ckpt_channel_forget_for_test(void) {}
+void hl_ckpt_channel_forget_for_test(void) {
+}
 
 int hl_ckpt_channel_current_for_test(void) {
     return -1;
@@ -254,7 +255,10 @@ static void checkpoint_channel_poison(void) {
 }
 #if defined(HL_NATIVE_TEST_HOOKS)
 static uint64_t checkpoint_test_claimed_pid;
-void hl_ckpt_channel_test_claimed_pid(uint64_t claimed_pid) { checkpoint_test_claimed_pid = claimed_pid; }
+
+void hl_ckpt_channel_test_claimed_pid(uint64_t claimed_pid) {
+    checkpoint_test_claimed_pid = claimed_pid;
+}
 
 /* Forgets this process's cached channel WITHOUT closing it.
  *
@@ -392,7 +396,8 @@ int hl_ckpt_channel_acquire(void) {
         (void)close(checkpoint_channel);
         checkpoint_channel = -1;
     }
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) return checkpoint_channel_failed("create its channel socket pair");
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0)
+        return checkpoint_channel_failed("create its channel socket pair");
     hello.magic = HL_CKPT_STREAM_MAGIC_HELLO;
     hello.abi = HL_CKPT_STREAM_ABI;
     hello.host_pid = (uint64_t)getpid();
@@ -539,8 +544,7 @@ int hl_ckpt_channel_authenticate_peer(int descriptor, uint64_t claimed_pid, uint
 #elif defined(__APPLE__)
     pid_t pid = 0;
     socklen_t size = (socklen_t)sizeof pid;
-    if (getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERPID, &pid, &size) != 0 ||
-        size != (socklen_t)sizeof pid || pid <= 0)
+    if (getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERPID, &pid, &size) != 0 || size != (socklen_t)sizeof pid || pid <= 0)
         return -1;
     authenticated = (uint64_t)pid;
 #else

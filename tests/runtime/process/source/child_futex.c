@@ -18,12 +18,18 @@
 static atomic_int word = 0;
 static volatile int woke = 0;
 
-static long fwait(int *a, int e) { return syscall(SYS_futex, a, FUTEX_WAIT | FUTEX_PRIVATE_FLAG, e, NULL, NULL, 0); }
-static long fwake(int *a, int n) { return syscall(SYS_futex, a, FUTEX_WAKE | FUTEX_PRIVATE_FLAG, n, NULL, NULL, 0); }
+static long fwait(int *a, int e) {
+    return syscall(SYS_futex, a, FUTEX_WAIT | FUTEX_PRIVATE_FLAG, e, NULL, NULL, 0);
+}
+
+static long fwake(int *a, int n) {
+    return syscall(SYS_futex, a, FUTEX_WAKE | FUTEX_PRIVATE_FLAG, n, NULL, NULL, 0);
+}
 
 static void *waiter(void *arg) {
     (void)arg;
-    while (atomic_load(&word) == 0) fwait((int *)&word, 0);
+    while (atomic_load(&word) == 0)
+        fwait((int *)&word, 0);
     woke = 1;
     return NULL;
 }
@@ -33,13 +39,13 @@ static void *waiter(void *arg) {
 static int child_body(void) {
     int ok = 0;
     pthread_t t;
-    pthread_create(&t, NULL, waiter, NULL);            // a peer thread first appears only HERE, in the child
-    struct timespec s = { .tv_sec = 0, .tv_nsec = 20000000 };
-    nanosleep(&s, NULL);                               // let it park in the private-futex bucket
+    pthread_create(&t, NULL, waiter, NULL); // a peer thread first appears only HERE, in the child
+    struct timespec s = {.tv_sec = 0, .tv_nsec = 20000000};
+    nanosleep(&s, NULL); // let it park in the private-futex bucket
     atomic_store(&word, 1);
     long n = fwake((int *)&word, 1);
     pthread_join(t, NULL);
-    ok += (woke == 1);                                 // the parked waiter was woken through the private table
+    ok += (woke == 1); // the parked waiter was woken through the private table
     ok += (n >= 0);
 
     int efd = eventfd(0, 0);
@@ -49,7 +55,7 @@ static int child_body(void) {
     ok += (read(efd, &v, sizeof v) == (ssize_t)sizeof v && v == 7);
     close(efd);
 
-    pid_t g = fork();                                  // nested fork from the (now multi-threaded-history) child
+    pid_t g = fork(); // nested fork from the (now multi-threaded-history) child
     if (g == 0) _exit(3);
     int gst = 0;
     if (waitpid(g, &gst, 0) == g && WIFEXITED(gst)) ok += (WEXITSTATUS(gst) == 3);
@@ -58,11 +64,14 @@ static int child_body(void) {
 
 int main(void) {
     long sum = 0;
-    for (int i = 0; i < 4; i++) {                      // main stays single-threaded across every fork
+    for (int i = 0; i < 4; i++) { // main stays single-threaded across every fork
         pid_t p = fork();
         if (p == 0) _exit(child_body());
         int st = 0;
-        if (waitpid(p, &st, 0) != p || !WIFEXITED(st)) { printf("fork_child_futex reap_fail@%d\n", i); return 1; }
+        if (waitpid(p, &st, 0) != p || !WIFEXITED(st)) {
+            printf("fork_child_futex reap_fail@%d\n", i);
+            return 1;
+        }
         sum += WEXITSTATUS(st);
     }
     printf("fork_child_futex rounds=4 sum=%ld\n", sum);

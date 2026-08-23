@@ -7,7 +7,11 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t ran;
-static void h(int s) { (void)s; ran++; }
+
+static void h(int s) {
+    (void)s;
+    ran++;
+}
 
 int main(void) {
     signal(SIGUSR1, h);
@@ -18,7 +22,7 @@ int main(void) {
 
     pid_t pid = fork();
     if (pid == 0) {
-        raise(SIGUSR1);            // stays pending (inherited block)
+        raise(SIGUSR1); // stays pending (inherited block)
         sigset_t pend;
         sigpending(&pend);
         int pending = sigismember(&pend, SIGUSR1);

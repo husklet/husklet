@@ -20,7 +20,10 @@ static long stat_field(const char *path, int idx /*1-based*/) {
     int nf = 0;
     long val = -1;
     for (char *t = strtok(b, " \n"); t; t = strtok(NULL, " \n")) {
-        if (++nf == idx) { val = atol(t); break; }
+        if (++nf == idx) {
+            val = atol(t);
+            break;
+        }
     }
     return val;
 }
@@ -28,7 +31,10 @@ static long stat_field(const char *path, int idx /*1-based*/) {
 int main(void) {
     pid_t parent = getpid();
     int pfd[2];
-    if (pipe(pfd) != 0) { printf("forkself ok=0\n"); return 0; }
+    if (pipe(pfd) != 0) {
+        printf("forkself ok=0\n");
+        return 0;
+    }
     pid_t child = fork();
     if (child == 0) {
         char b[8192], v[64];

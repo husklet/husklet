@@ -25,7 +25,8 @@ static uint16_t checksum(const void *data, size_t size) {
         size -= 2;
     }
     if (size) sum += (uint32_t)bytes[0] << 8;
-    while (sum >> 16) sum = (sum & 0xffffu) + (sum >> 16);
+    while (sum >> 16)
+        sum = (sum & 0xffffu) + (sum >> 16);
     return htons((uint16_t)~sum);
 }
 

@@ -1,5 +1,6 @@
 // Cohesive process-syscall handlers. Included by ../proc.c after shared process state.
-static int svc_proc_122(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_122(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 122: {
         size_t n = (size_t)a1;
@@ -30,7 +31,9 @@ static int svc_proc_122(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     }
     return 1;
 }
-static int svc_proc_123(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+
+static int svc_proc_123(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 123: {
         size_t n = (size_t)a1;
@@ -74,7 +77,8 @@ static int svc_proc_123(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_124(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_124(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 124: G_RET(c) = 0; break;
     // ---- sched_setscheduler / sched_*param arg-validation family (LTP sched_*01..03). hl has no real
@@ -86,7 +90,8 @@ static int svc_proc_124(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_125(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_125(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 125: {
         int lo, hi;
@@ -103,7 +108,8 @@ static int svc_proc_125(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_126(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_126(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 126: {
         int lo, hi;
@@ -121,7 +127,8 @@ static int svc_proc_126(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_127(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_127(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 127: {
         int pid = (int)a0;
@@ -146,7 +153,8 @@ static int svc_proc_127(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_140(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_140(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 140: {
         // setpriority(which, who, prio). Linux CLAMPS the resulting nice to [-20, 19]; macOS PRIO_MAX is
@@ -173,7 +181,8 @@ static int svc_proc_140(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_141(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_141(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 141: {
         // getpriority(which, who) -> Linux raw kernel encoding (20 - nice). Linux validates `which` first
@@ -202,7 +211,8 @@ static int svc_proc_141(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_146(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_146(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 146: {
         cred_init();
@@ -225,7 +235,8 @@ static int svc_proc_146(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_144(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_144(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 144: {
         cred_init();
@@ -248,7 +259,8 @@ static int svc_proc_144(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_147(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_147(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 147: {
         cred_init();
@@ -272,7 +284,8 @@ static int svc_proc_147(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_149(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_149(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 149: {
         cred_init();
@@ -296,7 +309,8 @@ static int svc_proc_149(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_145(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_145(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 145: {
         cred_init();
@@ -321,7 +335,8 @@ static int svc_proc_145(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_143(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_143(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 143: {
         cred_init();
@@ -346,7 +361,8 @@ static int svc_proc_143(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_151(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_151(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 151: {
         cred_init();
@@ -367,7 +383,8 @@ static int svc_proc_151(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_152(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_152(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 152: {
         cred_init();
@@ -382,7 +399,8 @@ static int svc_proc_152(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_148(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_148(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 148: {
         // getresuid(r,e,s) -- report the overlay so a runtime drop is observed (apt verifies all three).
@@ -406,7 +424,8 @@ static int svc_proc_148(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_150(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_150(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 150: {
         // getresgid(r,e,s) -- report the overlay (see getresuid above). NULL/unwritable pointer -> EFAULT.
@@ -433,7 +452,8 @@ static int svc_proc_150(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return 1;
 }
 
-static int svc_proc_154(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_154(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 154: {
         // Map the guest's view of the init (pid/pgid 1) to its real host pid/group, then do the REAL setpgid.

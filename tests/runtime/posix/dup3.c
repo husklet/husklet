@@ -14,7 +14,8 @@ int main(void) {
     int cloexec = (fcntl(50, F_GETFD) & FD_CLOEXEC) != 0;
     // dup3(x,x,..) must fail EINVAL (unlike dup2 which would no-op)
     int sameerr = dup3(fd, fd, 0) < 0 && errno == EINVAL;
-    close(fd); close(50);
+    close(fd);
+    close(50);
     unlink(path);
     printf("dup3 ok=%d cloexec=%d sameerr=%d\n", dup3ok, cloexec, sameerr);
     return 0;

@@ -18,35 +18,56 @@
 static uint64_t g_q[4] = {0x1122334455667788ull, 0x0fedcba987654321ull, 0xffffffffffffffffull, 0};
 static uint32_t g_w[4] = {0xdeadbeefu, 0x00c0ffeeu, 0x80000001u, 0};
 static uint16_t g_h[4] = {0xabcd, 0x0001, 0x8000, 0};
-static uint8_t  g_b[8]  = {0x5a, 0xff, 0x01, 0x80, 0, 0, 0, 0};
+static uint8_t g_b[8] = {0x5a, 0xff, 0x01, 0x80, 0, 0, 0, 0};
 
 // ldapr* wrappers. `.arch armv8.3-a` enables FEAT_RCPC for the assembler so the exact RCpc opcode is
 // emitted even when the compile's default -march (no per-test flags in the harness) predates it.
-static uint64_t ld_q(const uint64_t *p){ uint64_t v; __asm__ volatile(".arch armv8.3-a\n\tldapr %0,[%1]" :"=r"(v):"r"(p):"memory"); return v; }
-static uint32_t ld_w(const uint32_t *p){ uint32_t v; __asm__ volatile(".arch armv8.3-a\n\tldapr %w0,[%1]":"=r"(v):"r"(p):"memory"); return v; }
-static uint32_t ld_h(const uint16_t *p){ uint32_t v; __asm__ volatile(".arch armv8.3-a\n\tldaprh %w0,[%1]":"=r"(v):"r"(p):"memory"); return v; }
-static uint32_t ld_b(const uint8_t  *p){ uint32_t v; __asm__ volatile(".arch armv8.3-a\n\tldaprb %w0,[%1]":"=r"(v):"r"(p):"memory"); return v; }
+static uint64_t ld_q(const uint64_t *p) {
+    uint64_t v;
+    __asm__ volatile(".arch armv8.3-a\n\tldapr %0,[%1]" : "=r"(v) : "r"(p) : "memory");
+    return v;
+}
+
+static uint32_t ld_w(const uint32_t *p) {
+    uint32_t v;
+    __asm__ volatile(".arch armv8.3-a\n\tldapr %w0,[%1]" : "=r"(v) : "r"(p) : "memory");
+    return v;
+}
+
+static uint32_t ld_h(const uint16_t *p) {
+    uint32_t v;
+    __asm__ volatile(".arch armv8.3-a\n\tldaprh %w0,[%1]" : "=r"(v) : "r"(p) : "memory");
+    return v;
+}
+
+static uint32_t ld_b(const uint8_t *p) {
+    uint32_t v;
+    __asm__ volatile(".arch armv8.3-a\n\tldaprb %w0,[%1]" : "=r"(v) : "r"(p) : "memory");
+    return v;
+}
 
 // The per-width loops have constant trip counts and are fully unrolled at -O2, so a single pass
 // never observes an ldapr site twice and the block is never admitted to native translation.
 #define REPEATS 4000
 
-int main(void){
+int main(void) {
     uint64_t acc = 0;
     // Each round recomputes acc from zero over the same constants, so the printed value is identical
     // to a single pass; the repeat count is what makes the ldapr sites hot enough to translate.
     volatile int repeats = REPEATS;
     for (int round = 0; round < repeats; round++) {
         acc = 0;
-        for (int i = 0; i < 4; i++) acc = acc * 1000003 + ld_q(&g_q[i]);
-        for (int i = 0; i < 4; i++) acc = acc * 1000003 + ld_w(&g_w[i]);
-        for (int i = 0; i < 4; i++) acc = acc * 1000003 + ld_h(&g_h[i]);
-        for (int i = 0; i < 8; i++) acc = acc * 1000003 + ld_b(&g_b[i]);
+        for (int i = 0; i < 4; i++)
+            acc = acc * 1000003 + ld_q(&g_q[i]);
+        for (int i = 0; i < 4; i++)
+            acc = acc * 1000003 + ld_w(&g_w[i]);
+        for (int i = 0; i < 4; i++)
+            acc = acc * 1000003 + ld_h(&g_h[i]);
+        for (int i = 0; i < 8; i++)
+            acc = acc * 1000003 + ld_b(&g_b[i]);
     }
     // spot values prove per-width zero/sign handling (ldapr* zero-extend to X)
-    printf("ldapr q0=%016llx w0=%08x h0=%04x b3=%02x acc=%016llx\n",
-        (unsigned long long)ld_q(&g_q[0]), ld_w(&g_w[0]),
-        (unsigned)ld_h(&g_h[0]), (unsigned)ld_b(&g_b[3]),
-        (unsigned long long)acc);
+    printf("ldapr q0=%016llx w0=%08x h0=%04x b3=%02x acc=%016llx\n", (unsigned long long)ld_q(&g_q[0]), ld_w(&g_w[0]),
+           (unsigned)ld_h(&g_h[0]), (unsigned)ld_b(&g_b[3]), (unsigned long long)acc);
     return 0;
 }

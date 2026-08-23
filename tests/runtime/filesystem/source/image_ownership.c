@@ -33,23 +33,20 @@ int main(void) {
     // mismatch names which step broke.
     unsigned chowned_user = 0, chowned_group = 0;
     int fd = open("/etc/passwd", O_WRONLY | O_APPEND);
-    if (fd < 0) chowned_user = 80000 + errno;
-    else if (close(fd) != 0) return 5;
-    else if (chown("/etc/passwd", CHOWN_UID, CHOWN_GID) != 0) chowned_user = 90000 + errno;
-    else if (owner("/etc/passwd", &chowned_user, &chowned_group) != 0) return 6;
+    if (fd < 0)
+        chowned_user = 80000 + errno;
+    else if (close(fd) != 0)
+        return 5;
+    else if (chown("/etc/passwd", CHOWN_UID, CHOWN_GID) != 0)
+        chowned_user = 90000 + errno;
+    else if (owner("/etc/passwd", &chowned_user, &chowned_group) != 0)
+        return 6;
 
     // Non-vacuity: the two declared owners differ from each other, so the answer is per-path; and
     // /etc/shadow's declared gid is not the group the engine process would have reported.
     unsigned distinct = shadow_group != passwd_group && shadow_user == passwd_user;
 
-    printf(
-        "image-ownership shadow=%u:%u passwd=%u:%u chowned=%u:%u distinct=%u\n",
-        shadow_user,
-        shadow_group,
-        passwd_user,
-        passwd_group,
-        chowned_user,
-        chowned_group,
-        distinct);
+    printf("image-ownership shadow=%u:%u passwd=%u:%u chowned=%u:%u distinct=%u\n", shadow_user, shadow_group,
+           passwd_user, passwd_group, chowned_user, chowned_group, distinct);
     return 0;
 }

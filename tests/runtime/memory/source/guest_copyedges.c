@@ -12,7 +12,8 @@ static int fill(int descriptor, unsigned char seed, size_t length) {
     unsigned char bytes[4096];
     for (size_t offset = 0; offset < length;) {
         size_t chunk = length - offset < sizeof bytes ? length - offset : sizeof bytes;
-        for (size_t index = 0; index < chunk; ++index) bytes[index] = (unsigned char)(seed + offset + index);
+        for (size_t index = 0; index < chunk; ++index)
+            bytes[index] = (unsigned char)(seed + offset + index);
         if (write(descriptor, bytes, chunk) != (ssize_t)chunk) return 0;
         offset += chunk;
     }
@@ -30,8 +31,7 @@ int main(void) {
 
     unsigned char *area = mmap(NULL, 5 * page, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (area == MAP_FAILED) return 3;
-    unsigned char *logical0 =
-        mmap(area + page, page, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_SHARED, backing, page);
+    unsigned char *logical0 = mmap(area + page, page, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_SHARED, backing, page);
     unsigned char *direct =
         mmap(area + 2 * page, page, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     unsigned char *logical1 =
@@ -41,15 +41,16 @@ int main(void) {
     int pipefd[2];
     if (pipe(pipefd) != 0 || !fill(pipefd[1], 19, 3 * page)) return 5;
     ssize_t three = read(pipefd[0], logical0, 3 * page);
-    int three_ok = three == (ssize_t)(3 * page) && logical0[0] == 19 &&
-                   direct[page - 1] == (unsigned char)(18) && logical1[page - 1] == (unsigned char)(18);
+    int three_ok = three == (ssize_t)(3 * page) && logical0[0] == 19 && direct[page - 1] == (unsigned char)(18) &&
+                   logical1[page - 1] == (unsigned char)(18);
     close(pipefd[0]);
     close(pipefd[1]);
 
-    struct iovec *vectors = mmap(NULL, 1025 * sizeof(*vectors), PROT_READ | PROT_WRITE,
-                                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    struct iovec *vectors =
+        mmap(NULL, 1025 * sizeof(*vectors), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (vectors == MAP_FAILED) return 6;
-    for (size_t index = 0; index < 1025; ++index) vectors[index] = (struct iovec){logical0, 0};
+    for (size_t index = 0; index < 1025; ++index)
+        vectors[index] = (struct iovec){logical0, 0};
     vectors[1023] = (struct iovec){logical0, 1};
     if (pipe(pipefd) != 0) return 7;
     errno = 0;
@@ -112,7 +113,7 @@ int main(void) {
     close(pipefd[0]);
     close(pipefd[1]);
 
-    printf("guest-copy-edges three-span=%d iov-boundary=%d iov-over=%d iov-overflow=%d readonly=%d smc=%d\n",
-           three_ok, boundary_ok, over_count_ok, overflow_ok, readonly_ok, smc_ok);
+    printf("guest-copy-edges three-span=%d iov-boundary=%d iov-over=%d iov-overflow=%d readonly=%d smc=%d\n", three_ok,
+           boundary_ok, over_count_ok, overflow_ok, readonly_ok, smc_ok);
     return !(three_ok && boundary_ok && over_count_ok && overflow_ok && readonly_ok && smc_ok);
 }

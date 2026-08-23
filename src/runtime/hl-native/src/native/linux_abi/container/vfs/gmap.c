@@ -42,12 +42,11 @@ typedef struct hl_exec_mapping {
 static hl_exec_mapping g_exec_mappings[HL_EXEC_MAPPING_CAPACITY];
 static size_t g_exec_mapping_count;
 
-int hl_gmap_host_release_span(uint64_t address, uint64_t length, uint64_t granularity, uint64_t *start,
-                              uint64_t *end) {
+int hl_gmap_host_release_span(uint64_t address, uint64_t length, uint64_t granularity, uint64_t *start, uint64_t *end) {
     uint64_t low;
     uint64_t high;
-    if (start == NULL || end == NULL || length == 0 || granularity == 0 ||
-        (granularity & (granularity - 1)) != 0 || address > UINT64_MAX - length)
+    if (start == NULL || end == NULL || length == 0 || granularity == 0 || (granularity & (granularity - 1)) != 0 ||
+        address > UINT64_MAX - length)
         return 0;
     low = address & ~(granularity - 1);
     high = address + length;

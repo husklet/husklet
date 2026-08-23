@@ -5,7 +5,8 @@
 
 int main(void) {
     time_t t = 1700000000; // 2023-11-14T22:13:20Z
-    struct tm tmv; gmtime_r(&t, &tmv);
+    struct tm tmv;
+    gmtime_r(&t, &tmv);
     char buf[64];
     strftime(buf, sizeof buf, "%Y-%m-%d %H:%M:%S", &tmv);
     int d1 = strcmp(buf, "2023-11-14 22:13:20") == 0;

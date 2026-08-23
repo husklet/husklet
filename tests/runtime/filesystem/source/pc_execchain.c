@@ -17,14 +17,16 @@ int main(int argc, char **argv) {
         if (*p == '/') base = p + 1;
     if (strcmp(base, "pcapplet") == 0) { // applet epoch (post-exec)
         volatile unsigned long h = 5381;
-        for (int i = 0; i < 200000; i++) h = h * 31 + (unsigned)i;
+        for (int i = 0; i < 200000; i++)
+            h = h * 31 + (unsigned)i;
         (void)h;
         printf("pcache execchain applet ok argc=%d\n", argc);
         return 0;
     }
     // driver epoch: translate a deterministic slice, then switch applets via execve(self)
     volatile unsigned long h = 5381;
-    for (int i = 0; i < 100000; i++) h = h * 33 + (unsigned)i;
+    for (int i = 0; i < 100000; i++)
+        h = h * 33 + (unsigned)i;
     (void)h;
     char *na[] = {"pcapplet", NULL};
     execv(argv[0], na); // argv[0] is the absolute guest path (matrix + lifecycle lane pass it)

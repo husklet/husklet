@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <poll.h>
+
 int main(void) {
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv)) return 1;
@@ -53,8 +54,8 @@ int main(void) {
     int pr = poll(&pf, 1, 2000);
     uint64_t expirations = 0;
     ssize_t n = (newfd >= 0) ? read(newfd, &expirations, 8) : -1;
-    printf("scm_rights=%d distinct_fd=%d poll_ready=%d bytes=%zd expirations=%llu\n",
-           is_rights, newfd != tfd, pr == 1 && (pf.revents & POLLIN) != 0, n,
+    printf("scm_rights=%d distinct_fd=%d poll_ready=%d bytes=%zd expirations=%llu\n", is_rights, newfd != tfd,
+           pr == 1 && (pf.revents & POLLIN) != 0, n,
            (unsigned long long)expirations); // 1 1 1 8 1
     return 0;
 }

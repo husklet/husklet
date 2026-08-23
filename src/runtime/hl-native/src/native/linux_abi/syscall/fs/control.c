@@ -1,7 +1,7 @@
 #include "../../host_errno.h"
 
-static int ioctl_terminal_request(struct cpu *c, int fd, unsigned long rq, void *arg, uint64_t a2,
-                                  int tfd, int is_master) {
+static int ioctl_terminal_request(struct cpu *c, int fd, unsigned long rq, void *arg, uint64_t a2, int tfd,
+                                  int is_master) {
     switch (rq) {
     case 0x5401: {
         struct termios t;
@@ -375,7 +375,7 @@ static void ioctl_descriptor_request(struct cpu *c, int fd, unsigned long rq, vo
 }
 
 static void svc_fs_control_29(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                            uint64_t a4, uint64_t a5) {
+                              uint64_t a4, uint64_t a5) {
     switch (nr) {
     case 29: {
         int fd = (int)a0;
@@ -506,8 +506,7 @@ static void svc_fs_control_29(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t 
         } break;
         default: break;
         }
-        if (!ioctl_terminal_request(c, fd, rq, arg, a2, tfd, is_master))
-            ioctl_descriptor_request(c, fd, rq, arg, a2);
+        if (!ioctl_terminal_request(c, fd, rq, arg, a2, tfd, is_master)) ioctl_descriptor_request(c, fd, rq, arg, a2);
         if (pts_slave >= 0) close(pts_slave); // transient slave used to service a master's termios/winsize op
         if ((int64_t)G_RET(c) >= 0 && rq == 0x8912 && ioctl_nested_guest) {
             int32_t produced;
@@ -528,12 +527,10 @@ static void svc_fs_control_29(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t 
     }
 }
 
-static int svc_fs_control(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                         uint64_t a4, uint64_t a5) {
+static int svc_fs_control(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                          uint64_t a5) {
     switch (nr) {
-    case 29:
-        svc_fs_control_29(c, nr, a0, a1, a2, a3, a4, a5);
-        return 1;
+    case 29: svc_fs_control_29(c, nr, a0, a1, a2, a3, a4, a5); return 1;
     default: return 0;
     }
 }

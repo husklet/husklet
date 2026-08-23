@@ -4,9 +4,11 @@
 #include <string.h>
 
 int main(void) {
-    char *buf = NULL; size_t sz = 0;
+    char *buf = NULL;
+    size_t sz = 0;
     FILE *m = open_memstream(&buf, &sz);
-    for (int i = 0; i < 100; i++) fprintf(m, "%02d", i);
+    for (int i = 0; i < 100; i++)
+        fprintf(m, "%02d", i);
     fflush(m);
     int d1 = sz == 200;
     int d2 = strncmp(buf, "000102", 6) == 0;

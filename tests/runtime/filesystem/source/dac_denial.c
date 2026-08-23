@@ -123,28 +123,15 @@ int main(void) {
 
     // Non-vacuity: both children really became the uid they asked for, the two differ from each
     // other and from root, and the file the second child was refused really belongs to the first.
-    unsigned distinct = first.live_uid == FIRST_UID && second.live_uid == SECOND_UID
-                        && first.live_uid != second.live_uid && first.live_uid != (unsigned)getuid()
-                        && (unsigned)getuid() == 0 && first.own_file_uid == FIRST_UID;
+    unsigned distinct = first.live_uid == FIRST_UID && second.live_uid == SECOND_UID &&
+                        first.live_uid != second.live_uid && first.live_uid != (unsigned)getuid() &&
+                        (unsigned)getuid() == 0 && first.own_file_uid == FIRST_UID;
 
-    printf(
-        "dac-denial closed=%04o:%u denied=%u:%u chmod=%u chown=%u times=%u now=%u mixed=%u high-uid=%u "
-        "open=%u own-chmod=%u supplementary-chown=%u nofollow=%u "
-        "distinct=%u\n",
-        first.closed_mode,
-        first.closed_uid,
-        first.closed_denied,
-        second.closed_denied,
-        second.chmod_denied,
-        second.chown_denied,
-        second.times_denied,
-        second.now_denied,
-        second.mixed_denied,
-        first.high_uid_denied,
-        first.open_allowed,
-        first.own_chmod,
-        first.supplementary_chown,
-        first.nofollow_preserved,
-        distinct);
+    printf("dac-denial closed=%04o:%u denied=%u:%u chmod=%u chown=%u times=%u now=%u mixed=%u high-uid=%u "
+           "open=%u own-chmod=%u supplementary-chown=%u nofollow=%u "
+           "distinct=%u\n",
+           first.closed_mode, first.closed_uid, first.closed_denied, second.closed_denied, second.chmod_denied,
+           second.chown_denied, second.times_denied, second.now_denied, second.mixed_denied, first.high_uid_denied,
+           first.open_allowed, first.own_chmod, first.supplementary_chown, first.nofollow_preserved, distinct);
     return 0;
 }

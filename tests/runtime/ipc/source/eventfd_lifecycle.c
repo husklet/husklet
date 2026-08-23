@@ -14,8 +14,8 @@ static int send_fd(int socket, int fd) {
     char byte = 'x';
     struct iovec vector = {&byte, 1};
     char control[CMSG_SPACE(sizeof(fd))] = {0};
-    struct msghdr message = {.msg_iov = &vector, .msg_iovlen = 1, .msg_control = control,
-                             .msg_controllen = sizeof(control)};
+    struct msghdr message = {
+        .msg_iov = &vector, .msg_iovlen = 1, .msg_control = control, .msg_controllen = sizeof(control)};
     struct cmsghdr *header = CMSG_FIRSTHDR(&message);
     header->cmsg_level = SOL_SOCKET;
     header->cmsg_type = SCM_RIGHTS;
@@ -28,8 +28,8 @@ static int receive_fd(int socket) {
     char byte;
     struct iovec vector = {&byte, 1};
     char control[CMSG_SPACE(sizeof(int))] = {0};
-    struct msghdr message = {.msg_iov = &vector, .msg_iovlen = 1, .msg_control = control,
-                             .msg_controllen = sizeof(control)};
+    struct msghdr message = {
+        .msg_iov = &vector, .msg_iovlen = 1, .msg_control = control, .msg_controllen = sizeof(control)};
     struct cmsghdr *header;
     int fd = -1;
     if (recvmsg(socket, &message, MSG_CMSG_CLOEXEC) != 1) return -1;
@@ -72,8 +72,8 @@ static int receiver(int socket) {
     woke = epoll_wait(epoll, &ready, 1, 1000) == 1 && ready.data.u64 == 7;
     close(epoll);
     close(copy);
-    printf("eventfd_lifecycle cloexec=%d semaphore=%d empty=%d shared_flags=%d woke=%d\n", cloexec, semaphore,
-           empty, shared_flags, woke);
+    printf("eventfd_lifecycle cloexec=%d semaphore=%d empty=%d shared_flags=%d woke=%d\n", cloexec, semaphore, empty,
+           shared_flags, woke);
     fflush(stdout);
     return cloexec && semaphore && empty && shared_flags && woke ? 0 : 16;
 }

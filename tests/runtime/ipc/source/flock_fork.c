@@ -8,21 +8,30 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/wait.h>
+
 static int byte_write(int fd, char value) {
     ssize_t result;
-    do result = write(fd, &value, 1); while (result < 0 && errno == EINTR);
+    do
+        result = write(fd, &value, 1);
+    while (result < 0 && errno == EINTR);
     return result == 1;
 }
+
 static int byte_read(int fd) {
     char value;
     ssize_t result;
-    do result = read(fd, &value, 1); while (result < 0 && errno == EINTR);
+    do
+        result = read(fd, &value, 1);
+    while (result < 0 && errno == EINTR);
     return result == 1;
 }
+
 int main(void) {
-    char path[] = "/tmp/hl_flock_XXXXXX"; int fd = mkstemp(path);
+    char path[] = "/tmp/hl_flock_XXXXXX";
+    int fd = mkstemp(path);
     flock(fd, LOCK_EX);
-    int p[2], ready[2]; if (pipe(p) != 0 || pipe(ready) != 0) return 1;
+    int p[2], ready[2];
+    if (pipe(p) != 0 || pipe(ready) != 0) return 1;
     pid_t pid = fork();
     if (pid == 0) {
         int cfd = open(path, O_RDWR);
@@ -32,11 +41,14 @@ int main(void) {
         int ok = flock(cfd, LOCK_EX | LOCK_NB) == 0;
         printf("flock child_blocked=%d child_acquired=%d\n", blocked, ok);
         fflush(stdout);
-        close(cfd); _exit(0);
+        close(cfd);
+        _exit(0);
     }
     if (!byte_read(ready[0])) return 1;
     flock(fd, LOCK_UN);
     if (!byte_write(p[1], 'g')) return 1;
-    waitpid(pid, 0, 0); close(fd); unlink(path);
+    waitpid(pid, 0, 0);
+    close(fd);
+    unlink(path);
     return 0;
 }

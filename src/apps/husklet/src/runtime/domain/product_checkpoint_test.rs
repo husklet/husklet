@@ -61,6 +61,8 @@ struct Fixture {
     domain: Domain,
     rootfs: PathBuf,
     helper_log: PathBuf,
+    container_state: PathBuf,
+    container_journal: PathBuf,
     phases: Vec<String>,
 }
 
@@ -168,7 +170,7 @@ impl Fixture {
             let signature = context("derive workspace signature", configuration.signature())?;
             let configuration_signature = context(
                 "derive workspace configuration signature",
-                configuration.configuration_signature(),
+                configuration.identity_signature(),
             )?;
             let runtime_signature = configuration.runtime_signature();
             let session = context(
@@ -195,21 +197,34 @@ impl Fixture {
                 "provision seeded workspace session",
                 session.provision(&containers).await,
             )?;
+            let state_directory = container_storage.join("state/containers");
+            let container_state = state_directory.join(format!("{}.json", seeded.id));
+            let container_journal = state_directory.join(format!("{}.journal", seeded.id));
             drop(containers);
 
             let domain = Domain::new(&workspace);
             let helper_log = temporary.path().join("domain-worker.log");
-            Ok::<_, Box<dyn std::error::Error>>((home, workspace, domain, rootfs, helper_log))
+            Ok::<_, Box<dyn std::error::Error>>((
+                home,
+                workspace,
+                domain,
+                rootfs,
+                helper_log,
+                container_state,
+                container_journal,
+            ))
         }
         .await;
         match prepared {
-            Ok((home, workspace, domain, rootfs, helper_log)) => Ok(Self {
+            Ok((home, workspace, domain, rootfs, helper_log, container_state, container_journal)) => Ok(Self {
                 temporary: Some(temporary),
                 home,
                 workspace,
                 domain,
                 rootfs,
                 helper_log,
+                container_state,
+                container_journal,
                 phases: Vec::new(),
             }),
             Err(error) => {
@@ -279,6 +294,35 @@ impl Fixture {
         }
     }
 
+    fn wait_for_primary_growth(&self, path: &Path, previous: u64, timeout: Duration) -> TestResult {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if std::fs::metadata(path).is_ok_and(|metadata| metadata.len() > previous) {
+                return Ok(());
+            }
+            if let Some(result) = std::fs::read(&self.container_state)
+                .ok()
+                .and_then(|bytes| terminal_container_result(&bytes))
+            {
+                let journal = std::fs::read(&self.container_journal)
+                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                    .unwrap_or_else(|error| format!("<journal unavailable: {error}>"));
+                let helper = std::fs::read_to_string(&self.helper_log)
+                    .unwrap_or_else(|error| format!("<helper log unavailable: {error}>"));
+                return Err(format!(
+                    "primary container exited before {} progressed beyond {previous} bytes: result={result}; \
+                     journal={journal:?}; helper={helper:?}",
+                    path.display()
+                )
+                .into());
+            }
+            if Instant::now() >= deadline {
+                return Err(format!("{} did not progress beyond {previous} bytes", path.display()).into());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     fn close_continue(&mut self, cycle: usize, child: &mut DomainChild) -> TestResult<BTreeSet<u32>> {
         let old_tree = process_tree(child.id())?;
         child.known.extend(old_tree.iter().copied());
@@ -337,6 +381,31 @@ impl Fixture {
     }
 }
 
+fn terminal_container_result(bytes: &[u8]) -> Option<serde_json::Value> {
+    let state = serde_json::from_slice::<serde_json::Value>(bytes).ok()?;
+    (state
+        .pointer("/container/state/status")
+        .and_then(serde_json::Value::as_str)
+        == Some("exited"))
+    .then(|| {
+        state
+            .pointer("/container/state/result")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null)
+    })
+}
+
+#[test]
+fn terminal_container_state_ends_the_progress_wait() {
+    let exited = br#"{"container":{"state":{"status":"exited","result":{"kind":"code","value":91}}}}"#;
+    let running = br#"{"container":{"state":{"status":"running"}}}"#;
+    assert_eq!(
+        terminal_container_result(exited).and_then(|result| result["value"].as_i64()),
+        Some(91)
+    );
+    assert_eq!(terminal_container_result(running), None);
+}
+
 #[test]
 fn product_checkpoint_domain_worker() {
     let Some(name) = std::env::var_os(CHILD_ENV) else {
@@ -388,7 +457,7 @@ fn run_cycles(fixture: &mut Fixture) -> TestResult {
     let failure = fixture.rootfs.join("tmp/husklet-continue-failure");
 
     let mut domain = fixture.spawn_domain(0)?;
-    wait_for_growth(&progress, 0, budget(PHASE))?;
+    fixture.wait_for_primary_growth(&progress, 0, budget(PHASE))?;
     let expected = read_guest_identities(&identities)?;
     assert_eq!(
         expected.len(),
@@ -403,7 +472,7 @@ fn run_cycles(fixture: &mut Fixture) -> TestResult {
             return Err("guest progressed after the old domain lease was released".into());
         }
         domain = fixture.spawn_domain(cycle)?;
-        wait_for_growth(&progress, stopped, budget(PHASE))?;
+        fixture.wait_for_primary_growth(&progress, stopped, budget(PHASE))?;
         if fresh.exists() {
             return Err("restore silently fresh-started the primary process".into());
         }
@@ -663,7 +732,7 @@ impl ExecJourney {
         let inspection = match self.client.executions().inspect(&self.execution).await {
             Ok(inspection) => inspection,
             Err(hl_client::Error::Docker { status, .. }) if status.as_u16() == 404 => {
-                return Ok((Resumption::Discarded, None))
+                return Ok((Resumption::Discarded, None));
             }
             Err(error) => return Err(format!("inspect the persisted pane execution after reopen: {error}").into()),
         };

@@ -38,16 +38,15 @@ int main(void) {
     unsigned char records[RECORDS * 2][RECORD_SIZE];
     size_t received = 0;
     while (received < sizeof records) {
-        ssize_t count = read(pipes[0], (unsigned char *)records + received,
-                             sizeof records - received);
+        ssize_t count = read(pipes[0], (unsigned char *)records + received, sizeof records - received);
         if (count <= 0) return 5;
         received += (size_t)count;
     }
     int status_first = 0, status_second = 0;
     waitpid(first, &status_first, 0);
     waitpid(second, &status_second, 0);
-    int atomic = WIFEXITED(status_first) && WEXITSTATUS(status_first) == 0 &&
-                 WIFEXITED(status_second) && WEXITSTATUS(status_second) == 0;
+    int atomic = WIFEXITED(status_first) && WEXITSTATUS(status_first) == 0 && WIFEXITED(status_second) &&
+                 WEXITSTATUS(status_second) == 0;
     for (size_t record = 0; record < RECORDS * 2 && atomic; ++record) {
         unsigned char value = records[record][0];
         atomic = (value == 'A' || value == 'B');
@@ -59,8 +58,7 @@ int main(void) {
     if (pipe(split) != 0 || write(split[1], "abcdef", 6) != 6) return 6;
     char left[2] = {0}, right[4] = {0};
     struct iovec output[] = {{left, sizeof left}, {right, sizeof right}};
-    int distributed = readv(split[0], output, 2) == 6 &&
-                      memcmp(left, "ab", 2) == 0 && memcmp(right, "cdef", 4) == 0;
+    int distributed = readv(split[0], output, 2) == 6 && memcmp(left, "ab", 2) == 0 && memcmp(right, "cdef", 4) == 0;
     printf("vector-pipe atomic=%d distributed=%d\n", atomic, distributed);
     return atomic && distributed ? 0 : 1;
 }

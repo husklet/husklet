@@ -10,6 +10,7 @@
 #include <sys/time.h>
 
 static volatile sig_atomic_t ran = 0;
+
 __attribute__((target("avx"))) static void on_alrm(int s) {
     (void)s;
     __asm__ volatile("vzeroall" ::: "memory"); // clobber all ymm in the handler context

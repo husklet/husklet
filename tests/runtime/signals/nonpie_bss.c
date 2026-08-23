@@ -46,8 +46,7 @@ static void outer(int s, siginfo_t *si, void *ucv) {
     sigaltstack(NULL, &cur);
     printf("outer signo=%d sp_on_alt=%d si_on_alt=%d uc_on_alt=%d ss_sp=%d ss_size=%d onstack=%d\n",
            s == SIGUSR1 && si->si_signo == SIGUSR1, on_alt(&here), on_alt(si), on_alt(uc),
-           uc->uc_stack.ss_sp == (void *)altstk, uc->uc_stack.ss_size == ALTSZ,
-           (cur.ss_flags & SS_ONSTACK) != 0);
+           uc->uc_stack.ss_sp == (void *)altstk, uc->uc_stack.ss_size == ALTSZ, (cur.ss_flags & SS_ONSTACK) != 0);
     ran_outer = 1;
     raise(SIGUSR2);
     // Reached only if the nested frame did not clobber this one on its way in or out.
@@ -77,8 +76,7 @@ int main(void) {
     char here;
     stack_t after;
     sigaltstack(NULL, &after);
-    printf("main outer=%d nested=%d resumed=%d sp_off_alt=%d ss_sp=%d onstack=%d\n", ran_outer == 1,
-           ran_nested == 1, resumed == 1, !on_alt(&here), after.ss_sp == (void *)altstk,
-           (after.ss_flags & SS_ONSTACK) == 0);
+    printf("main outer=%d nested=%d resumed=%d sp_off_alt=%d ss_sp=%d onstack=%d\n", ran_outer == 1, ran_nested == 1,
+           resumed == 1, !on_alt(&here), after.ss_sp == (void *)altstk, (after.ss_flags & SS_ONSTACK) == 0);
     return 0;
 }

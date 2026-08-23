@@ -27,7 +27,9 @@
 
 // A denial counts only when it is the specific errno Linux gives for the missing capability, so a
 // path that fails for an unrelated reason cannot be read as enforcement.
-static unsigned denied(int result, int wanted) { return result != 0 && errno == wanted; }
+static unsigned denied(int result, int wanted) {
+    return result != 0 && errno == wanted;
+}
 
 // The same rule for `open`, whose failure is a negative descriptor rather than a non-zero status.
 // Verified against this Linux host at an unprivileged uid: reading a 0640 root:shadow file, creating
@@ -131,36 +133,16 @@ int main(void) {
     // the write. Without this a run that stayed root would satisfy the ordinary columns silently.
     // The read denial is measured against a 0640 root-owned file, so the guard pins that mode too:
     // were it 0644 the denial column would go vacuous by reading as permitted for the wrong reason.
-    unsigned distinct = live_uid == (unsigned)geteuid() && etc_uid == 0 && etc_mode == 0755
-                        && shadow_uid == 0 && shadow_mode == 0640
-                        && (live_uid == 0 || (live_uid != etc_uid && live_uid != shadow_uid));
+    unsigned distinct = live_uid == (unsigned)geteuid() && etc_uid == 0 && etc_mode == 0755 && shadow_uid == 0 &&
+                        shadow_mode == 0640 && (live_uid == 0 || (live_uid != etc_uid && live_uid != shadow_uid));
 
-    printf(
-        "user-caps uid=%u distinct=%u prm=%llx eff=%llx bnd=%llx inh=%llx amb=%llx dir=%u file=%u "
-        "mkdir_created=%u chown_self=%u owned=%u mkdir_chowned=%u image_read=%u own_rdwr=%u "
-        "own_trunc=%u etc_mkdir=%u chown_other=%u etc_create=%u shadow_read=%u etc_write=%u "
-        "etc_trunc=%u\n",
-        live_uid,
-        distinct,
-        cap_line("CapPrm:"),
-        cap_line("CapEff:"),
-        cap_line("CapBnd:"),
-        cap_line("CapInh:"),
-        cap_line("CapAmb:"),
-        made_dir,
-        made_file,
-        mkdir_created,
-        chown_self,
-        made_owned,
-        mkdir_chowned,
-        image_read,
-        own_rdwr,
-        own_trunc,
-        etc_mkdir_denied,
-        chown_other_denied,
-        etc_create_denied,
-        shadow_read_denied,
-        etc_write_denied,
-        etc_trunc_denied);
+    printf("user-caps uid=%u distinct=%u prm=%llx eff=%llx bnd=%llx inh=%llx amb=%llx dir=%u file=%u "
+           "mkdir_created=%u chown_self=%u owned=%u mkdir_chowned=%u image_read=%u own_rdwr=%u "
+           "own_trunc=%u etc_mkdir=%u chown_other=%u etc_create=%u shadow_read=%u etc_write=%u "
+           "etc_trunc=%u\n",
+           live_uid, distinct, cap_line("CapPrm:"), cap_line("CapEff:"), cap_line("CapBnd:"), cap_line("CapInh:"),
+           cap_line("CapAmb:"), made_dir, made_file, mkdir_created, chown_self, made_owned, mkdir_chowned, image_read,
+           own_rdwr, own_trunc, etc_mkdir_denied, chown_other_denied, etc_create_denied, shadow_read_denied,
+           etc_write_denied, etc_trunc_denied);
     return 0;
 }

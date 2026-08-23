@@ -14,7 +14,6 @@ int main(void) {
     // also confirm REALTIME is readable and non-zero
     struct timespec rt;
     clock_gettime(CLOCK_REALTIME, &rt);
-    printf("clock mono_ok=%d slept_ge=%d realtime_ok=%d\n",
-           d > 0, d >= 25 * 1000 * 1000, rt.tv_sec > 1000000000);
+    printf("clock mono_ok=%d slept_ge=%d realtime_ok=%d\n", d > 0, d >= 25 * 1000 * 1000, rt.tv_sec > 1000000000);
     return 0;
 }

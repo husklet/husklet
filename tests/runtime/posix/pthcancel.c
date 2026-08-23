@@ -37,7 +37,6 @@ int main(void) {
     pthread_join(t, &rv);
     int canceled = rv == PTHREAD_CANCELED;
     // Cleanup handlers run LIFO: the last pushed (c1) runs first.
-    printf("cancel joined=%d canceled=%d cleanups=%d lifo=%d\n",
-           1, canceled, cleanup_run, c1 == 1 && c2 == 2);
+    printf("cancel joined=%d canceled=%d cleanups=%d lifo=%d\n", 1, canceled, cleanup_run, c1 == 1 && c2 == 2);
     return 0;
 }

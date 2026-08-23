@@ -40,7 +40,8 @@ int main(void) {
     }
     // 'A'+'B'+'C' = 65+66+67 = 198, order-independent
     printf("accepted_sum=%d\n", total);
-    for (int i = 0; i < 3; i++) close(cli[i]);
+    for (int i = 0; i < 3; i++)
+        close(cli[i]);
     close(ls);
     return 0;
 }

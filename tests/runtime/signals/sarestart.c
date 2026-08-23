@@ -11,7 +11,11 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t hits = 0;
-static void h(int s) { (void)s; hits++; }
+
+static void h(int s) {
+    (void)s;
+    hits++;
+}
 
 // One trial: read 1 byte from a pipe a child fills at +250ms, with a +80ms SIGALRM in between.
 // Returns the read()'s result (1 on restart-and-complete, -1 on EINTR).
@@ -36,14 +40,16 @@ static int trial(int restart, int *saw_eintr) {
 
     struct itimerval it;
     memset(&it, 0, sizeof it);
-    it.it_value.tv_usec = 80000;      // 80 ms
+    it.it_value.tv_usec = 80000; // 80 ms
     setitimer(ITIMER_REAL, &it, NULL);
 
     char c = 0;
     errno = 0;
     int rc = read(p[0], &c, 1);
     *saw_eintr = (rc == -1 && errno == EINTR);
-    if (rc == -1) { /* drain the late byte so the child's write doesn't linger */ read(p[0], &c, 1); }
+    if (rc == -1) { /* drain the late byte so the child's write doesn't linger */
+        read(p[0], &c, 1);
+    }
     close(p[0]);
     waitpid(pid, NULL, 0);
     return rc;
@@ -52,8 +58,8 @@ static int trial(int restart, int *saw_eintr) {
 int main(void) {
     int e1 = 0, e2 = 0;
     hits = 0;
-    int r_restart = trial(1, &e1);          // SA_RESTART: should complete with 1 byte
-    int r_eintr = trial(0, &e2);            // no SA_RESTART: should be EINTR
+    int r_restart = trial(1, &e1); // SA_RESTART: should complete with 1 byte
+    int r_eintr = trial(0, &e2);   // no SA_RESTART: should be EINTR
     int restarted = r_restart == 1 && !e1;
     int eintr = r_eintr == -1 && e2;
     int handler_ran = hits == 2;

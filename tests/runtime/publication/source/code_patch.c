@@ -15,8 +15,8 @@ typedef int (*stub_fn)(void);
 
 int main(void) {
     long page = sysconf(_SC_PAGESIZE);
-    unsigned char *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE | PROT_EXEC,
-                               MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    unsigned char *code =
+        mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
     if (code == MAP_FAILED) {
         printf("pubcode mmap=0\n");
         return 1;
@@ -45,9 +45,7 @@ int main(void) {
         // Architecturally required on aarch64 and a no-op on x86-64, whose
         // instruction fetch is coherent with stores.
         __builtin___clear_cache((char *)code, (char *)code + length);
-        if (stub() != (int)want) {
-            stale++;
-        }
+        if (stub() != (int)want) { stale++; }
     }
     munmap(code, (size_t)page);
     printf("pubcode rounds=%d stale=%ld\n", ROUNDS, stale);

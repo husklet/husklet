@@ -26,7 +26,8 @@ static void *waiter(void *unused) {
 int main(void) {
     pthread_t parent_waiter;
     pthread_create(&parent_waiter, NULL, waiter, NULL);
-    while (!atomic_load(&ready)) sched_yield();
+    while (!atomic_load(&ready))
+        sched_yield();
     usleep(10000);
 
     pid_t child = fork();
@@ -34,7 +35,8 @@ int main(void) {
         atomic_store(&ready, 0);
         pthread_t child_waiter;
         pthread_create(&child_waiter, NULL, waiter, NULL);
-        while (!atomic_load(&ready)) sched_yield();
+        while (!atomic_load(&ready))
+            sched_yield();
         usleep(10000);
         atomic_store(&word, 1);
         long woke = futex(FUTEX_WAKE, 1);

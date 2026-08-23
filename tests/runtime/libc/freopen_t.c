@@ -10,7 +10,8 @@ int main(void) {
     FILE *g = freopen(NULL, "r", f);
     int d1 = g != NULL;
     rewind(g);
-    char buf[16] = {0}; fread(buf, 1, 5, g);
+    char buf[16] = {0};
+    fread(buf, 1, 5, g);
     int d2 = strcmp(buf, "first") == 0;
     fclose(g);
     printf("freopen d1=%d d2=%d\n", d1, d2);

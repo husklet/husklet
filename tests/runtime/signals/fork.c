@@ -27,7 +27,7 @@ int signalfd_fork(void) {
     ssize_t parent = read(fd, &info, sizeof(info));
     int isolated = parent == -1 && errno == EAGAIN;
     int closed = close(fd) == 0;
-    printf("signalfd_fork child=%d isolated=%d closed=%d\n",
-        WIFEXITED(status) && WEXITSTATUS(status) == 0, isolated, closed);
+    printf("signalfd_fork child=%d isolated=%d closed=%d\n", WIFEXITED(status) && WEXITSTATUS(status) == 0, isolated,
+           closed);
     return 0;
 }

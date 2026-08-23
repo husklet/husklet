@@ -46,9 +46,7 @@ static void shell_client_mode(const char *self, int fd, int open_stage) {
     ssize_t config_size = reopened >= 0 ? read(reopened, config, sizeof config) : -1;
     ssize_t input_size = read(STDIN_FILENO, input, sizeof input);
     if (reopened >= 0) close(reopened);
-    _exit(config_size == 0 && input_size == 5 && memcmp(input, "zones", 5) == 0
-              ? 0
-              : 1);
+    _exit(config_size == 0 && input_size == 5 && memcmp(input, "zones", 5) == 0 ? 0 : 1);
 }
 
 static int shell_pipeline(const char *self) {
@@ -134,12 +132,10 @@ static void child_mode(int argc, char **argv) {
         int link_ok = readlink(path, link, sizeof link) > 0;
         int access_ok = access(path, R_OK) == 0;
         int ok = descriptor_ok && direct_ok && projected_ok && nofollow_ok && proc_ok && relative_ok && statx_ok &&
-                 link_ok && access_ok && reopened >= 0 &&
-                 payload_size == 7 && memcmp(payload, "client\n", 7) == 0 &&
+                 link_ok && access_ok && reopened >= 0 && payload_size == 7 && memcmp(payload, "client\n", 7) == 0 &&
                  (direct.st_mode & S_IFMT) == (projected.st_mode & S_IFMT);
         if (!ok)
-            dprintf(STDERR_FILENO,
-                    "procfd-check fd=%d checks=%d%d%d%d%d%d%d%d%d open=%d read=%zd errno=%d\n", fd,
+            dprintf(STDERR_FILENO, "procfd-check fd=%d checks=%d%d%d%d%d%d%d%d%d open=%d read=%zd errno=%d\n", fd,
                     descriptor_ok, direct_ok, projected_ok, nofollow_ok, proc_ok, relative_ok, statx_ok, link_ok,
                     access_ok, reopened, payload_size, errno);
         if (reopened >= 0) close(reopened);
@@ -251,7 +247,8 @@ int main(int argc, char **argv) {
     pid_t stopped_wait = waitpid(stopped_child, &stopped_status, WUNTRACED);
     char stopped_byte;
     ssize_t stopped_read = read(stopped[0], &stopped_byte, 1);
-    int stopped_open = stopped_wait == stopped_child && WIFSTOPPED(stopped_status) && stopped_read < 0 && errno == EAGAIN;
+    int stopped_open =
+        stopped_wait == stopped_child && WIFSTOPPED(stopped_status) && stopped_read < 0 && errno == EAGAIN;
     kill(stopped_child, SIGCONT);
     kill(stopped_child, SIGKILL);
     waitpid(stopped_child, NULL, 0);

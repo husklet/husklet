@@ -45,8 +45,8 @@ int main(void) {
     waitpid(p2, &st2, 0);
     int dofork_inherits = WIFEXITED(st2) && WEXITSTATUS(st2) == 66;
 
-    printf("madv_dontfork adv_ok=%d child_faults=%d parent_keeps=%d dofork_inherits=%d\n", adv_ok,
-           child_faults, parent_keeps, dofork_inherits);
+    printf("madv_dontfork adv_ok=%d child_faults=%d parent_keeps=%d dofork_inherits=%d\n", adv_ok, child_faults,
+           parent_keeps, dofork_inherits);
     munmap((void *)a, ps);
     munmap((void *)b, ps);
     return adv_ok && child_faults && parent_keeps && dofork_inherits ? 0 : 1;

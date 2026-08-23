@@ -9,13 +9,22 @@
 #include <sys/time.h>
 
 static volatile sig_atomic_t vt_fired, prof_fired;
-static void vth(int s) { (void)s; vt_fired = 1; }
-static void ph(int s) { (void)s; prof_fired = 1; }
+
+static void vth(int s) {
+    (void)s;
+    vt_fired = 1;
+}
+
+static void ph(int s) {
+    (void)s;
+    prof_fired = 1;
+}
 
 static void burn_until(volatile sig_atomic_t *flag, long cap) {
     volatile double x = 1.0;
     for (long i = 0; i < cap && !*flag; i++) {
-        for (int k = 0; k < 1000; k++) x = x * 1.0000001 + 1.0;
+        for (int k = 0; k < 1000; k++)
+            x = x * 1.0000001 + 1.0;
     }
     (void)x;
 }

@@ -54,8 +54,7 @@ int main(void) {
     printf("mremap_zero_oldsize_errno=%d\n",
            ec((long)syscall(SYS_mremap, m, (size_t)0, (size_t)8192, 1 /*MREMAP_MAYMOVE*/, 0)));
     // Control: a normal shrink still succeeds in place.
-    printf("mremap_shrink_inplace=%d\n",
-           (void *)syscall(SYS_mremap, m, (size_t)8192, (size_t)4096, 0, 0) == m);
+    printf("mremap_shrink_inplace=%d\n", (void *)syscall(SYS_mremap, m, (size_t)8192, (size_t)4096, 0, 0) == m);
 
     // --- fallocate with an unsupported mode bit is EOPNOTSUPP; a bad range is still EINVAL.
     printf("fallocate_badmode_errno=%d\n", ec(syscall(SYS_fallocate, nfd, 0x80, 0, 10)));

@@ -26,7 +26,8 @@
 
 // The deterministic payload: 256 bytes, byte i = i*7+3 (mod 256). Sum over 0..255 = 32640.
 static void fill(unsigned char *buf) {
-    for (int i = 0; i < 256; i++) buf[i] = (unsigned char)(i * 7 + 3);
+    for (int i = 0; i < 256; i++)
+        buf[i] = (unsigned char)(i * 7 + 3);
 }
 
 // Write all `len` bytes (a forwarded write may be short -> loop). Returns 0 on success.
@@ -41,7 +42,10 @@ static int write_all(int fd, const unsigned char *buf, size_t len) {
 
 int main(void) {
     pid_t kid = fork();
-    if (kid < 0) { perror("fork"); return 1; }
+    if (kid < 0) {
+        perror("fork");
+        return 1;
+    }
 
     if (kid == 0) {
         // CHILD: fresh worker process -> sentry_fork_child() drops the inherited lane, mints a new token.
@@ -83,7 +87,8 @@ int main(void) {
             if (r <= 0) break;
             got += (size_t)r;
         }
-        for (size_t i = 0; i < got; i++) sum += rd[i];
+        for (size_t i = 0; i < got; i++)
+            sum += rd[i];
         // verify the readback matches the deterministic payload exactly
         unsigned char want[256];
         fill(want);

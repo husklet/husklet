@@ -81,8 +81,7 @@ static hl_host_result hl_macos_stream_set_status_flags(void *context, hl_host_ha
     int descriptor = -1;
     int current;
     uint32_t effective = 0;
-    if ((flags & ~(uint32_t)HL_HOST_STREAM_STATUS_FLAGS) != 0)
-        return hl_macos_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
+    if ((flags & ~(uint32_t)HL_HOST_STREAM_STATUS_FLAGS) != 0) return hl_macos_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
     if ((flags & (uint32_t)(HL_HOST_STREAM_DIRECT | HL_HOST_STREAM_NOATIME)) != 0)
         return hl_macos_result(HL_STATUS_NOT_SUPPORTED, 0, 0);
     pthread_mutex_lock(&host->lock);

@@ -68,7 +68,7 @@ impl<'a> Configuration<'a> {
         self.signature_for(runtime.as_str())
     }
 
-    pub(super) fn configuration_signature(&self) -> std::io::Result<String> {
+    pub(super) fn identity_signature(&self) -> std::io::Result<String> {
         self.validate()?;
         Ok(Self::digest(&self.identity()))
     }

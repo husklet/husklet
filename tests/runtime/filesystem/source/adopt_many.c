@@ -22,7 +22,8 @@ static int mk_unlinked(int idx, int *out_len) {
     if (fd < 0) return -1;
     int len = 32 + ((idx * 7) % 256);
     unsigned char buf[288];
-    for (int i = 0; i < len; i++) buf[i] = (unsigned char)((idx * 31 + i * 3) & 0xff);
+    for (int i = 0; i < len; i++)
+        buf[i] = (unsigned char)((idx * 31 + i * 3) & 0xff);
     if (write(fd, buf, (size_t)len) != len) {
         close(fd);
         return -1;
@@ -84,7 +85,9 @@ int main(void) {
     }
     printf("mid_ok=%d grow_ok=%d\n", mid_ok, grow_ok);
 
-    for (int i = 0; i < made; i++) close(fds[i]);
-    for (int i = 0; i < npad; i++) close(pad[i]);
+    for (int i = 0; i < made; i++)
+        close(fds[i]);
+    for (int i = 0; i < npad; i++)
+        close(pad[i]);
     return 0;
 }

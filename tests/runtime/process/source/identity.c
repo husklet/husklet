@@ -35,16 +35,19 @@ int main(void) {
         int ok = getppid() == parent && getpid() != parent;
         _exit(ok ? 0 : 1);
     }
-    int st = 0; waitpid(c, &st, 0);
+    int st = 0;
+    waitpid(c, &st, 0);
     int fork_identity = WIFEXITED(st) && WEXITSTATUS(st) == 0;
 
     // thread identity: 4 threads, each with same pid but distinct tid from main
     pthread_t t[4];
-    for (int i = 0; i < 4; i++) pthread_create(&t[i], NULL, worker, NULL);
-    for (int i = 0; i < 4; i++) pthread_join(t[i], NULL);
+    for (int i = 0; i < 4; i++)
+        pthread_create(&t[i], NULL, worker, NULL);
+    for (int i = 0; i < 4; i++)
+        pthread_join(t[i], NULL);
     int thread_identity = atomic_load(&distinct_tids) == 4;
 
-    printf("identity main_tid_eq_pid=%d fork_identity=%d thread_identity=%d\n",
-           main_tid_eq_pid, fork_identity, thread_identity);
+    printf("identity main_tid_eq_pid=%d fork_identity=%d thread_identity=%d\n", main_tid_eq_pid, fork_identity,
+           thread_identity);
     return 0;
 }

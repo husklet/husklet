@@ -20,8 +20,7 @@ static volatile sig_atomic_t regs_ok;
 static void handle(int signal, siginfo_t *info, void *opaque) {
     ucontext_t *context = opaque;
     unsigned long long *r = (unsigned long long *)context->uc_mcontext.regs;
-    exact = signal == SIGSEGV && info->si_addr == (void *)8 &&
-            context->uc_mcontext.pc == (uintptr_t)&faulting_load;
+    exact = signal == SIGSEGV && info->si_addr == (void *)8 && context->uc_mcontext.pc == (uintptr_t)&faulting_load;
     // x0 = bad base (0), x2/x3/x4 = live guest sentinels folded into scratch. All must be exact.
     regs_ok = r[0] == 0 && r[2] == 0x1111 && r[3] == 0x2222 && r[4] == 0x3333;
     context->uc_mcontext.pc = (uintptr_t)&after_fault; // resume past the faulting load

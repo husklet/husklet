@@ -16,7 +16,10 @@ int main(void) {
 
     // killed by signal
     pid_t b = fork();
-    if (b == 0) { pause(); _exit(0); }
+    if (b == 0) {
+        pause();
+        _exit(0);
+    }
     usleep(50000);
     kill(b, SIGKILL);
     siginfo_t sk;

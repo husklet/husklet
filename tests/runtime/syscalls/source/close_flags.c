@@ -17,7 +17,8 @@
 int main(void) {
     int a = dup2(open("/dev/null", O_RDONLY), 300);
     int b = dup2(open("/dev/null", O_RDONLY), 301);
-    (void)a; (void)b;
+    (void)a;
+    (void)b;
     // Mark [302,303] cloexec (open two there first).
     dup2(open("/dev/null", O_RDONLY), 302);
     dup2(open("/dev/null", O_RDONLY), 303);

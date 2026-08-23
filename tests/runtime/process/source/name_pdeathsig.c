@@ -29,7 +29,10 @@ int main(void) {
     // 3. live delivery
     prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0);
     int pfd[2];
-    if (pipe(pfd) != 0) { printf("pipe fail\n"); return 1; }
+    if (pipe(pfd) != 0) {
+        printf("pipe fail\n");
+        return 1;
+    }
 
     pid_t mid = fork();
     if (mid == 0) {
@@ -43,7 +46,11 @@ int main(void) {
             sigprocmask(SIG_BLOCK, &set, NULL);
             prctl(PR_SET_PDEATHSIG, SIGUSR1, 0, 0, 0);
             // guard: if our parent already died before arming, exit as failure via pipe
-            if (getppid() == 1) { char b = 'x'; if (write(pfd[1], &b, 1)) {} _exit(0); }
+            if (getppid() == 1) {
+                char b = 'x';
+                if (write(pfd[1], &b, 1)) {}
+                _exit(0);
+            }
             int sig = 0;
             sigwait(&set, &sig);
             char b = (sig == SIGUSR1) ? 'y' : 'n';
@@ -58,7 +65,10 @@ int main(void) {
     if (read(pfd[0], &got, 1) != 1) got = '?';
     // reap everyone (subreaper harvests the reparented grandchild)
     int any;
-    do { int s; any = waitpid(-1, &s, 0); } while (any > 0);
+    do {
+        int s;
+        any = waitpid(-1, &s, 0);
+    } while (any > 0);
 
     int delivered = got == 'y';
     printf("prctl name_ok=%d pd_roundtrip=%d delivered=%d\n", name_ok, pd_roundtrip, delivered);

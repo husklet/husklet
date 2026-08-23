@@ -43,7 +43,8 @@ int main(void) {
     char big[4096];
     int ecwd2 = (getcwd(guard, sizeof big) == NULL) ? errno : 0;
     (void)big;
-    printf("rd=%zd erd=%d wr=%zd ewr=%d fit=%zd wfit=%zd v=%zd ev=%d pv=%zd epv=%d cv=%zd ecv=%d g=%zd eg=%d ecwd=%d ecwd2=%d\n",
+    printf("rd=%zd erd=%d wr=%zd ewr=%d fit=%zd wfit=%zd v=%zd ev=%d pv=%zd epv=%d cv=%zd ecv=%d g=%zd eg=%d ecwd=%d "
+           "ecwd2=%d\n",
            rd, erd, wr, ewr, fit, wfit, v, ev, pv, epv, cv, ecv, g, eg, ecwd, ecwd2);
     return 0;
 }

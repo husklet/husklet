@@ -74,8 +74,7 @@ static void *storer(void *unused) {
 
 static void advance(unsigned long count) {
     unsigned long start = atomic_load_explicit(&iterations, memory_order_acquire);
-    while (atomic_load_explicit(&iterations, memory_order_acquire) - start < count) {
-    }
+    while (atomic_load_explicit(&iterations, memory_order_acquire) - start < count) {}
 }
 
 static int all_zero(const unsigned char *page) {

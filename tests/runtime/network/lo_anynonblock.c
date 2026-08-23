@@ -19,9 +19,7 @@ int main(void) {
     int listener = socket(AF_INET, SOCK_STREAM, 0);
     int one = 1;
     setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-    struct sockaddr_in address = {.sin_family = AF_INET,
-                                  .sin_port = htons(PORT),
-                                  .sin_addr.s_addr = htonl(INADDR_ANY)};
+    struct sockaddr_in address = {.sin_family = AF_INET, .sin_port = htons(PORT), .sin_addr.s_addr = htonl(INADDR_ANY)};
     if (bind(listener, (struct sockaddr *)&address, sizeof address) < 0 || listen(listener, 8) < 0) return 1;
 
     pid_t child = fork();

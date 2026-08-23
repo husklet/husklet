@@ -36,8 +36,10 @@ int main(void) {
     pthread_mutex_unlock(&mtx);
 
     pthread_t t[THREADS];
-    for (int i = 0; i < THREADS; i++) pthread_create(&t[i], 0, w, 0);
-    for (int i = 0; i < THREADS; i++) pthread_join(t[i], 0);
+    for (int i = 0; i < THREADS; i++)
+        pthread_create(&t[i], 0, w, 0);
+    for (int i = 0; i < THREADS; i++)
+        pthread_join(t[i], 0);
 
     pthread_mutex_destroy(&mtx);
     printf("mutex_pi busy=%d total_ok=%d\n", busy, counter == (long)THREADS * ITERS);

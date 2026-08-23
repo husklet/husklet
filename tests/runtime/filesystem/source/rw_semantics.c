@@ -106,7 +106,7 @@ int main(void) {
     printf("rw-semantics pwrite-appends=%d concurrent-append=%d readv-order=%d "
            "fork-offset=%d neg-einval=%d pipe-espipe=%d read-wo-ebadf=%d "
            "write-ro-ebadf=%d read-dir-eisdir=%d\n",
-           pwrite_appends, concurrent_append, readv_order, fork_shared_offset,
-           neg_off_einval, pipe_espipe, read_wo_ebadf, write_ro_ebadf, read_dir_eisdir);
+           pwrite_appends, concurrent_append, readv_order, fork_shared_offset, neg_off_einval, pipe_espipe,
+           read_wo_ebadf, write_ro_ebadf, read_dir_eisdir);
     return 0;
 }

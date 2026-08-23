@@ -8,12 +8,16 @@
 #include <stdio.h>
 
 // noinline: prevent gcc's accumulator-recursion->loop rewrite, so the frames really stack to depth.
-__attribute__((noinline)) static uint64_t rec(int n) { if (n == 0) return 0; return (uint64_t)n + rec(n - 1); }
+__attribute__((noinline)) static uint64_t rec(int n) {
+    if (n == 0) return 0;
+    return (uint64_t)n + rec(n - 1);
+}
 
 int main(void) {
-    volatile int depth = 6000;            // volatile -> not folded to the closed form
+    volatile int depth = 6000; // volatile -> not folded to the closed form
     uint64_t total = 0;
-    for (int i = 0; i < 6000; i++) total += rec(depth); // each descent returns depth*(depth+1)/2
+    for (int i = 0; i < 6000; i++)
+        total += rec(depth); // each descent returns depth*(depth+1)/2
     printf("soak recursion total=%llu\n", (unsigned long long)total);
     return 0;
 }

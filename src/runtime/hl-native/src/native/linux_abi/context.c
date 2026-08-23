@@ -327,7 +327,6 @@ hl_status hl_linux_abi_destroy(hl_linux_abi *linux_abi) {
     return HL_STATUS_OK;
 }
 
-
 #include "fork_snapshot.c"
 #include "fork_completion.c"
 #include "descriptor_install.c"

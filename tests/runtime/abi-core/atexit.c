@@ -4,9 +4,17 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-static void a(void) { write(1, "a", 1); }
-static void b(void) { write(1, "b", 1); }
-static void c(void) { write(1, "c", 1); }
+static void a(void) {
+    write(1, "a", 1);
+}
+
+static void b(void) {
+    write(1, "b", 1);
+}
+
+static void c(void) {
+    write(1, "c", 1);
+}
 
 int main(void) {
     write(1, "atexit order=", 13);

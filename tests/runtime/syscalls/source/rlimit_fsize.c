@@ -22,7 +22,8 @@ int main(void) {
         setrlimit(RLIMIT_FSIZE, &rl);
         signal(SIGXFSZ, SIG_DFL); // default action terminates on overflow
         char buf[4096];
-        for (int i = 0; i < 4096; i++) buf[i] = 'x';
+        for (int i = 0; i < 4096; i++)
+            buf[i] = 'x';
         // Fill exactly to the limit: succeeds.
         ssize_t ok = write(fd, buf, 4096);
         // Next byte exceeds the limit: SIGXFSZ terminates the child.

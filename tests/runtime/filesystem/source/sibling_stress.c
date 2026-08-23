@@ -10,8 +10,8 @@
 static int transfer(int fd, void *data, size_t size, int writing) {
     size_t offset = 0;
     while (offset < size) {
-        ssize_t count = writing ? write(fd, (char *)data + offset, size - offset)
-                                : read(fd, (char *)data + offset, size - offset);
+        ssize_t count =
+            writing ? write(fd, (char *)data + offset, size - offset) : read(fd, (char *)data + offset, size - offset);
         if (count <= 0) return -1;
         offset += (size_t)count;
     }
@@ -48,8 +48,7 @@ int main(void) {
     for (unsigned round = 0; coherent && round < 100; ++round) {
         char event = 0;
         unsigned value = 0;
-        if (transfer(ready[0], &event, 1, 0) != 0 || event != 'c' || realpath(path, resolved) == NULL)
-            coherent = 0;
+        if (transfer(ready[0], &event, 1, 0) != 0 || event != 'c' || realpath(path, resolved) == NULL) coherent = 0;
         int fd = open(path, O_RDONLY | O_CLOEXEC);
         if (fd < 0 || read(fd, &value, sizeof(value)) != sizeof(value) || value != round) coherent = 0;
         if (fd >= 0) close(fd);

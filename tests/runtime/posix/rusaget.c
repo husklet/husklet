@@ -6,11 +6,15 @@
 #include <unistd.h>
 #include <stdio.h>
 
-static long usec(const struct timeval *t) { return t->tv_sec * 1000000L + t->tv_usec; }
+static long usec(const struct timeval *t) {
+    return t->tv_sec * 1000000L + t->tv_usec;
+}
 
 static volatile long sink = 0;
+
 static void burn(void) {
-    for (long i = 0; i < 20000000L; i++) sink += i;
+    for (long i = 0; i < 20000000L; i++)
+        sink += i;
 }
 
 int main(void) {
@@ -36,7 +40,6 @@ int main(void) {
     struct rusage rt;
     int thread_ok = getrusage(RUSAGE_THREAD, &rt) == 0;
 
-    printf("rusaget self=%d child=%d thread=%d\n",
-           self_advanced, child_counted, thread_ok);
+    printf("rusaget self=%d child=%d thread=%d\n", self_advanced, child_counted, thread_ok);
     return 0;
 }

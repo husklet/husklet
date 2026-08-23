@@ -23,7 +23,9 @@ int main(void) {
     lseek(d2, 0, SEEK_SET);
     read(d2, buf, 4);
     int readok = memcmp(buf, "0123", 4) == 0;
-    close(fd); close(d); close(d2);
+    close(fd);
+    close(d);
+    close(d2);
     unlink(path);
     printf("dup dupped=%d sharedoff=%d dup2=%d read=%d\n", dupped, sharedoff, dup2ok, readok);
     return 0;

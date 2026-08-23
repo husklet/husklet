@@ -34,7 +34,7 @@ int main(void) {
 
     int sv[2];
     socketpair(AF_UNIX, SOCK_STREAM, 0, sv);
-    close(sv[1]);          // peer gone
+    close(sv[1]); // peer gone
     errno = 0;
     ssize_t s3 = send(sv[0], "y", 1, 0); // write to broken pipe -> EPIPE
     const char *e_pipe = err_name(errno);

@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 enum { THREADS = 6 };
+
 static _Atomic int word;
 static _Atomic int ready;
 static _Atomic int returned;
@@ -30,8 +31,10 @@ static void *waiter(void *unused) {
 
 int main(void) {
     pthread_t threads[THREADS];
-    for (int i = 0; i < THREADS; ++i) pthread_create(&threads[i], NULL, waiter, NULL);
-    while (atomic_load_explicit(&ready, memory_order_acquire) != THREADS) sched_yield();
+    for (int i = 0; i < THREADS; ++i)
+        pthread_create(&threads[i], NULL, waiter, NULL);
+    while (atomic_load_explicit(&ready, memory_order_acquire) != THREADS)
+        sched_yield();
 
     long first;
     do {
@@ -41,7 +44,8 @@ int main(void) {
     usleep(50000);
     int isolated = atomic_load_explicit(&returned, memory_order_acquire) == 1;
     long rest = futex(FUTEX_WAKE, INT_MAX, NULL);
-    for (int i = 0; i < THREADS; ++i) pthread_join(threads[i], NULL);
+    for (int i = 0; i < THREADS; ++i)
+        pthread_join(threads[i], NULL);
 
     int total = atomic_load_explicit(&returned, memory_order_acquire);
     printf("futex_wake_n first=%ld isolated=%d rest=%ld total=%d\n", first, isolated, rest, total);

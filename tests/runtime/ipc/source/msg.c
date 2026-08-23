@@ -4,17 +4,29 @@
 #include <sys/ipc.h>
 #include <sys/msg.h>
 
-struct msg { long mtype; char mtext[32]; };
+struct msg {
+    long mtype;
+    char mtext[32];
+};
 
 int main(void) {
     int id = msgget(IPC_PRIVATE, IPC_CREAT | 0666);
-    if (id < 0) { perror("msgget"); return 1; }
+    if (id < 0) {
+        perror("msgget");
+        return 1;
+    }
     struct msg s = {1, "MSG-PAYLOAD"};
-    if (msgsnd(id, &s, sizeof s.mtext, 0) < 0) { perror("msgsnd"); return 1; }
+    if (msgsnd(id, &s, sizeof s.mtext, 0) < 0) {
+        perror("msgsnd");
+        return 1;
+    }
     struct msg r;
     memset(&r, 0, sizeof r);
-    if (msgrcv(id, &r, sizeof r.mtext, 1, 0) < 0) { perror("msgrcv"); return 1; }
-    printf("MSG=%s\n", r.mtext);         // expect MSG-PAYLOAD
+    if (msgrcv(id, &r, sizeof r.mtext, 1, 0) < 0) {
+        perror("msgrcv");
+        return 1;
+    }
+    printf("MSG=%s\n", r.mtext); // expect MSG-PAYLOAD
     msgctl(id, IPC_RMID, NULL);
     return 0;
 }
