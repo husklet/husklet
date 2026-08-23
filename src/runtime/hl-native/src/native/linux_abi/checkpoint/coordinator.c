@@ -226,6 +226,18 @@ static void ckpt_coordinate_and_exit(struct cpu *c) {
             fprintf(stderr, "[ckpt] participant %lld %s\n", (long long)scan[index].identity,
                     kicked ? "interrupted" : "NOT interrupted (it cannot reach a safepoint)");
             if (forget_after_kick) { /* kicked, so it can prove membership -- and then never enumerated again */
+                int registered = 0;
+                for (int pass = 0; pass < CKPT_RENDEZVOUS_STALL_PASSES; ++pass) {
+                    registered = ckpt_stream_participant_registered(scan[index].identity);
+                    if (registered == 1) break;
+                    usleep(10000);
+                }
+                if (registered != 1) {
+                    fprintf(stderr,
+                            "[ckpt] test hook could not prove participant %lld registered before hiding it\n",
+                            (long long)scan[index].identity);
+                    ckpt_phase_exit(&phases, 71);
+                }
                 forget_after_kick = 0;
                 hidden = scan[index].identity;
                 nfoll--;
