@@ -70,6 +70,11 @@ int hl_ckpt_channel_owns_descriptor(int descriptor);
 int hl_ckpt_channel_call(hl_ckpt_request *request, const char *name, const void *payload, hl_ckpt_reply *reply,
                          void *out, size_t capacity);
 
+/* Send one terminal notification on this process's EXISTING channel without acquiring another channel or
+ * waiting for a reply. The whole frame is attempted once with nonblocking I/O; success or failure consumes
+ * the cached channel so a broker reply can never be mistaken for a later operation. */
+int hl_ckpt_channel_notify(hl_ckpt_request *request, const char *name);
+
 /* One round trip whose reply may carry a descriptor over SCM_RIGHTS. The request is framed exactly as
  * hl_ckpt_channel_call frames it; only the reply is read with recvmsg, because a plain read() would take
  * the header and DISCARD the rights attached to it. The reply carries no payload.
@@ -79,6 +84,7 @@ int hl_ckpt_channel_call(hl_ckpt_request *request, const char *name, const void 
  * registered for. Returns 0 when a well-formed reply arrived and -1 on a transport or framing failure. */
 int hl_ckpt_channel_call_receive_descriptor(hl_ckpt_request *request, const void *payload, hl_ckpt_reply *reply,
                                             int *out_descriptor);
+
 
 /* The checkpoint TRIGGER is a 4-byte generation counter shared by every engine process and bumped by the
  * embedder to request a capture. ckpt_poll reads it at every safepoint, so it has to be a plain memory load;

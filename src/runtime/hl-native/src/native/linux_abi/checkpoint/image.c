@@ -121,8 +121,8 @@ enum ckpt_refusal_reason {
 static _Noreturn void ckpt_coordinator_refuse(const struct ckpt_phase_ledger *ledger, enum ckpt_refusal_reason code,
                                               const char *reason) {
     fprintf(stderr, "[ckpt] refuse: %s\n", reason);
-    ckpt_stream_capture_refused(reason);
     hl_engine_child_result_publish(0, HL_STATUS_NOT_SUPPORTED, (uint64_t)code);
+    ckpt_stream_capture_refused(reason);
     ckpt_phase_exit(ledger, 70);
 }
 

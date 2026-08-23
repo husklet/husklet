@@ -66,6 +66,18 @@ int hl_ckpt_channel_call(hl_ckpt_request *request, const char *name, const void 
     return -1;
 }
 
+int hl_ckpt_channel_notify(hl_ckpt_request *request, const char *name) {
+    (void)request;
+    (void)name;
+    return -1;
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+HL_API int HL_TARGET_LOCAL(checkpoint_channel_notify_test)(uint32_t scenario) {
+    return scenario > 1 ? -22 : -95;
+}
+#endif
+
 int hl_ckpt_channel_call_receive_descriptor(hl_ckpt_request *request, const void *payload, hl_ckpt_reply *reply,
                                             int *out_descriptor) {
     (void)request;
@@ -481,6 +493,74 @@ int hl_ckpt_channel_call(hl_ckpt_request *request, const char *name, const void 
     }
     return 0;
 }
+
+int hl_ckpt_channel_notify(hl_ckpt_request *request, const char *name) {
+    struct iovec vectors[2];
+    struct msghdr message = {0};
+    int descriptor;
+    ssize_t sent;
+    size_t name_size = name != NULL ? strlen(name) + 1 : 0;
+    size_t frame_size;
+
+    if (request == NULL || name_size > HL_CKPT_STREAM_NAME_MAX || request->length != 0) return -1;
+    if (checkpoint_channel < 0 || checkpoint_channel_owner != (long)getpid()) return -1;
+    descriptor = checkpoint_channel;
+    request->magic = HL_CKPT_STREAM_MAGIC_REQUEST;
+    request->abi = HL_CKPT_STREAM_ABI;
+    request->name_size = (uint32_t)name_size;
+    vectors[0] = (struct iovec){.iov_base = request, .iov_len = sizeof *request};
+    vectors[1] = (struct iovec){.iov_base = (void *)name, .iov_len = name_size};
+    message.msg_iov = vectors;
+    message.msg_iovlen = name_size != 0 ? 2 : 1;
+    frame_size = sizeof *request + name_size;
+    do {
+        sent = sendmsg(descriptor, &message, MSG_DONTWAIT | MSG_NOSIGNAL);
+    } while (sent < 0 && errno == EINTR);
+    checkpoint_channel_poison();
+    return sent == (ssize_t)frame_size ? 0 : -1;
+}
+
+#if defined(HL_NATIVE_TEST_HOOKS)
+HL_API int HL_TARGET_LOCAL(checkpoint_channel_notify_test)(uint32_t scenario) {
+    static const char reason[] = "bounded refusal";
+    hl_ckpt_request request = {0};
+    int pair[2] = {-1, -1};
+    int status = -1;
+    if (scenario > 1) return -22;
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) return -1;
+    checkpoint_channel_poison();
+    checkpoint_channel = pair[0];
+    checkpoint_channel_owner = (long)getpid();
+    request.op = HL_CKPT_OP_CAPTURE_REFUSED;
+    if (scenario == 1) {
+        char bytes[4096] = {0};
+        while (send(pair[0], bytes, sizeof bytes, MSG_DONTWAIT | MSG_NOSIGNAL) > 0) {}
+        if (errno != EAGAIN && errno != EWOULDBLOCK) goto done;
+        status = hl_ckpt_channel_notify(&request, reason) == -1 ? 0 : -1;
+        pair[0] = -1;
+    } else {
+        unsigned char frame[sizeof request + sizeof reason];
+        hl_ckpt_request observed;
+        ssize_t count;
+        if (hl_ckpt_channel_notify(&request, reason) != 0) goto done;
+        pair[0] = -1;
+        count = recv(pair[1], frame, sizeof frame, 0);
+        if (count == (ssize_t)sizeof frame) {
+            memcpy(&observed, frame, sizeof observed);
+            if (observed.magic == HL_CKPT_STREAM_MAGIC_REQUEST && observed.abi == HL_CKPT_STREAM_ABI &&
+                observed.op == HL_CKPT_OP_CAPTURE_REFUSED && observed.name_size == sizeof reason &&
+                memcmp(frame + sizeof request, reason, sizeof reason) == 0)
+                status = 0;
+        }
+    }
+done:
+    checkpoint_channel = -1;
+    checkpoint_channel_owner = 0;
+    if (pair[0] >= 0) (void)close(pair[0]);
+    if (pair[1] >= 0) (void)close(pair[1]);
+    return status;
+}
+#endif
 
 int hl_ckpt_channel_call_receive_descriptor(hl_ckpt_request *request, const void *payload, hl_ckpt_reply *reply,
                                             int *out_descriptor) {
