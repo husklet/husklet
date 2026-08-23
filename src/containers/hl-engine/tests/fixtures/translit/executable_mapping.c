@@ -15,18 +15,30 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/mman.h>
+
 static void work(void) {
     unsigned long long h = 1469598103934665603ull;
-    for (unsigned long long i = 0; i < 2000000ull; i++) { h ^= i; h *= 1099511628211ull; h += h >> 7; }
+    for (unsigned long long i = 0; i < 2000000ull; i++) {
+        h ^= i;
+        h *= 1099511628211ull;
+        h += h >> 7;
+    }
     printf("work h=%016llx\n", h);
 }
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
-    if (argc > 1 && !strcmp(argv[1], "execed")) { work(); return 0; }
+    if (argc > 1 && !strcmp(argv[1], "execed")) {
+        work();
+        return 0;
+    }
     work();                                                  // still eligible here
-    if (mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,  // the latch, and it is permanent
-             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) { perror("mmap"); return 1; }
-    work();                                                  // refused from here on
-    execl(argv[0], argv[0], "execed", (char *)NULL);          // and the refusal survives this
+    if (mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC, // the latch, and it is permanent
+             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) {
+        perror("mmap");
+        return 1;
+    }
+    work();                                          // refused from here on
+    execl(argv[0], argv[0], "execed", (char *)NULL); // and the refusal survives this
     return 42;
 }
