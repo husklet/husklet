@@ -34,5 +34,8 @@ typedef struct insn {
 int hl_x86_decode(uint64_t pc, hl_x86_insn *insn);
 typedef int (*hl_x86_instruction_fetch_fn)(uint64_t, void *, size_t);
 void hl_x86_decode_set_instruction_fetch(hl_x86_instruction_fetch_fn);
+#if defined(HL_NATIVE_TEST_HOOKS)
+int hl_x86_decode_memo_test(uint32_t scenario, uint64_t *decodes);
+#endif
 
 #endif
