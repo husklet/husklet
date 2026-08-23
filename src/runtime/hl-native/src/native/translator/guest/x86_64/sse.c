@@ -167,7 +167,7 @@ double sse_round_d(double x, int imm) {
     } else if (rb != xb && !(imm & 8))
         raise = SSE_XP;
     cvt_fp_flags_set(parked);
-        hl_x86_sse_raise(raise);
+    hl_x86_sse_raise(raise);
     return r;
 }
 
@@ -207,7 +207,7 @@ float sse_round_f(float x, int imm) {
     } else if (rb != xb && !(imm & 8))
         raise = SSE_XP;
     cvt_fp_flags_set(parked);
-        hl_x86_sse_raise(raise);
+    hl_x86_sse_raise(raise);
     return r;
 }
 

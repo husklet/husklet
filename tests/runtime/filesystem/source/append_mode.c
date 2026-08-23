@@ -34,7 +34,6 @@ int main(void) {
 
     unlink(path);
     rmdir(dir);
-    printf("append-mode appended=%d offset-at-end=%d content=%.8s\n",
-           appended, offset_at_end, buf);
+    printf("append-mode appended=%d offset-at-end=%d content=%.8s\n", appended, offset_at_end, buf);
     return 0;
 }

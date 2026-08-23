@@ -93,8 +93,8 @@ static void *worker(void *unused) {
     struct timespec before, after_poll, after_select, after;
     clock_gettime(CLOCK_MONOTONIC, &before);
     struct pollfd poll_event[2] = {{.fd = signal_fd, .events = POLLIN}, {.fd = ready_pipe[0], .events = POLLIN}};
-    int poll_ready = poll(poll_event, 2, 1000) == 2 && (poll_event[0].revents & POLLIN) &&
-                     (poll_event[1].revents & POLLIN);
+    int poll_ready =
+        poll(poll_event, 2, 1000) == 2 && (poll_event[0].revents & POLLIN) && (poll_event[1].revents & POLLIN);
     clock_gettime(CLOCK_MONOTONIC, &after_poll);
     fd_set read_set;
     FD_ZERO(&read_set);
@@ -110,21 +110,22 @@ static void *worker(void *unused) {
     int epoll_ready = ready == 1 && event.data.u64 == 0x51 && (event.events & EPOLLIN);
     int oneshot_quiet = epoll_wait(epoll_fd, &event, 1, 0) == 0;
     struct epoll_event rearm = {.events = EPOLLIN | EPOLLONESHOT, .data.u64 = 0x51};
-    int oneshot_rearmed = epoll_ctl(epoll_fd, EPOLL_CTL_MOD, signal_fd, &rearm) == 0 &&
-                          epoll_wait(epoll_fd, &event, 1, 0) == 1;
+    int oneshot_rearmed =
+        epoll_ctl(epoll_fd, EPOLL_CTL_MOD, signal_fd, &rearm) == 0 && epoll_wait(epoll_fd, &event, 1, 0) == 1;
     clock_gettime(CLOCK_MONOTONIC, &after);
     long elapsed_ms = (after.tv_sec - before.tv_sec) * 1000L + (after.tv_nsec - before.tv_nsec) / 1000000L;
     struct signalfd_siginfo info = {0};
     ssize_t count = read(signal_fd, &info, sizeof(info));
     int ok = elapsed_ms < 500 && poll_ready && select_ready && epoll_ready && oneshot_quiet && oneshot_rearmed &&
-             count == sizeof(info) &&
-             info.ssi_signo == SIGUSR1 && info.ssi_code == SI_TKILL &&
+             count == sizeof(info) && info.ssi_signo == SIGUSR1 && info.ssi_code == SI_TKILL &&
              info.ssi_pid == (uint32_t)getpid() && info.ssi_uid == (uint32_t)getuid();
-    if (!ok) fprintf(stderr, "worker poll=%d/%ld select=%d/%ld epoll=%d/%ld read=%zd signo=%u\n",
-                     poll_ready, (after_poll.tv_sec-before.tv_sec)*1000+(after_poll.tv_nsec-before.tv_nsec)/1000000,
-                     select_ready, (after_select.tv_sec-after_poll.tv_sec)*1000+(after_select.tv_nsec-after_poll.tv_nsec)/1000000,
-                     epoll_ready, (after.tv_sec-after_select.tv_sec)*1000+(after.tv_nsec-after_select.tv_nsec)/1000000,
-                     count, info.ssi_signo);
+    if (!ok)
+        fprintf(
+            stderr, "worker poll=%d/%ld select=%d/%ld epoll=%d/%ld read=%zd signo=%u\n", poll_ready,
+            (after_poll.tv_sec - before.tv_sec) * 1000 + (after_poll.tv_nsec - before.tv_nsec) / 1000000, select_ready,
+            (after_select.tv_sec - after_poll.tv_sec) * 1000 + (after_select.tv_nsec - after_poll.tv_nsec) / 1000000,
+            epoll_ready, (after.tv_sec - after_select.tv_sec) * 1000 + (after.tv_nsec - after_select.tv_nsec) / 1000000,
+            count, info.ssi_signo);
     if (write(result_pipe[1], &ok, sizeof(ok)) != sizeof(ok)) return NULL;
     return NULL;
 }
@@ -172,7 +173,8 @@ int main(void) {
     pthread_join(thread, NULL);
     blocking_fd = signalfd(-1, &mask, 0);
     if (blocking_fd < 0 || pthread_create(&thread, NULL, blocking_worker, NULL)) return 7;
-    while (!blocking_tid) sched_yield();
+    while (!blocking_tid)
+        sched_yield();
     usleep(20000);
     if (syscall(SYS_tgkill, getpid(), blocking_tid, SIGUSR2)) return 7;
     void *blocking_result = (void *)1;
@@ -194,10 +196,11 @@ int main(void) {
     void *sender_result = NULL;
     pthread_join(thread, &sender_result);
     int concurrent_ok = sender_result == NULL;
+
     enum { QUEUE_CAPACITY = 128 };
+
     int highest_sent = 0;
-    while (highest_sent < QUEUE_CAPACITY &&
-           syscall(SYS_tgkill, getpid(), main_tid, SIGRTMAX) == 0)
+    while (highest_sent < QUEUE_CAPACITY && syscall(SYS_tgkill, getpid(), main_tid, SIGRTMAX) == 0)
         ++highest_sent;
     errno = 0;
     int highest_overflow = syscall(SYS_tgkill, getpid(), main_tid, SIGRTMAX) == -1 && errno == EAGAIN;
@@ -219,15 +222,15 @@ int main(void) {
     struct signalfd_siginfo overflow_info;
     errno = 0;
     int overflow_empty = read(signal_fd, &overflow_info, sizeof(overflow_info)) == -1 && errno == EAGAIN;
-    int rtmax = rtmax_pending && highest_sent == QUEUE_CAPACITY && highest_overflow &&
-                max_count == QUEUE_CAPACITY && overflow_empty;
+    int rtmax = rtmax_pending && highest_sent == QUEUE_CAPACITY && highest_overflow && max_count == QUEUE_CAPACITY &&
+                overflow_empty;
     if (pipe(cleanup_command) || pipe(cleanup_result)) return 7;
     cleanup_tid = 0;
     if (pthread_create(&thread, NULL, cleanup_worker, NULL)) return 7;
-    while (!cleanup_tid) sched_yield();
+    while (!cleanup_tid)
+        sched_yield();
     int dead_target_sent = 0;
-    while (dead_target_sent < QUEUE_CAPACITY &&
-           syscall(SYS_tgkill, getpid(), cleanup_tid, SIGRTMIN) == 0)
+    while (dead_target_sent < QUEUE_CAPACITY && syscall(SYS_tgkill, getpid(), cleanup_tid, SIGRTMIN) == 0)
         ++dead_target_sent;
     errno = 0;
     int dead_target_full = syscall(SYS_tgkill, getpid(), cleanup_tid, SIGRTMIN) == -1 && errno == EAGAIN;
@@ -241,10 +244,10 @@ int main(void) {
                            process_info.ssi_signo == SIGUSR1;
     cleanup_tid = 0;
     if (pthread_create(&thread, NULL, cleanup_worker, NULL)) return 7;
-    while (!cleanup_tid) sched_yield();
+    while (!cleanup_tid)
+        sched_yield();
     int replacement_sent = 0;
-    while (replacement_sent < QUEUE_CAPACITY &&
-           syscall(SYS_tgkill, getpid(), cleanup_tid, SIGRTMIN) == 0)
+    while (replacement_sent < QUEUE_CAPACITY && syscall(SYS_tgkill, getpid(), cleanup_tid, SIGRTMIN) == 0)
         ++replacement_sent;
     errno = 0;
     int replacement_full = syscall(SYS_tgkill, getpid(), cleanup_tid, SIGRTMIN) == -1 && errno == EAGAIN;
@@ -278,9 +281,10 @@ int main(void) {
     int parent_retained =
         read(signal_fd, &parent_info, sizeof(parent_info)) == sizeof(parent_info) && parent_info.ssi_signo == SIGUSR1;
     int child_empty = WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0;
-    printf("signalfd_peer preexisting=%d wrong_read=%d wrong_epoll=%d wrong_poll=%d wrong_select=%d worker=%d blocking=%d concurrent=%d rtmax=%d cleanup=%d siginfo=%d child_empty=%d parent_retained=%d\n",
-           preexisting, wrong_read, wrong_epoll, wrong_poll, wrong_select, worker_ok, blocking, concurrent_ok, rtmax, cleanup, siginfo,
-           child_empty, parent_retained);
-    return !(preexisting && wrong_read && wrong_epoll && wrong_poll && wrong_select && worker_ok && blocking && concurrent_ok && rtmax && cleanup && siginfo &&
-             child_empty && parent_retained);
+    printf("signalfd_peer preexisting=%d wrong_read=%d wrong_epoll=%d wrong_poll=%d wrong_select=%d worker=%d "
+           "blocking=%d concurrent=%d rtmax=%d cleanup=%d siginfo=%d child_empty=%d parent_retained=%d\n",
+           preexisting, wrong_read, wrong_epoll, wrong_poll, wrong_select, worker_ok, blocking, concurrent_ok, rtmax,
+           cleanup, siginfo, child_empty, parent_retained);
+    return !(preexisting && wrong_read && wrong_epoll && wrong_poll && wrong_select && worker_ok && blocking &&
+             concurrent_ok && rtmax && cleanup && siginfo && child_empty && parent_retained);
 }

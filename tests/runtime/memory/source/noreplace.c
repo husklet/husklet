@@ -23,7 +23,8 @@ int main(void) {
     int fd = open("/data", O_RDWR);
     memset(payload, 0x6d, sizeof payload);
     if (fd < 0 || ftruncate(fd, (off_t)sizeof payload) != 0 ||
-        pwrite(fd, payload, sizeof payload, 0) != (ssize_t)sizeof payload) return 1;
+        pwrite(fd, payload, sizeof payload, 0) != (ssize_t)sizeof payload)
+        return 1;
 
     arena = mmap(NULL, reserve_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (arena == MAP_FAILED) return 1;
@@ -41,8 +42,7 @@ int main(void) {
     int placed = exact == vacant;
     int contents = placed && exact[0] == 0x6d && exact[host_granule - 1] == 0x6d;
 
-    printf("noreplace rejected=%d preserved=%d placed=%d contents=%d\n",
-           rejected, preserved, placed, contents);
+    printf("noreplace rejected=%d preserved=%d placed=%d contents=%d\n", rejected, preserved, placed, contents);
     if (placed) munmap(exact, host_granule);
     munmap(occupied, host_granule);
     munmap(arena, reserve_size);

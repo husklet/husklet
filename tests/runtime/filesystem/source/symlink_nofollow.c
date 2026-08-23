@@ -27,7 +27,10 @@ int main(void) {
     // dir/real (a regular file), dir/link -> real, dir/sub/ (a real dir), dir/dlink -> sub (a dir symlink)
     snprintf(path, sizeof path, "%s/real", dir);
     int fd = open(path, O_CREAT | O_WRONLY, 0644);
-    if (fd >= 0) { write(fd, "hi", 2); close(fd); }
+    if (fd >= 0) {
+        write(fd, "hi", 2);
+        close(fd);
+    }
     snprintf(path, sizeof path, "%s/sub", dir);
     mkdir(path, 0755);
     snprintf(path, sizeof path, "%s/sub/leaf", dir);
@@ -80,8 +83,7 @@ int main(void) {
         dangling_fd >= 0 && fstat(dangling_fd, &dangling_status) == 0 && S_ISLNK(dangling_status.st_mode);
     n = dangling_fd >= 0 ? readlinkat(dangling_fd, "", rl, sizeof rl) : -1;
     static const char dangling_target[] = "no-such-target";
-    int dangling_opath_target =
-        n == (ssize_t)(sizeof dangling_target - 1) && !memcmp(rl, dangling_target, (size_t)n);
+    int dangling_opath_target = n == (ssize_t)(sizeof dangling_target - 1) && !memcmp(rl, dangling_target, (size_t)n);
     if (dangling_fd >= 0) close(dangling_fd);
 
     // faccessat2 AT_SYMLINK_NOFOLLOW: the dangling link node exists; following it is ENOENT.

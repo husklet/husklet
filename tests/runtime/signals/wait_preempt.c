@@ -13,6 +13,7 @@
 
 static volatile pid_t g_child;
 static volatile sig_atomic_t g_fired;
+
 static void on_alarm(int s) {
     (void)s;
     g_fired = 1;
@@ -22,7 +23,8 @@ static void on_alarm(int s) {
 int main(void) {
     g_child = fork();
     if (g_child == 0) {
-        for (;;) pause();
+        for (;;)
+            pause();
         _exit(0);
     }
     struct sigaction sa;

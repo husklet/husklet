@@ -3,18 +3,15 @@
 // constant-folded string. 42 = sum of 1..21 minus 189 = 231-189. Static non-PIE, no libc.
 static long sys3(long n, long a, long b, long c) {
     long r;
-    __asm__ volatile("syscall"
-                     : "=a"(r)
-                     : "a"(n), "D"(a), "S"(b), "d"(c)
-                     : "rcx", "r11", "memory");
+    __asm__ volatile("syscall" : "=a"(r) : "a"(n), "D"(a), "S"(b), "d"(c) : "rcx", "r11", "memory");
     return r;
 }
 
 void _start(void) {
     long v = 0;
     for (int i = 1; i <= 21; i++)
-        v += i;   // 231
-    v -= 189;     // 42
+        v += i; // 231
+    v -= 189;   // 42
     char buf[24];
     int p = sizeof buf;
     buf[--p] = '\n';

@@ -22,13 +22,19 @@ static void on_bus(int number, siginfo_t *info, void *context) {
 
 static int bus_load(volatile unsigned char *address) {
     expected = address;
-    if (sigsetjmp(jump, 1) == 0) { (void)*address; return 0; }
+    if (sigsetjmp(jump, 1) == 0) {
+        (void)*address;
+        return 0;
+    }
     return 1;
 }
 
 static int bus_store(volatile unsigned char *address) {
     expected = address;
-    if (sigsetjmp(jump, 1) == 0) { *address = 1; return 0; }
+    if (sigsetjmp(jump, 1) == 0) {
+        *address = 1;
+        return 0;
+    }
     return 1;
 }
 
@@ -51,17 +57,19 @@ int main(void) {
     pid_t peer = fork();
     if (peer == 0) {
         char op;
-        close(command[1]); close(reply[0]); close(fd);
+        close(command[1]);
+        close(reply[0]);
+        close(fd);
         int external = open(path, O_RDWR);
         if (external < 0 || read(command[0], &op, 1) != 1 || ftruncate(external, 5000) != 0 ||
-            write(reply[1], "s", 1) != 1 || read(command[0], &op, 1) != 1 ||
-            ftruncate(external, 12288) != 0 || pwrite(external, &marker, 1, 8192) != 1 ||
-            write(reply[1], "e", 1) != 1)
+            write(reply[1], "s", 1) != 1 || read(command[0], &op, 1) != 1 || ftruncate(external, 12288) != 0 ||
+            pwrite(external, &marker, 1, 8192) != 1 || write(reply[1], "e", 1) != 1)
             _exit(20);
         close(external);
         _exit(0);
     }
-    close(command[0]); close(reply[1]);
+    close(command[0]);
+    close(reply[1]);
     char byte = 's';
     if (peer < 0 || write(command[1], &byte, 1) != 1 || read(reply[0], &byte, 1) != 1) return 4;
     int partial = shared[4999] == 0x2a && shared[5000] == 0 && private[5000] == 0;
@@ -90,7 +98,8 @@ int main(void) {
     close(reopened);
     munmap(short_map, 12288);
     close(fd);
-    printf("truncate-peer partial=%d shrink-shared=%d shrink-private=%d extend-shared=%d extend-private=%d dirty-private=%d initial-extend=%d metadata=%d peer=%d\n",
+    printf("truncate-peer partial=%d shrink-shared=%d shrink-private=%d extend-shared=%d extend-private=%d "
+           "dirty-private=%d initial-extend=%d metadata=%d peer=%d\n",
            partial, shrink_shared, shrink_private, extend_shared, extend_private, dirty_private, initial_extend,
            metadata == 2, peer_ok);
     return partial && shrink_shared && shrink_private && extend_shared && extend_private && dirty_private &&

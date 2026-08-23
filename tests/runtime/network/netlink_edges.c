@@ -20,18 +20,27 @@ static int nl_open(void) {
     struct sockaddr_nl sa;
     memset(&sa, 0, sizeof sa);
     sa.nl_family = AF_NETLINK;
-    if (bind(fd, (struct sockaddr *)&sa, sizeof sa) < 0) { close(fd); return -1; }
+    if (bind(fd, (struct sockaddr *)&sa, sizeof sa) < 0) {
+        close(fd);
+        return -1;
+    }
     return fd;
 }
 
 // Dump all links; return the RTM_GETLINK view of `want` via out-params. found=0 if absent.
 static void getlink_dump(const char *want, int *found, int *type, int *index, int *mtu, int *flags,
                          unsigned char *mac) {
-    *found = 0; *type = *index = *mtu = *flags = -1;
+    *found = 0;
+    *type = *index = *mtu = *flags = -1;
     memset(mac, 0, 6);
     int fd = nl_open();
     if (fd < 0) return;
-    struct { struct nlmsghdr nh; struct ifinfomsg ifi; } req;
+
+    struct {
+        struct nlmsghdr nh;
+        struct ifinfomsg ifi;
+    } req;
+
     memset(&req, 0, sizeof req);
     req.nh.nlmsg_len = NLMSG_LENGTH(sizeof req.ifi);
     req.nh.nlmsg_type = RTM_GETLINK;
@@ -45,7 +54,10 @@ static void getlink_dump(const char *want, int *found, int *type, int *index, in
         ssize_t len = recv(fd, buf, sizeof buf, 0);
         if (len <= 0) break;
         for (struct nlmsghdr *nh = (struct nlmsghdr *)buf; NLMSG_OK(nh, len); nh = NLMSG_NEXT(nh, len)) {
-            if (nh->nlmsg_type == NLMSG_DONE || nh->nlmsg_type == NLMSG_ERROR) { done = 1; break; }
+            if (nh->nlmsg_type == NLMSG_DONE || nh->nlmsg_type == NLMSG_ERROR) {
+                done = 1;
+                break;
+            }
             if (nh->nlmsg_type != RTM_NEWLINK) continue;
             struct ifinfomsg *ifi = NLMSG_DATA(nh);
             char name[64] = "";
@@ -53,8 +65,10 @@ static void getlink_dump(const char *want, int *found, int *type, int *index, in
             unsigned char m[6] = {0};
             int rlen = nh->nlmsg_len - NLMSG_LENGTH(sizeof *ifi);
             for (struct rtattr *rta = IFLA_RTA(ifi); RTA_OK(rta, rlen); rta = RTA_NEXT(rta, rlen)) {
-                if (rta->rta_type == IFLA_IFNAME) snprintf(name, sizeof name, "%s", (char *)RTA_DATA(rta));
-                else if (rta->rta_type == IFLA_MTU) lmtu = *(int *)RTA_DATA(rta);
+                if (rta->rta_type == IFLA_IFNAME)
+                    snprintf(name, sizeof name, "%s", (char *)RTA_DATA(rta));
+                else if (rta->rta_type == IFLA_MTU)
+                    lmtu = *(int *)RTA_DATA(rta);
                 else if (rta->rta_type == IFLA_ADDRESS) {
                     ml = RTA_PAYLOAD(rta);
                     if (ml > 6) ml = 6;
@@ -116,7 +130,12 @@ int main(void) {
 
     // Non-dump RTM_GETLINK for a bogus ifindex -> Linux answers NLMSG_ERROR/-ENODEV, never a link dump.
     int fd = nl_open();
-    struct { struct nlmsghdr nh; struct ifinfomsg ifi; } req;
+
+    struct {
+        struct nlmsghdr nh;
+        struct ifinfomsg ifi;
+    } req;
+
     memset(&req, 0, sizeof req);
     req.nh.nlmsg_len = NLMSG_LENGTH(sizeof req.ifi);
     req.nh.nlmsg_type = RTM_GETLINK;

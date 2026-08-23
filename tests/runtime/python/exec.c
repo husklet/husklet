@@ -19,9 +19,7 @@ int main(int argc, char **argv) {
     const pid_t child = fork();
     if (child == 0) {
         FILE *diagnostic = freopen("/tmp/husklet-cpython-stderr", "w", stderr);
-        if (diagnostic == NULL) {
-            _exit(126);
-        }
+        if (diagnostic == NULL) { _exit(126); }
         execv(interpreter, arguments);
         const int error = errno;
         fprintf(stderr, "exec-python: %s: ", interpreter);
@@ -55,9 +53,7 @@ int main(int argc, char **argv) {
                 return 125;
             }
         }
-        if (ferror(input) != 0 || fclose(input) != 0) {
-            return 125;
-        }
+        if (ferror(input) != 0 || fclose(input) != 0) { return 125; }
         return 0;
     }
     FILE *diagnostic = fopen("/tmp/husklet-cpython-stderr", "rb");
@@ -69,8 +65,6 @@ int main(int argc, char **argv) {
         }
         (void)fclose(diagnostic);
     }
-    if (WIFEXITED(status)) {
-        return WEXITSTATUS(status);
-    }
+    if (WIFEXITED(status)) { return WEXITSTATUS(status); }
     return 128 + WTERMSIG(status);
 }

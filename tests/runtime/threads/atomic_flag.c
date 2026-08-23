@@ -7,6 +7,7 @@
 #define PER 20000
 static atomic_flag lock = ATOMIC_FLAG_INIT;
 static long shared;
+
 static void *w(void *_) {
     (void)_;
     for (int i = 0; i < PER; i++) {
@@ -16,10 +17,13 @@ static void *w(void *_) {
     }
     return 0;
 }
+
 int main(void) {
     pthread_t t[N];
-    for (int i = 0; i < N; i++) pthread_create(&t[i], 0, w, 0);
-    for (int i = 0; i < N; i++) pthread_join(t[i], 0);
+    for (int i = 0; i < N; i++)
+        pthread_create(&t[i], 0, w, 0);
+    for (int i = 0; i < N; i++)
+        pthread_join(t[i], 0);
     printf("atomic_flag shared=%ld\n", shared); // 320000
     return 0;
 }

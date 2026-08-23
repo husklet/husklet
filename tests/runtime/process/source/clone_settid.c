@@ -37,9 +37,11 @@ static int child_fn(void *arg) {
 int main(void) {
     long page = sysconf(_SC_PAGESIZE);
     size_t stack_size = 64 * 1024;
-    void *stack = mmap(NULL, stack_size, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK, -1, 0);
-    if (stack == MAP_FAILED) { printf("mmap fail\n"); return 1; }
+    void *stack = mmap(NULL, stack_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK, -1, 0);
+    if (stack == MAP_FAILED) {
+        printf("mmap fail\n");
+        return 1;
+    }
     (void)page;
 
     g_ptid = -1;
@@ -48,14 +50,17 @@ int main(void) {
 
     int flags = CLONE_VM | CLONE_PARENT_SETTID | CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID | SIGCHLD;
     pid_t pid = clone(child_fn, stack_top, flags, (void *)&g_ctid, &g_ptid, NULL, &g_ctid);
-    if (pid < 0) { printf("clone fail\n"); return 1; }
+    if (pid < 0) {
+        printf("clone fail\n");
+        return 1;
+    }
 
-    int ptid_ok = g_ptid == pid;                 // PARENT_SETTID wrote the child tid
+    int ptid_ok = g_ptid == pid; // PARENT_SETTID wrote the child tid
     // CHILD_CLEARTID: wait on the ctid futex; when the child exits the kernel zeroes it and wakes us.
     while (g_ctid != 0) {
-        fwait((volatile int *)&g_ctid, g_ctid);   // returns on wake or EAGAIN if already changed
+        fwait((volatile int *)&g_ctid, g_ctid); // returns on wake or EAGAIN if already changed
     }
-    int cleared = g_ctid == 0;                    // ctid zeroed on child exit
+    int cleared = g_ctid == 0; // ctid zeroed on child exit
 
     int st = 0;
     waitpid(pid, &st, 0);

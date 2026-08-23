@@ -19,7 +19,10 @@ static int v6only(int fd) {
 int main(void) {
     net_watchdog(20);
     int s = socket(AF_INET6, SOCK_STREAM, 0);
-    if (s < 0) { printf("no_ipv6\n"); return 0; }
+    if (s < 0) {
+        printf("no_ipv6\n");
+        return 0;
+    }
     int def = v6only(s);
     int off = 0, on = 1;
     setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof off);

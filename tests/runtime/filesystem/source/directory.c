@@ -18,14 +18,16 @@
 #define SYS_UNLINKAT 263
 #define SYS_SYMLINKAT 266
 #define O_DIRECTORY 0x10000L
+
 static long call6(long n, long a, long b, long c, long d, long e, long f) {
     register long r10 __asm__("r10") = d;
     register long r8 __asm__("r8") = e;
     register long r9 __asm__("r9") = f;
     long result;
-    __asm__ volatile("syscall" : "=a"(result)
-        : "a"(n), "D"(a), "S"(b), "d"(c), "r"(r10), "r"(r8), "r"(r9)
-        : "rcx", "r11", "memory");
+    __asm__ volatile("syscall"
+                     : "=a"(result)
+                     : "a"(n), "D"(a), "S"(b), "d"(c), "r"(r10), "r"(r8), "r"(r9)
+                     : "rcx", "r11", "memory");
     return result;
 }
 #elif defined(__aarch64__)
@@ -38,13 +40,16 @@ static long call6(long n, long a, long b, long c, long d, long e, long f) {
 #define SYS_UNLINKAT 35
 #define SYS_SYMLINKAT 36
 #define O_DIRECTORY 0x4000L
+
 static long call6(long n, long a, long b, long c, long d, long e, long f) {
-    register long x0 __asm__("x0") = a; register long x1 __asm__("x1") = b;
-    register long x2 __asm__("x2") = c; register long x3 __asm__("x3") = d;
-    register long x4 __asm__("x4") = e; register long x5 __asm__("x5") = f;
+    register long x0 __asm__("x0") = a;
+    register long x1 __asm__("x1") = b;
+    register long x2 __asm__("x2") = c;
+    register long x3 __asm__("x3") = d;
+    register long x4 __asm__("x4") = e;
+    register long x5 __asm__("x5") = f;
     register long x8 __asm__("x8") = n;
-    __asm__ volatile("svc 0" : "+r"(x0)
-        : "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x8) : "memory");
+    __asm__ volatile("svc 0" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x8) : "memory");
     return x0;
 }
 #else
@@ -62,19 +67,15 @@ static uint16_t word16(const unsigned char *p) {
 
 static int64_t word64(const unsigned char *p) {
     uint64_t value = 0;
-    for (int i = 0; i < 8; i++) value |= (uint64_t)p[i] << (i * 8);
+    for (int i = 0; i < 8; i++)
+        value |= (uint64_t)p[i] << (i * 8);
     return (int64_t)value;
 }
 
-static int record(
-    unsigned char *buffer,
-    long count,
-    const char *name,
-    unsigned char type,
-    int64_t *cookie
-) {
+static int record(unsigned char *buffer, long count, const char *name, unsigned char type, int64_t *cookie) {
     if (count != 24 || word16(buffer + 16) != 24 || buffer[18] != type) return 0;
-    for (int i = 0; name[i] != 0; i++) if (buffer[19 + i] != (unsigned char)name[i]) return 0;
+    for (int i = 0; name[i] != 0; i++)
+        if (buffer[19 + i] != (unsigned char)name[i]) return 0;
     int64_t next = word64(buffer + 8);
     if (next <= *cookie) return 0;
     *cookie = next;
@@ -90,11 +91,9 @@ void _start(void) {
     static const char target[] = "a";
     unsigned char buffer[64];
     if (call6(SYS_MKDIRAT, AT_FDCWD, (long)dir, 0755, 0, 0, 0) != 0) finish(1);
-    long created = call6(SYS_OPENAT, AT_FDCWD, (long)file,
-        O_CREAT | O_WRONLY, 0644, 0, 0);
+    long created = call6(SYS_OPENAT, AT_FDCWD, (long)file, O_CREAT | O_WRONLY, 0644, 0, 0);
     if (created < 0 || call6(SYS_CLOSE, created, 0, 0, 0, 0, 0) != 0) finish(2);
-    created = call6(SYS_OPENAT, AT_FDCWD, (long)removed,
-        O_CREAT | O_WRONLY, 0644, 0, 0);
+    created = call6(SYS_OPENAT, AT_FDCWD, (long)removed, O_CREAT | O_WRONLY, 0644, 0, 0);
     if (created < 0 || call6(SYS_CLOSE, created, 0, 0, 0, 0, 0) != 0) finish(3);
     if (call6(SYS_UNLINKAT, AT_FDCWD, (long)removed, 0, 0, 0, 0) != 0) finish(4);
     if (call6(SYS_SYMLINKAT, (long)target, AT_FDCWD, (long)link, 0, 0, 0) != 0) finish(5);
@@ -110,18 +109,15 @@ void _start(void) {
     long alias = call6(SYS_DUP, fd, 0, 0, 0, 0, 0);
     if (alias < 0) finish(11);
     int64_t cookie = -1;
-    if (!record(buffer, call6(SYS_GETDENTS64, fd, (long)buffer, 24, 0, 0, 0),
-            ".", DT_DIR, &cookie)) finish(12);
-    if (!record(buffer, call6(SYS_GETDENTS64, alias, (long)buffer, 24, 0, 0, 0),
-            "..", DT_DIR, &cookie)) finish(13);
-    if (!record(buffer, call6(SYS_GETDENTS64, fd, (long)buffer, 24, 0, 0, 0),
-            "a", DT_REG, &cookie)) finish(14);
+    if (!record(buffer, call6(SYS_GETDENTS64, fd, (long)buffer, 24, 0, 0, 0), ".", DT_DIR, &cookie)) finish(12);
+    if (!record(buffer, call6(SYS_GETDENTS64, alias, (long)buffer, 24, 0, 0, 0), "..", DT_DIR, &cookie)) finish(13);
+    if (!record(buffer, call6(SYS_GETDENTS64, fd, (long)buffer, 24, 0, 0, 0), "a", DT_REG, &cookie)) finish(14);
     long count = call6(SYS_GETDENTS64, alias, (long)buffer, 24, 0, 0, 0);
     int link_first = record(buffer, count, "l", DT_LNK, &cookie);
     if (!link_first && !record(buffer, count, "sub", DT_DIR, &cookie)) finish(15);
     count = call6(SYS_GETDENTS64, fd, (long)buffer, 24, 0, 0, 0);
-    if (!(link_first ? record(buffer, count, "sub", DT_DIR, &cookie)
-                     : record(buffer, count, "l", DT_LNK, &cookie))) finish(16);
+    if (!(link_first ? record(buffer, count, "sub", DT_DIR, &cookie) : record(buffer, count, "l", DT_LNK, &cookie)))
+        finish(16);
     if (call6(SYS_GETDENTS64, alias, (long)buffer, sizeof(buffer), 0, 0, 0) != 0) finish(17);
     if (call6(SYS_CLOSE, alias, 0, 0, 0, 0, 0) != 0) finish(18);
     if (call6(SYS_CLOSE, fd, 0, 0, 0, 0, 0) != 0) finish(19);

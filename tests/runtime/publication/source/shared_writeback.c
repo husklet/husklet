@@ -28,21 +28,13 @@ static int pread_matches(int fd, uint64_t edge_low, uint64_t edge_high) {
     while (done < BYTES) {
         size_t want = BYTES - done < sizeof chunk ? BYTES - done : sizeof chunk;
         ssize_t got = pread(fd, chunk, want, (off_t)done);
-        if (got <= 0) {
-            return 0;
-        }
+        if (got <= 0) { return 0; }
         for (size_t i = 0; i < (size_t)got / 8; i++) {
             size_t index = done / 8 + i;
             uint64_t want_value = mix(index, ROUNDS - 1);
-            if (index == 0) {
-                want_value = edge_low;
-            }
-            if (index == WORDS - 1) {
-                want_value = edge_high;
-            }
-            if (chunk[i] != want_value) {
-                return 0;
-            }
+            if (index == 0) { want_value = edge_low; }
+            if (index == WORDS - 1) { want_value = edge_high; }
+            if (chunk[i] != want_value) { return 0; }
         }
         done += (size_t)got;
     }
@@ -51,18 +43,12 @@ static int pread_matches(int fd, uint64_t edge_low, uint64_t edge_high) {
 
 static int alias_matches(int fd, uint64_t edge_low, uint64_t edge_high) {
     uint64_t *alias = mmap(NULL, BYTES, PROT_READ, MAP_SHARED, fd, 0);
-    if (alias == MAP_FAILED) {
-        return 0;
-    }
+    if (alias == MAP_FAILED) { return 0; }
     int ok = 1;
     for (size_t index = 0; index < WORDS; index++) {
         uint64_t want_value = mix(index, ROUNDS - 1);
-        if (index == 0) {
-            want_value = edge_low;
-        }
-        if (index == WORDS - 1) {
-            want_value = edge_high;
-        }
+        if (index == 0) { want_value = edge_low; }
+        if (index == WORDS - 1) { want_value = edge_high; }
         if (alias[index] != want_value) {
             ok = 0;
             break;

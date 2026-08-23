@@ -19,8 +19,7 @@ int main(void) {
         struct sockaddr_in *sa = (struct sockaddr_in *)res->ai_addr;
         char buf[64];
         inet_ntop(AF_INET, &sa->sin_addr, buf, sizeof buf);
-        v4_ok = strcmp(buf, "192.0.2.55") == 0 && ntohs(sa->sin_port) == 8080 &&
-                res->ai_family == AF_INET;
+        v4_ok = strcmp(buf, "192.0.2.55") == 0 && ntohs(sa->sin_port) == 8080 && res->ai_family == AF_INET;
         freeaddrinfo(res);
     }
 

@@ -387,6 +387,7 @@
         pkgs:
         let
           alpine = if pkgs.stdenv.isLinux then linuxAlpineFor pkgs else null;
+          toolchain = toolchainFor pkgs;
         in
         (rustPlatformFor pkgs).buildRustPackage (
           {
@@ -407,7 +408,12 @@
               pkgs.gobject-introspection
               pkgs.glib
               pkgs.gdk-pixbuf
-            ];
+              pkgs.cacert
+              pkgs.coreutils
+              pkgs.procps
+            ]
+            ++ lib.optionals toolchain.canBuildGuests toolchain.compilerAliases
+            ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.xorg-server pkgs.xvfb-run ];
             buildInputs = [
               pkgs.gtk4
               pkgs.librsvg
@@ -418,6 +424,14 @@
               runHook preBuild
 
               export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
+              export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+              # A unique root prevents two sandbox UIDs from sharing the corpus
+              # runner's durable default namespace in /var/tmp.
+              export TMPDIR="$(mktemp -d /tmp/husklet-verification.XXXXXX)"
+              export HL_RUNTIME_WORK_ROOT="$TMPDIR/runtime"
+              export HOME="$TMPDIR/home"
+              export XDG_CACHE_HOME="$TMPDIR/cache"
+              mkdir -p "$HOME" "$XDG_CACHE_HOME"
               if [ "$NIX_BUILD_CORES" -gt 256 ]; then
                 export HL_COMPAT_JOBS=256
               else
@@ -434,37 +448,65 @@
               export HL_TEST_ENGINE_APP_BIN_DIR="$PWD/target/debug"
               cargo check --workspace --all-targets --locked --offline
               cargo clippy --workspace --all-targets --locked --offline -- -D warnings
-              cargo test --workspace --all-targets --locked --offline --no-fail-fast
+              ${lib.optionalString pkgs.stdenv.isLinux ''
+                xvfb-run -a -s '-screen 0 1600x1000x24' -- \
+                  cargo test --workspace --all-targets --locked --offline --no-fail-fast
+              ''}
+              ${lib.optionalString pkgs.stdenv.isDarwin ''
+                cargo test --workspace --all-targets --locked --offline --no-fail-fast
+              ''}
               ${lib.optionalString pkgs.stdenv.isLinux ''export HL_PRODUCT_CHECKPOINT_REQUIRED=1''}
               cargo test -p husklet --features runtime --lib --locked --offline --no-fail-fast
               cargo test --workspace --doc --locked --offline
               ${lib.optionalString pkgs.stdenv.isLinux ''
+                build_authority_test() {
+                  local receipt="$1"
+                  cargo test -p hl-native --test executable_authority --locked --offline --no-run \
+                    --message-format=json | tee "$receipt"
+                  mapfile -t authority_tests < <(
+                    sed -n 's/.*"executable":"\([^"]*\/executable_authority-[^"]*\)".*/\1/p' "$receipt"
+                  )
+                  if [ "''${#authority_tests[@]}" -ne 1 ] || [ ! -x "''${authority_tests[0]}" ]; then
+                    printf 'expected one executable-authority artifact from this build, found %s\n' \
+                      "''${#authority_tests[@]}" >&2
+                    exit 1
+                  fi
+                  authority_test="''${authority_tests[0]}"
+                }
+
+                reject_sanitizer_reports() {
+                  local label="$1"
+                  local prefix="$2"
+                  local found=0
+                  for report in "$TMPDIR/$prefix" "$TMPDIR/$prefix".*; do
+                    [ -f "$report" ] || continue
+                    if [ "$found" -eq 0 ]; then
+                      printf '%s reported an error in the clean lifecycle tests\n' "$label" >&2
+                    fi
+                    cat "$report" >&2
+                    found=1
+                  done
+                  [ "$found" -eq 0 ]
+                }
+
+                # Prove the shell running this derivation can discover a report. The previous `compgen`
+                # probe was unavailable here and its failure made the surrounding `if` silently pass.
+                printf 'sanitizer-report-probe\n' > "$TMPDIR/sanitizer-probe.known"
+                if reject_sanitizer_reports Probe sanitizer-probe >/dev/null 2>&1; then
+                  printf 'sanitizer report probe was not discovered\n' >&2
+                  exit 1
+                fi
+                rm "$TMPDIR/sanitizer-probe.known"
+
                 # AddressSanitizer covers native lifetime violations that leak
                 # accounting cannot observe. Run the bounded ownership tests,
                 # then prove that the instrumentation rejects a C heap UAF.
                 export HL_C_SANITIZER=address
-                cargo test -p hl-native --test executable_authority --locked --offline --no-run
-                authority_tests=(target/debug/deps/executable_authority-*)
-                authority_test=""
-                for candidate in "''${authority_tests[@]}"; do
-                  if [ -x "$candidate" ] && [ "''${candidate##*.}" != d ]; then
-                    if [ -n "$authority_test" ]; then
-                      printf 'multiple executable-authority test binaries found\n' >&2
-                      exit 1
-                    fi
-                    authority_test="$candidate"
-                  fi
-                done
-                if [ -z "$authority_test" ]; then
-                  printf 'executable-authority test binary is absent\n' >&2
-                  exit 1
-                fi
+                build_authority_test "$TMPDIR/asan-authority-build.json"
                 asan_runtime="$(${pkgs.stdenv.cc}/bin/cc -print-file-name=libasan.so)"
                 ASAN_OPTIONS="detect_leaks=0:halt_on_error=1:exitcode=97:log_path=$TMPDIR/asan-clean" \
                   LD_PRELOAD="$asan_runtime" "$authority_test"
-                if compgen -G "$TMPDIR/asan-clean*" >/dev/null; then
-                  printf 'AddressSanitizer reported an error in the clean lifecycle tests\n' >&2
-                  cat "$TMPDIR"/asan-clean* >&2
+                if ! reject_sanitizer_reports AddressSanitizer asan-clean; then
                   exit 1
                 fi
 
@@ -487,9 +529,7 @@
                 export HL_C_SANITIZER=leak
                 export LSAN_OPTIONS="suppressions=$PWD/tests/lsan.supp:print_suppressions=1:exitcode=97:log_path=$TMPDIR/lsan-clean"
                 cargo test -p hl-native --test executable_authority --locked --offline
-                if compgen -G "$TMPDIR/lsan-clean*" >/dev/null; then
-                  printf 'LeakSanitizer reported an error in the clean lifecycle tests\n' >&2
-                  cat "$TMPDIR"/lsan-clean* >&2
+                if ! reject_sanitizer_reports LeakSanitizer lsan-clean; then
                   exit 1
                 fi
 
@@ -512,22 +552,7 @@
                 # bounded authority lifecycle tests do not execute generated guest
                 # code, which Valgrind cannot reliably inspect.
                 export HL_C_SANITIZER=memcheck
-                cargo test -p hl-native --test executable_authority --locked --offline --no-run
-                authority_tests=(target/debug/deps/executable_authority-*)
-                authority_test=""
-                for candidate in "''${authority_tests[@]}"; do
-                  if [ -x "$candidate" ] && [ "''${candidate##*.}" != d ]; then
-                    if [ -n "$authority_test" ]; then
-                      printf 'multiple executable-authority test binaries found\n' >&2
-                      exit 1
-                    fi
-                    authority_test="$candidate"
-                  fi
-                done
-                if [ -z "$authority_test" ]; then
-                  printf 'executable-authority test binary is absent\n' >&2
-                  exit 1
-                fi
+                build_authority_test "$TMPDIR/memcheck-authority-build.json"
                 valgrind \
                   --leak-check=full \
                   --show-leak-kinds=definite,indirect \
@@ -613,6 +638,8 @@
         pkgs:
         let
           archives = alpineArchivesFor pkgs;
+          toolchain = toolchainFor pkgs;
+          arm64Compiler = builtins.elemAt toolchain.compilerAliases 0;
         in
         (rustPlatformFor pkgs).buildRustPackage {
           pname = "hl-alpine-compatibility";
@@ -629,6 +656,7 @@
             # Load-bearing, proven by removal rather than assumed: without it this gate
             # reddens at `total_failed_ms=62 error=No such file or directory (os error 2)`.
             pkgs.procps
+            arm64Compiler
             (rustFor pkgs)
           ];
           doCheck = false;
@@ -636,6 +664,10 @@
             runHook preBuild
             export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
             export HL_PRODUCT_CHECKPOINT_REQUIRED=1
+            # The daemon's public fixtures below currently target ARM64.  Use the
+            # pinned guest compiler wrapper, which also supplies glibc's static
+            # archive; a Nix sandbox deliberately has no /usr/bin compiler.
+            export HL_GUEST_CC=${arm64Compiler}/bin/aarch64-linux-gnu-gcc
 
             run_ignored() {
               package="$1"
@@ -1119,6 +1151,7 @@
             (rustFor pkgs)
             windows.stdenv.cc
             pkgs.file
+            pkgs.jq
           ];
           buildInputs = [ windows.windows.mcfgthreads ];
           doCheck = false;
@@ -1160,7 +1193,7 @@
               -Isrc/runtime/hl-native/src/native \
               -Isrc/runtime/hl-native/src/native/include \
               -Isrc/runtime/hl-native/src/native/bridge \
-              src/runtime/hl-native/tests/bridge-abi/windows.c "$import" \
+              src/runtime/hl-native/tests/windows_bridge_abi.c "$import" \
               -o checkpoint-bridge-contract.exe
             ${windows.stdenv.cc.targetPrefix}objdump -f checkpoint-bridge-contract.exe \
               | grep -F 'file format pei-x86-64' >/dev/null
@@ -1178,6 +1211,14 @@
               ${windows.stdenv.cc.targetPrefix}objdump -p checkpoint-bridge-contract.exe \
                 | grep -F "$symbol" >/dev/null
             done
+            # HALF THIS CRATE'S WINDOWS TEST SURFACE IS EMPTY, and no artifact count can
+            # see it: of `hl-native`'s 46 test targets, 23 compile to empty crates on a
+            # Windows check without `native-test-hooks` -- 18 feature-gated and 5
+            # platform-gated -- while ALL 46 still emit artifacts. `identity_registry` is
+            # the only one deliberately armed FOR Windows, which is why it is named here
+            # rather than left to `--all-targets`. Unifying the feature through
+            # `-p hl-engine --all-targets` makes 18 of the 23 live; the other 5 are honest
+            # platform exclusions.
             cargo test --locked --offline --target ${target} -p hl-native \
               --test identity_registry --no-run
             ${lib.escapeShellArg compiler} -std=c11 -DHL_SHARED -DHL_BUILDING_ENGINE \
@@ -1244,6 +1285,68 @@
             file libhl-abi-fixture.dll.a | grep -F 'current ar archive'
             ${windows.stdenv.cc.targetPrefix}nm -g libhl-abi-fixture.dll.a \
               | grep -F ' T hl_ci_engine_abi' >/dev/null
+
+            # ---------------------------------------------------------------------------
+            # THE cfg-WIDTH GATE, READ AS A COUNT AND NEVER AS AN EXIT CODE.
+            #
+            # `cargo check --all-targets` exits 0 while SILENTLY SKIPPING a target whose
+            # required features are unmet. Measured rather than argued: clamping one target
+            # with a `required-features` it does not have left cargo at exit 0 while the
+            # compiled-unit count fell 87 to 86. An exit status cannot see that; a census
+            # can. So this arm diffs a per-crate unit count against a pinned table, and the
+            # `diff` IS the assertion -- nothing here reads `$?` from cargo.
+            #
+            # Shown to fail before landing, on the captured JSON of a real run: removing a
+            # single `hl-native` artifact takes the table from `48 hl-native` to
+            # `47 hl-native` and `diff -u` exits 1 naming the crate.
+            #
+            # Sorted by crate name so the comparison cannot fail on ordering alone. The
+            # first pair of files produced for this gate differed ONLY in the order of
+            # `engine` and `extension`, which would have been a spurious red.
+            #
+            # WHEN THIS REDDENS ON A TARGET YOU ADDED, that is the gate working: read the
+            # `diff`, confirm the new target belongs in the Windows census, and update the
+            # number below. Do NOT widen the pipeline to make the count float, which would
+            # return this arm to reading nothing. It reddened FOR REAL within minutes of
+            # being written: `imported_path_guard.rs` arrived on `main` from the chmod
+            # EFAULT lane and took `hl-native` from 48 to 49, unplanted.
+            #
+            # WHAT THIS WHOLE ATTRIBUTE IS AND IS NOT. Every claim here is COMPILE AND LINK
+            # evidence. Three DLLs and a PE32+ executable are produced and inspected, and
+            # NOT ONE INSTRUCTION HAS RUN -- there is no Windows host in this build. Whether
+            # the exported symbols behave, and whether `CreateProcess`-based spawning works,
+            # are open questions that need a real Windows runner. Do not let a green here be
+            # read as a working Windows product.
+            cargo check --locked --offline --target ${target} --all-targets \
+              --message-format=json \
+              -p hl-native -p hl-engine -p engine -p hl-fs -p hl-log -p hl-process \
+              -p hl-rpc -p hl-design -p hl-cc -p hl-gui -p hl-ws -p hl-ws-term \
+              -p hl-extension -p extension > windows-units.json
+            jq -r '
+              select(.reason == "compiler-artifact")
+              | select(.package_id | startswith("path+"))
+              | ((.package_id | capture("#(?<n>[A-Za-z0-9_-]+)@") | .n)
+                 // (.package_id | split("#")[0] | split("/") | last))
+                + "\t" + .target.name + "\t" + (.target.kind | join(","))
+            ' windows-units.json | sort -u | cut -f1 | sort | uniq -c \
+              | sed 's/^ *//' > windows-units.actual
+            cat > windows-units.expected <<'WINDOWS_UNITS'
+6 engine
+3 extension
+1 hl-cc
+2 hl-design
+5 hl-engine
+7 hl-extension
+1 hl-fs
+8 hl-gui
+2 hl-log
+49 hl-native
+1 hl-process
+1 hl-rpc
+1 hl-ws
+2 hl-ws-term
+WINDOWS_UNITS
+            diff -u windows-units.expected windows-units.actual
             runHook postBuild
           '';
           installPhase = ''
@@ -1415,6 +1518,13 @@
           toolchain = toolchainFor pkgs;
           alpineArchives = alpineArchivesFor pkgs;
           alpine = if pkgs.stdenv.isLinux then linuxAlpineFor pkgs else null;
+          # The same `pkgsCross.mingwW64` the `host-windows-x86_64-gnu-smoke` check already
+          # builds against, so this adds no closure CI does not already substitute.
+          windows = pkgs.pkgsCross.mingwW64;
+          windowsCc = "${windows.stdenv.cc}/bin/${windows.stdenv.cc.targetPrefix}cc";
+          windowsCxx = "${windows.stdenv.cc}/bin/${windows.stdenv.cc.targetPrefix}c++";
+          windowsAr = "${windows.stdenv.cc}/bin/${windows.stdenv.cc.targetPrefix}ar";
+          windowsLibraries = "-L${windows.windows.mcfgthreads}/lib -L${windows.windows.pthreads}/lib";
         in
         {
           default = pkgs.mkShell (
@@ -1451,6 +1561,17 @@
               ++ lib.optionals pkgs.stdenv.isLinux [
                 pkgs.xorg-server
                 pkgs.xvfb-run
+                # WHY THE WINDOWS C SURFACE WAS FOLKLORE UNTIL NOW.
+                #
+                # `cargo check --target x86_64-pc-windows-gnu` compiles ZERO C on its own:
+                # `HostTarget::supported()` is false for Windows, so `native_build.rs` returns at
+                # `emit_planned_target` and stubs the fingerprint to `unbuilt`. Every "I checked the
+                # Windows surface" that used that command covered Rust only. Setting
+                # `HL_NATIVE_COMPILE_CHECK=1` asks for the C, and without a mingw compiler on PATH it
+                # then dies in `bridge/shim.c` against host glibc headers -- which reads like the
+                # target being impossible rather than the toolchain being absent. Two lanes have now
+                # concluded "unverifiable on this box"; it is verifiable, and this is what it needed.
+                windows.stdenv.cc
               ];
               shellHook = ''
                 export CC="${toolchain.env.CC}"
@@ -1466,6 +1587,25 @@
                 fi
                 export CARGO_BUILD_JOBS="''${CARGO_BUILD_JOBS:-1}"
                 export HL_COMPAT_JOBS="''${HL_COMPAT_JOBS:-1}"
+              '' + lib.optionalString pkgs.stdenv.isLinux ''
+                export CC_x86_64_pc_windows_gnu=${lib.escapeShellArg windowsCc}
+                export CXX_x86_64_pc_windows_gnu=${lib.escapeShellArg windowsCxx}
+                export AR_x86_64_pc_windows_gnu=${lib.escapeShellArg windowsAr}
+                export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=${lib.escapeShellArg windowsCc}
+                # `rustc` links the .exe; the two -L below are what it needs.
+                export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS=${
+                  lib.escapeShellArg "-Lnative=${windows.windows.pthreads}/lib -Lnative=${windows.windows.mcfgthreads}/lib"
+                }
+                # AND THE PIECE THAT IS MISSING EVERYWHERE. `hl-native`'s build script links
+                # `hl_native_engine.dll` ITSELF, through the compiler above rather than through
+                # `rustc`, so RUSTFLAGS never reaches it and the build dies on
+                # `cannot find -lmcfgthread` -- an error that names no crate and no target and has
+                # cost more time than anything else on this surface. In the
+                # `host-windows-x86_64-gnu-smoke` derivation this comes free from
+                # `buildInputs = [ windows.windows.mcfgthreads ]`; a devShell has to say it. The
+                # variable is the cross wrapper's own suffix-salted spelling, taken from
+                # `cc.suffixSalt` rather than hand-spelled so it cannot drift from the triple.
+                export NIX_LDFLAGS_${windows.stdenv.cc.suffixSalt}=${lib.escapeShellArg windowsLibraries}
               '';
             }
             // lib.optionalAttrs pkgs.stdenv.isLinux {

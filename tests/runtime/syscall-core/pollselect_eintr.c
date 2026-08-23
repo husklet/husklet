@@ -23,15 +23,23 @@ static long long mono_ms(void) {
     clock_gettime(CLOCK_MONOTONIC, &t);
     return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000;
 }
+
 static volatile int got;
-static void onsig(int s) { (void)s; got = 1; }
+
+static void onsig(int s) {
+    (void)s;
+    got = 1;
+}
 
 // Child that raps `sig` on `parent` every 40ms for ~4s (long enough that a full-timeout-restart bug
 // grossly overshoots the 300ms wait), then exits.
 static pid_t pest(pid_t parent, int sig) {
     pid_t p = fork();
     if (p == 0) {
-        for (int i = 0; i < 100; i++) { usleep(40000); kill(parent, sig); }
+        for (int i = 0; i < 100; i++) {
+            usleep(40000);
+            kill(parent, sig);
+        }
         _exit(0);
     }
     return p;
@@ -56,13 +64,16 @@ int main(void) {
     // select under the signal storm: must return 0 within a generous cap (no unbounded restart).
     {
         pid_t c = pest(self, SIGUSR1);
-        fd_set rs; FD_ZERO(&rs); FD_SET(fds[0], &rs);
+        fd_set rs;
+        FD_ZERO(&rs);
+        FD_SET(fds[0], &rs);
         struct timeval tv = {0, 300000};
         long long t0 = mono_ms();
         int r = select(fds[0] + 1, &rs, NULL, NULL, &tv);
         long long dt = mono_ms() - t0;
         printf("select r=%d capped=%d\n", r, r == 0 && dt < 1500);
-        kill(c, SIGKILL); waitpid(c, NULL, 0);
+        kill(c, SIGKILL);
+        waitpid(c, NULL, 0);
     }
     {
         pid_t c = pest(self, SIGUSR1);
@@ -71,17 +82,21 @@ int main(void) {
         int r = poll(&p, 1, 300);
         long long dt = mono_ms() - t0;
         printf("poll r=%d capped=%d\n", r, r == 0 && dt < 1500);
-        kill(c, SIGKILL); waitpid(c, NULL, 0);
+        kill(c, SIGKILL);
+        waitpid(c, NULL, 0);
     }
     {
         pid_t c = pest(self, SIGUSR1);
-        fd_set rs; FD_ZERO(&rs); FD_SET(fds[0], &rs);
+        fd_set rs;
+        FD_ZERO(&rs);
+        FD_SET(fds[0], &rs);
         struct timespec ts = {0, 300000000};
         long long t0 = mono_ms();
         int r = pselect(fds[0] + 1, &rs, NULL, NULL, &ts, NULL);
         long long dt = mono_ms() - t0;
         printf("pselect r=%d capped=%d\n", r, r == 0 && dt < 1500);
-        kill(c, SIGKILL); waitpid(c, NULL, 0);
+        kill(c, SIGKILL);
+        waitpid(c, NULL, 0);
     }
     // ppoll (Linux-only): readiness, a finite timeout returning 0, and the same no-restart guarantee.
     {
@@ -89,7 +104,8 @@ int main(void) {
         struct pollfd p = {.fd = fds[0], .events = POLLIN};
         struct timespec ts = {1, 0};
         int ppoll_rd = (ppoll(&p, 1, &ts, NULL) == 1) && (p.revents & POLLIN);
-        char d; if (read(fds[0], &d, 1) < 0) return 1; // drain -> not readable again
+        char d;
+        if (read(fds[0], &d, 1) < 0) return 1; // drain -> not readable again
         struct pollfd pn = {.fd = fds[0], .events = POLLIN};
         struct timespec tz = {0, 30000000};
         int ppoll_to = (ppoll(&pn, 1, &tz, NULL) == 0);
@@ -100,7 +116,8 @@ int main(void) {
         int r = ppoll(&pp, 1, &ts2, NULL);
         long long dt = mono_ms() - t0;
         printf("ppoll rd=%d to=%d capped=%d\n", ppoll_rd, ppoll_to, r == 0 && dt < 1500);
-        kill(c, SIGKILL); waitpid(c, NULL, 0);
+        kill(c, SIGKILL);
+        waitpid(c, NULL, 0);
     }
 
     // A DELIVERED handler (unblocked, no SA_RESTART) must interrupt with EINTR (never restarted).
@@ -108,11 +125,13 @@ int main(void) {
     {
         pid_t c = pest(self, SIGUSR1);
         struct pollfd p = {.fd = fds[0], .events = POLLIN};
-        got = 0; errno = 0;
+        got = 0;
+        errno = 0;
         int r = poll(&p, 1, 5000);
         int e = errno;
         printf("eintr r=%d eintr=%d gotsig=%d\n", r, r < 0 && e == EINTR, got);
-        kill(c, SIGKILL); waitpid(c, NULL, 0);
+        kill(c, SIGKILL);
+        waitpid(c, NULL, 0);
     }
 
     // EFAULT: a faulty timeout pointer. EINVAL: negative nfds, and a malformed (negative) timeout.

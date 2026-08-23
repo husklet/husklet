@@ -541,7 +541,7 @@ mod tests {
     fn output_profile(path: &Path) -> Profile {
         let artifact = Artifact {
             path: path.to_owned(),
-            sha256: crate::benchmark::identity::file_hash(path).unwrap(),
+            sha256: crate::benchmark::identity::file_hash_without_attributes(path).unwrap(),
         };
         let artifacts = BTreeMap::from([("engine".into(), artifact)]);
         Profile {
@@ -583,7 +583,7 @@ mod tests {
             "guest".into(),
             Artifact {
                 path: native.clone(),
-                sha256: crate::benchmark::identity::file_hash(&native).unwrap(),
+                sha256: crate::benchmark::identity::file_hash_without_attributes(&native).unwrap(),
             },
         )]);
         let arm = primary(Profile {

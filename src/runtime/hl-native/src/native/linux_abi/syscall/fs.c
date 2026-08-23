@@ -10,8 +10,8 @@
 #include <sys/syscall.h>
 #endif
 
-static int guest_fill_linux_stat(uint64_t destination, const struct stat *status, const char *host_path,
-                                 int descriptor, int nofollow) {
+static int guest_fill_linux_stat(uint64_t destination, const struct stat *status, const char *host_path, int descriptor,
+                                 int nofollow) {
     uint8_t encoded[GUEST_LINUX_STAT_BYTES];
     int result = fill_linux_stat(encoded, status, host_path, descriptor, nofollow);
     if (result != 0) return result;
@@ -27,13 +27,13 @@ static int dac_snapshot_host_metadata(const hl_vfs_cursor_authority *authority, 
         authority->value.host.services->context, authority->value.host.handle, &metadata));
     if (error != 0) return error;
     uint32_t type = metadata.type == HL_HOST_FILE_TYPE_DIRECTORY   ? S_IFDIR
-                    : metadata.type == HL_HOST_FILE_TYPE_SYMLINK  ? S_IFLNK
-                    : metadata.type == HL_HOST_FILE_TYPE_REGULAR  ? S_IFREG
+                    : metadata.type == HL_HOST_FILE_TYPE_SYMLINK   ? S_IFLNK
+                    : metadata.type == HL_HOST_FILE_TYPE_REGULAR   ? S_IFREG
                     : metadata.type == HL_HOST_FILE_TYPE_CHARACTER ? S_IFCHR
-                    : metadata.type == HL_HOST_FILE_TYPE_BLOCK    ? S_IFBLK
-                    : metadata.type == HL_HOST_FILE_TYPE_FIFO     ? S_IFIFO
-                    : metadata.type == HL_HOST_FILE_TYPE_SOCKET   ? S_IFSOCK
-                                                                  : 0;
+                    : metadata.type == HL_HOST_FILE_TYPE_BLOCK     ? S_IFBLK
+                    : metadata.type == HL_HOST_FILE_TYPE_FIFO      ? S_IFIFO
+                    : metadata.type == HL_HOST_FILE_TYPE_SOCKET    ? S_IFSOCK
+                                                                   : 0;
     snapshot->uid = metadata.user;
     snapshot->gid = metadata.group;
     snapshot->mode = type | (metadata.permissions & 07777u);
@@ -51,8 +51,7 @@ static int dac_snapshot_cursor_authority(const hl_vfs_cursor_authority *authorit
         return dac_snapshot_fd(authority->value.descriptor, snapshot);
 #endif
     }
-    if (authority->kind != HL_VFS_CURSOR_AUTHORITY_HOST || authority->value.host.services == NULL)
-        return -ENOSYS;
+    if (authority->kind != HL_VFS_CURSOR_AUTHORITY_HOST || authority->value.host.services == NULL) return -ENOSYS;
     if (authority->value.host.services->posix_attachment == NULL ||
         authority->value.host.services->posix_attachment->borrow_file_at_least == NULL ||
         authority->value.host.services->posix_attachment->release == NULL)
@@ -61,8 +60,8 @@ static int dac_snapshot_cursor_authority(const hl_vfs_cursor_authority *authorit
     hl_host_result borrowed = attachment->borrow_file_at_least(authority->value.host.services->context,
                                                                authority->value.host.handle, 1u << 20);
     if (borrowed.status != HL_STATUS_OK)
-        borrowed = attachment->borrow_file_at_least(authority->value.host.services->context,
-                                                    authority->value.host.handle, 64);
+        borrowed =
+            attachment->borrow_file_at_least(authority->value.host.services->context, authority->value.host.handle, 64);
     int error = hl_vfs_cursor_host_error(borrowed);
     if (error == -ENOSYS) return dac_snapshot_host_metadata(authority, snapshot);
     if (error != 0) return error;
@@ -74,7 +73,7 @@ static int dac_snapshot_cursor_authority(const hl_vfs_cursor_authority *authorit
     char descriptor_path[64];
     int length = snprintf(descriptor_path, sizeof descriptor_path, "/proc/self/fd/%d", (int)borrowed.value);
     error = length < 0 || (size_t)length >= sizeof descriptor_path ? -ENAMETOOLONG
-                                                                  : dac_snapshot_path(descriptor_path, 0, snapshot);
+                                                                   : dac_snapshot_path(descriptor_path, 0, snapshot);
 #else
     error = dac_snapshot_fd((int)borrowed.value, snapshot);
 #endif
@@ -144,7 +143,8 @@ static int dac_authorize_cursor_search(const hl_vfs_cursor *directory, void *con
 // which is exactly how `git clone` fails, git init spelling ".git/branches/" with the slash.
 static void dac_strip_trailing_slashes(char *path) {
     size_t length = strlen(path);
-    while (length > 1 && path[length - 1] == '/') path[--length] = '\0';
+    while (length > 1 && path[length - 1] == '/')
+        path[--length] = '\0';
 }
 
 static int dac_snapshot_parent_at(int directory, const char *raw, hl_dac_snapshot *snapshot) {
@@ -337,8 +337,7 @@ static int dac_open_at(int directory, const char *raw, int flags, int path_only)
     int status = dac_snapshot_at(directory, raw, 0, &snapshot);
     if (status == -ENOENT && (flags & 0x40) != 0) return dac_create_at(directory, raw);
     if (status != 0) return status;
-    unsigned requested = (flags & 3) == 0 ? HL_DAC_READ : (flags & 3) == 1 ? HL_DAC_WRITE
-                                                                              : HL_DAC_READ | HL_DAC_WRITE;
+    unsigned requested = (flags & 3) == 0 ? HL_DAC_READ : (flags & 3) == 1 ? HL_DAC_WRITE : HL_DAC_READ | HL_DAC_WRITE;
     if ((flags & 0x200) != 0) requested |= HL_DAC_WRITE;
     return -hl_dac_authorize_access(&snapshot, &credentials, requested);
 }
@@ -421,9 +420,7 @@ static int dac_access_synthetic(const char *guest, int mode, int effective) {
     if (mode & R_OK) requested |= HL_DAC_READ;
     if (mode & W_OK) requested |= HL_DAC_WRITE;
     if (mode & X_OK) requested |= HL_DAC_EXECUTE;
-    if ((requested & HL_DAC_EXECUTE) &&
-        (hl_vfs_mount_flags_for_guest(guest, 0) & HL_VFS_MOUNT_NOEXEC))
-        return -EACCES;
+    if ((requested & HL_DAC_EXECUTE) && (hl_vfs_mount_flags_for_guest(guest, 0) & HL_VFS_MOUNT_NOEXEC)) return -EACCES;
     return -hl_dac_authorize_access(&snapshot, &credentials, requested);
 }
 
@@ -466,16 +463,14 @@ static int dac_synthetic_terminal(const char *guest, void *context) {
 }
 
 static int dac_search_at(int directory, const char *raw, int nofollow_final, int effective, char *resolved,
-                         size_t resolved_size,
-                         int *final_requires_directory) {
+                         size_t resolved_size, int *final_requires_directory) {
     uint32_t groups[HL_NGROUPS_MAX];
     hl_dac_credentials credentials = dac_credentials_current(groups);
     credentials.fsuid = (uint32_t)(effective ? cred_euid() : cred_ruid());
     credentials.fsgid = (uint32_t)(effective ? cred_egid() : cred_rgid());
     credentials.capabilities = effective ? g_cap_eff : (credentials.fsuid == 0 ? g_cap_prm : 0);
     return hl_vfs_cursor_search_parent_at(directory, raw, nofollow_final, dac_authorize_cursor_search, &credentials,
-                                          resolved,
-                                          resolved_size, final_requires_directory, dac_synthetic_terminal,
+                                          resolved, resolved_size, final_requires_directory, dac_synthetic_terminal,
                                           &credentials);
 }
 
@@ -493,7 +488,8 @@ static int dac_unlink_trailing_slash_at(int directory, const char *raw) {
     if (length <= 1 || raw[length - 1] != '/') return 0;
     char trimmed[4200];
     if (path_copy(trimmed, sizeof trimmed, raw) != 0) return -ENAMETOOLONG;
-    while (length > 1 && trimmed[length - 1] == '/') trimmed[--length] = 0;
+    while (length > 1 && trimmed[length - 1] == '/')
+        trimmed[--length] = 0;
     hl_dac_snapshot entry;
     int status = dac_snapshot_at(directory, trimmed, 1, &entry);
     return status != 0 ? status : (entry.mode & S_IFMT) == S_IFDIR ? 0 : -ENOTDIR;
@@ -790,7 +786,7 @@ static struct termios g_ptm_term[HL_NFD]; // host-form termios last set on the m
  * the rest on a macOS host. Keeping the image the guest actually wrote makes TCGETS exact. Demand-zero
  * BSS indexed like its siblings; only a live master ever touches a page. */
 static uint8_t g_ptm_image[HL_NFD][36];
-static struct winsize g_ptm_win[HL_NFD];  // winsize last set on the master
+static struct winsize g_ptm_win[HL_NFD]; // winsize last set on the master
 
 static void ptm_clear(int fd) {
     if (fd >= 0 && fd < HL_NFD) {

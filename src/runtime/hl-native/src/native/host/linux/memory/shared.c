@@ -56,4 +56,3 @@ static hl_host_result hl_linux_shared_resize(void *context, hl_host_handle objec
     pthread_mutex_unlock(&host->lock);
     return result == 0 ? hl_linux_result(HL_STATUS_OK, 0, 0) : hl_linux_errno_result();
 }
-

@@ -36,7 +36,6 @@ int main(void) {
     close(fd);
     unlink(path);
     rmdir(dir);
-    printf("seek-hole data-at-0=%d hole-at-4096=%d data-at-8192=%d hole-at-end=%d\n",
-           data0, hole0, data2, hole2);
+    printf("seek-hole data-at-0=%d hole-at-4096=%d data-at-8192=%d hole-at-end=%d\n", data0, hole0, data2, hole2);
     return 0;
 }

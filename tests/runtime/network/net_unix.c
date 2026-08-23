@@ -8,14 +8,18 @@
 
 int main(void) {
     int sv[2];
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0) { perror("socketpair"); return 1; }
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0) {
+        perror("socketpair");
+        return 1;
+    }
     pid_t pid = fork();
     if (pid == 0) {
         close(sv[0]);
         char buf[64];
         ssize_t n = read(sv[1], buf, sizeof buf);
         long sum = 0;
-        for (ssize_t i = 0; i < n; i++) sum += (unsigned char)buf[i];
+        for (ssize_t i = 0; i < n; i++)
+            sum += (unsigned char)buf[i];
         char out[32];
         int m = snprintf(out, sizeof out, "sum=%ld", sum);
         write(sv[1], out, m);

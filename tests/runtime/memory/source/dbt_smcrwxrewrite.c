@@ -15,7 +15,7 @@ int main(void) {
         int imm = (int)((s >> 16) & 0x7fff); // 0..32767 fits movz w0 low 16 bits and mov eax
         dbt_emit_ret_imm(p, imm);
         dbt_flush(p, sz);
-        int got = f();                       // must equal the JUST-written imm, not a stale one
+        int got = f(); // must equal the JUST-written imm, not a stale one
         acc = acc * 1000003ULL + (uint64_t)got;
         if (got != imm) {
             printf("smc-rwx MISMATCH round=%d want=%d got=%d\n", round, imm, got);

@@ -24,8 +24,18 @@ static void install(void) {
     sigaction(SIGSEGV, &sa, NULL);
 }
 
-static void child_read(void) { install(); volatile int v = *(volatile int *)0; (void)v; _exit(42); }
-static void child_write(void) { install(); *(volatile int *)0 = 1; _exit(42); }
+static void child_read(void) {
+    install();
+    volatile int v = *(volatile int *)0;
+    (void)v;
+    _exit(42);
+}
+
+static void child_write(void) {
+    install();
+    *(volatile int *)0 = 1;
+    _exit(42);
+}
 
 static int run(void (*fn)(void)) {
     pid_t p = fork();
@@ -39,7 +49,7 @@ int main(void) {
     long ps = sysconf(_SC_PAGESIZE);
     void *r = mmap(NULL, ps, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     int fixed0_eperm = (r == MAP_FAILED && errno == EPERM);
-    printf("null_read_maperr=%d null_write_maperr=%d fixed0_eperm=%d\n",
-           run(child_read), run(child_write), fixed0_eperm);
+    printf("null_read_maperr=%d null_write_maperr=%d fixed0_eperm=%d\n", run(child_read), run(child_write),
+           fixed0_eperm);
     return 0;
 }

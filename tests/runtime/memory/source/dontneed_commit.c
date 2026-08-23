@@ -13,8 +13,7 @@ int main(void) {
     long page = sysconf(_SC_PAGESIZE);
     if (page <= 0) return 1;
     size_t commit = (size_t)page * 16;
-    unsigned char *reserved =
-        mmap(NULL, (size_t)page * 64, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned char *reserved = mmap(NULL, (size_t)page * 64, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (reserved == MAP_FAILED) return 2;
     if (mprotect(reserved, commit, PROT_READ | PROT_WRITE) != 0) return 3;
     memset(reserved, 'A', commit);

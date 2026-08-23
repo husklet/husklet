@@ -45,8 +45,8 @@ static int lower_rotate_carry(struct insn *I, uint64_t next, int width, int oper
     return TX_BREAK;
 }
 
-static int lower_rotate_narrow(struct insn *I, const hl_x86_shift_state *state, int raw, int width_bytes,
-                               int operation, int by_cl, int by_one) {
+static int lower_rotate_narrow(struct insn *I, const hl_x86_shift_state *state, int raw, int width_bytes, int operation,
+                               int by_cl, int by_one) {
     if ((operation != 0 && operation != 1) || width_bytes >= 4) return TX_FALL;
     int width = 8 * width_bytes;
     e_uxt(16, raw, width_bytes);
@@ -69,8 +69,7 @@ static int lower_rotate_narrow(struct insn *I, const hl_x86_shift_state *state, 
         int right = operation == 1 ? effective : (width - effective) % width;
         if (right) e_ror_i(16, 16, right, 0);
         int masked = count & 0x1f;
-        if (masked && !state->output_flags_dead)
-            e_rot_flags_const(16, operation, width, effective ? effective : width);
+        if (masked && !state->output_flags_dead) e_rot_flags_const(16, operation, width, effective ? effective : width);
     }
     rm_store_after_guard(I, width_bytes, 16);
     return TX_NEXT;

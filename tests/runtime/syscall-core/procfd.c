@@ -19,7 +19,12 @@ int main(void) {
 
     DIR *d = opendir("/proc/self/fd");
     int count = 0;
-    if (d) { struct dirent *e; while ((e = readdir(d))) if (e->d_name[0] != '.') count++; closedir(d); }
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d)))
+            if (e->d_name[0] != '.') count++;
+        closedir(d);
+    }
     int pipefd[2] = {-1, -1};
     int devfd_pipe = 0, devfd_metadata = 0;
     if (pipe(pipefd) == 0 && write(pipefd[1], "procfd", 6) == 6) {
@@ -41,7 +46,7 @@ int main(void) {
     close(fd);
     unlink(path);
     // at least stdin/out/err + our fd + the DIR fd are open
-    printf("procfd resolves=%d enough_fds=%d devfd-metadata=%d devfd-pipe=%d\n", resolves, count >= 4,
-           devfd_metadata, devfd_pipe); // 1 1 1 1
+    printf("procfd resolves=%d enough_fds=%d devfd-metadata=%d devfd-pipe=%d\n", resolves, count >= 4, devfd_metadata,
+           devfd_pipe); // 1 1 1 1
     return 0;
 }

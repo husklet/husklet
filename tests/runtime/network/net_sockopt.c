@@ -24,7 +24,6 @@ int main(void) {
     gl = sizeof err;
     int r5 = getsockopt(s, SOL_SOCKET, SO_ERROR, &err, &gl); // freshly opened -> 0
     close(s);
-    printf("sockopt reuse=%d nodelay=%d soerr=%d ok=%d\n", got != 0, ndg != 0, err,
-           (r1 | r2 | r3 | r4 | r5) == 0);
+    printf("sockopt reuse=%d nodelay=%d soerr=%d ok=%d\n", got != 0, ndg != 0, err, (r1 | r2 | r3 | r4 | r5) == 0);
     return 0;
 }

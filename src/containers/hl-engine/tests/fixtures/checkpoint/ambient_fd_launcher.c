@@ -33,8 +33,7 @@ int main(int argc, char **argv) {
             return 71;
         }
     }
-    if (setenv("HL_AMBIENT_FD_CHECKPOINT_CHILD", "1", 1) != 0 ||
-        setenv("HL_AMBIENT_FD_DIRECTORY", argv[1], 1) != 0) {
+    if (setenv("HL_AMBIENT_FD_CHECKPOINT_CHILD", "1", 1) != 0 || setenv("HL_AMBIENT_FD_DIRECTORY", argv[1], 1) != 0) {
         fprintf(stderr, "cannot configure ambient fd child: %s\n", strerror(errno));
         return 71;
     }

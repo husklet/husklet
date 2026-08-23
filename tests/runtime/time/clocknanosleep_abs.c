@@ -25,7 +25,10 @@ int main(void) {
     struct timespec fut;
     clock_gettime(CLOCK_MONOTONIC, &fut);
     fut.tv_nsec += 60 * 1000 * 1000; // +60ms
-    if (fut.tv_nsec >= 1000000000L) { fut.tv_nsec -= 1000000000L; fut.tv_sec += 1; }
+    if (fut.tv_nsec >= 1000000000L) {
+        fut.tv_nsec -= 1000000000L;
+        fut.tv_sec += 1;
+    }
     long long deadline = fut.tv_sec * 1000000000LL + fut.tv_nsec;
     int rc = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &fut, NULL);
     long long after = ns(CLOCK_MONOTONIC);
@@ -35,7 +38,10 @@ int main(void) {
     struct timespec rfut;
     clock_gettime(CLOCK_REALTIME, &rfut);
     rfut.tv_nsec += 40 * 1000 * 1000;
-    if (rfut.tv_nsec >= 1000000000L) { rfut.tv_nsec -= 1000000000L; rfut.tv_sec += 1; }
+    if (rfut.tv_nsec >= 1000000000L) {
+        rfut.tv_nsec -= 1000000000L;
+        rfut.tv_sec += 1;
+    }
     int real_abs = clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &rfut, NULL) == 0;
 
     // Relative negative -> EINVAL.
@@ -46,7 +52,7 @@ int main(void) {
     struct timespec big = {0, 1000000000L};
     int badns = clock_nanosleep(CLOCK_MONOTONIC, 0, &big, NULL) == EINVAL;
 
-    printf("clocknanoabs past=%d abs=%d real=%d negrel=%d badns=%d\n", past_ok, slept_to_deadline,
-           real_abs, negrel, badns);
+    printf("clocknanoabs past=%d abs=%d real=%d negrel=%d badns=%d\n", past_ok, slept_to_deadline, real_abs, negrel,
+           badns);
     return 0;
 }

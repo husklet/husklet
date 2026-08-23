@@ -44,7 +44,7 @@ static uint64_t pcache_argv0_id(const char *argv0) {
 }
 
 static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity_digest interpreter,
-                                        const char *argv0) {
+                                         const char *argv0) {
     return hl_identity_digest_mix(program, interpreter, pcache_translator_identity(), argv0);
 }
 

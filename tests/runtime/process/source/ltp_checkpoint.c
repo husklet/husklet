@@ -25,84 +25,81 @@
 #include <unistd.h>
 
 static long fwait(int *w, int val, struct timespec *to) {
-	return syscall(SYS_futex, w, FUTEX_WAIT, val, to, NULL, 0);
+    return syscall(SYS_futex, w, FUTEX_WAIT, val, to, NULL, 0);
 }
+
 static long fwake(int *w, int n) {
-	return syscall(SYS_futex, w, FUTEX_WAKE, n, NULL, NULL, 0);
+    return syscall(SYS_futex, w, FUTEX_WAKE, n, NULL, NULL, 0);
 }
 
-int main(void)
-{
-	size_t sz = getpagesize();
-	char path[128];
-	snprintf(path, sizeof path, "/dev/shm/ltp_cp_%d", (int)getpid());
-	unlink(path);
+int main(void) {
+    size_t sz = getpagesize();
+    char path[128];
+    snprintf(path, sizeof path, "/dev/shm/ltp_cp_%d", (int)getpid());
+    unlink(path);
 
-	int fd = open(path, O_CREAT | O_EXCL | O_RDWR, 0600);
-	if (fd < 0) {
-		printf("open fail errno=%d\n", errno);
-		return 2;
-	}
-	if (ftruncate(fd, sz) < 0) {
-		printf("ftruncate fail errno=%d\n", errno);
-		return 2;
-	}
-	/* MAP_SHARED file page — inherited (as one physical page) across a real fork; the futex word lives
-	 * here so a WAKE in one process matches a WAIT in the other. */
-	int *m = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-	if (m == MAP_FAILED) {
-		printf("mmap fail errno=%d\n", errno);
-		return 2;
-	}
-	close(fd);
-	m[0] = 0; /* the futex word */
-	m[1] = 0; /* the child's "I was woken" marker */
+    int fd = open(path, O_CREAT | O_EXCL | O_RDWR, 0600);
+    if (fd < 0) {
+        printf("open fail errno=%d\n", errno);
+        return 2;
+    }
+    if (ftruncate(fd, sz) < 0) {
+        printf("ftruncate fail errno=%d\n", errno);
+        return 2;
+    }
+    /* MAP_SHARED file page — inherited (as one physical page) across a real fork; the futex word lives
+     * here so a WAKE in one process matches a WAIT in the other. */
+    int *m = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (m == MAP_FAILED) {
+        printf("mmap fail errno=%d\n", errno);
+        return 2;
+    }
+    close(fd);
+    m[0] = 0; /* the futex word */
+    m[1] = 0; /* the child's "I was woken" marker */
 
-	/* (1) no waiter parked -> WAKE returns 0. */
-	long w0 = fwake(&m[0], 0x7fffffff);
-	printf("wake_no_waiter_zero=%d\n", w0 == 0);
+    /* (1) no waiter parked -> WAKE returns 0. */
+    long w0 = fwake(&m[0], 0x7fffffff);
+    printf("wake_no_waiter_zero=%d\n", w0 == 0);
 
-	pid_t pid = fork();
-	if (pid < 0) {
-		printf("fork fail errno=%d\n", errno);
-		return 2;
-	}
-	if (pid == 0) {
-		/* child: park on the shared word until the parent wakes us (bounded so a broken wake can't
-		 * hang the test — 5s is far beyond the parent's wake latency). */
-		struct timespec to = {5, 0};
-		while (m[0] == 0) {
-			long r = fwait(&m[0], 0, &to);
-			if (r == -1 && (errno == ETIMEDOUT))
-				break;
-		}
-		m[1] = 1; /* record that we returned from the wait */
-		_exit(0);
-	}
+    pid_t pid = fork();
+    if (pid < 0) {
+        printf("fork fail errno=%d\n", errno);
+        return 2;
+    }
+    if (pid == 0) {
+        /* child: park on the shared word until the parent wakes us (bounded so a broken wake can't
+         * hang the test — 5s is far beyond the parent's wake latency). */
+        struct timespec to = {5, 0};
+        while (m[0] == 0) {
+            long r = fwait(&m[0], 0, &to);
+            if (r == -1 && (errno == ETIMEDOUT)) break;
+        }
+        m[1] = 1; /* record that we returned from the wait */
+        _exit(0);
+    }
 
-	/* parent: mirror tst_checkpoint_wake — loop WAKE until it reports it woke exactly nr_wake==1. */
-	int woke_exactly_one = 0, tries = 0;
-	for (;;) {
-		long w = fwake(&m[0], 0x7fffffff);
-		if (w == 1) {
-			woke_exactly_one = 1;
-			break;
-		}
-		if (w > 0)
-			break; /* woke, but with the wrong count (the bug) */
-		usleep(1000);
-		if (++tries >= 5000)
-			break; /* timed out (the bug: WAKE never reports a wakeup) */
-	}
-	m[0] = 1; /* release the child's re-check loop */
-	fwake(&m[0], 0x7fffffff);
+    /* parent: mirror tst_checkpoint_wake — loop WAKE until it reports it woke exactly nr_wake==1. */
+    int woke_exactly_one = 0, tries = 0;
+    for (;;) {
+        long w = fwake(&m[0], 0x7fffffff);
+        if (w == 1) {
+            woke_exactly_one = 1;
+            break;
+        }
+        if (w > 0) break; /* woke, but with the wrong count (the bug) */
+        usleep(1000);
+        if (++tries >= 5000) break; /* timed out (the bug: WAKE never reports a wakeup) */
+    }
+    m[0] = 1; /* release the child's re-check loop */
+    fwake(&m[0], 0x7fffffff);
 
-	int status = 0;
-	waitpid(pid, &status, 0);
-	printf("wake_returns_actual_count=%d\n", woke_exactly_one);
-	printf("child_woken=%d\n", m[1] == 1);
+    int status = 0;
+    waitpid(pid, &status, 0);
+    printf("wake_returns_actual_count=%d\n", woke_exactly_one);
+    printf("child_woken=%d\n", m[1] == 1);
 
-	munmap(m, sz);
-	unlink(path);
-	return 0;
+    munmap(m, sz);
+    unlink(path);
+    return 0;
 }

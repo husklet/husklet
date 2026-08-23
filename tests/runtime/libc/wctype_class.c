@@ -10,7 +10,6 @@ int main(void) {
     int d5 = towupper(L'a') == L'A' && towlower(L'Z') == L'z';
     int d6 = iswalnum(L'5') && iswpunct(L'!');
     int d7 = iswxdigit(L'f') && !iswxdigit(L'g');
-    printf("wctype_class d1=%d d2=%d d3=%d d4=%d d5=%d d6=%d d7=%d\n",
-           d1, d2, d3, d4, d5, d6, d7);
+    printf("wctype_class d1=%d d2=%d d3=%d d4=%d d5=%d d6=%d d7=%d\n", d1, d2, d3, d4, d5, d6, d7);
     return 0;
 }

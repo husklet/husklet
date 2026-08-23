@@ -268,8 +268,7 @@ static int sock_state_create(int fd) {
 static void sock_state_drop(int fd);
 
 static void sock_state_dup(int dst, int src) {
-    if (g_sock_states == NULL || src < 0 || src >= HL_NFD || dst < 0 || dst >= HL_NFD ||
-        g_sock_state_ref[src] == 0)
+    if (g_sock_states == NULL || src < 0 || src >= HL_NFD || dst < 0 || dst >= HL_NFD || g_sock_state_ref[src] == 0)
         return;
     if (dst == src) return;
     sock_state_drop(dst);
@@ -293,8 +292,7 @@ static void sock_state_shutdown_observed(int fd, int direction) {
     uint32_t bits = 0;
     if (direction == SHUT_RD || direction == SHUT_RDWR) bits |= SOCK_SHUTDOWN_READ;
     if (direction == SHUT_WR || direction == SHUT_RDWR) bits |= SOCK_SHUTDOWN_WRITE;
-    if (bits != 0)
-        __atomic_or_fetch(&g_sock_states[g_sock_state_ref[fd] - 1].shutdown, bits, __ATOMIC_ACQ_REL);
+    if (bits != 0) __atomic_or_fetch(&g_sock_states[g_sock_state_ref[fd] - 1].shutdown, bits, __ATOMIC_ACQ_REL);
 }
 
 static uint32_t sock_state_shutdown(int fd) {
@@ -547,8 +545,7 @@ static void sock_identity_ticket_arena_attach(void) {
         close(descriptor);
         return;
     }
-    if ((fstat(descriptor, &info) != 0 || (size_t)info.st_size != bytes) &&
-        ftruncate(descriptor, (off_t)bytes) != 0) {
+    if ((fstat(descriptor, &info) != 0 || (size_t)info.st_size != bytes) && ftruncate(descriptor, (off_t)bytes) != 0) {
         (void)flock(descriptor, LOCK_UN);
         close(descriptor);
         return;
@@ -571,10 +568,8 @@ static void sock_identity_ticket_release(int fd) {
     if (ticket->nonce_high != high || ticket->nonce_low != low) return; // recycled: not ours any more
     /* Only the publisher retires its own ticket, whether the acceptor never claimed it (PUBLISHED) or
      * claimed it and wrote its object back (RESOLVED) and the publisher is giving up on collecting. */
-    if (__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_PUBLISHED,
-                                     SOCK_IDENTITY_TICKET_CLAIMED) ||
-        __sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_RESOLVED,
-                                     SOCK_IDENTITY_TICKET_CLAIMED)) {
+    if (__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_PUBLISHED, SOCK_IDENTITY_TICKET_CLAIMED) ||
+        __sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_RESOLVED, SOCK_IDENTITY_TICKET_CLAIMED)) {
         ticket->nonce_high = ticket->nonce_low = 0;
         ticket->client_object = ticket->server_object = 0;
         ticket->publisher = 0;
@@ -582,17 +577,15 @@ static void sock_identity_ticket_release(int fd) {
     }
 }
 
-/* A PUBLISHED or RESOLVED ticket whose publisher no longer exists can never be claimed or collected -- its nonce died with the
- * name that carried it -- so the slot is recoverable.  Retiring it through the same CAS the claimer uses
- * keeps the one-shot property: whoever wins the transition owns the slot, and the loser sees FREE. */
+/* A PUBLISHED or RESOLVED ticket whose publisher no longer exists can never be claimed or collected -- its nonce died
+ * with the name that carried it -- so the slot is recoverable.  Retiring it through the same CAS the claimer uses keeps
+ * the one-shot property: whoever wins the transition owns the slot, and the loser sees FREE. */
 static void sock_identity_ticket_reclaim_abandoned(struct sock_identity_ticket *ticket) {
     uint32_t publisher = ticket->publisher;
     if (!publisher || (int)publisher == (int)getpid()) return;
     if (kill((pid_t)publisher, 0) == 0 || errno != ESRCH) return;
-    if (!__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_PUBLISHED,
-                                      SOCK_IDENTITY_TICKET_CLAIMED) &&
-        !__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_RESOLVED,
-                                      SOCK_IDENTITY_TICKET_CLAIMED))
+    if (!__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_PUBLISHED, SOCK_IDENTITY_TICKET_CLAIMED) &&
+        !__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_RESOLVED, SOCK_IDENTITY_TICKET_CLAIMED))
         return;
     ticket->nonce_high = ticket->nonce_low = 0;
     ticket->client_object = ticket->server_object = 0;
@@ -618,8 +611,7 @@ static int sock_identity_ticket_publish(int fd, uint64_t client, uint64_t *high,
         for (uint32_t index = 0; index < SOCK_IDENTITY_TICKET_N; index++) {
             struct sock_identity_ticket *ticket = &g_sock_identity_tickets[index];
             if (pass == 1u) sock_identity_ticket_reclaim_abandoned(ticket);
-            if (!__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_FREE,
-                                              SOCK_IDENTITY_TICKET_CLAIMED))
+            if (!__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_FREE, SOCK_IDENTITY_TICKET_CLAIMED))
                 continue;
             ticket->nonce_high = *high;
             ticket->nonce_low = *low;
@@ -651,8 +643,7 @@ static int sock_identity_ticket_claim(uint64_t high, uint64_t low, uint64_t *cli
         if (__atomic_load_n(&ticket->state, __ATOMIC_ACQUIRE) != SOCK_IDENTITY_TICKET_PUBLISHED ||
             ticket->nonce_high != high || ticket->nonce_low != low)
             continue;
-        if (!__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_PUBLISHED,
-                                          SOCK_IDENTITY_TICKET_CLAIMED))
+        if (!__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_PUBLISHED, SOCK_IDENTITY_TICKET_CLAIMED))
             continue;
         *client = ticket->client_object;
         if (!*client || *client == server) {
@@ -685,8 +676,7 @@ static int sock_identity_ticket_collect(int fd, uint64_t *server) {
         return -1; // recycled into another connection's ticket: nothing here is ours
     if (__atomic_load_n(&ticket->state, __ATOMIC_ACQUIRE) != SOCK_IDENTITY_TICKET_RESOLVED) return -1;
     uint64_t resolved = ticket->server_object;
-    if (!__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_RESOLVED,
-                                      SOCK_IDENTITY_TICKET_CLAIMED))
+    if (!__sync_bool_compare_and_swap(&ticket->state, SOCK_IDENTITY_TICKET_RESOLVED, SOCK_IDENTITY_TICKET_CLAIMED))
         return -1;
     ticket->nonce_high = ticket->nonce_low = 0;
     ticket->client_object = ticket->server_object = 0;
@@ -901,7 +891,8 @@ static int sock_internal_connect_prepare(int fd, int checkpoint_pending) {
         return -1;
     }
     struct sockaddr_un address;
-    int bound = unix_addr_set(&address, path) < 0 ? -1 : (unlink(path), bind(fd, (struct sockaddr *)&address, sizeof address));
+    int bound =
+        unix_addr_set(&address, path) < 0 ? -1 : (unlink(path), bind(fd, (struct sockaddr *)&address, sizeof address));
     if (bound != 0) {
         int saved = errno;
         sock_identity_ticket_release(fd);
@@ -951,8 +942,8 @@ static int sock_internal_accept_identify(int fd, int checkpoint_pending) {
 #if defined(HL_NATIVE_TEST_HOOKS)
 static void sock_internal_identity_test_initialize(int fd, uint64_t object, uint64_t ofd) {
     if (g_sock_states == NULL) {
-        void *arena = mmap(NULL, sizeof(struct sock_state) * SOCK_STATE_N, PROT_READ | PROT_WRITE,
-                           MAP_ANON | MAP_SHARED, -1, 0);
+        void *arena =
+            mmap(NULL, sizeof(struct sock_state) * SOCK_STATE_N, PROT_READ | PROT_WRITE, MAP_ANON | MAP_SHARED, -1, 0);
         if (arena != MAP_FAILED) g_sock_states = (struct sock_state *)arena;
     }
     sock_identity_ticket_arena_attach();
@@ -1039,8 +1030,7 @@ HL_API int HL_TARGET_LOCAL(unix_identity_test)(uint32_t operation, int fd, uint6
     uint32_t shutdown_state = sock_state_shutdown(fd);
     *hidden = (uint32_t)g_sock_identity_local_hidden[fd] | ((uint32_t)g_sock_identity_peer_hidden[fd] << 1) |
               ((uint32_t)g_sock_identity_reciprocity_required[fd] << 2) | ((uint32_t)g_sock_connecting[fd] << 3) |
-              ((uint32_t)g_sock_conn[fd] << 4) |
-              ((shutdown_state & SOCK_SHUTDOWN_READ) != 0 ? UINT32_C(1) << 5 : 0) |
+              ((uint32_t)g_sock_conn[fd] << 4) | ((shutdown_state & SOCK_SHUTDOWN_READ) != 0 ? UINT32_C(1) << 5 : 0) |
               ((shutdown_state & SOCK_SHUTDOWN_WRITE) != 0 ? UINT32_C(1) << 6 : 0) |
               ((uint32_t)g_sock_state_unretained[fd] << 7);
     return status;

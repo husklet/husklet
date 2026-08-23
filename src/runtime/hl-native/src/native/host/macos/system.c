@@ -305,8 +305,7 @@ int hl_host_process_peers(hl_host_process_peer *entries, size_t capacity, size_t
     for (size_t index = 0; index < bytes / sizeof *processes; ++index) {
         char path[PROC_PIDPATHINFO_MAXSIZE];
         pid_t pid = processes[index].kp_proc.p_pid;
-        if (pid <= 0 || pid == self || proc_pidpath(pid, path, sizeof path) <= 0 ||
-            strcmp(path, self_path) != 0)
+        if (pid <= 0 || pid == self || proc_pidpath(pid, path, sizeof path) <= 0 || strcmp(path, self_path) != 0)
             continue;
         if (total < capacity) entries[total].identity = pid;
         total++;
@@ -322,6 +321,8 @@ int hl_host_process_peers(hl_host_process_peer *entries, size_t capacity, size_t
    Exists because peer enumeration is only ever exercised by a coordinator against a REAL forked
    process tree: an in-memory fake cannot express "this peer became a session leader", which is the
    condition that silently emptied the result for every setsid-using guest. */
+HL_API int32_t hl_c_backend_host_process_peer_enumerated_test(int32_t pid);
+
 HL_API int32_t hl_c_backend_host_process_peer_enumerated_test(int32_t pid) {
     hl_host_process_peer peers[512];
     size_t count = 0;

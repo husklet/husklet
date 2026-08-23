@@ -46,8 +46,8 @@ int main(void) {
 
     char sent = 'x', received = 0;
     int data = write(alias, &sent, 1) == 1 && accepted >= 0 && read(accepted, &received, 1) == 1 && received == sent;
-    printf("bound=%d connected=%d local-unnamed=%d peer-named=%d accepted-peer-unnamed=%d data=%d\n", bound,
-           connected, local_unnamed, peer_named, accepted_peer_unnamed, data);
+    printf("bound=%d connected=%d local-unnamed=%d peer-named=%d accepted-peer-unnamed=%d data=%d\n", bound, connected,
+           local_unnamed, peer_named, accepted_peer_unnamed, data);
 
     if (accepted >= 0) close(accepted);
     close(alias);

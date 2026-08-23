@@ -15,11 +15,19 @@ int main(void) {
     snprintf(name, sizeof name, "/hl_shm_%d", (int)getpid());
     shm_unlink(name);
     int fd = shm_open(name, O_CREAT | O_RDWR | O_EXCL, 0600);
-    if (fd < 0) { printf("shmshare open=0\n"); return 0; }
+    if (fd < 0) {
+        printf("shmshare open=0\n");
+        return 0;
+    }
     int trunc = ftruncate(fd, SZ) == 0;
 
     atomic_int *shared = mmap(NULL, SZ, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (shared == MAP_FAILED) { printf("shmshare mmap=0\n"); close(fd); shm_unlink(name); return 0; }
+    if (shared == MAP_FAILED) {
+        printf("shmshare mmap=0\n");
+        close(fd);
+        shm_unlink(name);
+        return 0;
+    }
     atomic_store(&shared[0], 100);
     atomic_store(&shared[1], 0);
 
@@ -43,7 +51,6 @@ int main(void) {
     close(fd);
     close(fd2);
     int unlinked = shm_unlink(name) == 0;
-    printf("shmshare trunc=%d roundtrip=%d alias=%d unlink=%d\n",
-           trunc, roundtrip, alias, unlinked);
+    printf("shmshare trunc=%d roundtrip=%d alias=%d unlink=%d\n", trunc, roundtrip, alias, unlinked);
     return 0;
 }

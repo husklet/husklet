@@ -10,9 +10,8 @@ int main(void) {
     // Extended regex with a captured group; check match offsets.
     regcomp(&re, "([0-9]+)-([0-9]+)", REG_EXTENDED);
     int e1 = regexec(&re, "ab 42-99 cd", 4, m, 0) == 0;
-    int off_ok = e1 && m[0].rm_so == 3 && m[0].rm_eo == 8 &&
-                 m[1].rm_so == 3 && m[1].rm_eo == 5 &&
-                 m[2].rm_so == 6 && m[2].rm_eo == 8;
+    int off_ok = e1 && m[0].rm_so == 3 && m[0].rm_eo == 8 && m[1].rm_so == 3 && m[1].rm_eo == 5 && m[2].rm_so == 6 &&
+                 m[2].rm_eo == 8;
     regfree(&re);
 
     // REG_ICASE + anchors.
@@ -37,7 +36,6 @@ int main(void) {
     int e5 = regexec(&re, "a\nbc", 0, NULL, 0) == 0;
     regfree(&re);
 
-    printf("regexbr off=%d icase=%d nosub=%d backref=%d nobref=%d newline=%d\n",
-           off_ok, e2 && e2b, e3, e4, e4b, e5);
+    printf("regexbr off=%d icase=%d nosub=%d backref=%d nobref=%d newline=%d\n", off_ok, e2 && e2b, e3, e4, e4b, e5);
     return 0;
 }

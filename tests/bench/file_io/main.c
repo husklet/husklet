@@ -41,13 +41,13 @@ static int scalar_phase(void) {
     for (unsigned index = 0; index < SCALAR_ITERATIONS; ++index) {
         off_t offset = (off_t)(index % PAGES) * BLOCK;
         if (pwrite(descriptor, block, sizeof(block), offset) != BLOCK ||
-            pread(descriptor, block, sizeof(block), offset) != BLOCK) return 1;
+            pread(descriptor, block, sizeof(block), offset) != BLOCK)
+            return 1;
         checksum += block[index % BLOCK];
     }
     uint64_t elapsed = now_us() - started;
     if (close(descriptor) != 0) return 1;
-    printf("PHASE scalar_file us=%llu ok=%llu\n", (unsigned long long)elapsed,
-           (unsigned long long)checksum);
+    printf("PHASE scalar_file us=%llu ok=%llu\n", (unsigned long long)elapsed, (unsigned long long)checksum);
     return 0;
 }
 
@@ -63,13 +63,13 @@ static int vector_phase(void) {
     uint64_t started = now_us();
     for (unsigned index = 0; index < VECTOR_ITERATIONS; ++index) {
         if (lseek(descriptor, 0, SEEK_SET) != 0 || writev(descriptor, vectors, 2) != BLOCK ||
-            lseek(descriptor, 0, SEEK_SET) != 0 || readv(descriptor, vectors, 2) != BLOCK) return 1;
+            lseek(descriptor, 0, SEEK_SET) != 0 || readv(descriptor, vectors, 2) != BLOCK)
+            return 1;
         checksum += first[index % sizeof(first)] + second[index % sizeof(second)];
     }
     uint64_t elapsed = now_us() - started;
     if (close(descriptor) != 0) return 1;
-    printf("PHASE vector_file us=%llu ok=%llu\n", (unsigned long long)elapsed,
-           (unsigned long long)checksum);
+    printf("PHASE vector_file us=%llu ok=%llu\n", (unsigned long long)elapsed, (unsigned long long)checksum);
     return 0;
 }
 
@@ -91,8 +91,7 @@ static int mapping_phase(void) {
     }
     uint64_t elapsed = now_us() - started;
     if (msync(mapping, size, MS_SYNC) != 0 || munmap(mapping, size) != 0 || close(descriptor) != 0) return 1;
-    printf("PHASE mapped_file us=%llu ok=%llu\n", (unsigned long long)elapsed,
-           (unsigned long long)checksum);
+    printf("PHASE mapped_file us=%llu ok=%llu\n", (unsigned long long)elapsed, (unsigned long long)checksum);
     return 0;
 }
 

@@ -69,7 +69,7 @@ int main(void) {
     pthread_join(o, NULL);
     pthread_join(w, NULL);
 
-    printf("robust_pi_handoff eownerdead=%d consistent=%d timedout=%d\n", waiter_rc == EOWNERDEAD,
-           waiter_consistent, waiter_rc == ETIMEDOUT);
+    printf("robust_pi_handoff eownerdead=%d consistent=%d timedout=%d\n", waiter_rc == EOWNERDEAD, waiter_consistent,
+           waiter_rc == ETIMEDOUT);
     return 0;
 }

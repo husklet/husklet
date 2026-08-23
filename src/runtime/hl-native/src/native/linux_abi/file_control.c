@@ -206,4 +206,3 @@ int64_t hl_linux_file_adopt_reserved(hl_linux_abi *linux_abi, const hl_linux_fd_
     if (status == HL_STATUS_OK) return (int64_t)reservation->fd;
     return status == HL_STATUS_RESOURCE_LIMIT ? -HL_LINUX_EMFILE : hl_linux_error(status);
 }
-

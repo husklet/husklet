@@ -23,7 +23,6 @@ int main(void) {
     int cwd_agree = (cn > 0) && got && strcmp(cwd, g) == 0;
 
     printf("root_is_slash=%d cwd_abs=%d\n", root_ok, cwd_abs);
-    printf("getcwd_ok=%d getcwd_abs=%d cwd_link_agrees=%d\n",
-           got, got && g[0] == '/', cwd_agree);
+    printf("getcwd_ok=%d getcwd_abs=%d cwd_link_agrees=%d\n", got, got && g[0] == '/', cwd_agree);
     return 0;
 }

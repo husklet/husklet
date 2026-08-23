@@ -14,19 +14,32 @@ static const char *en(int e) {
     default: return "OTHER";
     }
 }
-static const char *rc(int r) { return r == 0 ? "0" : en(errno); }
+
+static const char *rc(int r) {
+    return r == 0 ? "0" : en(errno);
+}
 
 int main(void) {
     long ps = sysconf(_SC_PAGESIZE);
     unsigned char *m = mmap(NULL, ps, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (m == MAP_FAILED) { printf("map fail\n"); return 2; }
+    if (m == MAP_FAILED) {
+        printf("map fail\n");
+        return 2;
+    }
 
-    errno = 0; const char *mp = rc(mprotect(m, 0, PROT_READ));
-    errno = 0; const char *ma = rc(madvise(m, 0, MADV_DONTNEED));
-    errno = 0; const char *ms = rc(msync(m, 0, MS_ASYNC));
-    errno = 0; const char *ml = rc(mlock(m, 0));
-    errno = 0; const char *mu = rc(munlock(m, 0));
-    errno = 0; int ur = munmap(m, 0); const char *un = ur == 0 ? "0" : en(errno);
+    errno = 0;
+    const char *mp = rc(mprotect(m, 0, PROT_READ));
+    errno = 0;
+    const char *ma = rc(madvise(m, 0, MADV_DONTNEED));
+    errno = 0;
+    const char *ms = rc(msync(m, 0, MS_ASYNC));
+    errno = 0;
+    const char *ml = rc(mlock(m, 0));
+    errno = 0;
+    const char *mu = rc(munlock(m, 0));
+    errno = 0;
+    int ur = munmap(m, 0);
+    const char *un = ur == 0 ? "0" : en(errno);
 
     munmap(m, ps);
     printf("mprotect0=%s madvise0=%s msync0=%s mlock0=%s munlock0=%s munmap0=%s\n", mp, ma, ms, ml, mu, un);

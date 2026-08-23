@@ -36,10 +36,12 @@ static void *read_thread(void *arg) {
     (void)arg;
     size_t len = 1 << 20;
     unsigned char *m = dbt_alloc(len, PROT_READ | PROT_WRITE);
-    for (size_t i = 0; i < len; i += 4096) m[i] = (unsigned char)(i >> 12);
+    for (size_t i = 0; i < len; i += 4096)
+        m[i] = (unsigned char)(i >> 12);
     uint64_t s = 0;
     for (int r = 0; r < ITERS; r++)
-        for (size_t i = 0; i < len; i += 4096) s = s * 31 + m[i];
+        for (size_t i = 0; i < len; i += 4096)
+            s = s * 31 + m[i];
     munmap(m, len);
     read_sum = s;
     return NULL;
@@ -51,7 +53,7 @@ int main(void) {
     pthread_create(&b, NULL, read_thread, NULL);
     pthread_join(a, NULL);
     pthread_join(b, NULL);
-    printf("conc-mmap-exec jit=%llu read=%llu bad=%d\n", (unsigned long long)jit_sum,
-           (unsigned long long)read_sum, jit_bad);
+    printf("conc-mmap-exec jit=%llu read=%llu bad=%d\n", (unsigned long long)jit_sum, (unsigned long long)read_sum,
+           jit_bad);
     return 0;
 }

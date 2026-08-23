@@ -9,7 +9,10 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t caught;
-static void h(int s) { caught = s; }
+
+static void h(int s) {
+    caught = s;
+}
 
 int main(void) {
     struct sigaction sa;
@@ -30,7 +33,7 @@ int main(void) {
     caught = 0;
     alarm(1);
     errno = 0;
-    int rc = sigsuspend(&empty);      // unblocks SIGALRM, waits; handler runs; returns -1/EINTR
+    int rc = sigsuspend(&empty); // unblocks SIGALRM, waits; handler runs; returns -1/EINTR
     alarm(0);
     int eintr = rc == -1 && errno == EINTR;
     int ran = caught == SIGALRM;

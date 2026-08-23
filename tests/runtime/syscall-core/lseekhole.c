@@ -13,9 +13,9 @@ int main(void) {
     int fd = open(p, O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (fd < 0 || pwrite(fd, "A", 1, 0) != 1 || pwrite(fd, "B", 1, 1 << 20) != 1) return 1;
     off_t end = lseek(fd, 0, SEEK_END);
-    off_t hole = lseek(fd, 0, SEEK_HOLE);    // first hole at/after 0
-    off_t data = lseek(fd, 4096, SEEK_DATA); // next data at/after 4K -> ~1 MiB
-    int hole_ok = (hole > 0 && hole < (1 << 20)); // a hole exists before the 1 MiB mark
+    off_t hole = lseek(fd, 0, SEEK_HOLE);                          // first hole at/after 0
+    off_t data = lseek(fd, 4096, SEEK_DATA);                       // next data at/after 4K -> ~1 MiB
+    int hole_ok = (hole > 0 && hole < (1 << 20));                  // a hole exists before the 1 MiB mark
     int data_ok = (data >= (1 << 20) - 4096 && data <= (1 << 20)); // data resumes near 1 MiB
     int inside_hole_ok = lseek(fd, 8192, SEEK_HOLE) == 8192;
     int inside_data_ok = lseek(fd, 1 << 20, SEEK_DATA) == (1 << 20);
@@ -34,8 +34,8 @@ int main(void) {
     // in generic_file_llseek_size fires before the EINVAL path): verified on ext4 and tmpfs with a
     // plain `cc` build, which the engine reproduces exactly. macOS/APFS returns EINVAL. Accept both.
     int negative_ok = lseek(fd, -1, SEEK_DATA) == -1 && (errno == EINVAL || errno == ENXIO);
-    int truncate_ok = ftruncate(fd, 8192) == 0 && lseek(fd, 4096, SEEK_DATA) == -1 &&
-                      lseek(fd, 4096, SEEK_HOLE) == 4096;
+    int truncate_ok =
+        ftruncate(fd, 8192) == 0 && lseek(fd, 4096, SEEK_DATA) == -1 && lseek(fd, 4096, SEEK_HOLE) == 4096;
     int extend_ok = ftruncate(fd, 16384) == 0 && lseek(fd, 8192, SEEK_HOLE) == 8192;
     close(alias);
     close(fd);

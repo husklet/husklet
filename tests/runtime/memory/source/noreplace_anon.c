@@ -25,8 +25,8 @@ int main(void) {
 
     // NOREPLACE over the existing mapping -> EEXIST, canary intact.
     errno = 0;
-    void *collide = mmap(occupied, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE,
-                         -1, 0);
+    void *collide =
+        mmap(occupied, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     int rejected = collide == MAP_FAILED && errno == EEXIST;
     int preserved = occupied[0] == 0xa7 && occupied[len - 1] == 0xa7;
 
@@ -36,8 +36,8 @@ int main(void) {
     unsigned char *hole = arena + len;
     if (munmap(hole, len) != 0) return 1;
     errno = 0;
-    unsigned char *placed = mmap(hole, len, PROT_READ | PROT_WRITE,
-                                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    unsigned char *placed =
+        mmap(hole, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     int at_addr = placed == hole;
     int zeroed = at_addr && placed[0] == 0 && placed[len - 1] == 0;
 
@@ -45,8 +45,8 @@ int main(void) {
     void *repl = mmap(occupied, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
     int replaced = repl == occupied && occupied[0] == 0;
 
-    printf("noreplace_anon rejected=%d preserved=%d placed=%d zeroed=%d fixed_replaced=%d\n", rejected,
-           preserved, at_addr, zeroed, replaced);
+    printf("noreplace_anon rejected=%d preserved=%d placed=%d zeroed=%d fixed_replaced=%d\n", rejected, preserved,
+           at_addr, zeroed, replaced);
     if (at_addr) munmap(placed, len);
     munmap(arena, len * 3);
     munmap(occupied, len);

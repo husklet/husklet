@@ -40,11 +40,12 @@ int main(void) {
     off_t pr = lseek(pf[0], 0, SEEK_CUR);
     int espipe_ok = pr == (off_t)-1 && errno == ESPIPE;
 
-    close(pf[0]); close(pf[1]);
+    close(pf[0]);
+    close(pf[1]);
     close(fd);
     unlink(path);
     rmdir(dir);
-    printf("lseek-errno set=%d cur=%d end=%d einval=%d grew=%d espipe=%d\n",
-           set_ok, cur_ok, end_ok, einval_ok, grew, espipe_ok);
+    printf("lseek-errno set=%d cur=%d end=%d einval=%d grew=%d espipe=%d\n", set_ok, cur_ok, end_ok, einval_ok, grew,
+           espipe_ok);
     return 0;
 }

@@ -26,23 +26,29 @@
 static long x_statx(int dfd, const char *p, int flags, unsigned mask, void *buf) {
     return syscall(SYS_statx, dfd, p, flags, mask, buf);
 }
+
 static long x_renameat2(int od, const char *op, int nd, const char *np, unsigned fl) {
     return syscall(SYS_renameat2, od, op, nd, np, fl);
 }
 
-static int fails(long r, int want) { return r == -1 && errno == want; }
+static int fails(long r, int want) {
+    return r == -1 && errno == want;
+}
 
 int main(void) {
     char dir[128];
     snprintf(dir, sizeof dir, "/tmp/hl_aterr_%d", (int)getpid());
     mkdir(dir, 0755);
-    if (chdir(dir) != 0) { printf("aterr chdir_failed\n"); return 1; }
+    if (chdir(dir) != 0) {
+        printf("aterr chdir_failed\n");
+        return 1;
+    }
     int fd = open("file", O_CREAT | O_RDWR, 0644);
     if (fd >= 0) close(fd);
     fd = open("file2", O_CREAT | O_RDWR, 0644);
     if (fd >= 0) close(fd);
 
-    int regfd = open("file", O_RDONLY);        // a regular-file fd (NOT a directory)
+    int regfd = open("file", O_RDONLY); // a regular-file fd (NOT a directory)
     int dirfd = open(".", O_DIRECTORY | O_RDONLY);
     char stbuf[256];
     struct stat st;
@@ -64,8 +70,7 @@ int main(void) {
     int linkat_enotdir = fails(linkat(regfd, "a", dirfd, "b", 0), ENOTDIR);
     int linkat_einval = fails(linkat(dirfd, "file", AT_FDCWD, "newlink", 1), EINVAL);
     int linkat_exdev = fails(linkat(AT_FDCWD, "/proc/cpuinfo", dirfd, "b", 0), EXDEV);
-    int renameat2_einval =
-        fails(x_renameat2(dirfd, "file", dirfd, "file2", RENAME_WHITEOUT | RENAME_EXCHANGE), EINVAL);
+    int renameat2_einval = fails(x_renameat2(dirfd, "file", dirfd, "file2", RENAME_WHITEOUT | RENAME_EXCHANGE), EINVAL);
     int unlink_efault = fails(unlink((const char *)bad), EFAULT);
     int unlinkat_enotdir = fails(unlinkat(regfd, "x", 0), ENOTDIR);
 
@@ -82,8 +87,8 @@ int main(void) {
            "statx_einval_flag=%d statx_einval_mask=%d statx_enotdir=%d symlinkat_enotdir=%d "
            "linkat_enotdir=%d linkat_einval=%d linkat_exdev=%d renameat2_einval=%d "
            "unlink_efault=%d unlinkat_enotdir=%d\n",
-           fstatat_enotdir, fstatat_ebadf, fstatat_einval, statx_efault, statx_einval_flag,
-           statx_einval_mask, statx_enotdir, symlinkat_enotdir, linkat_enotdir, linkat_einval,
-           linkat_exdev, renameat2_einval, unlink_efault, unlinkat_enotdir);
+           fstatat_enotdir, fstatat_ebadf, fstatat_einval, statx_efault, statx_einval_flag, statx_einval_mask,
+           statx_enotdir, symlinkat_enotdir, linkat_enotdir, linkat_einval, linkat_exdev, renameat2_einval,
+           unlink_efault, unlinkat_enotdir);
     return 0;
 }

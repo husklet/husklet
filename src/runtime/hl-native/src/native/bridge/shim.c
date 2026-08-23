@@ -34,6 +34,7 @@
 
 #if defined(_WIN32)
 #define HL_C_OPEN_CLOEXEC 0
+
 static ssize_t hl_c_backend_pread(int fd, void *buffer, size_t size, off_t offset) {
     off_t saved = lseek(fd, 0, SEEK_CUR);
     if (saved < 0 || lseek(fd, offset, SEEK_SET) < 0) return -1;
@@ -84,6 +85,7 @@ static void hl_c_backend_leak_check_probe(void) {
 
 #if defined(HL_LEAK_SANITIZER)
 extern int __lsan_do_recoverable_leak_check(void);
+
 static void hl_c_backend_leak_check_verdict(void) {
     if (getenv("HL_LEAK_CHECK_PROBE") != NULL && __lsan_do_recoverable_leak_check() != 0) _exit(97);
 }
@@ -180,8 +182,7 @@ HL_API int32_t hl_c_backend_checkpoint_broker_accept(int32_t broker, int32_t tim
 
 HL_API int32_t hl_c_backend_checkpoint_broker_accept_authenticated(int32_t broker, int32_t timeout_ms,
                                                                    uint64_t *host_pid, uint64_t *host_birth,
-                                                                   uint64_t *host_generation,
-                                                                   int32_t *process_handle) {
+                                                                   uint64_t *host_generation, int32_t *process_handle) {
     hl_activation_descriptor channel;
 #if defined(__linux__)
     hl_host_process_info process;
@@ -220,8 +221,8 @@ HL_API int32_t hl_c_backend_checkpoint_broker_accept_authenticated(int32_t broke
         *host_pid = 0;
         return -1;
     }
-    *process_handle = hl_host_process_peer_identity_open((int)channel, *host_pid, host_pid, host_birth,
-                                                         host_generation);
+    *process_handle =
+        hl_host_process_peer_identity_open((int)channel, *host_pid, host_pid, host_birth, host_generation);
     if (*process_handle < 0) {
         (void)close((int)channel);
         *host_pid = 0;
@@ -239,7 +240,7 @@ HL_API int32_t hl_c_backend_checkpoint_broker_accept_authenticated(int32_t broke
 }
 
 HL_API int32_t hl_c_backend_checkpoint_peer_authenticate_test(int32_t descriptor, uint64_t claimed_pid,
-                                                             uint64_t *host_pid, uint64_t *host_birth) {
+                                                              uint64_t *host_pid, uint64_t *host_birth) {
     hl_host_process_info process;
     if (host_pid != NULL) *host_pid = 0;
     if (host_birth != NULL) *host_birth = 0;
@@ -273,9 +274,8 @@ HL_API int32_t hl_c_backend_checkpoint_channel_connect_test(int32_t broker_child
 }
 #endif
 HL_API int32_t hl_c_backend_checkpoint_process_identity_open_test(int32_t pid, uint64_t expected_birth,
-                                                                 uint64_t expected_generation,
-                                                                 uint64_t *actual_birth,
-                                                                 uint64_t *actual_generation) {
+                                                                  uint64_t expected_generation, uint64_t *actual_birth,
+                                                                  uint64_t *actual_generation) {
 #if defined(__APPLE__)
     return hl_host_process_identity_open((pid_t)pid, expected_birth, expected_generation, actual_birth,
                                          actual_generation);
@@ -290,8 +290,8 @@ HL_API int32_t hl_c_backend_checkpoint_process_identity_open_test(int32_t pid, u
 }
 
 HL_API int32_t hl_c_backend_checkpoint_peer_identity_open_test(int32_t descriptor, uint64_t claimed_pid,
-                                                              uint64_t *actual_pid, uint64_t *actual_birth,
-                                                              uint64_t *actual_generation) {
+                                                               uint64_t *actual_pid, uint64_t *actual_birth,
+                                                               uint64_t *actual_generation) {
 #if defined(__APPLE__)
     return hl_host_process_peer_identity_open(descriptor, claimed_pid, actual_pid, actual_birth, actual_generation);
 #else
@@ -435,7 +435,6 @@ HL_API int32_t hl_c_backend_checkpoint_configure(hl_c_backend *backend, int32_t 
                            : hl_engine_checkpoint_configure(backend->engine, broker, trigger);
 }
 
-
 static uint32_t hl_c_backend_status_flags(uint64_t detail) {
     uint32_t flags;
     const uint64_t access = detail & (HL_HOST_FILE_READ | HL_HOST_FILE_WRITE);
@@ -540,11 +539,10 @@ static int hl_c_validate_main_image_plan(int fd, const hl_c_main_image_plan *pla
 }
 
 HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char *executable_host, int32_t executable_fd,
-                            const hl_c_main_image_plan *image_plan, const void *interpreter_image,
-                            size_t interpreter_size, uint32_t option_count,
-                            const char *const *option_names, const char *const *option_values,
-                            const int32_t standard_fds[3], int32_t provider_fd, void *syscall_context,
-                            hl_syscall_trap_fn syscall_dispatch, hl_c_backend **output) {
+                                   const hl_c_main_image_plan *image_plan, const void *interpreter_image,
+                                   size_t interpreter_size, uint32_t option_count, const char *const *option_names,
+                                   const char *const *option_values, const int32_t standard_fds[3], int32_t provider_fd,
+                                   void *syscall_context, hl_syscall_trap_fn syscall_dispatch, hl_c_backend **output) {
     hl_c_backend *backend;
     hl_engine_config config;
     hl_status status;
@@ -656,8 +654,8 @@ HL_API int32_t hl_c_backend_create(uint32_t isa, const char *rootfs, const char 
         config.executable = &executable;
     }
     status = hl_engine_create_with_borrowed_options_and_syscall_trap_and_interpreter(
-        &config, &backend->services, &backend->options, syscall_context, syscall_dispatch,
-        interpreter_image, interpreter_size, &backend->engine);
+        &config, &backend->services, &backend->options, syscall_context, syscall_dispatch, interpreter_image,
+        interpreter_size, &backend->engine);
     if (status != HL_STATUS_OK) {
         hl_c_backend_executable_discard(&backend->services, &executable);
         if (standard_fds != NULL)

@@ -2,9 +2,8 @@
 #include <stdio.h>
 
 /* Compatibility-shape bytes are inert input, never a runtime classifier. */
-__attribute__((used)) static const unsigned char unrelated_note[] = {
-    0xff, ' ', 'G', 'o', ' ', 'b', 'u', 'i', 'l', 'd', 'i', 'n', 'f', ':'
-};
+__attribute__((used)) static const unsigned char unrelated_note[] = {0xff, ' ', 'G', 'o', ' ', 'b', 'u',
+                                                                     'i',  'l', 'd', 'i', 'n', 'f', ':'};
 
 static volatile sig_atomic_t observed;
 

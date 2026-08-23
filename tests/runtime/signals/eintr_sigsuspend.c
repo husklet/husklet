@@ -7,14 +7,24 @@
 #include <sys/time.h>
 
 static volatile sig_atomic_t alrm, usr1;
-static void ha(int s) { (void)s; alrm++; }
-static void hu(int s) { (void)s; usr1++; }
+
+static void ha(int s) {
+    (void)s;
+    alrm++;
+}
+
+static void hu(int s) {
+    (void)s;
+    usr1++;
+}
 
 int main(void) {
     struct sigaction sa = {0};
     sigemptyset(&sa.sa_mask);
-    sa.sa_handler = ha; sigaction(SIGALRM, &sa, NULL);
-    sa.sa_handler = hu; sigaction(SIGUSR1, &sa, NULL);
+    sa.sa_handler = ha;
+    sigaction(SIGALRM, &sa, NULL);
+    sa.sa_handler = hu;
+    sigaction(SIGUSR1, &sa, NULL);
 
     sigset_t block;
     sigemptyset(&block);
@@ -37,7 +47,6 @@ int main(void) {
     int mask_restored = sigismember(&cur, SIGUSR1) && sigismember(&cur, SIGALRM);
     int only_alrm = alrm == 1 && usr1 == 0;
 
-    printf("eintr_sigsuspend eintr=%d only_alrm=%d mask_restored=%d\n",
-           eintr, only_alrm, mask_restored);
+    printf("eintr_sigsuspend eintr=%d only_alrm=%d mask_restored=%d\n", eintr, only_alrm, mask_restored);
     return 0;
 }

@@ -17,12 +17,12 @@
 #include <math.h>
 
 // FSW/MXCSR exception bit positions (shared layout).
-#define FSW_IE 0x01 // invalid
-#define FSW_ZE 0x04 // divide-by-zero
-#define FSW_PE 0x20 // precision/inexact
-#define FSW_ES 0x80 // error summary
-#define FCW_DEFAULT 0x037f    // all exceptions masked, round-nearest, 64-bit precision
-#define FCW_ZE_UNMASK 0x037b  // clear the ZE(bit2) mask -> divide-by-zero is unmasked
+#define FSW_IE 0x01          // invalid
+#define FSW_ZE 0x04          // divide-by-zero
+#define FSW_PE 0x20          // precision/inexact
+#define FSW_ES 0x80          // error summary
+#define FCW_DEFAULT 0x037f   // all exceptions masked, round-nearest, 64-bit precision
+#define FCW_ZE_UNMASK 0x037b // clear the ZE(bit2) mask -> divide-by-zero is unmasked
 
 #if defined(__x86_64__)
 // Run an x87 divide under control word `cw` and return the resulting FSW. FNSTSW/FNINIT are the no-wait
@@ -36,6 +36,7 @@ static uint16_t x87_div(double a, double b, uint16_t cw) {
                      : "st");
     return fsw;
 }
+
 static uint16_t x87_sqrt(double a) {
     uint16_t fsw, cw = FCW_DEFAULT;
     __asm__ volatile("fninit\n\t fldcw %1\n\t fldl %2\n\t fsqrt\n\t fnstsw %%ax\n\t fninit\n\t"
@@ -44,6 +45,7 @@ static uint16_t x87_sqrt(double a) {
                      : "st");
     return fsw;
 }
+
 // Divide-by-zero, then FNCLEX, then read FSW: the sticky flags must be cleared.
 static uint16_t x87_div_then_clex(double a, double b) {
     uint16_t fsw, cw = FCW_DEFAULT;
@@ -61,35 +63,40 @@ static uint32_t fpsr_clear_read(void) {
     __asm__ volatile("mrs %0, fpsr" : "=r"(v));
     return (uint32_t)v;
 }
+
 static void fpsr_clear(void) {
     uint64_t v;
     __asm__ volatile("mrs %0, fpsr" : "=r"(v));
     v &= ~(uint64_t)0x9f; // clear IOC/DZC/OFC/UFC/IXC/IDC
     __asm__ volatile("msr fpsr, %0" ::"r"(v));
 }
+
 static uint16_t fpsr_to_fsw(uint32_t fpsr, uint16_t cw) {
     uint16_t fsw = 0;
-    if (fpsr & (1u << 0)) fsw |= FSW_IE;   // IOC -> IE
-    if (fpsr & (1u << 1)) fsw |= FSW_ZE;   // DZC -> ZE
-    if (fpsr & (1u << 2)) fsw |= 0x08;     // OFC -> OE
-    if (fpsr & (1u << 3)) fsw |= 0x10;     // UFC -> UE
-    if (fpsr & (1u << 4)) fsw |= FSW_PE;   // IXC -> PE
-    if (fpsr & (1u << 7)) fsw |= 0x02;     // IDC -> DE
+    if (fpsr & (1u << 0)) fsw |= FSW_IE; // IOC -> IE
+    if (fpsr & (1u << 1)) fsw |= FSW_ZE; // DZC -> ZE
+    if (fpsr & (1u << 2)) fsw |= 0x08;   // OFC -> OE
+    if (fpsr & (1u << 3)) fsw |= 0x10;   // UFC -> UE
+    if (fpsr & (1u << 4)) fsw |= FSW_PE; // IXC -> PE
+    if (fpsr & (1u << 7)) fsw |= 0x02;   // IDC -> DE
     if (fsw & (uint16_t)(~cw & 0x3f)) fsw |= FSW_ES;
     return fsw;
 }
+
 static uint16_t x87_div(double a, double b, uint16_t cw) {
     fpsr_clear();
     volatile double r = a / b;
     (void)r;
     return fpsr_to_fsw(fpsr_clear_read(), cw);
 }
+
 static uint16_t x87_sqrt(double a) {
     fpsr_clear();
     volatile double r = sqrt(a);
     (void)r;
     return fpsr_to_fsw(fpsr_clear_read(), FCW_DEFAULT);
 }
+
 static uint16_t x87_div_then_clex(double a, double b) {
     fpsr_clear();
     volatile double r = a / b;

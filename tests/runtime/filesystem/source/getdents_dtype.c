@@ -9,7 +9,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-struct entry { char name[64]; unsigned char type; };
+struct entry {
+    char name[64];
+    unsigned char type;
+};
 
 static int cmp(const void *a, const void *b) {
     return strcmp(((const struct entry *)a)->name, ((const struct entry *)b)->name);
@@ -43,10 +46,10 @@ int main(void) {
     for (int i = 0; i < count; i++) {
         char t = '?';
         switch (entries[i].type) {
-            case DT_REG: t = 'f'; break;
-            case DT_DIR: t = 'd'; break;
-            case DT_LNK: t = 'l'; break;
-            case DT_FIFO: t = 'p'; break;
+        case DT_REG: t = 'f'; break;
+        case DT_DIR: t = 'd'; break;
+        case DT_LNK: t = 'l'; break;
+        case DT_FIFO: t = 'p'; break;
         }
         printf(" %s:%c", entries[i].name, t);
     }

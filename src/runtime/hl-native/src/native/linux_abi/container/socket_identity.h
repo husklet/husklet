@@ -47,9 +47,7 @@ static inline int hl_socket_identity_nonce_new(uint64_t *high, uint64_t *low) {
     uint64_t words[2] = {0, 0};
     do {
 #if defined(_WIN32)
-        if (BCryptGenRandom(NULL, (PUCHAR)words, (ULONG)sizeof words,
-                            BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0)
-            return -1;
+        if (BCryptGenRandom(NULL, (PUCHAR)words, (ULONG)sizeof words, BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) return -1;
 #elif defined(__APPLE__)
         arc4random_buf(words, sizeof words);
 #else
@@ -74,8 +72,8 @@ static inline int hl_socket_identity_format(char *path, size_t capacity, const c
                                             uint64_t low) {
     if (!path || !directory || !directory[0] || (!high && !low)) return -1;
     size_t directory_length = strlen(directory);
-    int length = snprintf(path, capacity, "%s/%016llx%016llx", directory, (unsigned long long)high,
-                          (unsigned long long)low);
+    int length =
+        snprintf(path, capacity, "%s/%016llx%016llx", directory, (unsigned long long)high, (unsigned long long)low);
     return length > 0 && (size_t)length < capacity &&
                    (size_t)length == directory_length + 1u + HL_SOCKET_IDENTITY_NONCE_DIGITS
                ? 0

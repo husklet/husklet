@@ -35,8 +35,7 @@ int main(void) {
     if (dfd < 0) return 11;
 
     // Two pages, then unmap the second so a buffer near the boundary straddles into unmapped memory.
-    unsigned char *base = mmap(NULL, (size_t)page * 2, PROT_READ | PROT_WRITE,
-                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned char *base = mmap(NULL, (size_t)page * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (base == MAP_FAILED) return 12;
     if (munmap(base + page, (size_t)page) != 0) return 13;
 

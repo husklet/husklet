@@ -13,9 +13,15 @@ int main(void) {
     const char *dir = "/tmp/hl_inotify_dir";
     mkdir(dir, 0755);
     int fd = inotify_init1(0);
-    if (fd < 0) { perror("inotify_init1"); return 1; }
+    if (fd < 0) {
+        perror("inotify_init1");
+        return 1;
+    }
     int wd = inotify_add_watch(fd, dir, IN_CREATE);
-    if (wd < 0) { perror("add_watch"); return 1; }
+    if (wd < 0) {
+        perror("add_watch");
+        return 1;
+    }
 
     char fpath[256];
     snprintf(fpath, sizeof fpath, "%s/created.txt", dir);
@@ -27,8 +33,7 @@ int main(void) {
     int matched = 0;
     for (char *p = buf; p < buf + n;) {
         struct inotify_event *e = (struct inotify_event *)p;
-        if (e->len && strcmp(e->name, "created.txt") == 0 && (e->mask & IN_CREATE))
-            matched = 1;
+        if (e->len && strcmp(e->name, "created.txt") == 0 && (e->mask & IN_CREATE)) matched = 1;
         p += sizeof(struct inotify_event) + e->len;
     }
     close(fd);

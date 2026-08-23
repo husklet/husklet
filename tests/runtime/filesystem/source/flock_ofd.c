@@ -14,14 +14,17 @@
 
 static int byte_write(int fd, char value) {
     ssize_t r;
-    do r = write(fd, &value, 1);
+    do
+        r = write(fd, &value, 1);
     while (r < 0 && errno == EINTR);
     return r == 1;
 }
+
 static int byte_read(int fd) {
     char value;
     ssize_t r;
-    do r = read(fd, &value, 1);
+    do
+        r = read(fd, &value, 1);
     while (r < 0 && errno == EINTR);
     return r == 1;
 }

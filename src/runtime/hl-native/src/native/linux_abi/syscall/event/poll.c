@@ -53,7 +53,8 @@ static int poll_select_gate_ready(struct pollfd *fds, nfds_t n, int timeout_ms, 
         return 0; // EBADF and friends: fall through to poll so POLLNVAL is reported per descriptor
     }
     if (rc == 0) {
-        for (index = 0; index < n; ++index) fds[index].revents = 0;
+        for (index = 0; index < n; ++index)
+            fds[index].revents = 0;
         *decided = 1;
         return 0;
     }
@@ -77,9 +78,14 @@ static int poll_host_wait(struct pollfd *fds, nfds_t n, int timeout_ms) {
 }
 #endif
 
-static int svc_pselect6(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                      uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+static int svc_pselect6(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 72: { // pselect6(nfds, readfds, writefds, exceptfds, timeout(timespec), sigmask) -> pselect.
         // The Linux/macOS fd_set byte-layout is identical (bit N at byte N/8), so pass the sets through.
@@ -191,8 +197,7 @@ static int svc_pselect6(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
             if (r < 0 && have_to) {
                 struct timespec now;
                 hl_production_clock_gettime(effective_host_services(), HL_PRODUCTION_CLOCK_MONOTONIC, &now);
-                int64_t ns = (int64_t)(deadline.tv_sec - now.tv_sec) * 1000000000LL +
-                             (deadline.tv_nsec - now.tv_nsec);
+                int64_t ns = (int64_t)(deadline.tv_sec - now.tv_sec) * 1000000000LL + (deadline.tv_nsec - now.tv_nsec);
                 checkpoint_prepare_timeout(c, ns);
             }
             break;
@@ -222,9 +227,14 @@ static int svc_pselect6(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return svc_done_host(c);
 }
 
-static int svc_ppoll(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
-                      uint64_t a4, uint64_t a5) {
-    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+static int svc_ppoll(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                     uint64_t a5) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
+    (void)a5;
     switch (nr) {
     case 73: {
         struct pollfd *fds = NULL;
@@ -347,8 +357,7 @@ static int svc_ppoll(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             if (r < 0 && have_to) {
                 struct timespec now;
                 hl_production_clock_gettime(effective_host_services(), HL_PRODUCTION_CLOCK_MONOTONIC, &now);
-                int64_t ns = (int64_t)(deadline.tv_sec - now.tv_sec) * 1000000000LL +
-                             (deadline.tv_nsec - now.tv_nsec);
+                int64_t ns = (int64_t)(deadline.tv_sec - now.tv_sec) * 1000000000LL + (deadline.tv_nsec - now.tv_nsec);
                 checkpoint_prepare_timeout(c, ns);
             }
             break;

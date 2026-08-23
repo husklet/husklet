@@ -170,7 +170,7 @@ async fn successful_checkpoint_publishes_commit_acknowledgement_before_exit() {
     .await
     .unwrap();
 
-    let signal = Command::new("/bin/kill")
+    let signal = Command::new("kill")
         .args(["-HUP", &daemon.id().unwrap().to_string()])
         .status()
         .await

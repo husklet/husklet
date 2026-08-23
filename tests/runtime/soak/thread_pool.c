@@ -25,29 +25,45 @@ static void *worker(void *arg) {
     long local = 0;
     for (;;) {
         pthread_mutex_lock(&mu);
-        while (count == 0 && !done) pthread_cond_wait(&not_empty, &mu);
-        if (count == 0 && done) { pthread_mutex_unlock(&mu); break; }
-        long v = q[head]; head = (head + 1) % CAP; count--;
+        while (count == 0 && !done)
+            pthread_cond_wait(&not_empty, &mu);
+        if (count == 0 && done) {
+            pthread_mutex_unlock(&mu);
+            break;
+        }
+        long v = q[head];
+        head = (head + 1) % CAP;
+        count--;
         pthread_cond_signal(&not_full);
         pthread_mutex_unlock(&mu);
         local += v;
     }
-    pthread_mutex_lock(&mu); total += local; pthread_mutex_unlock(&mu);
+    pthread_mutex_lock(&mu);
+    total += local;
+    pthread_mutex_unlock(&mu);
     return 0;
 }
 
 int main(void) {
     pthread_t th[NWORK];
-    for (int i = 0; i < NWORK; i++) pthread_create(&th[i], 0, worker, 0);
+    for (int i = 0; i < NWORK; i++)
+        pthread_create(&th[i], 0, worker, 0);
     for (long i = 0; i < NTASKS; i++) {
         pthread_mutex_lock(&mu);
-        while (count == CAP) pthread_cond_wait(&not_full, &mu);
-        q[tail] = (i % 101) + 1; tail = (tail + 1) % CAP; count++;
+        while (count == CAP)
+            pthread_cond_wait(&not_full, &mu);
+        q[tail] = (i % 101) + 1;
+        tail = (tail + 1) % CAP;
+        count++;
         pthread_cond_signal(&not_empty);
         pthread_mutex_unlock(&mu);
     }
-    pthread_mutex_lock(&mu); done = 1; pthread_cond_broadcast(&not_empty); pthread_mutex_unlock(&mu);
-    for (int i = 0; i < NWORK; i++) pthread_join(th[i], 0);
+    pthread_mutex_lock(&mu);
+    done = 1;
+    pthread_cond_broadcast(&not_empty);
+    pthread_mutex_unlock(&mu);
+    for (int i = 0; i < NWORK; i++)
+        pthread_join(th[i], 0);
     printf("soak threadpool total=%ld\n", total); // sum_{i=0..NTASKS-1} (i%101)+1, order-independent
     return 0;
 }

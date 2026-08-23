@@ -92,15 +92,8 @@ int main(void) {
     // Non-vacuity: the child really became a different uid, and root really stayed root.
     unsigned distinct = report.live_uid == CHILD_UID && root_user == 0 && report.live_uid != root_user;
 
-    printf(
-        "created-ownership root=%u child=%u dir=%u file=%u symlink=%u fifo=%u setgid-group=%u distinct=%u\n",
-        root_user,
-        report.live_uid,
-        report.dir,
-        report.file,
-        report.link,
-        report.fifo,
-        report.setgid_group,
-        distinct);
+    printf("created-ownership root=%u child=%u dir=%u file=%u symlink=%u fifo=%u setgid-group=%u distinct=%u\n",
+           root_user, report.live_uid, report.dir, report.file, report.link, report.fifo, report.setgid_group,
+           distinct);
     return 0;
 }

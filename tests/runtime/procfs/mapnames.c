@@ -73,8 +73,7 @@ int main(void) {
     // 2. A whole-span reservation, then a MAP_FIXED file mapping over its middle -- the loader's shape.
     char *span = mmap(NULL, 4 * PG, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     char *inner = MAP_FAILED;
-    if (span != MAP_FAILED && fd >= 0)
-        inner = mmap(span + PG, 2 * PG, PROT_READ, MAP_PRIVATE | MAP_FIXED, fd, 2 * PG);
+    if (span != MAP_FAILED && fd >= 0) inner = mmap(span + PG, 2 * PG, PROT_READ, MAP_PRIVATE | MAP_FIXED, fd, 2 * PG);
 
     int maps_ok = plain != MAP_FAILED && span != MAP_FAILED && inner == span + PG;
     load();

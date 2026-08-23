@@ -11,13 +11,17 @@
 int main(void) {
     long ps = sysconf(_SC_PAGESIZE);
     unsigned char *m = mmap(NULL, ps, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (m == MAP_FAILED) { printf("map fail\n"); return 2; }
-    m[0] = 0x10; m[1] = 0x20;
+    if (m == MAP_FAILED) {
+        printf("map fail\n");
+        return 2;
+    }
+    m[0] = 0x10;
+    m[1] = 0x20;
 
     pid_t pid = fork();
     if (pid == 0) {
-        int saw = m[0] == 0x10 && m[1] == 0x20;   // inherited pre-fork values
-        m[0] = 0xee;                              // COW: parent must not observe this
+        int saw = m[0] == 0x10 && m[1] == 0x20; // inherited pre-fork values
+        m[0] = 0xee;                            // COW: parent must not observe this
         int child_local = m[0] == 0xee;
         _exit((saw && child_local) ? 0 : 1);
     }

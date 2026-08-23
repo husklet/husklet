@@ -18,7 +18,9 @@
  * unmapped-address store taken in translated guest code, which is the path a guest SIGSEGV takes. */
 static int *volatile fault_address;
 
-static int exists(const char *path) { return access(path, F_OK) == 0; }
+static int exists(const char *path) {
+    return access(path, F_OK) == 0;
+}
 
 static void join(char *out, size_t size, const char *directory, const char *name) {
     snprintf(out, size, "%s/%s", directory, name);

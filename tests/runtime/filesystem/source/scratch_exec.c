@@ -4,6 +4,7 @@
 // the native oracle. Deliberately trivial (fixed output) so the check asserts the LOADER/EXEC path
 // resolved argv[0] inside the scratch jail and entered the guest — not any runtime behaviour.
 #include <stdio.h>
+
 int main(void) {
     puts("scratch-exec OK");
     return 0;

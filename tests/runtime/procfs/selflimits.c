@@ -15,7 +15,8 @@ static long long soft_of(const char *b, const char *name) {
     const char *ln = strstr(b, name);
     if (!ln) return -2;
     ln += strlen(name);
-    while (*ln == ' ') ln++;
+    while (*ln == ' ')
+        ln++;
     if (!strncmp(ln, "unlimited", 9)) return -1; // RLIM_INFINITY sentinel
     return strtoll(ln, NULL, 10);
 }
@@ -31,7 +32,8 @@ int main(void) {
     int n = pf_read("/proc/self/limits", b, sizeof b);
     int has_header = !strncmp(b, "Limit", 5);
     int lines = 0;
-    for (const char *p = strchr(b, '\n'); p; p = strchr(p + 1, '\n')) lines++;
+    for (const char *p = strchr(b, '\n'); p; p = strchr(p + 1, '\n'))
+        lines++;
     int nofile_ok = soft_of(b, "Max open files") == soft_rl(RLIMIT_NOFILE);
     int stack_ok = soft_of(b, "Max stack size") == soft_rl(RLIMIT_STACK);
     int nproc_present = soft_of(b, "Max processes") != -2;

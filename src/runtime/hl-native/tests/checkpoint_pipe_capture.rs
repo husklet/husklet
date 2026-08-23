@@ -83,8 +83,16 @@ fn a_refusal_that_consumes_nothing_leaves_every_member_resumable() {
 }
 
 #[test]
+fn draining_one_holder_never_changes_a_coholders_status_flags() {
+    for isa in [1, 2] {
+        hl_native::checkpoint_pipe_capture_test(isa, 6)
+            .unwrap_or_else(|status| panic!("ISA {isa} pipe drain leaked status flags at {status}"));
+    }
+}
+
+#[test]
 fn checkpoint_pipe_capture_hook_rejects_unknown_scenarios() {
     for isa in [1, 2] {
-        assert_eq!(hl_native::checkpoint_pipe_capture_test(isa, 6), Err(99));
+        assert_eq!(hl_native::checkpoint_pipe_capture_test(isa, 7), Err(99));
     }
 }

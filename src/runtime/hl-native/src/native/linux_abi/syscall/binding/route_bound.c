@@ -1,4 +1,5 @@
-static int bound_route_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, hl_linux_fd_snapshot source) {
+static int bound_route_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                          hl_linux_fd_snapshot source) {
     int64_t result;
     switch (nr) {
     case 57: /* close */
@@ -169,7 +170,8 @@ static int bound_route_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, 
     return 1;
 }
 
-static int bound_route_sync(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, hl_linux_fd_snapshot source) {
+static int bound_route_sync(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                            hl_linux_fd_snapshot source) {
     int64_t result;
     switch (nr) {
     case 82: /* fsync */
@@ -355,7 +357,8 @@ static int bound_route_sync(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1
     return 1;
 }
 
-static int bound_route_metadata(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, hl_linux_fd_snapshot source) {
+static int bound_route_metadata(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                                uint64_t a4, hl_linux_fd_snapshot source) {
     int64_t result;
     switch (nr) {
     case 88: {
@@ -440,7 +443,6 @@ static int bound_route_metadata(struct cpu *c, uint64_t nr, uint64_t a0, uint64_
     return 1;
 }
 
-
 static int64_t bound_provider_control(hl_linux_fd_snapshot source, uint32_t request, uint64_t guest_argument) {
     int64_t result;
     do {
@@ -479,8 +481,7 @@ static int64_t bound_provider_control(hl_linux_fd_snapshot source, uint32_t requ
         if (result >= 0) {
             for (uint32_t i = 0; i < ioctl_result.write_count; ++i) {
                 hl_provider_ioctl_write *write = &ioctl_result.writes[i];
-                if (write->address == 0 ||
-                    guest_copy_to(write->address, write->bytes, write->size) != write->size) {
+                if (write->address == 0 || guest_copy_to(write->address, write->bytes, write->size) != write->size) {
                     result = -EFAULT;
                     break;
                 }
@@ -496,197 +497,200 @@ static int64_t bound_provider_control(hl_linux_fd_snapshot source, uint32_t requ
 static int64_t bound_native_control(hl_linux_fd_snapshot source, uint32_t request, uint64_t guest_argument) {
     int64_t result;
     do {
-    uint8_t argument[44] = {0};
-    size_t argument_size = 0;
-    int argument_input = 0, argument_output = 0;
-    if (request == 0x5401u) argument_size = 36, argument_output = 1;
-    if (request >= 0x5402u && request <= 0x5404u) argument_size = 36, argument_input = 1;
-    if (request == 0x802c542au) argument_size = 44, argument_output = 1;
-    if (request >= 0x402c542bu && request <= 0x402c542du) argument_size = 44, argument_input = 1;
-    if (request == 0x5413u) argument_size = sizeof(struct winsize), argument_output = 1;
-    if (request == 0x5414u) argument_size = sizeof(struct winsize), argument_input = 1;
-    if (request == 0x5421u || request == 0x5410u) argument_size = sizeof(int), argument_input = 1;
-    if (request == 0x541bu || request == 0x540fu) argument_size = sizeof(int), argument_output = 1;
-    if (argument_input && guest_copy_from(argument, guest_argument, argument_size) != (ssize_t)argument_size) {
-        result = -EFAULT;
-        break;
-    }
-    if (request == 0x5451u || request == 0x5450u) { /* FIOCLEX / FIONCLEX */
-        result =
-            hl_linux_fcntl(g_linux_box, source.fd, HL_LINUX_F_SETFD, request == 0x5451u ? HL_LINUX_FD_CLOEXEC : 0);
-    } else if (request == 0x5421u) { /* FIONBIO */
-        int enabled = 0;
-        memcpy(&enabled, argument, sizeof(enabled));
-        int64_t flags = hl_linux_fcntl(g_linux_box, source.fd, HL_LINUX_F_GETFL, 0);
-        if (flags < 0) {
-            result = flags;
+        uint8_t argument[44] = {0};
+        size_t argument_size = 0;
+        int argument_input = 0, argument_output = 0;
+        if (request == 0x5401u) argument_size = 36, argument_output = 1;
+        if (request >= 0x5402u && request <= 0x5404u) argument_size = 36, argument_input = 1;
+        if (request == 0x802c542au) argument_size = 44, argument_output = 1;
+        if (request >= 0x402c542bu && request <= 0x402c542du) argument_size = 44, argument_input = 1;
+        if (request == 0x5413u) argument_size = sizeof(struct winsize), argument_output = 1;
+        if (request == 0x5414u) argument_size = sizeof(struct winsize), argument_input = 1;
+        if (request == 0x5421u || request == 0x5410u) argument_size = sizeof(int), argument_input = 1;
+        if (request == 0x541bu || request == 0x540fu) argument_size = sizeof(int), argument_output = 1;
+        if (argument_input && guest_copy_from(argument, guest_argument, argument_size) != (ssize_t)argument_size) {
+            result = -EFAULT;
             break;
         }
-        if (enabled)
-            flags |= HL_LINUX_O_NONBLOCK;
-        else
-            flags &= ~(int64_t)HL_LINUX_O_NONBLOCK;
-        result = hl_linux_fcntl(g_linux_box, source.fd, HL_LINUX_F_SETFL, (uint64_t)flags);
-    } else if (request == 0x541bu) { /* FIONREAD */
-        hl_host_file_metadata metadata;
-        hl_host_result status =
-            g_host_services->file->metadata(g_host_services->context, source.host_handle, &metadata);
-        int64_t offset = hl_linux_lseek(g_linux_box, source.fd, 0, SEEK_CUR);
-        if (status.status != HL_STATUS_OK)
-            result = bound_host_error(status.status);
-        else if (metadata.type != HL_HOST_FILE_TYPE_REGULAR || offset < 0)
-            result = metadata.type != HL_HOST_FILE_TYPE_REGULAR ? -ENOTTY : offset;
-        else {
-            uint64_t available = metadata.size > (uint64_t)offset ? metadata.size - (uint64_t)offset : 0;
-            int encoded = available > INT_MAX ? INT_MAX : (int)available;
-            memcpy(argument, &encoded, sizeof(encoded));
-            result = 0;
-        }
-    } else if (request == 0x5401u || request == 0x5402u || request == 0x5403u || request == 0x5404u ||
-               request == 0x5413u || request == 0x5414u || request == 0x540fu || request == 0x5410u ||
-               request == 0x540eu || request == 0x802c542au || request == 0x402c542bu || request == 0x402c542cu ||
-               request == 0x402c542du) {
-        int native_fd = -1;
-        int borrowed = bound_attachment_borrow((int)source.fd, &native_fd);
-        if (borrowed < 0) {
-            result = borrowed;
-            break;
-        }
-        if (request == 0x5401u) { /* TCGETS */
-            int host_status = terminal_termios_host_image(native_fd, argument);
-            if (host_status != 0)
-                result = host_status;
+        if (request == 0x5451u || request == 0x5450u) { /* FIOCLEX / FIONCLEX */
+            result =
+                hl_linux_fcntl(g_linux_box, source.fd, HL_LINUX_F_SETFD, request == 0x5451u ? HL_LINUX_FD_CLOEXEC : 0);
+        } else if (request == 0x5421u) { /* FIONBIO */
+            int enabled = 0;
+            memcpy(&enabled, argument, sizeof(enabled));
+            int64_t flags = hl_linux_fcntl(g_linux_box, source.fd, HL_LINUX_F_GETFL, 0);
+            if (flags < 0) {
+                result = flags;
+                break;
+            }
+            if (enabled)
+                flags |= HL_LINUX_O_NONBLOCK;
+            else
+                flags &= ~(int64_t)HL_LINUX_O_NONBLOCK;
+            result = hl_linux_fcntl(g_linux_box, source.fd, HL_LINUX_F_SETFL, (uint64_t)flags);
+        } else if (request == 0x541bu) { /* FIONREAD */
+            hl_host_file_metadata metadata;
+            hl_host_result status =
+                g_host_services->file->metadata(g_host_services->context, source.host_handle, &metadata);
+            int64_t offset = hl_linux_lseek(g_linux_box, source.fd, 0, SEEK_CUR);
+            if (status.status != HL_STATUS_OK)
+                result = bound_host_error(status.status);
+            else if (metadata.type != HL_HOST_FILE_TYPE_REGULAR || offset < 0)
+                result = metadata.type != HL_HOST_FILE_TYPE_REGULAR ? -ENOTTY : offset;
             else {
-                terminal_termios_apply_recall(native_fd, argument);
+                uint64_t available = metadata.size > (uint64_t)offset ? metadata.size - (uint64_t)offset : 0;
+                int encoded = available > INT_MAX ? INT_MAX : (int)available;
+                memcpy(argument, &encoded, sizeof(encoded));
                 result = 0;
             }
-        } else if (request == 0x802c542au) { /* TCGETS2 */
-            /* Linux termios2 has an encoded 44-byte payload. On the Linux/aarch64 host its ABI is
-             * byte-identical to the aarch64 guest ABI, so preserve the extended speed fields and
-             * forward the complete request. macOS has no termios2 request, so translate its native
-             * termios and explicitly populate the two Linux speed fields. */
-#if defined(__linux__)
-            result = ioctl(native_fd, request, argument) == 0 ? 0 : -errno;
-#else
-            {
-                struct termios native;
-                if (tcgetattr(native_fd, &native) != 0)
-                    result = -errno;
+        } else if (request == 0x5401u || request == 0x5402u || request == 0x5403u || request == 0x5404u ||
+                   request == 0x5413u || request == 0x5414u || request == 0x540fu || request == 0x5410u ||
+                   request == 0x540eu || request == 0x802c542au || request == 0x402c542bu || request == 0x402c542cu ||
+                   request == 0x402c542du) {
+            int native_fd = -1;
+            int borrowed = bound_attachment_borrow((int)source.fd, &native_fd);
+            if (borrowed < 0) {
+                result = borrowed;
+                break;
+            }
+            if (request == 0x5401u) { /* TCGETS */
+                int host_status = terminal_termios_host_image(native_fd, argument);
+                if (host_status != 0)
+                    result = host_status;
                 else {
-                    uint32_t input_speed = (uint32_t)cfgetispeed(&native);
-                    uint32_t output_speed = (uint32_t)cfgetospeed(&native);
-                    termios_m2l(&native, argument);
-                    memcpy(argument + 36, &input_speed, sizeof(input_speed));
-                    memcpy(argument + 40, &output_speed, sizeof(output_speed));
+                    terminal_termios_apply_recall(native_fd, argument);
                     result = 0;
                 }
-            }
-#endif
-            /* termios2's leading 36 bytes are the termios image, so the same
-             * guest-authored view applies. */
-            if (result == 0) terminal_termios_apply_recall(native_fd, argument);
-        } else if (request >= 0x402c542bu && request <= 0x402c542du) { /* TCSETS2/W2/F2 */
+            } else if (request == 0x802c542au) { /* TCGETS2 */
+                /* Linux termios2 has an encoded 44-byte payload. On the Linux/aarch64 host its ABI is
+                 * byte-identical to the aarch64 guest ABI, so preserve the extended speed fields and
+                 * forward the complete request. macOS has no termios2 request, so translate its native
+                 * termios and explicitly populate the two Linux speed fields. */
 #if defined(__linux__)
-            result = ioctl(native_fd, request, argument) == 0 ? 0 : -errno;
+                result = ioctl(native_fd, request, argument) == 0 ? 0 : -errno;
 #else
-            {
-                struct termios native;
-                uint32_t input_speed, output_speed;
-                termios_l2m(argument, &native);
-                memcpy(&input_speed, argument + 36, sizeof(input_speed));
-                memcpy(&output_speed, argument + 40, sizeof(output_speed));
-                (void)cfsetispeed(&native, input_speed);
-                (void)cfsetospeed(&native, output_speed);
-                int action = request == 0x402c542bu ? TCSANOW : request == 0x402c542cu ? TCSADRAIN : TCSAFLUSH;
-                result = tcsetattr(native_fd, action, &native) == 0 ? 0 : -errno;
-            }
-#endif
-            if (result == 0) terminal_termios_observe_set(native_fd, argument);
-        } else if (request >= 0x5402u && request <= 0x5404u) { /* TCSETS{,W,F} */
-
-            struct termios native;
-            {
-#if defined(__linux__)
-                memset(&native, 0, sizeof(native));
-                memcpy(&native, argument, 36);
-#else
-                termios_l2m(argument, &native);
-#endif
-                int action = request == 0x5402u ? TCSANOW : request == 0x5403u ? TCSADRAIN : TCSAFLUSH;
-                result = tcsetattr(native_fd, action, &native) == 0 ? 0 : -errno;
-                if (result == 0) terminal_termios_observe_set(native_fd, argument);
-            }
-        } else if (request == 0x5413u || request == 0x5414u) { /* TIOCGWINSZ/TIOCSWINSZ */
-            result = ioctl(native_fd, request == 0x5413u ? TIOCGWINSZ : TIOCSWINSZ, argument) == 0 ? 0 : -errno;
-        } else if (request == 0x540fu) { /* TIOCGPGRP */
-            {
-                pid_t group = tcgetpgrp(native_fd);
-                if (group < 0)
-                    result = -errno;
-                else {
-                    int encoded;
-                    if (hl_linux_pidmap_guest_checked(&g_pgidmap, (int)group, &encoded) != 0)
-                        result = -ENOTTY;
+                {
+                    struct termios native;
+                    if (tcgetattr(native_fd, &native) != 0)
+                        result = -errno;
                     else {
-                        if (!hl_linux_pidmap_is_active(&g_pgidmap) && group == g_init_hostpid) encoded = 1;
-                        memcpy(argument, &encoded, sizeof(encoded));
+                        uint32_t input_speed = (uint32_t)cfgetispeed(&native);
+                        uint32_t output_speed = (uint32_t)cfgetospeed(&native);
+                        termios_m2l(&native, argument);
+                        memcpy(argument + 36, &input_speed, sizeof(input_speed));
+                        memcpy(argument + 40, &output_speed, sizeof(output_speed));
                         result = 0;
                     }
                 }
-            }
-        } else if (request == 0x5410u) { /* TIOCSPGRP */
-            {
-                int encoded;
-                memcpy(&encoded, argument, sizeof(encoded));
-                int host_group;
-                if (encoded > 0 && hl_linux_pidmap_host_checked(&g_pgidmap, encoded, &host_group) != 0) {
-                    result = -ESRCH;
-                    goto bound_ioctl_done;
+#endif
+                /* termios2's leading 36 bytes are the termios image, so the same
+                 * guest-authored view applies. */
+                if (result == 0) terminal_termios_apply_recall(native_fd, argument);
+            } else if (request >= 0x402c542bu && request <= 0x402c542du) { /* TCSETS2/W2/F2 */
+#if defined(__linux__)
+                result = ioctl(native_fd, request, argument) == 0 ? 0 : -errno;
+#else
+                {
+                    struct termios native;
+                    uint32_t input_speed, output_speed;
+                    termios_l2m(argument, &native);
+                    memcpy(&input_speed, argument + 36, sizeof(input_speed));
+                    memcpy(&output_speed, argument + 40, sizeof(output_speed));
+                    (void)cfsetispeed(&native, input_speed);
+                    (void)cfsetospeed(&native, output_speed);
+                    int action = request == 0x402c542bu ? TCSANOW : request == 0x402c542cu ? TCSADRAIN : TCSAFLUSH;
+                    result = tcsetattr(native_fd, action, &native) == 0 ? 0 : -errno;
                 }
-                pid_t group = encoded > 0 ? (pid_t)host_group : encoded;
-                if (!hl_linux_pidmap_is_active(&g_pgidmap) && group == 1 && g_init_hostpid) group = g_init_hostpid;
-                // The borrowed attachment is the terminal selected by the embedder. Require it to belong to
-                // this session and operate on it directly; /dev/tty may name an unrelated outer runner PTY.
-                // Other PTYs retain requested-fd ENOTTY/session semantics through native_fd.
-                pid_t session = getsid(0);
-                int controlling_binding = session > 0 && tcgetsid(native_fd) == session;
-                sigset_t saved;
-                if (!controlling_binding) {
-                    result = -ENOTTY;
-                } else if (tty_ctl_block(&saved) != 0) {
-                    result = -errno;
-                } else {
-                    result = tcsetpgrp(native_fd, group) == 0 ? 0 : -errno;
-                    if (tty_ctl_restore(&saved) != 0 && result == 0) result = -errno;
+#endif
+                if (result == 0) terminal_termios_observe_set(native_fd, argument);
+            } else if (request >= 0x5402u && request <= 0x5404u) { /* TCSETS{,W,F} */
+
+                struct termios native;
+                {
+#if defined(__linux__)
+                    memset(&native, 0, sizeof(native));
+                    memcpy(&native, argument, 36);
+#else
+                    termios_l2m(argument, &native);
+#endif
+                    int action = request == 0x5402u ? TCSANOW : request == 0x5403u ? TCSADRAIN : TCSAFLUSH;
+                    result = tcsetattr(native_fd, action, &native) == 0 ? 0 : -errno;
+                    if (result == 0) terminal_termios_observe_set(native_fd, argument);
                 }
+            } else if (request == 0x5413u || request == 0x5414u) { /* TIOCGWINSZ/TIOCSWINSZ */
+                result = ioctl(native_fd, request == 0x5413u ? TIOCGWINSZ : TIOCSWINSZ, argument) == 0 ? 0 : -errno;
+            } else if (request == 0x540fu) { /* TIOCGPGRP */
+                {
+                    pid_t group = tcgetpgrp(native_fd);
+                    if (group < 0)
+                        result = -errno;
+                    else {
+                        int encoded;
+                        if (hl_linux_pidmap_guest_checked(&g_pgidmap, (int)group, &encoded) != 0)
+                            result = -ENOTTY;
+                        else {
+                            if (!hl_linux_pidmap_is_active(&g_pgidmap) && group == g_init_hostpid) encoded = 1;
+                            memcpy(argument, &encoded, sizeof(encoded));
+                            result = 0;
+                        }
+                    }
+                }
+            } else if (request == 0x5410u) { /* TIOCSPGRP */
+                {
+                    int encoded;
+                    memcpy(&encoded, argument, sizeof(encoded));
+                    int host_group;
+                    if (encoded > 0 && hl_linux_pidmap_host_checked(&g_pgidmap, encoded, &host_group) != 0) {
+                        result = -ESRCH;
+                        goto bound_ioctl_done;
+                    }
+                    pid_t group = encoded > 0 ? (pid_t)host_group : encoded;
+                    if (!hl_linux_pidmap_is_active(&g_pgidmap) && group == 1 && g_init_hostpid) group = g_init_hostpid;
+                    // The borrowed attachment is the terminal selected by the embedder. Require it to belong to
+                    // this session and operate on it directly; /dev/tty may name an unrelated outer runner PTY.
+                    // Other PTYs retain requested-fd ENOTTY/session semantics through native_fd.
+                    pid_t session = getsid(0);
+                    int controlling_binding = session > 0 && tcgetsid(native_fd) == session;
+                    sigset_t saved;
+                    if (!controlling_binding) {
+                        result = -ENOTTY;
+                    } else if (tty_ctl_block(&saved) != 0) {
+                        result = -errno;
+                    } else {
+                        result = tcsetpgrp(native_fd, group) == 0 ? 0 : -errno;
+                        if (tty_ctl_restore(&saved) != 0 && result == 0) result = -errno;
+                    }
+                }
+            } else { /* TIOCSCTTY */
+                result = ioctl(native_fd, TIOCSCTTY, 0) == 0 || errno == EPERM ? 0 : -errno;
             }
-        } else { /* TIOCSCTTY */
-            result = ioctl(native_fd, TIOCSCTTY, 0) == 0 || errno == EPERM ? 0 : -errno;
+        bound_ioctl_done:
+            if (borrowed > 0) bound_attachment_release(native_fd);
+        } else {
+            result = -ENOTTY;
         }
-    bound_ioctl_done:
-        if (borrowed > 0) bound_attachment_release(native_fd);
-    } else {
-        result = -ENOTTY;
-    }
-    if (result >= 0 && argument_output &&
-        guest_copy_to(guest_argument, argument, argument_size) != (ssize_t)argument_size)
-        result = -EFAULT;
+        if (result >= 0 && argument_output &&
+            guest_copy_to(guest_argument, argument, argument_size) != (ssize_t)argument_size)
+            result = -EFAULT;
     } while (0);
     return result;
 }
 
-static int bound_route_control(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, hl_linux_fd_snapshot source) {
+static int bound_route_control(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                               uint64_t a4, hl_linux_fd_snapshot source) {
     int64_t result;
     if (nr != 29) return 0;
-    result = hl_provider_files_is_handle(source.host_handle)
-                 ? bound_provider_control(source, (uint32_t)a1, a2)
-                 : bound_native_control(source, (uint32_t)a1, a2);
+    result = hl_provider_files_is_handle(source.host_handle) ? bound_provider_control(source, (uint32_t)a1, a2)
+                                                             : bound_native_control(source, (uint32_t)a1, a2);
     G_RET(c) = (uint64_t)result;
-    (void)a0; (void)a3; (void)a4;
+    (void)a0;
+    (void)a3;
+    (void)a4;
     return 1;
 }
 
-static int bound_route_directory(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, hl_linux_fd_snapshot source) {
+static int bound_route_directory(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                                 uint64_t a4, hl_linux_fd_snapshot source) {
     int64_t result;
     switch (nr) {
     case 61: {
@@ -822,7 +826,8 @@ static int bound_route_directory(struct cpu *c, uint64_t nr, uint64_t a0, uint64
     return 1;
 }
 
-static int bound_route_duplication(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, hl_linux_fd_snapshot source) {
+static int bound_route_duplication(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                                   uint64_t a4, hl_linux_fd_snapshot source) {
     int64_t result;
     switch (nr) {
     case 25:
@@ -915,8 +920,7 @@ static int bound_route_duplication(struct cpu *c, uint64_t nr, uint64_t a0, uint
                 if (borrowed >= 0) {
                     int host_flags = fcntl(native_fd, F_GETFL);
                     // The kernel's own O_LARGEFILE value; glibc defines the name as 0 on a 64-bit target.
-                    if (host_flags >= 0 && (host_flags & 00100000) != 0)
-                        result |= (int64_t)(uint64_t)G_O_LARGEFILE;
+                    if (host_flags >= 0 && (host_flags & 00100000) != 0) result |= (int64_t)(uint64_t)G_O_LARGEFILE;
                     if (borrowed == 1) bound_attachment_release(native_fd);
                 }
             }
@@ -948,7 +952,8 @@ static int bound_route_duplication(struct cpu *c, uint64_t nr, uint64_t a0, uint
     return 1;
 }
 
-static int bound_route_unsupported(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, hl_linux_fd_snapshot source) {
+static int bound_route_unsupported(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                                   uint64_t a4, hl_linux_fd_snapshot source) {
     int64_t result;
     switch (nr) {
     case 20: return 0; /* epoll_create1: a0 is flags, not an fd */

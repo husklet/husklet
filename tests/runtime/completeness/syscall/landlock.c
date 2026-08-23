@@ -13,8 +13,7 @@
 #endif
 
 int main(void) {
-    long v = syscall(__NR_landlock_create_ruleset, (void *)0, (size_t)0,
-                     (unsigned)LANDLOCK_CREATE_RULESET_VERSION);
+    long v = syscall(__NR_landlock_create_ruleset, (void *)0, (size_t)0, (unsigned)LANDLOCK_CREATE_RULESET_VERSION);
     int handled = (v >= 1) || (v < 0 && (errno == ENOSYS || errno == EOPNOTSUPP || errno == EPERM));
 
     /* a bad flags value must be rejected, not silently accepted */

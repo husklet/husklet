@@ -13,12 +13,14 @@
  */
 #define SOFT_TLB_INDEX_BITS 9
 #define SOFT_TLB_ENTRIES (1u << SOFT_TLB_INDEX_BITS)
+
 struct hl_soft_tlb_entry {
     uint64_t page;       /* inclusive first guest address covered */
     uint64_t limit;      /* exclusive last guest address covered */
     uint64_t delta;      /* host address - guest address */
     uint64_t protection; /* HL_LOGICAL_VMA_* permission bits */
 };
+
 #define SOFT_TLB_SLOT(c, address) (&(c)->soft_tlb[((address) >> 12) & (SOFT_TLB_ENTRIES - 1)])
 #define SOFT_TLB_ENTRY_INVALIDATE(e)                                                                                   \
     do {                                                                                                               \

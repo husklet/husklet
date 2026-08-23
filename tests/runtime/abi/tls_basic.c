@@ -24,8 +24,10 @@ static void *worker(void *arg) {
 
 int main(void) {
     pthread_t t[8];
-    for (long i = 0; i < 8; i++) pthread_create(&t[i], 0, worker, (void *)i);
-    for (int i = 0; i < 8; i++) pthread_join(t[i], 0);
+    for (long i = 0; i < 8; i++)
+        pthread_create(&t[i], 0, worker, (void *)i);
+    for (int i = 0; i < 8; i++)
+        pthread_join(t[i], 0);
     printf("tls ok=%ld\n", ok_count); // 8
     return 0;
 }

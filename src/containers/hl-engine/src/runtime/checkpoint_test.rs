@@ -134,13 +134,13 @@ fn send_descriptor(channel: &UnixStream, descriptor: i32) {
         message.msg_iovlen = 1;
         message.msg_control = control.as_mut_ptr().cast();
         message.msg_controllen = control.len() as _;
-        let header = libc::CMSG_FIRSTHDR(&message);
+        let header = libc::CMSG_FIRSTHDR(&raw const message);
         (*header).cmsg_level = libc::SOL_SOCKET;
         (*header).cmsg_type = libc::SCM_RIGHTS;
         (*header).cmsg_len = libc::CMSG_LEN(mem::size_of::<i32>() as _) as _;
         *libc::CMSG_DATA(header).cast::<i32>() = descriptor;
         message.msg_controllen = libc::CMSG_SPACE(mem::size_of::<i32>() as _) as _;
-        assert_eq!(libc::sendmsg(channel.as_raw_fd(), &message, 0), 1);
+        assert_eq!(libc::sendmsg(channel.as_raw_fd(), &raw const message, 0), 1);
     }
 }
 
@@ -172,7 +172,7 @@ fn receive_descriptor(channel: &UnixStream) -> UnixStream {
         message.msg_control = control.as_mut_ptr().cast();
         message.msg_controllen = control.len() as _;
         assert_eq!(libc::recvmsg(channel.as_raw_fd(), &raw mut message, 0), 1);
-        let header = libc::CMSG_FIRSTHDR(&message);
+        let header = libc::CMSG_FIRSTHDR(&raw const message);
         assert!(!header.is_null());
         assert_eq!((*header).cmsg_level, libc::SOL_SOCKET);
         assert_eq!((*header).cmsg_type, libc::SCM_RIGHTS);

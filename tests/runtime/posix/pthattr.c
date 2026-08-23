@@ -37,8 +37,7 @@ int main(void) {
     pthread_join(t, NULL);
     pthread_attr_destroy(&attr);
 
-    printf("attr ss=%d gs=%d joinable=%d stack_ge=%d\n",
-           ss == STACK, gs == GUARD, ds == PTHREAD_CREATE_JOINABLE,
+    printf("attr ss=%d gs=%d joinable=%d stack_ge=%d\n", ss == STACK, gs == GUARD, ds == PTHREAD_CREATE_JOINABLE,
            observed_stack >= STACK);
     return 0;
 }

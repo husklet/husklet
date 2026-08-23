@@ -67,7 +67,10 @@ int main(void) {
     memset(&its, 0, sizeof its);
     its.it_value = now;
     its.it_value.tv_nsec += 40 * 1000 * 1000;
-    if (its.it_value.tv_nsec >= 1000000000L) { its.it_value.tv_sec++; its.it_value.tv_nsec -= 1000000000L; }
+    if (its.it_value.tv_nsec >= 1000000000L) {
+        its.it_value.tv_sec++;
+        its.it_value.tv_nsec -= 1000000000L;
+    }
     timerfd_settime(fd, TFD_TIMER_ABSTIME, &its, NULL);
     n = 0;
     int abstime = read_count(fd, &n) && n == 1;
@@ -83,7 +86,7 @@ int main(void) {
     int efault = timerfd_settime(fd, 0, (const struct itimerspec *)0x1, NULL) == -1 && errno == EFAULT;
     close(fd);
 
-    printf("timerfd oneshot=%d rem=%d disarmed=%d periodic=%d abstime=%d badclock=%d badflags=%d efault=%d\n",
-           oneshot, rem_ok, disarmed, periodic, abstime, badclock, badflags, efault);
+    printf("timerfd oneshot=%d rem=%d disarmed=%d periodic=%d abstime=%d badclock=%d badflags=%d efault=%d\n", oneshot,
+           rem_ok, disarmed, periodic, abstime, badclock, badflags, efault);
     return 0;
 }

@@ -82,9 +82,7 @@ static int post(const char *mode) {
     if (mode[0] == 'm')
         return r == 1000 && e == 0 && s == 0 && getauxval(AT_SECURE) == 1 && prctl(PR_GET_DUMPABLE) == 2 ? 0 : 17;
     if (mode[0] == 'n')
-        return r == 1000 && e == 1000 && s == 1000 && getauxval(AT_SECURE) == 0 && prctl(PR_GET_DUMPABLE) == 1
-                   ? 0
-                   : 18;
+        return r == 1000 && e == 1000 && s == 1000 && getauxval(AT_SECURE) == 0 && prctl(PR_GET_DUMPABLE) == 1 ? 0 : 18;
     if (mode[0] == 'g') {
         gid_t expected = mode[1] == '0' ? 1000 : 0;
         return gr == 1000 && ge == expected && gs == expected && getauxval(AT_SECURE) == (expected == 0) ? 0 : 19;
@@ -238,15 +236,16 @@ int main(int argc, char **argv) {
     int bad_format_prepared = bad_fd >= 0 && write(bad_fd, "not-elf", 7) == 7 && close(bad_fd) == 0 &&
                               setxattr(bad_format, "security.capability", bad, sizeof bad, 0) == 0;
     int bad_interpreter_fd = open(bad_interpreter, O_WRONLY | O_CREAT | O_TRUNC, 0755);
-    int bad_interpreter_prepared =
-        bad_interpreter_fd >= 0 && write(bad_interpreter_fd, "not-elf", 7) == 7 && close(bad_interpreter_fd) == 0 &&
-        setxattr(bad_interpreter, "security.capability", bad, sizeof bad, 0) == 0 &&
-        make_interpreted_image(interpreted, bad_interpreter);
-    int same_id_prepared = copy_self(same_id, 0755) == 0 && chown(same_id, 1000, 1000) == 0 && chmod(same_id, 04755) == 0;
-    int setgid_plain_prepared = copy_self(setgid_plain, 0755) == 0 && chown(setgid_plain, 1000, 0) == 0 &&
-                                chmod(setgid_plain, 02700) == 0;
-    int setgid_exec_prepared = copy_self(setgid_exec, 0755) == 0 && chown(setgid_exec, 1000, 0) == 0 &&
-                               chmod(setgid_exec, 02710) == 0;
+    int bad_interpreter_prepared = bad_interpreter_fd >= 0 && write(bad_interpreter_fd, "not-elf", 7) == 7 &&
+                                   close(bad_interpreter_fd) == 0 &&
+                                   setxattr(bad_interpreter, "security.capability", bad, sizeof bad, 0) == 0 &&
+                                   make_interpreted_image(interpreted, bad_interpreter);
+    int same_id_prepared =
+        copy_self(same_id, 0755) == 0 && chown(same_id, 1000, 1000) == 0 && chmod(same_id, 04755) == 0;
+    int setgid_plain_prepared =
+        copy_self(setgid_plain, 0755) == 0 && chown(setgid_plain, 1000, 0) == 0 && chmod(setgid_plain, 02700) == 0;
+    int setgid_exec_prepared =
+        copy_self(setgid_exec, 0755) == 0 && chown(setgid_exec, 1000, 0) == 0 && chmod(setgid_exec, 02710) == 0;
     int ordinary = run("/proc/self/exe", "ordinary", 1);
     int elevated = prepared && run(setid, "setid", 0);
     int ambient = run_ambient();
@@ -260,8 +259,7 @@ int main(int argc, char **argv) {
     int interpreter_precedence = bad_interpreter_prepared && exec_errno(interpreted, ELIBBAD);
     int secure_mismatch = run_ids("/proc/self/exe", "mismatch", 1000, 0, 0, 1000, 1000, 1000);
     int secure_same = same_id_prepared && run_ids(same_id, "new-same", 1000, 0, 0, 1000, 1000, 1000);
-    int setgid_plain_ok =
-        setgid_plain_prepared && run_ids(setgid_plain, "g0", 1000, 1000, 1000, 1000, 1000, 1000);
+    int setgid_plain_ok = setgid_plain_prepared && run_ids(setgid_plain, "g0", 1000, 1000, 1000, 1000, 1000, 1000);
     int setgid_exec_ok = setgid_exec_prepared && run_ids(setgid_exec, "g1", 1000, 1000, 1000, 1000, 1000, 1000);
     unlink(setid);
     unlink(filecap);
@@ -276,9 +274,8 @@ int main(int argc, char **argv) {
     unlink(setgid_exec);
     printf("exec-credentials ordinary=%d setid=%d ambient=%d filecap=%d forced=%d malformed=%d flags=%d "
            "precedence=%d securebits=%d format=%d interpreter=%d mismatch=%d same=%d setgid-plain=%d setgid-exec=%d\n",
-           ordinary, elevated, ambient, file_caps, forced, malformed_rejected, unknown_rejected, precedence,
-           securebits, format_precedence, interpreter_precedence, secure_mismatch, secure_same, setgid_plain_ok,
-           setgid_exec_ok);
+           ordinary, elevated, ambient, file_caps, forced, malformed_rejected, unknown_rejected, precedence, securebits,
+           format_precedence, interpreter_precedence, secure_mismatch, secure_same, setgid_plain_ok, setgid_exec_ok);
     if (!ordinary || !elevated || !ambient || !file_caps || !forced || !malformed_rejected || !unknown_rejected ||
         !precedence || !securebits)
         return 1;

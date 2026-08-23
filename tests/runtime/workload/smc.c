@@ -27,9 +27,11 @@ static void emit_ret(unsigned char *p, uint32_t v) {
 }
 
 int main(void) {
-    unsigned char *code = mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
-                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (code == MAP_FAILED) { perror("mmap"); return 1; }
+    unsigned char *code = mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (code == MAP_FAILED) {
+        perror("mmap");
+        return 1;
+    }
     uint64_t sum = 0;
     for (uint32_t i = 0; i < 200000; i++) {
         emit_ret(code, i & 0xffff);

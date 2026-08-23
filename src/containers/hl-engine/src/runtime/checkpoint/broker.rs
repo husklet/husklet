@@ -7,10 +7,14 @@ use super::{
 };
 use std::{
     collections::BTreeSet,
-    io::Read,
     os::{fd::AsRawFd, unix::net::UnixStream},
     sync::{Arc, atomic::Ordering},
 };
+
+#[path = "broker_connection.rs"]
+mod connection;
+pub(super) use connection::AcceptedChannel;
+use connection::{Connection, read_authenticated};
 
 impl Server {
     pub(crate) fn stop(&self) {
@@ -495,59 +499,3 @@ impl Server {
 
 /// Bounds the guest-derived inventory before it is allocated against.
 const EXECUTOR_INVENTORY_MAX: usize = 4096;
-
-fn read_authenticated(
-    channel: &mut &UnixStream,
-    peer: Option<&hl_native::AuthenticatedCheckpointPeer>,
-    output: &mut [u8],
-) -> std::io::Result<()> {
-    match peer {
-        Some(authority) => authority.read_exact(channel, output),
-        None => channel.read_exact(output),
-    }
-}
-
-struct Connection<'a> {
-    server: &'a Server,
-    descriptor: i32,
-    id: u64,
-    peer: Option<hl_native::AuthenticatedCheckpointPeer>,
-    /// The capture generation this connection proved membership of, if any.
-    registered: Option<u64>,
-    _accepted: AcceptedChannel,
-}
-
-impl Drop for Connection<'_> {
-    fn drop(&mut self) {
-        if let Ok(mut channels) = self.server.channels.lock() {
-            channels.remove(&self.descriptor);
-        }
-        if let Ok(mut connections) = self.server.recovery_connections.lock() {
-            connections.remove(&self.id);
-        }
-    }
-}
-
-pub(super) struct AcceptedChannel {
-    server: Arc<Server>,
-}
-
-impl AcceptedChannel {
-    pub(super) fn new(server: Arc<Server>) -> Self {
-        server.connections.fetch_add(1, Ordering::AcqRel);
-        #[cfg(test)]
-        server.accepts.fetch_add(1, Ordering::AcqRel);
-        Self { server }
-    }
-}
-
-impl Drop for AcceptedChannel {
-    fn drop(&mut self) {
-        let previous = self.server.connections.fetch_sub(1, Ordering::AcqRel);
-        debug_assert_ne!(previous, 0, "checkpoint connection count underflow");
-        if previous == 1 && self.server.running.load(Ordering::Acquire) {
-            self.server
-                .fail("every native checkpoint channel closed before capture completion".into());
-        }
-    }
-}

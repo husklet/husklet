@@ -10,13 +10,19 @@
 
 int main(void) {
     int fds[2];
-    if (pipe(fds) < 0) { perror("pipe"); return 1; }
+    if (pipe(fds) < 0) {
+        perror("pipe");
+        return 1;
+    }
     int ep = epoll_create1(0);
     struct epoll_event ev = {.events = EPOLLIN, .data.u64 = 0x1234ULL};
     epoll_ctl(ep, EPOLL_CTL_ADD, fds[0], &ev);
 
     pid_t pid = fork();
-    if (pid < 0) { perror("fork"); return 1; }
+    if (pid < 0) {
+        perror("fork");
+        return 1;
+    }
     if (pid == 0) {
         // child: inherits ep + the interest list + the pipe. Do NOT re-register.
         if (write(fds[1], "z", 1) < 0) _exit(9);

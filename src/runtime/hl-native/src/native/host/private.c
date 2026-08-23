@@ -419,11 +419,11 @@ struct hl_host_process_fd_private_plan {
     hl_host_process_fd_private_relocation relocations[];
 };
 
+#if defined(__APPLE__)
 static void *hl_private_plan_scratch(const hl_host_process_fd_private_plan *plan) {
     return (void *)(plan->relocations + plan->capacity);
 }
 
-#if defined(__APPLE__)
 static int hl_private_plan_open_descriptors(void *buffer, int size) {
     /* proc_pidinfo is a libproc wrapper and is not promised async-signal-safe. This path runs after fork in
      * a multithreaded embedder, so enter XNU's documented proc_info syscall directly: call 2 is
@@ -488,8 +488,7 @@ int hl_host_process_fd_private_plan_prepare(int minimum, const int *descriptors,
             result = -errno;
             goto done;
         }
-        plan->relocations[plan->count++] =
-            (hl_host_process_fd_private_relocation){descriptor, duplicate};
+        plan->relocations[plan->count++] = (hl_host_process_fd_private_relocation){descriptor, duplicate};
     }
     result = 0;
     *out = plan;
@@ -723,7 +722,8 @@ void hl_host_process_fd_private_cleanup(void) {
 
 static void hl_private_sleep(long nanoseconds) {
     struct timespec delay = {nanoseconds / 1000000000L, nanoseconds % 1000000000L};
-    while (nanosleep(&delay, &delay) != 0 && errno == EINTR) continue;
+    while (nanosleep(&delay, &delay) != 0 && errno == EINTR)
+        continue;
 }
 
 /* Holds the fork lock for a window wide enough that a fork() started after it can only

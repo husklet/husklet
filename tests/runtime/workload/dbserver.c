@@ -80,8 +80,7 @@ int main(void) {
     // ---- server ----
     sqlite3 *db;
     sqlite3_open("/tmp/hl_dbserver.db", &db);
-    sqlite3_exec(db, "PRAGMA journal_mode=WAL; DROP TABLE IF EXISTS t; CREATE TABLE t(v INTEGER);",
-                 0, 0, 0);
+    sqlite3_exec(db, "PRAGMA journal_mode=WAL; DROP TABLE IF EXISTS t; CREATE TABLE t(v INTEGER);", 0, 0, 0);
     for (;;) {
         int cs = accept(ls, NULL, NULL);
         if (cs < 0) break;
@@ -98,8 +97,8 @@ int main(void) {
             sqlite3_prepare_v2(db, "SELECT COUNT(*), COALESCE(SUM(v),0) FROM t;", -1, &st, 0);
             sqlite3_step(st);
             char out[64];
-            int m = snprintf(out, sizeof out, "count=%d sum=%d\n",
-                             sqlite3_column_int(st, 0), sqlite3_column_int(st, 1));
+            int m =
+                snprintf(out, sizeof out, "count=%d sum=%d\n", sqlite3_column_int(st, 0), sqlite3_column_int(st, 1));
             sqlite3_finalize(st);
             write(cs, out, m);
             close(cs);

@@ -10,7 +10,6 @@ int main(void) {
     int d5 = fmax(2.0, 3.0) == 3.0 && fmin(2.0, 3.0) == 2.0;
     int d6 = fma(2.0, 3.0, 4.0) == 10.0;
     int d7 = fabs(-7.0) == 7.0;
-    printf("math_misc d1=%d d2=%d d3=%d d4=%d d5=%d d6=%d d7=%d\n",
-           d1, d2, d3, d4, d5, d6, d7);
+    printf("math_misc d1=%d d2=%d d3=%d d4=%d d5=%d d6=%d d7=%d\n", d1, d2, d3, d4, d5, d6, d7);
     return 0;
 }

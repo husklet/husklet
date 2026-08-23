@@ -204,15 +204,8 @@ async fn main() {
 
 impl Arguments {
     async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
-        std::fs::create_dir_all(&self.root)?;
-        let owner = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(self.root.join("daemon.owner.lock"))?;
-        owner
-            .try_lock_exclusive()
-            .map_err(|error| format!("another daemon owns this data root: {error}"))?;
+        let owner_root = self.root.clone();
+        let _owner = tokio::task::spawn_blocking(move || acquire_owner(&owner_root)).await??;
         let mut containers = Containers::builder(Config::new(&self.root));
         match (self.images, self.external_images) {
             (Some(local), Some(external)) => {
@@ -272,6 +265,20 @@ impl Arguments {
         }
         Ok(())
     }
+}
+
+fn acquire_owner(root: &std::path::Path) -> Result<std::fs::File, String> {
+    std::fs::create_dir_all(root).map_err(|error| format!("create daemon data root: {error}"))?;
+    let owner = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(root.join("daemon.owner.lock"))
+        .map_err(|error| format!("open daemon owner lock: {error}"))?;
+    owner
+        .try_lock_exclusive()
+        .map_err(|error| format!("another daemon owns this data root: {error}"))?;
+    Ok(owner)
 }
 
 #[cfg(test)]

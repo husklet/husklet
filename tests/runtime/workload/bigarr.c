@@ -67,12 +67,17 @@ static inline uint64_t idxd_load(const uint64_t *base, uint64_t i) {
 int main(void) {
     uint64_t *a = malloc((size_t)N * sizeof(uint64_t));
     uint64_t *b = malloc((size_t)N * sizeof(uint64_t));
-    if (!a || !b) { perror("malloc"); return 1; }
+    if (!a || !b) {
+        perror("malloc");
+        return 1;
+    }
 
     // A) natural fill + sum (auto-vectorizable: movdqu/paddq on x86)
-    for (uint64_t i = 0; i < N; i++) a[i] = pat(i);
+    for (uint64_t i = 0; i < N; i++)
+        a[i] = pat(i);
     uint64_t sumA = 0;
-    for (uint64_t i = 0; i < N; i++) sumA += a[i];
+    for (uint64_t i = 0; i < N; i++)
+        sumA += a[i];
     printf("A fill+sum=%016llx\n", (unsigned long long)sumA);
 
     // B) unsigned scaled-index load, idx up to ~2M (> 2^20)
@@ -96,7 +101,8 @@ int main(void) {
     // C) rep movsq bulk copy of the whole >16 MiB region, then checksum
     memmove(b, a, (size_t)N * sizeof(uint64_t));
     uint64_t sumC = 0;
-    for (uint64_t i = 0; i < N; i++) sumC += b[i] * (i + 1);
+    for (uint64_t i = 0; i < N; i++)
+        sumC += b[i] * (i + 1);
     printf("C repmovsq=%016llx\n", (unsigned long long)sumC);
 
     // K) HUGE (5 GiB) demand-paged mmap so a scaled index PRODUCES a byte offset > 2^32
@@ -105,9 +111,11 @@ int main(void) {
     //    -> byte offset exactly 0x100000000 (4 GiB). Only a few pages are touched.
     const size_t HN = (5ull << 30) / sizeof(uint64_t);
     const uint64_t KBASE = 0x100000000ull / 8; // element index whose byte offset == 4 GiB
-    uint64_t *h = mmap(NULL, HN * sizeof(uint64_t), PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (h == MAP_FAILED) { perror("mmap"); return 1; }
+    uint64_t *h = mmap(NULL, HN * sizeof(uint64_t), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (h == MAP_FAILED) {
+        perror("mmap");
+        return 1;
+    }
     uint64_t sumK = 0;
     // touch a handful of elements straddling the 4 GiB byte-offset boundary via scaled-index loads
     for (uint64_t i = KBASE - 3; i < KBASE + 4 && i < HN; i++) {

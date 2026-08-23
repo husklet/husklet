@@ -20,8 +20,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#define NWORK   7
-#define ROUNDS  30000
+#define NWORK 7
+#define ROUNDS 30000
 
 static int chan[2], wake_fd, ack_fd;
 static _Atomic long g_done_rounds = 0;
@@ -31,7 +31,7 @@ static _Atomic int g_quit = 0;
 struct worker {
     pthread_mutex_t m;
     pthread_cond_t cv;
-    int njobs;      // pending job count (counting queue -> no job dropped on collision)
+    int njobs; // pending job count (counting queue -> no job dropped on collision)
     pthread_t th;
 };
 static struct worker W[NWORK];
@@ -40,8 +40,12 @@ static void *worker_fn(void *arg) {
     struct worker *w = arg;
     for (;;) {
         pthread_mutex_lock(&w->m);
-        while (w->njobs == 0 && !atomic_load(&g_quit)) pthread_cond_wait(&w->cv, &w->m); // FUTEX_WAIT
-        if (w->njobs == 0 && atomic_load(&g_quit)) { pthread_mutex_unlock(&w->m); return NULL; }
+        while (w->njobs == 0 && !atomic_load(&g_quit))
+            pthread_cond_wait(&w->cv, &w->m); // FUTEX_WAIT
+        if (w->njobs == 0 && atomic_load(&g_quit)) {
+            pthread_mutex_unlock(&w->m);
+            return NULL;
+        }
         w->njobs--;
         pthread_mutex_unlock(&w->m);
         // "process" the job, then ack back to the IO pump so it can pace the producer
@@ -70,16 +74,21 @@ static void *io_pump(void *arg) {
     struct epoll_event out[8];
     for (;;) {
         int n = epoll_wait(ep, out, 8, 2000);
-        if (n <= 0) { if (atomic_load(&g_quit)) return NULL; continue; }
+        if (n <= 0) {
+            if (atomic_load(&g_quit)) return NULL;
+            continue;
+        }
         for (int i = 0; i < n; i++) {
             if (out[i].data.fd == wake_fd) {
-                uint64_t v; while (read(wake_fd, &v, 8) == 8) {}
+                uint64_t v;
+                while (read(wake_fd, &v, 8) == 8) {}
             } else if (out[i].data.fd == chan[1]) {
                 char buf[128];
                 for (;;) {
                     ssize_t r = recv(chan[1], buf, sizeof buf, 0);
                     if (r <= 0) break;
-                    long job; memcpy(&job, buf, 8);
+                    long job;
+                    memcpy(&job, buf, 8);
                     dispatch(job); // hand off to a futex-parked worker
                 }
             }
@@ -96,16 +105,26 @@ static void *watchdog(void *arg) {
         nanosleep(&ts, NULL);
         long d = atomic_load(&g_done_rounds);
         if (d >= ROUNDS) return NULL;
-        if (d == last) { fprintf(stderr, "STALL done=%ld/%d\n", d, ROUNDS); fflush(stderr); _exit(7); }
+        if (d == last) {
+            fprintf(stderr, "STALL done=%ld/%d\n", d, ROUNDS);
+            fflush(stderr);
+            _exit(7);
+        }
         last = d;
     }
 }
 
 int main(void) {
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, chan) != 0) { perror("socketpair"); return 1; }
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, chan) != 0) {
+        perror("socketpair");
+        return 1;
+    }
     wake_fd = eventfd(0, EFD_NONBLOCK);
     ack_fd = eventfd(0, 0);
-    if (wake_fd < 0 || ack_fd < 0) { perror("eventfd"); return 1; }
+    if (wake_fd < 0 || ack_fd < 0) {
+        perror("eventfd");
+        return 1;
+    }
 
     for (int i = 0; i < NWORK; i++) {
         pthread_mutex_init(&W[i].m, NULL);
@@ -122,22 +141,38 @@ int main(void) {
     char msg[16];
     for (long r = 0; r < ROUNDS; r++) {
         memcpy(msg, &r, 8);
-        if (send(chan[0], msg, sizeof msg, 0) < 0) { perror("send"); return 2; }
-        if ((r & 1) == 0) { uint64_t one = 1; if (write(wake_fd, &one, 8) != 8) {} }
+        if (send(chan[0], msg, sizeof msg, 0) < 0) {
+            perror("send");
+            return 2;
+        }
+        if ((r & 1) == 0) {
+            uint64_t one = 1;
+            if (write(wake_fd, &one, 8) != 8) {}
+        }
         outstanding++;
         // keep a bounded number outstanding so the drain/re-arm + futex handoff windows stay hot
-        while (outstanding >= 32) { uint64_t a; if (read(ack_fd, &a, 8) == 8) outstanding -= (long)a; else break; }
+        while (outstanding >= 32) {
+            uint64_t a;
+            if (read(ack_fd, &a, 8) == 8)
+                outstanding -= (long)a;
+            else
+                break;
+        }
     }
     // drain remaining acks
     while (atomic_load(&g_done_rounds) < ROUNDS) {
-        uint64_t a; if (read(ack_fd, &a, 8) != 8) break;
+        uint64_t a;
+        if (read(ack_fd, &a, 8) != 8) break;
     }
     atomic_store(&g_quit, 1);
     for (int i = 0; i < NWORK; i++) {
-        pthread_mutex_lock(&W[i].m); pthread_cond_signal(&W[i].cv); pthread_mutex_unlock(&W[i].m);
+        pthread_mutex_lock(&W[i].m);
+        pthread_cond_signal(&W[i].cv);
+        pthread_mutex_unlock(&W[i].m);
         pthread_join(W[i].th, NULL);
     }
-    uint64_t one = 1; if (write(wake_fd, &one, 8) != 8) {}
+    uint64_t one = 1;
+    if (write(wake_fd, &one, 8) != 8) {}
     pthread_join(io, NULL);
     long d = atomic_load(&g_done_rounds);
     printf("worker rounds=%d done=%ld ok=%d\n", ROUNDS, d, d == ROUNDS);

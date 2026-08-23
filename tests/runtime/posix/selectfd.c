@@ -7,7 +7,10 @@
 
 int main(void) {
     int fds[2];
-    if (pipe(fds) != 0) { printf("selectfd pipe=0\n"); return 0; }
+    if (pipe(fds) != 0) {
+        printf("selectfd pipe=0\n");
+        return 0;
+    }
 
     // Nothing written yet: select times out (not ready).
     fd_set rf;
@@ -45,7 +48,6 @@ int main(void) {
 
     close(fds[0]);
     close(fds[1]);
-    printf("selectfd timeout=%d ready=%d hi=%d psel=%d\n",
-           timed_out, ready, hi_ok, psel_timeout);
+    printf("selectfd timeout=%d ready=%d hi=%d psel=%d\n", timed_out, ready, hi_ok, psel_timeout);
     return 0;
 }

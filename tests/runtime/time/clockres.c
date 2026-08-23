@@ -7,7 +7,7 @@ static int res_ok(clockid_t c) {
     struct timespec ts;
     if (clock_getres(c, &ts) != 0) return 0;
     long long ns = ts.tv_sec * 1000000000LL + ts.tv_nsec;
-    return ns > 0 && ns <= 1000000000LL;    // (0, 1s]
+    return ns > 0 && ns <= 1000000000LL; // (0, 1s]
 }
 
 int main(void) {
@@ -16,9 +16,8 @@ int main(void) {
     int pcpu = res_ok(CLOCK_PROCESS_CPUTIME_ID);
     int tcpu = res_ok(CLOCK_THREAD_CPUTIME_ID);
     struct timespec coarse;
-    int coarse_ms = clock_getres(CLOCK_MONOTONIC_COARSE, &coarse) == 0 &&
-                    coarse.tv_sec == 0 && coarse.tv_nsec == 1000000;
-    printf("clockres real=%d mono=%d pcpu=%d tcpu=%d coarse_ms=%d\n",
-           real, mono, pcpu, tcpu, coarse_ms);
+    int coarse_ms =
+        clock_getres(CLOCK_MONOTONIC_COARSE, &coarse) == 0 && coarse.tv_sec == 0 && coarse.tv_nsec == 1000000;
+    printf("clockres real=%d mono=%d pcpu=%d tcpu=%d coarse_ms=%d\n", real, mono, pcpu, tcpu, coarse_ms);
     return 0;
 }

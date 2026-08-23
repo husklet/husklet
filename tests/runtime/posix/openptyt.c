@@ -11,7 +11,10 @@ int main(void) {
     int m, s;
     int rc = openpty(&m, &s, NULL, NULL, NULL);
     int opened = rc == 0 && m >= 0 && s >= 0;
-    if (!opened) { printf("openptyt opened=0\n"); return 0; }
+    if (!opened) {
+        printf("openptyt opened=0\n");
+        return 0;
+    }
     // Both ends are ttys.
     int mtty = isatty(m);
     int stty = isatty(s);
@@ -29,8 +32,10 @@ int main(void) {
     // Read until we see the payload or the child closes the pty.
     for (int i = 0; i < 100 && total < 2; i++) {
         ssize_t n = read(master, buf + total, sizeof buf - 1 - total);
-        if (n > 0) total += n;
-        else break;
+        if (n > 0)
+            total += n;
+        else
+            break;
     }
     int got = strstr(buf, "HI") != NULL;
     close(master);

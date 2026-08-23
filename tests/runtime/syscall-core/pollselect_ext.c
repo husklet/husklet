@@ -26,26 +26,34 @@ int main(void) {
 
     // select: read-ready, write-ready, count=2 (readable + writable, distinct fds), timeout-0-clears.
     fd_set rs, ws;
-    FD_ZERO(&rs); FD_SET(a[0], &rs);
+    FD_ZERO(&rs);
+    FD_SET(a[0], &rs);
     struct timeval tv1 = {1, 0};
     int sel_rd = (select(a[0] + 1, &rs, NULL, NULL, &tv1) == 1) && FD_ISSET(a[0], &rs);
-    FD_ZERO(&ws); FD_SET(a[1], &ws);
+    FD_ZERO(&ws);
+    FD_SET(a[1], &ws);
     struct timeval tv1b = {1, 0};
     int sel_wr = (select(a[1] + 1, NULL, &ws, NULL, &tv1b) == 1) && FD_ISSET(a[1], &ws);
-    FD_ZERO(&rs); FD_ZERO(&ws); FD_SET(a[0], &rs); FD_SET(a[1], &ws);
+    FD_ZERO(&rs);
+    FD_ZERO(&ws);
+    FD_SET(a[0], &rs);
+    FD_SET(a[1], &ws);
     int nf = (a[0] > a[1] ? a[0] : a[1]) + 1;
     struct timeval tv1c = {1, 0};
     int r2 = select(nf, &rs, &ws, NULL, &tv1c);
     int sel_count2 = (r2 == 2) && FD_ISSET(a[0], &rs) && FD_ISSET(a[1], &ws);
-    FD_ZERO(&rs); FD_SET(b[0], &rs);
+    FD_ZERO(&rs);
+    FD_SET(b[0], &rs);
     struct timeval tvt = {0, 30000};
     int sel_to = (select(b[0] + 1, &rs, NULL, NULL, &tvt) == 0) && !FD_ISSET(b[0], &rs);
 
     // pselect: read-ready + finite-timeout-0 + nfds=0 pure-sleep returns 0.
-    FD_ZERO(&rs); FD_SET(a[0], &rs);
+    FD_ZERO(&rs);
+    FD_SET(a[0], &rs);
     struct timespec pts = {1, 0};
     int psel_rd = (pselect(a[0] + 1, &rs, NULL, NULL, &pts, NULL) == 1) && FD_ISSET(a[0], &rs);
-    FD_ZERO(&rs); FD_SET(b[0], &rs);
+    FD_ZERO(&rs);
+    FD_SET(b[0], &rs);
     struct timespec ptt = {0, 30000000};
     int psel_to = (pselect(b[0] + 1, &rs, NULL, NULL, &ptt, NULL) == 0);
     struct timespec ptz = {0, 30000000};

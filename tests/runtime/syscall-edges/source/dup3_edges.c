@@ -20,7 +20,7 @@ int main(void) {
     int f2 = fcntl(202, F_GETFD);
     int g = dup2(-1, 203);
     int eg = (g == -1) ? errno : 0;
-    printf("a=%d b=%d eb=%d c=%d ec=%d d=%d f0=%d f1=%d e=%d f2=%d g=%d eg=%d\n",
-           a == fd, b, eb, c, ec, d, f0, f1, e, f2, g, eg);
+    printf("a=%d b=%d eb=%d c=%d ec=%d d=%d f0=%d f1=%d e=%d f2=%d g=%d eg=%d\n", a == fd, b, eb, c, ec, d, f0, f1, e,
+           f2, g, eg);
     return 0;
 }

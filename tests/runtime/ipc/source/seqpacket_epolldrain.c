@@ -101,8 +101,8 @@ static void child_main(int sock, int ready_wr, int out_wr) {
 
 int main(void) {
     int sv[2], ready[2], out[2], p[2];
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0, sv) != 0 ||
-        pipe(ready) != 0 || pipe(out) != 0 || pipe(p) != 0) {
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0, sv) != 0 || pipe(ready) != 0 ||
+        pipe(out) != 0 || pipe(p) != 0) {
         perror("setup");
         return 1;
     }
@@ -143,10 +143,10 @@ int main(void) {
     int st = 0;
     waitpid(pid, &st, 0);
     int child = WIFEXITED(st) ? WEXITSTATUS(st) : -1;
-    printf("seqpacket_epoll_drain send=%d ep1=%d msg=%d cred=%d fd=%d clo=%d drained=%d quiet=%d child=%d\n",
-           send_ok, r.ep1, r.got_msg, r.got_cred, r.got_fd, r.fd_cloexec, r.drained, r.quiet, child);
-    return send_ok && rn == (ssize_t)sizeof r && r.ep1 == 1 && r.got_msg && r.got_cred && r.got_fd &&
-                   r.fd_cloexec && r.drained && r.quiet && child == 0
+    printf("seqpacket_epoll_drain send=%d ep1=%d msg=%d cred=%d fd=%d clo=%d drained=%d quiet=%d child=%d\n", send_ok,
+           r.ep1, r.got_msg, r.got_cred, r.got_fd, r.fd_cloexec, r.drained, r.quiet, child);
+    return send_ok && rn == (ssize_t)sizeof r && r.ep1 == 1 && r.got_msg && r.got_cred && r.got_fd && r.fd_cloexec &&
+                   r.drained && r.quiet && child == 0
                ? 0
                : 1;
 }

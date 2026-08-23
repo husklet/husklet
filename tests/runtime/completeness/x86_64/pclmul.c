@@ -8,15 +8,23 @@
 #include <smmintrin.h>
 
 static void ph(const char *t, __m128i v) {
-    uint8_t b[16]; _mm_storeu_si128((__m128i *)b, v);
-    printf("%s ", t); for (int i = 0; i < 16; i++) printf("%02x", b[i]); printf("\n");
+    uint8_t b[16];
+    _mm_storeu_si128((__m128i *)b, v);
+    printf("%s ", t);
+    for (int i = 0; i < 16; i++)
+        printf("%02x", b[i]);
+    printf("\n");
 }
 
 __attribute__((target("pclmul,sse4.1"))) static long go(void) {
     static const uint64_t v[][2] = {
-        {0, 0}, {~0ULL, ~0ULL}, {0x1122334455667788ULL, 0x99aabbccddeeff00ULL},
-        {0x8000000000000000ULL, 0x0000000000000001ULL}, {0xdeadbeefcafebabeULL, 0x0123456789abcdefULL},
-        {0xffULL, 0xff00000000000000ULL}, {0x0f0f0f0f0f0f0f0fULL, 0xf0f0f0f0f0f0f0f0ULL},
+        {0, 0},
+        {~0ULL, ~0ULL},
+        {0x1122334455667788ULL, 0x99aabbccddeeff00ULL},
+        {0x8000000000000000ULL, 0x0000000000000001ULL},
+        {0xdeadbeefcafebabeULL, 0x0123456789abcdefULL},
+        {0xffULL, 0xff00000000000000ULL},
+        {0x0f0f0f0f0f0f0f0fULL, 0xf0f0f0f0f0f0f0f0ULL},
     };
     int n = sizeof(v) / sizeof(v[0]);
     for (int i = 0; i < n; i++) {
@@ -41,4 +49,8 @@ __attribute__((target("pclmul,sse4.1"))) static long go(void) {
     ph("ghashfold", acc);
     return (long)(_mm_extract_epi64(acc, 0) ^ _mm_extract_epi64(acc, 1)) & 0xffffff;
 }
-int main(void) { printf("pclmul r=%ld\n", go()); return 0; }
+
+int main(void) {
+    printf("pclmul r=%ld\n", go());
+    return 0;
+}

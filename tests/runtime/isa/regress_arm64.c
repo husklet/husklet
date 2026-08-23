@@ -45,8 +45,7 @@ static uint64_t swp_loop(uint64_t *p, uint64_t v, uint64_t *status) {
 #define RMW_LOOP(name, op)                                                                                             \
     static uint64_t name(uint64_t *p, uint64_t v, uint64_t *status) {                                                  \
         uint64_t old, nv, st = SENTINEL;                                                                               \
-        __asm__ volatile("1: ldxr %[old], [%[p]]\n\t" op                                                               \
-                         "   stxr %w[st], %[nv], [%[p]]\n\t"                                                           \
+        __asm__ volatile("1: ldxr %[old], [%[p]]\n\t" op "   stxr %w[st], %[nv], [%[p]]\n\t"                           \
                          "   cbnz %w[st], 1b\n\t"                                                                      \
                          : [old] "=&r"(old), [nv] "=&r"(nv), [st] "+&r"(st)                                            \
                          : [p] "r"(p), [v] "r"(v)                                                                      \
@@ -130,17 +129,17 @@ static void caspa_then_low_accesses(uint64_t *old_lo, uint64_t *old_hi, uint64_t
     uint64_t ao, pv;
     /* One asm block, so all of this is one translated block and the stuck in_excl flag would
      * still be set when the two low-address accesses below are lowered. */
-    __asm__ volatile(".arch armv8.1-a\n\t"
-                     "caspa x0, x1, x2, x3, [%[pair]]\n\t"
-                     "ldumaxal %[one], %[ao], [%[at]]\n\t"
-                     "ldsminal %[one], %[ao], [%[at]]\n\t"
-                     "swpal %[one], %[ao], [%[at]]\n\t"
-                     "ldaddal %[one], %[ao], [%[at]]\n\t"
-                     "ldr %[pv], [%[pl]]\n\t"
-                     : "+r"(x0), "+r"(x1), [ao] "=&r"(ao), [pv] "=&r"(pv)
-                     : "r"(x2), "r"(x3), [pair] "r"(g_pair), [at] "r"(&g_after_atomic), [pl] "r"(&g_after_plain),
-                       [one] "r"(0x100ULL)
-                     : "memory");
+    __asm__ volatile(
+        ".arch armv8.1-a\n\t"
+        "caspa x0, x1, x2, x3, [%[pair]]\n\t"
+        "ldumaxal %[one], %[ao], [%[at]]\n\t"
+        "ldsminal %[one], %[ao], [%[at]]\n\t"
+        "swpal %[one], %[ao], [%[at]]\n\t"
+        "ldaddal %[one], %[ao], [%[at]]\n\t"
+        "ldr %[pv], [%[pl]]\n\t"
+        : "+r"(x0), "+r"(x1), [ao] "=&r"(ao), [pv] "=&r"(pv)
+        : "r"(x2), "r"(x3), [pair] "r"(g_pair), [at] "r"(&g_after_atomic), [pl] "r"(&g_after_plain), [one] "r"(0x100ULL)
+        : "memory");
     *old_lo = x0;
     *old_hi = x1;
     *atomic_old = ao;
@@ -150,8 +149,8 @@ static void caspa_then_low_accesses(uint64_t *old_lo, uint64_t *old_hi, uint64_t
 /* ------------------------------------------------------------------------------------------- */
 
 static void report(const char *tag, uint64_t old, uint64_t status, uint64_t mem) {
-    printf("%-12s old=%016llx status=%016llx mem=%016llx\n", tag, (unsigned long long)old,
-           (unsigned long long)status, (unsigned long long)mem);
+    printf("%-12s old=%016llx status=%016llx mem=%016llx\n", tag, (unsigned long long)old, (unsigned long long)status,
+           (unsigned long long)mem);
 }
 
 /* BLR reads its target before writing the link register. This matters specifically
@@ -204,8 +203,8 @@ int main(void) {
 
     uint64_t lo, hi, ao, pv;
     caspa_then_low_accesses(&lo, &hi, &ao, &pv);
-    printf("caspa        old=%016llx:%016llx new=%016llx:%016llx\n", (unsigned long long)lo,
-           (unsigned long long)hi, (unsigned long long)g_pair[0], (unsigned long long)g_pair[1]);
+    printf("caspa        old=%016llx:%016llx new=%016llx:%016llx\n", (unsigned long long)lo, (unsigned long long)hi,
+           (unsigned long long)g_pair[0], (unsigned long long)g_pair[1]);
     printf("after-caspa  atomic_old=%016llx atomic_now=%016llx plain=%016llx\n", (unsigned long long)ao,
            (unsigned long long)g_after_atomic, (unsigned long long)pv);
     printf("blr-x30      value=%016llx\n", (unsigned long long)blr_x30());

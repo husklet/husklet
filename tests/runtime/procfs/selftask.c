@@ -14,6 +14,7 @@
 #include "pf.h"
 
 enum { WORKERS = 3 };
+
 static pthread_barrier_t start, hold;
 
 static void *worker(void *arg) {
@@ -37,7 +38,8 @@ int main(void) {
     pthread_barrier_init(&start, NULL, WORKERS + 1);
     pthread_barrier_init(&hold, NULL, WORKERS + 1);
     pthread_t th[WORKERS];
-    for (int i = 0; i < WORKERS; i++) pthread_create(&th[i], NULL, worker, NULL);
+    for (int i = 0; i < WORKERS; i++)
+        pthread_create(&th[i], NULL, worker, NULL);
     pthread_barrier_wait(&start);
 
     int count_ok = task_count() == WORKERS + 1;
@@ -49,7 +51,8 @@ int main(void) {
     int self_task_ok = pf_read(p, b, sizeof b) > 0;
 
     pthread_barrier_wait(&hold);
-    for (int i = 0; i < WORKERS; i++) pthread_join(th[i], NULL);
+    for (int i = 0; i < WORKERS; i++)
+        pthread_join(th[i], NULL);
 
     int ok = count_ok && threads_ok && self_task_ok;
     printf("selftask ok=%d\n", ok);

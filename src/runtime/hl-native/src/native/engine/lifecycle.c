@@ -71,9 +71,16 @@ static int hl_engine_child_result_claim(void) {
    own exit still fails the check, because both sides are truncated from different raw values. */
 void hl_engine_child_result_publish(int32_t guest_status, hl_status engine_status, uint64_t detail) {
     int32_t observed_status = (int32_t)((uint32_t)guest_status & 0xffu);
-    hl_engine_child_result record = {
-        0,      HL_ENGINE_CHILD_RESULT_VERSION,   observed_status, engine_status, HL_ENGINE_CHILD_RESULT_EXIT, 0,
-        detail, hl_run_linux_guest_translations(), 0, 0};
+    hl_engine_child_result record = {0,
+                                     HL_ENGINE_CHILD_RESULT_VERSION,
+                                     observed_status,
+                                     engine_status,
+                                     HL_ENGINE_CHILD_RESULT_EXIT,
+                                     0,
+                                     detail,
+                                     hl_run_linux_guest_translations(),
+                                     0,
+                                     0};
     if (!hl_engine_child_result_claim()) return;
     /* The identity outlives the exit it is published beside: a whole-record store would erase the
        guest pid the parent is still entitled to read after the child is reaped. */
@@ -606,7 +613,9 @@ int hl_engine_checkpoint_lifetime_after_fork(void) {
  * revocation endpoint is the backend's own process table (host/windows/process.c). A real answer,
  * not a stub -- `0` here means "armed", and the caller in proc.c treats anything else as a failed
  * fork child. */
-int hl_engine_checkpoint_lifetime_after_fork(void) { return 0; }
+int hl_engine_checkpoint_lifetime_after_fork(void) {
+    return 0;
+}
 #endif
 
 #if !defined(_WIN32)

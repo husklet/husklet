@@ -23,8 +23,7 @@ static int install(void) {
 
 static int waited(pid_t child, int code) {
     int status = 0;
-    return child > 0 && waitpid(child, &status, 0) == child
-        && WIFEXITED(status) && WEXITSTATUS(status) == code;
+    return child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == code;
 }
 
 int main(int argc, char **argv) {
@@ -52,7 +51,7 @@ int main(int argc, char **argv) {
         _exit(65);
     }
     int exec = waited(child, 61);
-    printf("seccomp initial=%d nnp=%d install=%d mode=%d deny=%d allow=%d inherit=%d exec=%d\n",
-           initial, nnp, installed, mode, deny, allow, inherit, exec);
+    printf("seccomp initial=%d nnp=%d install=%d mode=%d deny=%d allow=%d inherit=%d exec=%d\n", initial, nnp,
+           installed, mode, deny, allow, inherit, exec);
     return initial && nnp && installed && mode && deny && allow && inherit && exec ? 0 : 1;
 }

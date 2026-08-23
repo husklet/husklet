@@ -32,6 +32,7 @@ int main(void) {
     long r = syscall(__NR_faccessat2, dfd, "", R_OK, AT_EMPTY_PATH);
     printf("faccessat2_empty_ok=%d\n", r == 0);
 
-    unlink(file); rmdir(dir);
+    unlink(file);
+    rmdir(dir);
     return 0;
 }

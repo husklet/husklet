@@ -12,7 +12,10 @@
 int main(void) {
     net_watchdog(20);
     int ls = socket(AF_UNIX, SOCK_SEQPACKET, 0);
-    if (ls < 0) { printf("no_seqpacket\n"); return 0; }
+    if (ls < 0) {
+        printf("no_seqpacket\n");
+        return 0;
+    }
     struct sockaddr_un a = {0};
     a.sun_family = AF_UNIX;
     memcpy(a.sun_path, "\0hl-seqpkt", 10); // abstract

@@ -8,11 +8,18 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t ran;
-static void h(int s) { (void)s; ran++; }
+
+static void h(int s) {
+    (void)s;
+    ran++;
+}
 
 int main(void) {
     int p[2];
-    if (pipe(p) != 0) { printf("eintr_poll pipe_fail\n"); return 1; }
+    if (pipe(p) != 0) {
+        printf("eintr_poll pipe_fail\n");
+        return 1;
+    }
 
     struct sigaction sa = {0};
     sa.sa_handler = h;
@@ -23,7 +30,7 @@ int main(void) {
     struct itimerval it = {{0, 0}, {0, 50 * 1000}};
     setitimer(ITIMER_REAL, &it, NULL);
 
-    struct pollfd pfd = { .fd = p[0], .events = POLLIN };
+    struct pollfd pfd = {.fd = p[0], .events = POLLIN};
     errno = 0;
     int r = poll(&pfd, 1, 5000); // blocks 5s; interrupted at 50ms
     int eintr = r == -1 && errno == EINTR;

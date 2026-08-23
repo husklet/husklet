@@ -8,7 +8,10 @@
 
 int main(void) {
     int fds[2];
-    if (pipe2(fds, O_DIRECT) < 0) { printf("pipepacket pipe2_failed\n"); return 0; }
+    if (pipe2(fds, O_DIRECT) < 0) {
+        printf("pipepacket pipe2_failed\n");
+        return 0;
+    }
     fcntl(fds[0], F_SETFL, O_NONBLOCK); // non-blocking so a coalescing bug can't hang the 2nd read
     write(fds[1], "AAA", 3);
     write(fds[1], "BBBBB", 5);

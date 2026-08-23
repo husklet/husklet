@@ -61,8 +61,8 @@ int main(int argc, char **argv) {
     address.sun_family = AF_UNIX;
     size_t length = strlen(socket_path);
     memcpy(address.sun_path, socket_path, length + 1);
-    if (bind(listener, (struct sockaddr *)&address,
-             (socklen_t)(offsetof(struct sockaddr_un, sun_path) + length + 1)) != 0 ||
+    if (bind(listener, (struct sockaddr *)&address, (socklen_t)(offsetof(struct sockaddr_un, sun_path) + length + 1)) !=
+            0 ||
         listen(listener, 1) != 0)
         return 5;
 
@@ -76,8 +76,7 @@ int main(int argc, char **argv) {
     if (connection < 0 || dup2(connection, 10) != 10) return 7;
     if (connection != 10) close(connection);
     char message[6];
-    if (read(10, message, sizeof message) != (ssize_t)sizeof message || memcmp(message, "BEFORE", 6) != 0)
-        return 8;
+    if (read(10, message, sizeof message) != (ssize_t)sizeof message || memcmp(message, "BEFORE", 6) != 0) return 8;
     if (publish(argv[1], "READY fd=10 connected=1\n") != 0) return 9;
     char after[5];
     if (read(10, after, sizeof after) != (ssize_t)sizeof after || memcmp(after, "AFTER", 5) != 0) return 10;

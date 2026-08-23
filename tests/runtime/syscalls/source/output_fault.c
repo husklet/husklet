@@ -24,8 +24,7 @@ int main(void) {
     if (page <= 0) return 10;
 
     // Two mapped pages, second unmapped: pointers near the boundary straddle into the hole.
-    unsigned char *base = mmap(NULL, (size_t)page * 2, PROT_READ | PROT_WRITE,
-                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned char *base = mmap(NULL, (size_t)page * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (base == MAP_FAILED) return 11;
     if (munmap(base + page, (size_t)page) != 0) return 12;
     void *straddle = base + page - 4; // 4 mapped bytes, then unmapped
@@ -46,12 +45,15 @@ int main(void) {
     // Sanity: the same calls on fully mapped buffers still work.
     int sv[2];
     int sp_ok = (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
-    if (sp_ok) { close(sv[0]); close(sv[1]); }
+    if (sp_ok) {
+        close(sv[0]);
+        close(sv[1]);
+    }
     char lbuf[256];
     ssize_t ln = readlink("/proc/self/exe", lbuf, sizeof lbuf);
     int rl_ok = (ln > 0);
 
-    printf("socketpair_efault=%d getsockname_efault=%d readlinkat_efault=%d valid=%d\n",
-           socketpair_efault, getsockname_efault, readlinkat_efault, sp_ok && rl_ok);
+    printf("socketpair_efault=%d getsockname_efault=%d readlinkat_efault=%d valid=%d\n", socketpair_efault,
+           getsockname_efault, readlinkat_efault, sp_ok && rl_ok);
     return (socketpair_efault && getsockname_efault && readlinkat_efault && sp_ok && rl_ok) ? 0 : 1;
 }

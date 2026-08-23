@@ -13,8 +13,7 @@ int main(void) {
     struct passwd pw, *pwres = NULL;
     int rc = getpwuid_r(0, &pw, buf, pwsz, &pwres);
     // root must exist with uid 0; name is "root" on a standard system.
-    int pw_ok = rc == 0 && pwres != NULL && pwres->pw_uid == 0 &&
-                strcmp(pwres->pw_name, "root") == 0;
+    int pw_ok = rc == 0 && pwres != NULL && pwres->pw_uid == 0 && strcmp(pwres->pw_name, "root") == 0;
     free(buf);
 
     long grsz = sysconf(_SC_GETGR_R_SIZE_MAX);
