@@ -3,6 +3,7 @@
 use super::*;
 use hl_container::{Config, ContainerSpec, Guest, Isolation, Process, Sandbox};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -413,11 +414,11 @@ fn checkpoint_log_records(helper_log: &Path) -> String {
 fn checkpoint_refusal_diagnostics(helper_log: &Path, processes: &BTreeSet<u32>, proc_root: &Path) -> String {
     let mut diagnostics = checkpoint_log_records(helper_log);
     for pid in processes {
-        diagnostics.push_str(&format!("checkpoint-participant pid={pid}\n"));
+        writeln!(diagnostics, "checkpoint-participant pid={pid}").expect("write String diagnostic");
         for name in ["stat", "wchan", "status"] {
             let path = proc_root.join(pid.to_string()).join(name);
             let value = std::fs::read_to_string(&path).unwrap_or_else(|error| format!("<unavailable: {error}>"));
-            diagnostics.push_str(&format!("/proc/{pid}/{name}: {value}"));
+            write!(diagnostics, "/proc/{pid}/{name}: {value}").expect("write String diagnostic");
             if !value.ends_with('\n') {
                 diagnostics.push('\n');
             }
