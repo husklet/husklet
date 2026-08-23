@@ -73,6 +73,12 @@ struct LaunchArguments {
     /// Print the guest's exit kind, status and detail to standard error when it finishes.
     #[arg(long)]
     report_exit: bool,
+    /// Emit native-engine diagnostics, including the translation backend receipt.
+    #[arg(long)]
+    diagnostics: bool,
+    /// Run supported x86-64 guest blocks through the experimental translation backend.
+    #[arg(long)]
+    translit: bool,
     /// Existing container root used to resolve the guest entry and `PT_INTERP`.
     #[arg(long)]
     rootfs: Option<PathBuf>,
@@ -224,6 +230,12 @@ fn execute(guest: Guest, launch: &LaunchArguments) -> Result<hl_engine::engine::
             guest.name()
         )));
     }
+    if launch.rootfs.is_none() && (launch.diagnostics || launch.translit) {
+        return Err(Failure::Request(
+            "--diagnostics and --translit require --rootfs; raw host-path launches do not carry launch options"
+                .to_owned(),
+        ));
+    }
     let engine = if let Some(rootfs) = &launch.rootfs {
         let plan = rootfs_plan(rootfs, launch)?;
         hl_engine::runtime::Engine::from_plan(guest.isa(), plan)?
@@ -278,6 +290,17 @@ fn rootfs_plan(
             guest_entry.display()
         ))
     })?;
+    let mut options = hl_engine::options::Options::default();
+    for (enabled, name) in [
+        (launch.diagnostics, "HL_C_DIAGNOSTICS"),
+        (launch.translit, "HL_TRANSLIT"),
+    ] {
+        if enabled {
+            options
+                .set(name, "1", true)
+                .map_err(|error| Failure::Request(format!("cannot set the engine launch option {name}: {error:?}")))?;
+        }
+    }
     Ok(hl_engine::launcher::plan::RuntimePlan {
         rootfs: Some(rootfs.as_os_str().as_encoded_bytes().to_vec()),
         executable_host: Some(host.as_os_str().as_encoded_bytes().to_vec()),
@@ -298,7 +321,7 @@ fn rootfs_plan(
             b"LANG=C".to_vec(),
         ],
         result_path: None,
-        options: hl_engine::options::Options::default(),
+        options,
     })
 }
 
@@ -429,6 +452,60 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn developer_backend_flags_parse_explicitly_and_default_absent() {
+        let defaults = launch(&["program"]);
+        assert!(!defaults.diagnostics);
+        assert!(!defaults.translit);
+
+        let selected = launch(&["--diagnostics", "--translit", "--rootfs", "/image", "bin/program"]);
+        assert!(selected.diagnostics);
+        assert!(selected.translit);
+        assert_eq!(selected.rootfs.as_deref(), Some(std::path::Path::new("/image")));
+    }
+
+    #[test]
+    fn launch_options_are_rejected_for_a_host_path_instead_of_ignored() {
+        for option in ["--diagnostics", "--translit"] {
+            let failure = execute(Guest::X86_64, &launch(&[option, "/bin/true"])).unwrap_err();
+            assert!(reason(&failure).contains("require --rootfs"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rootfs_plan_carries_only_the_explicit_backend_options() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let program = root.path().join("bin/program");
+        std::fs::create_dir_all(program.parent().unwrap()).unwrap();
+        std::fs::write(&program, b"\x7fELF").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let defaults = rootfs_plan(
+            root.path(),
+            &launch(&["--rootfs", root.path().to_str().unwrap(), "bin/program"]),
+        )
+        .unwrap();
+        assert_eq!(defaults.options.get("HL_C_DIAGNOSTICS"), None);
+        assert_eq!(defaults.options.get("HL_TRANSLIT"), None);
+
+        let selected = rootfs_plan(
+            root.path(),
+            &launch(&[
+                "--diagnostics",
+                "--translit",
+                "--rootfs",
+                root.path().to_str().unwrap(),
+                "bin/program",
+            ]),
+        )
+        .unwrap();
+        assert_eq!(selected.options.get("HL_C_DIAGNOSTICS"), Some("1"));
+        assert_eq!(selected.options.get("HL_TRANSLIT"), Some("1"));
     }
 
     /// A stock image ships `/bin/sh` as an **absolute** symbolic link, and the host path the plan
