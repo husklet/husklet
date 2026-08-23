@@ -341,8 +341,11 @@ impl Fixture {
             // Starve the box and one of them will not. Say so, rather than leaving the next reader
             // to rediscover it from the domain log.
             if error.to_string().contains("CaptureRefused") {
+                let diagnostics = checkpoint_refusal_diagnostics(&self.helper_log, &old_tree, Path::new("/proc"));
                 self.phase(format!(
-                    "cycle={cycle} capture refused at load {load}: a participant did not reach a                      checkpoint safepoint inside the coordinator's fixed rendezvous budget. This is                      the engine's budget, not a deadline this test controls; see the domain worker                      log for the participant it named"
+                    "cycle={cycle} capture refused at load {load}: a participant did not reach a \
+                     checkpoint safepoint inside the coordinator's fixed rendezvous budget. This is \
+                     the engine's budget, not a deadline this test controls.\n{diagnostics}"
                 ));
             }
             return Err(error.into());
@@ -372,14 +375,55 @@ impl Fixture {
 
     fn preserve_failure(mut self, error: &dyn std::fmt::Display) {
         let root = self.temporary.take().expect("fixture root").keep();
-        let mut report = format!("error={error}\n");
-        for phase in &self.phases {
-            report.push_str(phase);
-            report.push('\n');
-        }
+        let report = failure_report(error, &self.phases, &self.helper_log);
         let _ = std::fs::write(root.join("FAILURE.txt"), report);
         eprintln!("product-checkpoint failure artifacts={}", root.display());
     }
+}
+
+fn failure_report(error: &dyn std::fmt::Display, phases: &[String], helper_log: &Path) -> String {
+    let mut report = format!("error={error}\n");
+    for phase in phases {
+        report.push_str(phase);
+        report.push('\n');
+    }
+    let records = checkpoint_log_records(helper_log);
+    if !records.is_empty() {
+        report.push_str("checkpoint-worker-records:\n");
+        report.push_str(&records);
+    }
+    report
+}
+
+fn checkpoint_log_records(helper_log: &Path) -> String {
+    std::fs::read_to_string(helper_log).map_or_else(
+        |error| format!("<helper log unavailable: {error}>\n"),
+        |log| {
+            log.lines()
+                .filter(|line| line.contains("[ckpt] refuse:") || line.contains("checkpoint_phase_ledger"))
+                .fold(String::new(), |mut records, line| {
+                    records.push_str(line);
+                    records.push('\n');
+                    records
+                })
+        },
+    )
+}
+
+fn checkpoint_refusal_diagnostics(helper_log: &Path, processes: &BTreeSet<u32>, proc_root: &Path) -> String {
+    let mut diagnostics = checkpoint_log_records(helper_log);
+    for pid in processes {
+        diagnostics.push_str(&format!("checkpoint-participant pid={pid}\n"));
+        for name in ["stat", "wchan", "status"] {
+            let path = proc_root.join(pid.to_string()).join(name);
+            let value = std::fs::read_to_string(&path).unwrap_or_else(|error| format!("<unavailable: {error}>"));
+            diagnostics.push_str(&format!("/proc/{pid}/{name}: {value}"));
+            if !value.ends_with('\n') {
+                diagnostics.push('\n');
+            }
+        }
+    }
+    diagnostics
 }
 
 fn terminal_container_result(bytes: &[u8]) -> Option<serde_json::Value> {
@@ -405,6 +449,36 @@ fn terminal_container_state_ends_the_progress_wait() {
         Some(91)
     );
     assert_eq!(terminal_container_result(running), None);
+}
+
+#[test]
+fn refusal_participant_and_generation_reach_the_failure_artifact() {
+    let fixture = tempfile::tempdir().unwrap();
+    let helper = fixture.path().join("worker.log");
+    std::fs::write(
+        &helper,
+        "worker noise\n[ckpt] refuse: REGISTER_READY for host process 4242 was refused generation=17\n\
+         checkpoint_phase_ledger component=native generation=17 outcome=failure\n",
+    )
+    .unwrap();
+    let process = fixture.path().join("proc/4242");
+    std::fs::create_dir_all(&process).unwrap();
+    std::fs::write(process.join("stat"), "4242 (checkpoint-worker) S 1 4242 4242\n").unwrap();
+    std::fs::write(process.join("wchan"), "futex_wait_queue\n").unwrap();
+    std::fs::write(
+        process.join("status"),
+        "Name:\tcheckpoint-worker\nState:\tS (sleeping)\n",
+    )
+    .unwrap();
+
+    let diagnostics = checkpoint_refusal_diagnostics(&helper, &BTreeSet::from([4242]), &fixture.path().join("proc"));
+    let report = failure_report(&"CaptureRefused", &[diagnostics], &helper);
+
+    assert!(report.contains("REGISTER_READY for host process 4242"));
+    assert!(report.contains("generation=17"));
+    assert!(report.contains("checkpoint-participant pid=4242"));
+    assert!(report.contains("futex_wait_queue"));
+    assert!(report.contains("State:\tS (sleeping)"));
 }
 
 #[test]
