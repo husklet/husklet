@@ -1,5 +1,5 @@
-use hl_client::Client;
 use hl_client::api::Size;
+use hl_client::Client;
 use hl_ws_term::PtyBackend;
 use std::collections::VecDeque;
 use std::future::Future;
@@ -233,7 +233,7 @@ impl Drop for ExecPty {
 
 #[cfg(test)]
 mod tests {
-    use super::{Output, PaneRuntime, cleanup_with};
+    use super::{cleanup_with, Output, PaneRuntime};
 
     #[test]
     fn output_finishes_only_after_every_chunk_is_drained() {
@@ -505,11 +505,9 @@ mod tests {
             }
             panes.push(pane);
         }
-        assert!(
-            panes[1..]
-                .iter()
-                .all(|pane| std::sync::Arc::ptr_eq(&panes[0].runtime, &pane.runtime))
-        );
+        assert!(panes[1..]
+            .iter()
+            .all(|pane| std::sync::Arc::ptr_eq(&panes[0].runtime, &pane.runtime)));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while (active.load(std::sync::atomic::Ordering::Acquire) != 24 || named_threads("hl-exec") != 2)
             && std::time::Instant::now() < deadline

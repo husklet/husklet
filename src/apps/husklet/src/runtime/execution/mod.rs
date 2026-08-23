@@ -72,7 +72,11 @@ enum PersistedAction {
 
 impl PersistedAction {
     fn for_running(running: bool) -> Self {
-        if running { Self::Attach } else { Self::Restore }
+        if running {
+            Self::Attach
+        } else {
+            Self::Restore
+        }
     }
 
     fn after_failed_attach(running: Option<bool>) -> Self {
@@ -495,7 +499,7 @@ impl PaneStart {
 
 #[cfg(test)]
 mod pane_execution_tests {
-    use super::{PaneExecution, PersistedAction, terminal_identity};
+    use super::{terminal_identity, PaneExecution, PersistedAction};
     use crate::config::WorkspaceConfig;
     use hl_ws::Arch;
 
