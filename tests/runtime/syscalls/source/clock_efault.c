@@ -10,11 +10,18 @@
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
-int main(void){
-    pid_t p=fork();
-    if(p==0){ long r=syscall(SYS_clock_gettime,0,(long)-1,0,0,0); _exit(r==-1?(errno&0x7f):0); }
-    int st=0; waitpid(p,&st,0);
-    if(WIFSIGNALED(st)) printf("clock_gettime=-%d (CRASH)\n", WTERMSIG(st)); // engine: -11
-    else printf("clock_gettime=%d\n", WEXITSTATUS(st));                     // native: 14
+
+int main(void) {
+    pid_t p = fork();
+    if (p == 0) {
+        long r = syscall(SYS_clock_gettime, 0, (long)-1, 0, 0, 0);
+        _exit(r == -1 ? (errno & 0x7f) : 0);
+    }
+    int st = 0;
+    waitpid(p, &st, 0);
+    if (WIFSIGNALED(st))
+        printf("clock_gettime=-%d (CRASH)\n", WTERMSIG(st)); // engine: -11
+    else
+        printf("clock_gettime=%d\n", WEXITSTATUS(st)); // native: 14
     return 0;
 }

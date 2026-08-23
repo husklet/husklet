@@ -26,8 +26,10 @@ int main(void) {
     // The two files are sampled a few syscalls apart, so allow a small drift (page-fault noise) rather than
     // exact equality; the point is that both express the SAME address space in a consistent page size.
     long tol = 16 * pg; // 16 pages of slack
-    long labs_size = vmsize - size_pg * pg; if (labs_size < 0) labs_size = -labs_size;
-    long labs_rss = vmrss - res_pg * pg; if (labs_rss < 0) labs_rss = -labs_rss;
+    long labs_size = vmsize - size_pg * pg;
+    if (labs_size < 0) labs_size = -labs_size;
+    long labs_rss = vmrss - res_pg * pg;
+    if (labs_rss < 0) labs_rss = -labs_rss;
     int size_ok = labs_size <= tol;
     int rss_ok = labs_rss <= tol;
     int rel_ok = vmrss > 0 && vmsize > 0 && vmrss <= vmsize;

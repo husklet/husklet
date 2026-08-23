@@ -146,9 +146,9 @@ impl std::fmt::Display for ChildStatus {
 /// one and watched it execute. A banner exists so a live pane can be told from a replayed one; a
 /// banner the user can catch lying teaches them to distrust the true cases too. So it now says what
 /// actually happens to the keystroke.
-struct NotYetLive;
+struct StartupNotice;
 
-impl NotYetLive {
+impl StartupNotice {
     /// Dim styling, matching the reopen notice, applied only where it is written to a terminal.
     const DIM: &'static str = "\u{1b}[2m";
     const RESET: &'static str = "\u{1b}[0m";
@@ -256,7 +256,7 @@ pub(crate) fn make_terminal_ex(
     // will not for as long as the restore takes. Say so, in the same attributed voice the restore
     // summary uses, so "restoring" is legible as a state distinct from "ready". The notice carries
     // the notice prefix, so it is filtered out of the scrollback this pane persists.
-    term.feed(NotYetLive::notice(!replay.is_empty()).as_bytes());
+    term.feed(StartupNotice::notice(!replay.is_empty()).as_bytes());
     // NOTE: we deliberately do NOT use VTE's spawn_async — on macOS it fork()s inside the multithreaded
     // GTK process and does non-async-signal-safe work before exec, which crashes the child before it
     // runs (every command "exits 11"). Instead spawn via posix_spawn (async-safe) onto a PTY we own.
@@ -278,13 +278,13 @@ pub(crate) const URL_REGEX: &str = r"(?:https?://|www\.)[^\s<>\x22'`{}|\\^\[\]]+
 
 #[cfg(test)]
 mod child_status_tests {
-    use super::{ChildStatus, NotYetLive};
+    use super::{ChildStatus, StartupNotice};
 
     #[test]
     fn a_pane_that_is_not_live_yet_says_so_in_husklets_own_attributed_voice() {
         let prefix = hl::runtime::domain::RESTORE_NOTICE_PREFIX;
-        let restoring = NotYetLive::notice(true);
-        let starting = NotYetLive::notice(false);
+        let restoring = StartupNotice::notice(true);
+        let starting = StartupNotice::notice(false);
 
         for notice in [&restoring, &starting] {
             assert!(notice.contains(prefix), "the notice must be attributed to Husklet");

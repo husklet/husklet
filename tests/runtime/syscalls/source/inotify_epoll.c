@@ -41,7 +41,8 @@ int main(void) {
     snprintf(created, sizeof created, "%s/a", dir);
     int cf = open(created, O_CREAT | O_WRONLY, 0644);
     if (cf >= 0) {
-        if (write(cf, "z", 1) != 1) { /* ignore */ }
+        if (write(cf, "z", 1) != 1) { /* ignore */
+        }
         close(cf);
     }
 
@@ -88,7 +89,7 @@ int main(void) {
     unlink(created);
     rmdir(dir);
 
-    printf("inotify_epoll add=%d idle=%d sel=%d poll=%d epoll=%d data=%d create=%d drained=%d del=%d del2=%d\n",
-           add_ok, idle, sel_ready, poll_ready, epoll_ready, data_ok, saw_create, drained, del_ok, del_again);
+    printf("inotify_epoll add=%d idle=%d sel=%d poll=%d epoll=%d data=%d create=%d drained=%d del=%d del2=%d\n", add_ok,
+           idle, sel_ready, poll_ready, epoll_ready, data_ok, saw_create, drained, del_ok, del_again);
     return 0;
 }

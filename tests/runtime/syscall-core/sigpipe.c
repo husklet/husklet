@@ -11,7 +11,7 @@
 int main(void) {
     int sv[2];
     socketpair(AF_UNIX, SOCK_STREAM, 0, sv);
-    close(sv[0]); // peer gone -> writes to sv[1] would SIGPIPE
+    close(sv[0]);             // peer gone -> writes to sv[1] would SIGPIPE
     signal(SIGPIPE, SIG_DFL); // ensure it's fatal if delivered (so a flag-ignore is visible as death)
 
     ssize_t n = send(sv[1], "data", 4, MSG_NOSIGNAL);

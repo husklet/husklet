@@ -142,13 +142,12 @@ static int hl_vfs_cursor_authority_component(const hl_vfs_cursor_authority *auth
         authority->value.host.services->posix_attachment != NULL) {
         const hl_host_posix_attachment_services *attachment = authority->value.host.services->posix_attachment;
         if (attachment->borrow_file_at_least != NULL && attachment->release != NULL) {
-            hl_host_result borrowed = attachment->borrow_file_at_least(
-                authority->value.host.services->context, authority->value.host.handle, 64);
+            hl_host_result borrowed = attachment->borrow_file_at_least(authority->value.host.services->context,
+                                                                       authority->value.host.handle, 64);
             int error = hl_vfs_cursor_host_error(borrowed);
             if (error != 0) return error;
-            error = borrowed.value > INT_MAX
-                        ? -EMFILE
-                        : hl_case_component((int)borrowed.value, guest, physical, capacity);
+            error =
+                borrowed.value > INT_MAX ? -EMFILE : hl_case_component((int)borrowed.value, guest, physical, capacity);
             (void)attachment->release(authority->value.host.services->context, borrowed.value);
             return error;
         }
@@ -280,8 +279,8 @@ static int hl_vfs_cursor_authority_open_path(const hl_vfs_cursor_authority *auth
         descriptor = openat(authority->value.descriptor, component,
                             O_PATH | O_CLOEXEC | O_NOFOLLOW | (directory ? O_DIRECTORY : 0));
 #elif defined(__APPLE__)
-        descriptor = openat(authority->value.descriptor, component,
-                            O_SYMLINK | O_CLOEXEC | (directory ? O_DIRECTORY : 0));
+        descriptor =
+            openat(authority->value.descriptor, component, O_SYMLINK | O_CLOEXEC | (directory ? O_DIRECTORY : 0));
 #else
         return -ENOSYS;
 #endif
@@ -520,8 +519,8 @@ static int hl_vfs_cursor_lookup_intent(const hl_vfs_cursor *cursor, const char *
                 output->file = probed;
                 probed = (hl_vfs_cursor_authority){0};
             } else {
-                error = hl_vfs_cursor_authority_open_path(&cursor->layers[selected], selected_component, 0,
-                                                          &output->file);
+                error =
+                    hl_vfs_cursor_authority_open_path(&cursor->layers[selected], selected_component, 0, &output->file);
             }
         }
         hl_vfs_cursor_authority_close(&probed);
@@ -536,10 +535,9 @@ static int hl_vfs_cursor_lookup_intent(const hl_vfs_cursor *cursor, const char *
             opened = probed;
             probed = (hl_vfs_cursor_authority){0};
         } else {
-            error = path_only_file ? hl_vfs_cursor_authority_open_path(&cursor->layers[selected], selected_component, 0,
-                                                                       &opened)
-                                   : hl_vfs_cursor_authority_open_child(&cursor->layers[selected], selected_component, 0,
-                                                                        &opened);
+            error = path_only_file
+                        ? hl_vfs_cursor_authority_open_path(&cursor->layers[selected], selected_component, 0, &opened)
+                        : hl_vfs_cursor_authority_open_child(&cursor->layers[selected], selected_component, 0, &opened);
         }
         hl_vfs_cursor_authority_close(&probed);
         if (error != 0) return error;
@@ -553,11 +551,10 @@ static int hl_vfs_cursor_lookup_intent(const hl_vfs_cursor *cursor, const char *
         output->directory.layers[output->directory.count] = probed;
         probed = (hl_vfs_cursor_authority){0};
     } else {
-        error = path_only_file
-                    ? hl_vfs_cursor_authority_open_path(&cursor->layers[selected], selected_component, 1,
-                                                        &output->directory.layers[output->directory.count])
-                    : hl_vfs_cursor_authority_open_child(&cursor->layers[selected], selected_component, 1,
-                                                         &output->directory.layers[output->directory.count]);
+        error = path_only_file ? hl_vfs_cursor_authority_open_path(&cursor->layers[selected], selected_component, 1,
+                                                                   &output->directory.layers[output->directory.count])
+                               : hl_vfs_cursor_authority_open_child(&cursor->layers[selected], selected_component, 1,
+                                                                    &output->directory.layers[output->directory.count]);
     }
     hl_vfs_cursor_authority_close(&probed);
     if (error != 0) return error;
@@ -565,8 +562,7 @@ static int hl_vfs_cursor_lookup_intent(const hl_vfs_cursor *cursor, const char *
     // An opaque marker means only one thing: hide the layers BELOW the selected one. When there is no
     // such layer the flag has no reader -- the merge loop guarded by it is empty -- so the probe is
     // unobservable work. `opaque_cut` is consumed exactly here and nowhere else.
-    output->directory.opaque_cut =
-        selected + 1 < cursor->count && hl_vfs_cursor_opaque(&output->directory.layers[0]);
+    output->directory.opaque_cut = selected + 1 < cursor->count && hl_vfs_cursor_opaque(&output->directory.layers[0]);
     output->directory.mount_flags = output->mount_flags;
     if (!output->directory.opaque_cut)
         for (size_t index = selected + 1; index < cursor->count; index++) {
@@ -707,8 +703,7 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_walk(const hl_vfs_cursor *root, co
         int trailing_directory = component_rest_length != 0 && component[component_rest_length - 1] == '/';
         if (stop_before_final && (!nofollow_final || trailing_directory)) {
             error = hl_vfs_cursor_terminal_remaining(&frames[depth], component, terminal, terminal_context,
-                                                     resolved_final, resolved_final_size,
-                                                     final_requires_directory);
+                                                     resolved_final, resolved_final_size, final_requires_directory);
             if (error < 0) goto done;
             if (error > 0) {
                 memset(output, 0, sizeof *output);
@@ -765,9 +760,9 @@ static int HL_VFS_CURSOR_UNUSED hl_vfs_cursor_walk(const hl_vfs_cursor *root, co
         }
         char candidate[4200];
         if (final && stop_before_final) {
-            int length = !strcmp(frames[depth].guest, "/") ? snprintf(candidate, sizeof candidate, "/%s", name)
-                                                            : snprintf(candidate, sizeof candidate, "%s/%s",
-                                                                       frames[depth].guest, name);
+            int length = !strcmp(frames[depth].guest, "/")
+                             ? snprintf(candidate, sizeof candidate, "/%s", name)
+                             : snprintf(candidate, sizeof candidate, "%s/%s", frames[depth].guest, name);
             if (length < 0 || (size_t)length >= sizeof candidate) {
                 error = -ENAMETOOLONG;
                 goto done;

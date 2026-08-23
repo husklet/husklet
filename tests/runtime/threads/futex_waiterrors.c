@@ -32,7 +32,7 @@ int main(void) {
     // 3. FUTEX_WAIT_BITSET with an absolute deadline already in the past -> ETIMEDOUT
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
-    struct timespec past = { now.tv_sec - 1, now.tv_nsec };
+    struct timespec past = {now.tv_sec - 1, now.tv_nsec};
     errno = 0;
     // FUTEX_WAIT_BITSET's timeout is an ABSOLUTE CLOCK_MONOTONIC deadline by default.
     long r3 = futex(&word, FUTEX_WAIT_BITSET, 100, &past, NULL, FUTEX_BITSET_MATCH_ANY);
@@ -42,7 +42,7 @@ int main(void) {
     long r4 = futex(&word, FUTEX_WAKE, 1, NULL, NULL, 0);
     int wake_zero = r4 == 0;
 
-    printf("futex_errors eagain=%d etimedout=%d bitset_timeout=%d wake_zero=%d\n",
-           eagain, etimedout, bitset_timeout, wake_zero);
+    printf("futex_errors eagain=%d etimedout=%d bitset_timeout=%d wake_zero=%d\n", eagain, etimedout, bitset_timeout,
+           wake_zero);
     return 0;
 }

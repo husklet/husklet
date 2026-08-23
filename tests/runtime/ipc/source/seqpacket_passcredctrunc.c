@@ -82,10 +82,11 @@ int main(void) {
     int st = 0;
     waitpid(child, &st, 0);
     int child_ok = WIFEXITED(st) && WEXITSTATUS(st) == 0;
-    int ok = n == 4 && strcmp(data, "tiny") == 0 && !(mh.msg_flags & MSG_TRUNC) &&
-             !(mh.msg_flags & MSG_CTRUNC) && !rights && fdbyte == '-' && cred && cred_pid && child_ok;
-    printf("seqpass_ctrunc n=%ld data=%s trunc=%d ctrunc=%d controllen=%zu cmsgs=%d rights=%d fdbyte=%c cred=%d credpid=%d child=%d\n",
-           (long)n, data, !!(mh.msg_flags & MSG_TRUNC), !!(mh.msg_flags & MSG_CTRUNC), sizeof ctl, cmsgs,
-           rights, fdbyte, cred, cred_pid, child_ok);
+    int ok = n == 4 && strcmp(data, "tiny") == 0 && !(mh.msg_flags & MSG_TRUNC) && !(mh.msg_flags & MSG_CTRUNC) &&
+             !rights && fdbyte == '-' && cred && cred_pid && child_ok;
+    printf("seqpass_ctrunc n=%ld data=%s trunc=%d ctrunc=%d controllen=%zu cmsgs=%d rights=%d fdbyte=%c cred=%d "
+           "credpid=%d child=%d\n",
+           (long)n, data, !!(mh.msg_flags & MSG_TRUNC), !!(mh.msg_flags & MSG_CTRUNC), sizeof ctl, cmsgs, rights,
+           fdbyte, cred, cred_pid, child_ok);
     return ok ? 0 : 1;
 }

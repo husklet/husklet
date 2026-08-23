@@ -18,16 +18,17 @@ static void patch_branch(unsigned char *site, unsigned char *target) {
     site[3] = (unsigned char)((rel >> 16) & 0xff);
     site[4] = (unsigned char)((rel >> 24) & 0xff);
 #else
-    (void)site; (void)target;
+    (void)site;
+    (void)target;
 #endif
 }
 
 int main(void) {
     size_t sz = 4096;
     unsigned char *p = dbt_alloc(sz, PROT_READ | PROT_WRITE | PROT_EXEC);
-    unsigned char *entry = p;             // the trampoline branch lives here
-    unsigned char *leafA = p + 0x100;     // return 0xA1
-    unsigned char *leafB = p + 0x200;     // return 0xB2
+    unsigned char *entry = p;         // the trampoline branch lives here
+    unsigned char *leafA = p + 0x100; // return 0xA1
+    unsigned char *leafB = p + 0x200; // return 0xB2
     dbt_emit_ret_imm(leafA, 0xA1);
     dbt_emit_ret_imm(leafB, 0xB2);
     int (*f)(void) = (int (*)(void))entry;

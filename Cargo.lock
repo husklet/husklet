@@ -1255,6 +1255,7 @@ dependencies = [
 name = "hl-process"
 version = "0.1.0"
 dependencies = [
+ "hl-log",
  "libc",
  "tempfile",
  "windows-sys 0.61.2",

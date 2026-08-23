@@ -30,7 +30,9 @@ int main(void) {
             char *p = mmap(0, SZ, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
             if (p != MAP_FAILED) {
                 memset(p, 0xA5, SZ);
-                p[0] = 'D'; p[1] = 'S'; p[2] = 'M';
+                p[0] = 'D';
+                p[1] = 'S';
+                p[2] = 'M';
                 munmap(p, SZ);
             }
             close(fd);
@@ -39,8 +41,8 @@ int main(void) {
         if (fd2 >= 0) {
             char *q = mmap(0, SZ, PROT_READ, MAP_SHARED, fd2, 0);
             if (q != MAP_FAILED) {
-                roundtrip = (q[0] == 'D' && q[1] == 'S' && q[2] == 'M' &&
-                             (unsigned char)q[100] == 0xA5 && (unsigned char)q[SZ - 1] == 0xA5);
+                roundtrip = (q[0] == 'D' && q[1] == 'S' && q[2] == 'M' && (unsigned char)q[100] == 0xA5 &&
+                             (unsigned char)q[SZ - 1] == 0xA5);
                 munmap(q, SZ);
             }
             close(fd2);
@@ -74,7 +76,10 @@ int main(void) {
         sem_t *s = sem_open(sn, O_CREAT, 0600, 0);
         if (s != SEM_FAILED) {
             pid_t pid = fork();
-            if (pid == 0) { sem_post(s); _exit(0); }
+            if (pid == 0) {
+                sem_post(s);
+                _exit(0);
+            }
             waitpid(pid, 0, 0);
             semok = (sem_wait(s) == 0);
             sem_close(s);

@@ -18,7 +18,10 @@
 
 int main(void) {
     int sv[2];
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv) < 0) { printf("seqbystander socketpair_failed\n"); return 0; }
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv) < 0) {
+        printf("seqbystander socketpair_failed\n");
+        return 0;
+    }
     pid_t b = fork();
     if (b == 0) {
         // bystander: inherited both ends, uses neither. Close the recv end first, then the SEND end -- the

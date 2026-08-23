@@ -225,4 +225,3 @@ static int hl_linux_protection(uint32_t flags) {
     if ((flags & HL_HOST_MEMORY_EXECUTE) != 0) protection |= PROT_EXEC;
     return protection;
 }
-

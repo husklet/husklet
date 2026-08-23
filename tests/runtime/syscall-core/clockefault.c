@@ -20,16 +20,22 @@ static const char *ev(long r) {
 
 int main(void) {
     void *bad = (void *)0x0000123400000000ULL; // far, unmapped
-    struct timeval tv;                          // a valid buffer for the control case
+    struct timeval tv;                         // a valid buffer for the control case
 
-    errno = 0; const char *cg_bad   = ev(syscall(SYS_clock_gettime, 0 /*REALTIME*/, bad));
-    errno = 0; const char *cg_mono  = ev(syscall(SYS_clock_gettime, 1 /*MONOTONIC*/, bad));
-    errno = 0; const char *cg_null  = ev(syscall(SYS_clock_gettime, 0, (void *)0));      // -> EFAULT
-    errno = 0; const char *gtod_bad = ev(syscall(SYS_gettimeofday, bad, (void *)0));
-    errno = 0; const char *gtod_null = ev(syscall(SYS_gettimeofday, (void *)0, (void *)0)); // -> ok(0)
-    errno = 0; const char *gtod_ok  = ev(syscall(SYS_gettimeofday, &tv, (void *)0));      // -> ok(0)
+    errno = 0;
+    const char *cg_bad = ev(syscall(SYS_clock_gettime, 0 /*REALTIME*/, bad));
+    errno = 0;
+    const char *cg_mono = ev(syscall(SYS_clock_gettime, 1 /*MONOTONIC*/, bad));
+    errno = 0;
+    const char *cg_null = ev(syscall(SYS_clock_gettime, 0, (void *)0)); // -> EFAULT
+    errno = 0;
+    const char *gtod_bad = ev(syscall(SYS_gettimeofday, bad, (void *)0));
+    errno = 0;
+    const char *gtod_null = ev(syscall(SYS_gettimeofday, (void *)0, (void *)0)); // -> ok(0)
+    errno = 0;
+    const char *gtod_ok = ev(syscall(SYS_gettimeofday, &tv, (void *)0)); // -> ok(0)
 
-    printf("clockefault cg_bad=%s cg_mono=%s cg_null=%s gtod_bad=%s gtod_null=%s gtod_ok=%s survived=1\n",
-           cg_bad, cg_mono, cg_null, gtod_bad, gtod_null, gtod_ok);
+    printf("clockefault cg_bad=%s cg_mono=%s cg_null=%s gtod_bad=%s gtod_null=%s gtod_ok=%s survived=1\n", cg_bad,
+           cg_mono, cg_null, gtod_bad, gtod_null, gtod_ok);
     return 0;
 }

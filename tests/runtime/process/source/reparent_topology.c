@@ -36,6 +36,7 @@ static long proc_ppid(pid_t pid) {
     sscanf(rparen + 2, "%c %ld", &state, &ppid);
     return ppid;
 }
+
 static char proc_state(pid_t pid) {
     char path[64];
     snprintf(path, sizeof path, "/proc/%d/stat", pid);
@@ -52,6 +53,7 @@ static char proc_state(pid_t pid) {
     sscanf(rparen + 2, "%c", &state);
     return state;
 }
+
 static int proc_exists(pid_t pid) {
     char path[64];
     snprintf(path, sizeof path, "/proc/%d/stat", pid);
@@ -91,7 +93,7 @@ static void test_nearest_subreaper(void) {
         waitpid(c, NULL, 0);
         char line[32];
         int len = snprintf(line, sizeof line, "%ld\n", (long)getpid());
-        (void)write(bpid[1], line, len);   // tell A which pid B is
+        (void)write(bpid[1], line, len);        // tell A which pid B is
         pid_t harvested = waitpid(-1, NULL, 0); // B reaps reparented D
         char done[8];
         int dlen = snprintf(done, sizeof done, "%d\n", harvested > 0);
@@ -116,8 +118,7 @@ static void test_nearest_subreaper(void) {
     ssize_t hn = read(bpid[0], reap_line, sizeof reap_line - 1);
     if (hn < 0) hn = 0;
     reap_line[hn] = 0;
-    printf("nearest subreaper: D.getppid==B=%d B harvested D=%d\n",
-           d_ppid == b_pid, atoi(reap_line) == 1);
+    printf("nearest subreaper: D.getppid==B=%d B harvested D=%d\n", d_ppid == b_pid, atoi(reap_line) == 1);
     waitpid(b, NULL, 0);
 }
 
@@ -160,13 +161,14 @@ static void test_daemon_reparent(void) {
     sscanf(line, "%d %ld", &grandchild, &gc_ppid);
     long proc_view = proc_ppid(grandchild);
     pid_t harvested = waitpid(grandchild, NULL, 0);
-    printf("daemon grandchild: getppid==A=%d /proc ppid matches=%d subreaper harvested=%d\n",
-           gc_ppid == (long)getpid(), proc_view == gc_ppid, harvested == grandchild);
+    printf("daemon grandchild: getppid==A=%d /proc ppid matches=%d subreaper harvested=%d\n", gc_ppid == (long)getpid(),
+           proc_view == gc_ppid, harvested == grandchild);
 }
 
 // A caller may only wait on its own children: a grandchild and a sibling thread
 // are both non-children and yield ECHILD.
 static volatile long g_thread_tid;
+
 static void *tid_reporter(void *arg) {
     (void)arg;
     g_thread_tid = syscall(SYS_gettid);
@@ -174,6 +176,7 @@ static void *tid_reporter(void *arg) {
     nanosleep(&tick, NULL);
     return NULL;
 }
+
 static void test_wait_non_children(void) {
     int handoff[2];
     if (pipe(handoff) != 0) return;
@@ -212,7 +215,7 @@ static void test_wait_non_children(void) {
         pthread_t t;
         g_thread_tid = 0;
         pthread_create(&t, NULL, tid_reporter, NULL);
-        while (g_thread_tid == 0) { }
+        while (g_thread_tid == 0) {}
         errno = 0;
         pid_t rr = waitpid((pid_t)g_thread_tid, NULL, __WALL | WNOHANG);
         int echild = (rr == -1 && errno == ECHILD);
@@ -221,8 +224,8 @@ static void test_wait_non_children(void) {
     }
     int status = 0;
     waitpid(d, &status, 0);
-    printf("wait grandchild ECHILD=%d wait sibling-thread ECHILD=%d\n",
-           grandchild_echild, WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    printf("wait grandchild ECHILD=%d wait sibling-thread ECHILD=%d\n", grandchild_echild,
+           WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 
 // Wait-flag topology: __WCLONE must not match a SIGCHLD (fork) child while __WALL
@@ -237,8 +240,8 @@ static void test_wait_flags(void) {
     pid_t r = waitpid(a, &status, __WCLONE | WNOHANG);
     int wclone_no_match = (r == 0) || (r == -1 && errno == ECHILD);
     pid_t r2 = waitpid(a, &status, __WALL);
-    printf("__WCLONE skips fork child=%d __WALL reaps code==5=%d\n",
-           wclone_no_match, r2 == a && WEXITSTATUS(status) == 5);
+    printf("__WCLONE skips fork child=%d __WALL reaps code==5=%d\n", wclone_no_match,
+           r2 == a && WEXITSTATUS(status) == 5);
 
     int gate[2];
     if (pipe(gate) != 0) return;
@@ -260,8 +263,7 @@ static void test_wait_flags(void) {
     waitpid(z, &status, 0);
     errno = 0;
     int gone = !proc_exists(z);
-    printf("zombie state Z=%d reaped code==3=%d gone after reap=%d\n",
-           st == 'Z', WEXITSTATUS(status) == 3, gone);
+    printf("zombie state Z=%d reaped code==3=%d gone after reap=%d\n", st == 'Z', WEXITSTATUS(status) == 3, gone);
 
     fflush(stdout);
     pid_t g = fork();
@@ -271,8 +273,7 @@ static void test_wait_flags(void) {
     }
     setpgid(g, g);
     pid_t rg = waitpid(-g, &status, 0);
-    printf("waitpid(-pgid) reaps group child=%d code==11=%d\n",
-           rg == g, WEXITSTATUS(status) == 11);
+    printf("waitpid(-pgid) reaps group child=%d code==11=%d\n", rg == g, WEXITSTATUS(status) == 11);
 }
 
 int main(void) {

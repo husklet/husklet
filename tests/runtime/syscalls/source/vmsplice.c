@@ -16,7 +16,8 @@ int main(void) {
     char buf[64] = {0};
     int r = read(p[0], buf, sizeof buf);
     int ok = w == (long)(sizeof data - 1) && r == w && memcmp(buf, data, w) == 0;
-    close(p[0]); close(p[1]);
+    close(p[0]);
+    close(p[1]);
     printf("vmsplice wrote=%ld read=%d ok=%d\n", w, r, ok);
     return 0;
 }

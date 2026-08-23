@@ -91,6 +91,7 @@ void hl_host_directory_abandon(hl_host_directory *directory) {
    manifest, which the Windows link resolves against the artifact rather than the caller, so it exists
    and refuses. The Rust hook stays macOS-only; this arm is what keeps the link honest. */
 HL_API int32_t hl_c_backend_directory_stream_private_test(uint32_t scenario);
+
 HL_API int32_t hl_c_backend_directory_stream_private_test(uint32_t scenario) {
     (void)scenario;
     return -ENOTSUP;

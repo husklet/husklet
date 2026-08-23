@@ -24,8 +24,10 @@ int main(void) {
     int busy = pthread_spin_trylock(&lock) == EBUSY;
     pthread_spin_unlock(&lock);
     pthread_t t[N];
-    for (int i = 0; i < N; i++) pthread_create(&t[i], NULL, worker, NULL);
-    for (int i = 0; i < N; i++) pthread_join(t[i], NULL);
+    for (int i = 0; i < N; i++)
+        pthread_create(&t[i], NULL, worker, NULL);
+    for (int i = 0; i < N; i++)
+        pthread_join(t[i], NULL);
     pthread_spin_destroy(&lock);
     printf("spin busy=%d total_ok=%d\n", busy, counter == (long)N * ITERS);
     return 0;

@@ -10,7 +10,11 @@ static unsigned short getcw(void) {
     __asm__ volatile("fnstcw %0" : "=m"(c));
     return c;
 }
-static void setcw(unsigned short c) { __asm__ volatile("fldcw %0" ::"m"(c)); }
+
+static void setcw(unsigned short c) {
+    __asm__ volatile("fldcw %0" ::"m"(c));
+}
+
 static int fistp(double x) {
     int r;
     __asm__ volatile("fldl %1\n\tfistpl %0\n\t" : "=m"(r) : "m"(x) : "memory");

@@ -52,9 +52,13 @@ static int oneshot_signal(clockid_t clockid) {
     memset(&its, 0, sizeof its);
     its.it_value.tv_nsec = 40 * 1000 * 1000; // 40ms one-shot
     fired = code_ok = val_ok = 0;
-    if (timer_settime(t, 0, &its, NULL) != 0) { timer_delete(t); return 0; }
+    if (timer_settime(t, 0, &its, NULL) != 0) {
+        timer_delete(t);
+        return 0;
+    }
 
-    for (int i = 0; i < 500 && !fired; i++) usleep(2000);
+    for (int i = 0; i < 500 && !fired; i++)
+        usleep(2000);
     int ok = fired == 1 && code_ok && val_ok;
 
     // After a one-shot fires, gettime reports disarmed {0,0}.
@@ -97,8 +101,7 @@ static int timer_capacity(void) {
     size_t deleted = 0;
     memset(&ev, 0, sizeof ev);
     ev.sigev_notify = SIGEV_NONE;
-    while (created < sizeof(timers) / sizeof(timers[0]) &&
-           timer_create(CLOCK_MONOTONIC, &ev, &timers[created]) == 0)
+    while (created < sizeof(timers) / sizeof(timers[0]) && timer_create(CLOCK_MONOTONIC, &ev, &timers[created]) == 0)
         created++;
     for (size_t index = 0; index < created; index++)
         if (timer_delete(timers[index]) == 0) deleted++;
@@ -130,7 +133,10 @@ static int overrun_counts(void) {
     ev.sigev_notify = SIGEV_SIGNAL;
     ev.sigev_signo = SIGNO;
     timer_t t;
-    if (timer_create(CLOCK_MONOTONIC, &ev, &t) != 0) { sigprocmask(SIG_SETMASK, &old, NULL); return 0; }
+    if (timer_create(CLOCK_MONOTONIC, &ev, &t) != 0) {
+        sigprocmask(SIG_SETMASK, &old, NULL);
+        return 0;
+    }
 
     struct itimerspec its;
     memset(&its, 0, sizeof its);

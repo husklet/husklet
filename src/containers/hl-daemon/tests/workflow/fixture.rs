@@ -19,7 +19,7 @@ pub(crate) const IMAGE: &str = "workflow/alpine:test";
 ///
 /// Every workflow here executes the archive named by `HL_ALPINE_ARCHIVE`, and the flake
 /// pins a different one per host: `alpine-minirootfs-*-aarch64` in the Darwin dev shell,
-/// `*-x86_64` on x86_64 Linux. Nothing downstream infers it -- `Guest::default()` is
+/// `*-x86_64` on `x86_64` Linux. Nothing downstream infers it -- `Guest::default()` is
 /// `Aarch64` and `Daemon::new` starts at `Platform::linux_arm64()` -- so the fixture that
 /// chooses the rootfs is the only place that knows, and it must say so to both.
 ///
@@ -27,7 +27,7 @@ pub(crate) const IMAGE: &str = "workflow/alpine:test";
 /// Panics when `HL_ALPINE_ARCHIVE` is unset or does not name a recognised architecture.
 /// Guessing is what hid this: the previous form fell back to `arm64` for every name that
 /// did not spell `x86_64`, which agreed with both defaults on an arm64 Mac and agreed with
-/// neither once the host became x86_64 Linux.
+/// neither once the host became `x86_64` Linux.
 pub(crate) fn platform() -> Platform {
     let source = env::var_os("HL_ALPINE_ARCHIVE")
         .map(PathBuf::from)

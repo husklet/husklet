@@ -7,18 +7,18 @@
 #include <unistd.h>
 #ifdef __APPLE__
 #include <sys/xattr.h>
-#define XSET(p,n,v,s)   setxattr(p, n, v, s, 0, 0)
-#define XGET(p,n,v,s)   getxattr(p, n, v, s, 0, 0)
-#define XLIST(p,b,s)    listxattr(p, b, s, 0)
-#define XREMOVE(p,n)    removexattr(p, n, 0)
-#define XNAME           "user.hltest"
+#define XSET(p, n, v, s) setxattr(p, n, v, s, 0, 0)
+#define XGET(p, n, v, s) getxattr(p, n, v, s, 0, 0)
+#define XLIST(p, b, s) listxattr(p, b, s, 0)
+#define XREMOVE(p, n) removexattr(p, n, 0)
+#define XNAME "user.hltest"
 #else
 #include <sys/xattr.h>
-#define XSET(p,n,v,s)   setxattr(p, n, v, s, 0)
-#define XGET(p,n,v,s)   getxattr(p, n, v, s)
-#define XLIST(p,b,s)    listxattr(p, b, s)
-#define XREMOVE(p,n)    removexattr(p, n)
-#define XNAME           "user.hltest"
+#define XSET(p, n, v, s) setxattr(p, n, v, s, 0)
+#define XGET(p, n, v, s) getxattr(p, n, v, s)
+#define XLIST(p, b, s) listxattr(p, b, s)
+#define XREMOVE(p, n) removexattr(p, n)
+#define XNAME "user.hltest"
 #endif
 
 int main(void) {
@@ -36,7 +36,13 @@ int main(void) {
     long ln = XLIST(path, list, sizeof list);
     // listxattr returns a NUL-separated name list; our name must appear in it.
     int listed = 0;
-    for (long i = 0; i < ln; ) { if (strcmp(list + i, XNAME) == 0) { listed = 1; break; } i += strlen(list + i) + 1; }
+    for (long i = 0; i < ln;) {
+        if (strcmp(list + i, XNAME) == 0) {
+            listed = 1;
+            break;
+        }
+        i += strlen(list + i) + 1;
+    }
     int removed = XREMOVE(path, XNAME) == 0;
     int gone = XGET(path, XNAME, buf, sizeof buf) < 0;
     unlink(path);

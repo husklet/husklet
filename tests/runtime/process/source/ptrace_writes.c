@@ -27,6 +27,7 @@ static int tracee_regs(pid_t child, unsigned long long *buf, int n) {
     struct iovec iov = {buf, (size_t)n * 8};
     return ptrace(PTRACE_GETREGSET, child, (void *)NT_PRSTATUS, &iov) == 0 ? 0 : -1;
 }
+
 static long tracee_sysnr(pid_t child) {
     unsigned long long r[40];
     if (tracee_regs(child, r, 40) != 0) return -1;
@@ -36,6 +37,7 @@ static long tracee_sysnr(pid_t child) {
     return (long)r[8];
 #endif
 }
+
 static unsigned long tracee_arg1(pid_t child) {
     unsigned long long r[40];
     if (tracee_regs(child, r, 40) != 0) return ~0UL;
@@ -50,10 +52,16 @@ int main(void) {
     static const char marker[8] = {'m', 'a', 'r', 'k', 'e', 'r', '0', '0'};
     static const char poked[8] = {'P', 'O', 'K', 'E', 'D', '!', '!', '!'};
     int pfd[2];
-    if (pipe(pfd) != 0) { printf("ptrace-ctl pipe-fail\n"); return 1; }
+    if (pipe(pfd) != 0) {
+        printf("ptrace-ctl pipe-fail\n");
+        return 1;
+    }
 
     pid_t child = fork();
-    if (child < 0) { printf("ptrace-ctl fork-fail\n"); return 1; }
+    if (child < 0) {
+        printf("ptrace-ctl fork-fail\n");
+        return 1;
+    }
 
     if (child == 0) {
         // ---- tracee ----
@@ -71,7 +79,10 @@ int main(void) {
     int status = 0, peek_ok = 0, poke_ok = 0, reg_ok = 0, fpclean = 0, badclean = 0, saw_exit = 0;
     int child_exit = -1, at_entry = 1;
 
-    if (waitpid(child, &status, 0) != child || !WIFSTOPPED(status)) { printf("ptrace-ctl nostop\n"); return 1; }
+    if (waitpid(child, &status, 0) != child || !WIFSTOPPED(status)) {
+        printf("ptrace-ctl nostop\n");
+        return 1;
+    }
     ptrace(PTRACE_SETOPTIONS, child, 0, (void *)PTRACE_O_TRACESYSGOOD);
 
     // Register round-trip via GETREGSET + POKEUSER: read a scratch GPR's user-area offset, poke a value,
@@ -82,8 +93,14 @@ int main(void) {
     for (;;) {
         if (ptrace(PTRACE_SYSCALL, child, 0, 0) != 0) break;
         if (waitpid(child, &status, 0) != child) break;
-        if (WIFEXITED(status)) { child_exit = WEXITSTATUS(status); break; }
-        if (WIFSIGNALED(status)) { child_exit = 128 + WTERMSIG(status); break; }
+        if (WIFEXITED(status)) {
+            child_exit = WEXITSTATUS(status);
+            break;
+        }
+        if (WIFSIGNALED(status)) {
+            child_exit = 128 + WTERMSIG(status);
+            break;
+        }
         if (!WIFSTOPPED(status)) continue;
 
         long nr = tracee_sysnr(child);
@@ -158,7 +175,7 @@ int main(void) {
     ssize_t n = read(pfd[0], out, 8);
     if (!(n == 8 && memcmp(out, poked, 8) == 0)) poke_ok = 0;
 
-    printf("ptrace-ctl peek=%d poke=%d reg=%d fpclean=%d badclean=%d exit=%d status=%d\n", peek_ok, poke_ok,
-           reg_ok, fpclean, badclean, saw_exit, child_exit);
+    printf("ptrace-ctl peek=%d poke=%d reg=%d fpclean=%d badclean=%d exit=%d status=%d\n", peek_ok, poke_ok, reg_ok,
+           fpclean, badclean, saw_exit, child_exit);
     return 0;
 }

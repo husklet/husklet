@@ -19,15 +19,16 @@
 #include <sys/epoll.h>
 #include <unistd.h>
 
-#define NPROD   4
-#define ROUNDS  8000    // registrations per producer
-#define TOTAL   (NPROD * ROUNDS)
+#define NPROD 4
+#define ROUNDS 8000 // registrations per producer
+#define TOTAL (NPROD * ROUNDS)
 
 static int g_ep;
-static _Atomic long g_delivered = 0;   // fds whose readiness the waiter delivered + drained
+static _Atomic long g_delivered = 0; // fds whose readiness the waiter delivered + drained
 static _Atomic long g_registered = 0;
 static _Atomic int g_stop = 0;
-static _Atomic long g_addfail = 0; // spurious epoll_ctl(ADD) rejections (must stay 0: a real EEXIST leaves registered<TOTAL)
+static _Atomic long g_addfail =
+    0; // spurious epoll_ctl(ADD) rejections (must stay 0: a real EEXIST leaves registered<TOTAL)
 
 // The waiter: the ONLY thread that calls epoll_wait on g_ep. It drains every delivered fd (a pipe with one
 // byte already in it) and closes it, so a delivered registration makes forward progress.
@@ -67,8 +68,8 @@ static void *producer_fn(void *arg) {
             continue;
         }
         char one = 'x';
-        if (write(p[1], &one, 1) != 1) {}   // make the read end ALREADY readable BEFORE registering
-        close(p[1]);                        // read end stays readable (1 byte buffered) + will EOF too
+        if (write(p[1], &one, 1) != 1) {} // make the read end ALREADY readable BEFORE registering
+        close(p[1]);                      // read end stays readable (1 byte buffered) + will EOF too
         fcntl(p[0], F_SETFL, fcntl(p[0], F_GETFL) | O_NONBLOCK);
         struct epoll_event ev = {.events = EPOLLIN | EPOLLET, .data.fd = p[0]};
         if (epoll_ctl(g_ep, EPOLL_CTL_ADD, p[0], &ev) != 0) {
@@ -78,7 +79,10 @@ static void *producer_fn(void *arg) {
         }
         atomic_fetch_add(&g_registered, 1);
         // brief spacing so registrations land across the waiter's whole wait/return/re-block cycle
-        if ((r & 7) == 0) { struct timespec ts = {0, 30 * 1000}; nanosleep(&ts, NULL); }
+        if ((r & 7) == 0) {
+            struct timespec ts = {0, 30 * 1000};
+            nanosleep(&ts, NULL);
+        }
     }
     return NULL;
 }
@@ -102,13 +106,18 @@ static void *watchdog_fn(void *arg) {
 
 int main(void) {
     g_ep = epoll_create1(EPOLL_CLOEXEC);
-    if (g_ep < 0) { perror("epoll_create1"); return 1; }
+    if (g_ep < 0) {
+        perror("epoll_create1");
+        return 1;
+    }
 
     pthread_t waiter, wd, prod[NPROD];
     pthread_create(&waiter, NULL, waiter_fn, NULL);
     pthread_create(&wd, NULL, watchdog_fn, NULL);
-    for (int i = 0; i < NPROD; i++) pthread_create(&prod[i], NULL, producer_fn, NULL);
-    for (int i = 0; i < NPROD; i++) pthread_join(prod[i], NULL);
+    for (int i = 0; i < NPROD; i++)
+        pthread_create(&prod[i], NULL, producer_fn, NULL);
+    for (int i = 0; i < NPROD; i++)
+        pthread_join(prod[i], NULL);
 
     atomic_store(&g_stop, 1);
     pthread_join(waiter, NULL);

@@ -22,7 +22,10 @@ int main(void) {
     sev.sigev_notify = SIGEV_THREAD;
     sev.sigev_notify_function = tick;
     timer_t tid;
-    if (timer_create(CLOCK_MONOTONIC, &sev, &tid) != 0) { printf("timerthread create=0\n"); return 0; }
+    if (timer_create(CLOCK_MONOTONIC, &sev, &tid) != 0) {
+        printf("timerthread create=0\n");
+        return 0;
+    }
 
     struct itimerspec its = {0};
     its.it_value.tv_nsec = 20 * 1000 * 1000;    // first at 20ms

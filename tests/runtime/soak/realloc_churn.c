@@ -13,14 +13,21 @@ int main(void) {
     size_t cur = 16;
     unsigned char *p = malloc(cur);
     if (!p) return 1;
-    p[0] = 0xa5;                       // invariant marker preserved across reallocs
+    p[0] = 0xa5; // invariant marker preserved across reallocs
     for (uint64_t i = 0; i < 2000000ULL; i++) {
         r = r * 6364136223846793005ULL + 1442695040888963407ULL; // LCG
         size_t nsz = 8 + (size_t)((r >> 19) % (128 * 1024));
         unsigned char *q = realloc(p, nsz);
-        if (!q) { printf("soak reallocchurn oom@%llu\n", (unsigned long long)i); free(p); return 1; }
+        if (!q) {
+            printf("soak reallocchurn oom@%llu\n", (unsigned long long)i);
+            free(p);
+            return 1;
+        }
         p = q;
-        if (p[0] != 0xa5) { printf("soak reallocchurn lost-marker@%llu\n", (unsigned long long)i); return 1; }
+        if (p[0] != 0xa5) {
+            printf("soak reallocchurn lost-marker@%llu\n", (unsigned long long)i);
+            return 1;
+        }
         p[nsz - 1] = (unsigned char)r; // touch new tail
         sum += (uint64_t)p[nsz - 1] + nsz;
         cur = nsz;

@@ -31,8 +31,8 @@ int main(void) {
     errno = 0;
     int badfd_ok = readahead(-1, 0, 1) == -1 && errno == EBADF;
 
-    printf("vector-io vectors=%d current=%d flags=%d errno=%d advisory=%d badfd=%d\n", vector_ok, current_ok,
-           flags_ok, flag_errno, advisory_ok, badfd_ok);
+    printf("vector-io vectors=%d current=%d flags=%d errno=%d advisory=%d badfd=%d\n", vector_ok, current_ok, flags_ok,
+           flag_errno, advisory_ok, badfd_ok);
     close(fd);
     unlink(path);
     return vector_ok && current_ok && flags_ok && advisory_ok && badfd_ok ? 0 : 2;

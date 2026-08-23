@@ -28,8 +28,8 @@ int main(void) {
     sendto(ss, big, sizeof big, 0, (struct sockaddr *)&a, sizeof a);
 
     char buf[8];
-    ssize_t n1 = recv(rs, buf, sizeof buf, 0);          // truncated silently
-    ssize_t n2 = recv(rs, buf, sizeof buf, MSG_TRUNC);  // reports real length
+    ssize_t n1 = recv(rs, buf, sizeof buf, 0);         // truncated silently
+    ssize_t n2 = recv(rs, buf, sizeof buf, MSG_TRUNC); // reports real length
     printf("plain=%zd trunc_reports=%zd\n", n1, n2);
     close(ss);
     close(rs);

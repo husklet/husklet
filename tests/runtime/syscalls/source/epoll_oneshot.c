@@ -19,7 +19,9 @@ int main(void) {
     ev.events = EPOLLIN | EPOLLONESHOT;
     epoll_ctl(ep, EPOLL_CTL_MOD, fds[0], &ev);
     int rearmed = epoll_wait(ep, out, 4, 100) == 1;
-    close(ep); close(fds[0]); close(fds[1]);
+    close(ep);
+    close(fds[0]);
+    close(fds[1]);
     printf("epoll_oneshot first=%d disabled=%d rearmed=%d\n", first, disabled, rearmed);
     // #390: this case was flaky under host load with a *fully empty* stdout (rc=0, never a wrong value)
     // — a `mac`-bridge teardown race that dropped the guest's final buffered stdout write. The former

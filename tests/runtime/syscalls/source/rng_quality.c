@@ -43,15 +43,26 @@ int main(void) {
     // Gross-failure detection over the 256 samples in a[].
     int all_equal = 1;
     for (size_t i = 1; i < sizeof a; i++)
-        if (a[i] != a[0]) { all_equal = 0; break; }
+        if (a[i] != a[0]) {
+            all_equal = 0;
+            break;
+        }
     int period2 = 1; // repeating 2-byte pattern
     for (size_t i = 2; i < sizeof a; i++)
-        if (a[i] != a[i - 2]) { period2 = 0; break; }
+        if (a[i] != a[i - 2]) {
+            period2 = 0;
+            break;
+        }
     int seen[256] = {0}, distinct = 0, has_hi = 0, has_lo = 0;
     for (size_t i = 0; i < sizeof a; i++) {
-        if (!seen[a[i]]) { seen[a[i]] = 1; distinct++; }
-        if (a[i] >= 0x80) has_hi = 1;
-        else has_lo = 1;
+        if (!seen[a[i]]) {
+            seen[a[i]] = 1;
+            distinct++;
+        }
+        if (a[i] >= 0x80)
+            has_hi = 1;
+        else
+            has_lo = 1;
     }
     // 256 uniform draws yield ~163 distinct values on average; a healthy CSPRNG clears 100 with
     // overwhelming probability, a gross failure (constant/sequential/tiny period) falls far below.
@@ -79,7 +90,10 @@ int main(void) {
     if (atr_present) {
         const unsigned char *r = (const unsigned char *)atr;
         for (int i = 0; i < 16; i++)
-            if (r[i]) { atr_nonzero = 1; break; }
+            if (r[i]) {
+                atr_nonzero = 1;
+                break;
+            }
     }
 
     printf("filled=%d differ=%d all_equal=%d period2=%d distinct_ok=%d has_hi=%d has_lo=%d\n", filled, differ,

@@ -12,14 +12,21 @@
 #include <smmintrin.h>
 
 static void ph(const char *t, __m128i v) {
-    uint8_t b[16]; _mm_storeu_si128((__m128i *)b, v);
-    printf("%s ", t); for (int i = 0; i < 16; i++) printf("%02x", b[i]); printf("\n");
+    uint8_t b[16];
+    _mm_storeu_si128((__m128i *)b, v);
+    printf("%s ", t);
+    for (int i = 0; i < 16; i++)
+        printf("%02x", b[i]);
+    printf("\n");
 }
 
 __attribute__((target("sse4.1,ssse3"))) static long go(void) {
     static const uint64_t vv[][2] = {
-        {0, 0}, {~0ULL, ~0ULL}, {0x1122334455667788ULL, 0x99aabbccddeeff00ULL},
-        {0x8000000000000000ULL, 0x0000000000000001ULL}, {0xdeadbeefcafebabeULL, 0x0123456789abcdefULL},
+        {0, 0},
+        {~0ULL, ~0ULL},
+        {0x1122334455667788ULL, 0x99aabbccddeeff00ULL},
+        {0x8000000000000000ULL, 0x0000000000000001ULL},
+        {0xdeadbeefcafebabeULL, 0x0123456789abcdefULL},
         {0x807f017e02fd0380ULL, 0x00ff8081097f7e00ULL},
     };
     int n = sizeof(vv) / sizeof(vv[0]);
@@ -44,7 +51,18 @@ __attribute__((target("sse4.1,ssse3"))) static long go(void) {
         __m128i a = _mm_set_epi64x(vv[i][1], vv[i][0]);
         __m128i b = _mm_set_epi64x(vv[(i + 1) % n][1], vv[(i + 2) % n][0]);
 #define PA(k) ph("palignr", _mm_alignr_epi8(a, b, k))
-        PA(0); PA(1); PA(3); PA(7); PA(8); PA(15); PA(16); PA(17); PA(23); PA(31); PA(32); PA(33);
+        PA(0);
+        PA(1);
+        PA(3);
+        PA(7);
+        PA(8);
+        PA(15);
+        PA(16);
+        PA(17);
+        PA(23);
+        PA(31);
+        PA(32);
+        PA(33);
 #undef PA
     }
 
@@ -63,8 +81,8 @@ __attribute__((target("sse4.1,ssse3"))) static long go(void) {
     for (int i = 0; i < n; i++) {
         __m128i a = _mm_set_epi64x(vv[i][1], vv[i][0]);
         __m128i b = _mm_set_epi64x(vv[(i + 2) % n][1], vv[(i + 4) % n][0]);
-        __m128i m = _mm_set_epi8(0x00, (char)0x80, 0x7f, (char)0xff, 0x01, (char)0x81, 0x00, (char)0xc0,
-                                 (char)0x80, 0x00, (char)0xff, 0x00, 0x00, (char)0x80, 0x7f, (char)0x80);
+        __m128i m = _mm_set_epi8(0x00, (char)0x80, 0x7f, (char)0xff, 0x01, (char)0x81, 0x00, (char)0xc0, (char)0x80,
+                                 0x00, (char)0xff, 0x00, 0x00, (char)0x80, 0x7f, (char)0x80);
         ph("pblendvb", _mm_blendv_epi8(a, b, m));
         ph("blendvps", _mm_castps_si128(_mm_blendv_ps(_mm_castsi128_ps(a), _mm_castsi128_ps(b), _mm_castsi128_ps(m))));
         ph("blendvpd", _mm_castpd_si128(_mm_blendv_pd(_mm_castsi128_pd(a), _mm_castsi128_pd(b), _mm_castsi128_pd(m))));
@@ -73,12 +91,18 @@ __attribute__((target("sse4.1,ssse3"))) static long go(void) {
     // ---- PMOVSX / PMOVZX: all widths, sign vs zero, with negative + high-bit sources ----
     for (int i = 0; i < n; i++) {
         __m128i a = _mm_set_epi64x(vv[i][1], vv[i][0]);
-        ph("sxbw", _mm_cvtepi8_epi16(a));  ph("zxbw", _mm_cvtepu8_epi16(a));
-        ph("sxbd", _mm_cvtepi8_epi32(a));  ph("zxbd", _mm_cvtepu8_epi32(a));
-        ph("sxbq", _mm_cvtepi8_epi64(a));  ph("zxbq", _mm_cvtepu8_epi64(a));
-        ph("sxwd", _mm_cvtepi16_epi32(a)); ph("zxwd", _mm_cvtepu16_epi32(a));
-        ph("sxwq", _mm_cvtepi16_epi64(a)); ph("zxwq", _mm_cvtepu16_epi64(a));
-        ph("sxdq", _mm_cvtepi32_epi64(a)); ph("zxdq", _mm_cvtepu32_epi64(a));
+        ph("sxbw", _mm_cvtepi8_epi16(a));
+        ph("zxbw", _mm_cvtepu8_epi16(a));
+        ph("sxbd", _mm_cvtepi8_epi32(a));
+        ph("zxbd", _mm_cvtepu8_epi32(a));
+        ph("sxbq", _mm_cvtepi8_epi64(a));
+        ph("zxbq", _mm_cvtepu8_epi64(a));
+        ph("sxwd", _mm_cvtepi16_epi32(a));
+        ph("zxwd", _mm_cvtepu16_epi32(a));
+        ph("sxwq", _mm_cvtepi16_epi64(a));
+        ph("zxwq", _mm_cvtepu16_epi64(a));
+        ph("sxdq", _mm_cvtepi32_epi64(a));
+        ph("zxdq", _mm_cvtepu32_epi64(a));
     }
     // memory-operand widening forms (compiler may fold the load into pmovsx/zx m*)
     static const uint8_t mem[16] = {0x81, 0x02, 0xfe, 0x7f, 0x00, 0x80, 0x11, 0x22,
@@ -90,4 +114,9 @@ __attribute__((target("sse4.1,ssse3"))) static long go(void) {
 
     return 0;
 }
-int main(void) { go(); printf("shuffle done\n"); return 0; }
+
+int main(void) {
+    go();
+    printf("shuffle done\n");
+    return 0;
+}

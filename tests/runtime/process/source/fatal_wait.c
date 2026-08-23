@@ -74,15 +74,15 @@ int main(void) {
     struct rlimit rl = {0, 0}; // disable core dumps -> WCOREDUMP deterministically 0 everywhere
     setrlimit(RLIMIT_CORE, &rl);
 
-    int sigpoll = check_raise(SIGPOLL);       // 29 -> host SIGIO (default ignore): the headline #403 bug
-    int sigsys = check_raise(SIGSYS);         // 31
-    int sigstkflt = check_raise(SIGSTKFLT);   // 16 -> host SIGURG (default ignore)
-    int sigpwr = check_raise(SIGPWR);         // 30 -> host SIGUSR1 (terminates, but reports a different signo)
-    int exit157 = check_exit(157);            // disambiguation: a real exit(128+29) must stay WIFEXITED
-    int sigkill = check_kill();               // 9  (host-kill path, must not regress)
-    int sigsegv = check_segv();               // 11 (fault path, must not regress)
+    int sigpoll = check_raise(SIGPOLL);     // 29 -> host SIGIO (default ignore): the headline #403 bug
+    int sigsys = check_raise(SIGSYS);       // 31
+    int sigstkflt = check_raise(SIGSTKFLT); // 16 -> host SIGURG (default ignore)
+    int sigpwr = check_raise(SIGPWR);       // 30 -> host SIGUSR1 (terminates, but reports a different signo)
+    int exit157 = check_exit(157);          // disambiguation: a real exit(128+29) must stay WIFEXITED
+    int sigkill = check_kill();             // 9  (host-kill path, must not regress)
+    int sigsegv = check_segv();             // 11 (fault path, must not regress)
 
-    printf("waitsig sigpoll=%d sigsys=%d sigstkflt=%d sigpwr=%d exit157=%d sigkill=%d sigsegv=%d\n", sigpoll,
-           sigsys, sigstkflt, sigpwr, exit157, sigkill, sigsegv);
+    printf("waitsig sigpoll=%d sigsys=%d sigstkflt=%d sigpwr=%d exit157=%d sigkill=%d sigsegv=%d\n", sigpoll, sigsys,
+           sigstkflt, sigpwr, exit157, sigkill, sigsegv);
     return 0;
 }

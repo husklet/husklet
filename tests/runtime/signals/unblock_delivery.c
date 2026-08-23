@@ -4,7 +4,11 @@
 #include <stdio.h>
 
 static volatile sig_atomic_t ran;
-static void h(int s) { (void)s; ran++; }
+
+static void h(int s) {
+    (void)s;
+    ran++;
+}
 
 int main(void) {
     signal(SIGUSR1, h);

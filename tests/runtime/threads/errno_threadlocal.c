@@ -19,7 +19,7 @@ static void *w(void *arg) {
         // EBADF: read from a surely-invalid fd
         errno = 0;
         (void)!read(-1, NULL, 1);
-        pthread_barrier_wait(&bar);         // overlap the window where errno is live
+        pthread_barrier_wait(&bar); // overlap the window where errno is live
         if (errno == EBADF) atomic_fetch_add(&isolated, 1);
     } else {
         // EINVAL: fcntl with a bogus command
@@ -34,8 +34,10 @@ static void *w(void *arg) {
 int main(void) {
     pthread_barrier_init(&bar, 0, N);
     pthread_t t[N];
-    for (long i = 0; i < N; i++) pthread_create(&t[i], 0, w, (void *)i);
-    for (int i = 0; i < N; i++) pthread_join(t[i], 0);
+    for (long i = 0; i < N; i++)
+        pthread_create(&t[i], 0, w, (void *)i);
+    for (int i = 0; i < N; i++)
+        pthread_join(t[i], 0);
     printf("errno_threadlocal isolated=%d\n", atomic_load(&isolated)); // 8
     return 0;
 }

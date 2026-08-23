@@ -16,7 +16,8 @@ int main(void) {
         int rc = flock(cfd, LOCK_EX | LOCK_NB); // should fail: EWOULDBLOCK
         _exit(rc < 0 ? 0 : 1);
     }
-    int st; waitpid(c, &st, 0);
+    int st;
+    waitpid(c, &st, 0);
     int child_blocked = WIFEXITED(st) && WEXITSTATUS(st) == 0;
     flock(fd, LOCK_UN);
     close(fd);

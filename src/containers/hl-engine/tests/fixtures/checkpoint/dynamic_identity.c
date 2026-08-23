@@ -80,7 +80,9 @@ static void credential_boundary(void) {
 static pid_t spawn_paused(void) {
     pid_t child = fork();
     if (child < 0) fail("fork-paused");
-    if (child == 0) for (;;) pause();
+    if (child == 0)
+        for (;;)
+            pause();
     return child;
 }
 
@@ -105,7 +107,8 @@ int main(void) {
     if (session == 0) {
         if (setsid() != getpid()) fail("setsid");
         if (getsid(0) != getpid() || getpgid(0) != getpid()) fail("new-session-identity");
-        for (;;) pause();
+        for (;;)
+            pause();
     }
     pid_t leader = spawn_paused();
     if (setpgid(leader, leader) != 0) fail("set-group-leader");

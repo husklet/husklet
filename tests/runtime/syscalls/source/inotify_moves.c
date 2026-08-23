@@ -17,7 +17,7 @@ int main(void) {
     snprintf(a, sizeof a, "%s/a", dir);
     snprintf(b, sizeof b, "%s/b", dir);
     close(open(a, O_CREAT | O_WRONLY, 0644)); // IN_CREATE
-    rename(a, b);                              // IN_MOVED_FROM + IN_MOVED_TO
+    rename(a, b);                             // IN_MOVED_FROM + IN_MOVED_TO
     char buf[4096];
     int n = read(in, buf, sizeof buf);
     int create = 0, from = 0, to = 0;

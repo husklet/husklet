@@ -5,7 +5,8 @@
 #include <string.h>
 
 int main(void) {
-    struct tm tmv; memset(&tmv, 0, sizeof tmv);
+    struct tm tmv;
+    memset(&tmv, 0, sizeof tmv);
     char *end = strptime("2021-06-15 08:30:45", "%Y-%m-%d %H:%M:%S", &tmv);
     int d1 = end != NULL && *end == '\0';
     int d2 = tmv.tm_year == 121 && tmv.tm_mon == 5 && tmv.tm_mday == 15;

@@ -18,7 +18,10 @@ static unsigned fsw(void) {
     __asm__ volatile("fnstsw %0" : "=am"(s));
     return s;
 }
-static void init(void) { __asm__ volatile("fninit"); }
+
+static void init(void) {
+    __asm__ volatile("fninit");
+}
 
 struct out {
     int iterated; // C2 was set on some step

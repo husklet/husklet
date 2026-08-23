@@ -13,7 +13,7 @@ static void emit_return(void *page, uint16_t value) {
 #elif defined(__x86_64__)
     unsigned char code[] = {
         0xb8, (unsigned char)value, (unsigned char)(value >> 8), 0, 0, /* mov eax, value */
-        0xc3,                                                        /* ret */
+        0xc3,                                                          /* ret */
     };
 #else
 #error unsupported architecture
@@ -24,8 +24,7 @@ static void emit_return(void *page, uint16_t value) {
 
 int main(void) {
     size_t page_size = (size_t)sysconf(_SC_PAGESIZE);
-    unsigned char *mapping = mmap(NULL, page_size * 3, PROT_READ | PROT_WRITE,
-                                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned char *mapping = mmap(NULL, page_size * 3, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (mapping == MAP_FAILED) return 1;
     void *code = mapping + page_size * 2;
 

@@ -32,7 +32,10 @@ int main(void) {
 
     // A MAP_PRIVATE writable mapping does NOT block the seal.
     int fp = (int)syscall(SYS_memfd_create, "priv", MFD_ALLOW_SEALING);
-    if (fp < 0) { printf("memfd unsupported\n"); return 2; }
+    if (fp < 0) {
+        printf("memfd unsupported\n");
+        return 2;
+    }
     ftruncate(fp, ps);
     void *pv = mmap(NULL, ps, PROT_READ | PROT_WRITE, MAP_PRIVATE, fp, 0);
     int private_seal_ok = seal_errno(fp) == 0;
@@ -59,7 +62,7 @@ int main(void) {
     if (after != MAP_FAILED) munmap(after, ps);
     close(fd);
 
-    printf("private_seal_ok=%d wr_ebusy=%d ro_ebusy=%d seal_ok=%d after_eperm=%d\n", private_seal_ok,
-           wr_ebusy, ro_ebusy, seal_ok, after_eperm);
+    printf("private_seal_ok=%d wr_ebusy=%d ro_ebusy=%d seal_ok=%d after_eperm=%d\n", private_seal_ok, wr_ebusy,
+           ro_ebusy, seal_ok, after_eperm);
     return 0;
 }

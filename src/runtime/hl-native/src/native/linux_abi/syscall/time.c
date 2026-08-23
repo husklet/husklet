@@ -331,8 +331,8 @@ static int svc_sleep(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1) {
             if (r == 0) break;
             if (svc_poll_retry(c)) continue; // internal/spurious wakeup -> re-sleep the true remainder
             engine_clock_gettime(CLOCK_MONOTONIC, &now);
-            int64_t checkpoint_ns = (int64_t)(deadline.tv_sec - now.tv_sec) * 1000000000LL +
-                                    (deadline.tv_nsec - now.tv_nsec);
+            int64_t checkpoint_ns =
+                (int64_t)(deadline.tv_sec - now.tv_sec) * 1000000000LL + (deadline.tv_nsec - now.tv_nsec);
             checkpoint_prepare_timeout(c, checkpoint_ns);
             // A deliverable guest signal (or a real error): surface it, writing the remaining time to rem.
             if (a1 && c->checkpoint_continuation == CKPT_CONTINUATION_NONE) {
@@ -570,8 +570,8 @@ static int svc_clock_sleep(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1,
             if (rr == 0) break;
             if (svc_poll_retry(c)) continue; // internal/spurious wakeup -> re-sleep the true remainder
             engine_clock_gettime(CLOCK_MONOTONIC, &now);
-            int64_t checkpoint_ns = (int64_t)(deadline.tv_sec - now.tv_sec) * 1000000000LL +
-                                    (deadline.tv_nsec - now.tv_nsec);
+            int64_t checkpoint_ns =
+                (int64_t)(deadline.tv_sec - now.tv_sec) * 1000000000LL + (deadline.tv_nsec - now.tv_nsec);
             checkpoint_prepare_timeout(c, checkpoint_ns);
             if (a3 && c->checkpoint_continuation == CKPT_CONTINUATION_NONE) {
                 struct timespec rem;

@@ -13,7 +13,13 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
-struct ld64 { unsigned long d_ino; long d_off; unsigned short d_reclen; unsigned char d_type; char d_name[]; };
+struct ld64 {
+    unsigned long d_ino;
+    long d_off;
+    unsigned short d_reclen;
+    unsigned char d_type;
+    char d_name[];
+};
 
 int main(void) {
     char dir[128];
@@ -49,20 +55,27 @@ int main(void) {
             if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) {
                 total++;
                 int idx = (e->d_name[0] == 'f') ? atoi(e->d_name + 1) : -1;
-                if (idx >= 0 && idx < 512) { if (seen[idx]) dup++; seen[idx] = 1; }
+                if (idx >= 0 && idx < 512) {
+                    if (seen[idx]) dup++;
+                    seen[idx] = 1;
+                }
             }
-            if (e->d_reclen == 0) { off = r; break; }
+            if (e->d_reclen == 0) {
+                off = r;
+                break;
+            }
             off += e->d_reclen;
         }
     }
     int missing = 0;
-    for (int i = 0; i < N; i++) if (!seen[i]) missing++;
+    for (int i = 0; i < N; i++)
+        if (!seen[i]) missing++;
     // 3) after full drain, another read returns 0
     long r3 = syscall(SYS_getdents64, fd2, buf, sizeof buf);
     close(fd2);
 
-    printf("getdents-einval tiny_einval=%d total=%d dup=%d missing=%d drained=%ld\n",
-           tiny_einval, total, dup, missing, r3);
+    printf("getdents-einval tiny_einval=%d total=%d dup=%d missing=%d drained=%ld\n", tiny_einval, total, dup, missing,
+           r3);
 
     for (int i = 0; i < N; i++) {
         char nm[32];

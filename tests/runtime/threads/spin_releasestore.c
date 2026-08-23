@@ -19,8 +19,7 @@ static void *worker(void *argument) {
         int free_word = 0;
         while (!__atomic_compare_exchange_n(&lock_word, &free_word, id, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
             free_word = 0;
-        if (__atomic_load_n(&lock_word, __ATOMIC_RELAXED) != id)
-            __atomic_fetch_add(&breaches, 1, __ATOMIC_SEQ_CST);
+        if (__atomic_load_n(&lock_word, __ATOMIC_RELAXED) != id) __atomic_fetch_add(&breaches, 1, __ATOMIC_SEQ_CST);
         __atomic_store_n(&lock_word, 0, __ATOMIC_RELEASE);
     }
     return NULL;
@@ -28,8 +27,10 @@ static void *worker(void *argument) {
 
 int main(void) {
     pthread_t thread[THREADS];
-    for (int i = 0; i < THREADS; i++) pthread_create(&thread[i], NULL, worker, (void *)(long)i);
-    for (int i = 0; i < THREADS; i++) pthread_join(thread[i], NULL);
+    for (int i = 0; i < THREADS; i++)
+        pthread_create(&thread[i], NULL, worker, (void *)(long)i);
+    for (int i = 0; i < THREADS; i++)
+        pthread_join(thread[i], NULL);
     printf("spin release-store exclusive=%d\n", breaches == 0);
     return 0;
 }

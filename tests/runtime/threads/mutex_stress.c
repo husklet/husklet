@@ -6,15 +6,23 @@
 #define PER 100000
 static long shared;
 static pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
+
 static void *w(void *_) {
     (void)_;
-    for (int i = 0; i < PER; i++) { pthread_mutex_lock(&m); shared++; pthread_mutex_unlock(&m); }
+    for (int i = 0; i < PER; i++) {
+        pthread_mutex_lock(&m);
+        shared++;
+        pthread_mutex_unlock(&m);
+    }
     return 0;
 }
+
 int main(void) {
     pthread_t t[N];
-    for (int i = 0; i < N; i++) pthread_create(&t[i], 0, w, 0);
-    for (int i = 0; i < N; i++) pthread_join(t[i], 0);
+    for (int i = 0; i < N; i++)
+        pthread_create(&t[i], 0, w, 0);
+    for (int i = 0; i < N; i++)
+        pthread_join(t[i], 0);
     printf("mutex_stress shared=%ld\n", shared); // 1600000
     return 0;
 }

@@ -49,8 +49,7 @@ int main(int argc, char **argv) {
         if (epoll < 0) return 8;
         result_code = (int)syscall(SYS_epoll_pwait2, epoll, &event, 1, &timeout, NULL, sizeof(sigset_t));
         close(epoll);
-    }
-    else
+    } else
         return 4;
     int saved_errno = errno;
     (void)child;

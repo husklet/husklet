@@ -187,8 +187,8 @@ int main(void) {
 
     // -- prctl: PR_GET_NAME writes 16 bytes through a static pointer --
     memset(g_name, 0, sizeof g_name);
-    TOK("prctl_getname", prctl(PR_SET_NAME, "hlnonpie") == 0 && prctl(PR_GET_NAME, g_name) == 0 &&
-                             !strcmp(g_name, "hlnonpie"));
+    TOK("prctl_getname",
+        prctl(PR_SET_NAME, "hlnonpie") == 0 && prctl(PR_GET_NAME, g_name) == 0 && !strcmp(g_name, "hlnonpie"));
 
     // -- the auxv the loader planted: AT_PHDR must be a pointer the GUEST can dereference, and the table
     //    it names must describe this image (a PT_LOAD covering main's own address). Bugs three and four
@@ -215,7 +215,8 @@ int main(void) {
         unsigned char r[16];
         memcpy(r, (const void *)g_auxrnd, sizeof r);
         int nz = 0;
-        for (int i = 0; i < 16; i++) nz |= r[i];
+        for (int i = 0; i < 16; i++)
+            nz |= r[i];
         TOK("at_random", g_auxrnd != 0 && nz != 0);
     }
 
@@ -227,8 +228,8 @@ int main(void) {
 
     // -- rseq: unimplemented, and must say so rather than dereference the registration --
     {
-        long r = syscall(334 /*SYS_rseq on x86-64; 293 on aarch64 -- both route to the same handler*/, NULL, 0u, 0u,
-                         0u);
+        long r =
+            syscall(334 /*SYS_rseq on x86-64; 293 on aarch64 -- both route to the same handler*/, NULL, 0u, 0u, 0u);
         TOK("rseq", r == -1 && errno != EFAULT);
     }
 

@@ -35,7 +35,7 @@ static unsigned mxin, mxout;
         uint64_t low64;                                                                                                \
         memcpy(&low, Out, 4);                                                                                          \
         memcpy(&low64, Out, 8);                                                                                        \
-        printf("%-10s mx=%02x low32=%08x low64=%016llx\n", label, mxout & 0x3f, low, (unsigned long long)low64);        \
+        printf("%-10s mx=%02x low32=%08x low64=%016llx\n", label, mxout & 0x3f, low, (unsigned long long)low64);       \
     } while (0)
 
 // lane 0 exact, lanes 1..3 a QNaN and a pair that overflows if anyone touches them.

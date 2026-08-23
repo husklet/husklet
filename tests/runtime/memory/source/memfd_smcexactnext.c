@@ -8,8 +8,7 @@
 
 static size_t emit_return(unsigned char *code, uint32_t value) {
     unsigned char bytes[16] = {
-        0xb8, 0, 0, 0, 0,
-        0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0xc3,
+        0xb8, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0xc3,
     };
     memcpy(bytes + 1, &value, sizeof(value));
     memcpy(code, bytes, sizeof(bytes));
@@ -62,8 +61,8 @@ int main(void) {
                      : "0"(dst), "1"(src), "2"(count)
                      : "memory");
     int rep_remainder = memcmp(rw, replacement, sizeof(replacement)) == 0;
-    int rep_state = count_after == 0 && dst_after == dst + sizeof(replacement) &&
-                    src_after == src + sizeof(replacement);
+    int rep_state =
+        count_after == 0 && dst_after == dst + sizeof(replacement) && src_after == src + sizeof(replacement);
     int next_rip = fn() == 77;
 
     printf("memfd-smc-exact-next initial=%d scalar-once=%d lock-once=%d "

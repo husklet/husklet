@@ -35,17 +35,13 @@
 
 long hl_windows_sysconf(int name) {
     switch (name) {
-        case _SC_CLK_TCK:
-            return 100;
-        case _SC_OPEN_MAX:
-            return _getmaxstdio();
-        case _SC_NPROCESSORS_ONLN: {
-            DWORD count = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
-            return count == 0 ? 1 : (long)count;
-        }
-        default:
-            errno = EINVAL;
-            return -1;
+    case _SC_CLK_TCK: return 100;
+    case _SC_OPEN_MAX: return _getmaxstdio();
+    case _SC_NPROCESSORS_ONLN: {
+        DWORD count = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+        return count == 0 ? 1 : (long)count;
+    }
+    default: errno = EINVAL; return -1;
     }
 }
 
@@ -460,9 +456,7 @@ int clock_gettime(clockid_t clock_id, struct timespec *now) {
             return -1;
         }
         return 0;
-    default:
-        errno = EINVAL;
-        return -1;
+    default: errno = EINVAL; return -1;
     }
 }
 
@@ -494,9 +488,7 @@ int clock_getres(clockid_t clock_id, struct timespec *resolution) {
         resolution->tv_sec = 0;
         resolution->tv_nsec = 100;
         return 0;
-    default:
-        errno = EINVAL;
-        return -1;
+    default: errno = EINVAL; return -1;
     }
 }
 

@@ -31,8 +31,7 @@ static hl_host_result hl_linux_stream_set_status_flags(void *context, hl_host_ha
     hl_host_linux *host = context;
     int descriptor, current, wanted;
     const int settable = O_NONBLOCK | O_DIRECT | O_ASYNC | O_NOATIME;
-    if ((flags & ~(uint32_t)HL_HOST_STREAM_STATUS_FLAGS) != 0)
-        return hl_linux_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
+    if ((flags & ~(uint32_t)HL_HOST_STREAM_STATUS_FLAGS) != 0) return hl_linux_result(HL_STATUS_INVALID_ARGUMENT, 0, 0);
     pthread_mutex_lock(&host->lock);
     descriptor = hl_linux_descriptor(host, stream, HL_LINUX_HANDLE_STREAM, HL_LINUX_HANDLE_FILE);
     if (descriptor >= 0) descriptor = fcntl(descriptor, F_DUPFD_CLOEXEC, 0);
@@ -230,4 +229,3 @@ static hl_host_result hl_linux_stream_move(void *context, hl_host_handle source,
     close(output);
     return moved;
 }
-

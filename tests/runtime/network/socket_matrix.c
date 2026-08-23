@@ -38,6 +38,9 @@ int main(void) {
     int sv[2];
     int r = socketpair(AF_INET, SOCK_STREAM, 0, sv);
     printf("socketpair_inet=%s\n", err_name(r < 0 ? errno : 0));
-    if (r == 0) { close(sv[0]); close(sv[1]); }
+    if (r == 0) {
+        close(sv[0]);
+        close(sv[1]);
+    }
     return 0;
 }

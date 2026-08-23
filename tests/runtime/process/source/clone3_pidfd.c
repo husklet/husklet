@@ -23,11 +23,14 @@ int main(void) {
         usleep(40 * 1000);
         _exit(19);
     }
-    if (pid < 0) { printf("clone3 fail\n"); return 1; }
+    if (pid < 0) {
+        printf("clone3 fail\n");
+        return 1;
+    }
     int got_fd = pidfd >= 0;
 
     // Poll the pidfd: must transition to readable when the child exits.
-    struct pollfd pfd = { .fd = pidfd, .events = POLLIN };
+    struct pollfd pfd = {.fd = pidfd, .events = POLLIN};
     int pr = poll(&pfd, 1, 5000);
     int became_ready = pr == 1 && (pfd.revents & POLLIN);
 

@@ -32,6 +32,7 @@ static int image_range(uint64_t offset, uint64_t length, size_t size) {
 
 int hl_linux_elf64_validate(const hl_linux_image *image, uint16_t expected_machine, hl_linux_elf64_layout *layout) {
     enum { ELF_HEADER_SIZE = 64, PROGRAM_HEADER_SIZE = 56, MAX_PROGRAM_HEADERS = 1024, MAX_LOAD_SEGMENTS = 128 };
+
     uint64_t program_offset, table_size, load_start = UINT64_MAX, load_end = 0;
     uint16_t program_count, program_size, type, entry_is_executable = 0;
     uint64_t entry;
@@ -39,7 +40,8 @@ int hl_linux_elf64_validate(const hl_linux_image *image, uint16_t expected_machi
     if (layout != NULL) memset(layout, 0, sizeof *layout);
     if (image == NULL || image->bytes == NULL || layout == NULL || image->size < ELF_HEADER_SIZE) return -1;
     const uint8_t *bytes = image->bytes;
-    if (memcmp(bytes, "\177ELF\2\1\1", 7) != 0 || image_u32(bytes + 20) != 1 || image_u16(bytes + 52) != ELF_HEADER_SIZE)
+    if (memcmp(bytes, "\177ELF\2\1\1", 7) != 0 || image_u32(bytes + 20) != 1 ||
+        image_u16(bytes + 52) != ELF_HEADER_SIZE)
         return -1;
     type = image_u16(bytes + 16);
     entry = image_u64(bytes + 24);
@@ -70,15 +72,15 @@ int hl_linux_elf64_validate(const hl_linux_image *image, uint16_t expected_machi
                 entry_is_executable = 1;
         } else if (kind == 3) {
             if (++interpreters > 1 || file_size == 0 || file_size > 4096 ||
-                !image_range(offset, file_size, image->size) ||
-                bytes[offset + file_size - 1] != 0 || memchr(bytes + offset, 0, (size_t)file_size - 1) != NULL)
+                !image_range(offset, file_size, image->size) || bytes[offset + file_size - 1] != 0 ||
+                memchr(bytes + offset, 0, (size_t)file_size - 1) != NULL)
                 return -1;
         }
     }
     if (nonempty_loads == 0 || load_end <= load_start || !entry_is_executable || load_end > UINT64_MAX - 0xffff)
         return -1;
-    *layout =
-        (hl_linux_elf64_layout){program_offset, load_start, load_end, program_count, program_size, type, entry_is_executable};
+    *layout = (hl_linux_elf64_layout){program_offset, load_start, load_end,           program_count,
+                                      program_size,   type,       entry_is_executable};
     return 0;
 }
 

@@ -13,7 +13,19 @@ use std::{
     path::{Path, PathBuf},
 };
 
+type ExtendedAttributes = Vec<(Vec<u8>, Vec<u8>)>;
+type AttributeSource<'a> = dyn FnMut(&Path) -> Result<ExtendedAttributes, Error> + 'a;
+
 pub(super) fn verify_artifact(label: &str, artifact: &Artifact, directory: bool) -> Result<(), Error> {
+    verify_artifact_with(label, artifact, directory, &mut read_attributes)
+}
+
+fn verify_artifact_with(
+    label: &str,
+    artifact: &Artifact,
+    directory: bool,
+    xattrs: &mut AttributeSource<'_>,
+) -> Result<(), Error> {
     let metadata = fs::symlink_metadata(&artifact.path)?;
     let expected_type = if directory {
         metadata.is_dir()
@@ -24,9 +36,9 @@ pub(super) fn verify_artifact(label: &str, artifact: &Artifact, directory: bool)
         return Err(format!("{label} has the wrong file type").into());
     }
     let observed = if directory {
-        tree_hash(&artifact.path)?
+        tree_hash_with(&artifact.path, xattrs)?
     } else {
-        file_hash(&artifact.path)?
+        file_hash_with(&artifact.path, xattrs)?
     };
     if observed != artifact.sha256 {
         return Err(format!(
@@ -38,73 +50,88 @@ pub(super) fn verify_artifact(label: &str, artifact: &Artifact, directory: bool)
     Ok(())
 }
 
-pub(super) fn tree_hash(root: &Path) -> Result<String, Error> {
-    fn permissions(metadata: &fs::Metadata, identity: &mut FramedIdentity) -> Result<(), Error> {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-            unix_attributes(metadata.permissions().mode(), metadata.uid(), metadata.gid(), identity)?;
-        }
-        #[cfg(not(unix))]
-        identity.field(&[u8::from(metadata.permissions().readonly())])?;
-        Ok(())
+fn permissions(metadata: &fs::Metadata, identity: &mut FramedIdentity) -> Result<(), Error> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        unix_attributes(metadata.permissions().mode(), metadata.uid(), metadata.gid(), identity)?;
     }
+    #[cfg(not(unix))]
+    identity.field(&[u8::from(metadata.permissions().readonly())])?;
+    Ok(())
+}
 
-    fn walk(
-        root: &Path,
-        directory: &Path,
-        identity: &mut FramedIdentity,
-        links: &mut BTreeMap<(u64, u64), PathBuf>,
-    ) -> Result<(), Error> {
-        let mut entries = fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
-        entries.sort_by_key(std::fs::DirEntry::file_name);
-        for entry in entries {
-            let path = entry.path();
-            let relative = path.strip_prefix(root)?;
-            identity.field(relative.as_os_str().as_encoded_bytes())?;
-            let metadata = fs::symlink_metadata(&path)?;
-            permissions(&metadata, identity)?;
-            if !metadata.file_type().is_symlink() {
-                attributes(&path, identity)?;
-            }
-            if metadata.file_type().is_symlink() {
-                identity.field(b"L")?;
-                identity.field(fs::read_link(path)?.as_os_str().as_encoded_bytes())?;
-            } else if metadata.is_dir() {
-                identity.field(b"D")?;
-                walk(root, &path, identity, links)?;
-            } else if metadata.is_file() {
-                identity.field(b"F")?;
-                hardlink(relative, &metadata, identity, links)?;
-                identity.field(&fs::read(path)?)?;
-            } else {
-                return Err("rootfs contains an unsupported entry type".into());
-            }
+fn walk(
+    root: &Path,
+    directory: &Path,
+    identity: &mut FramedIdentity,
+    links: &mut BTreeMap<(u64, u64), PathBuf>,
+    xattrs: &mut AttributeSource<'_>,
+) -> Result<(), Error> {
+    let mut entries = fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        let relative = path.strip_prefix(root)?;
+        identity.field(relative.as_os_str().as_encoded_bytes())?;
+        let metadata = fs::symlink_metadata(&path)?;
+        permissions(&metadata, identity)?;
+        if !metadata.file_type().is_symlink() {
+            attributes(&path, identity, xattrs)?;
         }
-        Ok(())
+        if metadata.file_type().is_symlink() {
+            identity.field(b"L")?;
+            identity.field(fs::read_link(path)?.as_os_str().as_encoded_bytes())?;
+        } else if metadata.is_dir() {
+            identity.field(b"D")?;
+            walk(root, &path, identity, links, xattrs)?;
+        } else if metadata.is_file() {
+            identity.field(b"F")?;
+            hardlink(relative, &metadata, identity, links)?;
+            identity.field(&fs::read(path)?)?;
+        } else {
+            return Err("rootfs contains an unsupported entry type".into());
+        }
     }
+    Ok(())
+}
+
+pub(super) fn tree_hash(root: &Path) -> Result<String, Error> {
+    tree_hash_with(root, &mut read_attributes)
+}
+
+fn tree_hash_with(root: &Path, xattrs: &mut AttributeSource<'_>) -> Result<String, Error> {
     let mut identity = FramedIdentity::new(b"husklet-rootfs-tree-v4")?;
     permissions(&fs::symlink_metadata(root)?, &mut identity)?;
-    attributes(root, &mut identity)?;
-    walk(root, root, &mut identity, &mut BTreeMap::new())?;
+    attributes(root, &mut identity, xattrs)?;
+    walk(root, root, &mut identity, &mut BTreeMap::new(), xattrs)?;
     Ok(identity.finish())
 }
 
-fn attributes(path: &Path, identity: &mut FramedIdentity) -> Result<(), Error> {
+fn read_attributes(path: &Path) -> Result<ExtendedAttributes, Error> {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt as _;
-        let mut names = xattr::list(path)?.collect::<Vec<_>>();
-        names.sort();
-        identity.field(&(names.len() as u64).to_le_bytes())?;
-        for name in names {
-            identity.field(name.as_bytes())?;
-            let value = xattr::get(path, &name)?.ok_or("rootfs xattr disappeared while hashing")?;
-            identity.field(&value)?;
-        }
+        xattr::list(path)?
+            .map(|name| {
+                let bytes = name.as_bytes().to_vec();
+                let value = xattr::get(path, &name)?.ok_or("rootfs xattr disappeared while hashing")?;
+                Ok((bytes, value))
+            })
+            .collect()
     }
     #[cfg(not(unix))]
-    identity.field(&0_u64.to_le_bytes())?;
+    Ok(Vec::new())
+}
+
+fn attributes(path: &Path, identity: &mut FramedIdentity, source: &mut AttributeSource<'_>) -> Result<(), Error> {
+    let mut values = source(path)?;
+    values.sort_by(|left, right| left.0.cmp(&right.0));
+    identity.field(&(values.len() as u64).to_le_bytes())?;
+    for (name, value) in values {
+        identity.field(&name)?;
+        identity.field(&value)?;
+    }
     Ok(())
 }
 
@@ -151,6 +178,10 @@ pub(super) fn artifact_identity(path: &Path) -> Result<String, Error> {
 }
 
 pub(super) fn file_hash(path: &Path) -> Result<String, Error> {
+    file_hash_with(path, &mut read_attributes)
+}
+
+fn file_hash_with(path: &Path, xattrs: &mut AttributeSource<'_>) -> Result<String, Error> {
     let metadata = fs::symlink_metadata(path)?;
     let mut identity = FramedIdentity::new(b"husklet-benchmark-file-v3")?;
     #[cfg(unix)]
@@ -166,16 +197,33 @@ pub(super) fn file_hash(path: &Path) -> Result<String, Error> {
     }
     #[cfg(not(unix))]
     identity.field(&[u8::from(metadata.permissions().readonly())])?;
-    attributes(path, &mut identity)?;
+    attributes(path, &mut identity, xattrs)?;
     identity.field(&fs::read(path)?)?;
     Ok(identity.finish())
 }
 
 #[cfg(test)]
+pub(super) fn file_hash_without_attributes(path: &Path) -> Result<String, Error> {
+    file_hash_with(path, &mut |_| Ok(Vec::new()))
+}
+
+#[cfg(test)]
 mod tests {
-    use super::{Artifact, file_hash, tree_hash, unix_attributes, verify_artifact};
+    use super::{Artifact, file_hash_with, tree_hash_with, unix_attributes, verify_artifact_with};
     use crate::record::FramedIdentity;
-    use std::fs;
+    use std::{fs, path::Path};
+
+    fn no_attributes(_: &Path) -> Result<Vec<(Vec<u8>, Vec<u8>)>, crate::suite::Error> {
+        Ok(Vec::new())
+    }
+
+    fn file_hash(path: &Path) -> Result<String, crate::suite::Error> {
+        file_hash_with(path, &mut no_attributes)
+    }
+
+    fn tree_hash(path: &Path) -> Result<String, crate::suite::Error> {
+        tree_hash_with(path, &mut no_attributes)
+    }
 
     #[test]
     fn regular_file_artifact_is_accepted() {
@@ -186,7 +234,7 @@ mod tests {
             sha256: file_hash(&path).unwrap(),
             path,
         };
-        verify_artifact("engine", &artifact, false).unwrap();
+        verify_artifact_with("engine", &artifact, false, &mut no_attributes).unwrap();
     }
 
     #[cfg(unix)]
@@ -210,8 +258,13 @@ mod tests {
         let path = directory.path().join("engine");
         fs::write(&path, b"same engine bytes").unwrap();
         let before = file_hash(&path).unwrap();
-        xattr::set(&path, "user.husklet-benchmark", b"changed capability").unwrap();
-        assert_ne!(before, file_hash(&path).unwrap());
+        let mut attributes = |_: &Path| -> Result<Vec<(Vec<u8>, Vec<u8>)>, crate::suite::Error> {
+            Ok(vec![(
+                b"user.husklet-benchmark".to_vec(),
+                b"changed capability".to_vec(),
+            )])
+        };
+        assert_ne!(before, file_hash_with(&path, &mut attributes).unwrap());
     }
 
     #[cfg(unix)]
@@ -240,7 +293,7 @@ mod tests {
             path,
             sha256: file_hash(&target).unwrap(),
         };
-        assert!(verify_artifact("engine", &artifact, false).is_err());
+        assert!(verify_artifact_with("engine", &artifact, false, &mut no_attributes).is_err());
     }
 
     #[cfg(unix)]
@@ -296,7 +349,13 @@ mod tests {
         let guest = directory.path().join("guest");
         fs::write(&guest, b"same bytes").unwrap();
         let before = tree_hash(directory.path()).unwrap();
-        xattr::set(&guest, "user.husklet-benchmark", b"changed behavior").unwrap();
-        assert_ne!(before, tree_hash(directory.path()).unwrap());
+        let mut attributes = |path: &Path| {
+            Ok(if path == guest {
+                vec![(b"user.husklet-benchmark".to_vec(), b"changed behavior".to_vec())]
+            } else {
+                Vec::new()
+            })
+        };
+        assert_ne!(before, tree_hash_with(directory.path(), &mut attributes).unwrap());
     }
 }

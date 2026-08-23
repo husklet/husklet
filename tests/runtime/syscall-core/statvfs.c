@@ -15,7 +15,7 @@ int main(void) {
     int bsize_pow2 = a.f_bsize && (a.f_bsize & (a.f_bsize - 1)) == 0;
     int blocks_ok = a.f_blocks > 0 && a.f_bfree <= a.f_blocks;
     int consistent = a.f_bsize == b.f_bsize && a.f_blocks == b.f_blocks;
-    printf("statvfs ok=%d bsize_pow2=%d blocks_ok=%d consistent=%d\n",
-           (r1 | r2) == 0, bsize_pow2, blocks_ok, consistent); // 1 1 1 1
+    printf("statvfs ok=%d bsize_pow2=%d blocks_ok=%d consistent=%d\n", (r1 | r2) == 0, bsize_pow2, blocks_ok,
+           consistent); // 1 1 1 1
     return 0;
 }

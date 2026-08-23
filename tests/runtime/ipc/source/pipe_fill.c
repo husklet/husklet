@@ -25,7 +25,8 @@ int main(void) {
     memset(blob, 'x', sizeof blob);
     long total = 0;
     ssize_t w;
-    while ((w = write(fd[1], blob, 1024)) > 0) total += w;
+    while ((w = write(fd[1], blob, 1024)) > 0)
+        total += w;
     int efull = (w == -1) ? errno : 0;
     int exact = (total == gottiny);
     // one more byte still fails
@@ -37,7 +38,8 @@ int main(void) {
     ssize_t part = write(fd[1], blob, PIPE_BUF);
     int epart = (part == -1) ? errno : 0;
     ssize_t small = write(fd[1], blob, 256);
-    printf("defok=%d set=%d got=%d tiny=%d gottiny=%d neg=%d eneg=%d exact=%d efull=%d one=%zd eone=%d d=%zd part=%zd epart=%d small=%zd pipebuf=%d\n",
+    printf("defok=%d set=%d got=%d tiny=%d gottiny=%d neg=%d eneg=%d exact=%d efull=%d one=%zd eone=%d d=%zd part=%zd "
+           "epart=%d small=%zd pipebuf=%d\n",
            deflt > 0, set, got, tiny, gottiny, neg, eneg, exact, efull, one, eone, d, part, epart, small, PIPE_BUF);
     return 0;
 }

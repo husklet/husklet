@@ -70,8 +70,7 @@ int main(void) {
 
     int gotfd = -1;
     for (struct cmsghdr *c = CMSG_FIRSTHDR(&rmsg); c; c = CMSG_NXTHDR(&rmsg, c)) {
-        if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS)
-            memcpy(&gotfd, CMSG_DATA(c), sizeof(int));
+        if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS) memcpy(&gotfd, CMSG_DATA(c), sizeof(int));
         if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_CREDENTIALS) {
             struct ucred cr;
             memcpy(&cr, CMSG_DATA(c), sizeof(cr));
@@ -89,7 +88,6 @@ int main(void) {
     close(sv[0]);
     close(sv[1]);
 
-    printf("seqpacket_flags cloexec=%d nonblock=%d msg=%d recvclo=%d passcred=%d\n",
-           clo, nb, msg, recvclo, passcred);
+    printf("seqpacket_flags cloexec=%d nonblock=%d msg=%d recvclo=%d passcred=%d\n", clo, nb, msg, recvclo, passcred);
     return clo && nb && msg && recvclo && passcred ? 0 : 1;
 }

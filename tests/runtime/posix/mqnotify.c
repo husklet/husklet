@@ -28,7 +28,10 @@ int main(void) {
     attr.mq_maxmsg = 2;
     attr.mq_msgsize = 16;
     mqd_t q = mq_open(name, O_CREAT | O_RDWR | O_NONBLOCK, 0600, &attr);
-    if (q == (mqd_t)-1) { printf("mqnotify open=0\n"); return 0; }
+    if (q == (mqd_t)-1) {
+        printf("mqnotify open=0\n");
+        return 0;
+    }
 
     struct sigevent sev = {0};
     sev.sigev_notify = SIGEV_THREAD;

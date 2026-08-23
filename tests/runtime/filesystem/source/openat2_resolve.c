@@ -57,7 +57,7 @@ int main(void) {
     unlinkat(dfd, "file", 0);
     close(dfd);
     rmdir(dir);
-    printf("openat2-resolve plain=%d nosym-eloop=%d beneath-blocked=%d slash-blocked=%d\n",
-           plain_ok, nosym_eloop, beneath_blocked, slash_blocked);
+    printf("openat2-resolve plain=%d nosym-eloop=%d beneath-blocked=%d slash-blocked=%d\n", plain_ok, nosym_eloop,
+           beneath_blocked, slash_blocked);
     return 0;
 }

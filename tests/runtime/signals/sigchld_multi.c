@@ -14,7 +14,8 @@ static void chld(int s) {
     handler_calls++;
     int st;
     pid_t p;
-    while ((p = waitpid(-1, &st, WNOHANG)) > 0) reaped++;
+    while ((p = waitpid(-1, &st, WNOHANG)) > 0)
+        reaped++;
 }
 
 int main(void) {
@@ -26,10 +27,14 @@ int main(void) {
 
     for (int i = 0; i < KIDS; i++) {
         pid_t p = fork();
-        if (p == 0) { usleep(10000 * (i + 1)); _exit(0); }
+        if (p == 0) {
+            usleep(10000 * (i + 1));
+            _exit(0);
+        }
     }
     // wait until all reaped
-    while (reaped < KIDS) pause();
+    while (reaped < KIDS)
+        pause();
     int calls_bounded = handler_calls >= 1 && handler_calls <= KIDS;
     printf("sigchld_multi reaped=%d calls_ok=%d\n", (int)reaped, calls_bounded);
     return 0;

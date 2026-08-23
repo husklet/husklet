@@ -541,8 +541,7 @@ static int sentry_lend_file(struct sentry_proc *process, int descriptor, uint64_
     hl_host_result result;
 
     *borrowed = UINT64_MAX;
-    if (process == NULL || descriptor < 0 || (uint32_t)descriptor >= SENTRY_VFD_MAX ||
-        process->real[descriptor] < 0)
+    if (process == NULL || descriptor < 0 || (uint32_t)descriptor >= SENTRY_VFD_MAX || process->real[descriptor] < 0)
         return -1;
     if (!process->typed[descriptor]) return process->real[descriptor];
     if (!bound_snapshot((uint64_t)(uint32_t)process->real[descriptor], &snapshot)) return -1;
@@ -937,7 +936,8 @@ static int sentry_translate_inputs(struct sentry_ring *R, struct cpu *tmp, uint6
                     // A POSITIVE fd the sentry never handed this guest is stale/closed -> Linux reports
                     // POLLNVAL for it (remembered here, applied on the OUT-path). A NEGATIVE fd is a
                     // caller-requested ignore and legitimately polls as -1 (revents 0).
-                    if (r < 0 && ofd >= 0 && k < sizeof(state->poll_nval) * 8u) state->poll_nval[k >> 3] |= (uint8_t)(1u << (k & 7));
+                    if (r < 0 && ofd >= 0 && k < sizeof(state->poll_nval) * 8u)
+                        state->poll_nval[k >> 3] |= (uint8_t)(1u << (k & 7));
                     *fdp = (r < 0) ? -1 : r; // never forward a wrong fd
                 }
                 break;
@@ -955,7 +955,7 @@ static int sentry_translate_inputs(struct sentry_ring *R, struct cpu *tmp, uint6
                 for (int s = 0; s < 3; s++) {
                     if (!state->psel_present[s]) continue;
                     memcpy(state->psel_save[s], win[s], 128); // stash the ORIGINAL virtual set
-                    memset(win[s], 0, 128);            // rebuild it as the REAL set
+                    memset(win[s], 0, 128);                   // rebuild it as the REAL set
                     for (uint32_t v = 0; v < nfds; v++) {
                         if (!(state->psel_save[s][v >> 3] & (1u << (v & 7)))) continue;
                         int r = vfd_real(p, (int)v);
@@ -998,8 +998,8 @@ static int sentry_translate_inputs(struct sentry_ring *R, struct cpu *tmp, uint6
     return 0;
 }
 
-static void sentry_translate_outputs(struct sentry_ring *R, struct cpu *tmp, uint64_t snr, int64_t ret,
-                                     uint64_t coff, struct sentry_fd_state *state) {
+static void sentry_translate_outputs(struct sentry_ring *R, struct cpu *tmp, uint64_t snr, int64_t ret, uint64_t coff,
+                                     struct sentry_fd_state *state) {
     // ---- VIRTUALIZE newly-created fds (P1): every real fd service_local just produced is mapped to a fresh
     //      per-process virtual fd, so the worker only ever sees virtual numbers. Also remap pselect's narrowed
     //      result fd_sets back to the guest's virtual fd positions. (close drops its mapping on the IN-path;
@@ -1123,7 +1123,8 @@ static void sentry_translate_outputs(struct sentry_ring *R, struct cpu *tmp, uin
                         uint8_t out[128];
                         memset(out, 0, sizeof out);
                         for (uint32_t v = 0; v < state->psel_nfds; v++) {
-                            if (!(state->psel_save[s][v >> 3] & (1u << (v & 7)))) continue; // only originally-requested fds
+                            if (!(state->psel_save[s][v >> 3] & (1u << (v & 7))))
+                                continue; // only originally-requested fds
                             int r = vfd_real(p, (int)v);
                             if (r < 0 || (uint32_t)r >= 1024u) continue;
                             if (win[s][r >> 3] & (1u << (r & 7))) out[v >> 3] |= (uint8_t)(1u << (v & 7));
@@ -1138,8 +1139,7 @@ static void sentry_translate_outputs(struct sentry_ring *R, struct cpu *tmp, uin
     }
 }
 
-static int sentry_prepare_call(struct sentry_ring *R, struct cpu *tmp, uint32_t off[6], int have[6],
-                               uint32_t *iovn) {
+static int sentry_prepare_call(struct sentry_ring *R, struct cpu *tmp, uint32_t off[6], int have[6], uint32_t *iovn) {
     memset(tmp, 0, sizeof *tmp);
     G_RAWNR(tmp) = R->rawnr;
     G_A0(tmp) = R->a[0];
@@ -1149,7 +1149,8 @@ static int sentry_prepare_call(struct sentry_ring *R, struct cpu *tmp, uint32_t 
     G_A4(tmp) = R->a[4];
     G_A5(tmp) = R->a[5];
     int32_t redir[6];
-    for (int i = 0; i < 6; i++) redir[i] = R->redir[i];
+    for (int i = 0; i < 6; i++)
+        redir[i] = R->redir[i];
     *iovn = R->iovn;
     uint64_t *args[6] = {&G_A0(tmp), &G_A1(tmp), &G_A2(tmp), &G_A3(tmp), &G_A4(tmp), &G_A5(tmp)};
     for (int i = 0; i < 6; i++) {

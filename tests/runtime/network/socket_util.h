@@ -17,32 +17,32 @@
 
 static const char *err_name(int e) {
     switch (e) {
-        case 0: return "OK";
-        case EAGAIN: return "EAGAIN";
-        case ECONNREFUSED: return "ECONNREFUSED";
-        case ENOTCONN: return "ENOTCONN";
-        case EISCONN: return "EISCONN";
-        case EINPROGRESS: return "EINPROGRESS";
-        case EPIPE: return "EPIPE";
-        case ECONNRESET: return "ECONNRESET";
-        case EADDRINUSE: return "EADDRINUSE";
-        case EINVAL: return "EINVAL";
-        case EMSGSIZE: return "EMSGSIZE";
-        case EAFNOSUPPORT: return "EAFNOSUPPORT";
-        case EDESTADDRREQ: return "EDESTADDRREQ";
-        case EBADF: return "EBADF";
-        case ENOTSOCK: return "ENOTSOCK";
-        case EOPNOTSUPP: return "EOPNOTSUPP";
-        case EPERM: return "EPERM";
-        case EACCES: return "EACCES";
-        case EPROTONOSUPPORT: return "EPROTONOSUPPORT";
-        case EPROTOTYPE: return "EPROTOTYPE";
-        case ESOCKTNOSUPPORT: return "ESOCKTNOSUPPORT";
-        case EADDRNOTAVAIL: return "EADDRNOTAVAIL";
-        case ENODEV: return "ENODEV";
-        case ENOTTY: return "ENOTTY";
-        case ENOSYS: return "ENOSYS";
-        default: return "OTHER";
+    case 0: return "OK";
+    case EAGAIN: return "EAGAIN";
+    case ECONNREFUSED: return "ECONNREFUSED";
+    case ENOTCONN: return "ENOTCONN";
+    case EISCONN: return "EISCONN";
+    case EINPROGRESS: return "EINPROGRESS";
+    case EPIPE: return "EPIPE";
+    case ECONNRESET: return "ECONNRESET";
+    case EADDRINUSE: return "EADDRINUSE";
+    case EINVAL: return "EINVAL";
+    case EMSGSIZE: return "EMSGSIZE";
+    case EAFNOSUPPORT: return "EAFNOSUPPORT";
+    case EDESTADDRREQ: return "EDESTADDRREQ";
+    case EBADF: return "EBADF";
+    case ENOTSOCK: return "ENOTSOCK";
+    case EOPNOTSUPP: return "EOPNOTSUPP";
+    case EPERM: return "EPERM";
+    case EACCES: return "EACCES";
+    case EPROTONOSUPPORT: return "EPROTONOSUPPORT";
+    case EPROTOTYPE: return "EPROTOTYPE";
+    case ESOCKTNOSUPPORT: return "ESOCKTNOSUPPORT";
+    case EADDRNOTAVAIL: return "EADDRNOTAVAIL";
+    case ENODEV: return "ENODEV";
+    case ENOTTY: return "ENOTTY";
+    case ENOSYS: return "ENOSYS";
+    default: return "OTHER";
     }
 }
 

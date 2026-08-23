@@ -464,8 +464,8 @@ static int pid_namespace_scenario(uint32_t scenario) {
     g_hostpid_cache = 0;
     if (container_pid_namespace_begin() != 0) return -1;
 
-    if (container_pid() != 1) return -1;                          // the launch top is the namespace init
-    if (proc_self_guest_ppid(container_pid()) != 0) return -1;    // and it has no parent inside it
+    if (container_pid() != 1) return -1;                       // the launch top is the namespace init
+    if (proc_self_guest_ppid(container_pid()) != 0) return -1; // and it has no parent inside it
     if (guest_pid_from_host((int)getpid()) != 1) return -1;
 
     if (scenario == 1) {
@@ -485,9 +485,9 @@ static int pid_namespace_scenario(uint32_t scenario) {
         g_self_gpid = guest_child; // the two lines clone.c runs in the child
         g_self_gppid = -1;
         g_hostpid_cache = 0;
-        if (container_pid() != guest_child) _exit(4);                      // getpid() is guest-local
-        if (proc_self_guest_ppid(container_pid()) != 1) _exit(5);          // PPid names the init, not a host pid
-        if (guest_pid_from_host((int)getpid()) != guest_child) _exit(6);   // /proc renders it the same way
+        if (container_pid() != guest_child) _exit(4);                    // getpid() is guest-local
+        if (proc_self_guest_ppid(container_pid()) != 1) _exit(5);        // PPid names the init, not a host pid
+        if (guest_pid_from_host((int)getpid()) != guest_child) _exit(6); // /proc renders it the same way
         // A grandchild, because a CHILD of the init cannot separate the namespace from the old
         // init-only fold: both answer 1 for its parent. A grandchild's parent is an ordinary guest
         // process, which the fold could only render as a host pid.
@@ -581,6 +581,7 @@ static int pid_namespace_launch(int object, int writer) {
 // private registry. A fixture that provides its own better object cannot see a defect in the real one.
 static int pid_namespace_launches_share_one_namespace(void) {
     enum { LAUNCHES = 2, PER_LAUNCH = 3, EXPECTED = LAUNCHES * PER_LAUNCH };
+
     hl_activation_descriptor trigger = HL_ACTIVATION_DESCRIPTOR_NONE;
     void *mapping = NULL;
     if (hl_ckpt_trigger_create(&trigger, &mapping) != 0) return -1;
@@ -666,6 +667,7 @@ HL_API int HL_TARGET_LOCAL(pid_namespace_test)(uint32_t scenario) {
  * and refuses -- a hook that merely vanished would be a MissingBridge at load rather than a compile
  * error, which is the failure this arm exists to prevent. */
 HL_API int HL_TARGET_LOCAL(pid_namespace_test)(uint32_t scenario);
+
 HL_API int HL_TARGET_LOCAL(pid_namespace_test)(uint32_t scenario) {
     (void)scenario;
     errno = ENOTSUP;

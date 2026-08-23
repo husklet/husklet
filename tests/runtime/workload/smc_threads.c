@@ -26,13 +26,13 @@
 #include <sys/mman.h>
 
 #define THREADS 8
-#define SLOTS 2048        // 2048 * 16B = 32KB = 8 pages -> heavy cross-thread page sharing
+#define SLOTS 2048 // 2048 * 16B = 32KB = 8 pages -> heavy cross-thread page sharing
 #define SLOT_BYTES 16
 #define PASSES 24
-#define PASS_STEP 7919u   // makes each pass rewrite every slot with different bytes
+#define PASS_STEP 7919u // makes each pass rewrite every slot with different bytes
 
 static unsigned char *g_arena;
-static atomic_uint g_next;         // shared bump pointer over slots (the cross-thread page-sharing driver)
+static atomic_uint g_next; // shared bump pointer over slots (the cross-thread page-sharing driver)
 static pthread_barrier_t g_bar;
 static uint64_t g_sum[THREADS];
 
@@ -43,12 +43,12 @@ static void emit_ret_imm(unsigned char *p, uint16_t imm) {
     w[0] = 0x52800000u | ((uint32_t)imm << 5); // movz w0, #imm
     w[1] = 0xd65f03c0u;                        // ret
 #elif defined(__x86_64__)
-    p[0] = 0xB8;                               // mov eax, imm32
+    p[0] = 0xB8; // mov eax, imm32
     p[1] = (unsigned char)(imm & 0xff);
     p[2] = (unsigned char)(imm >> 8);
     p[3] = 0;
     p[4] = 0;
-    p[5] = 0xC3;                               // ret
+    p[5] = 0xC3; // ret
 #else
 #error "smc_threads needs an emitter for this ISA"
 #endif
@@ -67,24 +67,30 @@ static void *worker(void *arg) {
             uint32_t (*f)(void) = (uint32_t (*)(void))slot;
             sum += f(); // MUST observe this pass's imm, never the previous pass's translation
         }
-        pthread_barrier_wait(&g_bar);   // all threads finished this pass
+        pthread_barrier_wait(&g_bar);                                         // all threads finished this pass
         if (id == 0) atomic_store_explicit(&g_next, 0, memory_order_relaxed); // leader resets the bump
-        pthread_barrier_wait(&g_bar);   // reset published before anyone starts the next pass
+        pthread_barrier_wait(&g_bar); // reset published before anyone starts the next pass
     }
     g_sum[id] = sum;
     return NULL;
 }
 
 int main(void) {
-    g_arena = mmap(NULL, (size_t)SLOTS * SLOT_BYTES, PROT_READ | PROT_WRITE | PROT_EXEC,
-                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (g_arena == MAP_FAILED) { perror("mmap"); return 1; }
+    g_arena =
+        mmap(NULL, (size_t)SLOTS * SLOT_BYTES, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (g_arena == MAP_FAILED) {
+        perror("mmap");
+        return 1;
+    }
     pthread_barrier_init(&g_bar, NULL, THREADS);
     pthread_t t[THREADS];
-    for (long i = 0; i < THREADS; i++) pthread_create(&t[i], NULL, worker, (void *)i);
-    for (int i = 0; i < THREADS; i++) pthread_join(t[i], NULL);
+    for (long i = 0; i < THREADS; i++)
+        pthread_create(&t[i], NULL, worker, (void *)i);
+    for (int i = 0; i < THREADS; i++)
+        pthread_join(t[i], NULL);
     uint64_t total = 0;
-    for (int i = 0; i < THREADS; i++) total += g_sum[i];
+    for (int i = 0; i < THREADS; i++)
+        total += g_sum[i];
     // Each pass calls every slot exactly once: sum_{s}((s + pass*PASS_STEP) & 0xffff) per pass.
     printf("smc_threads total=%llu\n", (unsigned long long)total);
     return 0;

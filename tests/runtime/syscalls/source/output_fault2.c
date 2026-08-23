@@ -46,13 +46,12 @@ int main(void) {
     if (page <= 0) return 10;
 
     // Two mapped pages, second unmapped: pointers near the boundary straddle into the hole.
-    unsigned char *base = mmap(NULL, (size_t)page * 2, PROT_READ | PROT_WRITE,
-                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned char *base = mmap(NULL, (size_t)page * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (base == MAP_FAILED) return 11;
     if (munmap(base + page, (size_t)page) != 0) return 12;
-    void *straddle = base + page - 4;   // 4 mapped bytes, then unmapped
-    void *hole = base + page;           // fully unmapped page start
-    *(socklen_t *)straddle = 64;        // addrlen capacity for the socket cases
+    void *straddle = base + page - 4; // 4 mapped bytes, then unmapped
+    void *hole = base + page;         // fully unmapped page start
+    *(socklen_t *)straddle = 64;      // addrlen capacity for the socket cases
 
     // getpeername: addrlen cell straddles, addr buffer fully in the hole.
     int cli = -1;
@@ -90,8 +89,8 @@ int main(void) {
 
     printf("getpeername_efault=%d accept_efault=%d sigprocmask_old_efault=%d sigprocmask_set_efault=%d "
            "sched_getattr_efault=%d valid=%d\n",
-           getpeername_efault, accept_efault, sigprocmask_old_efault, sigprocmask_set_efault,
-           sched_getattr_efault, gp_ok && spm_ok && sga_ok);
+           getpeername_efault, accept_efault, sigprocmask_old_efault, sigprocmask_set_efault, sched_getattr_efault,
+           gp_ok && spm_ok && sga_ok);
     return (getpeername_efault && accept_efault && sigprocmask_old_efault && sigprocmask_set_efault &&
             sched_getattr_efault && gp_ok && spm_ok && sga_ok)
                ? 0

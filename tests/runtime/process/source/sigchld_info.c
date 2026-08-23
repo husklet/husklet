@@ -7,9 +7,15 @@
 #include <unistd.h>
 
 static volatile int g_code, g_status, g_pid, g_signo, g_n;
+
 static void ch(int s, siginfo_t *si, void *u) {
-    (void)s; (void)u;
-    g_signo = si->si_signo; g_code = si->si_code; g_status = si->si_status; g_pid = si->si_pid; g_n++;
+    (void)s;
+    (void)u;
+    g_signo = si->si_signo;
+    g_code = si->si_code;
+    g_status = si->si_status;
+    g_pid = si->si_pid;
+    g_n++;
 }
 
 // SIGCHLD stays blocked outside this call, so exactly one delivery lands per step and the globals the
@@ -20,15 +26,21 @@ static void ch(int s, siginfo_t *si, void *u) {
 // the continued case is really about: a standard signal already pending keeps its FIRST siginfo, so a
 // child continued and then exited in quick succession still reports CLD_CONTINUED.
 static sigset_t g_chld_unblocked;
+
 static void wait_chld(void) {
-    while (g_n == 0) sigsuspend(&g_chld_unblocked);
+    while (g_n == 0)
+        sigsuspend(&g_chld_unblocked);
 }
 
 int main(void) {
-    struct sigaction sa; memset(&sa, 0, sizeof sa);
-    sa.sa_sigaction = ch; sa.sa_flags = SA_SIGINFO; // no SA_NOCLDSTOP: stop/cont generate SIGCHLD
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = ch;
+    sa.sa_flags = SA_SIGINFO; // no SA_NOCLDSTOP: stop/cont generate SIGCHLD
     sigaction(SIGCHLD, &sa, NULL);
-    sigset_t chld; sigemptyset(&chld); sigaddset(&chld, SIGCHLD);
+    sigset_t chld;
+    sigemptyset(&chld);
+    sigaddset(&chld, SIGCHLD);
     sigprocmask(SIG_BLOCK, &chld, &g_chld_unblocked);
 
     // exit
@@ -37,13 +49,18 @@ int main(void) {
     if (p == 0) _exit(7);
     wait_chld();
     printf("exit signo=%d code=%d(want%d) status=%d pid=%d\n", g_signo, g_code, CLD_EXITED, g_status, g_pid == p);
-    int st; waitpid(p, &st, 0);
+    int st;
+    waitpid(p, &st, 0);
 
     // killed
     g_n = 0;
     pid_t k = fork();
-    if (k == 0) { pause(); _exit(0); }
-    usleep(30000); kill(k, SIGKILL);
+    if (k == 0) {
+        pause();
+        _exit(0);
+    }
+    usleep(30000);
+    kill(k, SIGKILL);
     wait_chld();
     printf("kill code=%d(want%d) status=%d(want%d)\n", g_code, CLD_KILLED, g_status, SIGKILL);
     waitpid(k, &st, 0);
@@ -51,7 +68,10 @@ int main(void) {
     // stopped (SA_NOCLDSTOP absent => SIGCHLD on stop)
     g_n = 0;
     pid_t s = fork();
-    if (s == 0) { raise(SIGSTOP); _exit(3); }
+    if (s == 0) {
+        raise(SIGSTOP);
+        _exit(3);
+    }
     wait_chld();
     printf("stop code=%d(want%d) status=%d(want%d)\n", g_code, CLD_STOPPED, g_status, SIGSTOP);
     // continued

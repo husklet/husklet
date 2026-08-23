@@ -112,8 +112,7 @@ static void svc_fs_attributes_11(struct cpu *c, uint64_t nr, uint64_t a0, uint64
             int authorized = (nr == 13 ? dac_access_fd((int)a0, R_OK, 1)
                                        : dac_access_at(-100, (const char *)a0, nr == 12, R_OK, 1)) == 0;
             dac_host_grant_begin_path(&grant, host, HL_DAC_READ, authorized);
-            G_RET(c) =
-                (uint64_t)(int64_t)guest_xattr_list(host, (char *)a1, (size_t)a2, nr == 12 ? XATTR_NOFOLLOW : 0);
+            G_RET(c) = (uint64_t)(int64_t)guest_xattr_list(host, (char *)a1, (size_t)a2, nr == 12 ? XATTR_NOFOLLOW : 0);
             dac_host_grant_end(&grant);
         }
         break;

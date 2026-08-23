@@ -23,9 +23,12 @@ int main(void) {
     uint64_t sum = 0;
     for (uint64_t it = 0; it < 3000ULL; it++) {
         unsigned char *p = mmap(0, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (p == MAP_FAILED) { printf("soak pagefault fail@%llu\n", (unsigned long long)it); return 1; }
+        if (p == MAP_FAILED) {
+            printf("soak pagefault fail@%llu\n", (unsigned long long)it);
+            return 1;
+        }
         for (size_t off = 0; off < len; off += STRIDE) {
-            p[off] = (unsigned char)(it + off);   // first-touch fault across the region
+            p[off] = (unsigned char)(it + off); // first-touch fault across the region
             sum += p[off];
         }
         munmap(p, len);

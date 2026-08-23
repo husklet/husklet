@@ -22,10 +22,12 @@ static int min_fields(const char *text, int min) {
     for (char *line = strtok(tmp, "\n"); line; line = strtok(NULL, "\n")) {
         int f = 0;
         for (char *p = line; *p;) {
-            while (*p == ' ' || *p == '\t') p++;
+            while (*p == ' ' || *p == '\t')
+                p++;
             if (!*p) break;
             f++;
-            while (*p && *p != ' ' && *p != '\t') p++;
+            while (*p && *p != ' ' && *p != '\t')
+                p++;
         }
         if (f && f < min) return 0;
     }
@@ -34,23 +36,17 @@ static int min_fields(const char *text, int min) {
 
 int main(void) {
     char mounts[8192], minfo[8192];
-    if (slurp("/proc/mounts", mounts, sizeof mounts) < 0 ||
-        slurp("/proc/self/mountinfo", minfo, sizeof minfo) < 0) {
+    if (slurp("/proc/mounts", mounts, sizeof mounts) < 0 || slurp("/proc/self/mountinfo", minfo, sizeof minfo) < 0) {
         printf("mounttab ok=0 (read failed)\n");
         return 0;
     }
     int ok =
         // /proc/mounts: overlay root + the pseudo filesystems df/mount enumerate; 6 fields per line
-        strstr(mounts, "overlay / overlay") != NULL &&
-        strstr(mounts, " /proc proc ") != NULL &&
-        strstr(mounts, " /sys sysfs ") != NULL &&
-        strstr(mounts, " /dev tmpfs ") != NULL &&
-        min_fields(mounts, 6) &&
+        strstr(mounts, "overlay / overlay") != NULL && strstr(mounts, " /proc proc ") != NULL &&
+        strstr(mounts, " /sys sysfs ") != NULL && strstr(mounts, " /dev tmpfs ") != NULL && min_fields(mounts, 6) &&
         // /proc/self/mountinfo: the "-" separator + overlay root mount; findmnt needs >=10 fields
-        strstr(minfo, " / / rw") != NULL &&
-        strstr(minfo, " - overlay overlay ") != NULL &&
-        strstr(minfo, " - proc proc ") != NULL &&
-        min_fields(minfo, 10);
+        strstr(minfo, " / / rw") != NULL && strstr(minfo, " - overlay overlay ") != NULL &&
+        strstr(minfo, " - proc proc ") != NULL && min_fields(minfo, 10);
     printf("mounttab ok=%d\n", ok ? 1 : 0);
     return 0;
 }

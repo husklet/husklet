@@ -20,7 +20,6 @@ int main(void) {
     usleep(20000);
     long long r1 = ns(CLOCK_MONOTONIC_RAW);
     int raw_advances = r1 >= r0;
-    printf("clockids boot=%d raw=%d mcoarse=%d rcoarse=%d advances=%d\n",
-           boot, raw0, mcoarse, rcoarse, raw_advances);
+    printf("clockids boot=%d raw=%d mcoarse=%d rcoarse=%d advances=%d\n", boot, raw0, mcoarse, rcoarse, raw_advances);
     return 0;
 }

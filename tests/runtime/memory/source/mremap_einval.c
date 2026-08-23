@@ -13,7 +13,10 @@
 int main(void) {
     long ps = sysconf(_SC_PAGESIZE);
     char *m = mmap(0, ps * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (m == MAP_FAILED) { printf("mmap_failed\n"); return 1; }
+    if (m == MAP_FAILED) {
+        printf("mmap_failed\n");
+        return 1;
+    }
 
     errno = 0;
     int fixed = mremap(m, ps, ps, MREMAP_FIXED, m) == MAP_FAILED ? errno : 0;
@@ -32,7 +35,7 @@ int main(void) {
     errno = 0;
     int mincore_unmapped = mincore(m, ps, vec) == -1 ? errno : 0;
 
-    printf("mremap-einval fixed=%d badflag=%d newsz0=%d mlock2=%d mincore_unalign=%d mincore_unmapped=%d\n",
-           fixed, badflag, newsz0, mlock2_bad, mincore_unalign, mincore_unmapped);
+    printf("mremap-einval fixed=%d badflag=%d newsz0=%d mlock2=%d mincore_unalign=%d mincore_unmapped=%d\n", fixed,
+           badflag, newsz0, mlock2_bad, mincore_unalign, mincore_unmapped);
     return 0;
 }

@@ -29,15 +29,13 @@ static void publish_lines(void *base, unsigned lines) {
 }
 
 static unsigned call_slot(uint32_t *base, unsigned slot) {
-    unsigned (*function)(void) =
-        (unsigned (*)(void))((char *)base + (size_t)slot * SLOT_BYTES);
+    unsigned (*function)(void) = (unsigned (*)(void))((char *)base + (size_t)slot * SLOT_BYTES);
     return function();
 }
 
 int main(void) {
-    uint32_t *arena = mmap(NULL, SLOTS * SLOT_BYTES,
-                           PROT_READ | PROT_WRITE | PROT_EXEC,
-                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint32_t *arena =
+        mmap(NULL, SLOTS * SLOT_BYTES, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (arena == MAP_FAILED) return 1;
 
     /*
@@ -63,8 +61,7 @@ int main(void) {
     }
 
     for (unsigned i = 1; i < SLOTS; i++)
-        emit_ret_imm((uint32_t *)((char *)arena + (size_t)i * SLOT_BYTES),
-                     1000u + i);
+        emit_ret_imm((uint32_t *)((char *)arena + (size_t)i * SLOT_BYTES), 1000u + i);
     publish_lines(arena, SLOTS);
     uint64_t checksum = 0;
     for (unsigned i = 1; i < SLOTS; i++)
@@ -72,8 +69,7 @@ int main(void) {
 
     /* More than the queued-range capacity: overflow must fall back whole, not lose a rewrite. */
     for (unsigned i = 1; i <= OVERFLOW_LINES; i++)
-        emit_ret_imm((uint32_t *)((char *)arena + (size_t)i * SLOT_BYTES),
-                     3000u + i);
+        emit_ret_imm((uint32_t *)((char *)arena + (size_t)i * SLOT_BYTES), 3000u + i);
     publish_lines((char *)arena + SLOT_BYTES, OVERFLOW_LINES);
     for (unsigned i = 1; i <= OVERFLOW_LINES; i++) {
         unsigned got = call_slot(arena, i);
@@ -90,10 +86,8 @@ int main(void) {
      * target must retain the trampoline but clear/refill its edge.
      */
     unsigned trampoline_slot = 120, target_slot = 121;
-    uint32_t *trampoline =
-        (uint32_t *)((char *)arena + (size_t)trampoline_slot * SLOT_BYTES);
-    uint32_t *target =
-        (uint32_t *)((char *)arena + (size_t)target_slot * SLOT_BYTES);
+    uint32_t *trampoline = (uint32_t *)((char *)arena + (size_t)trampoline_slot * SLOT_BYTES);
+    uint32_t *target = (uint32_t *)((char *)arena + (size_t)target_slot * SLOT_BYTES);
     intptr_t delta = (char *)target - (char *)trampoline;
     trampoline[0] = 0x14000000u | ((uint32_t)(delta / 4) & 0x03ffffffu);
     emit_ret_imm(target, 7001);
@@ -109,8 +103,7 @@ int main(void) {
         return 1;
     }
 
-    checksum ^= ((uint64_t)before << 48) ^ ((uint64_t)after << 32) ^
-                ((uint64_t)chained << 16) ^ unrelated;
+    checksum ^= ((uint64_t)before << 48) ^ ((uint64_t)after << 32) ^ ((uint64_t)chained << 16) ^ unrelated;
     printf("smc-targeted checksum=%llu\n", (unsigned long long)checksum);
     return 0;
 }

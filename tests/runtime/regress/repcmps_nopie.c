@@ -23,6 +23,7 @@ static void repe_cmpsb(const void *si, const void *di, unsigned long n, unsigned
     *rcx_out = rcx;
     *zf_out = zf;
 }
+
 // REPNE scasb: scan [rdi..] for AL, rcx elems. Returns remaining rcx + ZF (found).
 static void repne_scasb(const void *di, int al, unsigned long n, unsigned long *rcx_out, int *zf_out) {
     unsigned long rcx;

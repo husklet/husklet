@@ -19,7 +19,9 @@
 #define __NR_io_uring_register 427
 #endif
 
-struct io_uring_params { unsigned pad[30]; };  /* 120 bytes; kernel writes back into it */
+struct io_uring_params {
+    unsigned pad[30];
+}; /* 120 bytes; kernel writes back into it */
 
 /* ENOSYS is deliberately excluded: the engine exposes Linux's io_uring API under Docker's default
    policy, so it must report EPERM instead of claiming the syscall does not exist. */
@@ -53,13 +55,11 @@ int main(void) {
         char buf[sizeof msg];
         memset(buf, 0, sizeof buf);
         if (pwrite((int)fd, msg, sizeof msg, 0) == (ssize_t)sizeof msg &&
-            pread((int)fd, buf, sizeof msg, 0) == (ssize_t)sizeof msg &&
-            memcmp(buf, msg, sizeof msg) == 0)
+            pread((int)fd, buf, sizeof msg, 0) == (ssize_t)sizeof msg && memcmp(buf, msg, sizeof msg) == 0)
             fallback_ok = 1;
         close((int)fd);
     }
 
-    printf("io_uring setup=%d enter=%d register=%d fallback=%d\n",
-           setup_ok, enter_ok, register_ok, fallback_ok);
+    printf("io_uring setup=%d enter=%d register=%d fallback=%d\n", setup_ok, enter_ok, register_ok, fallback_ok);
     return 0;
 }

@@ -48,7 +48,8 @@ int main(int argc, char **argv) {
     int created = 0;
     for (; created < THREADS; ++created)
         if (pthread_create(&threads[created], NULL, worker, NULL) != 0) break;
-    for (int index = 0; index < created; ++index) pthread_join(threads[index], NULL);
+    for (int index = 0; index < created; ++index)
+        pthread_join(threads[index], NULL);
 
     int status = 0;
     errno = 0;

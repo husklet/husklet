@@ -14,7 +14,8 @@ void hl_fatal_diagnostic_init(const hl_host_services *host, const char *selector
 }
 
 static size_t append_text(char *output, size_t size, const char *text) {
-    while (*text != '\0') output[size++] = *text++;
+    while (*text != '\0')
+        output[size++] = *text++;
     return size;
 }
 
@@ -25,7 +26,8 @@ static size_t append_decimal(char *output, size_t size, uint32_t value) {
         reverse[count++] = (char)('0' + value % 10u);
         value /= 10u;
     } while (value != 0);
-    while (count != 0) output[size++] = reverse[--count];
+    while (count != 0)
+        output[size++] = reverse[--count];
     return size;
 }
 

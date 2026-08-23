@@ -69,7 +69,7 @@ static void checkpoint_prepare_timeout(struct cpu *c, int64_t remaining_ns) {
 }
 
 static int syscall_should_restart(struct cpu *c) {
-    if (ptrace_stop_requested()) return 0; // ATTACH/INTERRUPT must reach the ptrace dispatcher
+    if (ptrace_stop_requested()) return 0;                       // ATTACH/INTERRUPT must reach the ptrace dispatcher
     if (__atomic_load_n(&c->exited, __ATOMIC_SEQ_CST)) return 0; // execve teardown: don't re-block, unwind out
     // Process-wide pending (g_pending) AND this thread's directed-pending (c->tpending, set by tkill/tgkill):
     // a thread blocked in read/accept/recv must be interrupted by a thread-directed signal too, not only a
@@ -78,7 +78,7 @@ static int syscall_should_restart(struct cpu *c) {
     int all_sa_restart = 1; // ...and every such handler asked for SA_RESTART
     for (int s = 1; s <= 64; s++) {
         if (!signal_deliverable(c, s)) continue;
-        if (g_sigact[s].handler <= 1) continue;       // SIG_DFL/IGN -> no guest handler runs
+        if (g_sigact[s].handler <= 1) continue; // SIG_DFL/IGN -> no guest handler runs
         deliverable = 1;
         if (!(g_sigact[s].flags & SA_RESTART_L)) all_sa_restart = 0;
     }
@@ -120,7 +120,7 @@ static int svc_poll_retry(struct cpu *c) {
     if (__atomic_load_n(&c->exited, __ATOMIC_SEQ_CST)) return 0; // execve teardown: stop re-blocking, unwind out
     for (int s = 1; s <= 64; s++) {
         if (!signal_deliverable(c, s)) continue;
-        if (g_sigact[s].handler > 1) return 0;        // guest signal semantics take precedence over checkpointing
+        if (g_sigact[s].handler > 1) return 0; // guest signal semantics take precedence over checkpointing
     }
     if (ckpt_pending()) {
         checkpoint_mark_syscall(c);
@@ -985,7 +985,7 @@ static void svc_signal_errno_observe(struct cpu *c, void *context) {
 }
 
 HL_API int HL_TARGET_LOCAL(signal_errno_frame_test)(uint32_t domain, uint32_t redirect, uint64_t nr, int64_t raw,
-                                                     int64_t *observed, int64_t *completed) {
+                                                    int64_t *observed, int64_t *completed) {
     struct cpu cpu = {0};
     svc_errno_converter converter = domain == 1 ? hl_linux_errno_from_darwin : hl_linux_errno_from_ucrt;
     if ((domain != 1 && domain != 2) || observed == NULL || completed == NULL) return -EINVAL;

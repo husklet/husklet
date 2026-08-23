@@ -19,11 +19,17 @@ int main(int argc, char **argv) {
 
     char self[4096];
     ssize_t n = readlink("/proc/self/exe", self, sizeof self - 1);
-    if (n <= 0) { printf("ptrace-exec self-fail\n"); return 1; }
+    if (n <= 0) {
+        printf("ptrace-exec self-fail\n");
+        return 1;
+    }
     self[n] = 0;
 
     pid_t child = fork();
-    if (child < 0) { printf("ptrace-exec fork-fail\n"); return 1; }
+    if (child < 0) {
+        printf("ptrace-exec fork-fail\n");
+        return 1;
+    }
     if (child == 0) {
         if (ptrace(PTRACE_TRACEME, 0, 0, 0) != 0) _exit(90);
         char *a[] = {self, (char *)"x", NULL};
@@ -38,8 +44,14 @@ int main(int argc, char **argv) {
     ptrace(PTRACE_CONT, child, 0, 0);
     for (;;) {
         if (waitpid(child, &status, 0) != child) break;
-        if (WIFEXITED(status)) { child_exit = WEXITSTATUS(status); break; }
-        if (WIFSIGNALED(status)) { child_exit = 128 + WTERMSIG(status); break; }
+        if (WIFEXITED(status)) {
+            child_exit = WEXITSTATUS(status);
+            break;
+        }
+        if (WIFSIGNALED(status)) {
+            child_exit = 128 + WTERMSIG(status);
+            break;
+        }
         // any further stop: keep it moving
         ptrace(PTRACE_CONT, child, 0, 0);
     }

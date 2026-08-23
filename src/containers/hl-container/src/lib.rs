@@ -1,6 +1,43 @@
 //! Embeddable headless Linux container lifecycle.
 #![forbid(unsafe_code)]
 
+// This crate is POSIX-only by construction, and says so here rather than letting a
+// Windows build discover it 200 lines deep in somebody else's C.
+//
+// MEASURED 2026-08-21 on x86_64 Linux with the pinned `pkgsCross.mingwW64` toolchain: a
+// `--target x86_64-pc-windows-gnu` build of this crate never reaches its own source. It
+// stops in `aws-lc-sys`'s build script, which arrives through `hl-images` ->
+// `oci-client` -> `rustls`, and the failure text names a missing `sched.h` in a vendored
+// jitterentropy header. That message has been read three times as "an include path needs
+// scoping"; it is not. `aws-lc/crypto/internal.h` selects `#include <pthread.h>`
+// specifically for `defined(__MINGW32__) && !defined(__clang__)`, so aws-lc on mingw-gcc
+// structurally requires a winpthreads sysroot ahead of the system headers -- and that is
+// the same include position `hl-native`'s `toolchain/msvc-posix` shim must occupy to
+// build the C engine. `cc` reads one process-global `CFLAGS_x86_64_pc_windows_gnu`, so
+// the two cannot both be satisfied in one `cargo` invocation. Verified in both
+// directions: with winpthreads on `CFLAGS` `aws-lc-sys` compiles and `hl-native` dies
+// redefining `pthread_cond_timedwait`, `clock_gettime` and `nanosleep`; without it
+// `hl-native` compiles and `aws-lc-sys` dies on `pthread.h`. `-idirafter` splits the
+// difference and satisfies neither.
+//
+// None of which is the reason this crate is Unix-only. It is Unix-only because it drives
+// Linux namespaces, and `checkpoint/directory.rs` records the second, closer wall: this
+// crate and `hl-images` name `std::os::unix::fs` unconditionally in dozens of places.
+// The 26 `#[cfg(not(unix))]` arms in `filesystem*.rs` and `checkpoint/directory*.rs`
+// compile in no configuration at all, which is why they have rotted; this refusal states
+// the constraint they were pretending to satisfy. Removing them is the crate owner's
+// call and a separate change.
+//
+// Written as a refusal rather than an absence because a crate cannot be name-resolution
+// error the way `hl_native::process_identity_signal` is on Windows. The rewrite-every-cfg
+// technique that `checkpoint/directory.rs` documents still works: it renames
+// `cfg(not(unix))` to a name that is never set, and renames this one with it.
+#[cfg(not(unix))]
+compile_error!(
+    "hl-container drives Linux namespaces, bind mounts and POSIX file identity; it has no \
+     non-Unix configuration. See the note at the top of src/lib.rs."
+);
+
 mod checkpoint;
 mod config;
 mod console;

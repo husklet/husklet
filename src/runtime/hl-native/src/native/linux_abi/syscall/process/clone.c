@@ -1,7 +1,19 @@
 // Cohesive process-syscall handlers. Included by ../proc.c after shared process state.
 #include "../../../host/process.h"
 
-static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int clone_has_namespace_flags(uint64_t flags) {
+    const uint64_t namespace_flags = 0x00020000ull | // CLONE_NEWNS
+                                     0x02000000ull | // CLONE_NEWCGROUP
+                                     0x04000000ull | // CLONE_NEWUTS
+                                     0x08000000ull | // CLONE_NEWIPC
+                                     0x10000000ull | // CLONE_NEWUSER
+                                     0x20000000ull | // CLONE_NEWPID
+                                     0x40000000ull;  // CLONE_NEWNET
+    return (flags & namespace_flags) != 0;
+}
+
+static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 220: {
         // Dynamic Linux namespaces are not yet modeled by the embedded ABI.
@@ -10,14 +22,7 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // child remains in the original namespace. Return EINVAL, the kernel
         // contract for unsupported clone flags, so capability probes can use
         // their documented fallback.
-        const uint64_t namespace_flags = 0x00020000ull | // CLONE_NEWNS
-                                         0x02000000ull | // CLONE_NEWCGROUP
-                                         0x04000000ull | // CLONE_NEWUTS
-                                         0x08000000ull | // CLONE_NEWIPC
-                                         0x10000000ull | // CLONE_NEWUSER
-                                         0x20000000ull | // CLONE_NEWPID
-                                         0x40000000ull;  // CLONE_NEWNET
-        if (a0 & namespace_flags) {
+        if (clone_has_namespace_flags(a0)) {
             fork_diagnostic_emit(c, nr, a0, "namespace-flags", EINVAL, -1, NULL);
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
@@ -72,8 +77,7 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // backward (a failed posix_spawn followed by malloc hit glibc's heap
         // consistency abort). The only defined multithreaded vfork-child actions
         // are exec/_exit, neither of which requires child writes to be published.
-        int import_vfork_exit_memory =
-            is_vfork && !atomic_load_explicit(&g_ever_threaded, memory_order_acquire);
+        int import_vfork_exit_memory = is_vfork && !atomic_load_explicit(&g_ever_threaded, memory_order_acquire);
         if (is_vfork && (pipe(vfork_pipe) != 0 || pipe(vfork_ack) != 0)) {
             int pipe_error = errno;
             fork_diagnostic_emit(c, nr, a0, "vfork-pipe", pipe_error, pids_total, &bound_fork);
@@ -109,8 +113,8 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         pid_t pid = hl_host_process_clone_current();
         int fork_error = errno;
         if (pid < 0) fork_diagnostic_emit(c, nr, a0, "host-fork", fork_error, pids_total, &bound_fork);
-        guest_child_pid = pid < 0 ? -1 : restore_process_identity_publish(
-                                                   guest_child_pid, pid == 0 ? (int)getpid() : (int)pid);
+        guest_child_pid =
+            pid < 0 ? -1 : restore_process_identity_publish(guest_child_pid, pid == 0 ? (int)getpid() : (int)pid);
         if (pid >= 0 && guest_child_pid <= 0) {
             if (pid == 0) _exit(127);
             fork_diagnostic_emit(c, nr, a0, "identity-publish", EAGAIN, pids_total, &bound_fork);
@@ -211,9 +215,9 @@ static int svc_proc_220(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         if (pid > 0) { // parent side of a successful fork: count it for /proc/stat processes + pids.current
             atomic_fetch_add(&g_forks_since_boot, 1);
             host_pid_register_child((int)pid); // host registry: register the child NOW (parent-side, race-
-                                           // free) so a kill/pidfd membership check can never ESRCH it before
-                                           // it runs its own proc_reg_after_fork publish
-            acct_child_born((int)pid);     // register the child's OWN task slot (container-wide pids.current)
+                                               // free) so a kill/pidfd membership check can never ESRCH it before
+                                               // it runs its own proc_reg_after_fork publish
+            acct_child_born((int)pid);         // register the child's OWN task slot (container-wide pids.current)
         }
         if (pid > 0 && is_vfork) {
             unsigned char committed;
@@ -323,8 +327,7 @@ static int svc_proc_281(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         // close-on-exec sweep until the immutable exec image has finished loading.
         owned_descriptor = bound_exec_descriptor((int)a0);
         error = owned_descriptor < 0 ? -errno : execveat_empty_path((int)a0, path, sizeof path);
-    }
-    else if (!source || !source[0])
+    } else if (!source || !source[0])
         error = -ENOENT;
     else
         error = execveat_named_path((int)a0, source, (int)a4, path, sizeof path);
@@ -336,7 +339,8 @@ static int svc_proc_281(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
     return svc_proc_exec(c, path, a2, a3, owned_descriptor);
 }
 
-static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 435: {
         // clone3(clone_args*, size): a hostile/buggy guest can pass a bad args pointer or a junk size;
@@ -409,8 +413,8 @@ static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         pid_t pid = hl_host_process_clone_current();
         int fork_error = errno;
         if (pid < 0) fork_diagnostic_emit(c, nr, flags, "host-fork", fork_error, pids_total, &bound_fork);
-        guest_child_pid = pid < 0 ? -1 : restore_process_identity_publish(
-                                                   guest_child_pid, pid == 0 ? (int)getpid() : (int)pid);
+        guest_child_pid =
+            pid < 0 ? -1 : restore_process_identity_publish(guest_child_pid, pid == 0 ? (int)getpid() : (int)pid);
         if (pid >= 0 && guest_child_pid <= 0) {
             if (pid == 0) _exit(127);
             fork_diagnostic_emit(c, nr, flags, "identity-publish", EAGAIN, pids_total, &bound_fork);
@@ -486,7 +490,7 @@ static int svc_proc_435(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, ui
         if (pid > 0) { // parent side of a successful clone3 fork: count it (see case 220)
             atomic_fetch_add(&g_forks_since_boot, 1);
             host_pid_register_child((int)pid); // host registry: parent-side registration (see case 220)
-            acct_child_born((int)pid);     // register the child's OWN task slot (container-wide pids.current)
+            acct_child_born((int)pid);         // register the child's OWN task slot (container-wide pids.current)
         }
         // clone_args: parent_tid = ca[3]. CLONE_PARENT_SETTID stores the child's tid (pid) into the PARENT's
         // parent_tid (a distinct field from pidfd in clone3, so it never conflicts with CLONE_PIDFD).

@@ -79,8 +79,8 @@ struct pc_hdr {
     uint64_t cpu_sz, map_n, ibtc_n;
     uint64_t img_base, interp_base;
     hl_identity_digest bin_id; // full identity of guest binary + interp + argv0 + engine build
-    uint64_t entry_jump; // initial rip (sanity)
-    uint64_t arena_used; // bytes of translated code
+    uint64_t entry_jump;       // initial rip (sanity)
+    uint64_t arena_used;       // bytes of translated code
     uint64_t n_mapent, n_pend, n_reloc, n_lib;
     uint64_t csum;            // v6: FNV-1a over every byte after this header (parity with the aarch64 pcache)
     uint64_t block_return_at; // block_return's host addr at save time -> the image-slide anchor on load
@@ -178,7 +178,7 @@ static uint64_t pcache_argv0_id(const char *argv0) {
 }
 
 static hl_identity_digest pcache_make_id(hl_identity_digest program, hl_identity_digest interpreter,
-                                        const char *argv0) {
+                                         const char *argv0) {
     return hl_identity_digest_mix(program, interpreter, pcache_translator_identity(), argv0);
 }
 
@@ -373,9 +373,9 @@ static int pcache_load(uint64_t entry_jump) {
     }
     if (h.magic != PC_MAGIC || !hl_pcache_compatible(h.version, h.translator_abi, PC_VERSION_EFF, PC_TRANSLATOR_ABI) ||
         h.cpu_sz != sizeof(struct cpu) || h.map_n != JIT_MAP_N || h.ibtc_n != IBTC_N || h.img_base != PC_IMG_BASE ||
-        h.interp_base != PC_INTERP_BASE || !hl_identity_digest_equal(&h.bin_id, &g_pc_binid) || h.entry_jump != entry_jump ||
-        h.arena_used > CACHE_SZ || h.n_mapent > JIT_MAP_N || h.n_pend > (1u << 16) || h.n_reloc > PC_RELOC_CAP ||
-        h.n_lib != 0) { // mutable file mappings are never persistent translation authority
+        h.interp_base != PC_INTERP_BASE || !hl_identity_digest_equal(&h.bin_id, &g_pc_binid) ||
+        h.entry_jump != entry_jump || h.arena_used > CACHE_SZ || h.n_mapent > JIT_MAP_N || h.n_pend > (1u << 16) ||
+        h.n_reloc > PC_RELOC_CAP || h.n_lib != 0) { // mutable file mappings are never persistent translation authority
         free(image);
         return 0;
     }
@@ -496,8 +496,8 @@ static int pcache_load(uint64_t entry_jump) {
 // right before the exec flushes the arena -- each image epoch persists under its OWN key exactly once.
 static void pcache_save(void) {
     if (!g_pcache || hl_identity_digest_empty(&g_pc_binid) || g_cp == g_cache) return;
-    if (g_force_base_failed) return; // #210: mixed-base arena (a fixed-VA image map fell back) -> not revivable
-    if (g_pcache_poison) return;     // arena has un-recorded baked host pointers -> not safely relocatable
+    if (g_force_base_failed) return;     // #210: mixed-base arena (a fixed-VA image map fell back) -> not revivable
+    if (g_pcache_poison) return;         // arena has un-recorded baked host pointers -> not safely relocatable
     if (!jit_guest_bus_active()) return; // unguarded blocks must never reach a file that outlives this process
     // NEVER save from a fork child. jit_after_fork rebuilt a FRESH EMPTY arena in the child, but
     // the g_reloc table (and binid/entry identity) survived the fork -- a child save would persist the

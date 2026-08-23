@@ -32,7 +32,6 @@ int main(void) {
 
     close(pipefd[0]);
     close(pipefd[1]);
-    printf("vector-order range=%d badfd=%d untouched=%d\n",
-           invalid_ok, bad_ok, untouched_ok);
+    printf("vector-order range=%d badfd=%d untouched=%d\n", invalid_ok, bad_ok, untouched_ok);
     return !(invalid_ok && bad_ok && untouched_ok);
 }

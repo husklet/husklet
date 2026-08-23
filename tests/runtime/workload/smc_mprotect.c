@@ -43,10 +43,16 @@ static int emit_ret_imm(unsigned char *buf, int imm) {
 
 // Rewrite the arena to `return imm`, flush, mprotect(RX), call it. Returns the callee's result.
 static int rewrite_and_call(unsigned char *p, size_t sz, int imm) {
-    if (mprotect(p, sz, PROT_READ | PROT_WRITE) != 0) { perror("mprotect rw"); return -1; }
+    if (mprotect(p, sz, PROT_READ | PROT_WRITE) != 0) {
+        perror("mprotect rw");
+        return -1;
+    }
     emit_ret_imm(p, imm);
     __builtin___clear_cache((char *)p, (char *)p + sz);
-    if (mprotect(p, sz, PROT_READ | PROT_EXEC) != 0) { perror("mprotect rx"); return -1; }
+    if (mprotect(p, sz, PROT_READ | PROT_EXEC) != 0) {
+        perror("mprotect rx");
+        return -1;
+    }
     int (*f)(void) = (int (*)(void))p;
     return f();
 }
@@ -55,7 +61,10 @@ int main(void) {
     size_t sz = 4096;
     // Deliberately RW-only (NOT PROT_EXEC): this is the path the mmap case does NOT arm; mprotect must.
     unsigned char *p = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (p == MAP_FAILED) { perror("mmap"); return 1; }
+    if (p == MAP_FAILED) {
+        perror("mmap");
+        return 1;
+    }
 
     int r1 = rewrite_and_call(p, sz, 111);
     int r2 = rewrite_and_call(p, sz, 222); // must invalidate the r1 translation

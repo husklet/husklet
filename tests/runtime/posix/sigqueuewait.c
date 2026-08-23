@@ -15,10 +15,8 @@ int main(void) {
 
     siginfo_t info;
     int sig = sigwaitinfo(&set, &info);
-    int ok = sig == SIGRTMIN &&
-             info.si_signo == SIGRTMIN &&
-             info.si_value.sival_int == 0x5a5a &&
-             info.si_code == SI_QUEUE;
+    int ok =
+        sig == SIGRTMIN && info.si_signo == SIGRTMIN && info.si_value.sival_int == 0x5a5a && info.si_code == SI_QUEUE;
 
     // Second queued signal retrieved via sigtimedwait.
     sv.sival_int = 7;

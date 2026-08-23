@@ -10,8 +10,10 @@ int main(void) {
     int got = prlimit(0, RLIMIT_NOFILE, NULL, &old) == 0;
 
     struct rlimit lo = old;
-    if (lo.rlim_max == RLIM_INFINITY || lo.rlim_max > 256) lo.rlim_cur = 256;
-    else lo.rlim_cur = lo.rlim_max;
+    if (lo.rlim_max == RLIM_INFINITY || lo.rlim_max > 256)
+        lo.rlim_cur = 256;
+    else
+        lo.rlim_cur = lo.rlim_max;
     int set = prlimit(0, RLIMIT_NOFILE, &lo, NULL) == 0;
 
     struct rlimit cur;

@@ -12,11 +12,21 @@
 int main(void) {
     const char *path = "/tmp/hl_mmapshared.bin";
     int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) { perror("open"); return 1; }
-    if (ftruncate(fd, SZ) < 0) { perror("ftruncate"); return 1; }
+    if (fd < 0) {
+        perror("open");
+        return 1;
+    }
+    if (ftruncate(fd, SZ) < 0) {
+        perror("ftruncate");
+        return 1;
+    }
     char *m = mmap(NULL, SZ, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (m == MAP_FAILED) { perror("mmap"); return 1; }
-    for (int i = 0; i < SZ; i++) m[i] = (char)(i & 0x7f);
+    if (m == MAP_FAILED) {
+        perror("mmap");
+        return 1;
+    }
+    for (int i = 0; i < SZ; i++)
+        m[i] = (char)(i & 0x7f);
     msync(m, SZ, MS_SYNC);
     munmap(m, SZ);
 

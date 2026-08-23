@@ -25,7 +25,8 @@ static void *worker(void *arg) {
 int main(void) {
     pthread_barrier_init(&bar, NULL, N);
     pthread_t t[N];
-    for (int i = 0; i < N; i++) pthread_create(&t[i], NULL, worker, NULL);
+    for (int i = 0; i < N; i++)
+        pthread_create(&t[i], NULL, worker, NULL);
     int bad = 0;
     for (int i = 0; i < N; i++) {
         void *rv;
@@ -33,7 +34,6 @@ int main(void) {
         if (rv) bad = 1;
     }
     pthread_barrier_destroy(&bar);
-    printf("barrier serials=%d arrived=%d bad=%d\n",
-           serials == ROUNDS, arrived == N * ROUNDS, bad);
+    printf("barrier serials=%d arrived=%d bad=%d\n", serials == ROUNDS, arrived == N * ROUNDS, bad);
     return 0;
 }

@@ -24,11 +24,17 @@ int main(void) {
     }
 
     int fds[2];
-    if (pipe(fds) < 0) { perror("pipe"); return 1; }
+    if (pipe(fds) < 0) {
+        perror("pipe");
+        return 1;
+    }
 
     // Relocate the pipe READ end to a fd number > 1024 (the regime past the 1024-bit bitmap).
     int hi = fcntl(fds[0], F_DUPFD, 1100);
-    if (hi < 0) { perror("F_DUPFD"); return 1; }
+    if (hi < 0) {
+        perror("F_DUPFD");
+        return 1;
+    }
     close(fds[0]);
     int hi_gt_1024 = hi > 1024;
 
@@ -43,7 +49,10 @@ int main(void) {
     int eexist = (add1 == -1 && errno == EEXIST);
 
     // (3) Readiness on the >1024 fd must be delivered (the lost-wakeup symptom).
-    for (int i = 0; i < 5; i++) { ssize_t w = write(fds[1], "xyz", 3); (void)w; }
+    for (int i = 0; i < 5; i++) {
+        ssize_t w = write(fds[1], "xyz", 3);
+        (void)w;
+    }
     close(fds[1]);
     long total = 0;
     int events_seen = 0;
@@ -66,7 +75,7 @@ int main(void) {
     close(ep);
     close(hi);
     // Native Linux prints: hifd=1 add0=0 eexist=1 bytes=15 ev=1 del0=0 enoent=1
-    printf("hifd=%d add0=%d eexist=%d bytes=%ld ev=%d del0=%d enoent=%d\n",
-           hi_gt_1024, add0, eexist, total, events_seen >= 1, del0, enoent);
+    printf("hifd=%d add0=%d eexist=%d bytes=%ld ev=%d del0=%d enoent=%d\n", hi_gt_1024, add0, eexist, total,
+           events_seen >= 1, del0, enoent);
     return 0;
 }

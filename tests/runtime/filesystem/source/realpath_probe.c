@@ -44,7 +44,6 @@ int main(void) {
     unlink(file);
     rmdir(sub);
     rmdir(base);
-    printf("realpath-probe link-same=%d messy-same=%d tail=%d enoent=%d\n",
-           link_same, messy_same, tail_ok, enoent_ok);
+    printf("realpath-probe link-same=%d messy-same=%d tail=%d enoent=%d\n", link_same, messy_same, tail_ok, enoent_ok);
     return 0;
 }

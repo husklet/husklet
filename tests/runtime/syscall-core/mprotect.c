@@ -12,7 +12,11 @@
 #endif
 
 static sigjmp_buf jb;
-static void segv(int s) { (void)s; siglongjmp(jb, 1); }
+
+static void segv(int s) {
+    (void)s;
+    siglongjmp(jb, 1);
+}
 
 int main(void) {
     struct sigaction sa = {0};
@@ -21,7 +25,10 @@ int main(void) {
     sigaction(SIGBUS, &sa, NULL);
 
     volatile unsigned char *m = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (m == MAP_FAILED) { perror("mmap"); return 1; }
+    if (m == MAP_FAILED) {
+        perror("mmap");
+        return 1;
+    }
     m[0] = 0x7e;
     mprotect((void *)m, 4096, PROT_NONE);
 

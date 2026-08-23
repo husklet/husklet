@@ -14,12 +14,12 @@ static void h(int s) {
     (void)s;
     int local;
     char *p = (char *)&local;
-    on_alt = (p >= alt_lo && p < alt_hi);   // handler's stack var lives inside the alt stack
+    on_alt = (p >= alt_lo && p < alt_hi); // handler's stack var lives inside the alt stack
     ran = 1;
 }
 
 int main(void) {
-    stack_t ss = { .ss_sp = altbuf, .ss_size = sizeof altbuf, .ss_flags = 0 };
+    stack_t ss = {.ss_sp = altbuf, .ss_size = sizeof altbuf, .ss_flags = 0};
     int set = sigaltstack(&ss, NULL) == 0;
     alt_lo = altbuf;
     alt_hi = altbuf + sizeof altbuf;

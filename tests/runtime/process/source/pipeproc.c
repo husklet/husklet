@@ -7,7 +7,10 @@
 
 int main(void) {
     int fds[2];
-    if (pipe(fds) < 0) { perror("pipe"); return 1; }
+    if (pipe(fds) < 0) {
+        perror("pipe");
+        return 1;
+    }
     pid_t pid = fork();
     if (pid == 0) {
         close(fds[0]);
@@ -20,7 +23,8 @@ int main(void) {
     long sum = 0;
     int v;
     ssize_t n;
-    while ((n = read(fds[0], &v, sizeof v)) == sizeof v) sum += v;
+    while ((n = read(fds[0], &v, sizeof v)) == sizeof v)
+        sum += v;
     waitpid(pid, NULL, 0);
     printf("pipeproc sum=%ld\n", sum); // 500500
     return 0;

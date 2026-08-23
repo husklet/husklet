@@ -16,10 +16,8 @@
 
 int main(void) {
     struct rusage ru;
-    printf("self_ok=%d children_ok=%d thread_ok=%d\n",
-           getrusage(RUSAGE_SELF, &ru) == 0,
-           getrusage(RUSAGE_CHILDREN, &ru) == 0,
-           getrusage(RUSAGE_THREAD, &ru) == 0);
+    printf("self_ok=%d children_ok=%d thread_ok=%d\n", getrusage(RUSAGE_SELF, &ru) == 0,
+           getrusage(RUSAGE_CHILDREN, &ru) == 0, getrusage(RUSAGE_THREAD, &ru) == 0);
     // Unknown who -> EINVAL.
     errno = 0;
     printf("badwho_errno=%d\n", getrusage(12345, &ru) == -1 ? errno : 0);
@@ -28,7 +26,6 @@ int main(void) {
     printf("null_errno=%d\n", getrusage(RUSAGE_SELF, NULL) == -1 ? errno : 0);
     // Monotonic shape invariants.
     getrusage(RUSAGE_SELF, &ru);
-    printf("maxrss_nonneg=%d ctxsw_nonneg=%d\n",
-           ru.ru_maxrss >= 0, ru.ru_nvcsw >= 0 && ru.ru_nivcsw >= 0);
+    printf("maxrss_nonneg=%d ctxsw_nonneg=%d\n", ru.ru_maxrss >= 0, ru.ru_nvcsw >= 0 && ru.ru_nivcsw >= 0);
     return 0;
 }

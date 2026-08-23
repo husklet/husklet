@@ -19,8 +19,7 @@ int main(void) {
     off_t fpos = lseek(fd, 0, SEEK_CUR);
     char buf[16] = {0};
     read(p[0], buf, n > 0 ? n : 0);
-    printf("splice n=%zd off=%ld fpos=%ld data=[%.*s]\n", n, (long)off, (long)fpos,
-           (int)(n > 0 ? n : 0), buf);
+    printf("splice n=%zd off=%ld fpos=%ld data=[%.*s]\n", n, (long)off, (long)fpos, (int)(n > 0 ? n : 0), buf);
     close(fd);
     close(p[0]);
     close(p[1]);

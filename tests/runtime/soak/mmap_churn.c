@@ -22,8 +22,11 @@ int main(void) {
         size_t pages = 1 + (size_t)((r >> 20) & 7);              // 1..8 pages
         size_t len = pages * (size_t)pg;
         unsigned char *p = mmap(0, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (p == MAP_FAILED) { printf("soak mmapchurn fail@%llu\n", (unsigned long long)i); return 1; }
-        p[0] = (unsigned char)r;            // commit first page
+        if (p == MAP_FAILED) {
+            printf("soak mmapchurn fail@%llu\n", (unsigned long long)i);
+            return 1;
+        }
+        p[0] = (unsigned char)r;              // commit first page
         p[len - 1] = (unsigned char)(r >> 8); // commit last page
         sum += (uint64_t)p[0] + p[len - 1];
         munmap(p, len);

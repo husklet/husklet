@@ -13,12 +13,12 @@ int main(void) {
     write(sv[1], "peekme", 6);
 
     char a[16] = {0}, b[16] = {0};
-    ssize_t pn = recv(sv[0], a, sizeof a - 1, MSG_PEEK);  // peek, don't consume
-    ssize_t cn = recv(sv[0], b, sizeof b - 1, 0);          // now consume
+    ssize_t pn = recv(sv[0], a, sizeof a - 1, MSG_PEEK); // peek, don't consume
+    ssize_t cn = recv(sv[0], b, sizeof b - 1, 0);        // now consume
     int peek_ok = (pn == 6) && !strcmp(a, "peekme") && (cn == 6) && !strcmp(b, "peekme");
 
     char c[8];
-    ssize_t en = recv(sv[0], c, sizeof c, MSG_DONTWAIT);   // empty now -> EAGAIN
+    ssize_t en = recv(sv[0], c, sizeof c, MSG_DONTWAIT); // empty now -> EAGAIN
     int dontwait_ok = (en < 0) && (errno == EAGAIN || errno == EWOULDBLOCK);
     close(sv[0]);
     close(sv[1]);

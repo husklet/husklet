@@ -23,6 +23,10 @@ windows-sys = { version = "0.61", features = [
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# A `Drop` cannot propagate, and `unix_descriptor` owns process-global standard descriptor slots: a
+# failed restoration is invisible from wherever it later surfaces unless the guard names it there.
+# hl-log is std-only with no external dependencies and its error level survives release.
+hl-log = { path = "../hl-log" }
 
 [dev-dependencies]
 tempfile.workspace = true

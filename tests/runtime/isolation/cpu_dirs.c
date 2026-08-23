@@ -32,9 +32,10 @@ static int htop_cpucount(void) {
     closedir(dir);
     return active < 1 ? 1 : active;
 }
+
 int main(void) {
     int htop = htop_cpucount(), online = get_nprocs(), configured = get_nprocs_conf();
-    printf("cpu-sysfs-dirs consistent=%d multicore=%d\n",
-           htop == online && online == configured && htop >= 1, htop >= 2);
+    printf("cpu-sysfs-dirs consistent=%d multicore=%d\n", htop == online && online == configured && htop >= 1,
+           htop >= 2);
     return 0;
 }

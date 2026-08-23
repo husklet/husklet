@@ -158,8 +158,8 @@ static int hl_socket_owner_lookup(const struct stat *status, uint64_t birth_ns, 
     if (hl_socket_owner_namespace(&namespace) != 0) return -1;
     for (unsigned retry = 0; retry < 64; ++retry) {
         if (namespace_transaction_read_begin(&read) != 0) return -1;
-        result = hl_owner_registry_lookup(g_socket_owner_registry, namespace,
-                                          hl_socket_owner_key(status, birth_ns), &value);
+        result =
+            hl_owner_registry_lookup(g_socket_owner_registry, namespace, hl_socket_owner_key(status, birth_ns), &value);
         if (result < 0 && result != -EAGAIN) return -1;
         if (result != -EAGAIN && namespace_transaction_read_validate(&read) == 0) {
             if (result != HL_OWNER_FOUND) return 0;
@@ -310,8 +310,7 @@ static int hl_owner_set_metadata(const struct stat *status, uint64_t birth_ns, i
         int found = hl_owner_registry_writer_lookup(g_socket_owner_registry, namespace, socket_writer, key, &value);
         if (found == 0) {
             error = hl_owner_registry_update(g_socket_owner_registry, namespace, socket_writer, key,
-                                             uid < 0 ? value.uid : (uint32_t)uid,
-                                             gid < 0 ? value.gid : (uint32_t)gid);
+                                             uid < 0 ? value.uid : (uint32_t)uid, gid < 0 ? value.gid : (uint32_t)gid);
             hl_socket_owner_writer_end(socket_writer);
             return error == 0 ? 0 : (errno = error, -1);
         }

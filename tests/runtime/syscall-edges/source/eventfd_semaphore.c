@@ -31,8 +31,9 @@ int main(void) {
     uint64_t max = 0xffffffffffffffffULL;
     ssize_t wmax = write(fd, &max, 8);
     int ewmax = (wmax == -1) ? errno : 0;
-    printf("w=%zd r1=%zd v1=%llu v2=%llu v3=%llu r4=%zd e4=%d wz=%zd r5=%zd e5=%d shortw=%zd esw=%d shortr=%zd esr=%d wmax=%zd ewmax=%d\n",
-           w, r1, (unsigned long long)v1, (unsigned long long)v2, (unsigned long long)v3,
-           r4, e4, wz, r5, e5, shortw, esw, shortr, esr, wmax, ewmax);
+    printf("w=%zd r1=%zd v1=%llu v2=%llu v3=%llu r4=%zd e4=%d wz=%zd r5=%zd e5=%d shortw=%zd esw=%d shortr=%zd esr=%d "
+           "wmax=%zd ewmax=%d\n",
+           w, r1, (unsigned long long)v1, (unsigned long long)v2, (unsigned long long)v3, r4, e4, wz, r5, e5, shortw,
+           esw, shortr, esr, wmax, ewmax);
     return 0;
 }

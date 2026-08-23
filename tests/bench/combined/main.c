@@ -65,6 +65,7 @@ static inline uint64_t timer_count(void) {
     __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(v));
     return v;
 }
+
 static inline uint64_t timer_freq(void) {
     uint64_t v;
     __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(v));
@@ -76,7 +77,10 @@ static inline uint64_t timer_count(void) {
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * UINT64_C(1000000000) + (uint64_t)ts.tv_nsec;
 }
-static inline uint64_t timer_freq(void) { return UINT64_C(1000000000); }
+
+static inline uint64_t timer_freq(void) {
+    return UINT64_C(1000000000);
+}
 #endif
 
 static uint64_t g_freq;
@@ -123,6 +127,7 @@ static uint64_t phase_intdiv(unsigned iters) {
 
 static uint64_t phase_float_simd(unsigned iters) {
     enum { N = 4096 };
+
     static float a[N], b[N], c[N];
     for (int i = 0; i < N; ++i) {
         a[i] = (float)i * 0.5f + 1.0f;
@@ -155,9 +160,10 @@ static uint64_t phase_float_simd(unsigned iters) {
 #if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
 #include <wmmintrin.h>
 #include <emmintrin.h>
-__attribute__((target("aes,sse2")))
-static uint64_t phase_crypto(unsigned iters) {
+
+__attribute__((target("aes,sse2"))) static uint64_t phase_crypto(unsigned iters) {
     enum { BLK = 1024 };
+
     static __m128i buf[BLK];
     __m128i rk[11];
     for (int r = 0; r < 11; ++r)
@@ -186,24 +192,28 @@ static uint64_t phase_crypto(unsigned iters) {
         }
     }
     uint64_t acc = 0;
-    for (int i = 0; i < BLK; i += 64) acc += (uint64_t)_mm_cvtsi128_si64(buf[i]);
+    for (int i = 0; i < BLK; i += 64)
+        acc += (uint64_t)_mm_cvtsi128_si64(buf[i]);
     return acc;
 }
 #elif defined(__aarch64__) && (defined(__GNUC__) || defined(__clang__))
 #include <arm_neon.h>
-__attribute__((target("arch=armv8-a+crypto")))
-static uint64_t phase_crypto(unsigned iters) {
+
+__attribute__((target("arch=armv8-a+crypto"))) static uint64_t phase_crypto(unsigned iters) {
     enum { BLK = 1024 };
+
     static uint8x16_t buf[BLK];
     uint8x16_t rk[11];
     for (int r = 0; r < 11; ++r) {
         uint8_t k[16];
-        for (int j = 0; j < 16; ++j) k[j] = (uint8_t)(r * 16 + j + 1);
+        for (int j = 0; j < 16; ++j)
+            k[j] = (uint8_t)(r * 16 + j + 1);
         rk[r] = vld1q_u8(k);
     }
     for (int i = 0; i < BLK; ++i) {
         uint8_t s[16];
-        for (int j = 0; j < 16; ++j) s[j] = (uint8_t)(i * 7 + j * 13 + 1);
+        for (int j = 0; j < 16; ++j)
+            s[j] = (uint8_t)(i * 7 + j * 13 + 1);
         buf[i] = vld1q_u8(s);
     }
     uint8x16_t chain = vdupq_n_u8(0);
@@ -226,23 +236,30 @@ static uint64_t phase_crypto(unsigned iters) {
         }
     }
     uint64_t acc = 0;
-    for (int i = 0; i < BLK; i += 64) acc += vgetq_lane_u64(vreinterpretq_u64_u8(buf[i]), 0);
+    for (int i = 0; i < BLK; i += 64)
+        acc += vgetq_lane_u64(vreinterpretq_u64_u8(buf[i]), 0);
     return acc;
 }
 #else
 static uint64_t phase_crypto(unsigned iters) {
     enum { BLK = 1024 };
+
     static uint64_t buf[BLK * 2];
-    for (int i = 0; i < BLK * 2; ++i) buf[i] = (uint64_t)(i * 0x9e3779b97f4a7c15ULL + 1);
+    for (int i = 0; i < BLK * 2; ++i)
+        buf[i] = (uint64_t)(i * 0x9e3779b97f4a7c15ULL + 1);
     uint64_t chain = 0;
     for (unsigned it = 0; it < iters; ++it)
         for (int i = 0; i < BLK * 2; ++i) {
             uint64_t x = buf[i] ^ chain;
-            x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
-            buf[i] = x; chain = x;
+            x ^= x >> 33;
+            x *= 0xff51afd7ed558ccdULL;
+            x ^= x >> 33;
+            buf[i] = x;
+            chain = x;
         }
     uint64_t acc = 0;
-    for (int i = 0; i < BLK * 2; i += 128) acc += buf[i];
+    for (int i = 0; i < BLK * 2; i += 128)
+        acc += buf[i];
     return acc;
 }
 #endif
@@ -256,8 +273,7 @@ static uint64_t phase_atomics(unsigned iters) {
         do {
             old = __atomic_load_n(&v, __ATOMIC_RELAXED);
             neu = old + ((i & 7) + 1);
-        } while (!__atomic_compare_exchange_n(&v, &old, neu, 0, __ATOMIC_SEQ_CST,
-                                              __ATOMIC_RELAXED));
+        } while (!__atomic_compare_exchange_n(&v, &old, neu, 0, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED));
         __atomic_fetch_add(&v, 1, __ATOMIC_SEQ_CST);
     }
     return v;
@@ -267,6 +283,7 @@ static uint64_t phase_atomics(unsigned iters) {
 
 static uint64_t phase_malloc(unsigned iters) {
     enum { SLOTS = 64 };
+
     unsigned char *p[SLOTS];
     memset(p, 0, sizeof(p));
     uint64_t acc = 0;
@@ -282,7 +299,8 @@ static uint64_t phase_malloc(unsigned iters) {
         }
         p[s] = q;
     }
-    for (int s = 0; s < SLOTS; ++s) free(p[s]);
+    for (int s = 0; s < SLOTS; ++s)
+        free(p[s]);
     return acc;
 }
 
@@ -290,8 +308,10 @@ static uint64_t phase_malloc(unsigned iters) {
 
 static uint64_t phase_string(unsigned iters) {
     enum { LEN = 1024 };
+
     static char buf[LEN + 1], buf2[LEN + 1];
-    for (int i = 0; i < LEN; ++i) buf[i] = (char)('a' + (i % 26));
+    for (int i = 0; i < LEN; ++i)
+        buf[i] = (char)('a' + (i % 26));
     buf[LEN] = '\0';
     uint64_t acc = 0;
     for (unsigned it = 0; it < iters; ++it) {
@@ -313,16 +333,20 @@ static uint64_t phase_branch(unsigned iters) {
         x ^= x << 13;
         x ^= x >> 7;
         x ^= x << 17; /* xorshift64: data-dependent, unpredictable */
-        if (x & 1) acc += 3;
-        else acc -= 1;
+        if (x & 1)
+            acc += 3;
+        else
+            acc -= 1;
         if (x & 2) acc ^= x;
-        if ((x & 0xff) > 128) acc += x >> 3;
-        else acc += x >> 5;
+        if ((x & 0xff) > 128)
+            acc += x >> 3;
+        else
+            acc += x >> 5;
         switch (x & 7) {
-            case 0: acc++; break;
-            case 3: acc += 2; break;
-            case 5: acc += x & 0xf; break;
-            default: acc ^= 1; break;
+        case 0: acc++; break;
+        case 3: acc += 2; break;
+        case 5: acc += x & 0xf; break;
+        default: acc ^= 1; break;
         }
     }
     return acc;
@@ -336,14 +360,26 @@ static uint64_t fib_rec(unsigned n) {
     if (n < 2) return n;
     return fib_rec(n - 1) + fib_rec(n - 2);
 }
+
 typedef uint64_t (*op_fn)(uint64_t, uint64_t);
-static uint64_t op_add(uint64_t a, uint64_t b) { return a + b; }
-static uint64_t op_xor(uint64_t a, uint64_t b) { return a ^ (b << 1); }
-static uint64_t op_mul(uint64_t a, uint64_t b) { return a * (b | 1); }
+
+static uint64_t op_add(uint64_t a, uint64_t b) {
+    return a + b;
+}
+
+static uint64_t op_xor(uint64_t a, uint64_t b) {
+    return a ^ (b << 1);
+}
+
+static uint64_t op_mul(uint64_t a, uint64_t b) {
+    return a * (b | 1);
+}
+
 static uint64_t op_rot(uint64_t a, uint64_t b) {
     unsigned s = (unsigned)(b & 63);
     return (a << s) | (a >> ((64 - s) & 63));
 }
+
 static op_fn const OPS[4] = {op_add, op_xor, op_mul, op_rot};
 
 static uint64_t phase_calls(unsigned iters) {
@@ -365,13 +401,14 @@ static uint64_t phase_calls(unsigned iters) {
 
 static uint64_t phase_tlb(unsigned iters) {
     enum { PAGES = 8192 };
+
     size_t page = (size_t)sysconf(_SC_PAGESIZE);
     if (page == 0) page = 4096;
     size_t sz = (size_t)PAGES * page;
-    unsigned char *m = mmap(NULL, sz, PROT_READ | PROT_WRITE,
-                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned char *m = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (m == MAP_FAILED) return 0;
-    for (size_t i = 0; i < PAGES; ++i) m[i * page] = (unsigned char)i; /* fault in */
+    for (size_t i = 0; i < PAGES; ++i)
+        m[i * page] = (unsigned char)i; /* fault in */
     uint64_t acc = 0;
     for (unsigned it = 0; it < iters; ++it) {
         for (size_t i = 0; i < PAGES; ++i) {
@@ -410,7 +447,8 @@ static uint64_t read_thread_id(void) {
 static uint64_t phase_syscall(unsigned iters) {
     uint64_t first = read_thread_id();
     uint64_t matched = 0;
-    for (unsigned i = 0; i < iters; ++i) matched += read_thread_id() == first ? 1 : 0;
+    for (unsigned i = 0; i < iters; ++i)
+        matched += read_thread_id() == first ? 1 : 0;
     return first == 0 ? 0 : matched * 2 + 1;
 }
 
@@ -421,6 +459,7 @@ static uint64_t phase_syscall(unsigned iters) {
  */
 static volatile sig_atomic_t g_sig_count;
 static volatile sig_atomic_t g_sig_other;
+
 static void on_sigalrm(int signo) {
     g_sig_count++;
     if (signo != SIGALRM) g_sig_other++;
@@ -452,8 +491,7 @@ static uint64_t phase_mmap(unsigned iters) {
     size_t page = (size_t)sysconf(_SC_PAGESIZE);
     uint64_t acc = 0, ok = 0;
     for (unsigned i = 0; i < iters; ++i) {
-        unsigned char *p = mmap(NULL, page, PROT_READ | PROT_WRITE,
-                                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        unsigned char *p = mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (p == MAP_FAILED) break;
         size_t at = i % page;
         /* Fold the fresh page's byte (MAP_ANONYMOUS must be zero-filled) and the
@@ -534,9 +572,7 @@ static uint64_t phase_pipe(unsigned iters) {
     for (unsigned i = 0; i < iters; ++i) {
         uint64_t sent = value * UINT64_C(6364136223846793005) + i;
         value = 0;
-        if (full_write(fds[1], &sent, sizeof(sent)) != 0 ||
-            full_read(fds[0], &value, sizeof(value)) != 0)
-            break;
+        if (full_write(fds[1], &sent, sizeof(sent)) != 0 || full_read(fds[0], &value, sizeof(value)) != 0) break;
         /* Fold the bytes that came back, not just the count: a pipe that
          * delivered the wrong payload kept the old count checksum identical. */
         acc = acc * 31 + value;
@@ -551,6 +587,7 @@ static uint64_t phase_pipe(unsigned iters) {
 
 static uint64_t phase_memory(unsigned iters) {
     enum { BUF = 1 << 20 }; /* 1 MiB */
+
     unsigned char *a = malloc(BUF);
     unsigned char *b = malloc(BUF);
     if (a == NULL || b == NULL) {
@@ -580,8 +617,7 @@ static uint64_t phase_sqlite(unsigned iters) {
     sqlite3 *db;
     if (sqlite3_open(":memory:", &db)) return 0;
     char *err = NULL;
-    sqlite3_exec(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER, s TEXT);",
-                 0, 0, &err);
+    sqlite3_exec(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER, s TEXT);", 0, 0, &err);
     sqlite3_exec(db, "BEGIN;", 0, 0, &err);
     sqlite3_stmt *st;
     sqlite3_prepare_v2(db, "INSERT INTO t(v,s) VALUES(?,?)", -1, &st, 0);
@@ -598,8 +634,7 @@ static uint64_t phase_sqlite(unsigned iters) {
     sqlite3_stmt *q;
     sqlite3_prepare_v2(db, "SELECT COUNT(*), SUM(v) FROM t", -1, &q, 0);
     sqlite3_step(q);
-    uint64_t acc = (uint64_t)sqlite3_column_int(q, 0) ^
-                   (uint64_t)sqlite3_column_int64(q, 1);
+    uint64_t acc = (uint64_t)sqlite3_column_int(q, 0) ^ (uint64_t)sqlite3_column_int64(q, 1);
     sqlite3_finalize(q);
     sqlite3_close(db);
     return acc;
@@ -625,30 +660,30 @@ static uint64_t phase_timebase(unsigned iters) {
     uint64_t stopped = timer_count();
     if (clock_gettime(CLOCK_MONOTONIC, &after) != 0) return 2;
     uint64_t timer_us = ticks_to_us(stopped - started);
-    uint64_t clock_us = ((uint64_t)(after.tv_sec - before.tv_sec) * UINT64_C(1000000000) +
-                         (uint64_t)after.tv_nsec - (uint64_t)before.tv_nsec) / 1000;
+    uint64_t clock_us = ((uint64_t)(after.tv_sec - before.tv_sec) * UINT64_C(1000000000) + (uint64_t)after.tv_nsec -
+                         (uint64_t)before.tv_nsec) /
+                        1000;
     uint64_t verdict = 1;
-    if (timer_us < 90000) verdict |= 4;   /* the timer ran too slow to cover the sleep */
-    if (clock_us < 90000) verdict |= 8;   /* CLOCK_MONOTONIC did too */
+    if (timer_us < 90000) verdict |= 4; /* the timer ran too slow to cover the sleep */
+    if (clock_us < 90000) verdict |= 8; /* CLOCK_MONOTONIC did too */
     uint64_t low = timer_us < clock_us ? timer_us : clock_us;
     uint64_t high = timer_us < clock_us ? clock_us : timer_us;
-    if (high > 2 * low) verdict |= 16;    /* the two clocks disagree on one interval */
+    if (high > 2 * low) verdict |= 16; /* the two clocks disagree on one interval */
     return verdict;
 }
 
 /* ---------------- driver ---------------- */
 
-static uint64_t run_phase(const char *name, uint64_t (*fn)(unsigned), unsigned iters,
-                          unsigned warm) {
+static uint64_t run_phase(const char *name, uint64_t (*fn)(unsigned), unsigned iters, unsigned warm) {
     /* Warm: a few throwaway iterations so translation/cache is primed. */
-    for (unsigned w = 0; w < warm; ++w) g_sink += fn(iters / 20 + 1);
+    for (unsigned w = 0; w < warm; ++w)
+        g_sink += fn(iters / 20 + 1);
     uint64_t t0 = timer_count();
     uint64_t r = fn(iters);
     uint64_t t1 = timer_count();
     g_sink += r;
     uint64_t us = ticks_to_us(t1 - t0);
-    printf("PHASE %s us=%llu ok=%llu\n", name, (unsigned long long)us,
-           (unsigned long long)r);
+    printf("PHASE %s us=%llu ok=%llu\n", name, (unsigned long long)us, (unsigned long long)r);
     fflush(stdout);
     return us;
 }
@@ -671,9 +706,7 @@ static int parse_options(int argc, char **argv, unsigned *divisor, const char **
         char *end = NULL;
         errno = 0;
         unsigned long value = strtoul(argv[index + 1], &end, 10);
-        if (errno != 0 || end == argv[index + 1] || *end != '\0' || value == 0 ||
-            value > UINT_MAX)
-            return -1;
+        if (errno != 0 || end == argv[index + 1] || *end != '\0' || value == 0 || value > UINT_MAX) return -1;
         *divisor = (unsigned)value;
     }
     return 0;
@@ -683,9 +716,7 @@ int main(int argc, char **argv) {
     unsigned divisor = 1;
     const char *selected_phase = NULL;
     if (parse_options(argc, argv, &divisor, &selected_phase) != 0) {
-        fprintf(stderr,
-                "usage: %s [--divisor positive-integer] [--phase phase-name]\n",
-                argv[0]);
+        fprintf(stderr, "usage: %s [--divisor positive-integer] [--phase phase-name]\n", argv[0]);
         return 2;
     }
 
@@ -698,12 +729,12 @@ int main(int argc, char **argv) {
     fflush(stdout);
 
     int phase_matched = 0;
-#define RUN_PHASE(name, function, count, warm)                                     \
-    do {                                                                            \
-        if (selected_phase == NULL || strcmp(selected_phase, (name)) == 0) {        \
-            run_phase((name), (function), divided((count), divisor), (warm));       \
-            phase_matched = 1;                                                       \
-        }                                                                            \
+#define RUN_PHASE(name, function, count, warm)                                                                         \
+    do {                                                                                                               \
+        if (selected_phase == NULL || strcmp(selected_phase, (name)) == 0) {                                           \
+            run_phase((name), (function), divided((count), divisor), (warm));                                          \
+            phase_matched = 1;                                                                                         \
+        }                                                                                                              \
     } while (0)
 
     /* compute appears twice to expose cold-translation vs warm delta. */

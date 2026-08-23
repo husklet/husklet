@@ -24,7 +24,7 @@ static void e_imul_set_nzoc(int cfreg, int nzreg) {
     e_movconst(20, 3u << 28);
     e_rrr(A_BIC, nzreg, nzreg, 20, 1, 0); // retain N/Z, clear C/V
     e_movconst(23, 1);
-    e_rrr(A_EOR, 23, cfreg, 23, 0, 0);     // stored C = NOT x86 CF
+    e_rrr(A_EOR, 23, cfreg, 23, 0, 0); // stored C = NOT x86 CF
     e_rrr(A_ORR, nzreg, nzreg, 23, 1, 29);
     e_rrr(A_ORR, nzreg, nzreg, cfreg, 1, 28);
     e_str(nzreg, 28, OFF_NZCV);
@@ -100,7 +100,8 @@ void e_mul_oc_narrow(int prod, int k, int w) {
 // for a 1-bit rotate: ROL -> OF = MSB(result) XOR CF; ROR -> OF = MSB XOR (bit width-2). For any other
 // count OF is undefined and left unchanged. `res` holds the rotated value in its low `width` bits. We
 // rewrite only stored-C (bit29 = NOT CF, the borrow convention) and V (bit28 = OF), preserving N/Z and the
-// PF/AF lanes. `cnt` is the (already masked, nonzero) immediate count -> OF written iff cnt==1. Scratch x19..x23 plus x27 (host x18 is reserved on Darwin).
+// PF/AF lanes. `cnt` is the (already masked, nonzero) immediate count -> OF written iff cnt==1. Scratch x19..x23 plus
+// x27 (host x18 is reserved on Darwin).
 void e_rot_flags_const(int res, int k, int width, int cnt) {
     int wsf = width == 64;
     e_ldr(27, 28, OFF_NZCV);
@@ -132,7 +133,8 @@ void e_rot_flags_const(int res, int k, int width, int cnt) {
 
 // ROL/ROR by CL: like e_rot_flags_const but the count is runtime (n = CL & (width-1)). When n==0 x86
 // changes NO flags, so keep the old NZCV; otherwise set CF (and OF via the 1-bit formula -- for n>1 OF is
-// x86-undefined, so emitting that legal value is fine). Reads CL (RCX); scratch x19..x25 plus x27 (host x18 is reserved on Darwin).
+// x86-undefined, so emitting that legal value is fine). Reads CL (RCX); scratch x19..x25 plus x27 (host x18 is reserved
+// on Darwin).
 void e_rot_flags_cl(int res, int k, int width) {
     int wsf = width == 64;
     // "flags affected?" is decided by the 5-bit (0x1f) / 6-bit (0x3f, REX.W) masked count -- NOT the

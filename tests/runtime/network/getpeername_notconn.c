@@ -22,8 +22,8 @@ int main(void) {
     memset(&b, 0, sizeof b);
     socklen_t bl = sizeof b;
     int sr = getsockname(s, (struct sockaddr *)&b, &bl);
-    printf("getpeername=%d errno=%s getsockname=%d fam_inet=%d port0=%d\n", pr, err_name(peer_errno),
-           sr, b.sin_family == AF_INET, ntohs(b.sin_port) == 0);
+    printf("getpeername=%d errno=%s getsockname=%d fam_inet=%d port0=%d\n", pr, err_name(peer_errno), sr,
+           b.sin_family == AF_INET, ntohs(b.sin_port) == 0);
     close(s);
     return 0;
 }

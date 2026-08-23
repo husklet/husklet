@@ -46,7 +46,6 @@ int main(void) {
     unsigned char *mid = base + ps;
     volatile uint8_t last = mid[ps - 1]; // last in-mapping byte: readable
     (void)last;
-    printf("last_ok=1 past_end_faults=%d below_faults=%d\n",
-           faults((uintptr_t)mid + ps), faults((uintptr_t)mid - 1));
+    printf("last_ok=1 past_end_faults=%d below_faults=%d\n", faults((uintptr_t)mid + ps), faults((uintptr_t)mid - 1));
     return 0;
 }

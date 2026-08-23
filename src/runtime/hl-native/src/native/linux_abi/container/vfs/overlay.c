@@ -62,8 +62,8 @@ static void hl_vfs_lower_release_at(int index) {
                                                          (uint64_t)(unsigned)g_lower[index].descriptor);
     else if (g_lower[index].descriptor >= 0)
         close(g_lower[index].descriptor);
-    if (g_lower_handle[index] != HL_HOST_HANDLE_INVALID && g_host_services != NULL &&
-        g_host_services->file != NULL && g_host_services->file->close != NULL)
+    if (g_lower_handle[index] != HL_HOST_HANDLE_INVALID && g_host_services != NULL && g_host_services->file != NULL &&
+        g_host_services->file->close != NULL)
         (void)g_host_services->file->close(g_host_services->context, g_lower_handle[index]);
     memset(&g_lower[index], 0, sizeof g_lower[index]);
     g_lower[index].descriptor = -1;
@@ -83,9 +83,8 @@ static int hl_vfs_lower_state_after_fork(void) {
     int descriptors[HL_LINUX_VFS_LOWER_CAPACITY];
     for (int index = 0; index < HL_LINUX_VFS_LOWER_CAPACITY; index++)
         descriptors[index] = -1;
-    if (g_host_services == NULL || g_host_services->file == NULL ||
-        g_host_services->file->clone_for_fork == NULL || g_host_services->file->close == NULL ||
-        g_host_services->posix_attachment == NULL ||
+    if (g_host_services == NULL || g_host_services->file == NULL || g_host_services->file->clone_for_fork == NULL ||
+        g_host_services->file->close == NULL || g_host_services->posix_attachment == NULL ||
         g_host_services->posix_attachment->borrow_file_at_least == NULL ||
         g_host_services->posix_attachment->release == NULL)
         return 0;
@@ -136,9 +135,9 @@ static void add_lower(const char *dir) {
         g_host_services != NULL ? g_host_services->posix_attachment : NULL;
     if (file != NULL && file->open_relative != NULL && file->close != NULL && attachment != NULL &&
         attachment->borrow_file_at_least != NULL && attachment->release != NULL) {
-        hl_host_result opened = file->open_relative(
-            g_host_services->context, HL_HOST_HANDLE_CWD, lower->canon, strlen(lower->canon),
-            HL_HOST_FILE_READ | HL_HOST_FILE_DIRECTORY | HL_HOST_FILE_PATH_ONLY, 0, 0);
+        hl_host_result opened =
+            file->open_relative(g_host_services->context, HL_HOST_HANDLE_CWD, lower->canon, strlen(lower->canon),
+                                HL_HOST_FILE_READ | HL_HOST_FILE_DIRECTORY | HL_HOST_FILE_PATH_ONLY, 0, 0);
         if (opened.status == HL_STATUS_OK) {
             hl_host_result borrowed =
                 attachment->borrow_file_at_least(g_host_services->context, opened.value, 1u << 20);
@@ -293,8 +292,8 @@ static int hl_vfs_cursor_resolve_at(int dirfd, const char *path, int nofollow_fi
         }
     }
     if (error == 0)
-        error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, 0, 0, NULL, 0, NULL, NULL, NULL, NULL, NULL,
-                                   output);
+        error =
+            hl_vfs_cursor_walk(&root, start, path, nofollow_final, 0, 0, NULL, 0, NULL, NULL, NULL, NULL, NULL, output);
     hl_vfs_cursor_release(&root);
     return error;
 }
@@ -315,8 +314,8 @@ static int hl_vfs_cursor_resolve_metadata_at(int dirfd, const char *path, int no
         }
     }
     if (error == 0)
-        error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, 1, 0, NULL, 0, NULL, NULL, NULL, NULL, NULL,
-                                   output);
+        error =
+            hl_vfs_cursor_walk(&root, start, path, nofollow_final, 1, 0, NULL, 0, NULL, NULL, NULL, NULL, NULL, output);
     hl_vfs_cursor_release(&root);
     return error;
 }
@@ -345,10 +344,9 @@ static int hl_vfs_cursor_resolve_metadata_search_at(int dirfd, const char *path,
 }
 
 static int hl_vfs_cursor_search_parent_at(int dirfd, const char *path, int nofollow_final,
-                                          hl_vfs_cursor_search_hook search,
-                                          void *search_context, char *resolved_final, size_t resolved_final_size,
-                                          int *final_requires_directory, hl_vfs_cursor_terminal_hook terminal,
-                                          void *terminal_context) {
+                                          hl_vfs_cursor_search_hook search, void *search_context, char *resolved_final,
+                                          size_t resolved_final_size, int *final_requires_directory,
+                                          hl_vfs_cursor_terminal_hook terminal, void *terminal_context) {
     if (resolved_final != NULL && resolved_final_size != 0) resolved_final[0] = 0;
     if (final_requires_directory != NULL) *final_requires_directory = 0;
     hl_vfs_cursor root;
@@ -366,9 +364,9 @@ static int hl_vfs_cursor_search_parent_at(int dirfd, const char *path, int nofol
     }
     hl_vfs_cursor_entry ignored;
     if (error == 0)
-        error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, 1, 1, resolved_final, resolved_final_size,
-                                   final_requires_directory, terminal, terminal_context, search, search_context,
-                                   &ignored);
+        error =
+            hl_vfs_cursor_walk(&root, start, path, nofollow_final, 1, 1, resolved_final, resolved_final_size,
+                               final_requires_directory, terminal, terminal_context, search, search_context, &ignored);
     hl_vfs_cursor_release(&root);
     return error;
 }
@@ -389,8 +387,8 @@ static int hl_vfs_cursor_resolve_at_native_lowers(int dirfd, const char *path, i
         }
     }
     if (error == 0)
-        error = hl_vfs_cursor_walk(&root, start, path, nofollow_final, 0, 0, NULL, 0, NULL, NULL, NULL, NULL, NULL,
-                                   output);
+        error =
+            hl_vfs_cursor_walk(&root, start, path, nofollow_final, 0, 0, NULL, 0, NULL, NULL, NULL, NULL, NULL, output);
     hl_vfs_cursor_release(&root);
     return error;
 }
@@ -846,11 +844,11 @@ static void overlay_mkparents(const char *guest) {
                         if (target[0] != '/' && symlink(target, up) == 0) made = 1;
                     }
                 } else if (S_ISDIR(st.st_mode) && hl_compat_mkdir(up, st.st_mode & 0777) == 0) {
-                        // mkdir is umask-filtered and its creation mode omits special bits. Preserve the
-                        // lower directory exactly: Ubuntu's /tmp is 01777, and apt delegates signature
-                        // verification to an unprivileged helper which must create files there.
-                        ovl_copy_meta(lo, up, &st);
-                        made = 1;
+                    // mkdir is umask-filtered and its creation mode omits special bits. Preserve the
+                    // lower directory exactly: Ubuntu's /tmp is 01777, and apt delegates signature
+                    // verification to an unprivileged helper which must create files there.
+                    ovl_copy_meta(lo, up, &st);
+                    made = 1;
                 }
                 break;
             }
@@ -900,6 +898,7 @@ static void ovl_copy_meta(const char *src, const char *dst, const struct stat *s
 // immediate lower backing rather than an identity inherited from an older committed layer.
 #define HL_OVERLAY_LOCK_IDENTITY_XATTR "user.hl.overlay.lock-identity"
 #define HL_OVERLAY_LOCK_IDENTITY_VERSION UINT64_C(1)
+
 struct hl_overlay_lock_identity {
     uint64_t version;
     uint64_t device;
@@ -1295,8 +1294,7 @@ static int overlay_readdir(const char *gdir, char (**names_out)[256], uint8_t **
         struct dirent *e;
         while ((e = readdir(d))) {
             char decoded[256];
-            const char *visible =
-                hl_case_name_decode(e->d_name, decoded, sizeof decoded) ? decoded : e->d_name;
+            const char *visible = hl_case_name_decode(e->d_name, decoded, sizeof decoded) ? decoded : e->d_name;
             if (!strcmp(visible, ".") || !strcmp(visible, "..")) continue;
             int wh = !strncmp(visible, ".wh.", 4);
             const char *name = wh ? visible + 4 : visible;

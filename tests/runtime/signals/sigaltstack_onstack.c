@@ -22,7 +22,7 @@ static void h(int s) {
 int main(void) {
     alt_size = SIGSTKSZ;
     alt_base = malloc(alt_size);
-    stack_t ss = { .ss_sp = alt_base, .ss_size = alt_size, .ss_flags = 0 };
+    stack_t ss = {.ss_sp = alt_base, .ss_size = alt_size, .ss_flags = 0};
     sigaltstack(&ss, NULL);
 
     struct sigaction sa = {0};
@@ -32,7 +32,6 @@ int main(void) {
     sigaction(SIGUSR1, &sa, NULL);
 
     raise(SIGUSR1);
-    printf("sigaltstack_onstack ran=%d in_range=%d ss_onstack=%d\n",
-           ran == 1, in_range, onstack_flag);
+    printf("sigaltstack_onstack ran=%d in_range=%d ss_onstack=%d\n", ran == 1, in_range, onstack_flag);
     return 0;
 }

@@ -357,10 +357,10 @@ static int switch_dead_on_arrival(int fd) {
     // still sees any data): 0 bytes == the peer closed with nothing to serve == dead on arrival.
     char b[1];
     ssize_t n = recv(fd, b, 1, MSG_PEEK | MSG_DONTWAIT);
-    if (n == 0) return 1;                                             // clean EOF, no data -> dead
+    if (n == 0) return 1;                                    // clean EOF, no data -> dead
     if (n < 0 && HL_HOST_ERRNO_WOULD_BLOCK(errno)) return 0; // spurious wake, live
-    if (n < 0) return 1;                                              // ECONNRESET/ECONNREFUSED -> dead
-    return 0;                                                         // real data pending -> live
+    if (n < 0) return 1;                                     // ECONNRESET/ECONNREFUSED -> dead
+    return 0;                                                // real data pending -> live
 }
 
 static int switch_dial(const char *path) {

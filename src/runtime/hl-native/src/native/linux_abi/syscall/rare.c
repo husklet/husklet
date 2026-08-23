@@ -1362,8 +1362,7 @@ static void svc_rare_waitid(struct cpu *c, uint64_t a0, uint64_t a1, uint64_t a2
     // continue report), drop its container-registry record -- see wait4 (case 260) -- so a signal-killed
     // child leaves no stale membership marker a recycled host pid could inherit.
     if (si.si_pid != 0 && !(lopt & 0x01000000) &&
-        (si.si_code == CLD_EXITED || si.si_code == CLD_KILLED || si.si_code == CLD_DUMPED))
-    {
+        (si.si_code == CLD_EXITED || si.si_code == CLD_KILLED || si.si_code == CLD_DUMPED)) {
         host_pid_unregister_reaped((int)si.si_pid);
         if (hl_linux_pidmap_is_active(&g_pidmap))
             (void)hl_linux_identity_registry_reap(&g_pidmap, &g_pgidmap, &g_sidmap, (int)si.si_pid);

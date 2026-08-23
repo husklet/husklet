@@ -14,7 +14,8 @@ int main(void) {
     // split on spaces (comm is (…) with no spaces in our synth); count fields
     char *fields[64];
     int nf = 0;
-    for (char *t = strtok(b, " \n"); t && nf < 64; t = strtok(NULL, " \n")) fields[nf++] = t;
+    for (char *t = strtok(b, " \n"); t && nf < 64; t = strtok(NULL, " \n"))
+        fields[nf++] = t;
     int pid_ok = nf > 0 && atoi(fields[0]) == (int)getpid();
     int comm_ok = nf > 1 && fields[1][0] == '(' && fields[1][strlen(fields[1]) - 1] == ')';
     int state_ok = nf > 2 && (fields[2][0] == 'R' || fields[2][0] == 'S');

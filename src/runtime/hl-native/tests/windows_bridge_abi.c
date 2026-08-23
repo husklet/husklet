@@ -12,8 +12,7 @@
 int main(void) {
     int32_t parent = 7;
     int32_t child = 8;
-    if (hl_c_backend_checkpoint_broker_pair(&parent, &child) != HL_STATUS_NOT_SUPPORTED || parent != -1 ||
-        child != -1)
+    if (hl_c_backend_checkpoint_broker_pair(&parent, &child) != HL_STATUS_NOT_SUPPORTED || parent != -1 || child != -1)
         return 1;
     parent = 7;
     if (hl_c_backend_checkpoint_broker_pair(&parent, NULL) != HL_STATUS_INVALID_ARGUMENT || parent != -1) return 7;

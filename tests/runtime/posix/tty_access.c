@@ -27,10 +27,16 @@ static int bg_case(int slave, int op) {
         setpgid(0, 0); // background group; the leader's group stays foreground
         if (op == 1) signal(SIGTTIN, SIG_IGN);
         char b[4];
-        long r; int e;
+        long r;
+        int e;
         errno = 0;
-        if (op == 0 || op == 1) { r = read(slave, b, 1); e = errno; }
-        else { r = write(slave, "x", 1); e = errno; }
+        if (op == 0 || op == 1) {
+            r = read(slave, b, 1);
+            e = errno;
+        } else {
+            r = write(slave, "x", 1);
+            e = errno;
+        }
         _exit((r < 0 && e == EIO) ? 77 : (r >= 0 ? 66 : 55));
     }
     setpgid(bg, bg);
@@ -48,31 +54,42 @@ static int bg_case(int slave, int op) {
 static void leader(int reportfd) {
     setsid();
     int s = open(name, O_RDWR);
-    if (s < 0) { int v[3] = {0,0,0}; write(reportfd, v, sizeof v); _exit(0); }
+    if (s < 0) {
+        int v[3] = {0, 0, 0};
+        write(reportfd, v, sizeof v);
+        _exit(0);
+    }
     ioctl(s, TIOCSCTTY, 0);
-    struct termios t; tcgetattr(s, &t);
+    struct termios t;
+    tcgetattr(s, &t);
     t.c_lflag |= TOSTOP;
     tcsetattr(s, TCSANOW, &t);
     tcsetpgrp(s, getpgrp());
-    int v[3] = { bg_case(s, 0), bg_case(s, 1), bg_case(s, 2) };
+    int v[3] = {bg_case(s, 0), bg_case(s, 1), bg_case(s, 2)};
     write(reportfd, v, sizeof v);
     _exit(0);
 }
 
 int main(void) {
     int m = posix_openpt(O_RDWR | O_NOCTTY);
-    grantpt(m); unlockpt(m);
+    grantpt(m);
+    unlockpt(m);
     char *sn = ptsname(m);
     strncpy(name, sn ? sn : "", sizeof name - 1);
-    int p[2]; if (pipe(p) < 0) return 1;
+    int p[2];
+    if (pipe(p) < 0) return 1;
     pid_t sl = fork();
-    if (sl == 0) { close(p[0]); leader(p[1]); }
+    if (sl == 0) {
+        close(p[0]);
+        leader(p[1]);
+    }
     close(p[1]);
-    int v[3] = {0,0,0};
+    int v[3] = {0, 0, 0};
     read(p[0], v, sizeof v);
-    int st; waitpid(sl, &st, 0);
-    printf("bgtty read_sigttin=%d ign_eio=%d write_sigttou=%d\n",
-           v[0] == (1000 + SIGTTIN), v[1] == 77, v[2] == (1000 + SIGTTOU));
+    int st;
+    waitpid(sl, &st, 0);
+    printf("bgtty read_sigttin=%d ign_eio=%d write_sigttou=%d\n", v[0] == (1000 + SIGTTIN), v[1] == 77,
+           v[2] == (1000 + SIGTTOU));
     close(m);
     return 0;
 }

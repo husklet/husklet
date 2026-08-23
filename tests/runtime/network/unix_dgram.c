@@ -16,8 +16,7 @@ static void fail(const char *operation) {
 
 static void timeout(int descriptor) {
     struct timeval value = {.tv_sec = 5};
-    if (setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &value, sizeof value) < 0)
-        fail("setsockopt(SO_RCVTIMEO)");
+    if (setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &value, sizeof value) < 0) fail("setsockopt(SO_RCVTIMEO)");
 }
 
 int main(void) {
@@ -26,12 +25,13 @@ int main(void) {
     if (snprintf(sp, sizeof sp, "/tmp/hl_unix_dg_srv_%ld.sock", (long)getpid()) >= (int)sizeof sp ||
         snprintf(cp, sizeof cp, "/tmp/hl_unix_dg_cli_%ld.sock", (long)getpid()) >= (int)sizeof cp)
         return 1;
-    if ((unlink(sp) < 0 && access(sp, F_OK) == 0) || (unlink(cp) < 0 && access(cp, F_OK) == 0))
-        fail("unlink");
+    if ((unlink(sp) < 0 && access(sp, F_OK) == 0) || (unlink(cp) < 0 && access(cp, F_OK) == 0)) fail("unlink");
     int srv = socket(AF_UNIX, SOCK_DGRAM, 0);
     if (srv < 0) fail("socket(server)");
     timeout(srv);
-    struct sockaddr_un sa = {0}; sa.sun_family = AF_UNIX; strcpy(sa.sun_path, sp);
+    struct sockaddr_un sa = {0};
+    sa.sun_family = AF_UNIX;
+    strcpy(sa.sun_path, sp);
     if (bind(srv, (struct sockaddr *)&sa, sizeof sa) < 0) fail("bind(server)");
     int alias = dup(srv);
     if (alias < 0) fail("dup(server)");
@@ -40,25 +40,26 @@ int main(void) {
     pid_t pid = fork();
     if (pid < 0) fail("fork");
     if (pid == 0) {
-        char buf[64]; struct sockaddr_un from; socklen_t fl = sizeof from;
+        char buf[64];
+        struct sockaddr_un from;
+        socklen_t fl = sizeof from;
         ssize_t n = recvfrom(srv, buf, 64, 0, (struct sockaddr *)&from, &fl);
         if (n < 0) fail("recvfrom(server)");
-        if (sendto(srv, buf, (size_t)n, 0, (struct sockaddr *)&from, fl) != n)
-            fail("sendto(server)");
+        if (sendto(srv, buf, (size_t)n, 0, (struct sockaddr *)&from, fl) != n) fail("sendto(server)");
         _exit(0);
     }
     int cl = socket(AF_UNIX, SOCK_DGRAM, 0);
     if (cl < 0) fail("socket(client)");
     timeout(cl);
-    struct sockaddr_un ca = {0}; ca.sun_family = AF_UNIX; strcpy(ca.sun_path, cp);
+    struct sockaddr_un ca = {0};
+    ca.sun_family = AF_UNIX;
+    strcpy(ca.sun_path, cp);
     if (bind(cl, (struct sockaddr *)&ca, sizeof ca) < 0) fail("bind(client)");
-    if (sendto(cl, "dgram-unix", 10, 0, (struct sockaddr *)&sa, sizeof sa) != 10)
-        fail("sendto(client)");
+    if (sendto(cl, "dgram-unix", 10, 0, (struct sockaddr *)&sa, sizeof sa) != 10) fail("sendto(client)");
     char buf[64] = {0};
     if (recvfrom(cl, buf, 63, 0, 0, 0) != 10) fail("recvfrom(client)");
     int status = 0;
-    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
-        return 1;
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) return 1;
     if (unlink(sp) < 0 || unlink(cp) < 0) fail("unlink(cleanup)");
     printf("unix_dgram reply=%s\n", buf); // dgram-unix
     return 0;

@@ -12,7 +12,7 @@
 #include "../encoding.h"
 
 int lower_primary_fast(struct insn *instruction, uint64_t guest_pc, uint64_t next,
-                              const hl_x86_trace_state *trace_state) {
+                       const hl_x86_trace_state *trace_state) {
     hl_x86_move_image image;
     hl_x86_legacy_image(&image.low, &image.high, &image.bias);
     int result = hl_x86_lower_mov(instruction, next, &image);
@@ -22,9 +22,8 @@ int lower_primary_fast(struct insn *instruction, uint64_t guest_pc, uint64_t nex
 
     const hl_x86_shift_state shift_state = {
         .parity_aux_dead = hl_x86_legacy_pfaf_dead(),
-        .output_flags_dead = trace_state->flag_elision &&
-                             !(hl_x86_trace_flags_livein(trace_state, next, guest_pc) &
-                               (HL_X86_FLAG_ALL & ~HL_X86_FLAG_AF)),
+        .output_flags_dead = trace_state->flag_elision && !(hl_x86_trace_flags_livein(trace_state, next, guest_pc) &
+                                                            (HL_X86_FLAG_ALL & ~HL_X86_FLAG_AF)),
         .direct_registers = 1,
     };
     return hl_x86_lower_shift(instruction, next, &shift_state);
@@ -395,13 +394,13 @@ int lower_stack_control(struct insn *instruction, uint64_t guest_pc, uint64_t ne
 }
 
 int lower_immediate_multiply(struct insn *instruction, uint64_t guest_pc, uint64_t next,
-                                    const hl_x86_trace_state *trace_state) {
+                             const hl_x86_trace_state *trace_state) {
     if (instruction->op != 0x69 && instruction->op != 0x6B) return TX_FALL;
     int memory;
     int source = rm_load(instruction, next, instruction->opsize, &memory);
     e_movconst(19, (uint64_t)instruction->imm);
-    int overflow_live = !trace_state->flag_elision ||
-                        (hl_x86_trace_flags_livein(trace_state, next, guest_pc) & HL_X86_FLAG_NZCV);
+    int overflow_live =
+        !trace_state->flag_elision || (hl_x86_trace_flags_livein(trace_state, next, guest_pc) & HL_X86_FLAG_NZCV);
     e_imul2(instruction->reg, source, 19, instruction->opsize, overflow_live);
     return TX_NEXT;
 }
@@ -856,11 +855,13 @@ int lower_system_query(struct insn *instruction, uint64_t next) {
 
 int lower_bit_test_modify(struct insn *instruction, uint64_t guest_pc, uint64_t next, int sf) {
     uint8_t opcode = instruction->op;
-    if (opcode != 0xA3 && opcode != 0xAB && opcode != 0xB3 && opcode != 0xBB && opcode != 0xBA)
-        return TX_FALL;
+    if (opcode != 0xA3 && opcode != 0xAB && opcode != 0xB3 && opcode != 0xBB && opcode != 0xBA) return TX_FALL;
     int immediate = opcode == 0xBA;
     int operation = immediate ? (instruction->reg & 7)
-                              : (opcode == 0xA3 ? 4 : opcode == 0xAB ? 5 : opcode == 0xB3 ? 6 : 7);
+                              : (opcode == 0xA3   ? 4
+                                 : opcode == 0xAB ? 5
+                                 : opcode == 0xB3 ? 6
+                                                  : 7);
     if (operation < 4) {
         report_unimpl(guest_pc, instruction);
         return TX_BREAK;
@@ -970,7 +971,6 @@ int lower_extended_state(struct insn *instruction, uint64_t guest_pc, uint64_t n
 int lower_multibyte_hint(const struct insn *instruction) {
     uint8_t opcode = instruction->op;
     if (opcode == 0x1E && instruction->imm_bytes == 0) return TX_NEXT;
-    if (opcode == 0x1F || opcode == 0x18 || opcode == 0x0D || (opcode >= 0x19 && opcode <= 0x1D))
-        return TX_NEXT;
+    if (opcode == 0x1F || opcode == 0x18 || opcode == 0x0D || (opcode >= 0x19 && opcode <= 0x1D)) return TX_NEXT;
     return TX_FALL;
 }

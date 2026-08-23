@@ -149,8 +149,8 @@ static int prepare_dynamic_payload(const char *source, const char *payload, cons
         if (replacement_size > program.p_filesz) return 0;
         char replacement[256] = {0};
         memcpy(replacement, interpreter, replacement_size);
-        int ok = pwrite(descriptor, replacement, replacement_size, (off_t)program.p_offset) ==
-                 (ssize_t)replacement_size;
+        int ok =
+            pwrite(descriptor, replacement, replacement_size, (off_t)program.p_offset) == (ssize_t)replacement_size;
         program.p_filesz = replacement_size;
         ok = ok && pwrite(descriptor, &program, sizeof program, offset) == sizeof program;
         close(descriptor);

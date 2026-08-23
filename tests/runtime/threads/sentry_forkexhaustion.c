@@ -20,7 +20,8 @@ int main(void) {
         if (child == 0) {
             char marker = 1;
             (void)write(notify[1], &marker, 1);
-            for (;;) pause();
+            for (;;)
+                pause();
         }
         if (child < 0) {
             failure = errno;
@@ -50,7 +51,6 @@ int main(void) {
 
     int bounded = created == 63 && failure == EAGAIN;
     int children_ran = markers == created;
-    printf("sentry_fork_exhaustion bounded=%d created=%d markers=%d reaped=%d\n", bounded, created, markers,
-           reaped);
+    printf("sentry_fork_exhaustion bounded=%d created=%d markers=%d reaped=%d\n", bounded, created, markers, reaped);
     return bounded && children_ran && reaped == created ? 0 : 1;
 }

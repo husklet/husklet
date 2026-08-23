@@ -14,8 +14,8 @@ int main(void) {
     ok &= !strncmp(b, "Linux version ", 14);
 
     pf_read("/proc/filesystems", b, sizeof b);
-    ok &= pf_has(b, "ext4") && pf_has(b, "overlay") && pf_has(b, "tmpfs") && pf_has(b, "proc") &&
-          pf_has(b, "sysfs") && pf_has(b, "cgroup2");
+    ok &= pf_has(b, "ext4") && pf_has(b, "overlay") && pf_has(b, "tmpfs") && pf_has(b, "proc") && pf_has(b, "sysfs") &&
+          pf_has(b, "cgroup2");
 
     // uptime: two floats, first (system uptime) > 0
     pf_read("/proc/uptime", b, sizeof b);
@@ -25,10 +25,11 @@ int main(void) {
     // loadavg: "a b c r/t pid" — three floats, a running/total token with '/', a pid
     pf_read("/proc/loadavg", b, sizeof b);
     double l0, l1, l2;
-    char rt[32]; int lp = 0;
+    char rt[32];
+    int lp = 0;
     ok &= sscanf(b, "%lf %lf %lf %31s %d", &l0, &l1, &l2, rt, &lp) == 5 && strchr(rt, '/') && lp >= 1;
 
-    ok &= pf_read("/proc/cmdline", b, sizeof b) > 0 && b[0];         // kernel cmdline nonempty
+    ok &= pf_read("/proc/cmdline", b, sizeof b) > 0 && b[0];           // kernel cmdline nonempty
     ok &= pf_read("/proc/self/comm", b, sizeof b) > 0 && b[0] != '\n'; // our command name
 
     // /proc/self/limits RLIMIT_NOFILE row MUST agree with getrlimit(RLIMIT_NOFILE): a guest reads the

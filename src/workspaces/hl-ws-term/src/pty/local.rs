@@ -290,6 +290,7 @@ static PTY_ALLOC: std::sync::Mutex<()> = std::sync::Mutex::new(());
 mod tests {
     use super::*;
     use crate::Vt;
+    use std::os::fd::{FromRawFd, OwnedFd};
     use std::time::{Duration, Instant};
 
     /// Drive a `LocalPty` to completion, feeding all output into a fresh `Vt`, and return it.
@@ -335,23 +336,90 @@ mod tests {
         std::path::Path::new(prog).exists()
     }
 
-    fn read_process_id(pty: &mut LocalPty) -> libc::pid_t {
+    const PROCESS_MARKER: &[u8] = b"HL_DESCENDANT_PID=";
+    const READY_MARKER: &[u8] = b"HL_DESCENDANT_READY";
+
+    fn descendant_is_ready(bytes: &[u8]) -> bool {
+        bytes.split_inclusive(|byte| *byte == b'\n').any(|line| {
+            if !line.ends_with(b"\n") {
+                return false;
+            }
+            let line = line.strip_suffix(b"\n").unwrap_or(line);
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            line == READY_MARKER
+        })
+    }
+
+    fn reported_process_id(bytes: &[u8]) -> Result<Option<libc::pid_t>, String> {
+        for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+            if !line.ends_with(b"\n") {
+                break;
+            }
+            let line = line.strip_suffix(b"\n").unwrap_or(line);
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            let Some(value) = line.strip_prefix(PROCESS_MARKER) else {
+                continue;
+            };
+            let value = std::str::from_utf8(value).map_err(|error| format!("PID marker is not UTF-8: {error}"))?;
+            let process = value
+                .parse::<libc::pid_t>()
+                .map_err(|error| format!("PID marker {value:?} is invalid: {error}"))?;
+            if process <= 0 {
+                return Err(format!("PID marker must be positive, got {process}"));
+            }
+            return Ok(Some(process));
+        }
+        Ok(None)
+    }
+
+    fn read_ready_process_id(pty: &mut LocalPty) -> libc::pid_t {
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut bytes = Vec::new();
         let mut buffer = [0_u8; 64];
         while Instant::now() < deadline {
             if let Ok(count) = pty.read(&mut buffer) {
                 bytes.extend_from_slice(&buffer[..count]);
-                if bytes.contains(&b'\n') {
-                    break;
+                match reported_process_id(&bytes) {
+                    Ok(Some(process)) if descendant_is_ready(&bytes) => return process,
+                    Ok(Some(_)) => {}
+                    Ok(None) => {}
+                    Err(error) => panic!("shell reported an invalid descendant pid: {error}; bytes={bytes:?}"),
                 }
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        String::from_utf8_lossy(&bytes)
-            .trim()
-            .parse()
-            .expect("shell must report its descendant pid")
+        panic!("shell descendant did not report both its pid and readiness before the deadline; bytes={bytes:?}")
+    }
+
+    fn blocked_descendant(exit_leader: bool) -> (LocalPty, OwnedFd) {
+        let mut blocker = [-1; 2];
+        // SAFETY: `blocker` is writable storage for the two descriptors returned by pipe.
+        assert_eq!(unsafe { libc::pipe(blocker.as_mut_ptr()) }, 0);
+        let script = format!(
+            "trap '' HUP TERM; {{ trap '' HUP TERM; printf 'HL_DESCENDANT_READY\\n'; read _ <&{}; }} & printf 'HL_DESCENDANT_PID=%s\\n' \"$!\"; {}",
+            blocker[0],
+            if exit_leader { "exit 0" } else { "wait" }
+        );
+        let pty = LocalPty::spawn(&["/bin/sh", "-c", &script], 40, 10, &std::collections::BTreeMap::new())
+            .expect("spawn process tree");
+        // Only the shell descendant reads this end. Keeping the writer open gives the descendant a
+        // test-owned, PATH-independent blocking point that remains live after its leader exits.
+        unsafe { libc::close(blocker[0]) };
+        // SAFETY: the successful pipe call returned this uniquely owned descriptor.
+        let writer = unsafe { OwnedFd::from_raw_fd(blocker[1]) };
+        (pty, writer)
+    }
+
+    #[test]
+    fn descendant_pid_waits_for_the_complete_tagged_line_across_chunks() {
+        let mut bytes = b"shell noise\r\nHL_DESCENDANT_PID=169".to_vec();
+        assert_eq!(reported_process_id(&bytes), Ok(None));
+        bytes.extend_from_slice(b"42\r\nmore noise\r\n");
+        assert_eq!(reported_process_id(&bytes), Ok(Some(16_942)));
+        assert!(reported_process_id(b"HL_DESCENDANT_PID=16x42\r\n").is_err());
+        assert!(!descendant_is_ready(b"HL_DESCENDANT_READY"));
+        assert!(descendant_is_ready(b"HL_DESCENDANT_READY\n"));
+        assert!(descendant_is_ready(b"HL_DESCENDANT_READY\r\n"));
     }
 
     fn process_exists(process: libc::pid_t) -> bool {
@@ -363,7 +431,7 @@ mod tests {
         let mut ready = [-1; 2];
         // SAFETY: the pipe array is valid writable storage for two descriptors.
         assert_eq!(unsafe { libc::pipe(ready.as_mut_ptr()) }, 0);
-        let shell = std::ffi::CString::new("/bin/sh").unwrap();
+        let shell = std::ffi::CString::new(std::env::var("SHELL").unwrap_or_else(|_| "sh".into())).unwrap();
         let name = std::ffi::CString::new("sh").unwrap();
         let option = std::ffi::CString::new("-c").unwrap();
         let script = std::ffi::CString::new("printf x >&3; exec sleep 2").unwrap();
@@ -435,19 +503,10 @@ mod tests {
 
     #[test]
     fn dropping_a_pty_reaps_its_hup_ignoring_process_group() {
-        let mut pty = LocalPty::spawn(
-            &[
-                "/bin/sh",
-                "-c",
-                "trap '' HUP TERM; sleep 60 & printf '%s\\n' \"$!\"; wait",
-            ],
-            40,
-            10,
-            &std::collections::BTreeMap::new(),
-        )
-        .expect("spawn process tree");
-        let descendant = read_process_id(&mut pty);
+        let (mut pty, _blocker) = blocked_descendant(false);
+        let descendant = read_ready_process_id(&mut pty);
         assert!(process_exists(descendant));
+        assert_eq!(unsafe { libc::getpgid(descendant) }, pty.child);
 
         drop(pty);
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -491,24 +550,15 @@ mod tests {
 
     #[test]
     fn dropping_a_reaped_pty_leader_still_reaps_its_process_group() {
-        let mut pty = LocalPty::spawn(
-            &[
-                "/bin/sh",
-                "-c",
-                "trap '' HUP TERM; sleep 60 & printf '%s\\n' \"$!\"; exit 0",
-            ],
-            40,
-            10,
-            &std::collections::BTreeMap::new(),
-        )
-        .expect("spawn detached descendant");
-        let descendant = read_process_id(&mut pty);
+        let (mut pty, _blocker) = blocked_descendant(true);
+        let descendant = read_ready_process_id(&mut pty);
         let deadline = Instant::now() + Duration::from_secs(2);
         while pty.try_wait().is_none() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(pty.exited, Some(0), "PTY leader must be reaped before ownership drops");
         assert!(process_exists(descendant));
+        assert_eq!(unsafe { libc::getpgid(descendant) }, pty.child);
 
         drop(pty);
         let deadline = Instant::now() + Duration::from_secs(2);

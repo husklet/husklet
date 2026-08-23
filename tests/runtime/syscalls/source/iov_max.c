@@ -11,7 +11,10 @@ int main(void) {
     pipe(p);
     static struct iovec iov[1025];
     char c = 'x';
-    for (int i = 0; i < 1025; i++) { iov[i].iov_base = &c; iov[i].iov_len = 0; }
+    for (int i = 0; i < 1025; i++) {
+        iov[i].iov_base = &c;
+        iov[i].iov_len = 0;
+    }
     errno = 0;
     ssize_t w = writev(p[1], iov, 1025);
     printf("writev 1025 rc=%zd errno=%d\n", w, w < 0 ? errno : 0);

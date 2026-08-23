@@ -45,12 +45,15 @@ int main(void) {
     memset(rb, 'x', sizeof rb);
     pread(fd, rb, sizeof rb, 0);
     int zeros = 1;
-    for (size_t i = 0; i < sizeof rb; i++) if (rb[i] != 0) { zeros = 0; break; }
+    for (size_t i = 0; i < sizeof rb; i++)
+        if (rb[i] != 0) {
+            zeros = 0;
+            break;
+        }
 
     close(fd);
     unlink(path);
     rmdir(dir);
-    printf("fallocate-modes grew=%d keep-size=%d punch=%d hole-zeros=%d\n",
-           grew, keep_ok, punched, zeros);
+    printf("fallocate-modes grew=%d keep-size=%d punch=%d hole-zeros=%d\n", grew, keep_ok, punched, zeros);
     return 0;
 }

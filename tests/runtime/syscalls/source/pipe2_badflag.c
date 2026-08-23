@@ -6,9 +6,10 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <unistd.h>
-int main(void){
+
+int main(void) {
     int pf[2];
-    printf("pipe2_badflag_errno=%d\n", pipe2(pf, 0x4) == -1 ? errno : 0);   // native 22, engine 0
-    printf("eventfd2_badflag_errno=%d\n", -1); // context only
+    printf("pipe2_badflag_errno=%d\n", pipe2(pf, 0x4) == -1 ? errno : 0); // native 22, engine 0
+    printf("eventfd2_badflag_errno=%d\n", -1);                            // context only
     return 0;
 }

@@ -20,6 +20,7 @@ static int geti(int fd, int lvl, int opt) {
     if (getsockopt(fd, lvl, opt, &v, &l) < 0) return -errno;
     return v;
 }
+
 // set an int option then read it back; print "name set_ok=<0/1> got=<value>"
 static void rt(const char *nm, int fd, int lvl, int opt, int val) {
     int s = setsockopt(fd, lvl, opt, &val, sizeof val);
@@ -45,7 +46,10 @@ int main(void) {
     net_watchdog(15);
 
     int c = connfd();
-    if (c < 0) { printf("connect_failed\n"); return 1; }
+    if (c < 0) {
+        printf("connect_failed\n");
+        return 1;
+    }
     // IP-level options round-trip across the switch on a connected TCP socket.
     rt("IP_TOS", c, IPPROTO_IP, IP_TOS, 0x10);
     rt("IP_TTL", c, IPPROTO_IP, IP_TTL, 42);
@@ -58,7 +62,10 @@ int main(void) {
     close(c);
 
     int s6 = socket(AF_INET6, SOCK_STREAM, 0);
-    if (s6 < 0) { printf("no_ipv6\n"); return 0; }
+    if (s6 < 0) {
+        printf("no_ipv6\n");
+        return 0;
+    }
     int on = 1;
     // Set V6ONLY before bind (unswapped), then bind, then confirm the readback survives the switch and a
     // post-bind change is rejected with EINVAL exactly as native.
@@ -69,8 +76,8 @@ int main(void) {
     int b = bind(s6, (struct sockaddr *)&a6, sizeof a6);
     int post = setsockopt(s6, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof on);
     int post_e = post < 0 ? errno : 0;
-    printf("V6ONLY pre_ok=%d bind_ok=%d post_einval=%d got=%d\n",
-           pre == 0, b == 0, post_e == EINVAL, geti(s6, IPPROTO_IPV6, IPV6_V6ONLY));
+    printf("V6ONLY pre_ok=%d bind_ok=%d post_einval=%d got=%d\n", pre == 0, b == 0, post_e == EINVAL,
+           geti(s6, IPPROTO_IPV6, IPV6_V6ONLY));
     rt("IPV6_TCLASS", s6, IPPROTO_IPV6, IPV6_TCLASS, 0x20);
     rt("IPV6_UNICAST_HOPS", s6, IPPROTO_IPV6, IPV6_UNICAST_HOPS, 55);
     rt("IPV6_RECVPKTINFO", s6, IPPROTO_IPV6, IPV6_RECVPKTINFO, 1);

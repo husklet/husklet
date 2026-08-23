@@ -17,25 +17,31 @@ int main(void) {
     // 1. SIGSTOP: WUNTRACED stop report, SIGCONT + WCONTINUED, then the child's real exit(4) survives.
     {
         pid_t p = fork();
-        if (p == 0) { raise(SIGSTOP); _exit(4); }
+        if (p == 0) {
+            raise(SIGSTOP);
+            _exit(4);
+        }
         int st = 0;
         pid_t r = waitpid(p, &st, WUNTRACED);
-        printf("sigstop stopped=%d stopsig=%d raw=0x%x r=%d\n",
-               WIFSTOPPED(st) ? 1 : 0, WIFSTOPPED(st) ? WSTOPSIG(st) : -1, st & 0xffff, r == p);
+        printf("sigstop stopped=%d stopsig=%d raw=0x%x r=%d\n", WIFSTOPPED(st) ? 1 : 0,
+               WIFSTOPPED(st) ? WSTOPSIG(st) : -1, st & 0xffff, r == p);
         kill(p, SIGCONT);
         int sc = 0;
         pid_t rc = waitpid(p, &sc, WCONTINUED);
         printf("sigcont continued=%d raw=0x%x r=%d\n", WIFCONTINUED(sc) ? 1 : 0, sc & 0xffff, rc == p);
         int se = 0;
         waitpid(p, &se, 0);
-        printf("resumed-exit exited=%d code=%d raw=0x%x\n",
-               WIFEXITED(se) ? 1 : 0, WIFEXITED(se) ? WEXITSTATUS(se) : -1, se & 0xffff);
+        printf("resumed-exit exited=%d code=%d raw=0x%x\n", WIFEXITED(se) ? 1 : 0, WIFEXITED(se) ? WEXITSTATUS(se) : -1,
+               se & 0xffff);
     }
 
     // 2. SIGTSTP + WUNTRACED, continue, then exit(9) survives (a second stop signal, exercised via waitid).
     {
         pid_t p = fork();
-        if (p == 0) { raise(SIGTSTP); _exit(9); }
+        if (p == 0) {
+            raise(SIGTSTP);
+            _exit(9);
+        }
         siginfo_t si;
         memset(&si, 0, sizeof si);
         // WNOWAIT peek of the stop, then a real WSTOPPED reap -- both must report CLD_STOPPED.
@@ -64,11 +70,14 @@ int main(void) {
         int peeked = (si.si_code == CLD_EXITED && si.si_status == 9 && si.si_pid == p);
         memset(&si, 0, sizeof si);
         int r2 = waitid(P_PID, p, &si, WEXITED);
-        printf("wnowait peeked=%d reaped_again=%d\n",
-               peeked, (r2 == 0 && si.si_code == CLD_EXITED && si.si_status == 9));
+        printf("wnowait peeked=%d reaped_again=%d\n", peeked,
+               (r2 == 0 && si.si_code == CLD_EXITED && si.si_status == 9));
 
         pid_t k = fork();
-        if (k == 0) { pause(); _exit(0); }
+        if (k == 0) {
+            pause();
+            _exit(0);
+        }
         usleep(40000);
         kill(k, SIGKILL);
         memset(&si, 0, sizeof si);
@@ -92,7 +101,10 @@ int main(void) {
         printf("pgrpn ok=%d code=%d\n", r2 == q, WEXITSTATUS(st2));
 
         pid_t w = fork();
-        if (w == 0) { usleep(60000); _exit(1); }
+        if (w == 0) {
+            usleep(60000);
+            _exit(1);
+        }
         int st3 = 0;
         pid_t rn = waitpid(w, &st3, WNOHANG);
         printf("wnohang_notready ret=%d\n", (int)rn);

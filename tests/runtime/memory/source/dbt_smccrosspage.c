@@ -27,8 +27,8 @@ int main(void) {
         uint64_t got = f(x);
         uint64_t want = x + imm;
         if (got != want) {
-            printf("smc-crosspage MISMATCH round=%d want=%llu got=%llu\n", round,
-                   (unsigned long long)want, (unsigned long long)got);
+            printf("smc-crosspage MISMATCH round=%d want=%llu got=%llu\n", round, (unsigned long long)want,
+                   (unsigned long long)got);
             return 1;
         }
         acc = acc * 1000003ULL + got;

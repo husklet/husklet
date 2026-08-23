@@ -13,8 +13,16 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t got1, got2;
-static void h1(int s) { (void)s; got1++; }
-static void h2(int s) { (void)s; got2++; }
+
+static void h1(int s) {
+    (void)s;
+    got1++;
+}
+
+static void h2(int s) {
+    (void)s;
+    got2++;
+}
 
 int main(void) {
     signal(SIGUSR1, h1);
@@ -59,7 +67,7 @@ int main(void) {
     sigprocmask(SIG_SETMASK, &old, NULL);
     int delivered = got1 == 1 && got2 == 1;
 
-    printf("sigpending empty0=%d no_handler=%d only_usr1=%d both=%d raw_both=%d efault=%d delivered=%d\n",
-           empty0, no_handler_yet1, only_usr1, both, raw_both, efault, delivered);
+    printf("sigpending empty0=%d no_handler=%d only_usr1=%d both=%d raw_both=%d efault=%d delivered=%d\n", empty0,
+           no_handler_yet1, only_usr1, both, raw_both, efault, delivered);
     return 0;
 }

@@ -25,6 +25,7 @@
 // be) rejects an ordinary large argv -- 2839 paths of ~46 bytes already exhausts it -- long before the
 // kernel would. Measured on the host: 50,000 x 21-byte arguments exec fine, 100,000 give E2BIG.
 enum { HL_EXEC_ARGUMENT_STRING_BYTES = 128 * 1024 };
+
 enum { HL_EXEC_ARGUMENT_TOTAL_BYTES = 2 * 1024 * 1024 };
 
 /* Diagnostic counters remain enabled in a fork child because they participate
@@ -365,16 +366,16 @@ static void fork_child_hooks(struct cpu *c) {
     ts_after_fork();             // drop the inherited task-state slot cache so the child re-claims its own
     container_pid_after_fork();  // child has a new host pid -> drop the cached getpid() so it re-reads its own
     hl_host_process_identity_after_fork(); // retire the self (pid, start-time) memo the private-fd registry
-                                 // rows and the fdvis owner stamps are keyed on. pthread_atfork already
-                                 // does this; the explicit call keeps the child's identity correct even
-                                 // for a future child that arrives without running atfork handlers
-    poslk_after_fork();          // re-cache pid; child inherits NONE of the parent's fcntl record locks
-    flock_broker_after_fork();   // flock ownership is OFD-scoped and IS inherited across fork
-    proc_reg_after_fork();       // publish the fork child in /proc and stop it inheriting the parent's registry path
-    acct_after_fork();           // claim this child's OWN cgroup accounting slot (new host pid, one task)
-    wipefork_apply_child();      // MADV_WIPEONFORK: zero-fill the ranges the guest marked wipe-on-fork
-    dontfork_apply_child();      // MADV_DONTFORK: unmap the ranges the guest marked not-inherited-on-fork
-    hl_gmap_lock_reset();        // mlock(2): memory locks are NOT inherited across fork -> child starts unlocked
+                                           // rows and the fdvis owner stamps are keyed on. pthread_atfork already
+                                           // does this; the explicit call keeps the child's identity correct even
+                                           // for a future child that arrives without running atfork handlers
+    poslk_after_fork();                    // re-cache pid; child inherits NONE of the parent's fcntl record locks
+    flock_broker_after_fork();             // flock ownership is OFD-scoped and IS inherited across fork
+    proc_reg_after_fork();  // publish the fork child in /proc and stop it inheriting the parent's registry path
+    acct_after_fork();      // claim this child's OWN cgroup accounting slot (new host pid, one task)
+    wipefork_apply_child(); // MADV_WIPEONFORK: zero-fill the ranges the guest marked wipe-on-fork
+    dontfork_apply_child(); // MADV_DONTFORK: unmap the ranges the guest marked not-inherited-on-fork
+    hl_gmap_lock_reset();   // mlock(2): memory locks are NOT inherited across fork -> child starts unlocked
 }
 
 typedef struct bound_fork_state {

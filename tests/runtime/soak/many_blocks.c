@@ -9,11 +9,12 @@
 
 static uint64_t step(int k, uint64_t a) {
     switch (k & 0x3ff) {
-#define ARM(n) case n: return (a ^ (0x9e3779b97f4a7c15ULL * (n + 1))) + ((a << ((n & 31) + 1)) | (a >> (63 - (n & 31))));
-#define ARM8(b) ARM(b+0) ARM(b+1) ARM(b+2) ARM(b+3) ARM(b+4) ARM(b+5) ARM(b+6) ARM(b+7)
-#define ARM64(b) ARM8(b+0) ARM8(b+8) ARM8(b+16) ARM8(b+24) ARM8(b+32) ARM8(b+40) ARM8(b+48) ARM8(b+56)
-#define ARM256(b) ARM64(b+0) ARM64(b+64) ARM64(b+128) ARM64(b+192)
-#define ARM1024(b) ARM256(b+0) ARM256(b+256) ARM256(b+512) ARM256(b+768)
+#define ARM(n)                                                                                                         \
+    case n: return (a ^ (0x9e3779b97f4a7c15ULL * (n + 1))) + ((a << ((n & 31) + 1)) | (a >> (63 - (n & 31))));
+#define ARM8(b) ARM(b + 0) ARM(b + 1) ARM(b + 2) ARM(b + 3) ARM(b + 4) ARM(b + 5) ARM(b + 6) ARM(b + 7)
+#define ARM64(b) ARM8(b + 0) ARM8(b + 8) ARM8(b + 16) ARM8(b + 24) ARM8(b + 32) ARM8(b + 40) ARM8(b + 48) ARM8(b + 56)
+#define ARM256(b) ARM64(b + 0) ARM64(b + 64) ARM64(b + 128) ARM64(b + 192)
+#define ARM1024(b) ARM256(b + 0) ARM256(b + 256) ARM256(b + 512) ARM256(b + 768)
         ARM1024(0)
     }
     return a;

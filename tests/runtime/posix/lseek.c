@@ -9,9 +9,9 @@ int main(void) {
     snprintf(path, sizeof path, "/tmp/hl_lseek_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
     write(fd, "0123456789", 10);
-    off_t set = lseek(fd, 3, SEEK_SET);      // 3
-    off_t cur = lseek(fd, 2, SEEK_CUR);      // 5
-    off_t end = lseek(fd, 0, SEEK_END);      // 10
+    off_t set = lseek(fd, 3, SEEK_SET); // 3
+    off_t cur = lseek(fd, 2, SEEK_CUR); // 5
+    off_t end = lseek(fd, 0, SEEK_END); // 10
     // seek past EOF and write -> file grows with a hole
     lseek(fd, 1000, SEEK_SET);
     write(fd, "Z", 1);

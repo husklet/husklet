@@ -3,10 +3,21 @@
 #include <stdint.h>
 #include <string.h>
 
-struct guest_data_una8 { uint8_t value; } __attribute__((packed));
-struct guest_data_una16 { uint16_t value; } __attribute__((packed));
-struct guest_data_una32 { uint32_t value; } __attribute__((packed));
-struct guest_data_una64 { uint64_t value; } __attribute__((packed));
+struct guest_data_una8 {
+    uint8_t value;
+} __attribute__((packed));
+
+struct guest_data_una16 {
+    uint16_t value;
+} __attribute__((packed));
+
+struct guest_data_una32 {
+    uint32_t value;
+} __attribute__((packed));
+
+struct guest_data_una64 {
+    uint64_t value;
+} __attribute__((packed));
 
 static void guest_data_copy_indivisible(void *destination, const void *source, size_t length) {
     switch (length) {

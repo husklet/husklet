@@ -33,7 +33,8 @@ static long PS;
 static void t_badfd(void) {
     char tmpl[] = "/tmp/mmsemXXXXXX";
     int fd = mkstemp(tmpl);
-    if (ftruncate(fd, PS)) { /* ignore */ }
+    if (ftruncate(fd, PS)) { /* ignore */
+    }
     close(fd);
     errno = 0;
     void *p = mmap(NULL, PS, PROT_WRITE, MAP_FILE | MAP_SHARED, fd, 0);
@@ -106,12 +107,16 @@ static void t_populate(void) {
     char tmpl[] = "/tmp/mmsemXXXXXX";
     int fd = mkstemp(tmpl);
     size_t sz = 64 * 1024;
-    if (ftruncate(fd, sz)) { /* ignore */ }
+    if (ftruncate(fd, sz)) { /* ignore */
+    }
     char *a = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_POPULATE, fd, 0);
     int ok = a != MAP_FAILED, allzero = 1;
     if (ok)
         for (size_t i = 0; i < sz; i++)
-            if (a[i]) { allzero = 0; break; }
+            if (a[i]) {
+                allzero = 0;
+                break;
+            }
     printf("populate ok=%d allzero=%d\n", ok, allzero);
     if (ok) munmap(a, sz);
     close(fd);
@@ -124,12 +129,14 @@ static void t_mincore(void) {
     int n = 4;
     size_t len = PS * n;
     char *m = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-    for (int i = 0; i < n; i++) m[i * PS] = 1;
+    for (int i = 0; i < n; i++)
+        m[i * PS] = 1;
     mlock(m, len);
     unsigned char vec[8] = {0};
     int rc = mincore(m, len, vec);
     int res = 0;
-    for (int i = 0; i < n; i++) res += vec[i] & 1;
+    for (int i = 0; i < n; i++)
+        res += vec[i] & 1;
     errno = 0;
     int rmis = mincore((char *)m + 1, len, vec);
     int emis = errno == EINVAL;
@@ -148,7 +155,8 @@ static void t_madvise(void) {
     memset(m, 0xAB, sz);
     int rd = madvise(m, sz, MADV_DONTNEED);
     long after = 0;
-    for (size_t i = 0; i < sz; i += PS) after += (unsigned char)m[i];
+    for (size_t i = 0; i < sz; i += PS)
+        after += (unsigned char)m[i];
     printf("madv_dontneed rc=%d zeroed=%d\n", rd, after == 0);
 
     printf("madv_willneed rc=%d\n", madvise(m, sz, MADV_WILLNEED));
@@ -162,14 +170,17 @@ static void t_madvise(void) {
         if (pid == 0) {
             int zero = 1;
             for (size_t i = 0; i < sz; i++)
-                if (m[i]) { zero = 0; break; }
+                if (m[i]) {
+                    zero = 0;
+                    break;
+                }
             _exit(zero ? 0 : 1);
         }
         int st;
         waitpid(pid, &st, 0);
         int parent_keeps = (unsigned char)m[0] == 0xCD;
-        printf("madv_wipeonfork rc=0 child_zero=%d parent_keeps=%d\n",
-               WIFEXITED(st) && WEXITSTATUS(st) == 0, parent_keeps);
+        printf("madv_wipeonfork rc=0 child_zero=%d parent_keeps=%d\n", WIFEXITED(st) && WEXITSTATUS(st) == 0,
+               parent_keeps);
     } else {
         printf("madv_wipeonfork rc=%d einval=%d\n", rw, errno == EINVAL);
     }

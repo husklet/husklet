@@ -13,7 +13,8 @@ int main(void) {
     int zeroed = m[0] == 0 && m[len - 1] == 0;
     memset(m, 0xAB, len);
     long sum = 0;
-    for (size_t i = 0; i < len; i++) sum += (unsigned char)m[i];
+    for (size_t i = 0; i < len; i++)
+        sum += (unsigned char)m[i];
     int wrote = sum == (long)len * 0xAB;
     int prot = mprotect(m, len, PROT_READ) == 0; // downgrade succeeds
     int unmap = munmap(m, len) == 0;

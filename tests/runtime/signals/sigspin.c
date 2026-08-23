@@ -14,6 +14,7 @@
 #include <sys/time.h>
 
 static volatile sig_atomic_t fired;
+
 static void h(int s) {
     (void)s;
     fired = 1;

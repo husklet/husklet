@@ -15,8 +15,7 @@ int main(void) {
     atomic_fetch_and_explicit(&a, ~0x2ull, memory_order_acq_rel);
     atomic_fetch_xor_explicit(&a, 0xFF, memory_order_seq_cst);
     uint64_t prev = atomic_exchange_explicit(&a, 777, memory_order_seq_cst);
-    printf("a=%llu prev=%llu\n", (unsigned long long)atomic_load(&a),
-           (unsigned long long)prev);
+    printf("a=%llu prev=%llu\n", (unsigned long long)atomic_load(&a), (unsigned long long)prev);
 
     atomic_int c;
     atomic_init(&c, 10);
@@ -24,14 +23,14 @@ int main(void) {
     int ok_s = atomic_compare_exchange_strong(&c, &expect, 42);
     int expect2 = 999;
     int ok_f = atomic_compare_exchange_strong(&c, &expect2, 55);
-    printf("cas strong ok=%d val=%d fail=%d seen=%d final=%d\n",
-           ok_s, 42, ok_f, expect2, atomic_load(&c));
+    printf("cas strong ok=%d val=%d fail=%d seen=%d final=%d\n", ok_s, 42, ok_f, expect2, atomic_load(&c));
 
     /* weak CAS loop until success */
     atomic_int w;
     atomic_init(&w, 0);
     int cur = atomic_load(&w), tries = 0;
-    while (!atomic_compare_exchange_weak(&w, &cur, cur + 1) && tries < 1000) tries++;
+    while (!atomic_compare_exchange_weak(&w, &cur, cur + 1) && tries < 1000)
+        tries++;
     printf("cas weak final=%d\n", atomic_load(&w));
 
     atomic_flag f = ATOMIC_FLAG_INIT;

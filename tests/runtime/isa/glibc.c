@@ -50,8 +50,7 @@ int main(void) {
     struct timespec ts;
     bad |= (clock_gettime(CLOCK_REALTIME, &ts) != 0 || ts.tv_sec < 946684800);
 
-    if (bad)
-        return 1;
+    if (bad) return 1;
     puts("glibc ok");
     return 0;
 }

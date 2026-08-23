@@ -283,8 +283,7 @@ static int namespace_transaction_read_begin(struct namespace_transaction_read *r
 #if !defined(_WIN32)
     if (g_namespace_transaction_fd < 0) return errno = EIO, -1;
 #endif
-    if (atomic_load_explicit(&g_namespace_transaction->poisoned, memory_order_acquire))
-        return errno = EOWNERDEAD, -1;
+    if (atomic_load_explicit(&g_namespace_transaction->poisoned, memory_order_acquire)) return errno = EOWNERDEAD, -1;
     uint64_t sequence = atomic_load_explicit(&g_namespace_transaction->sequence, memory_order_acquire);
     if ((sequence & 1u) != 0) return namespace_transaction_read_slow(read);
     read->sequence = sequence;
@@ -295,8 +294,7 @@ static int namespace_transaction_read_begin(struct namespace_transaction_read *r
 static int namespace_transaction_read_validate(const struct namespace_transaction_read *read) {
     if (read == NULL) return errno = EINVAL, -1;
     atomic_thread_fence(memory_order_acquire);
-    if (atomic_load_explicit(&g_namespace_transaction->poisoned, memory_order_acquire))
-        return errno = EOWNERDEAD, -1;
+    if (atomic_load_explicit(&g_namespace_transaction->poisoned, memory_order_acquire)) return errno = EOWNERDEAD, -1;
     uint64_t sequence = atomic_load_explicit(&g_namespace_transaction->sequence, memory_order_acquire);
     return sequence == read->sequence && (sequence & 1u) == 0 ? 0 : (errno = EAGAIN, -1);
 }
@@ -348,8 +346,8 @@ static int namespace_transaction_writer(struct namespace_transaction_writer *wri
     if (generation != g_namespace_transaction_writer_generation || owner != g_namespace_transaction_writer_identity ||
         (generation & 1u) == 0 || atomic_load_explicit(&g_namespace_transaction->poisoned, memory_order_acquire))
         return errno = EOWNERDEAD, -1;
-    *writer = (struct namespace_transaction_writer){&g_namespace_transaction->sequence,
-                                                     &g_namespace_transaction->owner, generation, owner};
+    *writer = (struct namespace_transaction_writer){&g_namespace_transaction->sequence, &g_namespace_transaction->owner,
+                                                    generation, owner};
     return 0;
 }
 
@@ -586,6 +584,7 @@ HL_API int HL_TARGET_LOCAL(namespace_transaction_test)(uint32_t scenario) {
  * exist here: a guarded block with no Windows arm links as "cannot export ...: symbol not defined" with
  * the hooks on, and would otherwise have been a MissingBridge at load rather than a compile error. */
 HL_API int HL_TARGET_LOCAL(namespace_transaction_test)(uint32_t scenario);
+
 HL_API int HL_TARGET_LOCAL(namespace_transaction_test)(uint32_t scenario) {
     (void)scenario;
     errno = ENOTSUP;

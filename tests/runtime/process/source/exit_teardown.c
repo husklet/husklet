@@ -15,11 +15,15 @@
 #include <unistd.h>
 
 static int announce_fd;
-static void announce(char tag) { (void)write(announce_fd, &tag, 1); }
+
+static void announce(char tag) {
+    (void)write(announce_fd, &tag, 1);
+}
 
 // exit_group(2) from a worker terminates the whole thread group with that code,
 // even while sibling threads are blocked inside real host syscalls.
 static int block_pipe[2];
+
 static void *worker_block_read(void *arg) {
     (void)arg;
     announce('r');
@@ -27,18 +31,21 @@ static void *worker_block_read(void *arg) {
     (void)read(block_pipe[0], scratch, sizeof scratch); // blocks forever
     return NULL;
 }
+
 static void *worker_block_pause(void *arg) {
     (void)arg;
     announce('p');
     pause(); // blocks forever
     return NULL;
 }
+
 static void *worker_exit_group(void *arg) {
     (void)arg;
     announce('g');
     syscall(SYS_exit_group, 55);
     return NULL; // unreached
 }
+
 static void test_exit_group_teardown(void) {
     if (pipe(block_pipe) != 0) return;
     int ready[2];
@@ -51,13 +58,14 @@ static void test_exit_group_teardown(void) {
         pthread_create(&a, NULL, worker_block_read, NULL);
         pthread_create(&b, NULL, worker_block_pause, NULL);
         pthread_create(&c, NULL, worker_exit_group, NULL);
-        for (;;) pause();
+        for (;;)
+            pause();
         _exit(1);
     }
     int status = 0;
     waitpid(child, &status, 0);
-    printf("exit_group over blocked siblings: exited=%d code==55=%d\n",
-           WIFEXITED(status), WIFEXITED(status) && WEXITSTATUS(status) == 55);
+    printf("exit_group over blocked siblings: exited=%d code==55=%d\n", WIFEXITED(status),
+           WIFEXITED(status) && WEXITSTATUS(status) == 55);
     close(block_pipe[0]);
     close(block_pipe[1]);
     close(ready[0]);
@@ -67,12 +75,14 @@ static void test_exit_group_teardown(void) {
 // A raw SYS_exit terminates only the calling thread; the rest of the process
 // keeps running and can still make progress and exit on its own terms.
 static int self_pipe[2];
+
 static void *worker_self_exit(void *arg) {
     (void)arg;
     (void)write(self_pipe[1], "x", 1);
     syscall(SYS_exit, 0); // per-thread exit
     return NULL;
 }
+
 static void test_thread_self_exit(void) {
     if (pipe(self_pipe) != 0) return;
     fflush(stdout);
@@ -87,8 +97,7 @@ static void test_thread_self_exit(void) {
     }
     int status = 0;
     waitpid(child, &status, 0);
-    printf("thread self-exit leaves process alive: code==6=%d\n",
-           WIFEXITED(status) && WEXITSTATUS(status) == 6);
+    printf("thread self-exit leaves process alive: code==6=%d\n", WIFEXITED(status) && WEXITSTATUS(status) == 6);
     close(self_pipe[0]);
     close(self_pipe[1]);
 }
@@ -96,12 +105,14 @@ static void test_thread_self_exit(void) {
 // pthread_exit() from main keeps the process alive until the LAST thread exits;
 // a worker that outlives main still reaches its return and the process exits 0.
 static int last_pipe[2];
+
 static void *worker_outlive_main(void *arg) {
     (void)arg;
     char go;
     (void)read(last_pipe[0], &go, 1); // proceed only after main has left
-    return NULL;                       // last thread returns -> process exits 0
+    return NULL;                      // last thread returns -> process exits 0
 }
+
 static void test_pthread_exit_last_thread(void) {
     fflush(stdout);
     pid_t child = fork();
@@ -114,8 +125,8 @@ static void test_pthread_exit_last_thread(void) {
     }
     int status = 0;
     waitpid(child, &status, 0);
-    printf("pthread_exit main, worker is last thread: exited=%d code==0=%d\n",
-           WIFEXITED(status), WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    printf("pthread_exit main, worker is last thread: exited=%d code==0=%d\n", WIFEXITED(status),
+           WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 
 // A fatal fault in one thread takes down the entire thread group with the
@@ -126,33 +137,39 @@ static void *worker_segv(void *arg) {
     *p = 1;
     return NULL;
 }
+
 static void test_thread_fault_group(void) {
     fflush(stdout);
     pid_t child = fork();
     if (child == 0) {
         pthread_t t;
         pthread_create(&t, NULL, worker_segv, NULL);
-        for (;;) pause();
+        for (;;)
+            pause();
         _exit(1);
     }
     int status = 0;
     waitpid(child, &status, 0);
-    printf("thread SIGSEGV terminates group: signaled=%d sig==SEGV=%d\n",
-           WIFSIGNALED(status), WIFSIGNALED(status) && WTERMSIG(status) == SIGSEGV);
+    printf("thread SIGSEGV terminates group: signaled=%d sig==SEGV=%d\n", WIFSIGNALED(status),
+           WIFSIGNALED(status) && WTERMSIG(status) == SIGSEGV);
 }
 
 // glibc exit()/return-from-main routes through exit_group, so a running worker
 // is killed and the chosen code wins.
 static void *worker_spin(void *arg) {
     (void)arg;
-    for (;;) pause();
+    for (;;)
+        pause();
     return NULL;
 }
+
 static int spin_ready[2];
+
 static void *worker_spin_announce(void *arg) {
     (void)write(spin_ready[1], "s", 1);
     return worker_spin(arg);
 }
+
 static void test_exit_kills_workers(void) {
     if (pipe(spin_ready) != 0) return;
     fflush(stdout);
@@ -166,8 +183,8 @@ static void test_exit_kills_workers(void) {
     }
     int status = 0;
     waitpid(child, &status, 0);
-    printf("exit() kills running worker: exited=%d code==4=%d\n",
-           WIFEXITED(status), WIFEXITED(status) && WEXITSTATUS(status) == 4);
+    printf("exit() kills running worker: exited=%d code==4=%d\n", WIFEXITED(status),
+           WIFEXITED(status) && WEXITSTATUS(status) == 4);
     close(spin_ready[0]);
     close(spin_ready[1]);
 }

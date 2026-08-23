@@ -12,7 +12,7 @@
 #define HL_ARENA_SIDECAR_HEADER_SIZE UINT32_C(80)
 #define HL_ARENA_SIDECAR_RECORD_SIZE UINT32_C(56)
 #define HL_ARENA_SIDECAR_MAX_RECORDS UINT32_C(1024)
-#define HL_ARENA_SIDECAR_MAX_SIZE \
+#define HL_ARENA_SIDECAR_MAX_SIZE                                                                                      \
     (HL_ARENA_SIDECAR_HEADER_SIZE + HL_ARENA_SIDECAR_MAX_RECORDS * HL_ARENA_SIDECAR_RECORD_SIZE)
 
 typedef enum hl_arena_mapping_source_kind {

@@ -46,7 +46,6 @@ static int htop_cpucount(void) {
 }
 
 int main(void) {
-    printf("htop_cpus=%d get_nprocs=%d get_nprocs_conf=%d\n",
-           htop_cpucount(), get_nprocs(), get_nprocs_conf());
+    printf("htop_cpus=%d get_nprocs=%d get_nprocs_conf=%d\n", htop_cpucount(), get_nprocs(), get_nprocs_conf());
     return 0;
 }

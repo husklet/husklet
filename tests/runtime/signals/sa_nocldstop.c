@@ -6,7 +6,11 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t chld_count;
-static void h(int s) { (void)s; chld_count++; }
+
+static void h(int s) {
+    (void)s;
+    chld_count++;
+}
 
 int main(void) {
     struct sigaction sa = {0};
@@ -18,7 +22,8 @@ int main(void) {
     pid_t pid = fork();
     if (pid == 0) {
         // wait to be stopped/continued/killed by parent
-        for (;;) pause();
+        for (;;)
+            pause();
         _exit(0);
     }
     usleep(50 * 1000);
@@ -35,7 +40,7 @@ int main(void) {
     usleep(50 * 1000);
     int after_exit = chld_count; // >= 1
 
-    printf("sa_nocldstop stop_silent=%d cont_silent=%d exit_delivered=%d\n",
-           after_stop == 0, after_cont == 0, after_exit >= 1);
+    printf("sa_nocldstop stop_silent=%d cont_silent=%d exit_delivered=%d\n", after_stop == 0, after_cont == 0,
+           after_exit >= 1);
     return 0;
 }

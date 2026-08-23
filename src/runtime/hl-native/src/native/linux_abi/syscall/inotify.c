@@ -66,8 +66,7 @@ static char *bound_inotify_snapshot(bound_inotify_provider *provider, const char
             const char *visible = hl_case_visible(entries[index].name, decoded, sizeof decoded);
             size_t name_size = strlen(visible);
             char *grown;
-            if ((name_size == 1 && visible[0] == '.') ||
-                (name_size == 2 && visible[0] == '.' && visible[1] == '.'))
+            if ((name_size == 1 && visible[0] == '.') || (name_size == 2 && visible[0] == '.' && visible[1] == '.'))
                 continue;
             if (size > SIZE_MAX - name_size - 2u) {
                 read.status = HL_STATUS_OUT_OF_MEMORY;

@@ -69,8 +69,7 @@ int lower_sse_widening_multiply(struct insn *instruction, uint64_t next, int vd,
         emit32(0x0E60C000u | sse_register_field(source, 16) | sse_register_field(vd, 5) | 18u);
         int high = mmx ? 18 : 19;
         if (!mmx) emit32(0x4E60C000u | sse_register_field(source, 16) | sse_register_field(vd, 5) | 19u);
-        emit32(0x4EA0BC00u | sse_register_field(high, 16) | sse_register_field(18, 5) |
-               sse_register_field(vd, 0));
+        emit32(0x4EA0BC00u | sse_register_field(high, 16) | sse_register_field(18, 5) | sse_register_field(vd, 0));
         return TX_NEXT;
     }
     // PMULHW/PMULHUW widen each half independently; UZP2 selects the upper
@@ -82,11 +81,11 @@ int lower_sse_widening_multiply(struct insn *instruction, uint64_t next, int vd,
         emit32(0x0F108400u | sse_register_field(18, 5) | sse_register_field(vd, 0));
     } else {
         emit32(high | sse_register_field(source, 16) | sse_register_field(vd, 5) | 19u);
-        emit32(0x4E405800u | sse_register_field(19, 16) | sse_register_field(18, 5) |
-               sse_register_field(vd, 0));
+        emit32(0x4E405800u | sse_register_field(19, 16) | sse_register_field(18, 5) | sse_register_field(vd, 0));
     }
     return TX_NEXT;
 }
+
 int lower_sse_shuffle(struct insn *instruction, uint64_t next, int vd, int vm, int mmx) {
     if (instruction->op != 0x70) return TX_FALL;
     int source = instruction->is_mem ? 16 : vm;
@@ -155,16 +154,14 @@ int lower_sse_sign_mask(struct insn *instruction, int vm, int mmx) {
     emit32(0x6F001400u | (50u << 16) | (17 << 5) | 17);
     emit32(0x6F001400u | (100u << 16) | (17 << 5) | 17);
     emit32(0x0E003C00u | (1u << 16) | (17 << 5) | 16);
-    emit32(0x0E003C00u | (17u << 16) | sse_register_field(17, 5) |
-           sse_register_field(instruction->reg, 0));
+    emit32(0x0E003C00u | (17u << 16) | sse_register_field(17, 5) | sse_register_field(instruction->reg, 0));
     e_rrr(A_ORR, instruction->reg, 16, instruction->reg, 0, 8);
     return TX_NEXT;
 }
 
 int lower_mmx_fp_conversion(struct insn *instruction, uint64_t next, int vd, int vm) {
     uint8_t opcode = instruction->op;
-    if ((opcode != 0x2A && opcode != 0x2C && opcode != 0x2D) || instruction->rep || instruction->repne)
-        return TX_FALL;
+    if ((opcode != 0x2A && opcode != 0x2C && opcode != 0x2D) || instruction->rep || instruction->repne) return TX_FALL;
     int truncate = opcode == 0x2C;
     if (opcode == 0x2A) {
         int source = vm & 7;
@@ -225,8 +222,8 @@ int lower_mmx_fp_conversion(struct insn *instruction, uint64_t next, int vd, int
     return TX_NEXT;
 }
 
-int lower_sse_packed_shift(struct insn *instruction, uint64_t guest_pc, uint64_t next, int vd, int vm,
-                                  int mmx, int *writeback, hl_x86_crypto_state *crypto_state) {
+int lower_sse_packed_shift(struct insn *instruction, uint64_t guest_pc, uint64_t next, int vd, int vm, int mmx,
+                           int *writeback, hl_x86_crypto_state *crypto_state) {
     uint8_t opcode = instruction->op;
     if (opcode == 0x71 || opcode == 0x72 || opcode == 0x73) {
         int operation = instruction->reg & 7;
@@ -257,8 +254,8 @@ int lower_sse_packed_shift(struct insn *instruction, uint64_t guest_pc, uint64_t
         }
         return TX_NEXT;
     }
-    if (opcode != 0xF1 && opcode != 0xF2 && opcode != 0xF3 && opcode != 0xD1 && opcode != 0xD2 &&
-        opcode != 0xD3 && opcode != 0xE1 && opcode != 0xE2)
+    if (opcode != 0xF1 && opcode != 0xF2 && opcode != 0xF3 && opcode != 0xD1 && opcode != 0xD2 && opcode != 0xD3 &&
+        opcode != 0xE1 && opcode != 0xE2)
         return TX_FALL;
     int source = instruction->is_mem ? 16 : vm;
     if (instruction->is_mem) g_ldr_vec_ea(16, instruction, next, mmx);
@@ -266,7 +263,7 @@ int lower_sse_packed_shift(struct insn *instruction, uint64_t guest_pc, uint64_t
     int arithmetic = opcode == 0xE1 || opcode == 0xE2;
     int element_bits = (opcode == 0xF1 || opcode == 0xD1 || opcode == 0xE1)   ? 16
                        : (opcode == 0xF2 || opcode == 0xD2 || opcode == 0xE2) ? 32
-                                                                                : 64;
+                                                                              : 64;
     e_sse_var_shift(vd, vd, source, element_bits, left, arithmetic);
     return TX_NEXT;
 }
@@ -298,8 +295,7 @@ int lower_sse_packed_conversion(struct insn I, uint64_t next, int vd, int vm) {
     return TX_NEXT;
 }
 
-int lower_sse_nontemporal_store(struct insn *instruction, uint64_t guest_pc, uint64_t next, int vd,
-                                       int vm) {
+int lower_sse_nontemporal_store(struct insn *instruction, uint64_t guest_pc, uint64_t next, int vd, int vm) {
     uint8_t opcode = instruction->op;
     if (opcode == 0xE7 && instruction->p66) { // movntdq: non-temporal store xmm -> m128
         g_str_q_ea(vd, instruction, next);
@@ -323,8 +319,8 @@ int lower_sse_nontemporal_store(struct insn *instruction, uint64_t guest_pc, uin
     return TX_NEXT;
 }
 
-int lower_sse_word_lane(struct insn *instruction, uint64_t guest_pc, uint64_t next, int vd, int vm,
-                               int mmx, int *mmx_writeback) {
+int lower_sse_word_lane(struct insn *instruction, uint64_t guest_pc, uint64_t next, int vd, int vm, int mmx,
+                        int *mmx_writeback) {
     if (instruction->op != 0xC4 && instruction->op != 0xC5) return TX_FALL;
     int lane = (int)instruction->imm & (mmx ? 3 : 7);
     if (instruction->op == 0xC5) { // pextrw: extract H lane to r32, zero-extended
@@ -357,8 +353,7 @@ int lower_sse_widening_integer(struct insn *instruction, uint64_t next, int vd, 
     if (opcode == 0xF4) { // pmuludq: multiply even unsigned 32-bit lanes into 64-bit products
         emit32(0x4E801800u | sse_register_field(vd, 16) | sse_register_field(vd, 5) | 17u);
         emit32(0x4E801800u | sse_register_field(source, 16) | sse_register_field(source, 5) | 18u);
-        emit32(0x2EA0C000u | sse_register_field(18, 16) | sse_register_field(17, 5) |
-               sse_register_field(vd, 0));
+        emit32(0x2EA0C000u | sse_register_field(18, 16) | sse_register_field(17, 5) | sse_register_field(vd, 0));
         return TX_NEXT;
     }
 
@@ -382,8 +377,7 @@ int lower_sse_saturating_pack(struct insn *instruction, uint64_t next, int vd, i
     if (mmx) {
         // Concatenate both 64-bit operands before narrowing; MMX has no architectural high lanes.
         emit32(0x4EC03800u | sse_register_field(source, 16) | sse_register_field(vd, 5) | 17u);
-        emit32(narrow_low | ((uint32_t)element_size << 22) | sse_register_field(17, 5) |
-               sse_register_field(vd, 0));
+        emit32(narrow_low | ((uint32_t)element_size << 22) | sse_register_field(17, 5) | sse_register_field(vd, 0));
     } else {
         emit32(narrow_low | ((uint32_t)element_size << 22) | sse_register_field(vd, 5) | 17u);
         emit32(narrow_high | ((uint32_t)element_size << 22) | sse_register_field(source, 5) | 17u);
@@ -394,8 +388,8 @@ int lower_sse_saturating_pack(struct insn *instruction, uint64_t next, int vd, i
 
 int lower_sse_unpack(struct insn *instruction, uint64_t next, int vd, int vm, int mmx) {
     uint8_t opcode = instruction->op;
-    if (opcode != 0x60 && opcode != 0x61 && opcode != 0x62 && opcode != 0x6C && opcode != 0x68 &&
-        opcode != 0x69 && opcode != 0x6A && opcode != 0x6D)
+    if (opcode != 0x60 && opcode != 0x61 && opcode != 0x62 && opcode != 0x6C && opcode != 0x68 && opcode != 0x69 &&
+        opcode != 0x6A && opcode != 0x6D)
         return TX_FALL;
     int source = instruction->is_mem ? 16 : vm;
     if (instruction->is_mem) g_ldr_vec_ea(16, instruction, next, mmx);
@@ -496,8 +490,7 @@ int lower_sse_bitwise(struct insn *instruction, uint64_t next, int vd, int vm, i
 }
 
 int lower_sse_packed_double_integer(struct insn *instruction, uint64_t next, int vd, int vm) {
-    if (instruction->op != 0xE6 || (!instruction->rep && !instruction->p66 && !instruction->repne))
-        return TX_FALL;
+    if (instruction->op != 0xE6 || (!instruction->rep && !instruction->p66 && !instruction->repne)) return TX_FALL;
     int source = vm;
     if (instruction->rep) { // cvtdq2pd: low two packed s32 -> two packed f64
         if (instruction->is_mem) {
@@ -544,9 +537,9 @@ int lower_sse_flag_compare(struct insn I, uint64_t guest_pc, uint64_t next, int 
     // on ANY NaN operand, including qNaN. UCOMISS/UCOMISD (0x2E) is quiet: IE only for
     // sNaN. Map 0x2F -> FCMPE (bit4 set) and 0x2E -> FCMP. EFLAGS result is identical
     // for both (unordered -> N0 Z0 C1 V1), so the fixup below is unchanged.
-    emit32((I.p66 ? 0x1E602000u : 0x1E202000u) | (op == 0x2F ? 0x10u : 0u) |
-           sse_register_field(s, 16) | sse_register_field(vd, 5)); // FCMP/FCMPE Dvd, Ds  (Rd=0)
-    e_nzcv_save_fcmp();  // unordered fixup: x86 ZF=PF=CF=1, SF=0 (ARM FCMP gives N0 Z0 C1 V1)
+    emit32((I.p66 ? 0x1E602000u : 0x1E202000u) | (op == 0x2F ? 0x10u : 0u) | sse_register_field(s, 16) |
+           sse_register_field(vd, 5)); // FCMP/FCMPE Dvd, Ds  (Rd=0)
+    e_nzcv_save_fcmp();                // unordered fixup: x86 ZF=PF=CF=1, SF=0 (ARM FCMP gives N0 Z0 C1 V1)
     return TX_NEXT;
 }
 
@@ -579,14 +572,12 @@ int lower_sse_compare(struct insn I, uint64_t guest_pc, uint64_t next, int vd, i
     // destination, but the ARM scalar FCMxx/NOT forms zero everything above the
     // element. So scalar results are built in v18 and inserted back into lane 0.
     int res = packed ? vd : 18;
-    if (pred == 3 || pred == 7) {                       // UNORD/ORD: ordered(a)&ordered(b)
+    if (pred == 3 || pred == 7) {                                                  // UNORD/ORD: ordered(a)&ordered(b)
         emit32(EQ | sse_register_field(vd, 16) | sse_register_field(vd, 5) | 17u); // v17 = a==a
-        emit32(EQ | sse_register_field(s, 16) | sse_register_field(s, 5) |
-               sse_register_field(res, 0)); // res = b==b
+        emit32(EQ | sse_register_field(s, 16) | sse_register_field(s, 5) | sse_register_field(res, 0)); // res = b==b
         emit32(ANDb | sse_register_field(17, 16) | sse_register_field(res, 5) |
-               sse_register_field(res, 0)); // res = ORD
-        if (pred == 3)
-            emit32(NOTb | sse_register_field(res, 5) | sse_register_field(res, 0)); // UNORD = ~ORD
+               sse_register_field(res, 0));                                                    // res = ORD
+        if (pred == 3) emit32(NOTb | sse_register_field(res, 5) | sse_register_field(res, 0)); // UNORD = ~ORD
     } else {
         // predicates handled here: 0 EQ, 1 LT, 2 LE, 4 NEQ, 5 NLT, 6 NLE.
         // LT/LE/NLT/NLE build the ordered comparison a<b / a<=b via the swapped GT/GE (a<b ==
@@ -619,8 +610,7 @@ int lower_sse_scalar_to_integer(struct insn *instruction, uint64_t guest_pc, uin
     int source = vm;
     if (instruction->is_mem) {
         emit_ea(instruction, next);
-        if (emit_soft_memory_active())
-            emit_memory_guard(17, instruction->repne ? 8u : 4u, guest_pc, X86_SOFT_READ);
+        if (emit_soft_memory_active()) emit_memory_guard(17, instruction->repne ? 8u : 4u, guest_pc, X86_SOFT_READ);
         if (instruction->repne)
             g_ldr_d(16, 17);
         else
@@ -633,15 +623,13 @@ int lower_sse_scalar_to_integer(struct insn *instruction, uint64_t guest_pc, uin
         emit32(round_integral | sse_register_field(source, 5) | 18u);
         source = 18;
     }
-    emit32(0x1E380000u | (instruction->rexW ? 0x80000000u : 0) |
-           (instruction->repne ? 0x00400000u : 0) | sse_register_field(source, 5) |
-           sse_register_field(instruction->reg, 0));
+    emit32(0x1E380000u | (instruction->rexW ? 0x80000000u : 0) | (instruction->repne ? 0x00400000u : 0) |
+           sse_register_field(source, 5) | sse_register_field(instruction->reg, 0));
 
     // x86 returns integer-indefinite for positive overflow and NaN while ARM saturates.
     int sf = instruction->rexW ? 1 : 0;
-    uint64_t threshold = instruction->repne
-                             ? (sf ? 0x43E0000000000000ull : 0x41E0000000000000ull)
-                             : (sf ? 0x5F000000ull : 0x4F000000ull);
+    uint64_t threshold = instruction->repne ? (sf ? 0x43E0000000000000ull : 0x41E0000000000000ull)
+                                            : (sf ? 0x5F000000ull : 0x4F000000ull);
     e_movconst(20, threshold);
     if (instruction->repne)
         e_fmov_to_d(19, 20);
@@ -674,16 +662,15 @@ int lower_sse_integer_to_scalar(struct insn *instruction, uint64_t guest_pc, uin
     int source;
     if (instruction->is_mem) {
         emit_ea(instruction, next);
-        if (emit_soft_memory_active())
-            emit_memory_guard(17, instruction->rexW ? 8u : 4u, guest_pc, X86_SOFT_READ);
+        if (emit_soft_memory_active()) emit_memory_guard(17, instruction->rexW ? 8u : 4u, guest_pc, X86_SOFT_READ);
         e_load(instruction->rexW ? 8 : 4, 16, 17);
         source = 16;
     } else {
         source = instruction->rm_reg;
     }
     // Convert into scratch and merge lane zero: CVTSI2SS/SD preserve all upper destination bits.
-    emit32(0x1E220000u | (instruction->rexW ? 0x80000000u : 0) |
-           (instruction->repne ? 0x00400000u : 0) | sse_register_field(source, 5) | 18u);
+    emit32(0x1E220000u | (instruction->rexW ? 0x80000000u : 0) | (instruction->repne ? 0x00400000u : 0) |
+           sse_register_field(source, 5) | 18u);
     if (instruction->repne)
         e_ins_d(vd, 0, 18, 0);
     else
@@ -703,8 +690,7 @@ int lower_sse_minmax(struct insn *instruction, uint64_t guest_pc, uint64_t next,
             g_ldr_q_ea(16, instruction, next);
         } else {
             emit_ea(instruction, next);
-            if (emit_soft_memory_active())
-                emit_memory_guard(17, instruction->repne ? 8u : 4u, guest_pc, X86_SOFT_READ);
+            if (emit_soft_memory_active()) emit_memory_guard(17, instruction->repne ? 8u : 4u, guest_pc, X86_SOFT_READ);
             if (instruction->repne)
                 g_ldr_d(16, 17);
             else

@@ -1,5 +1,6 @@
 // Cohesive process-syscall handlers. Included by ../proc.c after shared process state.
-static int svc_proc_98(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_98(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                       uint64_t a5) {
     switch (nr) {
     case 98: { // futex(uaddr, op, val, timeout|nr_wake2=a3, uaddr2=a4, val3=a5)
         const unsigned raw_operation = (unsigned)a1;
@@ -78,7 +79,9 @@ static int svc_proc_98(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
     }
     return 1;
 }
-static int svc_proc_99(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+
+static int svc_proc_99(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                       uint64_t a5) {
     switch (nr) {
     case 99:
         if ((size_t)a1 != 24) {
@@ -94,7 +97,8 @@ static int svc_proc_99(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uin
     return 1;
 }
 
-static int svc_proc_116(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
+static int svc_proc_116(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4,
+                        uint64_t a5) {
     switch (nr) {
     case 116: G_RET(c) = 0; break;
     // sched_setaffinity(pid, size, MASK=a2) -- record the requested mask (intersected with the online

@@ -214,7 +214,7 @@ impl Runtime {
     ) -> io::Result<Vec<String>> {
         let configuration = Configuration::new(workspace);
         let signature = configuration.signature()?;
-        let configuration_signature = configuration.configuration_signature()?;
+        let configuration_signature = configuration.identity_signature()?;
         let runtime_signature = configuration.runtime_signature();
         match containers.inspect(CONTAINER).await {
             Ok(container) => {
