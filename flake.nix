@@ -1331,7 +1331,7 @@
             ' windows-units.json | sort -u | cut -f1 | sort | uniq -c \
               | sed 's/^ *//' > windows-units.actual
             cat > windows-units.expected <<'WINDOWS_UNITS'
-5 engine
+6 engine
 3 extension
 1 hl-cc
 2 hl-design
